@@ -4,6 +4,8 @@ Target: original Deus Ex game data running locally in a desktop browser. Preserv
 the original levels and behavior as the project progresses. Begin with keyboard
 and mouse; mobile support is undecided.
 
+Delivery stays local unless the user requests hosting.
+
 ## 0. Obtain and validate data
 
 Read an installed game directory. Validate all package tables, hash the inputs,

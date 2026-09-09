@@ -52,6 +52,7 @@ async function loadMap(name) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
+  $('toast').textContent = '';
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   let nextWorld;

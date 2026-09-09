@@ -63,6 +63,7 @@ test('production opens local File objects, reports missing packages, and sends n
     const beforeFiles = requests.length;
     await page.locator('#folder').setInputFiles(gameDirectory()); await ready(page);
     expect(await state(page)).toMatchObject({ map: '00_Training', renderErrors: [], triangles: 24427 });
+    await expect(page.locator('#toast')).toBeEmpty();
     expect(requests.slice(beforeFiles)).toEqual([]);
     expect(requests.every(r => r.method === 'GET' && new URL(r.url).origin === 'http://127.0.0.1:5174')).toBe(true);
     await page.screenshot({ path: 'reports/browser/production-training.png' });

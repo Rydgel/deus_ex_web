@@ -5,6 +5,9 @@ maps, assets, and game behavior. The current milestone is a working **original-m
 viewer**: explore the training map with original textures and static doors, using
 a free-flying inspection camera. Collision and gameplay come next.
 
+Delivery is **local only**, as requested. No website is deployed; do not publish
+or push further hosting updates unless the user asks.
+
 ## What works
 
 - A JavaScript UE1 package reader shared between Node and browser APIs. All 219
@@ -37,7 +40,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173`. With the extracted `Deus Ex GOTY Edition/` directory
 present, training loads automatically. Otherwise choose the game folder containing
-Maps, Textures, and System. The published viewer always uses this folder picker.
+Maps, Textures, and System. The local production preview always uses this folder picker.
 Original data is kept outside source control and outside the website build.
 
 Drag to look around, or double-click to lock the mouse. WASD/arrow keys fly,
