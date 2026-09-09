@@ -1,24 +1,30 @@
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { readModel, triangulateModel } from '../unreal/model.mjs';
-import { buildSurfaceGeometry, POLY, toView } from '../unreal/geometry.mjs';
+import { buildSurfaceGeometry, POLY, toView, fromView } from '../unreal/geometry.mjs';
 import { brushMatrix } from './transforms.mjs';
+import { createLighting, pointZone } from '../unreal/lighting.mjs';
+import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
+import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   const notes = new Set(), errors = [], textureNames = new Set();
+  const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
+  const lightingEnabled = { value: 1 };
+  const displayGamma = { value: 1 / 1.5 };
   const counts = { triangles: 0, degenerate: 0, corrected: 0, movers: 0, surfaces: 0 };
   const flagProperties = { bInvisible: 1, bMasked: 2, bTranslucent: 4, bTwoSided: 256,
-    bNoSmooth: 2048, bUnlit: 0x400000, bModulated: 0x4000000 };
+    bNoSmooth: 2048, bUnlit: POLY.Unlit, bModulated: POLY.Modulated };
 
-  async function materialFor(surface) {
+  async function materialFor(surface, tile) {
     let flags = surface.flags;
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
     if (data.procedural) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
-    const key = `${data.key}:${flags}`;
+    const key = `${data.key}:${flags}:${tile.page.index}`;
     if (!materials.has(key)) {
       const texKey = `${data.key}:${Boolean(flags & POLY.Masked)}:${Boolean(flags & POLY.NoSmooth)}`;
       if (!textureGPU.has(texKey)) {
@@ -37,6 +43,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const material = new THREE.MeshBasicMaterial({ map: textureGPU.get(texKey),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
+      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma);
       if (flags & POLY.Translucent) {
         material.transparent = true; material.depthWrite = false; material.blending = THREE.CustomBlending;
         material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor;
@@ -50,26 +57,41 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
     return { material: materials.get(key), flags, key };
   }
 
-  async function addModel(model, triangles, parent, actorName = null) {
+  async function addModel(model, triangles, parent, actorName = null, matrix = null) {
+    await lighting.prepare(model);
+    const normalMatrix = matrix ? new THREE.Matrix3().getNormalMatrix(matrix) : null;
+    const transform = matrix ? p => fromView(new THREE.Vector3(...toView(p)).applyMatrix4(matrix).toArray()) : p => p;
+    const transformNormal = normalMatrix ? n => fromView(new THREE.Vector3(...toView(n)).applyMatrix3(normalMatrix).toArray()) : n => n;
+    const moverZone = matrix ? pointZone(map.model, transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2))) : null;
     const bySurface = new Map();
     for (const t of triangles) {
-      if (!bySurface.has(t.surface)) bySurface.set(t.surface, []);
-      bySurface.get(t.surface).push(t);
+      const zone = moverZone ?? model.nodes[t.node].zones[1];
+      const key = `${t.surface}:${zone}`;
+      if (!bySurface.has(key)) bySurface.set(key, { surfaceIndex: t.surface, zone, ts: [] });
+      bySurface.get(key).ts.push(t);
     }
     const batches = new Map();
     let done = 0;
-    for (const [surfaceIndex, ts] of bySurface) {
+    for (const { surfaceIndex, zone, ts } of bySurface.values()) {
       const surface = model.surfaces[surfaceIndex];
       if (surface.flags & (POLY.Invisible | POLY.FakeBackdrop)) continue;
       try {
-        const { material, flags, key } = await materialFor(surface);
+        const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal);
+        const tile = lightAtlas.add(lightmap);
+        const { material, flags, key } = await materialFor(surface, tile);
         if (flags & POLY.Invisible) continue;
+        const lit = tile.enabled && !(flags & (POLY.Unlit | POLY.Modulated));
+        lighting.stats[lit ? 'litSurfaces' : 'unlitSurfaces']++;
         const g = buildSurfaceGeometry(model, ts, surfaceIndex, material.userData.width, material.userData.height);
         counts.degenerate += g.degenerate; counts.corrected += g.corrected;
         if (!g.positions.length) continue;
-        if (!batches.has(key)) batches.set(key, { material, positions: [], normals: [], uvs: [], faces: [] });
+        if (!batches.has(key)) batches.set(key, { material, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], faces: [] });
         const batch = batches.get(key);
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
+        for (let i = 0; i < g.positions.length; i += 3) {
+          batch.lightUV.push(...(lit ? lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))) : [0, 0, 0]));
+          batch.lightBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
+        }
         for (let i = 0; i < g.positions.length / 9; i++) batch.faces.push(surfaceIndex);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
       } catch (error) {
@@ -82,6 +104,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(batch.positions, 3));
       geometry.setAttribute('normal', new THREE.Float32BufferAttribute(batch.normals, 3));
       geometry.setAttribute('uv', new THREE.Float32BufferAttribute(batch.uvs, 2));
+      geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(batch.lightUV, 3));
+      geometry.setAttribute('lightBounds', new THREE.Float32BufferAttribute(batch.lightBounds, 4));
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, batch.material);
       mesh.userData = { actor: actorName, faces: batch.faces, model: model.entry.name };
@@ -92,11 +116,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   await addModel(map.model, map.triangles, root);
   for (const actor of map.actors.filter(a => /Mover$/.test(a.className) && a.values.Brush > 0)) {
     try {
-      const model = readModel(asset.pkg, asset.bytes, actor.values.Brush);
+      const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush);
+      const model = withMoverLightmaps(rawModel, readPolys(asset.pkg, asset.bytes, rawModel.polygons));
       const group = new THREE.Group();
       group.matrix.copy(brushMatrix(actor.values)); group.matrixAutoUpdate = false;
       root.add(group);
-      await addModel(model, triangulateModel(model), group, actor.name);
+      await addModel(model, triangulateModel(model), group, actor.name, group.matrix);
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
@@ -106,10 +131,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   const markers = new THREE.Points(markerGeometry, markerMaterial); markers.visible = false; markers.renderOrder = 100;
   root.add(markers);
   notes.add(`${map.summary.unknownLevelBytes} trailing Level bytes and ${map.summary.undecodedActorProperties} property values remain opaque.`);
+  for (const note of lighting.notes) notes.add(note);
+  if (map.model.surfaces.some(s => s.flags & POLY.Mirrored)) notes.add('Reflective surfaces show their base texture and lighting; mirror reflections are not active.');
+  if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
   return { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
+    lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); },
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); },
   };
 }

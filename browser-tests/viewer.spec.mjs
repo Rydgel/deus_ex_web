@@ -79,9 +79,9 @@ test('optional browser tool handlers validate inputs and reflect visible map sta
     Object.defineProperty(document, 'modelContext', { configurable: true, value: { registerTool: tool => { window.registeredTools[tool.name] = tool; } } });
   });
   await page.goto('http://127.0.0.1:5173'); await ready(page);
-  await page.waitForFunction(() => Object.keys(window.registeredTools).length === 3);
+  await page.waitForFunction(() => Object.keys(window.registeredTools).length === 4);
   expect(await page.evaluate(() => window.registeredTools.read_map_status.execute({}))).toMatchObject({ ready: true, map: '00_Training' });
-  for (const [name, input] of [['read_map_status', { extra: 1 }], ['open_local_map', {}], ['open_local_map', { name: 'missing' }], ['reset_inspection_camera', []]]) {
+  for (const [name, input] of [['read_map_status', { extra: 1 }], ['open_local_map', {}], ['open_local_map', { name: 'missing' }], ['reset_inspection_camera', []], ['set_inspection_camera', { position: [0, 0], rotation: [0, 0, 0] }]]) {
     const result = await page.evaluate(async ({ name, input }) => { try { await window.registeredTools[name].execute(input); return 'unexpected success'; } catch (e) { return e.message; } }, { name, input });
     expect(result).not.toBe('unexpected success');
   }

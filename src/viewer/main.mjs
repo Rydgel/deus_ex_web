@@ -24,7 +24,9 @@ const busy = (title, message) => {
 function toast(message) { $('toast').textContent = message; setTimeout(() => { if ($('toast').textContent === message) $('toast').textContent = ''; }, 4000); }
 function resize() {
   const box = $('viewport').getBoundingClientRect();
-  renderer.setSize(box.width, box.height, false); camera.aspect = box.width / Math.max(1, box.height); camera.updateProjectionMatrix();
+  renderer.setSize(box.width, box.height, false); camera.aspect = box.width / Math.max(1, box.height);
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(75 / 2)) / camera.aspect));
+  camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe($('viewport'));
 function resetCamera() {
@@ -39,7 +41,8 @@ function resetCamera() {
 function showStats() {
   const pairs = [['Map', currentMap], ['World triangles', map.summary.triangles.toLocaleString()],
     ['Rendered triangles', world.counts.triangles.toLocaleString()], ['Textures', world.textures],
-    ['Static doors / movers', world.counts.movers], ['Actors', map.actors.length], ['Render errors', world.errors.length]];
+    ['Static doors / movers', world.counts.movers], ['Actors', map.actors.length],
+    ['Lighting actors', world.lighting.lightActors], ['Lightmaps', world.lighting.lightmaps], ['Render errors', world.errors.length]];
   $('stats').replaceChildren(...pairs.flatMap(([label, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; return [dt, dd];
   }));
@@ -66,8 +69,10 @@ async function loadMap(name) {
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
+    world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
+    $('lighting').checked = true;
     $('map').value = name; $('gate').hidden = true; $('reset').disabled = false;
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
@@ -105,6 +110,29 @@ $('diagnostics').onclick = () => togglePanel($('panel').hidden);
 $('close-panel').onclick = () => togglePanel(false);
 $('wireframe').onchange = event => { if (world) for (const material of world.materials.values()) material.wireframe = event.target.checked; };
 $('actor-markers').onchange = event => { if (world) world.markers.visible = event.target.checked; };
+$('lighting').onchange = event => { if (world) world.lightingEnabled.value = event.target.checked ? 1 : 0; };
+$('brightness').oninput = event => {
+  const value = Number(event.target.value);
+  if (world) world.displayGamma.value = 1 / (2.5 * value);
+  $('brightness-value').value = value.toFixed(2);
+};
+function setCamera(input) {
+  if (!world) throw new Error('No map loaded');
+  if (!input || Object.keys(input).some(k => !['position', 'rotation'].includes(k)) ||
+    ![input.position, input.rotation].every(a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite)) ||
+    input.position.some(n => Math.abs(n) > 1e7) || input.rotation.some(n => Math.abs(n) > 65536)) throw new Error('Expected three finite position coordinates and three Unreal rotator values');
+  const signed = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
+  camera.position.fromArray(toView(input.position));
+  pitch = signed(input.rotation[0]); yaw = -signed(input.rotation[1]);
+  camera.rotation.set(pitch, yaw, -signed(input.rotation[2])); cameraMoved = true;
+  $('camera-position').value = input.position.join(', '); $('camera-rotation').value = input.rotation.join(', ');
+  return status();
+}
+$('camera-form').onsubmit = event => {
+  event.preventDefault();
+  try { setCamera({ position: $('camera-position').value.split(',').map(Number), rotation: $('camera-rotation').value.split(',').map(Number) }); }
+  catch (error) { toast(error.message); }
+};
 
 function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
@@ -130,6 +158,8 @@ function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
+    lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
+    brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
     calls: renderer.info.render.calls, frame: renderer.info.render.frame,
   };
@@ -197,6 +227,12 @@ if (context?.registerTool) {
     { name: 'reset_inspection_camera', title: 'Return to player start', description: 'Return the inspection camera to the original player start in the loaded map.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false },
       execute: input => { noArguments(input); if (!world) throw new Error('No map loaded'); resetCamera(); return status(); } },
+    { name: 'set_inspection_camera', title: 'Set reference camera', description: 'Set an inspection camera using original Unreal coordinates and rotator units for reference comparisons.',
+      inputSchema: { type: 'object', properties: {
+        position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+        rotation: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+      }, required: ['position', 'rotation'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: setCamera },
   ];
   for (const tool of tools) {
     try { await context.registerTool(tool, { signal: lifecycle.signal }); } catch { /* Optional browser capability. */ }

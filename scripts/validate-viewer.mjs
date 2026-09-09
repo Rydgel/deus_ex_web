@@ -25,7 +25,7 @@ try {
       } catch (error) { referencedTextures.push({ ref, error: error.message }); }
     }
     console.log(JSON.stringify({ map: map.summary, render: { ...world.counts, textures: world.textures,
-      errors: world.errors, notes: world.notes }, referencedTextures }, null, 2));
+      lighting: world.lighting, errors: world.errors, notes: world.notes }, referencedTextures }, null, 2));
     if (!world.counts.triangles || world.errors.length || referencedTextures.some(t => t.error)) process.exitCode = 1;
   } finally { world.dispose(); }
 } catch (error) { console.error(error.message); process.exitCode = 1; }

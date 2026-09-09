@@ -8,7 +8,7 @@ export const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 
 export const POLY = { Invisible: 1, Masked: 2, Translucent: 4, NotSolid: 8, Environment: 16,
   FakeBackdrop: 128, TwoSided: 256, AutoUPan: 512, AutoVPan: 1024, NoSmooth: 2048,
-  Unlit: 0x400000, Modulated: 0x4000000 };
+  Modulated: 0x40, Unlit: 0x400000, Portal: 0x4000000, Mirrored: 0x8000000 };
 
 /** UVs stay in texture-pixel coordinates until texture dimensions are known. */
 export function surfaceUV(model, surface, point, width, height) {

@@ -1,0 +1,143 @@
+import { ClassDefaults } from './classes.mjs';
+import { cross, dot, sub } from './geometry.mjs';
+
+const normalize = v => { const d = Math.hypot(...v); if (!d) throw new Error('Zero lighting normal'); return v.map(n => n / d); };
+
+/** Deus Ex Engine.dll FGetHSV (RVA 0xec8d0). Zone ambient uses its brightness
+ * response; actor lights call it with brightness 255 and scale separately. */
+export function lightColor(hue = 0, saturation = 0, brightness = 0) {
+  const b = brightness * 1.4 / 255, value = Math.min(1, .7 * b / (.01 + Math.sqrt(b)));
+  const rgb = hue <= 85 ? [(85 - hue) / 85, hue / 85, 0]
+    : hue <= 170 ? [0, (170 - hue) / 85, (hue - 85) / 85]
+      : [(hue - 170) / 85, 0, (255 - hue) / 84];
+  return rgb.map(c => (c + (1 - c) * saturation / 255) * value);
+}
+
+/** Row-aligned, least-significant-bit-first visibility masks, one per light. */
+export function shadowMask(model, lm, lightIndex) {
+  const [width, height] = lm.clamp, pitch = Math.ceil(width / 8);
+  const start = lm.dataOffset + lightIndex * pitch * height;
+  if (start < 0 || start + pitch * height > model.lightBits.length) throw new Error('Shadow mask outside serialized lighting data');
+  const sample = (x, y) => {
+    x = Math.max(0, Math.min(width - 1, x)); y = Math.max(0, Math.min(height - 1, y));
+    return (model.lightBits[start + y * pitch + (x >> 3)] >> (x & 7)) & 1;
+  };
+  // Original Render.dll builds this kernel, normalized by its total (320).
+  const result = new Float32Array(width * height), weights = [24, 40, 24, 40, 64, 40, 24, 40, 24];
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let total = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) total += sample(x + dx, y + dy) * weights[(dy + 1) * 3 + dx + 1];
+    result[y * width + x] = total / 320;
+  }
+  return result;
+}
+
+export function lightmapBasis(model, surface, lm) {
+  const u = model.vectors[surface.textureU], v = model.vectors[surface.textureV], n = model.vectors[surface.normal];
+  const determinant = dot(u, cross(v, n));
+  if (Math.abs(determinant) < 1e-10) throw new Error('Singular lightmap texture basis');
+  const du = cross(v, n).map(x => x / determinant), dv = cross(n, u).map(x => x / determinant);
+  const base = model.points[surface.base];
+  return {
+    normal: normalize(n),
+    point(x, y) { return base.map((p, i) => p + du[i] * (lm.pan[0] + x * lm.scale[0]) + dv[i] * (lm.pan[1] + y * lm.scale[1])); },
+    uv(point) { const p = sub(point, base); return [(dot(p, u) - lm.pan[0]) / lm.scale[0] + .5, (dot(p, v) - lm.pan[1]) / lm.scale[1] + .5]; },
+  };
+}
+
+export function pointZone(model, point) {
+  let index = 0;
+  for (let visited = 0; visited <= model.nodes.length; visited++) {
+    const node = model.nodes[index]; if (!node) throw new Error('Invalid BSP zone traversal');
+    const side = dot(node.plane.slice(0, 3), point) - node.plane[3] >= 0 ? 1 : 0;
+    const next = side ? node.front : node.back;
+    if (next < 0) return node.zones[side];
+    index = next;
+  }
+  throw new Error('Cyclic BSP zone traversal');
+}
+
+export function lightAttenuation(light, point, normal) {
+  const delta = sub(light.Location ?? [0, 0, 0], point), distance = Math.hypot(...delta);
+  const radius = ((light.LightRadius ?? 0) + 1) * 25, d = distance / radius;
+  if (d >= 1) return 0;
+  if (light.LightEffect === 13) return 1 - d; // NonIncidence
+  const incidence = distance > 1e-6 ? Math.abs(dot(delta, normal)) / distance : 1;
+  // Native table stores smooth falloff / d, then multiplies plane distance / radius.
+  let attenuation = incidence * (1 + 2 * d ** 3 - 3 * d ** 2);
+  if (light.LightEffect === 8 || light.LightEffect === 12) {
+    const [pitch, yaw] = (light.Rotation ?? [0, 0, 0]).map(n => n * Math.PI / 32768);
+    const direction = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch)];
+    const cone = (light.LightCone ?? 0) / 255;
+    const cosine = distance > 1e-6 ? -dot(delta, direction) / distance : 1;
+    attenuation *= cone > 0 ? Math.max(0, (cosine - 1 + cone) / cone) ** 2 : 0;
+  }
+  return attenuation;
+}
+
+export async function createLighting(map, asset, assets) {
+  const defaults = new ClassDefaults(assets), actors = new Map(), pendingActors = new Map(), notes = new Set();
+  const sourceActors = new Map(map.actors.map(a => [a.index, a]));
+  const levelInfo = map.actors.find(a => a.className === 'LevelInfo');
+  const stats = { lightActors: 0, lightmaps: 0, shadowMasks: 0, litSurfaces: 0, unlitSurfaces: 0, missingLightmaps: 0 };
+  async function actor(ref) {
+    if (!ref) ref = levelInfo?.index;
+    if (!ref || !sourceActors.has(ref)) throw new Error(`Missing lighting actor ${ref}`);
+    if (!pendingActors.has(ref)) {
+      const promise = defaults.forActor(asset, sourceActors.get(ref)).then(values => { actors.set(ref, values); return values; });
+      pendingActors.set(ref, promise);
+    }
+    return pendingActors.get(ref);
+  }
+  await Promise.all(map.model.zones.map(z => actor(z.actor)));
+  const levelValues = await actor(levelInfo.index);
+  const zoneValues = map.model.zones.map(z => actors.get(z.actor) ?? levelValues);
+  const usedLights = new Set();
+  const caches = new WeakMap();
+  return {
+    stats, notes,
+    async prepare(model) { await Promise.all([...new Set(model.lights.filter(Boolean))].map(actor)); },
+    surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n) {
+      const surface = model.surfaces[surfaceIndex], lm = model.lightMaps[surface.lightMap];
+      if (!lm) { stats.missingLightmaps++; return null; }
+      const [width, height] = lm.clamp;
+      if (width < 1 || height < 1 || width > 1022 || height > 1022 || !lm.scale.every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid lightmap dimensions or scale');
+      if (!caches.has(model)) caches.set(model, new Map());
+      const cache = caches.get(model), key = `${surfaceIndex}:${zone}`;
+      if (cache.has(key)) return cache.get(key);
+      const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
+      const ambient = zoneValues[zone] ?? levelValues;
+      const rgb = lightColor(ambient.AmbientHue, ambient.AmbientSaturation, ambient.AmbientBrightness).map(c => c * .25);
+      const pixels = new Float32Array(width * height * 3), points = [];
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        points.push(transform(basis.point(x, y))); pixels.set(rgb, (y * width + x) * 3);
+      }
+      if (lm.lightActors >= 0) {
+        let i = lm.lightActors, lightIndex = 0;
+        for (; i < model.lights.length && model.lights[i]; i++, lightIndex++) {
+          const ref = model.lights[i], light = actors.get(ref);
+          if (!light) throw new Error(`Unprepared light ${ref}`);
+          const shadow = shadowMask(model, lm, lightIndex); stats.shadowMasks++;
+          if (!light.LightType || !light.LightBrightness) continue;
+          if (Boolean(surface.flags & 0x100000) !== Boolean(light.bSpecialLit)) continue;
+          const effect = light.LightEffect ?? 0;
+          if (![0, 3, 8, 12, 13].includes(effect)) throw new Error(`Unsupported light effect ${effect}`);
+          if (effect === 3) notes.add('Watery-shimmer lights use their static contribution; shimmer animation is not active.');
+          if (![1, 9].includes(light.LightType)) notes.add(`Light type ${light.LightType} uses a steady snapshot; time-varying light animation is not active.`);
+          if (!light.bStatic) notes.add('Switchable lights use their stored initial lighting; script-controlled changes are not active.');
+          usedLights.add(ref); stats.lightActors = usedLights.size;
+          const color = lightColor(light.LightHue, light.LightSaturation, 255)
+            .map(c => c * light.LightBrightness / 255 * (levelValues.Brightness ?? 1));
+          for (let p = 0; p < points.length; p++) {
+            const weight = shadow[p] * lightAttenuation(light, points[p], normal);
+            for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(127 / 255, pixels[p * 3 + c] + color[c] * weight);
+          }
+        }
+        if (i === model.lights.length) throw new Error('Unterminated surface light list');
+      }
+      const result = { width, height, pixels, uv: basis.uv, index: surface.lightMap, zone };
+      cache.set(key, result); stats.lightmaps++;
+      return result;
+    },
+  };
+}

@@ -33,12 +33,21 @@
       <aside id="panel" hidden aria-label="Map diagnostics">
         <div class="panel-heading"><h2>Map diagnostics</h2><button id="close-panel" aria-label="Close diagnostics">×</button></div>
         <dl id="stats"></dl>
+        <label class="check"><input id="lighting" type="checkbox" checked /> Original lighting</label>
+        <label class="check">Brightness <input id="brightness" type="range" min="0.2" max="1" step="0.01" value="0.6" /><output id="brightness-value">0.60</output></label>
         <label class="check"><input id="wireframe" type="checkbox" /> Wireframe</label>
         <label class="check"><input id="actor-markers" type="checkbox" /> Actor positions</label>
         <label class="check"><input id="inspect" type="checkbox" /> Inspect surface under crosshair</label>
         <div id="surface-info">Aim at a surface to inspect its source texture.</div>
+        <details><summary>Reference camera</summary>
+          <form id="camera-form">
+            <label>Position (X, Y, Z)<input id="camera-position" value="-1149.24353, 825.84393, -40.2" required /></label>
+            <label>Rotation (pitch, yaw, roll)<input id="camera-rotation" value="-12, 31, 0" required /></label>
+            <button type="submit">Apply camera</button>
+          </form>
+        </details>
         <h3>Render scope</h3>
-        <p>Static world and door geometry. Flat inspection lighting. Camera passes through walls.</p>
+        <p>Static world and door geometry with original light and shadow data. Turn lighting off for texture inspection. Brightness 0.40 shows the framebuffer without display correction. Camera passes through walls.</p>
         <h3>Format notes</h3><ul id="notes"></ul>
       </aside>
       <output id="toast" role="status" aria-live="polite"></output>

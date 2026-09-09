@@ -90,6 +90,10 @@ modification, not an upstream release or a general compatibility guarantee.
 
 ## Engine research
 
+**Historical evaluation:** the current direction is an independent browser
+reimplementation. The reuse option discussed below was dropped; external engine
+sources remain research references. See [the roadmap](roadmap.md).
+
 [SurrealEngine](https://github.com/dpjudas/SurrealEngine) reimplements Unreal
 Engine 1. Its [current status](https://github.com/dpjudas/SurrealEngine/blob/master/Docs/Status.md)
 reports that Deus Ex 1112fm reaches the title screen and can play the beginning of

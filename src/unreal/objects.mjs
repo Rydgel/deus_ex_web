@@ -34,6 +34,11 @@ export function readObject(pkg, bytes, exportIndex) {
     const latentAction = reader.i32();
     stack = { node, state, probeMask, latentAction, offset: node ? reader.compact() : null };
   }
+  return { entry, reader, stack, ...readProperties(pkg, reader) };
+}
+
+/** Tagged values also appear at the end of UClass exports as default overrides. */
+export function readProperties(pkg, reader) {
   const properties = [];
   const values = Object.create(null);
   while (true) {
@@ -77,5 +82,5 @@ export function readObject(pkg, bytes, exportIndex) {
     // Preserve indexed overrides individually; do not pretend to apply defaults.
     values[arrayIndex ? `${name}[${arrayIndex}]` : name] = value;
   }
-  return { entry, reader, properties, values, stack };
+  return { properties, values };
 }
