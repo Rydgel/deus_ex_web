@@ -13,8 +13,12 @@ test('static lighting, display brightness and fixed original cameras render with
   await page.setViewportSize({ width: 926, height: 719 });
   await page.goto('http://127.0.0.1:5173');
   await page.waitForFunction(() => window.deusExViewer?.status().ready);
+  // Inspect and Play have different control text heights. Select the fixed-camera
+  // mode before sizing the canvas to the original capture's 926 × 603 viewport.
+  await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
   const canvas = page.locator('#scene'), box = await canvas.boundingBox();
   await page.setViewportSize({ width: 926, height: 719 + 603 - box.height });
+  await expect.poll(() => canvas.evaluate(c => [c.width, c.height])).toEqual([926, 603]);
   const initial = await page.evaluate(() => window.deusExViewer.status());
   expect(initial).toMatchObject({ renderErrors: [], lightingEnabled: true, brightness: .6,
     lighting: { missingLightmaps: 0, lightmaps: 5212, atlasPages: 6 } });

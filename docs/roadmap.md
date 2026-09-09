@@ -12,6 +12,18 @@ the compatibility authority. SurrealEngine and other public sources can inform
 research, but this project does not depend on their runtime or feature coverage.
 Implement missing systems here rather than waiting for another engine to support them.
 
+The fidelity target is **100% of original behavior** within each claimed support
+scope. Use original evidence for every behavior; do not substitute invented
+lookalikes. A working prototype or passing internal tests does not establish
+compatibility. Unverified differences remain open work.
+
+For every next subsystem, research the original before implementing it: identify
+the responsible data, script and native routines; record constants, state changes,
+call order and unknowns; establish original reference cases; then translate and
+validate the behavior before connecting it to Play mode. Behavior without enough
+original evidence stays explicitly unsupported. Audit existing prototypes as
+their subsystems are addressed.
+
 The first completion target is the original single-player campaign. Multiplayer,
 mod compatibility, mobile/controller support, and hosting are separate later scope
 decisions; they are not implied by campaign completion.
@@ -78,8 +90,22 @@ and remaining dynamic lighting effects belong with the broader renderer in Stage
 
 ## 2. Make a small playable slice
 
-**Next milestone.** The inspection camera and pointer-lock input are available;
-player simulation, collision, and interaction have not started.
+**Playable slice delivered; remaining acceptance deferred at the user's request.**
+Play connects original CheckBob bytecode,
+source-ordered crouch/jump controls, camera math, dry walking/falling/landing,
+stairs, actor collision/point recovery, relocation, and cached target selection.
+The selected Training door pair uses original state timing, interpolation,
+encroachment/player pushing and completion callbacks. JC shares the scene actor
+hash and original motion flags; the scene has a reproducible original RNG stream.
+
+Combined physics matches 10 original sequences, 63 frames and 2,547 ordered
+queries. Nine composed moving-door scenes match exactly. The source-ordered input
+and camera comparison adds five sequences/27 frames and 27 original native eye
+expressions. These counts cover their documented boundaries, not whole-game
+fidelity. Final original visual/motion comparison and real window/tab pause
+acceptance remain tracked, but no longer hold up Stage 3.
+See [movement evidence](movement.md). JavaScript remains the implementation;
+performance work is limited to basic playability.
 
 Add pointer-lock input, a fixed simulation step, first-person movement, player
 spawn handling, gravity, jumping, crouching, stair stepping, and BSP collision.
@@ -122,7 +148,8 @@ of general script compatibility.
 Decode and render original character, weapon, and prop meshes, skins, animation
 sequences, sprites, attachments, and the first-person weapon view. Restore animated
 and procedural textures, water/fire effects, particles, decals, sky/fog, mirrors
-and other required surface effects. Extend lighting to moving actors and dynamic
+and other required surface effects, including the polished training floor's
+reflection. Extend lighting to moving actors and dynamic
 effects; compare colours, brightness, and transparency with the original renderer.
 
 Decode sound and music resources and implement positional effects, ambient sound,

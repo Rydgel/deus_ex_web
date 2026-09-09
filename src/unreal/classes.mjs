@@ -78,7 +78,22 @@ export function readClass(asset, index) {
 /** Select scalar/struct defaults only: resource references need package provenance
  * and will be handled by the future runtime rather than merged as map indices. */
 export class ClassDefaults {
-  constructor(assets) { this.assets = assets; this.cache = new Map(); }
+  constructor(assets) { this.assets = assets; this.cache = new Map(); this.lineages = new Map(); }
+  /** Original export-table superclass references, with package identity retained.
+   * Native IsA follows this same ancestry; short class names alone are ambiguous.
+   */
+  async lineage(asset, ref, ancestors = []) {
+    const object = await this.assets.resolve(asset, ref);
+    if (object.entry.className !== 'Class') throw new Error(`Expected class: ${object.key}`);
+    if (ancestors.includes(object.key)) throw new Error(`Cyclic class inheritance: ${object.key}`);
+    if (!this.lineages.has(object.key)) {
+      const pending = (async () => [object.key.toLowerCase(), ...(object.entry.superIndex
+        ? await this.lineage(object.asset, object.entry.superIndex, [...ancestors, object.key]) : [])])();
+      this.lineages.set(object.key, pending);
+      pending.catch(() => this.lineages.delete(object.key));
+    }
+    return this.lineages.get(object.key);
+  }
   async get(asset, ref, ancestry = []) {
     const object = await this.assets.resolve(asset, ref);
     if (ancestry.includes(object.key)) throw new Error(`Cyclic class inheritance: ${object.key}`);

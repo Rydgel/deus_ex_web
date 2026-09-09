@@ -9,7 +9,7 @@ import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
-  const notes = new Set(), errors = [], textureNames = new Set();
+  const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
@@ -120,6 +120,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const model = withMoverLightmaps(rawModel, readPolys(asset.pkg, asset.bytes, rawModel.polygons));
       const group = new THREE.Group();
       group.matrix.copy(brushMatrix(actor.values)); group.matrixAutoUpdate = false;
+      group.userData.baseMatrix = group.matrix.clone(); moverGroups.set(actor.name, group);
       root.add(group);
       await addModel(model, triangulateModel(model), group, actor.name, group.matrix);
       counts.movers++;
@@ -137,6 +138,15 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
   return { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
+    syncMovers(movers) {
+      for (const mover of movers) {
+        const group = moverGroups.get(mover.name); if (!group) continue;
+        group.matrix.copy(group.userData.baseMatrix);
+        const offset = toView(mover.collider.offset);
+        for (let i = 0; i < 3; i++) group.matrix.elements[12 + i] += offset[i];
+        group.matrixWorldNeedsUpdate = true;
+      }
+    },
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
       for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); },

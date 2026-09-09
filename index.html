@@ -4,14 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Explore the original Deus Ex maps in your browser using local game files." />
-  <title>Deus Ex · Map Viewer</title>
+  <title>Deus Ex · Browser Runtime</title>
 </head>
 <body>
   <main id="app">
     <header class="toolbar">
-      <div class="identity"><strong>DEUS EX</strong><span>MAP VIEWER</span></div>
+      <div class="identity"><strong>DEUS EX</strong><span>BROWSER RUNTIME</span></div>
       <label class="map-control">Map <select id="map" disabled aria-label="Map"><option>Training</option></select></label>
       <div class="actions">
+        <select id="mode" aria-label="Movement mode"><option value="play">Play</option><option value="inspect">Inspect</option></select>
         <button id="choose">Choose game folder</button>
         <button id="reset" disabled>Player start</button>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
@@ -21,6 +22,7 @@
     <section id="viewport" aria-label="3D map inspection">
       <canvas id="scene" tabindex="0" aria-label="Map camera. Click to look around; W A S D to fly, Q E down and up, Escape to release mouse."></canvas>
       <div id="crosshair" aria-hidden="true">+</div>
+      <output id="play-hint" aria-live="polite"></output>
       <div id="gate">
         <div class="gate-content">
           <p class="eyebrow">ORIGINAL GAME DATA</p>
@@ -47,14 +49,14 @@
           </form>
         </details>
         <h3>Render scope</h3>
-        <p>Static world and door geometry with original light and shadow data. Turn lighting off for texture inspection. Brightness 0.40 shows the framebuffer without display correction. Camera passes through walls.</p>
+        <p>Play supports movement and sliding doors. Characters, items and mission scripts remain incomplete. Inspect mode flies through walls. Original lighting remains available in both modes; brightness 0.40 shows the framebuffer without display correction.</p>
         <h3>Format notes</h3><ul id="notes"></ul>
       </aside>
       <output id="toast" role="status" aria-live="polite"></output>
     </section>
     <footer>
       <span id="state" role="status">Local files · nothing uploaded</span>
-      <span class="controls">Drag to look · Double-click to lock mouse · <kbd>W A S D</kbd> fly · <kbd>Q E</kbd> down / up · <kbd>Shift</kbd> faster · <kbd>Esc</kbd> release</span>
+      <span id="controls" class="controls">WASD move · Space jump · Ctrl crouch · Shift walk · F use</span>
       <span id="performance"></span>
     </footer>
   </main>

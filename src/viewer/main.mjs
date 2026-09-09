@@ -4,6 +4,7 @@ import { AssetStore } from '../unreal/assets.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
+import { createGame } from './game.mjs';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -14,6 +15,7 @@ const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.
 camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
+let game, mode = 'play', paused = false;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
 const keys = new Set(), velocity = new THREE.Vector3();
@@ -31,12 +33,26 @@ function resize() {
 new ResizeObserver(resize).observe($('viewport'));
 function resetCamera() {
   if (!map) return;
+  if (mode === 'play' && game) { game.reset(); world.syncMovers(game.collision.movers); }
   const start = map.summary.playerStarts.find(p => p.location);
   const position = start?.location ?? map.model.points[0] ?? [0, 0, 0];
   camera.position.fromArray(toView([position[0], position[1], position[2] + 40]));
   pitch = (start?.rotation?.[0] ?? 0) * Math.PI / 32768;
   yaw = -(start?.rotation?.[1] ?? 0) * Math.PI / 32768;
   camera.rotation.set(pitch, yaw, 0); cameraMoved = false;
+  if (mode === 'play' && game) camera.position.fromArray(toView(game.player.eye));
+}
+function setMode(next) {
+  mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
+  keys.clear(); game?.clock.reset();
+  if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
+  $('play-hint').textContent = '';
+  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
+  $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
+}
+function useDoor() {
+  if (mode !== 'play' || !game || loading) return;
+  const result = game.use(); toast(result.message);
 }
 function showStats() {
   const pairs = [['Map', currentMap], ['World triangles', map.summary.triangles.toLocaleString()],
@@ -46,7 +62,7 @@ function showStats() {
   $('stats').replaceChildren(...pairs.flatMap(([label, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; return [dt, dd];
   }));
-  $('notes').replaceChildren(...[...world.notes, ...world.errors.slice(0, 10).map(e => `${e.actor ?? `Surface ${e.surface}`}: ${e.message}`)].map(message => {
+  $('notes').replaceChildren(...[...world.notes, ...(game?.notes ?? []), ...world.errors.slice(0, 10).map(e => `${e.actor ?? `Surface ${e.surface}`}: ${e.message}`)].map(message => {
     const li = document.createElement('li'); li.textContent = message; return li;
   }));
 }
@@ -58,7 +74,7 @@ async function loadMap(name) {
   $('toast').textContent = '';
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld;
+  let nextWorld, nextGame;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -67,8 +83,11 @@ async function loadMap(name) {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
+    try { nextGame = await createGame(nextMap, asset, assets); }
+    catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
+    game = nextGame; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
@@ -105,6 +124,7 @@ $('folder').onchange = async event => {
 };
 $('map').onchange = event => loadMap(event.target.value).catch(fail);
 $('reset').onclick = resetCamera;
+$('mode').onchange = event => setMode(event.target.value);
 function togglePanel(open) { $('panel').hidden = !open; $('diagnostics').setAttribute('aria-expanded', String(open)); }
 $('diagnostics').onclick = () => togglePanel($('panel').hidden);
 $('close-panel').onclick = () => togglePanel(false);
@@ -122,6 +142,7 @@ function setCamera(input) {
     ![input.position, input.rotation].every(a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite)) ||
     input.position.some(n => Math.abs(n) > 1e7) || input.rotation.some(n => Math.abs(n) > 65536)) throw new Error('Expected three finite position coordinates and three Unreal rotator values');
   const signed = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
+  setMode('inspect');
   camera.position.fromArray(toView(input.position));
   pitch = signed(input.rotation[0]); yaw = -signed(input.rotation[1]);
   camera.rotation.set(pitch, yaw, -signed(input.rotation[2])); cameraMoved = true;
@@ -138,7 +159,8 @@ function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
 }
-$('scene').onpointerdown = event => { if (world && !loading) { drag = true; $('scene').focus(); $('scene').setPointerCapture(event.pointerId); } };
+$('scene').onpointerdown = event => { if (world && !loading) { paused = false; $('scene').focus(); if (event.button === 2) useDoor(); else { drag = true; $('scene').setPointerCapture(event.pointerId); } } };
+$('scene').oncontextmenu = event => event.preventDefault();
 $('scene').onpointerup = () => { drag = false; };
 $('scene').onpointercancel = () => { drag = false; };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
@@ -146,18 +168,21 @@ document.addEventListener('pointermove', event => { if (document.pointerLockElem
 document.addEventListener('keydown', event => {
   if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
-  if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight'].includes(event.code)) {
+  if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
+  if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
+    paused = false;
     keys.add(event.code); event.preventDefault();
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
 document.addEventListener('keyup', event => keys.delete(event.code));
-window.addEventListener('blur', () => { keys.clear(); drag = false; });
-document.addEventListener('visibilitychange', () => { if (document.hidden) keys.clear(); });
+window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; game?.clock.reset(); });
+document.addEventListener('visibilitychange', () => { keys.clear(); game?.clock.reset(); if (document.hidden) paused = true; });
 function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
+    mode, paused, gameplay: game?.status() ?? null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
@@ -169,15 +194,23 @@ window.deusExViewer = { status };
 
 function animate(time) {
   requestAnimationFrame(animate);
-  const dt = Math.min((time - lastTime) / 1000, .05); lastTime = time;
+  const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   if (world && !loading) {
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
-    if (x || y || z) {
+    if (mode === 'play' && game) {
+      if (!paused && !document.hidden) game.tick(dt, { forward: z, right: x, yaw: -yaw, pitch, jump: keys.has('Space'),
+        crouch: keys.has('ControlLeft') || keys.has('ControlRight'), walk: keys.has('ShiftLeft') || keys.has('ShiftRight') });
+      world.syncMovers(game.collision.movers);
+      camera.position.fromArray(toView(game.player.eye));
+      if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
+      const target = game.target();
+      $('play-hint').textContent = paused ? 'Click the view to resume' : target ? `F · ${target.label}` : '';
+    } else if (x || y || z) {
       const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
       velocity.copy(forward).multiplyScalar(z).addScaledVector(right, x); velocity.y += y;
-      velocity.normalize().multiplyScalar(dt * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 900 : 240));
+      velocity.normalize().multiplyScalar(Math.min(dt, .05) * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 900 : 240));
       camera.position.add(velocity); cameraMoved = true;
     }
     renderer.setClearColor('#06101b', 1); renderer.clear();

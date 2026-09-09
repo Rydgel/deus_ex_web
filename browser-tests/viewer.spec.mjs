@@ -11,6 +11,8 @@ const errors = page => { const list = []; page.on('pageerror', e => list.push(e.
 test('original training map renders with textures and interactive inspection controls', async ({ page }) => {
   const failures = errors(page);
   await page.goto('http://127.0.0.1:5173'); await ready(page);
+  await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
+  await page.getByRole('button', { name: 'Player start', exact: true }).click();
   const initial = await state(page);
   expect(initial).toMatchObject({ map: '00_Training', textures: 70, movers: 25, triangles: 24427, renderErrors: [], cameraMoved: false });
   expect(initial.calls).toBeGreaterThan(0);

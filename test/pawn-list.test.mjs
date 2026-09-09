@@ -1,0 +1,3 @@
+import test from'node:test';import assert from'node:assert/strict';import{addPawn,removePawn}from'../src/runtime/pawn-list.mjs';
+test('prepend and unlink preserve removed next pointer',()=>{const l={pawnList:null},a={},b={},c={};addPawn(l,a);addPawn(l,b);addPawn(l,c);removePawn(l,b);assert.equal(l.pawnList,c);assert.equal(c.nextPawn,a);assert.equal(b.nextPawn,a);removePawn(l,c);assert.equal(l.pawnList,a);removePawn(l,{});assert.equal(l.pawnList,a);});
+test('native duplicate AddPawn has no membership guard',()=>{const l={pawnList:null},p={};addPawn(l,p);addPawn(l,p);assert.equal(p.nextPawn,p);});
