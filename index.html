@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Explore the original Deus Ex maps in your browser using local game files." />
+  <title>Deus Ex · Map Viewer</title>
+</head>
+<body>
+  <main id="app">
+    <header class="toolbar">
+      <div class="identity"><strong>DEUS EX</strong><span>MAP VIEWER</span></div>
+      <label class="map-control">Map <select id="map" disabled aria-label="Map"><option>Training</option></select></label>
+      <div class="actions">
+        <button id="choose">Choose game folder</button>
+        <button id="reset" disabled>Player start</button>
+        <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
+      </div>
+      <input id="folder" type="file" webkitdirectory multiple hidden />
+    </header>
+    <section id="viewport" aria-label="3D map inspection">
+      <canvas id="scene" tabindex="0" aria-label="Map camera. Click to look around; W A S D to fly, Q E down and up, Escape to release mouse."></canvas>
+      <div id="crosshair" aria-hidden="true">+</div>
+      <div id="gate">
+        <div class="gate-content">
+          <p class="eyebrow">ORIGINAL GAME DATA</p>
+          <h1 id="gate-title">Open your Deus Ex installation</h1>
+          <p id="gate-message">Choose the folder containing Maps, Textures, and System. Files are read on this device.</p>
+          <button id="gate-choose">Choose game folder</button>
+          <progress id="progress" hidden aria-label="Loading map"></progress>
+        </div>
+      </div>
+      <aside id="panel" hidden aria-label="Map diagnostics">
+        <div class="panel-heading"><h2>Map diagnostics</h2><button id="close-panel" aria-label="Close diagnostics">×</button></div>
+        <dl id="stats"></dl>
+        <label class="check"><input id="wireframe" type="checkbox" /> Wireframe</label>
+        <label class="check"><input id="actor-markers" type="checkbox" /> Actor positions</label>
+        <label class="check"><input id="inspect" type="checkbox" /> Inspect surface under crosshair</label>
+        <div id="surface-info">Aim at a surface to inspect its source texture.</div>
+        <h3>Render scope</h3>
+        <p>Static world and door geometry. Flat inspection lighting. Camera passes through walls.</p>
+        <h3>Format notes</h3><ul id="notes"></ul>
+      </aside>
+      <output id="toast" role="status" aria-live="polite"></output>
+    </section>
+    <footer>
+      <span id="state" role="status">Local files · nothing uploaded</span>
+      <span class="controls">Drag to look · Double-click to lock mouse · <kbd>W A S D</kbd> fly · <kbd>Q E</kbd> down / up · <kbd>Shift</kbd> faster · <kbd>Esc</kbd> release</span>
+      <span id="performance"></span>
+    </footer>
+  </main>
+  <script type="module" src="/src/viewer/main.mjs"></script>
+</body>
+</html>

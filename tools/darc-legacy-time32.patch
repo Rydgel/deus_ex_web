@@ -1,0 +1,20 @@
+diff --git a/rust/darc-arc/src/directory.rs b/rust/darc-arc/src/directory.rs
+index e368081..2d6db74 100644
+--- a/rust/darc-arc/src/directory.rs
++++ b/rust/darc-arc/src/directory.rs
+@@ -122,7 +122,14 @@ pub fn read_directory(arcpos: u64, body: &[u8]) -> Result<Directory, bytestream:
+     let sizes = s.exactly(total_files, |s| s.varint())?;
+     // FileTime is CTime, eight bytes signed -- NOT a varint. Reading it as one
+     // would consume the wrong width and shift every column after it.
+-    let times = s.exactly(total_files, |s| s.i64())?;
++    // Local compatibility switch for original FreeArc Windows archives.
++    // FreeArc 0.67 Unarc/ArcStructure.h reads this column with read4().
++    // Keep modern DArc's default unchanged; this is an extraction-only patch.
++    let times = if std::env::var_os("DARC_LEGACY_TIME32").is_some() {
++        s.exactly(total_files, |s| s.u32().map(i64::from))?
++    } else {
++        s.exactly(total_files, |s| s.i64())?
++    };
+     // Bool as a list is one byte per element: the bit-packing writeListFast in
+     // ByteStream.hs:524 is commented out, so the default element-wise path runs.
+     let dir_flags = s.exactly(total_files, |s| s.bool())?;
