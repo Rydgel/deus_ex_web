@@ -54,6 +54,7 @@ export class Doors {
         };
       }
     }
+    this.scriptRuntime?.reset();
   }
   target(collision, eye, forward) {
     const hit = collision.sweep(eye, forward.map(v => v * this.maxDistance));
@@ -77,6 +78,10 @@ export class Doors {
     const tag = (v.Tag ?? '').toLowerCase();
     const group = this.movers.filter(m => m === mover || tag && !['none','deusexmover'].includes(tag) && (m.values.Tag ?? '').toLowerCase() === tag);
     if (group.some(m => !m.supported)) return { ok: false, message: 'Linked door behavior not supported yet' };
+    if(this.scriptRuntime){
+      this.scriptRuntime.use(mover,group);this.uses++;
+      return {ok:true,message:mover.target?'Opening door':'Closing door',actors:group.map(m=>m.name)};
+    }
     if (mover.scriptState) {
       triggerFrobbedDoor(mover.scriptState,this.collision.playerActor,this.collision.playerActor,group.map(m=>m.scriptState),this.collision.doorCallbacks);
       for (const m of group) { m.target=m.scriptState.code==='open'?1:0;m.active=Boolean(m.scriptState.code); }
@@ -93,6 +98,7 @@ export class Doors {
     return { ok: true, message: mover.target ? 'Opening door' : 'Closing door', actors: group.map(m => m.name) };
   }
   tick(dt) {
+    if(this.scriptRuntime)return this.scriptRuntime.tick(dt);
     for (const m of this.movers) {
       if (!m.active) continue;
       if (m.scriptState) processDoorState(m.scriptState,{

@@ -72,6 +72,13 @@ test('atlas padding prevents neighboring lightmaps from bleeding into samples', 
   assert.deepEqual(tile.bounds, [.375, .375, .625, .375]);
   assert.deepEqual([...tile.page.pixels.slice(0, 4)], [255, 0, 0, 255]);
   assert.deepEqual([...tile.page.pixels.slice(12, 16)], [0, 0, 255, 255]);
+  lm.pixels = [0, 1, 0, 1, 1, 0];
+  const version = tile.page.texture.version;
+  assert.equal(atlas.update(lm), tile);
+  assert.equal(tile.page.texture.version, version + 1);
+  assert.deepEqual([...tile.page.pixels.slice(0, 4)], [0, 255, 0, 255]);
+  assert.deepEqual([...tile.page.pixels.slice(12, 16)], [255, 255, 0, 255]);
+  assert.deepEqual(atlas.coordinates(tile, []), [.375, .375, 1]);
   assert.equal(atlas.add({ ...lm }).page.index, 1);
   assert.deepEqual(atlas.coordinates(atlas.add(null), []), [0, 0, 0]);
   assert.throws(() => atlas.add({ ...lm, width: 3 }), /fit/);

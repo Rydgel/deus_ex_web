@@ -9,6 +9,11 @@ test('VM resolves local/instance references, native out parameters, and float32 
   const vm = compile([184, 1, 1, 0, 2, 22, 4, 1, 1], 18);
   const instance = { Value: Math.fround(.1) };
   assert.equal(vm.run(instance, { Amount: Math.fround(.2) }), Math.fround(Math.fround(.1) + Math.fround(.2)));
+  const toByte = compile([0x04, 0x43, 0x01, 1], 7);
+  assert.equal(toByte.run({Value: 300.9}), 44);
+  assert.equal(toByte.run({Value: -1.9}), 255);
+  assert.equal(toByte.run({Value: 255.99999999}), 0);
+  assert.throws(() => toByte.run({Value: NaN}), /nonfinite\/overflow/);
 });
 test('VM follows expanded jump addresses and fails closed on invalid/unsupported programs', () => {
   // if (Value < Amount) return 1; return 0;
@@ -16,8 +21,31 @@ test('VM follows expanded jump addresses and fails closed on invalid/unsupported
   const vm = compile(bytes, 19);
   assert.equal(vm.run({ Value: 1 }, { Amount: 2 }), 1);
   assert.equal(vm.run({ Value: 3 }, { Amount: 2 }), 0);
-  assert.throws(() => compile([0x5f], 1), /opcode/);
+  assert.throws(() => compile([0x03], 1), /opcode/);
   assert.throws(() => compile([6, 1, 0, 4, 11], 5), /boundary/);
   assert.throws(() => compile([6, 0, 0], 3).run({}, {}), /budget/);
-  assert.throws(() => compile([255, 22, 4, 11], 4).run({}, {}), /native 255/);
+  assert.throws(() => compile([127, 22, 4, 11], 4).run({}, {}), /native 127/);
+});
+
+test('object equality uses native114 and native118 reaches host Disable dispatch',()=>{
+  assert.equal(compile([4,114,0x2a,0x2a,0x16],5).run({}),true);
+  let index;
+  compile([118,0x2a,0x16,4,0x0b],5).run({}, {}, {invokeNative:call=>{index=call.index;}});
+  assert.equal(index,118);
+});
+
+function floatNative(index,a,b) {
+  // Field references allow NaN values from the host object; package float
+  // literals intentionally reject nonfinite data.
+  const bytes=[0x04,0x60,index,0x01,0x01,0x01,0x02,0x16];
+  return compile(bytes,14).run({Value:a,Amount:b});
+}
+
+test('native float equality uses float32 operands and original unordered result',()=>{
+  assert.equal(floatNative(0xb4,1,1+2**-25),true);
+  assert.equal(floatNative(0xb4,NaN,3),true);
+  assert.equal(floatNative(0xb5,1,1+2**-25),false);
+  assert.equal(floatNative(0xb5,NaN,3),false);
+  assert.equal(floatNative(0xb5,1,2),true);
+  assert.equal(floatNative(0xb4,-0,+0),true);
 });

@@ -100,7 +100,7 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
     if(actor.movingBrush)updateZone(actor,false,true);
   };
-  return {dispatch,reset(){
+  return {dispatch,level,reset(){
     worldActor.values={...levelValues};
     level.pawnList=null;
     for(const actor of actors)prepareActor(actor);

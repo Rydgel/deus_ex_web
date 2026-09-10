@@ -28,10 +28,15 @@ Keep delivery local. Do not deploy or push hosting updates unless the user asks.
 Keep original assets, extracted script sources, native binaries and local captures
 outside Git.
 
-Prioritize completing Stage 2 integration over performance optimization. Keep
-performance work to basic playability checks for now. Retain JavaScript unless
-later measurements identify a specific bottleneck that justifies WebAssembly;
-the user has explicitly allowed deferring that decision to a later stage.
+Prioritize runtime implementation over performance optimization. Retain
+JavaScript unless later measurements identify a specific bottleneck that
+justifies WebAssembly; performance work is limited to basic playability for now.
+
+During Stage 3, keep verification focused. Original bytecode/source and clearly
+recovered native instructions establish the behavior contract. Visual comparison
+is not a gate for nonvisual script/runtime logic. Check new translation and
+integration boundaries, reuse existing original evidence, and avoid expanding
+large test corpora or repeating passing checks without a concrete unresolved issue.
 
 ## Subagent delegation
 

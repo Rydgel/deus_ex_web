@@ -6,6 +6,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { CollisionWorld, BspCollider } from '../runtime/collision.mjs';
 import { Player, FixedClock } from '../runtime/player.mjs';
 import { Doors } from '../runtime/doors.mjs';
+import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
 import { brushMatrix } from './transforms.mjs';
@@ -13,6 +14,7 @@ import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { tickWalkingInteraction, traceActors, isHighlighted } from '../runtime/interaction.mjs';
 import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
+import { mapActorArray } from '../runtime/script-map-properties.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0 } = {}) {
@@ -82,6 +84,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
+  playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
+  doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
+    playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random});
   const interaction = { get position() { return player.position; }, get viewRotation() { return player.viewRotation; },
     get baseEyeHeight() { return player.baseEyeHeight; }, maxFrobDistance: playerDefaults.MaxFrobDistance,
     frobTime: 0, frobTarget: null, carriedDecoration: null, stateName: 'PlayerWalking',

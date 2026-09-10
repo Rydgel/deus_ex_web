@@ -70,7 +70,7 @@ npm test
 node scripts/validate-game.mjs > reports/map-validation.json
 node scripts/validate-viewer.mjs > reports/stage1-validation.json
 npm run build
-npx playwright install chromium
+npx playwright install chromium firefox
 npm run test:browser
 ```
 

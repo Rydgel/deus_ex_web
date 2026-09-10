@@ -91,7 +91,7 @@ npm run validate:game
 npm run validate:viewer
 node scripts/validate-gameplay.mjs
 npm run export:training
-npx playwright install chromium
+npx playwright install chromium firefox
 npm run test:browser
 ```
 

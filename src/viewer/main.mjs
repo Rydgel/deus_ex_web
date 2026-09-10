@@ -15,7 +15,7 @@ const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.
 camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
-let game, mode = 'play', paused = false;
+let game, mode = 'play', paused = false, runtimeError = null;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
 const keys = new Set(), velocity = new THREE.Vector3();
@@ -33,7 +33,10 @@ function resize() {
 new ResizeObserver(resize).observe($('viewport'));
 function resetCamera() {
   if (!map) return;
-  if (mode === 'play' && game) { game.reset(); world.syncMovers(game.collision.movers); }
+  if (mode === 'play' && game) {
+    game.reset(); world.syncMovers(game.collision.movers);
+    runtimeError=null;paused=false;keys.clear();$('toast').textContent='';showStats();
+  }
   const start = map.summary.playerStarts.find(p => p.location);
   const position = start?.location ?? map.model.points[0] ?? [0, 0, 0];
   camera.position.fromArray(toView([position[0], position[1], position[2] + 40]));
@@ -51,8 +54,15 @@ function setMode(next) {
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
 }
 function useDoor() {
-  if (mode !== 'play' || !game || loading) return;
-  const result = game.use(); toast(result.message);
+  if (mode !== 'play' || !game || loading || runtimeError) return;
+  try { const result = game.use(); toast(result.message); }
+  catch(error) { pauseForRuntimeError(error); }
+}
+function pauseForRuntimeError(error) {
+  runtimeError={message:error.message,stack:error.stack};paused=true;
+  keys.clear();drag=false;game.clock.reset();document.exitPointerLock?.();
+  showStats();
+  $('toast').textContent=`Play paused: ${error.message}. Choose Player start to reset.`;
 }
 function showStats() {
   const pairs = [['Map', currentMap], ['World triangles', map.summary.triangles.toLocaleString()],
@@ -62,7 +72,7 @@ function showStats() {
   $('stats').replaceChildren(...pairs.flatMap(([label, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; return [dt, dd];
   }));
-  $('notes').replaceChildren(...[...world.notes, ...(game?.notes ?? []), ...world.errors.slice(0, 10).map(e => `${e.actor ?? `Surface ${e.surface}`}: ${e.message}`)].map(message => {
+  $('notes').replaceChildren(...[...world.notes, ...(game?.notes ?? []), ...(runtimeError?[`Play paused: ${runtimeError.message}`]:[]), ...world.errors.slice(0, 10).map(e => `${e.actor ?? `Surface ${e.surface}`}: ${e.message}`)].map(message => {
     const li = document.createElement('li'); li.textContent = message; return li;
   }));
 }
@@ -87,7 +97,7 @@ async function loadMap(name) {
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
-    game = nextGame; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
@@ -159,7 +169,7 @@ function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
 }
-$('scene').onpointerdown = event => { if (world && !loading) { paused = false; $('scene').focus(); if (event.button === 2) useDoor(); else { drag = true; $('scene').setPointerCapture(event.pointerId); } } };
+$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus(); if (event.button === 2) useDoor(); else { drag = true; $('scene').setPointerCapture(event.pointerId); } } };
 $('scene').oncontextmenu = event => event.preventDefault();
 $('scene').onpointerup = () => { drag = false; };
 $('scene').onpointercancel = () => { drag = false; };
@@ -170,6 +180,7 @@ document.addEventListener('keydown', event => {
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
+    if(mode==='play'&&runtimeError){event.preventDefault();return;}
     paused = false;
     keys.add(event.code); event.preventDefault();
   }
@@ -182,7 +193,7 @@ function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
-    mode, paused, gameplay: game?.status() ?? null,
+    mode, paused, runtimeError, gameplay: game?.status() ?? null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
@@ -199,13 +210,16 @@ function animate(time) {
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
-      if (!paused && !document.hidden) game.tick(dt, { forward: z, right: x, yaw: -yaw, pitch, jump: keys.has('Space'),
-        crouch: keys.has('ControlLeft') || keys.has('ControlRight'), walk: keys.has('ShiftLeft') || keys.has('ShiftRight') });
+      if (!paused && !runtimeError && !document.hidden) {
+        try { game.tick(dt, { forward: z, right: x, yaw: -yaw, pitch, jump: keys.has('Space'),
+          crouch: keys.has('ControlLeft') || keys.has('ControlRight'), walk: keys.has('ShiftLeft') || keys.has('ShiftRight') }); }
+        catch(error) { pauseForRuntimeError(error); }
+      }
       world.syncMovers(game.collision.movers);
       camera.position.fromArray(toView(game.player.eye));
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
-      $('play-hint').textContent = paused ? 'Click the view to resume' : target ? `F · ${target.label}` : '';
+      $('play-hint').textContent = runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `F · ${target.label}` : '';
     } else if (x || y || z) {
       const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);

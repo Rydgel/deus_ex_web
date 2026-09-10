@@ -66,3 +66,13 @@ Future script/animation/audio consumers must share it, not create independent
 physics or audio streams. Full-session random-call ordering is still incomplete
 while those subsystems are absent; this does not claim the same historic game
 state or all original startup calls have been replayed.
+
+## UnrealScript FRand wrapper
+
+Native 195 in Object.uc uses Core `execFRand`, thunk `101033cd`, body
+`101362a0`. It advances FFrame.Code over EndFunctionParms, calls original
+`appFrand` at `101362a7`, and stores ST0 to the float32 Result at `101362b0`.
+It accepts no expressions and consumes exactly one shared-stream random value.
+The common ScriptRuntime binding therefore requires an explicit shared `rng`
+service and returns `Math.fround(rng.frand())`. Play passes its existing scene
+stream to the script runtime, preserving the same state used by physics.

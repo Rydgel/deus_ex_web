@@ -122,6 +122,77 @@ described in Stage 3 to validate our runtime design against original behavior.
 
 ## 3. Execute game behavior
 
+**Resume here:** [Stage 3 handoff, 2026-09-10](stage-3-handoff.md) records
+implemented work, remaining integration, unsaved research findings and passing
+checks. Work was stopped and saved in a progress checkpoint at the user's
+request; Stage 3 remains unfinished.
+
+**In progress.** Extend the existing bounded VM to execute original functions
+and state bytecode, starting with class/property metadata and the selected
+mover's script path. Use focused source/native and integration checks; visual
+comparison is not an acceptance gate for nonvisual runtime logic.
+
+The linked VM now executes original training-door functions and state bytecode
+in Play, including event entry, reversal and completion. Class inheritance,
+typed property/parameter storage, state transitions and the selected latent/native
+path are implemented. Original automatic state selection and Core execution-frame
+initialization are translated, with CameraPoint startup state selection checked
+against its original bytecode. Ownership and destruction now use the recovered
+event/cleanup order with explicit native world and object bindings; original
+CameraPoint metadata is covered by a focused lifecycle check. Fresh object
+construction now has source-backed naming, template copying, registration and
+the concrete CameraPoint native constructor. The scoped Spawn binding now runs
+CameraPoint construction, original startup/relevance scripts, zone assignment
+and automatic state selection, preserving the native callback/Tag order. Broader
+actor spawning, native resource classes, complete garbage-collection integration, native coverage and the
+remaining required systems below are still open; see [runtime scope](script-runtime.md).
+Core marking/purge orchestration and deferred actor-reference cleanup now follow
+the recovered native order. Typed reference traversal and CameraPoint final
+release/index reuse have focused source-backed coverage. Complete world/resource
+serialization and broader native release bindings remain explicit integration work.
+Actor/UObject collector serialization now connects to live script storage,
+including active CameraPoint state/code references. FName marking, deletion and
+index reuse are connected through the typed GC bridge; native class/resource
+loading and their complete serializer graph are still required for live-world GC.
+Class/state/property metadata and bytecode-reference serializers now follow
+the recovered native order. GC updates now reach live bytecode operand storage.
+Tagged-default traversal and its native measuring archive are translated, with
+an original Owner field connected to live default storage and the collector.
+Complete typed class layout and complex-property virtual bindings are still
+required for the full graph.
+Native UObject registration, UStruct/UClass construction and UClass's default-object
+initialization now have source-backed translations. UField/UStruct registration
+and real object lookup are connected to the shared host. The constructor, registration
+and serializer adapters share mutable native class fields. Registration now
+connects to the recovered UClass::Link layer and existing-package construction.
+The recovered UStruct/UState linkers and net-field sort are connected. Original
+Core.Object registration now executes through the real constructor, registry,
+default initialization, all three link layers and config/localization gates.
+Scalar property linking now supplies the recovered size/alignment behavior for
+Byte/Int/Float/Name/Object/Class fields through the actual struct linker.
+Complex native property linking, config/localization resource services and the live loaded graph remain
+required; the scoped adapters do not yet complete native class loading.
+The Play script host now preserves the full serialized map actor array, including
+non-colliding actors and null slots, with canonical references and typed authored
+properties. Training's four TriggerLights can be found through native AllActors;
+their player interaction and renderer update path remain integration work.
+The original PlaySound dispatch and hearing gates are translated, including
+the separate BSP FastLineCheck used for sound obstruction. Live native object
+indices, listener/viewport state and native audio event bindings still need
+integration; this does not yet add audible plant or switch sounds in Play.
+The [native coverage inventory](script-coverage.md) tracks engine, game, UI and
+conversation declarations separately from implemented call paths.
+
+Plant/decorative-object collisions are present, but their pushing and support
+scripts are still outside the delivered playable subset. An unsupported contact
+now pauses simulation with a visible explanation while rendering and the Player
+start reset remain usable; the Plant7 contact/recovery path is checked in Firefox.
+The inherited Plant2 Bump/Timer bytecode now executes in a focused VM fixture,
+including casts, native arithmetic and rotation. Play still needs decoration
+physics and sound/AI services before that script route can be enabled.
+The [plant contact trace](script-plant-contact.md) identifies the rejected scene
+callback, original pushable defaults, script dependencies and required actor physics.
+
 Build our own UnrealScript VM and implementations of the native engine and Deus Ex
 functions it calls. Analyze original package bytecode, class data, and native code
 or observed game behavior as needed. Prototype one representative script/class/native

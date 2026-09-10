@@ -18,8 +18,9 @@ export function interpolateMoverTo(mover,key,seconds){
 /** AMover.physMovingBrush103de690, constant-rotation two-key subset.
  * move(delta,rotation) MUST update mover.position as original MoveActor does,
  * and return its boolean success. No interpolation alpha commits on failure.
- * onInterpolateEnd is notification after the evidenced two-key script fields
- * previousKey=key and alpha=0 are applied. Script latent-state resumption is
+ * With scriptInterpolateEnd, the callback executes original InterpolateEnd
+ * bytecode and owns its fields. The legacy two-key adapter otherwise applies
+ * previousKey=key and alpha=0 before notification. Script latent resumption is
  * owned by the caller. See docs/doors.md for explicit collision/VM limits.
  */
 export function tickMoverInterpolation(mover,seconds){
@@ -37,7 +38,7 @@ export function tickMoverInterpolation(mover,seconds){
   mover.alpha=stored;
   if(stored===1){
    mover.interpolating=false;
-   mover.previousKey=mover.key;mover.alpha=0;
+   if(!mover.scriptInterpolateEnd){mover.previousKey=mover.key;mover.alpha=0;}
    mover.onInterpolateEnd?.();
   }
  }

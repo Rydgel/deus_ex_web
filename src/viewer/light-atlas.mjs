@@ -21,16 +21,28 @@ export class LightAtlas {
     if (page.x + width > this.size) { page.x = 0; page.y += page.rowHeight; page.rowHeight = 0; }
     if (page.y + height > this.size) page = this.addPage();
     const x = page.x + 1, y = page.y + 1;
+    const tile = { page, enabled: true, x, y, lightmap, width: lightmap.width, height: lightmap.height,
+      bounds: [(x + .5) / this.size, (y + .5) / this.size, (x + lightmap.width - .5) / this.size, (y + lightmap.height - .5) / this.size] };
+    page.x += width; page.rowHeight = Math.max(page.rowHeight, height);
+    this.tiles.set(lightmap, tile);
+    return this.update(lightmap);
+  }
+  /** Upload changed light samples into the existing tile, retaining its UVs,
+   * page and padding. The lighting engine owns when and how samples change. */
+  update(lightmap) {
+    const tile = this.tiles.get(lightmap);
+    if (!tile) throw new Error('Lightmap is not allocated in this atlas');
+    if (lightmap.width !== tile.width || lightmap.height !== tile.height)
+      throw new Error('Updating a lightmap cannot change its atlas dimensions');
+    const {page, x, y} = tile;
     for (let row = -1; row <= lightmap.height; row++) for (let col = -1; col <= lightmap.width; col++) {
       const src = (Math.max(0, Math.min(lightmap.height - 1, row)) * lightmap.width + Math.max(0, Math.min(lightmap.width - 1, col))) * 3;
       const dst = ((y + row) * this.size + x + col) * 4;
       for (let c = 0; c < 3; c++) page.pixels[dst + c] = Math.round(Math.max(0, Math.min(1, lightmap.pixels[src + c])) * 255);
       page.pixels[dst + 3] = 255;
     }
-    page.x += width; page.rowHeight = Math.max(page.rowHeight, height); page.texture.needsUpdate = true;
-    const tile = { page, enabled: true, x, y, lightmap,
-      bounds: [(x + .5) / this.size, (y + .5) / this.size, (x + lightmap.width - .5) / this.size, (y + lightmap.height - .5) / this.size] };
-    this.tiles.set(lightmap, tile); return tile;
+    page.texture.needsUpdate = true;
+    return tile;
   }
   coordinates(tile, point) {
     if (!tile.enabled) return [0, 0, 0];

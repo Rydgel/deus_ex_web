@@ -15,9 +15,9 @@ export default defineConfig({
       const files = new Map();
       try {
         const root = gameDirectory();
-        for (const directory of ['Maps', 'Textures', 'System']) {
+        for (const directory of ['Maps', 'Textures', 'System', 'Sounds', 'Music']) {
           for (const file of await readdir(path.join(root, directory), { withFileTypes: true })) {
-            if (file.isFile() && /\.(u|utx|dx|unr)$/i.test(file.name)) {
+            if (file.isFile() && /\.(u|utx|dx|unr|uax|umx)$/i.test(file.name)) {
               const name = `${directory}/${file.name}`;
               files.set(name, path.join(root, name));
             }

@@ -61,7 +61,7 @@ export function readClass(asset, index) {
   const line = r.u32(), textPosition = r.u32(), scriptSize = r.u32(), scriptStart = r.offset;
   skipBytecode(pkg, r, scriptSize);
   const scriptBytes = r.offset - scriptStart;
-  r.take(16); // Probe/ignore masks
+  const probeMask=[r.u32(),r.u32()],ignoreMask=[r.u32(),r.u32()];
   const labelTableOffset = r.u16(), stateFlags = r.u32(), classFlags = r.u32();
   r.take(16); // GUID
   const dependencies = counted(r, 9, () => ({ class: ref(), deep: r.u32(), scriptCRC: r.u32() }));
@@ -71,7 +71,7 @@ export function readClass(asset, index) {
   if (r.offset !== r.bytes.length) throw new PackageError('Trailing Class data', r.offset);
   if (base !== entry.superIndex) throw new Error('Class superclass disagrees with export table');
   return { entry, base, next, scriptText, children, friendlyName, line, textPosition,
-    scriptSize, scriptBytes, labelTableOffset, stateFlags, classFlags, dependencies,
+    scriptSize, scriptBytes, probeMask, ignoreMask, labelTableOffset, stateFlags, classFlags, dependencies,
     packageImports, within, configName, defaultsOffset, ...defaults };
 }
 
