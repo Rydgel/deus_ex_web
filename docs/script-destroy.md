@@ -246,6 +246,11 @@ when enabled.
 
 ## Browser adapter implementation
 
+The live Play wiring for these callbacks — the host eligibility gate, the
+level's real `FCollisionHash`, the Core object record for a pre-placed map
+export and the boundaries it still refuses — is recorded in
+[live-world `Actor.Destroy`](script-world-destroy.md).
+
 `src/runtime/script-destroy.mjs` exports the named function
 `destroyScriptActor(receiver, callbacks, netForce = false)`. `callbacks` must
 provide `levelFor`, `read`, `write`, and `validate`. `levelFor(receiver)` must

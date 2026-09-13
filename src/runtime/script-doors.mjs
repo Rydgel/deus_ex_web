@@ -11,6 +11,7 @@ import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers
 import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
+import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -118,6 +119,20 @@ function makeBinding(record, field) {
     base: {
       get: () => host.base ?? null,
       set: value => { host.base = value; },
+    },
+    // The live four `Touching` slots (Actor.uc:186) are kept on the host actor
+    // by the recovered BeginTouch/EndTouch pair (actor-touch.mjs). Script reads
+    // of `Touching` — the ULevel::DestroyActor scan among them — must see that
+    // live state. An actor the scene never prepared for contact has no live
+    // slots, and its serialized startup value stays authoritative.
+    touching: {
+      get: () => Array.isArray(host.touching) && host.touching.length === 4 ? [...host.touching]
+        : record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field),
+      set: value => {
+        if (!Array.isArray(value) || value.length !== 4) throw new Error('Original Touching requires four explicit slots');
+        if (Array.isArray(host.touching) && host.touching.length === 4) host.touching = [...value];
+        else record.store.set(field.key, [...value]);
+      },
     },
     waitingpawn: {
       get: () => host.waitingPawn ?? null,
@@ -356,6 +371,14 @@ export async function createScriptDoors({
     decorationBump: await prepare(deusEx, 'deusexdecoration.bump', 'DeusExDecoration.Bump'),
     decorationTimer: await prepare(deusEx, 'deusexdecoration.timer', 'DeusExDecoration.Timer'),
     decorationLanded: await prepare(deusEx, 'deusexdecoration.landed', 'DeusExDecoration.Landed'),
+    // DeusExDecoration.Bump:425-442 scales its push by the pushing player's
+    // Microfibral Muscle level, through AugmentationManager.GetClassLevel. That
+    // body is a plain FirstAug/next walk reading Class, bHasIt, bIsActive and
+    // CurrentLevel with no natives (AugmentationManager.uc:225-244); the manager
+    // itself is the live AugmentationManager1 built by the player startup below.
+    // Before this was prepared, a live bump on a pushable decoration paused Play
+    // as soon as the player owned an augmentation system.
+    augmentationGetClassLevel: await prepare(deusEx, 'augmentationmanager.getclasslevel', 'AugmentationManager.GetClassLevel'),
     // General Frob chain (docs/script-light-switch.md): a frobbed decoration runs
     // the empty Actor.Frob base, DeusExPlayer.StartConversation (which returns
     // early-false while ConListItems is null — the training case), then
@@ -553,6 +576,16 @@ export async function createScriptDoors({
     await Promise.all(fields.map(field => runtime.field(field)));
     record.initialProperty = await prepareMapProperties(runtime, asset, identity, cls, actorByIndex);
     for (const field of fields) runtime.bindProperty(identity, field, makeBinding(record, field));
+    // Core UObject identity for a pre-placed map export. Actor.Destroy's
+    // ConditionalDestroy -> AActor::Destroy -> UObject::Destroy chain reads this
+    // record, and the export table supplies its measured Name/ObjectFlags
+    // (docs/script-world-destroy.md).
+    const entry = Number.isInteger(identity.index) ? asset?.pkg.exports[identity.index - 1] : null;
+    if (entry && entry.name === identity.name) runtime.bindNativeObject(identity,
+      mapActorNativeObject(identity, entry, {
+        index: runtime.resolveOriginalObjectIndex?.(identity, runtime.instance(identity)) ?? null,
+        destroy: receiver => runtime.destroyActorBase(receiver),
+      }));
     // The selected LightSwitch Frob path reaches native PlayAnim synchronously.
     // Complete its native mesh/resource preparation before any event can run.
     for(let current=cls;current;current=current.base)if(current.record.key==='deusex.lightswitch'){
@@ -685,7 +718,19 @@ export async function createScriptDoors({
 
   let liveDataLink=null;
   let playerStartup=null;
+
+  // World destruction services and the browser-side ledger that "Player start"
+  // uses to return destroyed actors to their serialized map state, which the
+  // original reaches by reloading the level (docs/script-world-destroy.md).
+  const destroyedActors=createDestroyedActorLedger({level,runtime});
+  const destroyServices=createWorldDestroyServices({runtime,level,dispatch,
+    hash:()=>{
+      if(!level.hash)throw new Error('Live DestroyActor requires the level collision hash');
+      return level.hash;
+    }});
+
   function reset() {
+    destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveDataLink?.reset();
     for (const record of records) resetMover(record);
     // Re-run the TriggerLights' native startup so they return to TriggerToggle.
@@ -807,6 +852,24 @@ export async function createScriptDoors({
     player:playerActor,warning:message=>callbacks.warning?.(message)});
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
   runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
+
+  // Live Actor.Destroy. The DataLink spawn world above installs the spawn-side
+  // actorLifecycle and the minimal no-hash level fields; merge the world
+  // destruction services onto them afterwards and publish the level's real
+  // FCollisionHash, so an original body such as OrdersTrigger.Touch runs the
+  // recovered ULevel::DestroyActor order instead of pausing Play.
+  // docs/script-destroy.md, docs/script-world-destroy.md.
+  runtime.actorLifecycle={...runtime.actorLifecycle,...destroyServices};
+  level.collisionHash=destroyServices.collisionHash;
+  const baseDestroyActor=runtime.destroyActor.bind(runtime);
+  runtime.destroyActor=(receiver,netForce=false)=>{
+    const saved=destroyedActors.snapshot(receiver);
+    const accepted=baseDestroyActor(receiver,netForce);
+    // Record only a request that actually cleared the saved Level.Actors slot;
+    // the recovered gates can accept an already-deleting actor without one.
+    if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null)destroyedActors.record(receiver,saved);
+    return accepted;
+  };
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,

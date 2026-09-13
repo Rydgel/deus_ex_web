@@ -436,7 +436,13 @@ export class ScriptRuntime {
    * implied by attaching script storage or by this binding. */
   bindNativeObject(receiver,object) {
     const instance=this.instance(receiver);
-    if(object.identity!==receiver||!Number.isInteger(object.index))throw new Error('Invalid native object identity record');
+    // A freshly constructed object carries its registry slot. A pre-placed map
+    // export is registered in GObjObjects too, but its slot is only known from a
+    // measured capture (docs/boot-replay.md); `null` records "registered, slot
+    // unmeasured" rather than fabricating an index, while `-1` stays the
+    // original unregistered marker Core ConditionalDestroy rejects.
+    if(object.identity!==receiver||!(Number.isInteger(object.index)||object.index===null))
+      throw new Error('Invalid native object identity record');
     instance.nativeObject=object;
     // Fresh construction allocates the native FName before returning the
     // script identity. Preserve that canonical spelling on the identity so

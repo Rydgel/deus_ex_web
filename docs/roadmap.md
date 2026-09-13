@@ -306,7 +306,25 @@ contact uses the recovered non-Pawn `processHitWall` gate. Audible playback and
 AI propagation remain Stage-4 boundaries, and whole-scene rolling acceptance is
 not yet claimed. The
 [plant contact trace](script-plant-contact.md) identifies the original pushable
-defaults, script dependencies and required actor physics.
+defaults, script dependencies and required actor physics. A pushed decoration
+also reads the pushing player's Microfibral Muscle level through the installed
+`AugmentationManager.GetClassLevel`, which the live `AugmentationManager1`
+startup made reachable; that body is now prepared, so a bump no longer pauses
+Play once the player owns an augmentation system.
+
+Live actor destruction is now wired. The recovered `ULevel::DestroyActor`
+order runs against the real Play world: Training's `OrdersTrigger2.Touch`
+destroys its one-shot trigger through the host eligibility gate, Core
+`UObject::Modify`, the `Destroyed` event, `EndTouch(other, 1)` on the touching
+player, `FCollisionHash::RemoveActor`, the saved `Level.Actors` slot,
+`bDeleteMe`, both Core object-flag transitions and the deferred-deletion chain.
+Before this, walking past the first Training door paused Play at
+`DestroyActor requires validate`, and a paused session ignored every later
+input — which is what made the door appear to stop responding after the second
+DataLink. `CleanupDestroyed`, native subclass destructors, resource release and
+the map package's `ULinkerLoad`/`UPackage` identities remain explicit
+boundaries, and Pawn, Mover, based-child and networked targets stay refused.
+See [live-world Actor.Destroy](script-world-destroy.md).
 
 Build our own UnrealScript VM and implementations of the native engine and Deus Ex
 functions it calls. Analyze original package bytecode, class data, and native code
