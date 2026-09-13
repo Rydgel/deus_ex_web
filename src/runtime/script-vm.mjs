@@ -2,13 +2,21 @@ import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
 import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
+import { getAxes } from './camera.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,194,196,210,211,212,213,215,216,217,218,219,221,222,223,224,234,235,236,242,243,244,245,249,250,251,254,255,296,316]);
+const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,193,194,196,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,242,243,244,245,248,249,250,251,254,255,296,300,316]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
-const primitiveOutNatives=new Set([135,138,139,140,163,164,165,166,182,184,185,221,222,223,224,...decorationOutPrimitiveIndices]);
+// Natives whose out parameters survive as references: each index maps to
+// the argument positions the original body writes through GPropAddr.  All
+// pre-existing out natives use argument 0; GetAxes (229) writes arguments
+// 1-3, so a non-lvalue in any other position still gets a plain copy.
+const outArgZero=Object.freeze(new Set([0]));
+const primitiveOutNatives=new Map([[229,new Set([1,2,3])]]);
+for(const index of [135,138,139,140,163,164,165,166,182,184,185,221,222,223,224,...decorationOutPrimitiveIndices])
+  primitiveOutNatives.set(index,outArgZero);
 export const refValue = v => v?.reference ? v.get() : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
 export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Script assignment requires a variable'); return ref.set(value); };
@@ -46,8 +54,15 @@ const x87load = v => {
   return { neg, sig: BigInt(e ? m | 0x800000 : m), exp: e ? e - 150 : -149 };
 };
 // NaN selection: the operand with the larger significand wins and stores
-// quieted; a lone NaN operand quiets the same way.
-const x87nan = (a, b) => ({ nan: (((b.nan & 0x7fffff) > (a.nan & 0x7fffff) ? b.nan : a.nan) | 0x400000) >>> 0 });
+// quieted; a lone NaN operand quiets the same way.  On equal significands
+// the positive payload propagates — pinned by the subeq/mulv/dot tie cases
+// (positive st0 or st(i) over negative) and by MirrorVectorByNormal's FSUB
+// m32 where the positive memory operand beats the negative stack operand.
+const x87nan = (a, b) => {
+  const ap = a.nan & 0x7fffff, bp = b.nan & 0x7fffff;
+  const w = bp > ap || (bp === ap && !(b.nan >>> 31)) ? b : a;
+  return { nan: (w.nan | 0x400000) >>> 0 };
+};
 const x87quiet = v => ({ nan: (v.nan | 0x400000) >>> 0 });
 const x87mul = (a, b) => {
   if (a.nan !== undefined) return b.nan === undefined ? x87quiet(a) : x87nan(a, b);
@@ -123,6 +138,68 @@ const x87store = v => {
   }
   return f32num(q >= (1n << 23n) ? (v.neg << 31) | 0x800000 : (v.neg << 31) | Number(q));
 };
+// The FST/FSTL double store: round the 64-bit significand to 53 bits with
+// nearest-even, keeping the value in the model (SafeNormal's fstl at
+// 0x10144c04 is the only float64 store in the bound natives).
+const x87storeDouble = v => {
+  if (v.nan !== undefined || v.inf || v.sig === 0n) return v;
+  const [sig, sh] = x87round(v.sig, 53);
+  return { neg: v.neg, sig, exp: v.exp + sh };
+};
+// Integer square root (floor) for the FSQRT model below.
+const x87isqrt = n => {
+  if (n < 2n) return n;
+  let x = 1n << BigInt((x87width(n) + 1) >> 1);
+  for (;;) { const y = (x + n / x) >> 1n; if (y >= x) return x; x = y; }
+};
+// x87 FSQRT of a nonnegative finite value: correctly-rounded 64-bit
+// significand.  The CRT thunk 0x101032ba -> 0x10123290 executes it as
+// `fld qword; fsqrt; ret` on the pushed double argument.
+const x87sqrt = v => {
+  if (v.inf) return { neg: 0, inf: true };
+  if (v.sig === 0n) return v;
+  let sig = v.sig, exp = v.exp;
+  if (exp & 1) { sig <<= 1n; exp -= 1; }
+  const w = x87width(sig), sh = BigInt(w & 1 ? 127 - w : 128 - w);
+  const n2 = sig << sh;
+  let q = x87isqrt(n2);
+  // Round the real root to nearest (a root is never exactly halfway):
+  // q + 1 wins iff n2 - q*q > q.
+  if (n2 - q * q > q) q += 1n;
+  let e = exp / 2 - Number(sh) / 2;
+  if (x87width(q) > 64) { q >>= 1n; e += 1; }
+  return { neg: 0, sig: q, exp: e };
+};
+// The embedded double 1e-08 at 0x101765d8 that SafeNormal's FCOMP compares
+// against: on less-than OR unordered (C0) the body returns exactly (0,0,0).
+// The compare runs on the 80-bit register, not the stored double.
+const x87below1em8 = v => {
+  if (v.nan !== undefined) return true;
+  if (v.inf) return v.neg === 1;
+  if (v.sig === 0n || v.neg) return true;
+  const shift = v.exp + 79;
+  return shift >= 0 ? (v.sig << BigInt(shift)) < 0x15798ee2308c3an
+    : v.sig < (0x15798ee2308c3an << BigInt(-shift));
+};
+// FVector::SafeNormal (Core.dll 0x10144be0, thiscall reached through thunk
+// 0x101031c0 by natives 226 and 300): the squared length is accumulated
+// left-associatively in 80-bit — (x*x + y*y) + z*z — stored to a double by
+// FSTL, and the 80-bit register value is FCOMP'd against the embedded
+// 1e-08: below or unordered returns (0,0,0).  Otherwise the FDIVR
+// reciprocal of the CRT sqrt of that double stays on the stack and each
+// component multiplies into a float32 store.
+const x87safeNormal = v => {
+  const x = x87load(v[0]), y = x87load(v[1]), z = x87load(v[2]);
+  const s = x87add(x87add(x87mul(x, x), x87mul(y, y)), x87mul(z, z));
+  if (s.nan !== undefined || x87below1em8(s)) return [0, 0, 0];
+  const r = s.inf ? { neg: 0, sig: 0n, exp: 0 } : x87recip(x87sqrt(x87storeDouble(s)));
+  return v.map(c => x87store(x87mul(x87load(c), r)));
+};
+// The embedded double 3.0 at 0x10177f90 (Smerp's cubic coefficient).
+const x87three = { neg: 0, sig: 3n, exp: 0 };
+// Vector/rotator operand shape: three number components (NaN and infinity
+// included — they are float32 bit patterns the original loads too).
+const isVec3 = v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number');
 
 /** Original bytecode execution with linked engine services.
  * Unsupported instructions/native indices fail, rather than being approximated. */
@@ -137,6 +214,20 @@ export function compileFunction(fn) {
     if(moverPrimitiveIndices.has(index))return executeMoverPrimitive(index,args);
     if(decorationPrimitiveIndices.has(index))return executeDecorationPrimitive(index,args);
     const values = args.map(refValue), [a, b] = values;
+    // The recovered natives 193/226/229/248/300 are bound only for calls
+    // whose operand count and shapes match the declared Core signature; a
+    // malformed call keeps the services.native fallback unbound indices use.
+    const claimed =
+      index===193 ? values.length===1 && typeof a==='number'
+      : index===226 ? values.length===1 && isVec3(a)
+      : index===229 ? values.length===4 && isVec3(a)
+      : index===248 ? values.length===3 && values.every(v => typeof v==='number')
+      : index===300 ? values.length===2 && isVec3(a) && isVec3(b)
+      : true;
+    if (!claimed) {
+      if (services.native) return services.native({index,args,receiver,script:fn,frame});
+      throw new Error(`VM does not support native ${index}`);
+    }
     // Core.Object native declarations and original Engine.u CheckBob bytecode.
     switch (index) {
       case 112: return scriptConcat(a,b);
@@ -300,14 +391,69 @@ export function compileFunction(fn) {
         if(args[0]?.reference)assign(args[0],out);
         return out;
       }
+      // Normal (226): a thiscall to FVector::SafeNormal — see x87safeNormal
+      // for the recovered 80-bit accumulation, the 1e-08 FCOMP boundary and
+      // the reciprocal-multiply store sequence.
+      case 226: return x87safeNormal(a);
+      // GetAxes (229): void — the rotator argument evaluates normally while
+      // X, Y and Z publish through GPropAddr (primitiveOutNatives keeps
+      // argument positions 1-3 as references; a non-lvalue expression falls
+      // back to the body's discarded stack temporary).  The recovered body
+      // composes the quantized-sine roll/pitch/yaw matrices, which is
+      // exactly the camera.mjs getAxes already proven bit-exact against the
+      // original (docs/camera.md); it is reused, not reimplemented.
+      case 229: {
+        const axes=getAxes(a);
+        for(let i=1;i<4;i++)if(args[i]?.reference)assign(args[i],axes[i-1]);
+        return undefined;
+      }
+      // Smerp (248): A + (B-A)*(3*Alpha^2 - 2*Alpha^3).  FMULP (a*a),
+      // FMUL m64 (the embedded double 3.0), FMUL st(2) (a*a*a), FADD
+      // st0+st0, FSUBP, FSUB m32 (B-A), FMULP and FADD m32 keep every
+      // intermediate on the 80-bit stack — the only rounding is the final
+      // FSTP float32 store.
+      case 248: {
+        const al=x87load(a),aa=x87load(b),bb=x87load(values[2]);
+        const p=x87mul(al,al),cube=x87mul(al,p);
+        const s=x87add(x87mul(p,x87three),x87neg(x87add(cube,cube)));
+        return x87store(x87add(x87mul(s,x87add(bb,x87neg(aa))),aa));
+      }
       // Min (249) is a signed dword compare: A>B ? B : A.
       case 249: return Math.min(a|0,b|0);
+      // Sqrt (193): the float32 operand is promoted to a double (exact) for
+      // the CRT sqrt thunk — its x87 FSQRT keeps a 64-bit-significand root —
+      // then a single FSTP stores float32.  By Figueroa's double-rounding
+      // bound (64 >= 2*24+2) this is the correctly-rounded float32 root.
+      // Negative nonzero operands produce the x87 real indefinite; a NaN
+      // operand propagates quieted; -0 stays -0.
+      case 193: {
+        const d=x87load(a);
+        return d.nan!==undefined?x87store(x87quiet(d))
+          :d.neg&&(d.inf||d.sig!==0n)?x87store({nan:X87_INDEFINITE})
+          :x87store(x87sqrt(d));
+      }
       // Square (194): A loaded as float32, multiplied once in x87, a single
       // FSTP float32 store — including -0 -> +0 and NaN payload propagation.
       case 194: { const d=x87load(a); return x87store(x87mul(d,d)); }
       // Multiply_VectorVector (296): each component product stores to
       // float32 with its own FSTP — no cross-component accumulation.
       case 296: return a.map((v,i)=>x87store(x87mul(x87load(v),x87load(b[i]))));
+      // MirrorVectorByNormal (300): V - 2*N'*(V.N') with N' = SafeNormal(N).
+      // The 80-bit dot product stores once to float32 (FSTP) and that stored
+      // value feeds all three product terms.  2N'.x stays on the stack;
+      // 2N'.y/2N'.z and the y/z products each take an FSTP float32 store,
+      // while only the x product remains in 80-bit through the closing FSUB.
+      case 300: {
+        const n=x87safeNormal(b);
+        const nx=x87load(n[0]),ny=x87load(n[1]),nz=x87load(n[2]);
+        const vx=x87load(a[0]),vy=x87load(a[1]),vz=x87load(a[2]);
+        const twoX=x87add(nx,nx);
+        const twoY=x87load(x87store(x87add(ny,ny))),twoZ=x87load(x87store(x87add(nz,nz)));
+        const dot=x87load(x87store(x87add(x87add(x87mul(vy,ny),x87mul(vz,nz)),x87mul(vx,nx))));
+        const prodX=x87mul(twoX,dot);
+        const prodY=x87load(x87store(x87mul(twoY,dot))),prodZ=x87load(x87store(x87mul(twoZ,dot)));
+        return [x87store(x87add(vx,x87neg(prodX))),x87store(x87add(vy,x87neg(prodY))),x87store(x87add(vz,x87neg(prodZ)))];
+      }
       case 212: return a.map(v => f(f(v) * f(b)));
       case 213: return b.map(v => f(f(a) * f(v)));
       case 215: return a.map((v,i) => f(v + b[i]));
@@ -362,7 +508,7 @@ export function compileFunction(fn) {
               argumentCount:n.args.length,evaluateArgument:index=>evaluate(n.args[index],instance)});
             const args=n.args.map((arg,index)=>{
               const result=evaluate(arg,instance);
-              if(!primitiveNatives.has(n.index)||index===0&&primitiveOutNatives.has(n.index))return result;
+              if(!primitiveNatives.has(n.index)||primitiveOutNatives.get(n.index)?.has(index))return result;
               const value=refValue(result);return Array.isArray(value)?value.slice():value;
             });
             return native(n.index,args,receiver,services,frame);
