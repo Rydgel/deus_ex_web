@@ -1,5 +1,6 @@
 import {refValue} from './script-vm.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
+import {INVENTORY_CONSTRUCTION, resolveInheritedInventoryConstructorChain} from './script-inventory-construction.mjs';
 
 /** Engine execSpawn103e36d0. Defaults are sampled between argument
  * evaluations, not together at entry. SpawnActor receives NAME_None; the
@@ -161,9 +162,10 @@ export function spawnScriptActor(args,services,{kind,key,constructorSelection=fa
   if(level.spawnTracking!==false)throw new Error('SpawnActor tracking allocation is not implemented');
   if(!level.spawnNotifyGuard.active){
     level.spawnNotifyGuard.active=true;
-    if(read(level.actors[0],'SpawnNotify')!==null)
-      throw new Error('SpawnNotify event return/parameter handling is not implemented');
+    const notify=read(level.actors[0],'SpawnNotify');
     level.spawnNotifyGuard.active=false;
+    if(notify!==null)
+      throw new Error('SpawnNotify event return/parameter handling is not implemented');
   }
   // Original SpawnActor has no further pending-delete check after BeginPlay.
   return actor;
@@ -190,4 +192,184 @@ export function spawnScriptDataLinkPlay(args,services) {
     kind:'DataLinkPlay',key:SCRIPTED_ACTOR_CONSTRUCTION.dataLinkPlay.key,
     constructorSelection:true,
   });
+}
+
+/**
+ * The linked `DataVaultImage -> Engine.Inventory -> Engine.Actor -> Core.Object`
+ * ancestry, or null for any other class.  This is the shape Core UClass::Bind
+ * needs in order to copy Engine.AInventory's ClassConstructor (0x1030299b) and
+ * vtable (0x104286f8) down to a script-only subclass: the copy-down recurses
+ * through however many script subclasses the chain holds, so the admitted set
+ * is an ancestry, not a class name.  The abstract DataVaultImage parent itself
+ * is rejected earlier by the shared prologue abstract gate.
+ */
+export function inventoryImageChain(cls) {
+  const evidence=INVENTORY_CONSTRUCTION;
+  const chain=[];
+  for(let node=cls;node;node=node.base){
+    chain.push(node);
+    if(classKey(node)===evidence.engineInventory.key){
+      // Below Engine.Inventory the original chain is fixed.
+      if(classKey(node.base)!==SCRIPTED_ACTOR_CONSTRUCTION.engineActor.key||
+          classKey(node.base.base)!=='core.object'||node.base.base.base!=null)return null;
+      // DataVaultImage must be the class Engine.Inventory was reached through,
+      // so an unrelated Inventory subclass does not enter this path.
+      return chain.length>=3&&classKey(chain[chain.length-2])===evidence.dataVaultImage.key
+        ?chain:null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Build the inherited-constructor selection for an admitted DataVaultImage
+ * subclass from its linked chain, deriving each record the way UClass::Bind
+ * reads it: a class carries its own ClassConstructor only when it is RF_Native
+ * (0x04000000), which is the same flag the recovered Bind body tests before it
+ * would reach native DLL-export resolution. A native subclass on this chain,
+ * or a subclass that declares its own fields, is refused rather than given
+ * Engine.Inventory's body and DataVaultImage's PropertiesSize.
+ */
+export function inventoryImageSelection(cls) {
+  const chain=inventoryImageChain(cls);
+  if(!chain)return null;
+  const evidence=INVENTORY_CONSTRUCTION;
+  const records=[];
+  for(const node of chain){
+    const key=classKey(node);
+    if(key===evidence.engineInventory.key){
+      records.push({key,nativeConstructor:evidence.engineInventory.internalConstructor,
+        nativeVtable:evidence.engineInventory.vtable});
+      break;
+    }
+    if(((node.metadata?.entry?.flags??0)&0x04000000)!==0)
+      throw new Error(`UClass::Bind native DLL-export resolution is not implemented for ${key}`);
+    if(key!==evidence.dataVaultImage.key&&node.propertyOrder?.length)
+      throw new Error(`${key} declares its own fields; its linked PropertiesSize is required`);
+    records.push({key,nativeConstructor:null});
+  }
+  return resolveInheritedInventoryConstructorChain(records,
+    evidence.layout.dataVaultImagePropertiesSize);
+}
+
+function selectInventoryConstructor(cls,chain,services) {
+  const evidence=INVENTORY_CONSTRUCTION;
+  if(typeof services.resolveConstructor!=='function')
+    throw new Error('DataVaultImage Spawn requires the original UClass::Bind constructor service');
+  const selection=services.resolveConstructor(cls);
+  const expected=evidence.engineInventory;
+  if(!selection||selection.classKey!==classKey(cls)||
+      selection.inherited!==true||selection.constructor!==expected.internalConstructor||
+      selection.nativeVtable!==expected.vtable||
+      !Number.isInteger(selection.propertiesSize)||
+      selection.propertiesSize<evidence.layout.inventoryPropertiesSize)
+    throw new Error('DataVaultImage Spawn requires the inherited Engine.Inventory constructor binding');
+  return selection;
+}
+
+/**
+ * Accepted ULevel::SpawnActor path for a concrete DeusEx DataVaultImage
+ * subclass, admitted by its linked Engine.Inventory ancestry rather than by
+ * class name. Unlike the DataLinkPlay/CameraPoint path these classes carry authored
+ * collision defaults (bBlockActors), so the bounded collision-default gate
+ * is replaced by the original sequence actually recovered for it:
+ * the pre-startup hash registration (0x103953b7-0x103953cf, before
+ * SetOwner/InitExecution), the post-PostBeginPlay CheckEncroachment through
+ * level vtable +0xb8 with the +0x94 DestroyActor failure edge, and the
+ * FindBase tail gate (Base null + bCollideWorld + Inventory ancestry +
+ * Physics in {0,5}) between SetInitialState and PostPostBeginPlay.
+ */
+export function spawnScriptInventoryActor(args,services) {
+  const {cls,level,name,owner,instigator,location,rotation}=args;
+  const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
+    processEvent,setActorZone,validate}=services;
+  if(spawnActorRejectedByGates(args,services))return null;
+  const chain=inventoryImageChain(cls);
+  if(!chain)
+    throw new Error(`SpawnActor ${classKey(cls)} subclass startup is not implemented`);
+  if(typeof validate!=='function'||validate(args)!==true)
+    throw new Error('SpawnActor requires verified native defaults and complete world bindings');
+  const selected=selectInventoryConstructor(cls,chain,services);
+  if(!Array.isArray(level.actors)||!level.actors[0]||!level.nativeObject?.outer)
+    throw new Error('SpawnActor requires LevelInfo and the native level Outer package');
+  if(level.editor||level.undo!==null||level.spawnTracking!==false)
+    throw new Error('SpawnActor editor, transaction and spawn-tracking paths are not implemented');
+  if(typeof level.tickParity!=='boolean'||typeof level.spawnNotifyGuard?.active!=='boolean')
+    throw new Error('SpawnActor requires level tick parity and the global notification guard');
+  // 0x103950fb-0x103951ae: bCollideWorld or bCollideWhenPlacing class defaults
+  // would route through ULevel::FindSpot (+0xb0). Both are clear on the
+  // admitted class; keep the unimplemented branch explicit like the shared path.
+  if(defaultRead(cls,'bCollideWorld')||defaultRead(cls,'bCollideWhenPlacing'))
+    throw new Error('SpawnActor Inventory FindSpot placement is not implemented');
+  const index=level.actors.length;
+  level.actors.push(null);
+  const options={outer:level.nativeObject.outer,name,flags:0,template:null};
+  const actor=construct(cls,options,{constructorSelection:selected});
+  level.actors[index]=actor;
+  write(actor,'ObjectFlags',read(actor,'ObjectFlags')|1);
+  write(actor,'Tag',cls.record.name);
+  setRegion(actor,level.actors[0],-1,0);
+  write(actor,'Level',level.actors[0]);
+  services.setNativeLevel(actor,level);
+  write(actor,'bTicked',!level.tickParity);
+  if(read(actor,'Role')!==4)services.warning?.({type:'SpawnRole',actor,role:read(actor,'Role')});
+  if(read(actor,'Brush')!==null)write(actor,'Brush',null);
+  write(actor,'Location',location);
+  write(actor,'OldLocation',location);
+  write(actor,'Rotation',rotation);
+  // The collision view must exist before the original pre-startup hash gate:
+  // the native registration reads the +0x1dc bitfield the view derives.
+  if(typeof services.installCollisionView!=='function'||
+      typeof services.checkEncroachment!=='function'||
+      typeof services.findBase!=='function'||typeof services.destroyActor!=='function')
+    throw new Error('SpawnActor Inventory requires the recovered collision, encroachment, FindBase and DestroyActor services');
+  services.installCollisionView(actor);
+  // 0x103953b7-0x103953cf: the spawned actor joins the XLevel hash before
+  // SetOwner/InitExecution when +0x1dc bit 0 is set. The shipped image classes
+  // keep it clear, so the gate evaluates per class and adds nothing for them.
+  if((actor.flags??0)&INVENTORY_CONSTRUCTION.startup.preStartupHashMask&&level.hash)
+    level.hash.addActor(actor);
+  // 0x1039541c-0x10395432: the default Region re-init runs after the hash gate.
+  setRegion(actor,level.actors[0],-1,0);
+  setOwner(actor,owner);
+  write(actor,'Instigator',instigator);
+  initExecution(actor);
+  // AInventory inherits AActor's Spawned slot (vtable +0x74 -> 0x10303373).
+  processEvent(actor,'Spawned');
+  processEvent(actor,'PreBeginPlay');
+  processEvent(actor,'BeginPlay');
+  if(read(actor,'bDeleteMe'))return null;
+  setActorZone(actor,index===0,true);
+  write(actor,'LastRenderTime',-10);
+  processEvent(actor,'PostBeginPlay');
+  // 0x103955d6: CheckEncroachment is called even for noncolliding actors,
+  // with the +0x94 ULevel::DestroyActor edge on failure. The authored
+  // bBlockActors on this chain makes the general IsBlockedBy path live rather
+  // than the bounded early-return-only case.
+  // 0x103955bd/0x1039559a: the native pushes the actor's current +0x114
+  // Location and +0x120 Rotation by value, not the spawn arguments.
+  if(services.checkEncroachment(actor,read(actor,'Location').map(Math.fround),read(actor,'Rotation').map(v=>v|0),0)){
+    services.destroyActor(actor);
+    return null;
+  }
+  processEvent(actor,'SetInitialState');
+  // 0x10395612-0x1039569c: the FindBase tail. Inventory ancestry is fixed by
+  // the admission chain; the remaining gates are a null Base, the bCollideWorld
+  // flag Pickup's BeginState has just set, and Physics in {0,5}. The shipped
+  // image classes spawn Falling (2), so the gate evaluates to false here and
+  // Inventory.BecomeItem's SetPhysics(PHYS_None) reaches it later.
+  if(actor.base==null&&(actor.flags&2)&&
+      INVENTORY_CONSTRUCTION.startup.findBaseAncestry.some(key=>actor.lineage.includes(key))&&
+      INVENTORY_CONSTRUCTION.startup.findBasePhysicsValues.includes(actor.physics))
+    services.findBase(actor);
+  processEvent(actor,'PostPostBeginPlay');
+  if(level.spawnTracking!==false)throw new Error('SpawnActor tracking allocation is not implemented');
+  if(!level.spawnNotifyGuard.active){
+    level.spawnNotifyGuard.active=true;
+    const notify=read(level.actors[0],'SpawnNotify');
+    level.spawnNotifyGuard.active=false;
+    if(notify!==null)
+      throw new Error('SpawnNotify event return/parameter handling is not implemented');
+  }
+  return actor;
 }

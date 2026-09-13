@@ -132,3 +132,25 @@ export function constructCameraPoint(object) {
   constructActorBase(object);
   object.nativeVtable=0x10427178;
 }
+
+/** Engine AInventory registration selects 1030299b -> 10341730. The body
+ * first runs the inlined AActor member construction (the intermediate
+ * 0x104268dc store), then the Inventory member constructors, then installs
+ * the final AInventory vtable 0x104286f8. Select this only for the
+ * DataVaultImage/Image02 chain, whose script-only classes inherit this
+ * ClassConstructor through UClass::Bind. */
+export function constructInventory(object) {
+  constructActorBase(object);
+  object.nativeVtable=0x104286f8;
+}
+
+/** Map a verified UClass::Bind constructor selection to this host's native
+ * body. Only the recovered registrations are admitted: AActor's own
+ * constructor (inherited by the scripted ConPlayBase/DataLinkPlay chain) and
+ * AInventory's (inherited by the DataVaultImage/Image02 chain). */
+export function nativeConstructorFor(selection){
+  const constructor=selection?.constructor;
+  if(constructor===0x10302dab)return constructActorBase;
+  if(constructor===0x1030299b)return constructInventory;
+  throw new Error('Original constructor selection is not implemented');
+}

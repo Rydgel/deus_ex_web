@@ -1,7 +1,7 @@
 import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
-import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString } from './script-string-operations.mjs';
+import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,144,145,146,147,150,151,154,155,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,210,212,213,215,216,223,234,235,236,242,243,244,245,250,251,254,255,316]);
@@ -221,6 +221,7 @@ export function compileFunction(fn) {
             return Math.trunc(value)|0;
           }
           case 0x50: return vectorToRotator(refValue(evaluate(n.value,instance)));
+          case 0x56: return scriptObjectToString(refValue(evaluate(n.value,instance)));
           case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
           case 0x36: {
             const field=evaluate(n.value,receiver);

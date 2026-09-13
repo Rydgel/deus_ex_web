@@ -109,3 +109,10 @@ export function scriptNameToString(value) {
     throw new TypeError('NameToString requires a resolved logical FName spelling');
   return value;
 }
+
+export function scriptObjectToString(value) {
+  if(value==null)return 'None';
+  const name=value.name??value.record?.name;
+  if(typeof name==='string'&&name)return name;
+  throw new TypeError('ObjectToString requires an object with a logical name');
+}

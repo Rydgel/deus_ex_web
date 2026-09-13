@@ -77,12 +77,13 @@ dispatch. Candidate `JCDenton` leaves `fromActor` null, writes the player to
 `toActor`, loads the canonical image class into `giveObject`, and produces the
 native true result that `BindActorEvents` discards.
 
-The next event action is not claimed yet. `SetupEventTransferObject` reaches
-native `Spawn` for a new `DataVaultImage`, its actor constructor/startup,
-`Inventory.SpawnCopy`, `DeusExPlayer.AddImage`, and the received-items window.
-The current Spawn admission list has no source-backed `DataVaultImage` native
-construction path, so the validator stops before that action rather than
-substituting a fabricated inventory object.
+The event action is now claimed for every shipped reference.
+`SetupEventTransferObject` reaches native `Spawn` for a new `DataVaultImage`, its
+actor constructor/startup, `Inventory.SpawnCopy`, `DeusExPlayer.AddImage` and the
+received-items window; see [the DataVaultImage route](script-datavault-image.md).
+Spawn admission is the linked `DataVaultImage -> Engine.Inventory` ancestry rather
+than a class list, so all nine distinct image classes run the same body
+(`scripts/validate-datalink-transfer-object.mjs`).
 
 Validation:
 

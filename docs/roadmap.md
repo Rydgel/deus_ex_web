@@ -253,10 +253,33 @@ shipped DataLinks contain its one-count DataVaultImage delivery; `DL_Rooftops`
 event export 7448 now runs through native 2053, binds JCDenton as `toActor`,
 and loads canonical class `Image02_NYC_Warehouse`. See
 [the TransferObject evidence](script-conversation-transfer-object-bind.md).
-The remaining TransferObject action requires source-backed DataVaultImage
-construction and its original Spawn/SpawnCopy/AddImage/received-items path.
-Native metaclass loading remains incomplete. Native conversation audio mixing
-and final UI rendering belong to Stage 4.
+The TransferObject action now completes for that admitted route: source-backed
+`Image02_NYC_Warehouse` construction inherits Engine.AInventory's native
+constructor through the recovered `UClass::Bind` copy, and
+`ConPlayBase.SetupEventTransferObject` runs Spawn, `DataVaultImage.SpawnCopy`
+over `Inventory.SpawnCopy`, `GiveTo`/`BecomeItem`, `DeusExPlayer.AddInventory`,
+`GotoState('Idle2')`, `DeusExPlayer.AddImage` and one recorded
+`HUDReceivedDisplay.AddItem` before returning `EA_NextEvent`. This is the first
+collision-carrying `ULevel::SpawnActor` subclass: its pre-startup hash gate,
+the Deus Ex `PreBeginPlay` fake shrink, a live `CheckEncroachment`, the
+`DataVaultImage.Pickup` auto-state entry and the deferred `FindBase` tail are
+asserted as one observed sequence, and the abstract parent is refused by the
+prologue gate. See [the DataVaultImage route](script-datavault-image.md).
+Admission no longer names a class key. The recovered
+`ULinkerLoad::CreateExport` (`0x1012e230`) supplies native metaclass class
+loading: a null `ClassIndex` selects the hard-coded `Core.Class` identity, so a
+class export is constructed through the metaclass, `SuperField` is installed
+from the export's `SuperIndex`, and `UClass::Bind` copies the nearest native
+`ClassConstructor` down the chain. All nine shipped DataLink image classes are
+built from the real `DeusEx.u` export table through that branch, and
+`spawnScriptInventoryActor` admits them by their linked
+`DataVaultImage -> Engine.Inventory` ancestry, so the eight beyond
+`Image02_NYC_Warehouse` run the same live transfer route without being named in
+the runtime. See [the CreateExport body](script-create-export.md). The body ends
+at `Bind` and leaves `RF_NeedLoad` set, as the original does: serializing a
+constructed export's own bytes through the linker archive is still open, and
+imports resolve to prebound identities. Native conversation audio mixing and
+final UI rendering belong to Stage 4.
 
 The latest scene-event increment routes Trigger Touch/UnTouch through the VM
 and implements base Trigger relevance via Switch/Case and ClassIsChildOf.
@@ -290,9 +313,12 @@ six-control shell. Its direct Speech-to-End transition now executes installed
 `SetupEventEnd`, and `EA_End` termination. End-of-transmission runs the original HUD destroy body and
 recursive Window removal; queued and reset paths construct a distinct shell,
 with queue selection still owned by original `PopDataLink`. The shipped
-`DL_Rooftops` TransferObject actor/class bind is also admitted; its later
-DataVaultImage inventory action, broader ConEvent actions, final native rendering,
-and native audio mixing remain explicit gaps. See
+`DL_Rooftops` TransferObject actor/class bind is also admitted, and its
+DataVaultImage inventory action now runs end to end — as do the other nine
+shipped references, whose eight further image classes reach the runtime through
+the recovered `CreateExport` metaclass branch rather than by name. Broader
+ConEvent actions, final native rendering, and native audio mixing remain
+explicit gaps. See
 [the live lifecycle](script-datalink-live.md),
 [TransferObject binding](script-conversation-transfer-object-bind.md), and
 [scene events](scene-events.md).

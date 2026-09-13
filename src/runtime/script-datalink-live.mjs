@@ -22,6 +22,8 @@ import {prepareDataLinkFunctions} from './script-datalink-transmission.mjs';
 import {
   SCRIPTED_ACTOR_CONSTRUCTION,resolveInheritedActorConstructor,verifyDataLinkPlayDefaults,
 } from './script-scripted-actor-construction.mjs';
+import {inventoryImageChain,inventoryImageSelection} from './script-spawn.mjs';
+import {refValue} from './script-vm.mjs';
 import {setActorTimer,updateActorTimer} from './script-timers.mjs';
 import {createInfoLinkTimeline,infoLinkTimelineState} from './script-infolink-timeline.mjs';
 import {INFOLINK_CONTENT_REFERENCE} from './script-infolink-content.mjs';
@@ -43,10 +45,12 @@ async function prepare(runtime,asset,path){
 function set(runtime,object,name,value){runtime.namedReference(object,name).set(value);}
 function get(runtime,object,name){return runtime.namedReference(object,name).get();}
 
-/** Build the exact script/native world prerequisites for DataLinkPlay Spawn. */
+/** Build the exact script/native world prerequisites for DataLinkPlay Spawn
+ * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */
 async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
-  const [dataLinkClass,gameClass,mutatorClass]=await Promise.all([
+  const [dataLinkClass,imageClass,gameClass,mutatorClass]=await Promise.all([
     runtime.loadClass(deusEx,requiredExport(deusEx,'DataLinkPlay')),
+    runtime.loadClass(deusEx,requiredExport(deusEx,'Image02_NYC_Warehouse')),
     runtime.loadClass(deusEx,requiredExport(deusEx,'DeusExGameInfo')),
     runtime.loadClass(engine,requiredExport(engine,'Mutator')),
   ]);
@@ -67,9 +71,34 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
 
   for(const path of ['Actor.Spawn','Actor.Spawned','Actor.PreBeginPlay','Actor.BeginPlay',
     'Actor.PostBeginPlay','Actor.PostPostBeginPlay','Actor.SetInitialState','Actor.GainedChild',
-    'Actor.LostChild','Actor.SetCollision'])await prepare(runtime,engine,path);
-  for(const [asset,path] of [[engine,'GameInfo.IsRelevant'],[engine,'Mutator.AlwaysKeep'],
-    [engine,'Mutator.IsRelevant'],[engine,'Mutator.CheckReplacement']])await prepare(runtime,asset,path);
+    'Actor.LostChild','Actor.SetCollision','Actor.SetCollisionSize','Actor.SetPhysics',
+    'Actor.SetOwner','Actor.Destroy','Actor.GetItemName',
+    'Actor.SupportActor','Actor.Attach','Actor.Detach','Actor.BaseChange',
+    'Actor.EncroachingOn','Actor.EncroachedBy'])await prepare(runtime,engine,path);
+  // The Inventory startup/give chain reached by the transfer event:
+  // Pickup's auto-state BeginState and its Begin: label call BecomePickup,
+  // while SpawnCopy -> GiveTo -> AddInventory -> GotoState('Idle2') runs the
+  // received half on the player.
+  for(const path of ['Inventory.PostBeginPlay','Inventory.BecomePickup','Inventory.BecomeItem',
+    'Inventory.GiveTo','Inventory.SpawnCopy','Pawn.AddInventory','Pawn.DeleteInventory',
+    'Pawn.FindInventoryType'])await prepare(runtime,engine,path);
+  // DataVaultImage.SpawnCopy (DataVaultImage.uc:41-48) shadows the Engine body
+  // on Image02_NYC_Warehouse's method chain: it calls Super.SpawnCopy(Other)
+  // and returns the result, so the override is the entry point the receiver's
+  // class lookup resolves and the Engine body runs beneath it.
+  for(const [asset,path] of [[engine,'GameInfo.IsRelevant'],[engine,'GameInfo.ShouldRespawn'],
+    [engine,'Mutator.AlwaysKeep'],[engine,'Mutator.IsRelevant'],[engine,'Mutator.CheckReplacement'],
+    [deusEx,'DataVaultImage.SpawnCopy'],[deusEx,'DeusExPlayer.AddInventory'],
+    [deusEx,'ConPlayBase.SetupEventTransferObject'],[deusEx,'DeusExPlayer.AddImage'],
+    [deusEx,'DeusExPlayer.FindInventorySlot']])await prepare(runtime,asset,path);
+  await runtime.prepareState(engine,requiredExport(engine,'Inventory.Pickup'));
+  await runtime.prepareState(engine,requiredExport(engine,'Inventory.Idle2'));
+  // Image02_NYC_Warehouse inherits DataVaultImage's own `auto state Pickup`
+  // (DataVaultImage.uc:101), which shadows Engine.Inventory.Pickup through the
+  // state base chain, so GotoState('Auto') resolves the derived record.
+  await runtime.prepareState(deusEx,requiredExport(deusEx,'DataVaultImage.Pickup'));
+  await prepare(runtime,engine,'Inventory.Pickup.BeginState');
+  await prepare(runtime,engine,'Inventory.Pickup.EndState');
 
   const registry=new ScriptObjectRegistry();
   const none={index:0,flags:0,hashNext:null,text:'None'};
@@ -94,10 +123,14 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
       nativeConstructor:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.internalConstructor,
       nativeVtable:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.vtable},
   });
+  // Every concrete DataVaultImage subclass is admitted by its linked
+  // Engine.Inventory ancestry, so the nine shipped DataLink image classes share
+  // one route instead of one class key each.
+  const admitted=cls=>cls===dataLinkClass||inventoryImageChain(cls)!==null;
   runtime.actorLifecycle={
-    validateSpawn:args=>args.cls===dataLinkClass&&args.level===level,
+    validateSpawn:args=>admitted(args.cls)&&args.level===level,
     construction:{
-      validate:args=>args.cls===dataLinkClass&&args.outer===outer&&args.template===null,
+      validate:args=>admitted(args.cls)&&args.outer===outer&&args.template===null,
       registry,findObject:lookup.findObject,internName:name=>names.intern(name),
       initNativeProperties:object=>{
         object.auxiliary=null;
@@ -106,12 +139,14 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
       nativeConstructor:constructActorBase,
     },
     resolveConstructor:cls=>{
-      if(cls!==dataLinkClass)throw new Error('Live DataLink constructor received another class');
-      return selection;
+      if(cls===dataLinkClass)return selection;
+      const imageSelection=inventoryImageSelection(cls);
+      if(imageSelection)return imageSelection;
+      throw new Error('Live DataLink constructor received another class');
     },
   };
   runtime.nameServices={internName:text=>names.intern(text).name};
-  return {dataLinkClass,game,mutator,registry,names};
+  return {dataLinkClass,imageClass,game,mutator,registry,names};
 }
 
 /**
@@ -219,6 +254,22 @@ export async function createLiveDataLinkRuntime({
   set(runtime,player,'ConListItems',items[0]);set(runtime,player,'rootWindow',shell.root);
   set(runtime,shell.root,'parentPawn',player);set(runtime,shell.root,'hud',shell.hud);
   set(runtime,shell.hud,'infoLink',null);
+  // SetupEventTransferObject's DataVaultImage branch ends at
+  // DeusExRootWindow(player.rootWindow).hud.receivedItems.AddItem(invItemTo,1).
+  // The attached HUDReceivedDisplay carries the real field storage the script
+  // reads; its AddItem body reaches winTile.NewChild, which belongs to the
+  // Stage-4 window lifecycle, so the call is a recorded boundary on the
+  // original function key rather than a substitute implementation.
+  const receivedClass=await runtime.loadClass(deusEx,requiredExport(deusEx,'HUDReceivedDisplay'));
+  const receivedItems=[];
+  const receivedDisplay={name:'HUDReceivedDisplay DataLink runtime'};
+  runtime.attach(receivedDisplay,receivedClass);
+  set(runtime,shell.hud,'receivedItems',receivedDisplay);
+  runtime.boundaryFunctions.set('deusex.hudreceiveddisplay.additem',call=>{
+    const item=call.argumentCount>0?refValue(call.evaluateArgument(0)):null;
+    const count=call.argumentCount>1?refValue(call.evaluateArgument(1)):null;
+    receivedItems.push(Object.freeze({item,count}));
+  });
 
   const getActiveDataLink=prepared.get('deusex.deusexplayer.getactivedatalink');
   const popDataLink=prepared.get('deusex.datalinkplay.popdatalink');
@@ -576,5 +627,5 @@ export async function createLiveDataLinkRuntime({
 
   return {shell:()=>currentShell,conversation:startRoute.conversation,speech:startRoute.speech,endEvent:startRoute.endEvent,
     timeline:startRoute.timeline,tick,reset,presentation:()=>lastPresentation,active:()=>active,
-    catalog,handleStartConversation,startHandler};
+    catalog,handleStartConversation,startHandler,receivedItems,receivedDisplay};
 }

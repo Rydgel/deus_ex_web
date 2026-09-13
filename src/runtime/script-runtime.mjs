@@ -12,7 +12,13 @@ import { probeNames } from '../unreal/probe-names.mjs';
 import { conditionalDestroyScriptObject, destroyScriptObject } from './script-object-lifecycle.mjs';
 import { setScriptOwner } from './script-owner.mjs';
 import { destroyScriptActor } from './script-destroy.mjs';
-import { constructFreshScriptObject, allocateFreshScriptObject, constructActorBase } from './script-object-construction.mjs';
+import { constructFreshScriptObject, allocateFreshScriptObject, constructActorBase, nativeConstructorFor } from './script-object-construction.mjs';
+import { checkActorEncroachment } from './check-encroachment.mjs';
+import { setBase } from './walking-callbacks.mjs';
+import {
+  installActorCollisionView, findActorBase, setCollisionArguments,
+  setActorCollision, setActorCollisionSize, setActorPhysics,
+} from './script-actor-collision.mjs';
 import { execPlayAnim } from './play-anim.mjs';
 import { animationView } from './script-anim.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
@@ -24,7 +30,7 @@ import { execSetLocation } from './script-set-location.mjs';
 import { bindActorConversations } from './script-conversation-wrapper.mjs';
 import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
-import { execScriptSpawn, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay } from './script-spawn.mjs';
+import { execScriptSpawn, inventoryImageChain, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay, spawnScriptInventoryActor } from './script-spawn.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -153,6 +159,11 @@ export class ScriptRuntime {
     this.resources=null;
     this.preparedObjects=new Map();
     this.dynamicLoadGraph=null;
+    // Spawned actors that carry the recovered collision/native view
+    // (installActorCollisionView). Natives 262/283/3970 route to the
+    // recovered bodies only for these receivers; map actors keep their
+    // host-native paths.
+    this.collisionViewActors=new WeakSet();
     // Native indices the host owns as external boundaries: invokeNative delegates
     // these to the `native` callback even when the runtime has a built-in body.
     // Focused script harnesses use this to record a native (e.g. PlaySound 264)
@@ -847,6 +858,22 @@ export class ScriptRuntime {
     if(!record?.function)throw new Error(`Original native event is not implemented: ${name}`);
     return this.processEvent(receiver,name,args,resultReference);
   }
+  /** ProcessEvent for native callbacks that take a declared return value
+   * (e.g. EncroachingOn inside CheckEncroachment). The original passes a
+   * caller result block; a result-carrying event writes into it, while a
+   * probe-masked dispatch leaves the caller's zeroed slot untouched. */
+  dispatchSpawnedEvent(actor,name,args=[]) {
+    const record=this.lookup(actor,name);
+    if(!record?.function)throw new Error(`Original event is not prepared: ${record?.key??name}`);
+    const fn=record.function;
+    if(fn.result){
+      const cell={reference:{},value:zeroValue(fn.result),get(){return this.value},set(v){this.value=v}};
+      this.processEvent(actor,name,args,cell);
+      return cell.value;
+    }
+    this.processEvent(actor,name,args);
+    return undefined;
+  }
   /** Window's native wrapper preserves the UFunction selected by its original
    * checked/state-aware lookup. Only a null native parameter block (InitWindow)
    * is bridged here; arbitrary raw event blocks require their own typed layout. */
@@ -905,7 +932,13 @@ export class ScriptRuntime {
     const cls=args.cls?.linkedClass;
     if(!cls)throw new Error('Spawn class is not linked');
     const lifecycle=this.actorLifecycle;
+    const level=args.level;
     const key=cls.record.key;
+    // BSP world hits arrive as the collision query's $world sentinel; the
+    // script-visible Level actor is the attached LevelInfo at actors[0], the
+    // identity the original dispatch would target (Actor.SupportActor runs
+    // on LevelInfo). Map it before the script-event dispatch.
+    const levelActor=target=>target===level?.hash?.levelInfo?level.actors[0]:target;
     const services={
       read:(actor,name)=>this.namedReference(actor,name).get(),
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
@@ -915,7 +948,7 @@ export class ScriptRuntime {
       resolveConstructor:cls=>lifecycle?.resolveConstructor?.(cls),
       construct:(cls,options,context)=>this.constructObject(cls,options,
         context?.constructorSelection
-          ?{...lifecycle.construction,nativeConstructor:constructActorBase}
+          ?{...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)}
           :lifecycle.construction),
       setRegion:(...values)=>this.setRegion(...values),
       setNativeLevel:(actor,level)=>{this.instance(actor).nativeObject.xLevel=level;},
@@ -927,6 +960,28 @@ export class ScriptRuntime {
       },
       processEvent:(actor,name)=>this.processEvent(actor,name),
       setActorZone:(actor,test,force)=>this.setSpawnActorZone(actor,test,force),
+      // The collision-carrying subclasses (currently the admitted Inventory
+      // chain) run the recovered pre-startup hash gate, the real
+      // CheckEncroachment and the FindBase tail instead of the bounded
+      // no-collision path. The view reads and writes the object's own field
+      // storage, so natives dispatched later see the same state.
+      installCollisionView:actor=>{
+        const lineage=[];
+        for(let entry=cls;entry;entry=entry.base)lineage.push(entry.record.key);
+        installActorCollisionView(actor,{
+          read:(a,name)=>this.namedReference(a,name).get(),
+          write:(a,name,value)=>this.namedReference(a,name).set(value),
+          worldActor:level.actors[0],lineage});
+        this.collisionViewActors.add(actor);
+        return actor;
+      },
+      checkEncroachment:(actor,position,rotation,notify)=>checkActorEncroachment(actor,position,rotation,notify,{
+        encroachmentCheck:(a,p,r,e)=>level.hash.actorEncroachmentCheck(a,p,r,e),
+        dispatch:(a,name,args)=>this.dispatchSpawnedEvent(levelActor(a),name,args)}),
+      findBase:actor=>findActorBase(actor,{
+        lineCheck:(...lineArgs)=>level.hash.lineCheck(...lineArgs),
+        dispatch:(a,name,args)=>this.dispatchSpawnedEvent(levelActor(a),name,args)}),
+      destroyActor:actor=>this.destroyActor(actor,false),
       warning:this.warning,
     };
     // The original prologue gates reject null/abstract/non-Actor/static
@@ -934,6 +989,10 @@ export class ScriptRuntime {
     // runtime's subclass-startup admission gate.
     if(spawnActorRejectedByGates({...args,cls},services))return null;
     const spawn=key==='deusex.datalinkplay'?spawnScriptDataLinkPlay
+      // Admitted by linked DataVaultImage -> Engine.Inventory ancestry, which is
+      // what UClass::Bind's constructor copy-down actually depends on, rather
+      // than by class name.
+      :inventoryImageChain(cls)?spawnScriptInventoryActor
       :key==='engine.camerapoint'?spawnScriptCameraPoint
       :typeof lifecycle?.spawnActor==='function'
         ?(spawnArgs,spawnServices)=>lifecycle.spawnActor(spawnArgs,spawnServices)
@@ -1308,6 +1367,38 @@ export class ScriptRuntime {
     if(call.index===279){
       if(call.argumentCount!==0)throw new Error('Destroy accepts no arguments');
       return this.destroyActor(call.receiver,false);
+    }
+    // Recovered collision/physics natives for actors carrying the spawn
+    // collision view (the admitted Inventory chain). execSetCollision fills
+    // skipped optional arguments from the current +0x1dc bits, and
+    // SetPhysics routes its Walking/None base transitions through the
+    // recovered FindBase/SetSupportBase chain against the live level hash.
+    // Other receivers keep their host-native paths.
+    if(this.collisionViewActors.has(call.receiver)&&(call.index===262||call.index===283||call.index===298||call.index===3970)){
+      const level=this.levelFor(call.receiver);
+      const dispatch=(a,name,args)=>this.dispatchSpawnedEvent(
+        a===level?.hash?.levelInfo?level.actors[0]:a,name,args);
+      if(call.index===262){
+        const [collide,blockActors,blockPlayers]=setCollisionArguments(call.receiver,
+          call.argumentCount,index=>refValue(call.evaluateArgument(index)));
+        return setActorCollision(call.receiver,collide,blockActors,blockPlayers,{level});
+      }
+      if(call.index===283){
+        if(call.argumentCount!==2)throw new Error('SetCollisionSize requires radius and height');
+        return setActorCollisionSize(call.receiver,refValue(call.evaluateArgument(0)),
+          refValue(call.evaluateArgument(1)),{level});
+      }
+      // execSetBase (298) reaches AActor::SetBase 0x10369c80; the spawn's
+      // SupportActor dispatch (Actor.SupportActor -> SetBase) lands here.
+      if(call.index===298){
+        if(call.argumentCount!==1)throw new Error('SetBase accepts exactly one argument');
+        return setBase(call.receiver,refValue(call.evaluateArgument(0)),dispatch);
+      }
+      if(call.argumentCount<1||call.argumentCount>2)throw new Error('SetPhysics accepts one or two arguments');
+      const newPhysics=refValue(call.evaluateArgument(0));
+      const newBase=call.argumentCount>1?refValue(call.evaluateArgument(1)):null;
+      return setActorPhysics(call.receiver,newPhysics,newBase,{dispatch,
+        findBase:a=>findActorBase(a,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})});
     }
     if(call.index===261){
       if(call.argumentCount!==0)throw new Error('FinishAnim accepts no arguments');

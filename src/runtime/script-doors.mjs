@@ -562,6 +562,22 @@ export async function createScriptDoors({
       call.receiver.flags=((call.receiver.flags??0)&~13)|call.receiver.collisionBits;
       return true;
     }
+    // Extension window-layout natives (Window.ConfigureChild 1461,
+    // AskParentForReconfigure 1460, QueryPreferredSize/Width/Height
+    // 1465/1463/1464, QueryGranularity 1466). The live DataLink host wires a
+    // real attached HUDReceivedDisplay onto hud.receivedItems, which makes the
+    // installed DeusExHUD.ConfigurationChanged body run its received-display
+    // layout branch against these. They are bounded zero/no-op boundaries
+    // until the Stage-4 window-layout natives are recovered; every other
+    // ConfigurationChanged window field is still None in the preview shell.
+    if (call.index === 1460 || call.index === 1461) return undefined;
+    if (call.index === 1463 || call.index === 1464 || call.index === 1465 || call.index === 1466) {
+      for (let index = 0; index < call.argumentCount; index++) {
+        const value = call.evaluateArgument(index);
+        if (value?.reference && typeof value.set === 'function') value.set(0);
+      }
+      return 0;
+    }
     if (call.index === 256) throw new Error(`Unsupported Sleep in selected door script: ${path}`);
     if (path.endsWith('.stopwaiting')) return dispatch(call.receiver, 'StopWaiting', []);
     throw new Error(`Unsupported original door native ${call.index} in ${path}`);
@@ -940,7 +956,8 @@ export async function createScriptDoors({
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
-    infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active };
+    infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
+    dataLinkReceivedItems:liveDataLink.receivedItems };
 }
 
 export default createScriptDoors;
