@@ -4,11 +4,11 @@ import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecor
 import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,144,145,146,147,150,151,154,155,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,210,212,213,215,216,223,234,235,236,242,243,244,245,250,251,254,255,316]);
+const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,196,210,212,213,215,216,223,234,235,236,242,243,244,245,250,251,254,255,316]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
-const primitiveOutNatives=new Set([165,166,182,184,185,223,...decorationOutPrimitiveIndices]);
+const primitiveOutNatives=new Set([135,138,139,140,163,164,165,166,182,184,185,223,...decorationOutPrimitiveIndices]);
 export const refValue = v => v?.reference ? v.get() : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
 export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Script assignment requires a variable'); return ref.set(value); };
@@ -59,10 +59,35 @@ export function compileFunction(fn) {
           throw new Error('Original Divide_IntInt signed overflow (x86 divide exception) is unsupported');
         return (Math.trunc(dividend/divisor))|0;
       }
+      // Core's int bitwise operators evaluate the int32 operands into DWORD
+      // temporaries and execute NOT (141), NEG (143), AND (156), XOR (157) or
+      // OR (158); the shifts execute SHL (148), SAR (149) or SHR (196) with
+      // the count masked to 5 bits (CL & 31), which is also the JavaScript
+      // shift semantics.  196 stores the unsigned SHR result back as an int.
+      case 141: return ~(a | 0);
+      case 143: return (-(a | 0)) | 0;
+      case 148: return (a | 0) << (b | 0);
+      case 149: return (a | 0) >> (b | 0);
+      case 156: return (a | 0) & (b | 0);
+      case 157: return (a | 0) ^ (b | 0);
+      case 158: return (a | 0) | (b | 0);
+      case 196: return ((a | 0) >>> (b | 0)) | 0;
       case 150: return (a | 0) < (b | 0);
       case 151: return (a | 0) > (b | 0);
       case 154: return (a | 0) === (b | 0);
       case 155: return (a | 0) !== (b | 0);
+      // The int/byte out-parameter operators receive arg0 through the
+      // original GPropAddr handoff: lvalue arguments mutate the variable,
+      // anything else mutates a discarded stack temporary.  The byte
+      // operators load and store single bytes (wrapping mod 256); the
+      // preoperators return the NEW value while the postoperators write the
+      // OLD value to the result before incrementing or decrementing.
+      case 135: { const v=((a & 255) + (b & 255)) & 255; if(args[0]?.reference)assign(args[0], v); return v; }
+      case 138: { const v=((a & 255) - 1) & 255; if(args[0]?.reference)assign(args[0], v); return v; }
+      case 139: { const v=a & 255; if(args[0]?.reference)assign(args[0], (v + 1) & 255); return v; }
+      case 140: { const v=a & 255; if(args[0]?.reference)assign(args[0], (v - 1) & 255); return v; }
+      case 163: { const v=((a | 0) + 1) | 0; if(args[0]?.reference)assign(args[0], v); return v; }
+      case 164: { const v=((a | 0) - 1) | 0; if(args[0]?.reference)assign(args[0], v); return v; }
       case 165: if(args[0]?.reference)assign(args[0], ((a | 0) + 1) | 0); return a | 0;
       case 171: return f(a * b);
       case 172: return f(a / b);
