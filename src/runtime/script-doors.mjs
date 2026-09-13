@@ -387,6 +387,15 @@ export async function createScriptDoors({
     actorFrob: await prepare(engine, 'actor.frob', 'Actor.Frob'),
     startConversation: await prepare(deusEx, 'deusexplayer.startconversation', 'DeusExPlayer.StartConversation'),
     decorationFrob: await prepare(deusEx, 'deusexdecoration.frob', 'DeusExDecoration.Frob'),
+    // DeusExMover.Frob. Using a door is the original body's decision, not the
+    // viewer's: bFrobbable/bDestroyed/bSlave, the bPicking and KeyNum/PrevKeyNum
+    // tests, the bOneWay GetAxes dot product, the lock branches, the localized
+    // ClientMessage and the Tag fanout through native AllActors all live here.
+    // Its Super.Frob is the empty Actor.Frob above. The lockpick and NanoKeyRing
+    // branches are only reached with a non-null frobWith, which needs Stage-5
+    // inventory; Play frobs with None and never enters them.
+    // docs/script-mover-frob.md.
+    deusExMoverFrob: await prepare(deusEx, 'deusexmover.frob', 'DeusExMover.Frob'),
     // LightSwitch.Frob (roadmap item #3): Super.Frob's AllActors(Event) fanout calls
     // Actor.Trigger on each tagged actor; with the TriggerLights advanced into their
     // TriggerToggle state (createScriptLights below) that virtual call dispatches to
@@ -779,6 +788,64 @@ export async function createScriptDoors({
     if (!outcome.handled) throw new Error(`Bumped decoration has no Bump body: ${decoration?.name ?? '<unnamed>'}`);
   }
 
+  /** Signature of the state a Trigger changes on one prepared mover, so a frob
+   * can report exactly which movers its body triggered. TriggerToggle.Trigger
+   * selects a state label, which moves the FStateFrame cursor before any
+   * interpolation runs, so both halves are part of the signature. */
+  function frobSignature(record) {
+    const state = record.mover.interpolation, script = record.state;
+    return `${state.key}/${state.previousKey}/${state.interpolating ? 1 : 0}/${f(state.alpha ?? 0)}` +
+      `|${script.latent}/${script.execution ? script.execution.cursor : 'none'}`;
+  }
+
+  /** Original DeusExMover.Frob. Play's door use runs this body instead of a
+   * host lock/one-way/group substitute, so bFrobbable, bDestroyed, bSlave,
+   * bPicking, the KeyNum/PrevKeyNum "already open" test, the bOneWay GetAxes
+   * dot product, the lock branches and the Tag fanout through native AllActors
+   * are all the original's decisions. `frobWith` is the item in the player's
+   * hand; Play has no inventory yet and passes None, which is the branch the
+   * original takes for an empty hand. A non-null frobWith would reach the
+   * Lockpick/NanoKeyRing paths, which need Stage-5 inventory.
+   *
+   * The body's own localized ClientMessage stays a recorded boundary: the
+   * original delivers it through Player.Console, and that console/HUD
+   * presentation is Stage 4. The recorded string is the one the bytecode
+   * selected from the class's localized defaults, not a host message.
+   */
+  function frobMover(mover, frobber = playerActor, frobWith = null) {
+    if (!moversByObject.has(mover))
+      throw new Error(`Mover is outside the prepared TriggerToggle subset: ${mover?.name ?? '<unnamed>'}`);
+    const before = records.map(item => [item, frobSignature(item)]);
+    const messages = [];
+    const messageKey = runtime.lookup(frobber, 'ClientMessage')?.key ?? null;
+    const hadBoundary = messageKey !== null && runtime.boundaryFunctions.has(messageKey);
+    const previousBoundary = messageKey === null ? undefined : runtime.boundaryFunctions.get(messageKey);
+    if (messageKey !== null) runtime.boundaryFunctions.set(messageKey, call => {
+      // This route's argument is the body's local `msg` string, so evaluating
+      // it has no effects of its own.
+      messages.push(call.argumentCount > 0 ? refValue(call.evaluateArgument(0)) : '');
+      return undefined;
+    });
+    try {
+      runtime.processEvent(mover, 'Frob', [frobber, frobWith]);
+    } finally {
+      if (messageKey !== null) {
+        if (hadBoundary) runtime.boundaryFunctions.set(messageKey, previousBoundary);
+        else runtime.boundaryFunctions.delete(messageKey);
+      }
+    }
+    // Display bookkeeping for exactly the movers the body actually triggered;
+    // a refused frob leaves every interpolation state untouched.
+    const triggered = [];
+    for (const [item, signature] of before) {
+      if (frobSignature(item) === signature) continue;
+      item.mover.target = stateLabelForTarget(item.mover) === 'open' ? 1 : 0;
+      item.mover.active = true;
+      triggered.push(item.mover);
+    }
+    return { messages, triggered };
+  }
+
   function use(mover, group = [mover]) {
     const selected = [...new Set((Array.isArray(group) ? group : [group]).map(item => item?.actor ?? item))];
     if (!selected.length) throw new Error('TriggerToggle use requires at least one mover');
@@ -872,7 +939,7 @@ export async function createScriptDoors({
   };
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
-  return { reset, use, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
+  return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active };
 }
 

@@ -36,8 +36,9 @@ assert.deepEqual(use(pair[0]).actors,pair.map(mover=>mover.name));
 tick(2.1);
 assert.deepEqual(pair.map(mover=>mover.interpolation.key),[1,1]);
 assert.deepEqual(pair.map(mover=>mover.collider.offset),[[0,-56,0],[0,56,0]]);
-assert.deepEqual(iterations,[{native:304,next:1,matches:0},{native:304,next:1,matches:0}],
-  'each panel executes original FinishedOpening AllActors(Event) with zero matches');
+assert.deepEqual(iterations,[{native:304,next:3,matches:2},{native:304,next:1,matches:0},{native:304,next:1,matches:0}],
+  'the frob runs original DeusExMover.Frob AllActors(class\'DeusExMover\',Tag) over both darkdoor panels, '+
+  'then each panel executes original FinishedOpening AllActors(Event) with zero matches');
 assert.equal(game.collision.sweep([4240,848,-144],[100,0,0],game.player.extent),null,
   'opened doorway clears the player-sized route');
 assert.equal(game.player.nativeFarMove(game.player.physicsPawn,[4240,848,-144],0,1),true);
@@ -49,8 +50,8 @@ const beforeClose=iterations.length;
 assert.equal(use(pair[0]).ok,true);tick(2.1);
 assert.deepEqual(pair.map(mover=>mover.interpolation.key),[0,0]);
 assert.deepEqual(pair.map(mover=>mover.collider.offset),[[0,0,0],[0,0,0]]);
-assert.deepEqual(iterations.slice(beforeClose),[{native:304,next:1,matches:0},{native:304,next:1,matches:0}],
-  'each panel executes original DoClose AllActors(Event) with zero matches');
+assert.deepEqual(iterations.slice(beforeClose),[{native:304,next:3,matches:2},{native:304,next:1,matches:0},{native:304,next:1,matches:0}],
+  'closing repeats the original Frob Tag fanout, then each panel executes original DoClose AllActors(Event) with zero matches');
 
 game.reset();
 assert.deepEqual(pair.map(mover=>[mover.interpolation.key,mover.target,mover.collider.offset]),

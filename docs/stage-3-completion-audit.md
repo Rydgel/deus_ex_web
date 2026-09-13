@@ -1,4 +1,4 @@
-# Stage 3 completion audit — 2026-09-13
+# Stage 3 completion audit — 2026-09-13 (updated)
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused
@@ -29,10 +29,15 @@ node scripts/validate-world-destroy.mjs                      pass
 node scripts/validate-plant-push.mjs                         pass
 ```
 
-`scripts/validate-script-spawn.mjs` is red in this worktree, before and after
-the live-destruction work: its fixture reaches `SpawnActor engine.actor
-subclass startup is not implemented`. That gap belongs to the object-spawning
-row below, not to destruction.
+`scripts/validate-script-spawn.mjs` was red here: its `Spawn(class'Actor')`
+case reached `SpawnActor engine.actor subclass startup is not implemented`
+instead of the original null return. The runtime selected a subclass startup
+before running any original gate, while `ULevel::SpawnActor`'s prologue
+(`0x10394f81`-`0x103950b0`) rejects a null, abstract, non-Actor or
+static/nondeletable class before any class-specific behaviour. Those four gates
+are now `spawnActorRejectedByGates` and run ahead of this runtime's own
+admission gate, so an abstract class is refused the way the original refuses it.
+That was a gate-ordering defect, not the object-spawning gap, which is unchanged.
 
 These checks cover the current Training subset, including the live
 `AugmentationManager1` startup and the explicit `NanoKeyRing.CreateKeyRing`
@@ -45,7 +50,7 @@ boundary. They do not establish the remaining rows below.
 | Class inheritance | Linked Core/Engine/DeusEx class chains, UField/UStruct/UState/UClass registration and property-link dispatch are exercised by the runtime and class-registration tests. Evidence: [`script-class-registration.md:8-17,96-100`](script-class-registration.md), [`script-class-link.md:37-97`](script-class-link.md). | The complete first-load class graph and native metaclass identities are still absent. Next boundary: load one non-prebound imported class through the native registration path and compare its Super, fields, defaults and Link order. |
 | Default properties | Native CDO header/default allocation and inherited property copying are covered; 364 authored DeusEx struct defaults decode, and the augmentation manager/default list passes the live validator. Evidence: [`script-class-registration.md:102-143`](script-class-registration.md), [`script-struct-values.md`](script-struct-values.md), [`script-player-augmentation-startup.md:37-69`](script-player-augmentation-startup.md). | All classes/resources do not yet receive native CDO initialization, dynamic-container storage, config or localization values. Next boundary: one fresh non-prebound CDO containing an owning string/array property. |
 | States | Original `TriggerToggle` Open/Close and `CameraPoint` Auto/Idle state selection run through VM state frames. Evidence and check: [`script-runtime.md:322-337`](script-runtime.md), `scripts/validate-script-runtime.mjs`. | Arbitrary state graphs, inherited state probes and state-frame persistence are not established. Next boundary: one non-door actor with inherited `BeginState`/`EndState` and a second transition. |
-| Events | Spawn callbacks, Touch/UnTouch/Tick/Frob, trigger actions and the direct DataLink event path use original ProcessEvent/bytecode. Evidence: [`script-spawn.md:284-329`](script-spawn.md), `scripts/validate-trigger-actions.mjs`, `scripts/validate-training-datalink-live.mjs`. | Generic ProcessEvent coverage, native event memory, exception/unwind and all subclass event overrides remain open. Next boundary: an authored event with owning struct/array parameters through live frame allocation and cleanup. |
+| Events | Spawn callbacks, Touch/UnTouch/Tick/Frob, trigger actions and the direct DataLink event path use original ProcessEvent/bytecode. Using a door is now the original `DeusExMover.Frob` body's decision — its frobbable/destroyed gates, lock branch with the class's localized `ClientMessage`, and the like-tagged `AllActors` fanout replaced a host reimplementation in `doors.mjs`. Evidence: [`script-spawn.md:284-329`](script-spawn.md), [`script-mover-frob.md`](script-mover-frob.md), `scripts/validate-trigger-actions.mjs`, `scripts/validate-mover-frob.mjs`, `scripts/validate-training-datalink-live.mjs`. | Generic ProcessEvent coverage, native event memory, exception/unwind and all subclass event overrides remain open. Next boundary: an authored event with owning struct/array parameters through live frame allocation and cleanup. |
 | Timers | TriggerToggle `DelayTime`/`Sleep`, `Actor.SetTimer`, DamageTrigger timer scheduling and the DataLink end timer are compared against original order. Evidence: [`script-runtime.md:326-332`](script-runtime.md), [`script-trigger-actions.md:86-106`](script-trigger-actions.md). | A general scheduler for multiple actors, reentrant destruction and every timer flag is not proven. Next boundary: two live actor timers with one callback destroying or rescheduling the other. |
 | Latent functions | `InterpolateTo`, `FinishInterpolation` suspension/reversal and state Sleep/DelayTime are covered in the selected mover path. Native 261 `FinishAnim` now installs latent action `0x181`, preserves the recovered rate/tween/flag gates, and clears the slot only when `bAnimFinished` is set. Evidence: [`script-runtime.md:322-344`](script-runtime.md), [`script-finish-anim.md`](script-finish-anim.md). | The browser does not yet advance arbitrary native mesh animation state to produce `bAnimFinished`; general latent-slot serialization is also unsupported. Next boundary: drive one authored non-mover animation through its original animation tick into the `0x181` poll. |
 | Garbage collection | Core mark/purge ordering, typed reference holders, FName deletion/index reuse and CameraPoint cleanup have focused source-backed tests. Evidence: [`script-gc.md:170-221`](script-gc.md), [`script-reference-serialization.md:10-78`](script-reference-serialization.md). | The live world still lacks the complete class/resource graph, native destructors/allocators, dynamic array/map ownership and raw native event memory. Next boundary: collect a real map/resource subgraph containing a cycle, a lazy resource and a pending actor. |

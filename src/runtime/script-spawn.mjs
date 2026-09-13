@@ -79,17 +79,33 @@ function selectDataLinkPlayConstructor(cls,services) {
  * source-backed script Actor only when its lifecycle host explicitly admits
  * that key. It never becomes a generic Actor fallback.
  */
+/**
+ * The recovered `ULevel::SpawnActor` prologue gates at
+ * `0x10394f81`-`0x103950b0`, before any actor-array mutation and before any
+ * class-specific behaviour: null class, the `Class+0x484` bit 0 abstract test
+ * (`0x10394fc2`), the `AActor::PrivateStaticClass` ancestry walk, and the
+ * non-editor `bStatic`/`bNoDelete` class-default test. Each logs and returns
+ * null. They are ordinary reads, so a caller may run them before dispatching
+ * to a subclass startup and the startup may run them again.
+ * Returns `true` when the spawn is rejected here.
+ */
+export function spawnActorRejectedByGates(args,services) {
+  const {cls,level}=args;
+  if(!cls)return true;
+  const reject=reason=>{services.warning?.({type:'SpawnRejected',class:cls.record.key,reason});return true;};
+  if(cls.metadata.classFlags&1)return reject('abstract class');
+  if(!services.isActorClass(cls))return reject('class is not an Actor');
+  if(!level||typeof level.editor!=='boolean')throw new Error('SpawnActor requires an explicit original editor context');
+  if(!level.editor&&(services.defaultRead(cls,'bStatic')||services.defaultRead(cls,'bNoDelete')))
+    return reject('static or nondeletable class default');
+  return false;
+}
+
 export function spawnScriptActor(args,services,{kind,key,constructorSelection=false}) {
   const {cls,level,name,owner,instigator,location,rotation}=args;
   const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
     processEvent,setActorZone,validate}=services;
-  if(!cls)return null;
-  const reject=reason=>{services.warning?.({type:'SpawnRejected',class:cls.record.key,reason});return null;};
-  if(cls.metadata.classFlags&1)return reject('abstract class');
-  if(!services.isActorClass(cls))return reject('class is not an Actor');
-  if(!level||typeof level.editor!=='boolean')throw new Error('SpawnActor requires an explicit original editor context');
-  if(!level.editor&&(defaultRead(cls,'bStatic')||defaultRead(cls,'bNoDelete')))
-    return reject('static or nondeletable class default');
+  if(spawnActorRejectedByGates(args,services))return null;
   if(classKey(cls)!==key)throw new Error(`SpawnActor ${kind} subclass startup is not implemented`);
   if(typeof validate!=='function'||validate(args)!==true)
     throw new Error('SpawnActor requires verified native defaults and complete world bindings');

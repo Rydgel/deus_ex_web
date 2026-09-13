@@ -72,8 +72,22 @@ export class Doors {
   use(target, playerPosition) {
     if (!target) return { ok: false, message: 'No door in reach' };
     const mover = target.mover, v = mover.values;
-    if (!v.bFrobbable || v.bDestroyed) return { ok: false, message: 'This door cannot be used' };
     if (!mover.supported) return { ok: false, message: target.label };
+    // The original DeusExMover.Frob owns every gate below once the script
+    // runtime is linked: frobbable/destroyed/slave, lock and one-way state, the
+    // localized refusal message and the Tag fanout are its decisions, not ours.
+    if (this.scriptRuntime) {
+      const outcome = this.scriptRuntime.frob(mover);
+      const opened = outcome.triggered.length > 0;
+      if (opened) this.uses++;
+      return { ok: opened,
+        // The body's own localized ClientMessage when it refused or reported;
+        // otherwise the viewer's own label for a door it just retargeted.
+        message: outcome.messages.find(text => text !== '') ??
+          (opened ? (mover.target ? 'Opening door' : 'Closing door') : ''),
+        actors: outcome.triggered.map(m => m.name) };
+    }
+    if (!v.bFrobbable || v.bDestroyed) return { ok: false, message: 'This door cannot be used' };
     if (closed(mover) && v.bLocked) return { ok: false, message: v.msgLocked ?? "It's locked" };
     if (closed(mover) && v.bOneWay) {
       const yaw = (v.Rotation?.[1] ?? 0) * Math.PI / 32768;
@@ -82,10 +96,6 @@ export class Doors {
     const tag = (v.Tag ?? '').toLowerCase();
     const group = this.movers.filter(m => m === mover || tag && !['none','deusexmover'].includes(tag) && (m.values.Tag ?? '').toLowerCase() === tag);
     if (group.some(m => !m.supported)) return { ok: false, message: 'Linked door behavior not supported yet' };
-    if(this.scriptRuntime){
-      this.scriptRuntime.use(mover,group);this.uses++;
-      return {ok:true,message:mover.target?'Opening door':'Closing door',actors:group.map(m=>m.name)};
-    }
     if (mover.scriptState) {
       triggerFrobbedDoor(mover.scriptState,this.collision.playerActor,this.collision.playerActor,group.map(m=>m.scriptState),this.collision.doorCallbacks);
       for (const m of group) { m.target=m.scriptState.code==='open'?1:0;m.active=Boolean(m.scriptState.code); }

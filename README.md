@@ -33,6 +33,10 @@ or push further hosting updates unless the user asks.
 - Play mode with gravity, jumping, crouching, stairs, BSP and actor collision,
   translating TriggerToggle doors, and pushed decorations that run their original
   `DeusExDecoration.Bump`/physics ([rolling evidence](docs/rolling.md)).
+- Using a door runs the original `DeusExMover.Frob` bytecode, so Training's
+  locked and non-frobbable doors refuse as the original does, and like-tagged
+  double doors open through its own `AllActors` fanout
+  ([mover frob evidence](docs/script-mover-frob.md)).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through a small VM prototype.
 - Unit/format tests, real-data validation commands, and browser regression tests.

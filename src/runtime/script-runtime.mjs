@@ -24,7 +24,7 @@ import { execSetLocation } from './script-set-location.mjs';
 import { bindActorConversations } from './script-conversation-wrapper.mjs';
 import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
-import { execScriptSpawn, spawnScriptCameraPoint, spawnScriptDataLinkPlay } from './script-spawn.mjs';
+import { execScriptSpawn, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay } from './script-spawn.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -906,12 +906,6 @@ export class ScriptRuntime {
     if(!cls)throw new Error('Spawn class is not linked');
     const lifecycle=this.actorLifecycle;
     const key=cls.record.key;
-    const spawn=key==='deusex.datalinkplay'?spawnScriptDataLinkPlay
-      :key==='engine.camerapoint'?spawnScriptCameraPoint
-      :typeof lifecycle?.spawnActor==='function'
-        ?(spawnArgs,services)=>lifecycle.spawnActor(spawnArgs,services)
-        :null;
-    if(!spawn)throw new Error(`SpawnActor ${key} subclass startup is not implemented`);
     const services={
       read:(actor,name)=>this.namedReference(actor,name).get(),
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
@@ -935,6 +929,16 @@ export class ScriptRuntime {
       setActorZone:(actor,test,force)=>this.setSpawnActorZone(actor,test,force),
       warning:this.warning,
     };
+    // The original prologue gates reject null/abstract/non-Actor/static
+    // classes before any class-specific behaviour, so they precede this
+    // runtime's subclass-startup admission gate.
+    if(spawnActorRejectedByGates({...args,cls},services))return null;
+    const spawn=key==='deusex.datalinkplay'?spawnScriptDataLinkPlay
+      :key==='engine.camerapoint'?spawnScriptCameraPoint
+      :typeof lifecycle?.spawnActor==='function'
+        ?(spawnArgs,spawnServices)=>lifecycle.spawnActor(spawnArgs,spawnServices)
+        :null;
+    if(!spawn)throw new Error(`SpawnActor ${key} subclass startup is not implemented`);
     return spawn({...args,cls},services);
   }
   destroyActor(receiver,netForce=false) {

@@ -17,6 +17,35 @@ Verification through the actual HTTP manifest/file endpoints initialized
 training Play and advanced JC to grounded successfully. Reload the page to
 discard the old manifest. This fix is included in the checkpoint.
 
+## Latest — original DeusExMover.Frob and the SpawnActor gate order (2026-09-13)
+
+Two source-backed corrections on top of the checkpoint below.
+
+**`ULevel::SpawnActor` gate order.** `ScriptRuntime.spawnActor` selected a
+subclass startup before running any original gate, so `Spawn(class'Actor')`
+threw `SpawnActor engine.actor subclass startup is not implemented` instead of
+returning null. The original prologue (`0x10394f81`-`0x103950b0`, abstract test
+at `0x10394fc2`) rejects a null, abstract, non-Actor or static/nondeletable
+class before any class-specific behaviour. Those four gates are now
+`spawnActorRejectedByGates` in `script-spawn.mjs` and run ahead of the runtime's
+own admission gate. `scripts/validate-script-spawn.mjs` is green again; the
+object-spawning gap itself is unchanged.
+
+**Original `DeusExMover.Frob` in Play.** `doors.mjs` decided by itself whether a
+door could be used — it re-implemented the frobbable/destroyed, locked and
+one-way gates in JavaScript, built the like-tagged group from the viewer's own
+mover list, and substituted its own `"It's locked"` text. `DeusEx.u` export
+15897 now runs through `ProcessEvent` instead, so Training's locked (`gundoor`,
+`keydoor`, `MedDoor`) and non-frobbable (`paddoor`, `hackdoor`,
+`bodydoorsopen`) doors refuse the way the original refuses them, with the class's
+own localized `msgLocked`, and double doors open through the body's
+`AllActors(class'DeusExMover', Tag)` fanout. `ClientMessage` stays a recorded
+boundary (root-window/console delivery is Stage 4) and the Lockpick/NanoKeyRing
+branches stay unreached because Play frobs with `frobWith = None`.
+Evidence and boundaries: [script-mover-frob.md](script-mover-frob.md);
+check with `node scripts/validate-mover-frob.mjs`.
+
+
 ## Current checkpoint — live player startup and DataLink lifecycle (2026-09-13)
 
 The resumed work addressed original property value copying and destruction,
