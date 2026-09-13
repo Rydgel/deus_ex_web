@@ -7,6 +7,10 @@ trace.
 
 ## Observed browser boundary
 
+> **Resolved** (see "Play integration" below): `Plant7.Bump` now runs the real
+> script and pushes the plant; it no longer pauses. This section records the
+> original failure and the path it was supposed to enter.
+
 The focused browser check in
 [`browser-tests/runtime-error.spec.mjs`](../browser-tests/runtime-error.spec.mjs)
 moves JC into the training scene and waits for `runtimeError.message` to
@@ -74,8 +78,11 @@ empty callback. `ClassDefaults` on the installed packages gives Plant2
 `DeusExDecoration` defaults, so their UnrealScript zero value is false. The
 inherited `PushSound` default resolves to
 `DeusExSounds.Generic.PushMetal` (export `50`). JC's `JCDentonMale` defaults
-give `Mass=150`; `bOnFire`, `CarriedDecoration`, and
-`AugmentationSystem` begin null/false for this branch.
+give `Mass=150`; serialized `bOnFire`, `CarriedDecoration`, and
+`AugmentationSystem` begin false/null before `PostBeginPlay`. The current Play
+host runs the standalone player startup first, so the live manager is present;
+the unowned `AugMuscle` still leaves the source's `GetClassLevel` at `-1` and
+therefore keeps `augMult=1`.
 
 For a player contact with vertical overlap, the original order is therefore:
 
@@ -84,8 +91,8 @@ For a player contact with vertical overlap, the original order is therefore:
 3. `bPushable`, `PlayerPawn(Other)`, and `Other.Mass > 40` pass.
 4. If the hit's Z separation satisfies the exact source inequality
    `abs(Location.Z-Other.Location.Z) < CollisionHeight + Other.CollisionHeight - 1`,
-   the overlap gate passes. `augMult` remains `1` when the player's
-   augmentation system is null, so `maxPush=100`.
+   the overlap gate passes. The live manager finds unowned `AugMuscle` at level
+   `-1`, so `augMult` remains `1` and `maxPush=100`.
 5. Plant2's mass passes the limit and `velscale=1`. Its velocity receives the
    player's velocity; because its current physics is `PHYS_Falling`, the body
    does not zero Z and does not call `SetPhysics(PHYS_Rolling)`.
@@ -115,14 +122,114 @@ carried-object early return, and ordered requests to sound/AI natives. Sound
 264/265 and AI event 714/715 remain recorded external boundaries in that check;
 it does not implement audio playback or AI propagation.
 
-Play still prepares the door script subset and rejects Plant7.Bump at the
-scene-event adapter. Completing the plant route requires the sound/AI services,
-decoration physics/tick integration, and live collision-hash updates. The
-original Bump body only assigns the decoration's velocity; advancing it belongs
-to the subsequent native physics phase. IsInState281, burning-state transitions,
-and the rolling SetPhysics3970 branch also remain required when their source
-guards are reached. Plant2's initial falling branch skips that transition.
+## Play integration (implemented)
 
-The browser reset check establishes error recovery only. It does not establish
-working plant pushing in Play. The eventual scene adapter must preserve the
-original target-first Bump dispatch and execute the actual inherited script.
+`Plant7.Bump` now runs the real inherited `DeusExDecoration.Bump` in Play. The
+scene adapter ([`scene-events.mjs`](../src/runtime/scene-events.mjs)) routes a
+`DeusExDecoration` `Bump` to the door runtime's VM instead of the `unsupported`
+fallback, preserving `player-move`'s target-first dispatch. The pushed decoration
+is already attached to that runtime (every live map actor is), so the Bump reads
+its typed defaults (`bPushable`, `Physics`, `Mass`, `CollisionHeight`, the
+player's live `Velocity`) and writes `Velocity`, `Instigator`, the yaw
+`SetRotation`, and the push-sound state. Wiring:
+
+- [`script-doors.mjs`](../src/runtime/script-doors.mjs) prepares
+  `DeusExDecoration.Bump`/`Timer`, exposes `bumpDecoration`, records the push
+  sound / AI loud-noise (`264`/`714`) and the `Timer`'s `StopSound`/`AIEndEvent`
+  (`265`/`715`) as deferred boundaries, and advances the `SetTimer(0.2)`
+  push-sound lifetime each tick.
+- [`player-scene.mjs`](../src/runtime/player-scene.mjs) and
+  [`game.mjs`](../src/viewer/game.mjs) late-bind that handler into the scene, and
+  expose the player's live pawn `Velocity` to the runtime.
+
+Validated by `scripts/validate-plant-push.mjs` (the full scene route in the Play
+host: velocity/Instigator/rotation, recorded push sound + AI, and the timer
+clearing `bPushSoundPlaying`), alongside the bytecode-level
+`scripts/validate-script-decoration.mjs`. The browser check
+([`runtime-error.spec.mjs`](../browser-tests/runtime-error.spec.mjs)) now asserts
+the contact pushes without pausing and that Player start still resets.
+
+## Decoration physics (in progress)
+
+Advancing the pushed decoration's position is the native physics phase. It is
+being built on the recovered movement primitives:
+
+- **`MoveActor` for a decoration cylinder — done, validated.** The original
+  `MoveActor` (`0x103990e0`) query/selection/math is source-type independent: it
+  keys on each candidate's type and the source's block flags, never on whether the
+  source is a controlled player. `native-move-query-oracle.py` now runs a
+  decoration source (`sourceControlledPlayer:false`) and produces identical
+  results, so `moveQuery` reuses the same path for a decoration
+  (`scripts/validate-native-move-query.mjs`, 424 cases; `docs/move-query.md`).
+- **`physFalling` for a non-Pawn decoration — done, validated.** `AActor::physFalling`
+  (`0x103d0a50`) computes `Pawn = IsA(APawn) ? this : NULL` in its prologue
+  (`0x103d0a7d`–`0x103d0aa7`) and, for a non-Pawn (`0x103d0bca`), jumps past the
+  entire air-control/acceleration-clamp block, copying `Acceleration` unchanged.
+  The general integration is `Velocity = OldVelocity + 0.5*(Gravity + Acceleration)*step`
+  (`0x103d1157`, taken by any non-PlayerPawn; Path A at `0x103d1039` is
+  PlayerPawn-only, and the bounce branch at `0x103d0f42` is gated by
+  `IsA(0x10578d48) && bBounce`). That is exactly `falling()` line 44, and the
+  existing player oracle already ran that path (zone flag `+0x388=0`). The oracle
+  now runs a **non-Pawn** actor (`native-falling-oracle.py`, `nonPawn:true`, a
+  class whose null SuperField makes every inlined `IsA` false); `falling()` with a
+  decoration proxy (acceleration `[0,0,0]`, airControl `0`) reproduces it
+  bit-exactly — `scripts/validate-native-falling.mjs`, **562 cases, maxError 0**.
+- **Landing transition — done, validated (`AActor::processLanded`, `0x103cef60`).**
+  For a non-Pawn it skips the Pawn landing-animation block (`0x103cf124`
+  `IsA(Pawn)` → `0x103cf597`), runs a decoration-class landing-footprint branch
+  (`IsA(0x10578d48) && actor+0x324 < 5`), then **dispatches the script
+  `Landed(HitNormal)` via `ProcessEvent`** (the VM boundary — `DeusExDecoration.Landed`
+  runs here). Only if Physics is *still* `PHYS_Falling(2)` after that event does it
+  call `setPhysics(PHYS_None, floor)` (`0x103c95f0`), which sets `Physics=PHYS_None`,
+  `Base=floor`, and zeroes `Velocity` and `Acceleration`. The footprint probe set is
+  **read-only**: a footprint-present (counter `<5`) and a footprint-absent (`>=5`)
+  landing reach a byte-identical outcome — asserted directly as a footprint-invariance
+  check. `native-landing-oracle.py` gained a non-Pawn/decoration mode (class
+  `0x10578d48`); `decorationLanded()` (`src/runtime/landing.mjs`) reproduces the
+  native outcome and transition events exactly — `scripts/validate-native-landing.mjs`,
+  **356 cases, maxError 0, 4 invariance pairs**. `DeusExDecoration.Landed`
+  (`.cache/reference/DeusExDecoration.uc:156`) clears `bFixedRotationDir`, lays the
+  plant flat (`Pitch=Roll=0`, `SetRotation`), and only plays a fragType/Mass hit
+  sound + `AISendEvent('LoudNoise')` when `Velocity.Z <= -200` (fall damage only for
+  `Velocity.Z < -500`) — it never changes Physics, so the engine `setPhysics(0)`
+  fires. A settled decoration is therefore `PHYS_None` on its floor; `BaseChange()`
+  (`:295`) re-enters `PHYS_Falling` when a pushable decoration loses its base.
+- **Open question surfaced by the landing model:** the forced-`PHYS_Falling`
+  `validate-plant-push` masked that a settled Plant7 is `PHYS_None`. This is now
+  resolved: decorations advance their recovered physics every actor phase, so a
+  loaded Plant7 settles to `PHYS_None`, and at bump time the `Bump` body's
+  `Physics != PHYS_Falling` gate zeroes Z **and** calls
+  `SetPhysics(PHYS_Rolling)` (`3970`). That branch is implemented (the door
+  runtime's decoration `SetPhysics`, `src/runtime/rolling.mjs`), so the settled
+  plant rolls instead of pausing.
+- **Decoration-physics tick — wired.** [`decoration-physics.mjs`](../src/runtime/decoration-physics.mjs)
+  (`runDecorationPhysics`) advances one decoration a timestep by selecting the
+  recovered native on `Physics`: `falling()` with a non-Pawn proxy (zero
+  acceleration/air control), `rolling()` for `PHYS_Rolling`
+  ([rolling.md](rolling.md)), `moveQuery` as the collision move against the live
+  level queries (`multiLineCheck` + `changeActor` hash update), and
+  `decorationLanded()` on a floor hit (VM `Landed`, then `setPhysics(PHYS_None)`:
+  rebase on the floor, zero velocity/acceleration). An airborne push works,
+  wall contacts in rolling run the script `HitWall`/slide response, and a
+  falling wall contact runs the recovered, oracle-validated non-Pawn
+  `processHitWall` (`processDecorationHitWall`, `0x103cecc0`): return for a Pawn
+  wall, else dispatch the unmodified `HitWall(normal,wall)` solely while the
+  decoration probes `HitWall`, with none of the Pawn direction/`MinHitWall`/
+  `MoveTimer`/`bFromWall` bookkeeping ([walking-callbacks.md](walking-callbacks.md)).
+  `linkDecorationCollision` links a decoration's static hash `Location` to its live
+  `position` before it moves (non-mover decorations otherwise keep a static
+  cylinder). `test/decoration-physics.test.mjs` covers free-fall, floor landing,
+  the falling wall dispatch, the missing-handler guard, and the resting no-op;
+  `scripts/validate-plant-push.mjs` and the Firefox runtime check exercise the
+  live Play route.
+- **Wired into Play.** [`script-doors.mjs`](../src/runtime/script-doors.mjs)
+  enumerates the live decoration identities and runs `runDecorationPhysics` after
+  each actor's `ProcessState` and timer phase, using `collision.queries` and the
+  per-position zone from [`game.mjs`](../src/viewer/game.mjs). `DeusExDecoration.Landed`,
+  the inherited `Actor.HitWall`/`Actor.Landed`, and the decoration `SetPhysics`
+  native are prepared/bound so a settled plant rolls when pushed. The falling
+  wall contact's `onHitWall` calls `processDecorationHitWall` with the runtime's
+  live `isProbing` (state-frame probe mask) and `ProcessEvent` dispatch, replacing
+  the earlier ad-hoc branch that relied on `ProcessEvent`'s incidental probe gate.
+  Audible playback and AI propagation stay Stage-4 boundaries; whole-scene rolling
+  acceptance is not claimed.

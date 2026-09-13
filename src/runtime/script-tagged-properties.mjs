@@ -3,6 +3,15 @@ import {
   PROPERTY_MEASURE_ARCHIVE_STATE,
   createScriptPropertyMeasureArchive,
 } from './script-property-measure-archive.mjs';
+import {identicalScriptProperty} from './script-property-identical.mjs';
+import {
+  serializeStrItem,
+  serializeArrayItem,
+  serializeFixedArrayItem,
+  serializeStructItem,
+  serializeMapItem,
+  serializeBoolItem,
+} from './script-property-serialize-item.mjs';
 
 /**
  * Collector branch of Core's UStruct::SerializeTaggedProperties.
@@ -156,8 +165,8 @@ function propertyName(property) {
 
 function propertyClassName(property) {
   const metadata = propertyMetadata(property);
-  return String(first(property, ['className', 'kind', 'propertyClassName'],
-    first(metadata, ['className', 'kind', 'propertyClassName'], '')));
+  return String(first(property, ['className', 'kind', 'nativeKind', 'propertyClassName'],
+    first(metadata, ['className', 'kind', 'nativeKind', 'propertyClassName'], '')));
 }
 
 function propertyType(property) {
@@ -210,7 +219,7 @@ function isBoolProperty(property, services) {
 function isStructProperty(property, services) {
   if (typeof services.isStructProperty === 'function') return services.isStructProperty(property) === true;
   const name = propertyClassName(property).toLowerCase();
-  return name === 'structproperty' || name === 'struct';
+  return name === 'structproperty' || name === 'ustructproperty' || name === 'struct';
 }
 
 function propertyId(property, services) {
@@ -365,6 +374,19 @@ function defaultComparison(property, value, defaultRef, services, context) {
     // identities, not merely equal display strings.
     return left === zero;
   }
+  if (kind === 'strproperty' || type === 'string' ||
+      kind === 'arrayproperty' || type === 'array' ||
+      kind === 'fixedarrayproperty' || type === 'fixedarray' ||
+      kind === 'mapproperty' || type === 'map' ||
+      kind === 'structproperty' || type === 'struct') {
+    // The five complex +0x6c bodies (Str/Array/FixedArray/Map/Struct) are
+    // translated in script-property-identical.mjs.  The default reference may
+    // be null (out of range); the bodies apply their recovered null-default
+    // rules, and the current value is always present.
+    const current = directValue(property, value);
+    const fallback = directValue(property, defaultRef);
+    return Boolean(identicalScriptProperty(property, current, fallback, services));
+  }
   fail(`UProperty Identical (+0x6c) is unresolved for ${String(propertyName(property))}`, {
     property, slot: '+0x6c',
   });
@@ -450,12 +472,12 @@ function invokeItem(property, archive, reference, tag, context, services) {
     tag,
   };
   if (bool) {
-    // 0x1012aca0's UBoolProperty branch only updates the value for a loading
-    // archive. ar0c is zero here, so it performs no archive operation after
-    // asserting the nonzero mask. Keep the helper call visible to callers.
-    boolMask(property, services);
+    // UBoolProperty::SerializeItem (0x10166550) writes the bit as one byte
+    // through Ar->Serialize(..., 1) before any loading-only storage update.
+    // The verified byte count is 1 for every value; the collector raw is a
+    // no-op.  The recovered body lives in script-property-serialize-item.mjs.
     context.helperCalls.push({ kind: 'bool', phase: context.phase, property, tag });
-    return archive;
+    return serializeBoolItem(property, archive, reference, baseContext, services);
   }
 
   const callback = services.serializeItem ?? property?.serializeItem ?? property?.serializeValue;
@@ -473,6 +495,36 @@ function invokeItem(property, archive, reference, tag, context, services) {
   if (kind === 'nameproperty' || type === 'name') {
     context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'name' });
     return callNameArchive(archive, reference, baseContext);
+  }
+  if (kind === 'strproperty' || type === 'string') {
+    // UStrProperty::SerializeItem (0x10167750): CompactIndex(marker) then
+    // ArrayMax raw bytes (1 or 2 per char).  See script-property-serialize-item.mjs.
+    context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'string' });
+    return serializeStrItem(property, archive, reference, baseContext, services);
+  }
+  if (kind === 'arrayproperty' || type === 'array') {
+    // UArrayProperty::SerializeItem (0x10168520): CompactIndex(count) then
+    // one inner SerializeItem per element.
+    context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'array' });
+    return serializeArrayItem(property, archive, reference, baseContext, services);
+  }
+  if (kind === 'fixedarrayproperty' || kind === 'ufixedarrayproperty' ||
+      type === 'fixedarray' || type === 'fixed-array' || type === 'fixed_array') {
+    // UFixedArrayProperty::SerializeItem (0x10167da0): no count header;
+    // each Inner call receives Data + index * Inner ElementSize.
+    context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'fixed-array' });
+    return serializeFixedArrayItem(property, archive, reference, baseContext, services);
+  }
+  if (kind === 'structproperty' || kind === 'ustructproperty' || type === 'struct') {
+    // UStructProperty::SerializeItem (0x101691b0): Preload(Struct) then
+    // Struct::SerializeBin(Ar, Data), including its Children/Next walk.
+    context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'struct' });
+    return serializeStructItem(property, archive, reference, baseContext, services);
+  }
+  if (kind === 'mapproperty' || type === 'map') {
+    // UMapProperty::SerializeItem (0x10168d90) is an immediate `ret`.
+    context.helperCalls.push({ kind: 'serialize-item', phase: context.phase, property, tag, builtin: 'map' });
+    return serializeMapItem();
   }
   const width = kind === 'byteproperty' || type === 'byte' ? 1 : 4;
   if (kind === 'intproperty' || kind === 'floatproperty' || kind === 'byteproperty' ||

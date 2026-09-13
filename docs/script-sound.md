@@ -105,6 +105,84 @@ index changes, null-sound result preservation, PawnList mutation, simulated
 viewport traversal, ViewTarget distance and owner-dependent occlusion. This
 does not establish full Play integration or actual audio playback.
 
+## Play integration (2026-09-10)
+
+`ScriptRuntime.invokeNative` now routes native `264` to `execActorPlaySound`
+with `soundServices`: reflected fields through the typed storage, the level
+native graph (`Model`, null `DemoRecDriver` on the Play level object), class
+ancestry for `isA`, the enclosing script function's flags for the
+`Frame.Node` gate, the recovered `FastLineCheck`, and native event dispatch
+through `processNativeEvent` (script events via `ProcessEvent`; native events
+fail at the existing hook boundary, e.g. `Pawn.ClientHearSound`).
+
+### Global UObject index resolved by live capture (2026-09-11)
+
+The channel-id input the Play host was missing — the emitter's **global UObject
+index** — is now supplied from measured original evidence. The retail game's
+`GObjObjects` registry was read out of the running process (see
+[boot-replay.md](boot-replay.md); `tools/dump-gobjects-win.c`), giving the
+training `LightSwitch0` actor its true global index **34242** — not a fabricated
+or map-export index. `soundField('ObjectIndex')` returns it, so the
+`(Index << 4) + (Slot << 1) + bNoOverride` formula (validated in
+`test/script-sound.test.mjs`) now has its real input in Play.
+
+This resolution is **general**, not per-actor. `ScriptRuntime.setOriginalObjectIndex`
+installs a capture-backed provider, and `soundField('ObjectIndex')` resolves any
+pre-placed object by `(class, name)` (caching the slot on first read), so every
+placed emitter — not just the switch — gets its measured index with no
+`registerGlobalObjectIndex` call. Runtime-spawned emitters are absent from the
+load-time capture and instead take the slot the recovered `AddObject` rule assigns
+from the measured registry state (the runtime-spawn index model in
+[boot-replay.md](boot-replay.md); `test/script-object-index.test.mjs`,
+`scripts/validate-object-index-model.mjs`). `registerGlobalObjectIndex` remains as
+an explicit override.
+
+### Live game keeps PlaySound a recorded boundary; the full native runs where a measured index exists
+
+`execActorPlaySound` requires the emitter's global index, so it can only run
+faithfully where that index is available. The **live game** does not have a
+measured index for arbitrary emitters (there is no shippable index table yet, and
+audible playback — `ClientHearSound` — is Stage 4), so it keeps PlaySound a
+recorded boundary: `createScriptDoors` declares native `264` a host boundary
+(`ScriptRuntime` `boundaryNatives`), and `invokeNative` delegates it to
+`soundBoundary`, which records the mover sound through `callbacks.playSound`
+without producing audio. This is the original Stage-3 behavior — a deferred effect,
+not silence-by-omission — and it is what the browser gameplay and
+`scripts/validate-gameplay.mjs` exercise.
+
+The **full native** runs only where the measured index is present:
+`scripts/validate-script-lights.mjs` installs the capture provider and opts `264`
+back out of the boundary (`runtime.boundaryNatives.delete(264)`), so
+`LightSwitch.Frob` drives the real `execActorPlaySound` (channel id **547874** and
+the live `PawnList` traversal). Focused script harnesses that only assert a
+native's call/argument order (`scripts/validate-script-decoration.mjs`,
+`scripts/validate-script-runtime.mjs`) likewise declare `264` a boundary and record
+it, rather than running the full listener graph. So `boundaryNatives` is the single
+seam that decides, per host, whether PlaySound is recorded or executed.
+
+### Live listener graph wired (2026-09-11)
+
+`soundField` now maps the host's single `level` container onto the original's
+split identities: `XLevel` is the ULevel (`Actors`, `Model`, `DemoRecDriver`),
+and `Level` is the `LevelInfo` actor (`level.actors[0]`) carrying `PawnList`
+(`level.pawnList`) and `NetMode` (`level.netMode`). The Play host keeps this
+graph in the container rather than in the actors' native pointer fields, so the
+sound path reads it from there instead of the (unpopulated) reflected pointers.
+
+With this, `scripts/validate-script-lights.mjs` runs the actual `LightSwitch.Frob`
+wrapper **end-to-end**: `Super.Frob` + `StartConversation`, native 264
+`PlaySound('Switch4ClickOn', slot 1)` producing channel id **547874**
+(`(34242 << 4) + (1 << 1) + 0`), a full traversal of the live `PawnList`
+(JCDentonMale plus the intro cameras), and then the wrapper's own
+`PlayAnim('On')`. At the switch's position the player is far away, so the original
+distance gate leaves every listener unheard.
+
+The remaining boundary is **`ClientHearSound`** — the native per-listener audio
+event that actually queues playback on a channel — which is Stage 4 (audible
+output). It is only reached when a listener is in range and unoccluded; the
+listener traversal, distance and occlusion gates and channel id are all faithful
+up to that point.
+
 Float32 stores and native branch order are retained. JS number arithmetic is
 used for retained x87 intermediates, following the existing bounded scene math
 translation; this does not claim arbitrary extended-precision bit identity.

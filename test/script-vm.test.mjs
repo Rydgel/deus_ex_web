@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compileFunction } from '../src/runtime/script-vm.mjs';
+import { compileFunction, primitiveNativeIndices } from '../src/runtime/script-vm.mjs';
 
 const pkg = { imports: [], exports: [{ name: 'Value' }, { name: 'Amount' }] };
 function compile(bytes, size) { return compileFunction({ pkg, entry: { path: 'Fixture' }, bytes: Uint8Array.from(bytes), size }); }
@@ -24,7 +24,7 @@ test('VM follows expanded jump addresses and fails closed on invalid/unsupported
   assert.throws(() => compile([0x03], 1), /opcode/);
   assert.throws(() => compile([6, 1, 0, 4, 11], 5), /boundary/);
   assert.throws(() => compile([6, 0, 0], 3).run({}, {}), /budget/);
-  assert.throws(() => compile([127, 22, 4, 11], 4).run({}, {}), /native 127/);
+  assert.throws(() => compile([127, 22, 4, 11], 4).run({}, {}), /typed string/);
 });
 
 test('object equality uses native114 and native118 reaches host Disable dispatch',()=>{
@@ -48,4 +48,26 @@ test('native float equality uses float32 operands and original unordered result'
   assert.equal(floatNative(0xb5,NaN,3),false);
   assert.equal(floatNative(0xb5,1,2),true);
   assert.equal(floatNative(0xb4,-0,+0),true);
+});
+
+test('radiation path Core primitives preserve float32 stores and out lvalues', () => {
+  const binary = index => [0x04, 0x60, index, 0x01, 0x01, 0x01, 0x02, 0x16];
+  const unary = index => [0x04, 0x60, index, 0x01, 0x01, 0x16];
+  for (const index of [144, 169, 185, 213, 223])
+    assert.ok(primitiveNativeIndices.includes(index), `native ${index} is linked`);
+
+  assert.equal(compile(binary(144), 14).run({ Value: 300, Amount: -7 }), -2100);
+  assert.equal(compile(unary(169), 9).run({ Value: 3.5, Amount: 0 }), -3.5);
+
+  const subtract = { Value: 1 + 2 ** -25, Amount: 0.25 };
+  assert.equal(compile(binary(185), 14).run(subtract), Math.fround(0.75));
+  assert.equal(subtract.Value, Math.fround(0.75));
+
+  assert.deepEqual(compile(binary(213), 14).run({ Value: 0.1, Amount: [1, -2, 50] }),
+    [Math.fround(0.1), Math.fround(-0.2), Math.fround(5)]);
+
+  const add = { Value: [0.1, -2, 3], Amount: [0.2, 4, -5] };
+  assert.deepEqual(compile(binary(223), 14).run(add),
+    [Math.fround(0.3), Math.fround(2), Math.fround(-2)]);
+  assert.deepEqual(add.Value, [Math.fround(0.3), Math.fround(2), Math.fround(-2)]);
 });

@@ -51,3 +51,15 @@ export function processPlayerHitWall(pawn,normal,wall,{isProbing,dispatch}){
  if(isProbing(pawn,'HitWall') || pawn.physics===2)dispatch(pawn,'HitWall',[normal,wall]);
  else {pawn.moveTimer=-1;pawn.pawnFlags=(pawn.pawnFlags|0x100000)>>>0;}
 }
+
+/** Non-Pawn branch of native processHitWall103cecc0 (source is not a Pawn — e.g.
+ * a falling DeusExDecoration). The whole Pawn subtree — the zero-acceleration
+ * return, the Destination-Location direction/MinHitWall dot gate, the walking
+ * normal.Z/direction.Z flatten, and the MoveTimer=-1/bFromWall bookkeeping — is
+ * skipped by the source-class branch at 0x103ced37. The non-Pawn path (0x103cee37)
+ * is only: return for a Pawn wall, then dispatch the unmodified HitWall(normal,wall)
+ * solely while the source probes HitWall. It touches no other actor state. */
+export function processDecorationHitWall(source,normal,wall,{isProbing,dispatch}){
+ if(wall?.isPawn)return;
+ if(isProbing(source,'HitWall'))dispatch(source,'HitWall',[normal,wall]);
+}

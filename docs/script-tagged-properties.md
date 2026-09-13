@@ -52,9 +52,14 @@ contains the simple, source-checked cases:
 | `ObjectProperty`/`ClassProperty` | pointer identity; null default is a null pointer |
 | `NameProperty` | FName identity; null default is the zero FName |
 
-Complex property types require an explicit `services.identical` adapter at
-the native `UProperty` `+0x6c` boundary.  A missing adapter is reported as an
-unsupported reached branch; it is never treated as equal by default.
+Complex property types use the translated
+`identicalScriptProperty` fallback at the native `UProperty` `+0x6c` boundary.
+The five complex `Identical` bodies (Str/Array/FixedArray/Map/Struct) are
+translated in [script-property-identical.md](script-property-identical.md), and
+`defaultComparison` routes those kinds there. `services.identical` remains an
+optional host override for another concrete storage representation. Missing
+property kind or linked complex metadata is still an unsupported reached branch;
+it is never treated as equal by default.
 
 ## Tag and helper order
 
@@ -101,10 +106,13 @@ array index is nonzero, bit `0x80` is ORed into the byte.  For a bool property,
 the same bit is ORed when `value & BoolMask` is nonzero.  Thus the two reasons
 for bit `0x80` are independent and share one tag bit.
 
-The bool branch of `0x1012aca0` validates the nonzero mask and performs no
-archive write for this GC state (`ar+0x0c == 0`).  Nonbool branches call the
-property's `SerializeItem`; the collector's raw archive implementation may be
-a native no-op, but the reached virtual boundary is retained by the adapter.
+The bool branch of `0x1012aca0` validates the nonzero mask.  Its
+`SerializeItem` (`UBoolProperty::SerializeItem`, `0x10166550`) writes the bit
+as one byte in the measure archive before any loading-only storage update; the
+[complex SerializeItem bodies](script-property-serialize-item.md) own that
+verified byte count.  Nonbool branches call the property's `SerializeItem`; the
+collector's raw archive implementation may be a native no-op, but the reached
+virtual boundary is retained by the adapter.
 
 After all properties, Core creates a mutable zero FName (`NAME_None`) and
 calls the caller archive's name virtual `+0x1c` exactly once.  The module
@@ -142,7 +150,12 @@ name operator; object references and raw values are required only when a
 reached property uses them.  Reference holders are required for all value
 storage so adapters can preserve native pointer semantics.
 
-The module does not implement save/load tagged serialization, property linking,
-untraced `SerializeItem` bodies, generic UObject layout discovery, or an
-invented archive-size counter.  Those are explicit host boundaries until the
-corresponding native virtuals are recovered.
+The tagged-property walk still constructs only the collector/measure archive;
+it does not implement generic save/load tagged serialization, generic UObject
+layout discovery, or an invented archive-size counter. The shared Str/Array
+SerializeItem module now supports direct save/load archives when their raw and
+heap services are bound. Property linking is supplied by the separate recovered
+dispatcher. Generic tagged save traversal and complete native layouts remain
+explicit host boundaries.
+The complex collector/measure `SerializeItem` bodies are covered by
+[script-property-serialize-item.md](script-property-serialize-item.md).

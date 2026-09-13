@@ -90,7 +90,10 @@ test('GC tagged-property walk follows native filters, defaults, tag order, and t
     ['Transient', 6, 0x06, 1, 0],
     ['Arrayed', 7, 0x87, 1, 2],
     ['Obj', 5, 0x25, 4, 0],
-    ['Booled', 3, 0xd3, 0, 0],
+    // UBoolProperty::SerializeItem writes the bit as one byte (verified in
+    // scripts/native-property-serialize-item-oracle.py), so the measured size
+    // is 1 (size class 0x00) and the bool-set bit gives 0x80 | 0x03.
+    ['Booled', 3, 0x83, 1, 0],
   ]);
   assert.equal(SCRIPT_TAGGED_PROPERTIES.measureArchive.constructorBody, 0x10106b30);
   assert.equal(SCRIPT_TAGGED_PROPERTIES.measureArchive.vtable, PROPERTY_MEASURE_ARCHIVE.vtable);
@@ -100,6 +103,7 @@ test('GC tagged-property walk follows native filters, defaults, tag order, and t
     ['collector', 'Changed', 4],
     ['collector', 'Transient', 1],
     ['collector', 'Arrayed', 1],
+    ['collector', 'Booled', 1],
   ]);
   assert.deepEqual(result.helperCalls.filter(call => call.kind === 'bool').map(call => call.phase), ['measure', 'collector']);
 

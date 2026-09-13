@@ -17,8 +17,10 @@ GroundSpeed=FMax(float(newSpeed),100). This integer truncation can differ from
 GroundSpeed*.65 in browser arithmetic. Crouch sets bIsWalking but does not scale
 GroundSpeed here; native walking applies WalkingPct separately. The helper's
 currentGroundSpeed is the original function's resolved result, not a guessed
-constant. GetCurrentGroundSpeed3292–3313 returns0 for absent AugmentationSystem,
-otherwise Default.GroundSpeed times resolved AugSpeed (sentinel-1 becomes1).
+constant. GetCurrentGroundSpeed3292–3313 returns0 only before the player
+subsystem lifecycle has supplied an AugmentationSystem; the current Play
+startup creates that manager, after which Default.GroundSpeed is multiplied by
+the resolved AugSpeed (sentinel-1 becomes1).
 
 This bounded helper supports healthy standalone speed only. Health damage,
 carried objects, weapon effects, multiplayer, spy drone and augmentation resolution
@@ -30,8 +32,10 @@ API: `walkingInput({rotation,aForward,aStrafe,aLookup=0,aTurn=0})` returns the
 four scaled inputs and `newAccel`. `healthyWalkingGroundSpeed(currentGroundSpeed,
 aForward)` implements only the healthy speed branch above. Serialized inherited
 JCDentonMale defaults resolve GroundSpeed320, AccelRate1000, and both legs/torso
-health100. AccelRate is a separate native acceleration clamp, not the script
-axis multiplier. Input6000 becomes2400 before that later native work. Healthy
+health100. Its serialized AugmentationSystem field is null until PostBeginPlay
+runs the standalone startup path; the current Play host performs that startup
+before movement. AccelRate is a separate native acceleration clamp, not the
+script axis multiplier. Input6000 becomes2400 before that later native work. Healthy
 backward GroundSpeed320 becomes207: float32(.65)*320 is below208 and int*=float
 truncates it. Passing a decimal currentGroundSpeed first truncates defSpeed.
 DeusExPlayer.ProcessMove3662 ultimately calls Super.ProcessMove; inherited

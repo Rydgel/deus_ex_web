@@ -19,7 +19,9 @@ Virtual lookup searches the active state's inherited methods before class
 methods. Global calls skip the state; final calls use the bytecode's original
 function reference. Ordinary function calls allocate zeroed typed locals, copy
 arguments as each expression is evaluated, execute the original bytecode, and
-copy `out` values back in reverse order. Omitted trailing arguments and Nothing
+copy `out` values back in reverse order, then destroy owning temporaries using
+the recovered property dispatcher. The caller's return value is copied before
+out copyback and destruction. Omitted trailing arguments and Nothing
 holes retain the original zero-initialized slots. Indexed native calls preserve their
 separate engine-service boundary. Unindexed native implementations remain an
 explicit host binding requirement.
@@ -35,10 +37,15 @@ guard. Native event hooks and complete actor eligibility/world tick ordering
 remain separate integration work.
 
 The common native dispatcher supplies GotoState113, Enable117, Disable118,
-FRand195, Sleep256, SetOwner272, Spawn278, Destroy279, SetTimer280, SetRotation299 and IsA303. Destroy requires an
+FRand195, VRand252, Sleep256, FinishAnim261, SetOwner272, Spawn278, Destroy279, SetTimer280, SetRotation299 and IsA303. Destroy requires an
 explicit validated world adapter and native object registration. Probe controls use the complete 64-entry native
 EName table. FRand shares the original random stream with player physics and
-stores the native float32 result; SetRotation implements the recovered zero-delta
+stores the native float32 result. VRand shares that stream, performs the
+original three-component rejection sample, and preserves the recovered x87
+reciprocal/float32 store behavior. FinishAnim installs latent action `0x181`
+from the original animation-field gates and its poll clears only on the native
+`bAnimFinished` bit; the animation tick that sets that bit remains a separate
+boundary. SetRotation implements the recovered zero-delta
 short path, with full movement branches explicitly unsupported. IsA compares the original short class name through the base chain.
 Auto state selection follows serialized child order from the derived class
 through its bases, choosing the first state with the original auto flag.
@@ -48,11 +55,42 @@ the timer phase; its caller owns actor eligibility and the following physics
 phase. Timer fields share the original typed script-property storage. The door
 adapter uses this phase ordering, retaining its declared zero-delay scope.
 
+Core string primitives include `ComplementEqual_StrStr` native 124,
+`Object.At_StrStr` native 168, `Object.Right` native 234 and `Object.Chr`
+native 236. At evaluates both
+operands and returns `A + L" " + B`; its separator is the original Core `.data`
+TCHAR U+0020. ComplementEqual views both operands as terminated FString text,
+applies the original ASCII case-insensitive `appStricmp` comparison, and
+returns a normalized bool; Chr evaluates one int, keeps its low UTF-16 word,
+and returns one code unit or the raw empty form for zero.
+Right keeps original UTF-16 unit indexing and the negative/oversized count
+clamps used by the CheckObject NanoKey path. The Chr adapter preserves the original two-byte cursor advance and requires a
+signed int32 input. Raw FString storage, allocator behavior and CRT locale
+behavior remain outside the logical adapter; see [Core Chr](script-chr.md).
+
+Core `Object.Log` native 231 evaluates its required string before the optional
+name, defaults to raw EName `0x302` (`ScriptLog`), and passes terminated text to
+the `%s` `GLog->Logf` call. The `logDevice` service is a synchronous host
+boundary for that process-global output device; the native's temporary FString
+is destroyed after the boundary returns. See [Object.Log evidence](script-object-log.md).
+
 Direct native304 AllActors expressions support the original live actor-array
 scan, class/tag filters, Next/Pop, break and compiled return unwind. The caller
 must supply a complete linked actor array; Play's partial collision array is
 not used as a substitute. The original DeusExPlayer.GetLevelInfo bytecode passed
 first-match and empty-result checks against a controlled linked actor array.
+
+Window natives1410/1425/1460 now supply the recovered NewChild lifecycle helper,
+native parent-chain root query and parent reconfiguration through
+`windowLifecycle` services. Reconfiguration keeps diagnostic/global state,
+virtual callbacks and ResizeChild explicit; its hidden-window body also runs
+in the composed construction fixture.
+The window ProcessScript bridge preserves checked/state-aware function lookup,
+GIsScriptable gating and the selected UFunction through ProcessEvent. Original
+InfoLink initialization scripts assign the player and authored theme colors,
+then reach SetSize1431 in the focused typed fixture. Native construction, theme startup and the full
+window/control graph remain open; see [window construction calls](script-window-child.md),
+[script dispatch](script-window-script.md) and [hierarchy](script-window-hierarchy.md).
 
 `attach` connects storage to an existing loaded object identity. It deliberately
 does not run construction or startup. Explicit construction/spawn methods supply
@@ -117,8 +155,14 @@ calls and None terminator. It now uses the recovered
 [measuring archive](script-property-measure-archive.md), including MapObject and
 MapName, the compact-index branch and the byte counter. A selected original
 Actor.Owner field passes through that archive and real GC into its live default
-reference. Complete typed class layout, complex property virtuals and native
-metadata loading are still dependencies of the full graph.
+reference. The five complex [property Identical virtuals](script-property-identical.md)
+(Str/Array/FixedArray/Map/Struct) are translated and routed by the tagged
+walker's `+0x6c` comparison, so identical complex properties are skipped without
+a tag. The complex [SerializeItem virtuals](script-property-serialize-item.md)
+(Str/Array/FixedArray/Struct/Map/Bool) are translated and emulator-verified for
+the collector/measure path, including the FString ArrayNum code-unit count,
+the one-byte bool write, fixed-array stride recursion and inherited struct
+member traversal; native metadata loading remains a dependency of the full graph.
 Class-default variable references now expose writable typed storage, matching
 `execDefaultVariable`'s native assignment address. `serializeDefaultReferences`
 visits those live fields; objects retain the defaults they copied when they were
@@ -161,7 +205,17 @@ The native net-field sorter is connected, including original equal-key movement.
 The recovered [UStruct](script-struct-link.md) and [UState](script-state-link.md)
 linkers now build live property/reference chains and the 256-bucket field hash
 table. The [scalar property Link bodies](script-scalar-property-link.md) supply
-Byte/Int/Float/Name/Object/Class size and alignment directly to the struct linker.
+Byte/Int/Float/Name/Object/Class size and alignment directly to the struct linker,
+and the complex bodies are all translated: [UBoolProperty::Link](script-bool-property-link.md)
+packs consecutive bools into one DWORD via a shifting bitmask, honoring the
+per-container MergeBools rule (class/state/struct pack; UFunction does not), and
+the [complex property Link bodies](script-complex-property-link.md) cover
+Str/Array/FixedArray/Map/Struct (FString/TArray/TMap header sizes, the
+Inner*Count product, the recovered struct-size alignment rule, and the
+need-destruction flag with its FixedArray/Struct propagation rules). The
+`src/runtime/script-property-link.mjs` dispatcher routes each child to its
+verified body so the struct linker links mixed scalar/bool/string/array/struct
+layouts.
 Config/localization use the original class-flag gates; reached resource
 I/O and import virtuals remain explicit services.
 
@@ -169,8 +223,36 @@ The original Core.Object constructor inputs now pass through the actual queue,
 existing-package lookup, UObject/UField/UStruct registration, default storage,
 all three Link bodies and config/localization gates in one focused composition.
 The package and metaclass identities are prebound in this case; it is not a
-complete native package loader. Complex property-type Link bindings and the full
-loaded resource graph remain necessary for broader classes and live-world GC.
+complete native package loader. All complex property-type Link bodies
+(Struct/Array/FixedArray/Map/Str/Bool) are translated, as are the complex
+[Identical](script-property-identical.md) value virtuals, as are the complex
+[SerializeItem](script-property-serialize-item.md) bodies. FString and dynamic
+array save/load directions are recovered through explicit archive and heap
+services; the full loaded resource graph, raw allocator integration and native
+resource-tail serializers remain necessary for broader classes and live-world
+GC. The [property-copy dispatcher](script-property-copy.md)
+now implements native CopySingleValue/CopyCompleteValue over raw byte cursors,
+including owning arrays and strings, and is the default route from class-default
+initialization. Native heap pointer resolution/reallocation remain explicit
+services. This is separate from the existing logical VM copy adapter and does
+not complete temporary event ownership or the loaded class/resource graph.
+
+The recovered [DestroyValue dispatcher](script-property-destroy.md) now supplies
+the corresponding string, dynamic-array, fixed-array and struct cleanup bodies;
+base/scalar and map destruction preserve their original no-op behavior.
+`exitProperties` uses the dispatcher with the class destructor chain and typed
+field references. Logical structs resolve owning fields by their linked keys,
+preserving inline dimensions and nonowning numeric/object members. Missing raw
+byte offsets remain explicit (`addressOffset: null` for logical storage).
+The VM's dynamic-array/map value storage remains unsupported; native heap
+reallocation/free and raw member/element references require explicit services.
+The same typed destruction bridge now handles ordinary function-call locals
+and the nonparameter local suffix of ProcessEvent. Event parameter values
+retain ownership after copyback; typed return-bearing events use an explicit
+caller result reference and preserve it through local cleanup. Raw native event
+memory and native hooks
+remain unsupported. See [frame ownership](script-frame-ownership.md). Full
+native subclass destruction and live-world GC ownership remain open.
 
 [Object lookup and name resolution](script-object-lookup.md) now use the live
 object hash and FName table, exact/inherited class matching, qualified Outer
@@ -185,8 +267,14 @@ lookup never fabricates a missing object or interns an unknown name.
 Generic struct storage now follows linked original member identities, including
 inherited/imported struct members. Typed member writes preserve UObject identity
 and copy value storage. Original `Actor.Region`/`PointRegion` is checked through
-CameraPoint's inherited field. Opaque authored struct defaults and unresolved
-native struct array strides remain unsupported.
+CameraPoint's inherited field. Authored struct defaults now decode through the
+original SerializeBin member order, including canonical class/object references,
+strings, nested structs and fixed dimensions. All 364 previously opaque DeusEx
+class-default struct entries pass the focused loading check, together with
+Training map inventory/Region overrides; see [struct values](script-struct-values.md).
+Loaded script structs now obtain their native strides and ownership flags from
+the recovered UStruct/property Link bodies; see [struct layouts](script-struct-layout.md).
+Transient archive-state branches and dynamic arrays/maps remain unsupported.
 
 The [fresh construction helpers](script-construction.md) translate per-class
 unique naming, header initialization, template property copies, free-index reuse,

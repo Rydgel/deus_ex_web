@@ -1,5 +1,5 @@
 /** GOTY Core.dll UStruct::Link; see docs/script-struct-link.md. */
-import {linkScriptScalarProperty} from './script-scalar-property-link.mjs';
+import {linkScriptProperty} from './script-property-link.mjs';
 
 export const SCRIPT_STRUCT_LINK = Object.freeze({
   thunk: 0x10101933, body: 0x10126060,
@@ -185,7 +185,7 @@ export function linkScriptStruct(record, {archive, secondArgument = 0, services 
     if (isA(field, SCRIPT_STRUCT_LINK.propertyClass, services)) {
       const savedOffset = secondArgument === 0 ? integer(slot(field, 0x48, services), 'property Offset') : null;
       if (services.linkProperty) services.linkProperty(field, archive, previous);
-      else linkScriptScalarProperty(field, {archive, previousProperty: previous,
+      else linkScriptProperty(field, {archive, previousProperty: previous,
         services: services.scalarPropertyLink ?? services});
       if (secondArgument === 0) write(field, 0x48, savedOffset, services);
       else {

@@ -137,6 +137,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
+  function updateLighting(changes) {
+    const update = lighting.invalidate(changes);
+    for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
+    return { ...update, uploaded: update.lightmaps.length };
+  }
   return { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
     syncMovers(movers) {
       for (const mover of movers) {
@@ -147,6 +152,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
         group.matrixWorldNeedsUpdate = true;
       }
     },
+    updateLighting,
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
       for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); },

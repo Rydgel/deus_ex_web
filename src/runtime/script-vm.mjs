@@ -1,13 +1,14 @@
 import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
+import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString } from './script-string-operations.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([114,119,129,146,147,150,151,154,155,165,171,172,174,175,176,177,179,180,181,182,184,187,212,215,216,244,245,250,251,254,255,316]);
+const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,144,145,146,147,150,151,154,155,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,210,212,213,215,216,223,234,235,236,242,243,244,245,250,251,254,255,316]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
-const primitiveOutNatives=new Set([165,166,182,184,...decorationOutPrimitiveIndices]);
+const primitiveOutNatives=new Set([165,166,182,184,185,223,...decorationOutPrimitiveIndices]);
 export const refValue = v => v?.reference ? v.get() : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
 export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Script assignment requires a variable'); return ref.set(value); };
@@ -27,11 +28,37 @@ export function compileFunction(fn) {
     const values = args.map(refValue), [a, b] = values;
     // Core.Object native declarations and original Engine.u CheckBob bytecode.
     switch (index) {
+      case 112: return scriptConcat(a,b);
+      case 168: return scriptAt(a,b);
       case 114: return a === b;
       case 119: return a !== b;
+      case 122: return scriptStringEqual(a,b);
+      case 123: return !scriptStringEqual(a,b);
+      case 124: return scriptStringComplementEqual(a,b);
+      case 125: return scriptLen(a);
+      case 126: return scriptInStr(a,b);
+      case 127: return scriptMid(a,b,values.length>2?values[2]:undefined);
+      case 128: return scriptLeft(a,b);
+      case 234: return scriptRight(a,b);
       case 129: return !a;
       case 146: return ((a | 0) + (b | 0)) | 0;
       case 147: return ((a | 0) - (b | 0)) | 0;
+      // Core's Multiply_IntInt (144) evaluates both int32 operands into
+      // temporaries, multiplies with the original signed 32-bit IMUL, and
+      // stores the low DWORD in ReturnValue.
+      case 144: return Math.imul(a | 0, b | 0);
+      // Core's Divide_IntInt (145) evaluates signed dwords and uses the
+      // original zero-divisor guard before x86 IDIV.  The one overflowing
+      // signed pair (INT_MIN / -1) reaches the processor divide exception;
+      // keep that reached exceptional path explicit instead of returning a
+      // JavaScript Infinity or a guessed wrapped quotient.
+      case 145: {
+        const dividend=a|0, divisor=b|0;
+        if(divisor===0)return 0;
+        if(dividend===-0x80000000&&divisor===-1)
+          throw new Error('Original Divide_IntInt signed overflow (x86 divide exception) is unsupported');
+        return (Math.trunc(dividend/divisor))|0;
+      }
       case 150: return (a | 0) < (b | 0);
       case 151: return (a | 0) > (b | 0);
       case 154: return (a | 0) === (b | 0);
@@ -41,6 +68,9 @@ export function compileFunction(fn) {
       case 172: return f(a / b);
       case 174: return f(a + b);
       case 175: return f(a - b);
+      // Core's preoperator float - loads the operand as a float32 and uses
+      // x87 FCHS before storing the float32 ReturnValue.
+      case 169: return f(-f(a));
       case 176: return a < b;
       case 177: return a > b;
       case 179: return a >= b;
@@ -51,16 +81,38 @@ export function compileFunction(fn) {
         const x=f(a), y=f(b);
         return Number.isNaN(x)||Number.isNaN(y)||x===y;
       }
+      // Core's ComplementEqual_FloatFloat (210) evaluates both operands into
+      // float32 temporaries, subtracts them in x87 precision, and tests the
+      // absolute difference against the embedded double 0.0001.  The native
+      // fcom path treats unordered (NaN) as below the threshold, so NaN is
+      // deliberately accepted here just as it is by the original C0 test.
+      case 210: {
+        const x=f(a), y=f(b), difference=x-y;
+        return Number.isNaN(difference)||Math.abs(difference)<0.0001;
+      }
       case 181: {
         const x=f(a), y=f(b);
         return !(Number.isNaN(x)||Number.isNaN(y)||x===y);
       }
       case 182: return assign(args[0], f(a * b));
       case 184: return assign(args[0], f(a + b));
+      // These three operators are used by DeusExPlayer.ClientFlash and the
+      // preceding TakeDamage/DXReduceDamage path.  Core evaluates operands
+      // left-to-right, loads each serialized float as float32, and stores
+      // every result component as float32.  The first operand of 185/223 is
+      // an out-lvalue and is therefore retained by primitiveOutNatives.
+      case 185: return assign(args[0], f(f(a) - f(b)));
       case 187: return f(Math.sin(a));
-      case 212: return a.map(v => f(v * b));
+      case 212: return a.map(v => f(f(v) * f(b)));
+      case 213: return b.map(v => f(f(a) * f(v)));
       case 215: return a.map((v,i) => f(v + b[i]));
       case 216: return a.map((v,i) => f(v - b[i]));
+      case 223: return assign(args[0], a.map((v,i) => f(f(v) + f(b[i]))));
+      case 235: return scriptCaps(a);
+      case 236: return scriptChr(a);
+      // EqualEqual_BoolBool (242) / NotEqual_BoolBool (243): pure Core operators.
+      case 242: return Boolean(a) === Boolean(b);
+      case 243: return Boolean(a) !== Boolean(b);
       case 244: return a > b ? b : a;
       case 245: return a >= b ? a : b;
       case 250: return Math.max(a | 0, b | 0);
@@ -161,7 +213,15 @@ export function compileFunction(fn) {
               throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
             return Math.trunc(value) & 255;
           }
+          case 0x44: {
+            // Core10131b40: float32 local -> _ftol -> store low DWORD.
+            const value=f(refValue(evaluate(n.value)));
+            if(!Number.isFinite(value)||value<-(2**63)||value>=2**63)
+              throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
+            return Math.trunc(value)|0;
+          }
           case 0x50: return vectorToRotator(refValue(evaluate(n.value,instance)));
+          case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
           case 0x36: {
             const field=evaluate(n.value,receiver);
             if(services.structReference)return services.structReference(field,fn,n);
@@ -203,6 +263,20 @@ export function compileFunction(fn) {
           else if (n.op === 0x08) {
             if(!frame.state)throw new Error('Stop requires a state frame');
             frame.cursor=null;
+          } else if (n.op === 0x05) {
+            // EX_Switch: evaluate the switch value once; the following EX_Case
+            // statements compare against it. Non-nested storage suffices because
+            // all cases of a switch are evaluated before its matched body runs.
+            frame.switchValue = refValue(evaluate(n.value));
+          } else if (n.op === 0x0a) {
+            // EX_Case: default (0xffff) always falls through; otherwise compare the
+            // case value to the stored switch value — match falls into the body,
+            // mismatch jumps to the next case (n.target).
+            if (n.target !== 0xffff) {
+              const value = refValue(evaluate(n.value)), key = frame.switchValue;
+              const equal = key === value || (typeof key === 'string' && typeof value === 'string' && key.toLowerCase() === value.toLowerCase());
+              if (!equal) frame.cursor = n.target;
+            }
           } else if (n.op === 0x06 || n.op === 0x07 && !refValue(evaluate(n.value))) frame.cursor = n.target;
           else if (n.op !== 0x07) evaluate(n);
         }

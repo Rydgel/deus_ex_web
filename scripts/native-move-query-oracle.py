@@ -37,6 +37,12 @@ class NativeMove(c.NativeCollision):
         super().on_instruction(cpu,address,size,data)
     def capture(self,case):
         self.query=None;self.displacement=[0,0,0]
+        # Source actor type: a controlled-player cylinder (default) or a plain
+        # movable actor such as a pushable decoration. This toggles the class
+        # pointer (+0x24) and the controlled-player flag (+0x5d4) MoveActor reads.
+        controlled=case.get('sourceControlledPlayer',True)
+        self.write(self.source+0x24,'I',0x1058c160 if controlled else 0)
+        self.write(self.source+0x5d4,'I',1 if controlled else 0)
         self.write(self.source+0x28,'I',(1 if case.get('static') else 0)|(0 if case.get('movable') is False else 0x80000))
         self.write(self.source+0x114,'3f',*case['start']);self.write(self.source+0x120,'3i',0,0,0)
         self.write(self.source+0x1d4,'2f',*case.get('extent',[17,42]));self.write(self.source+0x1dc,'I',case.get('sourceFlags',15))

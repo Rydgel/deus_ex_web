@@ -1,18 +1,32 @@
+import {readObject} from '../unreal/objects.mjs';
+
 /** Bind serialized map properties to canonical script identities. Class defaults
  * keep their original package provenance; only map-authored refs use map indices.
  * See docs/script-map-actors.md. */
 export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
   const authored = new Map();
-  for (const property of actor.properties ?? []) {
+  let rawProperties;
+  for (const [ordinal,property] of (actor.properties ?? []).entries()) {
     const field = runtime.lookupMember(cls, 'fields', property.name);
     if (!field) throw new Error(`Map property is not linked: ${actor.name}.${property.name}`);
     await runtime.field(field);
     let value = property.value;
-    if (!property.decoded) value = {unsupported: `Undecoded map property ${actor.name}.${property.name}`};
+    if (property.type === 10 && property.decoded) value=runtime.authoredStructValue(field,value);
+    else if (property.type === 10) {
+      // decodeMap's diagnostic actor descriptions omit raw property payloads.
+      // Recover this original tag when the linked decoder needs its bytes.
+      if(!property.data)rawProperties??=readObject(asset.pkg,asset.bytes,actor.index).properties;
+      const raw=property.data?property:rawProperties[ordinal];
+      if(!raw||raw.name!==property.name||raw.arrayIndex!==property.arrayIndex||raw.type!==property.type)
+        throw new Error(`Original map property order changed: ${actor.name}.${property.name}`);
+      const initial=authored.get(field.key)?.get(property.arrayIndex)??cls.defaults.get(field.key)?.get(property.arrayIndex);
+      value=await runtime.authoredStructProperty(asset,field,raw,initial,
+        (source,index)=>index>0&&actors.has(index)?actors.get(index):runtime.objects.resolve(source,index));
+    } else if (!property.decoded) value = {unsupported: `Undecoded map property ${actor.name}.${property.name}`};
     else if ([5, 8].includes(property.type)) {
       value = property.value > 0 && actors.has(property.value)
         ? actors.get(property.value) : await runtime.objects.resolve(asset, property.value);
-    } else if (property.type === 10) value = runtime.authoredStructValue(field, value);
+    }
     if (!authored.has(field.key)) authored.set(field.key, new Map());
     authored.get(field.key).set(property.arrayIndex, value);
   }

@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import {readFile,readdir} from 'node:fs/promises';
+import {AssetStore} from '../src/unreal/assets.mjs';
+import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {readObject} from '../src/unreal/objects.mjs';
+import {readClass} from '../src/unreal/classes.mjs';
+import {gameDirectory} from './game-directory.mjs';
+
+const root=`${gameDirectory()}/System`;
+const assets=new AssetStore((await readdir(root)).map(path=>({path,read:()=>readFile(`${root}/${path}`)})));
+const runtime=new ScriptRuntime(assets),asset=await assets.get('DeusExConText');
+const conversation=await runtime.objects.resolve(asset,1926),raw=readObject(asset.pkg,asset.bytes,1926);
+const prepared=await Promise.all([runtime.prepareObject(conversation),runtime.prepareObject(conversation)]);
+assert.equal(prepared[0],conversation);assert.equal(prepared[1],conversation);
+assert.equal(raw.reader.offset,conversation.entry.serialSize);
+const value=(object,name)=>runtime.namedReference(object,name).get();
+for(const [field,expected] of [['conName','DL_Start'],['conOwnerName','JCDenton'],['bDataLinkCon',true],['bDisplayOnce',true]]){
+  assert.equal(raw.values[field],expected);assert.equal(value(conversation,field),expected);
+}
+const cls=runtime.instance(conversation).cls;
+assert.equal(cls.record.key,'consys.conversation');
+const originalDefaults=readClass(cls.record.asset,cls.record.index).properties;
+assert.equal(originalDefaults.find(property=>property.name==='bGenerateAudioNames').value,true);
+assert.equal(value(conversation,'bGenerateAudioNames'),true);
+assert.equal(value(conversation,'flagRefList'),null);
+assert.equal(value(conversation,'Name'),'Conversation57');assert.equal(value(conversation,'Class'),cls.record);
+assert.equal(value(conversation,'Outer').key,'package:deusexcontext');
+const event=value(conversation,'eventList');
+assert.equal(event,await runtime.objects.resolve(asset,raw.values.eventList));
+await runtime.prepareObject(event);
+assert.equal(value(event,'speakerName'),'JaimeReyes');assert.equal(value(event,'speakingToName'),'JCDenton');
+assert.equal(value(event,'Conversation'),conversation,'back reference retains canonical identity');
+const next=value(event,'nextEvent');await runtime.prepareObject(next);
+assert.equal(runtime.instance(next).cls.record.key,'consys.coneventend');
+assert.equal(value(next,'Conversation'),conversation);
+assert.throws(()=>value(conversation,'ObjectFlags'),/live native object lifecycle/);
+const before=value(conversation,'conName');runtime.namedReference(conversation,'conName').set('changed');
+await runtime.prepareObject(conversation);assert.equal(value(conversation,'conName'),'changed','repeated preparation does not reset loaded values');
+runtime.namedReference(conversation,'conName').set(before);
+const soundAsset=await assets.get('DeusExSounds'),sound=await runtime.objects.resolve(soundAsset,soundAsset.exportsByPath.get('special.switch4clickon'));
+await assert.rejects(()=>runtime.prepareObject(sound),/Missing object: Engine.Sound/);
+assert.equal(runtime.instances.has(sound),false);
+console.log('Original Conversation57/Speech79/End77 values, inherited default, canonical forward/back references, concurrent preparation and explicit native-class boundary passed.');

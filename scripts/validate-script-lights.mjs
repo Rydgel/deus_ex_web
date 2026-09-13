@@ -1,9 +1,9 @@
 /** Focused execution of the original 00_Training TriggerLight subset.
  *
- * Use the actual Play actor identities/property bindings. This does not enable
- * LightSwitch.Frob in Play: animation, audio and post-startup conversation
- * registration remain open. The inherited Decoration.Frob below runs against
- * explicitly verified null conversation storage in this prepared host.
+ * Use the actual Play actor identities/property bindings. The player subsystem
+ * actors are appended after the serialized level actors, so this validator
+ * verifies the preserved map prefix instead of the obsolete map-plus-player
+ * actor count.
  */
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { createScriptLights } from '../src/runtime/script-lights.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { loadOriginalGObjects } from './original-gobjects.mjs';
 
 function packageFiles(root) {
   return (async () => {
@@ -34,10 +35,11 @@ const deusEx = await assets.get('DeusEx');
 const game = await createGame(map, mapAsset, assets, {randomSeed: 1});
 const runtime = game.doors.scriptRuntime.runtime;
 const player = game.player.collisionActor, level = runtime.levelFor(player);
-assert.equal(level.actors.length, map.level.actors.length + 1);
+assert.ok(level.actors.length > map.level.actors.length + 1);
 for (const [index, ref] of map.level.actors.entries()) {
   assert.equal(level.actors[index], ref ? await runtime.objects.resolve(mapAsset, ref) : null);
 }
+assert.equal(level.actors[map.level.actors.length], player);
 const mapLightActors = map.actors.filter(actor => /^TriggerLight[0-3]$/i.test(actor.name));
 assert.deepEqual(mapLightActors.map(actor => actor.name), ['TriggerLight0', 'TriggerLight1', 'TriggerLight2', 'TriggerLight3']);
 assert.deepEqual(mapLightActors.map(actor => actor.index), [111, 113, 114, 110]);
@@ -68,9 +70,8 @@ assert.deepEqual(initial.map(item => item.InitialBrightness), [50, 50, 25, 25]);
 assert.ok(initial.every(item => item.Skin === null));
 assert.ok(initial.every(item => item.MultiSkins.every(value => value === null)));
 
-// Execute the actual inherited Frob and AllActors fanout, with the current
-// host's null conversation list explicitly checked. This is not evidence that
-// native ConBindEvents would leave that list null after full game startup.
+// Execute the actual inherited Frob and AllActors fanout. The recovered
+// Training conversation bind leaves this switch without conversation items.
 const engine = await assets.get('Engine');
 await runtime.prepareFunction(engine, engine.exportsByPath.get('actor.frob'));
 await runtime.prepareFunction(deusEx, deusEx.exportsByPath.get('deusexplayer.startconversation'));
@@ -129,4 +130,124 @@ assert.equal(halfOff.tickEnabled, false);
 runtime.namedReference(lights[0], 'ChangeTime').set(0);
 controller.reset();
 
+// Native PlayAnim (259) against the actual LightSwitch mesh payload. The
+// serialized sequence table was recovered by executing the original
+// ULodMesh::Serialize (docs/lodmesh-serialization.md); the native contract is
+// docs/script-play-anim.md. Sound (264) and the post-startup conversation
+// binding remain explicit blockers for running the complete LightSwitch.Frob
+// wrapper in Play.
+const switchMesh = await runtime.prepareMesh(lightSwitch);
+assert.equal(runtime.meshPayload(lightSwitch),switchMesh);
+assert.equal(switchMesh.entry.name, 'LightSwitch');
+assert.deepEqual(switchMesh.sequences.map(sequence => [sequence.name, sequence.startFrame, sequence.numFrames]), [
+  ['All', 0, 2], ['Still', 0, 1], ['Off', 0, 1], ['On', 1, 1],
+]);
+{
+  const before = runtime.namedReference(lightSwitch, 'AnimSequence').get();
+  assert.equal(before, 'None');
+  runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
+    evaluateArgument: () => 'Off'});
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimSequence').get(), 'Off');
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -1);
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 0);
+  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 10);
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimLast').get(), 0);
+  const animation = lightSwitch.animationState;
+  assert.deepEqual(animation.simAnim, {frame: -10000, rate: 0, tween: 10000, last: 0});
+  // The NF==1 path zeroes the +0x224/+0x228 mirrors: linked AnimMinRate and
+  // OldAnimRate ("= AnimRate until animation completes").
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimMinRate').get(), 0);
+  assert.equal(runtime.namedReference(lightSwitch, 'OldAnimRate').get(), 0);
+  // Second call: a previous sequence exists, so the TweenTime=-1 collapse no
+  // longer applies and NumFrames==1 keeps the TweenRate=10 fallback.
+  runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
+    evaluateArgument: () => 'On'});
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimSequence').get(), 'On');
+  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 10);
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -1);
+  // The two-frame 'All' sequence exercises the NumFrames!=1 paths. With a
+  // previous sequence and TweenTime=-1, the prior mirror (the earlier
+  // AnimRate bits, 0) selects the zero-mirror 0.025 tween (0x103e03a8).
+  runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
+    evaluateArgument: () => 'All'});
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -2);
+  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), Math.fround(0.05));
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 15);
+  // A second 'All' call sees OldAnimRate (the prior AnimRate bits, 15 > 0)
+  // and copies its bits into TweenRate, as the original 0x103e0323 branch does.
+  runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
+    evaluateArgument: () => 'All'});
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -2);
+  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 15);
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 15);
+}
+// The mesh payload cache must return the same decoded identity on repeat calls.
+assert.equal(runtime.meshPayload(lightSwitch), switchMesh);
+
+// The global UObject index (Core.dll GObjObjects slot) read from the running
+// original game (tools/dump-gobjects-win.c). docs/script-sound.md requires this
+// true global identity, not the map export index, to form the PlaySound channel
+// id. The live capture also shows the index is the recursive construction order
+// during LoadAllObjects, not a contiguous N0 + exportIndex block
+// (docs/boot-replay.md).
+//
+// Plan B generalises Plan A's single measured index: instead of a per-actor
+// registerGlobalObjectIndex, install the capture-backed provider once, and
+// soundField('ObjectIndex') resolves any pre-placed actor by (class, name).
+// Runtime spawns (absent from the load-time capture) continue the recovered
+// AddObject rule from the measured registry state
+// (scripts/validate-object-index-model.mjs, test/script-object-index.test.mjs).
+const gobjects = await loadOriginalGObjects('.cache/original-gobjects.txt');
+runtime.setOriginalObjectIndex(gobjects.provider());
+// The live game records PlaySound as a mover-sound boundary (script-doors.mjs);
+// this focused validation instead runs the real execActorPlaySound native to
+// check the channel id, so opt 264 back out of the host boundary now that the
+// measured index provider is installed.
+runtime.boundaryNatives.delete(264);
+const switchGlobalIndex = gobjects.index('LightSwitch', 'LightSwitch0');
+// The emitter's ObjectIndex now resolves to the true global registry slot with
+// no actor-specific wiring -- the one input the PlaySound channel-id formula
+// (validated in test/script-sound.test.mjs) was missing in Play. The formula is
+// (Index << 4) + (Slot << 1) + bNoOverride (docs/script-sound.md).
+assert.equal(runtime.soundField(lightSwitch, 'ObjectIndex'), switchGlobalIndex);
+// A pre-placed neighbour (a TriggerLight) also resolves through the same
+// provider, confirming the lookup is general, not switch-specific.
+const sampleLight = lights[0];
+assert.equal(runtime.soundField(sampleLight, 'ObjectIndex'),
+  gobjects.index('TriggerLight', runtime.namedReference(sampleLight, 'Name').get()));
+
+// Native 264 now runs its full listener traversal against the live host graph:
+// the emitter's XLevel (ULevel), its Actors(0) LevelInfo and the LevelInfo's
+// PawnList. Capture the PlaySound descriptor while the wrapper runs.
+const soundCalls = [];
+const invokeNative = runtime.invokeNative.bind(runtime);
+runtime.invokeNative = call => { const result = invokeNative(call); if (call.index === 264) soundCalls.push(result); return result; };
+const switchFrob = await runtime.prepareFunction(deusEx, deusEx.exportsByPath.get('lightswitch.frob'));
+runtime.callFunction(switchFrob, lightSwitch, 2, index => index === 0 ? player : null);
+runtime.invokeNative = invokeNative;
+
+// LightSwitch.Frob plays Switch4ClickOn on slot 1; the channel id derives from
+// the measured global index through (Index << 4) + (Slot << 1) + bNoOverride.
+assert.equal(soundCalls.length, 1);
+const [play] = soundCalls;
+assert.ok(play.resultWritten);
+const [playSound, slot, , noOverride] = play.arguments;
+assert.equal(playSound.name, 'Switch4ClickOn');
+assert.equal(play.result, ((switchGlobalIndex << 4) + (slot << 1) + noOverride) | 0);
+assert.equal(play.result, 547874); // (34242 << 4) + (1 << 1) + 0
+
+// The traversal walked the live PawnList; the player (JCDentonMale) sits at its
+// spawn, far from the switch, so the original distance gate leaves every listener
+// unheard here -- reaching ClientHearSound (audible playback) is Stage 4.
+const jc = play.listeners.find(entry => entry.listener?.name === 'JCDentonMale');
+assert.ok(jc, 'the player pawn is traversed as a listener');
+assert.equal(jc.heard, false);
+assert.equal(jc.reason, 'distance');
+assert.ok(play.listeners.every(entry => entry.heard === false));
+
+// Past PlaySound, the wrapper runs its own PlayAnim('On').
+assert.equal(runtime.namedReference(lightSwitch, 'AnimSequence').get(), 'On');
+
 console.log('Original 00_Training TriggerLight BeginPlay -> Actor.SetInitialState -> TriggerToggle.Trigger -> Actor.Tick reversal, byte brightness and corona branches passed.');
+console.log('Native PlayAnim (259) against the original LightSwitch LodMesh payload: sequence lookup, animation stores and SimAnim tail passed.');
+console.log(`LightSwitch.Frob runs end-to-end: Super.Frob + StartConversation, native 264 PlaySound(Switch4ClickOn) -> channel id ${play.result} from measured global index ${switchGlobalIndex}, live PawnList traversal (${play.listeners.length} listeners, none in range), then PlayAnim('On'). Remaining boundary: ClientHearSound audio playback (Stage 4).`);

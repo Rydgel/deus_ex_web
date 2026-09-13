@@ -15,6 +15,8 @@
         <select id="mode" aria-label="Movement mode"><option value="play">Play</option><option value="inspect">Inspect</option></select>
         <button id="choose">Choose game folder</button>
         <button id="reset" disabled>Player start</button>
+        <button id="light-preview" hidden>Light switch preview</button>
+        <button id="dark-door-preview" hidden>Dark door preview</button>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
       </div>
       <input id="folder" type="file" webkitdirectory multiple hidden />
@@ -23,6 +25,13 @@
       <canvas id="scene" tabindex="0" aria-label="Map camera. Click to look around; W A S D to fly, Q E down and up, Escape to release mouse."></canvas>
       <div id="crosshair" aria-hidden="true">+</div>
       <output id="play-hint" aria-live="polite"></output>
+      <section id="infolink-shell" hidden aria-label="InfoLink transmission">
+        <canvas id="infolink-portrait" width="64" height="64" hidden aria-label="InfoLink speaker portrait"></canvas>
+        <div id="infolink-name" hidden><strong id="infolink-title"></strong></div>
+        <div id="infolink-queued" hidden></div>
+        <div id="infolink-line" aria-hidden="true"></div>
+        <div id="infolink-text" aria-live="polite"></div>
+      </section>
       <div id="gate">
         <div class="gate-content">
           <p class="eyebrow">ORIGINAL GAME DATA</p>

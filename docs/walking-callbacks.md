@@ -30,14 +30,22 @@ The zeroing decision re-reads Physics after synchronous events: an event that
 changes it to0/5 causes velocity and acceleration to be cleared. The8-unit
 FindBase constant was read directly as float32 from the original DLL.
 
-processHitWall immediately returns when wall actor IsA(Pawn). For a Pawn source,
-zero acceleration also returns. Otherwise normalize Destination-Location using
-native SafeNormal; walking zeros both direction.Z and supplied normal.Z for the
-remaining expression/event. If dot(direction,normal)>MinHitWall, return.
-If HitWall is probed OR Physics==Falling, dispatch HitWall(normal,wall). Otherwise
-set MoveTimer=-1 and bFromWall(+318 mask100000). Thus even an empty HitWall script
-body does not justify replacing all native bookkeeping with a no-op.
-Non-Pawn sources dispatch only when probing HitWall; this helper scope is JC.
+processHitWall103cecc0 has two source branches, selected by an inlined
+this->IsA(APawn) at0x103ced17. Both first return when the wall actor IsA(Pawn)
+(0x103cecf4). **Pawn source** (0x103ced3d): zero acceleration also returns.
+Otherwise normalize Destination-Location using native SafeNormal; walking zeros
+both direction.Z and supplied normal.Z for the remaining expression/event. If
+dot(direction,normal)>MinHitWall, return. If HitWall is probed OR Physics==Falling,
+dispatch HitWall(normal,wall). Otherwise set MoveTimer=-1 and bFromWall
+(+318 mask100000). Thus even an empty HitWall script body does not justify
+replacing all native bookkeeping with a no-op.
+
+**Non-Pawn source** (0x103cee37, e.g. a falling DeusExDecoration): the entire
+Pawn subtree — the zero-acceleration return, the SafeNormal/MinHitWall dot gate,
+the walking normal.Z/direction.Z flatten, and the MoveTimer/bFromWall
+bookkeeping — is skipped. The path is only: return for a Pawn wall, then
+`if IsProbing(HitWall) dispatch HitWall(normal,wall)` with the normal unmodified.
+It touches no other actor state.
 
 The native entry's HitWall event is Actor's empty declaration in the recovered
 JC ancestry. Runtime must still model native gates/bookkeeping and explicitly
@@ -47,12 +55,17 @@ landing on Decoration. Mover Attach can activate StandOpenTimed. These callbacks
 must not silently disappear in generic-cylinder/mover paths.
 
 `src/runtime/walking-callbacks.mjs` supplies `setBase`, `setSupportBase`,
-`setWalkingPhysics`, and `processPlayerHitWall`. State uses numeric native
+`setWalkingPhysics`, `processPlayerHitWall` (Pawn source) and
+`processDecorationHitWall` (non-Pawn source). State uses numeric native
 `physics`1/2, `base`/`worldActor` identity, actor `standingCount`, and pawn
 `position`, `destination`, `acceleration`, `velocity`, `minHitWall`, `moveTimer`,
 `pawnFlags`. `wall.isPawn` must come from decoded class ancestry. Native
 `bFromWall` is pawnFlags mask0x100000, distinct from hitSlopedWall mask0x20.
 No helper changes `justTeleported` or `bJustLanded`.
+`processDecorationHitWall(source,normal,wall,{isProbing,dispatch})` is the whole
+non-Pawn path: `if(wall.isPawn)return; if(isProbing(source,'HitWall'))dispatch(...)`.
+The decoration-physics tick wires it (docs/script-plant-contact.md): `isProbing`
+routes to the runtime's live state-frame probe mask and `dispatch` to ProcessEvent.
 
 The mandatory synchronous `dispatch(target,event,args)` callback executes the
 resolved script event, including its state-dependent overrides. It has no
@@ -66,12 +79,18 @@ substep-loop entry. Base changes neither replace that work nor clear these flags
 
 Validation: `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node
 scripts/validate-native-walking-callbacks.mjs` executes the hash-gated original
-instructions and compares54 cases exactly. Cases cover self/cycle rejection,
-same/different/world/null bases, both physics transitions, SupportActor dispatch,
-Pawn-wall rejection, zero acceleration, direction gates, probing, walking normal
-flattening, and Falling event dispatch. Original cases were captured before the
-helper was written; the final matrix adds degenerate direction cases. Five
-focused tests cover event-visible state and preservation of unrelated flags.
+instructions and compares102 cases exactly. Pawn-source cases (54) cover
+self/cycle rejection, same/different/world/null bases, both physics transitions,
+SupportActor dispatch, Pawn-wall rejection, zero acceleration, direction gates,
+probing, walking normal flattening, and Falling event dispatch. Non-Pawn-source
+cases (48) drive the0x103cee37 branch through a self-contained source class with a
+null SuperField, sweeping {Pawn/non-Pawn wall}×{probing on/off}×{PHYS_None/Falling/
+Rolling}×four float32-exact normals: they confirm the wall-Pawn return, the
+probe-gated unmodified dispatch, the absence of any MoveTimer/bFromWall/direction
+bookkeeping, and (via the Physics sweep) that the non-Pawn path never reads Physics.
+Original Pawn cases were captured before the helper was written; the final matrix
+adds degenerate direction cases and the non-Pawn source sweep. Five focused tests
+cover event-visible state and preservation of unrelated flags.
 The native harness deliberately supplies controlled empty script callbacks and
 probe answers: it validates native bookkeeping and call order, not the script
 effects themselves. Mover damage/destruction, Pawn JumpOffPawn, Decoration damage,

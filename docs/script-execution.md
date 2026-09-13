@@ -58,9 +58,10 @@ The call path is:
 2. Otherwise, if `FunctionFlags` at `Function+0x6c` has `FUNC_Native` bit
    `0x400`, call the object vtable slot `+0x18` with the function, a local
    scratch block and the caller frame. A nonzero hook result marks the native
-   implementation handled. The argument parse and cleanup still run. If the
+   implementation handled. The argument parse and cleanup then run. If the
    hook returns zero, the fallback function pointer at `Function+0x7c` is
-   called with the caller frame and result after parsing.
+   called immediately with the caller frame and result, and this wrapper
+   returns without parsing a temporary frame (`1013f53d–1013f553`).
 3. For an ordinary script function, read the parameter/local block size from
    the exact field consumed at `Function+0x3c`. Allocate
    `(size + 7) & ~7`, then `(rounded + 3) & ~3` bytes and zero the original
@@ -112,7 +113,9 @@ the zeroed block from `1013f577–1013f58b`. No OptionalParm flag or default-val
 initializer is consulted in this script call path. An explicit Nothing argument
 likewise writes no value, retaining that slot's zero initialization. The runtime
 can therefore accept missing trailing arguments and Nothing holes; excess
-arguments and nontrivial parameter destruction remain outside its supported ABI.
+arguments remain outside its supported ABI. The logical VM now destroys owning
+strings/structs after copying return and out values, using the recovered
+DestroyValue dispatcher; see [frame ownership](script-frame-ownership.md).
 
 In pseudocode, the script path is therefore:
 

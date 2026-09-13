@@ -8,7 +8,10 @@ const named = value => Boolean(value) && String(value).toLowerCase() !== 'none';
 /** Original two-key translating TriggerToggle subset, including like-tagged
  * panels and smooth reversal. Full state/event execution belongs to the VM. */
 export class Doors {
-  constructor(movers, maxDistance, collision = null) { this.movers = movers; this.maxDistance = maxDistance; this.collision = collision; this.reset(); }
+  constructor(movers, maxDistance, collision = null, {eventHasRecipients = null} = {}) {
+    this.movers = movers; this.maxDistance = maxDistance; this.collision = collision;
+    this.eventHasRecipients = eventHasRecipients; this.reset();
+  }
   setOffset(mover, offset) {
     if (this.collision) this.collision.setMoverOffset(mover, offset); else mover.collider.offset = offset;
   }
@@ -19,7 +22,8 @@ export class Doors {
       mover.supported = mover.values.InitialState === 'TriggerToggle' && mover.values.NumKeys === 2 &&
         mover.values['KeyPos[1]']?.some(v => v !== 0) && !(mover.values['KeyRot[1]'] ?? zero).some(Boolean) &&
         !(mover.values.KeyRot ?? zero).some(Boolean) && !mover.values.bSlave && !mover.values.bTriggerOnceOnly &&
-        !(mover.values.DelayTime ?? 0) && !(mover.values.KeyNum ?? 0) && !(mover.values.KeyPos ?? zero).some(Boolean) && !named(mover.values.Event);
+        !(mover.values.DelayTime ?? 0) && !(mover.values.KeyNum ?? 0) && !(mover.values.KeyPos ?? zero).some(Boolean) &&
+        (!named(mover.values.Event) || this.eventHasRecipients?.(mover.values.Event) === false);
       if (mover.collider.offset.some(v => v !== 0)) this.setOffset(mover, [...zero]);
       const base = mover.values.Location.map(f);
       mover.interpolation = { position: [...base], basePosition: [...base], oldPosition: [...base],

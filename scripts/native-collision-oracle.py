@@ -28,7 +28,7 @@ HASHES = {
 
 
 class Image:
-    def __init__(self, path, expected_hash=None):
+    def __init__(self, path, expected_hash=None, rebase=None):
         self.data = data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != (expected_hash or HASHES[path.name]):
             raise ValueError(f'Unsupported original binary hash: {path.name}')
@@ -40,6 +40,32 @@ class Image:
         section = opt + struct.unpack_from('<H', data, pe + 20)[0]
         count = struct.unpack_from('<H', data, pe + 6)[0]
         self.sections = [struct.unpack_from('<8sIIII', data, section + i * 40) for i in range(count)]
+        if rebase is not None and rebase != self.base:
+            self.rebase(rebase)
+
+    def rebase(self, new_base):
+        """Apply the PE .reloc fixups and change this image's preferred base."""
+        delta = (new_base - self.base) & 0xffffffff
+        rva, size = self.directories[5]
+        if not rva or size < 8:
+            raise ValueError('Image has no relocation table and cannot be rebased')
+        buf = bytearray(self.data)
+        end = rva + size
+        page = rva
+        while page < end:
+            block_rva, block_size = struct.unpack_from('<II', buf, self.offset(page))
+            if block_size < 8:
+                break
+            for entry_rva in range(page + 8, page + block_size, 2):
+                entry = struct.unpack_from('<H', buf, self.offset(entry_rva))[0]
+                if entry >> 12 == 3:  # IMAGE_REL_BASED_HIGHLOW
+                    target = block_rva + (entry & 0xfff)
+                    offset = self.offset(target)
+                    value = struct.unpack_from('<I', buf, offset)[0]
+                    struct.pack_into('<I', buf, offset, (value + delta) & 0xffffffff)
+            page += block_size
+        self.data = bytes(buf)
+        self.base = new_base
 
     def offset(self, rva):
         for _, virtual_size, virtual, raw_size, raw in self.sections:
@@ -88,7 +114,13 @@ class NativeCollision:
         extra = additional_hashes or {}
         if extra.keys() & HASHES.keys():
             raise ValueError('Additional images must not override the original Engine/Core hashes')
-        images = {name.lower(): Image(game_root / 'System' / name, digest) for name, digest in (HASHES | extra).items()}
+        images = {}
+        for name, spec in (HASHES | extra).items():
+            rebase = None
+            if isinstance(spec, dict):
+                rebase = spec.get('base')
+                spec = spec['hash']
+            images[name.lower()] = Image(game_root / 'System' / name, spec, rebase=rebase)
         for image in images.values():
             cpu.mem_map(image.base, (image.size + 4095) & ~4095)
             cpu.mem_write(image.base, image.data[:1024])
@@ -116,7 +148,7 @@ class NativeCollision:
                     # in EDX:EAX. All collision/math code executes from the DLLs.
                     cpu.mem_write(address, bytes.fromhex('83 ec 08 dd 0c 24 58 5a c3'))
                     self.thunks.pop(address)
-        cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
+        self.code_hook = cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
         cpu.hook_add(UC_HOOK_MEM_INVALID, self.on_bad_memory)
         # UnitCoords, normally initialized by Core's process startup constructor.
         gmath = exports['core.dll']['?GMath@@3VFGlobalMath@@A']

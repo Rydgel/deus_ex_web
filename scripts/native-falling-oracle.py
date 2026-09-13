@@ -47,6 +47,14 @@ class NativeFalling(collision.NativeCollision):
         self.write(self.pawn + 0x31, 'B', 4)  # ROLE_Authority.
         self.write(self.pawn + 0x1d4, '2f', 20, 43)
         self.write(self.pawn + 0x38c, 'f', 25)
+        # A non-Pawn class (e.g. a pushed Decoration) whose SuperField chain reaches
+        # neither Pawn (0x1058c660) nor PlayerPawn (0x1058c160) nor the bounce class
+        # (0x10578d48). physFalling reads +0x24 only through its inlined IsA walks
+        # (each reads class->SuperField at +0x28), so a null SuperField makes every
+        # IsA(target) false: the air-control/accel-clamp prelude and both Pawn-only
+        # integration branches are skipped, leaving the general integration path.
+        self.nonpawn_class = self.alloc(0x40)
+        self.write(self.nonpawn_class + 0x28, 'I', 0)
         self.events = None
 
     def on_instruction(self, cpu, address, size, data):
@@ -100,6 +108,8 @@ class NativeFalling(collision.NativeCollision):
     def falling(self, case):
         self.responses, self.move_index = case['responses'], 0
         self.air_blocked = case['airBlocked']
+        # Select a Pawn (default) or a non-Pawn actor such as a pushed Decoration.
+        self.write(self.pawn + 0x24, 'I', self.nonpawn_class if case.get('nonPawn') else 0x1058c160)
         self.write(self.pawn + 0x30, 'B', 2)
         self.write(self.pawn + 0x1ec, 'I', 0)
         self.write(self.pawn + 0x114, '3f', *case['position'])

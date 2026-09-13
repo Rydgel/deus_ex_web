@@ -1,0 +1,108 @@
+# Stage 3 completion audit — 2026-09-13
+
+This audit applies the required systems and done criterion in
+[`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused
+validator proves only the named original path that it exercises; it does not
+turn an adapter or a package decode into general compatibility.
+
+## Current validation snapshot
+
+The current worktree passes the focused checks below:
+
+```text
+npm test                                                     486/486
+node scripts/validate-script-runtime.mjs                     pass
+node scripts/validate-player-augmentation-startup.mjs        pass
+node scripts/validate-stage3-dark-doors.mjs                  pass
+node scripts/validate-gm-trench-play-anim.mjs                pass
+node scripts/validate-trigger-actions.mjs                    pass
+node scripts/validate-script-lights.mjs                      pass
+node scripts/validate-training-datalink-live.mjs             pass
+node scripts/validate-conversation-move-camera.mjs           pass
+node scripts/validate-conversation-check-object-bind.mjs     pass
+node scripts/validate-conversation-transfer-object-bind.mjs  pass
+node scripts/validate-script-set-location.mjs                pass
+node scripts/validate-native-vrand.mjs                       pass
+node scripts/validate-native-finish-anim.mjs                 pass
+node scripts/validate-script-string-operations.mjs           pass
+```
+
+These checks cover the current Training subset, including the live
+`AugmentationManager1` startup and the explicit `NanoKeyRing.CreateKeyRing`
+boundary. They do not establish the remaining rows below.
+
+## Required-system matrix
+
+| Roadmap system | Proven subset in the current runtime | Exact unproven requirement and next boundary |
+| --- | --- | --- |
+| Class inheritance | Linked Core/Engine/DeusEx class chains, UField/UStruct/UState/UClass registration and property-link dispatch are exercised by the runtime and class-registration tests. Evidence: [`script-class-registration.md:8-17,96-100`](script-class-registration.md), [`script-class-link.md:37-97`](script-class-link.md). | The complete first-load class graph and native metaclass identities are still absent. Next boundary: load one non-prebound imported class through the native registration path and compare its Super, fields, defaults and Link order. |
+| Default properties | Native CDO header/default allocation and inherited property copying are covered; 364 authored DeusEx struct defaults decode, and the augmentation manager/default list passes the live validator. Evidence: [`script-class-registration.md:102-143`](script-class-registration.md), [`script-struct-values.md`](script-struct-values.md), [`script-player-augmentation-startup.md:37-69`](script-player-augmentation-startup.md). | All classes/resources do not yet receive native CDO initialization, dynamic-container storage, config or localization values. Next boundary: one fresh non-prebound CDO containing an owning string/array property. |
+| States | Original `TriggerToggle` Open/Close and `CameraPoint` Auto/Idle state selection run through VM state frames. Evidence and check: [`script-runtime.md:322-337`](script-runtime.md), `scripts/validate-script-runtime.mjs`. | Arbitrary state graphs, inherited state probes and state-frame persistence are not established. Next boundary: one non-door actor with inherited `BeginState`/`EndState` and a second transition. |
+| Events | Spawn callbacks, Touch/UnTouch/Tick/Frob, trigger actions and the direct DataLink event path use original ProcessEvent/bytecode. Evidence: [`script-spawn.md:284-329`](script-spawn.md), `scripts/validate-trigger-actions.mjs`, `scripts/validate-training-datalink-live.mjs`. | Generic ProcessEvent coverage, native event memory, exception/unwind and all subclass event overrides remain open. Next boundary: an authored event with owning struct/array parameters through live frame allocation and cleanup. |
+| Timers | TriggerToggle `DelayTime`/`Sleep`, `Actor.SetTimer`, DamageTrigger timer scheduling and the DataLink end timer are compared against original order. Evidence: [`script-runtime.md:326-332`](script-runtime.md), [`script-trigger-actions.md:86-106`](script-trigger-actions.md). | A general scheduler for multiple actors, reentrant destruction and every timer flag is not proven. Next boundary: two live actor timers with one callback destroying or rescheduling the other. |
+| Latent functions | `InterpolateTo`, `FinishInterpolation` suspension/reversal and state Sleep/DelayTime are covered in the selected mover path. Native 261 `FinishAnim` now installs latent action `0x181`, preserves the recovered rate/tween/flag gates, and clears the slot only when `bAnimFinished` is set. Evidence: [`script-runtime.md:322-344`](script-runtime.md), [`script-finish-anim.md`](script-finish-anim.md). | The browser does not yet advance arbitrary native mesh animation state to produce `bAnimFinished`; general latent-slot serialization is also unsupported. Next boundary: drive one authored non-mover animation through its original animation tick into the `0x181` poll. |
+| Garbage collection | Core mark/purge ordering, typed reference holders, FName deletion/index reuse and CameraPoint cleanup have focused source-backed tests. Evidence: [`script-gc.md:170-221`](script-gc.md), [`script-reference-serialization.md:10-78`](script-reference-serialization.md). | The live world still lacks the complete class/resource graph, native destructors/allocators, dynamic array/map ownership and raw native event memory. Next boundary: collect a real map/resource subgraph containing a cycle, a lazy resource and a pending actor. |
+| Native function dispatch | Selected Core arithmetic/string/state primitives, including `At_StrStr` 168, `Right` 234, and `VRand` 252, Engine `FinishAnim` 261 and `SetLocation` 267 plus mover/actor/sound/animation functions, Extension flag/window functions and ConSys/DataLink functions dispatch through the VM. Evidence: [`script-coverage.md:23-37,56-96`](script-coverage.md), [`script-at-string.md`](script-at-string.md), [`script-string-operations.md`](script-string-operations.md), [`script-vrand.md`](script-vrand.md), [`script-finish-anim.md`](script-finish-anim.md), [`script-set-location.md`](script-set-location.md). | Of 581 decoded direct native indices, 444 remain outside the recorded scoped bindings; native-zero declarations, arbitrary iterator calls and many native branches are unsupported. The 267 wrapper still requires an explicit native actor and FarMoveActor adapter. |
+| Imported objects | Canonical package/export identities, Outer/Class edges, hash lookup and existing-object `StaticLoadObject` return work for the Training graph. The Jaime portrait now constructs its canonical `ULinkerLoad` on first access and preserves BeginLoad → ResolveName → linker/export → CreateExport → EndLoad order. Evidence: [`script-resources.md:10-48`](script-resources.md), [`script-static-load-object.md`](script-static-load-object.md), `scripts/validate-training-datalink-live.mjs`. | Native metaclass loading, null-export construction, general file search/error routes and nonempty post-load cleanup remain explicit. Next boundary: construct one previously absent export through its original native class constructor and serializer. |
+| Native actor/resource types | `Engine.Actor`-based CameraPoint construction is source/native checked; the Training LightSwitch LodMesh eager table, Sound header/WAV bytes and GM_Trench sequences are decoded. Evidence: [`script-spawn.md:211-302`](script-spawn.md), [`script-resources.md:65-93`](script-resources.md), [`script-play-anim.md:1-19`](script-play-anim.md). | General native actor subclasses, resource constructors/serializers/destructors, texture payloads and lazy mesh tails are not live. Next boundary: one non-prebound resource constructor and serializer attached to the canonical registry. |
+| Object spawning | The scoped CameraPoint Spawn path preserves native argument/default order, naming, template copy, actor-array insertion, callbacks, zone and auto-state; player subsystem actors and DataLinkPlay use prepared spawn routes. Evidence: [`script-spawn.md:211-302`](script-spawn.md). | General collision placement, encroachment, undo, SpawnNotify, spawn-during-tick and arbitrary native subclasses remain open. Next boundary: one map actor spawned through a complete collision-enabled `ULevel::SpawnActor` path. |
+| Object destruction | Actor/level destruction order, owner/touch cleanup, pending-kill gates, Window tree destruction and CameraPoint final release have focused translations. Evidence: [`script-destroy.md:96-140`](script-destroy.md), [`script-window-destroy.md:82-131`](script-window-destroy.md). | Complete live-world finalization, native subclass destructors, allocator/free-list ownership and resource release are not wired. Next boundary: destroy a spawned actor with an owned resource and verify registry/index/GC cleanup. |
+| References | UObject header Name/Outer/Class/Linker/state references, typed property walks, inherited structs, PawnList links and canonical map references are checked. Evidence: [`script-reference-serialization.md:10-139`](script-reference-serialization.md), [`pawn-list.md:29-60`](pawn-list.md). | Raw native pointers, dynamic containers and the complete cross-package live graph are not traversed. Next boundary: a live map/resource reference graph with null, shared and cyclic edges. |
+| Execution order | Native level pawn startup order, Spawn callback order, mover reversal, LightSwitch fanout and DataLink termination order are compared. Evidence: [`pawn-list.md:29-60`](pawn-list.md), [`script-spawn.md:278-329`](script-spawn.md), [`script-datalink-live.md:10-24,61-72`](script-datalink-live.md). | Full level startup with every non-pawn callback, startup spawns and destruction is not established. Next boundary: replay the complete Training startup loop against all actor-array slots. |
+| Serialization hooks | UObject/Actor/reference serialization, class/property metadata, tagged-default measurement, complex `SerializeItem` and authored struct loading are covered. FString and dynamic-array `SerializeItem` now include the recovered save/load flags, CompactIndex encoding, allocation and recursive element paths through explicit archive/heap services. Evidence: [`script-reference-serialization.md:80-139`](script-reference-serialization.md), [`script-property-serialize-item.md`](script-property-serialize-item.md). | Native resource tails, raw heap integration, map/object archive composition and map/save persistence remain open. Next boundary: one Sound or non-prebound resource through its real load archive; full save/map persistence is Stage 6. |
+| Native calls across Engine, game, UI/Extension and ConSys | The selected mover, light, trigger/damage, DataLink and Window routes cross all named package families and are checked by their focused validators. Evidence: [`script-coverage.md:56-60,94-109`](script-coverage.md), [`script-lights.md:43-63`](script-lights.md). | Package availability and selected bindings do not establish broad native compatibility; UI/extension event overrides, engine iterators, game AI and raw native services remain incomplete. Next boundary: broaden one cross-package event route only after its native call graph and frame ownership are recovered. |
+| Script-controlled light switches and lighting changes | Training `LightSwitch.Frob` fans out to four original TriggerLights; TriggerToggle/Tick, PlayAnim and steady brightness lightmap refill/upload pass the live validator. Evidence: [`script-lights.md:13-39,43-63`](script-lights.md), [`script-light-cache.md:60-88,107-131`](script-light-cache.md), `scripts/validate-script-lights.mjs`. | The selected Stage 3 light requirement is met for this documented subset. General `bLightChanged` setter/clear lifetime, radius/effect/type/corona branches and moving-light rendering remain open; the next boundary is the original dirty-bit owner. |
+| Deus Ex conversation and UI classes | `ConBindEvents`, the 18 Training direct Speech→End routes, six-control InfoLink construction/destruction, queue/reset, first-load Jaime portrait linker and exact speech timing/audio bytes pass. Mission00 `M00MeetPage` executes canonical MoveCamera export 50071 through its exact native false binder and the installed action into Speech export 50044. `ConEventCheckObject.BindActor` preserves its `NK_` clear and class-load branches; MeetKaplan and ChadThankful run their installed Inventory/NanoKey predicates and both next/fail actions. `ConEventTransferObject.BindActor` now preserves its from/to bark/normal name order and class load. All ten shipped DataLink references are pinned, and `DL_Rooftops` export 7448 runs through native 2053 to bind JCDenton and load `Image02_NYC_Warehouse`. Evidence: [`script-datalink-live.md`](script-datalink-live.md), [`script-conversation-events.md`](script-conversation-events.md), [`script-conversation-check-object-bind.md`](script-conversation-check-object-bind.md), [`script-conversation-transfer-object-bind.md`](script-conversation-transfer-object-bind.md), `scripts/validate-conversation-transfer-object-bind.mjs`. | Native metaclass class loading and TransferObject's DataVaultImage Spawn/SpawnCopy/AddImage/received-items action remain Stage 3 gaps. Native mixer, glyph/texture presentation and final HUD rendering are Stage 4. Next boundary: source-backed native construction and startup for the shipped `Image02_NYC_Warehouse` class. |
+
+## Stage 4 and Stage 5 separation
+
+The following are deliberately outside the Stage 3 gates:
+
+* **Stage 4 presentation** (`roadmap.md:314-331`): lazy mesh geometry and visual
+  animation, skins/textures, animated effects, audible `ClientHearSound`, audio
+  mixing, glyph rasterization and final HUD/conversation rendering. The eager
+  GM_Trench sequence decode and PlayAnim state writes are already Stage 3 runtime
+  evidence; visual playback is not.
+* **Stage 5 gameplay** (`roadmap.md:333-345`): AI navigation/perception,
+  combat/health/death, weapons, inventory/keyring, skills, full augmentation and
+  energy behavior, dialogue choices, objectives and mission systems. The current
+  player startup proves the manager/default augmentation state and stops at the
+  source-backed `NanoKeyRing.CreateKeyRing` boundary; completing inventory is a
+  Stage 5 task, while the manager startup is a Stage 3 integration dependency.
+
+## Smallest actual Stage 3 blocker set
+
+1. **Live class/resource/object graph:** native metaclass and absent-export loads,
+   native actor/resource construction, general spawn/destruction/references,
+   load/save virtuals, heap/temporary ownership and live-world GC are still
+   prepared or fixture-backed rather than complete.
+2. **General native dispatch:** the selected package paths pass, but the runtime
+   still lacks enough Engine, game, UI/Extension and ConSys native branches,
+   including raw event memory and dynamic-container/heap services, to claim the
+   required general script path.
+3. **Generic conversation execution:** the direct 18-route Speech→End slice,
+   canonical Mission00 MoveCamera→Speech transition, CheckObject actions, and
+   the shipped `DL_Rooftops` TransferObject actor/class bind are green. Native
+   metaclass class loading and TransferObject's DataVaultImage construction and
+   inventory action still require their original services. Presentation audio/rendering
+   belongs to Stage 4.
+
+The selected light-switch/brightness route is evidence for the named lighting
+subset and therefore is not in this minimal blocker list. Its general dirty/cache
+branches remain documented follow-up work. The dependency order is:
+
+```text
+broader class/resource graph and canonical identity
+  -> native actor/resource construction
+  -> spawn/destruction/reference/serialization/GC ownership
+  -> broad native dispatch and event-frame/heap services
+  -> generic ConEvent/conversation execution
+```
+
+## One bounded next slice
+
+Recover native construction/startup for shipped `Image02_NYC_Warehouse`, then
+admit the `DL_Rooftops` event to its original `SetupEventTransferObject` path
+through Spawn, SpawnCopy, AddImage, and the received-items sink. Preserve the
+current actor/class binder, CheckObject next/fail routes, direct Speech-to-End,
+and MoveCamera-to-Speech routes. Keep mixer/rendering work in Stage 4.

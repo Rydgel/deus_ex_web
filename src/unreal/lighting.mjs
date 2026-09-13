@@ -75,6 +75,56 @@ export function lightAttenuation(light, point, normal) {
   return attenuation;
 }
 
+function lightReferences(model, lightMap) {
+  if (lightMap.lightActors == null || lightMap.lightActors < 0) return [];
+  const start = lightMap.lightActors;
+  if (!Number.isInteger(start) || start >= model.lights.length) {
+    throw new Error(`Invalid LightActors start ${start}`);
+  }
+  const refs = [];
+  for (let index = start; index < model.lights.length; index++) {
+    const ref = model.lights[index];
+    if (!Number.isInteger(ref)) throw new Error(`Invalid light reference ${ref}`);
+    if (ref === 0) return refs;
+    refs.push(ref);
+  }
+  throw new Error('Unterminated surface light list');
+}
+
+function changeValues(values) {
+  if (values == null) return null;
+  if (typeof values !== 'object' || Array.isArray(values)) throw new TypeError('Light change values must be an object');
+  const unsupported = Object.keys(values).filter(key => key !== 'LightBrightness');
+  if (unsupported.length) throw new Error(`Unsupported script light update field: ${unsupported[0]}`);
+  return values;
+}
+
+function normalizeLightingChanges(value) {
+  const result = [];
+  const append = (item, tuple = false) => {
+    let ref, values;
+    if (Number.isInteger(item)) ref = item;
+    else if (tuple) [ref, values] = item;
+    else if (item && typeof item === 'object') {
+      ref = item.ref ?? item.index;
+      values = item.values ?? item.patch;
+    }
+    if (!Number.isInteger(ref) || ref <= 0) throw new TypeError(`Invalid changed light reference: ${ref}`);
+    result.push({ ref, values: changeValues(values) });
+  };
+  if (Number.isInteger(value)) append(value);
+  else if (value && typeof value === 'object' && !Array.isArray(value) && ('ref' in value || 'index' in value)) append(value);
+  else if (value instanceof Map) for (const entry of value) append(entry, true);
+  else if (Array.isArray(value) && value.length === 2 && Number.isInteger(value[0]) && (value[1] == null || typeof value[1] === 'object')) append(value, true);
+  else if (value != null && typeof value !== 'string' && typeof value[Symbol.iterator] === 'function') {
+    for (const item of value) {
+      if (Array.isArray(item)) append(item, true);
+      else append(item);
+    }
+  } else throw new TypeError('invalidate() requires a light reference or iterable of changes');
+  return result;
+}
+
 export async function createLighting(map, asset, assets) {
   const defaults = new ClassDefaults(assets), actors = new Map(), pendingActors = new Map(), notes = new Set();
   const sourceActors = new Map(map.actors.map(a => [a.index, a]));
@@ -92,11 +142,54 @@ export async function createLighting(map, asset, assets) {
   await Promise.all(map.model.zones.map(z => actor(z.actor)));
   const levelValues = await actor(levelInfo.index);
   const zoneValues = map.model.zones.map(z => actors.get(z.actor) ?? levelValues);
-  const usedLights = new Set();
-  const caches = new WeakMap();
+  const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set();
+
+  function refill(result) {
+    const { pixels, points, normal, surface, lightEntries } = result;
+    const ambient = zoneValues[result.zone] ?? levelValues;
+    const rgb = lightColor(ambient.AmbientHue, ambient.AmbientSaturation, ambient.AmbientBrightness).map(c => c * .25);
+    for (let p = 0; p < points.length; p++) pixels.set(rgb, p * 3);
+    for (const { ref, shadow } of lightEntries) {
+      const light = actors.get(ref);
+      if (!light) throw new Error(`Unprepared light ${ref}`);
+      if (!light.LightType || !light.LightBrightness) continue;
+      if (Boolean(surface.flags & 0x100000) !== Boolean(light.bSpecialLit)) continue;
+      const effect = light.LightEffect ?? 0;
+      if (![0, 3, 8, 12, 13].includes(effect)) throw new Error(`Unsupported light effect ${effect}`);
+      if (effect === 3) notes.add('Watery-shimmer lights use their static contribution; shimmer animation is not active.');
+      if (![1, 9].includes(light.LightType)) notes.add(`Light type ${light.LightType} uses a steady snapshot; time-varying light animation is not active.`);
+      if (!light.bStatic) notes.add('Steady TriggerLight brightness changes use explicit host invalidation; other script-controlled light changes are not active.');
+      usedLights.add(ref); stats.lightActors = usedLights.size;
+      const color = lightColor(light.LightHue, light.LightSaturation, 255)
+        .map(c => c * light.LightBrightness / 255 * (levelValues.Brightness ?? 1));
+      for (let p = 0; p < points.length; p++) {
+        const weight = shadow[p] * lightAttenuation(light, points[p], normal);
+        for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(127 / 255, pixels[p * 3 + c] + color[c] * weight);
+      }
+    }
+    return result;
+  }
+
+  function updateActor(ref, values = {}) {
+    if (!Number.isInteger(ref) || ref <= 0) throw new TypeError(`Invalid lighting actor reference: ${ref}`);
+    const current = actors.get(ref);
+    if (!current) throw new Error(`Unprepared lighting actor ${ref}`);
+    Object.assign(current, changeValues(values) ?? {});
+    return current;
+  }
+
   return {
     stats, notes,
     async prepare(model) { await Promise.all([...new Set(model.lights.filter(Boolean))].map(actor)); },
+    updateActor,
+    invalidate(changes) {
+      const entries = normalizeLightingChanges(changes), changedLights = [...new Set(entries.map(entry => entry.ref))];
+      for (const { ref, values } of entries) if (values) updateActor(ref, values);
+      const affected = [...cacheRecords].filter(result => changedLights.some(ref => result.lightRefs.has(ref)));
+      for (const result of affected) refill(result);
+      return { changedLights, lightmaps: affected,
+        affected: affected.map(result => ({ surfaceIndex: result.surfaceIndex, lightMapIndex: result.index, zone: result.zone, lightmap: result })) };
+    },
     surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n) {
       const surface = model.surfaces[surfaceIndex], lm = model.lightMaps[surface.lightMap];
       if (!lm) { stats.missingLightmaps++; return null; }
@@ -106,37 +199,15 @@ export async function createLighting(map, asset, assets) {
       const cache = caches.get(model), key = `${surfaceIndex}:${zone}`;
       if (cache.has(key)) return cache.get(key);
       const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
-      const ambient = zoneValues[zone] ?? levelValues;
-      const rgb = lightColor(ambient.AmbientHue, ambient.AmbientSaturation, ambient.AmbientBrightness).map(c => c * .25);
-      const pixels = new Float32Array(width * height * 3), points = [];
-      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        points.push(transform(basis.point(x, y))); pixels.set(rgb, (y * width + x) * 3);
-      }
-      if (lm.lightActors >= 0) {
-        let i = lm.lightActors, lightIndex = 0;
-        for (; i < model.lights.length && model.lights[i]; i++, lightIndex++) {
-          const ref = model.lights[i], light = actors.get(ref);
-          if (!light) throw new Error(`Unprepared light ${ref}`);
-          const shadow = shadowMask(model, lm, lightIndex); stats.shadowMasks++;
-          if (!light.LightType || !light.LightBrightness) continue;
-          if (Boolean(surface.flags & 0x100000) !== Boolean(light.bSpecialLit)) continue;
-          const effect = light.LightEffect ?? 0;
-          if (![0, 3, 8, 12, 13].includes(effect)) throw new Error(`Unsupported light effect ${effect}`);
-          if (effect === 3) notes.add('Watery-shimmer lights use their static contribution; shimmer animation is not active.');
-          if (![1, 9].includes(light.LightType)) notes.add(`Light type ${light.LightType} uses a steady snapshot; time-varying light animation is not active.`);
-          if (!light.bStatic) notes.add('Switchable lights use their stored initial lighting; script-controlled changes are not active.');
-          usedLights.add(ref); stats.lightActors = usedLights.size;
-          const color = lightColor(light.LightHue, light.LightSaturation, 255)
-            .map(c => c * light.LightBrightness / 255 * (levelValues.Brightness ?? 1));
-          for (let p = 0; p < points.length; p++) {
-            const weight = shadow[p] * lightAttenuation(light, points[p], normal);
-            for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(127 / 255, pixels[p * 3 + c] + color[c] * weight);
-          }
-        }
-        if (i === model.lights.length) throw new Error('Unterminated surface light list');
-      }
-      const result = { width, height, pixels, uv: basis.uv, index: surface.lightMap, zone };
-      cache.set(key, result); stats.lightmaps++;
+      const points = [];
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) points.push(transform(basis.point(x, y)));
+      const refs = lightReferences(model, lm);
+      const lightEntries = refs.map((ref, lightIndex) => ({ ref, shadow: shadowMask(model, lm, lightIndex) }));
+      stats.shadowMasks += lightEntries.length;
+      const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
+        model, surfaceIndex, surface, points, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal };
+      refill(result);
+      cache.set(key, result); cacheRecords.add(result); stats.lightmaps++;
       return result;
     },
   };

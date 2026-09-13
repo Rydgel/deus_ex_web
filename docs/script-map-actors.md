@@ -30,7 +30,11 @@ overlays it on that class's typed defaults. This follows the existing recovered
 [default-storage](script-values.md) contracts. Map object/class references
 resolve in the map package; inherited resource defaults retain their declaring
 package's canonical identity. Static-array overrides replace only their authored
-elements. Missing fields and reached opaque payloads fail explicitly.
+elements. Generic StructProperty overrides now reload their omitted diagnostic
+payload bytes from the original map export, decode the linked SerializeBin
+member stream, and resolve nested object/class references in the map's package.
+Missing fields and unresolved member serializers fail explicitly. See
+[struct value loading](script-struct-values.md).
 
 The previous scalar-only `ClassDefaults` merge remains useful for collision
 construction, but it deliberately omits inherited resource references. Script

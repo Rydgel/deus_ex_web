@@ -158,6 +158,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     Skin: runtime.namedReference(light, 'Skin').get(),
     MultiSkins: runtime.namedReference(light, 'MultiSkins').get().slice(),
   }]));
+  const previousBrightness = new Map();
 
   function stateFor(light) {
     const state = runtime.instance(light).state;
@@ -194,6 +195,24 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     };
   }
 
+  function lightingChange(light, force = false) {
+    const identity = assertSelected(light);
+    const brightness = runtime.namedReference(identity, 'LightBrightness').get();
+    const previous = previousBrightness.get(identity);
+    previousBrightness.set(identity, brightness);
+    if (!force && Object.is(previous, brightness)) return null;
+    // The recovered renderer contract covers the selected TriggerLight route's
+    // steady surface-list lights. Animated/pulsed light types remain outside
+    // this callback until their native renderer path is established.
+    const type = runtime.namedReference(identity, 'LightType').get();
+    if (Number(type) !== 1) return null; // LT_Steady
+    return { ref: identity.index, values: { LightBrightness: brightness } };
+  }
+
+  function collectLightingChanges({ force = false } = {}) {
+    return identities.map(light => lightingChange(light, force)).filter(Boolean);
+  }
+
   function resetLight(light) {
     const state = stateFor(light);
     // A fresh map actor starts at the class sentinel.  On repeated reset(),
@@ -210,6 +229,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     // GotoState(InitialState), rather than selecting TriggerToggle here.
     runtime.callFunction(functions.beginPlay, light, 0);
     runtime.callFunction(functions.setInitialState, light, 0);
+    previousBrightness.set(light, runtime.namedReference(light, 'LightBrightness').get());
     const active = stateFor(light).stateNode;
     if (active?.record !== triggerToggleState.record) {
       throw new Error(`TriggerLight InitialState did not select TriggerToggle: ${light.name ?? '<unnamed>'}`);
@@ -232,7 +252,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     // including SavedTrigger BeginEvent/EndEvent and Direction reversal, is
     // still the installed script body.
     const executed = runtime.processEvent(identity, 'Trigger', [other ?? null, eventInstigator ?? null]);
-    return { executed, snapshot: snapshot(identity) };
+    return { executed, snapshot: snapshot(identity), lightingChange: lightingChange(identity) };
   }
 
   function tickActor(light, deltaTime) {
@@ -243,7 +263,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     // Tick probe is disabled.  Keep that ordering and let ScriptRuntime apply
     // its source-backed latent/timer behavior.
     runtime.processActorScript(identity, delta);
-    return { tickEvent, snapshot: snapshot(identity) };
+    return { tickEvent, snapshot: snapshot(identity), lightingChange: lightingChange(identity) };
   }
 
   function tick(deltaTime) {
@@ -266,6 +286,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     tickActor,
     tick,
     snapshot,
+    collectLightingChanges,
   };
 }
 

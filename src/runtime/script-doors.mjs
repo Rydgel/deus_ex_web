@@ -3,6 +3,14 @@ import { refValue } from './script-vm.mjs';
 import { tickMoverInterpolation } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
+import { updateActorTimer } from './script-timers.mjs';
+import { runDecorationPhysics, linkDecorationCollision, PHYS_FALLING, PHYS_ROLLING, PHYS_NONE } from './decoration-physics.mjs';
+import { processDecorationHitWall } from './walking-callbacks.mjs';
+import { createScriptLights } from './script-lights.mjs';
+import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
+import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
+import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
+import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -54,14 +62,20 @@ function moverKeyPairs(mover) {
  * endpoint and `KeyPos` as the implicit zero endpoint. Keep that exact
  * selected predicate here instead of broadening it to arbitrary Mover states.
  */
-function selectedMover(mover) {
+function levelHasTaggedActor(level, tag) {
+  if (!Array.isArray(level?.actors)) return null;
+  const wanted = lower(tag);
+  return level.actors.some(actor => actor && lower(actor.values?.Tag) === wanted);
+}
+
+function selectedMover(mover, level) {
   const values = mover?.values ?? {};
   const { positions, rotations } = moverKeyPairs(mover);
   return values.InitialState === 'TriggerToggle' && values.NumKeys === 2 &&
     !isZeroVector(positions[1]) && isZeroVector(positions[0]) &&
     isZeroVector(rotations[0]) && isZeroVector(rotations[1]) &&
     !values.bSlave && !values.bTriggerOnceOnly && !(values.DelayTime ?? 0) &&
-    !(values.KeyNum ?? 0) && !hasNamedValue(values.Event);
+    !(values.KeyNum ?? 0) && (!hasNamedValue(values.Event) || levelHasTaggedActor(level, values.Event) === false);
 }
 
 /**
@@ -203,6 +217,12 @@ function makeBinding(record, field) {
       get: () => host.physics ?? values.Physics ?? 0,
       set: value => { host.physics = Number(value) & 0xff; },
     },
+    // The live pawn velocity for the player (its values.Velocity getter), and
+    // stored on the object for a pushed decoration whose Bump writes it.
+    velocity: {
+      get: () => vector(host.velocity ?? values.Velocity ?? ZERO_VECTOR),
+      set: value => { host.velocity = vector(value); },
+    },
     clientupdate: {
       get: () => host.clientUpdate ?? values.ClientUpdate ?? 0,
       set: value => { host.clientUpdate = Number(value) | 0; },
@@ -265,15 +285,31 @@ function stateLabelForTarget(mover) {
  * TriggerToggle state. This adapter never rewrites their script bodies.
  */
 export async function createScriptDoors({
-  assets, asset, movers = [], playerActor, level, callbacks = {}, rng,
+  assets, asset, movers = [], playerActor, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
   if (!playerActor || typeof playerActor !== 'object') throw new TypeError('createScriptDoors requires the existing player actor');
+  if (onLightingChanged != null && typeof onLightingChanged !== 'function') throw new TypeError('createScriptDoors onLightingChanged must be a function');
 
   const engine = await assets.get('Engine');
   const deusEx = await assets.get('DeusEx');
-  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level });
+  // PlaySound (264) is a recorded mover-sound boundary in the live game and
+  // the explicit stopping boundary for the Training damage response's Human
+  // pain sound (soundBoundary -> callbacks.playSound for the supported mover
+  // names; no audible playback until Stage 4). Declaring it a host boundary
+  // keeps invokeNative routing it here instead of running the full
+  // execActorPlaySound native, whose channel id needs the measured index. A
+  // focused validation with the live capture (scripts/validate-script-lights.mjs)
+  // opts 264 back out to exercise the real native.
+  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level,
+    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264] });
+  const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
+    if(name==='XLevel')return runtime.levelFor(object);
+    const field={Engine:'engine',Client:'client',Viewports:'viewports',Actor:'actor'}[name];
+    if(!field)throw new Error(`Unbound trigger native graph field: ${name}`);
+    return object[field];
+  }}});
   const identities = new WeakMap();
   const moversByObject = new WeakMap();
   const actorByIndex = new Map((level.actors ?? []).filter(actor => Number.isInteger(actor?.index))
@@ -298,6 +334,8 @@ export async function createScriptDoors({
   const functions = {
     actorBeginEvent: await prepare(engine, 'actor.beginevent', 'Actor.BeginEvent'),
     actorEndEvent: await prepare(engine, 'actor.endevent', 'Actor.EndEvent'),
+    actorHitWall: await prepare(engine, 'actor.hitwall', 'Actor.HitWall'),
+    actorLanded: await prepare(engine, 'actor.landed', 'Actor.Landed'),
     pawnStopWaiting: await prepare(engine, 'pawn.stopwaiting', 'Pawn.StopWaiting'),
     pawnEncroachedByMover: await prepare(engine, 'pawn.encroachedbymover', 'Pawn.EncroachedByMover'),
     moverTrigger: await prepare(engine, 'mover.triggertoggle.trigger', 'Mover.TriggerToggle.Trigger'),
@@ -311,6 +349,52 @@ export async function createScriptDoors({
     moverFinishedClosing: await prepare(engine, 'mover.finishedclosing', 'Mover.FinishedClosing'),
     moverFinishNotify: await prepare(engine, 'mover.finishnotify', 'Mover.FinishNotify'),
     deusExMoverFinishNotify: await prepare(deusEx, 'deusexmover.finishnotify', 'DeusExMover.FinishNotify'),
+    // Inherited pushable-decoration contact (e.g. Plant2/Plant7). The bodies are
+    // validated in scripts/validate-script-decoration.mjs; preparing them here
+    // lets a live player bump run the real script instead of pausing at the
+    // scene adapter (docs/script-plant-contact.md).
+    decorationBump: await prepare(deusEx, 'deusexdecoration.bump', 'DeusExDecoration.Bump'),
+    decorationTimer: await prepare(deusEx, 'deusexdecoration.timer', 'DeusExDecoration.Timer'),
+    decorationLanded: await prepare(deusEx, 'deusexdecoration.landed', 'DeusExDecoration.Landed'),
+    // General Frob chain (docs/script-light-switch.md): a frobbed decoration runs
+    // the empty Actor.Frob base, DeusExPlayer.StartConversation (which returns
+    // early-false while ConListItems is null — the training case), then
+    // DeusExDecoration.Frob's Event/AllActors trigger fanout. Preparing these lets
+    // game.use() route a non-mover frob through the real bytecode.
+    actorFrob: await prepare(engine, 'actor.frob', 'Actor.Frob'),
+    startConversation: await prepare(deusEx, 'deusexplayer.startconversation', 'DeusExPlayer.StartConversation'),
+    decorationFrob: await prepare(deusEx, 'deusexdecoration.frob', 'DeusExDecoration.Frob'),
+    // LightSwitch.Frob (roadmap item #3): Super.Frob's AllActors(Event) fanout calls
+    // Actor.Trigger on each tagged actor; with the TriggerLights advanced into their
+    // TriggerToggle state (createScriptLights below) that virtual call dispatches to
+    // the state Trigger. Native PlayAnim state is recovered; audible playback
+    // and final mesh rendering remain Stage-4 presentation boundaries.
+    // Evidence: docs/script-light-switch.md and docs/script-play-anim.md.
+    actorTrigger: await prepare(engine, 'actor.trigger', 'Actor.Trigger'),
+    lightSwitchFrob: await prepare(deusEx, 'lightswitch.frob', 'LightSwitch.Frob'),
+    // DataLinkTrigger Touch/UnTouch: Touch runs its original gating and the
+    // supported DL_Start call continues through the live DataLink runtime wired
+    // below. UnTouch chains to the inherited Trigger.UnTouch.
+    dataLinkTouch: await prepare(deusEx, 'datalinktrigger.touch', 'DataLinkTrigger.Touch'),
+    dataLinkUnTouch: await prepare(deusEx, 'datalinktrigger.untouch', 'DataLinkTrigger.UnTouch'),
+    dataLinkEvaluateFlag: await prepare(deusEx, 'datalinktrigger.evaluateflag', 'DataLinkTrigger.EvaluateFlag'),
+    // Base Trigger Touch/UnTouch (item #2 M3): the real IsRelevant gate (TriggerType
+    // switch + ClassIsChildOf) and the Event/AllActors -> Actor.Trigger fanout. A
+    // proximity trigger fires its Event to the tagged actors (e.g. a corpse-detection
+    // Trigger opening its body doors). docs/scene-events.md.
+    triggerTouch: await prepare(engine, 'trigger.touch', 'Trigger.Touch'),
+    triggerIsRelevant: await prepare(engine, 'trigger.isrelevant', 'Trigger.IsRelevant'),
+    triggerUnTouch: await prepare(engine, 'trigger.untouch', 'Trigger.UnTouch'),
+    // Training's standalone Radiation10 body reaches this exact inherited
+    // chain after TakeDamage writes the body-part health fields.  Keep the
+    // original script bodies intact: PlayDXTakeDamageHit calls the JC override
+    // PlayHit, which calls Human.PlayTakeHitSound.  The latter's first
+    // PlaySound(264) is the next intentionally unsupported audio boundary.
+    // Evidence: DeusExPlayer.uc:10011-10061 and Human.uc:336-377;
+    // installed exports 17174, 17166, and 16845.
+    playerPlayDXTakeDamageHit: await prepare(deusEx, 'deusexplayer.playdxtakedamagehit', 'DeusExPlayer.PlayDXTakeDamageHit'),
+    playerPlayHit: await prepare(deusEx, 'deusexplayer.playhit', 'DeusExPlayer.PlayHit'),
+    humanPlayTakeHitSound: await prepare(deusEx, 'human.playtakehitsound', 'Human.PlayTakeHitSound'),
   };
   const triggerState = await runtime.prepareState(deusEx, deusExIndex('deusexmover.triggertoggle', 'DeusExMover.TriggerToggle state'));
 
@@ -341,7 +425,10 @@ export async function createScriptDoors({
   function soundBoundary(call) {
     const path = nativePath(call);
     const method = Object.keys(MOVER_SOUNDS).find(name => path.endsWith(`.${name}`));
-    if (!method) throw new Error(`PlaySound native reached from unsupported script: ${path}`);
+    // Scene-event dispatch recognizes this error as a recordable boundary;
+    // retain the exact caller path so focused validators can name the first
+    // unsupported operation after the recovered damage state writes.
+    if (!method) throw new Error(`Unsupported original door native 264 PlaySound from ${path}`);
     const args = Array.from({ length: call.argumentCount }, (_, index) => refValue(call.evaluateArgument(index)));
     const details = {
       sound: args[0] ?? null,
@@ -357,9 +444,43 @@ export async function createScriptDoors({
     return 0;
   }
 
+  // Pushable decorations (DeusExDecoration.Bump/Timer) record their push sound
+  // and AI loud-noise events as deferred boundaries; audible playback and AI
+  // propagation are later stages. The Bump stores PlaySound's return as
+  // pushSoundId and its Timer passes it to StopSound, so a boundary channel id of
+  // 0 round-trips that lifetime without a measured global index.
+  function decorationEffect(call, label) {
+    const args = Array.from({ length: call.argumentCount }, (_, index) => refValue(call.evaluateArgument(index)));
+    if (typeof callbacks.playSound !== 'function') throw new Error('Original decoration sound/AI boundary is not linked');
+    callbacks.playSound(callbackView(call.receiver), label, { args });
+    return args;
+  }
+
   function nativeCall(call) {
+    const triggerNative=triggerActions.handleNative(call);
+    if(triggerNative.handled)return triggerNative.value;
     const path = nativePath(call);
-    if (call.index === 264) return soundBoundary(call);
+    const decoration = path.startsWith('deusexdecoration.');
+    const lightSwitch = path.startsWith('lightswitch.');
+    if (call.index === 264) {
+      if (decoration) { decorationEffect(call, path.endsWith('.bump') ? 'PushSound' : 'LandedSound'); return 0; }
+      // LightSwitch.Frob's Switch4ClickOn/Off is a Stage-4 audio boundary (recorded,
+      // no audible playback until ClientHearSound). Channel id 0 (docs/script-light-switch.md).
+      // PlayAnim(259) is not a boundary: the runtime runs the real execPlayAnim
+      // native, so the switch's animation state is applied (only rendering is Stage-4).
+      if (lightSwitch) { decorationEffect(call, 'SwitchSound'); return 0; }
+      return soundBoundary(call);
+    }
+    if (decoration && call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
+    if (call.index === 265) {
+      if (decoration) decorationEffect(call, 'StopSound');
+      // DataLinkPlay/ConPlayBase stop the player speech channel at termination.
+      // Browser audio is driven by the same recovered duration and has already
+      // ended on the supported path; there is no native channel id to stop here.
+      return undefined;
+    }
+    if (decoration && call.index === 714) { decorationEffect(call, 'AIStartEvent'); return null; }
+    if (decoration && call.index === 715) { decorationEffect(call, 'AIEndEvent'); return undefined; }
     if (call.index === 301) {
       runtime.instance(call.receiver).state.latent = 302;
       return undefined;
@@ -371,6 +492,12 @@ export async function createScriptDoors({
     }
     if (call.index === 3970) {
       const value = refValue(call.evaluateArgument(0));
+      // DeusExDecoration.Bump calls SetPhysics(PHYS_Rolling) when a settled
+      // decoration is pushed. The recovered native (0x103c95f0) writes Physics
+      // and only touches Base/velocity for the Falling/Walking/None transitions;
+      // Rolling changes nothing else. The separately validated physRolling phase
+      // (src/runtime/rolling.mjs) then advances the decoration.
+      if (decoration) { call.receiver.physics = Number(value) & 0xff; return undefined; }
       if ((Number(value) | 0) !== 9) throw new Error(`Unsupported mover SetPhysics value: ${value}`);
       const current = Number(call.receiver.physics ?? call.receiver.values?.Physics ?? 0) | 0;
       if (current !== 9) throw new Error(`Mover SetPhysics requires already-moving-brush physics: ${current}`);
@@ -386,6 +513,22 @@ export async function createScriptDoors({
       if (!minimum?.reference || !maximum?.reference) throw new Error('GetBoundingBox requires out references');
       minimum.set(vector(bounds.min)); maximum.set(vector(bounds.max));
       return undefined;
+    }
+    if (call.index === 262) {
+      if(call.argumentCount>3)throw new Error('SetCollision accepts at most three boolean arguments');
+      const collide=call.argumentCount>0?Boolean(refValue(call.evaluateArgument(0))):false;
+      const blockActors=call.argumentCount>1?Boolean(refValue(call.evaluateArgument(1))):false;
+      const blockPlayers=call.argumentCount>2?Boolean(refValue(call.evaluateArgument(2))):false;
+      if(call.receiver.collideActors&&!collide&&queries)queries.removeActor(call.receiver);
+      runtime.namedReference(call.receiver,'bCollideActors').set(collide);
+      runtime.namedReference(call.receiver,'bBlockActors').set(blockActors);
+      runtime.namedReference(call.receiver,'bBlockPlayers').set(blockPlayers);
+      call.receiver.collideActors=collide;call.receiver.blockActors=blockActors;
+      call.receiver.blockPlayers=blockPlayers;call.receiver.blocking=blockPlayers;
+      call.receiver.collisionBits=((call.receiver.collisionBits??0)&~13)|
+        (collide?1:0)|(blockActors?4:0)|(blockPlayers?8:0);
+      call.receiver.flags=((call.receiver.flags??0)&~13)|call.receiver.collisionBits;
+      return true;
     }
     if (call.index === 256) throw new Error(`Unsupported Sleep in selected door script: ${path}`);
     if (path.endsWith('.stopwaiting')) return dispatch(call.receiver, 'StopWaiting', []);
@@ -410,11 +553,35 @@ export async function createScriptDoors({
     await Promise.all(fields.map(field => runtime.field(field)));
     record.initialProperty = await prepareMapProperties(runtime, asset, identity, cls, actorByIndex);
     for (const field of fields) runtime.bindProperty(identity, field, makeBinding(record, field));
+    // The selected LightSwitch Frob path reaches native PlayAnim synchronously.
+    // Complete its native mesh/resource preparation before any event can run.
+    for(let current=cls;current;current=current.base)if(current.record.key==='deusex.lightswitch'){
+      await runtime.prepareResource(cls.record);
+      await runtime.prepareMesh(identity);
+      const fn=functions.lightSwitchFrob.function;
+      for(const node of fn.compiled.decoded.expressions.values())if(node.op===0x20){
+        const object=runtime.objects.operand(fn.script,node);
+        if(object?.kind==='Sound')await runtime.prepareResource(object);
+      }
+      break;
+    }
     return record;
   }
 
   await attach(levelInfo, levelClass, 'level');
   await attach(playerActor, playerClass, 'player');
+  // The browser creates JCDentonMale before the script level is attached.
+  // ULevel::SpawnActor would have written this inherited Actor.Level slot
+  // during construction; restore that source-required identity before any
+  // PostBeginPlay subsystem code reads Player.Level.NetMode.
+  runtime.namedReference(playerActor, 'Level').set(levelInfo);
+  // Player startup may synchronously reach mesh-dependent inherited code after
+  // the subsystem objects are constructed. Prepare the canonical player mesh
+  // while the attached package identity is still in the setup phase, matching
+  // the existing LightSwitch resource-prepared contract.
+  await runtime.prepareMesh(playerActor);
+  triggerActions.bindPlayerFlagBase(runtime,playerActor);
+  await prepareTriggerFunctions(runtime,assets);
 
   async function attachPawnList() {
     const seen = new Set();
@@ -437,10 +604,36 @@ export async function createScriptDoors({
     await attach(actor, await runtime.loadClass(asset, entry.classIndex), 'scene');
   }
 
+  // Every live decoration advances its recovered non-Pawn physics each actor
+  // phase: physFalling settles it onto the floor at load and physRolling slides
+  // a pushed decoration. Other Physics values are no-ops (docs/rolling.md,
+  // docs/script-plant-contact.md). Collision-hash cylinders are linked to the
+  // live position before the first move.
+  const decorations = [];
+  for (const actor of level.actors ?? []) {
+    if (!actor?.lineage) continue;
+    if (!actor.lineage.includes('deusex.deusexdecoration') && !actor.lineage.includes('engine.decoration')) continue;
+    if (queries) linkDecorationCollision(queries, actor);
+    decorations.push(actor);
+  }
+
+  // Live TriggerLights (base Engine.TriggerLight). createScriptLights shares this
+  // runtime, runs their native startup (BeginPlay -> SetInitialState) so they enter
+  // TriggerToggle, and drives their Trigger/Tick bodies. This is what makes a
+  // LightSwitch.Frob's AllActors(Event) fanout (Actor.Trigger on each tagged light)
+  // dispatch to the real state Trigger instead of the empty base. Subclasses are
+  // outside this selected subset and are left inert (docs/script-light-switch.md).
+  const triggerLightClass = await loadClass(engine, 'triggerlight', 'Engine.TriggerLight class');
+  const triggerLights = (level.actors ?? []).filter(actor => {
+    try { return runtime.instance(actor).cls.record === triggerLightClass.record; } catch { return false; }
+  });
+  const lights = await createScriptLights({ runtime, assets, lights: triggerLights });
+  const missionTriggers=(level.actors??[]).filter(actor=>actor?.lineage?.includes('engine.trigger'));
+
   const records = [];
   for (const mover of movers) {
-    if (!selectedMover(mover) && !mover?.supported) continue;
-    if (!selectedMover(mover)) throw new Error(`Mover is marked supported outside the selected TriggerToggle subset: ${mover?.name ?? '<unnamed>'}`);
+    if (!selectedMover(mover,level) && !mover?.supported) continue;
+    if (!selectedMover(mover,level)) throw new Error(`Mover is marked supported outside the selected TriggerToggle subset: ${mover?.name ?? '<unnamed>'}`);
     const state = mover.interpolation;
     if (!state) throw new Error(`Doors.reset() must create interpolation state before attaching ${mover.name}`);
     const entry=asset?.pkg.exports[mover.index-1];
@@ -490,11 +683,55 @@ export async function createScriptDoors({
     mover.alpha = state.interpolating ? state.key === 1 ? f(state.alpha) : f(1 - state.alpha) : state.key;
   }
 
+  let liveDataLink=null;
+  let playerStartup=null;
   function reset() {
+    liveDataLink?.reset();
     for (const record of records) resetMover(record);
+    // Re-run the TriggerLights' native startup so they return to TriggerToggle.
+    lights.reset();
+    if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
     // player-scene.reset() relinks Level.PawnList. Attach any newly linked
     // identity before a later FinishNotify can traverse it. Bindings themselves
     // read the list dynamically on every script field access.
+  }
+
+  // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
+  // lifetime is advanced each tick until the one-shot Timer clears it.
+  const bumpedDecorations = new Set();
+
+  const isDecoration = actor =>
+    Boolean(actor?.lineage?.includes('deusex.deusexdecoration') || actor?.lineage?.includes('engine.decoration'));
+
+  /** General scene-event router: run an attached actor's real event bytecode
+   * through the linked VM (docs/scene-events.md). This is the single VM entry the
+   * scene adapter delegates to for any actor/event outside its recovered
+   * native-semantics branches. Returns `{handled:false}` when the class ancestry
+   * declares no such function — the original empty-event no-op (e.g. Actor.HitWall
+   * on a plain actor); returns `{handled:true, result}` when the real body ran. A
+   * body that reaches a not-yet-prepared function or an unimplemented native still
+   * throws the original specific pause, now from the real bytecode rather than the
+   * adapter. Synchronous: the movement/touch callers dispatch within the tick, so
+   * event functions must be prepared at setup (per milestone), not on demand. */
+  function dispatchEvent(target, event, args = []) {
+    if (!identities.has(target))
+      throw new Error(`Scene event target is not attached to the script runtime: ${target?.name ?? '<unnamed>'}.${event}`);
+    const record = runtime.lookup(target, event);
+    if (!record) return { handled: false };
+    if (!record.function)
+      throw new Error(`Original scene event is not prepared: ${runtime.instance(target).cls.record.key}.${event}`);
+    const result = runtime.processEvent(target, event, args);
+    // A pushable decoration's Bump starts a SetTimer(0.2) push-sound lifetime the
+    // tick advances (bumpedDecorations); track it here now that decoration Bump
+    // routes through the general path (docs/script-plant-contact.md).
+    if (event === 'Bump' && isDecoration(target)) bumpedDecorations.add(target);
+    return { handled: true, result };
+  }
+
+  /** Back-compat wrapper for the decoration Bump entry (now the general router). */
+  function bumpDecoration(decoration, other) {
+    const outcome = dispatchEvent(decoration, 'Bump', [other]);
+    if (!outcome.handled) throw new Error(`Bumped decoration has no Bump body: ${decoration?.name ?? '<unnamed>'}`);
   }
 
   function use(mover, group = [mover]) {
@@ -523,11 +760,57 @@ export async function createScriptDoors({
       tickMoverInterpolation(record.mover.interpolation, delta);
       updateDisplay(record);
     }
+    // Advance the push-sound Timer for any bumped decoration. updateActorTimer
+    // no-ops once the one-shot rate has been cleared, so a decoration can stay
+    // tracked cheaply and re-fire if bumped again.
+    for (const decoration of bumpedDecorations)
+      updateActorTimer(runtime.timerState(decoration), delta, () => runtime.processEvent(decoration, 'Timer', []));
+    // Mission triggers share the recovered native timer step. DamageTrigger's
+    // original Timer runs the prepared Training radiation chain, including the
+    // GM_Trench PlayAnim state write, and stops at Human.PlayTakeHitSound's
+    // Actor.PlaySound audio boundary after preserving damage and flash writes.
+    for(const trigger of missionTriggers)
+      updateActorTimer(runtime.timerState(trigger),delta,()=>dispatch(trigger,'Timer',[]));
+    // DataLinkPlay is a spawned Actor. Its selected playback state and Timer
+    // phase run after ProcessState and before physics, on the same fixed tick.
+    liveDataLink?.tick(delta);
+    // Physics phase follows ProcessState and the timer phase for each actor.
+    for (const decoration of decorations) {
+      if (!queries) continue;
+      runDecorationPhysics(decoration, delta, {
+        queries,
+        zone: zoneAt?.(decoration.position ?? decoration.values?.Location) ?? {},
+        landedEvent: normal => runtime.processEvent(decoration, 'Landed', [normal]),
+        // Non-Pawn processHitWall (0x103cecc0), recovered and oracle-validated as
+        // processDecorationHitWall (docs/walking-callbacks.md): return for a Pawn
+        // wall, else dispatch the unmodified HitWall(normal,wall) only while the
+        // decoration probes HitWall. No Pawn direction/MinHitWall/MoveTimer path.
+        onHitWall: hit => processDecorationHitWall(decoration, hit?.normal ?? [0, 0, 0], hit?.actor ?? null, {
+          isProbing: (source, name) => runtime.isProbing(source, name),
+          dispatch: (source, event, args) => runtime.processEvent(source, event, args),
+        }),
+        // physRolling calls eventHitWall directly for any hit (no processHitWall).
+        onHitWallEvent: (normal, actor) => runtime.processEvent(decoration, 'HitWall', [normal, actor ?? null]),
+      });
+    }
+    // Advance the TriggerLights' Alpha animation (their Tick/ProcessState phase).
+    const lightTicks = lights.tick(delta);
+    const lightingChanges = lightTicks.map(result => result.lightingChange).filter(Boolean);
+    if (onLightingChanged && lightingChanges.length) onLightingChanged(lightingChanges);
     return records.length;
   }
 
+  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor});
+  liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
+    player:playerActor,shell:infoLinkShellValue,onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
+  playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
+    player:playerActor,warning:message=>callbacks.warning?.(message)});
+  runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
+  runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
   reset();
-  return { reset, use, tick, runtime };
+  const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
+  return { reset, use, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
+    infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active };
 }
 
 export default createScriptDoors;

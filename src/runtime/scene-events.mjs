@@ -3,11 +3,25 @@ const hasName = name => Boolean(name) && String(name).toLowerCase() !== 'none';
 
 /** Original bodies for the declared JC/TriggerToggle dry scene subset.
  * Native event ordering is owned by movement/touch/zone callers. */
-export function createSceneEvents(player,{deferMissionEvent}={}) {
+export function createSceneEvents(player,{deferMissionEvent,dispatchEvent}={}) {
   const unsupported = (target,event) => { throw Error(`Unsupported original scene event: ${target?.name ?? 'actor'}.${event}`); };
   return function dispatch(target,event,args) {
-    if (isA(target,'engine.triggers') && ['Touch','UnTouch'].includes(event) && deferMissionEvent) {
-      deferMissionEvent(target,event,args);
+    if (isA(target,'engine.triggers') && ['Touch','UnTouch','Timer'].includes(event)) {
+      // Run the trigger's real Touch/UnTouch bytecode through the VM router
+      // (docs/scene-events.md, item #2 M3). A body that reaches a not-yet-built
+      // subsystem (unprepared helper, or an unimplemented/boundary native) is
+      // recorded as a deferred mission-script effect instead of pausing play —
+      // the record-as-boundary approach. Handled types (datalinks) run to
+      // the host boundary; earlier script writes are not rolled back on deferral.
+      if (dispatchEvent) {
+        try {
+          const outcome = dispatchEvent(target,event,args);
+          if (outcome?.handled) return outcome.result;
+        } catch (error) {
+          if (!/not prepared|Unsupported original door native|Unimplemented original native|does not support native/.test(error.message)) throw error;
+        }
+      }
+      if (deferMissionEvent) deferMissionEvent(target,event,args);
       return;
     }
     if (target === player) {
@@ -36,6 +50,15 @@ export function createSceneEvents(player,{deferMissionEvent}={}) {
         if (v.MoverEncroachType !== 3) return unsupported(target,'MoverEncroachType');
         return false;
       }
+    }
+    // General VM router: any other attached actor's event runs its real bytecode
+    // through the linked VM (docs/scene-events.md). `handled:false` means the class
+    // ancestry has no such function — the original empty-event no-op. A prepared
+    // body that reaches an unbuilt native/subsystem still surfaces the original
+    // pause, but now from the real bytecode rather than this adapter.
+    if (dispatchEvent) {
+      const outcome = dispatchEvent(target,event,args);
+      return outcome?.handled ? outcome.result : undefined;
     }
     return unsupported(target,event);
   };

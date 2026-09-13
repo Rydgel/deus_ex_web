@@ -127,6 +127,9 @@ implemented work, remaining integration, unsaved research findings and passing
 checks. Work was stopped and saved in a progress checkpoint at the user's
 request; Stage 3 remains unfinished.
 
+See the [Stage 3 completion audit](stage-3-completion-audit.md) for the current
+requirement matrix, evidence locations and smallest remaining blocker set.
+
 **In progress.** Extend the existing bounded VM to execute original functions
 and state bytecode, starting with class/property metadata and the selected
 mover's script path. Use focused source/native and integration checks; visual
@@ -168,30 +171,142 @@ connects to the recovered UClass::Link layer and existing-package construction.
 The recovered UStruct/UState linkers and net-field sort are connected. Original
 Core.Object registration now executes through the real constructor, registry,
 default initialization, all three link layers and config/localization gates.
-Scalar property linking now supplies the recovered size/alignment behavior for
+Scalar property linking supplies the recovered size/alignment behavior for
 Byte/Int/Float/Name/Object/Class fields through the actual struct linker.
-Complex native property linking, config/localization resource services and the live loaded graph remain
+All six complex property Link bodies are now translated: UBoolProperty packs
+bools, UStrProperty/UArrayProperty/UMapProperty set their container sizes
+(0xc/0xc/0x14) and the need-destruction bit, UFixedArrayProperty multiplies
+Inner by its count and copies the Inner's destruction bit, and
+UStructProperty uses the inner struct's PropertiesSize, the recovered
+size-based alignment rule and the inner destroy-chain head. The property-link
+dispatcher routes every property class to its verified body, so mixed
+scalar/bool/string/array/struct layouts link through the recovered native
+bodies. Config/localization resource services and the live loaded graph remain
 required; the scoped adapters do not yet complete native class loading.
+The five complex property Identical value virtuals (Str/Array/FixedArray/Map/
+Struct) are translated from the original Core.dll and routed by the tagged
+property walker's +0x6c comparison, so identical complex defaults are skipped
+without a tag. The complex SerializeItem virtuals
+(Str/Array/FixedArray/Struct/Map/Bool) are translated and emulator-verified for
+the collector/measure path, including the FString ArrayNum code-unit count, the
+one-byte bool write, fixed-array stride recursion and inherited struct member
+traversal. FString and dynamic-array `SerializeItem` also cover original save
+and load directions, including CompactIndex encoding, archive flags,
+reallocation and recursive element mutation through explicit services. Raw
+CopySingleValue/CopyCompleteValue bodies are now translated and routed by
+native property class, and class-default initialization uses the dispatcher
+for its inherited owning fields. Native heap resolution/reallocation remain
+explicit services; logical VM frame ownership and the full resource graph are
+not established by this integration. The recovered DestroyValue bodies now
+dispatch strings, arrays, fixed arrays and linked struct members; the logical
+`ScriptRuntime.exitProperties` route uses them for its supported owning fields.
+Raw heap cleanup still requires explicit allocator/reference services. Dynamic
+array/map temporary ownership, full archive composition and config/localization
+resource services remain open. Owning FString/struct call and event
+temporaries now follow recovered return/out-copy/destruction order. Generic
+authored structs decode all 364 previously opaque DeusEx defaults and obtain
+their array strides from recovered UStruct/property Link bodies.
 The Play script host now preserves the full serialized map actor array, including
 non-colliding actors and null slots, with canonical references and typed authored
 properties. Training's four TriggerLights can be found through native AllActors;
-their player interaction and renderer update path remain integration work.
+their player interaction now runs end-to-end in Play (item #3): the door host shares
+a `createScriptLights` controller that advances them into `TriggerToggle` and ticks
+them, and frobbing `LightSwitch0` runs its full `Frob` — the `cratelight` AllActors
+fanout dispatches `Actor.Trigger` to each light's real state Trigger, toggling all
+four (`scripts/validate-frob.mjs`, docs/scene-events.md). Their steady brightness
+changes now refill dependent lightmaps after script ticks and update existing
+atlas tiles. Native ComputeFromActor multiplies live brightness into RGB before
+comparing its cached color header, rebuilding when a component differs. This
+decision is checked by executing the original Render.dll instructions. General
+dirty-flag setter/clear and non-brightness changes remain open. See
+[light cache](script-light-cache.md). Switch mesh rendering belongs to Stage 4.
 The original PlaySound dispatch and hearing gates are translated, including
-the separate BSP FastLineCheck used for sound obstruction. Live native object
-indices, listener/viewport state and native audio event bindings still need
-integration; this does not yet add audible plant or switch sounds in Play.
+the separate BSP FastLineCheck used for sound obstruction. The emitter's global
+UObject index — the channel-id input — is now supplied from a measured live
+capture of the running game's registry (`LightSwitch0` = 34242;
+[boot-replay.md](boot-replay.md)), which also disproves the earlier
+`N0 + exportIndex` model in favour of the recursive construction order. This is
+generalised beyond one actor: a capture-backed provider resolves any pre-placed
+object's slot by `(class, name)`, and runtime spawns (absent from the load-time
+capture) take the slot the recovered `AddObject` rule assigns from the measured
+registry state — the seeded append + LIFO free-list model, cross-checked against
+the capture (count 42167, one freed slot, runtime-spawn tail) in
+`test/script-object-index.test.mjs` and `scripts/validate-object-index-model.mjs`.
+The live listener graph is now wired (`XLevel` ULevel / `Level` LevelInfo / `PawnList`), so
+`LightSwitch.Frob` runs end-to-end in `scripts/validate-script-lights.mjs`
+(`Super.Frob` → `PlaySound` channel id 547874 → live PawnList traversal →
+`PlayAnim('On')`). The remaining boundary is the native `ClientHearSound` audible
+playback (Stage 4); this does not yet add audible switch or plant sounds in Play.
 The [native coverage inventory](script-coverage.md) tracks engine, game, UI and
 conversation declarations separately from implemented call paths.
+Conversation binding now runs through `ConBindEvents` (native 2101/2100), which links each
+actor's mission conversations by `BindName` ↔ `conOwnerName`
+([script-conversation-binding.md](script-conversation-binding.md)). In training
+only the two UNATCO instructors bind (their `MunitionsTrooper` conversations);
+decorations bind nothing, so the LightSwitch's `StartConversation → None` is
+correct. Shared native 2052/2053 event dispatch has exact binders for Speech,
+Animation/Trade, MoveCamera, CheckObject, TransferObject, and thirteen inherited
+event classes. CheckObject's two authored references execute their installed
+Inventory/NanoKey predicates and both next/fail actions. TransferObject preserves
+the recovered from/to bark/normal comparisons and class-load order. Exactly ten
+shipped DataLinks contain its one-count DataVaultImage delivery; `DL_Rooftops`
+event export 7448 now runs through native 2053, binds JCDenton as `toActor`,
+and loads canonical class `Image02_NYC_Warehouse`. See
+[the TransferObject evidence](script-conversation-transfer-object-bind.md).
+The remaining TransferObject action requires source-backed DataVaultImage
+construction and its original Spawn/SpawnCopy/AddImage/received-items path.
+Native metaclass loading remains incomplete. Native conversation audio mixing
+and final UI rendering belong to Stage 4.
 
-Plant/decorative-object collisions are present, but their pushing and support
-scripts are still outside the delivered playable subset. An unsupported contact
-now pauses simulation with a visible explanation while rendering and the Player
-start reset remain usable; the Plant7 contact/recovery path is checked in Firefox.
-The inherited Plant2 Bump/Timer bytecode now executes in a focused VM fixture,
-including casts, native arithmetic and rotation. Play still needs decoration
-physics and sound/AI services before that script route can be enabled.
-The [plant contact trace](script-plant-contact.md) identifies the rejected scene
-callback, original pushable defaults, script dependencies and required actor physics.
+The latest scene-event increment routes Trigger Touch/UnTouch through the VM
+and implements base Trigger relevance via Switch/Case and ClassIsChildOf.
+Original Orders/Flag actions now run in Play; DamageTrigger schedules and
+advances its original timer through the prepared Training Radiation10 chain:
+`TakeDamage`, damage display/reduction, poison clearing, percentage update and
+body-health recomputation. Core natives 144, 145, 169, 185, 210, 213 and 223 match
+focused original DLL cases for integer overflow/division, the zero-divisor guard,
+float32 rounding, strict approximate comparison, unordered values, vectors and
+out-lvalues. The [Divide_IntInt evidence](script-divide-int.md) records native
+145's signed-overflow exception boundary. The earlier null
+`AugmentationSystem` was caused by the browser skipping the player's standalone
+startup lifecycle. The live path now creates `AugmentationManager1`; unowned
+`AugEnviro` leaves Radiation10 at `adjustedDamage=10`/false before execution
+reaches the prepared `PlayDXTakeDamageHit`, `PlayHit`, and
+`Human.PlayTakeHitSound` bodies. The live path writes `HealthLegLeft=90` and
+`Health=98`, and native PlayAnim 259 stores the canonical `GM_Trench`
+`HitLegLeft` state (`frame=-4`, `rate=2.5`, `tween=0.4f`, `last=-3`) after the
+original optional-argument hole is honored. Execution then stops at the exact
+`Actor.PlaySound(264)` audio boundary from `Human.PlayTakeHitSound`; subsequent
+AI event dispatch, other damage branches, audible playback, presentation and
+flag expiration remain open.
+All 18 DataLink routes authored by Training now resolve canonical Mission00
+Conversation/Speech/End objects and exact audio. The first transmission executes
+installed player selection, DataLinkPlay Spawn, SetConversation/SetTrigger,
+ConPlayBase start/termination and trigger completion. The live HUD reference is
+published, played flags are set, and one-shot triggers leave collision. The
+source-translated playback schedule calls prepared HUD operations on a complete
+six-control shell. Its direct Speech-to-End transition now executes installed
+`PlayNextEvent`/`ProcessAction`, prepared `PlayEvent.SetupEvent`, inherited
+`SetupEventEnd`, and `EA_End` termination. End-of-transmission runs the original HUD destroy body and
+recursive Window removal; queued and reset paths construct a distinct shell,
+with queue selection still owned by original `PopDataLink`. The shipped
+`DL_Rooftops` TransferObject actor/class bind is also admitted; its later
+DataVaultImage inventory action, broader ConEvent actions, final native rendering,
+and native audio mixing remain explicit gaps. See
+[the live lifecycle](script-datalink-live.md),
+[TransferObject binding](script-conversation-transfer-object-bind.md), and
+[scene events](scene-events.md).
+
+Plant/decorative-object collisions now push the plant in Play: a player bump
+runs the inherited `DeusExDecoration.Bump`, and the decoration's recovered
+non-Pawn physics (`physFalling` and `physRolling`, [rolling.md](rolling.md))
+advances it. Decorations settle to `PHYS_None` at load, so a settled plant takes
+the `SetPhysics(PHYS_Rolling)` branch and rolls when pushed; a falling wall
+contact uses the recovered non-Pawn `processHitWall` gate. Audible playback and
+AI propagation remain Stage-4 boundaries, and whole-scene rolling acceptance is
+not yet claimed. The
+[plant contact trace](script-plant-contact.md) identifies the original pushable
+defaults, script dependencies and required actor physics.
 
 Build our own UnrealScript VM and implementations of the native engine and Deus Ex
 functions it calls. Analyze original package bytecode, class data, and native code

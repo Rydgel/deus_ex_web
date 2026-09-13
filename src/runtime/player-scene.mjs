@@ -16,8 +16,15 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   const f=Math.fround,source=player.collisionActor;
   const worldActor=collision.queries.levelInfo;
   worldActor.values={...levelValues};
+  // Late-bound so the scene can route an unhandled actor event into the door
+  // runtime's VM (the general scene-event router), which is created after this
+  // scene (game.mjs wires it). See docs/scene-events.md.
+  const hooks={dispatchEvent:null};
   const dispatch=createSceneEvents(source,{deferMissionEvent:(target,event)=>{
     player.unimplementedPhysicsEffects.add(`${target.name}.${event} mission script`);
+  },dispatchEvent:(target,event,args)=>{
+    if(!hooks.dispatchEvent)throw Error(`Scene event dispatch is not linked: ${target?.name??'actor'}.${event}`);
+    return hooks.dispatchEvent(target,event,args);
   }});
   const unsupported=name=>{throw Error(`Unsupported original scene callback: ${name}`);};
   const dry=dryPlayerZoneCallbacks({timeSeconds,
@@ -43,6 +50,12 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   });
   player.nativeMove=move;
   const level={editor:false,netMode:0,actors:[worldActor,...actors,source],
+    // Native graph slots read by native dispatch (Level.Model, null demo driver):
+    // the original Play path has no demo recorder attached.
+    model, demoRecDriver: null,
+    // ULevel::SpawnActor asks the live level for the same BSP PointRegion used
+    // by ordinary movement when it initializes a spawned actor's Region.
+    pointRegion:position=>pointRegion(model,position,worldActor,zoneActors),
     get hash(){return collision.queries;},
     findSpot(extent,position,checkActors,checkFirst){
       const fitted=collision.findSpot(position,extent,checkActors,checkFirst);
@@ -100,7 +113,7 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
     if(actor.movingBrush)updateZone(actor,false,true);
   };
-  return {dispatch,level,reset(){
+  return {dispatch,level,hooks,reset(){
     worldActor.values={...levelValues};
     level.pawnList=null;
     for(const actor of actors)prepareActor(actor);

@@ -82,17 +82,20 @@ it is not a static lightmap rebuild.
 lighting now” and `Actor.uc:72` defines `bDynamicLight`.  The field order makes
 the former flag `0x400` and the latter `0x800` in the `+0x28` DWORD; the direct
 `0x800` test above confirms the latter mapping.  A focused search of the
-Engine.dll and Render.dll instruction listings found no consumer testing
-`0x400` at `actor+0x28` or bit `0x4` at `actor+0x29`.  The setter/clear path for
-`bLightChanged`, the static lightmap dirty bit, and the surface cache upload
-were not identified in this pass.  No per-frame brightness comparison in
-those paths can therefore be claimed as original behavior.
+Engine.dll and Render.dll instruction listings found the cache consumers in
+`FLightInfo::ComputeFromActor` (`0x10b05fa0`, named by its original guard string), at `0x10b06459`--`0x10b06461` and
+`0x10b0698f`--`0x10b06997`, testing `0x400` at `actor+0x28` (the high-byte
+`testb $0x4, %ch`).  The setter/clear path for `bLightChanged`, the static
+lightmap dirty bit, and the surface cache upload were not identified in this
+pass.  No script-side write to the flag can therefore be claimed as original
+behavior.
 
-`src/unreal/lighting.mjs` currently caches each `${surfaceIndex}:${zone}`
-result in a model-local `WeakMap` and reads the light values only when that
-result is first built.  Its current note that non-static lights retain their
-stored illumination is accurate for the present Stage 1.5 behavior.  A
-brightness mutation cannot affect an already cached result.
+`src/unreal/lighting.mjs` caches each `${surfaceIndex}:${zone}` result in a
+model-local `WeakMap` and now keeps a dependency set for each result.  Its
+explicit `invalidate()` route accepts a changed light reference and optional
+`LightBrightness` byte, refills affected results in place, and preserves their
+atlas identity.  `src/viewer/main.mjs` connects the selected steady
+TriggerLight tick changes to `world.updateLighting()` after script execution.
 
 ## Supported implementation boundary
 
@@ -106,16 +109,16 @@ an efficient and numerically source-backed *candidate* for the contribution,
 but the original binary did not establish that it invalidates this way.
 
 The host schedule for that candidate is: finish script Tick/event processing,
-collect changed light references, invalidate their dependent static surface
-entries, rebuild or upload those entries, then draw.  The ordering follows the
-need to sample the script's new `LightBrightness`; it is a host requirement,
-not a recovered native call order.  The dynamic `SetupDynamics` list should be
-rebuilt before drawing only for actors that pass its flag gate.
+collect changed steady-light references, invalidate their dependent static
+surface entries, rebuild or upload those entries, then draw.  The ordering
+follows the need to sample the script's new `LightBrightness`; it is a host
+requirement, not a recovered native call order.  The dynamic `SetupDynamics`
+list should be rebuilt before drawing only for actors that pass its flag gate.
 
 The following remain explicitly unsupported by this evidence:
 
-* claiming that `bLightChanged` is set by the TriggerLight bytecode or consumed
-  by a particular Render.dll routine;
+* claiming that `bLightChanged` is set by the TriggerLight bytecode or that the
+  recovered ComputeFromActor cache tests establish who clears that flag;
 * treating the four training lights as `SetupDynamics` lights unless a runtime
   native path demonstrably sets `bDynamicLight`;
 * claiming that the original renderer rebuilds a static atlas or reuses its

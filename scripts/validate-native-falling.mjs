@@ -40,6 +40,28 @@ for (let i = 0; i < 200; i++) addCase(vector(3000), vector(2400), .005 + random(
   zoneVelocity: vector(30), terminalVelocity: f(500 + random() * 2500),
   responses: [...Array.from({ length: 3 }, () => random() < .3 ? hit(random(), safeNormal(vector(1))) : clear), ...Array(29).fill(clear)],
 });
+// Non-Pawn decoration falling (a pushed Plant2). Acceleration and air control are
+// zero, so the native physFalling skips the Pawn air-control prelude and both
+// Pawn-only integration branches (Path A PlayerPawn, and the bounce class), taking
+// the general integration Velocity += 0.5*(Gravity+Acceleration)*step. This proves
+// falling() is reused verbatim for a decoration cylinder; docs/script-plant-contact.md.
+const decoration = { acceleration: [0, 0, 0], airControl: 0, nonPawn: true, position: [-804.27, 1125.16, -84.02].map(f) };
+for (const dt of [1 / 120, 1 / 30, .1, .2, .4]) {
+  for (const velocity of [[0, 0, 0], [120, -30, 18], [120, -30, -40], [-60, 45, -200], [300, 0, -2600], [0, 0, -950], [5, 0, 9.99]]) {
+    addCase(velocity, [0, 0, 0], dt, { ...decoration, gravity: [0, 0, -950], terminalVelocity: 2500 });
+  }
+  for (const gravity of [[0, 0, -800], [40, -25, -1200]]) addCase([70, -15, -30], [0, 0, 0], dt, { ...decoration, gravity, zoneVelocity: [12, -6, 0], terminalVelocity: 1800 });
+}
+// Landing (floor normal>0.7), wall (vertical/side normal), and grazing hits during a decoration fall.
+for (const normal of [[0, 0, 1], [.2, 0, .98], [-1, 0, 0], [0, 1, 0], [.8, 0, .6]]) {
+  for (const time of [0, .15, .5, .9]) for (const dt of [1 / 60, .1]) {
+    addCase([90, -20, -120], [0, 0, 0], dt, { ...decoration, gravity: [0, 0, -950], terminalVelocity: 2000, responses: [hit(time, normal), ...Array(31).fill(clear)] });
+  }
+}
+// Two-wall / floor-after-wall sequences on a decoration.
+for (const second of [[0, 0, 1], [0, 1, 0], [.8, 0, .6]]) {
+  addCase([120, 40, -160], [0, 0, 0], .1, { ...decoration, gravity: [0, 0, -950], terminalVelocity: 2000, responses: [hit(.3, [-1, 0, 0]), hit(.4, second), ...Array(30).fill(clear)] });
+}
 
 function run(input) {
   const events = [], pawn = { ...structuredClone(input), physics: 2, airControlBlocked: () => input.airBlocked,

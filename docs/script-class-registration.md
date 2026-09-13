@@ -67,9 +67,9 @@ The callback sequence is source ordered:
    UClass's vtable resolves this slot to `10102f2c ->10127e30`,
    [`UClass::Link`](script-class-link.md). Supplying `services.classLink`
    invokes that recovered adapter with this exact archive and argument zero.
-   Its UStruct and UState layers are connected; individual property Link virtuals
-   still need the corresponding native services;
-   net-field ordering uses the recovered native sort helper.
+   Its UStruct and UState layers and the verified property `Link` dispatcher are
+   connected; raw native pointer/layout storage remains an explicit host
+   boundary. Net-field ordering uses the recovered native sort helper.
    An explicit `postRegisterVirtual`, `virtual6c`, or `initializeClassVirtual`
    override takes precedence; absence of both bindings fails explicitly.
 9. PropertiesSize is checked again, then `LoadConfig(0, 0, 0)` is called on
@@ -94,9 +94,10 @@ See [UField/UStruct registration](script-struct-registration.md); UField alone
 does not perform UStruct's FriendlyName write.
 
 The focused registration check passes through the actual UClass::Link adapter
-with a recorded UState::Link boundary. It checks that a live global-gate getter
-is read after that base call, before config/localization continue. This validates
-the composition and ordering; it does not implement the inherited linker.
+and connected UState::Link path. It checks that a live global-gate getter is read
+after that base call, before config/localization continue. This validates the
+composition and ordering; it does not establish a complete native package or
+resource loader.
 
 ## Default storage and typed initialization
 
@@ -137,14 +138,16 @@ buffer exists, then zeroes the remaining derived tail.  It walks only the
 linked property chain at `Super+0x68`, following `Property+0x54`.  For each
 property whose `Property+0x48` offset is below the source size it zeroes
 `ElementSize(+0x38) * ArrayDim(+0x34)` bytes and calls the property's virtual
-`+0x90` CopyCompleteValue boundary.  The adapter requires
-`services.copyCompleteValue` (or `copyProperty`) whenever that linked list is
-reached; its arguments are:
+`+0x90` CopyCompleteValue. The adapter now defaults to the recovered
+[property-copy dispatcher](script-property-copy.md). Native heap pointer
+resolution and FArray reallocation are supplied through `services.propertyCopy`.
+A host may still override the entire copy with `services.copyCompleteValue`
+(or `copyProperty`); that override's arguments are:
 
 ```text
 ({ property, destination, source, destinationOffset, sourceOffset,
    elementSize, arrayDim, bytes },
- { kind: 'copy-complete-value', body: 0x10165560, property, classRecord })
+ { kind: 'copy-complete-value', virtualSlot: 0x90, property, classRecord })
 ```
 
 This is a byte-storage boundary, so a typed property adapter can preserve
@@ -153,7 +156,10 @@ by a blanket JavaScript reference assignment. Missing or unresolved offset,
 ElementSize and ArrayDim bindings fail explicitly; null metadata does not mean
 a zero-width property. The actual `UStruct::Link` chain can now be consumed
 directly: properties retain their raw `+54` Next and `+48/+38/+34` layout
-holders. Fields outside the superclass default range are skipped before reading
+holders. The raw-chain iterator reads each `Next` after the copy callback
+returns, matching `101521f7` (virtual call) followed by `10152200` (Next read);
+it does not snapshot the chain before invoking copies.
+Fields outside the superclass default range are skipped before reading
 stride/dimension, as in the original routine. Ordinary fields that are not
 on the linked chain remain in the copied raw tail or in the zeroed tail, just
 as in Core.
@@ -168,11 +174,12 @@ superclass propagation uses `0x4ec`, exported as
 
 The implementation covers the reached GOTY Core registration/default path and
 does not claim compatibility with another Core binary or serialized engine
-version. The raw CDO header writer, inherited typed CopyCompleteValue calls and
-distinct static constructors require concrete bindings. Shared registration,
-linking and config/localization adapters supply the corresponding native calls;
-unimplemented property virtuals and package/resource loading still require
-their native services.
+version. The raw CDO header writer, owning-value heap storage and distinct
+static constructors require concrete bindings. Property Link and value-copy
+bodies are translated and routed; raw native pointer/layout storage and
+package/resource loading still require concrete services. The default-copy
+integration check covers inherited FString allocation and template preservation;
+it does not complete the loaded class/resource graph.
 This routine does not supply config/localization resources or a fully loaded
 package/object registry. A class whose superclass default storage is
 missing is zero initialized only when no linked property call is reached; a

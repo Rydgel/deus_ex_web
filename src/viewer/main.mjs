@@ -16,6 +16,8 @@ camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let game, mode = 'play', paused = false, runtimeError = null;
+let infoLinkAudioContext=null,infoLinkAudioSources=new Set();
+let infoLinkAnimationFrame=0,infoLinkRunToken=0;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
 const keys = new Set(), velocity = new THREE.Vector3();
@@ -24,6 +26,65 @@ const busy = (title, message) => {
   $('gate-choose').hidden = loading; $('progress').hidden = !loading;
 };
 function toast(message) { $('toast').textContent = message; setTimeout(() => { if ($('toast').textContent === message) $('toast').textContent = ''; }, 4000); }
+async function activateInfoLinkAudio(){
+  const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+  if(!AudioContextClass)throw new Error('This browser cannot decode the original DataLink audio');
+  infoLinkAudioContext??=new AudioContextClass();
+  if(infoLinkAudioContext.state==='suspended')await infoLinkAudioContext.resume();
+  return infoLinkAudioContext;
+}
+function stopInfoLinkAudio(){for(const source of infoLinkAudioSources){try{source.stop();}catch{}}infoLinkAudioSources.clear();}
+async function playInfoLinkAudio(audio,context=null){
+  if(!audio?.startCue?.bytes?.byteLength||!audio?.bytes?.byteLength)
+    throw new Error('The original DataLink audio payloads are unavailable');
+  context??=await activateInfoLinkAudio();
+  stopInfoLinkAudio();
+  const decode=bytes=>context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
+  const [startBuffer,speechBuffer]=await Promise.all([decode(audio.startCue.bytes),decode(audio.bytes)]);
+  const schedule=(buffer,when)=>{const source=context.createBufferSource();source.buffer=buffer;
+    source.connect(context.destination);infoLinkAudioSources.add(source);
+    source.onended=()=>infoLinkAudioSources.delete(source);source.start(when);};
+  const now=context.currentTime;schedule(startBuffer,now);schedule(speechBuffer,now+audio.speechDelaySeconds);
+  return {context,startTime:now};
+}
+function stopInfoLinkPresentation(){
+  infoLinkRunToken++;
+  if(infoLinkAnimationFrame)cancelAnimationFrame(infoLinkAnimationFrame);
+  infoLinkAnimationFrame=0;
+  $('infolink-shell').hidden=true;
+  stopInfoLinkAudio();
+}
+function drawInfoLinkTexture(canvas,texture){
+  if(canvas.dataset.texture===texture.key)return;
+  canvas.width=texture.width;canvas.height=texture.height;
+  const context=canvas.getContext('2d');
+  context.putImageData(new ImageData(new Uint8ClampedArray(texture.data),texture.width,texture.height),0,0);
+  canvas.dataset.texture=texture.key;
+}
+function startInfoLinkPresentation(shell){
+  const token=++infoLinkRunToken;
+  const element=$('infolink-shell'),portrait=$('infolink-portrait');
+  const name=$('infolink-name'),title=$('infolink-title'),queued=$('infolink-queued'),body=$('infolink-text');
+  const frame=()=>{
+    if(token!==infoLinkRunToken)return;
+    const state=game?.doors?.scriptRuntime?.dataLinkPresentation?.();
+    if(!state){element.hidden=true;infoLinkAnimationFrame=0;return;}
+    element.hidden=!state.shellVisible;
+    title.textContent=state.title;name.style.visibility=state.titleVisible?'visible':'hidden';
+    queued.textContent=state.queuedText??'';queued.hidden=!queued.textContent;
+    body.textContent=state.text;
+    if(state.portrait==='portrait')drawInfoLinkTexture(portrait,shell.content.portrait);
+    else if(state.portrait==='icon')drawInfoLinkTexture(portrait,shell.content.dataLinkIcon);
+    portrait.hidden=state.portrait==='none'||!state.portraitVisible;
+    if(state.phase==='destroyed'){
+      infoLinkAnimationFrame=0;stopInfoLinkAudio();
+      toast('DL_Start transmission complete');
+      return;
+    }
+    infoLinkAnimationFrame=requestAnimationFrame(frame);
+  };
+  frame();
+}
 function resize() {
   const box = $('viewport').getBoundingClientRect();
   renderer.setSize(box.width, box.height, false); camera.aspect = box.width / Math.max(1, box.height);
@@ -35,7 +96,7 @@ function resetCamera() {
   if (!map) return;
   if (mode === 'play' && game) {
     game.reset(); world.syncMovers(game.collision.movers);
-    runtimeError=null;paused=false;keys.clear();$('toast').textContent='';showStats();
+    runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();
   }
   const start = map.summary.playerStarts.find(p => p.location);
   const position = start?.location ?? map.model.points[0] ?? [0, 0, 0];
@@ -81,7 +142,7 @@ async function loadMap(name) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
-  $('toast').textContent = '';
+  $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   let nextWorld, nextGame;
@@ -93,11 +154,22 @@ async function loadMap(name) {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
-    try { nextGame = await createGame(nextMap, asset, assets); }
+    try {
+      nextGame = await createGame(nextMap, asset, assets, {
+        onLightingChanged: changes => nextWorld.updateLighting(changes),
+        onDataLinkTransmission: event => {
+          if(event.kind!=='started')return;
+          queueMicrotask(()=>playInfoLinkTransmission(event));
+        },
+      });
+    }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    $('light-preview').hidden = !game || name !== '00_Training';
+    $('dark-door-preview').hidden = !game || name !== '00_Training';
+    $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
@@ -165,6 +237,103 @@ $('camera-form').onsubmit = event => {
   catch (error) { toast(error.message); }
 };
 
+// Viewer-only preview navigation. The actual light change still executes the
+// original switch Frob and TriggerLight state scripts in the shared game host.
+$('light-preview').onclick = () => {
+  if (!game || loading || currentMap !== '00_Training') return;
+  try {
+    const runtime=game.doors.scriptRuntime.runtime;
+    const player=game.player.collisionActor;
+    const lightSwitch=runtime.levelFor(player).actors.find(actor=>actor?.name==='LightSwitch0');
+    if (!lightSwitch) throw new Error('Training light switch is unavailable');
+    const location=runtime.namedReference(lightSwitch,'Location').get();
+    setCamera({position:[location[0]-178,location[1],location[2]+35],rotation:[-2000,0,0]});
+    game.doors.scriptRuntime.dispatchEvent(lightSwitch,'Frob',[player,null]);
+    game.tick(.4,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+    world.syncMovers(game.collision.movers);
+    const lit=runtime.levelFor(player).actors.some(actor=>actor&&/^TriggerLight[0-3]$/.test(actor.name)&&
+      runtime.namedReference(actor,'LightBrightness').get()>0);
+    toast(`Room lights ${lit?'on':'off'} · switch mesh is not rendered yet`);
+  } catch(error) { pauseForRuntimeError(error); }
+};
+
+// Viewer navigation for the newly admitted original TriggerToggle pair. The
+// button uses the normal game.use path; opening/closing and empty padoor fanout
+// remain owned by the installed Mover bytecode.
+$('dark-door-preview').onclick = () => {
+  if (!game || loading || currentMap !== '00_Training') return;
+  try {
+    const pair=game.collision.movers.filter(mover=>
+      ['DeusExMover19','DeusExMover20'].includes(mover.name));
+    if(pair.length!==2||pair.some(mover=>!mover.supported))
+      throw new Error('Training dark-room doors are unavailable');
+    setCamera({position:[4160,848,-105],rotation:[0,0,0]});
+    game.interaction.frobTarget=pair[0];
+    const result=game.use();
+    for(let frame=0;frame<260;frame++)game.tick(1/120,{});
+    world.syncMovers(game.collision.movers);
+    const open=pair.every(mover=>mover.interpolation.key===1);
+    toast(`Dark-room doors ${open?'opened':'closed'} · original padoor fanout found 0 actors`);
+    return result;
+  } catch(error) { pauseForRuntimeError(error); }
+};
+
+const infoColor=({r,g,b})=>`rgb(${r} ${g} ${b})`;
+async function playInfoLinkTransmission({tag='DataLink'}={}){
+  if(!game||loading||currentMap!=='00_Training')return;
+  try{
+    const audioContext=await activateInfoLinkAudio();
+    const shell=await game.doors.scriptRuntime.infoLinkShell();
+    const element=$('infolink-shell');
+    element.style.setProperty('--info-bg',infoColor(shell.colors.background));
+    element.style.setProperty('--info-border',infoColor(shell.colors.border));
+    element.style.setProperty('--info-text',infoColor(shell.colors.text));
+    element.style.setProperty('--info-header',infoColor(shell.colors.header));
+    element.style.borderStyle=shell.drawBorder?'solid':'none';
+    const portrait=shell.initializedControls.find(control=>control.name==='winPortrait');
+    const nameControl=shell.initializedControls.find(control=>control.name==='winName');
+    const queuedControl=shell.initializedControls.find(control=>control.name==='winQueued');
+    const lineControl=shell.initializedControls.find(control=>control.name==='winLine');
+    const portraitElement=$('infolink-portrait');
+    if(portrait){
+      portraitElement.style.left=`${portrait.x}px`;portraitElement.style.top=`${portrait.y}px`;
+      portraitElement.style.width=`${portrait.width}px`;portraitElement.style.height=`${portrait.height}px`;
+    }
+    portraitElement.hidden=true;
+    const nameElement=$('infolink-name');
+    if(nameControl){
+      nameElement.style.left=`${nameControl.x}px`;nameElement.style.top=`${nameControl.y}px`;
+      nameElement.style.width=`${nameControl.width}px`;nameElement.style.height=`${nameControl.height}px`;
+      nameElement.style.color=infoColor(nameControl.textColor);
+      nameElement.style.justifyContent=nameControl.horizontalAlignment===0?'flex-start':'center';
+      nameElement.style.alignItems=nameControl.verticalAlignment===1?'center':'flex-start';
+      nameElement.title=`${nameControl.font} · margins ${nameControl.horizontalMargin}, ${nameControl.verticalMargin}`;
+    }
+    nameElement.hidden=!nameControl;
+    const queuedElement=$('infolink-queued');
+    if(queuedControl){
+      queuedElement.style.left=`${queuedControl.x}px`;queuedElement.style.top=`${queuedControl.y}px`;
+      queuedElement.style.width=`${queuedControl.width}px`;queuedElement.style.height=`${queuedControl.height}px`;
+      queuedElement.style.color=infoColor(queuedControl.textColor);
+      queuedElement.style.justifyContent=queuedControl.horizontalAlignment===2?'flex-end':'flex-start';
+      queuedElement.style.alignItems=queuedControl.verticalAlignment===1?'center':'flex-start';
+    }
+    queuedElement.textContent='';queuedElement.hidden=true;
+    const lineElement=$('infolink-line');
+    if(lineControl){
+      lineElement.style.left=`${lineControl.x}px`;lineElement.style.top=`${lineControl.y}px`;
+      lineElement.style.width=`${lineControl.width}px`;lineElement.style.height=`${lineControl.height}px`;
+      lineElement.style.background=infoColor(lineControl.tileColor??shell.colors.line);
+    }
+    $('infolink-title').textContent=nameControl?.text??shell.title;
+    $('infolink-text').textContent='';
+    const presentation=game.doors.scriptRuntime.dataLinkPresentation?.();
+    await playInfoLinkAudio(presentation?.audio??shell.audio,audioContext);
+    startInfoLinkPresentation(shell);
+    toast(`${tag} · live DataLinkPlay lifecycle`);
+  }catch(error){pauseForRuntimeError(error);}
+}
+
 function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
@@ -181,6 +350,7 @@ document.addEventListener('keydown', event => {
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
     if(mode==='play'&&runtimeError){event.preventDefault();return;}
+    if(mode==='play'&&currentMap==='00_Training')activateInfoLinkAudio().catch(()=>{});
     paused = false;
     keys.add(event.code); event.preventDefault();
   }

@@ -3,8 +3,10 @@
 The installed `00_Training.dx` contains a concrete script-controlled lighting
 case for Stage 3. The source is the original Engine/DeusEx package metadata,
 bytecode and extracted UC in `.cache/reference`, with native anchors below.
-The controller is checked against Play's shared actor/property host. Automatic
-light ticking, player switch interaction and renderer updates are not enabled yet.
+The controller is checked against Play's shared actor/property host. Play
+forwards the selected steady TriggerLight `LightBrightness` changes to the
+dependent lightmap cache after each script tick; other renderer branches
+remain outside this route.
 
 ## Map actors and script path
 
@@ -106,16 +108,17 @@ The generic iterator and the full map actor array are supplied by the shared
 host. This controller intentionally leaves the LightSwitch `Frob` wrapper's
 Decoration conversation, PlayAnim259 and PlaySound264 services to that host;
 it exposes the original Trigger event directly so those boundaries cannot be
-replaced by a hand-written toggle. The host must also add renderer invalidation
-when `LightBrightness`, `Skin` or `MultiSkins` changes.
+replaced by a hand-written toggle. The Play host now forwards changed
+`LightBrightness` bytes from linked TriggerLight instances to
+`world.updateLighting()` after the script tick. Skin and `MultiSkins` changes
+still have no renderer update path, and animated light types remain unsupported
+by that callback.
 
-`unreal/lighting.mjs` and `viewer/world.mjs` currently compute/cache initial
-lightmaps and upload a static atlas. Updating the script's LightBrightness does
-not yet update that atlas. The atlas now supports replacing samples in existing
-tiles with unchanged UVs and padding, but the recovered engine must determine
-when and how to rebuild those samples. Actor.uc declares transient bLightChanged for lighting
-recalculation, but its exact setter/invalidation path still needs original native
-analysis. Render.dll entry points `GlobalLighting` (`10b010b4`) and
+`unreal/lighting.mjs` and `viewer/world.mjs` refill dependent lightmaps in place
+and upload their existing atlas tiles after the selected brightness callback.
+Actor.uc declares transient bLightChanged for lighting recalculation, but its
+exact setter/clear path still needs original native analysis. Render.dll entry
+points `GlobalLighting` (`10b010b4`) and
 `SetupDynamics` (`10b0118b`) lead to the original lighting routines documented
 in `lighting.md`. The [invalidation trace](script-light-invalidation.md) establishes
 that the training lights use stored surface lists and do not enter SetupDynamics'

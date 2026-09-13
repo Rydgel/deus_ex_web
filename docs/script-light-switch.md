@@ -152,6 +152,24 @@ The `AllActors` argument order and out actor reference are covered by
 covered by `src/runtime/script-lights.mjs`; its event call must receive the
 switch as `Other` and the pawn cast as the event-instigator argument.
 
+## Live Play integration (item #2 M2 step 2 / roadmap item #3)
+
+`LightSwitch0.Frob` now runs end-to-end in the live Play host, reached through the
+general scene-event router when the player frobs the switch (`game.use()` →
+`script-doors.mjs` `dispatchEvent`, docs/scene-events.md). The door host prepares
+`lightswitch.frob`, `deusexdecoration.frob`, `deusexplayer.startconversation`,
+`actor.frob` and `actor.trigger`, and shares a `createScriptLights` controller that
+advances the four TriggerLights into `TriggerToggle` at load (and ticks their Alpha).
+So the `AllActors('cratelight')` fanout's `Actor.Trigger(Self, P)` dispatches to each
+light's real state `Trigger`, toggling all four; `StartConversation` returns
+early-false on the live null `ConListItems` (**not** faked — the real guard runs).
+`PlayAnim` runs the real `execPlayAnim` native (the switch `AnimSequence` is set;
+only the mesh rendering is Stage-4); `PlaySound(264)` is recorded as a Stage-4 audio
+boundary (channel id 0). Validated by `scripts/validate-frob.mjs` (the full
+switch → 4-TriggerLight toggle, both directions). This focused note's separate
+`scripts/validate-script-lights.mjs` still measures the real `PlaySound`/`PlayAnim`
+natives (channel id from the captured global index) which the live host defers.
+
 ## Native `PlaySound` 264
 
 `Actor.uc` declares native `264` as:

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { processLanded } from '../src/runtime/landing.mjs';
+import { processLanded, decorationLanded } from '../src/runtime/landing.mjs';
 import { safeNormal } from '../src/runtime/steps.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
@@ -46,6 +46,38 @@ for (let i = 0; i < 150; i++) {
     randomIntegers: [Math.floor(random() * 32768), Math.floor(random() * 32768)], farSuccess: random() < .5 });
 }
 
+// Non-Pawn decoration landings (a settled Plant2). The decoration path dispatches
+// the script Landed, then — only while still PHYS_Falling — setPhysics(PHYS_None):
+// rebase onto the floor and zero velocity/acceleration. The landing-footprint probe
+// set is read-only, so these use a spent landing counter (>=5) to skip it and
+// compare the transition exactly; footprint invariance is asserted separately below.
+for (const velocity of [[0, 0, 0], [80, -20, -120], [120, -30, 18], [-60, 45, -260], [0, 0, -950], [300, 0, -2600]]) {
+  for (const base of [null, 'floor']) for (const eventPhysics of [null, 0, 2, 3]) {
+    add({ decoration: true, landingCounter: 5, physics: 2, base, velocity, eventPhysics,
+      acceleration: [0, 0, 0], position: [-804.27, 1125.16, -84.02].map(f), radius: 23.26, height: 43.88 });
+  }
+}
+// A decoration that is no longer PHYS_Falling when its Landed event returns (e.g.
+// already resting, or a script GotoState) must not be re-set to PHYS_None.
+for (const physics of [0, 3, 7]) for (const eventPhysics of [null, 3]) {
+  add({ decoration: true, landingCounter: 5, physics, eventPhysics, base: 'floor', velocity: [10, 0, 0],
+    acceleration: [0, 0, 0], radius: 23.26, height: 43.88 });
+}
+// Footprint invariance: the same landing with the counter spent (>=5, probes
+// skipped) and unspent (0, probes run) must reach an identical outcome, proving the
+// read-only footprint set does not affect the landing. Only the counter=0 members
+// are excluded from the exact per-event comparison (they carry extra probe queries).
+const footprintOn = new Set(), invariancePairs = [];
+for (const velocity of [[80, -20, -120], [0, 0, -300], [120, -30, 18], [-24, 12, -60]]) {
+  const off = cases.length;
+  add({ decoration: true, landingCounter: 5, physics: 2, base: null, velocity, acceleration: [0, 0, 0],
+    position: [-804.27, 1125.16, -84.02].map(f), radius: 23.26, height: 43.88, supportTime: f(1) });
+  const on = cases.length; footprintOn.add(on);
+  add({ decoration: true, landingCounter: 0, physics: 2, base: null, velocity, acceleration: [0, 0, 0],
+    position: [-804.27, 1125.16, -84.02].map(f), radius: 23.26, height: 43.88, supportTime: f(1) });
+  invariancePairs.push([off, on]);
+}
+
 const directory = path.resolve('reports/movement/native-landing');
 await mkdir(directory, { recursive: true });
 const casesFile = path.join(directory, 'cases.json');
@@ -82,15 +114,20 @@ function run(input) {
       if (pawn.physics !== physics) {
         pawn.physics = physics;
         if (pawn.base !== actor) { events.push({ supportBase: actor }); pawn.base = actor; }
+        // Original setPhysics (0x103c9676) zeroes Velocity and Acceleration when it
+        // switches into PHYS_None (0) or PHYS_Interpolating (5).
+        if (physics === 0 || physics === 5) { pawn.velocity = [0, 0, 0]; pawn.acceleration = [0, 0, 0]; }
       }
     },
     walking(remaining, iterations) {
       events.push({ walking: remaining, iterations, acceleration: [...pawn.acceleration], velocity: [...pawn.velocity] });
     },
   };
-  processLanded(pawn, { normal: input.normal, actor: 'floor' }, input.remaining, input.iterations);
+  pawn.landingCounter = input.landingCounter ?? 0;
+  if (input.decoration) decorationLanded(pawn, { normal: input.normal, actor: 'floor' });
+  else processLanded(pawn, { normal: input.normal, actor: 'floor' }, input.remaining, input.iterations);
   return { position: pawn.position, velocity: pawn.velocity, acceleration: pawn.acceleration,
-    physics: pawn.physics, base: pawn.base, events };
+    physics: pawn.physics, landingCounter: pawn.landingCounter, base: pawn.base, events };
 }
 let maxError = 0;
 function same(actual, expected) {
@@ -106,12 +143,21 @@ function same(actual, expected) {
 const mismatches = [];
 const comparisons = cases.map((input, index) => {
   const actual = run(input), expected = native.results[index];
-  if (!same(actual, expected)) mismatches.push(index);
+  // Footprint-on decoration cases carry read-only probe queries; their outcome is
+  // validated by the invariance assertion, not this per-event comparison.
+  if (!footprintOn.has(index) && !same(actual, expected)) mismatches.push(index);
   return { input, actual, expected };
 });
+// The read-only footprint probes do not affect the landing: counter-spent and
+// counter-unspent members of each pair must agree on the observable outcome.
+const outcome = result => ({ position: result.position, velocity: result.velocity,
+  acceleration: result.acceleration, physics: result.physics, base: result.base, landingCounter: result.landingCounter });
+const invarianceFailures = invariancePairs.filter(([off, on]) => !same(outcome(native.results[off]), outcome(native.results[on])));
 const summary = { binaryHashes: native.hashes, cases: cases.length,
-  scope: 'dry Pawn landing and original setPhysics with controlled world, Landed, support basing, walking and CRT random callbacks',
-  comparison: 'exact state, query parameters, callback order and arguments, including signed zero', maxError, mismatches };
+  scope: 'dry Pawn and non-Pawn decoration landing with original setPhysics and controlled world, Landed, support basing, walking and CRT random callbacks',
+  comparison: 'exact state, query parameters, callback order and arguments, including signed zero', maxError, mismatches,
+  footprintInvariancePairs: invariancePairs.length, invarianceFailures };
 await writeFile(path.join(directory, 'comparison.json'), JSON.stringify({ summary, comparisons }, null, 2));
 console.log(JSON.stringify({ ...summary, mismatches: mismatches.slice(0, 15), mismatchCount: mismatches.length }, null, 2));
-assert.equal(mismatches.length, 0, 'dry Pawn landing agrees with original processLanded for all sampled cases');
+assert.equal(invarianceFailures.length, 0, 'decoration landing footprint probes are read-only (outcome invariant to the landing counter)');
+assert.equal(mismatches.length, 0, 'dry Pawn and decoration landing agree with original processLanded for all sampled cases');

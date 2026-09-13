@@ -120,3 +120,16 @@ scene rejection. A caller must preserve a scene rejection's false result. A
 stance Move callback needs this boolean, not `time===1`, and must never treat the
 returned result object itself as the boolean. The original downstream touch/base/
 zone effects are still outside the controlled harness.
+
+## Decoration-cylinder source (2026-09-11)
+
+`MoveActor`'s query construction, hit selection and displacement/time math are
+**source-type independent** — they key on each candidate's type and the source's
+block flags, never on whether the source is a controlled player. The oracle now
+takes `sourceControlledPlayer` (writing the class pointer `+0x24` and the
+controlled-player flag `+0x5d4`); a decoration source produces byte-identical
+results to a player source across floor, wall, no-hit and actor cases. The
+corpus adds those decoration cases (424 total, zero mismatches), so `moveQuery`
+accepts a decoration cylinder (`source.decoration`) and reuses the same path for
+a pushed `Plant2` under `physFalling` (docs/script-plant-contact.md). The
+controlled-player guard was only a validation scope, not a native branch.

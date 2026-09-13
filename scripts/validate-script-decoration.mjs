@@ -12,7 +12,10 @@ import {gameDirectory} from './game-directory.mjs';
 const root=gameDirectory();
 const assets=new AssetStore((await readdir(`${root}/System`)).map(name=>({path:name,read:()=>readFile(`${root}/System/${name}`)})));
 const deus=await assets.get('DeusEx'),calls=[],level={editor:false};
-const runtime=new ScriptRuntime(assets,{levelFor:()=>level,native:call=>{
+// PlaySound (264) is a recorded host boundary here (see the file header): this
+// focused Plant2.Bump test verifies the script's native-call order and args, not
+// the full sound engine, so it owns 264 rather than running execActorPlaySound.
+const runtime=new ScriptRuntime(assets,{levelFor:()=>level,boundaryNatives:[264],native:call=>{
   const args=Array.from({length:call.argumentCount},(_,i)=>refValue(call.evaluateArgument(i)));
   calls.push({index:call.index,args});
   if(call.index===264)return 99;

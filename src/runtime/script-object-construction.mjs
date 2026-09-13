@@ -42,6 +42,29 @@ export class ScriptObjectRegistry {
   }
 }
 
+/** Seed a registry at a measured GObjObjects state so runtime spawns continue
+ * the original construction order. `count` is the live high-water mark (Core.dll
+ * +0x19e62c); the objects array is that long with holes for the freed slots, so
+ * AddObject appends at `count` when the free list is empty. `freeIndices` are the
+ * freed slots still on GObjAvailable (LIFO; the last is reused first). This does
+ * not repopulate the loaded objects — the load-time indices are measured evidence
+ * (the live capture), while forward allocation is the recovered rule
+ * (docs/boot-replay.md, docs/script-object-release.md). */
+export function seedScriptObjectRegistry({count, freeIndices = []} = {}) {
+  if(!Number.isInteger(count)||count<0)throw new Error('Registry seed requires a non-negative object count');
+  if(!Array.isArray(freeIndices))throw new Error('Registry seed requires a freeIndices array');
+  const objects=new Array(count);            // sparse: length is the high-water mark
+  const free=[],seen=new Set();
+  for(const index of freeIndices){
+    if(!Number.isInteger(index)||index<0||index>=count)
+      throw new Error(`Registry seed free index ${index} is outside 0..${count - 1}`);
+    if(seen.has(index))throw new Error(`Registry seed free index ${index} is occupied twice`);
+    seen.add(index);
+    free.push(index);
+  }
+  return new ScriptObjectRegistry({objects, freeIndices: free});
+}
+
 /** Name lookup and FName interning are explicit host boundaries, shared with
  * loaded objects. Never use only a list of spawned actors for collision checks. */
 export function makeUniqueScriptObjectName(cls,outer,{findObject,internName}) {
@@ -59,13 +82,13 @@ export function makeUniqueScriptObjectName(cls,outer,{findObject,internName}) {
 /** Accepted fresh StaticAllocateObject -> class native constructor sequence.
  * validate establishes loaded-class/Outer/native-template eligibility before
  * mutation. Existing-name replacement and config/localization are unsupported. */
-export function constructFreshScriptObject({cls,outer,name='None',flags=0,template=null},services) {
-  const {validate,findObject,internName,registry,initProperties,nativeConstructor}=services;
+export function allocateFreshScriptObject({cls,outer,name='None',flags=0,template=null},services) {
+  const {validate,findObject,internName,registry,initProperties}=services;
   if(typeof validate!=='function'||validate({cls,outer,name,flags,template})!==true)
     throw new Error('Fresh construction requires verified native class and Outer bindings');
   if(cls.metadata.classFlags&1)throw new Error('Abstract class construction is outside the accepted fresh path');
   if(cls.metadata.classFlags&0x400)throw new Error('Object config/localization loading is not implemented');
-  if(!(registry instanceof ScriptObjectRegistry)||typeof initProperties!=='function'||typeof nativeConstructor!=='function'
+  if(!(registry instanceof ScriptObjectRegistry)||typeof initProperties!=='function'
     ||typeof findObject!=='function'||typeof internName!=='function')
     throw new Error('Fresh construction services are incomplete');
   const resolved=String(name).toLowerCase()==='none'
@@ -81,7 +104,15 @@ export function constructFreshScriptObject({cls,outer,name='None',flags=0,templa
   // The observed IsValid boundary verifies registration before constructor
   // dispatch. No caller-visible script event occurs between these operations.
   if(registry.objects[object.index]!==object)throw new Error('Constructed object is not registered');
-  nativeConstructor(object);
+  return object;
+}
+
+/** StaticConstructObject adds the class-selected constructor after allocation.
+ * C++ class operator new callers use allocateFreshScriptObject directly. */
+export function constructFreshScriptObject(args,services) {
+  if(typeof services.nativeConstructor!=='function')throw new Error('Fresh construction requires native constructor dispatch');
+  const object=allocateFreshScriptObject(args,services);
+  services.nativeConstructor(object);
   return object;
 }
 

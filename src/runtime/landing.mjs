@@ -31,3 +31,21 @@ export function processLanded(pawn, hit, remainingTime, iterations) {
     if (f(remainingTime) > .01) pawn.walking(f(remainingTime), iterations);
   }
 }
+
+/** Original AActor.processLanded non-Pawn (decoration) path (Engine.dll
+ * 0x103cef60 -> IsA(Pawn) false -> 0x103cf597). A landed decoration (IsA the
+ * decoration class 0x10578d48) runs a read-only landing-footprint probe set
+ * (0x103cf5f7, only while its landing counter actor+0x324 < 5) that never
+ * relocates it or changes its physics: a footprint-present and a footprint-absent
+ * landing reach a byte-identical outcome (scripts/validate-native-landing.mjs).
+ * The observable transition is therefore: reset the decoration landing counter,
+ * dispatch the script Landed(HitNormal) event, then — only while still
+ * PHYS_Falling after that event — call setPhysics(PHYS_None), which rebases the
+ * decoration onto the floor actor and zeroes its velocity and acceleration
+ * (0x103c95f0). The moving-zone landing-velocity branch (nonzero ZoneVelocity) and
+ * the read-only footprint probes are outside this dry entry point. */
+export function decorationLanded(pawn, hit) {
+  pawn.landingCounter = 0;
+  pawn.landedEvent(hit.normal);
+  if (pawn.physics === 2) pawn.setPhysics(0, hit.actor);
+}

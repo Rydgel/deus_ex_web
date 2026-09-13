@@ -37,6 +37,12 @@ class NativeLanding(collision.NativeCollision):
         self.write(self.pawn + 0x24, 'I', 0x1058c660)  # Pawn.
         self.write(self.pawn + 0xac, 'I', self.level)
         self.write(self.pawn + 0xc8, 'I', self.floor)  # Dry zone, bounce-velocity flag clear.
+        # Decoration source: processLanded's IsA(Pawn) at 0x103cf124 is false, so it
+        # takes the non-Pawn path (0x103cf597); IsA(0x10578d48) is true there, so the
+        # decoration landing-footprint branch (0x103cf5f7) is reachable. Give the
+        # decoration class a null SuperField so IsA(Pawn) walks off the chain.
+        self.decoration_class = 0x10578d48
+        self.write(self.decoration_class + 0x28, 'I', 0)
 
     def actor_name(self, pointer):
         if pointer not in [0, self.floor]:
@@ -107,6 +113,9 @@ class NativeLanding(collision.NativeCollision):
 
     def landed(self, case):
         self.case, self.random_index = case, 0
+        # A Pawn (default) or a non-Pawn decoration (class 0x10578d48).
+        self.write(self.pawn + 0x24, 'I', self.decoration_class if case.get('decoration') else 0x1058c660)
+        self.write(self.pawn + 0x324, 'I', case.get('landingCounter', 0))
         self.write(self.pawn + 0x30, 'B', case['physics'])
         self.write(self.pawn + 0xc4, 'I', self.floor if case['base'] else 0)
         self.write(self.pawn + 0x114, '3f', *case['position'])
@@ -119,6 +128,7 @@ class NativeLanding(collision.NativeCollision):
                   'velocity': list(self.read(self.pawn + 0x144, '3f')),
                   'acceleration': list(self.read(self.pawn + 0x150, '3f')),
                   'physics': self.read(self.pawn + 0x30, 'B')[0],
+                  'landingCounter': self.read(self.pawn + 0x324, 'I')[0],
                   'base': self.actor_name(self.read(self.pawn + 0xc4, 'I')[0]), 'events': self.events}
         self.events = None
         return result

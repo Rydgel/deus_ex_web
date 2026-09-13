@@ -13,12 +13,18 @@ event,args)` is used only for native actor branches such as `StopWaiting`.
 `callbacks.getBoundingBox(actor,exact,position,rotation)` is optional; when it
 is omitted, the established `moverFinishBounds` implementation is used.
 
-The supported records are the existing standalone two-key Training subset:
+The supported records are the existing two-key Training subset:
 `InitialState=TriggerToggle`, `NumKeys=2`, a zero first key and translating
-second key, zero key rotations, no slave/once-only/delay/event branch. The
-adapter keeps each original actor identity and binds `Level`, `PawnList`,
-`NextPawn`, movement fields, replication fields, and the mover's mutable
-interpolation state through `ScriptRuntime.bindProperty`.
+second key, zero key rotations, and no slave/once-only/delay branch. A nonempty
+`Event` is admitted only when the complete canonical level actor array is
+available and proves that no actor has the matching `Tag`. This admits the
+Training `darkdoor` pair's authored `padoor` event without hiding its behavior:
+the original `FinishedOpening` and `DoClose` bytecode still execute native 304
+`AllActors` and exhaust the real array with zero matches. If the level array is
+missing or any recipient exists, the mover remains unsupported. The adapter
+keeps each original actor identity and binds `Level`, `PawnList`, `NextPawn`,
+movement fields, replication fields, and the mover's mutable interpolation
+state through `ScriptRuntime.bindProperty`.
 
 ## Original execution order
 
@@ -60,6 +66,10 @@ whole-game scheduling and arbitrary actor lifetimes remain outside this adapter.
 
 The Play integration passed actual Training targeted use, mid-move reversal,
 opening/closing completion, closing contact that displaces JC, and Player start
-reset. Native collision evidence is reused from Stage 2; these checks target the
-new script/host connections. All attached actors retain their actual original
-classes; attaching metadata alone does not enable their unprepared behavior.
+reset. The focused dark-room check additionally verifies both panels' authored
+offsets and timing, actual zero-match native 304 enumeration on open and close,
+normal player movement through the open doorway, close/reset, and preservation
+of the starting-door pair. Native collision evidence is reused from Stage 2;
+these checks target the new script/host connections. All attached actors retain
+their actual original classes; attaching metadata alone does not enable their
+unprepared behavior.

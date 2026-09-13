@@ -17,7 +17,10 @@ import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray } from '../runtime/script-map-properties.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
-export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0 } = {}) {
+export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
+  onLightingChanged = null, onDataLinkTransmission = null } = {}) {
+  if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
+    throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
   const engine = await assets.get('Engine'), dx = await assets.get('DeusEx');
   const playerDefaults = await defaults.get(dx, dx.exportsByPath.get('jcdentonmale'));
@@ -69,7 +72,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   Object.assign(player.collisionActor,{id:'$player',name:'JCDentonMale',
     lineage:await defaults.lineage(dx,dx.exportsByPath.get('jcdentonmale')),
     collisionBits:player.collisionActor.flags,
-    values:{...playerDefaults,get Location(){return player.position;},get CollisionRadius(){return player.radius;},get CollisionHeight(){return player.height;}}});
+    values:{...playerDefaults,get Location(){return player.position;},get CollisionRadius(){return player.radius;},get CollisionHeight(){return player.height;},
+      // The live pawn velocity, read by scripts such as DeusExDecoration.Bump
+      // (the pushed decoration copies Other.Velocity).
+      get Velocity(){return player.velocity;}}});
   const surfaceTextures = await walkingSurfaceTextures(assets, asset, map.model);
   player.textureForHit = hit => {
     if (hit.actor !== collision.queries.levelInfo || hit.primitive !== map.model) return null;
@@ -78,15 +84,30 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     return surfaceTextures[node.surface] ?? null;
   };
   player.timeDilation = [...actors.values()].find(a => a.className === 'LevelInfo')?.values.TimeDilation ?? 1;
-  const doors = new Doors(collision.movers, playerDefaults.MaxFrobDistance, collision), clock = new FixedClock();
+  const eventHasRecipients = event => {
+    const wanted = String(event ?? '').toLowerCase();
+    return [...actors.values()].some(actor => String(actor.values?.Tag ?? '').toLowerCase() === wanted);
+  };
+  const doors = new Doors(collision.movers, playerDefaults.MaxFrobDistance, collision,
+    {eventHasRecipients}), clock = new FixedClock();
   let timeSeconds=0;
   const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
   playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
+  // Native GetPlayerPawn720 follows XLevel.Engine.Client.Viewports[0].Actor.
+  // This local Play session owns one viewport, bound to its controlled JC.
+  playerScene.level.engine = {client:{viewports:[{actor:player.collisionActor}]}};
+  collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
-    playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random});
+    playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
+    queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
+  // Route any unhandled actor scene event (dispatched from player-move/actor-touch,
+  // or re-entrant from a VM body) into the door runtime's general VM router, so a
+  // player bump runs the real DeusExDecoration.Bump — and other attached actors run
+  // their real event bytecode — instead of pausing at the scene adapter.
+  playerScene.hooks.dispatchEvent=(target,event,args)=>doors.scriptRuntime.dispatchEvent(target,event,args);
   const interaction = { get position() { return player.position; }, get viewRotation() { return player.viewRotation; },
     get baseEyeHeight() { return player.baseEyeHeight; }, maxFrobDistance: playerDefaults.MaxFrobDistance,
     frobTime: 0, frobTarget: null, carriedDecoration: null, stateName: 'PlayerWalking',
@@ -94,7 +115,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const trace = (end,start,extent) => traceActors(collision.queries,player,end,start,extent);
   const describeTarget = actor => !actor ? null : actor.collider ? doors.describe(actor)
     : { actor, label: `${actor.name} · interaction not supported yet` };
-  notes.push('First playable subset: movement and translating TriggerToggle doors. Mission scripts, other interactions and actor visuals remain incomplete.');
+  notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Mission-trigger scripts and actor/mesh visuals remain incomplete.');
   if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; their meshes are not rendered yet.`);
   const game = {
     player, doors, collision, clock, notes, start, interaction, random,
@@ -110,9 +131,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     },
     target() { return isHighlighted(interaction,interaction.frobTarget) ? describeTarget(interaction.frobTarget) : null; },
     use() {
-      const target = describeTarget(interaction.frobTarget);
-      if (!target) return { ok: false, message: 'Nothing selected' };
-      return target.mover ? doors.use(target,player.position) : { ok: false, message: target.label };
+      const actor = interaction.frobTarget;
+      if (!actor) return { ok: false, message: 'Nothing selected' };
+      if (actor.lineage?.includes('engine.mover')) {
+        const target = describeTarget(actor);
+        return target?.mover ? doors.use(target,player.position) : { ok: false, message: target?.label ?? 'Nothing selected' };
+      }
+      // Non-mover frob: run the actor's real Frob bytecode through the general VM
+      // router (docs/scene-events.md). A handled Frob ran the real body; an
+      // unhandled one has no Frob override (the empty-event no-op). A prepared body
+      // that reaches an unbuilt native/subsystem throws, pausing play honestly
+      // (main.mjs surfaces it) — e.g. LightSwitch.Frob's anim/audio until M2 step 2.
+      const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
+      return { ok: outcome.handled, message: '' };
     },
     status() { return { player: player.status(), doors: doors.status(), hulls: collision.bsp.hulls.length,
       deferredEffects:[...player.unimplementedPhysicsEffects],

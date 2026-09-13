@@ -10,7 +10,7 @@ import{walkingSurfaceTextures}from'../src/runtime/walking-surface.mjs';
 import{objectAt}from'../src/unreal/objects.mjs';
 import{ClassDefaults}from'../src/unreal/classes.mjs';
 import{gameDirectory}from'./game-directory.mjs';
-const root=gameDirectory(),files=[];for(const dir of['System','Textures','Maps'])for(const name of await readdir(`${root}/${dir}`))files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
+const root=gameDirectory(),files=[];for(const dir of['System','Textures','Maps','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 let mismatches=0;
 const assets=new AssetStore(files),defaults=new ClassDefaults(assets),de=await assets.get('DeusEx');const jc=de.pkg.exports.findIndex((e,i)=>objectAt(de.pkg,i+1)?.name==='JCDentonMale');if(jc<0)throw Error('Missing JC class');const pawnValues=await defaults.get(de,jc+1);
 for(const [name,start]of [['00_Training',[-1149.2435302734375,825.8439331054688,-80.0999984741211]],['01_NYC_UNATCOIsland',[-4760.56982421875,10430.8115234375,-280.67498779296875]]]){

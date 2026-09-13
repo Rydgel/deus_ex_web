@@ -10,7 +10,10 @@ import {gameDirectory} from './game-directory.mjs';
 const root=gameDirectory(),files=[];
 for(const name of await readdir(`${root}/System`))files.push({path:name,read:()=>readFile(`${root}/System/${name}`)});
 const assets=new AssetStore(files),engine=await assets.get('Engine'),calls=[];
-const runtime=new ScriptRuntime(assets,{native:call=>{
+// The mover's PlaySound (264) is a recorded engine boundary here (no audio
+// claim): this focused state-machine test owns 264 rather than running the full
+// execActorPlaySound implementation, which needs the live level/index graph.
+const runtime=new ScriptRuntime(assets,{boundaryNatives:[264],native:call=>{
   const args=Array.from({length:call.argumentCount},(_,i)=>refValue(call.evaluateArgument(i)));
   calls.push({index:call.index,args});
   if(call.index===3970){getRef(call.receiver,'Physics').set(args[0]);return;}

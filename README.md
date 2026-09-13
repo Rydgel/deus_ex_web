@@ -3,7 +3,11 @@
 The aim is to make the original Deus Ex playable in a browser using its original
 maps, assets, and game behavior. The current build delivers the **Stage 2 playable slice**: training and Liberty Island have player movement and collision,
 and training's starting door pair opens, closes and pushes the player. Final
-original camera/motion acceptance remains tracked. Stage 3 has not started.
+original camera/motion acceptance remains tracked. Stage 3 runtime and gameplay
+work is in progress. The latest gameplay checkpoint recovers the base Trigger
+touch path and VM Switch/ClassIsChildOf support. The current foundation work
+connects original property copying and destruction to class defaults and logical
+object cleanup; see the [Stage 3 handoff](docs/stage-3-handoff.md).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -27,7 +31,8 @@ or push further hosting updates unless the user asks.
 - Static lighting from original shadow masks, inherited light defaults, zone
   ambient and mover polygon lightmaps, compared at two original-game cameras.
 - Play mode with gravity, jumping, crouching, stairs, BSP and actor collision,
-  and a bounded implementation of translating TriggerToggle doors.
+  translating TriggerToggle doors, and pushed decorations that run their original
+  `DeusExDecoration.Bump`/physics ([rolling evidence](docs/rolling.md)).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through a small VM prototype.
 - Unit/format tests, real-data validation commands, and browser regression tests.
@@ -41,13 +46,15 @@ or push further hosting updates unless the user asks.
   [movement evidence](docs/movement.md) and [level queries](docs/level-queries.md).
 
 **Current boundary:** the final original camera/motion comparison and actual
-window/tab pause acceptance remain open. General script execution, mission events,
+window/tab pause acceptance remain open. Broader script execution, mission events,
 characters and other actor meshes, AI, audio, conversations and wider gameplay
-remain future work. Procedural water displays its original source image statically.
-Reflections (including the polished training floor) and dynamic lighting remain
-Stage 4 work. The training map is the visual acceptance target; other maps expose diagnostics
-for unsupported content. See the [rendering contract](docs/rendering.md) and
-[movement evidence and open work](docs/movement.md).
+remain future work. Script-controlled lighting still needs its original
+brightness/cache invalidation and renderer update path in Stage 3; reflections
+(including the polished training floor) and renderer polish remain Stage 4 work.
+Procedural water displays its original source image statically. The training map
+is the visual acceptance target; other maps expose diagnostics for unsupported
+content. See the [rendering contract](docs/rendering.md) and [movement evidence
+and open work](docs/movement.md).
 
 ## Open the viewer
 
@@ -122,7 +129,10 @@ static doors. The footprint overlays every height and is not a game screenshot.
 - **Stage 1:** render training with textures and an inspection camera — complete.
 - **Stage 1.5:** restore original static lighting and shadows — complete.
 - **Stage 2:** playable movement/collision/door slice delivered; remaining validation deferred.
-- **Stage 3:** implement the original script/native runtime and object lifecycle.
+- **Stage 3:** implement the original script/native runtime and object lifecycle —
+  in progress; the current checkpoint includes live Training DataLinks, mission
+  triggers, and the original player augmentation startup through the explicit
+  NanoKeyRing boundary.
 - **Stage 4:** restore animated actors, visual effects, audio, and original interfaces.
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations.
 - **Stage 6:** persist saves and map state, then validate the full campaign.

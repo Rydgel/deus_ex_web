@@ -69,7 +69,10 @@ test('UState::Link calls UStruct::Link, copies buckets, and hashes direct struct
   assert.equal(result.operations.at(-1).operation, 'stop-non-direct-child');
 });
 
-test('UState::Link rejects an omitted inherited UStruct linker', () => {
+test('UState::Link composes the inherited UStruct::Link by default and fails when its slot bindings are absent', () => {
   const record = { superClass: null, children: null, hashBuckets: new Array(256).fill(null) };
-  assert.throws(() => linkScriptState(record, { archive: {} }), /inherited UStruct::Link adapter/);
+  assert.throws(
+    () => linkScriptState(record, { archive: {} }),
+    /UStruct::Link has no binding for \+0x38/,
+  );
 });

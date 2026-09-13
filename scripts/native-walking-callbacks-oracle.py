@@ -6,6 +6,10 @@ class Native(c.NativeCollision):
  def __init__(self,root):
   super().__init__(root);self.events=[];self.active=False
   self.actors=[self.alloc(0x1000) for _ in range(4)];self.pawn,self.world,self.old,self.new=self.actors
+  # Non-Pawn source class: a self-contained class whose null SuperField (+0x28)
+  # makes the inlined this->IsA(APawn) walk off the chain, selecting processHitWall's
+  # non-Pawn branch (0x103cee37) instead of the Pawn branch (0x103ced3d).
+  self.source_class=self.alloc(0x40);self.write(self.source_class+0x28,'I',0)
   vt=self.alloc(0x100);self.event=0x700fc000;self.find=0x700fc020;self.probe=0x700fc040
   for p in self.actors:self.write(p,'I',vt)
   self.write(vt+0x10,'I',self.event)
@@ -31,7 +35,7 @@ class Native(c.NativeCollision):
   for p in self.actors:self.write(p+0xc4,'I',0);self.write(p+0xd8,'B',7)
   self.write(self.pawn+0xa8,'I',self.world);self.write(self.pawn+0xc4,'I',self.actors[x['base']] if x.get('base') is not None else 0)
   self.write(self.pawn+0x30,'B',x.get('physics',1));self.write(self.pawn+0x318,'I',0x24);self.write(self.pawn+0x1ec,'I',0x100)
-  self.write(self.pawn+0x24,'I',0x1058c660);self.write(self.new+0x24,'I',0x1058c660 if x.get('wallPawn') else 0)
+  self.write(self.pawn+0x24,'I',0x1058c660 if x.get('sourcePawn',True) else self.source_class);self.write(self.new+0x24,'I',0x1058c660 if x.get('wallPawn') else 0)
   self.write(self.pawn+0x150,'3f',*x.get('acceleration',[1,0,0]));self.write(self.pawn+0x354,'3f',*x.get('destination',[10,0,0]))
   self.write(self.pawn+0x348,'f',3);self.write(self.pawn+0x394,'f',-.6)
   target=self.actors[x['target']] if x.get('target') is not None else 0

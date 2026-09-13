@@ -16,11 +16,18 @@ uses the property vtable `+0x8c`, `CopySingleValue`.
 
 The ordinary local, instance, and default variable handlers at
 `0x1012ebc0`, `0x1012ec60`, and `0x1012ed00` use the property vtable `+0x90`,
-`CopyCompleteValue`. The original generic implementation at `0x10165560`
-copies one `ElementSize` unit, while `0x10165600` loops over all
+`CopyCompleteValue`. The generic **CopySingleValue** body at `0x10165560`
+copies one `ElementSize` unit, while **CopyCompleteValue** at `0x10165600` loops over all
 `ArrayDimension` elements and invokes the single-value copy. Consequently a
 plain fixed-array field reference reads and writes the complete array; only an
 indexed reference selects one element.
+
+The native generic complete-copy loop rereads `ArrayDim` after each virtual
+call and `ElementSize` before each iteration (`10165617`–`10165634`). Its
+single-copy body uses forward `rep movsl` followed by `rep movsb`
+(`1016557e`–`10165582`), not an overlap-safe memmove. A raw storage adapter must
+preserve those reads and dword/byte writes; the logical VM copies below do not
+represent overlapping native byte addresses.
 
 `UObject::InitProperties` at `0x101520d0` copies an authored class default and
 zeroes the remaining property storage. `zeroValue` models the fresh zeroed VM
@@ -129,9 +136,12 @@ identity/fields, nested arrays, and a `FixedArrayProperty` without linked
 `innerMetadata` and a fixed count throw `UnsupportedScriptValueError` with
 code `UNSUPPORTED_SCRIPT_VALUE`. Fixed arrays of linked primitive or struct
 values are copied as complete arrays. A generic struct's physical byte stride
-is left null until the linker supplies an established `elementSize`; an
-indexed reference therefore fails explicitly while whole-value copy remains
-available. Authored defaults whose struct tag is opaque remain an explicit
+is left null until the linker supplies an established `elementSize`. The
+[loaded struct linker](script-struct-layout.md) now supplies that size from the
+recovered native Link bodies for scalar/string/bool/nested struct members;
+unlinked layouts still reject indexing explicitly. Generic authored defaults use the linked
+[SerializeBin struct decoder](script-struct-values.md), including strings and
+canonical object/class references. Unresolved member serializers remain an explicit
 loader error and are never replaced with a guessed object.
 
 The generic struct behavior follows the installed original Core.dll

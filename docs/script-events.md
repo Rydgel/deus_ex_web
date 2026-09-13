@@ -31,6 +31,8 @@ ProcessEvent(this, Function, Params, ignoredResult):
             return
 
     filterResult = this.vtable[+0x2c]()
+    if filterResult != 0:
+        return
     if uint16(filterResult) != Function.u16(+0x70):
         return
 
@@ -53,10 +55,11 @@ same range and mask convention is independently present in `IsProbing` at
 
 The virtual call at `+0x2c` is the exported `IsPendingKill` slot
 (`0x101028a1`); the base implementation at `0x1010ab80` returns zero. Core
-compares its 16-bit result with the function's 16-bit field at `+0x70`. Thus
-the usual script/event case (`IsPendingKill() == 0`, `iNative == 0`) passes,
-while a mismatch exits before allocation. Keep this as the observed equality
-test rather than replacing it with an unconditional pending-kill test.
+first rejects its nonzero result (`1013f850–1013f852`), then compares the
+zero 16-bit result with the function's 16-bit field at `+0x70`. Thus only
+`IsPendingKill() == 0` and `iNative == 0` pass. The earlier equality-only
+interpretation omitted the first branch; [frame ownership](script-frame-ownership.md)
+records the correction and native comparison.
 
 The `FUNC_Native` test is the high-byte bit test at `0x1013f862`–`0x1013f868`,
 which is flag `0x400`. The hook receives `(Function, incoming Params, 0)` at
@@ -107,8 +110,10 @@ The exact body sequence (`0x1013f8aa`–`0x1013f984`) is:
 7. Copy exactly `paramBytes` bytes from the temporary block back to the
    original `Params` pointer.
 8. Walk the property destruction chain starting at `Function+0x68`. For each
-   property, call its vtable `+0x94` (`DestroyValue`) on
-   `temporary + property+0x48`, then follow `property+0x54`.
+   property whose signed Offset `+0x48` is at or beyond unsigned ParmsSize
+   `+0x76`, call its vtable `+0x94` (`DestroyValue`) on that temporary slot,
+   then follow `property+0x54`. The parameter prefix is skipped
+   (`1013f963–1013f96e`); its ownership has been copied back to Params.
 9. Decrement the event depth and return. The temporary is FMemStack storage;
    no result is returned to the ProcessEvent caller.
 
@@ -123,7 +128,7 @@ frame = FFrame(Node=Function, Object=this,
                Code=Function[+0x44], Locals=tmp)
 Function[+0x7c](frame, tmp + uint16(Function[+0x78]))
 copyBytes(Params, tmp, uint16(Function[+0x76]))
-destroyPropertyChain(Function[+0x68], tmp)
+destroyPropertyChain(Function[+0x68], tmp, onlyOffsetsAtOrBeyond=paramBytes)
 ```
 
 This is a raw block ABI. `ProcessEvent` does not parse argument expressions,
@@ -138,8 +143,12 @@ The incoming `Result` argument is ignored, even when non-null. A return
 property, if present, is written at `temporary + Function+0x78`; bytes within
 the parameter copyback range still reach the caller's `Params`. Ignoring the
 separate Result pointer does not establish that a return property is discarded.
-Return-property offsets versus the parameter range are outside the focused
-no-return event layout implemented here. Optional defaults are not synthesized;
+The typed host now represents a ReturnParm in that parameter range using the
+fourth `processEvent(receiver,name,args,resultReference)` argument. This is a
+reference to the caller's logical ReturnParm slot, not the ignored native
+Result argument. Its value is copied in and back with the other parameters,
+and survives local destruction; the original pointer/copyback path is checked
+in [frame ownership](script-frame-ownership.md). Optional defaults are not synthesized;
 the caller must provide the already formed parameter block. A null `Params`
 pointer with a nonzero `Function+0x76` count is not a valid or traced case. A
 zero count causes the copy loops to execute zero iterations, so the no-arg
@@ -153,8 +162,8 @@ The difference from `CallFunction` is therefore structural:
 | Out parameters | included in one forward block copyback | address records, reverse property copyback |
 | Locals | tail of block zeroed | fresh block zeroed before expression evaluation |
 | Return | external result ignored; return-slot bytes follow the parameter copyback range | `ProcessInternal` receives caller result pointer |
-| Optional arguments | no defaults constructed here | no omission handling in the traced parser; compiler-emitted expressions supply values |
-| Destruction | property chain after block copyback | property chain after out copyback |
+| Optional arguments | caller supplies full block | early terminator leaves omitted trailing slots zero |
+| Destruction | local suffix of property chain after block copyback | whole property chain after out copyback |
 
 ## State and callback reentrancy
 

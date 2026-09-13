@@ -4,7 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {setBase,setSupportBase,setWalkingPhysics,processPlayerHitWall} from '../src/runtime/walking-callbacks.mjs';
+import {setBase,setSupportBase,setWalkingPhysics,processPlayerHitWall,processDecorationHitWall} from '../src/runtime/walking-callbacks.mjs';
 const cases=[];
 for(const base of [null,1,2])for(const target of [null,1,2,3,0])cases.push({type:'base',base,target});
 for(const physics of [1,2])for(const next of [1,2])for(const base of [null,1,2])cases.push({type:'physics',physics,next,base,target:3});
@@ -13,6 +13,15 @@ for(const physics of [1,2])for(const probing of [false,true])for(const wallPawn 
  cases.push({type:'wall',physics,probing,wallPawn,normal});
 for(const acceleration of [[0,0,0],[0,0,1]])for(const destination of [[0,0,0],[3,4,5]])for(const normal of [[-1,0,0],[0,-1,0]])
  cases.push({type:'wall',physics:1,probing:false,acceleration,destination,normal});
+// Non-Pawn source (a falling DeusExDecoration): processHitWall takes the
+// source-class branch to 0x103cee37 — only the Pawn-wall gate and the IsProbing
+// gate apply. No direction/MinHitWall/walking-flatten or MoveTimer/bFromWall
+// bookkeeping runs, and the HitWall normal is dispatched unmodified. Sweeping
+// PHYS_None/Falling/Rolling proves the non-Pawn path never reads Physics. Normals
+// are float32-exact so the unmodified passthrough compares bit-for-bit.
+for(const physics of [0,2,7])for(const probing of [false,true])for(const wallPawn of [false,true])
+ for(const normal of [[-1,0,0.5],[0,-1,0],[0.5,-0.25,0.75],[-0.75,0.5,-0.25]])
+  cases.push({type:'wall',sourcePawn:false,physics,probing,wallPawn,normal});
 const directory=path.resolve('reports/movement/walking-callbacks');await mkdir(directory,{recursive:true});
 const file=path.join(directory,'cases.json');await writeFile(file,JSON.stringify(cases));
 const {stdout}=await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON??'python3',['scripts/native-walking-callbacks-oracle.py',gameDirectory(),file],{maxBuffer:8*1024*1024,timeout:120000});
@@ -27,6 +36,7 @@ cases.forEach((c,index)=>{
  if(c.type==='base')setBase(pawn,target,dispatch);
  else if(c.type==='support')setSupportBase(pawn,target,dispatch);
  else if(c.type==='physics')setWalkingPhysics(pawn,c.next,target,{dispatch,findBase:()=>{throw Error('Uncaptured FindBase');}});
+ else if(c.sourcePawn===false)processDecorationHitWall(pawn,c.normal,actors[3],{dispatch,isProbing:()=>!!c.probing});
  else processPlayerHitWall(pawn,c.normal,actors[3],{dispatch,isProbing:()=>!!c.probing});
  const actual={base:pawn.base?actors.indexOf(pawn.base):null,physics:pawn.physics,counts:actors.map(a=>a.standingCount),events,
   moveTimer:pawn.moveTimer,pawnFlags:pawn.pawnFlags,justTeleported:pawn.justTeleported};

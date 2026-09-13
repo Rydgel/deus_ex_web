@@ -130,7 +130,9 @@ arrays or `{data,num/capacity}` FArray objects.  The adapter writes the raw
 `+0x46` field value as a two-byte quantity; it does not attach an unverified
 semantic name to that slot.
 
-The implementation intentionally leaves the following boundaries explicit:
-the internals of property virtual Link calls and native pointer
-memory behind an unbound `nativeSlots` FArray. None of those paths is replaced with a no-op or an invented
-property-type linker.
+The implementation routes the verified property `Link` bodies through
+[`script-property-link.mjs`](../src/runtime/script-property-link.mjs), including
+the complex Bool/Str/Array/FixedArray/Map/Struct classes. The remaining explicit
+boundary is raw native pointer/layout memory behind an unbound `nativeSlots`
+FArray, plus any metadata graph that the host has not loaded. No missing
+property-type linker is replaced with a no-op or an invented layout.

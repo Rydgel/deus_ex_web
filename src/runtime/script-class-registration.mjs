@@ -1,6 +1,7 @@
 import {registerScriptStruct} from './script-struct-registration.mjs';
 import {linkScriptClass} from './script-class-link.mjs';
 import {loadScriptConfig, loadScriptLocalized} from './script-object-config.mjs';
+import {copyCompletePropertyValue} from './script-property-copy.mjs';
 
 /**
  * The reached UClass registration/default-object path from the installed
@@ -191,24 +192,22 @@ function sourceBuffer(record) {
   return bufferRecord(candidate, `${record?.key ?? 'superclass'} Defaults`);
 }
 
-function linkedProperties(record) {
+function* linkedProperties(record) {
   const candidate = first(record, ['linkedProperties', 'propertyLink', 'linkedPropertyList'], null);
-  if (candidate === null || candidate === undefined) return [];
-  if (Array.isArray(candidate)) return candidate;
-  if (typeof candidate[Symbol.iterator] === 'function') return [...candidate];
+  if (candidate === null || candidate === undefined) return;
+  if (typeof candidate[Symbol.iterator] === 'function') { yield* candidate; return; }
 
   // A host may retain the original +0x68/+0x54 singly linked chain.  Follow
   // only an explicitly named next link; no export-table order is inferred.
-  const result = [], seen = new Set();
+  const seen = new Set();
   for (let property = candidate; property;) {
     if (seen.has(property)) throw new Error('Cyclic UClass linked property chain');
-    seen.add(property); result.push(property);
+    seen.add(property); yield property;
     const rawNext = property.nativeSlots?.get(0x54);
     if (property.nativeSlots instanceof Map && rawNext?.value === undefined)
       fail('Inherited CopyCompleteValue requires live property Next +0x54', {operation: 'InitProperties', slot: '+0x54'});
     property = rawNext ? rawNext.value : first(property, ['next', 'nextProperty'], null);
   }
-  return result;
 }
 
 function propertyLayout(property, sourceSize) {
@@ -322,12 +321,10 @@ function growDefaults(buffer, count, services, record, trace) {
  * whose Defaults.Data is being initialized; its superclass supplies the
  * inherited default tail and linked property list.
  *
- * The raw header writer and `services.copyCompleteValue` are mandatory
- * storage boundaries.  The latter matches the inherited property's virtual
- * `+0x90` call and receives mutable source and destination byte views,
- * offsets, element size and ArrayDim.  Omitting CopyCompleteValue is accepted
- * only when there are no inherited linked properties to visit; silently
- * skipping a reached property call would not match Core.
+ * The raw header writer remains a storage boundary. Inherited +0x90 calls use
+ * the translated property dispatcher unless the host supplies an override.
+ * Owning values additionally require the reached native heap services in
+ * `services.propertyCopy`; missing heap storage is not a shallow-copy fallback.
  */
 export function initializeClassDefaultObject(record, buffer, services = {}, trace = []) {
   buffer.copiedProperties = [];
@@ -399,7 +396,10 @@ export function initializeClassDefaultObject(record, buffer, services = {}, trac
   // superclass +0x68 linked list.  A property is eligible only when its
   // offset is below the inherited Defaults size, exactly as 101521b8–c0.
   const properties = linkedProperties(parent);
-  const copyCompleteValue = services.copyCompleteValue ?? services.copyProperty;
+  const copyCompleteValue = services.copyCompleteValue ?? services.copyProperty ??
+    (detail => copyCompletePropertyValue(detail.property,
+      {bytes: detail.destination, offset: detail.destinationOffset},
+      {bytes: detail.source, offset: detail.sourceOffset}, services.propertyCopy ?? {}));
   for (const property of properties) {
     const layout = propertyLayout(property, buffer.sourceSize);
     if (layout.offset >= buffer.sourceSize) continue;
@@ -411,11 +411,6 @@ export function initializeClassDefaultObject(record, buffer, services = {}, trac
       property, offset: layout.offset, bytes: layout.bytes,
       body: SCRIPT_CLASS_REGISTRATION.initProperties.body,
     });
-    if (typeof copyCompleteValue !== 'function') {
-      fail('InitProperties reached a linked property without CopyCompleteValue', {
-        operation: 'InitProperties', slot: 'property.+0x90',
-      });
-    }
     copyCompleteValue({
       property,
       destination: data,
@@ -426,13 +421,13 @@ export function initializeClassDefaultObject(record, buffer, services = {}, trac
       arrayDim: layout.arrayDim,
       bytes: layout.bytes,
     }, {
-      kind: 'copy-complete-value', body: 0x10165560,
+      kind: 'copy-complete-value', virtualSlot: 0x90,
       property, classRecord: record,
     });
     buffer.copiedProperties.push(property);
     traceCall(trace, 'init-properties-copy-complete', {
       property, offset: layout.offset, bytes: layout.bytes,
-      body: 0x10165560,
+      virtualSlot: 0x90,
     });
   }
   return { buffer, header, size: sizeOfClass, parent, sourceSize: buffer.sourceSize };

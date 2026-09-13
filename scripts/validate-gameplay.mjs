@@ -9,7 +9,7 @@ import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
 const root = gameDirectory(), files = [];
-for (const dir of ['Maps', 'System', 'Textures']) for (const name of await readdir(path.join(root, dir))) files.push({ path: `${dir}/${name}`, read: () => readFile(path.join(root, dir, name)) });
+for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music']) for (const name of await readdir(path.join(root, dir))) files.push({ path: `${dir}/${name}`, read: () => readFile(path.join(root, dir, name)) });
 const assets = new AssetStore(files), engine = await assets.get('Engine');
 const checkBob = readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob'));
 const report = { checkBob: { function: checkBob.entry.path, expandedBytes: checkBob.size, serializedBytes: checkBob.bytes.length,
