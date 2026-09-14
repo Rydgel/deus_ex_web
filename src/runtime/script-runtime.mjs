@@ -69,6 +69,11 @@ import { getRootWindowNative } from './script-window-hierarchy.mjs';
 import { askParentForReconfigureNative } from './script-window-reconfigure.mjs';
 import { setWindowSizeNative } from './script-window-size.mjs';
 import { setChildVisibilityNative, showWindowNative, isWindowVisibleNative } from './script-window-visibility.mjs';
+import {
+  setSensitivityNative, enableWindowNative, disableWindowNative, isWindowSensitiveNative,
+  getTopChildNative, getBottomChildNative, getHigherSiblingNative, getLowerSiblingNative,
+  getClientObjectNative, windowSensitivityOptionalDefault,
+} from './script-window-sensitivity.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
@@ -1161,6 +1166,49 @@ export class ScriptRuntime {
       if(call.argumentCount>1)throw new Error('Window.IsVisible accepts one optional boolean argument');
       const recurse=call.argumentCount?refValue(call.evaluateArgument(0)):true;
       return isWindowVisibleNative(call.receiver,recurse,this.windowLifecycle?.visibility);
+    }
+    if(call.index===1416){
+      if(call.argumentCount>1)throw new Error('Window.SetSensitivity accepts one optional boolean argument');
+      const sensitive=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1416);
+      return setSensitivityNative({object:call.receiver,sensitive},this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1417){
+      if(call.argumentCount>1)throw new Error('Window.EnableWindow accepts one optional boolean argument');
+      const sensitive=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1417);
+      return setSensitivityNative({object:call.receiver,sensitive},this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1418){
+      if(call.argumentCount!==0)throw new Error('Window.DisableWindow accepts no arguments');
+      return disableWindowNative(call.receiver,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1419){
+      if(call.argumentCount>1)throw new Error('Window.IsSensitive accepts one optional boolean argument');
+      const recurse=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1419);
+      return isWindowSensitiveNative(call.receiver,recurse,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1455){
+      if(call.argumentCount>1)throw new Error('Window.GetTopChild accepts one optional boolean argument');
+      const filterVisible=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1455);
+      return getTopChildNative(call.receiver,filterVisible,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1456){
+      if(call.argumentCount>1)throw new Error('Window.GetBottomChild accepts one optional boolean argument');
+      const filterVisible=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1456);
+      return getBottomChildNative(call.receiver,filterVisible,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1457){
+      if(call.argumentCount>1)throw new Error('Window.GetHigherSibling accepts one optional boolean argument');
+      const filterVisible=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1457);
+      return getHigherSiblingNative(call.receiver,filterVisible,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1458){
+      if(call.argumentCount>1)throw new Error('Window.GetLowerSibling accepts one optional boolean argument');
+      const filterVisible=call.argumentCount?refValue(call.evaluateArgument(0)):windowSensitivityOptionalDefault(1458);
+      return getLowerSiblingNative(call.receiver,filterVisible,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1488){
+      if(call.argumentCount!==0)throw new Error('Window.GetClientObject accepts no arguments');
+      return getClientObjectNative(call.receiver,this.windowLifecycle?.sensitivity);
     }
     if(call.index===1425){
       if(call.argumentCount!==0)throw new Error('Window.GetRootWindow accepts no arguments');
