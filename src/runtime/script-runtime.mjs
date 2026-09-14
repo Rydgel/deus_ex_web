@@ -25,6 +25,8 @@ import { animationView } from './script-anim.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
 import { execActorPlaySound } from './script-sound.mjs';
+import { execMove } from './script-move.mjs';
+import { execMakeNoise } from './script-noise.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
 import { isOverlapping } from './actor-touch.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
@@ -711,6 +713,33 @@ export class ScriptRuntime {
       processNativeEvent:(receiver,name,args)=>this.processNativeEvent(receiver,name,args),
     };
   }
+  /** Native Move266 services: reflected fields plus the live level's
+   * MoveActor boundary (ULevel::MoveActor, vtable +0x88). A scene without the
+   * movement service leaves the slot unset so the wrapper raises its explicit
+   * unlinked-service error instead of approximating movement. */
+  moveServices(call) {
+    const level=this.levelFor(call.receiver);
+    return {
+      read:(actor,name)=>this.soundField(actor,name),
+      moveActor:typeof level?.moveActor==='function'?level.moveActor.bind(level):undefined,
+    };
+  }
+  /** Native MakeNoise512 services: the PlaySound level graph plus field
+   * writes (instigator noise slots, listener Stimulus), probe-mask queries,
+   * the bidirectional class test and appWarnf warnings (0xf1/0xf2). */
+  noiseServices(call) {
+    const services=this.soundServices(call);
+    services.write=(actor,name,value)=>this.namedReference(actor,name).set(value);
+    services.warn=code=>this.warning?.({type:'MakeNoise',kind:code});
+    services.isProbing=(actor,name)=>this.isProbing(actor,name);
+    services.relatedClass=(a,b)=>{
+      const ca=this.instance(a).cls,cb=this.instance(b).cls;
+      if(!ca||!cb)return !ca&&!cb;
+      const contains=(cls,record)=>{for(let node=cls;node;node=node.base)if(node.record===record)return true;return false;};
+      return contains(ca,cb.record)||contains(cb,ca.record);
+    };
+    return services;
+  }
   /** Record the measured global UObject index (Core.dll GObjObjects slot) for
    * an attached object. The original PlaySound channel id and other native
    * paths derive from this global identity, and a map-package export index is
@@ -846,7 +875,15 @@ export class ScriptRuntime {
     if(name==='Level')return level?.actors?.[0]??null;
     if(name==='Actors')return level?.actors??null;
     if(name==='PawnList')return level?.pawnList??null;
+    // Pawn.nextPawn: the runtime pawn list is a JS property chain
+    // (pawn-list.mjs addPawn/removePawn), not a native-graph field slot.
+    if(name==='nextPawn')return actor.nextPawn??null;
     if(name==='NetMode')return level?.netMode??0;
+    if(name==='TimeSeconds'){
+      const value=level?.timeSeconds;
+      if(value===undefined)throw new Error('Original noise field is not linked: TimeSeconds');
+      return typeof value==='function'?value():value;
+    }
     if(['DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor'].includes(name)){
       // Native graph slots; the level container carries the established ones.
       const graph=reflected(name);
@@ -1534,6 +1571,8 @@ export class ScriptRuntime {
       if(call.argumentCount>6)throw new Error('PlaySound accepts at most six arguments');
       return execActorPlaySound(call,this.soundServices(call));
     }
+    if(call.index===266)return execMove(call,this.moveServices(call));
+    if(call.index===512)return execMakeNoise(call,this.noiseServices(call));
     if(call.index===2100||call.index===2101||call.index===2102){
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
       return this.bindConversationEvents(call.receiver);

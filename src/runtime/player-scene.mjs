@@ -52,7 +52,7 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   const level={editor:false,netMode:0,actors:[worldActor,...actors,source],
     // Native graph slots read by native dispatch (Level.Model, null demo driver):
     // the original Play path has no demo recorder attached.
-    model, demoRecDriver: null,
+    model, demoRecDriver: null, timeSeconds,
     // Per-surface texture records (walkingSurfaceTextures) for native 1000's
     // hit.Item -> Model->Surfs[iSurf] material lookup.
     surfaceTexture: surfaceTextures,
