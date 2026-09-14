@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {ClassDefaults} from '../src/unreal/classes.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
@@ -54,16 +55,31 @@ for(const name of ['00_Training','01_NYC_UNATCOIsland']){
     }
   }
 }
-const summaries=[];
+const summaries=[],prepared=[];
 for(const group of groups){
  const directory=path.resolve('reports/movement/native-extents',group.name);await mkdir(directory,{recursive:true});
  const modelFile=path.join(directory,'model.json'),casesFile=path.join(directory,'cases.json');
  await writeFile(modelFile,JSON.stringify(nativeModel(group.model)));await writeFile(casesFile,JSON.stringify(group.cases));
- let native;
- if(reuse)native=JSON.parse(await readFile(path.join(directory,'original.json')));
- else{const r=spawnSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',['scripts/native-extent-oracle.py',root,modelFile,casesFile],{encoding:'utf8',maxBuffer:32*1024*1024});if(r.status!==0)throw Error(r.stderr);await writeFile(path.join(directory,'original.json'),r.stdout);native=JSON.parse(r.stdout);}
+ prepared.push({group,directory});
+}
+if(!reuse){
+ // Each group's oracle run is independent — its own model/cases inputs and
+ // its own original.json output — so the dozens of process spawns run across
+ // a bounded worker set instead of serially.
+ const python=process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',queue=[...prepared];
+ // Each worker owns one oracle process at a time; under the validator sweep
+ // NATIVE_ORACLE_JOBS bounds this so nested spawns share the machine's cores.
+ const workers=Math.max(1,Math.min(Number(process.env.NATIVE_ORACLE_JOBS)||8,queue.length));
+ await Promise.all(Array.from({length:workers},async()=>{
+  let next;while((next=queue.shift())){
+   const {stdout}=await promisify(execFile)(python,['scripts/native-extent-oracle.py',root,path.join(next.directory,'model.json'),path.join(next.directory,'cases.json')],{encoding:'utf8',maxBuffer:32*1024*1024});
+   await writeFile(path.join(next.directory,'original.json'),stdout);
+  }}));
+}
+const {traceExtent}=await import('../src/runtime/extent-trace.mjs');
+for(const {group,directory} of prepared){
+ const native=JSON.parse(await readFile(path.join(directory,'original.json'),'utf8'));
  if(captureOnly){console.log(group.name,group.cases.length,'captured');continue;}
- const {traceExtent}=await import('../src/runtime/extent-trace.mjs');
  const mismatches=[],comparisons=[];
  group.cases.forEach((c,i)=>{const expected=native.results[i],end=c.end??c.start.map((v,j)=>f(v+c.delta[j])),actual=traceExtent(group.model,c.start,end,c.extent,c.owner?brushToWorld(c.owner):null),reasons=[];
  if(!actual!==expected.line.outside)reasons.push('outside');

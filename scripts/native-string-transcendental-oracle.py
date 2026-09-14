@@ -74,6 +74,13 @@ _NATIVE = importlib.util.module_from_spec(_SPEC)
 assert _SPEC.loader is not None
 _SPEC.loader.exec_module(_NATIVE)
 
+_POOL_SPEC = importlib.util.spec_from_file_location(
+    "oracle_pool", Path(__file__).with_name("oracle_pool.py")
+)
+_POOL = importlib.util.module_from_spec(_POOL_SPEC)
+assert _POOL_SPEC.loader is not None
+_POOL_SPEC.loader.exec_module(_POOL)
+
 
 CORE_SHA256 = "8bf3039e14f849942ee70a95bdf26cf1f636245926e30106bbe58b7097eba7e4"
 MSVCRT_SHA256 = "e390b0529fb9ee1214bb68302a4658b578134d92ab76bc5eb48f3badd843d210"
@@ -773,6 +780,21 @@ def _boundary_inputs(fn, count, seed):
     return out
 
 
+_SWEEP_PROBE: StringTranscendentalProbe | None = None
+
+
+def _sweep_init(root: str) -> None:
+    """Per-worker probe; each Unicorn instance lives in exactly one process."""
+    global _SWEEP_PROBE
+    _SWEEP_PROBE = StringTranscendentalProbe(Path(root))
+
+
+def _sweep_work(item: tuple[str, list[int]]) -> bytes:
+    name, inputs = item
+    assert _SWEEP_PROBE is not None
+    return _SWEEP_PROBE.sweep(name, iter(inputs))
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-string-transcendental-oracle.py GAME_ROOT")
@@ -803,14 +825,31 @@ def main() -> None:
             case["jsOutBits"] = js["outBits"]
             case["jsPropAddr"] = js["propAddr"]
 
-    sweep = {}
+    # The 2^20-input sweeps are the validate critical path: shard each
+    # native's deterministic input list into contiguous chunks, one worker
+    # probe per process, then join the packed (in, out) pairs in input order
+    # — byte-identical to the serial run by construction.
+    inputs_by_name = {}
     for name, fn in (("sin", math.sin), ("cos", math.cos),
                      ("tan", math.tan), ("atan", math.atan)):
-        inputs = (_targeted_inputs()
-                  + _boundary_inputs(fn, 256, LCG_SEED + NATIVES[name]["index"])
-                  + list(_lcg_stream(LCG_SEED ^ NATIVES[name]["index"], SWEEP_RANDOM)))
-        packed = probe.sweep(name, iter(inputs))
-        sweep[name] = {"count": len(inputs), "data": base64.b64encode(packed).decode("ascii")}
+        inputs_by_name[name] = (
+            _targeted_inputs()
+            + _boundary_inputs(fn, 256, LCG_SEED + NATIVES[name]["index"])
+            + list(_lcg_stream(LCG_SEED ^ NATIVES[name]["index"], SWEEP_RANDOM)))
+    jobs = _POOL.oracle_jobs()
+    work: list[tuple[str, list[int]]] = []
+    for name, inputs in inputs_by_name.items():
+        chunks = min(len(inputs), max(1, jobs * 4))
+        size = (len(inputs) + chunks - 1) // chunks
+        work += [(name, inputs[i:i + size]) for i in range(0, len(inputs), size)]
+    packed = _POOL.pooled_map(_sweep_work, _sweep_init, (sys.argv[1],), work)
+    sweep: dict[str, dict[str, object]] = {}
+    for (name, inputs), data in zip(work, packed):
+        entry = sweep.setdefault(name, {"count": 0, "chunks": []})
+        entry["count"] += len(inputs)
+        entry["chunks"].append(data)
+    for entry in sweep.values():
+        entry["data"] = base64.b64encode(b"".join(entry.pop("chunks"))).decode("ascii")
 
     print(json.dumps({
         "hashes": {"Core.dll": CORE_SHA256, "MSVCRT.dll": MSVCRT_SHA256},

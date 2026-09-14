@@ -36,6 +36,14 @@ const probe = path.join(root, '.cache', 'native-probe-env', 'bin', 'python');
 const env = { ...process.env };
 if (!env.NATIVE_PROBE_PYTHON && existsSync(probe))
   env.NATIVE_PROBE_PYTHON = path.relative(root, probe);
+// The sweep is already CPU-saturated, so a pooled oracle must not multiply
+// the runner's jobs by a second full cpu count.  Only a handful of validators
+// carry a pooled oracle, so each one gets a bounded share — floor(cpus/5) at
+// the default job count — that shrinks the critical-path sweep without
+// starving the rest of the pool.  Standalone oracle runs keep the
+// unrestricted default; NATIVE_ORACLE_JOBS=1 forces the serial path.
+if (!env.NATIVE_ORACLE_JOBS)
+  env.NATIVE_ORACLE_JOBS = String(Math.max(1, Math.floor(os.cpus().length / Math.min(jobs, 5))));
 
 let timings = {};
 try { timings = JSON.parse(readFileSync(timingsPath, 'utf8')); } catch { /* first run */ }

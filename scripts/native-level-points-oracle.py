@@ -41,9 +41,25 @@ class NativeLevelPoints(level.NativeLevel):
         if case.get('owner'):self.set_brush_values(owner,original)
         return result
 
+_WORKER=None
+
+def _worker_init(root,scene_path):
+    """Per-worker scene; each Unicorn instance lives in exactly one process."""
+    global _WORKER
+    _WORKER=NativeLevelPoints(Path(root),json.loads(Path(scene_path).read_text()))
+
+def _worker_case(item):
+    kind,case=item
+    return _WORKER.model_point_case(case) if kind=='models' else _WORKER.point_case(case)
+
 if __name__=='__main__':
     if len(sys.argv)!=4:sys.exit('Usage: native-level-points-oracle.py GAME_ROOT SCENE_JSON CASES_JSON')
     scene=Path(sys.argv[2]).read_bytes();raw=Path(sys.argv[3]).read_bytes();cases=json.loads(raw)
-    native=NativeLevelPoints(Path(sys.argv[1]),json.loads(scene))
+    # The model/point case lists are the validate critical path: shard them
+    # across worker probes and join the results in input order — identical to
+    # the serial run by construction.
+    work=[('models',c) for c in cases.get('models',[])]+[('points',c) for c in cases.get('points',[])]
+    results=level.oracle_pool.pooled_map(_worker_case,_worker_init,(sys.argv[1],sys.argv[2]),work)
+    count=len(cases.get('models',[]))
     print(json.dumps({'hashes':level.base.HASHES|{'MSVCRT.dll':level.hash_module.CRT_HASH},'sceneSha256':hashlib.sha256(scene).hexdigest(),'casesSha256':hashlib.sha256(raw).hexdigest(),
-      'models':[native.model_point_case(c) for c in cases.get('models',[])],'points':[native.point_case(c) for c in cases.get('points',[])]}))
+      'models':results[:count],'points':results[count:]}))

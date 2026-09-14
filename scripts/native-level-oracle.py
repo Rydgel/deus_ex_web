@@ -16,6 +16,10 @@ hash_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hash_module)
 base = hash_module.base
 
+pool_spec = importlib.util.spec_from_file_location('oracle_pool', Path(__file__).with_name('oracle_pool.py'))
+oracle_pool = importlib.util.module_from_spec(pool_spec)
+pool_spec.loader.exec_module(oracle_pool)
+
 
 class NativeLevel(hash_module.NativeHash):
     def __init__(self, root, scene, seed=1):
@@ -144,13 +148,53 @@ class NativeLevel(hash_module.NativeHash):
         return result
 
 
+_WORKER_LEVEL = None
+
+
+def _worker_init(root, scene_path):
+    """Per-worker scene; each Unicorn instance lives in exactly one process."""
+    global _WORKER_LEVEL
+    _WORKER_LEVEL = NativeLevel(Path(root), json.loads(Path(scene_path).read_text()))
+
+
+def _worker_case(item):
+    kind, case = item[0], item[-1]
+    if kind == 'meta':
+        return _WORKER_LEVEL.registration
+    return _WORKER_LEVEL.trace_case(case) if kind == 'rays' else _WORKER_LEVEL.fit(case)
+
+
 if __name__ == '__main__':
     if len(sys.argv) != 4:
         sys.exit('Usage: native-level-oracle.py GAME_ROOT SCENE_JSON CASES_JSON')
     scene_bytes, case_bytes = Path(sys.argv[2]).read_bytes(), Path(sys.argv[3]).read_bytes()
-    native = NativeLevel(Path(sys.argv[1]), json.loads(scene_bytes))
     cases = json.loads(case_bytes)
+    # The thousands of ray/fitting cases are the validate critical path:
+    # shard them across worker probes and join the results by original index —
+    # byte-identical to the serial run by construction.  Fitting cases run
+    # ~30x slower than rays, so interleave them deterministically through the
+    # work list; pooling contiguous chunks would otherwise leave every
+    # fitting case on one straggler worker.  The parent never builds a probe:
+    # the leading meta item reports registration from whichever worker built it.
+    work = [('meta', None)]
+    fits = iter(enumerate(cases['fitting']))
+    stride = len(cases['rays']) // len(cases['fitting']) + 1 if cases['fitting'] else 0
+    for index, case in enumerate(cases['rays']):
+        work.append(('rays', index, case))
+        if stride and (index + 1) % stride == 0:
+            fit = next(fits, None)
+            if fit is not None:
+                work.append(('fit', *fit))
+    work.extend(('fit', *fit) for fit in fits)
+    results = oracle_pool.pooled_map(_worker_case, _worker_init, (sys.argv[1], sys.argv[2]), work)
+    rays, fitting, registration = [None] * len(cases['rays']), [None] * len(cases['fitting']), None
+    for item, result in zip(work, results):
+        if item[0] == 'meta':
+            registration = result
+        elif item[0] == 'rays':
+            rays[item[1]] = result
+        else:
+            fitting[item[1]] = result
     print(json.dumps({'hashes': base.HASHES | {'MSVCRT.dll': hash_module.CRT_HASH},
         'sceneSha256': hashlib.sha256(scene_bytes).hexdigest(), 'casesSha256': hashlib.sha256(case_bytes).hexdigest(),
-        'registration': native.registration, 'rays': [native.trace_case(case) for case in cases['rays']],
-        'fitting': [native.fit(case) for case in cases['fitting']]}))
+        'registration': registration, 'rays': rays, 'fitting': fitting}))

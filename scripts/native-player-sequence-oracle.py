@@ -5,6 +5,7 @@ import importlib.util,json,struct,sys,hashlib
 from pathlib import Path
 s=importlib.util.spec_from_file_location('player_move',Path(__file__).with_name('native-player-move-oracle.py'));p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
 m=p.m
+ps=importlib.util.spec_from_file_location('oracle_pool',Path(__file__).with_name('oracle_pool.py'));oracle_pool=importlib.util.module_from_spec(ps);ps.loader.exec_module(oracle_pool)
 class Native(p.Native):
  def alloc(self,size):return super().alloc(0x800 if size==0x100 else size)
  def __init__(self,root,scene):
@@ -68,10 +69,17 @@ class Native(p.Native):
    frames.append({'position':self.read(a+0x114,'3f'),'velocity':self.read(a+0x144,'3f'),'physics':self.read(a+0x30,'B')[0],'acceleration':self.read(a+0x150,'3f'),'traceEnd':len(self.sequence_trace),'queryEnd':len(self.events),'sceneEventEnd':len(self.player_events)})
   self.sequence_active=False;self.player_active=False
   return {'frames':frames,'trace':self.sequence_trace,'sceneEvents':self.player_events,'queries':self.events}
+_WORKER=None
+def _worker_init(root,scene_path):
+ """Per-worker scene; each case still builds its own probe below."""
+ global _WORKER;_WORKER=(Path(root),json.loads(Path(scene_path).read_text()))
+def _worker_case(c):
+ root,scene=_WORKER
+ try:return Native(root,scene).run(c)
+ except Exception as e:return {'unsupported':str(e)}
 if __name__=='__main__':
- scene_bytes=Path(sys.argv[2]).read_bytes();cases_bytes=Path(sys.argv[3]).read_bytes();scene=json.loads(scene_bytes)
- results=[]
- for c in json.loads(cases_bytes):
-  try:results.append(Native(Path(sys.argv[1]),scene).run(c))
-  except Exception as e:results.append({'unsupported':str(e)})
+ scene_bytes=Path(sys.argv[2]).read_bytes();cases_bytes=Path(sys.argv[3]).read_bytes()
+ # Every case builds a full level scene, so the few cases are sharded across
+ # workers; results stay in input order — identical to the serial run.
+ results=oracle_pool.pooled_map(_worker_case,_worker_init,(sys.argv[1],sys.argv[2]),json.loads(cases_bytes))
  print(json.dumps({'hashes':m.m.base.HASHES|{'MSVCRT.dll':m.m.hash_module.CRT_HASH},'sceneSha256':hashlib.sha256(scene_bytes).hexdigest(),'casesSha256':hashlib.sha256(cases_bytes).hexdigest(),'results':results}))

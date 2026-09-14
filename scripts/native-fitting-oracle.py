@@ -14,6 +14,10 @@ spec = importlib.util.spec_from_file_location('native_collision', Path(__file__)
 collision = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collision)
 
+pool_spec = importlib.util.spec_from_file_location('oracle_pool', Path(__file__).with_name('oracle_pool.py'))
+oracle_pool = importlib.util.module_from_spec(pool_spec)
+pool_spec.loader.exec_module(oracle_pool)
+
 
 class NativeFitting(collision.NativeCollision):
     def __init__(self, root):
@@ -127,9 +131,27 @@ class NativeWorldFitting(NativeFitting):
         return super().on_instruction(cpu, address, size, data)
 
 
+_WORKER = None
+
+
+def _worker_init(root, model_path):
+    """Per-worker probe; each Unicorn instance lives in exactly one process."""
+    global _WORKER
+    _WORKER = (NativeWorldFitting(Path(root), json.loads(Path(model_path).read_text()))
+               if model_path else NativeFitting(Path(root)))
+
+
+def _worker_case(case):
+    return _WORKER.fit(case)
+
+
 if __name__ == '__main__':
     if len(sys.argv) not in [3, 4]:
         sys.exit('Usage: native-fitting-oracle.py GAME_ROOT CASES_JSON [WORLD_MODEL_JSON]')
-    native = NativeWorldFitting(Path(sys.argv[1]), json.loads(Path(sys.argv[3]).read_text())) if len(sys.argv) == 4 else NativeFitting(Path(sys.argv[1]))
-    cases = json.loads(Path(sys.argv[2]).read_text())
-    print(json.dumps({'hashes': collision.HASHES, 'results': [native.fit(case) for case in cases]}))
+    # The FindSpot case list is the validate critical path: shard it across
+    # worker probes and join the results in input order — identical to the
+    # serial run by construction.
+    results = oracle_pool.pooled_map(_worker_case, _worker_init,
+                                     (sys.argv[1], sys.argv[3] if len(sys.argv) == 4 else None),
+                                     json.loads(Path(sys.argv[2]).read_text()))
+    print(json.dumps({'hashes': collision.HASHES, 'results': results}))
