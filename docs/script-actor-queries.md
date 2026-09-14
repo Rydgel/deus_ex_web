@@ -18,6 +18,8 @@ from the Engine.u exports, not from the declaration text.
 | 718 | `final function bool IsOverlapping (actor checkActor)` | exec `0x1036ddb0`, body `0x10369430` (thunk `0x103029be`) | `checkActor` evaluated once; a null reference writes `0` without entering the body |
 | 310 | `final iterator function RadiusActors (class<actor> BaseClass, out actor Actor, float Radius, optional vector Loc)` | exec `0x103e4fa0` | four argument evaluations, `Loc` buffer pre-stored from `this->+0x114`, Level->Actors array scan with Class-ancestry filter and a strict x87 radius predicate |
 | 311 | `final iterator function VisibleActors (class<actor> BaseClass, out actor Actor, optional float Radius, optional vector Loc)` | exec `0x103e5260` | same skeleton plus a pre-zeroed `Radius` buffer, an `+0x28` bit-2 skip, a `Radius == 0.0` distance-gate bypass and a `Level->Model->FastLineCheck` visibility call |
+| 298 | `final function SetBase (actor NewBase)` | exec `0x103e1a90`, body `0x10369c80` (thunk `0x10301285`) | `NewBase` evaluated once, then the C++ body called with `(this, NewBase, 1)` — the notify literal is the BaseChange gate |
+| 306 | `final iterator function BasedActors (class<actor> BaseClass, out actor Actor)` | exec `0x103e4800` | two argument evaluations, Level->Actors scan with the Class-ancestry filter and `candidate->+0xc4 == this` |
 
 ## Recovered semantics
 
@@ -117,6 +119,46 @@ class filtering, negative `Radius` (squared), and early-break out
 retention. Mutations dropping the hidden skip, applying the distance gate
 at `Radius == 0` or swapping the `FastLineCheck` arguments are caught.
 
+### 298 `SetBase` — exec `0x103e1a90`, body `0x10369c80`
+
+The exec evaluates `NewBase` once, then calls the body as
+`SetBase(this, NewBase, 1)` — the `1` literal is the BaseChange notify
+flag. The body (`AActor::SetBase`) first walks `NewBase`'s `+0xc4` chain:
+any link equal to `this` returns without side effects. A `NewBase` equal to
+the current `+0xc4` also returns. Otherwise the old base's `+0xd8` byte is
+decremented and `Detach` is dispatched on it — unless the old base is
+`this->+0xa8` (LevelInfo). `+0xc4` is then stored, the new base's `+0xd8`
+byte incremented and `Attach` dispatched on it — again skipped for the
+world actor. The notify flag gates the final `BaseChange` dispatch on the
+receiver. Events run through vtable `+0x10` (`ProcessEvent`) with the
+receiver as the single argument, and the `+0xd8` counts wrap as bytes.
+
+Cases (`scripts/native-set-base-oracle.py` →
+`validate-native-set-base.mjs`, 9 cases): the Detach → store → Attach →
+BaseChange order (each event records the live `+0xc4`), the same-base and
+null no-ops, the world exclusion on both ends, the self-ancestry guard
+including a two-hop chain, and the `&0xff` wrap at 255. Mutations removing
+the guard, either exclusion, the store ordering, the early out or the byte
+width are caught.
+
+### 306 `BasedActors` — `0x103e4800`
+
+The exec evaluates `BaseClass` and the out `Actor` expression, defaults a
+null `BaseClass` to `class'Actor'` (`0x1057cdf0`), clears the out slot and
+resumes the `Level->+0x2c/+0x30` actor-array scan from a saved index. A
+candidate yields when it is non-null, its Class ancestry reaches
+`BaseClass` and `candidate->+0xc4` (Base) is the receiver — there is no
+other exclusion, distance or visibility test. Natural exhaustion leaves
+the out slot cleared; an early `IteratorPop` keeps the last publish.
+
+Cases (`scripts/native-based-actors-oracle.py` →
+`validate-native-based-actors.mjs`, 8 cases): array order, unbased and
+other-based candidates skipped, the Mover ancestry filter, null slots, a
+LevelInfo candidate still yielding, the receiver itself not yielding
+(its own `+0xc4` is not itself), and early-break out retention. Mutations
+dropping the class filter, the Base test or the per-resume out clear are
+caught.
+
 ## Runtime binding notes
 
 - `invokeNative(283)` remains gated on `collisionViewActors`: the spawned
@@ -129,9 +171,15 @@ at `Radius == 0` or swapping the `FastLineCheck` arguments are caught.
   (`worldActor`/`position`/`radius`/`height`/`movingBrush`); a null
   `checkActor` returns `false` without touching the receiver, matching the
   exec.
-- `createIterator(310/311)` requires `actorClass` and `levelFor`; the
+- `createIterator(310/311/306)` requires `actorClass` and `levelFor`; the
   candidate class test is `IsChildOf` over the attached instance's `cls`
   chain — the same walk `AllActors` performs — so map actors and spawned
   actors both filter correctly. `311` resolves `level.model` and
   `level.fastLineCheck ?? fastLineCheck` (the ported `UModel::FastLineCheck`)
-  per resume.
+  per resume. `306` reads the candidate's `Base` through
+  `fieldReference(actor, 'Base')` and compares object identity to the
+  receiver.
+- `invokeNative(298)` remains gated on `collisionViewActors` like the other
+  attachment natives — the receiver needs the `base`/`worldActor`/
+  `standingCount` view — and delegates to the already-validated `setBase`
+  port with `notify=true`, matching the exec's `(NewBase, 1)` call.

@@ -346,3 +346,49 @@ export function createVisibleActorsIterator({
     },
   };
 }
+
+/** Original execBasedActors 0x103e4800 (native index 306). The exec evaluates
+ * BaseClass and the out Actor expression, defaults a null BaseClass to
+ * class'Actor' (0x1057cdf0), clears the out slot and resumes the
+ * Level->Actors (+0x2c/+0x30) scan from a saved index. A candidate yields
+ * when its Class ancestry reaches BaseClass and candidate->+0xc4 (Base) is
+ * the receiver — no other exclusion or distance test. Evidence:
+ * docs/script-actor-queries.md. */
+export function createBasedActorsIterator({
+  receiver,
+  argumentCount,
+  evaluateArgument,
+  actorClass,
+  levelFor,
+  isA,
+  baseOf,
+}) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('BasedActors requires evaluateArgument');
+  if (typeof levelFor !== 'function') throw new TypeError('BasedActors requires levelFor');
+  if (typeof isA !== 'function') throw new TypeError('BasedActors requires isA');
+  if (typeof baseOf !== 'function') throw new TypeError('BasedActors requires baseOf');
+  if (argumentCount !== 2) throw new RangeError(`BasedActors takes two arguments; got ${String(argumentCount)}`);
+
+  const baseValue = refValue(evaluateArgument(0));
+  const outActor = writeSlot(evaluateArgument(1));
+  const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+
+  let index = 0;
+  return {
+    next() {
+      outActor.set(null);
+      const level = levelFor(receiver), actors = level?.actors;
+      if (!actors || typeof actors.length !== 'number')
+        throw new TypeError('BasedActors levelFor(receiver) must provide an actors array');
+      while (index < actors.length) {
+        const actor = actors[index++];
+        if (actor === null || actor === undefined) continue;
+        if (!isA(actor, baseClass)) continue;
+        if (baseOf(actor) !== receiver) continue;
+        outActor.set(actor);
+        return true;
+      }
+      return false;
+    },
+  };
+}

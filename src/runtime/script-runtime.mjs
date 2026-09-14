@@ -5,7 +5,7 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
@@ -1619,18 +1619,25 @@ export class ScriptRuntime {
       const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
       return create({...call,levelFor:this.levelFor});
     }
-    if(call.index===310||call.index===311){
-      // execRadiusActors/execVisibleActors scan Level->Actors in native
-      // order; the candidate Class->+0x28 ancestry walk is the attached
-      // instance's cls chain, same as AllActors. See
+    if(call.index===310||call.index===311||call.index===306){
+      // execRadiusActors/execVisibleActors/execBasedActors scan
+      // Level->Actors in native order; the candidate Class->+0x28 ancestry
+      // walk is the attached instance's cls chain, same as AllActors. See
       // docs/script-actor-queries.md.
       if(!this.actorClass||!this.levelFor)throw new Error('Actor iterators require a linked original actor array');
+      const isA=(actor,base)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
+        return false;
+      };
+      if(call.index===306){
+        // The native compares candidate->+0xc4 (the Base property) to the
+        // receiver; fieldReference reads the attached field storage.
+        const baseField=this.lookupMember(this.actorClass,'fields','Base');
+        return createBasedActorsIterator({...call,actorClass:this.actorClass.record,
+          levelFor:this.levelFor,isA,baseOf:actor=>this.fieldReference(actor,baseField).get()});
+      }
       const create=call.index===310?createRadiusActorsIterator:createVisibleActorsIterator;
-      return create({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,
-        isA:(actor,base)=>{
-          for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
-          return false;
-        }});
+      return create({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
     }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');
