@@ -5,6 +5,7 @@
  * bytecode VM owns the iterator body's execution and calls next() at each
  * IteratorNext boundary.
  */
+import { fastLineCheck } from './fast-line-check.mjs';
 
 const isReference = value => Boolean(value?.reference && typeof value.set === 'function');
 const refValue = value => value?.reference ? value.get() : value;
@@ -231,6 +232,117 @@ export function createTraceTextureIterator({
       outGroup.set(group);
       outFlags.set(flags);
       return true;
+    },
+  };
+}
+
+const f32 = Math.fround;
+
+/** Original execRadiusActors 0x103e4fa0 (native index 310). The exec
+ * evaluates BaseClass, the out Actor expression and Radius, copies
+ * this->+0x114 into the Loc buffer, then evaluates the optional Loc; a null
+ * BaseClass falls back to the Actor class after evaluation. Each resume
+ * clears the out slot and continues scanning Level->Actors (+0x2c/+0x30)
+ * from a saved index — no self or owner exclusion. A candidate yields when
+ * its Class ancestry reaches BaseClass and
+ * (Radius + CollisionRadius)^2 > sum((candidate.Location - Loc)^2) with the
+ * strict fcompp predicate (equal or unordered distances excluded).
+ * Evidence: docs/script-actor-queries.md. */
+export function createRadiusActorsIterator({
+  receiver,
+  argumentCount,
+  evaluateArgument,
+  actorClass,
+  levelFor,
+  isA,
+}) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('RadiusActors requires evaluateArgument');
+  if (typeof levelFor !== 'function') throw new TypeError('RadiusActors requires levelFor');
+  if (typeof isA !== 'function') throw new TypeError('RadiusActors requires isA');
+  if (argumentCount !== 4) throw new RangeError(`RadiusActors takes four arguments; got ${String(argumentCount)}`);
+
+  const baseValue = refValue(evaluateArgument(0));
+  const outActor = writeSlot(evaluateArgument(1));
+  const radius = f32(refValue(evaluateArgument(2)) ?? 0);
+  const locationDefault = receiver.position.map(f32);
+  const loc = (refValue(evaluateArgument(3)) ?? locationDefault).map(f32);
+  const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+
+  let index = 0;
+  return {
+    next() {
+      outActor.set(null);
+      const level = levelFor(receiver), actors = level?.actors;
+      if (!actors || typeof actors.length !== 'number')
+        throw new TypeError('RadiusActors levelFor(receiver) must provide an actors array');
+      while (index < actors.length) {
+        const actor = actors[index++];
+        if (actor === null || actor === undefined) continue;
+        if (!isA(actor, baseClass)) continue;
+        const p = actor.position;
+        const dx = f32(p[0]) - loc[0], dy = f32(p[1]) - loc[1], dz = f32(p[2]) - loc[2];
+        const sum = radius + f32(actor.radius ?? 0);
+        if (!(sum * sum > dx * dx + dy * dy + dz * dz)) continue;
+        outActor.set(actor);
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+/** Original execVisibleActors 0x103e5260 (native index 311). Same argument
+ * skeleton as RadiusActors plus a pre-stored zero Radius buffer evaluated
+ * before the Loc default copy. Each candidate is skipped on a null slot,
+ * actor flag +0x28 bit 0x02 or a failed Class ancestry walk; the distance
+ * gate runs only when Radius is ordered-nonzero against the double constant
+ * 0.0 (strict Radius^2 > sum(d^2), no CollisionRadius term). Survivors call
+ * Level->Model->FastLineCheck(candidate.Location, Loc) and yield on a
+ * nonzero AL byte. Evidence: docs/script-actor-queries.md. */
+export function createVisibleActorsIterator({
+  receiver,
+  argumentCount,
+  evaluateArgument,
+  actorClass,
+  levelFor,
+  isA,
+}) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('VisibleActors requires evaluateArgument');
+  if (typeof levelFor !== 'function') throw new TypeError('VisibleActors requires levelFor');
+  if (typeof isA !== 'function') throw new TypeError('VisibleActors requires isA');
+  if (argumentCount !== 4) throw new RangeError(`VisibleActors takes four arguments; got ${String(argumentCount)}`);
+
+  const baseValue = refValue(evaluateArgument(0));
+  const outActor = writeSlot(evaluateArgument(1));
+  const radius = f32(refValue(evaluateArgument(2)) ?? 0);
+  const locationDefault = receiver.position.map(f32);
+  const loc = (refValue(evaluateArgument(3)) ?? locationDefault).map(f32);
+  const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+
+  let index = 0;
+  return {
+    next() {
+      outActor.set(null);
+      const level = levelFor(receiver), actors = level?.actors;
+      if (!actors || typeof actors.length !== 'number')
+        throw new TypeError('VisibleActors levelFor(receiver) must provide an actors array');
+      const model = level?.model, check = level?.fastLineCheck ?? fastLineCheck;
+      while (index < actors.length) {
+        const actor = actors[index++];
+        if (actor === null || actor === undefined) continue;
+        if ((actor.actorFlags ?? 0) & 2) continue;
+        if (!isA(actor, baseClass)) continue;
+        const p = actor.position;
+        if (radius < 0 || radius > 0) {
+          const dx = f32(p[0]) - loc[0], dy = f32(p[1]) - loc[1], dz = f32(p[2]) - loc[2];
+          if (!(radius * radius > dx * dx + dy * dy + dz * dz)) continue;
+        }
+        if (!model) throw new TypeError('VisibleActors requires the level BSP model');
+        if (!(check(model, p.map(f32), loc) & 0xff)) continue;
+        outActor.set(actor);
+        return true;
+      }
+      return false;
     },
   };
 }

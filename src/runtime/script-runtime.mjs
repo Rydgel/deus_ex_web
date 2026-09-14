@@ -5,7 +5,7 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
@@ -26,6 +26,7 @@ import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
 import { execActorPlaySound } from './script-sound.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
+import { isOverlapping } from './actor-touch.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
 import { execSetLocation } from './script-set-location.mjs';
 import { bindActorConversations } from './script-conversation-wrapper.mjs';
@@ -1407,6 +1408,19 @@ export class ScriptRuntime {
       if(!model)throw new Error('FastTrace requires the live level BSP model');
       return scriptFastTrace(model,source,end,start,level.fastLineCheck);
     }
+    if(call.index===718){
+      // execIsOverlapping 0x1036ddb0: checkActor evaluates first; a null
+      // reference publishes 0 without entering AActor::IsOverlapping
+      // 0x10369430 — strict (Ra+Rb)^2 > dx^2+dy^2 and (Ha+Hb)^2 > dz^2 in
+      // x87, excluded when either side carries a Primitive whose class
+      // ancestry reaches Brush or when the other actor is this->+0xa8.
+      if(call.argumentCount!==1)throw new Error('IsOverlapping requires one argument');
+      const other=refValue(call.evaluateArgument(0));
+      if(other==null)return false;
+      if(call.receiver?.worldActor===undefined)
+        throw new Error('IsOverlapping requires the actor collision view');
+      return isOverlapping(call.receiver,other);
+    }
     if(call.index===278)return execScriptSpawn(call,{
       read:(actor,name)=>this.namedReference(actor,name).get(),
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
@@ -1604,6 +1618,19 @@ export class ScriptRuntime {
       // docs/script-trace.md.
       const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
       return create({...call,levelFor:this.levelFor});
+    }
+    if(call.index===310||call.index===311){
+      // execRadiusActors/execVisibleActors scan Level->Actors in native
+      // order; the candidate Class->+0x28 ancestry walk is the attached
+      // instance's cls chain, same as AllActors. See
+      // docs/script-actor-queries.md.
+      if(!this.actorClass||!this.levelFor)throw new Error('Actor iterators require a linked original actor array');
+      const create=call.index===310?createRadiusActorsIterator:createVisibleActorsIterator;
+      return create({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,
+        isA:(actor,base)=>{
+          for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
+          return false;
+        }});
     }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');
