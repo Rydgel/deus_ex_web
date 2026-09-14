@@ -9,6 +9,24 @@ export function scriptStringEqual(left,right) {
   return scriptStringText(left)===scriptStringText(right);
 }
 
+/** Core UObject natives 115/120/121 (<, <=, >= on string,string) -> appStrcmp,
+ * which forwards to the shipped MSVCRT wcscmp: a case-sensitive compare of
+ * unsigned UTF-16 code units that stops at the first NUL unit.  The bodies
+ * substitute the runtime empty-string buffer for an operand whose ArrayNum is
+ * zero — the logical adapter's truncation at the first NUL covers both that
+ * substitution and embedded-zero storage (oracle cases slt-numzero-ptr and
+ * slt-embedded-zero). */
+export function scriptStringCompare(left,right) {
+  const a=scriptStringText(left),b=scriptStringText(right);
+  const n=Math.min(a.length,b.length);
+  for(let i=0;i<n;i++){
+    const d=a.charCodeAt(i)-b.charCodeAt(i);
+    if(d)return d;
+  }
+  // The shorter text's terminating NUL compares below any remaining unit.
+  return a.length-b.length;
+}
+
 /** Core UObject::execComplementEqual_StringString native 124 -> appStricmp. */
 export function scriptStringComplementEqual(left,right) {
   const a=scriptStringText(left),b=scriptStringText(right);

@@ -1,12 +1,12 @@
 import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
-import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
+import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
 import { getAxes } from './camera.mjs';
 import { rotatorSin } from './coords.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,242,243,244,245,248,249,250,251,254,255,276,287,288,296,300,316,317,318,319]);
+const primitiveNatives=new Set([112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
@@ -16,7 +16,7 @@ export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].
 // 1-3, so a non-lvalue in any other position still gets a plain copy.
 const outArgZero=Object.freeze(new Set([0]));
 const primitiveOutNatives=new Map([[229,new Set([1,2,3])]]);
-for(const index of [135,138,139,140,163,164,165,166,182,184,185,221,222,223,224,318,319,...decorationOutPrimitiveIndices])
+for(const index of [135,138,139,140,160,163,164,165,166,182,184,185,221,222,223,224,297,318,319,...decorationOutPrimitiveIndices])
   primitiveOutNatives.set(index,outArgZero);
 export const refValue = v => v?.reference ? v.get() : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
@@ -106,6 +106,38 @@ const x87recip = b => {
   let exp = -(63 + n) - b.exp;
   if (x87width(q) > 64) { q >>= 1n; exp += 1; }
   return { neg: b.neg, sig: q, exp };
+};
+// x87 FDIV of two loaded values: a NaN operand propagates quieted (the
+// larger significand wins on a NaN pair), 0/0 and inf/inf produce the real
+// indefinite, x/0 is a signed infinity and x/inf a signed zero.  A finite
+// quotient keeps its correctly-rounded 64-bit significand — native 160
+// truncates it through _ftol, where the extended precision is observable:
+// INT_MAX / 4.665708e-10f truncates to low DWORD 0x843de10f while the
+// 53-bit double quotient rounds up to give 0x843de200.
+const x87div = (a, b) => {
+  if (a.nan !== undefined) return b.nan === undefined ? x87quiet(a) : x87nan(a, b);
+  if (b.nan !== undefined) return x87quiet(b);
+  const neg = a.neg ^ b.neg;
+  if (a.inf || b.inf) {
+    if (a.inf && b.inf) return { nan: X87_INDEFINITE };
+    return a.inf ? { neg, inf: true } : { neg, sig: 0n, exp: 0 };
+  }
+  if (b.sig === 0n) return a.sig === 0n ? { nan: X87_INDEFINITE } : { neg, inf: true };
+  if (a.sig === 0n) return { neg, sig: 0n, exp: 0 };
+  // Shift the dividend up so the integer quotient carries ~96 bits, then
+  // round the top 64 with the exact remainder: q = floor(num/den) and the
+  // dropped fraction is low/2^shift + rem/(den*2^shift).
+  const k = 96 + x87width(b.sig) - x87width(a.sig);
+  const num = a.sig << BigInt(k);
+  const q = num / b.sig, rem = num - q * b.sig;
+  const shift = x87width(q) - 64;
+  let sig = q >> BigInt(shift);
+  const low = q - (sig << BigInt(shift));
+  const lost2 = (low * b.sig + rem) * 2n, unit = b.sig << BigInt(shift);
+  if (lost2 > unit || (lost2 === unit && (sig & 1n))) sig += 1n;
+  let exp = a.exp - b.exp - k + shift;
+  if (x87width(sig) > 64) { sig >>= 1n; exp += 1; }
+  return { neg, sig, exp };
 };
 // The FST/FSTP float32 store: round the 64-bit significand to 24 bits with
 // nearest-even, honoring denormal and overflow boundaries.
@@ -219,6 +251,43 @@ const isVec3 = v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n 
 
 /** Original bytecode execution with linked engine services.
  * Unsupported instructions/native indices fail, rather than being approximated. */
+// x87 FSIN/FCOS/FPTAN/FPATAN as the Core thunks run them, measured on real
+// silicon through Rosetta 2 rather than modelled (tools/x87-transcendental-probe.c;
+// 1.4M+ sampled float32 bit patterns per function, see
+// docs/script-string-transcendental.md):
+//   * a NaN operand is quieted (bit 22 set) and keeps its sign and payload —
+//     FCOS does NOT clear a negative NaN's sign;
+//   * +-inf raises #IA on FSIN/FCOS/FPTAN and yields the QNaN indefinite,
+//     while FPATAN legitimately returns +-pi/2;
+//   * a finite |x| >= 2^63 is out of FSIN/FCOS range: C2 is set and the
+//     operand passes through unchanged.  FPTAN also declines to push, so the
+//     thunk's `fstp st(0)` empties the stack and the result store underflows
+//     to the indefinite.  The boundary is inclusive: 2^63 itself passes through.
+// Above X87_REDUCTION_LIMIT the FPU's 66-bit pi argument reduction diverges
+// from the exactly-reduced libm result, so those inputs are refused rather
+// than answered with a value the original would not produce.
+const X87_REDUCTION_LIMIT = 2 ** 26;
+const X87_TRANSCENDENTAL = {
+  sin: { fn: Math.sin, overRange: 'passthrough' },
+  cos: { fn: Math.cos, overRange: 'passthrough' },
+  tan: { fn: Math.tan, overRange: 'indefinite' },
+  atan: { fn: Math.atan, overRange: null },
+};
+function x87Transcendental(name, operand) {
+  const { fn, overRange } = X87_TRANSCENDENTAL[name];
+  const bits = f32bits(operand), magnitude = bits & 0x7fffffff;
+  if (magnitude > 0x7f800000) return f32num((bits | 0x400000) >>> 0);
+  if (magnitude === 0x7f800000)
+    return overRange === null ? f(fn(f32num(bits))) : f32num(X87_INDEFINITE);
+  const x = f32num(bits);
+  if (overRange !== null && Math.abs(x) >= 2 ** 63)
+    return overRange === 'passthrough' ? x : f32num(X87_INDEFINITE);
+  if (overRange !== null && Math.abs(x) >= X87_REDUCTION_LIMIT)
+    throw new Error(`Core ${name} operand ${x} is above the measured 2^26 bound `
+      + "where the x87's 66-bit pi argument reduction diverges from Math." + name);
+  return f(fn(x));
+}
+
 export function compileFunction(fn) {
   const decoded = decodeScript(fn), { statements } = decoded;
   for (const { node } of statements.values()) if ([0x06, 0x07].includes(node.op) && !statements.has(node.target)) throw new Error('Script jump is not an instruction boundary');
@@ -240,9 +309,13 @@ export function compileFunction(fn) {
       : index===248 ? values.length===3 && values.every(v => typeof v==='number')
       : index===300 ? values.length===2 && isVec3(a) && isVec3(b)
       : index===173 ? values.length===2 && typeof a==='number' && typeof b==='number'
+      : index===160 ? values.length===2 && typeof a==='number' && typeof b==='number'
+      : index===237 ? values.length===1 && typeof a==='string'
+      : [115,120,121].includes(index) ? values.length===2 && typeof a==='string' && typeof b==='string'
+      : [188,189,190].includes(index) ? values.length===1 && typeof a==='number'
       : index===287 ? values.length===2 && isVec3(a) && typeof b==='number'
       : index===288 ? values.length===2 && typeof a==='number' && isVec3(b)
-      : [142,203,276,317,318,319].includes(index) ? values.length===2 && isVec3(a) && isVec3(b)
+      : [142,203,276,297,317,318,319].includes(index) ? values.length===2 && isVec3(a) && isVec3(b)
       : true;
     if (!claimed) {
       if (services.native) return services.native({index,args,receiver,script:fn,frame});
@@ -257,6 +330,16 @@ export function compileFunction(fn) {
       case 122: return scriptStringEqual(a,b);
       case 123: return !scriptStringEqual(a,b);
       case 124: return scriptStringComplementEqual(a,b);
+      // LessThan/LessEqual/GreaterEqual_StrStr (115/120/121): two FString
+      // temporaries evaluate left-to-right; an operand whose ArrayNum is
+      // zero is substituted with the runtime empty-string buffer at
+      // 0x101ef654 (the pointer is not consulted), then appStrcmp — the
+      // shipped MSVCRT wcscmp — compares unsigned UTF-16 code units
+      // case-sensitively and the body stores setl/setle/setge on the signed
+      // result.
+      case 115: return scriptStringCompare(a,b)<0;
+      case 120: return scriptStringCompare(a,b)<=0;
+      case 121: return scriptStringCompare(a,b)>=0;
       case 125: return scriptLen(a);
       case 126: return scriptInStr(a,b);
       case 127: return scriptMid(a,b,values.length>2?values[2]:undefined);
@@ -294,6 +377,21 @@ export function compileFunction(fn) {
       case 157: return (a | 0) ^ (b | 0);
       case 158: return (a | 0) | (b | 0);
       case 196: return ((a | 0) >>> (b | 0)) | 0;
+      // DivideEqual_IntFloat (160): the float32 divisor is FCOMP'd against
+      // the embedded 0.0 at 0x101765c4 and C3 tested — an equal OR
+      // unordered (NaN) divisor takes the path that loads the same 0.0,
+      // runs _ftol and stores 0 to BOTH the out int and the result (the
+      // previous value is NOT kept).  Otherwise FILD loads the int32 and
+      // FDIV divides by the float32 divisor on the 80-bit stack before
+      // _ftol truncates to int64 and stores the low DWORD.  The out
+      // operand arrives through GPropAddr like every out native.
+      case 160: {
+        const divisor=x87load(b);
+        const v=divisor.nan!==undefined||(!divisor.inf&&divisor.sig===0n)?0
+          :x87ftol(x87div(x87int32(a),divisor));
+        if(args[0]?.reference)assign(args[0],v);
+        return v;
+      }
       case 150: return (a | 0) < (b | 0);
       case 151: return (a | 0) > (b | 0);
       case 154: return (a | 0) === (b | 0);
@@ -374,7 +472,21 @@ export function compileFunction(fn) {
       // every result component as float32.  The first operand of 185/223 is
       // an out-lvalue and is therefore retained by primitiveOutNatives.
       case 185: return assign(args[0], f(f(a) - f(b)));
-      case 187: return f(Math.sin(a));
+      // Sin (187)/Cos (188)/Tan (189)/Atan (190): each body widens the
+      // float32 operand to a double and calls a Core thunk that runs the
+      // bare x87 instruction — 0x10123240 fsin, 0x10123250 fcos,
+      // 0x10123260 fptan (+fstp st(0) discarding the pushed 1.0),
+      // 0x10123270 fld1+fpatan — then stores one float32.  The edge rules
+      // below are MEASURED on real x87 silicon through Rosetta 2
+      // (tools/x87-transcendental-probe.c, scripts/validate-x87-
+      // transcendental-hardware.mjs); Unicorn's softfloat computes these
+      // four instructions in host double precision and reports different
+      // edges, so it is not the authority here.  See
+      // docs/script-string-transcendental.md.
+      case 187: return x87Transcendental('sin', a);
+      case 188: return x87Transcendental('cos', a);
+      case 189: return x87Transcendental('tan', a);
+      case 190: return x87Transcendental('atan', a);
       // Core's float/vector operators: every operand evaluator stores its
       // result as float32, and each FST/FSTP in the bodies is where the
       // original rounds to float32 — anything still on the x87 stack keeps
@@ -483,6 +595,18 @@ export function compileFunction(fn) {
       // Multiply_VectorVector (296): each component product stores to
       // float32 with its own FSTP — no cross-component accumulation.
       case 296: return a.map((v,i)=>x87store(x87mul(x87load(v),x87load(b[i]))));
+      // MultiplyEqual_VectorVector (297): the first operand arrives through
+      // the original GPropAddr handoff (an lvalue mutates its variable, a
+      // non-lvalue mutates the discarded stack temporary); each component
+      // FLDs the float32 second operand and FMULs the target in place, and
+      // the three updated words copy to the return vector.  The body
+      // computes arg1*st0 x arg0*mem per component — written in that order
+      // though FMUL is commutative under the proven NaN-selection rules.
+      case 297: {
+        const out=a.map((v,i)=>x87store(x87mul(x87load(b[i]),x87load(v))));
+        if(args[0]?.reference)assign(args[0],out);
+        return out;
+      }
       // MirrorVectorByNormal (300): V - 2*N'*(V.N') with N' = SafeNormal(N).
       // The 80-bit dot product stores once to float32 (FSTP) and that stored
       // value feeds all three product terms.  2N'.x stays on the stack;
@@ -522,9 +646,21 @@ export function compileFunction(fn) {
       case 223: return assign(args[0], a.map((v,i) => f(f(v) + f(b[i]))));
       case 235: return scriptCaps(a);
       case 236: return scriptChr(a);
+      // Asc (237): the FString operand substitutes the runtime empty-string
+      // buffer when its ArrayNum is zero (pointer not consulted), then the
+      // result is the first UTF-16 code unit zero-extended (MOVZX word) —
+      // an empty string reads the buffer's leading NUL and returns 0.
+      case 237: {
+        const text=scriptStringText(a);
+        return text.length?text.charCodeAt(0):0;
+      }
       // EqualEqual_BoolBool (242) / NotEqual_BoolBool (243): pure Core operators.
       case 242: return Boolean(a) === Boolean(b);
       case 243: return Boolean(a) !== Boolean(b);
+      // XorXor_BoolBool (131): each dword operand is TEST/SETE'd (==0) and
+      // the two flags XORed — logical inequality after zero-truth coercion;
+      // any nonzero bit pattern is true.
+      case 131: return Boolean(a) !== Boolean(b);
       case 244: return a > b ? b : a;
       case 245: return a >= b ? a : b;
       case 250: return Math.max(a | 0, b | 0);
