@@ -3,9 +3,10 @@ import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-pri
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
 import { scriptStringEqual, scriptStringComplementEqual, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
 import { getAxes } from './camera.mjs';
+import { rotatorSin } from './coords.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,174,175,176,177,179,180,181,182,184,185,187,193,194,196,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,242,243,244,245,248,249,250,251,254,255,296,300,316]);
+const primitiveNatives=new Set([112,114,119,122,123,124,125,126,127,128,129,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,242,243,244,245,248,249,250,251,254,255,276,287,288,296,300,316,317,318,319]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
@@ -15,7 +16,7 @@ export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].
 // 1-3, so a non-lvalue in any other position still gets a plain copy.
 const outArgZero=Object.freeze(new Set([0]));
 const primitiveOutNatives=new Map([[229,new Set([1,2,3])]]);
-for(const index of [135,138,139,140,163,164,165,166,182,184,185,221,222,223,224,...decorationOutPrimitiveIndices])
+for(const index of [135,138,139,140,163,164,165,166,182,184,185,221,222,223,224,318,319,...decorationOutPrimitiveIndices])
   primitiveOutNatives.set(index,outArgZero);
 export const refValue = v => v?.reference ? v.get() : v;
 export const reference = (object, key) => ({ reference: true, get: () => object[key], set: value => (object[key] = value) });
@@ -181,6 +182,21 @@ const x87below1em8 = v => {
   return shift >= 0 ? (v.sig << BigInt(shift)) < 0x15798ee2308c3an
     : v.sig < (0x15798ee2308c3an << BigInt(-shift));
 };
+// FILD dword: the int32 rotator field becomes an exact 80-bit value
+// (natives 287/288 load each component this way before FMUL).
+const x87int32 = v => (v |= 0, { neg: v < 0 ? 1 : 0, sig: BigInt(v < 0 ? -v : v), exp: 0 });
+// The shipped MSVCRT _ftol (Core thunk 0x1016eec0 -> IAT 0x102ab4b8):
+// FNSTCW -> set RC=truncate -> FISTP qword -> restore; the low DWORD is the
+// result.  A NaN/infinity or a truncated value outside int64 range raises
+// the invalid-operation exception, which stores the integer indefinite
+// 0x8000000000000000 — whose low DWORD is 0.
+const x87ftol = v => {
+  if (v.nan !== undefined || v.inf) return 0;
+  let n = v.exp >= 0 ? v.sig << BigInt(v.exp) : v.sig >> BigInt(-v.exp);
+  if (v.neg) n = -n;
+  return n > 0x7fffffffffffffffn || n < -0x8000000000000000n ? 0
+    : Number(BigInt.asIntN(32, n));
+};
 // FVector::SafeNormal (Core.dll 0x10144be0, thiscall reached through thunk
 // 0x101031c0 by natives 226 and 300): the squared length is accumulated
 // left-associatively in 80-bit — (x*x + y*y) + z*z — stored to a double by
@@ -223,6 +239,10 @@ export function compileFunction(fn) {
       : index===229 ? values.length===4 && isVec3(a)
       : index===248 ? values.length===3 && values.every(v => typeof v==='number')
       : index===300 ? values.length===2 && isVec3(a) && isVec3(b)
+      : index===173 ? values.length===2 && typeof a==='number' && typeof b==='number'
+      : index===287 ? values.length===2 && isVec3(a) && typeof b==='number'
+      : index===288 ? values.length===2 && typeof a==='number' && isVec3(b)
+      : [142,203,276,317,318,319].includes(index) ? values.length===2 && isVec3(a) && isVec3(b)
       : true;
     if (!claimed) {
       if (services.native) return services.native({index,args,receiver,script:fn,frame});
@@ -278,6 +298,11 @@ export function compileFunction(fn) {
       case 151: return (a | 0) > (b | 0);
       case 154: return (a | 0) === (b | 0);
       case 155: return (a | 0) !== (b | 0);
+      // EqualEqual/NotEqual_RotatorRotator (142/203): three plain CMP dword
+      // pairs on the pitch/yaw/roll words — == stores 1 only when all match,
+      // != stores 0 only then.  Raw int32 words, no angle normalization.
+      case 142: return a.every((v,i)=>(v|0)===(b[i]|0));
+      case 203: return a.some((v,i)=>(v|0)!==(b[i]|0));
       // The int/byte out-parameter operators receive arg0 through the
       // original GPropAddr handoff: lvalue arguments mutate the variable,
       // anything else mutates a discarded stack temporary.  The byte
@@ -293,6 +318,26 @@ export function compileFunction(fn) {
       case 165: if(args[0]?.reference)assign(args[0], ((a | 0) + 1) | 0); return a | 0;
       case 171: return f(a * b);
       case 172: return f(a / b);
+      // Percent_FloatFloat (173): both operands are stored float32, widened
+      // to doubles and passed cdecl to the shipped MSVCRT _CIfmod — which
+      // classifies the x87 operand pair and either runs its fxch/FPREM loop
+      // or a domain-error/NaN action before the body stores one float32.
+      // The CRT path (not raw FPREM) is authoritative: a zero or infinite
+      // divisor and an infinite dividend are domain errors producing the
+      // real x87 indefinite; a zero dividend or an exactly-zero remainder
+      // produces +0 through the CRT path; a NaN operand propagates its
+      // payload quieted (the larger significand wins on a NaN/NaN pair).
+      // For finite nonzero operands the FPREM result equals the exact fmod,
+      // which is always representable in float32, so the single store is
+      // bit-exact.
+      case 173: {
+        const x=x87load(a),y=x87load(b);
+        if(x.nan!==undefined)return x87store(y.nan===undefined?x87quiet(x):x87nan(x,y));
+        if(y.nan!==undefined)return x87store(x87quiet(y));
+        if(y.sig===0n||x.inf||y.inf)return x87store({nan:X87_INDEFINITE});
+        const r=a%b;
+        return f(r===0?0:r);
+      }
       case 174: return f(a + b);
       case 175: return f(a - b);
       // Core's preoperator float - loads the operand as a float32 and uses
@@ -456,6 +501,22 @@ export function compileFunction(fn) {
       }
       case 212: return a.map(v => f(f(v) * f(b)));
       case 213: return b.map(v => f(f(a) * f(v)));
+      // Multiply_RotatorFloat (287) / Multiply_FloatRotator (288): each int32
+      // component is FILD'd and FMUL'd against the float32 scalar — the
+      // product stays on the x87 stack — then the shipped MSVCRT _ftol
+      // (RC=truncate FISTP m64) returns the low DWORD.  The 80-bit product
+      // matters: rot 0x7fffffff x 1.0000001f is exact-below-2147483903 at 64
+      // bits (truncates to 2147483902) while a double product rounds up to
+      // 2147483903.  Nonfinite scalars and int64 overflow produce the
+      // integer indefinite, whose low DWORD is 0.
+      case 287: {
+        const s=x87load(b);
+        return a.map(v=>x87ftol(x87mul(x87int32(v),s)));
+      }
+      case 288: {
+        const s=x87load(a);
+        return b.map(v=>x87ftol(x87mul(x87int32(v),s)));
+      }
       case 215: return a.map((v,i) => f(v + b[i]));
       case 216: return a.map((v,i) => f(v - b[i]));
       case 223: return assign(args[0], a.map((v,i) => f(f(v) + f(b[i]))));
@@ -473,6 +534,49 @@ export function compileFunction(fn) {
       case 254: return String(a||'None').toLowerCase()===String(b||'None').toLowerCase();
       case 255: return String(a||'None').toLowerCase()!==String(b||'None').toLowerCase();
       case 316: return a.map((v,i) => ((v | 0) + (b[i] | 0)) | 0);
+      // Subtract_RotatorRotator (317): three independent dword SUBs on the
+      // pitch/yaw/roll words — int32 wrap, no angle normalization.
+      case 317: return a.map((v,i)=>((v|0)-(b[i]|0))|0);
+      // AddEqual/SubtractEqual_RotatorRotator (318/319): the first operand
+      // arrives through the original GPropAddr handoff — an lvalue mutates
+      // its variable in place, anything else mutates a discarded stack
+      // temporary; the three updated words are copied to the return rotator.
+      case 318: {
+        const out=a.map((v,i)=>((v|0)+(b[i]|0))|0);
+        if(args[0]?.reference)assign(args[0],out);
+        return out;
+      }
+      case 319: {
+        const out=a.map((v,i)=>((v|0)-(b[i]|0))|0);
+        if(args[0]?.reference)assign(args[0],out);
+        return out;
+      }
+      // Rotate_VectorRotator (276): the body builds each angle's
+      // forward-rotation FCoords — yaw first, then pitch, then roll — and
+      // accumulates M = M @ R_angleᵀ through the shared FCoords transform
+      // (0x1011a710): every new row component is the x87 dot
+      // (x*ax + y*ay) + z*az stored once to float32, and the origin row's
+      // subtracted intermediates likewise stay on the stack.  The final
+      // block dots V against M's three axes with the same shape.
+      case 276: {
+        const dot=(t,r)=>x87store(x87add(
+          x87add(x87mul(t[0],x87load(r[0])),x87mul(t[1],x87load(r[1]))),
+          x87mul(t[2],x87load(r[2]))));
+        const [pitch,yaw,roll]=b.map(v=>v|0);
+        const sy=rotatorSin(yaw),cy=rotatorSin((yaw+0x4000)|0);
+        const sp=rotatorSin(pitch),cp=rotatorSin((pitch+0x4000)|0);
+        const sr=rotatorSin(roll),cr=rotatorSin((roll+0x4000)|0);
+        let m=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
+        for(const r of [[[0,0,0],[cy,sy,0],[-sy,cy,0],[0,0,1]],
+          [[0,0,0],[cp,0,sp],[0,1,0],[-sp,0,cp]],
+          [[0,0,0],[1,0,0],[0,cr,-sr],[0,sr,cr]]])
+          m=m.map((v,i)=>{
+            const t=i?v.map(x87load)
+              :v.map((x,j)=>x87add(x87load(x),x87neg(x87load(r[0][j]))));
+            return [dot(t,r[1]),dot(t,r[2]),dot(t,r[3])];
+          });
+        return [dot(a.map(x87load),m[1]),dot(a.map(x87load),m[2]),dot(a.map(x87load),m[3])];
+      }
       default:
         if (services.native) return services.native({index,args,receiver,script:fn,frame});
         throw new Error(`VM does not support native ${index}`);
