@@ -91,7 +91,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const doors = new Doors(collision.movers, playerDefaults.MaxFrobDistance, collision,
     {eventHasRecipients}), clock = new FixedClock();
   let timeSeconds=0;
-  const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,
+  const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,surfaceTextures,
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();

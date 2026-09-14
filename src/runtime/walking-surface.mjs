@@ -14,7 +14,7 @@ export async function walkingSurfaceTextures(assets,asset,model){
    const inherited=await defaults.get(object.asset,object.entry.classIndex);
    const friction=stored.values.Friction??inherited.Friction;
    if(!Number.isFinite(friction))throw Error(`Unresolved original Texture.Friction: ${object.key}`);
-   return {key:object.key,outerName:objectAt(object.asset.pkg,object.entry.outer)?.name??object.asset.name,friction:f(friction)};
+   return {key:object.key,name:object.entry.name,outerName:objectAt(object.asset.pkg,object.entry.outer)?.name??object.asset.name,friction:f(friction)};
   })());
   return cache.get(surface.texture);
  }));

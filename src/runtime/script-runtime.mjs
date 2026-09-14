@@ -5,7 +5,8 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator } from './script-iterators.mjs';
+import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
 import { probeNames } from '../unreal/probe-names.mjs';
@@ -97,6 +98,9 @@ import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
 
 const lower=name=>String(name).toLowerCase();
+/** exec bodies resolve each out expression to a raw address; a non-assignable
+ * expression lands in a private temporary whose writes never escape. */
+const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{set(){}};
 
 /** Linked, synchronous original script calls. Loading/linking remains async;
  * an event never suspends halfway through an original call to fetch an asset.
@@ -1366,6 +1370,43 @@ export class ScriptRuntime {
         }),
       });
     }
+    if(call.index===277){
+      // execTrace 0x103e3330: each out expression resolves through GPropAddr
+      // (non-assignable expressions land in a private temporary whose writes
+      // never escape), then End, then the pre-stored optional defaults
+      // Start=this->Location, bTraceActors=*(this+0x1dc)&1 and Extent=(0,0,0).
+      // ULevel::SingleLineCheck (vtable +0xc0) runs with flags
+      // bTraceActors?0x37:6 and extra=0 over a zeroed 44-byte FCheckResult
+      // (Time=1.0, Item=-1); hit.Actor is the result and the record's
+      // Location/Normal publish verbatim — zeroed on a miss.
+      if(call.argumentCount!==6)throw new Error('Trace takes six arguments');
+      const outLocation=call.evaluateArgument(0),outNormal=call.evaluateArgument(1);
+      const end=refValue(call.evaluateArgument(2)),source=call.receiver;
+      const startDefault=source.position;
+      const start=refValue(call.evaluateArgument(3))??startDefault;
+      const traceDefault=Boolean(source.flags&1);
+      const traceActors=refValue(call.evaluateArgument(4))??traceDefault;
+      const extent=refValue(call.evaluateArgument(5))??[0,0,0];
+      const queries=this.levelFor(source)?.hash;
+      if(typeof queries?.lineCheck!=='function')
+        throw new Error('Trace requires the live level query services');
+      const hit=scriptTrace(queries,source,end,start,traceActors,extent);
+      writeSlot(outLocation).set(hit.location);
+      writeSlot(outNormal).set(hit.normal);
+      return hit.actor??null;
+    }
+    if(call.index===548){
+      // execFastTrace 0x103e35e0: Start's Location default is copied before
+      // the optional argument's expression runs; both vectors push by value
+      // into Level->Model->FastLineCheck and the byte result returns masked.
+      if(call.argumentCount!==2)throw new Error('FastTrace takes two arguments');
+      const source=call.receiver,end=refValue(call.evaluateArgument(0));
+      const startDefault=source.position;
+      const start=refValue(call.evaluateArgument(1))??startDefault;
+      const level=this.levelFor(source),model=level?.model;
+      if(!model)throw new Error('FastTrace requires the live level BSP model');
+      return scriptFastTrace(model,source,end,start,level.fastLineCheck);
+    }
     if(call.index===278)return execScriptSpawn(call,{
       read:(actor,name)=>this.namedReference(actor,name).get(),
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
@@ -1557,6 +1598,13 @@ export class ScriptRuntime {
     return updateActorTimer(this.timerState(receiver),seconds,()=>this.processEvent(receiver,'Timer'));
   }
   createIterator(call) {
+    if(call.index===309||call.index===1000){
+      // execTraceActors/execTraceTexture run one MultiLineCheck at
+      // IteratorStart and publish each hit list node in order; see
+      // docs/script-trace.md.
+      const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
+      return create({...call,levelFor:this.levelFor});
+    }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');
     const tag=this.lookupMember(this.actorClass,'fields','Tag');

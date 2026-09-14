@@ -12,7 +12,7 @@ import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
-export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelValues,timeSeconds}) {
+export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelValues,timeSeconds,surfaceTextures}) {
   const f=Math.fround,source=player.collisionActor;
   const worldActor=collision.queries.levelInfo;
   worldActor.values={...levelValues};
@@ -53,6 +53,9 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     // Native graph slots read by native dispatch (Level.Model, null demo driver):
     // the original Play path has no demo recorder attached.
     model, demoRecDriver: null,
+    // Per-surface texture records (walkingSurfaceTextures) for native 1000's
+    // hit.Item -> Model->Surfs[iSurf] material lookup.
+    surfaceTexture: surfaceTextures,
     // ULevel::SpawnActor asks the live level for the same BSP PointRegion used
     // by ordinary movement when it initializes a spawned actor's Region.
     pointRegion:position=>pointRegion(model,position,worldActor,zoneActors),

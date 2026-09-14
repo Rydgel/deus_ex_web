@@ -5,7 +5,7 @@ from pathlib import Path
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 
 ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "Deus Ex GOTY Edition"
-DLL = ROOT / "System" / "Core.dll"
+DLL = ROOT / "System" / (sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].endswith(".dll") else "Core.dll")
 data = DLL.read_bytes()
 pe = int.from_bytes(data[60:64], "little")
 opt = pe + 24
@@ -30,6 +30,8 @@ md.detail = True
 
 ranges = []
 for spec in sys.argv[2:]:
+    if spec.endswith(".dll"):
+        continue
     start, end = (int(x, 16) for x in spec.split("-"))
     ranges.append((start, end))
 
