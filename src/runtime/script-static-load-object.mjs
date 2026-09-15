@@ -16,6 +16,8 @@
  * inferred here.
  */
 
+import {createLinkerExport, CREATE_EXPORT_CONTRACT} from './script-create-export.mjs';
+
 export const STATIC_LOAD_OBJECT_CONTRACT = Object.freeze({
   thunk: 0x10102a1d,
   body: 0x10154d50,
@@ -550,18 +552,33 @@ function findExportIndex(linker, classRef, requestedName, requestedOuter, servic
   return null;
 }
 
-function existingExport(linker, classRef, match, services, events) {
+/**
+ * Run the linker resolver's CreateExport step for one hash-matched export.
+ * The native resolver body at 0x10161cc0 returns CreateExport's result
+ * directly, so an absent `_Object` must reach the recovered
+ * `ULinkerLoad::CreateExport` body rather than a host shortcut: a bound
+ * `createExport` service that is not that body is refused here instead of
+ * being allowed to fabricate a loaded object.  A null return is legitimate —
+ * the context-flag gate at 0x1012e278 and the NAME_Camera gate at
+ * 0x1012e2fd both leave `_Object` null — and the caller then falls back to
+ * StaticFindObject exactly as it does for a missed export.
+ */
+function resolveExport(linker, classRef, match, services, events) {
   const {index, record} = match;
-  if (record.object === null || record.object === 0) {
-    fail(`StaticLoadObject reached null export[${index}] construction`, {
+  const create = requireFunction(services.createExport, 'createExport');
+  if ((record.object === null || record.object === 0) &&
+      create.body !== CREATE_EXPORT_CONTRACT.body) {
+    fail(`StaticLoadObject reached absent export[${index}] construction without the recovered CreateExport body`, {
       kind: 'SERVICE', value: {linker, index}, field: 'object',
     });
   }
-  const create = requireFunction(services.createExport, 'createExport');
   const object = sync(create({linker, index, classRef, record, existing: record.object}),
     'createExport');
+  // CreateExport returns Export._Object; the host writeExportObject service
+  // is what stores it, so a return that the live slot does not hold is
+  // refused rather than trusted.
   if (object !== record.object) {
-    fail(`StaticLoadObject createExport did not preserve existing export[${index}]`, {
+    fail(`StaticLoadObject createExport did not leave export[${index}] holding its return`, {
       kind: 'RETURN', value: object,
     });
   }
@@ -594,8 +611,13 @@ function existingExport(linker, classRef, match, services, events) {
  * - `findName(text, 1)` returns the existing FName index;
  * - `readHashHead(linker, bucket)`, `readExport(linker, index)`, and
  *   `readImportWord(linker, byteOffset)` expose the native linker tables;
- * - `createExport({linker,index,classRef,record,existing})` returns the same
- *   canonical existing export object;
+ * - `createExport({linker,index,classRef,record,existing})` is the linker
+ *   resolver's CreateExport call.  For an existing `_Object` it returns the
+ *   canonical export object; for an absent one it must be the recovered
+ *   `ULinkerLoad::CreateExport` body, bound through `linkerCreateExport`
+ *   below — a service without that body's `0x1012e230` marker is refused
+ *   rather than allowed to fabricate a loaded object.  A null return falls
+ *   back to `staticFindObject`;
  * - an optional synchronous `createLinkerLoad({root,filename,flags,sandbox,guid})`
  *   binds the recovered first-load ULinkerLoad constructor.  It must return a
  *   canonical linker whose `outer` is `root` and whose native reader is
@@ -639,7 +661,10 @@ export function staticLoadObject(request, services = {}) {
     if (linker !== null) {
       const requestedName = nameIndex(resolved.name, services, events);
       const match = findExportIndex(linker, request.classRef, requestedName, -1, services, events);
-      if (match !== null) return {object: existingExport(linker, request.classRef, match, services, events), events};
+      if (match !== null) {
+        const object = resolveExport(linker, request.classRef, match, services, events);
+        if (object !== null) return {object, events};
+      }
     }
     const findObject = requireFunction(services.staticFindObject, 'staticFindObject');
     const object = sync(findObject({classRef: request.classRef, outer: resolved.outer,
@@ -650,4 +675,36 @@ export function staticLoadObject(request, services = {}) {
   } finally {
     lifecycleEnd(services, events);
   }
+}
+
+/**
+ * Bind the recovered `ULinkerLoad::CreateExport` body — thunk `0x101012fd`,
+ * body `0x1012e230` — to the `createExport` service contract consumed by
+ * `staticLoadObject`.  The native resolver calls CreateExport for every
+ * hash-matched export; the body itself performs the `_Object` early-out at
+ * `0x1012e26c` and the absent-export construction, so this adapter serves
+ * both branches and never substitutes a host shortcut for the body.
+ *
+ * `createServices` is the CreateExport service set documented in
+ * script-create-export.mjs: `readExport`/`writeExportObject` in the
+ * `FObjectExport` shape, `contextFlags`, `linkerRoot`, `indexToObject`,
+ * `preload`, `staticConstructObject`, `setLinker`, `loadedObjects`,
+ * `getFullName`, `log`, `read`, `write`, `bind`, `classStaticClass`,
+ * `structStaticClass` and `errorDevice`.  When `sink` is a function it
+ * receives the recovered body's own event sequence so a host can audit the
+ * inner order.  The returned service carries `body` so `staticLoadObject`
+ * can tell it apart from a stub that cannot construct an absent export.
+ */
+export function linkerCreateExport(createServices, sink = null) {
+  requireObject(createServices, 'CreateExport services');
+  if (sink !== null && typeof sink !== 'function') {
+    fail('linkerCreateExport sink must be a function', {kind: 'VALUE', value: sink});
+  }
+  const service = ({linker, index}) => {
+    const result = createLinkerExport({linker, index}, createServices);
+    if (sink !== null) for (const event of result.events) sink(event);
+    return result.object;
+  };
+  service.body = CREATE_EXPORT_CONTRACT.body;
+  return service;
 }

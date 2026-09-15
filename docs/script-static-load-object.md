@@ -189,17 +189,22 @@ and post-load work are skipped on this path.  A null export pointer is the
 separate construction path and requires the full native object lifecycle.
 
 The null-export branch has now been followed through the original instructions
-to its first unresolved service boundary. It resolves `ClassIndex` through
-`0x1012e550`, calls the linker archive's `Preload` virtual at slot `+0x10`,
-resolves `Outer`, and calls `StaticConstructObject` at `0x10157ff0`. The object
-flags passed to that call are `(ExportFlags & 0x067f0025) | 0x01000200`.
-After construction it writes the export's object field, calls `SetLinker`, adds
-the object to `GObjLoaded`, logs, and invokes the class-chain virtual at slot
-`+0x5c`. This order is evidence for the next implementation; the browser still
-rejects the branch because archive `Preload` at `0x10162000` requires a valid
-native object/linker/index graph and the selected Texture then enters its
-unimplemented native serializer. Skipping either call would manufacture a
-loaded resource state that the original did not produce.
+and wired: the resolver body at `0x10161cc0` forwards a hash-matched index to
+`CreateExport` and returns its result directly, so the module routes every
+matched export through the `createExport` service and refuses an absent
+`_Object` unless that service is the recovered `ULinkerLoad::CreateExport`
+body (`0x1012e230`) bound by `linkerCreateExport`.  That body resolves
+`ClassIndex` through `IndexToObject`, calls the linker archive's `Preload`
+virtual at slot `+0x10`, resolves `Outer`, and calls `StaticConstructObject`
+at `0x10157ff0` with `(ExportFlags & 0x067f0025) | 0x01000200`; after
+construction it writes the export's object field, calls `SetLinker`, adds the
+object to `GObjLoaded`, logs, and invokes the class-chain virtual at slot
+`+0x5c`.  Each of those remains a host service the caller must bind — the
+module substitutes nothing.  A null `CreateExport` result (the context-flag
+or `NAME_Camera` gate) falls back to `StaticFindObject` exactly as a missed
+export does.  `Preload` at `0x10162000` is still the boundary that serializes
+a constructed export's own bytes; it remains an explicit host service until
+that body is separately recovered.
 
 The focused fixture uses a negative class import index to exercise the actual
 import-name walk as well as the hash hit.  Its import records are 0x1c bytes at
@@ -272,10 +277,12 @@ first-load constructor after `ResolveName`; direct and grouped exports that
 are explicitly prepared retain the existing-linker path. The graph remains a
 focused initialized fixture rather than the captured 40-entry native loader
 array. The nonempty `ConditionalPostLoad` graph, nonzero linker cleanup,
-first-load file search, null-export construction, native metaclass loading,
-`StaticFindObject` fallback, and sandbox/GUID behavior remain unsupported until
-each native graph is separately bound. See [the native wrapper and live
-integration](script-dynamic-load-object.md).
+first-load file search, `StaticFindObject` fallback, and sandbox/GUID
+behavior remain unsupported until each native graph is separately bound.
+Null-export construction and native metaclass loading are bound only through
+the recovered `CreateExport` body: `scripts/validate-static-load-createexport.mjs`
+drives an absent `DeusEx.u` class export from `staticLoadObject` into it.
+See [the native wrapper and live integration](script-dynamic-load-object.md).
 
 ## Conversation binding integration
 
