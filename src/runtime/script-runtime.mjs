@@ -83,6 +83,7 @@ import {
   getClientObjectNative, windowSensitivityOptionalDefault,
 } from './script-window-sensitivity.mjs';
 import { getToggleNative } from './script-window-toggle-get.mjs';
+import { setToggleNative } from './script-window-toggle-set.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
@@ -1270,6 +1271,11 @@ export class ScriptRuntime {
     if(call.index===1612){
       if(call.argumentCount!==0)throw new Error('ToggleWindow.GetToggle accepts no arguments');
       return getToggleNative(call.receiver,this.windowLifecycle?.toggle??{});
+    }
+    if(call.index===1611){
+      if(call.argumentCount!==1)throw new Error('ToggleWindow.SetToggle requires the bNewToggle argument');
+      const bNewToggle=refValue(call.evaluateArgument(0));
+      return setToggleNative(call.receiver,bNewToggle,this.windowLifecycle?.toggle??{});
     }
     if(call.index===1425){
       if(call.argumentCount!==0)throw new Error('Window.GetRootWindow accepts no arguments');
