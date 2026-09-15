@@ -1,15 +1,24 @@
 import { Reader, PackageError } from './package.mjs';
 import { counted, nameAt, objectAt, readProperties } from './objects.mjs';
 
-/** Walk serialized UE1 bytecode without executing it. Object/name indices expand
- * to four bytes in the script size stored by the original engine. */
-export function skipBytecode(pkg, r, size) {
-  if (!Number.isInteger(size) || size < 0 || size > 16_000_000) throw new PackageError('Invalid script size', r.offset);
+/** One serialized UE1 expression, shared by the whole-script skipper and the
+ * linker-Preload SerializeExpr boundary.  Returns the expanded byte count the
+ * original engine records for the expression (object/name indices expand to
+ * four bytes in the stored script size).  `onIndex(isName, value, start, end)`
+ * observes each serialized compact reference span so callers can emit the
+ * expanded in-memory form. */
+function scriptExpression(pkg, r, onIndex = null) {
   let expanded = 0;
   const bytes = n => { r.take(n); expanded += n; };
-  const index = isName => { const n = r.compact(); expanded += 4; if (isName) nameAt(pkg, n); else objectAt(pkg, n); };
+  const index = isName => {
+    const start = r.offset;
+    const n = r.compact();
+    expanded += 4;
+    if (isName) nameAt(pkg, n); else objectAt(pkg, n);
+    if (onIndex) onIndex(isName, n, start, r.offset);
+  };
   function expression(depth = 0) {
-    if (depth > 128 || expanded >= size) throw new PackageError('Invalid script nesting or size', r.offset);
+    if (depth > 128) throw new PackageError('Invalid script nesting', r.offset);
     const op = r.u8(); expanded++;
     const child = () => expression(depth + 1);
     const argumentsList = () => { while (child() !== 0x16) {} };
@@ -23,7 +32,15 @@ export function skipBytecode(pkg, r, size) {
       case 0x06: bytes(2); break;
       case 0x07: case 0x09: case 0x18: bytes(2); child(); break;
       case 0x0a: { const offset = r.u16(); expanded += 2; if (offset !== 65535) child(); break; }
-      case 0x0c: while (true) { const n = r.compact(); expanded += 4; bytes(4); if (nameAt(pkg, n) === 'None') break; } break;
+      case 0x0c: while (true) {
+        const start = r.offset;
+        const n = r.compact();
+        const end = r.offset;
+        expanded += 4;
+        bytes(4);
+        if (onIndex) onIndex(true, n, start, end);
+        if (nameAt(pkg, n) === 'None') break;
+      } break;
       case 0x0d: case 0x0e: case 0x2d: child(); break;
       case 0x0f: case 0x10: case 0x14: case 0x1a: child(); child(); break;
       case 0x11: child(); child(); child(); child(); break;
@@ -43,10 +60,133 @@ export function skipBytecode(pkg, r, size) {
       case 0x27: case 0x28: case 0x2a: case 0x30: case 0x31: break;
       default: throw new PackageError(`Unsupported script token 0x${op.toString(16)}`, r.offset - 1);
     }
-    if (expanded > size) throw new PackageError('Script size mismatch', r.offset);
     return op;
   }
-  while (expanded < size) expression();
+  expression();
+  return expanded;
+}
+
+/**
+ * Consume one serialized expression — the byte-consumption step of the
+ * recovered UStruct::SerializeExpr load loop at 0x10126ff0.  `r` must be
+ * positioned at the expression start; returns the expanded size the native
+ * cursor advances by.
+ */
+export function skipScriptExpression(pkg, r) {
+  const start = r.offset;
+  const expanded = scriptExpression(pkg, r);
+  return { expanded, serialized: r.offset - start };
+}
+
+/**
+ * One serialized expression expanded the way the recovered
+ * `UStruct::SerializeExpr` (0x101289c0) writes it into the Script FArray:
+ * raw stream bytes pass through, while each compact object/name reference is
+ * replaced by the resolved four-byte slot — `resolveObject(index)` supplies
+ * the object pointer word and `resolveName(index)` the process-wide FName
+ * index.  Returns the expanded bytes plus the expanded/serialized sizes.
+ */
+export function expandScriptExpression(pkg, r, { resolveObject, resolveName } = {}) {
+  if (typeof resolveObject !== 'function' || typeof resolveName !== 'function') {
+    throw new TypeError('expandScriptExpression requires resolveObject and resolveName');
+  }
+  const start = r.offset;
+  const refs = [];
+  const expanded = scriptExpression(pkg, r, (isName, value, at, end) => {
+    const word = isName ? resolveName(value) : resolveObject(value);
+    if (!Number.isInteger(word) || word < 0 || word > 0xffffffff) {
+      throw new PackageError(`Expanded script ${isName ? 'name' : 'object'} reference is not a dword`, at);
+    }
+    refs.push({ at, end, word });
+  });
+  const serialized = r.offset - start;
+  const raw = r.bytes.subarray(start, r.offset);
+  const out = new Uint8Array(expanded);
+  let source = 0, target = 0;
+  for (const ref of refs) {
+    const before = ref.at - start - source;
+    out.set(raw.subarray(source, source + before), target);
+    source += before;
+    target += before;
+    out[target] = ref.word & 0xff;
+    out[target + 1] = (ref.word >>> 8) & 0xff;
+    out[target + 2] = (ref.word >>> 16) & 0xff;
+    out[target + 3] = (ref.word >>> 24) & 0xff;
+    target += 4;
+    source += ref.end - ref.at;
+  }
+  out.set(raw.subarray(source), target);
+  return { bytes: out, expanded, serialized };
+}
+
+/**
+ * Walk one expression inside the expanded in-memory script — the buffer the
+ * load path fills through `expandScriptExpression`.  Object and name slots
+ * are fixed four-byte words there, so the same token table runs with `index`
+ * reads widened to a dword.  `data` is the script byte span; `offset` the
+ * starting cursor.  Returns the end cursor (the recovered SerializeExpr
+ * `iMem` advance).
+ */
+export function skipExpandedScriptExpression(data, offset, { version = 68 } = {}) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  let cursor = offset;
+  let expanded = 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const take = n => { const s = cursor; cursor += n; expanded += n; return bytes.subarray(s, s + n); };
+  const readU8 = () => { const v = bytes[cursor]; cursor += 1; expanded += 1; return v; };
+  const readU16 = () => { const v = view.getUint16(cursor, true); cursor += 2; expanded += 2; return v; };
+  const index = () => { cursor += 4; expanded += 4; };
+  function expression(depth = 0) {
+    if (depth > 128) throw new PackageError('Invalid expanded script nesting', cursor);
+    const op = readU8();
+    const child = () => expression(depth + 1);
+    const argumentsList = () => { while (child() !== 0x16) {} };
+    if (op >= 0x60) { if (op < 0x70) take(1); argumentsList(); }
+    else if (op >= 0x39 && op <= 0x59) child();
+    else switch (op) {
+      case 0x00: case 0x01: case 0x02: case 0x20: case 0x29: index(); break;
+      case 0x21: index(); break;
+      case 0x04: if (version > 61) child(); break;
+      case 0x05: take(1); child(); break;
+      case 0x06: take(2); break;
+      case 0x07: case 0x09: case 0x18: take(2); child(); break;
+      case 0x0a: { const jump = readU16(); if (jump !== 65535) child(); break; }
+      case 0x0c: while (true) { index(); take(4); if (view.getUint32(cursor - 8, true) === 0) break; } break;
+      case 0x0d: case 0x0e: case 0x2d: child(); break;
+      case 0x0f: case 0x10: case 0x14: case 0x1a: child(); child(); break;
+      case 0x11: child(); child(); child(); child(); break;
+      case 0x12: case 0x19: child(); take(3); child(); break;
+      case 0x13: case 0x2e: case 0x36: index(); child(); break;
+      case 0x1b: case 0x38: index(); argumentsList(); break;
+      case 0x1c: index(); argumentsList(); break;
+      case 0x1d: case 0x1e: take(4); break;
+      case 0x1f: while (readU8() !== 0) {} break;
+      case 0x22: case 0x23: take(12); break;
+      case 0x24: case 0x2c: take(1); break;
+      case 0x2b: take(1); child(); break;
+      case 0x2f: child(); take(2); break;
+      case 0x32: case 0x33: index(); child(); child(); break;
+      case 0x34: while (readU16() !== 0) {} break;
+      case 0x08: case 0x0b: case 0x15: case 0x16: case 0x17: case 0x25: case 0x26:
+      case 0x27: case 0x28: case 0x2a: case 0x30: case 0x31: break;
+      default: throw new PackageError(`Unsupported expanded script token 0x${op.toString(16)}`, cursor - 1);
+    }
+    return op;
+  }
+  expression();
+  return cursor;
+}
+
+/** Walk serialized UE1 bytecode without executing it. Object/name indices expand
+ * to four bytes in the script size stored by the original engine. */
+export function skipBytecode(pkg, r, size) {
+  if (!Number.isInteger(size) || size < 0 || size > 16_000_000) throw new PackageError('Invalid script size', r.offset);
+  let expanded = 0;
+  while (expanded < size) {
+    const { expanded: delta } = skipScriptExpression(pkg, r);
+    expanded += delta;
+  }
+  if (expanded !== size) throw new PackageError('Script size mismatch', r.offset);
 }
 
 export function readClass(asset, index) {

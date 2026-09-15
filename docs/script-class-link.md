@@ -29,10 +29,15 @@ The local archive starts with vtable `0x101751f8` and these words:
 | `+0x20` | `1` |
 | `+0x24` | `1` |
 
-`linkScriptClass` validates those values.  It accepts the frame from the
-registration adapter or the exported `CLASS_LINK_ARCHIVE_STATE` object.  A
-nonzero second argument is rejected because only `0` is reached by the
-observed caller.
+`linkScriptClass` accepts the frame from the registration adapter, the
+exported `CLASS_LINK_ARCHIVE_STATE` object, or the embedded `ULinkerLoad`
+archive (vtable `0x1017a430`) passed by `ULinkerLoad::Preload`.  The
+recovered body forwards its archive pointer and second argument verbatim to
+`UState::Link` (`0x10127e59`-`0x10127e68`: `push eax`/`push ecx`/`call
+0x1010282e`); it never reads the archive's fields, so the adapter no longer
+validates the constructor words.  A nonzero second argument selects the
+load-path `UStruct::Link` mode (`Link(Ar, 1)` from `UStruct::Serialize`'s
+tail on a stream archive).
 
 ## Native order
 

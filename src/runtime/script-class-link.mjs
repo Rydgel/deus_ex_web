@@ -186,16 +186,12 @@ function archiveState(archive) {
   if (!archive || typeof archive !== 'object') {
     throw new TypeError('UClass::Link requires an FArchive record');
   }
-  const nested = archive.archiveState;
-  for (const [key, expected] of Object.entries(CLASS_LINK_ARCHIVE_STATE)) {
-    const actual = nested?.[key] ?? archive[key];
-    if (actual !== expected) {
-      fail(`UClass::Link requires local FArchive ${key} == ${expected}`, {
-        operation: 'UClass::Link', slot: key,
-      });
-    }
-  }
-  return nested ?? archive;
+  // 0x10127e59-0x10127e68: the recovered body pushes the second argument and
+  // the incoming archive pointer straight into UState::Link; it never reads
+  // the archive's fields.  Register callers pass the local FArchive words
+  // (CLASS_LINK_ARCHIVE_STATE); ULinkerLoad::Preload passes the embedded
+  // linker archive (vtable 0x1017a430).  Both flow through unchanged.
+  return archive.archiveState ?? archive;
 }
 
 function callStateLink(record, archive, secondArgument, services, trace) {
@@ -756,8 +752,9 @@ function serviceHost(options, nested) {
 /**
  * Replays Core's UClass::Link (`10127e30`) for a logical or nativeSlots
  * UClass record.  `archive` defaults to the exact local FArchive words used
- * by Register; callers should pass the frame object when retaining the
- * Register trace. The inherited state linker and field predicates use
+ * by Register and is forwarded verbatim to UState::Link (0x10127e59-0x10127e68);
+ * the ULinkerLoad::Preload path passes the embedded linker archive through
+ * the same call.  The inherited state linker and field predicates use
  * recovered defaults or explicit host bindings. Multi-entry sorting
  * uses the recovered native helper unless explicitly overridden by the host.
  */
@@ -769,8 +766,11 @@ export function linkScriptClass(record, options = {}) {
   const archive = options.archive === undefined ? { ...CLASS_LINK_ARCHIVE_STATE } : options.archive;
   const secondArgument = options.secondArgument === undefined ? 0 : options.secondArgument;
   const nested = options.services === undefined ? {} : options.services;
-  if (secondArgument !== 0) {
-    throw new RangeError(`UClass::Link only has a verified second argument of 0, got ${String(secondArgument)}`);
+  // The recovered UClass::Link body (0x10127e30) forwards its second argument
+  // to UState::Link unconditionally; UStruct::Link treats any nonzero value
+  // identically (test/je), so only an integer check is faithful here.
+  if (!Number.isInteger(secondArgument)) {
+    throw new RangeError(`UClass::Link requires a native integer argument, got ${String(secondArgument)}`);
   }
   const frame = archiveState(archive);
   // Accept both the nested `services` form and the flat classLink object

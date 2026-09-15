@@ -48,10 +48,11 @@ node scripts/validate-script-spawn.mjs                       pass
 node scripts/validate-inventory-spawn.mjs                    pass
 node scripts/validate-datalink-transfer-object.mjs           pass
 node scripts/validate-create-export.mjs                      pass
+node scripts/validate-linker-preload.mjs                     pass
 node scripts/validate-static-load-createexport.mjs           pass
 ```
 
-The full local sweep is green: 486 `npm test` cases, all 165 `scripts/validate-*.mjs`
+The full local sweep is green: 486 `npm test` cases, all 166 `scripts/validate-*.mjs`
 (the 82 oracle-backed probes need
 `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python`), and `npm run build`.
 
@@ -75,7 +76,7 @@ boundary. They do not establish the remaining rows below.
 
 | Roadmap system | Proven subset in the current runtime | Exact unproven requirement and next boundary |
 | --- | --- | --- |
-| Class inheritance | Linked Core/Engine/DeusEx class chains, UField/UStruct/UState/UClass registration and property-link dispatch are exercised by the runtime and class-registration tests. Evidence: [`script-class-registration.md:8-17,96-100`](script-class-registration.md), [`script-class-link.md:37-97`](script-class-link.md). The recovered `ULinkerLoad::CreateExport` now runs the metaclass branch: a null `ClassIndex` selects the hard-coded `Core.Class` identity, `StaticConstructObject` allocates through it, `SuperField` is installed from the export's `SuperIndex` and `UClass::Bind` copies the nearest native `ClassConstructor` down. Evidence: [`script-create-export.md`](script-create-export.md), `scripts/validate-create-export.mjs`. | The complete first-load class graph is still absent, and `CreateExport` stops at `Bind`: the constructed class keeps `RF_NeedLoad`, and its field chain/defaults still come from this project's decoded-package path rather than a live linker-archive preload. Next boundary: serialize one constructed export's own bytes through `ULinkerLoad::Preload` instead of completing it from the decoded package. |
+| Class inheritance | Linked Core/Engine/DeusEx class chains, UField/UStruct/UState/UClass registration and property-link dispatch are exercised by the runtime and class-registration tests. Evidence: [`script-class-registration.md:8-17,96-100`](script-class-registration.md), [`script-class-link.md:37-97`](script-class-link.md). The recovered `ULinkerLoad::CreateExport` now runs the metaclass branch: a null `ClassIndex` selects the hard-coded `Core.Class` identity, `StaticConstructObject` allocates through it, `SuperField` is installed from the export's `SuperIndex` and `UClass::Bind` copies the nearest native `ClassConstructor` down. Evidence: [`script-create-export.md`](script-create-export.md), `scripts/validate-create-export.mjs`. | The complete first-load class graph is still absent, and `CreateExport` stops at `Bind`: the constructed class keeps `RF_NeedLoad`, and `ULinkerLoad::Preload` (`0x10162000`) now serializes a constructed export's own bytes: the `DataVaultImage` field chain, linked offsets, `PropertiesSize`, class flags and every default tag are verified byte-for-byte against the decoded package through the real serial stream, and the native class-registration registry is completed for all 46 startup packages so every `RF_Native` export binds with zero `Can't bind` warnings (the measured original startup logs none). Evidence: [`script-linker-preload.md`](script-linker-preload.md), [`original-startup-log.md`](original-startup-log.md), `scripts/validate-linker-preload.mjs`. | Only `DataVaultImage` is verified field-for-field; the other 1493 class exports are constructed and bound but not individually asserted. Next boundary: serialize a second class carrying an owning string/array default, and resolve one cross-package import through its own `ULinkerLoad`. |
 | Default properties | Native CDO header/default allocation and inherited property copying are covered; 364 authored DeusEx struct defaults decode, and the augmentation manager/default list passes the live validator. Evidence: [`script-class-registration.md:102-143`](script-class-registration.md), [`script-struct-values.md`](script-struct-values.md), [`script-player-augmentation-startup.md:37-69`](script-player-augmentation-startup.md). | All classes/resources do not yet receive native CDO initialization, dynamic-container storage, config or localization values. Next boundary: one fresh non-prebound CDO containing an owning string/array property. |
 | States | Original `TriggerToggle` Open/Close and `CameraPoint` Auto/Idle state selection run through VM state frames. Evidence and check: [`script-runtime.md:322-337`](script-runtime.md), `scripts/validate-script-runtime.mjs`. | Arbitrary state graphs, inherited state probes and state-frame persistence are not established. Next boundary: one non-door actor with inherited `BeginState`/`EndState` and a second transition. |
 | Events | Spawn callbacks, Touch/UnTouch/Tick/Frob, trigger actions and the direct DataLink event path use original ProcessEvent/bytecode. Using a door is now the original `DeusExMover.Frob` body's decision — its frobbable/destroyed gates, lock branch with the class's localized `ClientMessage`, and the like-tagged `AllActors` fanout replaced a host reimplementation in `doors.mjs`. Evidence: [`script-spawn.md:284-329`](script-spawn.md), [`script-mover-frob.md`](script-mover-frob.md), `scripts/validate-trigger-actions.mjs`, `scripts/validate-mover-frob.mjs`, `scripts/validate-training-datalink-live.mjs`. | Generic ProcessEvent coverage, native event memory, exception/unwind and all subclass event overrides remain open. Next boundary: an authored event with owning struct/array parameters through live frame allocation and cleanup. |
@@ -180,22 +181,35 @@ live `SetupEventTransferObject` route — Spawn, `SpawnCopy`, `GiveTo`,
 `AddInventory`, `GotoState('Idle2')`, `AddImage` and one `AddItem` each — leaving
 all nine distinct images carried (`scripts/validate-datalink-transfer-object.mjs`).
 
-**What these slices did not close.** `CreateExport` ends at `UClass::Bind` and
-leaves `RF_NeedLoad` set, exactly as the original does. Serializing the
-constructed export's own bytes is a different recovered body, so the field
-chain, defaults and Link order still come from this project's decoded-package
-path; `scripts/validate-create-export.mjs` compares the two rather than claiming
-the linker produced them. Import references still resolve to prebound
-identities.
+**Slice 2 is done.** `ULinkerLoad::Preload` (`0x10162000`) now serializes a
+constructed export's own bytes from the real serial stream:
+`scripts/validate-linker-preload.mjs` verifies `DataVaultImage`'s field chain,
+linked offsets, `PropertiesSize`, class flags and every default tag byte-for-byte
+against the decoded package, and asserts the parse consumed exactly the export
+serial range. The native class-registration registry is completed for all 46
+startup packages (`tools/class-registration-scan.py`), so every `RF_Native`
+export binds with zero `Can't bind` warnings — matching the measured original
+startup ([`original-startup-log.md`](original-startup-log.md)). Three classes
+with no distinct C++ constructor (`Engine.Player`, `Fire.FractalTexture`,
+`Fire.WaterTexture`) inherit the super constructor, which is bit-for-bit what
+`UClass::Bind`'s fall-through produces. Evidence:
+[`script-linker-preload.md`](script-linker-preload.md).
+
+**What this slice did not close.** Only `DataVaultImage` is verified
+field-for-field; the other 1493 class exports are constructed and bound but not
+individually asserted, and the arrayIndex/array-property and unknown-property
+tag paths are unexercised (see the doc's Unverified scope). Import references
+still resolve to prebound identities.
 
 Next, in order:
 
 1. ~~Wire `staticLoadObject`'s absent-export route to `createLinkerExport`~~ —
-   done in this slice through `linkerCreateExport`.
-2. Recover `ULinkerLoad::Preload` (`0x10162000`) and serialize one constructed
-   class export's own bytes, replacing the decoded-package completion for that
-   class.
-3. Resolve one cross-package import through its own `ULinkerLoad` rather than a
+   done through `linkerCreateExport`.
+2. ~~Recover `ULinkerLoad::Preload` and serialize one constructed class export's
+   own bytes~~ — done for `DataVaultImage`.
+3. Serialize a second class carrying an owning string/array default (exercises
+   the arrayIndex and unknown-property tag paths this slice left unverified).
+4. Resolve one cross-package import through its own `ULinkerLoad` rather than a
    prebound identity.
 
 Keep mixer/rendering work in Stage 4.
