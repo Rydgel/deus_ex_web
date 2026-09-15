@@ -201,6 +201,12 @@ individually asserted, and the arrayIndex/array-property and unknown-property
 tag paths are unexercised (see the doc's Unverified scope). Import references
 still resolve to prebound identities.
 
+> **The "39,414 constructed" figure is execution breadth, not verification
+> breadth.** The closure *runs* over the whole `DeusEx.u` graph, but exactly one
+> class is checked against ground truth. Do not read the object/export counts as
+> a coverage claim — only `DataVaultImage` (and the `Engine.Inventory` import it
+> resolves) is proven.
+
 Next, in order:
 
 1. ~~Wire `staticLoadObject`'s absent-export route to `createLinkerExport`~~ —
