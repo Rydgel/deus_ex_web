@@ -81,6 +81,7 @@ import {
   getClientObjectNative, windowSensitivityOptionalDefault,
 } from './script-window-sensitivity.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
+import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
@@ -1289,6 +1290,20 @@ export class ScriptRuntime {
       const x=refValue(call.evaluateArgument(0)),y=refValue(call.evaluateArgument(1));
       const position=this.windowLifecycle?.position??{};
       return setWindowPositionNative(call.receiver,x,y,{...position,
+        askParentForReconfigure:position.askParentForReconfigure??
+          (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
+      });
+    }
+    if(call.index===1438){
+      if(call.argumentCount<2||call.argumentCount>6)
+        throw new Error('Window.SetWindowAlignments requires HAlign, VAlign, and up to four optional margins');
+      const hAlign=refValue(call.evaluateArgument(0)),vAlign=refValue(call.evaluateArgument(1));
+      const hMargin0=call.argumentCount>2?refValue(call.evaluateArgument(2)):0;
+      const vMargin0=call.argumentCount>3?refValue(call.evaluateArgument(3)):0;
+      const hMargin1=call.argumentCount>4?refValue(call.evaluateArgument(4)):0;
+      const vMargin1=call.argumentCount>5?refValue(call.evaluateArgument(5)):0;
+      const position=this.windowLifecycle?.position??this.windowLifecycle?.alignments??{};
+      return setWindowAlignmentsNative(call.receiver,hAlign,vAlign,hMargin0,vMargin0,hMargin1,vMargin1,{...position,
         askParentForReconfigure:position.askParentForReconfigure??
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       });
