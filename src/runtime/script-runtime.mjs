@@ -72,6 +72,7 @@ import { processWindowScript } from './script-window-script.mjs';
 import { getRootWindowNative } from './script-window-hierarchy.mjs';
 import { askParentForReconfigureNative } from './script-window-reconfigure.mjs';
 import { setWindowSizeNative } from './script-window-size.mjs';
+import { setWindowWidthNative } from './script-window-width.mjs';
 import { setChildVisibilityNative, showWindowNative, isWindowVisibleNative } from './script-window-visibility.mjs';
 import {
   setSensitivityNative, enableWindowNative, disableWindowNative, isWindowSensitiveNative,
@@ -1265,6 +1266,15 @@ export class ScriptRuntime {
       const width=refValue(call.evaluateArgument(0)),height=refValue(call.evaluateArgument(1));
       const size=this.windowLifecycle?.size??{};
       return setWindowSizeNative(call.receiver,width,height,{...size,
+        askParentForReconfigure:size.askParentForReconfigure??
+          (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
+      });
+    }
+    if(call.index===1433){
+      if(call.argumentCount!==1)throw new Error('Window.SetWidth requires one width argument');
+      const width=refValue(call.evaluateArgument(0));
+      const size=this.windowLifecycle?.size??{};
+      return setWindowWidthNative(call.receiver,width,{...size,
         askParentForReconfigure:size.askParentForReconfigure??
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       });
