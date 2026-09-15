@@ -84,6 +84,7 @@ import {
 } from './script-window-sensitivity.mjs';
 import { getToggleNative } from './script-window-toggle-get.mjs';
 import { setToggleNative } from './script-window-toggle-set.mjs';
+import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
@@ -1288,6 +1289,13 @@ export class ScriptRuntime {
     if(call.index===1460){
       if(call.argumentCount!==0)throw new Error('Window.AskParentForReconfigure accepts no arguments');
       return askParentForReconfigureNative(call.receiver,this.windowLifecycle?.reconfiguration);
+    }
+    if(call.index===1461){
+      if(call.argumentCount!==4)throw new Error('Window.ConfigureChild requires newX, newY, newWidth and NewHeight');
+      const newX=refValue(call.evaluateArgument(0)),newY=refValue(call.evaluateArgument(1)),
+        newWidth=refValue(call.evaluateArgument(2)),newHeight=refValue(call.evaluateArgument(3));
+      return configureChildNative(call.receiver,newX,newY,newWidth,newHeight,
+        this.windowLifecycle?.configureChild??{});
     }
     if(call.index===1431){
       if(call.argumentCount!==2)throw new Error('Window.SetSize requires width and height');
