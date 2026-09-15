@@ -84,6 +84,7 @@ import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
+import { lowerWindowNative } from './script-window-lower.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
 import { safeDestroyWindowNative } from './script-window-destroy.mjs';
 import {
@@ -1190,6 +1191,14 @@ export class ScriptRuntime {
       if(call.argumentCount!==0)throw new Error('Window.Raise accepts no arguments');
       const order=this.windowLifecycle?.order??{};
       return raiseWindowNative(call.receiver,{...order,
+        askParentForReconfigure:order.askParentForReconfigure??
+          (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
+      });
+    }
+    if(call.index===1412){
+      if(call.argumentCount!==0)throw new Error('Window.Lower accepts no arguments');
+      const order=this.windowLifecycle?.order??{};
+      return lowerWindowNative(call.receiver,{...order,
         askParentForReconfigure:order.askParentForReconfigure??
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       });
