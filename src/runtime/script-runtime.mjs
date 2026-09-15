@@ -70,6 +70,7 @@ import { conversationSpeechAudio } from './script-conversation-speech-audio.mjs'
 import { createNewWindowNative } from './script-window-child.mjs';
 import { processWindowScript } from './script-window-script.mjs';
 import { getRootWindowNative } from './script-window-hierarchy.mjs';
+import { getParentWindowNative } from './script-window-parent.mjs';
 import { askParentForReconfigureNative } from './script-window-reconfigure.mjs';
 import { setWindowSizeNative } from './script-window-size.mjs';
 import { setWindowWidthNative } from './script-window-width.mjs';
@@ -1256,6 +1257,10 @@ export class ScriptRuntime {
     if(call.index===1425){
       if(call.argumentCount!==0)throw new Error('Window.GetRootWindow accepts no arguments');
       return getRootWindowNative(call.receiver,this.windowLifecycle?.hierarchy);
+    }
+    if(call.index===1428){
+      if(call.argumentCount!==0)throw new Error('Window.GetParent accepts no arguments');
+      return getParentWindowNative(call.receiver,this.windowLifecycle?.hierarchy??{});
     }
     if(call.index===1460){
       if(call.argumentCount!==0)throw new Error('Window.AskParentForReconfigure accepts no arguments');
