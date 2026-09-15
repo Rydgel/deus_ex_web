@@ -56,6 +56,8 @@ export const LINKER_PRELOAD = freeze({
     functionSerialize: 0x10129010,
     propertyTag: 0x1012a840,
     taggedPropertyItem: 0x1012aca0,
+    propertyGetId: 0x101655f0,
+    classPropertyGetId: 0x10113e20,
     archiveObjectRef: 0x10163470,
     archiveNameRef: 0x10163580,
     archiveRawSerialize: 0x10163310,
@@ -1143,10 +1145,19 @@ export function serializeTaggedPropertiesLoad(structure, archive, data, defaults
       continue;
     }
     property = matched;
-    // UProperty::GetId (+0x9c, body 0x101655f0) is `mov eax,[ecx+0x24];
-    // mov al,[eax+0x20]; ret` — the property class object's name index.
+    // The recovered body calls the property's +0x9c GetID slot virtually
+    // (`call dword ptr [eax+0x9c]` at 0x1012690a and 0x1012682d).  Every
+    // property vtable's slot reaches the shared UProperty::GetID body
+    // 0x101655f0 (`mov eax,[ecx+0x24]; mov al,[eax+0x20]; ret` — the
+    // property class object's name index low byte) EXCEPT UClassProperty:
+    // its vtable (0x10175ec4) +0x9c holds thunk 0x10102ac2 -> body
+    // 0x10113e20 (`mov al, 5; ret`), so a class-reference default ships and
+    // is accepted as tag type 5.
     const propertyClass = pointer(read(property, LINKER_PRELOAD.offsets.objectClass, services));
+    const propertyKind = services.propertyKindOf ? services.propertyKindOf(property)
+      : property.kind ?? property.nativeKind;
     const propertyId = propertyClass === null ? 0
+      : propertyKind === 'ClassProperty' ? 0x05
       : integer(read(propertyClass, LINKER_PRELOAD.offsets.name, services) ?? 0,
         'property-class name index', { minimum: 0, maximum: 0xffffffff }) & 0xff;
     if (tag.type === 0x07 && propertyId === 0x0d) {

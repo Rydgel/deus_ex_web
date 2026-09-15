@@ -37,23 +37,112 @@ object/name references remain the host-archive boundary supplied by
 
 ## Validation — against the decoded package, not itself
 
-`scripts/validate-linker-preload.mjs` runs the whole preload closure over the
-`DeusEx.u` linker (1721 serialized / 39,414 constructed / 1494 class exports),
-then verifies **one class — `DataVaultImage`** field-for-field against the
-project's independently decoded package: children-chain length and each child's
-name and class, the linked property order, per-property `ArrayDim`,
-`ElementSize`, `PropertyFlags` and `Offset`, `PropertiesSize`, `ClassFlags`,
-`ClassConfigName`, `FriendlyName`, `Line`/`TextPos`, the dependency count, and
-every default tag's name/type/arrayIndex/value (including struct and array
-recursion). It also asserts `Preload consumed exactly the export serial range`,
-so the parse must walk the real bytes end-to-end.
+`scripts/validate-linker-preload.mjs` runs the preload closure over the
+`DeusEx.u` linker (9346 serialized / 39,414 constructed / 1494 class exports
+once the set below is loaded), then verifies a curated set of class exports
+field-for-field against the project's independently decoded package through
+one per-class comparator (`verifyClassExport`): children-chain length and each
+child's name and class, per-property `ArrayDim`, `PropertyFlags` and linked
+`Offset` (offsets strictly increase in link order except where
+`UBoolProperty::Link` packs consecutive bools into one dword), `ClassFlags`,
+`ClassConfigName`, `FriendlyName`, `Line`/`TextPos`, the dependency count, the
+`UStruct::Link` operation order, the `+0x60` chain, and every default tag's
+name/type/arrayIndex, its destination (`Offset + ElementSize × arrayIndex`) and
+its value. The `PreloadTellExit` record must show the export serial range
+consumed exactly, so the parse walks the real bytes end-to-end. `DataVaultImage`
+additionally keeps its recorded-layout checks (`INVENTORY_CONSTRUCTION`
+property order/kinds/`ElementSize`, `PropertiesSize`, the `Engine.Inventory`
+import path and inherited `InternalConstructor`).
 
-The value path is genuinely exercised: the scalar reads come from the real
-`DeusEx.u` bytes through `serializeRaw`, and the results are compared against
-the decoded oracle — not pulled from it. Mutation checks that fail the
-validator: corrupting the scalar value read (`value + 1`), reading an
-`IntProperty`/`FloatProperty` as 2 bytes instead of 4, permuting a linked
-property's order, and dropping a class from the native registry.
+Tag values are compared by kind: Byte/Int/Str `deepEqual`; Float within 1e-6;
+Bool from the tag's `0x80` bit; Name through the process-wide FName text;
+object/class references by resolved full name against the export/import path.
+Struct payloads the package oracle decodes (`Vector`, `Rotator`, `Color`) are
+compared memberwise positionally; for the DeusEx-declared structs the oracle
+does not decode (`InventoryItem`, `S_KeyDisplayItem`, `S_ActionButtonDefault`,
+…) the comparator reads the raw tag payload memberwise in `SerializeBin`
+order using the decoded package's own struct member table
+(`readStructMetadata`) and the oracle's primitive readers, and asserts the
+payload is consumed exactly. Struct members of kind Bool/Struct/Array/
+FixedArray/Map or with `ArrayDim > 1` are not decoded by the comparator; such
+a tag is recorded and the validator fails — none occurs in the set.
+
+### Shipped default-tag shapes (census)
+
+The validator also censuses every serialized `DeusEx.u` class through the
+decoded oracle and asserts the package facts: 1158 classes, 13,865 default
+tags, types `{Byte 523, Int 1375, Bool 1075, Float 2895, Object 4192, Name 91,
+Struct 1483, Str 2231}`, 464 classes with an `arrayIndex > 0` tag, largest
+index 70 (`MenuScreenCustomizeKeys`). **No shipped class default is an
+`ArrayProperty` tag (type 9) or a type-8 tag**, in `DeusEx.u` or in Core,
+Engine, Extension, ConSys, IpDrv, Fire or DeusExText (scanned once; only the
+`DeusEx.u` totals are asserted). Class references (`CarcassType`, `AmmoNames`,
+`ExplosionDecal`, …) ship as **type 5** on a `UClassProperty` — see the GetID
+note below.
+
+### The curated set and why each class is in it
+
+| class | shapes it covers |
+| --- | --- |
+| `DataVaultImage` | the original slice: Int, Bool, Float, Object, Str, `Color` struct; inherited `Engine.Inventory` properties through an import |
+| `DeusExWeapon` | Byte defaults (`ReloadCount`, …), 38 Str, Int/Bool/Float/Object; 257 own children, ~40 consecutive packed bools; `Engine.Weapon` super |
+| `WeaponAssaultGun` | `Vector` struct (`FireOffset`); **class reference at `arrayIndex 1–2`** (`AmmoNames[n]`, a `UClassProperty`); a superclass (`DeusExWeapon`) already preloaded by the set |
+| `DeusExPlayer` | 10 Name defaults incl. `AugPrefs[0..8]` (NameProperty at `arrayIndex > 0`, stride 4), `Rotator`, Byte/Bool/Int/Float/Str, class reference (`PlayerReplicationInfoClass`); largest export (17,523 bytes); super chain through a third package (`Extension.PlayerPawnExt`) |
+| `Gray` | `InventoryItem` struct = class reference + Int nested in a struct, at `arrayIndex 0–2` (stride 8) — the undecoded-struct memberwise path; `CarcassType` class reference; 10 Byte tags; Name |
+| `Rocket` | Engine-declared `UClassProperty` default (`Projectile.ExplosionDecal`) resolving to a DeusEx export; `Rotator`; Name; Byte |
+| `MenuScreenCustomizeKeys` | largest defaults block (212 tags, 195 at `arrayIndex > 0`, up to 70 — the maximum shipped); `S_KeyDisplayItem` (Byte+Str) ×71 and `S_ActionButtonDefault` (Byte,Byte,Str,Str,Object) — structs with string members at array indices; Str at `arrayIndex > 0` |
+
+### Mutation checks
+
+Each of these, applied temporarily, fails the validator (first failing
+assertion in parentheses): forcing `tag.arrayIndex = 0` in the tag read
+(`WeaponAssaultGun AmmoNames`: `Ammo20mm !== Ammo762mm` — the clobbered index-0
+cell); dropping the `ElementSize × arrayIndex` placement term (same failure);
+reverting the `UClassProperty` GetID to 8 (`WeaponAssaultGun applied 57 tags`:
+`52 !== 57`); Int read `+1` (`DataVaultImage SizeX 401 !== 400`, and with that
+class disabled `Gray InitialInventory[0] member Count 2 !== 1` — the struct
+member path bites); Str read dropping the last character (`DataVaultImage
+PickupMessage`); Byte read `+1` (`DataVaultImage colNoteTextNormal member R`);
+Name read `index + 1` (`DeusExPlayer AugPrefs`: `AlarmLight !== AugVision`).
+The earlier checks (2-byte Int/Float read, permuted link order, a class dropped
+from the native registry) still fail it.
+
+### `UProperty::GetID` is virtual — `UClassProperty` returns 5
+
+`SerializeTaggedProperties` compares the tag type nibble with the property's
+`+0x9c` GetID slot, called virtually (`call dword ptr [eax+0x9c]` at
+`0x1012690a`, and at `0x1012682d` for the type-7 string check). Every property
+vtable's slot reaches the shared body `0x101655f0` (`mov eax,[ecx+0x24]; mov
+al,[eax+0x20]; ret` — the property class's FName low byte) **except
+`UClassProperty`** (vtable `0x10175ec4`): its slot is thunk `0x10102ac2` →
+`0x10113e20` = `mov al, 5; ret`. So a class-reference default is written and
+accepted as type 5. The serializer previously inlined the shared body for every
+kind, computed 8, and took the `Type mismatch in %s of %s` warn-and-skip path
+for every shipped class-reference default (e.g. `Rat.CarcassType`,
+`Rocket.ExplosionDecal`) — a warning the measured original startup log
+([`original-startup-log.md`](original-startup-log.md)) never contains.
+`serializeTaggedPropertiesLoad` now models the dispatch
+(`ClassProperty → 5`, otherwise the name low byte), and the validator asserts
+that no tag anywhere in the closure took any warn-and-skip path
+(`TagUnmatched`/`TagTypeMismatch`/`TagArrayIndex`/`TagStructMismatch`/
+`TagNotSerializable`).
+
+### The two edge paths
+
+- **`FPropertyTag` arrayIndex decode and array placement — exercised.** 3368
+  shipped tags carry `arrayIndex > 0`; the set verifies Name (stride 4), Str
+  (stride 12), class-reference (stride 4) and struct (stride 8 and 32)
+  elements at indices 1–70 against the oracle, and the placement assertion
+  ties each destination to `Offset + ElementSize × arrayIndex`. Only the
+  single-byte index encoding is exercisable: the largest shipped index is 70,
+  so the `0x80`-prefixed word and `0xc0`-prefixed dword forms are read off the
+  encoding but **unexercisable with shipped data**.
+- **`tag.size` skip-unknown-property — unexercisable with shipped data.** The
+  size is consumed only by the warn-and-skip paths, which fire when a
+  serialized default names a property the class no longer has (or the wrong
+  type/index/struct). A self-consistent shipped package contains none: the
+  closure asserts zero such events. This path is a save-game/version-skew
+  concern for Stage 6, not a hole in the preload slice.
 
 ## Native class-registration registry
 
@@ -90,17 +179,21 @@ zero-warning startup confirms the record exists.
 
 ## Unverified scope
 
-- **One class is verified end-to-end.** `DataVaultImage`'s serialization is
-  proven field-for-field; the other 1493 class exports are constructed and
-  bound by the closure but not individually asserted against the package.
-  Widening to a second class (e.g. one with an owning string/array default) is
-  the next step.
-- **No default with a nonzero `arrayIndex` or an array-property tag** is
-  exercised by `DataVaultImage`, so the `FPropertyTag` arrayIndex varint decode
-  and the array-placement offset are read off the encodings but not
-  test-distinguished.
-- **No unknown/mismatched-property default** is exercised, so `tag.size`
-  (used only to skip an unknown property) is likewise unverified.
+- **Seven classes are verified end-to-end**, chosen to cover every default-tag
+  shape the shipped packages contain (census above). The remaining class
+  exports run the same serialization path — the closure asserts zero native
+  asserts, zero real warnings and zero tag skips for all of them — but are not
+  individually value-asserted against the package.
+- **`ArrayProperty` (type 9) defaults, type-8 tags, and the multi-byte
+  arrayIndex encodings** do not occur in any shipped package, so those branches
+  of the tag reader and `serializeArrayItem` remain read off the encoding only.
+- **Struct members of kind Bool** (`InitialAllianceInfo.bPermanent` in
+  `Karkian`/`Greasel`, 3 tags) are not oracle-decoded by the comparator, so
+  those two classes are outside the set; the `SerializeBin` bool element form
+  is exercised by the runtime translation but not value-compared here.
+- The comparator's placement check uses the linked `ElementSize` the runtime
+  itself produced; `ElementSize` is independently asserted only for
+  `DataVaultImage` (recorded layout).
 - The 78 scan-recovered `InternalConstructor` addresses are verified by the
   scan's cross-check against the hand-recovered tables and by the zero-warning
   bind, but their individual values are not independently asserted by this
