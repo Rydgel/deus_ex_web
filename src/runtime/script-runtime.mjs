@@ -82,6 +82,7 @@ import {
   getTopChildNative, getBottomChildNative, getHigherSiblingNative, getLowerSiblingNative,
   getClientObjectNative, windowSensitivityOptionalDefault,
 } from './script-window-sensitivity.mjs';
+import { getToggleNative } from './script-window-toggle-get.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
 import { setBackgroundStyleNative } from './script-window-background-style.mjs';
@@ -1265,6 +1266,10 @@ export class ScriptRuntime {
     if(call.index===1488){
       if(call.argumentCount!==0)throw new Error('Window.GetClientObject accepts no arguments');
       return getClientObjectNative(call.receiver,this.windowLifecycle?.sensitivity);
+    }
+    if(call.index===1612){
+      if(call.argumentCount!==0)throw new Error('ToggleWindow.GetToggle accepts no arguments');
+      return getToggleNative(call.receiver,this.windowLifecycle?.toggle??{});
     }
     if(call.index===1425){
       if(call.argumentCount!==0)throw new Error('Window.GetRootWindow accepts no arguments');
