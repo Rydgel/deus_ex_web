@@ -75,6 +75,7 @@ import { askParentForReconfigureNative } from './script-window-reconfigure.mjs';
 import { setWindowSizeNative } from './script-window-size.mjs';
 import { setWindowWidthNative } from './script-window-width.mjs';
 import { setFocusWindowNative } from './script-window-focus.mjs';
+import { changeStyleWindowNative } from './script-window-change-style.mjs';
 import { setChildVisibilityNative, showWindowNative, isWindowVisibleNative } from './script-window-visibility.mjs';
 import {
   setSensitivityNative, enableWindowNative, disableWindowNative, isWindowSensitiveNative,
@@ -1298,6 +1299,10 @@ export class ScriptRuntime {
     if(call.index===1440){
       if(call.argumentCount!==1)throw new Error('Window.SetFocusWindow requires one window argument');
       return setFocusWindowNative(call.receiver,refValue(call.evaluateArgument(0)),this.windowLifecycle?.focus??{});
+    }
+    if(call.index===1493){
+      if(call.argumentCount!==0)throw new Error('Window.ChangeStyle accepts no arguments');
+      return changeStyleWindowNative(call.receiver,this.windowLifecycle?.changeStyle??{});
     }
     if(call.index===1432){
       if(call.argumentCount!==2)throw new Error('Window.SetPos requires x and y');
