@@ -212,8 +212,14 @@ export function buildWindow(heap, spec = {}) {
   heap.write(base + W.delimiter + 4, 'u32', dnum);
   heap.write(base + W.delimiter + 8, 'u32', dmax);
   const rows = (spec.rows ?? []).map(r => buildRow(heap, r));
-  const rdata = rows.length ? heap.allocRaw(4 * rows.length) : 0;
+  const rowMax = spec.rowMax ?? rows.length;
+  const rdata = rowMax ? heap.allocRaw(4 * rowMax) : 0;
   rows.forEach((node, i) => heap.write(rdata + 4 * i, 'u32', node));
+  (spec.rowSlack ?? []).forEach((value, i) => {
+    if (rows.length + i + 1 > rowMax)
+      throw new Error('rowSlack needs rowMax >= rows.length + rowSlack.length');
+    heap.write(rdata + 4 * (rows.length + i), 'u32', value >>> 0);
+  });
   heap.write(base + W.rowsData, 'u32', rdata);
   heap.write(base + W.rowsCount, 'u32', rows.length);
   heap.write(base + W.rowsMax, 'u32', spec.rowMax ?? rows.length);

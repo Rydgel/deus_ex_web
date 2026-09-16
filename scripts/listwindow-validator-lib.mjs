@@ -52,8 +52,16 @@ export function marshalArgs(heap, base, args = []) {
   });
 }
 
-function canonResult(kind, heap, value) {
-  if (kind === 'ptr') return {ptr: heap.canon(value)};
+function canonResult(kind, heap, base, value) {
+  if (kind === 'ptr') {
+    const rdata = heap.read(base + 0x170, 'u32');
+    const rcount = heap.read(base + 0x174, 'i32');
+    let rowIndex = null;
+    for (let i = 0; i < Math.max(rcount, 0); i++) {
+      if (heap.read(rdata + 4 * i, 'u32') === value) { rowIndex = i; break; }
+    }
+    return {ptr: heap.canon(value), rowIndex};
+  }
   if (kind === 'fieldstr')
     return {ptr: heap.canon(value), text: value ? heap.readString(value) : null};
   if (kind === 'int') return {value: value | 0};
@@ -126,7 +134,7 @@ export async function runListValidator(opts) {
     const args = marshalArgs(heap, base, caseSpec.args);
     const raw = opts.invoke ? opts.invoke(fn, object, args, services, caseSpec.spec)
       : fn(object, ...args, services);
-    const result = canonResult(opts.resultKind, heap, raw);
+    const result = canonResult(opts.resultKind, heap, base, raw);
     return {result, events: heap.events.map(e => ({...e})), state: dumpState(heap, base)};
   };
 

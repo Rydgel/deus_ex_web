@@ -267,6 +267,25 @@
           "int": 0
         }
       ]
+    },
+    "slackBound": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          }
+        ],
+        "rowMax": 4,
+        "rowSlack": [
+          3735928559
+        ],
+        "cols": []
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
     }
   },
   "getSelectedRow": {

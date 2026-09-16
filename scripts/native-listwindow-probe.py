@@ -382,10 +382,15 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         ddata, dnum, dmax = self.fstring(spec.get('delimiter'))
         self.write(address + OFF_DELIM, '3I', ddata, dnum, dmax)
         rows = [self.row(**r) for r in spec.get('rows', [])]
-        rdata = self.alloc(4 * len(rows)) if rows else 0
+        rmax = spec.get('rowMax', len(rows))
+        rdata = self.alloc(4 * rmax) if rmax else 0
         if rows:
             self.write(rdata, str(len(rows)) + 'I', *rows)
-        rmax = spec.get('rowMax', len(rows))
+        if spec.get('rowSlack'):
+            if not rdata or rmax < len(rows) + len(spec['rowSlack']):
+                raise ValueError('rowSlack needs rowMax >= len(rows)+len(rowSlack)')
+            for i, value in enumerate(spec['rowSlack']):
+                self.write(rdata + 4 * (len(rows) + i), 'I', value & 0xffffffff)
         self.write(address + OFF_ROWS, '3I', rdata, len(rows), rmax)
         cols = [self.column(index=i, packed=spec.get('colPacked', 0),
                             font=c.get('font', spec.get('defFont', 0)),
@@ -554,7 +559,14 @@ def oracle_main(method, result_kind, section, root=None):
         else:
             ret = probe.run_method(method, this, words)
             if result_kind == 'ptr':
-                result = {'ptr': probe.canon(ret)}
+                rdata = probe.read(this + OFF_ROWS, 'I')[0]
+                rcount = probe.read(this + OFF_ROWS + 4, 'i')[0]
+                row_index = None
+                for i in range(max(rcount, 0)):
+                    if probe.read(rdata + 4 * i, 'I')[0] == ret:
+                        row_index = i
+                        break
+                result = {'ptr': probe.canon(ret), 'rowIndex': row_index}
             elif result_kind == 'fieldstr':
                 result = {'ptr': probe.canon(ret),
                           'text': probe.wstring(ret) if ret else None}
