@@ -65,6 +65,28 @@ NATIVES = {
     'isWordWrapEnabled':         {'exec': EXT + 0x2be00, 'method': None,          'kind': 'execInt'},
     'enableSpecialText':         {'exec': EXT + 0x2be40, 'method': EXT + 0x27740, 'kind': 'void'},
     'isSpecialTextEnabled':      {'exec': EXT + 0x2beb0, 'method': None,          'kind': 'execInt'},
+    'setStyle':                  {'exec': EXT + 0x2b0e0, 'method': EXT + 0x27170, 'kind': 'void'},
+    'getStyle':                  {'exec': EXT + 0x2b150, 'method': None,          'kind': 'execByte'},
+    'setTileColor':              {'exec': EXT + 0x2b450, 'method': EXT + 0x274f0, 'kind': 'void'},
+    'getTileColor':              {'exec': EXT + 0x2b4b0, 'method': None,          'kind': 'execOut'},
+    'setTextColor':              {'exec': EXT + 0x2b530, 'method': EXT + 0x27580, 'kind': 'void'},
+    'getTextColor':              {'exec': EXT + 0x2b590, 'method': None,          'kind': 'execOut'},
+    'setFont':                   {'exec': EXT + 0x2b6c0, 'method': EXT + 0x27640, 'kind': 'void'},
+    'setNormalFont':             {'exec': EXT + 0x2b730, 'method': EXT + 0x27660, 'kind': 'void'},
+    'setBoldFont':               {'exec': EXT + 0x2b7a0, 'method': EXT + 0x27670, 'kind': 'void'},
+    'setFonts':                  {'exec': EXT + 0x2b810, 'method': EXT + 0x27640, 'kind': 'void'},
+    'getFonts':                  {'exec': EXT + 0x2b8a0, 'method': None,          'kind': 'outs',
+                                  'outs': ['normalFont', 'boldFont']},
+    'setBaselineData':           {'exec': EXT + 0x2b970, 'method': EXT + 0x27680, 'kind': 'void'},
+    'setTextVSpacing':           {'exec': EXT + 0x2ba00, 'method': EXT + 0x276a0, 'kind': 'void'},
+    'getTextVSpacing':           {'exec': EXT + 0x2ba70, 'method': None,          'kind': 'execFloat'},
+    'setHorizontalAlignment':    {'exec': EXT + 0x2bab0, 'method': EXT + 0x276b0, 'kind': 'void'},
+    'getHorizontalAlignment':    {'exec': EXT + 0x2bb20, 'method': None,          'kind': 'execByte'},
+    'setVerticalAlignment':      {'exec': EXT + 0x2bb60, 'method': EXT + 0x276c0, 'kind': 'void'},
+    'getVerticalAlignment':      {'exec': EXT + 0x2bbd0, 'method': None,          'kind': 'execByte'},
+    'setAlignments':             {'exec': EXT + 0x2bc10, 'method': EXT + 0x276d0, 'kind': 'void'},
+    'getAlignments':             {'exec': EXT + 0x2bcb0, 'method': EXT + 0x276f0, 'kind': 'outs',
+                                  'outs': ['hAlign', 'vAlign']},
 }
 
 # Extension IAT slots: Core GNatives table import and Core GPropAddr import.
@@ -120,6 +142,7 @@ class GcProbe(_NATIVE.NativeCollision):
         super().__init__(Path(root), IMAGES)
         self.events = []
         self.exec_params = []
+        self.out_refs = []
 
         # Fake GNatives table: every token dispatches to the eval stub, which
         # the code hook services with the per-case param dwords.
@@ -205,10 +228,26 @@ class GcProbe(_NATIVE.NativeCollision):
         return state
 
     # ----- case drivers --------------------------------------------------------
+    def _alloc_out(self, spec):
+        """Allocate a 4-byte out slot for a {'out': init} arg spec."""
+        slot = self.alloc(4)
+        init = spec.get('out')
+        self.write(slot, 'I', (init or 0) & 0xffffffff)
+        return slot
+
     def run_method(self, native, this, args):
         body = NATIVES[native]['method']
-        words = [(a & 0xffffffff) if not isinstance(a, dict) else a['value'] & 0xffffffff
-                 for a in args]
+        self.out_refs = []
+        words = []
+        for a in args:
+            if isinstance(a, dict) and 'out' in a:
+                slot = self._alloc_out(a)
+                self.out_refs.append(slot)
+                words.append(slot)
+            else:
+                self.out_refs.append(None)
+                words.append((a & 0xffffffff) if not isinstance(a, dict)
+                             else a['value'] & 0xffffffff)
         return self.call(body, this, struct.pack('<%dI' % len(words), *words))
 
     def run_exec(self, native, this, args):
@@ -218,25 +257,53 @@ class GcProbe(_NATIVE.NativeCollision):
         self.cpu.mem_write(code, b'\x1c' * 0x40)  # token byte for every position
         self.write(frame + 8, 'I', this)
         self.write(frame + 0xc, 'I', code)
-        self.exec_params = list(args)
+        self.exec_params = []
+        self.out_refs = []
+        for a in args:
+            if isinstance(a, dict) and 'out' in a:
+                slot = self._alloc_out(a)
+                self.exec_params.append({'out': slot})
+                self.out_refs.append(slot)
+            else:
+                self.exec_params.append(a)
+                self.out_refs.append(None)
         out = self.alloc(4)
         self.write(out, 'I', 0xdeadbeef)
         ret = self.call(NATIVES[native]['exec'], this,
                         struct.pack('<II', frame, out))
-        return ret, self.read(out, 'i')[0]
+        return ret, out
+
+    def _out_result(self, native):
+        """Read the recorded out slots into the native's result shape."""
+        names = NATIVES[native].get('outs')
+        if names:
+            return {names[i]: (self.read(slot, 'I')[0] if slot else None)
+                    for i, slot in enumerate(self.out_refs[:len(names)])}
+        for slot in self.out_refs:
+            if slot:
+                return self.read(slot, 'I')[0]
+        return None
 
     def run_case(self, native, case):
         this = self.gc_object(case['spec'])
         self.events = []
         mode = case.get('mode', 'exec')
+        kind = NATIVES[native]['kind']
         args = case.get('args', [])
         if mode == 'method':
             ret = self.run_method(native, this, args)
-            out = {'result': None, 'rawEax': ret}
+            result = self._out_result(native) if kind in ('outs', 'execOut') else None
+            out = {'result': result, 'rawEax': ret}
         else:
-            ret, value = self.run_exec(native, this, args)
-            if NATIVES[native]['kind'] == 'execInt':
-                out = {'ret': ret, 'result': value}
+            ret, out_addr = self.run_exec(native, this, args)
+            if kind == 'execInt':
+                out = {'ret': ret, 'result': self.read(out_addr, 'i')[0]}
+            elif kind == 'execByte':
+                out = {'ret': ret, 'result': self.read(out_addr, 'B')[0]}
+            elif kind == 'execFloat':
+                out = {'ret': ret, 'result': self.read(out_addr, 'I')[0]}
+            elif kind in ('outs', 'execOut'):
+                out = {'ret': ret, 'result': self._out_result(native)}
             else:
                 out = {'result': None, 'rawEax': ret}
         out['events'] = list(self.events)

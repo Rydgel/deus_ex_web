@@ -33,6 +33,36 @@ const CASES = JSON.parse(readFileSync(path.join(ROOT, 'scripts/gc-cases.json'), 
 
 const PYTHON = process.env.NATIVE_PROBE_PYTHON || path.join(ROOT, '.cache/native-probe-env/bin/python');
 
+const F32 = new Float32Array(1);
+const U32 = new Uint32Array(F32.buffer);
+const f32bits = v => { F32[0] = v; return U32[0]; };
+const isNanBits = b => (b & 0x7f800000) === 0x7f800000 && (b & 0x7fffff) !== 0;
+
+/**
+ * Compare one JS replay result against the oracle result for the case.
+ * 'execFloat' oracle results are raw f32 bit patterns: a NaN pattern means
+ * the native x87 fld/fstp produced NaN (it quiets SNaN payloads, e.g.
+ * 0x7f800001 -> 0x7fc00001); JS numbers cannot carry f32 NaN payloads, so
+ * NaN oracle bits only require Number.isNaN on the JS side.
+ */
+function resultMatches(resultKind, got, expected) {
+  switch (resultKind) {
+    case 'execFloat': {
+      const bits = expected >>> 0;
+      if (isNanBits(bits)) return Number.isNaN(got);
+      return f32bits(got) === bits;
+    }
+    case 'execInt':
+    case 'execByte':
+    case 'execOut':
+      return got === expected;
+    case 'outs':
+      return JSON.stringify(got) === JSON.stringify(expected);
+    default:
+      return JSON.stringify(got ?? null) === JSON.stringify(expected ?? null);
+  }
+}
+
 async function loadExtension(root) {
   const extensionPath = path.join(root, 'System', 'Extension.u');
   const extensionBytes = new Uint8Array(await readFile(extensionPath));
@@ -51,10 +81,14 @@ async function loadExtension(root) {
  *   entry      - exported translation function name
  *   oracleFile - oracle script name inside scripts/
  *   section    - gc-cases.json section
- *   resultKind - 'void' | 'execInt'
- *   invoke(fn, object, args, services) - call the module, return raw result
+ *   resultKind - 'void' | 'execInt' | 'execByte' | 'execFloat' | 'execOut' | 'outs'
+ *   invoke(fn, object, args, services, caseSpec, mod) - call the module,
+ *      return the raw result; caseSpec is the JSON case (its mode picks the
+ *      exec-vs-method JS entry for natives like GetAlignments), mod the module
  *   mutations    - [{file:'module'|'model', find, replace, note}]
  *   metadataParams - expected param list ['name:type', ...]
+ *   dllAssert    - [{offset, hex}] extra Extension.dll byte asserts (e.g. the
+ *      color scale constant at 0x1005e3c0)
  */
 export async function runGcValidator(opts) {
   const root = gameDirectory();
@@ -77,6 +111,11 @@ export async function runGcValidator(opts) {
 
   const dllBytes = new Uint8Array(await readFile(path.join(root, 'System', 'Extension.dll')));
   assert.equal(createHash('sha256').update(dllBytes).digest('hex'), meta.dllSha256);
+  for (const check of opts.dllAssert ?? []) {
+    const bytes = Buffer.from(dllBytes.subarray(check.offset - meta.imageBase,
+      check.offset - meta.imageBase + check.hex.length / 2)).toString('hex');
+    assert.equal(bytes, check.hex, `dll bytes at 0x${check.offset.toString(16)}`);
+  }
   const bodyHash = (start, end) => createHash('sha256').update(
     dllBytes.subarray(start - meta.imageBase, end - meta.imageBase)).digest('hex');
   if (meta.execBody)
@@ -106,7 +145,7 @@ export async function runGcValidator(opts) {
     heap.events.length = 0;
     const args = caseSpec.args ?? [];
     const raw = opts.invoke
-      ? opts.invoke(fn, object, args, services)
+      ? opts.invoke(fn, object, args, services, caseSpec, mod)
       : fn(object, ...args, services);
     const result = opts.resultKind === 'void' ? null : raw;
     return {result, events: heap.events.map(e => ({...e})), state: dumpState(heap, base)};
@@ -117,12 +156,10 @@ export async function runGcValidator(opts) {
     const expected = oracle.cases[name];
     assert.ok(expected, `oracle missing case ${name}`);
     const got = runCase(mod[opts.entry], caseSpec);
-    if (opts.resultKind === 'execInt') {
-      assert.equal(got.result, expected.result, `${name}: result value`);
+    assert.ok(resultMatches(opts.resultKind, got.result, expected.result),
+      `${name}: result ${JSON.stringify(got.result)} != ${JSON.stringify(expected.result)}`);
+    if (opts.resultKind === 'execInt')
       assert.equal(expected.ret, expected.result, `${name}: exec ret`);
-    } else {
-      assert.deepEqual(got.result, expected.result, `${name}: result`);
-    }
     assert.deepEqual(got.events, expected.events, `${name}: events`);
     assert.deepEqual(got.state, expected.state, `${name}: state`);
     report.cases[name] = 'pass';
@@ -154,9 +191,7 @@ export async function runGcValidator(opts) {
         const expected = oracle.cases[name];
         try {
           const got = runCase(mutated[opts.entry], caseSpec);
-          const sameResult = opts.resultKind === 'execInt'
-            ? got.result === expected.result
-            : JSON.stringify(got.result) === JSON.stringify(expected.result);
+          const sameResult = resultMatches(opts.resultKind, got.result, expected.result);
           const sameEvents = JSON.stringify(got.events) === JSON.stringify(expected.events);
           const sameState = JSON.stringify(got.state) === JSON.stringify(expected.state);
           if (!sameResult || !sameEvents || !sameState) {

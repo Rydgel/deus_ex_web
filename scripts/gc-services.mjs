@@ -118,6 +118,15 @@ export function buildGc(heap, spec = {}) {
   return {base, heap, spec};
 }
 
+const F32 = new Float32Array(1);
+const U32 = new Uint32Array(F32.buffer);
+
+/** Decode a raw f32 bit pattern (u32) to the JS number the heap stores. */
+export function f32FromBits(bits) {
+  U32[0] = bits >>> 0;
+  return F32[0];
+}
+
 export function dumpState(heap, base) {
   const state = {};
   for (const [name, [offset, kind]] of Object.entries(GC_FIELDS)) {

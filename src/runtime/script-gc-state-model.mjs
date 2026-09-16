@@ -90,6 +90,29 @@ export const GC_HELPERS = freeze({
   polyFlagsFromFlags: 0x1002af00,
 });
 
+/**
+ * Byte-channel color scale.  SetTileColor/SetTextColor multiply each byte
+ * channel of the stored Color dword by the f64 constant at 0x1005e3c0
+ * (1/255, bit pattern 0x3f70101010101010) on the x87: fild(byte) is exact,
+ * fmul produces the exact product (byte*significand needs <= 61 bits, which
+ * fits the 64-bit extended mantissa), and fstp f32 rounds once to 24 bits.
+ * Math.fround(byte * GC_COLOR_SCALE) double-rounds through a 53-bit double
+ * intermediate; verified exhaustively for all 256 byte values that it
+ * produces the identical f32, so no extended-precision emulation is needed.
+ */
+export const GC_COLOR_SCALE_ADDR = 0x1005e3c0;
+export const GC_COLOR_SCALE_BITS = 0x3f70101010101010n;
+export const GC_COLOR_SCALE = (() => {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setBigUint64(0, GC_COLOR_SCALE_BITS, true);
+  return view.getFloat64(0, true);
+})();
+
+/** f32 channel value the color setters store for one byte channel. */
+export function gcColorChannel(byte) {
+  return Math.fround((byte & 0xff) * GC_COLOR_SCALE);
+}
+
 export class GcStateModelBoundaryError extends Error {
   constructor(message, {kind = 'BOUNDARY', offset = null, value = undefined} = {}) {
     super(message);

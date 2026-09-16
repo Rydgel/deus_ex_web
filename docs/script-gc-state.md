@@ -147,8 +147,10 @@ double). Both color setters compute `fild byte; fmul qword K; fstp f32`.
   `SetBoldFont` -> `+0x80`; `SetFonts(n, b)` -> `+0x7c = n, +0x80 = b`.
 * `SetBaselineData(off, ul)`: `+0x8c = off`, `+0x88 = ul` (raw dword copies).
 * `SetTextVSpacing(v)`: `+0x90 = v`. `GetTextVSpacing` returns it through
-  `fld/fstp` (an SNaN payload is quieted by the x87 load; JS numbers cannot
-  carry NaN payloads, so the validator only compares NaN-ness there).
+  `fld/fstp` (UNVERIFIED: real x87 hardware should quiet an SNaN payload on
+  the load, but Unicorn's softfloat returns `0x7f800001` unchanged, so the
+  oracle cannot prove it; JS numbers cannot carry NaN payloads, so the
+  validator only compares NaN-ness there).
 * `SetHorizontalAlignment(a)` -> byte `+0x94`; `SetVerticalAlignment` ->
   `+0x95`; `SetAlignments(h, v)` -> both. The exec bodies mask the evaluated
   slot with `& 0xff` before the call because only one byte of the slot is
