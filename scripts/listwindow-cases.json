@@ -720,6 +720,58 @@
         "selectedRow": 0
       },
       "args": []
+    },
+    "selectedSink": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "numSelected": 1,
+        "selectedRow": 0,
+        "selectionSink": 7
+      },
+      "args": []
+    },
+    "asymmetric": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "b"
+              },
+              {
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {},
+          {}
+        ]
+      },
+      "args": []
     }
   },
   "setNumColumns": {

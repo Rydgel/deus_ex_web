@@ -22,9 +22,12 @@ export class ListWindowHeap {
     this.freed = new Set();
     this.seen = new Map();        // addr -> 'a<N>' encounter labels
     this.events = [];
-    // Extension image scratch state: the sort-column list 0x100a6f28/0x100a7348.
+    // Extension image scratch state: the sort-column list 0x100a6f28/0x100a7348
+    // and the shared empty wstring 0x10099ea8 that GetField/measureField hand
+    // out for unallocated field text.
     this.sortList = this.allocRaw(0x400);
     this.sortCount = this.allocRaw(4);
+    this.emptyWString = this.allocRaw(4);
   }
 
   allocRaw(size) {
@@ -43,6 +46,15 @@ export class ListWindowHeap {
   }
 
   realloc(address, size, tag = 'FArray') {
+    if (size === 0) {
+      // FMalloc::Realloc frees the block and returns NULL for size 0.
+      if (address) {
+        this.sizes.delete(address);
+        this.freed.add(address);
+      }
+      this.events.push({op: 'Realloc', old: this.canon(address), size: 0, tag, block: 0});
+      return 0;
+    }
     if (!address) {
       const fresh = this.allocRaw(size);
       const id = `h${this.blockIds.size}`;
@@ -245,8 +257,48 @@ export function buildWindow(heap, spec = {}) {
   heap.write(base + W.defFont, 'u32', spec.defFont ?? 0);
   const style = heap.allocRaw(0x60);
   heap.write(base + W.style, 'u32', style);
-  heap.write(base + W.context, 'u32', spec.context ?? 0);
+  const context = spec.context === true ? heap.allocRaw(0xc0) : (spec.context ?? 0);
+  heap.write(base + W.context, 'u32', context);
   return {base, heap, spec};
+}
+
+/**
+ * Leaf services mirroring the probe's intercepted Extension boundaries.
+ * Each emits the same canonical event the probe records and performs the
+ * same state effect the leaf models (context acquire returns this+0x134,
+ * measureString writes the configured extents, the selection virtual returns
+ * the configured sink value).
+ */
+export function listLeafServices(heap, base, spec = {}) {
+  const measure = spec.measure ?? {};
+  const mwidth = measure.width ?? 0, mheight = measure.height ?? 0;
+  const sink = spec.selectionSink ?? 0;
+  return {
+    acquireContext(object, windowBase) {
+      const ctx = heap.read(windowBase + 0x134, 'u32');
+      heap.events.push({op: 'AcquireContext', object: heap.canon(windowBase),
+                        ctx: heap.canon(ctx)});
+      return ctx;
+    },
+    releaseContext(object, windowBase, ctx) {
+      heap.events.push({op: 'ReleaseContext', object: heap.canon(windowBase),
+                        ctx: heap.canon(ctx)});
+    },
+    measureString(object, ctx, outWidth, outHeight, text, flags) {
+      heap.write(outWidth, 'f32', mwidth);
+      heap.write(outHeight, 'f32', mheight);
+      heap.events.push({op: 'MeasureString', flags,
+                        text: heap.readString(text), width: mwidth, height: mheight});
+    },
+    selectionChanged(object, receiver, sender, count, node) {
+      heap.events.push({op: 'SelectionChanged', receiver: heap.canon(receiver),
+                        sender: heap.canon(sender), count, node: heap.canon(node)});
+      return sink;
+    },
+    askParentForReconfigure(object, windowBase) {
+      heap.events.push({op: 'AskParentForReconfigure', object: heap.canon(windowBase)});
+    },
+  };
 }
 
 export function dumpFString(heap, address) {

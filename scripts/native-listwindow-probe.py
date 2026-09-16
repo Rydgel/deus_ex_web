@@ -127,8 +127,9 @@ class ListWindowProbe(_NATIVE.NativeCollision):
     def __init__(self, root):
         super().__init__(Path(root), IMAGES)
         self.events = []
-        self.blocks = {}           # live ptr -> size
+        self.blocks = {}           # live GMalloc ptr -> size
         self.block_ids = {}        # ptr -> 'h<N>' (Malloc event order)
+        self.sizes = {}            # EVERY allocation's requested size
         self.freed = set()
         self.seen_ids = {}         # ptr -> 'a<N>' (dump encounter order)
         self.measure_extents = (0.0, 0.0)
@@ -189,6 +190,11 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         self.cpu.hook_add(UC_HOOK_CODE, self.on_dispatch)
 
     # ----- allocator model -------------------------------------------------
+    def alloc(self, size):
+        address = super().alloc(size)
+        self.sizes[address] = size
+        return address
+
     def _track_alloc(self, size):
         address = self.alloc(max(size, 4))
         ident = 'h%d' % len(self.block_ids)
@@ -219,7 +225,7 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             self._cdecl_return(cpu, stack, 12)
             return
         if old:
-            old_size = self.blocks.get(old, 0)
+            old_size = self.sizes.get(old, 0)
             new, ident = self._track_alloc(size)
             keep = min(old_size, size)
             data = bytes(self.cpu.mem_read(old, keep)) if keep else b''
@@ -863,7 +869,9 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         return address
 
     def column(self, index=0, header='', sort_priority=0, sort_flags=0, width=0.0,
-               flag_byte=0, packed=0, font=0, col_type=0, fmt=''):
+               flag_byte=0, packed=0, font=0, col_type=0, fmt='', type=None):
+        if type is not None:
+            col_type = type
         address = self.alloc(0x38)
         self.cpu.mem_write(address, b'\0' * 0x38)
         hdata, hnum, hmax = self.fstring(header)
@@ -1056,6 +1064,9 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         self.blocks = {}
         self.freed = set()
         self.seen_ids = {}
+        # The sort-column list is process-global image scratch; a fresh case
+        # models a process where no sort path has run yet.
+        self.write(SORT_COUNT, 'i', 0)
         m = spec.get('measure', {})
         self.measure_extents = (m.get('width', 0.0), m.get('height', 0.0))
         self.selection_sink = spec.get('selectionSink', 0)
