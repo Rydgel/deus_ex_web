@@ -620,7 +620,19 @@ def oracle_main(method, result_kind, section, root=None):
         if result_kind == 'execInt':
             out = probe.run_exec_int(BODIES[method], this)
         else:
-            ret = probe.run_method(method, this, words)
+            if method == 'MoveInsertionPoint':
+                # exec body masks the byte param: `and edx, 0xff`.
+                words[0] &= 0xff
+            if method == 'InsertText':
+                # exec body runs convertPipes(0x10050710) on the string and
+                # calls the virtual (+0x124 = 0x1001e3c0) with the converted
+                # pointer; the virtual's EAX becomes the script result.
+                conv = probe.call(CONVERT_PIPES, this, struct.pack('<I', words[0]))
+                words = [conv] + words[1:]
+                ret = probe.call(INSERT_TEXT_VIRTUAL, this,
+                                 struct.pack('<3I', *words))
+            else:
+                ret = probe.run_method(method, this, words)
             if result_kind == 'void':
                 # The export returns no value; the leftover EAX is recorded as
                 # evidence but is not observable through the script VM.

@@ -1198,5 +1198,743 @@
     }
    ]
   }
+ },
+ "moveInsertionPoint": {
+  "up": {
+   "spec": {
+    "ip": 14,
+    "anchor": 14,
+    "columns": [
+     3
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "down": {
+   "spec": {
+    "ip": 4,
+    "anchor": 4,
+    "columns": [
+     1
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "left": {
+   "spec": {
+    "ip": 5,
+    "anchor": 5,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "right": {
+   "spec": {
+    "ip": 5,
+    "anchor": 5,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 3
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordLeft": {
+   "spec": {
+    "ip": 9,
+    "anchor": 9,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 4
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordRight": {
+   "spec": {
+    "ip": 2,
+    "anchor": 2,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 5
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "lineStart": {
+   "spec": {
+    "ip": 15,
+    "anchor": 15,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 6
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "lineEnd": {
+   "spec": {
+    "ip": 14,
+    "anchor": 14,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 7
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pageUp": {
+   "spec": {
+    "ip": 21,
+    "anchor": 21,
+    "height": 100,
+    "lineHeight": 12,
+    "lineSpacing": 2,
+    "columns": [
+     0
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 8
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pageDown": {
+   "spec": {
+    "ip": 2,
+    "anchor": 2,
+    "height": 100,
+    "lineHeight": 12,
+    "lineSpacing": 2,
+    "columns": [
+     2
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 9
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "textStart": {
+   "spec": {
+    "ip": 15,
+    "anchor": 15,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 10
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "textEnd": {
+   "spec": {
+    "ip": 0,
+    "anchor": 0,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 11
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "type12": {
+   "spec": {
+    "ip": 5,
+    "anchor": 5,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 12
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "type255": {
+   "spec": {
+    "ip": 5,
+    "anchor": 5,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 255
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "emptyUp": {
+   "spec": {
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [],
+    "ip": 3,
+    "anchor": 3
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "emptyRight": {
+   "spec": {
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [],
+    "ip": 3,
+    "anchor": 3
+   },
+   "args": [
+    {
+     "int": 3
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "emptyEnd": {
+   "spec": {
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [],
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": 11
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "dragRight": {
+   "spec": {
+    "ip": 5,
+    "anchor": 2,
+    "selStart": 2,
+    "selEnd": 5,
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 3
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "dragDown": {
+   "spec": {
+    "ip": 4,
+    "anchor": 4,
+    "columns": [
+     6
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "pageClampTop": {
+   "spec": {
+    "ip": 14,
+    "anchor": 14,
+    "height": 50,
+    "lineHeight": 12,
+    "lineSpacing": 2,
+    "columns": [
+     0
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 8
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pageMin1": {
+   "spec": {
+    "ip": 14,
+    "anchor": 14,
+    "height": 5,
+    "lineHeight": 12,
+    "lineSpacing": 2,
+    "columns": [
+     0
+    ],
+    "text": "hello world\nfoo bar\nbaz",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 11,
+      "full": 12
+     },
+     {
+      "x": 0,
+      "start": 12,
+      "visible": 7,
+      "full": 8
+     },
+     {
+      "x": 0,
+      "start": 20,
+      "visible": 3,
+      "full": 3
+     }
+    ]
+   },
+   "args": [
+    {
+     "int": 8
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordRightCR": {
+   "spec": {
+    "text": "ab\rcd",
+    "lines": [
+     {
+      "x": 0,
+      "start": 0,
+      "visible": 5,
+      "full": 5
+     }
+    ],
+    "ip": 1,
+    "anchor": 1
+   },
+   "args": [
+    {
+     "int": 5
+    },
+    {
+     "int": 0
+    }
+   ]
+  }
  }
 }

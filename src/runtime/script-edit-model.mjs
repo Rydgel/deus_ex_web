@@ -517,6 +517,117 @@ export function wordEnd(L, pos) {
   return (p - data) >> 1;
 }
 
+// 0x1001eba0 — posToLineCol(pos): clamps pos to [0, len], scans the +0x194
+// line table from the last record down for the first start <= pos and
+// returns {line, col}; (0, 0) when no record qualifies or the table is empty.
+// The native writes the two results through separate NULL-guarded out
+// pointers (the second offset shifts across a mid-body pop); callers that
+// pass NULL for col are modelled by ignoring it.
+export function posToLineCol(L, pos) {
+  const len = textLen(L);
+  const count = L.read(L.base + EDIT_WINDOW.linesCount, 'i32');
+  let p = pos | 0;
+  if (p > len) p = len;
+  if (p < 0) p = 0;
+  const data = L.read(L.base + EDIT_WINDOW.linesData, 'u32');
+  let line = count - 1;
+  while (line >= 0
+      && L.read(data + line * EDIT_LINE.size + EDIT_LINE.start, 'i32') > p) {
+    line -= 1;
+  }
+  if (line < 0) return {line: 0, col: 0};
+  return {
+    line,
+    col: p - L.read(data + line * EDIT_LINE.size + EDIT_LINE.start, 'i32'),
+  };
+}
+
+// 0x1001f200 — moveToLine(line, bExtend): clamps the target line to
+// [0, count - 1], resolves the column through the ColumnFromX leaf on the
+// stickyX (+0x270) float bits, clamps the position to [0, len] and moves the
+// caret; bExtend keeps the anchor.  Ends with updateSelection /
+// updateCaret(0) / resetBlink.
+export function moveToLine(L, line, bExtend) {
+  const len = textLen(L);
+  const count = L.read(L.base + EDIT_WINDOW.linesCount, 'i32');
+  let l = line | 0;
+  if (l > count - 1) l = count - 1;
+  if (l < 0) l = 0;
+  let pos = 0;
+  if (l < count) {
+    const data = L.read(L.base + EDIT_WINDOW.linesData, 'u32');
+    const xBits = L.read(L.base + EDIT_WINDOW.stickyX, 'u32');
+    const col = columnFromX(L, l, xBits);
+    pos = L.read(data + l * EDIT_LINE.size + EDIT_LINE.start, 'i32') + col;
+  }
+  if (pos > len) pos = len;
+  if (pos < 0) pos = 0;
+  L.write(L.base + EDIT_WINDOW.insertionPoint, 'i32', pos);
+  if (!bExtend) L.write(L.base + EDIT_WINDOW.anchor, 'i32', pos);
+  updateSelection(L);
+  updateCaret(L, 0);
+  resetBlink(L);
+}
+
+// 0x1001f3b0 — nextWord(pos): finds the line holding pos; past the line's
+// visible end returns start + fullLen.  Otherwise scans forward skipping
+// non-whitespace then whitespace to the next word start; reaching the line
+// end returns start + fullLen - 1.  Out-of-range line -> 0.
+export function nextWord(L, pos) {
+  const {line} = posToLineCol(L, pos);
+  const count = L.read(L.base + EDIT_WINDOW.linesCount, 'i32');
+  if (line < 0 || line >= count) return 0;
+  const data = textData(L);
+  const linesData = L.read(L.base + EDIT_WINDOW.linesData, 'u32');
+  const rec = linesData + line * EDIT_LINE.size;
+  const start = L.read(rec + EDIT_LINE.start, 'i32');
+  const lineEnd = start + L.read(rec + EDIT_LINE.visibleLen, 'i32');
+  let p = data + (pos | 0) * 2;
+  const end = data + lineEnd * 2;
+  if (p >= end) return start + L.read(rec + EDIT_LINE.fullLen, 'i32');
+  let seenSpace = 0;
+  while (p < end) {
+    const ch = L.read(p, 'u16');
+    if ((ch >= 9 && ch <= 0xd) || ch === 0x20) {
+      seenSpace = 1;
+    } else if (seenSpace) {
+      break;
+    }
+    p += 2;
+  }
+  if (p >= end) return start + L.read(rec + EDIT_LINE.fullLen, 'i32') - 1;
+  return (p - data) >> 1;
+}
+
+// 0x1001f550 — prevWord(pos): finds the line holding pos; at the line start
+// returns max(pos - 1, 0).  Otherwise scans back from pos - 1 skipping
+// whitespace then non-whitespace and returns the index after the stop;
+// reaching the line start yields that start.  Out-of-range line -> 0.
+export function prevWord(L, pos) {
+  const {line} = posToLineCol(L, pos);
+  const count = L.read(L.base + EDIT_WINDOW.linesCount, 'i32');
+  if (line < 0 || line >= count) return 0;
+  const data = textData(L);
+  const linesData = L.read(L.base + EDIT_WINDOW.linesData, 'u32');
+  const start = L.read(linesData + line * EDIT_LINE.size + EDIT_LINE.start, 'i32');
+  const lineStart = data + start * 2;
+  let p = data + (pos | 0) * 2;
+  if (p === lineStart) return Math.max(pos - 1, 0);
+  let seenNonSpace = 0;
+  for (;;) {
+    p -= 2;
+    if (p < lineStart) break;
+    const ch = L.read(p, 'u16');
+    if ((ch >= 9 && ch <= 0xd) || ch === 0x20) {
+      if (seenNonSpace) break;
+    } else {
+      seenNonSpace = 1;
+    }
+  }
+  const result = (p - data + 2) >> 1;
+  return result < 0 ? 0 : result;
+}
+
 // 0x1001f140 — setInsertionPointCore (reached via the 0x1001d4a0 SEH entry).
 export function setInsertionPointCore(L, pos, bExtend) {
   const len = textLen(L);
