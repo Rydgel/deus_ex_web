@@ -1,0 +1,391 @@
+{
+  "enableSmoothing": {
+    "set-high-bits": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "clear-high-bits": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern-5a": {
+      "spec": {"flags": 1515870810, "style": 7, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "already-set": {
+      "spec": {"flags": 4294967295, "style": 4, "polyFlags": 4660},
+      "args": [1]
+    },
+    "method-set": {
+      "spec": {"flags": 4294967232, "style": 7, "polyFlags": 3735928559},
+      "args": [1],
+      "mode": "method"
+    },
+    "method-clear": {
+      "spec": {"flags": 4294967295, "style": 3, "polyFlags": 3735928559},
+      "args": [0],
+      "mode": "method"
+    }
+  },
+  "isSmoothingEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 1}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967294}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870811}, "args": []}
+  },
+  "enableDrawing": {
+    "set": {
+      "spec": {"flags": 4294967232, "style": 9, "polyFlags": 3735928559, "textPolyFlags": 48879},
+      "args": [1]
+    },
+    "clear": {
+      "spec": {"flags": 4294967295, "style": 9, "polyFlags": 3735928559, "textPolyFlags": 48879},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967295, "style": 9, "polyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967232, "style": 9, "polyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "style": 9, "polyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967295, "style": 9, "polyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern": {
+      "spec": {"flags": 1515870810, "style": 2, "polyFlags": 258},
+      "args": [0]
+    },
+    "method-set": {
+      "spec": {"flags": 1515870808, "style": 7, "polyFlags": 4660},
+      "args": [1],
+      "mode": "method"
+    }
+  },
+  "isDrawingEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 2}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967293}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870808}, "args": []}
+  },
+  "enableMasking": {
+    "set-drawing-clear": {
+      "spec": {"flags": 4294967280, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "set-drawing-only": {
+      "spec": {"flags": 4294967282, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "masked-beats-translucent-modulated": {
+      "spec": {"flags": 4294967290, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "clear-leaves-translucent": {
+      "spec": {"flags": 4294967294, "style": 17, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "clear-to-normal": {
+      "spec": {"flags": 4294967238, "style": 17, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "style": 17, "polyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967238, "style": 17, "polyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern-5a": {
+      "spec": {"flags": 1515870810, "style": 51, "polyFlags": 30583},
+      "args": [1]
+    },
+    "method-set": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [1],
+      "mode": "method"
+    }
+  },
+  "isMaskingEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 4}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967291}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870814}, "args": []}
+  },
+  "enableTranslucency": {
+    "set-drawing-clear": {
+      "spec": {"flags": 4294967280, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "set-drawing-only": {
+      "spec": {"flags": 4294967282, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "masked-priority": {
+      "spec": {"flags": 4294967238, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "clear-keeps-masked": {
+      "spec": {"flags": 4294967294, "style": 17, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "clear-leaves-modulated": {
+      "spec": {"flags": 4294967290, "style": 17, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "style": 17, "polyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967290, "style": 17, "polyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern-5a": {
+      "spec": {"flags": 1515870808, "style": 51, "polyFlags": 30583},
+      "args": [1]
+    },
+    "method-set": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [1],
+      "mode": "method"
+    }
+  },
+  "isTranslucencyEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 8}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967287}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870802}, "args": []}
+  },
+  "enableModulation": {
+    "set-drawing-clear": {
+      "spec": {"flags": 4294967264, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "set-drawing-only": {
+      "spec": {"flags": 4294967266, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "masked-priority": {
+      "spec": {"flags": 4294967270, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "translucent-priority": {
+      "spec": {"flags": 4294967274, "style": 17, "polyFlags": 3735928559},
+      "args": [1]
+    },
+    "clear-keeps-masked-translucent": {
+      "spec": {"flags": 4294967295, "style": 17, "polyFlags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "style": 17, "polyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967295, "style": 17, "polyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern-5a": {
+      "spec": {"flags": 1515870808, "style": 51, "polyFlags": 30583},
+      "args": [1]
+    },
+    "method-set": {
+      "spec": {"flags": 4294967234, "style": 17, "polyFlags": 3735928559},
+      "args": [1],
+      "mode": "method"
+    }
+  },
+  "isModulationEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 16}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967279}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870794}, "args": []}
+  },
+  "enableTranslucentText": {
+    "set": {
+      "spec": {"flags": 4294967232, "textPolyFlags": 3735928559, "style": 9, "polyFlags": 4660},
+      "args": [1]
+    },
+    "clear": {
+      "spec": {"flags": 4294967295, "textPolyFlags": 3735928559, "style": 9, "polyFlags": 4660},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"flags": 4294967295, "textPolyFlags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"flags": 4294967232, "textPolyFlags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"flags": 4294967232, "textPolyFlags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"flags": 4294967295, "textPolyFlags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern": {
+      "spec": {"flags": 1515870810, "textPolyFlags": 3735928559, "style": 9, "polyFlags": 4660},
+      "args": [1]
+    },
+    "method-clear": {
+      "spec": {"flags": 4294967295, "textPolyFlags": 3735928559, "style": 9},
+      "args": [0],
+      "mode": "method"
+    }
+  },
+  "isTranslucentTextEnabled": {
+    "zero": {"spec": {"flags": 0}, "args": []},
+    "bit-set": {"spec": {"flags": 32}, "args": []},
+    "bit-clear-high": {"spec": {"flags": 4294967263}, "args": []},
+    "all-set": {"spec": {"flags": 4294967295}, "args": []},
+    "pattern-clear": {"spec": {"flags": 1515870810}, "args": []},
+    "pattern-set": {"spec": {"flags": 1515870842}, "args": []}
+  },
+  "enableWordWrap": {
+    "set": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [1]
+    },
+    "clear": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern": {
+      "spec": {"textFlags": 1515870810, "flags": 3735928559},
+      "args": [1]
+    },
+    "method-clear": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [0],
+      "mode": "method"
+    }
+  },
+  "isWordWrapEnabled": {
+    "zero": {"spec": {"textFlags": 0}, "args": []},
+    "bit-set": {"spec": {"textFlags": 1}, "args": []},
+    "bit-clear-high": {"spec": {"textFlags": 4294967294}, "args": []},
+    "all-set": {"spec": {"textFlags": 4294967295}, "args": []},
+    "pattern-clear": {"spec": {"textFlags": 1515870810}, "args": []},
+    "pattern-set": {"spec": {"textFlags": 1515870811}, "args": []}
+  },
+  "enableSpecialText": {
+    "set": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [1]
+    },
+    "clear": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [0]
+    },
+    "mask-arg-2": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [2]
+    },
+    "mask-arg-3": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [3]
+    },
+    "mask-arg-ffffffff": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [4294967295]
+    },
+    "mask-arg-80000000": {
+      "spec": {"textFlags": 4294967295, "flags": 3735928559},
+      "args": [2147483648]
+    },
+    "pattern": {
+      "spec": {"textFlags": 1515870810, "flags": 3735928559},
+      "args": [0]
+    },
+    "method-set": {
+      "spec": {"textFlags": 4294967292, "flags": 3735928559},
+      "args": [1],
+      "mode": "method"
+    }
+  },
+  "isSpecialTextEnabled": {
+    "zero": {"spec": {"textFlags": 0}, "args": []},
+    "bit-set": {"spec": {"textFlags": 2}, "args": []},
+    "bit-clear-high": {"spec": {"textFlags": 4294967293}, "args": []},
+    "all-set": {"spec": {"textFlags": 4294967295}, "args": []},
+    "pattern-set": {"spec": {"textFlags": 1515870810}, "args": []},
+    "pattern-clear": {"spec": {"textFlags": 1515870808}, "args": []}
+  }
+}
