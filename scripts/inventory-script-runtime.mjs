@@ -144,6 +144,21 @@ const bindings={
     {index:2101,scope:'DeusExDecoration.ConBindEvents same recovered mission-list path for the selected decoration route'},
     {index:2102,scope:'ScriptedPawn.ConBindEvents same recovered mission-list path for the selected scripted-pawn route'}],
 };
+// Natives implemented as dedicated runtime modules each record `nativeIndex: N`.
+// That is real execution support the hand-maintained catalogue above does not
+// enumerate, so scan for it and fold it in — otherwise the supported/unsupported
+// split reports a stale list (e.g. the whole XWindow/XListWindow family read as
+// "unsupported" long after it was bound). Keyed by module for a readable scope.
+const runtimeDir=path.resolve('src/runtime'),moduleNatives=new Map();
+for(const file of (await readdir(runtimeDir)).filter(name=>name.endsWith('.mjs'))){
+  const text=await readFile(path.join(runtimeDir,file),'utf8');
+  for(const match of text.matchAll(/nativeIndex:\s*(0x[0-9a-fA-F]+|\d+)/g)){
+    const index=Number(match[1]);
+    if(Number.isInteger(index)&&index>0&&!moduleNatives.has(index))moduleNatives.set(index,file);
+  }
+}
+bindings.modules=[...moduleNatives].sort((a,b)=>a[0]-b[0])
+  .map(([index,file])=>({index,scope:`implemented in src/runtime/${file}`}));
 const directNativeTotals=new Map();
 for(const pkg of packages)for(const [index,count] of Object.entries(pkg.directNativeCalls))
   directNativeTotals.set(Number(index),(directNativeTotals.get(Number(index))??0)+count);
