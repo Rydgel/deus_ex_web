@@ -164,6 +164,14 @@
         "numSelected": 7
       },
       "args": []
+    },
+    "large": {
+      "spec": {
+        "rows": [],
+        "cols": [],
+        "numSelected": 511
+      },
+      "args": []
     }
   },
   "indexToRowId": {
