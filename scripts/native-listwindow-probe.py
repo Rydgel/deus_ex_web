@@ -32,12 +32,15 @@ Sort scratch globals:         0x100a6f28 column list (max 0x100),
 """
 import importlib.util
 import json
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from pathlib import Path
 import struct
 import sys
 
 from unicorn import UC_HOOK_CODE
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_ESP
+from unicorn.x86_const import (
+    UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EIP, UC_X86_REG_ESP,
+)
 
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -85,6 +88,7 @@ GET_PARENT = EXT + 0x4c550
 # Extension IAT slots.
 GMALLOC_IAT = EXT + 0x59060
 FAIL_ASSERT_IAT = EXT + 0x59098
+SPRINTF_IAT = EXT + 0x59138
 
 # In-image scratch/static addresses.
 SORT_LIST = EXT + 0xa6f28
@@ -151,13 +155,38 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         # surfaces as an explicit oracle failure instead of GError dereference.
         self.assert_addr = self.read(FAIL_ASSERT_IAT, 'I')[0]
 
+        # appSprintf leaf: the real Core body handles integer/string/Unreal
+        # directives natively, but %f/%e/%g dive into MSVCRT's floating
+        # conversion path which aborts without full CRT init (recovered:
+        # _woutput -> _amsg_exit).  The leaf jumps to the real body for
+        # non-float formats and formats float conversions in Python with
+        # Decimal correctly-rounded/half-away digit generation, which matches
+        # the real _fcvt on every probed value (incl. exact ties 0.5->1,
+        # 2.5->3, 0.125->0.13).
+        self.sprintf_stub = self.alloc(16)
+        self.cpu.mem_write(self.sprintf_stub, b'\xc3')
+        self.sprintf_real = self.read(SPRINTF_IAT, 'I')[0]
+        self.write(SPRINTF_IAT, 'I', self.sprintf_stub)
+
         # Fake XWindow vtable: only the selection-changed slot is used here.
         self.window_vtable = self.alloc(0x200)
         self.selection_stub = self.alloc(16)
         self.cpu.mem_write(self.selection_stub, b'\xc3')
         self.write(self.window_vtable + SELECTION_CHANGED_SLOT, 'I', self.selection_stub)
 
-        self.cpu.hook_add(UC_HOOK_CODE, self.on_leaf)
+        # The base code hook raises on every unresolved import; the ListWindow
+        # model additionally services kernel32 calls issued by the real MSVCRT
+        # _vsnwprintf path, so this probe installs its own dispatcher (leaf
+        # hooks are reached through on_dispatch, not a second hook).
+        self.cpu.hook_del(self.code_hook)
+        self.tls = {}
+        self.tls_next = 1
+        self.kernel_calls = []
+        self._getproc_stubs = {}
+        self.k32_heap = {}
+        self.k32_reserved_lo = 0
+        self.k32_reserved_hi = 0
+        self.cpu.hook_add(UC_HOOK_CODE, self.on_dispatch)
 
     # ----- allocator model -------------------------------------------------
     def _track_alloc(self, size):
@@ -174,11 +203,21 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         self.events.append({'op': 'Malloc', 'size': size, 'tag': self.wstring(tag),
                             'block': ident})
         cpu.reg_write(UC_X86_REG_EAX, address)
-        self._cdecl_return(cpu, stack)
+        self._cdecl_return(cpu, stack, 8)
 
     def on_realloc(self, cpu):
         stack = cpu.reg_read(UC_X86_REG_ESP)
         old, size, tag = self.read(stack + 4, '3I')
+        if size == 0:
+            # FMalloc::Realloc frees the block and returns NULL for size 0.
+            if old:
+                self.blocks.pop(old, None)
+                self.freed.add(old)
+            self.events.append({'op': 'Realloc', 'old': self.canon(old), 'size': 0,
+                                'tag': self.wstring(tag), 'block': 0})
+            cpu.reg_write(UC_X86_REG_EAX, 0)
+            self._cdecl_return(cpu, stack, 12)
+            return
         if old:
             old_size = self.blocks.get(old, 0)
             new, ident = self._track_alloc(size)
@@ -197,7 +236,7 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             self.events.append({'op': 'Realloc', 'old': 0, 'size': size,
                                 'tag': self.wstring(tag), 'block': ident})
         cpu.reg_write(UC_X86_REG_EAX, new)
-        self._cdecl_return(cpu, stack)
+        self._cdecl_return(cpu, stack, 12)
 
     def on_free(self, cpu):
         stack = cpu.reg_read(UC_X86_REG_ESP)
@@ -205,12 +244,15 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         self.events.append({'op': 'Free', 'block': self.canon(ptr)})
         self.blocks.pop(ptr, None)
         self.freed.add(ptr)
-        self._cdecl_return(cpu, stack)
+        self._cdecl_return(cpu, stack, 4)
 
     @staticmethod
-    def _cdecl_return(cpu, stack):
+    def _cdecl_return(cpu, stack, arg_bytes=0):
+        # FMalloc vtable slots and the intercepted member functions are MSVC
+        # thiscall: the callee pops its stack arguments.  arg_bytes models
+        # that cleanup; varargs leaves (appSprintf) stay caller-cleaned.
         ret = int.from_bytes(cpu.mem_read(stack, 4), 'little')
-        cpu.reg_write(UC_X86_REG_ESP, stack + 4)
+        cpu.reg_write(UC_X86_REG_ESP, stack + 4 + arg_bytes)
         cpu.reg_write(UC_X86_REG_EIP, ret)
 
     # ----- helpers ----------------------------------------------------------
@@ -260,11 +302,12 @@ class ListWindowProbe(_NATIVE.NativeCollision):
                                 'object': self.canon(cpu.reg_read(UC_X86_REG_ECX))})
             self._cdecl_return(cpu, stack)
         elif address == ACQUIRE_CONTEXT:
-            ctx = self.alloc(0xc0)
-            self.cpu.mem_write(ctx, b'\0' * 0xc0)
-            self._contexts.append(ctx)
+            # Real body returns this+0x134 after priming the pooled context;
+            # the two ctx-object calls inside it are part of the leaf.
+            window = cpu.reg_read(UC_X86_REG_ECX)
+            ctx = self.read(window + OFF_CONTEXT, 'I')[0]
             self.events.append({'op': 'AcquireContext',
-                                'object': self.canon(cpu.reg_read(UC_X86_REG_ECX)),
+                                'object': self.canon(window),
                                 'ctx': self.canon(ctx)})
             cpu.reg_write(UC_X86_REG_EAX, ctx)
             self._cdecl_return(cpu, stack)
@@ -273,7 +316,7 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             self.events.append({'op': 'ReleaseContext',
                                 'object': self.canon(cpu.reg_read(UC_X86_REG_ECX)),
                                 'ctx': self.canon(ctx)})
-            self._cdecl_return(cpu, stack)
+            self._cdecl_return(cpu, stack, 4)
         elif address == MEASURE_STRING:
             flags, out_w, out_h, text = self.read(stack + 4, '4I')
             string = self.wstring(text)
@@ -282,7 +325,7 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             self.write(out_h, 'f', height)
             self.events.append({'op': 'MeasureString', 'flags': flags,
                                 'text': string, 'width': width, 'height': height})
-            self._cdecl_return(cpu, stack)
+            self._cdecl_return(cpu, stack, 16)
         elif address == self.selection_stub:
             receiver = cpu.reg_read(UC_X86_REG_ECX)
             sender, count, node = self.read(stack + 4, '3I')
@@ -290,13 +333,500 @@ class ListWindowProbe(_NATIVE.NativeCollision):
                                 'sender': self.canon(sender), 'count': count,
                                 'node': self.canon(node)})
             cpu.reg_write(UC_X86_REG_EAX, self.selection_sink)
-            self._cdecl_return(cpu, stack)
+            self._cdecl_return(cpu, stack, 12)
+        elif address == self.sprintf_stub:
+            self.on_sprintf(cpu)
         elif address == self.assert_addr:
             expr, file_, line = self.read(stack + 4, '3I')
             raise RuntimeError('appFailAssert fired: line %d expr %s' % (line, expr))
         elif address == GET_PARENT:
             # Real body is a plain field read; it executes unchanged.
             pass
+
+    # ----- appSprintf leaf ----------------------------------------------------
+    FLOAT_CONVS = frozenset('eEfgG')
+    KNOWN_CONVS = frozenset('diuxXocspfFeEgGaAnm%')
+
+    def on_sprintf(self, cpu):
+        """Intercept Core appSprintf at the Extension IAT.
+
+        Formats containing no float conversions jump straight to the real Core
+        body (which executes natively); float formats are produced in Python.
+        Varargs sit at esp+0xc: int/string args are 4 bytes, doubles 8 bytes.
+        """
+        stack = cpu.reg_read(UC_X86_REG_ESP)
+        buf, fmt_ptr = self.read(stack + 4, '2I')
+        fmt = self.wstring(fmt_ptr)
+        specs = self._scan_formats(fmt)
+        if not any(c in self.FLOAT_CONVS for c in specs):
+            if any(c not in self.KNOWN_CONVS for c in specs):
+                raise RuntimeError('appSprintf unhandled conversion in %r' % fmt)
+            cpu.reg_write(UC_X86_REG_EIP, self.sprintf_real)
+            return
+        text = self._format(cpu, fmt, stack + 0xc)
+        data = text.encode('utf-16-le') + b'\0\0'
+        cpu.mem_write(buf, data)
+        cpu.reg_write(UC_X86_REG_EAX, buf)
+        self._cdecl_return(cpu, stack)
+
+    @staticmethod
+    def _scan_formats(fmt):
+        """Return [(conv, argpos)] for each % conversion in order."""
+        out = []
+        i = 0
+        while True:
+            i = fmt.find('%', i)
+            if i < 0:
+                return out
+            j = i + 1
+            n = len(fmt)
+            if j < n and fmt[j] == '%':
+                i = j + 1
+                continue
+            while j < n and fmt[j] in '-+ #0':
+                j += 1
+            if j < n and fmt[j] == '*':
+                j += 1
+            else:
+                while j < n and fmt[j].isdigit():
+                    j += 1
+            if j < n and fmt[j] == '.':
+                j += 1
+                if j < n and fmt[j] == '*':
+                    j += 1
+                else:
+                    while j < n and fmt[j].isdigit():
+                        j += 1
+            while j < n and fmt[j] in 'hlLzI346':
+                j += 1
+            if j >= n:
+                return out
+            out.append(fmt[j])
+            i = j + 1
+
+    def _format(self, cpu, fmt, va):
+        """Mini printf for float-containing formats; decimal digits come from
+        exact binary expansion (CPython Decimal) with round-half-away, the same
+        result MSVCRT _fcvt produced for every probed value."""
+        args = []
+
+        def read_arg():
+            # width/precision '*' also consume int args; handled by caller
+            pass
+
+        out = []
+        argp = va
+        i = 0
+        n = len(fmt)
+        while i < n:
+            ch = fmt[i]
+            if ch != '%':
+                out.append(ch)
+                i += 1
+                continue
+            j = i + 1
+            if fmt[j] == '%':
+                out.append('%')
+                i = j + 1
+                continue
+            flags = ''
+            while j < n and fmt[j] in '-+ #0':
+                flags += fmt[j]
+                j += 1
+            if j < n and fmt[j] == '*':
+                width = struct.unpack('<i', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                j += 1
+            else:
+                width = 0
+                while j < n and fmt[j].isdigit():
+                    width = width * 10 + int(fmt[j])
+                    j += 1
+            prec = None
+            if j < n and fmt[j] == '.':
+                j += 1
+                if j < n and fmt[j] == '*':
+                    prec = struct.unpack('<i', cpu.mem_read(argp, 4))[0]
+                    argp += 4
+                    j += 1
+                else:
+                    prec = 0
+                    while j < n and fmt[j].isdigit():
+                        prec = prec * 10 + int(fmt[j])
+                        j += 1
+            while j < n and fmt[j] in 'hlLzI346':
+                j += 1
+            conv = fmt[j] if j < n else ''
+            j += 1
+            i = j
+            piece = ''
+            if conv in 'fF':
+                p = 6 if prec is None else prec
+                value = struct.unpack('<d', cpu.mem_read(argp, 8))[0]
+                argp += 8
+                piece = self._fmt_f(value, p, flags, Decimal, ROUND_HALF_UP)
+            elif conv in 'eE':
+                p = 6 if prec is None else prec
+                value = struct.unpack('<d', cpu.mem_read(argp, 8))[0]
+                argp += 8
+                piece = self._fmt_e(value, p, flags, conv == 'E',
+                                    Decimal, ROUND_HALF_UP)
+            elif conv in 'gG':
+                p = 6 if prec is None else max(prec, 1)
+                value = struct.unpack('<d', cpu.mem_read(argp, 8))[0]
+                argp += 8
+                piece = self._fmt_g(value, p, flags, conv == 'G',
+                                    Decimal, ROUND_HALF_UP)
+            elif conv in 'di':
+                value = struct.unpack('<i', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = self._fmt_int(value, 10, flags, signed=True)
+            elif conv == 'u':
+                value = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = self._fmt_int(value, 10, flags, signed=False)
+            elif conv in 'xX':
+                value = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = self._fmt_int(value, 16, flags, signed=False)
+                if conv == 'X':
+                    piece = piece.upper()
+            elif conv == 'o':
+                value = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = self._fmt_int(value, 8, flags, signed=False)
+            elif conv == 'c':
+                value = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = chr(value & 0xffff)
+            elif conv == 's':
+                sptr = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = self.wstring(sptr)
+            elif conv == 'p':
+                value = struct.unpack('<I', cpu.mem_read(argp, 4))[0]
+                argp += 4
+                piece = '0x%08x' % value
+            else:
+                raise RuntimeError('appSprintf leaf unhandled %%%s in %r' % (conv, fmt))
+            out.append(self._pad(piece, width, flags,
+                                 numeric=conv not in 'sc'))
+        return ''.join(out)
+
+    @staticmethod
+    def _fmt_f(value, prec, flags, Decimal, ROUND_HALF_UP):
+        with localcontext() as ctx:
+            ctx.prec = 200
+            if value != value:
+                return '-1.#QNAN' if struct.unpack('<q', struct.pack('<d', value))[0] < 0 else '1.#QNAN'
+            if value in (float('inf'), float('-inf')):
+                return ('-1.#INF' if value < 0 else '1.#INF')
+            d = Decimal(value)
+            q = d.quantize(Decimal(1).scaleb(-prec), rounding=ROUND_HALF_UP)
+            body = format(q, 'f')
+            if prec == 0 and '#' not in flags:
+                body = body.split('.')[0]
+            elif prec == 0:
+                body = body + '.'
+            if '.' not in body and prec > 0:
+                body += '.' + '0' * prec
+            if '.' in body:
+                ip, fp = body.split('.')
+                body = ip + '.' + fp.ljust(prec, '0')
+            if body.startswith('-'):
+                return body
+            if '+' in flags:
+                return '+' + body
+            if ' ' in flags:
+                return ' ' + body
+            return body
+
+    @staticmethod
+    def _fmt_e(value, prec, flags, upper, Decimal, ROUND_HALF_UP):
+        with localcontext() as ctx:
+            ctx.prec = 200
+            if value != value or value in (float('inf'), float('-inf')):
+                return ListWindowProbe._fmt_f(value, prec, flags, Decimal, ROUND_HALF_UP)
+            if value == 0:
+                mant = '0' + ('.' + '0' * prec if prec or '#' in flags else '')
+                sign = '-' if struct.unpack('<q', struct.pack('<d', value))[0] < 0 else ''
+                body = sign + mant
+            else:
+                d = Decimal(abs(value))
+                exp = int(d.log10().__floor__()) if d != 0 else 0
+                # normalize mantissa to [1,10)
+                mant_d = d.scaleb(-exp)
+                q = mant_d.quantize(Decimal(1).scaleb(-prec), rounding=ROUND_HALF_UP)
+                if q >= 10:
+                    q = q / 10
+                    exp += 1
+                mant = format(q, 'f')
+                if '.' not in mant and (prec or '#' in flags):
+                    mant += '.' + '0' * prec
+                elif '.' in mant:
+                    ip, fp = mant.split('.')
+                    mant = ip + '.' + fp.ljust(prec, '0')
+                body = ('-' if value < 0 else '') + mant
+            letter = 'E' if upper else 'e'
+            body += letter + ('+' if exp >= 0 else '-') + '%02d' % abs(exp)
+            if body.startswith('-'):
+                return body
+            if '+' in flags:
+                return '+' + body
+            if ' ' in flags:
+                return ' ' + body
+            return body
+
+    @staticmethod
+    def _fmt_g(value, prec, flags, upper, Decimal, ROUND_HALF_UP):
+        with localcontext() as ctx:
+            ctx.prec = 200
+            if value != value or value in (float('inf'), float('-inf')):
+                return ListWindowProbe._fmt_f(value, prec, flags, Decimal, ROUND_HALF_UP)
+            if value == 0:
+                body = '0'
+            else:
+                d = Decimal(abs(value))
+                exp = int(d.log10().__floor__())
+                if exp < -4 or exp >= prec:
+                    p = prec - 1
+                    mant_d = d.scaleb(-exp)
+                    q = mant_d.quantize(Decimal(1).scaleb(-p), rounding=ROUND_HALF_UP)
+                    if q >= 10:
+                        q = q / 10
+                        exp += 1
+                    mant = format(q, 'f')
+                    if '.' in mant:
+                        ip, fp = mant.split('.')
+                        mant = ip + '.' + fp.ljust(p, '0')
+                    if '#' not in flags:
+                        mant = mant.rstrip('0').rstrip('.') if '.' in mant else mant
+                    body = mant + ('E' if upper else 'e') + ('+' if exp >= 0 else '-') + '%02d' % abs(exp)
+                else:
+                    p = prec - 1 - exp
+                    q = d.quantize(Decimal(1).scaleb(-p), rounding=ROUND_HALF_UP)
+                    mant = format(q, 'f')
+                    if '#' not in flags and '.' in mant:
+                        mant = mant.rstrip('0').rstrip('.')
+                    body = mant
+            if value < 0:
+                body = '-' + body
+            elif '+' in flags:
+                body = '+' + body
+            elif ' ' in flags:
+                body = ' ' + body
+            return body
+
+    @staticmethod
+    def _fmt_int(value, base, flags, signed):
+        if base == 16:
+            digits = '%x' % (value & 0xffffffff)
+        elif base == 8:
+            digits = '%o' % (value & 0xffffffff)
+        else:
+            digits = str(abs(value) if signed else value & 0xffffffff)
+        if signed and value < 0:
+            return '-' + digits
+        if '+' in flags:
+            return '+' + digits
+        if ' ' in flags:
+            return ' ' + digits
+        return digits
+
+    @staticmethod
+    def _pad(piece, width, flags, numeric=True):
+        if len(piece) >= width:
+            return piece
+        fill = '0' if ('0' in flags and '-' not in flags and numeric) else ' '
+        padn = width - len(piece)
+        if '-' in flags:
+            return piece + ' ' * padn
+        if fill == '0' and piece and piece[0] in '+- ':
+            return piece[0] + '0' * padn + piece[1:]
+        return fill * padn + piece
+
+    # ----- dispatch + kernel32 bridge ----------------------------------------
+    def on_dispatch(self, cpu, address, size, data):
+        if address == self.done:
+            cpu.emu_stop()
+            return
+        ent = self.thunks.get(address)
+        if ent is not None:
+            if ent[0] == 'kernel32.dll':
+                self.on_kernel32(cpu, ent[1])
+                return
+            raise RuntimeError(f'Unresolved import {ent}; trace {list(self.trace)}')
+        self.trace.append(hex(address))
+        self.on_leaf(cpu, address, size, data)
+
+    # kernel32 is stdcall: each stub pops its own arguments.  The table gives
+    # the parameter byte count for every import the model services.
+    KERNEL32_ARG_BYTES = {
+        'TlsAlloc': 0, 'TlsGetValue': 4, 'TlsSetValue': 8, 'TlsFree': 4,
+        'GetModuleFileNameA': 12, 'GetModuleFileNameW': 12,
+        'GetModuleHandleA': 4, 'GetModuleHandleW': 4,
+        'GetACP': 0, 'GetOEMCP': 0, 'GetUserDefaultLCID': 0,
+        'GetSystemDefaultLangID': 0, 'GetSystemDefaultLCID': 0,
+        'GetCPInfo': 8, 'GetCommandLineA': 0, 'GetVersion': 0,
+        'GetCurrentThreadId': 0, 'GetCurrentProcess': 0,
+        'GetCurrentThread': 0, 'GetCurrentProcessId': 0,
+        'IsValidLocale': 8, 'IsValidCodePage': 4, 'GetTickCount': 0,
+        'GetStartupInfoA': 4, 'InterlockedIncrement': 4,
+        'InterlockedDecrement': 4, 'LoadLibraryA': 4, 'LoadLibraryW': 4,
+        'GetProcAddress': 8, 'FreeLibrary': 4,
+        'InitializeCriticalSection': 4, 'EnterCriticalSection': 4,
+        'LeaveCriticalSection': 4, 'DeleteCriticalSection': 4,
+        'SetLastError': 4, 'SetErrorMode': 4, 'SetHandleCount': 4,
+        'GetLastError': 0, 'GetStdHandle': 4, 'GetLocaleInfoA': 12,
+        'GetLocaleInfoW': 12, 'GetStringTypeA': 16, 'GetStringTypeW': 20,
+        'SetEnvironmentVariableA': 8,
+        'HeapCreate': 12, 'HeapAlloc': 12, 'HeapReAlloc': 16,
+        'HeapSize': 12, 'HeapFree': 12, 'HeapDestroy': 4,
+        'VirtualAlloc': 16, 'VirtualFree': 12,
+        'MultiByteToWideChar': 24, 'WideCharToMultiByte': 32,
+        'LCMapStringA': 20, 'LCMapStringW': 24, 'CompareStringA': 20,
+        'CompareStringW': 20, 'GetLocalTime': 4, 'GetSystemTime': 4,
+        'GetTimeZoneInformation': 4, 'SystemTimeToFileTime': 8,
+        'FileTimeToLocalFileTime': 12, 'LocalFileTimeToFileTime': 8,
+        'EnumSystemLocalesA': 8, 'IsBadReadPtr': 8, 'IsBadWritePtr': 8,
+        'GetFileType': 4, 'GetConsoleMode': 8, 'WriteConsoleA': 16,
+        'WriteFile': 20, 'FormatMessageA': 28, 'FormatMessageW': 28,
+        'RaiseException': 16, 'RtlUnwind': 16, 'UnhandledExceptionFilter': 4,
+        'SetUnhandledExceptionFilter': 4, 'ExitProcess': 4,
+        'TerminateProcess': 8, 'Sleep': 4, 'Beep': 8,
+        'GetEnvironmentStrings': 0, 'GetEnvironmentStringsW': 0,
+        'FreeEnvironmentStringsA': 4, 'FreeEnvironmentStringsW': 4,
+    }
+
+    def on_kernel32(self, cpu, name):
+        """Minimal kernel32 surface for the real MSVCRT _vsnwprintf path.
+
+        Only calls the formatter actually issues are serviced; anything else
+        stays an unresolved-import failure.  TLS slots, critical sections and
+        the C-locale defaults model what MSVCRT needs to format %f/%d.
+        """
+        self.kernel_calls.append(name)
+        stack = cpu.reg_read(UC_X86_REG_ESP)
+        ret = int.from_bytes(cpu.mem_read(stack, 4), 'little')
+        args = [int.from_bytes(cpu.mem_read(stack + 4 + 4 * i, 4), 'little')
+                for i in range(8)]
+        eax = 0
+        if name == 'TlsAlloc':
+            eax = self.tls_next
+            self.tls_next += 1
+        elif name == 'TlsGetValue':
+            eax = self.tls.get(args[0], 0)
+        elif name == 'TlsSetValue':
+            self.tls[args[0]] = args[1]
+            eax = 1
+        elif name == 'TlsFree':
+            eax = 1
+        elif name in ('GetModuleFileNameA', 'GetModuleFileNameW'):
+            cpu.mem_write(args[1], b'\0' * 8)
+        elif name == 'GetACP':
+            eax = 1252
+        elif name == 'GetOEMCP':
+            eax = 437
+        elif name in ('GetUserDefaultLCID', 'GetSystemDefaultLangID'):
+            eax = 0x409
+        elif name == 'GetCPInfo':
+            cpu.mem_write(args[1], struct.pack('<I', 8) + b'\0' * 10)
+            eax = 1
+        elif name == 'GetCommandLineA':
+            eax = self.write_wstring('probe.exe')
+        elif name == 'GetVersion':
+            eax = 0x0a280105
+        elif name == 'GetCurrentThreadId':
+            eax = 0x1234
+        elif name in ('GetCurrentProcess', 'GetCurrentThread'):
+            eax = 0xffffffff
+        elif name == 'GetCurrentProcessId':
+            eax = 0x1234
+        elif name in ('IsValidLocale', 'IsValidCodePage'):
+            eax = 1
+        elif name == 'GetTickCount':
+            eax = 1000
+        elif name == 'GetStartupInfoA':
+            cpu.mem_write(args[0], b'\0' * 0x44)
+        elif name == 'InterlockedIncrement':
+            value = int.from_bytes(cpu.mem_read(args[0], 4), 'little')
+            value = (value + 1) & 0xffffffff
+            cpu.mem_write(args[0], struct.pack('<I', value))
+            eax = value if value < 0x80000000 else value - 0x100000000
+        elif name == 'InterlockedDecrement':
+            value = int.from_bytes(cpu.mem_read(args[0], 4), 'little')
+            value = (value - 1) & 0xffffffff
+            cpu.mem_write(args[0], struct.pack('<I', value))
+            eax = value if value < 0x80000000 else value - 0x100000000
+        elif name in ('LoadLibraryA', 'LoadLibraryW'):
+            eax = 0x70010000
+        elif name == 'GetProcAddress':
+            # Record the requested symbol; callers may invoke the result, so a
+            # named stub is installed that returns 0 as a cdecl no-op.
+            sym = args[1]
+            if sym & 0xffff0000:
+                chars = []
+                for i in range(0x40):
+                    ch = int.from_bytes(cpu.mem_read(sym + i, 1), 'little')
+                    if ch == 0:
+                        break
+                    chars.append(ch)
+                symname = bytes(chars).decode('ascii', 'replace')
+            else:
+                symname = '#%d' % sym
+            self.kernel_calls.append('GetProcAddress:%s' % symname)
+            stub = self._getproc_stubs.get(symname)
+            if stub is None:
+                stub = self.alloc(16)
+                cpu.mem_write(stub, b'\x31\xc0\xc2\x00\x00')  # xor eax,eax; ret 0
+                self._getproc_stubs[symname] = stub
+            eax = stub
+        elif name == 'HeapCreate':
+            eax = 0x780ff000
+        elif name == 'HeapAlloc':
+            eax = self.alloc(max(args[2], 4))
+            self.k32_heap[eax] = args[2]
+        elif name == 'HeapReAlloc':
+            old = self.k32_heap.get(args[2], 0)
+            eax = self.alloc(max(args[3], 4))
+            self.k32_heap[eax] = args[3]
+            keep = min(old, args[3])
+            if keep:
+                cpu.mem_write(eax, bytes(cpu.mem_read(args[2], keep)))
+        elif name == 'HeapSize':
+            eax = self.k32_heap.get(args[2], 0)
+        elif name == 'HeapFree':
+            self.k32_heap.pop(args[2], None)
+            eax = 1
+        elif name == 'HeapDestroy':
+            eax = 1
+        elif name == 'VirtualAlloc':
+            # Reserve/commit from the probe heap region; the pages are already
+            # mapped so a commit of reserved pages just echoes the address.
+            requested = args[0]
+            if requested and requested >= self.k32_reserved_lo and requested < self.k32_reserved_hi:
+                eax = requested
+            else:
+                eax = self.alloc(max(args[1], 4))
+                if requested == 0:
+                    self.k32_reserved_lo = eax
+                    self.k32_reserved_hi = eax + ((args[1] + 0xffff) & ~0xffff)
+        elif name == 'VirtualFree':
+            eax = 1
+        elif name in ('InitializeCriticalSection', 'EnterCriticalSection',
+                      'LeaveCriticalSection', 'DeleteCriticalSection',
+                      'SetLastError', 'SetErrorMode', 'SetHandleCount',
+                      'GetLastError', 'GetStdHandle', 'GetModuleHandleA',
+                      'GetModuleHandleW', 'GetLocaleInfoA', 'GetLocaleInfoW',
+                      'GetStringTypeA', 'GetStringTypeW', 'SetEnvironmentVariableA'):
+            eax = 0
+        else:
+            raise RuntimeError(
+                f'kernel32.{name} not modelled; trace {list(self.trace)}')
+        cpu.reg_write(UC_X86_REG_EAX, eax & 0xffffffff)
+        cpu.reg_write(UC_X86_REG_ESP,
+                      stack + 4 + self.KERNEL32_ARG_BYTES[name])
+        cpu.reg_write(UC_X86_REG_EIP, ret)
         return None
 
     # ----- window construction ----------------------------------------------
@@ -421,7 +951,11 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         style = self.alloc(0x60)
         self.cpu.mem_write(style, b'\0' * 0x60)
         self.write(address + OFF_STYLE, 'I', style)
-        self.write(address + OFF_CONTEXT, 'I', spec.get('context', 0))
+        context = spec.get('context', 0)
+        if context is True:
+            context = self.alloc(0xc0)
+            self.cpu.mem_write(context, b'\0' * 0xc0)
+        self.write(address + OFF_CONTEXT, 'I', context)
         if spec.get('parent'):
             # Give the parent the same fake vtable so the broadcast walk can
             # continue past the first hop when requested.
@@ -522,6 +1056,9 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         self.blocks = {}
         self.freed = set()
         self.seen_ids = {}
+        m = spec.get('measure', {})
+        self.measure_extents = (m.get('width', 0.0), m.get('height', 0.0))
+        self.selection_sink = spec.get('selectionSink', 0)
         return this
 
     def finish_case(self, this, result):
