@@ -1485,6 +1485,22 @@
           "int": 2
         }
       ]
+    },
+    "argThree": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 2
+      },
+      "args": [
+        {
+          "int": 3
+        }
+      ]
     }
   },
   "enableMultiSelect": {
