@@ -69,7 +69,7 @@ export const LIST_COL = freeze({
   size: 0x38,
   index: 0x00,
   header: 0x04,          // FString (data/count/max)
-  sortPriority: 0x10,    // int, lower sorts first; -1/0 excludes the column
+  sortPriority: 0x10,    // int; <0 excludes the column, higher compares first
   sortFlags: 0x14,       // bit0 reverse compare, bit1 case sensitive
   width: 0x18,           // float configured width
   flagByte: 0x1c,
