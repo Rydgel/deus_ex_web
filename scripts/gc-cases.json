@@ -24334,5 +24334,1494 @@
     }
    ]
   }
+ },
+ "intersect": {
+  "nested-inside": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nested-outside": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    0,
+    0,
+    1120403456,
+    1120403456
+   ]
+  },
+  "partial-right": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1109393408,
+    1101004800,
+    1106247680,
+    1106247680
+   ]
+  },
+  "partial-left": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    0,
+    1101004800,
+    1109393408,
+    1106247680
+   ]
+  },
+  "disjoint-left": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1128792064,
+    0,
+    1092616192,
+    1092616192
+   ]
+  },
+  "disjoint-above": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    0,
+    1128792064,
+    1092616192,
+    1092616192
+   ]
+  },
+  "disjoint-corner": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    3259498496,
+    3259498496,
+    1092616192,
+    1092616192
+   ]
+  },
+  "neg-origin": {
+   "spec": {
+    "originX": 3240099840,
+    "originY": 3240099840,
+    "clipX": 3231711232,
+    "clipY": 3231711232,
+    "clipWidth": 1101004800,
+    "clipHeight": 1101004800
+   },
+   "args": [
+    0,
+    0,
+    1112014848,
+    1112014848
+   ]
+  },
+  "neg-origin-both": {
+   "spec": {
+    "originX": 3267887104,
+    "originY": 3267887104,
+    "clipX": 3259498496,
+    "clipY": 3259498496,
+    "clipWidth": 1106247680,
+    "clipHeight": 1106247680
+   },
+   "args": [
+    3265265664,
+    3265265664,
+    1109393408,
+    1109393408
+   ]
+  },
+  "mixed-origin": {
+   "spec": {
+    "originX": 3240099840,
+    "originY": 1092616192,
+    "clipX": 3248488448,
+    "clipY": 1101004800,
+    "clipWidth": 1106247680,
+    "clipHeight": 1106247680
+   },
+   "args": [
+    3245342720,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "tie-all": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1097859072,
+    "clipY": 1097859072,
+    "clipWidth": 1101004800,
+    "clipHeight": 1106247680
+   },
+   "args": [
+    1097859072,
+    1097859072,
+    1101004800,
+    1106247680
+   ]
+  },
+  "tie-c-left-edge": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    1084227584,
+    1077936128,
+    1092616192,
+    1082130432
+   ]
+  },
+  "tie-e-g": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 0,
+    "clipY": 0,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    3240099840,
+    3240099840,
+    1114636288,
+    1114636288
+   ]
+  },
+  "neg-zero": {
+   "spec": {
+    "originX": 2147483648,
+    "originY": 0,
+    "clipX": 0,
+    "clipY": 2147483648,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    2147483648,
+    0,
+    1101004800,
+    2147483648
+   ]
+  },
+  "denormal": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1,
+    "clipY": 1,
+    "clipWidth": 1,
+    "clipHeight": 1
+   },
+   "args": [
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  "inf-x": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    2139095040,
+    0,
+    1101004800,
+    1101004800
+   ]
+  },
+  "ninf-y": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    0,
+    4286578688,
+    1101004800,
+    1101004800
+   ]
+  },
+  "inf-w": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    0,
+    0,
+    2139095040,
+    1101004800
+   ]
+  },
+  "ninf-h": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    0,
+    0,
+    1101004800,
+    4286578688
+   ]
+  },
+  "inf-clipw": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 2139095040,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    0,
+    0,
+    1101004800,
+    1101004800
+   ]
+  },
+  "ninf-clipx": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 4286578688,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    0,
+    0,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-x": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    2143289344,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-y": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    2143289344,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-w": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    2143289344,
+    1101004800
+   ]
+  },
+  "nan-h": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    2143289344
+   ]
+  },
+  "nan-clipx": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 2143289344,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-clipy": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 2143289344,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-clipw": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 2143289344,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-cliph": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 2143289344
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-originx": {
+   "spec": {
+    "originX": 2143289344,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "nan-originy": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 2143289344,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ]
+  },
+  "pow24-up": {
+   "spec": {
+    "originX": 1266679808,
+    "originY": 0,
+    "clipX": 1266679808,
+    "clipY": 0,
+    "clipWidth": 1082130432,
+    "clipHeight": 1082130432
+   },
+   "args": [
+    1069547520,
+    0,
+    1082130432,
+    1082130432
+   ]
+  },
+  "pow24-down": {
+   "spec": {
+    "originX": 1266679808,
+    "originY": 0,
+    "clipX": 1266679808,
+    "clipY": 0,
+    "clipWidth": 1082130432,
+    "clipHeight": 1082130432
+   },
+   "args": [
+    1068708659,
+    0,
+    1082130432,
+    1082130432
+   ]
+  },
+  "pow24-edge": {
+   "spec": {
+    "originX": 1266679808,
+    "originY": 1266679808,
+    "clipX": 1266679806,
+    "clipY": 1266679806,
+    "clipWidth": 1073741824,
+    "clipHeight": 1073741824
+   },
+   "args": [
+    3223322624,
+    3223322624,
+    1090519040,
+    1090519040
+   ]
+  },
+  "pow24-g-ext": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1266679808,
+    "clipY": 0,
+    "clipWidth": 1069547520,
+    "clipHeight": 1082130432
+   },
+   "args": [
+    1266679808,
+    0,
+    1070071808,
+    1082130432
+   ]
+  },
+  "huge-sums": {
+   "spec": {
+    "originX": 1621981420,
+    "originY": 1621981420,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    1088421888,
+    1088421888,
+    1077936128,
+    1077936128
+   ]
+  },
+  "tiny-sums": {
+   "spec": {
+    "originX": 507307272,
+    "originY": 507307272,
+    "clipX": 1084227584,
+    "clipY": 1084227584,
+    "clipWidth": 1092616192,
+    "clipHeight": 1092616192
+   },
+   "args": [
+    1088421888,
+    1088421888,
+    1077936128,
+    1077936128
+   ]
+  },
+  "method-basic": {
+   "spec": {
+    "originX": 1092616192,
+    "originY": 1092616192,
+    "clipX": 1101004800,
+    "clipY": 1101004800,
+    "clipWidth": 1112014848,
+    "clipHeight": 1112014848
+   },
+   "args": [
+    1103626240,
+    1103626240,
+    1101004800,
+    1101004800
+   ],
+   "mode": "method"
+  },
+  "extreme-gap-probe": {
+   "spec": {
+    "originX": 0,
+    "originY": 0,
+    "clipX": 1084227584,
+    "clipY": 1400897536,
+    "clipWidth": 1092616192,
+    "clipHeight": 1065353224
+   },
+   "args": [
+    0,
+    0,
+    1097859072,
+    1417674752
+   ]
+  }
+ },
+ "copyGC": {
+  "full-distinct": {
+   "spec": {
+    "flags": 4294967232,
+    "textFlags": 4294967292,
+    "depth": 4,
+    "stackTop": {
+     "node": 1
+    },
+    "freeList": {
+     "node": 2
+    },
+    "owner": {
+     "node": 3
+    },
+    "nodeFlags": 90,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "canvas": 805306384,
+      "originX": 1069547520,
+      "originY": 3223322624,
+      "clipX": 1077936128,
+      "clipY": 1082130432,
+      "clipWidth": 1084227584,
+      "clipHeight": 1086324736,
+      "style": 4,
+      "flags": 63,
+      "polyFlags": 258,
+      "textPolyFlags": 2052,
+      "tileColor": 287454020,
+      "tileFloats": [
+       1065353216,
+       1073741824,
+       1077936128,
+       1082130432
+      ],
+      "textColor": 2864434397,
+      "textFloats": [
+       1084227584,
+       1086324736,
+       1088421888,
+       1090519040
+      ],
+      "normalFont": 805310464,
+      "boldFont": 805314560,
+      "unknown84": 3735928559,
+      "underlineHeight": 1091567616,
+      "baselineOffset": 1092616192,
+      "textVSpacing": 1093664768,
+      "hAlign": 2,
+      "vAlign": 1,
+      "textFlags": 3,
+      "unknown9c": 305419896,
+      "unknownA0": 2596069104,
+      "nodeFlags": 119,
+      "depth": 9,
+      "stackTop": 805318656,
+      "freeList": 805322752,
+      "owner": 805326848
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 3,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     },
+     {
+      "nodeFlags": 1,
+      "depth": 2,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": 805330944
+     }
+    ]
+   },
+   "args": [
+    {
+     "node": 0
+    }
+   ]
+  },
+  "zero-src": {
+   "spec": {
+    "flags": 4294967232,
+    "textFlags": 4294967292,
+    "style": 7,
+    "depth": 2,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "canvas": 0,
+      "originX": 0,
+      "originY": 0,
+      "clipX": 0,
+      "clipY": 0,
+      "clipWidth": 0,
+      "clipHeight": 0,
+      "style": 0,
+      "flags": 0,
+      "polyFlags": 0,
+      "textPolyFlags": 0,
+      "tileColor": 0,
+      "tileFloats": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "textColor": 0,
+      "textFloats": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "normalFont": 0,
+      "boldFont": 0,
+      "unknown84": 0,
+      "underlineHeight": 0,
+      "baselineOffset": 0,
+      "textVSpacing": 0,
+      "hAlign": 0,
+      "vAlign": 0,
+      "textFlags": 0,
+      "unknown9c": 0,
+      "unknownA0": 0,
+      "nodeFlags": 1,
+      "depth": 5,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "stackTop": 0,
+    "freeList": 0,
+    "owner": 0
+   },
+   "args": [
+    {
+     "node": 0
+    }
+   ]
+  },
+  "high-bits-src": {
+   "spec": {
+    "flags": 305419896,
+    "textFlags": 2596069104,
+    "depth": 1,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "canvas": 805306384,
+      "originX": 1069547520,
+      "originY": 3223322624,
+      "clipX": 1077936128,
+      "clipY": 1082130432,
+      "clipWidth": 1084227584,
+      "clipHeight": 1086324736,
+      "style": 4,
+      "flags": 63,
+      "polyFlags": 258,
+      "textPolyFlags": 2052,
+      "tileColor": 287454020,
+      "tileFloats": [
+       1065353216,
+       1073741824,
+       1077936128,
+       1082130432
+      ],
+      "textColor": 2864434397,
+      "textFloats": [
+       1084227584,
+       1086324736,
+       1088421888,
+       1090519040
+      ],
+      "normalFont": 805310464,
+      "boldFont": 805314560,
+      "unknown84": 3735928559,
+      "underlineHeight": 1091567616,
+      "baselineOffset": 1092616192,
+      "textVSpacing": 1093664768,
+      "hAlign": 2,
+      "vAlign": 1,
+      "textFlags": 3,
+      "unknown9c": 305419896,
+      "unknownA0": 2596069104,
+      "nodeFlags": 119,
+      "depth": 9,
+      "stackTop": 805318656,
+      "freeList": 805322752,
+      "owner": 805326848
+     }
+    ],
+    "stackTop": 0,
+    "freeList": 0,
+    "owner": 0
+   },
+   "args": [
+    {
+     "node": 0
+    }
+   ]
+  },
+  "self-copy": {
+   "spec": {
+    "flags": -22,
+    "textFlags": -3,
+    "style": 3,
+    "depth": 6,
+    "vtable": 268802268,
+    "canvas": 805306384,
+    "nodes": [],
+    "stackTop": 0,
+    "freeList": 0,
+    "owner": 0
+   },
+   "args": [
+    "this"
+   ]
+  },
+  "method-full": {
+   "spec": {
+    "flags": 4294967232,
+    "textFlags": 4294967292,
+    "depth": 4,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "canvas": 805306384,
+      "originX": 1069547520,
+      "originY": 3223322624,
+      "clipX": 1077936128,
+      "clipY": 1082130432,
+      "clipWidth": 1084227584,
+      "clipHeight": 1086324736,
+      "style": 4,
+      "flags": 63,
+      "polyFlags": 258,
+      "textPolyFlags": 2052,
+      "tileColor": 287454020,
+      "tileFloats": [
+       1065353216,
+       1073741824,
+       1077936128,
+       1082130432
+      ],
+      "textColor": 2864434397,
+      "textFloats": [
+       1084227584,
+       1086324736,
+       1088421888,
+       1090519040
+      ],
+      "normalFont": 805310464,
+      "boldFont": 805314560,
+      "unknown84": 3735928559,
+      "underlineHeight": 1091567616,
+      "baselineOffset": 1092616192,
+      "textVSpacing": 1093664768,
+      "hAlign": 2,
+      "vAlign": 1,
+      "textFlags": 3,
+      "unknown9c": 305419896,
+      "unknownA0": 2596069104,
+      "nodeFlags": 119,
+      "depth": 9,
+      "stackTop": 805318656,
+      "freeList": 805322752,
+      "owner": 805326848
+     }
+    ],
+    "stackTop": 0,
+    "freeList": 0,
+    "owner": 0
+   },
+   "args": [
+    {
+     "node": 0
+    }
+   ],
+   "mode": "method"
+  }
+ },
+ "pushGC": {
+  "owner-nonzero": {
+   "spec": {
+    "owner": {
+     "node": 0
+    },
+    "depth": 3,
+    "freeList": {
+     "node": 1
+    },
+    "stackTop": {
+     "node": 2
+    },
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": 0
+     },
+     {
+      "nodeFlags": 1,
+      "depth": 7,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ]
+   },
+   "args": []
+  },
+  "alloc-depth0": {
+   "spec": {
+    "depth": 0,
+    "freeList": 0,
+    "stackTop": 0,
+    "vtable": 268802268,
+    "flags": 23,
+    "style": 3,
+    "nodes": [],
+    "owner": 0
+   },
+   "args": []
+  },
+  "alloc-depth5": {
+   "spec": {
+    "depth": 5,
+    "freeList": 0,
+    "stackTop": {
+     "node": 0
+    },
+    "vtable": 268802268,
+    "flags": 63,
+    "style": 2,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 4,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": []
+  },
+  "alloc-returns-null": {
+   "spec": {
+    "depth": 5,
+    "freeList": 0,
+    "stackTop": 0,
+    "vtable": 268802268,
+    "allocReturnsNull": true,
+    "nodes": [],
+    "owner": 0
+   },
+   "args": []
+  },
+  "reuse-one": {
+   "spec": {
+    "depth": 1,
+    "freeList": {
+     "node": 0
+    },
+    "stackTop": 0,
+    "vtable": 268802268,
+    "flags": 31,
+    "style": 4,
+    "clipX": 1077936128,
+    "nodes": [
+     {
+      "nodeFlags": 1,
+      "depth": 7,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 4294967232,
+      "style": 1,
+      "clipX": 1120272384,
+      "canvas": 805306384
+     }
+    ],
+    "owner": 0
+   },
+   "args": []
+  },
+  "reuse-two": {
+   "spec": {
+    "depth": 2,
+    "freeList": {
+     "node": 0
+    },
+    "stackTop": {
+     "node": 2
+    },
+    "vtable": 268802268,
+    "flags": 42,
+    "style": 1,
+    "nodes": [
+     {
+      "nodeFlags": 1,
+      "depth": 7,
+      "stackTop": {
+       "node": 1
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 4294967232,
+      "style": 2
+     },
+     {
+      "nodeFlags": 1,
+      "depth": 6,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 1431655765
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": []
+  },
+  "reuse-high-flag-bits": {
+   "spec": {
+    "depth": 0,
+    "freeList": {
+     "node": 0
+    },
+    "stackTop": 0,
+    "vtable": 268802268,
+    "flags": 63,
+    "textFlags": 3,
+    "nodes": [
+     {
+      "nodeFlags": 1,
+      "depth": 3,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 2779096512,
+      "textFlags": 1515870812,
+      "unknownA0": 4277009102
+     }
+    ],
+    "owner": 0
+   },
+   "args": []
+  },
+  "method-alloc": {
+   "spec": {
+    "depth": 2,
+    "freeList": 0,
+    "stackTop": {
+     "node": 0
+    },
+    "vtable": 268802268,
+    "flags": 17,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": [],
+   "mode": "method"
+  }
+ },
+ "popGC": {
+  "neg1-empty": {
+   "spec": {
+    "depth": 2,
+    "stackTop": 0,
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 23,
+    "style": 3,
+    "nodes": [],
+    "owner": 0
+   },
+   "args": [
+    4294967295
+   ]
+  },
+  "neg1-one": {
+   "spec": {
+    "depth": 1,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 63,
+    "style": 4,
+    "clipX": 1077936128,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 42,
+      "style": 2,
+      "clipX": 1088421888,
+      "clipWidth": 1109917696,
+      "canvas": 805306384
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    4294967295
+   ]
+  },
+  "neg1-three": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 17,
+    "style": 1,
+    "clipX": 1120403456,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": {
+       "node": 1
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 34,
+      "style": 2,
+      "clipX": 1101004800
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": {
+       "node": 2
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 36,
+      "style": 3,
+      "clipX": 1106247680
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 40,
+      "style": 4,
+      "clipX": 1109393408
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    4294967295
+   ]
+  },
+  "explicit-middle": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 17,
+    "style": 1,
+    "clipX": 1120403456,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": {
+       "node": 1
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 34,
+      "style": 2,
+      "clipX": 1101004800
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": {
+       "node": 2
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 36,
+      "style": 3,
+      "clipX": 1106247680
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 40,
+      "style": 4,
+      "clipX": 1109393408
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    1
+   ]
+  },
+  "gcnum-ge-depth": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    4
+   ]
+  },
+  "gcnum-equal-depth": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    3
+   ]
+  },
+  "pop-all": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 17,
+    "style": 1,
+    "clipX": 1120403456,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": {
+       "node": 1
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 34,
+      "clipX": 1101004800
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": {
+       "node": 2
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 36,
+      "clipX": 1106247680
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 40,
+      "style": 4,
+      "clipX": 1109393408
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    0
+   ]
+  },
+  "owner-nonzero": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "owner": {
+     "node": 1
+    },
+    "vtable": 268802268,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 0,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": 0
+     }
+    ]
+   },
+   "args": [
+    4294967295
+   ]
+  },
+  "preexisting-free": {
+   "spec": {
+    "depth": 2,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": {
+     "node": 1
+    },
+    "vtable": 268802268,
+    "flags": 17,
+    "clipX": 1120403456,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 34,
+      "clipX": 1101004800
+     },
+     {
+      "nodeFlags": 1,
+      "depth": 7,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this"
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    4294967295
+   ]
+  },
+  "method-restore": {
+   "spec": {
+    "depth": 3,
+    "stackTop": {
+     "node": 0
+    },
+    "freeList": 0,
+    "vtable": 268802268,
+    "flags": 17,
+    "style": 1,
+    "clipX": 1120403456,
+    "nodes": [
+     {
+      "nodeFlags": 0,
+      "depth": 2,
+      "stackTop": {
+       "node": 1
+      },
+      "freeList": 0,
+      "owner": "this",
+      "flags": 34,
+      "clipX": 1101004800
+     },
+     {
+      "nodeFlags": 0,
+      "depth": 1,
+      "stackTop": 0,
+      "freeList": 0,
+      "owner": "this",
+      "flags": 36,
+      "clipX": 1106247680
+     }
+    ],
+    "owner": 0
+   },
+   "args": [
+    1
+   ],
+   "mode": "method"
+  }
  }
 }

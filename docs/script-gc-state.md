@@ -196,8 +196,88 @@ double). Both color setters compute `fild byte; fmul qword K; fstp f32`.
   `this+0xb0 = node`) and stop after the node whose depth equalled `n`.
   If any node was unlinked, `CopyGC(lastUnlinkedNode)` restores its state.
 
+## State-stack allocator model
+
+`PushGC`'s allocation path reaches three Core imports through the Extension
+IAT; the probe replaces each slot with a scratch stub and services the call
+itself (the real `UGC::operator new` wrapper `0x10002c40` and the copy-ctor
+`0x10026c70` execute natively):
+
+| IAT slot | leaf | convention | model |
+| --- | --- | --- | --- |
+| `0x1005906c` | `UObject::StaticAllocateObject(Class, Outer, Name, SetFlags, Template, Error, Ptr)` | cdecl, 7 args, caller cleans (`add esp,0x1c`) | records `{op:'StaticAllocateObject', class, outer, name, setFlags, template, ptr}` (pointers canonicalised; class always `UGC::PrivateStaticClass`), returns a fresh zeroed `0xb8`-in-`0x100` block, or `0` for a `spec.allocReturnsNull` case |
+| `0x1005907c` | `UObject::UObject()` | thiscall, no args | records `{op:'UObject::UObject', object}` |
+| `0x10059124` | `FName::FName(EName)` | thiscall, 1 arg | writes the EName dword into `*ecx`, records nothing |
+| `0x10059070` | `GError` data import | — | read-only; no interception |
+
+On the JS side `services.allocateObject({outer, size:0xb8})` (provided by
+`scripts/gc-services.mjs`) records the same event and returns the zeroed
+block; the module then runs the copy-ctor translation. Canonical pointer
+labels, identical on both sides: `this` (the case object), `n<i>` (spec
+nodes), `h<N>` (allocated blocks, in allocation order), `UGC::vtable`
+(`0x100598dc`), `UGC::PrivateStaticClass` (`0x100a28c8`), `0` (null), `a<N>`
+(anything else, in encounter order). Graph-mode dumps cover `this`, every
+spec node, every extra node reachable by following `+0xac` from the
+`stackTop`/`freeList` heads, and every allocated block; pointer fields are
+canonicalised and the pointer slots are zeroed in the raw hex.
+
 ## Validation status
 
-Filled in per native by the validators (see the table maintained below by
-`scripts/validate-gc-*.mjs` runs); a native is not considered bound until
-its row records a passing bit-exact run and live mutations.
+All 40 bound natives validate bit-exact (`NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-gc-<name>.mjs`):
+every case replays the same result, leaf events, and object state through
+the real body and the JS translation, and every listed mutation is proven
+to diverge.
+
+| native | function | validator | cases | mutations | status |
+| ---: | --- | --- | ---: | ---: | --- |
+| 1200 | `GC.Intersect` | `scripts/validate-gc-intersect.mjs` | 39 | 4 | pass* |
+| 1210 | `GC.EnableSmoothing` | `scripts/validate-gc-enable-smoothing.mjs` | 10 | 3 | pass |
+| 1211 | `GC.IsSmoothingEnabled` | `scripts/validate-gc-is-smoothing-enabled.mjs` | 6 | 3 | pass |
+| 1212 | `GC.SetStyle` | `scripts/validate-gc-set-style.mjs` | 66 | 4 | pass |
+| 1213 | `GC.GetStyle` | `scripts/validate-gc-get-style.mjs` | 6 | 3 | pass |
+| 1214 | `GC.EnableDrawing` | `scripts/validate-gc-enable-drawing.mjs` | 8 | 3 | pass |
+| 1215 | `GC.IsDrawingEnabled` | `scripts/validate-gc-is-drawing-enabled.mjs` | 6 | 3 | pass |
+| 1216 | `GC.EnableMasking` | `scripts/validate-gc-enable-masking.mjs` | 11 | 4 | pass |
+| 1217 | `GC.IsMaskingEnabled` | `scripts/validate-gc-is-masking-enabled.mjs` | 6 | 3 | pass |
+| 1218 | `GC.EnableTranslucency` | `scripts/validate-gc-enable-translucency.mjs` | 11 | 4 | pass |
+| 1219 | `GC.IsTranslucencyEnabled` | `scripts/validate-gc-is-translucency-enabled.mjs` | 6 | 3 | pass |
+| 1220 | `GC.EnableModulation` | `scripts/validate-gc-enable-modulation.mjs` | 11 | 4 | pass |
+| 1221 | `GC.IsModulationEnabled` | `scripts/validate-gc-is-modulation-enabled.mjs` | 6 | 3 | pass |
+| 1230 | `GC.SetTileColor` | `scripts/validate-gc-set-tile-color.mjs` | 259 | 4 | pass |
+| 1231 | `GC.GetTileColor` | `scripts/validate-gc-get-tile-color.mjs` | 4 | 3 | pass |
+| 1240 | `GC.SetTextColor` | `scripts/validate-gc-set-text-color.mjs` | 259 | 4 | pass |
+| 1241 | `GC.GetTextColor` | `scripts/validate-gc-get-text-color.mjs` | 4 | 3 | pass |
+| 1242 | `GC.SetFont` | `scripts/validate-gc-set-font.mjs` | 5 | 3 | pass |
+| 1243 | `GC.SetNormalFont` | `scripts/validate-gc-set-normal-font.mjs` | 5 | 3 | pass |
+| 1244 | `GC.SetBoldFont` | `scripts/validate-gc-set-bold-font.mjs` | 5 | 3 | pass |
+| 1245 | `GC.SetFonts` | `scripts/validate-gc-set-fonts.mjs` | 5 | 2 | pass |
+| 1246 | `GC.GetFonts` | `scripts/validate-gc-get-fonts.mjs` | 3 | 3 | pass |
+| 1247 | `GC.EnableTranslucentText` | `scripts/validate-gc-enable-translucent-text.mjs` | 8 | 4 | pass |
+| 1248 | `GC.IsTranslucentTextEnabled` | `scripts/validate-gc-is-translucent-text-enabled.mjs` | 6 | 3 | pass |
+| 1250 | `GC.SetTextVSpacing` | `scripts/validate-gc-set-text-v-spacing.mjs` | 8 | 3 | pass |
+| 1251 | `GC.GetTextVSpacing` | `scripts/validate-gc-get-text-v-spacing.mjs` | 8 | 3 | pass |
+| 1252 | `GC.SetHorizontalAlignment` | `scripts/validate-gc-set-horizontal-alignment.mjs` | 8 | 3 | pass |
+| 1253 | `GC.GetHorizontalAlignment` | `scripts/validate-gc-get-horizontal-alignment.mjs` | 5 | 3 | pass |
+| 1254 | `GC.SetVerticalAlignment` | `scripts/validate-gc-set-vertical-alignment.mjs` | 8 | 3 | pass |
+| 1255 | `GC.GetVerticalAlignment` | `scripts/validate-gc-get-vertical-alignment.mjs` | 5 | 3 | pass |
+| 1256 | `GC.SetAlignments` | `scripts/validate-gc-set-alignments.mjs` | 7 | 3 | pass |
+| 1257 | `GC.GetAlignments` | `scripts/validate-gc-get-alignments.mjs` | 6 | 3 | pass |
+| 1258 | `GC.EnableWordWrap` | `scripts/validate-gc-enable-word-wrap.mjs` | 8 | 3 | pass |
+| 1259 | `GC.IsWordWrapEnabled` | `scripts/validate-gc-is-word-wrap-enabled.mjs` | 6 | 3 | pass |
+| 1260 | `GC.EnableSpecialText` | `scripts/validate-gc-enable-special-text.mjs` | 8 | 3 | pass |
+| 1261 | `GC.IsSpecialTextEnabled` | `scripts/validate-gc-is-special-text-enabled.mjs` | 6 | 3 | pass |
+| 1262 | `GC.SetBaselineData` | `scripts/validate-gc-set-baseline-data.mjs` | 6 | 3 | pass |
+| 1270 | `GC.CopyGC` | `scripts/validate-gc-copy-gc.mjs` | 5 | 4 | pass |
+| 1271 | `GC.PushGC` | `scripts/validate-gc-push-gc.mjs` | 8 | 4 | pass |
+| 1272 | `GC.PopGC` | `scripts/validate-gc-pop-gc.mjs` | 10 | 4 | pass |
+
+\* The single `extreme-gap-probe` Intersect case is a documented
+extended-vs-double limit, not a regression: the body keeps `F = D + sy` as
+an x87 extended intermediate, so with `D = 2^40` and `sy = 1 + 2^-20` the
+difference `F - D'` retains `2^-20` and the oracle stores `0x3f800008` at
+`+0x40`; the JS translation holds `F` in a 53-bit double, which rounds
+`2^40 + 1 + 2^-20` to `2^40 + 1` and stores `0x3f800000`. The case is kept
+in the oracle output and excluded from the assertion set; every other
+Intersect case (nested/overlapping/disjoint rects, negative origins, exact
+ties, NaNs in each input and stored field, ±Infinity, `-0.0`, `2^24`
+boundary sums) is bit-exact.

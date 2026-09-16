@@ -87,11 +87,33 @@ NATIVES = {
     'setAlignments':             {'exec': EXT + 0x2bc10, 'method': EXT + 0x276d0, 'kind': 'void'},
     'getAlignments':             {'exec': EXT + 0x2bcb0, 'method': EXT + 0x276f0, 'kind': 'outs',
                                   'outs': ['hAlign', 'vAlign']},
+    'intersect':                 {'exec': EXT + 0x2af40, 'method': EXT + 0x27000, 'kind': 'void'},
+    'copyGC':                    {'exec': EXT + 0x2bef0, 'method': EXT + 0x27760, 'kind': 'void'},
+    'pushGC':                    {'exec': EXT + 0x2bf60, 'method': EXT + 0x278d0, 'kind': 'execInt'},
+    # PopGC's method pair is contiguous: PopGC(-1) at 0x100279f0 then
+    # RestoreGC(n) at 0x10027a80.  Method-mode cases call RestoreGC directly
+    # ('method'); 'methodBody' is the reported span start used by oracle_main.
+    'popGC':                     {'exec': EXT + 0x2bfa0, 'method': EXT + 0x27a80,
+                                  'methodBody': EXT + 0x279f0, 'kind': 'void'},
 }
 
 # Extension IAT slots: Core GNatives table import and Core GPropAddr import.
 GNATIVES_IAT = EXT + 0x59064
 GPROPADDR_IAT = EXT + 0x590d0
+
+# Extension IAT slots the state-stack allocator model intercepts (Core bound
+# imports; the slots are overwritten with scratch stubs the code hook serves).
+STATIC_ALLOC_IAT = EXT + 0x5906c   # UObject::StaticAllocateObject (cdecl, caller cleans)
+UOBJECT_CTOR_IAT = EXT + 0x5907c   # UObject::UObject (thiscall, no args)
+FNAME_CTOR_IAT = EXT + 0x59124     # FName::FName(EName) (thiscall, 1 arg)
+# 0x10059070 (GError data import) needs no interception: the operator-new
+# wrapper 0x10002c40 only reads through it.
+UGC_CLASS = EXT + 0xa28c8          # &UGC::PrivateStaticClass
+UGC_VTABLE = EXT + 0x598dc
+
+# Pointer fields canonicalised in graph-mode dumps.
+GC_PTR_FIELDS = frozenset(('vtable', 'canvas', 'normalFont', 'boldFont',
+                           'stackTop', 'freeList', 'owner'))
 
 # UGC field layout: name -> (offset, struct fmt).  All values are raw bit
 # patterns; '4I' fields take a list of four dword bit patterns.
@@ -131,7 +153,7 @@ GC_FIELDS = {
 }
 
 from unicorn.x86_const import (  # noqa: E402
-    UC_X86_REG_EIP, UC_X86_REG_ESP,
+    UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EIP, UC_X86_REG_ESP,
 )
 
 
@@ -159,6 +181,31 @@ class GcProbe(_NATIVE.NativeCollision):
         self.gprop_global = self.read(GPROPADDR_IAT, 'I')[0]
         self.out_slot = self.alloc(0x40)
 
+        # Allocator model for PushGC: the Core imports used on the allocation
+        # path are replaced with scratch stubs the code hook services.
+        # StaticAllocateObject is cdecl (the operator-new wrapper cleans its
+        # seven args with `add esp,0x1c`), so its stub must not pop them; the
+        # ctor leaves are thiscall and pop their own args.
+        self.static_alloc_stub = self._stub()
+        self.write(STATIC_ALLOC_IAT, 'I', self.static_alloc_stub)
+        self.uobject_ctor_stub = self._stub()
+        self.write(UOBJECT_CTOR_IAT, 'I', self.uobject_ctor_stub)
+        self.fname_ctor_stub = self._stub()
+        self.write(FNAME_CTOR_IAT, 'I', self.fname_ctor_stub)
+
+        self.cur_this = 0
+        self.node_addrs = []
+        self.has_nodes = False
+        self.block_ids = {}
+        self.blocks = {}
+        self.seen_ids = {}
+        self.alloc_returns_null = False
+
+    def _stub(self):
+        stub = self.alloc(16)
+        self.cpu.mem_write(stub, b'\xc3')
+        return stub
+
     # ----- thiscall leaf returns -------------------------------------------
     @staticmethod
     def _cdecl_return(cpu, stack, arg_bytes=0):
@@ -177,6 +224,12 @@ class GcProbe(_NATIVE.NativeCollision):
         self.trace.append(hex(address))
         if address == self.gnative_stub:
             self.on_gnative(cpu)
+        elif address == self.static_alloc_stub:
+            self.on_static_alloc(cpu)
+        elif address == self.uobject_ctor_stub:
+            self.on_uobject_ctor(cpu)
+        elif address == self.fname_ctor_stub:
+            self.on_fname_ctor(cpu)
 
     def on_gnative(self, cpu):
         """Model one param expression eval: (ecx=object, frame, resultPtr)."""
@@ -196,35 +249,149 @@ class GcProbe(_NATIVE.NativeCollision):
             self.write(result_ptr, 'I', spec & 0xffffffff)
         self._cdecl_return(cpu, stack, 8)
 
+    # ----- allocator-model leaves --------------------------------------------
+    def on_static_alloc(self, cpu):
+        """UObject::StaticAllocateObject(Class, Outer, Name, SetFlags,
+        Template, Error, Ptr) -- cdecl; the caller cleans all 7 args."""
+        stack = cpu.reg_read(UC_X86_REG_ESP)
+        cls, outer, name, set_flags, template, _error, ptr = \
+            self.read(stack + 4, '7I')
+        self.events.append({'op': 'StaticAllocateObject',
+                            'class': self.canon(cls),
+                            'outer': self.canon(outer),
+                            'name': name,
+                            'setFlags': set_flags,
+                            'template': self.canon(template),
+                            'ptr': self.canon(ptr)})
+        address = 0
+        if not self.alloc_returns_null:
+            address = self.alloc(0x100)
+            self.cpu.mem_write(address, b'\0' * 0x100)
+            self.block_ids[address] = 'h%d' % len(self.block_ids)
+            self.blocks[address] = 0xb8
+        cpu.reg_write(UC_X86_REG_EAX, address)
+        self._cdecl_return(cpu, stack)
+
+    def on_uobject_ctor(self, cpu):
+        """UObject::UObject() -- thiscall with no stack args."""
+        stack = cpu.reg_read(UC_X86_REG_ESP)
+        self.events.append({'op': 'UObject::UObject',
+                            'object': self.canon(cpu.reg_read(UC_X86_REG_ECX))})
+        self._cdecl_return(cpu, stack)
+
+    def on_fname_ctor(self, cpu):
+        """FName::FName(EName) -- thiscall with one arg; writes the name index
+        into *ecx (records no event)."""
+        stack = cpu.reg_read(UC_X86_REG_ESP)
+        ename = self.read(stack + 4, 'I')[0]
+        self.write(cpu.reg_read(UC_X86_REG_ECX), 'I', ename)
+        self._cdecl_return(cpu, stack, 4)
+
+    def canon(self, ptr):
+        """Stable pointer label shared with the JS heap: 'this' for the case
+        object, 'n<i>' for spec nodes, 'h<N>' for StaticAllocateObject blocks,
+        'a<N>' for anything else in encounter order."""
+        if not ptr:
+            return 0
+        if ptr in (UGC_VTABLE, IMAGE_BASE + 0x598dc):
+            return 'UGC::vtable'
+        if ptr in (UGC_CLASS, IMAGE_BASE + 0xa28c8):
+            return 'UGC::PrivateStaticClass'
+        if ptr == self.cur_this:
+            return 'this'
+        if ptr in self.node_addrs:
+            return 'n%d' % self.node_addrs.index(ptr)
+        if ptr in self.block_ids:
+            return self.block_ids[ptr]
+        if ptr in self.seen_ids:
+            return self.seen_ids[ptr]
+        label = 'a%d' % len(self.seen_ids)
+        self.seen_ids[ptr] = label
+        return label
+
     # ----- object image ------------------------------------------------------
-    def gc_object(self, spec):
-        this = self.alloc(0x100)
-        fill = spec.get('fill', 0xa5) & 0xff
-        self.cpu.mem_write(this, bytes([fill]) * 0x100)
+    def _resolve_ref(self, value):
+        """Resolve {'node': i} / 'this' case-spec references to addresses."""
+        if isinstance(value, dict) and 'node' in value:
+            return self.node_addrs[value['node']]
+        if value == 'this':
+            return self.cur_this
+        return value
+
+    def _write_fields(self, base, fields):
         for name, (offset, fmt) in GC_FIELDS.items():
-            if name not in spec:
+            if name not in fields:
                 continue
-            value = spec[name]
+            value = self._resolve_ref(fields[name])
             if fmt == '4I':
-                self.write(this + offset, '4I',
+                self.write(base + offset, '4I',
                            *[v & 0xffffffff for v in value])
             elif fmt == 'B':
-                self.write(this + offset, 'B', value & 0xff)
+                self.write(base + offset, 'B', value & 0xff)
             else:
-                self.write(this + offset, 'I', value & 0xffffffff)
+                self.write(base + offset, 'I', value & 0xffffffff)
+
+    def gc_object(self, spec):
+        node_specs = spec.get('nodes')
+        this = self.alloc(0x100)
+        self.cur_this = this
+        self.node_addrs = [self.alloc(0x100) for _ in node_specs or ()]
+        self.has_nodes = node_specs is not None
+        fill = spec.get('fill', 0xa5) & 0xff
+        self.cpu.mem_write(this, bytes([fill]) * 0x100)
+        for node in self.node_addrs:
+            self.cpu.mem_write(node, bytes([fill]) * 0x100)
+        self._write_fields(this, spec)
+        for addr, fields in zip(self.node_addrs, node_specs or ()):
+            self._write_fields(addr, fields)
         return this
 
     # ----- canonical dump ----------------------------------------------------
-    def dump_state(self, this):
+    def _dump_object(self, base, canon_ptrs):
         state = {}
         for name, (offset, fmt) in GC_FIELDS.items():
             if fmt == '4I':
-                state[name] = list(self.read(this + offset, '4I'))
+                state[name] = list(self.read(base + offset, '4I'))
             elif fmt == 'B':
-                state[name] = self.read(this + offset, 'B')[0]
+                state[name] = self.read(base + offset, 'B')[0]
             else:
-                state[name] = self.read(this + offset, 'I')[0]
-        state['raw'] = bytes(self.cpu.mem_read(this + 0x28, 0x90)).hex()
+                value = self.read(base + offset, 'I')[0]
+                state[name] = (self.canon(value)
+                               if canon_ptrs and name in GC_PTR_FIELDS else value)
+        raw = bytearray(self.cpu.mem_read(base + 0x28, 0x90))
+        if canon_ptrs:
+            # Raw addresses differ between the oracle heap and the JS heap;
+            # the canonicalised pointer fields carry the graph identity, so
+            # the pointer slots are zeroed in the hex.
+            for name in GC_PTR_FIELDS:
+                offset = GC_FIELDS[name][0]
+                if 0x28 <= offset <= 0xb4:
+                    raw[offset - 0x28:offset - 0x24] = b'\0' * 4
+        state['raw'] = raw.hex()
+        return state
+
+    def dump_state(self, this):
+        """Flat dump for plain specs; graph dump when the spec declared nodes
+        or the run allocated blocks: 'this', every spec node (n<i>), every
+        extra node reachable through the stackTop/freeList +0xac chains, and
+        every StaticAllocateObject block, with pointer fields canonicalised
+        and the pointer slots zeroed in the raw hex."""
+        if not self.has_nodes and not self.block_ids:
+            return self._dump_object(this, False)
+        state = {'this': self._dump_object(this, True), 'nodes': {}}
+        seen = {this}
+        for i, addr in enumerate(self.node_addrs):
+            seen.add(addr)
+            state['nodes']['n%d' % i] = self._dump_object(addr, True)
+        for chain in (0xac, 0xb0):
+            addr = self.read(this + chain, 'I')[0]
+            while addr and addr not in seen:
+                seen.add(addr)
+                state['nodes'][self.canon(addr)] = self._dump_object(addr, True)
+                addr = self.read(addr + 0xac, 'I')[0]
+        for addr, label in self.block_ids.items():
+            if addr not in seen:
+                state['nodes'][label] = self._dump_object(addr, True)
         return state
 
     # ----- case drivers --------------------------------------------------------
@@ -285,15 +452,24 @@ class GcProbe(_NATIVE.NativeCollision):
         return None
 
     def run_case(self, native, case):
+        self.seen_ids = {}
+        self.block_ids = {}
+        self.blocks = {}
+        self.alloc_returns_null = bool(case['spec'].get('allocReturnsNull'))
         this = self.gc_object(case['spec'])
         self.events = []
         mode = case.get('mode', 'exec')
         kind = NATIVES[native]['kind']
-        args = case.get('args', [])
+        args = [self._resolve_ref(a) for a in case.get('args', [])]
         if mode == 'method':
             ret = self.run_method(native, this, args)
-            result = self._out_result(native) if kind in ('outs', 'execOut') else None
-            out = {'result': result, 'rawEax': ret}
+            if kind in ('outs', 'execOut'):
+                result = self._out_result(native)
+            elif kind == 'execInt':
+                result = ret
+            else:
+                result = None
+            out = {'result': result, 'rawEax': ret, 'ret': ret}
         else:
             ret, out_addr = self.run_exec(native, this, args)
             if kind == 'execInt':
@@ -328,6 +504,7 @@ def oracle_main(native_name, root=None):
                    'Engine.dll': _NATIVE.HASHES['Engine.dll']},
         'extensionBase': EXTENSION_BASE,
         'execBody': (entry['exec'] - EXT) + IMAGE_BASE,
-        'methodBody': (entry['method'] - EXT) + IMAGE_BASE if entry['method'] else None,
+        'methodBody': ((entry.get('methodBody', entry['method']) - EXT) + IMAGE_BASE
+                       if entry['method'] else None),
         'cases': results,
     }))

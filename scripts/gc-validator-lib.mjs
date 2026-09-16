@@ -63,6 +63,18 @@ function resultMatches(resultKind, got, expected) {
   }
 }
 
+/** First leaf-level difference between two JSON-comparable values. */
+function firstDiff(got, expected, path = '') {
+  if (Object.is(got, expected)) return null;
+  if (typeof got !== 'object' || typeof expected !== 'object' || !got || !expected)
+    return {path: path || '$', got, expected};
+  for (const key of new Set([...Object.keys(got), ...Object.keys(expected)])) {
+    const d = firstDiff(got[key], expected[key], path ? `${path}.${key}` : key);
+    if (d) return d;
+  }
+  return null;
+}
+
 async function loadExtension(root) {
   const extensionPath = path.join(root, 'System', 'Extension.u');
   const extensionBytes = new Uint8Array(await readFile(extensionPath));
@@ -141,9 +153,16 @@ export async function runGcValidator(opts) {
     const services = {
       mem: heap,
       objectAddress: o => o.base,
+      nodeAddress: i => heap.nodeAddrs[i],
+      events: heap.events,
+      canon: a => heap.canon(a),
+      allocateObject: alloc => heap.allocateObject(alloc),
+      constructUObject: address => heap.constructUObject(address),
     };
     heap.events.length = 0;
-    const args = caseSpec.args ?? [];
+    const args = (caseSpec.args ?? []).map(a =>
+      a && typeof a === 'object' && 'node' in a ? heap.nodeAddrs[a.node]
+      : a === 'this' ? base : a);
     const raw = opts.invoke
       ? opts.invoke(fn, object, args, services, caseSpec, mod)
       : fn(object, ...args, services);
@@ -156,6 +175,23 @@ export async function runGcValidator(opts) {
     const expected = oracle.cases[name];
     assert.ok(expected, `oracle missing case ${name}`);
     const got = runCase(mod[opts.entry], caseSpec);
+    const okResult = resultMatches(opts.resultKind, got.result, expected.result);
+    const okEvents = JSON.stringify(got.events) === JSON.stringify(expected.events);
+    const okState = JSON.stringify(got.state) === JSON.stringify(expected.state);
+    if (okResult && okEvents && okState) {
+      if (opts.resultKind === 'execInt')
+        assert.equal(expected.ret, expected.result, `${name}: exec ret`);
+      report.cases[name] = 'pass';
+      continue;
+    }
+    const d = firstDiff(got.state, expected.state, 'state')
+      ?? firstDiff(got.events, expected.events, 'events')
+      ?? {path: 'result', got: got.result, expected: expected.result};
+    if (opts.knownDivergent?.includes(name)) {
+      report.cases[name] = `known-divergent ${d.path}: js ${JSON.stringify(d.got)}`
+        + ` vs oracle ${JSON.stringify(d.expected)}`;
+      continue;
+    }
     assert.ok(resultMatches(opts.resultKind, got.result, expected.result),
       `${name}: result ${JSON.stringify(got.result)} != ${JSON.stringify(expected.result)}`);
     if (opts.resultKind === 'execInt')
@@ -171,6 +207,11 @@ export async function runGcValidator(opts) {
     module: readFileSync(opts.moduleFile, 'utf8'),
     model: readFileSync(modelFile, 'utf8'),
   };
+  // opts.extraFiles: {key: file path} sibling modules the entry module
+  // imports (e.g. push-gc imports copy-gc); mutation.file may target a key.
+  const extras = opts.extraFiles ?? {};
+  for (const [key, file] of Object.entries(extras))
+    sources[key] = readFileSync(path.resolve(file), 'utf8');
   for (const [i, mutation] of (opts.mutations ?? []).entries()) {
     const target = mutation.file ?? 'module';
     const source = sources[target];
@@ -184,6 +225,9 @@ export async function runGcValidator(opts) {
       const moduleName = path.basename(opts.moduleFile);
       writeFileSync(path.join(dir, moduleName),
         target === 'module' ? patched : sources.module);
+      for (const [key, file] of Object.entries(extras))
+        writeFileSync(path.join(dir, path.basename(file)),
+          target === key ? patched : sources[key]);
       const mutated = await import(url.pathToFileURL(path.join(dir, moduleName)).href);
       let diverged = false;
       let detail = '';

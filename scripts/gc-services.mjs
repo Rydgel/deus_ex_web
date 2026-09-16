@@ -4,9 +4,16 @@
  * `GcHeap` is a byte-addressable bump heap mirroring the probe's scratch
  * allocator.  `buildGc` constructs the same object image the probe's
  * `gc_object()` does (0xb8 padded to 0x100, per-case fill byte, spec fields
- * as raw bit patterns) and `dumpState` reproduces the probe's canonical
+ * as raw bit patterns, `nodes` pre-built linked objects referenced by
+ * `{node: i}` / `'this'`) and `dumpState` reproduces the probe's canonical
  * dump including the raw 0x28..0xb8 hex so stray writes are caught.
+ * `allocateObject` models the intercepted `UObject::StaticAllocateObject`
+ * leaf PushGC reaches through the operator-new wrapper.
  */
+
+const GC_VTABLE = 0x100598dc;
+const GC_PRIVATE_CLASS = 0x100a28c8;
+const ORACLE_DELTA = 0x12000000 - 0x10000000;
 
 export class GcHeap {
   constructor() {
@@ -15,6 +22,10 @@ export class GcHeap {
     this.next = 0x1000;
     this.sizes = new Map();
     this.seen = new Map();
+    this.labels = new Map();
+    this.hblocks = new Map();
+    this.nodeAddrs = null;
+    this.allocReturnsNull = false;
     this.events = [];
   }
 
@@ -31,8 +42,44 @@ export class GcHeap {
     return address;
   }
 
+  /**
+   * Modelled UObject::StaticAllocateObject leaf (the operator-new wrapper
+   * always passes Class=&UGC::PrivateStaticClass, Name=NAME_None,
+   * SetFlags=0, Template=0, Ptr=0).  Records the event the oracle's
+   * intercepted leaf records, then returns a fresh zeroed 0x100-padded
+   * block labelled 'h<N>'; spec.allocReturnsNull yields 0 instead.
+   */
+  allocateObject({outer, size}) {
+    this.events.push({
+      op: 'StaticAllocateObject',
+      class: 'UGC::PrivateStaticClass',
+      outer: this.canon(outer),
+      name: 0,
+      setFlags: 0,
+      template: 0,
+      ptr: 0,
+    });
+    if (this.allocReturnsNull) return 0;
+    const address = this.allocRaw(0x100);
+    this.bytes.fill(0, address, address + 0x100);
+    this.sizes.set(address, size ?? 0xb8);
+    const label = `h${this.hblocks.size}`;
+    this.hblocks.set(address, label);
+    this.labels.set(address, label);
+    return address;
+  }
+
+  /** Intercepted Core `UObject::UObject()` base constructor leaf. */
+  constructUObject(address) {
+    this.events.push({op: 'UObject::UObject', object: this.canon(address)});
+  }
+
   canon(address) {
     if (!address) return 0;
+    if (address === GC_VTABLE || address === GC_VTABLE + ORACLE_DELTA) return 'UGC::vtable';
+    if (address === GC_PRIVATE_CLASS || address === GC_PRIVATE_CLASS + ORACLE_DELTA)
+      return 'UGC::PrivateStaticClass';
+    if (this.labels.has(address)) return this.labels.get(address);
     if (this.seen.has(address)) return this.seen.get(address);
     const label = `a${this.seen.size}`;
     this.seen.set(address, label);
@@ -105,17 +152,31 @@ const GC_FIELDS = {
 
 export function buildGc(heap, spec = {}) {
   const base = heap.allocRaw(0x100);
-  heap.bytes.fill((spec.fill ?? 0xa5) & 0xff, base, base + 0x100);
-  for (const [name, [offset, kind]] of Object.entries(GC_FIELDS)) {
-    if (!(name in spec)) continue;
-    const value = spec[name];
-    if (kind === 'bits4') {
-      for (let i = 0; i < 4; i++) heap.write(base + offset + 4 * i, 'u32', value[i]);
-    } else {
-      heap.write(base + offset, kind, value);
+  const nodes = spec.nodes;
+  const nodeAddrs = nodes ? nodes.map(() => heap.allocRaw(0x100)) : [];
+  heap.nodeAddrs = nodes ? nodeAddrs : null;
+  heap.allocReturnsNull = Boolean(spec.allocReturnsNull);
+  heap.labels.set(base, 'this');
+  nodeAddrs.forEach((address, i) => heap.labels.set(address, `n${i}`));
+  const fill = (spec.fill ?? 0xa5) & 0xff;
+  heap.bytes.fill(fill, base, base + 0x100);
+  for (const address of nodeAddrs) heap.bytes.fill(fill, address, address + 0x100);
+  const resolve = value => value === 'this' ? base
+    : (value && typeof value === 'object' && 'node' in value ? nodeAddrs[value.node] : value);
+  const writeFields = (address, fields) => {
+    for (const [name, [offset, kind]] of Object.entries(GC_FIELDS)) {
+      if (!(name in fields)) continue;
+      const value = resolve(fields[name]);
+      if (kind === 'bits4') {
+        for (let i = 0; i < 4; i++) heap.write(address + offset + 4 * i, 'u32', value[i]);
+      } else {
+        heap.write(address + offset, kind, value);
+      }
     }
-  }
-  return {base, heap, spec};
+  };
+  writeFields(base, spec);
+  nodes?.forEach((fields, i) => writeFields(nodeAddrs[i], fields));
+  return {base, heap, spec, nodeAddrs};
 }
 
 const F32 = new Float32Array(1);
@@ -127,16 +188,51 @@ export function f32FromBits(bits) {
   return F32[0];
 }
 
-export function dumpState(heap, base) {
+const GC_PTR_FIELDS = new Set(['vtable', 'canvas', 'normalFont', 'boldFont',
+  'stackTop', 'freeList', 'owner']);
+
+function dumpObject(heap, base, canonPtrs) {
   const state = {};
   for (const [name, [offset, kind]] of Object.entries(GC_FIELDS)) {
     if (kind === 'bits4') {
       state[name] = [0, 1, 2, 3].map(i => heap.read(base + offset + 4 * i, 'u32'));
     } else {
-      state[name] = heap.read(base + offset, kind);
+      const value = heap.read(base + offset, kind);
+      state[name] = canonPtrs && GC_PTR_FIELDS.has(name) ? heap.canon(value) : value;
     }
   }
-  state.raw = Array.from(heap.bytes.subarray(base + 0x28, base + 0xb8))
-    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const raw = heap.bytes.slice(base + 0x28, base + 0xb8);
+  if (canonPtrs) {
+    // Pointer fields carry raw addresses that differ between runtimes; the
+    // canonicalised fields carry the graph identity, so zero them in the hex.
+    for (const name of GC_PTR_FIELDS) {
+      const offset = GC_FIELDS[name][0];
+      if (offset >= 0x28 && offset <= 0xb4) raw.fill(0, offset - 0x28, offset - 0x24);
+    }
+  }
+  state.raw = Array.from(raw).map(b => b.toString(16).padStart(2, '0')).join('');
+  return state;
+}
+
+export function dumpState(heap, base) {
+  if (!heap.nodeAddrs && heap.hblocks.size === 0)
+    return dumpObject(heap, base, false);
+  const state = {this: dumpObject(heap, base, true), nodes: {}};
+  const seen = new Set([base]);
+  (heap.nodeAddrs ?? []).forEach((address, i) => {
+    seen.add(address);
+    state.nodes[`n${i}`] = dumpObject(heap, address, true);
+  });
+  for (const chain of [0xac, 0xb0]) {
+    let address = heap.read(base + chain, 'u32');
+    while (address && !seen.has(address)) {
+      seen.add(address);
+      state.nodes[heap.canon(address)] = dumpObject(heap, address, true);
+      address = heap.read(address + 0xac, 'u32');
+    }
+  }
+  for (const [address, label] of heap.hblocks) {
+    if (!seen.has(address)) state.nodes[label] = dumpObject(heap, address, true);
+  }
   return state;
 }

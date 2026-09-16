@@ -90,6 +90,11 @@ export const GC_HELPERS = freeze({
   polyFlagsFromFlags: 0x1002af00,
 });
 
+/** Preferred-base addresses the state-stack path references. */
+export const GC_VTABLE = 0x100598dc;          // written by the ctor 0x10026c70
+export const GC_PRIVATE_CLASS = 0x100a28c8;   // &UGC::PrivateStaticClass arg
+export const GC_CTOR = 0x10026c70;            // copy-ctor PushGC invokes
+
 /**
  * Byte-channel color scale.  SetTileColor/SetTextColor multiply each byte
  * channel of the stored Color dword by the f64 constant at 0x1005e3c0
