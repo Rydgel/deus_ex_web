@@ -1740,6 +1740,125 @@
           "int": 0
         }
       ]
+    },
+    "sortingOn": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "b"
+              },
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "y"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "c"
+              },
+              {
+                "text": "z"
+              }
+            ]
+          }
+        ],
+        "flags": 1
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "reset": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 5,
+            "sort_flags": 3
+          },
+          {
+            "type": 0,
+            "sort_priority": 2,
+            "sort_flags": 7
+          },
+          {
+            "type": 0,
+            "sort_priority": -1,
+            "sort_flags": 2
+          }
+        ],
+        "rows": [],
+        "flags": 0
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "preserveBits": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "sort_flags": 20
+          },
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 0
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        }
+      ]
     }
   },
   "sort": {
@@ -1904,6 +2023,597 @@
           },
           {
             "type": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "bigRun": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "m"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "k"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "fields": [
+              {
+                "text": "z"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "fields": [
+              {
+                "text": "d"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "fields": [
+              {
+                "text": "p"
+              }
+            ]
+          },
+          {
+            "id": 6,
+            "fields": [
+              {
+                "text": "b"
+              }
+            ]
+          },
+          {
+            "id": 7,
+            "fields": [
+              {
+                "text": "y"
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "fields": [
+              {
+                "text": "f"
+              }
+            ]
+          },
+          {
+            "id": 9,
+            "fields": [
+              {
+                "text": "w"
+              }
+            ]
+          },
+          {
+            "id": 10,
+            "fields": [
+              {
+                "text": "h"
+              }
+            ]
+          },
+          {
+            "id": 11,
+            "fields": [
+              {
+                "text": "s"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "dupIds": {
+      "spec": {
+        "rows": [
+          {
+            "id": 7,
+            "clientData": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "clientData": 1,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 11,
+            "clientData": 2,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 3,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "clientData": 4,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 9,
+            "clientData": 5,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "clientData": 6,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "clientData": 7,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "clientData": 8,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "clientData": 9,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 10,
+            "clientData": 10,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 6,
+            "clientData": 11,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "multiKey": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "b"
+              },
+              {
+                "text": "2",
+                "value": 2.0
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "3",
+                "value": 3.0
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "b"
+              },
+              {
+                "text": "1",
+                "value": 1.0
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "1",
+                "value": 1.0
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "fields": [
+              {
+                "text": "b"
+              },
+              {
+                "text": "0",
+                "value": 0.0
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 2,
+            "sort_flags": 0
+          },
+          {
+            "type": 1,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "caseSensitive": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "B"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 2
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "reverseText": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "c"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "b"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 1
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "sortingOff": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "b"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 0
+      },
+      "args": []
+    },
+    "single": {
+      "spec": {
+        "rows": [
+          {
+            "id": 7,
+            "fields": [
+              {
+                "text": "only"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "empty": {
+      "spec": {
+        "rows": [],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "allEqual": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "clientData": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 1,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 2,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 3,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 4,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 5,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 6,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 7,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 8,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 9,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 10,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 0,
+            "clientData": 11,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
           }
         ],
         "flags": 1

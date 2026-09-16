@@ -1063,6 +1063,97 @@ export function autoExpandColumns(L, reset) {
 }
 
 /**
+ * appQsort — Core 0x1010194c forwarding to the shipped MSVCRT qsort
+ * 0x7802543d.  Byte-faithful port of that body: while the run exceeds 8
+ * elements the midpoint element is swapped to the front (swap only, no
+ * median compare), the partition scans loguy upward while
+ * comp(loguy, lo) <= 0 and higuy downward while comp(higuy, lo) >= 0, swaps
+ * equal-passing pairs until the scans cross, then plants the pivot at higuy
+ * with swap(lo, higuy).  The larger half is pushed on the 30-entry lo/hi
+ * stack and the loop continues on the smaller; runs of <= 8 go through
+ * shortsort 0x780255e2, which selection-sorts each pass's max element to the
+ * shrinking back edge.  Element access is by byte address through the heap;
+ * the only caller uses width 4 on the rows pointer array.
+ */
+function swapBytes(L, a, b, width) {
+  if (a === b) return;
+  for (let i = 0; i < width; i++) {
+    const t = L.read(a + i, 'u8');
+    L.write(a + i, 'u8', L.read(b + i, 'u8'));
+    L.write(b + i, 'u8', t);
+  }
+}
+
+function shortsort(L, lo, hi, width, cmp) {
+  for (let end = hi; end > lo; end -= width) {
+    let max = lo;
+    for (let p = lo + width; p <= end; p += width)
+      if (cmp(p, max) > 0) max = p;
+    swapBytes(L, max, end, width);
+  }
+}
+
+export function appQsort(L, base, num, width, cmp) {
+  if (num < 2 || !width) return;
+  const lostk = [], histk = [];
+  let lo = base, hi = base + width * (num - 1);
+  for (;;) {
+    const size = Math.trunc((hi - lo) / width) + 1;
+    if (size <= 8) {
+      shortsort(L, lo, hi, width, cmp);
+    } else {
+      const mid = lo + Math.trunc(size / 2) * width;
+      swapBytes(L, mid, lo, width);
+      let loguy = lo, higuy = hi + width;
+      for (;;) {
+        do { loguy += width; } while (loguy <= hi && cmp(loguy, lo) <= 0);
+        do { higuy -= width; } while (higuy > lo && cmp(higuy, lo) >= 0);
+        if (higuy < loguy) break;
+        swapBytes(L, loguy, higuy, width);
+      }
+      swapBytes(L, lo, higuy, width);
+      if (higuy - lo - 1 < hi - loguy) {
+        if (loguy < hi) { lostk.push(hi); histk.push(loguy); }
+        if (lo + width >= higuy) { /* pop below */ }
+        else { hi = higuy - width; continue; }
+      } else {
+        if (lo + width < higuy) { histk.push(lo); lostk.push(higuy - width); }
+        if (loguy < hi) { lo = loguy; continue; }
+      }
+    }
+    if (!lostk.length) return;
+    hi = lostk.pop();
+    lo = histk.pop();
+  }
+}
+
+/**
+ * Renumber 0x10031660: row[i].id = i for every row in order.
+ */
+export function renumberRowIds(L) {
+  const count = L.read(L.base + LIST_WINDOW.rowsCount, 'i32');
+  const rdata = L.read(L.base + LIST_WINDOW.rowsData, 'u32');
+  for (let i = 0; i < count; i++)
+    L.write(L.read(rdata + 4 * i, 'u32') + LIST_ROW.id, 'i32', i);
+}
+
+/**
+ * Sort driver 0x100329b0: rebuilds the sort-column list, qsorts the rows
+ * pointer array when count > 1 through the qsort callback 0x10032a50
+ * (compareRows on the two dereferenced nodes), then renumbers row ids.
+ */
+export function sortRows(L) {
+  buildSortList(L);
+  const count = L.read(L.base + LIST_WINDOW.rowsCount, 'i32');
+  if (count > 1) {
+    const rdata = L.read(L.base + LIST_WINDOW.rowsData, 'u32');
+    appQsort(L, rdata, count, 4,
+      (pa, pb) => compareRows(L, L.read(pa, 'u32'), L.read(pb, 'u32')));
+  }
+  renumberRowIds(L);
+}
+
+/**
  * Selection-bit helper 0x10032dc0(this, index, newState, out): when the row's
  * selected bit differs from the full newState dword the bit is replaced
  * ((flags ^ newState) & 1) ^ flags, numSelected is decremented for a zero
