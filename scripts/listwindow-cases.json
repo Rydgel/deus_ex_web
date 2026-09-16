@@ -1665,6 +1665,32 @@
           "int": 0
         }
       ]
+    },
+    "argTwoOff": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "flags": 0,
+        "numSelected": 2,
+        "selectedRow": 0,
+        "parent": true
+      },
+      "args": [
+        {
+          "int": 2
+        }
+      ]
     }
   },
   "setSortColumn": {
