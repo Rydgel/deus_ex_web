@@ -79,7 +79,31 @@ BODIES = {
     'SetMaxSize': 0x1201d980,
     'SetMaxUndos': 0x1201da60,
     'SetInsertionPointBlinkRate': 0x1201d960,
+    'MoveInsertionPoint': 0x1201d250,
+    'SetInsertionPoint': 0x1201d4a0,
+    'GetInsertionPoint': 0x12021c20,       # execInt
+    'SetSelectedArea': 0x1201d520,
+    'GetSelectedArea': 0x1201d5c0,
+    'Undo': 0x1201e0a0,
+    'Redo': 0x1201e170,
+    'ClearUndo': 0x1201ddf0,
+    'Copy': 0x1201df20,
+    'Cut': 0x1201dfa0,
+    'Paste': 0x1201e020,
+    'DeleteChar': 0x1201e560,
+    'SetInsertionPointTexture': 0x1201daf0,
+    'SetInsertionPointType': 0x1201db80,
+    'SetSelectedAreaTexture': 0x1201dc10,
+    'SetSelectedAreaTextColor': 0x1201dc30,
+    'SetEditCursor': 0x1201dc40,
+    'SetEditSounds': 0x1201dc70,
 }
+
+# exec-level ConvertPipes (0x10050710): the InsertText export runs it on the
+# string argument before invoking the +0x124 virtual; the oracle drives the
+# two real bodies in the same sequence.
+CONVERT_PIPES = EXT + 0x50710
+INSERT_TEXT_VIRTUAL = EXT + 0x1e3c0
 
 # Intercepted Extension leaves.
 UPDATE_CARET = EXT + 0x1f680
@@ -520,6 +544,7 @@ class EditWindowProbe(_NATIVE.NativeCollision):
     def marshal_args(self, this, args):
         """Turn case-file arg specs into method-body stack words."""
         words = []
+        self._out_cells = []
         for arg in args:
             if 'int' in arg:
                 words.append(arg['int'] & 0xffffffff)
@@ -532,6 +557,16 @@ class EditWindowProbe(_NATIVE.NativeCollision):
                 ptr = self.alloc(max(len(data), 4))
                 self.cpu.mem_write(ptr, data)
                 words.append(ptr)
+            elif 'out' in arg:
+                # Out-int parameter: allocate the cell, pass its address,
+                # read it back after the call.  The exec always supplies a
+                # real pointer (it falls back to a stack local when the
+                # out-prop address is NULL).
+                cell = self.alloc(4)
+                init = arg['out']
+                self.write(cell, 'i', -559038737 if init is None else init)
+                self._out_cells.append(cell)
+                words.append(cell)
             else:
                 raise ValueError('unsupported arg %r' % (arg,))
         return words
@@ -593,9 +628,9 @@ def oracle_main(method, result_kind, section, root=None):
             elif result_kind == 'int':
                 out = {'result': struct.unpack('<i', struct.pack('<I', ret))[0]}
             elif result_kind == 'outPair':
-                # Two out-ints through stack slots (phase-2 natives).
-                out = {'result': [struct.unpack('<i', struct.pack('<I', w))[0]
-                                  for w in words]}
+                # Two out-ints written through pointer args; read the cells
+                # the method stored into.
+                out = {'result': [probe.read(c, 'i')[0] for c in probe._out_cells]}
             else:
                 raise ValueError('unsupported result kind %r' % (result_kind,))
         out['events'] = list(probe.events)

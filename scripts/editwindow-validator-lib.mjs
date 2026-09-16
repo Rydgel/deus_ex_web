@@ -56,6 +56,13 @@ export function marshalArgs(heap, base, args = []) {
       heap.bytes.set(data, ptr);
       return ptr;
     }
+    if ('out' in arg) {
+      // Out-int parameter cell (exec supplies a real pointer).  The JS entry
+      // for outPair natives returns the pair directly and drops these words.
+      const cell = heap.allocRaw(4);
+      heap.write(cell, 'i32', arg.out ?? -559038737);
+      return cell;
+    }
     throw new Error(`unsupported arg ${JSON.stringify(arg)}`);
   });
 }

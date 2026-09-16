@@ -1,97 +1,1202 @@
 {
-  "enableEditing": {
-    "set":              {"spec": {"flags": 0}, "args": [{"int": 1}]},
-    "clear":            {"spec": {"flags": 1}, "args": [{"int": 0}]},
-    "same":             {"spec": {"flags": 3}, "args": [{"int": 1}]},
-    "preserveOthers":   {"spec": {"flags": 6}, "args": [{"int": 1}]},
-    "argMasked":        {"spec": {"flags": 5}, "args": [{"int": 2}]},
-    "argThree":         {"spec": {"flags": 0}, "args": [{"int": 3}]},
-    "clearWhenSet":     {"spec": {"flags": 7}, "args": [{"int": 0}]}
+ "enableEditing": {
+  "set": {
+   "spec": {
+    "flags": 0
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
   },
-  "isEditingEnabled": {
-    "off":              {"spec": {"flags": 0}, "args": []},
-    "on":               {"spec": {"flags": 1}, "args": []},
-    "otherBits":        {"spec": {"flags": 6}, "args": []},
-    "all":              {"spec": {"flags": 7}, "args": []},
-    "highBits":         {"spec": {"flags": 4294967294}, "args": []},
-    "negOne":           {"spec": {"flags": 4294967295}, "args": []}
+  "clear": {
+   "spec": {
+    "flags": 1
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
   },
-  "enableSingleLineEditing": {
-    "alreadyOn":        {"spec": {"flags": 3, "text": "a\nb"}, "args": [{"int": 1}]},
-    "alreadyOff":       {"spec": {"flags": 1, "text": "a\nb"}, "args": [{"int": 0}]},
-    "enableNewlines":   {"spec": {"flags": 1, "text": "ab\ncd\nef", "textFlags": 1}, "args": [{"int": 1}]},
-    "enableEmpty":      {"spec": {"flags": 1}, "args": [{"int": 1}]},
-    "enableNoNewlines": {"spec": {"flags": 1, "text": "abc"}, "args": [{"int": 1}]},
-    "disable":          {"spec": {"flags": 3, "textFlags": 0}, "args": [{"int": 0}]},
-    "disableWrapOn":    {"spec": {"flags": 3, "textFlags": 1}, "args": [{"int": 0}]},
-    "argTwo":           {"spec": {"flags": 1, "text": "a\nb"}, "args": [{"int": 2}]},
-    "enableOverMax":    {"spec": {"flags": 1, "text": "abcdef", "maxSize": 3, "textFlags": 1}, "args": [{"int": 1}]},
-    "enableUndoCleared":{"spec": {"flags": 1, "text": "a\nb", "undo": [{"pos": 0, "old": "x", "new": "y"}], "undoPos": 1, "savedUndoPos": 1, "parent": true}, "args": [{"int": 1}]}
+  "same": {
+   "spec": {
+    "flags": 3
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
   },
-  "isSingleLineEditingEnabled": {
-    "off":              {"spec": {"flags": 0}, "args": []},
-    "editingOnly":      {"spec": {"flags": 1}, "args": []},
-    "singleLine":       {"spec": {"flags": 2}, "args": []},
-    "both":             {"spec": {"flags": 3}, "args": []},
-    "all":              {"spec": {"flags": 7}, "args": []},
-    "highBits":         {"spec": {"flags": 4294967293}, "args": []}
+  "preserveOthers": {
+   "spec": {
+    "flags": 6
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
   },
-  "enableUppercaseOnly": {
-    "enableLower":      {"spec": {"flags": 1, "text": "abz"}, "args": [{"int": 1}]},
-    "enableMixed":      {"spec": {"flags": 1, "text": "aB9 z!"}, "args": [{"int": 1}]},
-    "alreadyOn":        {"spec": {"flags": 5, "text": "ab"}, "args": [{"int": 1}]},
-    "disable":          {"spec": {"flags": 5, "text": "ab"}, "args": [{"int": 0}]},
-    "enableEmpty":      {"spec": {"flags": 1}, "args": [{"int": 1}]},
-    "argTwo":           {"spec": {"flags": 1, "text": "ab"}, "args": [{"int": 2}]},
-    "argThreeOn":       {"spec": {"flags": 5, "text": "ab"}, "args": [{"int": 3}]},
-    "enableNewlines":   {"spec": {"flags": 3, "text": "a\nb"}, "args": [{"int": 1}]},
-    "enableUndoCleared":{"spec": {"flags": 1, "text": "ab", "undo": [{"pos": 0, "old": "x", "new": "y"}], "undoPos": 1, "savedUndoPos": 0, "parent": true}, "args": [{"int": 1}]}
+  "argMasked": {
+   "spec": {
+    "flags": 5
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
   },
-  "clearTextChangedFlag": {
-    "equal":            {"spec": {"undoPos": 2, "savedUndoPos": 2}, "args": []},
-    "sentinel":         {"spec": {"undoPos": 3, "savedUndoPos": -1}, "args": []},
-    "zero":             {"spec": {"undoPos": 0, "savedUndoPos": 0}, "args": []},
-    "different":        {"spec": {"undoPos": 5, "savedUndoPos": 7}, "args": []},
-    "negSent":          {"spec": {"undoPos": -1, "savedUndoPos": -1}, "args": []}
+  "argThree": {
+   "spec": {
+    "flags": 0
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
   },
-  "setTextChangedFlag": {
-    "set":              {"spec": {"undoPos": 2, "savedUndoPos": 0}, "args": [{"int": 1}]},
-    "clear":            {"spec": {"undoPos": 4, "savedUndoPos": -1}, "args": [{"int": 0}]},
-    "setAgain":         {"spec": {"undoPos": 1, "savedUndoPos": -1}, "args": [{"int": 1}]},
-    "clearEqual":       {"spec": {"undoPos": 3, "savedUndoPos": 3}, "args": [{"int": 0}]},
-    "setArgTwo":        {"spec": {"undoPos": 2, "savedUndoPos": 2}, "args": [{"int": 2}]}
-  },
-  "hasTextChanged": {
-    "equal":            {"spec": {"undoPos": 2, "savedUndoPos": 2}, "args": []},
-    "different":        {"spec": {"undoPos": 3, "savedUndoPos": 0}, "args": []},
-    "sentinel":         {"spec": {"undoPos": 0, "savedUndoPos": -1}, "args": []},
-    "bothZero":         {"spec": {"undoPos": 0, "savedUndoPos": 0}, "args": []},
-    "negBoth":          {"spec": {"undoPos": -1, "savedUndoPos": -1}, "args": []}
-  },
-  "setMaxSize": {
-    "unchanged":        {"spec": {"maxSize": 10, "text": "abc"}, "args": [{"int": 10}]},
-    "zero":             {"spec": {"maxSize": 10, "text": "abc"}, "args": [{"int": 0}]},
-    "negative":         {"spec": {"maxSize": 10, "text": "abc"}, "args": [{"int": -5}]},
-    "larger":           {"spec": {"text": "abcdef", "maxSize": 100}, "args": [{"int": 20}]},
-    "smallerTruncate":  {"spec": {"text": "abcdef", "maxSize": 100, "undoPos": 0, "savedUndoPos": 0}, "args": [{"int": 3}]},
-    "emptyText":        {"spec": {"text": null}, "args": [{"int": 5}]},
-    "exactLen":         {"spec": {"text": "abc"}, "args": [{"int": 3}]},
-    "truncateWithUndo": {"spec": {"text": "abcd", "undo": [{"pos": 0, "old": "w", "new": "xy"}, {"pos": 1, "old": "q", "new": "r"}], "undoPos": 2, "savedUndoPos": 2}, "args": [{"int": 1}]}
-  },
-  "setMaxUndos": {
-    "negative":         {"spec": {"maxUndos": 64, "undo": [{"pos": 0, "old": "a", "new": "b"}, {"pos": 1, "old": "c", "new": "d"}], "undoPos": 2, "savedUndoPos": 1}, "args": [{"int": -3}]},
-    "unlimitedSame":    {"spec": {"maxUndos": -1}, "args": [{"int": -9}]},
-    "grow":             {"spec": {"maxUndos": 5, "undo": [{"pos": 0, "old": "a", "new": "b"}, {"pos": 1, "old": "c", "new": "d"}], "undoPos": 2, "savedUndoPos": 1}, "args": [{"int": 10}]},
-    "shrink":           {"spec": {"maxUndos": 64, "undo": [{"pos": 0, "old": "a", "new": "b"}, {"pos": 1, "old": "c", "new": "d"}, {"pos": 2, "old": "e", "new": "f"}], "undoPos": 3, "savedUndoPos": 2}, "args": [{"int": 1}]},
-    "equal":            {"spec": {"maxUndos": 5, "undo": [{"pos": 0, "old": "a", "new": "b"}, {"pos": 1, "old": "c", "new": "d"}], "undoPos": 2, "savedUndoPos": 0}, "args": [{"int": 2}]},
-    "savedClamp":       {"spec": {"maxUndos": 10, "undo": [{"pos": 0, "old": "a", "new": "b"}, {"pos": 1, "old": "c", "new": "d"}, {"pos": 2, "old": "e", "new": "f"}], "undoPos": 1, "savedUndoPos": 0}, "args": [{"int": 0}]},
-    "zeroEmpty":        {"spec": {"maxUndos": 5, "undo": [], "undoPos": 0, "savedUndoPos": 0}, "args": [{"int": 0}]}
-  },
-  "setInsertionPointBlinkRate": {
-    "defaults":         {"spec": {}, "args": [{"float": 0.75}, {"float": 1.0}]},
-    "swapped":          {"spec": {}, "args": [{"float": 0.5}, {"float": 0.25}]},
-    "zeros":            {"spec": {"blinkOn": 0.5, "blinkOff": 0.5}, "args": [{"float": 0.0}, {"float": 0.0}]},
-    "negative":         {"spec": {}, "args": [{"float": -1.5}, {"float": -0.25}]},
-    "mixed":            {"spec": {"blinkOn": 0.1, "blinkOff": 0.2}, "args": [{"float": 2.5}, {"float": 0.125}]}
+  "clearWhenSet": {
+   "spec": {
+    "flags": 7
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
   }
+ },
+ "isEditingEnabled": {
+  "off": {
+   "spec": {
+    "flags": 0
+   },
+   "args": []
+  },
+  "on": {
+   "spec": {
+    "flags": 1
+   },
+   "args": []
+  },
+  "otherBits": {
+   "spec": {
+    "flags": 6
+   },
+   "args": []
+  },
+  "all": {
+   "spec": {
+    "flags": 7
+   },
+   "args": []
+  },
+  "highBits": {
+   "spec": {
+    "flags": 4294967294
+   },
+   "args": []
+  },
+  "negOne": {
+   "spec": {
+    "flags": 4294967295
+   },
+   "args": []
+  }
+ },
+ "enableSingleLineEditing": {
+  "alreadyOn": {
+   "spec": {
+    "flags": 3,
+    "text": "a\nb"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "alreadyOff": {
+   "spec": {
+    "flags": 1,
+    "text": "a\nb"
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "enableNewlines": {
+   "spec": {
+    "flags": 1,
+    "text": "ab\ncd\nef",
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enableEmpty": {
+   "spec": {
+    "flags": 1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enableNoNewlines": {
+   "spec": {
+    "flags": 1,
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "disable": {
+   "spec": {
+    "flags": 3,
+    "textFlags": 0
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "disableWrapOn": {
+   "spec": {
+    "flags": 3,
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "argTwo": {
+   "spec": {
+    "flags": 1,
+    "text": "a\nb"
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  },
+  "enableOverMax": {
+   "spec": {
+    "flags": 1,
+    "text": "abcdef",
+    "maxSize": 3,
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enableUndoCleared": {
+   "spec": {
+    "flags": 1,
+    "text": "a\nb",
+    "undo": [
+     {
+      "pos": 0,
+      "old": "x",
+      "new": "y"
+     }
+    ],
+    "undoPos": 1,
+    "savedUndoPos": 1,
+    "parent": true
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  }
+ },
+ "isSingleLineEditingEnabled": {
+  "off": {
+   "spec": {
+    "flags": 0
+   },
+   "args": []
+  },
+  "editingOnly": {
+   "spec": {
+    "flags": 1
+   },
+   "args": []
+  },
+  "singleLine": {
+   "spec": {
+    "flags": 2
+   },
+   "args": []
+  },
+  "both": {
+   "spec": {
+    "flags": 3
+   },
+   "args": []
+  },
+  "all": {
+   "spec": {
+    "flags": 7
+   },
+   "args": []
+  },
+  "highBits": {
+   "spec": {
+    "flags": 4294967293
+   },
+   "args": []
+  }
+ },
+ "enableUppercaseOnly": {
+  "enableLower": {
+   "spec": {
+    "flags": 1,
+    "text": "abz"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enableMixed": {
+   "spec": {
+    "flags": 1,
+    "text": "aB9 z!"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "alreadyOn": {
+   "spec": {
+    "flags": 5,
+    "text": "ab"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "disable": {
+   "spec": {
+    "flags": 5,
+    "text": "ab"
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "enableEmpty": {
+   "spec": {
+    "flags": 1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "argTwo": {
+   "spec": {
+    "flags": 1,
+    "text": "ab"
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  },
+  "argThreeOn": {
+   "spec": {
+    "flags": 5,
+    "text": "ab"
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "enableNewlines": {
+   "spec": {
+    "flags": 3,
+    "text": "a\nb"
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enableUndoCleared": {
+   "spec": {
+    "flags": 1,
+    "text": "ab",
+    "undo": [
+     {
+      "pos": 0,
+      "old": "x",
+      "new": "y"
+     }
+    ],
+    "undoPos": 1,
+    "savedUndoPos": 0,
+    "parent": true
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  }
+ },
+ "clearTextChangedFlag": {
+  "equal": {
+   "spec": {
+    "undoPos": 2,
+    "savedUndoPos": 2
+   },
+   "args": []
+  },
+  "sentinel": {
+   "spec": {
+    "undoPos": 3,
+    "savedUndoPos": -1
+   },
+   "args": []
+  },
+  "zero": {
+   "spec": {
+    "undoPos": 0,
+    "savedUndoPos": 0
+   },
+   "args": []
+  },
+  "different": {
+   "spec": {
+    "undoPos": 5,
+    "savedUndoPos": 7
+   },
+   "args": []
+  },
+  "negSent": {
+   "spec": {
+    "undoPos": -1,
+    "savedUndoPos": -1
+   },
+   "args": []
+  }
+ },
+ "setTextChangedFlag": {
+  "set": {
+   "spec": {
+    "undoPos": 2,
+    "savedUndoPos": 0
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "clear": {
+   "spec": {
+    "undoPos": 4,
+    "savedUndoPos": -1
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "setAgain": {
+   "spec": {
+    "undoPos": 1,
+    "savedUndoPos": -1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "clearEqual": {
+   "spec": {
+    "undoPos": 3,
+    "savedUndoPos": 3
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "setArgTwo": {
+   "spec": {
+    "undoPos": 2,
+    "savedUndoPos": 2
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  }
+ },
+ "hasTextChanged": {
+  "equal": {
+   "spec": {
+    "undoPos": 2,
+    "savedUndoPos": 2
+   },
+   "args": []
+  },
+  "different": {
+   "spec": {
+    "undoPos": 3,
+    "savedUndoPos": 0
+   },
+   "args": []
+  },
+  "sentinel": {
+   "spec": {
+    "undoPos": 0,
+    "savedUndoPos": -1
+   },
+   "args": []
+  },
+  "bothZero": {
+   "spec": {
+    "undoPos": 0,
+    "savedUndoPos": 0
+   },
+   "args": []
+  },
+  "negBoth": {
+   "spec": {
+    "undoPos": -1,
+    "savedUndoPos": -1
+   },
+   "args": []
+  }
+ },
+ "setMaxSize": {
+  "unchanged": {
+   "spec": {
+    "maxSize": 10,
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 10
+    }
+   ]
+  },
+  "zero": {
+   "spec": {
+    "maxSize": 10,
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "negative": {
+   "spec": {
+    "maxSize": 10,
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": -5
+    }
+   ]
+  },
+  "larger": {
+   "spec": {
+    "text": "abcdef",
+    "maxSize": 100
+   },
+   "args": [
+    {
+     "int": 20
+    }
+   ]
+  },
+  "smallerTruncate": {
+   "spec": {
+    "text": "abcdef",
+    "maxSize": 100,
+    "undoPos": 0,
+    "savedUndoPos": 0
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "emptyText": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "int": 5
+    }
+   ]
+  },
+  "exactLen": {
+   "spec": {
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "truncateWithUndo": {
+   "spec": {
+    "text": "abcd",
+    "undo": [
+     {
+      "pos": 0,
+      "old": "w",
+      "new": "xy"
+     },
+     {
+      "pos": 1,
+      "old": "q",
+      "new": "r"
+     }
+    ],
+    "undoPos": 2,
+    "savedUndoPos": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  }
+ },
+ "setMaxUndos": {
+  "negative": {
+   "spec": {
+    "maxUndos": 64,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "a",
+      "new": "b"
+     },
+     {
+      "pos": 1,
+      "old": "c",
+      "new": "d"
+     }
+    ],
+    "undoPos": 2,
+    "savedUndoPos": 1
+   },
+   "args": [
+    {
+     "int": -3
+    }
+   ]
+  },
+  "unlimitedSame": {
+   "spec": {
+    "maxUndos": -1
+   },
+   "args": [
+    {
+     "int": -9
+    }
+   ]
+  },
+  "grow": {
+   "spec": {
+    "maxUndos": 5,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "a",
+      "new": "b"
+     },
+     {
+      "pos": 1,
+      "old": "c",
+      "new": "d"
+     }
+    ],
+    "undoPos": 2,
+    "savedUndoPos": 1
+   },
+   "args": [
+    {
+     "int": 10
+    }
+   ]
+  },
+  "shrink": {
+   "spec": {
+    "maxUndos": 64,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "a",
+      "new": "b"
+     },
+     {
+      "pos": 1,
+      "old": "c",
+      "new": "d"
+     },
+     {
+      "pos": 2,
+      "old": "e",
+      "new": "f"
+     }
+    ],
+    "undoPos": 3,
+    "savedUndoPos": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "equal": {
+   "spec": {
+    "maxUndos": 5,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "a",
+      "new": "b"
+     },
+     {
+      "pos": 1,
+      "old": "c",
+      "new": "d"
+     }
+    ],
+    "undoPos": 2,
+    "savedUndoPos": 0
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  },
+  "savedClamp": {
+   "spec": {
+    "maxUndos": 10,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "a",
+      "new": "b"
+     },
+     {
+      "pos": 1,
+      "old": "c",
+      "new": "d"
+     },
+     {
+      "pos": 2,
+      "old": "e",
+      "new": "f"
+     }
+    ],
+    "undoPos": 1,
+    "savedUndoPos": 0
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "zeroEmpty": {
+   "spec": {
+    "maxUndos": 5,
+    "undo": [],
+    "undoPos": 0,
+    "savedUndoPos": 0
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "setInsertionPointBlinkRate": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "float": 0.75
+    },
+    {
+     "float": 1.0
+    }
+   ]
+  },
+  "swapped": {
+   "spec": {},
+   "args": [
+    {
+     "float": 0.5
+    },
+    {
+     "float": 0.25
+    }
+   ]
+  },
+  "zeros": {
+   "spec": {
+    "blinkOn": 0.5,
+    "blinkOff": 0.5
+   },
+   "args": [
+    {
+     "float": 0.0
+    },
+    {
+     "float": 0.0
+    }
+   ]
+  },
+  "negative": {
+   "spec": {},
+   "args": [
+    {
+     "float": -1.5
+    },
+    {
+     "float": -0.25
+    }
+   ]
+  },
+  "mixed": {
+   "spec": {
+    "blinkOn": 0.1,
+    "blinkOff": 0.2
+   },
+   "args": [
+    {
+     "float": 2.5
+    },
+    {
+     "float": 0.125
+    }
+   ]
+  }
+ },
+ "getInsertionPoint": {
+  "zero": {
+   "spec": {
+    "ip": 0
+   }
+  },
+  "midText": {
+   "spec": {
+    "text": "hello world",
+    "ip": 4
+   }
+  },
+  "endOfText": {
+   "spec": {
+    "text": "abc",
+    "ip": 3
+   }
+  },
+  "negative": {
+   "spec": {
+    "text": "abc",
+    "ip": -2
+   }
+  },
+  "large": {
+   "spec": {
+    "text": "abc",
+    "ip": 2147483647
+   }
+  },
+  "unsetText": {
+   "spec": {
+    "ip": 9,
+    "anchor": 2,
+    "selStart": 1,
+    "selEnd": 4
+   }
+  }
+ },
+ "setInsertionPoint": {
+  "plain": {
+   "spec": {
+    "text": "hello world",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": 5
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "extend": {
+   "spec": {
+    "text": "hello world",
+    "ip": 3,
+    "anchor": 1,
+    "selStart": 1,
+    "selEnd": 3
+   },
+   "args": [
+    {
+     "int": 7
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "clampLow": {
+   "spec": {
+    "text": "abc",
+    "ip": 2,
+    "anchor": 2
+   },
+   "args": [
+    {
+     "int": -4
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "clampHigh": {
+   "spec": {
+    "text": "abc",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": 99
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "emptyText": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "int": 5
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordSnap": {
+   "spec": {
+    "text": "foo bar\tbaz",
+    "ip": 0,
+    "anchor": 0,
+    "stateFlags": 5
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordSnapExtend": {
+   "spec": {
+    "text": "foo bar\tbaz",
+    "ip": 0,
+    "anchor": 0,
+    "stateFlags": 5
+   },
+   "args": [
+    {
+     "int": 9
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "collapse": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": 0,
+    "selEnd": 2
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "setSelectedArea": {
+  "range": {
+   "spec": {
+    "text": "hello world",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 5
+    }
+   ]
+  },
+  "negative": {
+   "spec": {
+    "text": "abc",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": -3
+    },
+    {
+     "int": 4
+    }
+   ]
+  },
+  "overrun": {
+   "spec": {
+    "text": "abc",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 99
+    }
+   ]
+  },
+  "emptyText": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 3
+    }
+   ]
+  },
+  "zeroLen": {
+   "spec": {
+    "text": "abc",
+    "ip": 0,
+    "anchor": 0,
+    "stateFlags": 5
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "wordSelectOn": {
+   "spec": {
+    "text": "foo bar baz",
+    "ip": 0,
+    "anchor": 0,
+    "stateFlags": 5
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 6
+    }
+   ]
+  },
+  "reversedSel": {
+   "spec": {
+    "text": "hello world",
+    "ip": 8,
+    "anchor": 2,
+    "selStart": 2,
+    "selEnd": 8
+   },
+   "args": [
+    {
+     "int": 4
+    },
+    {
+     "int": 3
+    }
+   ]
+  }
+ },
+ "getSelectedArea": {
+  "none": {
+   "spec": {
+    "text": "abc",
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "out": null
+    },
+    {
+     "out": null
+    }
+   ]
+  },
+  "normal": {
+   "spec": {
+    "text": "hello world",
+    "selStart": 2,
+    "selEnd": 7
+   },
+   "args": [
+    {
+     "out": null
+    },
+    {
+     "out": null
+    }
+   ]
+  },
+  "negativeStart": {
+   "spec": {
+    "text": "abc",
+    "selStart": -3,
+    "selEnd": 2
+   },
+   "args": [
+    {
+     "out": null
+    },
+    {
+     "out": null
+    }
+   ]
+  },
+  "endBeforeStart": {
+   "spec": {
+    "text": "abc",
+    "selStart": 5,
+    "selEnd": 2
+   },
+   "args": [
+    {
+     "out": null
+    },
+    {
+     "out": null
+    }
+   ]
+  },
+  "zeroWidth": {
+   "spec": {
+    "text": "abc",
+    "selStart": 1,
+    "selEnd": 1
+   },
+   "args": [
+    {
+     "out": null
+    },
+    {
+     "out": null
+    }
+   ]
+  },
+  "dirtyCells": {
+   "spec": {
+    "text": "abc",
+    "selStart": 0,
+    "selEnd": 3
+   },
+   "args": [
+    {
+     "out": 77
+    },
+    {
+     "out": -55
+    }
+   ]
+  }
+ }
 }
