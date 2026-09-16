@@ -118,6 +118,8 @@ export const EDIT_WINDOW = Object.freeze({
   blinkOn: 0x23c,
   blinkOff: 0x240,
   stateFlags: 0x244,
+  prefWidth: 0x258,
+  prefHeight: 0x25c,
   stickyX: 0x270,
 });
 

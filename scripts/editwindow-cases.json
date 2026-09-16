@@ -2885,5 +2885,327 @@
     "clipboard": "wxyz"
    }
   }
+ },
+ "setInsertionPointTexture": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 286326784
+    },
+    {
+     "int": 16777215
+    }
+   ]
+  },
+  "highAlpha": {
+   "spec": {
+    "ipTexture": 572653568,
+    "ipColor": 7
+   },
+   "args": [
+    {
+     "int": 858980352
+    },
+    {
+     "int": -1582119980
+    }
+   ]
+  },
+  "nullTexture": {
+   "spec": {
+    "ipTexture": 1145307136
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": -4278255616
+    }
+   ]
+  },
+  "zeroColour": {
+   "spec": {
+    "ipColor": 8355711
+   },
+   "args": [
+    {
+     "int": 1431633920
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "negativeTexture": {
+   "spec": {},
+   "args": [
+    {
+     "int": -559038737
+    },
+    {
+     "int": -1
+    }
+   ]
+  }
+ },
+ "setInsertionPointType": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "float": 4.0
+    },
+    {
+     "float": 12.5
+    }
+   ]
+  },
+  "byteMask": {
+   "spec": {
+    "ipType": 1,
+    "prefWidth": 1.0,
+    "prefHeight": 2.0
+   },
+   "args": [
+    {
+     "int": 427
+    },
+    {
+     "float": 8.0
+    },
+    {
+     "float": 16.0
+    }
+   ]
+  },
+  "zeroType": {
+   "spec": {
+    "ipType": 7
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "float": 0.0
+    },
+    {
+     "float": -1.0
+    }
+   ]
+  },
+  "roundFloat": {
+   "spec": {},
+   "args": [
+    {
+     "int": 3
+    },
+    {
+     "float": 0.1
+    },
+    {
+     "float": 1e+20
+    }
+   ]
+  },
+  "negativeByte": {
+   "spec": {},
+   "args": [
+    {
+     "int": -1
+    },
+    {
+     "float": -4.5
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  }
+ },
+ "setSelectedAreaTexture": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 1717960704
+    },
+    {
+     "int": 12632256
+    }
+   ]
+  },
+  "highAlpha": {
+   "spec": {
+    "selTexture": 2004287488,
+    "selColor": 3
+   },
+   "args": [
+    {
+     "int": 2290614272
+    },
+    {
+     "int": -1
+    }
+   ]
+  },
+  "nullTexture": {
+   "spec": {
+    "selTexture": 2576941056
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "setSelectedAreaTextColor": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 65280
+    }
+   ]
+  },
+  "highAlpha": {
+   "spec": {
+    "selTextColor": 5
+   },
+   "args": [
+    {
+     "int": -1582119980
+    }
+   ]
+  },
+  "zero": {
+   "spec": {
+    "selTextColor": 4294967295
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "setEditCursor": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 2863267840
+    },
+    {
+     "int": 3149594624
+    },
+    {
+     "int": 16777215
+    }
+   ]
+  },
+  "zeros": {
+   "spec": {
+    "cursor": [
+     1,
+     2,
+     3
+    ]
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "highAlpha": {
+   "spec": {},
+   "args": [
+    {
+     "int": -2
+    },
+    {
+     "int": 3435921408
+    },
+    {
+     "int": -559038737
+    }
+   ]
+  }
+ },
+ "setEditSounds": {
+  "defaults": {
+   "spec": {},
+   "args": [
+    {
+     "int": 286326784
+    },
+    {
+     "int": 572653568
+    },
+    {
+     "int": 858980352
+    },
+    {
+     "int": 1145307136
+    }
+   ]
+  },
+  "zeros": {
+   "spec": {
+    "sounds": [
+     5,
+     6,
+     7,
+     8
+    ]
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "mixed": {
+   "spec": {},
+   "args": [
+    {
+     "int": -1
+    },
+    {
+     "int": 0
+    },
+    {
+     "int": 2147483647
+    },
+    {
+     "int": -2147483648
+    }
+   ]
+  }
  }
 }

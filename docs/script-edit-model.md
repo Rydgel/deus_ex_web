@@ -60,7 +60,7 @@ and the JS replay the table is constructed input.
 | `+0x1ec/+0x1f0` | ptr/dword | insertion point texture / packed colour [0 / ff ff ff] | `0x1001daf0` |
 | `+0x1f4/+0x1f8` | ptr/dword | selected-area texture / colour [0 / c4 c4 c4] | `0x1001dc10` |
 | `+0x1fc` | dword | selected-area text colour [0] | `0x1001dc30` |
-| `+0x200/+0x204/+0x208` | dword x3 | edit cursor (texture, colour, ?) [0] | `0x1001dc40` |
+| `+0x200/+0x204/+0x208` | dword x3 | edit cursor (cursor object, shadow object, packed colour) [0] | `0x1001dc40` |
 | `+0x20c..+0x218` | dword x4 | edit sounds [0] | `0x1001dc70` |
 | `+0x21c/+0x220/+0x224` | TArray | undo stack: data / num / max, 0x1c-byte records | `0x1001ddf0` |
 | `+0x228` | int | undo position (records below it are undoable) [0] | `0x1001e0a0` |
@@ -71,6 +71,7 @@ and the JS replay the table is constructed input.
 | `+0x23c/+0x240` | float | blink on / off durations [0.75 / 1.0] | `0x1001d960` |
 | `+0x244` | dword | state flags: bit0 caret visible [1], bit1 ?, bit2 word-select mode | `0x1001f04a`, `0x1001d54e` |
 | `+0x248..+0x26c` | floats | caret rectangle geometry (render) [`-1`,0,...] | `0x1001f680` |
+| `+0x258/+0x25c` | float | preferred caret width/height for the insertion-point type [0]; inside the caret-rect region updateCaret rewrites | `0x1001db80` |
 | `+0x270` | float | sticky caret x for vertical moves [-1] | `0x1001f891` |
 | `+0x274/+0x278/+0x27c/+0x280` | dword | [-1,-1,-1,-1] mouse tracking (unused here) | ctor |
 
@@ -284,6 +285,23 @@ buffer or the shared empty string when `num == 0`.  Whitespace = code
 * `0x1001e170 Redo`: if `undoPos <= num - 1`: `rec = data[undoPos]`;
   `selStart = ip = rec.pos`; `selEnd = rec.pos + lenA`; `undoPos++`;
   `replaceSelection(B or L"", 0, 1)`.
+* `0x1001daf0 SetInsertionPointTexture(texture, colour)`: `+0x1ec =
+  texture`, `+0x1f0 = colour`, `updateCaret(0)`.  The exec default colour
+  is three 0xff bytes; the fourth byte of the packed dword is left
+  undefined — the local reuses the incoming Stack argument slot — so the
+  colour reaches the method verbatim as marshalled.
+* `0x1001db80 SetInsertionPointType(type, w, h)`: the exec masks `type`
+  with 0xff (`and eax,0xff`); `+0x1dc = type` (byte), `+0x258 = w`,
+  `+0x25c = h` (raw f32 dwords), `updateCaret(0)`.
+* `0x1001dc10 SetSelectedAreaTexture(texture, colour)`: `+0x1f4`,
+  `+0x1f8`; no caret update.  Exec default colour three 0xc0 bytes,
+  fourth undefined.
+* `0x1001dc30 SetSelectedAreaTextColor(colour)`: `+0x1fc`; exec default
+  three 0 bytes, fourth undefined.
+* `0x1001dc40 SetEditCursor(cursor, shadow, colour)`: `+0x200`, `+0x204`,
+  `+0x208`; exec default colour three 0xff bytes, fourth undefined.
+* `0x1001dc70 SetEditSounds(t, d, e, m)`: `+0x20c`, `+0x210`, `+0x214`,
+  `+0x218` in parameter order.
 * `0x10050710 convertPipes(text)` (exec-level, before the InsertText
   virtual): static FString `0x100aead0` reset to `L""`; the text is copied in
   runs into `0x100add98`, translating `|n` to `\n`

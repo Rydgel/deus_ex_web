@@ -43,7 +43,7 @@ const W = {
   undoData: 0x21c, undoNum: 0x220, undoMax: 0x224,
   undoPos: 0x228, maxUndos: 0x22c, savedUndoPos: 0x230,
   blinkOn: 0x23c, blinkOff: 0x240,
-  stateFlags: 0x244, stickyX: 0x270,
+  stateFlags: 0x244, prefWidth: 0x258, prefHeight: 0x25c, stickyX: 0x270,
 };
 const LINE_SIZE = 0x24;
 const UNDO_SIZE = 0x1c;
@@ -141,6 +141,8 @@ export function buildWindow(heap, spec = {}) {
   heap.write(base + W.stateFlags, 'u32', spec.stateFlags ?? 1);
   heap.write(base + W.blinkOn, 'f32', spec.blinkOn ?? 0.75);
   heap.write(base + W.blinkOff, 'f32', spec.blinkOff ?? 1.0);
+  heap.write(base + W.prefWidth, 'f32', spec.prefWidth ?? 0);
+  heap.write(base + W.prefHeight, 'f32', spec.prefHeight ?? 0);
   heap.write(base + W.stickyX, 'f32', spec.stickyX ?? 0);
 
   // Process-global scratch (probe begin_case resets these per case).
@@ -269,6 +271,8 @@ export function dumpState(heap, base) {
     savedUndoPos: heap.read(base + W.savedUndoPos, 'i32'),
     blinkOn: heap.read(base + W.blinkOn, 'u32'),
     blinkOff: heap.read(base + W.blinkOff, 'u32'),
+    prefWidth: heap.read(base + W.prefWidth, 'u32'),
+    prefHeight: heap.read(base + W.prefHeight, 'u32'),
     stateFlags: heap.read(base + W.stateFlags, 'u32'),
     stickyX: heap.read(base + W.stickyX, 'u32'),
     height: heap.read(base + W.height, 'u32'),

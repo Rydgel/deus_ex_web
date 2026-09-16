@@ -144,7 +144,7 @@ O = {
     'undoData': 0x21c, 'undoNum': 0x220, 'undoMax': 0x224,
     'undoPos': 0x228, 'maxUndos': 0x22c, 'savedUndoPos': 0x230,
     'blinkOn': 0x23c, 'blinkOff': 0x240,
-    'stateFlags': 0x244, 'stickyX': 0x270,
+    'stateFlags': 0x244, 'prefW': 0x258, 'prefH': 0x25c, 'stickyX': 0x270,
 }
 LINE_SIZE = 0x24
 UNDO_SIZE = 0x1c
@@ -455,6 +455,8 @@ class EditWindowProbe(_NATIVE.NativeCollision):
         self.write(address + O['stateFlags'], 'I', spec.get('stateFlags', 1))
         self.write(address + O['blinkOn'], 'f', spec.get('blinkOn', 0.75))
         self.write(address + O['blinkOff'], 'f', spec.get('blinkOff', 1.0))
+        self.write(address + O['prefW'], 'f', spec.get('prefWidth', 0.0))
+        self.write(address + O['prefH'], 'f', spec.get('prefHeight', 0.0))
         self.write(address + O['stickyX'], 'f', spec.get('stickyX', 0.0))
 
         parent = spec.get('parent', 0)
@@ -513,6 +515,8 @@ class EditWindowProbe(_NATIVE.NativeCollision):
             'maxUndos': self.read(this + O['maxUndos'], 'i')[0],
             'savedUndoPos': self.read(this + O['savedUndoPos'], 'i')[0],
             'blinkOn': self.read(this + O['blinkOn'], 'I')[0],
+            'prefWidth': self.read(this + O['prefW'], 'I')[0],
+            'prefHeight': self.read(this + O['prefH'], 'I')[0],
             'blinkOff': self.read(this + O['blinkOff'], 'I')[0],
             'stateFlags': self.read(this + O['stateFlags'], 'I')[0],
             'stickyX': self.read(this + O['stickyX'], 'I')[0],
