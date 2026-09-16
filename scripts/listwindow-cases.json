@@ -389,6 +389,25 @@
         "cols": []
       },
       "args": []
+    },
+    "cachedSecond": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "selectedRow": 1
+      },
+      "args": []
     }
   },
   "getField": {
