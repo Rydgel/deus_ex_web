@@ -1,0 +1,1767 @@
+{
+ "fonts": [
+  "Engine.SmallFont",
+  "Engine.MedFont",
+  "Engine.LargeFont",
+  "DeusExUI.FontConversation"
+ ],
+ "fontDefs": {
+  "syntheticNoSpace": {
+   "charsPerPage": 32,
+   "pageCount": 1,
+   "pages": [
+    {
+     "header": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "fill": [
+      0,
+      0,
+      5,
+      7
+     ]
+    }
+   ]
+  },
+  "syntheticTallSpace": {
+   "charsPerPage": 64,
+   "pageCount": 1,
+   "pages": [
+    {
+     "header": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "fill": [
+      0,
+      0,
+      5,
+      7
+     ],
+     "set": {
+      "32": [
+       1,
+       1,
+       4,
+       21
+      ],
+      "33": [
+       1,
+       1,
+       10,
+       3
+      ]
+     }
+    }
+   ]
+  },
+  "syntheticTwoPage": {
+   "charsPerPage": 64,
+   "pageCount": 2,
+   "pages": [
+    {
+     "header": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "fill": [
+      0,
+      0,
+      5,
+      7
+     ],
+     "set": {
+      "32": [
+       1,
+       1,
+       4,
+       9
+      ]
+     }
+    },
+    {
+     "header": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "fill": [
+      0,
+      0,
+      9,
+      13
+     ],
+     "set": {
+      "1": [
+       1,
+       1,
+       30,
+       25
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "getTextExtent": {
+  "empty-small": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": ""
+    }
+   ]
+  },
+  "hello-small": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "hello-conversation": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontConversation"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "hello-large": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "vspacing-two": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 1073741824,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "vspacing-negative": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 3212836864,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hi"
+    }
+   ]
+  },
+  "wrap-exact-fit": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1103626240
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab c"
+    }
+   ]
+  },
+  "wrap-word-to-next": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1100480512
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab cd"
+    }
+   ]
+  },
+  "wrap-space-overflow": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab cd"
+    }
+   ]
+  },
+  "wrap-midword-cut": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1103626240
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "abcdefgh"
+    }
+   ]
+  },
+  "wrap-first-char-fits": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hi"
+    }
+   ]
+  },
+  "wrap-tight-single": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1086324736
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab c"
+    }
+   ]
+  },
+  "wrap-conversation": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontConversation"
+    },
+    "textVSpacing": 1073741824,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1094713344
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello wide world"
+    }
+   ]
+  },
+  "wrap-multi-space": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1094713344
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a  b  c"
+    }
+   ]
+  },
+  "wrap-leading-space": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": " abc"
+    }
+   ]
+  },
+  "newline-pair": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      97,
+      10,
+      98
+     ]
+    }
+   ]
+  },
+  "newline-trailing": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      97,
+      10
+     ]
+    }
+   ]
+  },
+  "newline-leading": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      10,
+      97
+     ]
+    }
+   ]
+  },
+  "newline-double": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      10,
+      10
+     ]
+    }
+   ]
+  },
+  "newline-wrap-mix": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 1073741824,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      97,
+      98,
+      32,
+      99,
+      10,
+      100,
+      101
+     ]
+    }
+   ]
+  },
+  "no-font": {
+   "spec": {
+    "nodes": [],
+    "normalFont": 0,
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab cd"
+    }
+   ]
+  },
+  "no-font-newline": {
+   "spec": {
+    "nodes": [],
+    "normalFont": 0,
+    "textVSpacing": 1073741824,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      97,
+      10,
+      98
+     ]
+    }
+   ]
+  },
+  "dest-zero": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "dest-negative": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 3231711232
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "dest-nan": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 2143289344
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "Hello"
+    }
+   ]
+  },
+  "bold-run": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "boldFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textFlags": 3,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|bB|!bc"
+    }
+   ]
+  },
+  "bold-off-flag": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "boldFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textFlags": 1,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|bB"
+    }
+   ]
+  },
+  "color-run": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "|c7f0080ab"
+    }
+   ]
+  },
+  "color-short": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "|c1zab"
+    }
+   ]
+  },
+  "palette-run": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "|p3ab"
+    }
+   ]
+  },
+  "palette-eight": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "|p8ab"
+    }
+   ]
+  },
+  "pipe-literal": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a||b"
+    }
+   ]
+  },
+  "pipe-unknown": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|xb"
+    }
+   ]
+  },
+  "pipe-trailing": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab|"
+    }
+   ]
+  },
+  "bang-trailing": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab|!"
+    }
+   ]
+  },
+  "bang-unknown": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|!xb"
+    }
+   ]
+  },
+  "amp-escape": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|&b"
+    }
+   ]
+  },
+  "color-restore": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|!cb"
+    }
+   ]
+  },
+  "palette-restore": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|!pb"
+    }
+   ]
+  },
+  "multipage-large": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      65,
+      233,
+      66
+     ]
+    }
+   ]
+  },
+  "missing-glyph": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      97,
+      19968,
+      98
+     ]
+    }
+   ]
+  },
+  "synthetic-two-page": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$fontDef": "syntheticTwoPage"
+    },
+    "textFlags": 3,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$units": [
+      65,
+      97
+     ]
+    }
+   ]
+  },
+  "wordwrap-flag-off": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 2,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "ab cd"
+    }
+   ]
+  },
+  "special-off-pipes": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textFlags": 1,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1224635392
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "a|bc"
+    }
+   ]
+  },
+  "method-exec-equiv": {
+   "mode": "method",
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 1073741824,
+    "textFlags": 3,
+    "boldFont": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1093664768
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$unitsPtr": [
+      97,
+      98,
+      32,
+      99
+     ]
+    }
+   ]
+  }
+ },
+ "getFontHeight": {
+  "small-nospace": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "small-withspace": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 1073741824,
+    "boldFont": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1
+    }
+   ]
+  },
+  "large-nospace": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "normal-small-bold-large": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "boldFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "normal-large-bold-small": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "boldFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "bold-only": {
+   "spec": {
+    "nodes": [],
+    "boldFont": {
+     "$font": "Engine.MedFont"
+    },
+    "normalFont": 0,
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "no-fonts-flat": {
+   "spec": {
+    "nodes": [],
+    "normalFont": 0,
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "no-fonts-spacing": {
+   "spec": {
+    "nodes": [],
+    "textVSpacing": 1073741824,
+    "normalFont": 0,
+    "boldFont": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1
+    }
+   ]
+  },
+  "synthetic-miss-space": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$fontDef": "syntheticNoSpace"
+    },
+    "boldFont": 0,
+    "textVSpacing": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 0
+    }
+   ]
+  },
+  "synthetic-tall-space": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$fontDef": "syntheticTallSpace"
+    },
+    "boldFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 1082130432,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1
+    }
+   ]
+  },
+  "negative-spacing": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "textVSpacing": 3212836864,
+    "boldFont": 0,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1
+    }
+   ]
+  },
+  "method-mode": {
+   "mode": "method",
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "Engine.SmallFont"
+    },
+    "boldFont": {
+     "$font": "Engine.LargeFont"
+    },
+    "textVSpacing": 1073741824,
+    "textFlags": 0,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1
+    }
+   ]
+  }
+ }
+}
