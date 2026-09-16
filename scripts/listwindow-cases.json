@@ -1,0 +1,1270 @@
+{
+  "getNumRows": {
+    "empty": {
+      "spec": {
+        "rows": [],
+        "cols": []
+      },
+      "args": []
+    },
+    "one": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": []
+    },
+    "five": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 0,
+            "client": 0,
+            "fields": [
+              {
+                "text": "a0"
+              },
+              {
+                "text": "b0"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "flags": 1,
+            "client": 7,
+            "fields": [
+              {
+                "text": "a1"
+              },
+              {
+                "text": "b1"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "flags": 0,
+            "client": 14,
+            "fields": [
+              {
+                "text": "a2"
+              },
+              {
+                "text": "b2"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "flags": 1,
+            "client": 21,
+            "fields": [
+              {
+                "text": "a3"
+              },
+              {
+                "text": "b3"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "flags": 0,
+            "client": 28,
+            "fields": [
+              {
+                "text": "a4"
+              },
+              {
+                "text": "b4"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {},
+          {}
+        ],
+        "numSelected": 2,
+        "delimiter": "|"
+      },
+      "args": []
+    },
+    "slack": {
+      "spec": {
+        "rows": [
+          {
+            "id": 3,
+            "fields": []
+          }
+        ],
+        "rowMax": 9,
+        "cols": []
+      },
+      "args": []
+    }
+  },
+  "getNumSelectedRows": {
+    "none": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "numSelected": 0
+      },
+      "args": []
+    },
+    "two": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          },
+          {
+            "id": 2
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "numSelected": 2
+      },
+      "args": []
+    },
+    "stale": {
+      "spec": {
+        "rows": [],
+        "cols": [],
+        "numSelected": 7
+      },
+      "args": []
+    }
+  },
+  "indexToRowId": {
+    "first": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 0
+          },
+          {
+            "id": 1,
+            "flags": 1
+          },
+          {
+            "id": 2
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    },
+    "last": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1
+          },
+          {
+            "id": 2
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "int": 2
+        }
+      ]
+    },
+    "negative": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "int": -1
+        }
+      ]
+    },
+    "pastEnd": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "empty": {
+      "spec": {
+        "rows": [],
+        "cols": []
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "getSelectedRow": {
+    "cachedSelected": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "selectedRow": 1
+      },
+      "args": []
+    },
+    "cachedStale": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1,
+            "flags": 1
+          },
+          {
+            "id": 2,
+            "flags": 1
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "selectedRow": 0
+      },
+      "args": []
+    },
+    "scanFirst": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": []
+    },
+    "scanMiddle": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1
+          },
+          {
+            "id": 2,
+            "flags": 1
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": []
+    },
+    "none": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0
+          },
+          {
+            "id": 1
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": []
+    },
+    "empty": {
+      "spec": {
+        "rows": [],
+        "cols": []
+      },
+      "args": []
+    }
+  },
+  "getField": {
+    "text": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "hello"
+              },
+              {
+                "text": "w"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {},
+          {}
+        ]
+      },
+      "args": [
+        {
+          "row": 0
+        },
+        {
+          "int": 1
+        }
+      ]
+    },
+    "emptyField": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "hello"
+              },
+              {
+                "text": ""
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {},
+          {}
+        ]
+      },
+      "args": [
+        {
+          "row": 0
+        },
+        {
+          "int": 1
+        }
+      ]
+    },
+    "nullRow": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "badCol": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "row": 0
+        },
+        {
+          "int": 3
+        }
+      ]
+    },
+    "negCol": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "x"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ]
+      },
+      "args": [
+        {
+          "row": 0
+        },
+        {
+          "int": -1
+        }
+      ]
+    }
+  },
+  "addRow": {
+    "append": {
+      "spec": {
+        "rows": [],
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "delimiter": "|"
+      },
+      "args": [
+        {
+          "string": "alpha|beta"
+        },
+        {
+          "int": 42
+        }
+      ]
+    },
+    "sortedInsert": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "1"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "c"
+              },
+              {
+                "text": "3"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "delimiter": "|",
+        "flags": 1
+      },
+      "args": [
+        {
+          "string": "b|2"
+        },
+        {
+          "int": 7
+        }
+      ]
+    },
+    "growth": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "z"
+              },
+              {
+                "text": "9"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "delimiter": "|"
+      },
+      "args": [
+        {
+          "string": "y|8"
+        },
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "deleteAllRows": {
+    "empty": {
+      "spec": {
+        "rows": [],
+        "cols": []
+      },
+      "args": []
+    },
+    "plain": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "b"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "c"
+              },
+              {
+                "text": "d"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {},
+          {}
+        ]
+      },
+      "args": []
+    },
+    "selected": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "b"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {}
+        ],
+        "numSelected": 1,
+        "selectedRow": 0
+      },
+      "args": []
+    }
+  },
+  "setNumColumns": {
+    "grow": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "b"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 4
+        }
+      ]
+    },
+    "shrink": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "b"
+              },
+              {
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "same": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "zero": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "setColumnWidth": {
+    "change": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 1.0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "float": 2.5
+        }
+      ]
+    },
+    "same": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 2.5
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "float": 2.5
+        }
+      ]
+    },
+    "badCol": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 5
+        },
+        {
+          "float": 2.5
+        }
+      ]
+    },
+    "autoExpand": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 1.0
+          }
+        ],
+        "rows": [],
+        "flags": 2
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "float": 3.0
+        }
+      ]
+    }
+  },
+  "setColumnType": {
+    "numeric": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "12.5"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        },
+        {
+          "string": ""
+        }
+      ]
+    },
+    "time": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "90"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 2
+        },
+        {
+          "string": "%02h:%02m"
+        }
+      ]
+    },
+    "custom": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "1.5"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        },
+        {
+          "string": "%.2f"
+        }
+      ]
+    }
+  },
+  "enableAutoExpandColumns": {
+    "on": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 1.0
+          }
+        ],
+        "rows": [],
+        "flags": 0
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "off": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 1.0
+          }
+        ],
+        "rows": [],
+        "flags": 2
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "enableMultiSelect": {
+    "on": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1
+          }
+        ],
+        "flags": 0,
+        "numSelected": 1,
+        "selectedRow": 0
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "offTwoSelected": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "flags": 4,
+        "numSelected": 2,
+        "selectedRow": 0
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "setSortColumn": {
+    "set": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 0
+      },
+      "args": [
+        {
+          "int": 1
+        },
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        }
+      ]
+    },
+    "badCol": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 0
+      },
+      "args": [
+        {
+          "int": 9
+        },
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        }
+      ]
+    }
+  },
+  "sort": {
+    "textAsc": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "charlie"
+              },
+              {
+                "text": "3"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "alpha"
+              },
+              {
+                "text": "1"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "bravo"
+              },
+              {
+                "text": "2"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "numericDesc": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a",
+                "value": 1.5
+              },
+              {
+                "text": "x"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "b",
+                "value": 9.25
+              },
+              {
+                "text": "y"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "c",
+                "value": -3.0
+              },
+              {
+                "text": "z"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 1,
+            "sort_priority": 1,
+            "sort_flags": 1
+          },
+          {
+            "type": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    },
+    "duplicates": {
+      "spec": {
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "k"
+              },
+              {
+                "text": "p"
+              }
+            ]
+          },
+          {
+            "id": 1,
+            "fields": [
+              {
+                "text": "k"
+              },
+              {
+                "text": "q"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "fields": [
+              {
+                "text": "k"
+              },
+              {
+                "text": "r"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "fields": [
+              {
+                "text": "k"
+              },
+              {
+                "text": "s"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "sort_priority": 1,
+            "sort_flags": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "flags": 1
+      },
+      "args": []
+    }
+  }
+}
