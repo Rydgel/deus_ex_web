@@ -72,6 +72,9 @@ function canonResult(kind, heap, base, value) {
   // Void exports leave unobservable register leftovers in the native EAX;
   // only the heap state and event stream are comparable.
   if (kind === 'void') return null;
+  // Two out-int natives: the JS entry returns {start, length}; the oracle
+  // records [out0, out1].  Compare in oracle order.
+  if (kind === 'outPair') return [value.start | 0, value.length | 0];
   return value;
 }
 
