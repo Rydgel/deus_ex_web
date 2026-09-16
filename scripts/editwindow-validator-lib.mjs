@@ -49,7 +49,10 @@ export function marshalArgs(heap, base, args = []) {
   return args.map(arg => {
     if ('int' in arg) return arg.int | 0;
     if ('float' in arg) return arg.float;
-    if ('string' in arg) return arg.string;
+    if ('string' in arg) {
+      // Mirror the probe's write_wstring: a heap wchar buffer.
+      return arg.string === null ? 0 : heap.allocString(arg.string);
+    }
     if ('bytes' in arg) {
       const data = Uint8Array.from(arg.bytes);
       const ptr = heap.allocRaw(Math.max(data.length, 4));

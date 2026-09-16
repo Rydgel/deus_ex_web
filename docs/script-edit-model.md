@@ -85,7 +85,7 @@ was replaced (old), `+0x10/+0x14/+0x18` FString B = text that was inserted
 | `0x1009ae00` | clipboard FString (data/num/max), constructed by `0x1001cda0` | `0x1001e648` Copy, `0x1001e6cb` Paste |
 | `0x10099ea8` | shared empty wide string `L""` | everywhere an empty FString is read |
 | `0x100aead0` | static FString scratch of the `|n` converter `0x10050710`, flag byte `0x100aeac8` | `0x1005072b` |
-| `0x100add98` | 0x800-wchar conversion buffer of `0x10050710` | `0x100507eb` |
+| `0x100add98` | conversion run buffer of `0x10050710` (flushed when the run reaches 0x800 bytes = 0x400 wchars) | `0x100507eb` |
 | `0x1009b380` | FName index of `FilterChar` | `0x10021890` |
 
 ## Exec trampolines -> method bodies
@@ -207,7 +207,9 @@ buffer or the shared empty string when `num == 0`.  Whitespace = code
   (or `n+1` when `dst.num == 0`), growth `max = num + (3num+adj)/8 + 0x20`,
   `Realloc(2)`; shrink: if `n < dstLen`: `n > 0 ? Remove(n, dstLen-n, 2)
   : (num=max=0, Realloc(2))`; finally if `n > 0` `appStrncpy(dst.data, src,
-  n+1)`.
+  n+1)`.  `appStrncpy` is Core `0x101233c0`: `wcsncpy(dst, src, n)` then
+  `dst[n-1] = 0` — the forced terminator overwrites the last copied slot,
+  so callers always pass `len + 1`.
 * `0x10020450 pushUndo(pos, oldText, oldLen, newText, newLen)`: negative
   lengths use `appStrlen`; return if both `< 1`.  Coalescing: if exactly one
   of them is `>= 1`, `undoPos > 0`, `undoPos != saved`, the previous record's A
@@ -284,8 +286,10 @@ buffer or the shared empty string when `num == 0`.  Whitespace = code
   `replaceSelection(B or L"", 0, 1)`.
 * `0x10050710 convertPipes(text)` (exec-level, before the InsertText
   virtual): static FString `0x100aead0` reset to `L""`; the text is copied in
-  runs of up to 0x800 wchars into `0x100add98`, translating `|n` to `\n`
-  (a `|` not followed by `n` is kept); each run is appended (`FArray::Add` /
+  runs into `0x100add98`, translating `|n` to `\n`
+  (a `|` not followed by `n` is kept); the run flushes when the
+  wchar-aligned byte distance reaches 0x800 bytes — 0x400 wchars
+  (`0x10050831`-`0x10050842`) — and each run is appended (`FArray::Add` /
   growth + `appStrcpy`).  Returns the static buffer (or `L""` when empty).
   The static buffer keeps its capacity across calls; the probe and the JS
   heap model reset it per case ("fresh process").

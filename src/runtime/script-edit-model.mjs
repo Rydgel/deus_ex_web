@@ -249,6 +249,8 @@ function wcharCopy(L, dst, src) {
   }
 }
 
+// Core appStrncpy (0x101233c0): wcsncpy(dst, src, n) then dst[n-1] = 0 —
+// the forced terminator overwrites the nth copied slot, so callers pass n+1.
 function wcharCopyN(L, dst, src, n) {
   let i = 0;
   for (; i < n; i += 1) {
@@ -260,6 +262,7 @@ function wcharCopyN(L, dst, src, n) {
     }
   }
   for (; i < n; i += 1) L.write(dst + i * 2, 'u16', 0);
+  L.write(dst + (n - 1) * 2, 'u16', 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -918,6 +921,100 @@ export function replaceSelection(L, textPtr, bRecordUndo, bExtend) {
   setInsertionPointEntry(L, ip + insLen, bExtend);
 }
 
+// 0x10050710 — convertPipes(text): '|n' -> LF translation accumulated in
+// the process-static FString (mem.convertBuffer, native 0x100aead0) with
+// the init-once flag byte (mem.convertFlag, native 0x100aeac8).  A run
+// scratch (mem.convertRun, native 0x100add98) collects translated chars
+// and flushes every 0x800 BYTES (1024 wchars — the binary compares the
+// byte distance at 0x10050831-0x10050842; the doc once said "0x800
+// wchars", which was a units slip).  `|` followed by 'n' emits LF and
+// consumes both; `|` followed by anything else emits the '|' and the
+// following char verbatim; a trailing '|' is kept.  The atexit
+// registration of the static's destructor has no heap effect and is not
+// modelled.
+export function convertPipes(L, textPtr) {
+  const statik = L.mem.convertBuffer;
+  const flagCell = L.mem.convertFlag;
+  const run = L.mem.convertRun;
+  if (![statik, flagCell, run].every(Number.isInteger)) {
+    throw new EditWindowModelBoundaryError(
+      'memory service lacks convertPipes scratch cells');
+  }
+  const empty = emptyWString(L);
+  if ((L.read(flagCell, 'u8') & 1) === 0) {
+    L.write(flagCell, 'u8', L.read(flagCell, 'u8') | 1);
+    L.write(statik, 'u32', 0);
+    L.write(statik + 4, 'i32', 0);
+    L.write(statik + 8, 'i32', 0);
+  }
+  // 0x1005076b-0x100507e0: if the static still holds a buffer (not L""),
+  // reset it to a copy of the shared empty string.
+  if (L.read(statik, 'u32') !== empty) {
+    let n = 0;
+    if (L.read(empty, 'u16') !== 0) n = wcharLen(L, empty) + 1;
+    L.write(statik + 4, 'i32', n);
+    L.write(statik + 8, 'i32', n);
+    farrayRealloc(L, statik, 2);
+    const num = L.read(statik + 4, 'i32');
+    if (num !== 0) moveBytes(L, L.read(statik, 'u32'), empty, num * 2);
+  }
+  // Append the NUL-terminated run buffer to the static (0x10050844 /
+  // 0x100508f4): path A (static nonempty) uses FArray::Add + appStrcpy at
+  // data + (num-1)*2; path B (static empty) skips an empty run, sets
+  // num = runLen + 1, grows max via growArrayMax, appStrcpy at data.
+  const flush = writeAt => {
+    L.write(writeAt, 'u16', 0);
+    const num = L.read(statik + 4, 'i32');
+    if (num !== 0) {
+      const runLen = wcharLen(L, run);
+      farrayInsert(L, statik, num, runLen, 2);
+      wcharCopy(L, L.read(statik, 'u32') + (num - 1) * 2, run);
+      return;
+    }
+    if (L.read(run, 'u16') === 0) return;
+    const newNum = wcharLen(L, run) + 1;
+    L.write(statik + 4, 'i32', newNum);
+    if (newNum > L.read(statik + 8, 'i32')) {
+      L.write(statik + 8, 'i32', growArrayMax(newNum));
+      farrayRealloc(L, statik, 2);
+    }
+    wcharCopy(L, L.read(statik, 'u32'), run);
+  };
+  let p = textPtr;
+  let w = run;
+  for (;;) {
+    let ch = L.read(p, 'u16');
+    if (ch === 0) {
+      // 0x100508f4: final flush, then return static data or L"".
+      flush(w);
+      return L.read(statik + 4, 'i32') !== 0 ? L.read(statik, 'u32') : empty;
+    }
+    if (ch === 0x7c) { // '|'
+      p += 2;
+      if (L.read(p, 'u16') === 0x6e) { // 'n'
+        L.write(w, 'u16', 0xa);
+        w += 2;
+      } else {
+        L.write(w, 'u16', 0x7c);
+        ch = L.read(p, 'u16');
+        w += 2;
+        if (ch !== 0) {
+          L.write(w, 'u16', ch);
+          w += 2;
+        }
+      }
+    } else {
+      L.write(w, 'u16', ch);
+      w += 2;
+    }
+    if (L.read(p, 'u16') !== 0) p += 2;
+    if (((w - run) & ~1) >= 0x800) {
+      flush(w); // 0x10050844: mid-run flush on the 0x800-byte boundary
+      w = run;
+    }
+  }
+}
+
 // 0x1001e3c0 — InsertText virtual body (text, bKeepUndo, bExtend).
 // The temp FString lives in the heap scratch cell that mirrors the native
 // stack temp.
@@ -947,6 +1044,114 @@ export function insertTextVirtual(L, textPtr, bKeepUndo, bExtend) {
   replaceSelection(L, filtered, bKeepUndo, bExtend);
   tempFStringTeardown(L, temp);
   return 1;
+}
+
+// 0x100201d0 — deleteChar core (bBackspace, bKeepUndo).  When no selection
+// is active (selEnd <= selStart) it selects the one char backward
+// (bBackspace, guarded by ip <= 0) or forward (guarded by ip >= textLen);
+// the guard only skips the selection write — replaceSelection still runs.
+export function deleteCharCore(L, bBackspace, bKeepUndo) {
+  const selEnd = L.read(L.base + EDIT_WINDOW.selEnd, 'i32');
+  const selStart = L.read(L.base + EDIT_WINDOW.selStart, 'i32');
+  if (selEnd <= selStart) {
+    let p = L.read(L.base + EDIT_WINDOW.insertionPoint, 'i32');
+    if (bBackspace !== 0) {
+      if (p <= 0) {
+        replaceSelection(L, 0, bKeepUndo, 0);
+        return;
+      }
+      p -= 1;
+    } else if (p >= textLen(L)) {
+      replaceSelection(L, 0, bKeepUndo, 0);
+      return;
+    }
+    L.write(L.base + EDIT_WINDOW.selStart, 'i32', p);
+    L.write(L.base + EDIT_WINDOW.selEnd, 'i32', p + 1);
+  }
+  replaceSelection(L, 0, bKeepUndo, 0);
+}
+
+// 0x1001e560 — DeleteChar virtual (vtable +0x128): when bKeepUndo is 0 it
+// clears the undo history and marks the text changed BEFORE the deletion
+// attempt, so a backspace at position 0 still wipes undo history.
+export function deleteCharVirtual(L, bBackspace, bKeepUndo) {
+  if (bKeepUndo === 0) {
+    clearUndo(L);
+    setTextChangedFlag(L, 1);
+  }
+  deleteCharCore(L, bBackspace, bKeepUndo);
+}
+
+// 0x1001e0a0 — Undo: nothing when undoPos <= 0; otherwise decrement
+// undoPos, restore selection = [rec.pos, rec.pos + rec.newLen), ip =
+// rec.pos, then replace with the record's old text (no undo recording,
+// bExtend = 1).
+export function undoEdit(L) {
+  const pos = L.read(L.base + EDIT_WINDOW.undoPos, 'i32');
+  if (pos <= 0) return;
+  const np = pos - 1;
+  L.write(L.base + EDIT_WINDOW.undoPos, 'i32', np);
+  const rec = L.read(L.base + EDIT_WINDOW.undoData, 'u32') + np * EDIT_UNDO.size;
+  const start = L.read(rec + EDIT_UNDO.pos, 'i32');
+  L.write(L.base + EDIT_WINDOW.selStart, 'i32', start);
+  const newNum = L.read(rec + EDIT_UNDO.newText + 4, 'i32');
+  const newLen = newNum !== 0 ? newNum - 1 : 0;
+  L.write(L.base + EDIT_WINDOW.selEnd, 'i32', start + newLen);
+  L.write(L.base + EDIT_WINDOW.insertionPoint, 'i32', start);
+  const oldNum = L.read(rec + EDIT_UNDO.oldText + 4, 'i32');
+  const src = oldNum !== 0 ? L.read(rec + EDIT_UNDO.oldText, 'u32') : emptyWString(L);
+  replaceSelection(L, src, 0, 1);
+}
+
+// 0x1001e170 — Redo: nothing when undoPos > undoNum - 1; otherwise select
+// [rec.pos, rec.pos + rec.oldLen), ip = rec.pos, advance undoPos, and
+// replace with the record's new text (no undo recording, bExtend = 1).
+export function redoEdit(L) {
+  const count = L.read(L.base + EDIT_WINDOW.undoNum, 'i32') - 1;
+  const pos = L.read(L.base + EDIT_WINDOW.undoPos, 'i32');
+  if (pos > count) return;
+  const rec = L.read(L.base + EDIT_WINDOW.undoData, 'u32') + pos * EDIT_UNDO.size;
+  const start = L.read(rec + EDIT_UNDO.pos, 'i32');
+  L.write(L.base + EDIT_WINDOW.selStart, 'i32', start);
+  const oldNum = L.read(rec + EDIT_UNDO.oldText + 4, 'i32');
+  const oldLen = oldNum !== 0 ? oldNum - 1 : 0;
+  L.write(L.base + EDIT_WINDOW.insertionPoint, 'i32', start);
+  L.write(L.base + EDIT_WINDOW.undoPos, 'i32', pos + 1);
+  L.write(L.base + EDIT_WINDOW.selEnd, 'i32', start + oldLen);
+  const newNum = L.read(rec + EDIT_UNDO.newText + 4, 'i32');
+  const src = newNum !== 0 ? L.read(rec + EDIT_UNDO.newText, 'u32') : emptyWString(L);
+  replaceSelection(L, src, 0, 1);
+}
+
+// 0x1001e5f0 — copy/cut core (bCut, bKeepUndo): no-op without a selection;
+// assigns text[selStart, selEnd) to the process-global clipboard FString;
+// when bCut, runs the DeleteChar virtual (vtable +0x128) with (0,
+// bKeepUndo).
+export function copyOrCut(L, bCut, bKeepUndo) {
+  const selEnd = L.read(L.base + EDIT_WINDOW.selEnd, 'i32');
+  const selStart = L.read(L.base + EDIT_WINDOW.selStart, 'i32');
+  if (selEnd <= selStart) return;
+  const clip = L.mem.clipboard;
+  if (!Number.isInteger(clip)) {
+    throw new EditWindowModelBoundaryError('memory service lacks clipboard');
+  }
+  const num = L.read(L.base + EDIT_WINDOW.textNum, 'i32');
+  const data = num !== 0 ? L.read(L.base + EDIT_WINDOW.text, 'u32') : emptyWString(L);
+  assignString(L, clip, data + selStart * 2, selEnd - selStart);
+  if (bCut !== 0) deleteCharVirtual(L, 0, bKeepUndo);
+}
+
+// 0x1001e6b0 — paste core (bKeepUndo, bExtend): calls the InsertText
+// virtual (vtable +0x124) with the clipboard text (clipboard.data when
+// num != 0, else the shared L"").
+export function pasteEdit(L, bKeepUndo, bExtend) {
+  const clip = L.mem.clipboard;
+  if (!Number.isInteger(clip)) {
+    throw new EditWindowModelBoundaryError('memory service lacks clipboard');
+  }
+  const num = L.read(clip + 4, 'i32');
+  const src = num !== 0 ? L.read(clip, 'u32') : emptyWString(L);
+  return insertTextVirtual(L, src, bKeepUndo, bExtend);
 }
 
 // 0x1001e260 — SetText virtual body.

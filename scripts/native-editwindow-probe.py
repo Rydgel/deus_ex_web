@@ -91,6 +91,7 @@ BODIES = {
     'Cut': 0x1201dfa0,
     'Paste': 0x1201e020,
     'DeleteChar': 0x1201e560,
+    'InsertText': 0x1201e3c0,             # vtable +0x124 virtual body
     'SetInsertionPointTexture': 0x1201daf0,
     'SetInsertionPointType': 0x1201db80,
     'SetSelectedAreaTexture': 0x1201dc10,

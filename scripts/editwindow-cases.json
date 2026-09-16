@@ -1936,5 +1936,954 @@
     }
    ]
   }
+ },
+ "insertText": {
+  "plain": {
+   "spec": {
+    "text": "hello",
+    "ip": 5,
+    "anchor": 5
+   },
+   "args": [
+    {
+     "string": " world"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "midInsert": {
+   "spec": {
+    "text": "helo",
+    "ip": 2,
+    "anchor": 2
+   },
+   "args": [
+    {
+     "string": "l"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "replaceSel": {
+   "spec": {
+    "text": "hello world",
+    "ip": 6,
+    "anchor": 0,
+    "selStart": 0,
+    "selEnd": 5
+   },
+   "args": [
+    {
+     "string": "goodbye"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pipeNl": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "string": "a|nb"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pipeNonN": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "string": "a|xb|c|"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pipeEscape": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "string": "x||ny"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "singleLine": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0,
+    "flags": 3
+   },
+   "args": [
+    {
+     "string": "a\nb|nc"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "uppercase": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0,
+    "flags": 5
+   },
+   "args": [
+    {
+     "string": "abz|n"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "noUndo": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "coalesce": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 0
+   },
+   "args": [
+    {
+     "string": "cd"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "empty": {
+   "spec": {
+    "text": "ab",
+    "ip": 1,
+    "anchor": 1
+   },
+   "args": [
+    {
+     "string": ""
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "extendSel": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1
+   },
+   "args": [
+    {
+     "string": "xy"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "maxSizeOver": {
+   "spec": {
+    "text": "abcdef",
+    "ip": 6,
+    "anchor": 6,
+    "maxSize": 4
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "maxSizePartial": {
+   "spec": {
+    "text": "abcd",
+    "ip": 4,
+    "anchor": 4,
+    "maxSize": 5
+   },
+   "args": [
+    {
+     "string": "xyz"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "longRun": {
+   "spec": {
+    "text": "",
+    "ip": 0,
+    "anchor": 0
+   },
+   "args": [
+    {
+     "string": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "dropRedo": {
+   "spec": {
+    "text": "ab",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "trim": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "maxUndos": 1,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 2
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "sinkStops": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "parent": true,
+    "textChangedSink": 1
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "pendingLen": {
+   "spec": {
+    "text": "ab",
+    "ip": 1,
+    "anchor": 1,
+    "pendingLen": 3,
+    "relayoutFlags": 0
+   },
+   "args": [
+    {
+     "string": "z"
+    },
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "deleteChar": {
+  "backMid": {
+   "spec": {
+    "text": "abc",
+    "ip": 2,
+    "anchor": 2,
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "backAtZero": {
+   "spec": {
+    "text": "abc",
+    "ip": 0,
+    "anchor": 0,
+    "selStart": -1,
+    "selEnd": -1,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 2
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "delEnd": {
+   "spec": {
+    "text": "abc",
+    "ip": 3,
+    "anchor": 3,
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "delMid": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "withSel": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": 0,
+    "selEnd": 2
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "emptyText": {
+   "spec": {
+    "text": null,
+    "ip": 0,
+    "anchor": 0,
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "delUndoRec": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": -1,
+    "selEnd": -1
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 1
+    }
+   ]
+  }
+ },
+ "undo": {
+  "empty": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [],
+    "undoPos": 0
+   }
+  },
+  "posZero": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 0
+   }
+  },
+  "insertRec": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   }
+  },
+  "deleteRec": {
+   "spec": {
+    "text": "ac",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "b",
+      "new": ""
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   }
+  },
+  "multi": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 0
+   }
+  },
+  "savedHit": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 2
+   }
+  }
+ },
+ "redo": {
+  "empty": {
+   "spec": {
+    "text": "a",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [],
+    "undoPos": 0
+   }
+  },
+  "atEnd": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 2
+   }
+  },
+  "midStack": {
+   "spec": {
+    "text": "a",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 2
+   }
+  },
+  "insertRec": {
+   "spec": {
+    "text": "a",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 0,
+    "saved": -1
+   }
+  },
+  "deleteRec": {
+   "spec": {
+    "text": "abc",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 1,
+      "old": "b",
+      "new": ""
+     }
+    ],
+    "undoPos": 0,
+    "saved": -1
+   }
+  }
+ },
+ "clearUndo": {
+  "empty": {
+   "spec": {
+    "text": "ab",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [],
+    "undoPos": 0,
+    "saved": -1
+   }
+  },
+  "savedEqPos": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 2
+   }
+  },
+  "savedNeqPos": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 2,
+    "saved": 0
+   }
+  },
+  "savedNeg": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": -1
+   }
+  },
+  "midPos": {
+   "spec": {
+    "text": "ab",
+    "ip": 1,
+    "anchor": 1,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     },
+     {
+      "pos": 1,
+      "old": "",
+      "new": "b"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   }
+  }
+ },
+ "copy": {
+  "noSel": {
+   "spec": {
+    "text": "abc",
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": "old"
+   }
+  },
+  "normal": {
+   "spec": {
+    "text": "hello world",
+    "selStart": 0,
+    "selEnd": 5,
+    "clipboard": "old"
+   }
+  },
+  "wholeText": {
+   "spec": {
+    "text": "abc",
+    "selStart": 0,
+    "selEnd": 3,
+    "clipboard": null
+   }
+  },
+  "zeroLen": {
+   "spec": {
+    "text": "abc",
+    "selStart": 2,
+    "selEnd": 2
+   }
+  }
+ },
+ "cut": {
+  "noSel": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": "old"
+   }
+  },
+  "normal": {
+   "spec": {
+    "text": "hello world",
+    "ip": 5,
+    "anchor": 0,
+    "selStart": 0,
+    "selEnd": 5,
+    "clipboard": "old"
+   }
+  },
+  "undoStack": {
+   "spec": {
+    "text": "abc",
+    "ip": 2,
+    "anchor": 0,
+    "selStart": 0,
+    "selEnd": 2,
+    "undo": [
+     {
+      "pos": 0,
+      "old": "",
+      "new": "a"
+     }
+    ],
+    "undoPos": 1,
+    "saved": 1
+   }
+  }
+ },
+ "paste": {
+  "empty": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": null
+   }
+  },
+  "normal": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": "XY"
+   }
+  },
+  "overSel": {
+   "spec": {
+    "text": "abc",
+    "ip": 1,
+    "anchor": 1,
+    "selStart": 0,
+    "selEnd": 2,
+    "clipboard": "XY"
+   }
+  },
+  "singleLine": {
+   "spec": {
+    "text": "ab",
+    "ip": 2,
+    "anchor": 2,
+    "flags": 3,
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": "x\ny"
+   }
+  },
+  "maxSize": {
+   "spec": {
+    "text": "abcd",
+    "ip": 4,
+    "anchor": 4,
+    "maxSize": 5,
+    "selStart": -1,
+    "selEnd": -1,
+    "clipboard": "wxyz"
+   }
+  }
  }
 }

@@ -23,6 +23,7 @@ export class EditWindowHeap extends ListWindowHeap {
     this.clipboard = this.allocRaw(12);     // clipboard FString (0x1009ae00)
     this.convertBuffer = this.allocRaw(12); // convertPipes static (0x100aead0)
     this.convertFlag = this.allocRaw(4);    // convertPipes flag byte (0x100aeac8)
+    this.convertRun = this.allocRaw(0x1000); // convertPipes run scratch (0x100add98)
   }
 }
 
