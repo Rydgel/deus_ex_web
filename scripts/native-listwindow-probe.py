@@ -892,13 +892,13 @@ class ListWindowProbe(_NATIVE.NativeCollision):
         """Craft a font object with a two-level glyph table for 0x100267e0."""
         rows = {}
         for ch, adv in advances.items():
-            row, col = divmod(ch, chars_per_row)
+            row, col = divmod(int(ch), chars_per_row)
             rows.setdefault(row, {})[col] = adv
         font = self.alloc(0x60)
         self.cpu.mem_write(font, b'\0' * 0x60)
-        table = self.alloc(16 * len(rows))
-        glyphs_base = self.alloc(16 * chars_per_row * len(rows))
         max_row = (max(rows) + 1) if rows else 0
+        table = self.alloc(16 * max_row)
+        glyphs_base = self.alloc(16 * chars_per_row * max_row)
         for row in range(max_row):
             record = table + 16 * row
             cells = rows.get(row, {})
@@ -914,6 +914,12 @@ class ListWindowProbe(_NATIVE.NativeCollision):
 
     def window(self, spec):
         """Build a window image from a spec dict."""
+        fonts = [self.font(f.get('advances', {}), f.get('chars_per_row', 16))
+                 for f in spec.get('fonts', [])]
+        def font_ref(value):
+            if isinstance(value, dict) and 'font' in value:
+                return fonts[value['font']]
+            return value
         address = self.alloc(0x700)
         self.cpu.mem_write(address, b'\0' * 0x700)
         self.write(address, 'I', self.window_vtable)
@@ -931,7 +937,7 @@ class ListWindowProbe(_NATIVE.NativeCollision):
                 self.write(rdata + 4 * (len(rows) + i), 'I', value & 0xffffffff)
         self.write(address + OFF_ROWS, '3I', rdata, len(rows), rmax)
         cols = [self.column(index=i, packed=spec.get('colPacked', 0),
-                            font=c.get('font', spec.get('defFont', 0)),
+                            font=font_ref(c.get('font', spec.get('defFont', 0))),
                             **{k: v for k, v in c.items() if k != 'font'})
                 for i, c in enumerate(spec.get('cols', []))]
         cdata = self.alloc(0x38 * len(cols)) if cols else 0
@@ -953,9 +959,13 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             selected = rows[spec['selectedRow']]
         self.write(address + OFF_SELECTED, 'I', selected)
         self.write(address + OFF_SELECTED2, 'I', spec.get('selected2', 0))
-        self.write(address + OFF_PARENT, 'I', spec.get('parent', 0))
+        parent = spec.get('parent', 0)
+        if parent is True:
+            parent = self.alloc(0x700)
+            self.cpu.mem_write(parent, b'\0' * 0x700)
+        self.write(address + OFF_PARENT, 'I', parent)
         self.write(address + OFF_COL_PACKED, 'I', spec.get('colPacked', 0))
-        self.write(address + OFF_DEF_FONT, 'I', spec.get('defFont', 0))
+        self.write(address + OFF_DEF_FONT, 'I', font_ref(spec.get('defFont', 0)))
         style = self.alloc(0x60)
         self.cpu.mem_write(style, b'\0' * 0x60)
         self.write(address + OFF_STYLE, 'I', style)
@@ -964,11 +974,11 @@ class ListWindowProbe(_NATIVE.NativeCollision):
             context = self.alloc(0xc0)
             self.cpu.mem_write(context, b'\0' * 0xc0)
         self.write(address + OFF_CONTEXT, 'I', context)
-        if spec.get('parent'):
+        if parent:
             # Give the parent the same fake vtable so the broadcast walk can
             # continue past the first hop when requested.
-            self.write(spec['parent'], 'I', self.window_vtable)
-            self.write(spec['parent'] + OFF_PARENT, 'I', spec.get('grandParent', 0))
+            self.write(parent, 'I', self.window_vtable)
+            self.write(parent + OFF_PARENT, 'I', spec.get('grandParent', 0))
         self._window = address
         self._window_spec = spec
         return address
@@ -1118,9 +1128,15 @@ def oracle_main(method, result_kind, section, root=None):
             elif result_kind == 'fieldstr':
                 result = {'ptr': probe.canon(ret),
                           'text': probe.wstring(ret) if ret else None}
+            elif result_kind == 'void':
+                # The export returns no value; the leftover EAX is recorded as
+                # evidence but is not observable through the script VM.
+                result = None
+                out = {'result': result, 'rawEax': ret}
             else:
                 result = {'value': struct.unpack('<i', struct.pack('<I', ret))[0]}
-            out = {'result': result}
+            if result_kind != 'void':
+                out = {'result': result}
         out['events'] = list(probe.events)
         out['state'] = probe.dump_state(this)
         results[name] = out

@@ -28,6 +28,11 @@ export class ListWindowHeap {
     this.sortList = this.allocRaw(0x400);
     this.sortCount = this.allocRaw(4);
     this.emptyWString = this.allocRaw(4);
+    // Image-global scratch: 0x100aeba0 is the zeroed record pair the glyph
+    // lookup returns on a miss, and the scratch dword stands in for the
+    // native frame slot that glyphEntry writes through its out-pointer.
+    this.glyphMiss = this.allocRaw(0x10);
+    this.glyphScratch = this.allocRaw(4);
   }
 
   allocRaw(size) {
@@ -215,7 +220,45 @@ function buildColumn(heap, index, spec = {}, defaults = {}) {
   return address;
 }
 
+/**
+ * Build a font object matching the probe's `font()`: +0x28 chars per row,
+ * +0x2c the 16-byte row-record table (record +4 = glyph run base, +8 = run
+ * count), +0x30 the table row count; each glyph record keeps its advance at
+ * +0xc, which the row-height recompute reads as the glyph height.
+ */
+function buildFont(heap, spec = {}) {
+  const advances = spec.advances ?? {};
+  const charsPerRow = spec.charsPerRow ?? 16;
+  const rows = {};
+  for (const [ch, adv] of Object.entries(advances)) {
+    const code = Number(ch);
+    const row = Math.floor(code / charsPerRow);
+    (rows[row] ??= {})[code - row * charsPerRow] = adv;
+  }
+  const font = heap.allocRaw(0x60);
+  const rowNums = Object.keys(rows).map(Number);
+  const maxRow = rowNums.length ? Math.max(...rowNums) + 1 : 0;
+  const table = heap.allocRaw(16 * maxRow || 4);
+  const glyphsBase = heap.allocRaw(16 * charsPerRow * maxRow || 4);
+  for (let row = 0; row < maxRow; row++) {
+    const cells = rows[row] ?? {};
+    const record = table + 16 * row;
+    const run = glyphsBase + 16 * charsPerRow * row;
+    heap.write(record + 4, 'u32', run);
+    heap.write(record + 8, 'u32', Object.keys(cells).length
+      ? Math.max(...Object.keys(cells).map(Number)) + 1 : 0);
+    for (const [col, adv] of Object.entries(cells))
+      heap.write(run + 16 * Number(col) + 0xc, 'i32', adv);
+  }
+  heap.write(font + 0x28, 'u32', charsPerRow);
+  heap.write(font + 0x2c, 'u32', table);
+  heap.write(font + 0x30, 'u32', maxRow);
+  return font;
+}
+
 export function buildWindow(heap, spec = {}) {
+  const fonts = (spec.fonts ?? []).map(fSpec => buildFont(heap, fSpec));
+  const fontRef = v => (v && typeof v === 'object' && 'font' in v) ? fonts[v.font] : v;
   const base = heap.allocRaw(0x700);
   const vtable = heap.allocRaw(0x200);
   heap.write(base, 'u32', vtable);
@@ -235,7 +278,9 @@ export function buildWindow(heap, spec = {}) {
   heap.write(base + W.rowsData, 'u32', rdata);
   heap.write(base + W.rowsCount, 'u32', rows.length);
   heap.write(base + W.rowsMax, 'u32', spec.rowMax ?? rows.length);
-  const cols = (spec.cols ?? []).map((c, i) => buildColumn(heap, i, c, spec));
+  const resolvedDefFont = fontRef(spec.defFont);
+  const cols = (spec.cols ?? []).map((c, i) => buildColumn(heap, i,
+    {...c, font: fontRef(c.font)}, {...spec, defFont: resolvedDefFont}));
   const cdata = cols.length ? heap.allocRaw(C.size * cols.length) : 0;
   cols.forEach((col, i) => heap.bytes.copyWithin(cdata + C.size * i, col, col + C.size));
   const numCols = spec.numCols ?? cols.length;
@@ -252,9 +297,11 @@ export function buildWindow(heap, spec = {}) {
   const selected = spec.selectedRow != null ? rows[spec.selectedRow] : (spec.selected ?? 0);
   heap.write(base + W.selected, 'u32', selected);
   heap.write(base + W.selected2, 'u32', spec.selected2 ?? 0);
-  heap.write(base + W.parent, 'u32', spec.parent ?? 0);
+  const parent = spec.parent === true ? heap.allocRaw(0x700) : (spec.parent ?? 0);
+  heap.write(base + W.parent, 'u32', parent);
+  if (parent) heap.write(parent + W.parent, 'u32', spec.grandParent ?? 0);
   heap.write(base + W.colPacked, 'u32', spec.colPacked ?? 0);
-  heap.write(base + W.defFont, 'u32', spec.defFont ?? 0);
+  heap.write(base + W.defFont, 'u32', resolvedDefFont ?? 0);
   const style = heap.allocRaw(0x60);
   heap.write(base + W.style, 'u32', style);
   const context = spec.context === true ? heap.allocRaw(0xc0) : (spec.context ?? 0);

@@ -65,6 +65,9 @@ function canonResult(kind, heap, base, value) {
   if (kind === 'fieldstr')
     return {ptr: heap.canon(value), text: value ? heap.readString(value) : null};
   if (kind === 'int') return {value: value | 0};
+  // Void exports leave unobservable register leftovers in the native EAX;
+  // only the heap state and event stream are comparable.
+  if (kind === 'void') return null;
   return value;
 }
 

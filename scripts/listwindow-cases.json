@@ -888,6 +888,115 @@
           "int": 0
         }
       ]
+    },
+    "growPacked": {
+      "spec": {
+        "padX": 4.0,
+        "padY": 3.0,
+        "colPacked": 57005,
+        "defFont": {
+          "font": 0
+        },
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          }
+        ],
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "fonts": [
+          {
+            "advances": {
+              "32": 14
+            }
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 3
+        }
+      ]
+    },
+    "shrinkRealloc": {
+      "spec": {
+        "colMax": 70,
+        "cols": [
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          },
+          {
+            "type": 0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "b"
+              },
+              {
+                "text": "c"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "font": {
+      "spec": {
+        "fonts": [
+          {
+            "advances": {
+              "32": 14
+            }
+          }
+        ],
+        "padY": 3.0,
+        "cols": [
+          {
+            "type": 0,
+            "font": {
+              "font": 0
+            }
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
     }
   },
   "setColumnWidth": {
@@ -964,6 +1073,64 @@
         },
         {
           "float": 3.0
+        }
+      ]
+    },
+    "shrink": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "width": 5.0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "float": 2.5
+        }
+      ]
+    },
+    "driver": {
+      "spec": {
+        "padX": 5.0,
+        "flags": 2,
+        "cols": [
+          {
+            "type": 0,
+            "width": 0.0
+          },
+          {
+            "type": 0,
+            "width": 0.0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a",
+                "width": 30.0
+              },
+              {
+                "text": "b",
+                "width": 50.0
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "float": 100.0
         }
       ]
     }
@@ -1058,6 +1225,170 @@
           "string": "%.2f"
         }
       ]
+    },
+    "badCol": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 7
+        },
+        {
+          "int": 1
+        },
+        {
+          "string": "%f"
+        }
+      ]
+    },
+    "context": {
+      "spec": {
+        "context": true,
+        "measure": {
+          "width": 7.5,
+          "height": 9.25
+        },
+        "fonts": [
+          {
+            "advances": {
+              "32": 6
+            }
+          }
+        ],
+        "cols": [
+          {
+            "type": 0,
+            "font": {
+              "font": 0
+            }
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "12.5"
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        },
+        {
+          "string": "%.1f"
+        }
+      ]
+    },
+    "defaultFmt": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 1
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "defaultTime": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 2
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "defaultOther": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0,
+            "fmt": "%.3g"
+          }
+        ],
+        "rows": []
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 5
+        },
+        {
+          "int": 0
+        }
+      ]
+    },
+    "autoExpand": {
+      "spec": {
+        "padX": 5.0,
+        "flags": 2,
+        "cols": [
+          {
+            "type": 0,
+            "width": 0.0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a",
+                "width": 30.0
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 0
+        },
+        {
+          "int": 0
+        },
+        {
+          "string": ""
+        }
+      ]
     }
   },
   "enableAutoExpandColumns": {
@@ -1092,6 +1423,66 @@
       "args": [
         {
           "int": 0
+        }
+      ]
+    },
+    "expand": {
+      "spec": {
+        "padX": 5.0,
+        "flags": 0,
+        "cols": [
+          {
+            "type": 0,
+            "width": 0.0
+          }
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "fields": [
+              {
+                "text": "a",
+                "width": 30.0
+              }
+            ]
+          }
+        ]
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "sameOn": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 2
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "argTwo": {
+      "spec": {
+        "cols": [
+          {
+            "type": 0
+          }
+        ],
+        "rows": [],
+        "flags": 2
+      },
+      "args": [
+        {
+          "int": 2
         }
       ]
     }
@@ -1139,6 +1530,119 @@
         "flags": 4,
         "numSelected": 2,
         "selectedRow": 0
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    },
+    "offOne": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1
+          }
+        ],
+        "flags": 4,
+        "numSelected": 1,
+        "selectedRow": 0
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    },
+    "sameOn": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          }
+        ],
+        "flags": 4,
+        "numSelected": 1,
+        "selectedRow": 0
+      },
+      "args": [
+        {
+          "int": 1
+        }
+      ]
+    },
+    "argTwo": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [],
+        "flags": 4,
+        "numSelected": 0
+      },
+      "args": [
+        {
+          "int": 2
+        }
+      ]
+    },
+    "parent": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "flags": 4,
+        "numSelected": 2,
+        "selectedRow": 0,
+        "parent": true
+      },
+      "args": [
+        {
+          "int": 0
+        }
+      ]
+    },
+    "sinkStops": {
+      "spec": {
+        "cols": [
+          {}
+        ],
+        "rows": [
+          {
+            "id": 0,
+            "flags": 1
+          },
+          {
+            "id": 1,
+            "flags": 1
+          }
+        ],
+        "flags": 4,
+        "numSelected": 2,
+        "selectedRow": 0,
+        "parent": true,
+        "selectionSink": 5
       },
       "args": [
         {

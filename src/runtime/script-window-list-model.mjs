@@ -918,3 +918,164 @@ export function askParentReconfigure(L) {
   rejectAsync(requireService(L, 'askParentForReconfigure')(L.object, L.base),
     'askParentForReconfigure');
 }
+
+/** Measure-context acquire 0x1004ddc0 — leaf boundary: event + ctx handle. */
+export function acquireContext(L) {
+  return rejectAsync(requireService(L, 'acquireContext')(L.object, L.base),
+    'acquireContext') | 0;
+}
+
+/** Measure-context release 0x1004de50 — leaf boundary: event only. */
+export function releaseContext(L, ctx) {
+  rejectAsync(requireService(L, 'releaseContext')(L.object, L.base, ctx),
+    'releaseContext');
+}
+
+/**
+ * Column initializer 0x100314f0(this, col, index): stamps the column index,
+ * assigns the header and format FStrings from the shared empty wstring (the
+ * len-0 assign: num = max = 0 then Realloc — a Realloc(0, 0) event on fresh
+ * columns), clears the sort priority and the low three sort-flag bits, sets
+ * width = f32(2*padX + 20.0), zeroes the flag byte and type, and copies the
+ * window's packed dword (+0x3d) and default font (+0x54).  The native
+ * self-assign guard (data == EMPTY_WSTRING) cannot fire for a zeroed column.
+ */
+export function initColumn(L, colPtr, index) {
+  L.write(colPtr + LIST_COL.index, 'i32', index);
+  fstringAssign(L, colPtr + LIST_COL.header, '');
+  L.write(colPtr + LIST_COL.sortPriority, 'i32', 0);
+  L.write(colPtr + LIST_COL.sortFlags, 'u32',
+    (L.read(colPtr + LIST_COL.sortFlags, 'u32') & ~7) >>> 0);
+  L.write(colPtr + LIST_COL.width, 'f32',
+    L.read(L.base + LIST_WINDOW.padX, 'f32') * 2 + 20.0);
+  L.write(colPtr + LIST_COL.flagByte, 'u8', 0);
+  L.write(colPtr + LIST_COL.packed, 'u32',
+    L.read(L.base + LIST_WINDOW.colPacked, 'u32'));
+  L.write(colPtr + LIST_COL.font, 'u32',
+    L.read(L.base + LIST_WINDOW.defFont, 'u32'));
+  L.write(colPtr + LIST_COL.type, 'u8', 0);
+  fstringAssign(L, colPtr + LIST_COL.format, '');
+}
+
+/**
+ * Column destructor 0x100161c0 (also inlined by SetNumColumns' shrink path
+ * 0x1002fb3d): resets header then format (each num = max = 0 + Realloc,
+ * freeing the data), then ~FString on format then header (a second
+ * Realloc(0, 0) each plus the Remove/Free tail).  Four allocator events per
+ * destroyed column, in exactly this order.
+ */
+export function columnDtor(L, colPtr) {
+  fstringReset(L, colPtr + LIST_COL.header, 0);
+  fstringReset(L, colPtr + LIST_COL.format, 0);
+  fstringDtor(L, colPtr + LIST_COL.format);
+  fstringDtor(L, colPtr + LIST_COL.header);
+}
+
+/**
+ * Two-level glyph lookup 0x10026950 behind 0x10026880: row = id/perRow,
+ * col = id - row*perRow (id & 0xffff first); hit requires row < font row
+ * count and col < the row record's count; the glyph pointer is the row run
+ * base + col*0x10.  Returns 0 on a miss (the caller then substitutes the
+ * zeroed image pair 0x100aeba0).  A zero perRow is a native divide fault,
+ * surfaced as a boundary error rather than an invented glyph.
+ */
+function glyphLookup(L, font, glyphId) {
+  const ch = glyphId & 0xffff;
+  const perRow = L.read(font + 0x28, 'i32');
+  if (!perRow)
+    modelFail('ListWindow glyph lookup hit a font with no columns-per-row',
+      {kind: 'BOUNDARY', value: font});
+  const row = Math.trunc(ch / perRow);
+  const col = ch - row * perRow;
+  if (row >= L.read(font + 0x30, 'i32')) return 0;
+  const rec = L.read(font + 0x2c, 'u32') + row * 0x10;
+  if (col >= L.read(rec + 8, 'i32')) return 0;
+  return L.read(rec + 4, 'u32') + col * 0x10;
+}
+
+/**
+ * glyphEntry 0x100267e0: *outW = rec+8 and *outH = rec+0xc when the
+ * out-pointer is nonzero.  On a lookup miss the native zeroes the image
+ * globals 0x100aeba8/0x100aebac and returns 0x100aeba0, so both outputs read
+ * as zero through the returned record.
+ */
+export function glyphEntry(L, font, glyphId, outW, outH) {
+  let rec = glyphLookup(L, font, glyphId);
+  if (!rec) {
+    rec = L.mem.glyphMiss;
+    if (typeof rec !== 'number' || !rec)
+      modelFail('ListWindow requires the glyph-miss pair on the heap service',
+        {kind: 'SERVICE'});
+    L.write(rec + 8, 'u32', 0);
+    L.write(rec + 0xc, 'u32', 0);
+  }
+  if (outW) L.write(outW, 'u32', L.read(rec + 8, 'u32'));
+  if (outH) L.write(outH, 'u32', L.read(rec + 0xc, 'u32'));
+}
+
+/**
+ * Row-height recompute 0x10031fd0: rowHeight = 0, then per column with a
+ * font the space glyph's height (fild of the int at rec+0xc) replaces
+ * rowHeight only when strictly greater (fcom + test ah,0x41 skips on
+ * less/equal/unordered); finally rowHeight = f32(rowHeight + 2*padY).
+ */
+export function recomputeRowHeight(L) {
+  const heightAt = L.base + LIST_WINDOW.rowHeight;
+  L.write(heightAt, 'f32', 0);
+  const numCols = L.read(L.base + LIST_WINDOW.numCols, 'i32');
+  const cdata = L.read(L.base + LIST_WINDOW.colsData, 'u32');
+  const scratch = L.mem.glyphScratch;
+  if (typeof scratch !== 'number' || !scratch)
+    modelFail('ListWindow requires the glyph scratch cell on the heap service',
+      {kind: 'SERVICE'});
+  for (let i = 0; i < numCols; i++) {
+    const font = L.read(cdata + i * LIST_COL.size + LIST_COL.font, 'u32');
+    if (!font) continue;
+    glyphEntry(L, font, 0x20, 0, scratch);
+    const h = L.read(scratch, 'i32');
+    if (h > L.read(heightAt, 'f32')) L.write(heightAt, 'f32', h);
+  }
+  L.write(heightAt, 'f32',
+    L.read(heightAt, 'f32') + 2 * L.read(L.base + LIST_WINDOW.padY, 'f32'));
+}
+
+/**
+ * Auto-expand driver 0x1002fc40(this, reset): when reset is 0 every column
+ * width is first set to f32(2*padX); then for every row/column pair
+ * updateColWidth 0x10031f80 widens columns to fit the measured field width
+ * plus 2*padX; always ends with AskParentForReconfigure.
+ */
+export function autoExpandColumns(L, reset) {
+  const numCols = L.read(L.base + LIST_WINDOW.numCols, 'i32');
+  const cdata = L.read(L.base + LIST_WINDOW.colsData, 'u32');
+  if (!(reset | 0)) {
+    const w = L.read(L.base + LIST_WINDOW.padX, 'f32') * 2;
+    for (let i = 0; i < numCols; i++)
+      L.write(cdata + i * LIST_COL.size + LIST_COL.width, 'f32', w);
+  }
+  const count = L.read(L.base + LIST_WINDOW.rowsCount, 'i32');
+  const rdata = L.read(L.base + LIST_WINDOW.rowsData, 'u32');
+  for (let r = 0; r < count; r++) {
+    const node = L.read(rdata + 4 * r, 'u32');
+    for (let c = 0; c < numCols; c++) updateColWidth(L, node, c);
+  }
+  askParentReconfigure(L);
+}
+
+/**
+ * Selection-bit helper 0x10032dc0(this, index, newState, out): when the row's
+ * selected bit differs from the full newState dword the bit is replaced
+ * ((flags ^ newState) & 1) ^ flags, numSelected is decremented for a zero
+ * newState and incremented for any nonzero value, and *out is set to 1.
+ * Returns the value the native would write to *out (0 when unchanged).
+ */
+export function selectRowAt(L, index, newState) {
+  const node = L.read(
+    L.read(L.base + LIST_WINDOW.rowsData, 'u32') + 4 * index, 'u32');
+  const flags = L.read(node + LIST_ROW.flags, 'u32');
+  if ((flags & 1) === (newState | 0)) return 0;
+  L.write(node + LIST_ROW.flags, 'u32', (((flags ^ newState) & 1) ^ flags) >>> 0);
+  const n = L.read(L.base + LIST_WINDOW.numSelected, 'i32');
+  L.write(L.base + LIST_WINDOW.numSelected, 'i32', newState ? n + 1 : n - 1);
+  return 1;
+}
