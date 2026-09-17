@@ -609,7 +609,7 @@
   "same": {
    "spec": {
     "hMarginBits": 1069547520,
-    "vMarginBits": 1075838976
+    "vMarginBits": 1074790400
    },
    "args": [
     {
@@ -636,7 +636,7 @@
   "nan-arg": {
    "spec": {
     "hMarginBits": 1069547520,
-    "vMarginBits": 1075838976
+    "vMarginBits": 1074790400
    },
    "args": [
     {
@@ -650,7 +650,7 @@
   "nan-field": {
    "spec": {
     "hMarginBits": 2143289344,
-    "vMarginBits": 1075838976
+    "vMarginBits": 1074790400
    },
    "args": [
     {
@@ -669,6 +669,20 @@
     },
     {
      "float": -0.0
+    }
+   ]
+  },
+  "nan-arg-vdiff": {
+   "spec": {
+    "hMarginBits": 1069547520,
+    "vMarginBits": 1074790400
+   },
+   "args": [
+    {
+     "floatBits": 2143289344
+    },
+    {
+     "float": 9.5
     }
    ]
   }
@@ -1415,7 +1429,7 @@
   },
   "same": {
    "spec": {
-    "lineSpacingBits": 1075838976
+    "lineSpacingBits": 1074790400
    },
    "args": [
     {
