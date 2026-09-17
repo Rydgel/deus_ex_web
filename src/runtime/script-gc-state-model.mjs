@@ -47,8 +47,8 @@ export const GC = freeze({
   hAlign: 0x94,          // u8
   vAlign: 0x95,          // u8
   textFlags: 0x98,       // u32: bit0 wordWrap, bit1 specialText; bits 2+ untouched
-  unknown9c: 0x9c,       // copied by CopyGC only
-  unknownA0: 0xa0,       // copied by CopyGC only
+  unknown9c: 0x9c,       // i32 GC.hMultiplier — DrawTexture's X/XL scale (draw model)
+  unknownA0: 0xa0,       // i32 GC.vMultiplier — DrawTexture's Y/YL scale (draw model)
   nodeFlags: 0xa4,       // stack-node flags: bit0 = node sits on the free list
   depth: 0xa8,           // i32 stack depth
   stackTop: 0xac,        // ptr top saved node
