@@ -1,0 +1,130 @@
+{
+  "setActivateDelay": {
+    "store": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "args": [
+        {
+          "f32": 0.5
+        }
+      ],
+      "dump": [
+        "0x1f8",
+        "0x1fc",
+        "0x200",
+        "0x204"
+      ]
+    },
+    "zero": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "args": [
+        {
+          "f32": 0
+        }
+      ],
+      "dump": [
+        "0x1f8",
+        "0x1fc",
+        "0x200",
+        "0x204"
+      ]
+    },
+    "negative": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1fc": {
+              "f32": 9.25
+            }
+          }
+        ]
+      ],
+      "args": [
+        {
+          "f32": -3.75
+        }
+      ],
+      "dump": [
+        "0x1f8",
+        "0x1fc",
+        "0x200",
+        "0x204"
+      ]
+    }
+  },
+  "getEnabledToggle": {
+    "enabled": {
+      "nodes": [
+        [
+          "box",
+          {
+            "0x184": {
+              "ptr": "togA"
+            }
+          }
+        ],
+        [
+          "togA",
+          {}
+        ]
+      ],
+      "this": "box",
+      "args": [],
+      "dump": {
+        "box": [
+          "0x184"
+        ]
+      }
+    },
+    "none": {
+      "nodes": [
+        [
+          "box",
+          {
+            "0x184": 0
+          }
+        ]
+      ],
+      "this": "box",
+      "args": [],
+      "dump": {
+        "box": [
+          "0x184"
+        ]
+      }
+    },
+    "other": {
+      "nodes": [
+        [
+          "box",
+          {
+            "0x184": {
+              "ptr": "togB"
+            }
+          }
+        ],
+        [
+          "togB",
+          {}
+        ]
+      ],
+      "this": "box",
+      "args": [],
+      "dump": {
+        "box": [
+          "0x184"
+        ]
+      }
+    }
+  }
+}
