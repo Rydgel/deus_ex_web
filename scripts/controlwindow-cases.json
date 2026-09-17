@@ -874,5 +874,247 @@
         ]
       }
     }
+  },
+  "changeToggle": {
+    "walkAll": {
+      "nodes": [
+        [
+          "tog",
+          {
+            "0x174": 1,
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": {
+              "ptr": "grand"
+            }
+          }
+        ],
+        [
+          "grand",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "tog",
+      "args": [],
+      "dump": {}
+    },
+    "handledAtParent": {
+      "nodes": [
+        [
+          "tog",
+          {
+            "0x174": 0,
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": {
+              "ptr": "grand"
+            }
+          }
+        ],
+        [
+          "grand",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "tog",
+      "args": [],
+      "vresults": {
+        "par:240": [
+          1
+        ]
+      },
+      "dump": {}
+    },
+    "single": {
+      "nodes": [
+        [
+          "tog",
+          {
+            "0x174": 3,
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "tog",
+      "args": [],
+      "dump": {}
+    }
+  },
+  "activateButton": {
+    "walkAll": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": {
+              "ptr": "grand"
+            }
+          }
+        ],
+        [
+          "grand",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        1
+      ],
+      "dump": {}
+    },
+    "key2": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        2
+      ],
+      "dump": {}
+    },
+    "handled": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": {
+              "ptr": "grand"
+            }
+          }
+        ],
+        [
+          "grand",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        1
+      ],
+      "vresults": {
+        "btn:232": [
+          1
+        ]
+      },
+      "dump": {}
+    },
+    "key2Handled": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x138": {
+              "ptr": "par"
+            }
+          }
+        ],
+        [
+          "par",
+          {
+            "0x138": 0
+          }
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        2
+      ],
+      "vresults": {
+        "par:236": [
+          1
+        ]
+      },
+      "dump": {}
+    }
+  },
+  "pressButton": {
+    "basic": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        32
+      ],
+      "dump": {}
+    },
+    "masked": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        416
+      ],
+      "dump": {}
+    },
+    "zero": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "this": "btn",
+      "args": [
+        0
+      ],
+      "dump": {}
+    }
   }
 }

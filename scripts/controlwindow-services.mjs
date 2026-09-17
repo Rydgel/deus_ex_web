@@ -213,36 +213,40 @@ export function buildWorld(caseSpec) {
       const width = f32bits(prefsize.width ?? 0);
       const height = f32bits(prefsize.height ?? 0);
       const object = details.object;
-      const result = pull(object, 0x7c);
+      const slot = details.virtualSlot ?? 0x7c;
+      const result = pull(object, slot);
       world.events.push({ op: 'PreferredSize', object: nameOf(object),
                           via: nameOf(object), flagW: details.flagW,
                           flagH: details.flagH, width, height,
-                          virtualSlot: 0x7c, result });
+                          virtualSlot: slot, result });
       return { width: prefsize.width ?? 0, height: prefsize.height ?? 0,
                widthBits: width, heightBits: height, result };
     },
     activateButton: details => {
       const object = details.object;
-      const result = pull(object, details.virtualSlot);
+      const slot = details.virtualSlot ?? 0xe8;
+      const result = pull(object, slot);
       world.events.push({ op: 'ActivateButton', object: nameOf(object),
                           via: nameOf(object), source: nameOf(details.source),
-                          virtualSlot: details.virtualSlot, result });
+                          virtualSlot: slot, result });
       return result;
     },
     toggleChanged: details => {
       const object = details.object;
-      const result = pull(object, 0xf0);
+      const slot = details.virtualSlot ?? 0xf0;
+      const result = pull(object, slot);
       world.events.push({ op: 'ToggleChanged', object: nameOf(object),
                           via: nameOf(object), source: nameOf(details.source),
-                          toggle: details.toggle, virtualSlot: 0xf0, result });
+                          toggle: details.toggle, virtualSlot: slot, result });
       return result;
     },
     buttonPressed: details => {
       const object = details.object;
-      const result = pull(object, 0x124);
+      const slot = details.virtualSlot ?? 0x124;
+      const result = pull(object, slot);
       world.events.push({ op: 'ButtonPressed', object: nameOf(object),
                           via: nameOf(object), key: details.key,
-                          virtualSlot: 0x124, result });
+                          virtualSlot: slot, result });
       return result;
     },
   };
