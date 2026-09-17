@@ -15,6 +15,7 @@ import {
 import {initWindowNative} from './script-window-init.mjs';
 import {addWindowChildNative,getRootWindowNative} from './script-window-hierarchy.mjs';
 import {WINDOW_RECONFIGURE_GLOBALS} from './script-window-reconfigure.mjs';
+import {WINDOW_CONFIGURE_CHILD_GLOBALS} from './script-window-configure-child.mjs';
 import {setWindowSizeNative,WINDOW_SIZE_OFFSETS} from './script-window-size.mjs';
 import {setVisibilityNative} from './script-window-visibility.mjs';
 import {WINDOW_POSITION_OFFSETS} from './script-window-position.mjs';
@@ -131,7 +132,8 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
   }
   memory.write(root,O.type,'u8',3);memory.write(root,O.flags,'u32',1);memory.write(root,O.parent,'ptr',null);
   memory.write(hud,O.flags,'u32',1);memory.write(hud,O.parent,'ptr',root);
-  const globals=new Map(Object.values(WINDOW_RECONFIGURE_GLOBALS).map(name=>[name,0]));
+  const globals=new Map([...Object.values(WINDOW_RECONFIGURE_GLOBALS),
+    ...Object.values(WINDOW_CONFIGURE_CHILD_GLOBALS)].map(name=>[name,0]));
   let events=[];
   let child=null,portrait=null,staticControl=null,nameControl=null,queuedControl=null;
   let textControl=null,lineControl=null,computerTextWindow=null,computerInputWindow=null,boundary=null;
@@ -144,6 +146,14 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
   const reconfiguration={...rawServices,
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
     parentRequestedReconfiguration:()=>0,configurationChanged:()=>{},resizeChild:()=>{},
+  };
+  // ConfigureChild shares the reconfiguration globals and leaf surface
+  // (configurationChanged/resizeChild); conditional leafs such as
+  // diagnostic, safeDestroy, boundsUpdate and sortWindowLists stay
+  // unprovided so reaching them remains an explicit boundary error.
+  const configureChild={...rawServices,
+    readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
+    configurationChanged:()=>{},resizeChild:()=>{},
   };
   const visibility={...rawServices,
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
@@ -207,6 +217,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     errorDevice:{name:'InfoLinkPreviewGError'},isScriptable:()=>true,
     hierarchy:{readParent:object=>memory.read(object,O.parent,'ptr'),readType:object=>memory.read(object,O.type,'u8')},
     reconfiguration,
+    configureChild,
     size:rawServices,
     position:rawServices,
     backgroundStyle,
@@ -422,6 +433,13 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
       return constructShell();
     },
     readNative:(object,offset,kind)=>memory.read(object,offset,kind),
+    // Adopt a runtime-attached object (e.g. the live DataLink harness's
+    // HUDReceivedDisplay) into the shell's native window storage so Window
+    // natives invoked on it execute against real fields.
+    adoptWindow:(object,parent=hud)=>{memory.allocate(object);
+      constructWindowNative(object,{...rawServices,
+        coreObjectConstructor:({object:base})=>memory.write(base,0,'u32',0x10179dfc)});
+      memory.write(object,O.parent,'ptr',parent);return object;},
     isDestroyed:object=>destroyedWindows.has(object),
     native:Object.freeze({lockCount:memory.read(child,O.lock,'i32'),
       visible:Boolean(memory.read(child,O.flags,'u32')&1),parent:memory.read(child,O.parent,'ptr')===hud}),

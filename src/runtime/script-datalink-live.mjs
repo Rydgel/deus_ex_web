@@ -264,6 +264,7 @@ export async function createLiveDataLinkRuntime({
   const receivedItems=[];
   const receivedDisplay={name:'HUDReceivedDisplay DataLink runtime'};
   runtime.attach(receivedDisplay,receivedClass);
+  shell.adoptWindow?.(receivedDisplay,shell.hud);
   set(runtime,shell.hud,'receivedItems',receivedDisplay);
   runtime.boundaryFunctions.set('deusex.hudreceiveddisplay.additem',call=>{
     const item=call.argumentCount>0?refValue(call.evaluateArgument(0)):null;
