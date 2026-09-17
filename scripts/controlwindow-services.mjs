@@ -86,7 +86,7 @@ export function buildWorld(caseSpec) {
       size: kind === 'u8' ? 1 : 4,
       bits: kind === 'ptr' ? null
         : kind === 'f32' ? f32bits(value ?? 0)
-        : (value ?? 0) & (kind === 'u8' ? 0xff : 0xffffffff) >>> 0,
+        : ((value ?? 0) & (kind === 'u8' ? 0xff : 0xffffffff)) >>> 0,
       label: kind === 'ptr' ? nameOf(value) : null,
     });
   };
@@ -177,6 +177,9 @@ export function buildWorld(caseSpec) {
     },
   };
 
+  // Uninitialized probe memory is 0xaa-filled; a single sentinel object
+  // canonizes to the same 'a<N>' label the oracle gives that fill pattern.
+  const uninit = {};
   world.dumpState = dumpSpec => {
     const state = {};
     for (const [label] of caseSpec.nodes ?? []) {
@@ -188,10 +191,12 @@ export function buildWorld(caseSpec) {
         const offset = Number(offText);
         const kind = fieldKind(offset);
         const value = object[offset];
-        if (kind === 'u8') dump[offText] = (value ?? 0) & 0xff;
-        else if (kind === 'ptr') dump[offText] = nameOf(value ?? null);
-        else if (kind === 'f32') dump[offText] = f32bits(value ?? 0);
-        else dump[offText] = (value ?? 0) >>> 0;
+        if (kind === 'u8') dump[offText] = value === undefined ? 0xaa : value & 0xff;
+        else if (kind === 'ptr')
+          dump[offText] = value === undefined ? nameOf(uninit) : nameOf(value ?? null);
+        else if (kind === 'f32')
+          dump[offText] = value === undefined ? 0xaaaaaaaa : f32bits(value);
+        else dump[offText] = value === undefined ? 0xaaaaaaaa : value >>> 0;
       }
       state[label] = dump;
     }
