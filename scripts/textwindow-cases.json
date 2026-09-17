@@ -1,157 +1,1427 @@
 {
-  "setText": {
-    "fresh-empty": {"spec": {"text": null}, "args": [{"string": "hello"}]},
-    "replace": {"spec": {"text": "old text"}, "args": [{"string": "new text|nline2"}]},
-    "same-ci": {"spec": {"text": "SAME"}, "args": [{"string": "same"}]},
-    "same-exact": {"spec": {"text": "abc"}, "args": [{"string": "abc"}]},
-    "empty-arg": {"spec": {"text": "x"}, "args": [{"string": ""}]},
-    "empty-both": {"spec": {"text": null}, "args": [{"string": ""}]},
-    "accel-scan": {"spec": {"text": "x", "textFlags": 2, "windowType": 2}, "args": [{"string": "|&Q quit"}]},
-    "accel-off": {"spec": {"text": "x", "textFlags": 0, "accelKey": 81}, "args": [{"string": "|&Q quit"}]},
-    "accel-skip-pair": {"spec": {"text": null, "textFlags": 2, "windowType": 2}, "args": [{"string": "a|bc|&Z d"}]},
-    "accel-trail-pipe": {"spec": {"text": null, "textFlags": 2, "windowType": 2}, "args": [{"string": "end|"}]},
-    "accel-pipe-end": {"spec": {"text": null, "textFlags": 2, "windowType": 2}, "args": [{"string": "tail|&"}]},
-    "convert-static": {"spec": {"text": null, "convert": "prev", "convertFlag": 1}, "args": [{"string": "zz"}]},
-    "convert-static-nolf": {"spec": {"text": null, "convert": "prev", "convertFlag": 1, "convertMax": 64}, "args": [{"string": "zz|nww"}]},
-    "long-arg": {"spec": {"text": null}, "args": [{"string": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]}
+ "setText": {
+  "fresh-empty": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "string": "hello"
+    }
+   ]
   },
-  "appendText": {
-    "to-empty": {"spec": {"text": null}, "args": [{"string": "first"}]},
-    "to-empty-arg-empty": {"spec": {"text": null}, "args": [{"string": ""}]},
-    "append-fits": {"spec": {"text": "abc", "textMax": 32}, "args": [{"string": "DEF"}]},
-    "append-grows": {"spec": {"text": "abc"}, "args": [{"string": "DEFGHIJKLMNOP"}]},
-    "append-pipe": {"spec": {"text": "a", "textMax": 32}, "args": [{"string": "b|nc"}]},
-    "accel-on-append": {"spec": {"text": "|&A", "textFlags": 2, "windowType": 2}, "args": [{"string": " |&B x"}]},
-    "accel-no-new-key": {"spec": {"text": "|&A", "textFlags": 2, "windowType": 2, "accelKey": 65}, "args": [{"string": " tail"}]}
+  "replace": {
+   "spec": {
+    "text": "old text"
+   },
+   "args": [
+    {
+     "string": "new text|nline2"
+    }
+   ]
   },
-  "getText": {
-    "basic": {"spec": {"text": "hello world"}, "args": []},
-    "empty": {"spec": {"text": null}, "args": []},
-    "empty-str": {"spec": {"text": ""}, "args": []},
-    "into-stale": {"spec": {"text": "new", "outText": "previous contents", "outMax": 40}, "args": []},
-    "into-stale-shrink": {"spec": {"text": "a much longer text than before", "outText": "x"}, "args": []}
+  "same-ci": {
+   "spec": {
+    "text": "SAME"
+   },
+   "args": [
+    {
+     "string": "same"
+    }
+   ]
   },
-  "getTextLength": {
-    "basic": {"spec": {"text": "hello"}, "args": []},
-    "empty": {"spec": {"text": null}, "args": []},
-    "nul-only": {"spec": {"text": ""}, "args": []}
+  "same-exact": {
+   "spec": {
+    "text": "abc"
+   },
+   "args": [
+    {
+     "string": "abc"
+    }
+   ]
   },
-  "getTextPart": {
-    "mid": {"spec": {"text": "abcdefghij"}, "args": [{"int": 3}, {"int": 4}, {"outString": "old"}]},
-    "clamp-start": {"spec": {"text": "abc"}, "args": [{"int": 10}, {"int": 2}, {"outString": null}]},
-    "clamp-count": {"spec": {"text": "abc"}, "args": [{"int": 1}, {"int": 99}, {"outString": null}]},
-    "neg-start": {"spec": {"text": "abcdef"}, "args": [{"int": -2}, {"int": 3}, {"outString": null}]},
-    "neg-count": {"spec": {"text": "abcdef"}, "args": [{"int": 2}, {"int": -1}, {"outString": null}]},
-    "zero-count": {"spec": {"text": "abcdef"}, "args": [{"int": 2}, {"int": 0}, {"outString": null}]},
-    "empty-text": {"spec": {"text": null}, "args": [{"int": 0}, {"int": 5}, {"outString": null}]},
-    "no-dest": {"spec": {"text": "abcdef"}, "args": [{"int": 1}, {"int": 3}, {"outNone": true}]},
-    "dest-shrink": {"spec": {"text": "abcdef"}, "args": [{"int": 0}, {"int": 2}, {"outString": "a much longer previous", "outMax": 64}]},
-    "overflow-sum": {"spec": {"text": "abcdef"}, "args": [{"int": 4}, {"int": -4}, {"outString": null}]}
+  "empty-arg": {
+   "spec": {
+    "text": "x"
+   },
+   "args": [
+    {
+     "string": ""
+    }
+   ]
   },
-  "setWordWrap": {
-    "enable": {"spec": {"textFlags": 0}, "args": [{"int": 1}]},
-    "disable": {"spec": {"textFlags": 1}, "args": [{"int": 0}]},
-    "same-on": {"spec": {"textFlags": 1}, "args": [{"int": 1}]},
-    "same-off": {"spec": {"textFlags": 0}, "args": [{"int": 0}]},
-    "raw-two": {"spec": {"textFlags": 1}, "args": [{"int": 2}]},
-    "raw-three": {"spec": {"textFlags": 0}, "args": [{"int": 3}]},
-    "raw-three-on": {"spec": {"textFlags": 1}, "args": [{"int": 3}]},
-    "other-flags": {"spec": {"textFlags": 254}, "args": [{"int": 1}]}
+  "empty-both": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "string": ""
+    }
+   ]
   },
-  "setTextAlignments": {
-    "both": {"spec": {}, "args": [{"int": 1}, {"int": 2}]},
-    "masked": {"spec": {}, "args": [{"int": 511}, {"int": 259}]},
-    "same": {"spec": {"hAlign": 5, "vAlign": 6}, "args": [{"int": 5}, {"int": 6}]},
-    "high-bits": {"spec": {"hAlign": 9, "vAlign": 9}, "args": [{"int": 4294901760}, {"int": 256}]}
+  "accel-scan": {
+   "spec": {
+    "text": "x",
+    "textFlags": 2,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "string": "|&Q quit"
+    }
+   ]
   },
-  "setTextMargins": {
-    "change": {"spec": {}, "args": [{"float": 1.5}, {"float": 2.25}]},
-    "same": {"spec": {"hMarginBits": 1069547520, "vMarginBits": 1075838976}, "args": [{"float": 1.5}, {"float": 2.25}]},
-    "h-only": {"spec": {"vMarginBits": 1075838976}, "args": [{"float": 9.5}, {"float": 2.25}]},
-    "nan-arg": {"spec": {"hMarginBits": 1069547520, "vMarginBits": 1075838976}, "args": [{"floatBits": 2143289344}, {"float": 2.25}]},
-    "nan-field": {"spec": {"hMarginBits": 2143289344, "vMarginBits": 1075838976}, "args": [{"float": 8.0}, {"float": 2.25}]},
-    "neg": {"spec": {}, "args": [{"float": -3.5}, {"float": -0.0}]}
+  "accel-off": {
+   "spec": {
+    "text": "x",
+    "textFlags": 0,
+    "accelKey": 81
+   },
+   "args": [
+    {
+     "string": "|&Q quit"
+    }
+   ]
   },
-  "setLines": {
-    "both": {"spec": {}, "args": [{"int": 2}, {"int": 8}]},
-    "min-clamp": {"spec": {}, "args": [{"int": 9}, {"int": 3}]},
-    "negatives": {"spec": {}, "args": [{"int": -5}, {"int": -2}]},
-    "same": {"spec": {"minLines": 1, "maxLines": 4}, "args": [{"int": 1}, {"int": 4}]},
-    "zero-zero": {"spec": {"minLines": -1, "maxLines": -1}, "args": [{"int": 0}, {"int": 0}]}
+  "accel-skip-pair": {
+   "spec": {
+    "text": null,
+    "textFlags": 2,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "string": "a|bc|&Z d"
+    }
+   ]
   },
-  "setMinLines": {
-    "set": {"spec": {"maxLines": 10}, "args": [{"int": 3}]},
-    "clamp-neg": {"spec": {"maxLines": 10}, "args": [{"int": -4}]},
-    "clamp-max": {"spec": {"maxLines": 2}, "args": [{"int": 9}]},
-    "clamp-negmax": {"spec": {"maxLines": -1}, "args": [{"int": 5}]},
-    "same": {"spec": {"minLines": 3, "maxLines": 9}, "args": [{"int": 3}]}
+  "accel-trail-pipe": {
+   "spec": {
+    "text": null,
+    "textFlags": 2,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "string": "end|"
+    }
+   ]
   },
-  "setMaxLines": {
-    "set": {"spec": {"minLines": 2}, "args": [{"int": 8}]},
-    "clamp-neg": {"spec": {"minLines": 2}, "args": [{"int": -4}]},
-    "clamp-min": {"spec": {"minLines": 6}, "args": [{"int": 3}]},
-    "clamp-negmin": {"spec": {"minLines": -1}, "args": [{"int": 7}]},
-    "same": {"spec": {"minLines": 1, "maxLines": 4}, "args": [{"int": 4}]}
+  "accel-pipe-end": {
+   "spec": {
+    "text": null,
+    "textFlags": 2,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "string": "tail|&"
+    }
+   ]
   },
-  "resetLines": {
-    "both-set": {"spec": {"minLines": 2, "maxLines": 9}, "args": []},
-    "already": {"spec": {"minLines": -1, "maxLines": -1}, "args": []},
-    "min-only": {"spec": {"minLines": 4, "maxLines": -1}, "args": []},
-    "max-only": {"spec": {"minLines": -1, "maxLines": 0}, "args": []}
+  "convert-static": {
+   "spec": {
+    "text": null,
+    "convert": "prev",
+    "convertFlag": 1
+   },
+   "args": [
+    {
+     "string": "zz"
+    }
+   ]
   },
-  "setMinWidth": {
-    "set": {"spec": {}, "args": [{"float": 3.5}]},
-    "neg": {"spec": {}, "args": [{"float": -2.5}]},
-    "nan-arg": {"spec": {"minWidthBits": 1069547520}, "args": [{"floatBits": 2143289344}]},
-    "nan-field": {"spec": {"minWidthBits": 2143289344}, "args": [{"float": 4.0}]},
-    "same": {"spec": {"minWidthBits": 1069547520}, "args": [{"float": 1.5}]}
+  "convert-static-nolf": {
+   "spec": {
+    "text": null,
+    "convert": "prev",
+    "convertFlag": 1,
+    "convertMax": 64
+   },
+   "args": [
+    {
+     "string": "zz|nww"
+    }
+   ]
   },
-  "resetMinWidth": {
-    "positive": {"spec": {"minWidthBits": 1069547520}, "args": []},
-    "zero": {"spec": {}, "args": []},
-    "negative": {"spec": {"minWidthBits": 3212836864}, "args": []},
-    "nan": {"spec": {"minWidthBits": 2143289344}, "args": []}
-  },
-  "enableTextAsAccelerator": {
-    "enable-text": {"spec": {"text": "|&H hello", "windowType": 2}, "args": [{"int": 1}]},
-    "enable-no-key": {"spec": {"text": "plain", "windowType": 2}, "args": [{"int": 1}]},
-    "disable": {"spec": {"textFlags": 2, "text": "x", "accelKey": 72, "windowType": 2}, "args": [{"int": 0}]},
-    "same-on": {"spec": {"textFlags": 2, "text": "|&H x", "accelKey": 72, "windowType": 2}, "args": [{"int": 1}]},
-    "same-off": {"spec": {}, "args": [{"int": 0}]},
-    "raw-three": {"spec": {"textFlags": 2, "text": "|&H x", "accelKey": 72, "windowType": 2}, "args": [{"int": 3}]},
-    "enable-no-parent": {"spec": {"text": "|&G go", "textFlags": 0}, "args": [{"int": 1}]},
-    "key-clamp": {"spec": {"text": "|&\u017d z", "windowType": 2}, "args": [{"int": 1}]}
-  },
-  "addLog": {
-    "first": {"spec": {"now": 10.5, "lineSpacingBits": 1082130432}, "args": [{"string": "line one"}, {"int": 16711680}]},
-    "second": {"spec": {"now": 11.0, "lineSpacingBits": 1082130432, "log": [{"expireBits": 1088421888, "text": "prev", "color": 255}]}, "args": [{"string": "line two"}, {"int": 65280}]},
-    "grow": {"spec": {"now": 1.0, "lineSpacingBits": 0, "log": [{"text": "a"}, {"text": "b"}, {"text": "c"}, {"text": "d"}, {"text": "e"}, {"text": "f"}, {"text": "g"}, {"text": "h"}, {"text": "i"}, {"text": "j"}, {"text": "k"}, {"text": "l"}, {"text": "m"}, {"text": "n"}, {"text": "o"}, {"text": "p"}, {"text": "q"}, {"text": "r"}, {"text": "s"}, {"text": "t"}, {"text": "u"}, {"text": "v"}, {"text": "w"}, {"text": "x"}, {"text": "y"}, {"text": "z"}, {"text": "A"}, {"text": "B"}, {"text": "C"}, {"text": "D"}, {"text": "E"}, {"text": "F"}]}, "args": [{"string": "grown"}, {"int": 1}]},
-    "empty-line": {"spec": {"now": 2.0, "lineSpacingBits": 1065353216, "log": [{"text": "kept"}]}, "args": [{"string": ""}, {"int": 7}]},
-    "text-present": {"spec": {"now": 3.0, "lineSpacingBits": 1065353216, "text": "existing"}, "args": [{"string": "L"}, {"int": 0}]}
-  },
-  "clearLog": {
-    "empty": {"spec": {}, "args": []},
-    "one": {"spec": {"log": [{"expireBits": 1, "text": "x", "color": 5}]}, "args": []},
-    "many": {"spec": {"text": "a\nb\nc", "log": [{"text": "a"}, {"text": "b", "textMax": 16}, {"text": "c"}], "logMax": 48}, "args": []},
-    "capacity-only": {"spec": {"logMax": 8}, "args": []}
-  },
-  "setTextTimeout": {
-    "set": {"spec": {}, "args": [{"float": 4.5}]},
-    "neg": {"spec": {"lineSpacingBits": 1065353216}, "args": [{"float": -2.0}]},
-    "nan": {"spec": {}, "args": [{"floatBits": 2143289344}]}
-  },
-  "pauseLog": {
-    "pause": {"spec": {}, "args": [{"int": 1}]},
-    "unpause": {"spec": {"logFlags": 4}, "args": [{"int": 0}]},
-    "keep": {"spec": {"logFlags": 4}, "args": [{"int": 1}]},
-    "raw-three": {"spec": {"logFlags": 248}, "args": [{"int": 3}]},
-    "raw-two": {"spec": {"logFlags": 4}, "args": [{"int": 2}]}
-  },
-  "setVerticalSpacing": {
-    "set": {"spec": {}, "args": [{"float": 2.5}]},
-    "neg": {"spec": {}, "args": [{"float": -1.25}]},
-    "nan-arg": {"spec": {"lineSpacingBits": 1069547520}, "args": [{"floatBits": 2143289344}]},
-    "nan-field": {"spec": {"lineSpacingBits": 2143289344}, "args": [{"float": 4.0}]},
-    "same": {"spec": {"lineSpacingBits": 1075838976}, "args": [{"float": 2.25}]}
+  "long-arg": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "string": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+   ]
   }
+ },
+ "appendText": {
+  "to-empty": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "string": "first"
+    }
+   ]
+  },
+  "to-empty-arg-empty": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "string": ""
+    }
+   ]
+  },
+  "append-fits": {
+   "spec": {
+    "text": "abc",
+    "textMax": 32
+   },
+   "args": [
+    {
+     "string": "DEF"
+    }
+   ]
+  },
+  "append-grows": {
+   "spec": {
+    "text": "abc"
+   },
+   "args": [
+    {
+     "string": "DEFGHIJKLMNOP"
+    }
+   ]
+  },
+  "append-pipe": {
+   "spec": {
+    "text": "a",
+    "textMax": 32
+   },
+   "args": [
+    {
+     "string": "b|nc"
+    }
+   ]
+  },
+  "accel-on-append": {
+   "spec": {
+    "text": "|&A",
+    "textFlags": 2,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "string": " |&B x"
+    }
+   ]
+  },
+  "accel-no-new-key": {
+   "spec": {
+    "text": "|&A",
+    "textFlags": 2,
+    "windowType": 2,
+    "accelKey": 65
+   },
+   "args": [
+    {
+     "string": " tail"
+    }
+   ]
+  }
+ },
+ "getText": {
+  "basic": {
+   "spec": {
+    "text": "hello world"
+   },
+   "args": []
+  },
+  "empty": {
+   "spec": {
+    "text": null
+   },
+   "args": []
+  },
+  "empty-str": {
+   "spec": {
+    "text": ""
+   },
+   "args": []
+  },
+  "into-stale": {
+   "spec": {
+    "text": "new",
+    "outText": "previous contents",
+    "outMax": 40
+   },
+   "args": []
+  },
+  "into-stale-shrink": {
+   "spec": {
+    "text": "a much longer text than before",
+    "outText": "x"
+   },
+   "args": []
+  }
+ },
+ "getTextLength": {
+  "basic": {
+   "spec": {
+    "text": "hello"
+   },
+   "args": []
+  },
+  "empty": {
+   "spec": {
+    "text": null
+   },
+   "args": []
+  },
+  "nul-only": {
+   "spec": {
+    "text": ""
+   },
+   "args": []
+  },
+  "capacity": {
+   "spec": {
+    "text": "hi",
+    "textMax": 20
+   },
+   "args": []
+  }
+ },
+ "getTextPart": {
+  "mid": {
+   "spec": {
+    "text": "abcdefghij"
+   },
+   "args": [
+    {
+     "int": 3
+    },
+    {
+     "int": 4
+    },
+    {
+     "outString": "old"
+    }
+   ]
+  },
+  "clamp-start": {
+   "spec": {
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 10
+    },
+    {
+     "int": 2
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "clamp-count": {
+   "spec": {
+    "text": "abc"
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 99
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "neg-start": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": -2
+    },
+    {
+     "int": 3
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "neg-count": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": -1
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "zero-count": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 0
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "empty-text": {
+   "spec": {
+    "text": null
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 5
+    },
+    {
+     "outString": null
+    }
+   ]
+  },
+  "no-dest": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 3
+    },
+    {
+     "outNone": true
+    }
+   ]
+  },
+  "dest-shrink": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 2
+    },
+    {
+     "outString": "a much longer previous",
+     "outMax": 64
+    }
+   ]
+  },
+  "overflow-sum": {
+   "spec": {
+    "text": "abcdef"
+   },
+   "args": [
+    {
+     "int": 4
+    },
+    {
+     "int": -4
+    },
+    {
+     "outString": null
+    }
+   ]
+  }
+ },
+ "setWordWrap": {
+  "enable": {
+   "spec": {
+    "textFlags": 0
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "disable": {
+   "spec": {
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "same-on": {
+   "spec": {
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "same-off": {
+   "spec": {
+    "textFlags": 0
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "raw-two": {
+   "spec": {
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  },
+  "raw-three": {
+   "spec": {
+    "textFlags": 0
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "raw-three-on": {
+   "spec": {
+    "textFlags": 1
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "other-flags": {
+   "spec": {
+    "textFlags": 254
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  }
+ },
+ "setTextAlignments": {
+  "both": {
+   "spec": {},
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 2
+    }
+   ]
+  },
+  "masked": {
+   "spec": {},
+   "args": [
+    {
+     "int": 511
+    },
+    {
+     "int": 259
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "hAlign": 5,
+    "vAlign": 6
+   },
+   "args": [
+    {
+     "int": 5
+    },
+    {
+     "int": 6
+    }
+   ]
+  },
+  "high-bits": {
+   "spec": {
+    "hAlign": 9,
+    "vAlign": 9
+   },
+   "args": [
+    {
+     "int": 4294901760
+    },
+    {
+     "int": 256
+    }
+   ]
+  }
+ },
+ "setTextMargins": {
+  "change": {
+   "spec": {},
+   "args": [
+    {
+     "float": 1.5
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "hMarginBits": 1069547520,
+    "vMarginBits": 1075838976
+   },
+   "args": [
+    {
+     "float": 1.5
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  },
+  "h-only": {
+   "spec": {
+    "vMarginBits": 1075838976
+   },
+   "args": [
+    {
+     "float": 9.5
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  },
+  "nan-arg": {
+   "spec": {
+    "hMarginBits": 1069547520,
+    "vMarginBits": 1075838976
+   },
+   "args": [
+    {
+     "floatBits": 2143289344
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  },
+  "nan-field": {
+   "spec": {
+    "hMarginBits": 2143289344,
+    "vMarginBits": 1075838976
+   },
+   "args": [
+    {
+     "float": 8.0
+    },
+    {
+     "float": 2.25
+    }
+   ]
+  },
+  "neg": {
+   "spec": {},
+   "args": [
+    {
+     "float": -3.5
+    },
+    {
+     "float": -0.0
+    }
+   ]
+  }
+ },
+ "setLines": {
+  "both": {
+   "spec": {},
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 8
+    }
+   ]
+  },
+  "min-clamp": {
+   "spec": {},
+   "args": [
+    {
+     "int": 9
+    },
+    {
+     "int": 3
+    }
+   ]
+  },
+  "negatives": {
+   "spec": {},
+   "args": [
+    {
+     "int": -5
+    },
+    {
+     "int": -2
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "minLines": 1,
+    "maxLines": 4
+   },
+   "args": [
+    {
+     "int": 1
+    },
+    {
+     "int": 4
+    }
+   ]
+  },
+  "zero-zero": {
+   "spec": {
+    "minLines": -1,
+    "maxLines": -1
+   },
+   "args": [
+    {
+     "int": 0
+    },
+    {
+     "int": 0
+    }
+   ]
+  },
+  "half-same": {
+   "spec": {
+    "minLines": 2,
+    "maxLines": -1
+   },
+   "args": [
+    {
+     "int": 2
+    },
+    {
+     "int": 8
+    }
+   ]
+  }
+ },
+ "setMinLines": {
+  "set": {
+   "spec": {
+    "maxLines": 10
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "clamp-neg": {
+   "spec": {
+    "maxLines": 10
+   },
+   "args": [
+    {
+     "int": -4
+    }
+   ]
+  },
+  "clamp-max": {
+   "spec": {
+    "maxLines": 2
+   },
+   "args": [
+    {
+     "int": 9
+    }
+   ]
+  },
+  "clamp-negmax": {
+   "spec": {
+    "maxLines": -1
+   },
+   "args": [
+    {
+     "int": 5
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "minLines": 3,
+    "maxLines": 9
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  }
+ },
+ "setMaxLines": {
+  "set": {
+   "spec": {
+    "minLines": 2
+   },
+   "args": [
+    {
+     "int": 8
+    }
+   ]
+  },
+  "clamp-neg": {
+   "spec": {
+    "minLines": 2
+   },
+   "args": [
+    {
+     "int": -4
+    }
+   ]
+  },
+  "clamp-min": {
+   "spec": {
+    "minLines": 6
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "clamp-negmin": {
+   "spec": {
+    "minLines": -1
+   },
+   "args": [
+    {
+     "int": 7
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "minLines": 1,
+    "maxLines": 4
+   },
+   "args": [
+    {
+     "int": 4
+    }
+   ]
+  }
+ },
+ "resetLines": {
+  "both-set": {
+   "spec": {
+    "minLines": 2,
+    "maxLines": 9
+   },
+   "args": []
+  },
+  "already": {
+   "spec": {
+    "minLines": -1,
+    "maxLines": -1
+   },
+   "args": []
+  },
+  "min-only": {
+   "spec": {
+    "minLines": 4,
+    "maxLines": -1
+   },
+   "args": []
+  },
+  "max-only": {
+   "spec": {
+    "minLines": -1,
+    "maxLines": 0
+   },
+   "args": []
+  }
+ },
+ "setMinWidth": {
+  "set": {
+   "spec": {},
+   "args": [
+    {
+     "float": 3.5
+    }
+   ]
+  },
+  "neg": {
+   "spec": {},
+   "args": [
+    {
+     "float": -2.5
+    }
+   ]
+  },
+  "nan-arg": {
+   "spec": {
+    "minWidthBits": 1069547520
+   },
+   "args": [
+    {
+     "floatBits": 2143289344
+    }
+   ]
+  },
+  "nan-field": {
+   "spec": {
+    "minWidthBits": 2143289344
+   },
+   "args": [
+    {
+     "float": 4.0
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "minWidthBits": 1069547520
+   },
+   "args": [
+    {
+     "float": 1.5
+    }
+   ]
+  }
+ },
+ "resetMinWidth": {
+  "positive": {
+   "spec": {
+    "minWidthBits": 1069547520
+   },
+   "args": []
+  },
+  "zero": {
+   "spec": {},
+   "args": []
+  },
+  "negative": {
+   "spec": {
+    "minWidthBits": 3212836864
+   },
+   "args": []
+  },
+  "nan": {
+   "spec": {
+    "minWidthBits": 2143289344
+   },
+   "args": []
+  }
+ },
+ "enableTextAsAccelerator": {
+  "enable-text": {
+   "spec": {
+    "text": "|&H hello",
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "enable-no-key": {
+   "spec": {
+    "text": "plain",
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "disable": {
+   "spec": {
+    "textFlags": 2,
+    "text": "x",
+    "accelKey": 72,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "same-on": {
+   "spec": {
+    "textFlags": 2,
+    "text": "|&H x",
+    "accelKey": 72,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "same-off": {
+   "spec": {},
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "raw-three": {
+   "spec": {
+    "textFlags": 2,
+    "text": "|&H x",
+    "accelKey": 72,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "enable-no-parent": {
+   "spec": {
+    "text": "|&G go",
+    "textFlags": 0
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "key-clamp": {
+   "spec": {
+    "text": "|&\u017d z",
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "raw-three-newkey": {
+   "spec": {
+    "textFlags": 2,
+    "text": "|&H x",
+    "accelKey": 1,
+    "windowType": 2
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  }
+ },
+ "addLog": {
+  "first": {
+   "spec": {
+    "now": 10.5,
+    "lineSpacingBits": 1082130432
+   },
+   "args": [
+    {
+     "string": "line one"
+    },
+    {
+     "int": 16711680
+    }
+   ]
+  },
+  "second": {
+   "spec": {
+    "now": 11.0,
+    "lineSpacingBits": 1082130432,
+    "log": [
+     {
+      "expireBits": 1088421888,
+      "text": "prev",
+      "color": 255
+     }
+    ]
+   },
+   "args": [
+    {
+     "string": "line two"
+    },
+    {
+     "int": 65280
+    }
+   ]
+  },
+  "grow": {
+   "spec": {
+    "now": 1.0,
+    "lineSpacingBits": 0,
+    "log": [
+     {
+      "text": "a"
+     },
+     {
+      "text": "b"
+     },
+     {
+      "text": "c"
+     },
+     {
+      "text": "d"
+     },
+     {
+      "text": "e"
+     },
+     {
+      "text": "f"
+     },
+     {
+      "text": "g"
+     },
+     {
+      "text": "h"
+     },
+     {
+      "text": "i"
+     },
+     {
+      "text": "j"
+     },
+     {
+      "text": "k"
+     },
+     {
+      "text": "l"
+     },
+     {
+      "text": "m"
+     },
+     {
+      "text": "n"
+     },
+     {
+      "text": "o"
+     },
+     {
+      "text": "p"
+     },
+     {
+      "text": "q"
+     },
+     {
+      "text": "r"
+     },
+     {
+      "text": "s"
+     },
+     {
+      "text": "t"
+     },
+     {
+      "text": "u"
+     },
+     {
+      "text": "v"
+     },
+     {
+      "text": "w"
+     },
+     {
+      "text": "x"
+     },
+     {
+      "text": "y"
+     },
+     {
+      "text": "z"
+     },
+     {
+      "text": "A"
+     },
+     {
+      "text": "B"
+     },
+     {
+      "text": "C"
+     },
+     {
+      "text": "D"
+     },
+     {
+      "text": "E"
+     },
+     {
+      "text": "F"
+     }
+    ]
+   },
+   "args": [
+    {
+     "string": "grown"
+    },
+    {
+     "int": 1
+    }
+   ]
+  },
+  "empty-line": {
+   "spec": {
+    "now": 2.0,
+    "lineSpacingBits": 1065353216,
+    "log": [
+     {
+      "text": "kept"
+     }
+    ]
+   },
+   "args": [
+    {
+     "string": ""
+    },
+    {
+     "int": 7
+    }
+   ]
+  },
+  "text-present": {
+   "spec": {
+    "now": 3.0,
+    "lineSpacingBits": 1065353216,
+    "text": "existing"
+   },
+   "args": [
+    {
+     "string": "L"
+    },
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "clearLog": {
+  "empty": {
+   "spec": {},
+   "args": []
+  },
+  "one": {
+   "spec": {
+    "log": [
+     {
+      "expireBits": 1,
+      "text": "x",
+      "color": 5
+     }
+    ]
+   },
+   "args": []
+  },
+  "many": {
+   "spec": {
+    "text": "a\nb\nc",
+    "log": [
+     {
+      "text": "a"
+     },
+     {
+      "text": "b",
+      "textMax": 16
+     },
+     {
+      "text": "c"
+     }
+    ],
+    "logMax": 48
+   },
+   "args": []
+  },
+  "capacity-only": {
+   "spec": {
+    "logMax": 8
+   },
+   "args": []
+  }
+ },
+ "setTextTimeout": {
+  "set": {
+   "spec": {},
+   "args": [
+    {
+     "float": 4.5
+    }
+   ]
+  },
+  "neg": {
+   "spec": {
+    "lineSpacingBits": 1065353216
+   },
+   "args": [
+    {
+     "float": -2.0
+    }
+   ]
+  },
+  "nan": {
+   "spec": {},
+   "args": [
+    {
+     "floatBits": 2143289344
+    }
+   ]
+  }
+ },
+ "pauseLog": {
+  "pause": {
+   "spec": {},
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "unpause": {
+   "spec": {
+    "logFlags": 4
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  },
+  "keep": {
+   "spec": {
+    "logFlags": 4
+   },
+   "args": [
+    {
+     "int": 1
+    }
+   ]
+  },
+  "raw-three": {
+   "spec": {
+    "logFlags": 248
+   },
+   "args": [
+    {
+     "int": 3
+    }
+   ]
+  },
+  "raw-two": {
+   "spec": {},
+   "args": [
+    {
+     "int": 2
+    }
+   ]
+  },
+  "other-bits": {
+   "spec": {
+    "logFlags": 5
+   },
+   "args": [
+    {
+     "int": 0
+    }
+   ]
+  }
+ },
+ "setVerticalSpacing": {
+  "set": {
+   "spec": {},
+   "args": [
+    {
+     "float": 2.5
+    }
+   ]
+  },
+  "neg": {
+   "spec": {},
+   "args": [
+    {
+     "float": -1.25
+    }
+   ]
+  },
+  "nan-arg": {
+   "spec": {
+    "lineSpacingBits": 1069547520
+   },
+   "args": [
+    {
+     "floatBits": 2143289344
+    }
+   ]
+  },
+  "nan-field": {
+   "spec": {
+    "lineSpacingBits": 2143289344
+   },
+   "args": [
+    {
+     "float": 4.0
+    }
+   ]
+  },
+  "same": {
+   "spec": {
+    "lineSpacingBits": 1075838976
+   },
+   "args": [
+    {
+     "float": 2.25
+    }
+   ]
+  }
+ }
 }
