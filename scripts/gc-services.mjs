@@ -212,7 +212,7 @@ export function f32FromBits(bits) {
 }
 
 const GC_PTR_FIELDS = new Set(['vtable', 'canvas', 'normalFont', 'boldFont',
-  'unknown84', 'stackTop', 'freeList', 'owner']);
+  'stackTop', 'freeList', 'owner']);
 
 // ---------------------------------------------------------------------------
 // Draw-boundary images (scripts/native-gc-draw-probe.py mirrors).  The stub
