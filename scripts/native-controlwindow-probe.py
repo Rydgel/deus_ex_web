@@ -270,7 +270,8 @@ class ControlWindowProbe(_NATIVE.NativeCollision):
             if (kind == 'u8' and size != 1) or (kind != 'u8' and size != 4):
                 return
         captured = (int.from_bytes(cpu.mem_read(address, size), 'little')
-                    if access == UC_MEM_READ else value & 0xffffffff)
+                    if access == UC_MEM_READ
+                    else value & ((1 << (size * 8)) - 1))
         self.accesses.append({
             'op': 'read' if access == UC_MEM_READ else 'write',
             'object': label, 'offset': offset, 'kind': kind, 'size': size,

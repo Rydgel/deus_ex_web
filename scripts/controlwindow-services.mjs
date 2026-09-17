@@ -80,6 +80,46 @@ export function buildWorld(caseSpec) {
   const receiver = world.objects[caseSpec.this ?? caseSpec.nodes?.[0]?.[0]];
   const nameOf = canon;
 
+  // Sparse byte overlay: an unaligned dword store (e.g. the +0x20d checkbox
+  // color) bleeds bytes into neighboring dwords.  Field values live at their
+  // numeric key; `_b` holds bytes written across field boundaries.
+  const fieldByte = (object, off) => {
+    if (object._b?.has(off)) return object._b.get(off);
+    for (const key of Object.keys(object)) {
+      if (!/^\d+$/.test(key)) continue;
+      const base = Number(key);
+      const v = object[base];
+      if (typeof v !== 'number') continue;
+      const kind = fieldKind(base);
+      if (kind === 'u8') {
+        if (base === off) return v & 0xff;
+      } else if (base <= off && off < base + 4) {
+        const bits = kind === 'f32' ? f32bits(v) : v >>> 0;
+        return (bits >>> ((off - base) * 8)) & 0xff;
+      }
+    }
+    return 0xaa;
+  };
+  const mergedU32 = object => {
+    const bytes = [...Array(4)].map((_, j) => fieldByte(object, offset0 + j));
+    return (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) |
+      (bytes[3] << 24)) >>> 0;
+  };
+  let offset0 = 0;
+  const clearBytes = (object, off, size) => {
+    if (!object._b) return;
+    for (let j = 0; j < size; j += 1) object._b.delete(off + j);
+  };
+  const readDword = (object, offset) => {
+    offset0 = offset;
+    let hasOverlay = false;
+    if (object._b)
+      for (let j = 0; j < 4 && !hasOverlay; j += 1)
+        hasOverlay = object._b.has(offset + j);
+    if (hasOverlay) return mergedU32(object);
+    return object[offset];
+  };
+
   const record = (op, object, offset, kind, value) => {
     world.trace.push({
       op, object: nameOf(object), offset, kind,
@@ -92,12 +132,16 @@ export function buildWorld(caseSpec) {
   };
 
   const read = (object, offset, kind, details) => {
-    let value = object[offset];
+    let value;
     if (kind === 'ptr') {
-      value = value ?? null;
+      value = object[offset] ?? null;
       record('read', object, offset, kind, value);
       return value;
     }
+    value = kind === 'u8'
+      ? (object._b?.has(offset) ? object._b.get(offset)
+        : object[offset] === undefined ? 0 : object[offset])
+      : readDword(object, offset);
     if (value === undefined) value = 0;
     record('read', object, offset, kind, value);
     if (kind === 'u8') return value & 0xff;
@@ -108,12 +152,23 @@ export function buildWorld(caseSpec) {
     if (kind === 'ptr') {
       record('write', object, offset, kind, value ?? null);
       object[offset] = value ?? null;
+      clearBytes(object, offset, 4);
       return;
     }
     const stored = kind === 'u8' ? value & 0xff
       : kind === 'u32' ? value >>> 0 : f(value);
     record('write', object, offset, kind, stored);
-    object[offset] = stored;
+    const size = kind === 'u8' ? 1 : 4;
+    if (kind === 'u8' || offset % 4 === 0) {
+      object[offset] = stored;
+      clearBytes(object, offset, size);
+      return;
+    }
+    if (!object._b) object._b = new Map();
+    const bits = kind === 'f32' ? f32bits(stored) : stored;
+    for (let j = 0; j < 4; j += 1)
+      object._b.set(offset + j, (bits >>> (8 * j)) & 0xff);
+    delete object[offset];
   };
 
   const queues = {};
@@ -190,13 +245,24 @@ export function buildWorld(caseSpec) {
       for (const offText of offsets) {
         const offset = Number(offText);
         const kind = fieldKind(offset);
-        const value = object[offset];
-        if (kind === 'u8') dump[offText] = value === undefined ? 0xaa : value & 0xff;
-        else if (kind === 'ptr')
-          dump[offText] = value === undefined ? nameOf(uninit) : nameOf(value ?? null);
-        else if (kind === 'f32')
-          dump[offText] = value === undefined ? 0xaaaaaaaa : f32bits(value);
-        else dump[offText] = value === undefined ? 0xaaaaaaaa : value >>> 0;
+        if (kind === 'u8') {
+          dump[offText] = object._b?.has(offset) ? object._b.get(offset)
+            : object[offset] === undefined ? 0xaa : object[offset] & 0xff;
+        } else if (kind === 'ptr') {
+          const value = object[offset];
+          dump[offText] = value === undefined
+            ? nameOf(uninit) : nameOf(value ?? null);
+        } else {
+          offset0 = offset;
+          let overlay = false;
+          if (object._b)
+            for (let j = 0; j < 4 && !overlay; j += 1)
+              overlay = object._b.has(offset + j);
+          if (overlay) dump[offText] = mergedU32(object);
+          else if (object[offset] === undefined) dump[offText] = 0xaaaaaaaa;
+          else if (kind === 'f32') dump[offText] = f32bits(object[offset]);
+          else dump[offText] = object[offset] >>> 0;
+        }
       }
       state[label] = dump;
     }
