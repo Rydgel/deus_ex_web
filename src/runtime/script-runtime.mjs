@@ -26,6 +26,11 @@ import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
 import { execActorPlaySound } from './script-sound.mjs';
 import { execMove } from './script-move.mjs';
+import {
+  dispatchMoveTo, dispatchMoveToward, dispatchTurnTo, dispatchTurnToward,
+  dispatchWaitForLanding, pollMoveTo, pollMoveToward, pollTurnTo,
+  pollTurnToward, pollWaitForLanding,
+} from './script-pawn-locomotion.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
 import { isOverlapping } from './actor-touch.mjs';
@@ -231,6 +236,8 @@ export class ScriptRuntime {
         if(call.index===0x181)return pollFinishAnim({
           animation:animationView(this,call.receiver),state:call.state,
         });
+        if([501,503,509,511,528].includes(call.index))
+          return this.pollPawnLocomotion(call);
         if(!this.pollLatent)throw new Error(`Unimplemented original latent action ${call.index}`);
         return this.pollLatent(call);
       },
@@ -732,6 +739,75 @@ export class ScriptRuntime {
       read:(actor,name)=>this.soundField(actor,name),
       moveActor:typeof level?.moveActor==='function'?level.moveActor.bind(level):undefined,
     };
+  }
+  /** Pawn-locomotion native view (docs/script-pawn-locomotion.md): the
+   * recovered bodies read/write the pawn's script-declared movement fields.
+   * Each property binds the reflected field once; vectors/rotators stay
+   * [x,y,z]/[pitch,yaw,roll] arrays and flags stay booleans, matching the
+   * shapes the oracle probe's fabricated memory exposes. */
+  pawnView(receiver) {
+    const fields={
+      physics:'Physics',location:'Location',velocity:'Velocity',acceleration:'Acceleration',
+      rotation:'Rotation',desiredRotation:'DesiredRotation',rotationRate:'RotationRate',
+      floor:'Floor',destination:'Destination',focus:'Focus',latentFloat:'LatentFloat',
+      moveTimer:'MoveTimer',desiredSpeed:'DesiredSpeed',maxDesiredSpeed:'MaxDesiredSpeed',
+      meleeRange:'MeleeRange',groundSpeed:'GroundSpeed',waterSpeed:'WaterSpeed',
+      airSpeed:'AirSpeed',accelRate:'AccelRate',avgPhysicsTime:'AvgPhysicsTime',
+      collisionRadius:'CollisionRadius',collisionHeight:'CollisionHeight',
+      moveTarget:'MoveTarget',faceTarget:'FaceTarget',
+      bCanStrafe:'bCanStrafe',bReducedSpeed:'bReducedSpeed',bCanSwim:'bCanSwim',
+      bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',
+    };
+    const view={self:receiver};
+    for(const [prop,name] of Object.entries(fields)){
+      const ref=this.namedReference(receiver,name);
+      Object.defineProperty(view,prop,{get:()=>ref.get(),set:value=>ref.set(value),enumerable:true});
+    }
+    return view;
+  }
+  /** ZoneInfo projection the falling/swim gates consume: Region.Zone plus the
+   * ZoneInfo class default's ZoneGravity.z (the be200 assert path reads
+   * zone->Class->ClassDefaultObject+0x324). */
+  locomotionZone(actor) {
+    if(!actor)return null;
+    const zone=this.regionValue(actor).zone;
+    if(!zone)return null;
+    const cls=this.instance(zone)?.cls;
+    const gravity=this.namedReference(zone,'ZoneGravity').get();
+    const field=cls?this.lookupMember(cls,'fields','ZoneGravity'):null;
+    const defaults=field?this.defaultValue(cls,field):null;
+    return {gravityZ:gravity?.[2],defaultGravityZ:defaults?.[2],
+      waterZone:Boolean(this.namedReference(zone,'bWaterZone').get())};
+  }
+  locomotionServices() {
+    return {
+      isA:(actor,name)=>{
+        const tail=lower(String(name).split('.').pop());
+        for(let cls=this.instance(actor)?.cls;cls;cls=cls.base)
+          if(lower(cls.record.name)===tail)return true;
+        return false;
+      },
+      readField:(actor,name)=>this.namedReference(actor,name).get(),
+      processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
+      zone:actor=>this.locomotionZone(actor),
+    };
+  }
+  /** Latent move/turn setups (Engine bodies at PAWN_LOCOMOTION_CONTRACT):
+   * every argument expression is evaluated before the body runs, exactly as
+   * the original GNatives-dispatch order (all evals precede all writes). */
+  pawnLocomotion(call) {
+    const dispatch={500:dispatchMoveTo,502:dispatchMoveToward,508:dispatchTurnTo,
+      510:dispatchTurnToward,527:dispatchWaitForLanding}[call.index];
+    const args=[];
+    for(let i=0;i<call.argumentCount;i++)args.push(refValue(call.evaluateArgument(i)));
+    return dispatch({pawn:this.pawnView(call.receiver),state:this.instance(call.receiver).state,
+      args,services:this.locomotionServices()});
+  }
+  pollPawnLocomotion(call) {
+    const poll={501:pollMoveTo,503:pollMoveToward,509:pollTurnTo,
+      511:pollTurnToward,528:pollWaitForLanding}[call.index];
+    return poll({pawn:this.pawnView(call.receiver),state:call.state,dt:call.seconds,
+      services:this.locomotionServices()});
   }
   /** Native MakeNoise512 services: the PlaySound level graph plus field
    * writes (instigator noise slots, listener Stimulus), probe-mask queries,
@@ -1640,6 +1716,7 @@ export class ScriptRuntime {
       return execActorPlaySound(call,this.soundServices(call));
     }
     if(call.index===266)return execMove(call,this.moveServices(call));
+    if([500,502,508,510,527].includes(call.index))return this.pawnLocomotion(call);
     if(call.index===512)return execMakeNoise(call,this.noiseServices(call));
     if(call.index===2100||call.index===2101||call.index===2102){
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
