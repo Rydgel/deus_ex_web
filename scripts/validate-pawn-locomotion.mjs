@@ -544,7 +544,7 @@ for (const mut of MUTATIONS) {
     console.log(`MUTATION ${mut.name}: expected ${mut.expect.join(',')} to flip; flipped=[${flipped.join(',')}]`);
     mutFailures++;
   }
+  try { unlinkSync(mutPath); } catch { /* cleaned on next run at worst */ }
 }
-try { unlinkSync(path.join(cacheDir, 'mut-dummy')); } catch { /* none */ }
 console.log(`${mutFailures ? 'FAIL' : 'PASS'} mutation coverage: ${MUTATIONS.length - mutFailures}/${MUTATIONS.length} mutants detected`);
 process.exit(mutFailures ? 1 : 0);
