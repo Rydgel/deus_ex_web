@@ -11,9 +11,11 @@ recorded as an event.
 
 Leaves intercepted (all other code executes the real bodies):
   * AskParentForReconfigure 0x1004e060   -> event {op:'AskParentForReconfigure'}
-  * GetTime leaf 0x1004fda0              -> patched `push; push; fld qword
-    [esp]; add esp,8; ret` stub returning the per-case `now` double in ST0
-    (the real leaf reaches rdtsc through 0x1003a3b0 and is nondeterministic)
+  * GetTime leaf 0x1004fda0              -> patched `fld qword [now_cell];
+    ret` stub returning the per-case `now` double in ST0 (the real leaf
+    reaches rdtsc through 0x1003a3b0 and is nondeterministic).  The stub
+    bytes are fixed; only the now_cell data changes per case, so Unicorn's
+    translated-block cache never serves a stale `now`.
   * GNatives readers (Core ?GNatives@@ table at 0x101f41b8) -> positional
     marshal queue.  The table is runtime-initialised by Core process startup
     (the file image is zero-filled), so parameter marshalling is a documented
@@ -176,6 +178,10 @@ class TextWindowProbe(_NATIVE.NativeCollision):
         self.gnatives = self.read(GNATIVES_IAT, 'I')[0]
         self.gprop_addr = self.read(GPROP_IAT, 'I')[0]
         self.reader_stubs = self.alloc(0x400)
+        # GetTime stub: a fixed `fld qword [now_cell]; ret` — the code bytes
+        # never change (re-patching would not invalidate Unicorn's translated
+        # block cache, freezing the first case's `now`), only now_cell data.
+        self.now_cell = self.alloc(8)
         for i in range(256):
             stub = self.reader_stubs + i * 4
             self.cpu.mem_write(stub, b'\xc2\x08\x00\x90')
@@ -298,13 +304,15 @@ class TextWindowProbe(_NATIVE.NativeCollision):
         return address
 
     def patch_gettime(self, now):
-        """Replace the GetTime leaf body with a stub that loads the configured
-        f64 `now` into ST0: push hi; push lo; fld qword [esp]; add esp,8; ret.
-        The real body calls appSecondsSlow (rdtsc) and is nondeterministic."""
-        lo, hi = struct.unpack('<2I', struct.pack('<d', float(now)))
-        stub = (b'\x68' + struct.pack('<I', hi) + b'\x68' + struct.pack('<I', lo)
-                + b'\xdd\x04\x24\x83\xc4\x08\xc3')
-        self.cpu.mem_write(GET_TIME, stub)
+        """Point the GetTime leaf at a fixed `fld qword [now_cell]; ret` stub
+        and refresh the cell.  The real body calls appSecondsSlow (rdtsc) and
+        is nondeterministic.  The stub bytes are identical on every call —
+        only now_cell data varies — because re-patching code would not
+        invalidate Unicorn's translated-block cache (a baked-in value would
+        freeze at the first case's `now`)."""
+        self.cpu.mem_write(
+            GET_TIME, b'\xdd\x05' + struct.pack('<I', self.now_cell) + b'\xc3')
+        self.cpu.mem_write(self.now_cell, struct.pack('<d', float(now)))
 
     def accel_root(self, this):
         """0x1004c580 walk: first ancestor (or self) with windowType >= 2."""
