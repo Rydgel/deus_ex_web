@@ -113,8 +113,7 @@ CASES = {
     'drawing-off':  case(spec={'flags': 0},
                          args=[F(10), F(20), F(32), F(16), F(0), F(0), TEX64]),
     'null-texture': case(args=[F(10), F(20), F(32), F(16), F(0), F(0), 0]),
-    'no-canvas':    case(spec={'fill': 0, 'flags': 0x2, 'hMultiplier': 1,
-                              'vMultiplier': 1},
+    'no-canvas':    case(spec={'canvas': 0},
                          args=[F(10), F(20), F(32), F(16), F(0), F(0), TEX64]),
 
     # --- fractional coords: _ftol(v + 0.1) truncation --------------------------
