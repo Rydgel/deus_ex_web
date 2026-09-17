@@ -81,13 +81,15 @@ const fail = (message, details) => {
   throw new GcGetTextExtentBoundaryError(message, details);
 };
 
-/** State byte indices inside the 20-byte per-measurement iterator state. */
-const STATE_BOLD = 0;
-const STATE_HAS_COLOR = 1;
-const STATE_CONTINUED = 2; // newline pending — set by the scanner on '\n'
-const STATE_AMP = 3;
-const STATE_COLOR = 4;     // 4 x f32 rgba at +4..+0x13
-const STATE_SIZE = 20;
+/** State byte indices inside the 20-byte per-measurement iterator state.
+ *  Exported for UGC::DrawText — it runs the same two-state iterator pair
+ *  (emit state + scan state) through these helpers. */
+export const STATE_BOLD = 0;
+export const STATE_HAS_COLOR = 1;
+export const STATE_CONTINUED = 2; // newline pending — set by the scanner on '\n'
+export const STATE_AMP = 3;
+export const STATE_COLOR = 4;     // 4 x f32 rgba at +4..+0x13
+export const STATE_SIZE = 20;
 
 /**
  * Palette the one-time init at 0x100294eb writes into 0x100a2dd4 — eight
@@ -115,7 +117,7 @@ let gPaletteInit = 0; // 0x100a2df4 — set once; palette data is constant
 
 /** The FString data as UTF-16 code units, truncated at the first NUL —
  *  the same bound appStrlen gives the method body. */
-function textUnits(text) {
+export function textUnits(text) {
   if (typeof text !== 'string')
     fail('GC.GetTextExtent requires the text string', {kind: 'REFERENCE', value: text});
   let len = text.indexOf('\0');
@@ -125,10 +127,10 @@ function textUnits(text) {
   return units;
 }
 
-const stateView = state => new DataView(state.buffer, state.byteOffset, STATE_SIZE);
+export const stateView = state => new DataView(state.buffer, state.byteOffset, STATE_SIZE);
 const writeStateF32 = (state, offset, value) =>
   stateView(state).setFloat32(offset, Math.fround(value), true);
-const copyTextFloats = (L, gcBase, state) => {
+export const copyTextFloats = (L, gcBase, state) => {
   const view = stateView(state);
   for (let i = 0; i < 4; i++)
     view.setUint32(STATE_COLOR + i * 4, L.read(gcBase + GC.textFloats + i * 4, 'u32'), true);
@@ -166,7 +168,7 @@ function parseColor(cur, end, state, units) {
 
 /** 0x100294d0: advance *cursor past escapes, return the next renderable
  *  UTF-16 unit (0 at the end).  Mutates cur.pos and the 20-byte state. */
-function nextChar(L, gcBase, cur, end, state, units) {
+export function nextChar(L, gcBase, cur, end, state, units) {
   if (!gPaletteInit) gPaletteInit = 1;
   state[STATE_AMP] = 0;
   for (;;) {
@@ -248,7 +250,7 @@ function nextChar(L, gcBase, cur, end, state, units) {
  * Returns {start, len, width(f32), progress} — progress 0 models the
  * wrapper's null return (line-start pointer on success).
  */
-function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
+export function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
   let destW = destWidth;
   if (!(destW > 0)) destW = 500000;
   const savedByte2 = state[STATE_CONTINUED];
@@ -329,11 +331,12 @@ function scanLine(L, gcBase, cursor, end, state, units, destWidth) {
           progress: outCursor > start || savedByte2 !== 0 ? 1 : 0};
 }
 
-export function gcGetTextExtentMethod(object, destWidth, writeX, writeY, text, services = {}) {
-  if (!object || (typeof object !== 'object' && typeof object !== 'function'))
-    fail('GC.GetTextExtent requires a canonical GC object', {kind: 'REFERENCE', value: object});
-  const L = gcMemory(object, services);
-  const units = textUnits(text);
+/**
+ * The method's measurement loop on already-decoded UTF-16 units — shared by
+ * UGC::DrawText, which calls the same GetTextExtent body (0x10027bb0) with
+ * f32(wrapInt) when its vAlign byte is non-zero.
+ */
+export function gcTextExtentUnits(L, destWidth, units) {
   const state = new Uint8Array(STATE_SIZE);
   const cursor = {pos: 0};
   const end = units.length;
@@ -366,10 +369,15 @@ export function gcGetTextExtentMethod(object, destWidth, writeX, writeY, text, s
     totalY = Math.fround(lineH + L.read(L.base + GC.textVSpacing, 'f32') + totalY);
     lineH = 0;
   }
-  return {
-    xExtent: writeX ? maxX : null,
-    yExtent: writeY ? Math.fround(lineH + totalY) : null,
-  };
+  return {xExtent: maxX, yExtent: Math.fround(lineH + totalY)};
+}
+
+export function gcGetTextExtentMethod(object, destWidth, writeX, writeY, text, services = {}) {
+  if (!object || (typeof object !== 'object' && typeof object !== 'function'))
+    fail('GC.GetTextExtent requires a canonical GC object', {kind: 'REFERENCE', value: object});
+  const L = gcMemory(object, services);
+  const m = gcTextExtentUnits(L, destWidth, textUnits(text));
+  return {xExtent: writeX ? m.xExtent : null, yExtent: writeY ? m.yExtent : null};
 }
 
 export function gcGetTextExtent(object, destWidth, text, services = {}) {

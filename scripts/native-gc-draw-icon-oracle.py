@@ -94,8 +94,7 @@ CASES = {
     'drawing-off':  case(spec={'flags': 0},
                          args=[F(10), F(20), TEX64]),
     'null-texture': case(args=[F(10), F(20), 0]),
-    'no-canvas':    case(spec={'fill': 0, 'flags': 0x2, 'hMultiplier': 1,
-                              'vMultiplier': 1},
+    'no-canvas':    case(spec={'canvas': 0},
                          args=[F(10), F(20), TEX64]),
 
     # --- fractional coords -------------------------------------------------------

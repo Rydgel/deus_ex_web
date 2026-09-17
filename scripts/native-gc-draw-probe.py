@@ -178,6 +178,13 @@ class GcDrawProbe(_NATIVE.NativeCollision):
         self.gprop_global = self.read(GPROPADDR_IAT, 'I')[0]
         self.out_slot = self.alloc(0x40)
 
+        # msvcrt __dllonexit resolves to real CRT code (its IAT slot carries
+        # the export address, so it never lands in self.thunks).  DrawText's
+        # realize-cache init and nextChar's palette init both register an
+        # atexit callback through it — model the append at the resolved
+        # address before real CRT code can reach kernel32 critical sections.
+        self.dllonexit_addr = self.read(EXT + 0x593a8, 'I')[0]
+
         # Recording DrawTile stub: the code hook captures the argument block
         # at entry, then the real `ret 0x50` performs thiscall cleanup —
         # callee pops all 80 stack bytes, matching UCanvas::DrawTile.
@@ -186,10 +193,14 @@ class GcDrawProbe(_NATIVE.NativeCollision):
 
         # DrawText's glyph path calls FRenderInterface::DrawTile directly —
         # vtable slot +0x7c of *(*(canvas+0x7c) + 0x64), the same boundary the
-        # real UCanvas::DrawTile (Engine.dll 0x10376160) delegates to.  Same
-        # 20-dword arg block and thiscall cleanup.
+        # real UCanvas::DrawTile (Engine.dll 0x10376160) delegates to.  The
+        # arg block is the full DrawTile layout plus one trailing dword:
+        # (sceneNode, FTextureInfo record, X, Y, XL, YL, U, V, UL, VL, span,
+        # Z, color[4], fog[4], polyFlags) — the text polyflags dword is
+        # pushed before the FPlane ctor that fills the fog local, so it
+        # survives the ctor's arg cleanup as the 21st dword.
         self.glyph_stub = self.alloc(16)
-        self.cpu.mem_write(self.glyph_stub, b'\xc2\x50\x00')
+        self.cpu.mem_write(self.glyph_stub, b'\xc2\x54\x00')
 
         # Fake UTexture vtable leaves the realize cache calls:
         # Lock(this, &record, vp+0xb0, vp+0xb4, -1, RI) ret 0x14 and
@@ -209,6 +220,14 @@ class GcDrawProbe(_NATIVE.NativeCollision):
         self.cpu.mem_write(self.remove_stub, b'\xc2\x0c\x00')
         self.write(FARRAY_REALLOC_IAT, 'I', self.realloc_stub)
         self.write(FARRAY_REMOVE_IAT, 'I', self.remove_stub)
+
+        # The exec teardown frees the FString data through the real Core
+        # GMalloc global (FMalloc::Free at vtable+8 — thiscall, one arg).
+        # Redirect just that slot; the block lives in our scratch heap.
+        self.free_stub = self.alloc(16)
+        self.cpu.mem_write(self.free_stub, b'\xc2\x04\x00')
+        gmalloc = self.read(EXT + 0x59060, 'I')[0]
+        self.write(self.read(gmalloc, 'I')[0] + 8, 'I', self.free_stub)
 
         # PushGC's UGC::operator-new path (reached when freeList == 0):
         # StaticAllocateObject is cdecl (caller cleans 7 args), the ctor
@@ -242,7 +261,7 @@ class GcDrawProbe(_NATIVE.NativeCollision):
         if address == self.done:
             cpu.emu_stop()
             return
-        if self.thunks.get(address) == ('msvcrt.dll', '__dllonexit'):
+        if address == self.dllonexit_addr:
             # CRT atexit-for-DLLs, reached once by the realize-cache init in
             # 0x1002a370 and the palette init in 0x100294d0.  The registered
             # list is only walked at DLL unload; a faithful append to the
@@ -337,12 +356,13 @@ class GcDrawProbe(_NATIVE.NativeCollision):
 
     def on_glyph_tile(self, cpu):
         """DrawText glyph emit — FRenderInterface::DrawTile at vtable +0x7c.
-        The 20-dword block is (sceneNode, FTextureInfo*, X, Y, XL, YL, U, V,
-        UL, VL, FSpanBuffer*, Z, Color FPlane, Fog FPlane): the leading object
-        pair replaces the DrawTile texture and there is no polyFlags arg —
-        the text polyflags ride in fog.w."""
+        The 21-dword block is (sceneNode, FTextureInfo*, X, Y, XL, YL, U, V,
+        UL, VL, FSpanBuffer*, Z, Color FPlane, Fog FPlane, polyFlags): the
+        leading object pair replaces the DrawTile texture and the text
+        polyflags (GC+0x50) are the trailing arg — pushed before the FPlane
+        ctor whose four zero args fill the fog local (fog.w stays 0)."""
         stack = cpu.reg_read(UC_X86_REG_ESP)
-        args = self.read(stack + 4, '20I')
+        args = self.read(stack + 4, '21I')
         (node, record, x, y, xl, yl, u, v, ul, vl, span, z) = args[:12]
         self.events.append({
             'op': 'DrawGlyphTile',
@@ -354,6 +374,7 @@ class GcDrawProbe(_NATIVE.NativeCollision):
             'u': u, 'v': v, 'ul': ul, 'vl': vl,
             'spanBuffer': span, 'z': z,
             'color': list(args[12:16]), 'fog': list(args[16:20]),
+            'polyFlags': args[20],
         })
 
     def on_texture_lock(self, cpu):
@@ -411,6 +432,8 @@ class GcDrawProbe(_NATIVE.NativeCollision):
             return 0
         if ptr in (UGC_VTABLE, IMAGE_BASE + 0x598dc):
             return 'UGC::vtable'
+        if ptr in (EXT + 0xa28c8, IMAGE_BASE + 0xa28c8):
+            return 'UGC::PrivateStaticClass'
         if ptr == self.cur_this:
             return 'this'
         if ptr == self.canvas_addr:
@@ -505,21 +528,41 @@ class GcDrawProbe(_NATIVE.NativeCollision):
         Page texture specs ('tex': {...}|0) build real lockable textures so
         the glyph path's realize/Lock sequence is exercised."""
         cpp = spec['charsPerPage']
+        pages = spec['pages']
+        # A page may pin its table index with 'page': i (sparse fonts put a
+        # glyph on a high page, e.g. U+4E2D at index 0x4e for cpp=0x100).
+        count = spec.get('pageCount')
+        if count is None:
+            count = max((p.get('page', i) + 1 for i, p in enumerate(pages)),
+                        default=0)
         font = self.alloc(0x40)
         self.cpu.mem_write(font, b'\0' * 0x40)
-        table = self.alloc(FONT_PAGE_SIZE * spec['pageCount'])
-        for p, page in enumerate(spec['pages']):
+        table = self.alloc(FONT_PAGE_SIZE * count)
+        self.cpu.mem_write(table, b'\0' * (FONT_PAGE_SIZE * count))
+        for i, page in enumerate(pages):
+            p = page.get('page', i)
             chars = page['chars']
-            run = self.alloc(FONT_GLYPH_SIZE * len(chars))
-            for i, rec in enumerate(chars):
-                self.write(run + FONT_GLYPH_SIZE * i, '4i', *rec)
+            if isinstance(chars, dict):
+                # {remainder-index: [startU, startV, uSize, vSize]} — the
+                # glyph array is indexed by codepoint % charsPerPage.
+                n = max(chars) + 1 if chars else 0
+                run = self.alloc(FONT_GLYPH_SIZE * max(n, 1))
+                self.cpu.mem_write(run, b'\0' * (FONT_GLYPH_SIZE * max(n, 1)))
+                for rem, rec in chars.items():
+                    self.write(run + FONT_GLYPH_SIZE * rem, '4i', *rec)
+                num = n
+            else:
+                run = self.alloc(FONT_GLYPH_SIZE * len(chars))
+                for j, rec in enumerate(chars):
+                    self.write(run + FONT_GLYPH_SIZE * j, '4i', *rec)
+                num = len(chars)
             tex = self.build_texture(page['tex']) if page.get('tex') else 0
             self.write(table + FONT_PAGE_SIZE * p, '4I',
-                       tex, run, len(chars), len(chars))
+                       tex, run, num, num)
         self.write(font + FONT_CHARS_PER_PAGE, 'i', cpp)
         self.write(font + FONT_PAGES, 'I', table)
-        self.write(font + FONT_PAGE_COUNT, 'i', spec['pageCount'])
-        self.write(font + FONT_PAGE_MAX, 'i', spec['pageCount'])
+        self.write(font + FONT_PAGE_COUNT, 'i', count)
+        self.write(font + FONT_PAGE_MAX, 'i', count)
         self.font_ids[font] = 'font%d' % len(self.font_ids)
         return font
 

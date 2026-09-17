@@ -184,6 +184,7 @@ export function uFontGlyph(L, font, ch, texOut = 0) {
   const count = L.read(font + UFONT.pageCount, 'i32');
   let hit = page < count; // signed jge: miss iff page >= pageCount
   let glyph = 0;
+  let texture = 0;
   if (hit) {
     const table = L.read(font + UFONT.pages, 'u32');
     const pageRec = table + page * FONT_PAGE.size;
@@ -191,16 +192,18 @@ export function uFontGlyph(L, font, ch, texOut = 0) {
       fontFail('UFont glyph lookup produced a negative page/index (reads outside the table — unverifiable)', {kind: 'DIVISOR', value: {ch, cpp, page, rem}});
     hit = rem < L.read(pageRec + FONT_PAGE.numChars, 'i32'); // signed jge
     if (hit) glyph = L.read(pageRec + FONT_PAGE.chars, 'u32') + rem * FONT_GLYPH.size;
+    texture = hit ? L.read(pageRec + FONT_PAGE.texture, 'u32') : 0;
     if (texOut)
-      L.write(texOut, 'u32', hit ? L.read(pageRec + FONT_PAGE.texture, 'u32') : 0);
+      L.write(texOut, 'u32', texture);
   } else if (texOut) {
     L.write(texOut, 'u32', 0);
   }
-  if (!hit) return {startU: 0, startV: 0, uSize: 0, vSize: 0};
+  if (!hit) return {startU: 0, startV: 0, uSize: 0, vSize: 0, texture: 0};
   return {
     startU: L.read(glyph + FONT_GLYPH.startU, 'i32'),
     startV: L.read(glyph + FONT_GLYPH.startV, 'i32'),
     uSize:  L.read(glyph + FONT_GLYPH.uSize, 'i32'),
     vSize:  L.read(glyph + FONT_GLYPH.vSize, 'i32'),
+    texture,
   };
 }

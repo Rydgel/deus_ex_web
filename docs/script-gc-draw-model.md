@@ -7,12 +7,18 @@ command stream**, not pixels.  A browser canvas backend that consumes the
 stream is a separate app-side concern; nothing here rasterizes.
 
 `src/runtime/script-gc-draw-model.mjs` holds the shared gate/sink/clip
-translation and the command record.  `src/runtime/script-gc-draw-texture.mjs`
-is the first native bound to it (`GC.DrawTexture`, native 1284).
+translation and the command record.  Six tile natives are bound to it —
+`DrawTexture` (1284), `DrawIcon` (1283), `DrawStretchedTexture` (1287),
+`DrawPattern` (1285), `DrawBox` (1286), `DrawBorders` (1289) — each in its
+own `src/runtime/script-gc-draw-*.mjs` module with a matching
+`scripts/native-gc-draw-*-oracle.py` case driver and
+`scripts/validate-gc-draw-*.mjs` bit-exactness gate.
 `scripts/native-gc-draw-probe.py` runs the real bodies under Unicorn and
-records the boundary calls; `scripts/native-gc-draw-texture-oracle.py` is the
-case driver; `scripts/validate-gc-draw-texture.mjs` asserts bit-exact
-agreement on raw f32 bit patterns.
+records the boundary calls.
+
+`DrawText` (1282) is bound separately in
+`src/runtime/script-gc-draw-text.mjs`: its glyph emits reach the same
+render boundary one level deeper (see below).
 
 ## Native evidence (Extension.dll, base 0x10000000)
 
@@ -133,19 +139,81 @@ probe the vtable slot holds a `ret 0x50` stub whose code-hook captures the
 rebuilds the identical event.  Events carry raw u32 bit patterns — texture
 and canvas as canonicalized heap labels — and are compared bit-for-bit.
 
-## Reuse by the other draw natives
+## Reuse by the other draw natives — all bound
 
-The gate/sink/clip trio is the shared engine for every tile draw:
+The gate/sink/clip trio is the shared engine for every tile draw.  All six
+are implemented and oracle-validated bit-exact:
 
-- `DrawTexture` (this task): one command; `ul = destW`, `vl = destH`.
-- `DrawStretchedTexture`: same single command with independent UV extent —
-  exercises the proportional clip path the zero-size flags gate here.
-- `DrawBox`/`DrawPattern`/`DrawBorders`: emit one command per tile piece
-  through the same sink.
-- `DrawText`: one command per glyph (font model supplies per-glyph rects).
+- `DrawTexture` (1284): gate `ul = destW`, `vl = destH` → proportional.
+- `DrawIcon` (1283): method `0x10028f10` re-gates, leaf `0x10029010` emits
+  `sink(tex, x, y, USize, VSize, 0, 0, USize, VSize, 0, 0)` — proportional
+  mode over the full texture.
+- `DrawStretchedTexture` (1287): exec calls the sink directly,
+  `flagW = flagH = 0` — proportional with an independent UV rect.
+- `DrawPattern` (1285): method `0x10028a60` emits
+  `sink(tex, x, y, w, h, OrgX, OrgY, 0, 0, 1, 1)` — pixel-tracking.
+- `DrawBox` (1286): method `0x10028c50` — four DrawPattern-shaped edge
+  calls (top, bottom, left, right — pixel-tracking, OrgX/OrgY shifted per
+  edge); a single full-rect tile when `destW <= 2T or destH <= 2T`.
+- `DrawBorders` (1289): method `0x10028df0` — nine tiles from a
+  `Texture[9]` array (TL, TR, BL, BR, L, R, T, B, C); corner/edge dims are
+  max-folded per row/column, negative mid-dimensions rescale the border
+  bands proportionally, `bStretch` flags pick per-tile proportional vs
+  pixel-tracking.
 
-Each follow-on native supplies its own argument marshalling up to the gate;
-below the gate the model is unchanged.
+## DrawText (1282) — the glyph path one level deeper
+
+`DrawText` does NOT emit through the tile sink.  Its per-glyph helper
+`drawGlyph` (`0x10029e40`) calls `FRenderInterface::DrawTile` at
+`*(*(canvas+0x7c) + 0x64)` vtable `+0x7c` — the same boundary the real
+`UCanvas::DrawTile` (Engine.dll `0x10376160`) delegates to internally.  The
+emitted block is the DrawTile layout plus one trailing dword — 21 dwords:
+
+```
+DrawTile(FSceneNode* node, FTextureInfo* record,        // replaces `tex`
+         FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL,
+         FLOAT U, FLOAT V, FLOAT UL, FLOAT VL,
+         FSpanBuffer* span,                             // NULL
+         FLOAT Z,                                       // canvas+0x4c raw
+         FPlane Color,                                  // emit-state color
+         FPlane Fog,                                    // (0,0,0,0)
+         DWORD textPolyFlags)                           // GC+0x50, arg 21
+```
+
+The trailing `textPolyFlags` is pushed before the `FPlane(0,0,0,0)` ctor
+and survives its arg cleanup; `fog.w` stays 0 — oracle-verified.
+
+Supporting machinery:
+
+- **Method `0x10028180`** — gates on drawing bit, canvas, and the text
+  pointer (the exec substitutes the static empty wstring `0x10099ea8` for
+  an empty FString, so `''` still enters).  PushGC →
+  `Intersect(DestX, DestY, destWidth, destHeight)` → optional vAlign
+  measure through the real `GetTextExtent` body (`0x10027bb0`) with
+  `f32(wrapInt)` → per-line scan + per-glyph `drawGlyph` → `PopGC(-1)`.
+  hAlign/vAlign use `ftol` + signed halving; line heights fold `vSize`
+  maxes with a 1.0f floor that falls back to the space glyph's `vSize`.
+- **Text pipeline** — the same `scanLine`/`nextChar`/escape-state model
+  `GetTextExtent` uses (`script-gc-get-text-extent.mjs`); DrawText runs a
+  second emit-state pair (`A` emit, `B` scan, `A ← B` per line).
+- **Realize cache `0x1002a370`** — five 0x84-byte `FTextureInfo` records
+  in Extension .bss (`0x100a2630`), an MRU head (`0x100a2dc8`) and count
+  (`0x100a2dc4`): head-hit is a no-op; a mid-list hit unlinks and
+  re-heads; a miss appends `records[count++]`; a miss with a full cache
+  force-evicts the tail (`Unlock` old texture then `Lock` new —
+  `UTexture::Lock(this, &record, vp+0xb0, vp+0xb4, -1, RI)` fills
+  `record+0` with the texture).  Texture 0 returns the static record
+  `0x100aeb20` unlocked.  The cache is process-global — it persists across
+  calls, which the oracle exercises across cases.
+- **Underline** — a second `DrawTile` emit when the emit state's `|&` flag
+  is set and `GC+0x84` (underline texture) / `GC+0x88` (height > 0) are
+  live: source (0,0), width `uSize - 1`, worldY
+  `f32(vSize) - baselineOffset + originY + y`, same world-clip rules.
+
+Glyph coordinate marshalling matches the tile sink
+(`f32(imul(trunc(v + 0.1), multiplier))` on dest coords, `f32(trunc(+0.1))`
+on UVs) but the clip is done inline against the GC clip rect — the clip
+helper's pixel-tracking mode, not proportional UV.
 
 ## Out of scope / explicit unknowns
 
@@ -165,3 +233,8 @@ below the gate the model is unchanged.
   stores; every emitted integer is proven bit-exact by the oracle, but a
   pathological extended-precision-boundary input could in principle diverge
   without a case covering it.
+- **`DrawActor` (1288) is intentionally unimplemented.**  It enters the 3D
+  mesh-rendering path — `DrawActor` draws an `Actor` through the render
+  interface's mesh pipeline, not the 2D tile emitter — so it is the
+  documented 3D-renderer dependency boundary for this layer, not a
+  candidate for the DrawTile command-capture model.

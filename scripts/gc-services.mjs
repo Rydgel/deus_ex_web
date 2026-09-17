@@ -74,6 +74,19 @@ export class GcHeap {
     this.events.push({op: 'UObject::UObject', object: this.canon(address)});
   }
 
+  /**
+   * Per-case reset for a SHARED heap — mirrors the draw probe's run_case:
+   * events and the 'a<N>' fallback counter restart; 'h<N>' (allocated
+   * blocks), 'rec<N>'/'recStatic' (the process-global realize cache) and
+   * their memory persist across cases exactly like the oracle's .bss.
+   */
+  resetCase() {
+    this.events.length = 0;
+    this.seen.clear();
+    for (const [addr, label] of [...this.labels])
+      if (!/^(h\d+|rec\d+|recStatic)$/.test(label)) this.labels.delete(addr);
+  }
+
   canon(address) {
     if (!address) return 0;
     if (address === GC_VTABLE || address === GC_VTABLE + ORACLE_DELTA) return 'UGC::vtable';
@@ -161,8 +174,18 @@ export function buildGc(heap, spec = {}) {
   const fill = (spec.fill ?? 0xa5) & 0xff;
   heap.bytes.fill(fill, base, base + 0x100);
   for (const address of nodeAddrs) heap.bytes.fill(fill, address, address + 0x100);
-  const resolve = value => value === 'this' ? base
-    : (value && typeof value === 'object' && 'node' in value ? nodeAddrs[value.node] : value);
+  // Dict spec values build their runtime image here — in GC_FIELDS order,
+  // matching the probe's _write_fields allocation/label sequence.
+  const resolve = value => {
+    if (value === 'this') return base;
+    if (value && typeof value === 'object') {
+      if ('node' in value) return nodeAddrs[value.node];
+      if ('$canvas' in value) return buildCanvas(heap, value.$canvas);
+      if ('$font' in value) return buildFont(heap, value.$font);
+      if ('$texture' in value) return buildTexture(heap, value.$texture);
+    }
+    return value;
+  };
   const writeFields = (address, fields) => {
     for (const [name, [offset, kind]] of Object.entries(GC_FIELDS)) {
       if (!(name in fields)) continue;
@@ -189,7 +212,151 @@ export function f32FromBits(bits) {
 }
 
 const GC_PTR_FIELDS = new Set(['vtable', 'canvas', 'normalFont', 'boldFont',
-  'stackTop', 'freeList', 'owner']);
+  'unknown84', 'stackTop', 'freeList', 'owner']);
+
+// ---------------------------------------------------------------------------
+// Draw-boundary images (scripts/native-gc-draw-probe.py mirrors).  The stub
+// sentinels land in vtable slots; services.callVirtual distinguishes the
+// boundary by which sentinel it was handed.
+// ---------------------------------------------------------------------------
+
+export const DRAW_TILE_SLOT = 0x5c;    // canvas vtable — UCanvas::DrawTile
+export const DRAW_GLYPH_SLOT = 0x7c;   // FRenderInterface vtable — glyph path
+export const TEX_LOCK_SLOT = 0x54;     // UTexture vtable — realize-cache Lock
+export const TEX_UNLOCK_SLOT = 0x58;   // UTexture vtable — realize-cache Unlock
+export const CANVAS_Z = 0x4c;
+export const CANVAS_VIEWPORT = 0x78;   // canvas -> Viewport (realize Lock args)
+export const CANVAS_SCENENODE = 0x7c;  // canvas -> FSceneNode (glyph arg0)
+export const VIEWPORT_RI = 0x64;       // *sceneNode / viewport -> RI
+export const TEX_USIZE = 0x34;
+export const TEX_VSIZE = 0x38;
+
+export const DRAW_STUB = 0xdeadc0de;
+export const GLYPH_STUB = 0xdeadc0df;
+export const LOCK_STUB = 0xdeadc0e0;
+export const UNLOCK_STUB = 0xdeadc0e1;
+
+/** Runtime UFont/FPage/FFontCharacter sizes (script-font-model.mjs). */
+const FONT_CPP = 0x28, FONT_PAGES = 0x2c, FONT_COUNT = 0x30, FONT_MAX = 0x34;
+const FONT_PAGE_SIZE = 0x10, FONT_GLYPH_SIZE = 0x10;
+
+/** Fake UTexture: dims at +0x34/+0x38, Lock/Unlock stubs in the vtable. */
+export function buildTexture(heap, spec = {}) {
+  const tex = heap.allocRaw(0x60);
+  const vtable = heap.allocRaw(0x80);
+  heap.write(tex, 'u32', vtable);
+  heap.write(vtable + TEX_LOCK_SLOT, 'u32', LOCK_STUB);
+  heap.write(vtable + TEX_UNLOCK_SLOT, 'u32', UNLOCK_STUB);
+  heap.write(tex + TEX_USIZE, 'i32', spec.u | 0);
+  heap.write(tex + TEX_VSIZE, 'i32', spec.v | 0);
+  heap.labels.set(tex, `tex${[...heap.labels.values()].filter(l => /^tex\d/.test(l)).length}`);
+  return tex;
+}
+
+/**
+ * Fake canvas + the render graph DrawText's glyph path needs:
+ * canvas+0x78 -> viewport (+0x64 RI, +0xb0/+0xb4 forwarded to Lock),
+ * canvas+0x7c -> scene node (*node+0x64 -> the same RI whose vtable+0x7c
+ * is the glyph emit slot).  The canvas's own +0x5c stays a DrawTile stub.
+ */
+export function buildCanvas(heap, spec = {}) {
+  const canvas = heap.allocRaw(0x80);
+  const vtable = heap.allocRaw(0x100);
+  heap.write(canvas, 'u32', vtable);
+  heap.write(vtable + DRAW_TILE_SLOT, 'u32', DRAW_STUB);
+  heap.write(canvas + CANVAS_Z, 'u32', resolveBits(spec.z ?? 0));
+  const riVtable = heap.allocRaw(0x100);
+  heap.write(riVtable + DRAW_GLYPH_SLOT, 'u32', GLYPH_STUB);
+  const ri = heap.allocRaw(0x40);
+  heap.write(ri, 'u32', riVtable);
+  const vp = heap.allocRaw(0xc0);
+  heap.write(vp + VIEWPORT_RI, 'u32', ri);
+  if (spec.vpB0 !== undefined) heap.write(vp + 0xb0, 'u32', resolveBits(spec.vpB0));
+  if (spec.vpB4 !== undefined) heap.write(vp + 0xb4, 'u32', resolveBits(spec.vpB4));
+  const node = heap.allocRaw(0x40);
+  heap.write(node, 'u32', vp);
+  heap.write(canvas + CANVAS_VIEWPORT, 'u32', vp);
+  heap.write(canvas + CANVAS_SCENENODE, 'u32', node);
+  heap.labels.set(canvas, 'canvas');
+  heap.labels.set(vp, 'vp');
+  heap.labels.set(node, 'scenenode');
+  heap.labels.set(ri, 'ri');
+  return canvas;
+}
+
+/**
+ * Runtime UFont image mirroring the probe's build_font: +0x28 charsPerPage,
+ * +0x2c page table of 16-byte {texture, chars, num, max} records.
+ * `pages[i]` = {'page'?: table-index, 'tex': {u,v}|0, 'chars': {rem: rec}|list}.
+ */
+export function buildFont(heap, spec) {
+  const pages = spec.pages ?? [];
+  const count = spec.pageCount ??
+    pages.reduce((m, p, i) => Math.max(m, (p.page ?? i) + 1), 0);
+  const font = heap.allocRaw(0x40);
+  const table = heap.allocRaw(FONT_PAGE_SIZE * count);
+  heap.bytes.fill(0, table, table + FONT_PAGE_SIZE * count);
+  pages.forEach((page, i) => {
+    const p = page.page ?? i;
+    const chars = page.chars;
+    let num, run;
+    if (Array.isArray(chars)) {
+      num = chars.length;
+      run = heap.allocRaw(FONT_GLYPH_SIZE * Math.max(num, 1));
+      heap.bytes.fill(0, run, run + FONT_GLYPH_SIZE * Math.max(num, 1));
+      chars.forEach((rec, j) => {
+        heap.write(run + FONT_GLYPH_SIZE * j + 0, 'i32', rec[0]);
+        heap.write(run + FONT_GLYPH_SIZE * j + 4, 'i32', rec[1]);
+        heap.write(run + FONT_GLYPH_SIZE * j + 8, 'i32', rec[2]);
+        heap.write(run + FONT_GLYPH_SIZE * j + 12, 'i32', rec[3]);
+      });
+    } else {
+      // {remainder-index: [startU, startV, uSize, vSize]} — the glyph array
+      // is indexed by codepoint % charsPerPage; holes stay zeroed.
+      const keys = Object.keys(chars).map(Number);
+      num = keys.length ? Math.max(...keys) + 1 : 0;
+      run = heap.allocRaw(FONT_GLYPH_SIZE * Math.max(num, 1));
+      heap.bytes.fill(0, run, run + FONT_GLYPH_SIZE * Math.max(num, 1));
+      for (const [rem, rec] of Object.entries(chars)) {
+        heap.write(run + FONT_GLYPH_SIZE * Number(rem) + 0, 'i32', rec[0]);
+        heap.write(run + FONT_GLYPH_SIZE * Number(rem) + 4, 'i32', rec[1]);
+        heap.write(run + FONT_GLYPH_SIZE * Number(rem) + 8, 'i32', rec[2]);
+        heap.write(run + FONT_GLYPH_SIZE * Number(rem) + 12, 'i32', rec[3]);
+      }
+    }
+    const tex = page.tex ? buildTexture(heap, page.tex) : 0;
+    heap.write(table + FONT_PAGE_SIZE * p + 0, 'u32', tex);
+    heap.write(table + FONT_PAGE_SIZE * p + 4, 'u32', run);
+    heap.write(table + FONT_PAGE_SIZE * p + 8, 'i32', num);
+    heap.write(table + FONT_PAGE_SIZE * p + 12, 'i32', num);
+  });
+  heap.write(font + FONT_CPP, 'i32', spec.charsPerPage | 0);
+  heap.write(font + FONT_PAGES, 'u32', table);
+  heap.write(font + FONT_COUNT, 'i32', count);
+  heap.write(font + FONT_MAX, 'i32', count);
+  heap.labels.set(font, `font${[...heap.labels.values()].filter(l => /^font\d/.test(l)).length}`);
+  return font;
+}
+
+/**
+ * The DrawText realize cache service: five 0x84-byte FTextureInfo records
+ * (labelled rec0..rec4) plus the static record, an empty MRU list.
+ */
+export function makeTexCache(heap) {
+  const records = [0, 1, 2, 3, 4].map(i => {
+    const rec = heap.allocRaw(0x84);
+    heap.labels.set(rec, `rec${i}`);
+    return rec;
+  });
+  const statik = heap.allocRaw(0x84);
+  heap.labels.set(statik, 'recStatic');
+  return {records, static: statik, head: 0, count: 0};
+}
+
+const F32B = new Float32Array(1);
+const U32B = new Uint32Array(F32B.buffer);
+export const resolveBits = v => (v && typeof v === 'object' && 'f' in v
+  ? (F32B[0] = v.f, U32B[0]) : v >>> 0);
 
 function dumpObject(heap, base, canonPtrs) {
   const state = {};
