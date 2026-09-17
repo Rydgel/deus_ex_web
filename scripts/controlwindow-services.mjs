@@ -85,7 +85,9 @@ export function buildWorld(caseSpec) {
       object[Number(offText)] = resolveSpec(world, v);
   }
   world.objects.result = { name: 'result' };
-  world.objects.prefSizeDepth = { name: 'prefSizeDepth' };
+  // The preferred-size recursion counter lives in Extension .bss and starts
+  // at 0 in the real process, not the 0xaa probe fill.
+  world.objects.prefSizeDepth = { name: 'prefSizeDepth', 0: 0 };
   const receiver = world.objects[caseSpec.this ?? caseSpec.nodes?.[0]?.[0]];
   const nameOf = canon;
 
