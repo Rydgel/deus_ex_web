@@ -26,9 +26,9 @@ export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Sc
 // NaN payloads and signed zeros must cross through DataView bit patterns
 // rather than JavaScript arithmetic on the NaN values themselves.
 const f32io = new DataView(new ArrayBuffer(4));
-const f32bits = v => (f32io.setFloat32(0, f(v), true), f32io.getUint32(0, true));
-const f32num = b => (f32io.setUint32(0, b >>> 0, true), f32io.getFloat32(0, true));
-const X87_INDEFINITE = 0xffc00000;
+export const f32bits = v => (f32io.setFloat32(0, f(v), true), f32io.getUint32(0, true));
+export const f32num = b => (f32io.setUint32(0, b >>> 0, true), f32io.getFloat32(0, true));
+export const X87_INDEFINITE = 0xffc00000;
 
 /** 80-bit x87 stack model for Core's float/vector operator natives.  The
  * bodies FLD float32 temporaries and keep intermediates on the x87 stack —
@@ -37,7 +37,7 @@ const X87_INDEFINITE = 0xffc00000;
  * value = (-1)^neg * sig * 2^exp; {inf:true} is an infinity; {nan:bits} keeps
  * the float32 NaN payload (the larger-significand operand propagates quieted;
  * invalid operations produce the real indefinite 0xffc00000). */
-const x87width = x => x.toString(2).length;
+export const x87width = x => x.toString(2).length;
 // Round a positive significand to `width` bits, nearest-even; returns
 // [significand, rightShiftApplied].
 const x87round = (sig, width) => {
@@ -49,7 +49,7 @@ const x87round = (sig, width) => {
   if (rem > half || (rem === half && (q & 1n))) q += 1n;
   return x87width(q) > width ? [q >> 1n, n - width + 1] : [q, n - width];
 };
-const x87load = v => {
+export const x87load = v => {
   const b = f32bits(v), neg = b >>> 31, e = (b >>> 23) & 0xff, m = b & 0x7fffff;
   if (e === 0xff) return m ? { nan: b } : { neg, inf: true };
   return { neg, sig: BigInt(e ? m | 0x800000 : m), exp: e ? e - 150 : -149 };
@@ -59,13 +59,13 @@ const x87load = v => {
 // the positive payload propagates — pinned by the subeq/mulv/dot tie cases
 // (positive st0 or st(i) over negative) and by MirrorVectorByNormal's FSUB
 // m32 where the positive memory operand beats the negative stack operand.
-const x87nan = (a, b) => {
+export const x87nan = (a, b) => {
   const ap = a.nan & 0x7fffff, bp = b.nan & 0x7fffff;
   const w = bp > ap || (bp === ap && !(b.nan >>> 31)) ? b : a;
   return { nan: (w.nan | 0x400000) >>> 0 };
 };
-const x87quiet = v => ({ nan: (v.nan | 0x400000) >>> 0 });
-const x87mul = (a, b) => {
+export const x87quiet = v => ({ nan: (v.nan | 0x400000) >>> 0 });
+export const x87mul = (a, b) => {
   if (a.nan !== undefined) return b.nan === undefined ? x87quiet(a) : x87nan(a, b);
   if (b.nan !== undefined) return x87quiet(b);
   if (a.inf || b.inf) {
@@ -78,8 +78,8 @@ const x87mul = (a, b) => {
 };
 // FSUB operand negation: sign flips on finite and infinite values while a
 // NaN subtrahend propagates its own payload unchanged.
-const x87neg = v => v.nan === undefined ? { ...v, neg: v.neg ^ 1 } : v;
-const x87add = (a, b) => {
+export const x87neg = v => v.nan === undefined ? { ...v, neg: v.neg ^ 1 } : v;
+export const x87add = (a, b) => {
   if (a.nan !== undefined) return b.nan === undefined ? x87quiet(a) : x87nan(a, b);
   if (b.nan !== undefined) return x87quiet(b);
   if (a.inf || b.inf) {
@@ -98,7 +98,7 @@ const x87add = (a, b) => {
 };
 // 1.0 / b held on the x87 stack (native 222 divides the embedded double
 // 1.0 at 0x101765a8 by the float32 divisor and never stores it to float32).
-const x87recip = b => {
+export const x87recip = b => {
   const n = x87width(b.sig), num = 1n << BigInt(63 + n);
   let q = num / b.sig;
   const twice = (num - q * b.sig) * 2n;
@@ -114,7 +114,7 @@ const x87recip = b => {
 // truncates it through _ftol, where the extended precision is observable:
 // INT_MAX / 4.665708e-10f truncates to low DWORD 0x843de10f while the
 // 53-bit double quotient rounds up to give 0x843de200.
-const x87div = (a, b) => {
+export const x87div = (a, b) => {
   if (a.nan !== undefined) return b.nan === undefined ? x87quiet(a) : x87nan(a, b);
   if (b.nan !== undefined) return x87quiet(b);
   const neg = a.neg ^ b.neg;
@@ -141,7 +141,7 @@ const x87div = (a, b) => {
 };
 // The FST/FSTP float32 store: round the 64-bit significand to 24 bits with
 // nearest-even, honoring denormal and overflow boundaries.
-const x87store = v => {
+export const x87store = v => {
   if (v.nan !== undefined) return f32num(v.nan);
   if (v.inf || v.exp + x87width(v.sig) - 1 > 127) return f32num((v.neg << 31) | 0x7f800000);
   if (v.sig === 0n) return f32num(v.neg << 31);
@@ -174,7 +174,7 @@ const x87store = v => {
 // The FST/FSTL double store: round the 64-bit significand to 53 bits with
 // nearest-even, keeping the value in the model (SafeNormal's fstl at
 // 0x10144c04 is the only float64 store in the bound natives).
-const x87storeDouble = v => {
+export const x87storeDouble = v => {
   if (v.nan !== undefined || v.inf || v.sig === 0n) return v;
   const [sig, sh] = x87round(v.sig, 53);
   return { neg: v.neg, sig, exp: v.exp + sh };
@@ -188,7 +188,7 @@ const x87isqrt = n => {
 // x87 FSQRT of a nonnegative finite value: correctly-rounded 64-bit
 // significand.  The CRT thunk 0x101032ba -> 0x10123290 executes it as
 // `fld qword; fsqrt; ret` on the pushed double argument.
-const x87sqrt = v => {
+export const x87sqrt = v => {
   if (v.inf) return { neg: 0, inf: true };
   if (v.sig === 0n) return v;
   let sig = v.sig, exp = v.exp;
@@ -206,7 +206,7 @@ const x87sqrt = v => {
 // The embedded double 1e-08 at 0x101765d8 that SafeNormal's FCOMP compares
 // against: on less-than OR unordered (C0) the body returns exactly (0,0,0).
 // The compare runs on the 80-bit register, not the stored double.
-const x87below1em8 = v => {
+export const x87below1em8 = v => {
   if (v.nan !== undefined) return true;
   if (v.inf) return v.neg === 1;
   if (v.sig === 0n || v.neg) return true;
@@ -216,13 +216,13 @@ const x87below1em8 = v => {
 };
 // FILD dword: the int32 rotator field becomes an exact 80-bit value
 // (natives 287/288 load each component this way before FMUL).
-const x87int32 = v => (v |= 0, { neg: v < 0 ? 1 : 0, sig: BigInt(v < 0 ? -v : v), exp: 0 });
+export const x87int32 = v => (v |= 0, { neg: v < 0 ? 1 : 0, sig: BigInt(v < 0 ? -v : v), exp: 0 });
 // The shipped MSVCRT _ftol (Core thunk 0x1016eec0 -> IAT 0x102ab4b8):
 // FNSTCW -> set RC=truncate -> FISTP qword -> restore; the low DWORD is the
 // result.  A NaN/infinity or a truncated value outside int64 range raises
 // the invalid-operation exception, which stores the integer indefinite
 // 0x8000000000000000 — whose low DWORD is 0.
-const x87ftol = v => {
+export const x87ftol = v => {
   if (v.nan !== undefined || v.inf) return 0;
   let n = v.exp >= 0 ? v.sig << BigInt(v.exp) : v.sig >> BigInt(-v.exp);
   if (v.neg) n = -n;
@@ -236,7 +236,7 @@ const x87ftol = v => {
 // 1e-08: below or unordered returns (0,0,0).  Otherwise the FDIVR
 // reciprocal of the CRT sqrt of that double stays on the stack and each
 // component multiplies into a float32 store.
-const x87safeNormal = v => {
+export const x87safeNormal = v => {
   const x = x87load(v[0]), y = x87load(v[1]), z = x87load(v[2]);
   const s = x87add(x87add(x87mul(x, x), x87mul(y, y)), x87mul(z, z));
   if (s.nan !== undefined || x87below1em8(s)) return [0, 0, 0];
