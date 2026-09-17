@@ -313,14 +313,19 @@ class ControlWindowProbe(_NATIVE.NativeCollision):
         self.labels[label] = address
         self.vtables[vtable] = label
         self.regions[label] = (address, WINDOW_SIZE, None)
-        for off_text, value in (fields or {}).items():
+        if fields is not None:
+            self.apply_fields(label, fields)
+        return address
+
+    def apply_fields(self, label, fields):
+        address = self.windows[label]
+        for off_text, value in fields.items():
             offset = int(off_text, 0)
             resolved = self._resolve(value)
             if offset in U8_OFFSETS or U8_RANGE[0] <= offset < U8_RANGE[1]:
                 self.write(address + offset, 'B', resolved & 0xff)
             else:
                 self.write(address + offset, 'I', resolved & 0xffffffff)
-        return address
 
     def _resource(self, label, size=0x40, kind='u32', track=True):
         address = self.alloc(size)
@@ -349,9 +354,14 @@ class ControlWindowProbe(_NATIVE.NativeCollision):
             for off_text, value in (fields or {}).items():
                 self.write(self.labels[name] + int(off_text, 0), 'I',
                            self._resolve(value))
-        # nodes listed receiver-first; build outermost-first so links resolve
-        for label, fields in reversed(case.get('nodes', [])):
-            self._window(label, fields)
+        # nodes listed receiver-first; build all objects first, then apply
+        # fields so references may point at any node in either direction
+        nodes = case.get('nodes', [])
+        for label, fields in reversed(nodes):
+            self._window(label)
+        for label, fields in nodes:
+            if fields:
+                self.apply_fields(label, fields)
         receiver = self.windows[case.get('this', case['nodes'][0][0])]
         out_labels = {}
         args = []

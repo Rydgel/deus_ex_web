@@ -1235,5 +1235,517 @@
       ],
       "dump": {}
     }
+  },
+  "setButtonTextures": {
+    "insensitiveNormal": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 1,
+            "0x174": 0
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "insensitiveToggled": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 1,
+            "0x174": 1
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "focusedToggled": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 3,
+            "0x174": 1,
+            "0x138": {
+              "ptr": "root"
+            }
+          }
+        ],
+        [
+          "root",
+          {
+            "0x30": 3,
+            "0x138": 0,
+            "0x28": 3,
+            "0x5c8": {
+              "ptr": "btn"
+            }
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "unfocusedNormal": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 3,
+            "0x174": 0,
+            "0x138": {
+              "ptr": "root"
+            }
+          }
+        ],
+        [
+          "other",
+          {}
+        ],
+        [
+          "root",
+          {
+            "0x30": 3,
+            "0x138": 0,
+            "0x28": 4,
+            "0x5c8": {
+              "ptr": "other"
+            }
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "badRootType": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 3,
+            "0x174": 0,
+            "0x138": {
+              "ptr": "root"
+            }
+          }
+        ],
+        [
+          "root",
+          {
+            "0x30": 3,
+            "0x138": 0,
+            "0x28": 2,
+            "0x5c8": {
+              "ptr": "btn"
+            }
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "fallbackPressed": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 1,
+            "0x174": 1
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        0
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "fallbackNormal": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 1,
+            "0x174": 1
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        0,
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        {
+          "ptr": "texNI"
+        },
+        0
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    },
+    "fallbackNormalUntoggled": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x1a8": 4096,
+            "0x1ac": 8192,
+            "0x1b4": 4097,
+            "0x1b8": 8193,
+            "0x1c0": 4098,
+            "0x1c4": 8194,
+            "0x1cc": 4099,
+            "0x1d0": 8195,
+            "0x1d8": 4100,
+            "0x1dc": 8196,
+            "0x1e4": 4101,
+            "0x1e8": 8197,
+            "0x30": 1,
+            "0x174": 0
+          }
+        ]
+      ],
+      "resources": [
+        "texN",
+        "texP",
+        "texNF",
+        "texPF",
+        "texNI",
+        "texPI"
+      ],
+      "this": "btn",
+      "args": [
+        {
+          "ptr": "texN"
+        },
+        {
+          "ptr": "texP"
+        },
+        {
+          "ptr": "texNF"
+        },
+        {
+          "ptr": "texPF"
+        },
+        0,
+        {
+          "ptr": "texPI"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x184",
+          "0x188",
+          "0x18c"
+        ]
+      }
+    }
   }
 }
