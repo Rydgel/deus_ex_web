@@ -299,5 +299,261 @@
         ]
       }
     }
+  },
+  "enableRightMouseClick": {
+    "enable": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 4294967280
+          }
+        ]
+      ],
+      "args": [
+        1
+      ],
+      "dump": {
+        "btn": [
+          "0x174"
+        ]
+      }
+    },
+    "disable": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 4294967295
+          }
+        ]
+      ],
+      "args": [
+        0
+      ],
+      "dump": {
+        "btn": [
+          "0x174"
+        ]
+      }
+    },
+    "keep": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 16
+          }
+        ]
+      ],
+      "args": [
+        0
+      ],
+      "dump": {
+        "btn": [
+          "0x174"
+        ]
+      }
+    }
+  },
+  "enableAutoRepeat": {
+    "on": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 0
+          }
+        ]
+      ],
+      "args": [
+        1,
+        {
+          "f32": 0.5
+        },
+        {
+          "f32": 0.1
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x174",
+          "0x17c",
+          "0x180"
+        ]
+      }
+    },
+    "off": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 4294967295
+          }
+        ]
+      ],
+      "args": [
+        0,
+        {
+          "f32": 1.25
+        },
+        {
+          "f32": 2.5
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x174",
+          "0x17c",
+          "0x180"
+        ]
+      }
+    },
+    "negative": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x174": 16
+          }
+        ]
+      ],
+      "args": [
+        1,
+        {
+          "f32": -0.75
+        },
+        {
+          "f32": 0
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x174",
+          "0x17c",
+          "0x180"
+        ]
+      }
+    }
+  },
+  "setButtonSounds": {
+    "both": {
+      "nodes": [
+        [
+          "btn",
+          {}
+        ]
+      ],
+      "resources": [
+        "sndA",
+        "sndB"
+      ],
+      "args": [
+        {
+          "ptr": "sndA"
+        },
+        {
+          "ptr": "sndB"
+        }
+      ],
+      "dump": {
+        "btn": [
+          "0x190",
+          "0x194"
+        ]
+      }
+    },
+    "none": {
+      "nodes": [
+        [
+          "btn",
+          {
+            "0x190": {
+              "ptr": "sndA"
+            },
+            "0x194": {
+              "ptr": "sndB"
+            }
+          }
+        ]
+      ],
+      "resources": [
+        "sndA",
+        "sndB"
+      ],
+      "args": [
+        {
+          "ptr": "sndA"
+        },
+        0
+      ],
+      "dump": {
+        "btn": [
+          "0x190",
+          "0x194"
+        ]
+      }
+    }
+  },
+  "setToggleSounds": {
+    "both": {
+      "nodes": [
+        [
+          "tog",
+          {}
+        ]
+      ],
+      "resources": [
+        "sndA",
+        "sndB"
+      ],
+      "args": [
+        {
+          "ptr": "sndA"
+        },
+        {
+          "ptr": "sndB"
+        }
+      ],
+      "dump": {
+        "tog": [
+          "0x1ec",
+          "0x1f0"
+        ]
+      }
+    },
+    "swap": {
+      "nodes": [
+        [
+          "tog",
+          {
+            "0x1ec": {
+              "ptr": "sndB"
+            },
+            "0x1f0": {
+              "ptr": "sndA"
+            }
+          }
+        ]
+      ],
+      "resources": [
+        "sndA",
+        "sndB"
+      ],
+      "args": [
+        {
+          "ptr": "sndA"
+        },
+        {
+          "ptr": "sndB"
+        }
+      ],
+      "dump": {
+        "tog": [
+          "0x1ec",
+          "0x1f0"
+        ]
+      }
+    }
   }
 }
