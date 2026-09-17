@@ -663,5 +663,216 @@
         ]
       }
     }
+  },
+  "setCheckboxTextures": {
+    "allSame": {
+      "nodes": [
+        [
+          "cb",
+          {
+            "0x1f4": {
+              "ptr": "texOff"
+            },
+            "0x1f8": {
+              "ptr": "texOn"
+            },
+            "0x1fc": {
+              "f32": 16
+            },
+            "0x200": {
+              "f32": 16
+            }
+          }
+        ],
+        [
+          "texOff",
+          {}
+        ],
+        [
+          "texOn",
+          {}
+        ]
+      ],
+      "resources": [],
+      "args": [
+        {
+          "ptr": "texOff"
+        },
+        {
+          "ptr": "texOn"
+        },
+        {
+          "f32": 16
+        },
+        {
+          "f32": 16
+        }
+      ],
+      "dump": {
+        "cb": [
+          "0x1f4",
+          "0x1f8",
+          "0x1fc",
+          "0x200"
+        ]
+      }
+    },
+    "offDiffers": {
+      "nodes": [
+        [
+          "cb",
+          {
+            "0x1f4": {
+              "ptr": "texOff"
+            },
+            "0x1f8": {
+              "ptr": "texOn"
+            },
+            "0x1fc": {
+              "f32": 16
+            },
+            "0x200": {
+              "f32": 16
+            }
+          }
+        ],
+        [
+          "texOff",
+          {}
+        ],
+        [
+          "texOn",
+          {}
+        ],
+        [
+          "texNew",
+          {}
+        ]
+      ],
+      "args": [
+        {
+          "ptr": "texNew"
+        },
+        {
+          "ptr": "texOn"
+        },
+        {
+          "f32": 16
+        },
+        {
+          "f32": 16
+        }
+      ],
+      "dump": {
+        "cb": [
+          "0x1f4",
+          "0x1f8",
+          "0x1fc",
+          "0x200"
+        ]
+      }
+    },
+    "heightDiffers": {
+      "nodes": [
+        [
+          "cb",
+          {
+            "0x1f4": {
+              "ptr": "texOff"
+            },
+            "0x1f8": {
+              "ptr": "texOn"
+            },
+            "0x1fc": {
+              "f32": 16
+            },
+            "0x200": {
+              "f32": 16
+            }
+          }
+        ],
+        [
+          "texOff",
+          {}
+        ],
+        [
+          "texOn",
+          {}
+        ]
+      ],
+      "args": [
+        {
+          "ptr": "texOff"
+        },
+        {
+          "ptr": "texOn"
+        },
+        {
+          "f32": 16
+        },
+        {
+          "f32": 24
+        }
+      ],
+      "dump": {
+        "cb": [
+          "0x1f4",
+          "0x1f8",
+          "0x1fc",
+          "0x200"
+        ]
+      }
+    },
+    "nanWidth": {
+      "nodes": [
+        [
+          "cb",
+          {
+            "0x1f4": {
+              "ptr": "texOff"
+            },
+            "0x1f8": {
+              "ptr": "texOn"
+            },
+            "0x1fc": {
+              "f32bits": 2143289344
+            },
+            "0x200": {
+              "f32": 16
+            }
+          }
+        ],
+        [
+          "texOff",
+          {}
+        ],
+        [
+          "texOn",
+          {}
+        ]
+      ],
+      "args": [
+        {
+          "ptr": "texOff"
+        },
+        {
+          "ptr": "texOn"
+        },
+        {
+          "f32": 16
+        },
+        {
+          "f32": 16
+        }
+      ],
+      "dump": {
+        "cb": [
+          "0x1f4",
+          "0x1f8",
+          "0x1fc",
+          "0x200"
+        ]
+      }
+    }
   }
 }
