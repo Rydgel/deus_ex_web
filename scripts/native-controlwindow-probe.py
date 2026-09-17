@@ -288,6 +288,8 @@ class ControlWindowProbe(_NATIVE.NativeCollision):
                 return self.labels[value['ptr']]
             if 'f32' in value:
                 return struct.unpack('<I', struct.pack('<f', value['f32']))[0]
+            if 'f32bits' in value:
+                return value['f32bits'] & 0xffffffff
             if 'i32' in value:
                 return value['i32'] & 0xffffffff
             if 'u32' in value:

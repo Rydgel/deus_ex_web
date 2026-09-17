@@ -15,6 +15,14 @@ const f32bits = value => {
   buffer.setFloat32(0, f(value), true);
   return buffer.getUint32(0, true);
 };
+const f32fromBits = bits => {
+  const buffer = new DataView(new ArrayBuffer(4));
+  buffer.setUint32(0, bits >>> 0, true);
+  return buffer.getFloat32(0, true);
+};
+const FILL_F32 = f32fromBits(0xaaaaaaaa);
+
+export { f32bits, f32fromBits };
 
 export const U8_RANGE = [0x630, 0x630 + 0x100];
 export const U8_OFFSETS = new Set([0x28, 0x30, 0x20c]);
@@ -37,6 +45,7 @@ function resolveSpec(world, value) {
   if (value && typeof value === 'object') {
     if ('ptr' in value) return world.objects[value.ptr];
     if ('f32' in value) return f(value.f32);
+    if ('f32bits' in value) return f32fromBits(value.f32bits);
   }
   return value;
 }
@@ -110,13 +119,16 @@ export function buildWorld(caseSpec) {
     if (!object._b) return;
     for (let j = 0; j < size; j += 1) object._b.delete(off + j);
   };
-  const readDword = (object, offset) => {
+  const readDword = (object, offset, kind) => {
     offset0 = offset;
     let hasOverlay = false;
     if (object._b)
       for (let j = 0; j < 4 && !hasOverlay; j += 1)
         hasOverlay = object._b.has(offset + j);
-    if (hasOverlay) return mergedU32(object);
+    if (hasOverlay) {
+      const bits = mergedU32(object);
+      return kind === 'f32' ? f32fromBits(bits) : bits;
+    }
     return object[offset];
   };
 
@@ -131,18 +143,21 @@ export function buildWorld(caseSpec) {
     });
   };
 
+  // Uninitialized probe memory reads back the 0xaa fill pattern.
+  const uninit = {};
   const read = (object, offset, kind, details) => {
     let value;
     if (kind === 'ptr') {
-      value = object[offset] ?? null;
+      value = object[offset] === undefined ? uninit : (object[offset] ?? null);
       record('read', object, offset, kind, value);
       return value;
     }
     value = kind === 'u8'
       ? (object._b?.has(offset) ? object._b.get(offset)
-        : object[offset] === undefined ? 0 : object[offset])
-      : readDword(object, offset);
-    if (value === undefined) value = 0;
+        : object[offset] === undefined ? 0xaa : object[offset])
+      : readDword(object, offset, kind);
+    if (value === undefined)
+      value = kind === 'f32' ? FILL_F32 : 0xaaaaaaaa;
     record('read', object, offset, kind, value);
     if (kind === 'u8') return value & 0xff;
     if (kind === 'u32') return value >>> 0;
@@ -232,9 +247,8 @@ export function buildWorld(caseSpec) {
     },
   };
 
-  // Uninitialized probe memory is 0xaa-filled; a single sentinel object
+  // Uninitialized probe memory is 0xaa-filled; the `uninit` sentinel object
   // canonizes to the same 'a<N>' label the oracle gives that fill pattern.
-  const uninit = {};
   world.dumpState = dumpSpec => {
     const state = {};
     for (const [label] of caseSpec.nodes ?? []) {

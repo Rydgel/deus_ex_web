@@ -50,6 +50,11 @@ function marshalArg(world, arg) {
       return { out: world.objects[arg.out] };
     }
     if ('f32' in arg) return arg.f32;
+    if ('f32bits' in arg) {
+      const view = new DataView(new ArrayBuffer(4));
+      view.setUint32(0, arg.f32bits >>> 0, true);
+      return view.getFloat32(0, true);
+    }
     if ('skip' in arg) return { skip: true };
     if ('i32' in arg) return arg.i32 | 0;
     if ('u32' in arg) return arg.u32 >>> 0;
