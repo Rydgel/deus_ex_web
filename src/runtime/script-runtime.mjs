@@ -32,6 +32,10 @@ import {
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
 import { execMakeNoise } from './script-noise.mjs';
+import {
+  execLineOfSightTo, execCanSee, execPlayerCanSeeMe,
+  execPickTarget, execPickAnyTarget, execAICanSee,
+} from './script-pawn-perception.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
 import { isOverlapping } from './actor-touch.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
@@ -822,6 +826,80 @@ export class ScriptRuntime {
       if(!ca||!cb)return !ca&&!cb;
       const contains=(cls,record)=>{for(let node=cls;node;node=node.base)if(node.record===record)return true;return false;};
       return contains(ca,cb.record)||contains(cb,ca.record);
+    };
+    return services;
+  }
+  /** Native Pawn perception services (514/531/532/533/534/705) per
+   * docs/script-pawn-perception.md: the shared LOS worker, the two target
+   * pickers and the AICanSee visibility worker. Field reads come through the
+   * soundField level graph; the trace primitives are the BSP FastLineCheck
+   * and the SingleLineCheck (MultiLineCheck) wrapper — no navigation graph is
+   * consulted by any of these bodies. */
+  perceptionServices(call) {
+    const services=this.soundServices(call);
+    services.write=(actor,name,value)=>this.namedReference(actor,name).set(value);
+    services.level=receiver=>this.levelFor(receiver);
+    services.levelInfo=level=>level?.actors?.[0]??null;
+    services.levelActors=level=>level?.actors??null;
+    services.model=level=>level?.model??null;
+    services.pawnList=level=>level?.pawnList??null;
+    services.nextPawn=pawn=>pawn?.nextPawn??null;
+    /* netMode==0 / netMode==3 net list: the original iterates Engine->Players
+     * (UPlayer Pawn slots). The browser runtime keeps no separate UPlayer
+     * TArray; in standalone the net players are exactly the pawn list's
+     * bIsPlayer pawns. Network client/server modes are outside the browser
+     * port's modeled graph (docs/script-pawn-perception.md). */
+    services.netPlayers=level=>{
+      const out=[];
+      for(let pawn=level?.pawnList;pawn;pawn=pawn.nextPawn)
+        if(this.namedReference(pawn,'bIsPlayer').get())out.push(pawn);
+      return out;
+    };
+    services.rand=()=>{
+      if(typeof this.rng?.frand!=='function')
+        throw new Error('Pawn perception requires the shared original RNG stream');
+      return Math.fround(this.rng.frand());
+    };
+    /* PickTarget's same-team test (0x103baee3..0x103baf0e): GameInfo->+0x328
+     * bit 0x200 (bTeamGame) gates a PRI->+0x340 team-byte compare; missing PRIs
+     * or a non-team game keep the candidate. */
+    services.sameTeam=(viewer,cand,levelInfo)=>{
+      const game=this.namedReference(levelInfo,'Game').get();
+      if(!game)return false;
+      const viewerPri=this.namedReference(viewer,'PlayerReplicationInfo').get();
+      const candPri=this.namedReference(cand,'PlayerReplicationInfo').get();
+      if(!viewerPri||!candPri)return false;
+      if(!this.namedReference(game,'bTeamGame').get())return false;
+      return (Number(this.namedReference(viewerPri,'Team').get())&0xff)
+        ===(Number(this.namedReference(candPri,'Team').get())&0xff);
+    };
+    /* AICanSee's lighting multiplier is the native visibility query at
+     * 0x1036bca0 (AActor light accumulation — a deep subsystem the runtime
+     * does not yet model). It stays an explicit service seam so the validator
+     * can inject the oracle's measured value; production defaults to full
+     * light (docs/script-pawn-perception.md records the boundary). */
+    services.lighting=(other,oLoc)=>this.perceptionLighting
+      ?this.perceptionLighting(other,oLoc):1;
+    /* SingleLineCheck (0x103c7430): MultiLineCheck(end,start,extent=0,
+     * checkActors=1,worldActor=Level,extra=4), then walk hits in order — the
+     * viewer's owner chain and the target are skipped, a world (LevelInfo)
+     * hit or a bBlockSight&&!bHidden actor blocks the line. */
+    services.singleLineCheck=(level,viewer,target,end,start)=>{
+      if(!level?.hash||typeof level.hash.multiLineCheck!=='function')
+        throw new Error('AICanSee LOS requires the live level collision hash');
+      const worldActor=level.actors?.[0]??null;
+      const hits=level.hash.multiLineCheck({end,start,extent:[0,0,0],checkActors:1,worldActor,extra:4});
+      const blocked=actor=>{
+        if(!actor)return false;
+        for(let node=viewer;node;node=this.namedReference(node,'Owner').get())
+          if(actor===node)return false;
+        if(actor===target)return false;
+        if(actor===worldActor)return true;
+        const blocks=this.namedReference(actor,'bBlockSight').get(),hidden=this.namedReference(actor,'bHidden').get();
+        return Boolean(blocks)&&!Boolean(hidden);
+      };
+      for(const hit of hits)if(blocked(hit.actor))return false;
+      return true;
     };
     return services;
   }
@@ -1718,6 +1796,14 @@ export class ScriptRuntime {
     if(call.index===266)return execMove(call,this.moveServices(call));
     if([500,502,508,510,527].includes(call.index))return this.pawnLocomotion(call);
     if(call.index===512)return execMakeNoise(call,this.noiseServices(call));
+    // Pawn perception natives share the recovered services block
+    // (docs/script-pawn-perception.md): LOS worker, target pickers, AICanSee.
+    if(call.index===514)return execLineOfSightTo(call,this.perceptionServices(call));
+    if(call.index===533)return execCanSee(call,this.perceptionServices(call));
+    if(call.index===532)return execPlayerCanSeeMe(call,this.perceptionServices(call));
+    if(call.index===531)return execPickTarget(call,this.perceptionServices(call));
+    if(call.index===534)return execPickAnyTarget(call,this.perceptionServices(call));
+    if(call.index===705)return execAICanSee(call,this.perceptionServices(call));
     if(call.index===2100||call.index===2101||call.index===2102){
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
       return this.bindConversationEvents(call.receiver);
