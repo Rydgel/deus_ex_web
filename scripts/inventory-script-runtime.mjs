@@ -156,6 +156,13 @@ for(const file of (await readdir(runtimeDir)).filter(name=>name.endsWith('.mjs')
     const index=Number(match[1]);
     if(Number.isInteger(index)&&index>0&&!moduleNatives.has(index))moduleNatives.set(index,file);
   }
+  // Latent-native modules (e.g. script-pawn-locomotion.mjs) register each native
+  // as `index: N, poll: M, setup: 0x..` — a setup body and its per-tick poll are
+  // both real execution support, so credit both indices of that paired shape.
+  for(const match of text.matchAll(/index:\s*(\d+),\s*poll:\s*(\d+)/g)){
+    for(const index of [Number(match[1]),Number(match[2])])
+      if(Number.isInteger(index)&&index>0&&!moduleNatives.has(index))moduleNatives.set(index,file);
+  }
 }
 bindings.modules=[...moduleNatives].sort((a,b)=>a[0]-b[0])
   .map(([index,file])=>({index,scope:`implemented in src/runtime/${file}`}));
