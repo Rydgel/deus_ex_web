@@ -147,6 +147,57 @@ function pw(name, mv, { point = [100, 0, 0], arg14 = 0, physics = 1,
   return s;
 }
 
+/* A reachMask scene (0x10326d10): thiscall(pawn) -> 7-bit capability mask. */
+function rm(name, { pawn = {} } = {}) {
+  return {
+    name, body: 'reachMask', this: 'self',
+    pawn: { ...BASE_PAWN, ...pawn },
+    js: { pawn: { ...BASE_PAWN, ...pawn } },
+  };
+}
+
+/* A directReach scene (0x103dad20): thiscall(pawn; source nav, target).
+ * navPoints carry paths[]/upstreamPaths[] ReachSpec index arrays; reachSpecs
+ * is the level's spec table ({start,end,radius,height,flags}); singleLine is
+ * the scripted SingleLineCheck sequence. */
+function dr(name, { source = 'src', target = 'tgt', navPoints = null,
+                    actors = null, reachSpecs = [], singleLine = [{ ret: 1, hit: { actor: 0, time: 1 } }],
+                    pawn = {} } = {}) {
+  const s = {
+    name, body: 'directReach', this: 'self',
+    zones: { dry: { gravityZ: -950 } },
+    pawn: { ...BASE_PAWN, ...pawn },
+    reachSpecs, singleLine,
+    directArgs: [{ ref: source }, { ref: target }],
+    js: { source, target, singleLine, pawn: { ...BASE_PAWN, ...pawn } },
+  };
+  if (navPoints) { s.navPoints = navPoints; s.js.navPoints = navPoints; }
+  if (actors) { s.actors = actors; s.js.actors = actors; }
+  return s;
+}
+
+/* An actorWorker scene (0x103c0630): thiscall(pawn; target, argC).  The target
+ * is an actor/navpoint/inventory/trigger; zones + class drive the gates;
+ * singleLine/farMove/moveActor are the scripted boundary sequences. */
+function aw(name, mv, { target = 'tgt', argC = 0, actors = null, navPoints = null,
+                        zones = null, gIsEditor = 0, pawn = {},
+                        singleLine = null, farMove = [1, 1] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const s = {
+    name, body: 'actorWorker', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    singleLine, moveActor: mv, farMove,
+    directArgs: [{ ref: target }, { i: argC }],
+    js: { target, argC, gIsEditor, zones: z, farMove,
+          pawn: { ...BASE_PAWN, ...pawn }, actors: actors || {},
+          singleLine },
+  };
+  if (actors) s.actors = actors;
+  if (navPoints) s.navPoints = navPoints;
+  return s;
+}
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -262,6 +313,207 @@ const scenes = [
                                       pawn: { collisionRadius: 20 } }),
   // Blocked walk: forward probe always blocked -> walkReach returns 0.
   pw('pw-blocked', [H(0.5, 1), H(0.1, 1)], { pawn: { collisionRadius: 20 } }),
+
+  // -- reachMask 0x10326d10 --------------------------------------------------
+  // Maps pawn +0x318 bits [13,15,14,12,16,17,1] -> reach-mask bits [0..6].
+  rm('rm-zero', { pawn: { flags318: 0 } }),
+  rm('rm-all', { pawn: { flags318: 0x1ffff } }),
+  rm('rm-bit1', { pawn: { flags318: 0x2 } }),        // -> 64
+  rm('rm-bit12', { pawn: { flags318: 0x1000 } }),    // -> 8
+  rm('rm-bit13', { pawn: { flags318: 0x2000 } }),    // -> 1
+  rm('rm-bit14', { pawn: { flags318: 0x4000 } }),    // -> 4
+  rm('rm-bit15', { pawn: { flags318: 0x8000 } }),    // -> 2
+  rm('rm-bit16', { pawn: { flags318: 0x10000 } }),   // -> 16
+  rm('rm-bit17', { pawn: { flags318: 0x20000 } }),   // -> 32
+  rm('rm-mixed', { pawn: { flags318: 0x6000 } }),    // bits13+14 -> 1|4 = 5
+
+  // -- directReach 0x103dad20 ------------------------------------------------
+  // Matching ReachSpec (end==target, dims/flags admit) + clear SLC -> 1.
+  dr('dr-clear', {
+    navPoints: { src: { paths: [0] } }, actors: { tgt: {} },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+  // ReachSpec radius < pawn CR -> rejected before the line check (slc=0).
+  dr('dr-radius', {
+    navPoints: { src: { paths: [0] } }, actors: { tgt: {} },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 19, height: 40, flags: 0 }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+  // reachFlags requires a capability the pawn lacks -> rejected (slc=0).
+  dr('dr-flags', {
+    navPoints: { src: { paths: [0] } }, actors: { tgt: {} },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 8 }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+  // The second (upstream +0x3a0) path array finds the spec too.
+  dr('dr-upstream', {
+    navPoints: { src: { upstreamPaths: [0] } }, actors: { tgt: {} },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+  // Spec end != target -> no match -> 0.
+  dr('dr-wrong-end', {
+    navPoints: { src: { paths: [0] } }, actors: { tgt: {}, other: {} },
+    reachSpecs: [{ start: 'src', end: 'other', radius: 20, height: 40, flags: 0 }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+  // SLC hits a Mover the pawn can't open (flags318&0x10000 == 0) -> skip -> 0.
+  dr('dr-mover-blocked', {
+    navPoints: { src: { paths: [0] } },
+    actors: { tgt: {}, door: { cls: 'mover' } },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 'door', time: 0.5 } }],
+    pawn: { collisionRadius: 20, collisionHeight: 40, flags318: 0 },
+  }),
+  // Mover openable (flags318&0x10000) and pawn bit1 -> return 1.
+  dr('dr-mover-open', {
+    navPoints: { src: { paths: [0] } },
+    actors: { tgt: {}, door: { cls: 'mover' } },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 'door', time: 0.5 } }],
+    pawn: { collisionRadius: 20, collisionHeight: 40, flags318: 0x10002 },
+  }),
+  // Mover + flags318&0x10000 but !bit1: openable iff mover +0x4ec&8 == 0 -> 1.
+  dr('dr-mover-field4ec', {
+    navPoints: { src: { paths: [0] } },
+    actors: { tgt: {}, door: { cls: 'mover', field4ec: 0 } },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 'door', time: 0.5 } }],
+    pawn: { collisionRadius: 20, collisionHeight: 40, flags318: 0x10000 },
+  }),
+  // Same but mover +0x4ec&8 set and pawn !bit1 -> continue -> 0.
+  dr('dr-mover-blocked2', {
+    navPoints: { src: { paths: [0] } },
+    actors: { tgt: {}, door: { cls: 'mover', field4ec: 8 } },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 'door', time: 0.5 } }],
+    pawn: { collisionRadius: 20, collisionHeight: 40, flags318: 0x10000 },
+  }),
+  // SLC hits a non-mover actor -> treat as clear -> 1.
+  dr('dr-nonmover', {
+    navPoints: { src: { paths: [0] } },
+    actors: { tgt: {}, crate: {} },
+    reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 'crate', time: 0.5 } }],
+    pawn: { collisionRadius: 20, collisionHeight: 40 },
+  }),
+
+  // -- actorWorker 0x103c0630 ------------------------------------------------
+  // Pawn target inside R=min(CR*1.5,melee)+tCR+pCR -> return 1 (no farMove).
+  aw('aw-pawn-inside', flatWalk(4), {
+    actors: { tgt: { cls: 'pawn', location: [50, 0, 0], collisionRadius: 22, collisionHeight: 40 } },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Pawn target beyond R, within 800 -> farMove fit + walkReach.
+  aw('aw-pawn-reach', flatWalk(40), {
+    actors: { tgt: { cls: 'pawn', location: [120, 0, 0], collisionRadius: 22, collisionHeight: 40 } },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Pawn target beyond 800 -> widen R to dist-800 before walking.
+  aw('aw-pawn-far', flatWalk(50), {
+    actors: { tgt: { cls: 'pawn', location: [900, 0, 0], collisionRadius: 22, collisionHeight: 40 } },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Non-pawn target beyond 800 (non-editor) -> return 0 before any boundary.
+  aw('aw-actor-far', [], {
+    actors: { tgt: { cls: 'actor', location: [900, 0, 0] } },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Non-pawn within 800 -> R=15 -> farMove + physicsReach(target=0).
+  aw('aw-actor', flatWalk(40), {
+    actors: { tgt: { cls: 'actor', location: [100, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Inventory target -> R = tCR + pCR - 2.
+  aw('aw-inventory', flatWalk(40), {
+    actors: { tgt: { cls: 'inventory', location: [100, 0, 0], collisionRadius: 15 } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Trigger target -> same R = tCR + pCR - 2.
+  aw('aw-trigger', flatWalk(40), {
+    actors: { tgt: { cls: 'trigger', location: [100, 0, 0], collisionRadius: 15 } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // WarpZoneMarker -> physicsReach receives the actor (not 0) as target; the
+  // scripted target hit makes the target arg observable via checkMove's
+  // hit.actor === target -> 5 early-reach.
+  aw('aw-warp', [H(0.5, 0, 'tgt'), ...flatWalk(40)], {
+    actors: { tgt: { cls: 'warpzonemarker', location: [100, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // flags1dc&4 -> physicsReach target arg = actor (same as warp).
+  aw('aw-f1dc', [H(0.5, 0, 'tgt'), ...flatWalk(40)], {
+    actors: { tgt: { cls: 'actor', location: [100, 0, 0], flags1dc: 4 } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // LOS blocked by a non-target actor -> return 0.
+  aw('aw-los-blocked', [], {
+    actors: { tgt: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 22 }, wall: {} },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 'wall', time: 0.5 } }],
+  }),
+  // LOS hits the target itself -> not blocked -> proceeds.
+  aw('aw-los-target', flatWalk(40), {
+    actors: { tgt: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 22 } },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 'tgt', time: 0.5 } }],
+  }),
+  // argC != 0 -> the LOS SingleLineCheck is skipped entirely.
+  aw('aw-no-los', flatWalk(40), {
+    argC: 1,
+    actors: { tgt: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 22 } },
+    pawn: { meleeRange: 40, physics: 1 },
+  }),
+  // Pawn target in a footZone pain zone, no resist -> return 0.
+  aw('aw-foot-pain', [], {
+    actors: { tgt: { cls: 'pawn', location: [50, 0, 0], footZone: 'pain' } },
+    zones: { pain: { pain: 1, damageType: 3 } },
+    pawn: { meleeRange: 40, physics: 1 },
+  }),
+  // Same pain zone but ReducedDamageType matches -> immune -> proceeds.
+  aw('aw-foot-pain-resist', flatWalk(4), {
+    actors: { tgt: { cls: 'pawn', location: [50, 0, 0], footZone: 'pain' } },
+    zones: { pain: { pain: 1, damageType: 3 } },
+    pawn: { meleeRange: 40, physics: 1, field444: 3 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Non-pawn target in a regionZone pain zone, no resist -> return 0.
+  aw('aw-region-pain', [], {
+    actors: { tgt: { cls: 'actor', location: [50, 0, 0], regionZone: 'pain' } },
+    zones: { pain: { pain: 1, damageType: 3 } },
+    pawn: { physics: 1 },
+  }),
+  // Target in a water regionZone and pawn can't swim (flags318&0x4000==0) -> 0.
+  aw('aw-water-noswim', [], {
+    actors: { tgt: { cls: 'pawn', location: [50, 0, 0], regionZone: 'water' } },
+    zones: { water: { water: 1 } },
+    pawn: { meleeRange: 40, physics: 1 },
+  }),
+  // Same water but pawn can swim -> proceeds.
+  aw('aw-water-swim', flatWalk(4), {
+    actors: { tgt: { cls: 'pawn', location: [50, 0, 0], regionZone: 'water' } },
+    zones: { water: { water: 1 } },
+    pawn: { meleeRange: 40, physics: 1, flags318: 0x4000 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Editor mode skips the non-pawn distance gate entirely.
+  aw('aw-editor-far', flatWalk(50), {
+    gIsEditor: 1,
+    actors: { tgt: { cls: 'actor', location: [900, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Null target -> return 0.
+  aw('aw-null', [], { target: '__none' }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -372,11 +624,108 @@ function runJsWalk(scene, mod = module) {
            velocityBits: vecBits(pawn.velocity) };
 }
 
+/* Nav-graph twin: reachMask/directReach/actorWorker.  Builds named actors and
+ * nav-points with their class/zone/path surface, the level's ReachSpec table,
+ * and the same scripted boundary sequences the oracle records. */
+const ISA = {
+  actor: ['Actor'], pawn: ['Pawn', 'Actor'],
+  playerpawn: ['PlayerPawn', 'Pawn', 'Actor'],
+  scriptedpawn: ['ScriptedPawn', 'Pawn', 'Actor'],
+  navpoint: ['NavPoint', 'Actor'], navigationpoint: ['NavPoint', 'Actor'],
+  warpzonemarker: ['WarpZoneMarker', 'NavPoint', 'Actor'],
+  inventoryspot: ['InventorySpot', 'NavPoint', 'Actor'],
+  mover: ['Mover', 'Actor'], inventory: ['Inventory', 'Actor'],
+  trigger: ['Trigger', 'Triggers', 'Actor'], levelinfo: ['LevelInfo', 'Actor'],
+};
+function runJsGraph(scene, mod = module) {
+  const j = scene.js;
+  const zones = j.zones || {};
+  const zoneObj = n => {
+    const s = zones[n] || {};
+    return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ };
+  };
+  const mkActor = spec => {
+    const cls = spec.cls || 'actor';
+    return {
+      location: (spec.location || [0, 0, 0]).map(f32),
+      velocity: (spec.velocity || [0, 0, 0]).map(f32),
+      Rotation: (spec.rotation || [0, 0, 0]).slice(),
+      CollisionRadius: f32(spec.collisionRadius ?? 46),
+      CollisionHeight: f32(spec.collisionHeight ?? 46),
+      MaxStepHeight: f32(spec.maxStepHeight ?? 24),
+      MeleeRange: f32(spec.meleeRange ?? 0),
+      GroundSpeed: f32(spec.groundSpeed ?? 200),
+      BaseEyeHeight: f32(spec.baseEyeHeight ?? 40),
+      Flags318: spec.flags318 | 0, ReducedDamageType: spec.field444 | 0,
+      Flags1dc: spec.flags1dc | 0, Flags4ec: spec.field4ec | 0,
+      CollideFlag: spec.collideFlag | 0, Physics: spec.physics | 0,
+      zoneGravity: f32((zones[spec.regionZone] || {}).gravityZ ?? -950),
+      __isA: ISA[cls] || ['Actor'],
+      __rz: spec.regionZone ?? 'dry', __fz: spec.footZone ?? 'dry',
+      __paths: spec.paths || [], __upstream: spec.upstreamPaths || [],
+    };
+  };
+  const actors = {};
+  for (const [n, spec] of Object.entries(j.navPoints || {}))
+    actors[n] = mkActor({ cls: 'navpoint', ...spec });
+  for (const [n, spec] of Object.entries(j.actors || {}))
+    actors[n] = mkActor(spec);
+  const pawn = mkActor({ cls: 'pawn', ...j.pawn });
+  actors.self = pawn;
+  const ref = v => (typeof v === 'string' ? (actors[v] ?? 0) : v);
+  const specs = (scene.reachSpecs || []).map(s => ({
+    start: ref(s.start), distance: s.distance | 0, end: ref(s.end),
+    radius: s.radius | 0, height: s.height | 0, reachFlags: s.flags | 0, pruned: s.pruned | 0,
+  }));
+  const target = ref(j.target);
+  const scripted = scene.moveActor || [];
+  const slSeq = j.singleLine || null, farSeq = j.farMove || null;
+  let idx = 0, moves = 0, farMoves = 0, sli = 0, fi = 0;
+  const services = {
+    location: a => a.location, velocity: a => a.velocity,
+    read: (a, n) => a[n],
+    zoneGravity: a => a.zoneGravity,
+    gIsEditor: () => !!j.gIsEditor,
+    regionZone: a => zoneObj(a.__rz ?? 'dry'),
+    footZone: a => zoneObj(a.__fz ?? 'dry'),
+    isA: (a, key) => !!(a && a.__isA && a.__isA.includes(key)),
+    level: a => ({ model: { id: 'model' } }),
+    model: lvl => lvl.model,
+    reachSpecTable: a => specs,
+    paths: a => a.__paths, upstreamPaths: a => a.__upstream,
+    singleLineCheck: (src, end, start, flags, extent, extra) => {
+      const arr = slSeq || [{ ret: 1, hit: { actor: 0, time: 1 } }];
+      const r = arr[Math.min(sli++, arr.length - 1)];
+      const h = r.hit || {};
+      return { ret: r.ret | 0, time: h.time ?? 1, actor: ref(h.actor ?? 0), item: h.item ?? -1 };
+    },
+    moveActor: (a, delta, rot, flags) => {
+      moves++;
+      const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
+      commitMove(a.location, delta, h.time);
+      return { time: h.time, normal: h.normal, actor: ref(h.actor ?? 0), item: h.item };
+    },
+    farMoveActor: (a, dest, test, noCheck) => {
+      farMoves++;
+      const r = farSeq ? farSeq[Math.min(fi++, farSeq.length - 1)] : 1;
+      if (r) a.location = dest.map(f32);
+      return r;
+    },
+    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
+    pointRegion: () => zoneObj('dry'), fastLineCheck: () => 1,
+  };
+  const ret = scene.body === 'reachMask' ? mod.reachMask(pawn, services)
+    : scene.body === 'directReach' ? mod.directReach(pawn, actors[j.source], target, services)
+    : mod.actorWorker(pawn, target, j.argC, services);
+  return { ret, moves, farMoves, slc: sli, locationBits: vecBits(pawn.location) };
+}
+
 function normalizeProbe(r) {
   return {
     ret: r.returned | 0,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
+    slc: r.counts.singleLineCheck,
     locationBits: r.pawn.locationBits,
     velocityBits: r.pawn.velocityBits,
   };
@@ -387,6 +736,7 @@ function compare(name, o, j) {
   if (o.ret !== j.ret) d.push(`${name}: ret ${o.ret} != ${j.ret}`);
   if (o.moves !== j.moves) d.push(`${name}: moveActor calls ${o.moves} != ${j.moves}`);
   if (o.farMoves !== j.farMoves) d.push(`${name}: farMoveActor calls ${o.farMoves} != ${j.farMoves}`);
+  if (j.slc !== undefined && o.slc !== j.slc) d.push(`${name}: singleLineCheck calls ${o.slc} != ${j.slc}`);
   if (o.locationBits.join() !== j.locationBits.join())
     d.push(`${name}: location ${o.locationBits} != ${j.locationBits}`);
   if (j.velocityBits && o.velocityBits.join() !== j.velocityBits.join())
@@ -395,7 +745,9 @@ function compare(name, o, j) {
 }
 
 const runFor = scene =>
-  (scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk : runJs);
+  (scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
+   : scene.body === 'reachMask' || scene.body === 'directReach' || scene.body === 'actorWorker' ? runJsGraph
+   : runJs);
 
 // ---------------------------------------------------------------------------
 const probeResults = runProbe(scenes.map(s => {
@@ -492,6 +844,61 @@ const MUTATIONS = [
     pattern: '  if (arg14 === 0) {',
     replacement: '  if (arg14 !== 0) {',
     expect: ['pw-arg14-skip', 'pw-no-los'] },
+
+  // -- reachMask (0x10326d10) mutants ---------------------------------------
+  // bit1 -> bit2 for output bit6: the lone bit1 scene loses its mask bit.
+  { name: 'rm-bit1-src',
+    pattern: '(((f >>> 1) & 1) << 6)',
+    replacement: '(((f >>> 2) & 1) << 6)',
+    expect: ['rm-bit1'] },
+
+  // -- directReach (0x103dad20) mutants -------------------------------------
+  // Radius gate never rejects: the under-radius spec now reaches the SLC and
+  // returns 1 instead of being filtered out.
+  { name: 'dr-radius-gate',
+    pattern: 'if ((spec.radius | 0) < cri) continue;',
+    replacement: 'if ((spec.radius | 0) < 0) continue;',
+    expect: ['dr-radius'] },
+  // The cannot-open-Mover continue becomes a hard accept.
+  { name: 'dr-mover-gate',
+    pattern: 'if (!(f318 & 0x10000)) continue;',
+    replacement: 'if (!(f318 & 0x10000)) return 1;',
+    expect: ['dr-mover-blocked'] },
+
+  // -- actorWorker (0x103c0630) mutants -------------------------------------
+  // canSwim bit 0x4000 -> 0x8000: the swimming pawn loses its water exemption.
+  { name: 'aw-water-swim',
+    pattern: 'if (rz.water && !(f318 & 0x4000)) return 0;',
+    replacement: 'if (rz.water && !(f318 & 0x8000)) return 0;',
+    expect: ['aw-water-swim'] },
+  // Pawn footZone pain-resist compare inverted: immune now blocked, vulnerable
+  // now allowed.
+  { name: 'aw-foot-pain',
+    pattern: 'if (fz.pain && fz.damageType !== rdt) return 0;',
+    replacement: 'if (fz.pain && fz.damageType === rdt) return 0;',
+    expect: ['aw-foot-pain', 'aw-foot-pain-resist'] },
+  // Within-combined-radius returns 0 instead of 1: the close pawn target now
+  // falls through to the walk instead of the immediate accept.
+  { name: 'aw-within-radius',
+    pattern: 'if (leU(distSq, Rsq)) return 1;',
+    replacement: 'if (leU(distSq, Rsq)) return 0;',
+    expect: ['aw-pawn-inside'] },
+  // LOS "hit a non-target" gate inverted: a blocker no longer blocks and a
+  // direct hit on the target now blocks.
+  { name: 'aw-los-target',
+    pattern: 'if (!eqU(ld(hit.time), D1) && hit.actor !== target) return 0;',
+    replacement: 'if (!eqU(ld(hit.time), D1) && hit.actor === target) return 0;',
+    expect: ['aw-los-blocked', 'aw-los-target'] },
+  // WarpZoneMarker no longer passes the actor as the physicsReach target.
+  { name: 'aw-warp-target',
+    pattern: "services.isA(target, 'WarpZoneMarker') ? target : 0",
+    replacement: "false ? target : 0",
+    expect: ['aw-warp'] },
+  // argC LOS gate inverted: the argC=1 scene now runs the line check (slc 0->1).
+  { name: 'aw-argc-los',
+    pattern: '  if (argC === 0) {',
+    replacement: '  if (argC !== 0) {',
+    expect: ['aw-no-los'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');

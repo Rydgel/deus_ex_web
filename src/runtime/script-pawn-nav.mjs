@@ -16,7 +16,7 @@
 
 import {
   x87load, x87add, x87mul, x87div, x87neg, x87recip, x87store,
-  x87storeDouble, x87sqrt, x87safeNormal, x87width,
+  x87storeDouble, x87sqrt, x87safeNormal, x87width, x87ftol,
 } from './script-vm.mjs';
 
 const f32 = Math.fround;
@@ -147,6 +147,76 @@ const moveActor = (services, pawn, delta, rot) =>
 
 /** Original ULevel::FarMoveActor (vtable +0x8c): restore `pawn` to `dest`. */
 const farMove = (services, pawn, dest) => services.farMoveActor(pawn, dest, 1, 1);
+
+/** Ordered C3 (equal) flag from FCOM — `test ah,0x40`. */
+const eqU = (a, b) => x87compare(a, b).c3 === 1;
+
+/**
+ * reachMask worker 0x10326d10 — pure thiscall gather.
+ *   int reachMask(this=pawn)
+ *
+ * Packs the pawn's +0x318 capability bits into the 7-bit ReachSpec mask.
+ * The body shifts each source bit into bit0 and accumulates left, so the
+ * last-shifted bit lands at the top of the result:
+ *   mask = b13 | b15<<1 | b14<<2 | b12<<3 | b16<<4 | b17<<5 | b1<<6
+ * (oracle bit-exact: flags318=0x1ffff -> 0x5f, each single bit verified).
+ */
+export function reachMask(pawn, services) {
+  const f = rd(services, pawn, 'Flags318') >>> 0;           // ecx+0x318
+  return ((f >>> 13) & 1)
+       | (((f >>> 15) & 1) << 1)
+       | (((f >>> 14) & 1) << 2)
+       | (((f >>> 12) & 1) << 3)
+       | (((f >>> 16) & 1) << 4)
+       | (((f >>> 17) & 1) << 5)
+       | (((f >>> 1) & 1) << 6);
+}
+
+/**
+ * directReach worker 0x103dad20.
+ *   int directReach(this=pawn; AActor* source; AActor* target)
+ *
+ * Scans `source`'s two NavigationPoint ReachSpec index arrays (+0x360 then
+ * +0x3a0, 16 slots, -1 terminated) for a spec whose `end` (+0x08) is `target`
+ * and that admits the pawn's dimensions/capabilities.  A qualifying spec is
+ * confirmed by SingleLineCheck(source.loc -> target.loc, flags=6, zero extent):
+ * a clear trace, or a non-Mover hit, or a Mover the pawn can open, returns 1.
+ * Only a Mover the pawn cannot open makes it advance to the next index.
+ *
+ * ReachSpec record (level +0x8c, 28-byte stride): +0x00 start, +0x04 distance,
+ * +0x08 end, +0x0c collisionRadius(int), +0x10 collisionHeight(int),
+ * +0x14 reachFlags, +0x18 pruned.
+ */
+export function directReach(pawn, source, target, services) {
+  const table = services.reachSpecTable(pawn);              // pawn->level +0x8c
+  const cri = x87ftol(ld(rd(services, pawn, 'CollisionRadius')));  // __ftol
+  const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight')));
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  const mask = reachMask(pawn, services);
+  const end = services.location(target), start = services.location(source);
+  for (const arr of [services.paths(source), services.upstreamPaths(source)]) {
+    for (let i = 0; i < 16; i++) {                          // [ebp-0x14] < 0x10
+      // Fixed 16-dword array; absent slots read as the -1 terminator.
+      const idx = i < arr.length ? (arr[i] | 0) : -1;
+      if (idx === -1) break;                                // -1 terminator
+      const spec = table[idx];
+      if (!spec || spec.end !== target) continue;           // spec+0x08
+      if ((spec.radius | 0) < cri) continue;                // spec+0x0c < ftoi(CR)
+      if ((spec.height | 0) < chi) continue;                // spec+0x10 < ftoi(CH)
+      if (((spec.reachFlags | 0) & mask) !== (spec.reachFlags | 0)) continue; // +0x14
+      const hit = services.singleLineCheck(pawn, end, start, 6, [0, 0, 0], 0);
+      if (!hit.actor) return 1;                             // clear trace
+      if (services.isA(hit.actor, 'Mover')) {               // AMover 0x1058bb58
+        if (!(f318 & 0x10000)) continue;                    // !bCanOpenDoors
+        if (f318 & 0x2) return 1;                           // flags bit1
+        if (!(rd(services, hit.actor, 'Flags4ec') & 8)) return 1;
+        continue;                                           // mover blocks
+      }
+      return 1;                                             // non-mover hit
+    }
+  }
+  return 0;
+}
 
 /**
  * checkMove worker 0x103c3290.
@@ -452,4 +522,88 @@ export function pointWorker(pawn, point, arg14, services) {
     services.farMoveActor(pawn, origLoc, 1, 1);
   // Physics dispatch (0x103c0f22): radius 15.0, target 0.
   return physicsReach(pawn, point, 15.0, 0, services);
+}
+
+/**
+ * actorReachable worker 0x103c0630.
+ *   int actorWorker(this=pawn; AActor* target; int argC)
+ *
+ * The actor-analog of pointWorker: zone/class gates, an optional SingleLineCheck
+ * (argC==0), a collision-fit test FarMoveActor, then physicsReach.  The exec's
+ * nav-graph fast path runs ahead of this; the worker is the single-hop fallback.
+ *
+ * Distance is the full 3D distSq [ebp-0x14].  Non-pawn targets are limited to
+ * 800 units (distSq<=640000) outside the editor and checked against their
+ * regionZone pain flag; pawn targets instead check footZone pain.  Both then
+ * apply the shared regionZone water/canSwim gate, the argC LOS gate, and a
+ * reach radius:
+ *   pawn target  — R = max(CR*1.5, meleeRange) + targetCR + pawnCR;
+ *                  distSq<=R^2 returns 1 immediately, else (dist>800 only)
+ *                  R=max(R, sqrt(distSq)-800); physicsReach target=actor.
+ *   other target — R = 15.0, or targetCR+pawnCR-2.0 for Inventory/Trigger;
+ *                  physicsReach target = actor only when +0x1dc&4 or a
+ *                  WarpZoneMarker, else 0.
+ */
+export function actorWorker(pawn, target, argC, services) {
+  if (!target) return 0;                                    // 0x103c065f
+  const ploc = services.location(pawn), tloc = services.location(target);
+  const dx = sub(ld(tloc[0]), ld(ploc[0])),
+        dy = sub(ld(tloc[1]), ld(ploc[1])),
+        dz = sub(ld(tloc[2]), ld(ploc[2]));
+  // [ebp-0x34/-0x30/-0x2c]: the f32-stored deltas, reused by the sqrt recompute.
+  const dxf = st(dx), dyf = st(dy), dzf = st(dz);
+  // [ebp-0x14] distSq: (dx^2+dy^2)+dz^2 in 80-bit, stored f32 and reloaded.
+  const distSq = ld(st(x87add(
+    x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz))));
+  const rdt = rd(services, pawn, 'ReducedDamageType');      // pawn+0x444
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  const isPawn = services.isA(target, 'Pawn');              // target IsA APawn
+  if (isPawn) {                                             // 0x103c0747
+    const fz = services.footZone(target);                   // target+0x330
+    if (fz.pain && fz.damageType !== rdt) return 0;         // foot pain, !resist
+  } else if (!services.gIsEditor()) {                       // 0x103c06e0 [10599c94]
+    if (gtU(distSq, ld64(640000.0))) return 0;              // dist>800 -> 0
+    const rz = services.regionZone(target);                 // target+0xc8
+    if (rz.pain && rz.damageType !== rdt) return 0;         // pain, !resist
+  }
+  const rz = services.regionZone(target);                   // 0x103c077b
+  if (rz.water && !(f318 & 0x4000)) return 0;               // water, !canSwim
+  if (argC === 0) {                                         // 0x103c07aa LOS gate
+    const eye = [ploc[0], ploc[1],
+      st(x87add(ld(ploc[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
+    const hit = services.singleLineCheck(pawn, tloc, eye, 6, [0, 0, 0], 0);
+    if (!eqU(ld(hit.time), D1) && hit.actor !== target) return 0; // blocked, !target
+  }
+  const pCR = rd(services, pawn, 'CollisionRadius');
+  const origLoc = ploc.map(f32);
+  if (isPawn) {                                             // 0x103c08a3
+    const tCR = rd(services, target, 'CollisionRadius');
+    const melee = rd(services, pawn, 'MeleeRange');         // pawn+0x374
+    const scaled = x87mul(ld(pCR), ld(1.5));                // CR*1.5
+    // fcom+test ah,0x41 keeps st0 when scaled<=melee, else reloads melee: a MIN.
+    let R = leU(scaled, ld(melee)) ? scaled : ld(melee);    // min(scaled, melee)
+    R = x87add(x87add(R, ld(tCR)), ld(pCR));                // + tCR + pCR
+    const Rf = ld(st(R));                                   // f32 store [ebp+0xc]
+    const Rsq = x87mul(R, Rf);                              // R * f32(R)
+    if (leU(distSq, Rsq)) return 1;                         // distSq<=R^2 -> 1
+    if (gtU(distSq, ld64(640000.0))) {                      // dist>800: widen
+      // Recompute dzf^2+dyf^2+dxf^2 from the f32 stores, then appSqrt - 800.
+      const sq = x87add(x87add(x87mul(ld(dzf), ld(dzf)), x87mul(ld(dyf), ld(dyf))),
+                        x87mul(ld(dxf), ld(dxf)));
+      const widened = sub(appSqrt(sq), ld(800.0));          // sqrt(dsq)-800
+      // fcom dword[ebp+0xc]: widened vs the f32-stored R; keep the larger.
+      if (geU(widened, Rf)) R = widened;                    // R = max(R, widened)
+    }
+    if (services.farMoveActor(pawn, tloc.map(f32), 1, 0))   // fit test
+      services.farMoveActor(pawn, origLoc, 1, 1);
+    return physicsReach(pawn, tloc.map(f32), st(R), target, services);
+  }
+  let R = 15.0;                                             // 0x103c0a26
+  if (services.isA(target, 'Inventory') || services.isA(target, 'Trigger'))
+    R = st(sub(x87add(ld(rd(services, target, 'CollisionRadius')), ld(pCR)), ld(2.0)));
+  if (services.farMoveActor(pawn, tloc.map(f32), 1, 0))
+    services.farMoveActor(pawn, origLoc, 1, 1);
+  const f1dc = rd(services, target, 'Flags1dc') >>> 0;      // target+0x1dc
+  const arg4 = (f1dc & 4) || services.isA(target, 'WarpZoneMarker') ? target : 0;
+  return physicsReach(pawn, tloc.map(f32), R, arg4, services);
 }

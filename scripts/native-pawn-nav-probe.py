@@ -103,6 +103,7 @@ NAVPOINT_CLASS = 0x1057a128      # ANavigationPoint::StaticClass()
 WARPMARKER_CLASS = 0x10575198    # AWarpZoneMarker::StaticClass()
 INVENTORY_CLASS = 0x10576f70     # AInventory::StaticClass()
 MOVER_CLASS = 0x1058bb58         # AMover::StaticClass()
+TRIGGER_CLASS = 0x10576088       # ATrigger::StaticClass()
 ACTOR_CLASS = 0x1057c560         # AActor::StaticClass()
 
 # Expression tokens consumed by the exec wrappers through GNatives[token].
@@ -285,7 +286,9 @@ def slcheck_stub(mail, recs):
         'f3a5',
         'ff05', struct.pack('<I', mi).hex(),
         '5f', '5e', '5b',
-        'c22000')
+        # SingleLineCheck pops 9 stack dwords: hit, source, end*, start*,
+        # flags, extent vec3, extra — real body at 0x1039aed0 ends `ret 0x24`.
+        'c22400')
 
 
 def pointregion_stub(mail, recs):
@@ -536,6 +539,10 @@ class NavProbe:
         self.probing_index = 0
         self.last_image_ip = 0
         self.watch_ips = set()
+        # Heap watermark: every allocation above this point is per-scene and is
+        # reclaimed at the top of run(), so a batch of scenes does not grow the
+        # fabricated heap without bound.
+        self.heap_mark = self.free
         cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
         cpu.hook_add(UC_HOOK_MEM_INVALID, self.on_bad_memory)
 
@@ -642,7 +649,7 @@ class NavProbe:
         'pawn': PAWN_CLASS, 'playerpawn': PLAYER_CLASS, 'levelinfo': LEVELINFO_CLASS,
         'navpoint': NAVPOINT_CLASS, 'navigationpoint': NAVPOINT_CLASS,
         'warpzonemarker': WARPMARKER_CLASS, 'inventory': INVENTORY_CLASS,
-        'mover': MOVER_CLASS, 'actor': ACTOR_CLASS,
+        'mover': MOVER_CLASS, 'trigger': TRIGGER_CLASS, 'actor': ACTOR_CLASS,
     }
 
     def zone(self, spec):
@@ -736,6 +743,10 @@ class NavProbe:
 
     # --- run ---------------------------------------------------------------
     def run(self, scene):
+        # Reclaim the prior scene's heap: restore the allocation pointer to the
+        # watermark captured at the end of __init__ (below the persistent
+        # vtable/stub/record-buffer allocations) so batches stay bounded.
+        self.free = self.heap_mark
         for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
@@ -892,6 +903,7 @@ class NavProbe:
         self.write(WARPMARKER_CLASS + 0x28, 'I', NAVPOINT_CLASS)
         self.write(INVENTORY_CLASS + 0x28, 'I', self.class_object(0))
         self.write(MOVER_CLASS + 0x28, 'I', self.class_object(0))
+        self.write(TRIGGER_CLASS + 0x28, 'I', ACTOR_CLASS)
         self.write(ACTOR_CLASS + 0x28, 'I', 0)
         self.write(LEVELINFO_CLASS + 0x28, 'I', self.class_object(0))
 

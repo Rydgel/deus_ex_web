@@ -184,14 +184,61 @@ From `actorReachable`'s direct-spec worker `0x103dad20` and `ULevel.cpp`:
   → compact bits `0..6` (`R_WALK/R_FLY/R_SWIM/R_JUMP/R_DOOR/R_SPECIAL/
   R_PLAYERONLY`).  **Oracle-confirmed:** `flags=0x70026` → `0x70`.
 
-The direct-spec worker scans a nav point's `Paths[]`, skips `-1`, checks the
-spec `End` + collision dims + `reachFlags & reachMask`, runs `SingleLineCheck`
-(flags `6`, zero extent) to the endpoint, and rejects obstructed/`Mover`
-(`class [0x1058bb58]`) specs.
+The direct-spec worker `0x103dad20` (`thiscall pawn; source, target`) scans a
+nav point's `Paths[]`, skips `-1`, and for each spec checks `End==target`
+(`+0x08`), `collisionRadius >= __ftol(pawn.CR)` (`+0x0c`),
+`collisionHeight >= __ftol(pawn.CH)` (`+0x10`), and
+`(reachFlags & reachMask) == reachFlags` (`+0x14`).  A qualifying spec is
+confirmed by `SingleLineCheck(source.loc -> target.loc, flags=6, zero extent,
+extra=0)`: a clear trace, a non-`Mover` hit, or a `Mover` the pawn can open
+returns 1.  The `Mover` (`class 0x1058bb58`) rule: skip the spec unless pawn
+`+0x318 & 0x10000` (bCanOpenDoors); if `+0x318 & 0x2` is clear the mover is
+openable only when its `+0x4ec & 0x8` is clear.  Both `Paths` (`+0x360`) and
+`upstreamPaths` (`+0x3a0`) are scanned in turn.
+
+## `actorReachable` worker `0x103c0630`
+
+`int actorWorker(this=pawn; AActor* target; int argC)` — the actor analogue of
+`pointWorker`: a gate sequence, then a collision-fit `FarMoveActor`, then the
+shared physics-reach dispatcher `0x103c1000`.  `arg8`=target (null → 0),
+`argC` is repurposed as the reach-radius local after the LOS gate.
+
+1. `dx/dy/dz` and `distSq` (`[ebp-0x34/-0x30/-0x2c/-0x14]`, all f32-stored).
+2. First `IsA(APawn 0x1058c660)` class-chain walk of `target`:
+   - pawn → `target.FootZone+0x330` pain flag (`+0x388&0x20`) vs
+     `damageType`/`+0x350` == pawn `+0x444`; mismatch → 0.
+   - non-pawn → unless `[[0x10599c94]]!=0` (editor): `distSq>640000` (800²) → 0,
+     then `target.RegionZone+0xc8` pain flag → 0 on resist mismatch.
+3. Shared: `target.RegionZone` water (`+0x388&1`) requires pawn `+0x318&0x4000`
+   (canSwim) else 0.
+4. `argC==0` → `SingleLineCheck(pawn, eye=loc.z+BaseEyeHeight, target.loc,
+   flags=6)`: proceed iff `hit.time==1.0` or `hit.actor==target`.
+5. Second `IsA(APawn)` walk → the radius/`physicsReach` path:
+   - pawn → `R = min(CR*1.5, meleeRange) + targetCR + pawnCR` (f32).  Within
+     `distSq<=R²` → 1.  Else `distSq>640000` widens `R=max(R, appSqrt(dsq)-800)`.
+     `FarMoveActor` fit test then `physicsReach(pawn, target.loc, R, target)`.
+   - non-pawn → `R=15.0`, or `targetCR+pawnCR-2.0` for `IsA(Inventory 0x10576f70)`
+     /`IsA(Trigger 0x10576088)`; `FarMoveActor` fit test then
+     `physicsReach(pawn, target.loc, R, arg4)` where `arg4 = target` iff
+     `target+0x1dc & 4` or `IsA(WarpZoneMarker 0x10575198)`, else 0.
 
 ## Verification status
 
-- `reachMask` 7-bit gather — **bit-exact vs oracle** (`0x70026 → 0x70`).
+- `reachMask` `0x10326d10` 7-bit gather — **ported to JS, bit-exact vs oracle**
+  across 10 flag scenes (`0x70026 → 0x70` plus each single bit) plus 1 mutant.
+- `directReach` `0x103dad20` — **ported to JS, bit-exact vs oracle** across 10
+  scenes (clear trace, under-radius/height/capability pre-checks, upstream
+  array, wrong-end, Mover blocked/open/`+0x4ec` branches, non-mover hit) plus
+  2 mutants.
+- `actorReachable` worker `0x103c0630` — **ported to JS, bit-exact vs oracle**
+  across 20 scenes (pawn within-radius early-accept, near/far walk reach,
+  >800 radius widen, non-pawn distance limit, `R=15`/`Inventory`/`Trigger`
+  radii, `WarpZoneMarker`/`flags1dc` target arg, LOS blocked/on-target/argC
+  skip, foot+region pain and resist, water swim/no-swim, editor skip, null
+  target) plus 6 mutants.  The `actorReachable` exec `0x103bc1a0` nav-graph
+  fast path (anchor redirect, nearby-navpoint scan, `directReach`) is
+  recovered at the disasm level but not yet ported — the worker is its
+  single-hop fallback.
 - `checkMove` `0x103c3290` — **ported to JS, bit-exact vs oracle** across 16
   scenes (flat/step-up/target-hit/ledge/steep/under-moved/low-grav) plus 4
   mutants detected (commit `26a2f08`).
