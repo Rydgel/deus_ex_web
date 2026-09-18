@@ -241,7 +241,7 @@ def farmove_stub(mail, recs):
         '8b049e',                                   # eax = [esi+ebx*4]
         'ff05', struct.pack('<I', mi).hex(),
         '85c0',                                     # test eax,eax
-        '7421',                                     # jz done (skip 33B vec-write)
+        '7422',                                     # jz done (skip 34B vec-write)
         '8b54240c',                                 # edx = actor
         '8b4c2410', '898a14010000',                 # vec.x -> actor+0x114
         '8b4c2414', '898a18010000',                 # vec.y -> actor+0x118

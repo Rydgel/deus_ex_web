@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { x87load, x87add, x87mul, x87store } from '../src/runtime/script-vm.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const modulePath = path.join(root, 'src/runtime/script-pawn-nav.mjs');
@@ -37,6 +38,16 @@ const bitsOf = v => { io.setFloat32(0, v, true); return io.getUint32(0, true); }
 const bitsHex = v => bitsOf(v).toString(16).padStart(8, '0');
 const vecBits = v => v.map(bitsHex);
 
+/* The oracle's moveActor stub commits the displacement exactly like
+ * ULevel::MoveActor: for each axis fld time; fmul m32 delta; fadd m32 loc;
+ * fstp m32 loc.  Mirror that in 80-bit so partial-hit z landings round
+ * identically. */
+const commitMove = (loc, delta, time) => {
+  const t = x87load(time);
+  for (let i = 0; i < 3; i++)
+    loc[i] = x87store(x87add(x87load(loc[i]), x87mul(t, x87load(delta[i]))));
+};
+
 // -- Scripted boundary hits --------------------------------------------------
 const H = (time, nz, actor = 0, nx = 0, ny = 0) =>
   ({ ret: 1, hit: { time, normal: [nx, ny, nz], actor, item: -1 } });
@@ -45,6 +56,7 @@ const BASE_PAWN = {
   location: [0, 0, 0], rotation: [0, 0, 0], velocity: [0, 0, 0],
   maxStepHeight: 24.0, collisionRadius: 22.0, collisionHeight: 40.0,
   groundSpeed: 200.0, flags318: 0, field444: 0, collideFlag: 0,
+  physics: 1, baseEyeHeight: 40.0,
   regionZone: 'dry', footZone: 'dry',
 };
 
@@ -109,6 +121,28 @@ function dp(name, mv, { point = [100, 0, 0], radius = 15, target = 0,
     moveActor: mv, farMove,
     js: { point, radius, target, gIsEditor, zones: z,
           pawn: { ...BASE_PAWN, physics, ...pawn }, actors: {} },
+  };
+  return s;
+}
+
+/* A pointReachable-worker scene (0x103c0d30): thiscall(pawn; point vec3,
+ * arg14).  arg14==0 runs the FastLineCheck; the worker then test-FarMoves and
+ * physics-dispatches into walkReach.  pointRegion/fastLine/farMove are scripted
+ * boundary results alongside the MoveActor sequence. */
+function pw(name, mv, { point = [100, 0, 0], arg14 = 0, physics = 1,
+                        zones = null, gIsEditor = 0, pawn = {},
+                        pointRegion = ['dry'], fastLine = [1], farMove = [1, 1] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const pr = pointRegion.map(r => (typeof r === 'string' ? { zone: r } : r));
+  const s = {
+    name, body: 'pointWorker', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, physics, ...pawn },
+    directArgs: [{ f: point[0] }, { f: point[1] }, { f: point[2] }, { i: arg14 }],
+    moveActor: mv, farMove, pointRegion: pr, fastLine,
+    js: { point, arg14, gIsEditor, zones: z, farMove,
+          pawn: { ...BASE_PAWN, physics, ...pawn }, actors: {},
+          pointRegion: pr, fastLine },
   };
   return s;
 }
@@ -192,6 +226,42 @@ const scenes = [
   dp('dp-falling', flatWalk(4), { physics: 2, pawn: { collisionRadius: 20 } }),
   // PHYS_None(0) -> 0.
   dp('dp-none', flatWalk(4), { physics: 0, pawn: { collisionRadius: 20 } }),
+
+  // -- pointReachable worker (0x103c0d30) ------------------------------------
+  // Dry-to-dry reach: pointRegion->dry, fastLine->1, farMove test+restore, then
+  // walkReach reaches the flat point.
+  pw('pw-reach', flatWalk(20), { pawn: { collisionRadius: 20 } }),
+  // Beyond the 1e6 distSq limit (point 2000 away) -> 0 before any boundary.
+  pw('pw-too-far', flatWalk(4), { point: [2000, 0, 0], pawn: { collisionRadius: 20 } }),
+  // Editor nonzero skips the distance gate entirely -> still reaches.
+  pw('pw-editor', flatWalk(20), { gIsEditor: 1, point: [2000, 0, 0],
+                                  pawn: { collisionRadius: 20 } }),
+  // Dest zone is water, pawn region dry, no canSwim (flags318 & 0x4000 = 0) -> 0.
+  pw('pw-water-gate', flatWalk(4), {
+    zones: { wet: { gravityZ: -950, water: true } },
+    pointRegion: ['wet'], pawn: { collisionRadius: 20 } }),
+  // Same water dest but pawn canSwim -> passes the gate and reaches.
+  pw('pw-water-swim', flatWalk(20), {
+    zones: { wet: { gravityZ: -950, water: true } },
+    pointRegion: ['wet'], pawn: { collisionRadius: 20, flags318: 0x4000 } }),
+  // Dest zone is pain with a damage type the pawn does not resist -> 0.
+  pw('pw-pain-gate', flatWalk(4), {
+    zones: { lava: { gravityZ: -950, pain: true, damageType: 7 } },
+    pointRegion: ['lava'], pawn: { collisionRadius: 20 } }),
+  // Pain dest but the pawn's ReducedDamageType matches -> gate passed.
+  pw('pw-pain-immune', flatWalk(20), {
+    zones: { lava: { gravityZ: -950, pain: true, damageType: 7 } },
+    pointRegion: ['lava'], pawn: { collisionRadius: 20, field444: 7 } }),
+  // Line of sight fails (fastLine->0) -> 0 before any farMove/move.
+  pw('pw-no-los', flatWalk(4), { fastLine: [0], pawn: { collisionRadius: 20 } }),
+  // arg14!=0 skips FastLineCheck; reach decided purely by the farMove+walk.
+  pw('pw-arg14-skip', flatWalk(20), { arg14: 1, fastLine: [0],
+                                     pawn: { collisionRadius: 20 } }),
+  // farMove test fails -> no restore, dispatch still runs into walkReach.
+  pw('pw-farmove-fail', flatWalk(20), { farMove: [0, 0],
+                                      pawn: { collisionRadius: 20 } }),
+  // Blocked walk: forward probe always blocked -> walkReach returns 0.
+  pw('pw-blocked', [H(0.5, 1), H(0.1, 1)], { pawn: { collisionRadius: 20 } }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -222,9 +292,7 @@ function runJs(scene, mod = module) {
     moveActor: (a, delta, rot, flags) => {
       moves++;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
-      a.location[0] = f32(a.location[0] + delta[0] * h.time);
-      a.location[1] = f32(a.location[1] + delta[1] * h.time);
-      a.location[2] = f32(a.location[2] + delta[2] * h.time);
+      commitMove(a.location, delta, h.time);
       return { time: h.time, normal: h.normal, actor: h.actor === 'tgt' ? TGT : h.actor, item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => { farMoves++; a.location = dest.map(f32); return 1; },
@@ -259,11 +327,13 @@ function runJsWalk(scene, mod = module) {
     MaxStepHeight: f32(j.pawn.maxStepHeight), GroundSpeed: f32(j.pawn.groundSpeed),
     Flags318: j.pawn.flags318 | 0, ReducedDamageType: j.pawn.field444 | 0,
     CollideFlag: j.pawn.collideFlag | 0, Physics: j.pawn.physics | 0,
+    BaseEyeHeight: f32(j.pawn.baseEyeHeight ?? 40),
     zoneGravity: f32((zones[j.pawn.regionZone] || {}).gravityZ ?? -950),
     __rz: j.pawn.regionZone, __fz: j.pawn.footZone,
   };
   const scripted = scene.moveActor;
-  let idx = 0, moves = 0, farMoves = 0;
+  const farSeq = j.farMove || null, prSeq = j.pointRegion || null, flSeq = j.fastLine || null;
+  let idx = 0, moves = 0, farMoves = 0, fi = 0, pri = 0, fli = 0;
   const services = {
     location: a => a.location, velocity: a => a.velocity,
     read: (a, n) => a[n],
@@ -272,19 +342,31 @@ function runJsWalk(scene, mod = module) {
     regionZone: a => zoneObj(a.__rz ?? 'dry'),
     footZone: a => zoneObj(a.__fz ?? 'dry'),
     isA: (a, key) => !!(a && a.__cls === key),
+    level: a => ({ model: a.__model ?? { id: 'model' } }),
+    model: lvl => lvl.model,
+    pointRegion: pt => {
+      const r = (prSeq || ['dry'])[Math.min(pri++, (prSeq || []).length - 1)];
+      return zoneObj(typeof r === 'string' ? r : (r.zone || 'dry'));
+    },
+    fastLineCheck: (model, end, start) => (flSeq || [1])[Math.min(fli++, (flSeq || [1]).length - 1)],
     moveActor: (a, delta, rot, flags) => {
       moves++;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
-      a.location[0] = f32(a.location[0] + delta[0] * h.time);
-      a.location[1] = f32(a.location[1] + delta[1] * h.time);
-      a.location[2] = f32(a.location[2] + delta[2] * h.time);
+      commitMove(a.location, delta, h.time);
       return { time: h.time, normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
     },
-    farMoveActor: (a, dest, test, noCheck) => { farMoves++; a.location = dest.map(f32); return 1; },
+    farMoveActor: (a, dest, test, noCheck) => {
+      farMoves++;
+      const r = farSeq ? farSeq[Math.min(fi++, farSeq.length - 1)] : 1;
+      if (r) a.location = dest.map(f32);
+      return r;
+    },
     jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
   };
   const ret = scene.body === 'dispatch'
     ? mod.physicsReach(pawn, j.point.map(f32), j.radius, tgt, services)
+    : scene.body === 'pointWorker'
+    ? mod.pointWorker(pawn, j.point.map(f32), j.arg14, services)
     : mod.walkReach(pawn, j.point.map(f32), j.radius, j.arg18, tgt, services);
   return { ret, moves, farMoves, locationBits: vecBits(pawn.location),
            velocityBits: vecBits(pawn.velocity) };
@@ -313,7 +395,7 @@ function compare(name, o, j) {
 }
 
 const runFor = scene =>
-  (scene.body === 'walkReach' || scene.body === 'dispatch' ? runJsWalk : runJs);
+  (scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk : runJs);
 
 // ---------------------------------------------------------------------------
 const probeResults = runProbe(scenes.map(s => {
@@ -378,6 +460,38 @@ const MUTATIONS = [
     pattern: 'if (ltU(ld(adz), ld(step))) reached = 1;',
     replacement: 'if (gtU(ld(adz), ld(step))) reached = 1;',
     expect: ['wr-inside-radius'] },
+
+  // -- pointReachable worker (0x103c0d30) mutants ----------------------------
+  // distSq limit 1e6 -> 5000: every non-editor reach scene (point 100 ->
+  // d2=10000) now fails the gate before any boundary call.
+  { name: 'pw-dist-limit',
+    pattern: 'if (gtU(d2, ld(1000000.0))) return 0;',
+    replacement: 'if (gtU(d2, ld(5000.0))) return 0;',
+    expect: ['pw-reach', 'pw-water-swim', 'pw-pain-immune', 'pw-arg14-skip',
+             'pw-farmove-fail'] },
+  // canSwim bit 0x4000 -> 0x8000: a swimming pawn no longer exempts the water
+  // gate, so the water-dest reach is rejected.
+  { name: 'pw-water-swim',
+    pattern: 'if (!rz.water && !(flags318 & 0x4000) && destZone.water) return 0;',
+    replacement: 'if (!rz.water && !(flags318 & 0x8000) && destZone.water) return 0;',
+    expect: ['pw-water-swim'] },
+  // Pain-resist compare inverted: an unresisted pain zone now passes while the
+  // resisted one is rejected.
+  { name: 'pw-pain-resist',
+    pattern: 'if (!fz.pain && destZone.pain && destZone.damageType !== rdt) return 0;',
+    replacement: 'if (!fz.pain && destZone.pain && destZone.damageType === rdt) return 0;',
+    expect: ['pw-pain-gate', 'pw-pain-immune'] },
+  // Blocked LOS returns 1 instead of 0: the no-LOS scene now reports reachable.
+  { name: 'pw-los-block',
+    pattern: 'if (!services.fastLineCheck(model, point, eye)) return 0;',
+    replacement: 'if (!services.fastLineCheck(model, point, eye)) return 1;',
+    expect: ['pw-no-los'] },
+  // arg14 gate inverted: the arg14!=0 scene now runs (and fails) the LOS check
+  // while the arg14==0 no-LOS scene skips it and reaches.
+  { name: 'pw-arg14-gate',
+    pattern: '  if (arg14 === 0) {',
+    replacement: '  if (arg14 !== 0) {',
+    expect: ['pw-arg14-skip', 'pw-no-los'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');

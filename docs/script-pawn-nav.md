@@ -35,7 +35,8 @@ end-to-end so far:
 - `pointReachable` worker + dispatcher + `walkReach` + `checkMove` run a real
   ~100-step loop; a clear flat-ground scene returns a genuine **1** after ~3
   iterations (phase-A forward move + `maxStep+2` down-probe each step), with
-  `Location`/`Velocity` correctly restored.
+  `Location`/`Velocity` correctly restored.  All four are now **ported to JS and
+  bit-exact vs the oracle** (42 scenes, 11 mutants).
 - `checkMove` return codes `5`/`1`/`−1` confirmed against scripted hits;
   `reachMask` (`0x10326d10`) returns the predicted 7-bit capability gather.
 - Boundary order for `pointReachable`: `PointRegion → FastLineCheck →
@@ -48,7 +49,7 @@ proximity-landing `appSqrt` arc, `actorReachable`, `FindRandomDest`,
 
 ## Reachability — the call graph
 
-`pointReachable` worker `0x103c0d30` (`thiscall ecx=pawn; stack [ret][point vec3][target]`):
+`pointReachable` worker `0x103c0d30` (`thiscall ecx=pawn; stack [ret][point vec3][arg14]`):
 
 1. `GIsEditor` dword gate — outside the editor, squared distance to the point
    must not exceed `1000000.0` (`=1000²`, `qword [0x104314a8]`); beyond → return 0.
@@ -63,8 +64,9 @@ proximity-landing `appSqrt` arc, `actorReachable`, `FindRandomDest`,
      `0x20`) **but** the destination zone is a pain zone **and** its
      `zone+0x350` damage-type dword differs from `pawn+0x444` (the
      reduced-damage-type field) → return 0.
-4. If `target==0`: `FastLineCheck(model, end=point, start=eye)` where
-   `eye = Location + BaseEyeHeight` (`+0x3f4`); blocked → return 0.
+4. If `arg14==0` (the exec passes a literal 0): `FastLineCheck(model, end=point,
+   start=eye)` where `eye = Location + BaseEyeHeight` (`+0x3f4`); blocked →
+   return 0.
 5. `FarMoveActor(level, pawn, point, test=1, noCheck=0)` — a test teleport to
    the destination (vtable `+0x8c`).
 6. Dispatch on physics through `0x103c1000` (`thunk 0x1030353f`):
@@ -201,13 +203,13 @@ spec `End` + collision dims + `reachFlags & reachMask`, runs `SingleLineCheck`
   swim `0x103c15a0` — and the swim-enabled water gate delegate to services
   seams that are **not yet ported** (a flag-free walker never reaches them);
   validating those needs the helper workers recovered separately.
-- `pointReachable` worker `0x103c0d30` — **runs end-to-end on the real bytes**
-  through the zone gates, `PointRegion`, `FastLineCheck`, test `FarMoveActor`,
-  the physics dispatcher and the walk helper; location/velocity restored.
-  The full reachable-vs-blocked decision matrix against scripted
-  `MoveActor`/`SingleLineCheck` outcomes is recovered structurally (every gate
-  and constant above is read from the disassembly); the JS port and its
-  bit-exact validator are the in-progress deliverable.
+- `pointReachable` worker `0x103c0d30` — **ported to JS, bit-exact vs oracle**
+  across 11 scenes (dry-to-dry reach, 1e6 distance gate, editor-skip, water
+  gate, water+canSwim, pain gate, pain-immune, blocked LOS, arg14 LOS skip,
+  farMove-test-fail, blocked walk) plus 5 mutants.  The worker returns the
+  physics-dispatch result; the exec `0x103bc710` only reads the vector arg,
+  passes `arg14=0`, and stores the result — it is wired at dispatch time, not
+  in this worker.
 - The remaining helpers (`0x103c1190` jump, `0x103c15a0` water, `0x103c3900`
   fly, `0x103c2f50` jumpArc) share the same save→100-step→restore template and
   are mapped; `FindRandomDest`/`FindPathTo`/`FindPathToward` share the

@@ -407,3 +407,49 @@ export function physicsReach(pawn, point, radius, target, services) {
     return services.flyReach(pawn, point, radius, 0, target);
   return 0;                                                 // 0x103c10b8
 }
+
+/**
+ * pointReachable worker 0x103c0d30.
+ *   int pointWorker(this=pawn; FVector point; int arg14)
+ *
+ * Gates, then a physics-dispatch reach trace.  arg14 is 0 for the
+ * pointReachable exec (FastLineCheck runs); a nonzero arg14 skips it.  The
+ * worker returns the dispatcher result; Location/Velocity are restored inside
+ * walkReach.
+ *
+ * Boundary seams: services.pointRegion(point)->zone, services.fastLineCheck
+ * (model, end=point, start=eye) with model = services.model(services.level(pawn)),
+ * services.farMoveActor(actor,dest,test,noCheck).
+ */
+export function pointWorker(pawn, point, arg14, services) {
+  const loc = services.location(pawn);
+  // GIsEditor==0 gate + 2D distance limit (0x103c0d65): dx^2+dy^2 <= 1e6, z
+  // ignored.  fld m32/fsub m32 keep the deltas in 80-bit for the compare.
+  if (!services.gIsEditor()) {
+    const dy = sub(ld(point[1]), ld(loc[1])), dx = sub(ld(point[0]), ld(loc[0]));
+    const d2 = x87add(x87mul(dx, dx), x87mul(dy, dy));
+    if (gtU(d2, ld(1000000.0))) return 0;                 // 0x103c0d90
+  }
+  const destZone = services.pointRegion(point);           // 0x103c0d92 -> [ebp-0x30]
+  const rz = services.regionZone(pawn);
+  const flags318 = rd(services, pawn, 'Flags318') >>> 0;
+  // Water gate (0x103c0dc4): pawn not in water && !canSwim && dest is water -> 0.
+  if (!rz.water && !(flags318 & 0x4000) && destZone.water) return 0;
+  const fz = services.footZone(pawn);
+  const rdt = rd(services, pawn, 'ReducedDamageType');
+  // Pain gate (0x103c0e02): foot not in pain && dest is pain && dt != rdt -> 0.
+  if (!fz.pain && destZone.pain && destZone.damageType !== rdt) return 0;
+  // FastLineCheck (0x103c0e2a): arg14==0 only — FastLineCheck(End=point,
+  // Start=eye) where eye = loc.z + BaseEyeHeight (fadd m32, stored to f32).
+  if (arg14 === 0) {
+    const model = services.model(services.level(pawn));
+    const eye = [loc[0], loc[1], st(x87add(ld(loc[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
+    if (!services.fastLineCheck(model, point, eye)) return 0;
+  }
+  // Test FarMoveActor to the point (0x103c0e8c), restore on success (0x103c0ecf).
+  const origLoc = loc.map(f32);
+  if (services.farMoveActor(pawn, point, 1, 0))
+    services.farMoveActor(pawn, origLoc, 1, 1);
+  // Physics dispatch (0x103c0f22): radius 15.0, target 0.
+  return physicsReach(pawn, point, 15.0, 0, services);
+}
