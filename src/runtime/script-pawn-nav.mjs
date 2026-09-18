@@ -15,7 +15,8 @@
  */
 
 import {
-  x87load, x87add, x87mul, x87store, x87width,
+  x87load, x87add, x87mul, x87div, x87neg, x87recip, x87store,
+  x87storeDouble, x87sqrt, x87safeNormal, x87width,
 } from './script-vm.mjs';
 
 const f32 = Math.fround;
@@ -94,6 +95,7 @@ const ld64 = v => {
 };
 
 const D1 = ld64(1), D07 = ld64(0.7), D2 = ld64(2), D08 = ld64(0.8), D0 = ld64(0);
+const D095 = ld64(0.95), D1f = ld(1.0), D15 = ld(15.0);
 
 /** FCOM/FUCOM status flags: C0 below, C3 equal, both when unordered. */
 const x87compare = (a, b) => {
@@ -117,8 +119,15 @@ const x87compare = (a, b) => {
   }
   return { c0: m < 0 ? 1 : 0, c3: m === 0 ? 1 : 0 };
 };
-const ltU = (a, b) => x87compare(a, b).c0 === 1;       // test ah,1
+const ltU = (a, b) => x87compare(a, b).c0 === 1;       // test ah,1 / jne
 const leU = (a, b) => { const f = x87compare(a, b); return (f.c0 | f.c3) === 1; };
+const geU = (a, b) => x87compare(a, b).c0 === 0;       // test ah,1 / je
+const gtU = (a, b) => { const f = x87compare(a, b); return (f.c0 | f.c3) === 0; };
+
+const st = x87store;
+const sub = (a, b) => x87add(a, x87neg(b));          // FSUB: a - b in 80-bit
+/** appSqrt(double): FSTP double arg -> CRT sqrt -> double result (Core thunk). */
+const appSqrt = v => x87storeDouble(x87sqrt(x87storeDouble(v)));
 
 // ---------------------------------------------------------------------------
 // Field access through the service seam.  The level-graph boundary mirrors
@@ -215,4 +224,164 @@ export function checkMove(pawn, delta, target, scale, flag, services) {
   }
   farMove(services, pawn, postLoc);                      // 0x103c367b keep forward step
   return -1;
+}
+
+/**
+ * walkReach worker 0x103c1b70.
+ *   int walkReach(this=pawn; FVector point; float radius; int arg18; AActor* target)
+ *
+ * The ~100-iteration stepped walking/swimming reachability trace.  Each step
+ * calls checkMove; on blockage the pawn +0x318 flag bits select an arc or swim
+ * helper, otherwise a smaller step is retried.  The tail applies the pain-zone
+ * and water gates, then a WarpZoneMarker fallback, restores Location+Velocity
+ * through FarMoveActor, and returns `reached ? arg18 : 0`.
+ *
+ * The three locomotion helpers (jump 0x103c1190, arc 0x103c2f50, swim
+ * 0x103c15a0) are reached only via the +0x318 flag bits or a water region; they
+ * are delegated to services.jumpArc / services.altMove / services.waterReach —
+ * a flag-free walking pawn never invokes them.
+ */
+export function walkReach(pawn, point, radius, arg18, target, services) {
+  const origLoc = services.location(pawn).map(f32);        // [ebp-0x58/-0x54/-0x50]
+  const origVel = services.velocity(pawn).map(f32);        // [ebp-0x68/-0x64/-0x60]
+  const radiusSq = st(x87mul(ld(radius), ld(radius)));     // [ebp-0x5c]
+  let reached = 0;                                         // [ebp-0x14]
+  arg18 = arg18 | 1;                                       // [ebp+0x18] |= 1
+  const flags318 = rd(services, pawn, 'Flags318') >>> 0;   // esi+0x318
+  const CR = rd(services, pawn, 'CollisionRadius');        // esi+0x1d4
+  const CH = rd(services, pawn, 'CollisionHeight');        // esi+0x1d8
+  const maxStep = rd(services, pawn, 'MaxStepHeight');     // esi+0x38c
+  const rdt = rd(services, pawn, 'ReducedDamageType');     // esi+0x444
+
+  // innerRadius [ebp-0x18]: GIsEditor!=0 -> 16.0; else bit 0x1000 set ->
+  // max(CR,128) / clear -> CR.  innerRadiusSq [ebp-0x78] is captured once and
+  // is NOT refreshed when the -1 path below clamps innerRadius to maxStep.
+  let innerRadius = 16.0;
+  if (!services.gIsEditor()) innerRadius = (flags318 & 0x1000) ? Math.max(CR, 128.0) : CR;
+  const innerRadiusSq = st(x87mul(ld(innerRadius), ld(innerRadius)));
+
+  // step [ebp-0x28] = max(pawnCH, targetCH); pawnCH when target==0.
+  let step = CH;
+  if (target) {
+    const tCH = rd(services, target, 'CollisionHeight');
+    if (ltU(ld(CH), ld(tCH))) step = tCH;                  // 0x103c1c4b
+  }
+
+  // Shared FCheckResult buffer [ebp-0xb0]: the native hands the same out ptr
+  // to every checkMove MoveActor, so [ebp-0x94]=Normal.z is the last landing
+  // slope.  The wrapper records each hit exactly as the shared buffer would.
+  const hitbuf = { time: 1.0, normal: [0, 0, 0], actor: 0, item: -1 };
+  const nav = {
+    ...services,
+    moveActor: (a, d, r, f) => {
+      const h = services.moveActor(a, d, r, f);
+      hitbuf.time = h.time; hitbuf.normal = h.normal;
+      hitbuf.actor = h.actor; hitbuf.item = h.item;
+      return h;
+    },
+  };
+
+  let counter = 100;                                       // [ebp-0x34]
+  let edi = 1;
+  while (edi === 1) {                                      // 0x103c1cd2
+    const loc = services.location(pawn);
+    const dz = f32(point[2] - loc[2]);                     // [ebp+0x1c]
+    const dy = f32(point[1] - loc[1]);                     // [ebp-0x20]
+    const dx = f32(point[0] - loc[0]);                     // [ebp-0x24]
+    let flat = [dx, dy, 0];
+    const distSq = x87add(x87mul(ld(dx), ld(dx)), x87mul(ld(dy), ld(dy)));
+
+    // Climb gate (0x103c1d36): dz>step && 0.8*(dz-step)^2 > distSq -> bail.
+    if (gtU(ld(dz), ld(step))) {
+      const ex = sub(ld(dz), ld(step));
+      const climb = x87mul(x87mul(ex, ex), D08);
+      if (!leU(climb, distSq)) { edi = 0; break; }         // 0x103c1d55
+    }
+
+    if (leU(distSq, ld(radiusSq))) {                       // 0x103c1d5c -> arrival
+      edi = 0;
+      // Arrival eval (0x103c1fc8): |dz| < step -> reached; else the landing
+      // arc uses the last checkMove landing slope hitbuf.normal.z [ebp-0x94].
+      const adz = ltU(ld(dz), D0) ? st(x87neg(ld(dz))) : dz;
+      if (ltU(ld(adz), ld(step))) reached = 1;             // 0x103c20e7
+      else {
+        const nz = hitbuf.normal[2];
+        if (ltU(ld(nz), D095) && gtU(ld(nz), D07)) {       // 0.7 < nz < 0.95
+          if (ltU(ld(dz), D0)) {                           // dz<0: point below
+            const sq = appSqrt(sub(x87div(D1, x87mul(ld(nz), ld(nz))), D1f));
+            if (gtU(x87add(x87mul(ld(CR), sq), ld(CH)), ld(adz))) reached = 1;
+          }
+          if (!reached) {                                  // dz>=0 path + below-fail
+            const tCR = target ? rd(services, target, 'CollisionRadius') : 46.0;
+            if (ltU(ld(CR), ld(tCR))) {                    // pawnCR < tCR
+              const sq = appSqrt(sub(x87div(D1, x87mul(ld(nz), ld(nz))), D1f));
+              const allow = x87add(x87mul(sub(x87add(ld(tCR), D15), ld(CR)), sq), ld(step));
+              if (gtU(allow, ld(dz))) reached = 1;
+            }
+          }
+        }
+      }
+      break;                                               // edi=0 -> exit loop
+    }
+
+    // Step select (0x103c1d6a): distSq>=innerRadiusSq -> far step (unit flat *
+    // innerRadius, scale 4.1); else near step (raw flat delta, scale 8.0).
+    let delta, scale;
+    if (ltU(distSq, ld(innerRadiusSq))) { delta = flat; scale = 8.0; }
+    else {
+      flat = x87safeNormal(flat);
+      delta = [st(x87mul(ld(flat[0]), ld(innerRadius))),
+               st(x87mul(ld(flat[1]), ld(innerRadius))),
+               st(x87mul(ld(flat[2]), ld(innerRadius)))];
+      scale = 4.1;
+    }
+    edi = checkMove(pawn, delta, target, scale, 0, nav);
+
+    if (edi === 5) { reached = 1; edi = 0; }               // 0x103c1e13
+    else if (edi !== 1) {                                  // 0 or -1: blocked
+      const collide = rd(services, pawn, 'CollideFlag');   // esi+0xd0
+      if (!collide) { reached = 0; edi = 0; }              // 0x103c1e2b
+      else if (flags318 & 0x8000) {                        // bCanJump -> arc 0x103c1190
+        const r = services.jumpArc(pawn, point, radius, arg18, target);
+        arg18 = r; reached = r; edi = 0;
+      } else if (flags318 & 0x1000) {                      // alt bit -> arc 0x103c2f50
+        arg18 |= 8;
+        if (edi === -1) {
+          const u = x87safeNormal(flat);
+          const gs = rd(services, pawn, 'GroundSpeed');    // esi+0x378
+          const d = [st(x87mul(ld(gs), ld(u[0]))),
+                     st(x87mul(ld(gs), ld(u[1]))),
+                     st(x87mul(ld(gs), ld(u[2])))];
+          edi = services.altMove(pawn, d, point, gs);
+        }
+      } else if (edi === -1) {                             // ledge, no jump/swim
+        if (gtU(ld(innerRadius), ld(maxStep))) { innerRadius = maxStep; edi = 1; }
+      }
+    }
+
+    // Gates (0x103c1f36): foot-zone pain, then region water/swim.
+    const fz = services.footZone(pawn);                    // esi+0x330 zone
+    if (fz.pain && fz.damageType !== rdt) { reached = 0; edi = 0; }
+    const rz = services.regionZone(pawn);                  // esi+0xc8 zone
+    if (rz.water) {
+      edi = 0;
+      if (flags318 & 0x4000 && !(rz.pain && rz.damageType !== rdt)) {
+        const r = services.waterReach(pawn, point, radius, arg18, target);
+        arg18 = r; reached = r;
+      }
+    }
+
+    if (--counter < 0) edi = 0;                            // 0x103c20ee
+  }
+
+  // WarpZoneMarker fallback (0x103c2102): reached if the target is a warp and
+  // the pawn already sits in its destination zone.
+  if (!reached && target && services.isA(target, 'WarpZoneMarker')) {
+    if (services.regionZone(pawn) === rd(services, target, 'WarpDestZone')) reached = 1;
+  }
+  // Restore Location + Velocity (0x103c2145-0x103c2192), return reached?arg18:0.
+  farMove(services, pawn, origLoc);
+  const vel = services.velocity(pawn);
+  vel[0] = origVel[0]; vel[1] = origVel[1]; vel[2] = origVel[2];
+  return reached ? arg18 : 0;
 }

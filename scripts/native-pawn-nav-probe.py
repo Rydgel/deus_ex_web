@@ -693,6 +693,10 @@ class NavProbe:
                          ('physics', 0x30)]:
             if key in spec:
                 self.write(obj + off, 'I', spec[key])
+        # Byte-sized fields (walkReach reads the +0xd0 collide flag as a byte).
+        for key, off in [('collideFlag', 0xd0)]:
+            if key in spec:
+                self.write(obj + off, 'B', spec[key])
         for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
                          ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
                          ('weapon', 0x3d0)]:

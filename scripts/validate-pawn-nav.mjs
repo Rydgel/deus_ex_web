@@ -42,8 +42,10 @@ const H = (time, nz, actor = 0, nx = 0, ny = 0) =>
   ({ ret: 1, hit: { time, normal: [nx, ny, nz], actor, item: -1 } });
 
 const BASE_PAWN = {
-  location: [0, 0, 0], rotation: [0, 0, 0], maxStepHeight: 24.0,
-  collisionRadius: 22.0, collisionHeight: 40.0, regionZone: 'dry',
+  location: [0, 0, 0], rotation: [0, 0, 0], velocity: [0, 0, 0],
+  maxStepHeight: 24.0, collisionRadius: 22.0, collisionHeight: 40.0,
+  groundSpeed: 200.0, flags318: 0, field444: 0, collideFlag: 0,
+  regionZone: 'dry', footZone: 'dry',
 };
 
 /* A checkMove scene: delta/scale/flag args plus the scripted MoveActor result
@@ -66,6 +68,37 @@ function cm(name, mv, { delta = [40, 0, 0], scale = 40, flag = 1, target = 0,
 }
 
 const TGT = { location: [50, 0, 0] };
+
+/* A walkReach scene: point/radius/arg18/target args plus the scripted MoveActor
+ * sequence the ~100-step loop consumes.  Zones drive the water/pain gates; the
+ * pawn's flag bits select the jump/arc/swim helpers (flag-free stays on the
+ * walking path the port covers). */
+function wr(name, mv, { point = [100, 0, 0], radius = 15, arg18 = 0, target = 0,
+                        actors = null, zones = null, gIsEditor = 0,
+                        pawn = {}, farMove = [1] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const s = {
+    name, body: 'walkReach', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    // thiscall(pawn; point vec3, radius f, arg18 i, target ref/i).
+    directArgs: [{ f: point[0] }, { f: point[1] }, { f: point[2] },
+                 { f: radius }, { i: arg18 }, target === 0 ? { i: 0 } : { ref: target }],
+    moveActor: mv, farMove,
+    js: { point, radius, arg18, target, gIsEditor, zones: z,
+          pawn: { ...BASE_PAWN, ...pawn }, actors: actors || {} },
+  };
+  if (actors) s.actors = actors;
+  return s;
+}
+
+/* Alternate forward-full / down-floor hits so each checkMove step progresses
+ * like a flat walk; padded at the tail to the requested depth. */
+function flatWalk(depth) {
+  const mv = [];
+  for (let i = 0; i < depth; i++) { mv.push(H(1, 1)); mv.push(H(0.1, 1)); }
+  return mv;
+}
 
 const scenes = [
   // Clean flat move: phase A full then a floor landing on the down-probe.
@@ -95,6 +128,39 @@ const scenes = [
   cm('offaxis', [H(1, 1), H(0.5, 1)], { delta: [30, 40, 0], scale: 50 }),
   // Inverted-gravity zone flips the probe sign.
   cm('lowgrav', [H(1, 1), H(0.5, 1)], { gravityZ: 50 }),
+
+  // -- walkReach (0x103c1b70) -----------------------------------------------
+  // Flat walk to a point 100 units away: ~5 innerRadius steps, then arrival.
+  wr('wr-flat-reach', flatWalk(20), { pawn: { collisionRadius: 20 } }),
+  // A longer walk exercises more loop iterations.
+  wr('wr-flat-far', flatWalk(30), { point: [300, 0, 0], pawn: { collisionRadius: 20 } }),
+  // Pawn already inside the inner radius -> arrival on iteration 1, no probe.
+  wr('wr-inside-radius', flatWalk(4), { point: [10, 0, 0], pawn: { collisionRadius: 20 } }),
+  // Point below with |dz| < step -> reached via the arrival |dz| gate.
+  wr('wr-below-step', flatWalk(20), { point: [60, 0, -20], pawn: { collisionRadius: 20 } }),
+  // Blocked with collide flag clear -> reached=0 immediately (fail).
+  wr('wr-blocked-nocollide', [H(1, 1), H(1, 1)], { pawn: { collideFlag: 0 } }),
+  // Steep landing on the down-probe -> -1, collide set but no jump/swim bits ->
+  // innerRadius(20) <= maxStep(24) so no retry: reached=0.
+  wr('wr-ledge-noflags', [H(1, 1), H(0.9, 0)], { pawn: { collideFlag: 1 } }),
+  // CR(30) > maxStep(24): a ledge clamps innerRadius to maxStep and retries the
+  // loop; with no floor ever it exhausts and fails.
+  wr('wr-ledge-clamp', [H(1, 1), H(0.9, 0)],
+     { pawn: { collisionRadius: 30, collideFlag: 1 } }),
+  // Diagonal target direction exercises the flat SafeNormal far step.
+  wr('wr-diagonal', flatWalk(20), { point: [200, 100, 0], pawn: { collisionRadius: 20 } }),
+  // Foot-region pain zone whose damageType the pawn doesn't resist -> reached=0.
+  wr('wr-pain-zone', flatWalk(20),
+     { zones: { hot: { gravityZ: -950, pain: 1, damageType: 7 } },
+       pawn: { collisionRadius: 20, footZone: 'hot', field444: 0 } }),
+  // Water region on a pawn that cannot swim (flags318 bit 0x4000 clear): the
+  // water gate forces edi=0 without invoking the swim helper -> reached=0.
+  wr('wr-water-noswim', flatWalk(20),
+     { zones: { pool: { gravityZ: -950, water: 1 } },
+       pawn: { collisionRadius: 20, regionZone: 'pool', flags318: 0 } }),
+  // Nonzero velocity is saved and restored verbatim through the epilogue.
+  wr('wr-vel-restore', flatWalk(20),
+     { pawn: { collisionRadius: 20, velocity: [3.5, -2.25, 7.75] } }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,12 +203,67 @@ function runJs(scene, mod = module) {
   return { ret, moves, farMoves, locationBits: vecBits(pawn.location) };
 }
 
+/* walkReach twin: the full field surface (velocity, collision dims, ground
+ * speed, flag dword, zones) plus the helper seams the flag-free walking path
+ * never invokes.  The oracle's stubs mirror loc += delta*hit.time and the
+ * FarMove restore. */
+function runJsWalk(scene, mod = module) {
+  const j = scene.js;
+  const zones = j.zones || {};
+  const zoneObj = n => {
+    const s = zones[n] || {};
+    return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ };
+  };
+  const tgtSpec = j.target !== 0 ? (j.actors?.[j.target] || {}) : null;
+  const tgt = tgtSpec === null ? 0 : {
+    CollisionRadius: f32(tgtSpec.collisionRadius ?? 46),
+    CollisionHeight: f32(tgtSpec.collisionHeight ?? 46),
+    WarpDestZone: tgtSpec.warpDestZone ? zoneObj(tgtSpec.warpDestZone) : 0,
+    __cls: tgtSpec.cls || 'actor',
+  };
+  const pawn = {
+    location: j.pawn.location.map(f32), velocity: (j.pawn.velocity || [0, 0, 0]).map(f32),
+    Rotation: j.pawn.rotation.slice(),
+    CollisionRadius: f32(j.pawn.collisionRadius), CollisionHeight: f32(j.pawn.collisionHeight),
+    MaxStepHeight: f32(j.pawn.maxStepHeight), GroundSpeed: f32(j.pawn.groundSpeed),
+    Flags318: j.pawn.flags318 | 0, ReducedDamageType: j.pawn.field444 | 0,
+    CollideFlag: j.pawn.collideFlag | 0,
+    zoneGravity: f32((zones[j.pawn.regionZone] || {}).gravityZ ?? -950),
+    __rz: j.pawn.regionZone, __fz: j.pawn.footZone,
+  };
+  const scripted = scene.moveActor;
+  let idx = 0, moves = 0, farMoves = 0;
+  const services = {
+    location: a => a.location, velocity: a => a.velocity,
+    read: (a, n) => a[n],
+    zoneGravity: a => a.zoneGravity,
+    gIsEditor: () => !!j.gIsEditor,
+    regionZone: a => zoneObj(a.__rz ?? 'dry'),
+    footZone: a => zoneObj(a.__fz ?? 'dry'),
+    isA: (a, key) => !!(a && a.__cls === key),
+    moveActor: (a, delta, rot, flags) => {
+      moves++;
+      const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
+      a.location[0] = f32(a.location[0] + delta[0] * h.time);
+      a.location[1] = f32(a.location[1] + delta[1] * h.time);
+      a.location[2] = f32(a.location[2] + delta[2] * h.time);
+      return { time: h.time, normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
+    },
+    farMoveActor: (a, dest, test, noCheck) => { farMoves++; a.location = dest.map(f32); return 1; },
+    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0,
+  };
+  const ret = mod.walkReach(pawn, j.point.map(f32), j.radius, j.arg18, tgt, services);
+  return { ret, moves, farMoves, locationBits: vecBits(pawn.location),
+           velocityBits: vecBits(pawn.velocity) };
+}
+
 function normalizeProbe(r) {
   return {
     ret: r.returned | 0,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
     locationBits: r.pawn.locationBits,
+    velocityBits: r.pawn.velocityBits,
   };
 }
 
@@ -153,8 +274,12 @@ function compare(name, o, j) {
   if (o.farMoves !== j.farMoves) d.push(`${name}: farMoveActor calls ${o.farMoves} != ${j.farMoves}`);
   if (o.locationBits.join() !== j.locationBits.join())
     d.push(`${name}: location ${o.locationBits} != ${j.locationBits}`);
+  if (j.velocityBits && o.velocityBits.join() !== j.velocityBits.join())
+    d.push(`${name}: velocity ${o.velocityBits} != ${j.velocityBits}`);
   return d;
 }
+
+const runFor = scene => (scene.body === 'walkReach' ? runJsWalk : runJs);
 
 // ---------------------------------------------------------------------------
 const probeResults = runProbe(scenes.map(s => {
@@ -171,13 +296,13 @@ for (let i = 0; i < scenes.length; i++) {
     failures++; continue;
   }
   let js;
-  try { js = runJs(scene); }
+  try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
   const diffs = compare(scene.name, normalizeProbe(r.result), js);
   if (diffs.length) { failures++; diffs.forEach(d => console.log(`FAIL ${d}`)); }
 }
 const passed = scenes.length - failures;
-console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav checkMove: ${passed}/${scenes.length} scenes bit-exact`);
+console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav: ${passed}/${scenes.length} scenes bit-exact`);
 
 // ---------------------------------------------------------------------------
 // Mutation coverage: each edit rewrites one behavior the disassembly dictates.
@@ -204,6 +329,21 @@ const MUTATIONS = [
     pattern: 'farMove(services, pawn, postLoc);                      // 0x103c367b keep forward step',
     replacement: 'farMove(services, pawn, origLoc);',
     expect: ['ledge-flag0'] },
+
+  // -- walkReach mutants -----------------------------------------------------
+  // Far-step scale 4.1 -> 400: every far step under-moves -> checkMove returns
+  // 0 (blocked) instead of 1 -> the reach scenes fail.
+  { name: 'wr-far-scale',
+    pattern: '      scale = 4.1;',
+    replacement: '      scale = 400.0;',
+    expect: ['wr-flat-reach', 'wr-flat-far', 'wr-below-step', 'wr-diagonal',
+             'wr-vel-restore'] },
+  // Arrival |dz|<step gate inverted: a close-enough drop no longer counts, so
+  // the within-radius arrivals fall through to the landing-arc and miss.
+  { name: 'wr-arrival-gate',
+    pattern: 'if (ltU(ld(adz), ld(step))) reached = 1;',
+    replacement: 'if (gtU(ld(adz), ld(step))) reached = 1;',
+    expect: ['wr-inside-radius'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');
@@ -229,7 +369,7 @@ for (const mut of MUTATIONS) {
     const r = probeResults[i];
     if (!r?.result) continue;
     let js;
-    try { js = runJs(scenes[i], mutMod); } catch { flipped.push(scenes[i].name); continue; }
+    try { js = runFor(scenes[i])(scenes[i], mutMod); } catch { flipped.push(scenes[i].name); continue; }
     if (compare(scenes[i].name, normalizeProbe(r.result), js).length) flipped.push(scenes[i].name);
   }
   const missed = mut.expect.filter(n => !flipped.includes(n));

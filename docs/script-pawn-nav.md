@@ -190,6 +190,17 @@ spec `End` + collision dims + `reachFlags & reachMask`, runs `SingleLineCheck`
 ## Verification status
 
 - `reachMask` 7-bit gather — **bit-exact vs oracle** (`0x70026 → 0x70`).
+- `checkMove` `0x103c3290` — **ported to JS, bit-exact vs oracle** across 16
+  scenes (flat/step-up/target-hit/ledge/steep/under-moved/low-grav) plus 4
+  mutants detected (commit `26a2f08`).
+- `walkReach` `0x103c1b70` — **ported to JS, bit-exact vs oracle** across 11
+  flag-free walking scenes (flat near+far steps, inside-radius arrival,
+  below-step landing, blocked, ledge no-retry vs `CR>maxStep` clamp-retry,
+  diagonal, pain gate, water-no-swim gate, velocity restore) plus 2 mutants.
+  The `+0x318`-flag helper branches — jump `0x103c1190`, arc `0x103c2f50`,
+  swim `0x103c15a0` — and the swim-enabled water gate delegate to services
+  seams that are **not yet ported** (a flag-free walker never reaches them);
+  validating those needs the helper workers recovered separately.
 - `pointReachable` worker `0x103c0d30` — **runs end-to-end on the real bytes**
   through the zone gates, `PointRegion`, `FastLineCheck`, test `FarMoveActor`,
   the physics dispatcher and the walk helper; location/velocity restored.
