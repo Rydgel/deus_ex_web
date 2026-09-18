@@ -198,6 +198,31 @@ function aw(name, mv, { target = 'tgt', argC = 0, actors = null, navPoints = nul
   return s;
 }
 
+/* An actorReachable exec scene (0x103bc1a0): thiscall(pawn; FFrame, result*).
+ * `args` carries the bytecode token stream (one object arg); the verdict lands
+ * in *result (resultOut).  `navList` names the nav-list head; navpoints chain
+ * via nextNav; the pawn's moveTarget is its Anchor (+0x34c). */
+function ae(name, { target = 'tgt', navList = null, navPoints = null,
+                    actors = null, zones = null, gIsEditor = 0, pawn = {},
+                    singleLine = null, farMove = [1, 1], moveActor = [],
+                    reachSpecs = [] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const s = {
+    name, body: 'actorReachable', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    singleLine, moveActor, farMove, reachSpecs,
+    args: [{ kind: 'object', value: target }],
+    js: { target, gIsEditor, zones: z, farMove, navList,
+          pawn: { ...BASE_PAWN, ...pawn }, actors: actors || {},
+          navPoints: navPoints || {}, singleLine },
+  };
+  if (actors) s.actors = actors;
+  if (navPoints) s.navPoints = navPoints;
+  if (navList) s.navList = navList;
+  return s;
+}
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -514,6 +539,110 @@ const scenes = [
   }),
   // Null target -> return 0.
   aw('aw-null', [], { target: '__none' }),
+
+  // -- actorReachable exec 0x103bc1a0 (result lands in *result) --------------
+  // Null object arg -> result 0.
+  ae('ae-null', { target: '__none' }),
+  // Non-NavigationPoint target -> straight to actorWorker (slc blocks -> 0).
+  ae('ae-nonpawn', {
+    actors: { tgt: { cls: 'actor', location: [50, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // NavPoint target found in the nav list within radius -> fast-path 1.
+  ae('ae-nav-hit', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [30, 0, 0] }, n0: { location: [50, 0, 0], nextNav: 'tgt' } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+  }),
+  // Nearby nav point reaches the target via a ReachSpec -> directReach 1.
+  ae('ae-nav-direct', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [200, 0, 0] },
+                 n0: { location: [30, 0, 0], paths: [0], nextNav: 'tgt' } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Pawn Anchor (+0x34c) is the target -> anchor fast-path 1.
+  ae('ae-anchor-hit', {
+    navList: 'n0',
+    navPoints: { a1: { location: [30, 0, 0] }, n0: { location: [10, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1, moveTarget: 'a1' },
+    target: 'a1',
+  }),
+  // Anchor within radius reaches the far target via a ReachSpec.
+  ae('ae-anchor-direct', {
+    navList: 'n0',
+    navPoints: { a1: { location: [30, 0, 0], paths: [0] }, tgt: { location: [200, 0, 0] },
+                 n0: { location: [10, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1, moveTarget: 'a1' },
+    reachSpecs: [{ start: 'a1', end: 'tgt', radius: 20, height: 40, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Nearby nav point but no ReachSpec to target -> found, non-flying -> 0
+  // (no boundary calls proves the worker was NOT invoked).
+  ae('ae-nav-found-unreach', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [500, 0, 0] }, n0: { location: [30, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+  }),
+  // Same but PHYS_Flying (4) -> falls through to the worker (slc=1 proves it).
+  ae('ae-nav-flying-unreach', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [500, 0, 0] }, n0: { location: [30, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 4 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // No nav point within radius -> found=0 -> worker fallback.
+  ae('ae-nav-none-near', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [300, 0, 0] }, n0: { location: [500, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // Inventory target with a +0x398 holder -> redirect onto the nav point.
+  ae('ae-inv-redirect', {
+    navList: 'n0',
+    actors: { tgt: { cls: 'inventory', location: [50, 0, 0], field398: 'hold' } },
+    navPoints: { hold: { location: [30, 0, 0] }, n0: { location: [10, 0, 0], nextNav: 'hold' } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    // Blocked slc makes the un-redirected worker path return 0 so the redirect
+    // is observable (redirect -> fast-path 1, no redirect -> worker 0).
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // Inventory target with no holder -> stays Inventory -> worker fallback.
+  ae('ae-inv-noholder', {
+    actors: { tgt: { cls: 'inventory', location: [50, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // Pawn CR>115 -> the nav fast path is skipped -> worker fallback.
+  ae('ae-big-pawn', {
+    navList: 'tgt',
+    navPoints: { tgt: { location: [30, 0, 0] } },
+    pawn: { collisionRadius: 200, collisionHeight: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // Nav point above the pawn's collision height -> |dz|>=CH -> not within ->
+  // found=0 -> worker fallback (slc=1 proves the worker ran).
+  ae('ae-nav-above', {
+    navList: 'n0',
+    navPoints: { tgt: { location: [200, 0, 0] }, n0: { location: [30, 0, 100] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
+  }),
+  // Inventory redirect where the holder nav point is NOT within radius -> the
+  // worker runs on the restored inventory target (close -> reachable -> 1).
+  // Skipping the +0x398 restore makes the worker see the far holder -> 0.
+  ae('ae-inv-worker', {
+    navList: 'n0',
+    actors: { tgt: { cls: 'inventory', location: [50, 0, 0], field398: 'hold' } },
+    navPoints: { hold: { location: [500, 0, 0] }, n0: { location: [500, 0, 0] } },
+    pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: [H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1)],
+  }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -650,12 +779,13 @@ function runJsGraph(scene, mod = module) {
       location: (spec.location || [0, 0, 0]).map(f32),
       velocity: (spec.velocity || [0, 0, 0]).map(f32),
       Rotation: (spec.rotation || [0, 0, 0]).slice(),
-      CollisionRadius: f32(spec.collisionRadius ?? 46),
-      CollisionHeight: f32(spec.collisionHeight ?? 46),
-      MaxStepHeight: f32(spec.maxStepHeight ?? 24),
+      // Unspecified fields are 0 in the probe's zeroed fabricated memory.
+      CollisionRadius: f32(spec.collisionRadius ?? 0),
+      CollisionHeight: f32(spec.collisionHeight ?? 0),
+      MaxStepHeight: f32(spec.maxStepHeight ?? 0),
       MeleeRange: f32(spec.meleeRange ?? 0),
-      GroundSpeed: f32(spec.groundSpeed ?? 200),
-      BaseEyeHeight: f32(spec.baseEyeHeight ?? 40),
+      GroundSpeed: f32(spec.groundSpeed ?? 0),
+      BaseEyeHeight: f32(spec.baseEyeHeight ?? 0),
       Flags318: spec.flags318 | 0, ReducedDamageType: spec.field444 | 0,
       Flags1dc: spec.flags1dc | 0, Flags4ec: spec.field4ec | 0,
       CollideFlag: spec.collideFlag | 0, Physics: spec.physics | 0,
@@ -673,6 +803,12 @@ function runJsGraph(scene, mod = module) {
   const pawn = mkActor({ cls: 'pawn', ...j.pawn });
   actors.self = pawn;
   const ref = v => (typeof v === 'string' ? (actors[v] ?? 0) : v);
+  // Ref-valued fields resolve only after every actor exists.
+  for (const [n, spec] of Object.entries(j.navPoints || {}))
+    actors[n].__nextNav = ref(spec.nextNav);
+  for (const [n, spec] of Object.entries(j.actors || {}))
+    actors[n].Field398 = ref(spec.field398);
+  pawn.Anchor = ref(j.pawn.moveTarget);                       // pawn+0x34c
   const specs = (scene.reachSpecs || []).map(s => ({
     start: ref(s.start), distance: s.distance | 0, end: ref(s.end),
     radius: s.radius | 0, height: s.height | 0, reachFlags: s.flags | 0, pruned: s.pruned | 0,
@@ -713,16 +849,20 @@ function runJsGraph(scene, mod = module) {
     },
     jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
     pointRegion: () => zoneObj('dry'), fastLineCheck: () => 1,
+    navListHead: () => ref(j.navList),                        // level+0x90 head
+    nextNav: n => n.__nextNav,                                // navpoint+0x42c
   };
   const ret = scene.body === 'reachMask' ? mod.reachMask(pawn, services)
     : scene.body === 'directReach' ? mod.directReach(pawn, actors[j.source], target, services)
+    : scene.body === 'actorReachable' ? mod.actorReachable(pawn, target, services)
     : mod.actorWorker(pawn, target, j.argC, services);
   return { ret, moves, farMoves, slc: sli, locationBits: vecBits(pawn.location) };
 }
 
-function normalizeProbe(r) {
+function normalizeProbe(r, isExec) {
   return {
-    ret: r.returned | 0,
+    // Exec natives write the verdict to *result; workers return it in eax.
+    ret: isExec ? parseInt(r.resultOut, 16) : r.returned | 0,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
     slc: r.counts.singleLineCheck,
@@ -744,9 +884,10 @@ function compare(name, o, j) {
   return d;
 }
 
+const EXEC_BODIES = new Set(['actorReachable']);
 const runFor = scene =>
   (scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
-   : scene.body === 'reachMask' || scene.body === 'directReach' || scene.body === 'actorWorker' ? runJsGraph
+   : scene.body === 'reachMask' || scene.body === 'directReach' || scene.body === 'actorWorker' || EXEC_BODIES.has(scene.body) ? runJsGraph
    : runJs);
 
 // ---------------------------------------------------------------------------
@@ -766,7 +907,7 @@ for (let i = 0; i < scenes.length; i++) {
   let js;
   try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
-  const diffs = compare(scene.name, normalizeProbe(r.result), js);
+  const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body)), js);
   if (diffs.length) { failures++; diffs.forEach(d => console.log(`FAIL ${d}`)); }
 }
 const passed = scenes.length - failures;
@@ -899,6 +1040,50 @@ const MUTATIONS = [
     pattern: '  if (argC === 0) {',
     replacement: '  if (argC !== 0) {',
     expect: ['aw-no-los'] },
+
+  // -- actorReachable exec 0x103bc1a0 ---------------------------------------
+  // Null object arg should short-circuit to result 0, not 1.
+  { name: 'ae-null-gate',
+    pattern: 'if (!target) return 0;                                    // 0x103bc1dc',
+    replacement: 'if (!target) return 1;                                    // 0x103bc1dc',
+    expect: ['ae-null'] },
+  // Inventory holder redirect dropped: the worker then sees the Inventory
+  // (blocked slc -> 0) instead of the fast-path NavigationPoint (1).
+  { name: 'ae-inv-redirect',
+    pattern: 'if (holder) { origInv = t; t = holder; }',
+    replacement: 'if (false) { origInv = t; t = holder; }',
+    expect: ['ae-inv-redirect'] },
+  // Anchor==target equality lost: the anchor fast-path can no longer return 1.
+  { name: 'ae-anchor-eq',
+    pattern: 'if (anchor === t || directReach',
+    replacement: 'if (anchor === null || directReach',
+    expect: ['ae-anchor-hit'] },
+  // Nav==target equality lost: the list scan can no longer return 1 on match.
+  { name: 'ae-nav-eq',
+    pattern: 'if (nav === t || directReach',
+    replacement: 'if (nav === null || directReach',
+    expect: ['ae-nav-hit'] },
+  // CR<=115 gate inverted: big pawns now take the fast path, small ones skip it.
+  { name: 'ae-cr-gate',
+    pattern: 'leU(ld(CR), ld(115.0))',
+    replacement: 'geU(ld(CR), ld(115.0))',
+    expect: ['ae-nav-hit', 'ae-big-pawn'] },
+  // found+PHYS_Flying gate inverted: non-flying now falls to the worker and
+  // flying short-circuits to 0 instead.
+  { name: 'ae-found-phys',
+    pattern: "rd(services, pawn, 'Physics') !== 4",
+    replacement: "rd(services, pawn, 'Physics') === 4",
+    expect: ['ae-nav-found-unreach', 'ae-nav-flying-unreach'] },
+  // |dz|<CH vertical gate removed: an overhead nav point now counts as "within".
+  { name: 'ae-dz-gate',
+    pattern: 'if (geU(ltU(dz, D0) ? x87neg(dz) : dz, CH)) return false;',
+    replacement: 'if (false) return false;',
+    expect: ['ae-nav-above'] },
+  // +0x398 restore dropped: the worker sees the far holder, not the inventory.
+  { name: 'ae-inv-undo',
+    pattern: 'if (origInv) t = origInv;',
+    replacement: 'if (false) t = origInv;',
+    expect: ['ae-inv-worker'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');
@@ -925,7 +1110,7 @@ for (const mut of MUTATIONS) {
     if (!r?.result) continue;
     let js;
     try { js = runFor(scenes[i])(scenes[i], mutMod); } catch { flipped.push(scenes[i].name); continue; }
-    if (compare(scenes[i].name, normalizeProbe(r.result), js).length) flipped.push(scenes[i].name);
+    if (compare(scenes[i].name, normalizeProbe(r.result, EXEC_BODIES.has(scenes[i].body)), js).length) flipped.push(scenes[i].name);
   }
   const missed = mut.expect.filter(n => !flipped.includes(n));
   if (!flipped.length || missed.length) {

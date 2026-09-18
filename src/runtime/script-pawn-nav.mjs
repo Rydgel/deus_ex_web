@@ -607,3 +607,67 @@ export function actorWorker(pawn, target, argC, services) {
   const arg4 = (f1dc & 4) || services.isA(target, 'WarpZoneMarker') ? target : 0;
   return physicsReach(pawn, tloc.map(f32), R, arg4, services);
 }
+
+/**
+ * actorReachable exec 0x103bc1a0 (native 520).
+ *   void actorReachable(this=pawn; FFrame; result*)
+ *
+ * The native evaluates one actor arg through GNatives[opcode] (null -> result
+ * 0) and writes the verdict to the result out-pointer; here the already
+ * evaluated `target` is the parameter and the int is the return.  The
+ * [0x10599dac]/Level+0x1128 rdtsc block is a native-call timer, not behavior.
+ *
+ * Path: an Inventory target with a holder (+0x398) is redirected for the
+ * NavigationPoint fast path only (restored before the worker call).  A
+ * NavigationPoint target first tries the pawn's Anchor (+0x34c) then walks the
+ * level's nav list (level+0x90 gate, actors[0].NavigationPointList +0x548,
+ * +0x42c links) for a point within (|dz|<CH and dx^2+dy^2<max(CR,48)^2) that
+ * equals the target or satisfies directReach -> 1.  A nearby candidate that
+ * nothing reaches returns 0 unless the pawn is PHYS_Flying (4).  Everything
+ * else falls through to actorWorker(pawn, target, 0).
+ */
+export function actorReachable(pawn, target, services) {
+  if (!target) return 0;                                    // 0x103bc1dc
+  let t = target, origInv = 0;                              // [ebp-4] / [ebp-0xc]
+  // Inventory redirect (chain 0x10576f70): use the +0x398 holder if present.
+  if (services.isA(t, 'Inventory')) {
+    const holder = rd(services, t, 'Field398');             // target+0x398
+    if (holder) { origInv = t; t = holder; }                // 0x103bc245
+  }
+  // NavigationPoint fast path (chain 0x1057a128).
+  if (services.isA(t, 'NavPoint')) {
+    const head = services.navListHead(pawn);                // level+0x90 head
+    const CR = rd(services, pawn, 'CollisionRadius');       // pawn+0x1d4
+    // level+0x90!=0 gate and pawn CR<=115.0 (0x10431434).
+    if (head && leU(ld(CR), ld(115.0))) {
+      const radius = geU(ld(CR), ld(48.0)) ? ld(CR) : ld(48.0); // max(CR,48)
+      const radiusSq = x87mul(radius, radius);              // [ebp-8]
+      const ploc = services.location(pawn);
+      const CH = ld(rd(services, pawn, 'CollisionHeight')); // pawn+0x1d8
+      // |nav.z-pawn.z|<CH (0.0 abs via fchs) and horizontal dx^2+dy^2<radius^2.
+      const within = nav => {
+        const nl = services.location(nav);
+        const dz = sub(ld(nl[2]), ld(ploc[2]));
+        if (geU(ltU(dz, D0) ? x87neg(dz) : dz, CH)) return false;
+        const dx = sub(ld(nl[0]), ld(ploc[0])),
+              dy = sub(ld(nl[1]), ld(ploc[1]));
+        return ltU(x87add(x87mul(dx, dx), x87mul(dy, dy)), radiusSq);
+      };
+      let found = 0;                                        // [ebp+8]
+      const anchor = rd(services, pawn, 'Anchor');          // pawn+0x34c
+      if (anchor && services.isA(anchor, 'NavPoint') && within(anchor)) {
+        found = 1;                                          // 0x103bc35b
+        if (anchor === t || directReach(pawn, anchor, t, services)) return 1;
+      }
+      for (let nav = head; nav; nav = services.nextNav(nav)) {
+        if (!within(nav)) continue;
+        found = 1;                                          // 0x103bc4aa
+        if (nav === t || directReach(pawn, nav, t, services)) return 1;
+      }
+      // Nearby candidate(s) but nothing reached: 0 unless PHYS_Flying.
+      if (found && rd(services, pawn, 'Physics') !== 4) return 0; // 0x103bc4d6
+    }
+  }
+  if (origInv) t = origInv;                                 // 0x103bc583 undo
+  return actorWorker(pawn, t, 0, services);                 // 0x103024be
+}

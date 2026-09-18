@@ -222,6 +222,32 @@ shared physics-reach dispatcher `0x103c1000`.  `arg8`=target (null → 0),
      `physicsReach(pawn, target.loc, R, arg4)` where `arg4 = target` iff
      `target+0x1dc & 4` or `IsA(WarpZoneMarker 0x10575198)`, else 0.
 
+## `actorReachable` exec `0x103bc1a0`
+
+`void actorReachable(this=pawn; FFrame; int* result)` — the GNatives exec
+wrapper.  It evaluates one actor arg through `GNatives[opcode]` (a null object
+writes `*result=0`), then runs a NavigationPoint fast path before delegating to
+the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
+`[0x10599dac]`/`Level+0x1128` rdtsc block is a native-call timer, not behavior.
+
+1. `target==null` → `*result=0` (`0x103bc1dc`).
+2. `IsA(Inventory 0x10576f70)` and `target+0x398` holder present → redirect
+   `t=holder` for the fast path only; the original Inventory is restored
+   (`0x103bc583`) before the worker call.
+3. `IsA(NavigationPoint)` fast path, gated on `level+0x90!=0` (nav-list head)
+   and `pawn.CollisionRadius <= 115.0` (`0x10431434`):
+   - horizontal radius `R=max(pawn.CR, 48.0)` (`0x10430a68`), `R²` cached.
+   - a nav point is *within* iff `|nav.z−pawn.z| < pawn.CollisionHeight`
+     **and** `dx²+dy² < R²`.
+   - the pawn's `Anchor` (`+0x34c`) is checked first if it is a NavigationPoint
+     within bounds; then the list `level+0x90 → +0x42c (nextNav)` is walked.
+   - a candidate returns `1` when it `== target` or `directReach(pawn, nav,
+     target)` succeeds.
+   - candidate(s) found but none reached → `0`, unless `pawn.Physics==4`
+     (PHYS_Flying) which falls through.
+4. Everything else → `actorWorker(pawn, originalTarget, 0)` (thunk
+   `0x103024be`), with the Inventory restored first.
+
 ## Verification status
 
 - `reachMask` `0x10326d10` 7-bit gather — **ported to JS, bit-exact vs oracle**
@@ -235,10 +261,14 @@ shared physics-reach dispatcher `0x103c1000`.  `arg8`=target (null → 0),
   >800 radius widen, non-pawn distance limit, `R=15`/`Inventory`/`Trigger`
   radii, `WarpZoneMarker`/`flags1dc` target arg, LOS blocked/on-target/argC
   skip, foot+region pain and resist, water swim/no-swim, editor skip, null
-  target) plus 6 mutants.  The `actorReachable` exec `0x103bc1a0` nav-graph
-  fast path (anchor redirect, nearby-navpoint scan, `directReach`) is
-  recovered at the disasm level but not yet ported — the worker is its
-  single-hop fallback.
+  target) plus 6 mutants.
+- `actorReachable` exec `0x103bc1a0` — **ported to JS, bit-exact vs oracle**
+  across 14 scenes (null arg, non-NavigationPoint worker fallback, nav-list
+  hit, `directReach` reach, Anchor hit/reach, found-but-unreachable non-flying
+  0 vs PHYS_Flying fallback, none-near fallback, Inventory holder redirect,
+  no-holder fallback, `CR>115` gate, overhead-nav `|dz|<CH` gate, Inventory
+  restore to the worker) plus 8 mutants.  The verdict is `*result`-normalized;
+  unspecified actor fields are 0 (the probe zeroes fabricated memory).
 - `checkMove` `0x103c3290` — **ported to JS, bit-exact vs oracle** across 16
   scenes (flat/step-up/target-hit/ledge/steep/under-moved/low-grav) plus 4
   mutants detected (commit `26a2f08`).

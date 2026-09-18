@@ -553,9 +553,14 @@ class NavProbe:
 
     def alloc(self, size):
         address = self.free
-        self.free += (size + 15) & ~15
+        span = (size + 15) & ~15
+        self.free += span
         if self.free >= 0x23000000:
             raise MemoryError('Probe allocation limit exceeded')
+        # The heap watermark rewinds self.free per scene; without re-zeroing,
+        # fields a later scene leaves unset would retain stale data.  mem_map
+        # gave zeros on first use, so reproduce that here.
+        self.cpu.mem_write(address, b'\x00' * span)
         return address
 
     def write(self, address, fmt, *values):
@@ -634,9 +639,16 @@ class NavProbe:
                 lz = self.read(esi + 0x11c, 'f')[0]
             except Exception:
                 lx = ly = lz = 0.0
-            print('WATCH @%x ebx=%x loc=(%.1f,%.1f,%.1f) [ebp-5c]=%s hit.t=%.3f hit.nz=%.3f | %s' % (
+            extra = ''
+            try:
+                extra = ' [ebp+c]=%s arg8=%x' % (
+                    '%.3f' % self.read(ebp + 0xc, 'f')[0],
+                    self.read(ebp + 8, 'I')[0])
+            except Exception:
+                extra = ' ?'
+            print('WATCH @%x ebx=%x loc=(%.1f,%.1f,%.1f) [ebp-5c]=%s hit.t=%.3f hit.nz=%.3f%s | %s' % (
                 address, ebx, lx, ly, lz,
-                ('%.3f' % self.read(ebp - 0x5c, 'f')[0]) if ebp else '?', ht, nz, raw),
+                ('%.3f' % self.read(ebp - 0x5c, 'f')[0]) if ebp else '?', ht, nz, extra, raw),
                 file=sys.stderr)
 
     # --- fabrication -------------------------------------------------------
@@ -696,7 +708,7 @@ class NavProbe:
                 self.write(obj + off, 'f', spec[key])
         for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
                          ('flags28', 0x28), ('field444', 0x444), ('field4ec', 0x4ec),
-                         ('markedWarpZone', 0x44c), ('field398', 0x398),
+                         ('markedWarpZone', 0x44c),
                          ('physics', 0x30)]:
             if key in spec:
                 self.write(obj + off, 'I', spec[key])
@@ -706,7 +718,7 @@ class NavProbe:
                 self.write(obj + off, 'B', spec[key])
         for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
                          ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
-                         ('weapon', 0x3d0)]:
+                         ('weapon', 0x3d0), ('field398', 0x398)]:
             ref = spec.get(key)
             if ref is not None:
                 self.write(obj + off, 'I', refs.get(ref, ref) if isinstance(ref, str) else ref)
