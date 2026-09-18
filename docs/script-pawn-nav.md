@@ -28,6 +28,24 @@ Every `MoveActor` / `FarMoveActor` / `SingleLineCheck` / `PointRegion` /
 results are fed back per call (padded to `RESULT_DEPTH` so the ~100-step reach
 loops cannot exhaust them).
 
+**Oracle verification status.**  The Unicorn probe executes the *real* native
+machine code; only the five collision/zone boundaries are scripted.  Verified
+end-to-end so far:
+
+- `pointReachable` worker + dispatcher + `walkReach` + `checkMove` run a real
+  ~100-step loop; a clear flat-ground scene returns a genuine **1** after ~3
+  iterations (phase-A forward move + `maxStep+2` down-probe each step), with
+  `Location`/`Velocity` correctly restored.
+- `checkMove` return codes `5`/`1`/`−1` confirmed against scripted hits;
+  `reachMask` (`0x10326d10`) returns the predicted 7-bit capability gather.
+- Boundary order for `pointReachable`: `PointRegion → FastLineCheck →
+  FarMoveActor(test) → FarMoveActor(restore) → dispatch → checkMove loop →
+  FarMoveActor(restore)`.
+
+Not yet oracle-verified: flying/swimming reach helpers, `jumpArc`, the
+proximity-landing `appSqrt` arc, `actorReachable`, `FindRandomDest`,
+`FindPathTo`/`FindPathToward`, `PickWallAdjust`, `FindStairRotation`.
+
 ## Reachability — the call graph
 
 `pointReachable` worker `0x103c0d30` (`thiscall ecx=pawn; stack [ret][point vec3][target]`):
@@ -77,34 +95,51 @@ Per iteration, against `flat = (dx, dy, 0)` and `dz`:
   `0x103c3290`) moves the pawn by a scaled delta and returns a code:
   - `1` → keep stepping (loop continues);
   - `5` → reached (sets `[ebp-0x14]=1`, `edi=0`);
-  - otherwise → blocked: `pawn+0xd0` clear → fail (`reached=0`); else branch on
-    `flags+0x318`: bit `0x8000` → jump helper `0x103c1190` (`thunk 0x10303c9c`),
-    bit `0x1000` → alternate `jumpArc` `0x103c2f50` (`thunk 0x10303422`).
+  - `−1` → retry: if the needed step `≤ maxStepHeight` → `edi=1` (continue);
+    else `flags+0x318` bit `0x1000` set → `SafeNormal` + alternate-move helper
+    `0x10303422`; bit `0x8000` → `jumpArc` `0x10303c9c`.
+  - `0`/other → `pawn+0xd0` clear → fail (`reached=0`); else the alternate
+    `jumpArc`/helper result sets `reached`.
 - **Pain-zone gate** — `FootRegion.Zone` (`+0x330`) `+0x388` bit `0x20` set and
   `zone+0x350 != pawn+0x444` → `reached=0`, bail.
 - **Water gate** — `Region.Zone` water (`+0x388` bit `0x01`): needs `flags
   0x4000` (can swim) else bail; pain-in-water re-checks `0x20`/`+0x350`; then
   calls the water helper `0x103c15a0` (`thunk 0x10301406`).
-- **Arrival test** — `|dz| <= [ebp-0x28]` (within step height) → `reached=1`;
-  else a landing-arc check `sqrt(1/x²−1)` via `appSqrt` (`[0x10599ca4]`) scaled
-  by `CollisionRadius`/`CollisionHeight` (`+0x1d4`/`+0x1d8`) and the target's
-  radius (default `46.0`) decides `reached=1`.
+- **Arrival test** — when `dx²+dy² ≤ innerRadius²` (`[ebp-0x5c]` = `radius²` =
+  `15.0²` = `225`, oracle-confirmed) the loop jumps to the landing evaluation
+  `0x103c1fc8`: `|dz| ≤ [ebp-0x28]` (within step height) → `reached=1`; else a
+  landing-arc check `sqrt(1/x²−1)` via `appSqrt` (`[0x10599ca4]`) scaled by
+  `CollisionRadius`/`CollisionHeight` (`+0x1d4`/`+0x1d8`) and the target's
+  radius (default `46.0`) decides `reached=1`.  Two step sizes feed the loop:
+  a far `SafeNormal·step` (`0x103c1d95`) and a near `8.0`-scaled step
+  (`0x103c1d74`) chosen by the `distSq` bands at `0x103c1d5c`.
 - **WarpZoneMarker fallback** — after the loop, if the target (`ebx`) is a
   `WarpZoneMarker` (`class [0x10575198]`) whose `+0x44c` marked zone equals the
   pawn `Region.Zone` → `reached=1`.
 
 ## `checkMove` `0x103c3290`
 
-The per-step `MoveActor` probe.  Reads `zone+0x324` gravityZ for the sign
-(`±1.0` at `[ebp-0x48]`), scales `maxStepHeight` (`+0x38c`), builds the delta,
-and calls `MoveActor` (vtable `+0x88`).  On the returned `FCheckResult`:
+The per-step `MoveActor` probe (`thiscall ecx=pawn; stack [ret][delta vec3]
+[hit*][target][scale][flag]`).  Reads `zone+0x324` gravityZ for the sign
+(`±1.0` at `[ebp-0x48]`), scales `maxStepHeight` (`+0x38c`), and runs a
+multi-phase `MoveActor` (vtable `+0x88`) sequence.  Oracle-verified return
+codes:
 
-- `hit.Actor (+0x04) == target` → return **5** (reached the target actor).
-- `hit.Time (+0x24) < 1.0` (`qword [0x104298a0]`) → a blocking hit: rescale the
-  remaining `1−Time` fraction and re-probe, classifying floor/wall/slope by the
-  `hit.Normal (+0x14..0x1f)` against the `0.7`/`0.95` slope thresholds
-  (`qword [0x1042adc0]`/`[0x1042f5e8]`).
-- `hit.Time == 1.0` → the step completed unobstructed → return **1**.
+- **5** — the probe's `hit.Actor (+0x04) == target` (reached the target actor;
+  checked after phase A and each retry).
+- **1** — progressed.  Reached when the down-probe hits a non-floor surface
+  (`hit.Normal.z < 0.7`) **or** the pawn's actual displacement
+  `|loc−origLoc|²` reaches `scale²`; the caller keeps stepping.
+- **−1** — stepped/landed: the down-probe (`[0,0,−(maxStep+2)]`) came to rest
+  on a floor (`hit.Normal.z ≥ 0.7`) or completed with the `flag` clear; the
+  walk helper then retries via the step-height/`jumpArc` alternate path.
+- **0** — blocked and restored (`FarMoveActor` restore before return).
+
+`hit.Time == 1.0` (`qword [0x104298a0]`) selects the phase: a partial hit
+(`Time<1`) rescales the remaining `1−Time` and re-probes (up to 3 `MoveActor`
+calls per `checkMove`); a full move drops to the `maxStep+2` down-probe.
+`hit.Normal (+0x14..0x1f)` slope thresholds `0.7`/`0.95`
+(`qword [0x1042adc0]`/`[0x1042f5e8]`).
 
 ## Field layout
 
