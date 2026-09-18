@@ -932,6 +932,18 @@ class NavProbe:
         self.write(self.stack, 'I', self.done)
         if direct_args is not None:
             for i, arg in enumerate(direct_args):
+                # Explicit typed args keep JSON ints distinct from floats:
+                # {'f': x} -> float32, {'i': x} -> dword, {'ref': name} -> pointer.
+                if isinstance(arg, dict):
+                    if 'f' in arg:
+                        self.write(self.stack + 4 + i * 4, 'f', arg['f'])
+                        continue
+                    if 'i' in arg:
+                        self.write(self.stack + 4 + i * 4, 'I', arg['i'])
+                        continue
+                    if 'ref' in arg:
+                        self.write(self.stack + 4 + i * 4, 'I', refs.get(arg['ref'], 0))
+                        continue
                 if isinstance(arg, float):
                     self.write(self.stack + 4 + i * 4, 'f', arg)
                 else:
