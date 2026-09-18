@@ -385,3 +385,25 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
   vel[0] = origVel[0]; vel[1] = origVel[1]; vel[2] = origVel[2];
   return reached ? arg18 : 0;
 }
+
+/**
+ * Physics reach dispatcher 0x103c1000.
+ *   int dispatch(this=pawn; FVector point; float radius; AActor* target)
+ *
+ * Routes by the pawn's region-zone water flag ([ecx+0xc8]+0x388 bit0) then the
+ * Physics byte (+0x30):  water zone -> waterReach 0x103c15a0;  PHYS_Walking(1)
+ * or PHYS_Swimming(3) -> walkReach 0x103c1b70;  PHYS_Flying(4) -> flyReach
+ * 0x103c1190;  otherwise -> 0.  Every helper receives (pawn, point, radius, 0,
+ * target).  Only the walkReach branch is ported; waterReach/flyReach delegate
+ * to services seams pending their own recovery.
+ */
+export function physicsReach(pawn, point, radius, target, services) {
+  if (services.regionZone(pawn).water)                      // 0x103c102d
+    return services.waterReach(pawn, point, radius, 0, target);
+  const phys = rd(services, pawn, 'Physics');               // ecx+0x30
+  if (phys === 1 || phys === 3)                             // 0x103c1074/0x103c1078
+    return walkReach(pawn, point, radius, 0, target, services);
+  if (phys === 4)                                           // 0x103c107c
+    return services.flyReach(pawn, point, radius, 0, target);
+  return 0;                                                 // 0x103c10b8
+}

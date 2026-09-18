@@ -92,6 +92,27 @@ function wr(name, mv, { point = [100, 0, 0], radius = 15, arg18 = 0, target = 0,
   return s;
 }
 
+/* A physics-dispatch scene (0x103c1000): thiscall(pawn; point vec3, radius,
+ * target).  Routes water-zone/PHYS 1/3 -> walkReach (ported), PHYS 4 ->
+ * flyReach, else -> 0.  Only the walkReach and the 0-branches are bit-exact
+ * validatable here (fly/water helpers aren't ported yet). */
+function dp(name, mv, { point = [100, 0, 0], radius = 15, target = 0,
+                        physics = 1, zones = null, gIsEditor = 0,
+                        pawn = {}, farMove = [1] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const s = {
+    name, body: 'dispatch', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, physics, ...pawn },
+    directArgs: [{ f: point[0] }, { f: point[1] }, { f: point[2] },
+                 { f: radius }, target === 0 ? { i: 0 } : { ref: target }],
+    moveActor: mv, farMove,
+    js: { point, radius, target, gIsEditor, zones: z,
+          pawn: { ...BASE_PAWN, physics, ...pawn }, actors: {} },
+  };
+  return s;
+}
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -161,6 +182,16 @@ const scenes = [
   // Nonzero velocity is saved and restored verbatim through the epilogue.
   wr('wr-vel-restore', flatWalk(20),
      { pawn: { collisionRadius: 20, velocity: [3.5, -2.25, 7.75] } }),
+
+  // -- physics dispatch (0x103c1000) ----------------------------------------
+  // PHYS_Walking -> walkReach: reaches a flat point.
+  dp('dp-walk-reach', flatWalk(20), { physics: 1, pawn: { collisionRadius: 20 } }),
+  // PHYS_Swimming -> walkReach as well.
+  dp('dp-swim-reach', flatWalk(20), { physics: 3, pawn: { collisionRadius: 20 } }),
+  // PHYS_Falling(2) routes to none of 1/3/4 -> 0 without probing.
+  dp('dp-falling', flatWalk(4), { physics: 2, pawn: { collisionRadius: 20 } }),
+  // PHYS_None(0) -> 0.
+  dp('dp-none', flatWalk(4), { physics: 0, pawn: { collisionRadius: 20 } }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -227,7 +258,7 @@ function runJsWalk(scene, mod = module) {
     CollisionRadius: f32(j.pawn.collisionRadius), CollisionHeight: f32(j.pawn.collisionHeight),
     MaxStepHeight: f32(j.pawn.maxStepHeight), GroundSpeed: f32(j.pawn.groundSpeed),
     Flags318: j.pawn.flags318 | 0, ReducedDamageType: j.pawn.field444 | 0,
-    CollideFlag: j.pawn.collideFlag | 0,
+    CollideFlag: j.pawn.collideFlag | 0, Physics: j.pawn.physics | 0,
     zoneGravity: f32((zones[j.pawn.regionZone] || {}).gravityZ ?? -950),
     __rz: j.pawn.regionZone, __fz: j.pawn.footZone,
   };
@@ -250,9 +281,11 @@ function runJsWalk(scene, mod = module) {
       return { time: h.time, normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => { farMoves++; a.location = dest.map(f32); return 1; },
-    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0,
+    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
   };
-  const ret = mod.walkReach(pawn, j.point.map(f32), j.radius, j.arg18, tgt, services);
+  const ret = scene.body === 'dispatch'
+    ? mod.physicsReach(pawn, j.point.map(f32), j.radius, tgt, services)
+    : mod.walkReach(pawn, j.point.map(f32), j.radius, j.arg18, tgt, services);
   return { ret, moves, farMoves, locationBits: vecBits(pawn.location),
            velocityBits: vecBits(pawn.velocity) };
 }
@@ -279,7 +312,8 @@ function compare(name, o, j) {
   return d;
 }
 
-const runFor = scene => (scene.body === 'walkReach' ? runJsWalk : runJs);
+const runFor = scene =>
+  (scene.body === 'walkReach' || scene.body === 'dispatch' ? runJsWalk : runJs);
 
 // ---------------------------------------------------------------------------
 const probeResults = runProbe(scenes.map(s => {
