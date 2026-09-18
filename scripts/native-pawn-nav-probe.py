@@ -44,7 +44,7 @@ import sys
 try:
     from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
     from unicorn.x86_const import (
-        UC_X86_REG_EAX, UC_X86_REG_EBP, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESI, UC_X86_REG_ESP,
+        UC_X86_REG_EAX, UC_X86_REG_EBP, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESI, UC_X86_REG_ESP,
         UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG, UC_X86_REG_ST0,
         UC_X86_REG_FP0,
     )
@@ -182,21 +182,35 @@ def move_stub(mail, recs):
         'c1e306',                                   # ebx *= 64
         '81c3', struct.pack('<I', recs).hex(),      # ebx = record
         '890b',                                     # level (ecx)
-        '8b442414', '894304',                       # actor   (orig+4, +0xc pushes)
-        '8b442418', '894308', '8b44241c', '89430c', '8b442420', '894310',   # delta
-        '8b442424', '894314', '8b442428', '894318', '8b44242c', '89431c',   # rot
-        '8b442430', '894320',                       # hitptr
-        '8b442434', '894324', '8b442438', '894328',
-        '8b44243c', '89432c', '8b442440', '894330', # flags4
+        '8b442410', '894304',                       # actor   (orig+4, +0xc pushes)
+        '8b442414', '894308', '8b442418', '89430c', '8b44241c', '894310',   # delta
+        '8b442420', '894314', '8b442424', '894318', '8b442428', '89431c',   # rot
+        '8b44242c', '894320',                       # hitptr
+        '8b442430', '894324', '8b442434', '894328',
+        '8b442438', '89432c', '8b44243c', '894330', # flags4
         'ff05', struct.pack('<I', mc).hex(),        # ++count
         '8b1d', struct.pack('<I', mi).hex(),        # ebx = result idx
-        '8d0443',                                   # eax = idx*3
+        '8d045b',                                   # eax = idx*3
         'c1e004',                                   # eax = idx*48
         '8b35', struct.pack('<I', mb).hex(),        # esi = results base
         '03f0',                                     # esi += idx*48
         '8b06',                                     # eax = scripted return
         '83c604',                                   # esi = &hit44
-        '8b7c2430',                                 # edi = hitptr
+        # Commit the move like ULevel::MoveActor: actor.loc += delta*hit.time.
+        '8b7c2410',                                 # edi = actor (orig+4,+0xc)
+        'd94624',                                   # fld [esi+0x24]      (time)
+        'd84c2414',                                 # fmul [esp+0x14]     (*delta.x)
+        'd88714010000',                             # fadd [edi+0x114]
+        'd99f14010000',                             # fstp [edi+0x114]
+        'd94624',                                   # fld [esi+0x24]
+        'd84c2418',                                 # fmul [esp+0x18]     (*delta.y)
+        'd88718010000',                             # fadd [edi+0x118]
+        'd99f18010000',                             # fstp [edi+0x118]
+        'd94624',                                   # fld [esi+0x24]
+        'd84c241c',                                 # fmul [esp+0x1c]     (*delta.z)
+        'd8871c010000',                             # fadd [edi+0x11c]
+        'd99f1c010000',                             # fstp [edi+0x11c]
+        '8b7c242c',                                 # edi = hitptr
         'b90b000000',                               # ecx = 11 dwords
         'f3a5',                                     # rep movsd
         'ff05', struct.pack('<I', mi).hex(),        # ++idx
@@ -248,25 +262,25 @@ def slcheck_stub(mail, recs):
         'c1e306',
         '81c3', struct.pack('<I', recs).hex(),
         '890b',                                     # level
-        '8b442414', '894304',                       # hitptr
-        '8b442418', '894308',                       # source
-        '8b7c241c', '8b07', '89430c',               # end.x
+        '8b442410', '894304',                       # hitptr
+        '8b442414', '894308',                       # source
+        '8b7c2418', '8b07', '89430c',               # end.x
         '8b4704', '894310',                         # end.y
         '8b4708', '894314',                         # end.z
-        '8b7c2420', '8b07', '894318',               # start.x
+        '8b7c241c', '8b07', '894318',               # start.x
         '8b4704', '89431c',                         # start.y
         '8b4708', '894320',                         # start.z
-        '8b442424', '894324',                       # flags
-        '8b442428', '894328', '8b44242c', '89432c', '8b442430', '894330',   # extent
+        '8b442420', '894324',                       # flags
+        '8b442424', '894328', '8b442428', '89432c', '8b44242c', '894330',   # extent
         'ff05', struct.pack('<I', mc).hex(),
         '8b1d', struct.pack('<I', mi).hex(),
-        '8d0443',                                   # eax = idx*3
+        '8d045b',                                   # eax = idx*3
         'c1e004',                                   # eax = idx*48
         '8b35', struct.pack('<I', mb).hex(),
         '03f0',
         '8b06',                                     # eax = scripted ret
         '83c604',
-        '8b7c2414',                                 # edi = hitptr
+        '8b7c2410',                                 # edi = hitptr
         'b90b000000',
         'f3a5',
         'ff05', struct.pack('<I', mi).hex(),
@@ -291,7 +305,7 @@ def pointregion_stub(mail, recs):
         '8b442414', '89430c', '8b442418', '894310', '8b44241c', '894314',   # point
         'ff05', struct.pack('<I', mc).hex(),
         '8b1d', struct.pack('<I', mi).hex(),        # ebx = idx
-        '8d0443',                                   # eax = idx*3
+        '8d045b',                                   # eax = idx*3
         'c1e002',                                   # eax = idx*12
         '8b35', struct.pack('<I', mb).hex(),        # esi = results
         '03f0',                                     # esi = slot
@@ -492,11 +506,22 @@ class NavProbe:
         self.rec_sl = self.alloc(64 * RESULT_DEPTH)
         self.rec_pr = self.alloc(32 * RESULT_DEPTH)
         self.rec_fl = self.alloc(32 * RESULT_DEPTH)
-        self.write(self.vtable + 0x88, 'I', self.deploy(move_stub(MAIL_MV, self.rec_mv)))
-        self.write(self.vtable + 0x8c, 'I', self.deploy(farmove_stub(MAIL_FM, self.rec_fm)))
-        self.write(self.vtable + 0xc0, 'I', self.deploy(slcheck_stub(MAIL_SL, self.rec_sl)))
-        cpu.mem_write(POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr))
-        cpu.mem_write(FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl))
+        # Boundary stub addresses -> op name, so the code hook can log which
+        # call site (the return address at [esp] on stub entry) invoked each.
+        self.stub_entry = {}
+        for op, slot, builder in [
+                ('moveActor', self.vtable + 0x88, move_stub(MAIL_MV, self.rec_mv)),
+                ('farMoveActor', self.vtable + 0x8c, farmove_stub(MAIL_FM, self.rec_fm)),
+                ('singleLineCheck', self.vtable + 0xc0, slcheck_stub(MAIL_SL, self.rec_sl))]:
+            addr = self.deploy(builder)
+            self.write(slot, 'I', addr)
+            self.stub_entry[addr] = op
+        for op, thunk, builder in [
+                ('pointRegion', POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr)),
+                ('fastLineCheck', FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl))]:
+            cpu.mem_write(thunk, builder)
+            self.stub_entry[thunk] = op
+        self.callsite_log = []
         cpu.mem_write(EH_PROLOG, hx('33c0', 'c3'))
         # Import-body intercepts dispatched from the code hook.
         self.isa_body = exports['core.dll'].get('?IsA@UObject@@QBEHPAVUClass@@@Z')
@@ -566,13 +591,45 @@ class NavProbe:
         self.trace.append(hex(address))
         if len(self.trace) > 200:
             self.trace.pop(0)
+        if address in self.stub_entry:
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            site = self.read(esp, 'I')[0]
+            self.callsite_log.append((self.stub_entry[address], site))
+            if self.dump_stubs and self.stub_entry[address] == 'moveActor':
+                idx = self.read(MAIL_MV + 4, 'I')[0]
+                base = self.read(MAIL_MV + 8, 'I')[0]
+                act = self.read(esp + 4, 'I')[0]
+                dx = self.read(esp + 8, 'f')[0]
+                lx = self.read(act + 0x114, 'f')[0] if act else -9
+                print('STUB mv @%x idx=%d act=%x dx=%.2f act.lx=%.2f' % (
+                    site, idx, act, dx, lx), file=sys.stderr)
         if address < 0x20000000:
             self.last_image_ip = address
         if address in self.watch_ips:
             r = cpu.reg_read(UC_X86_REG_EAX)
-            print('WATCH @%x eax=%x ecx=%x edx=%x esi=%x' % (
-                address, r, cpu.reg_read(UC_X86_REG_ECX),
-                cpu.reg_read(UC_X86_REG_EDX), cpu.reg_read(UC_X86_REG_ESI)),
+            ebx = cpu.reg_read(UC_X86_REG_EBX)
+            ht, nz = 0.0, 0.0
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            ebp = cpu.reg_read(UC_X86_REG_EBP)
+            sp1c, bp14 = 0, 0
+            try:
+                ht = self.read(ebx + 0x24, 'f')[0]
+                nz = self.read(ebx + 0x1c, 'f')[0]
+                sp1c = self.read(esp + 0x1c, 'I')[0]
+                bp14 = self.read(ebp + 0x14, 'I')[0]
+                raw = ' '.join('%02x:%x' % (o, self.read(ebx + o, 'I')[0])
+                               for o in range(0, 44, 4))
+            except Exception:
+                raw = '?'
+            try:
+                lx = self.read(esi + 0x114, 'f')[0]
+                ly = self.read(esi + 0x118, 'f')[0]
+                lz = self.read(esi + 0x11c, 'f')[0]
+            except Exception:
+                lx = ly = lz = 0.0
+            print('WATCH @%x ebx=%x loc=(%.1f,%.1f,%.1f) [ebp-5c]=%s hit.t=%.3f hit.nz=%.3f | %s' % (
+                address, ebx, lx, ly, lz,
+                ('%.3f' % self.read(ebp - 0x5c, 'f')[0]) if ebp else '?', ht, nz, raw),
                 file=sys.stderr)
 
     # --- fabrication -------------------------------------------------------
@@ -679,6 +736,8 @@ class NavProbe:
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
         self.probing_results = scene.get('probing', [])
+        self.watch_ips = {int(a, 0) for a in scene.get('watch', [])}
+        self.dump_stubs = bool(scene.get('dumpStubs', 0))
         self.probing_index = 0
         self.write(GISEDITOR, 'I', self.alloc(8))
         self.write(self.read(GISEDITOR, 'I')[0], 'I', scene.get('gIsEditor', 0))
@@ -693,20 +752,10 @@ class NavProbe:
             while len(lst) < RESULT_DEPTH:
                 lst.append(lst[-1])
             return lst
+        # Buffers are allocated now (base -> mailbox); the per-call hit records
+        # are written later once actor refs exist (see the post-fab fill below).
         mv = pad(scene.get('moveActor', []), {'ret': 0})
         mv_mem = self.alloc(48 * len(mv))
-        for i, r in enumerate(mv):
-            self.write(mv_mem + i * 48, 'I', r.get('ret', 1))
-            hit = r.get('hit', {})
-            fields = [
-                hit.get('f0', 0), hit.get('actor', 0),
-                *hit.get('location', [0, 0, 0]),
-                *hit.get('normal', [0, 0, 0]),
-                hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1),
-            ]
-            self.write(mv_mem + i * 48 + 4, 'II3f3fIfi',
-                       fields[0], fields[1], *fields[2:5], *fields[5:8],
-                       fields[8], fields[9], fields[10])
         self.write(MAIL_MV + 8, 'I', mv_mem)
         fm = pad(scene.get('farMove', []), 1)
         fm_mem = self.alloc(4 * len(fm))
@@ -715,15 +764,6 @@ class NavProbe:
         self.write(MAIL_FM + 8, 'I', fm_mem)
         sl = pad(scene.get('singleLine', []), {'ret': 0})
         sl_mem = self.alloc(48 * len(sl))
-        for i, r in enumerate(sl):
-            if isinstance(r, int):
-                r = {'ret': r}
-            self.write(sl_mem + i * 48, 'I', r.get('ret', 1))
-            hit = r.get('hit', {})
-            self.write(sl_mem + i * 48 + 4, 'II3f3fIfi',
-                       hit.get('f0', 0), hit.get('actor', 0),
-                       *hit.get('location', [0, 0, 0]), *hit.get('normal', [0, 0, 0]),
-                       hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1))
         self.write(MAIL_SL + 8, 'I', sl_mem)
         fl = pad(scene.get('fastLine', []), 1)
         fl_mem = self.alloc(4 * len(fl))
@@ -816,6 +856,31 @@ class NavProbe:
         refs['__level'] = lvl
         refs['__levelinfo'] = levelinfo
         refs['__model'] = model
+        # Named scratch buffers for by-reference out params (FCheckResult,
+        # FVector outs).  Referenced from directArgs as e.g. 'hitbuf'.
+        for name, size in [('hitbuf', 64), ('vecbuf', 64), ('scratch', 256)]:
+            refs[name] = self.alloc(size)
+
+        # Deferred hit records — 'actor' resolves named refs now that every
+        # object exists.  Resolve a name once so the padded tail shares it.
+        def resolve(v):
+            return refs.get(v, v) if isinstance(v, str) else v
+        for i, r in enumerate(mv):
+            self.write(mv_mem + i * 48, 'I', r.get('ret', 1))
+            hit = r.get('hit', {})
+            self.write(mv_mem + i * 48 + 4, 'II3f3fIfi',
+                       hit.get('f0', 0), resolve(hit.get('actor', 0)),
+                       *hit.get('location', [0, 0, 0]), *hit.get('normal', [0, 0, 0]),
+                       hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1))
+        for i, r in enumerate(sl):
+            if isinstance(r, int):
+                r = {'ret': r}
+            self.write(sl_mem + i * 48, 'I', r.get('ret', 1))
+            hit = r.get('hit', {})
+            self.write(sl_mem + i * 48 + 4, 'II3f3fIfi',
+                       hit.get('f0', 0), resolve(hit.get('actor', 0)),
+                       *hit.get('location', [0, 0, 0]), *hit.get('normal', [0, 0, 0]),
+                       hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1))
         # Class super-chains on the REAL class VAs.
         self.write(PLAYER_CLASS + 0x28, 'I', PAWN_CLASS)
         self.write(PAWN_CLASS + 0x28, 'I', self.class_object(0))
@@ -941,6 +1006,11 @@ class NavProbe:
                        for op, mail in [('moveActor', MAIL_MV), ('farMoveActor', MAIL_FM),
                                         ('singleLineCheck', MAIL_SL), ('pointRegion', MAIL_PR),
                                         ('fastLineCheck', MAIL_FL)]},
+            'callsites': [[op, '%x' % site] for op, site in self.callsite_log],
+            'mvres': [[self.read(mv_mem + i * 48, 'I')[0],
+                       round(self.read(mv_mem + i * 48 + 0x28, 'f')[0], 4)]
+                      for i in range(4)],
+            'hit44src': ['%08x' % self.read(mv_mem + 48 + 4 + o, 'I')[0] for o in range(0, 44, 4)],
             'pawn': {
                 'location': vec(pawn, 0x114), 'locationBits': bits(pawn, 0x114),
                 'velocity': vec(pawn, 0x144), 'velocityBits': bits(pawn, 0x144),
@@ -950,6 +1020,7 @@ class NavProbe:
                 'moveTarget': self.read(pawn + 0x34c, 'I')[0],
             },
             'probingUsed': self.probing_index,
+            'hitbuf': ['%08x' % w for w in self.read(refs['hitbuf'], '12I')],
             'pawnAddress': pawn,
             'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
             'levelAddress': lvl,
