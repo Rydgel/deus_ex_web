@@ -1,0 +1,991 @@
+"""Execute the recovered APawn navigation/reachability natives in an isolated
+x86 emulator.
+
+Recovered bodies (Engine.dll image base 0x10300000):
+
+  pointReachable(521)   exec 0x103bc710 -> worker 0x103c0d30(pawn; point, target)
+  actorReachable(520)   exec 0x103bc1a0 -> worker 0x103c0630(pawn; actor, flag)
+                        + close-navpoint scan worker 0x103dad20(pawn; nav, target)
+  FindRandomDest(525)   exec 0x103bcb90 -> 0x103da050 + 0x103dc700
+  FindPathToward(517)   exec 0x103bc9c0 -> 0x103db3f0
+  FindPathTo(518)       exec 0x103bc800 -> 0x103dc1d0
+  PickWallAdjust(526)   exec 0x103bb7e0 -> 0x103c4150
+  FindStairRotation(524) exec 0x103bb880 (inline fp)
+
+The reachability core is a stepped-walk graph primitive: the point/actor
+workers run zone gates, an optional eye trace, a test FarMoveActor, then
+dispatch on the destination zone / pawn Physics into three stepped-move
+helpers (walkReach 0x103c1b70, waterReach 0x103c15a0, flyReach 0x103c1190)
+that iterate up to 100 move-check probes (checkMove 0x103c3290,
+waterMove 0x103c3ca0, flyMove 0x103c3900, jumpArc 0x103c2f50).
+
+Collision/movement subsystem is consumed, not reimplemented: every
+MoveActor (XLevel vtable +0x88), FarMoveActor (+0x8c) and SingleLineCheck
+(+0xc0) call lands on a RECORDING STUB in a fabricated level vtable that
+feeds scripted results back.  UModel PointRegion (thunk 0x1030391d) and
+FastLineCheck (thunk 0x10301a37) are patched in place the same way — the
+command-capture boundary.
+
+Transcendental authority: none of the reachability bodies use
+fsin/fcos/fpatan/fptan/fyl2x/f2xm1 (verified by opcode scan); Unicorn is
+fully authoritative for their integer/vector/fsqrt math.  appSqrt and
+FVector::SafeNormal run as real imported bodies.
+
+Input: a JSON scene on argv[1].  Output: JSON command/result capture.
+Optional research tool; inputs and results stay local.
+"""
+import hashlib
+import json
+import math
+from pathlib import Path
+import struct
+import sys
+
+try:
+    from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
+    from unicorn.x86_const import (
+        UC_X86_REG_EAX, UC_X86_REG_EBP, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESI, UC_X86_REG_ESP,
+        UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG, UC_X86_REG_ST0,
+        UC_X86_REG_FP0,
+    )
+except ImportError:
+    sys.exit('Install unicorn==2.1.4 in a virtualenv and set NATIVE_PROBE_PYTHON to its Python executable.')
+
+HASHES = {
+    'Engine.dll': '0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4',
+    'Core.dll': '8bf3039e14f849942ee70a95bdf26cf1f636245926e30106bbe58b7097eba7e4',
+    'MSVCRT.dll': 'e390b0529fb9ee1214bb68302a4658b578134d92ab76bc5eb48f3badd843d210',
+}
+
+# Recovered bodies (Engine.dll image base 0x10300000).
+BODIES = {
+    'pointReachable': 0x103bc710,      # native 521 exec
+    'pointWorker': 0x103c0d30,         # point-reach worker (pawn; vec, target)
+    'actorReachable': 0x103bc1a0,      # native 520 exec
+    'actorWorker': 0x103c0630,         # actor-reach worker (pawn; actor, flag)
+    'directReach': 0x103dad20,         # nav-point ReachSpec scan (pawn; nav, target)
+    'reachMask': 0x10326d10,           # pawn capability-mask gather (thiscall)
+    'dispatch': 0x103c1000,            # physics reach dispatcher
+    'waterReach': 0x103c15a0,
+    'walkReach': 0x103c1b70,
+    'flyReach': 0x103c1190,
+    'checkMove': 0x103c3290,
+    'jumpArc': 0x103c2f50,
+    'flyMove': 0x103c3900,
+    'waterMove': 0x103c3ca0,
+    'FindRandomDest': 0x103bcb90,      # native 525 exec
+    'randomDestWorker': 0x103dc700,
+    'clearPaths': 0x103da050,
+    'FindPathTo': 0x103bc800,          # native 518 exec
+    'pathToWorker': 0x103dc1d0,
+    'FindPathToward': 0x103bc9c0,      # native 517 exec
+    'pathTowardWorker': 0x103db3f0,
+    'PickWallAdjust': 0x103bb7e0,      # native 526 exec
+    'wallAdjustWorker': 0x103c4150,
+    'FindStairRotation': 0x103bb880,   # native 524 exec
+}
+
+# Command-capture boundaries patched in place at their thunk VAs.
+POINTREGION_THUNK = 0x1030391d   # -> UModel::PointRegion 0x103f5db0
+FASTLINE_THUNK = 0x10301a37      # -> UModel::FastLineCheck(end,start)
+EH_PROLOG = 0x104134d0           # __CxxFrameHandler helper — unreachable on clean paths.
+
+# Fixed original globals.
+GNATIVES = 0x101f41b8            # Core GNatives array base (.bss, fabricated).
+SINE_TABLE = 0x101b32a4          # Core GMath sine table (.bss, populated here).
+GPROPADDR = 0x10599aa0           # Engine IAT slot for GPropAddr — real Core .bss.
+GISEDITOR = 0x10599c94           # Engine data: pointer to editor-mode flag.
+GTIMING = 0x10599dac             # Engine data: stat-timing flag pointer.
+PAWN_CLASS = 0x1058c660          # APawn::StaticClass()
+PLAYER_CLASS = 0x1058c160        # APlayerPawn::StaticClass()
+LEVELINFO_CLASS = 0x1057bf00     # ALevelInfo::StaticClass()
+NAVPOINT_CLASS = 0x1057a128      # ANavigationPoint::StaticClass()
+WARPMARKER_CLASS = 0x10575198    # AWarpZoneMarker::StaticClass()
+INVENTORY_CLASS = 0x10576f70     # AInventory::StaticClass()
+MOVER_CLASS = 0x1058bb58         # AMover::StaticClass()
+ACTOR_CLASS = 0x1057c560         # AActor::StaticClass()
+
+# Expression tokens consumed by the exec wrappers through GNatives[token].
+TOK_NOTHING = 0x0b
+TOK_FLOAT = 0x1e
+TOK_OBJECT = 0x20
+TOK_VECTOR = 0x23
+TOK_INT = 0x1d
+TOK_OUT = 0x01
+TOK_END = 0x16
+
+# Mailboxes — each capture block: +0 record count, +4 result-queue index,
+# +8 result-queue base pointer.  The captured-argument records themselves are
+# written to a separate heap buffer (recs), so the header stays small.
+MAIL_MV = 0x1ff00000   # MoveActor      header
+MAIL_FM = 0x1ff00100   # FarMoveActor   header
+MAIL_SL = 0x1ff00180   # SingleLineCheck header
+MAIL_PR = 0x1ff00280   # PointRegion    header
+MAIL_FL = 0x1ff00300   # FastLineCheck  header
+
+# Deep enough that a ~100-step reach loop can't exhaust a scripted boundary
+# (each list is padded by repeating its last entry to this depth).
+RESULT_DEPTH = 8192
+
+
+def u32(v):
+    return v & 0xffffffff
+
+
+def f32bits(v):
+    return struct.unpack('<I', struct.pack('<f', v))[0]
+
+
+def hx(*parts):
+    return bytes.fromhex(''.join(parts))
+
+
+def dword_stub(loads):
+    """GNatives evaluator: [esp+4]=frame,[esp+8]=out; copies `loads` dwords
+    from *frame.Code to out, advances Code.  stdcall, ret 8."""
+    parts = ['56', '8b442408', '8b500c', '8b4c240c']
+    for i in range(loads):
+        parts.append('8b32' if i == 0 else f'8b72{i * 4:02x}')
+        parts.append('8931' if i == 0 else f'8971{i * 4:02x}')
+    parts.append('83400c' + f'{loads * 4:02x}')
+    parts.append('5e')
+    parts.append('c20800')
+    return bytes.fromhex(''.join(parts))
+
+
+def outarg_stub():
+    """GNatives evaluator for out/lvalue args: writes the operand dword
+    (a storage address) to *out AND to GPropAddr[0], advances Code by 4."""
+    return hx(
+        '56',
+        '8b442408',
+        '8b500c',
+        '8b4c240c',
+        '8b32',
+        '8931',
+        '8b0d', struct.pack('<I', GPROPADDR).hex(),
+        '8931',
+        '83400c04',
+        '5e',
+        'c20800')
+
+
+def move_stub(mail, recs):
+    """MoveActor record stub (vtable +0x88).  thiscall ecx=level;
+    stack: [ret][actor][delta12][rot12][hit*][f1][f2][f3][f4] -> ret 0x30.
+    Record {level,actor,delta,rot,hitptr,flags4} (64B); copy the scripted 44B
+    FCheckResult (results+idx*48+4) into *hitptr; eax = results[idx*48]."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53', '56', '57',
+        '8b1d', struct.pack('<I', mc).hex(),        # ebx = count
+        'c1e306',                                   # ebx *= 64
+        '81c3', struct.pack('<I', recs).hex(),      # ebx = record
+        '890b',                                     # level (ecx)
+        '8b442414', '894304',                       # actor   (orig+4, +0xc pushes)
+        '8b442418', '894308', '8b44241c', '89430c', '8b442420', '894310',   # delta
+        '8b442424', '894314', '8b442428', '894318', '8b44242c', '89431c',   # rot
+        '8b442430', '894320',                       # hitptr
+        '8b442434', '894324', '8b442438', '894328',
+        '8b44243c', '89432c', '8b442440', '894330', # flags4
+        'ff05', struct.pack('<I', mc).hex(),        # ++count
+        '8b1d', struct.pack('<I', mi).hex(),        # ebx = result idx
+        '8d0443',                                   # eax = idx*3
+        'c1e004',                                   # eax = idx*48
+        '8b35', struct.pack('<I', mb).hex(),        # esi = results base
+        '03f0',                                     # esi += idx*48
+        '8b06',                                     # eax = scripted return
+        '83c604',                                   # esi = &hit44
+        '8b7c2430',                                 # edi = hitptr
+        'b90b000000',                               # ecx = 11 dwords
+        'f3a5',                                     # rep movsd
+        'ff05', struct.pack('<I', mi).hex(),        # ++idx
+        '5f', '5e', '5b',
+        'c23000')                                   # ret 0x30
+
+
+def farmove_stub(mail, recs):
+    """FarMoveActor record stub (vtable +0x8c).  thiscall ecx=level;
+    stack: [ret][actor][vec12][test][noCheck] -> ret 0x18.
+    Record {level,actor,vec,test,noCheck} (32B); on scripted nonzero result
+    write vec -> actor+0x114 (FarMove teleports even on a test move);
+    eax = scripted dword; ret 0x18."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53', '56',
+        '8b1d', struct.pack('<I', mc).hex(),
+        'c1e305',                                   # ebx *= 32
+        '81c3', struct.pack('<I', recs).hex(),
+        '890b',                                     # level
+        '8b44240c', '894304',                       # actor (orig+4, +8 pushes)
+        '8b442410', '894308', '8b442414', '89430c', '8b442418', '894310',   # vec
+        '8b44241c', '894314',                       # test
+        '8b442420', '894318',                       # noCheck
+        'ff05', struct.pack('<I', mc).hex(),
+        '8b1d', struct.pack('<I', mi).hex(),        # ebx = idx
+        '8b35', struct.pack('<I', mb).hex(),        # esi = results
+        '8b049e',                                   # eax = [esi+ebx*4]
+        'ff05', struct.pack('<I', mi).hex(),
+        '85c0',                                     # test eax,eax
+        '7421',                                     # jz done (skip 33B vec-write)
+        '8b54240c',                                 # edx = actor
+        '8b4c2410', '898a14010000',                 # vec.x -> actor+0x114
+        '8b4c2414', '898a18010000',                 # vec.y -> actor+0x118
+        '8b4c2418', '898a1c010000',                 # vec.z -> actor+0x11c
+        '5e', '5b',
+        'c21800')
+
+
+def slcheck_stub(mail, recs):
+    """SingleLineCheck record stub (vtable +0xc0).  thiscall ecx=level;
+    stack: [ret][hit*][source][end*][start*][flags][extent12] -> ret 0x20.
+    Record {level,hitptr,source,end,start,flags,extent} (64B); copy the
+    scripted 44B FCheckResult into *hitptr; eax = scripted; ret 0x20."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53', '56', '57',
+        '8b1d', struct.pack('<I', mc).hex(),
+        'c1e306',
+        '81c3', struct.pack('<I', recs).hex(),
+        '890b',                                     # level
+        '8b442414', '894304',                       # hitptr
+        '8b442418', '894308',                       # source
+        '8b7c241c', '8b07', '89430c',               # end.x
+        '8b4704', '894310',                         # end.y
+        '8b4708', '894314',                         # end.z
+        '8b7c2420', '8b07', '894318',               # start.x
+        '8b4704', '89431c',                         # start.y
+        '8b4708', '894320',                         # start.z
+        '8b442424', '894324',                       # flags
+        '8b442428', '894328', '8b44242c', '89432c', '8b442430', '894330',   # extent
+        'ff05', struct.pack('<I', mc).hex(),
+        '8b1d', struct.pack('<I', mi).hex(),
+        '8d0443',                                   # eax = idx*3
+        'c1e004',                                   # eax = idx*48
+        '8b35', struct.pack('<I', mb).hex(),
+        '03f0',
+        '8b06',                                     # eax = scripted ret
+        '83c604',
+        '8b7c2414',                                 # edi = hitptr
+        'b90b000000',
+        'f3a5',
+        'ff05', struct.pack('<I', mi).hex(),
+        '5f', '5e', '5b',
+        'c22000')
+
+
+def pointregion_stub(mail, recs):
+    """PointRegion record stub (thunk 0x1030391d).  thiscall ecx=model;
+    stack: [ret][outRegion*][worldActor][point12] -> ret 0x14.
+    Record {model,outptr,world,point} (32B); write scripted {zone,leaf,num}
+    to *outRegion; eax = outRegion*."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53', '56',
+        '8b1d', struct.pack('<I', mc).hex(),
+        'c1e305',                                   # ebx *= 32
+        '81c3', struct.pack('<I', recs).hex(),
+        '890b',                                     # model (ecx)
+        '8b44240c', '894304',                       # outptr
+        '8b442410', '894308',                       # world
+        '8b442414', '89430c', '8b442418', '894310', '8b44241c', '894314',   # point
+        'ff05', struct.pack('<I', mc).hex(),
+        '8b1d', struct.pack('<I', mi).hex(),        # ebx = idx
+        '8d0443',                                   # eax = idx*3
+        'c1e002',                                   # eax = idx*12
+        '8b35', struct.pack('<I', mb).hex(),        # esi = results
+        '03f0',                                     # esi = slot
+        '8b7c240c',                                 # edi = outptr
+        '8b06', '8907',                             # zone
+        '8b4604', '894704',                         # leaf
+        '8b4608', '894708',                         # zoneNumber
+        'ff05', struct.pack('<I', mi).hex(),
+        '8b44240c',                                 # eax = outptr
+        '5e', '5b',
+        'c21400')
+
+
+def fastline_stub(mail, recs):
+    """FastLineCheck record stub (thunk 0x10301a37).  thiscall ecx=model;
+    stack: [ret][v1(12)][v2(12)] -> ret 0x18.  eax = scripted dword."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53',
+        '8b1d', struct.pack('<I', mc).hex(),
+        'c1e305',
+        '81c3', struct.pack('<I', recs).hex(),
+        '890b',                                     # model
+        '8b442408', '894304', '8b44240c', '894308', '8b442410', '89430c',   # v1
+        '8b442414', '894310', '8b442418', '894314', '8b44241c', '894318',   # v2
+        'ff05', struct.pack('<I', mc).hex(),
+        '8b1d', struct.pack('<I', mi).hex(),
+        '8b0d', struct.pack('<I', mb).hex(),
+        '8b0499',                                   # eax = [ecx+ebx*4]
+        'ff05', struct.pack('<I', mi).hex(),
+        '5b',
+        'c21800')
+
+
+def isa_stub():
+    """UObject::IsA(UClass*): ecx=this,[esp+4]=class.  Walk [this+0x24]
+    super chain via +0x28; eax=1 on match else 0; ret 4."""
+    return hx(
+        '8b4124',
+        '85c0',
+        '7408',
+        '3b442404',
+        '7408',
+        '8b4028',
+        'ebf4',
+        '33c0', 'c20400',
+        'b801000000', 'c20400')
+
+
+class ProbeError(RuntimeError):
+    pass
+
+
+class OracleMiss(ProbeError):
+    pass
+
+
+class Image:
+    def __init__(self, path, expected_hash=None):
+        self.data = Path(path).read_bytes()
+        if expected_hash:
+            digest = hashlib.sha256(self.data).hexdigest()
+            if digest != expected_hash:
+                raise ProbeError(f'{Path(path).name} sha256 {digest} != {expected_hash}')
+        pe = struct.unpack_from('<I', self.data, 60)[0]
+        opt = pe + 24
+        self.base = struct.unpack_from('<I', self.data, opt + 28)[0]
+        nsec = struct.unpack_from('<H', self.data, pe + 6)[0]
+        optsize = struct.unpack_from('<H', self.data, pe + 20)[0]
+        sec = opt + optsize
+        self.sections = []
+        self.size = 0
+        for i in range(nsec):
+            o = sec + i * 40
+            vsize, va, rsize, raw = struct.unpack_from('<IIII', self.data, o + 8)
+            self.sections.append((va, vsize, raw, rsize))
+            self.size = max(self.size, va + vsize)
+
+    def offset(self, rva):
+        for va, vs, raw, rs in self.sections:
+            if va <= rva < va + max(vs, rs):
+                return raw + rva - va
+        return None
+
+    def read(self, rva, fmt):
+        o = self.offset(rva)
+        return struct.unpack_from('<' + fmt, self.data, o)
+
+    def string(self, rva):
+        o = self.offset(rva)
+        end = self.data.index(b'\0', o)
+        return self.data[o:end].decode('ascii', 'replace')
+
+    def export_map(self):
+        pe = struct.unpack_from('<I', self.data, 60)[0]
+        opt = pe + 24
+        edir_rva, _ = struct.unpack_from('<II', self.data, opt + 96)
+        if not edir_rva:
+            return {}
+        o = self.offset(edir_rva)
+        base = self.base
+        addr_funcs = struct.unpack_from('<I', self.data, o + 28)[0]
+        addr_names = struct.unpack_from('<I', self.data, o + 32)[0]
+        addr_ord = struct.unpack_from('<I', self.data, o + 36)[0]
+        nnames = struct.unpack_from('<I', self.data, o + 24)[0]
+        out = {}
+        for i in range(nnames):
+            name_rva = struct.unpack_from('<I', self.data, self.offset(addr_names) + i * 4)[0]
+            name = self.string(name_rva)
+            ord_i = struct.unpack_from('<H', self.data, self.offset(addr_ord) + i * 2)[0]
+            func_rva = struct.unpack_from('<I', self.data, self.offset(addr_funcs) + ord_i * 4)[0]
+            out[name] = self.base + func_rva
+        return out
+
+    def imports(self):
+        pe = struct.unpack_from('<I', self.data, 60)[0]
+        opt = pe + 24
+        idir_rva, _ = struct.unpack_from('<II', self.data, opt + 104)
+        if not idir_rva:
+            return
+        o = self.offset(idir_rva)
+        while True:
+            ilt, ts, fwd, name_rva, iat = struct.unpack_from('<IIIII', self.data, o)
+            if not ilt and not iat:
+                break
+            dll = self.string(name_rva).lower()
+            lookup = self.offset(ilt) if ilt else self.offset(iat)
+            j = 0
+            while True:
+                entry = struct.unpack_from('<I', self.data, lookup + j * 4)[0]
+                if not entry:
+                    break
+                sym = f'#{entry & 0xffff}' if entry & 0x80000000 else self.string(entry + 2)
+                yield dll, sym, self.base + iat + j * 4
+                j += 1
+            o += 20
+
+
+class NavProbe:
+    """Fabricates pawn/zone/level/nav-graph memory and runs the real native
+    bytes.  Every MoveActor/FarMoveActor/SingleLineCheck call through the
+    fabricated level vtable, plus PointRegion/FastLineCheck thunk calls, is
+    captured as a command; scripted results feed back per call."""
+
+    def __init__(self, game_root):
+        self.cpu = cpu = Uc(UC_ARCH_X86, UC_MODE_32)
+        self.thunks = {}
+        self.trace = []
+        self.images = {name: Image(game_root / 'System' / name) for name in HASHES}
+        for image in self.images.values():
+            cpu.mem_map(image.base, (image.size + 4095) & ~4095)
+            cpu.mem_write(image.base, image.data[:1024])
+            for virtual, _vsize, raw, size in image.sections:
+                if size:
+                    cpu.mem_write(image.base + virtual, image.data[raw:raw + size])
+        cpu.mem_map(0, 0x10000)
+        cpu.mem_map(0x1ff00000, 0x10000)
+        cpu.mem_map(0x20000000, 0x4000000)
+        self.free = 0x20000000
+        self.stack = 0x23ff0000
+        self.done = 0x20010000
+        exports = {name.lower(): image.export_map() for name, image in self.images.items()}
+        thunk = 0x20020000
+        self.exports = exports
+        for image in self.images.values():
+            for dll, symbol, iat in image.imports():
+                address = exports.get(dll, {}).get(symbol)
+                if address is None:
+                    address = thunk
+                    thunk += 16
+                    self.thunks[address] = (dll, symbol)
+                self.write(iat, 'I', address)
+                if dll == 'msvcrt.dll' and symbol == '_ftol' and address in self.thunks:
+                    cpu.mem_write(address, bytes.fromhex('83ec08dd0c24585ac3'))
+                    self.thunks.pop(address)
+        gmath = exports['core.dll']['?GMath@@3VFGlobalMath@@A']
+        self.write(gmath + 0x18, '12f', 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+        table = bytes().join(struct.pack('<f', math.sin(i * 6.283185307179586 / 16384))
+                             for i in range(16384))
+        cpu.mem_write(SINE_TABLE, table)
+        # GNatives evaluator stubs.
+        self.write(GNATIVES + TOK_VECTOR * 4, 'I', self.deploy(dword_stub(3)))
+        self.write(GNATIVES + TOK_FLOAT * 4, 'I', self.deploy(dword_stub(1)))
+        self.write(GNATIVES + TOK_OBJECT * 4, 'I', self.deploy(dword_stub(1)))
+        self.write(GNATIVES + TOK_INT * 4, 'I', self.deploy(dword_stub(1)))
+        self.write(GNATIVES + TOK_NOTHING * 4, 'I', self.deploy(dword_stub(0)))
+        self.write(GNATIVES + TOK_OUT * 4, 'I', self.deploy(outarg_stub()))
+        # Fabricated level vtable: MoveActor +0x88, FarMoveActor +0x8c,
+        # SingleLineCheck +0xc0 -> recording stubs; every other slot -> trap.
+        self.vtable = self.alloc(0x100)
+        trap = self.deploy(hx('0f0b', 'c3'))          # ud2 guard
+        for i in range(0x100 // 4):
+            self.write(self.vtable + i * 4, 'I', trap)
+        # Captured-argument record buffers live in heap space (one record per
+        # boundary call); the mailbox headers only keep count/index/base.
+        self.rec_mv = self.alloc(64 * RESULT_DEPTH)
+        self.rec_fm = self.alloc(32 * RESULT_DEPTH)
+        self.rec_sl = self.alloc(64 * RESULT_DEPTH)
+        self.rec_pr = self.alloc(32 * RESULT_DEPTH)
+        self.rec_fl = self.alloc(32 * RESULT_DEPTH)
+        self.write(self.vtable + 0x88, 'I', self.deploy(move_stub(MAIL_MV, self.rec_mv)))
+        self.write(self.vtable + 0x8c, 'I', self.deploy(farmove_stub(MAIL_FM, self.rec_fm)))
+        self.write(self.vtable + 0xc0, 'I', self.deploy(slcheck_stub(MAIL_SL, self.rec_sl)))
+        cpu.mem_write(POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr))
+        cpu.mem_write(FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl))
+        cpu.mem_write(EH_PROLOG, hx('33c0', 'c3'))
+        # Import-body intercepts dispatched from the code hook.
+        self.isa_body = exports['core.dll'].get('?IsA@UObject@@QBEHPAVUClass@@@Z')
+        self.fail_body = exports['core.dll'].get('?appFailAssert@@YAXPBD0H@Z')
+        self.unwind_body = exports['core.dll'].get('?appUnwindf@@YAXPBGZZ')
+        self.warnf_body = exports['core.dll'].get('?appWarnf@@YAXPBGZZ')
+        self.probing_body = exports['core.dll'].get('?IsProbing@UObject@@QBEHVName@@@Z')
+        if self.isa_body:
+            cpu.mem_write(self.isa_body, isa_stub())
+        self.missed_oracles = []
+        self.probing_results = []
+        self.probing_index = 0
+        self.last_image_ip = 0
+        self.watch_ips = set()
+        cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
+        cpu.hook_add(UC_HOOK_MEM_INVALID, self.on_bad_memory)
+
+    def deploy(self, code):
+        address = self.alloc(len(code))
+        self.cpu.mem_write(address, code)
+        return address
+
+    def alloc(self, size):
+        address = self.free
+        self.free += (size + 15) & ~15
+        if self.free >= 0x23000000:
+            raise MemoryError('Probe allocation limit exceeded')
+        return address
+
+    def write(self, address, fmt, *values):
+        self.cpu.mem_write(address, struct.pack('<' + fmt, *values))
+
+    def read(self, address, fmt):
+        return struct.unpack('<' + fmt, self.cpu.mem_read(address, struct.calcsize('<' + fmt)))
+
+    def f32(self, address):
+        return self.read(address, 'f')[0]
+
+    def on_bad_memory(self, cpu, access, address, size, value, data):
+        print('BADMEM access=%r addr=%x trace=%r' % (access, address, self.trace[-16:]), file=sys.stderr)
+        raise ProbeError(f'Invalid memory {address:x}; trace {self.trace[-12:]}')
+
+    def on_instruction(self, cpu, address, size, data):
+        if address == self.done:
+            cpu.emu_stop()
+            return
+        if address in self.thunks:
+            dll, symbol = self.thunks[address]
+            raise ProbeError(f'Unresolved import {dll}!{symbol}; trace {self.trace[-12:]}')
+        if address == self.fail_body:
+            raise ProbeError(f'appFailAssert fired; trace {self.trace[-12:]}')
+        if address == self.unwind_body:
+            raise ProbeError(f'appUnwindf fired; trace {self.trace[-12:]}')
+        if address == self.warnf_body or address == self.probing_body:
+            # Variadic warn / IsProbing(FName): consume one stack arg, eax=scripted.
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            if address == self.probing_body:
+                value = self.probing_results[self.probing_index % len(self.probing_results)] \
+                    if self.probing_results else 0
+                self.probing_index += 1
+            else:
+                value = 0
+            cpu.reg_write(UC_X86_REG_EAX, value)
+            cpu.reg_write(UC_X86_REG_EIP, self.read(esp, 'I')[0])
+            cpu.reg_write(UC_X86_REG_ESP, esp + 4)
+            return
+        self.trace.append(hex(address))
+        if len(self.trace) > 200:
+            self.trace.pop(0)
+        if address < 0x20000000:
+            self.last_image_ip = address
+        if address in self.watch_ips:
+            r = cpu.reg_read(UC_X86_REG_EAX)
+            print('WATCH @%x eax=%x ecx=%x edx=%x esi=%x' % (
+                address, r, cpu.reg_read(UC_X86_REG_ECX),
+                cpu.reg_read(UC_X86_REG_EDX), cpu.reg_read(UC_X86_REG_ESI)),
+                file=sys.stderr)
+
+    # --- fabrication -------------------------------------------------------
+    def class_object(self, super_class=0):
+        cls = self.alloc(0x600)
+        self.write(cls + 0x28, 'I', super_class)
+        return cls
+
+    CLASS_MAP = {
+        'pawn': PAWN_CLASS, 'playerpawn': PLAYER_CLASS, 'levelinfo': LEVELINFO_CLASS,
+        'navpoint': NAVPOINT_CLASS, 'navigationpoint': NAVPOINT_CLASS,
+        'warpzonemarker': WARPMARKER_CLASS, 'inventory': INVENTORY_CLASS,
+        'mover': MOVER_CLASS, 'actor': ACTOR_CLASS,
+    }
+
+    def zone(self, spec):
+        """Fabricated ZoneInfo: +0x324 gravityZ, +0x350 damageType dword,
+        +0x388 flags byte (bit0 water, bit0x20 pain)."""
+        z = self.alloc(0x480)
+        self.write(z + 0x388, 'B', spec.get('flags388', 0)
+                 | (1 if spec.get('water') else 0)
+                 | (0x20 if spec.get('pain') else 0))
+        self.write(z + 0x350, 'I', spec.get('damageType', 0))
+        self.write(z + 0x324, 'f', spec.get('gravityZ', -950.0))
+        return z
+
+    def region(self, zone_addr, leaf=0, num=0):
+        return (zone_addr, leaf, num)
+
+    def actor(self, spec, refs):
+        obj = self.alloc(0x900)
+        self.write(obj, 'I', self.alloc(0x120))
+        cls_name = spec.get('cls', 'actor')
+        cls_map = self.CLASS_MAP
+        if cls_name == 'none':
+            cls = 0
+        elif cls_name.endswith('*'):
+            cls = self.class_object(cls_map.get(cls_name[:-1], ACTOR_CLASS))
+        else:
+            cls = cls_map.get(cls_name)
+            if cls is None:
+                cls = self.class_object(spec.get('super', 0))
+        self.write(obj + 0x24, 'I', cls)
+        for key, off in [('location', 0x114), ('velocity', 0x144), ('floor', 0x3fc),
+                         ('destination', 0x354), ('focus', 0x360)]:
+            if key in spec:
+                self.write(obj + off, '3f', *spec[key])
+        if 'rotation' in spec:
+            self.write(obj + 0x120, '3i', *spec['rotation'])
+        for key, off in [('collisionRadius', 0x1d4), ('collisionHeight', 0x1d8),
+                         ('baseEyeHeight', 0x3f4), ('maxStepHeight', 0x38c),
+                         ('desiredSpeed', 0x36c), ('maxDesiredSpeed', 0x370),
+                         ('meleeRange', 0x374), ('groundSpeed', 0x378),
+                         ('waterSpeed', 0x37c), ('airSpeed', 0x380),
+                         ('accelRate', 0x384), ('jumpZ', 0x408)]:
+            if key in spec:
+                self.write(obj + off, 'f', spec[key])
+        for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
+                         ('flags28', 0x28), ('field444', 0x444), ('field4ec', 0x4ec),
+                         ('markedWarpZone', 0x44c), ('field398', 0x398),
+                         ('physics', 0x30)]:
+            if key in spec:
+                self.write(obj + off, 'I', spec[key])
+        for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
+                         ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
+                         ('weapon', 0x3d0)]:
+            ref = spec.get(key)
+            if ref is not None:
+                self.write(obj + off, 'I', refs.get(ref, ref) if isinstance(ref, str) else ref)
+        return obj
+
+    def level(self, spec, actor_list, reach_specs, nav_list_head):
+        """ULevel: +0 vtable, +0x2c Actors.Data, +0x30 Actors.Num, +0x8c
+        ReachSpec TArray data, +0x90 nav-list head, +0x98 Model."""
+        lvl = self.alloc(0x600)
+        self.write(lvl, 'I', self.vtable)
+        actors = self.alloc(4 * max(1, len(actor_list)))
+        for i, a in enumerate(actor_list):
+            self.write(actors + i * 4, 'I', a)
+        self.write(lvl + 0x2c, 'I', actors)
+        self.write(lvl + 0x30, 'I', len(actor_list))
+        # ReachSpec TArray: contiguous 28-byte records
+        # {+0:start,+4:distance,+8:end,+0xc:radius,+0x10:height,+0x14:flags,+0x18:pruned}
+        if reach_specs:
+            mem = self.alloc(28 * len(reach_specs))
+            for i, s in enumerate(reach_specs):
+                o = mem + i * 28
+                self.write(o + 0x00, 'I', s.get('start', 0))
+                self.write(o + 0x04, 'I', s.get('distance', 0))
+                self.write(o + 0x08, 'I', s.get('end', 0))
+                self.write(o + 0x0c, 'I', s.get('radius', 0))
+                self.write(o + 0x10, 'I', s.get('height', 0))
+                self.write(o + 0x14, 'I', s.get('flags', 0))
+                self.write(o + 0x18, 'I', s.get('pruned', 0))
+            self.write(lvl + 0x8c, 'I', mem)
+        self.write(lvl + 0x90, 'I', nav_list_head)
+        model = self.alloc(0x40)
+        self.write(lvl + 0x98, 'I', model)
+        return lvl, model
+
+    # --- run ---------------------------------------------------------------
+    def run(self, scene):
+        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL):
+            self.write(mail, 'I', 0)
+            self.write(mail + 4, 'I', 0)
+        self.probing_results = scene.get('probing', [])
+        self.probing_index = 0
+        self.write(GISEDITOR, 'I', self.alloc(8))
+        self.write(self.read(GISEDITOR, 'I')[0], 'I', scene.get('gIsEditor', 0))
+        self.write(GTIMING, 'I', self.alloc(8))
+        self.write(self.read(GTIMING, 'I')[0], 'I', scene.get('gTiming', 0))
+
+        # Scripted boundary results.  The reach helpers loop ~100 steps and
+        # may call a boundary many times; pad each scripted list by repeating
+        # its last entry so the recording index never runs past the buffer.
+        def pad(lst, default):
+            lst = list(lst) if lst else [default]
+            while len(lst) < RESULT_DEPTH:
+                lst.append(lst[-1])
+            return lst
+        mv = pad(scene.get('moveActor', []), {'ret': 0})
+        mv_mem = self.alloc(48 * len(mv))
+        for i, r in enumerate(mv):
+            self.write(mv_mem + i * 48, 'I', r.get('ret', 1))
+            hit = r.get('hit', {})
+            fields = [
+                hit.get('f0', 0), hit.get('actor', 0),
+                *hit.get('location', [0, 0, 0]),
+                *hit.get('normal', [0, 0, 0]),
+                hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1),
+            ]
+            self.write(mv_mem + i * 48 + 4, 'II3f3fIfi',
+                       fields[0], fields[1], *fields[2:5], *fields[5:8],
+                       fields[8], fields[9], fields[10])
+        self.write(MAIL_MV + 8, 'I', mv_mem)
+        fm = pad(scene.get('farMove', []), 1)
+        fm_mem = self.alloc(4 * len(fm))
+        for i, v in enumerate(fm):
+            self.write(fm_mem + i * 4, 'I', v)
+        self.write(MAIL_FM + 8, 'I', fm_mem)
+        sl = pad(scene.get('singleLine', []), {'ret': 0})
+        sl_mem = self.alloc(48 * len(sl))
+        for i, r in enumerate(sl):
+            if isinstance(r, int):
+                r = {'ret': r}
+            self.write(sl_mem + i * 48, 'I', r.get('ret', 1))
+            hit = r.get('hit', {})
+            self.write(sl_mem + i * 48 + 4, 'II3f3fIfi',
+                       hit.get('f0', 0), hit.get('actor', 0),
+                       *hit.get('location', [0, 0, 0]), *hit.get('normal', [0, 0, 0]),
+                       hit.get('f20', 0), hit.get('time', 1.0), hit.get('item', -1))
+        self.write(MAIL_SL + 8, 'I', sl_mem)
+        fl = pad(scene.get('fastLine', []), 1)
+        fl_mem = self.alloc(4 * len(fl))
+        for i, v in enumerate(fl):
+            self.write(fl_mem + i * 4, 'I', v)
+        self.write(MAIL_FL + 8, 'I', fl_mem)
+
+        # Zones (built before actors so region fields can reference them).
+        zones = {name: self.zone(spec) for name, spec in scene.get('zones', {}).items()}
+        refs = dict(zones)
+
+        # PointRegion results carry zone pointers — resolve after zones exist.
+        pr = pad(scene.get('pointRegion', []), {'zone': 0})
+        pr_mem = self.alloc(12 * len(pr))
+        for i, r in enumerate(pr):
+            zref = r.get('zone', 0)
+            if isinstance(zref, str):
+                zref = refs.get(zref.removeprefix('USE:'), 0)
+            self.write(pr_mem + i * 12, '3I', zref, r.get('leaf', 0), r.get('zoneNumber', 0))
+        self.write(MAIL_PR + 8, 'I', pr_mem)
+        actors = {}
+        # Navigation points get their Paths[]/upstreamPaths[] arrays.
+        for name, spec in scene.get('navPoints', {}).items():
+            obj = self.actor(spec, refs)
+            self.write(obj + 0x24, 'I', NAVPOINT_CLASS)
+            for i, idx in enumerate(spec.get('paths', [])):
+                self.write(obj + 0x360 + i * 4, 'i', idx)
+            if len(spec.get('paths', [])) < 16:
+                self.write(obj + 0x360 + len(spec.get('paths', [])) * 4, 'i', -1)
+            for i, idx in enumerate(spec.get('upstreamPaths', [])):
+                self.write(obj + 0x3a0 + i * 4, 'i', idx)
+            if len(spec.get('upstreamPaths', [])) < 16:
+                self.write(obj + 0x3a0 + len(spec.get('upstreamPaths', [])) * 4, 'i', -1)
+            for key, off in [('regionZone', 0xc8), ('footZone', 0x330), ('headZone', 0x33c)]:
+                ref = spec.get(key)
+                if ref in zones:
+                    self.write(obj + off, 'I', zones[ref])
+            actors[name] = obj
+            refs[name] = obj
+        for name, spec in scene.get('actors', {}).items():
+            obj = self.actor(spec, refs)
+            for key, off in [('regionZone', 0xc8), ('footZone', 0x330), ('headZone', 0x33c)]:
+                ref = spec.get(key)
+                if ref in zones:
+                    self.write(obj + off, 'I', zones[ref])
+            actors[name] = obj
+            refs[name] = obj
+        pawn = self.actor(scene.get('pawn', {}), refs)
+        pz = scene.get('pawn', {})
+        for key, off in [('regionZone', 0xc8), ('footZone', 0x330), ('headZone', 0x33c)]:
+            ref = pz.get(key)
+            if ref in zones:
+                self.write(pawn + off, 'I', zones[ref])
+        actors['self'] = pawn
+        refs['self'] = pawn
+        # Second pass: resolve actor->actor refs that needed all objects first.
+        for name, spec in list(scene.get('navPoints', {}).items()) + list(scene.get('actors', {}).items()):
+            obj = actors[name]
+            for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
+                             ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c)]:
+                ref = spec.get(key)
+                if isinstance(ref, str) and ref in refs:
+                    self.write(obj + off, 'I', refs[ref])
+        for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
+                         ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c)]:
+            ref = pz.get(key)
+            if isinstance(ref, str) and ref in refs:
+                self.write(pawn + off, 'I', refs[ref])
+
+        # ReachSpec graph: resolve named start/end refs.
+        reach_specs = []
+        for s in scene.get('reachSpecs', []):
+            s = dict(s)
+            s['start'] = refs.get(s.get('start'), s.get('start', 0))
+            s['end'] = refs.get(s.get('end'), s.get('end', 0))
+            reach_specs.append(s)
+        nav_head = refs.get(scene.get('navList', ''), 0)
+        # LevelInfo is Actors[0] — carries the +0x548 nav-point list.
+        levelinfo = refs.get(scene.get('levelInfo', ''), 0) or self.actor(
+            {'cls': 'levelinfo'}, refs)
+        li_spec = scene.get('levelInfoSpec', {})
+        self.write(levelinfo + 0x548, 'I', refs.get(li_spec.get('navList', scene.get('navList', '')), nav_head))
+        actor_list = [levelinfo] + [a for n, a in actors.items()
+                                    if n != 'self' and a != levelinfo]
+        lvl, model = self.level(scene.get('level', {}), actor_list, reach_specs, nav_head)
+        self.write(pawn + 0xac, 'I', lvl)
+        self.write(pawn + 0xa8, 'I', levelinfo)
+        for n, a in actors.items():
+            self.write(a + 0xac, 'I', lvl)
+        refs['__level'] = lvl
+        refs['__levelinfo'] = levelinfo
+        refs['__model'] = model
+        # Class super-chains on the REAL class VAs.
+        self.write(PLAYER_CLASS + 0x28, 'I', PAWN_CLASS)
+        self.write(PAWN_CLASS + 0x28, 'I', self.class_object(0))
+        self.write(NAVPOINT_CLASS + 0x28, 'I', ACTOR_CLASS)
+        self.write(WARPMARKER_CLASS + 0x28, 'I', NAVPOINT_CLASS)
+        self.write(INVENTORY_CLASS + 0x28, 'I', self.class_object(0))
+        self.write(MOVER_CLASS + 0x28, 'I', self.class_object(0))
+        self.write(ACTOR_CLASS + 0x28, 'I', 0)
+        self.write(LEVELINFO_CLASS + 0x28, 'I', self.class_object(0))
+
+        # Token stream for exec wrappers.
+        stream = []
+        for arg in scene.get('args', []):
+            kind = arg['kind']
+            if kind == 'vector':
+                stream.append(TOK_VECTOR)
+                stream += struct.pack('<3f', *arg['value'])
+            elif kind == 'float':
+                stream.append(TOK_FLOAT)
+                stream += struct.pack('<f', arg['value'])
+            elif kind == 'int':
+                stream.append(TOK_INT)
+                stream += struct.pack('<i', arg['value'])
+            elif kind == 'object':
+                stream.append(TOK_OBJECT)
+                stream += struct.pack('<I', refs.get(arg['value'], 0))
+            elif kind == 'out':
+                stream.append(TOK_OUT)
+                stream += struct.pack('<I', refs[arg['value']])
+            elif kind == 'nothing':
+                stream.append(TOK_NOTHING)
+            else:
+                raise ValueError(f'Unknown arg kind {kind}')
+        code = self.alloc(len(stream) + 16)
+        self.cpu.mem_write(code, bytes(stream + [TOK_END, 0, 0, 0]))
+        frame = self.alloc(0x40)
+        self.write(frame + 0x8, 'I', pawn)
+        self.write(frame + 0xc, 'I', code)
+        result_out = self.alloc(16)
+
+        body = BODIES[scene['body']]
+        direct_args = scene.get('directArgs')
+        for reg, value in [(UC_X86_REG_ESP, self.stack),
+                           (UC_X86_REG_FPCW, 0x037f), (UC_X86_REG_FPSW, 0),
+                           (UC_X86_REG_FPTAG, 0xffff)]:
+            self.cpu.reg_write(reg, value)
+        this_obj = refs.get(scene.get('this', 'self'), pawn)
+        self.cpu.reg_write(UC_X86_REG_ECX, this_obj)
+        self.write(self.stack, 'I', self.done)
+        if direct_args is not None:
+            for i, arg in enumerate(direct_args):
+                if isinstance(arg, float):
+                    self.write(self.stack + 4 + i * 4, 'f', arg)
+                else:
+                    self.write(self.stack + 4 + i * 4, 'I',
+                               refs.get(arg, arg) if isinstance(arg, str) else arg)
+        else:
+            self.write(self.stack + 4, 'I', frame)
+            self.write(self.stack + 8, 'I', result_out)
+        try:
+            self.cpu.emu_start(body, self.done + 1, count=8000000)
+        except Exception as e:
+            ec, ea = self.cpu.reg_read(UC_X86_REG_ECX), self.cpu.reg_read(UC_X86_REG_EAX)
+            def d(a):
+                try:
+                    return '%x' % self.read(a, 'I')[0]
+                except Exception:
+                    return '?'
+            raise ProbeError(
+                f'{e}; eip={self.cpu.reg_read(UC_X86_REG_EIP):#x} '
+                f'last_image={self.last_image_ip:#x} ecx={ec:#x} eax={ea:#x} '
+                f'lvl={lvl:#x} [lvl]={d(lvl)} vt={self.vtable:#x} vt88={d(self.vtable+0x88)} '
+                f'vt8c={d(self.vtable+0x8c)} vtc0={d(self.vtable+0xc0)} '
+                f'trace {self.trace[-16:]}')
+        if self.cpu.reg_read(UC_X86_REG_EIP) != self.done:
+            raise ProbeError('Native instruction budget exceeded')
+
+        def vec3(rec):
+            return [struct.unpack('<f', struct.pack('<I', w))[0] for w in rec]
+        commands = []
+        for i in range(self.read(MAIL_MV, 'I')[0]):
+            rec = self.read(self.rec_mv + i * 64, '14I')
+            commands.append({'op': 'moveActor', 'level': rec[0], 'actor': rec[1],
+                             'delta': vec3(rec[2:5]), 'rot': vec3(rec[5:8]),
+                             'hit': rec[8], 'flags': list(rec[9:13])})
+        for i in range(self.read(MAIL_FM, 'I')[0]):
+            rec = self.read(self.rec_fm + i * 32, '8I')
+            commands.append({'op': 'farMoveActor', 'level': rec[0], 'actor': rec[1],
+                             'dest': vec3(rec[2:5]), 'test': rec[5], 'noCheck': rec[6]})
+        for i in range(self.read(MAIL_SL, 'I')[0]):
+            rec = self.read(self.rec_sl + i * 64, '14I')
+            commands.append({'op': 'singleLineCheck', 'level': rec[0], 'hit': rec[1],
+                             'source': rec[2], 'end': vec3(rec[3:6]),
+                             'start': vec3(rec[6:9]), 'flags': rec[9],
+                             'extent': vec3(rec[10:13])})
+        for i in range(self.read(MAIL_PR, 'I')[0]):
+            rec = self.read(self.rec_pr + i * 32, '8I')
+            commands.append({'op': 'pointRegion', 'model': rec[0], 'out': rec[1],
+                             'world': rec[2], 'point': vec3(rec[3:6])})
+        for i in range(self.read(MAIL_FL, 'I')[0]):
+            rec = self.read(self.rec_fl + i * 32, '8I')
+            commands.append({'op': 'fastLineCheck', 'model': rec[0],
+                             'end': vec3(rec[1:4]), 'start': vec3(rec[4:7])})
+        # Interleaved order matters — rebuild a combined sequence from a
+        # global ordering counter if needed later; for now emit per-op lists.
+        def vec(obj, off):
+            return list(self.read(obj + off, '3f'))
+        def bits(obj, off):
+            return ['%08x' % w for w in self.read(obj + off, '3I')]
+        st0_bits = None
+        try:
+            st0 = self.cpu.reg_read(UC_X86_REG_ST0)
+            st0_bits = '%020x' % st0
+        except Exception:
+            pass
+        return {
+            'returned': self.cpu.reg_read(UC_X86_REG_EAX),
+            'resultOut': '%08x' % self.read(result_out, 'I')[0],
+            'resultOutValue': self.read(result_out, 'f')[0],
+            'st0': st0_bits,
+            'commands': commands,
+            'counts': {op: self.read(mail, 'I')[0]
+                       for op, mail in [('moveActor', MAIL_MV), ('farMoveActor', MAIL_FM),
+                                        ('singleLineCheck', MAIL_SL), ('pointRegion', MAIL_PR),
+                                        ('fastLineCheck', MAIL_FL)]},
+            'pawn': {
+                'location': vec(pawn, 0x114), 'locationBits': bits(pawn, 0x114),
+                'velocity': vec(pawn, 0x144), 'velocityBits': bits(pawn, 0x144),
+                'destination': vec(pawn, 0x354), 'focus': vec(pawn, 0x360),
+                'flags318': self.read(pawn + 0x318, 'I')[0],
+                'physics': self.read(pawn + 0x30, 'B')[0],
+                'moveTarget': self.read(pawn + 0x34c, 'I')[0],
+            },
+            'probingUsed': self.probing_index,
+            'pawnAddress': pawn,
+            'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
+            'levelAddress': lvl,
+            'missedOracles': self.missed_oracles,
+        }
+
+
+def sanitize(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return 'f32:0x%08x' % f32bits(value)
+    if isinstance(value, dict):
+        return {k: sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize(v) for v in value]
+    return value
+
+
+def main():
+    root = Path(__file__).resolve().parent.parent
+    payload = json.loads(Path(sys.argv[1]).read_text() if len(sys.argv) > 1 else sys.stdin.read())
+    probe = NavProbe(root / 'Deus Ex GOTY Edition')
+    if isinstance(payload, list):
+        out = []
+        for scene in payload:
+            try:
+                out.append({'ok': True, 'result': probe.run(scene)})
+            except (ProbeError, OracleMiss) as e:
+                out.append({'ok': False, 'error': str(e), 'type': type(e).__name__})
+            except Exception as e:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+                out.append({'ok': False, 'error': str(e), 'type': type(e).__name__})
+        print(json.dumps(sanitize(out)))
+    else:
+        print(json.dumps(sanitize(probe.run(payload)), indent=1))
+
+
+if __name__ == '__main__':
+    main()
