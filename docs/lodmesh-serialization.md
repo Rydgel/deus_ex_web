@@ -1,5 +1,14 @@
 # Original `ULodMesh::Serialize` (GOTY) recovered layout
 
+**Update, 2026-09-19:** this records the historical sequence-only investigation.
+Its placeholder array vtables corrupted ordinary FArray initialization. The
+short consumption results and inferred unread tails below are superseded by
+[the full payload investigation](script-mesh-payload.md), which executes the
+actual constructors and lazy-array loaders. LightSwitch, Plant2 and SignFloor
+now consume their complete exports, and the canonical runtime resource carries
+the complete v68 payload with deferred vertex loading. The sequence tables
+established below remain valid.
+
 Evidence for the mesh payload consumed by the training `LightSwitch.Frob`
 route (stage-3-handoff item 1). This replaces the open question in
 [script-play-anim.md](script-play-anim.md) ("Serialized mesh: GOTY does not
@@ -10,7 +19,7 @@ native code, not from a public reader.
 ## Method
 
 The original `ULodMesh::Serialize` (`Engine.dll` image base `0x10300000`,
-thunk `0x10324b9` → body `0x10354ab0`, SHA-256
+thunk `0x103024b9` → body `0x10354ab0`, SHA-256
 `0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4`) was
 executed in the unicorn x86 emulator against the real serialized
 `DeusExDeco.u` export 606 payload, using a fake loading `FArchive`

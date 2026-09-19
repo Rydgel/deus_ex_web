@@ -92,7 +92,7 @@ test('PollFinishAnim clears only the latent action when bAnimFinished is set', (
 });
 
 test('ScriptRuntime dispatches native 261 and its 0x181 poll through one actor state frame', () => {
-  const actor = {animationState: {flags: 0}};
+  const actor = {};
   const state = {latent: 0};
   const values = new Map([
     ['AnimSequence', 'Walk'], ['AnimFrame', 0], ['AnimRate', 1],
@@ -114,7 +114,7 @@ test('ScriptRuntime dispatches native 261 and its 0x181 poll through one actor s
   }), undefined);
   assert.equal(state.latent, FINISH_ANIM_LATENT_ACTION);
 
-  actor.animationState.flags |= FINISH_ANIM_FLAGS.AnimFinished;
+  values.set('bAnimFinished', true);
   runtime.services.pollLatent({index: FINISH_ANIM_LATENT_ACTION, receiver: actor, state, seconds: 0});
   assert.equal(state.latent, 0);
 });

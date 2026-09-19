@@ -12,6 +12,15 @@ export class ScriptObjects {
   async resolve(asset, index) {
     if (!index) return null;
     const resolved = await this.assets.resolve(asset, index);
+    return this.exportIdentity(resolved.asset, resolved.index);
+  }
+  /** Bind an already resolved positive export without repeating import lookup.
+   * The native loader supplies the owning linker/index after VerifyImport. */
+  exportIdentity(asset, index) {
+    const entry = asset.pkg.exports[index - 1];
+    if (!Number.isInteger(index) || index <= 0 || !entry)
+      throw new Error(`Invalid canonical export ${asset.name}:${index}`);
+    const resolved = {asset, index, entry, key: `${asset.name}.${entry.path}`};
     const key = resolved.key.toLowerCase();
     if (!this.objects.has(key)) this.objects.set(key, {
       ...resolved, key, kind: resolved.entry.className, name: resolved.entry.name,

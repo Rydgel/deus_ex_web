@@ -21,6 +21,11 @@ assert.deepEqual(level.actors.filter(actor=>String(actor?.values?.Tag??'').toLow
   'complete original actor array has no padoor recipient');
 
 const runtime=game.doors.scriptRuntime.runtime;
+assert.ok(runtime.classLoader,'Play uses the recovered class loader');
+const moverClass=await runtime.classes.get('deusex.deusexmover');
+assert.equal(moverClass.defaultsSource,'original-linker-serialized');
+assert.equal(runtime.classLoader.identity(moverClass.loadRecord),moverClass.record,
+  'the live mover class retains the native loader canonical identity');
 const createIterator=runtime.createIterator.bind(runtime);
 const iterations=[];
 runtime.createIterator=call=>{

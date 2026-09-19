@@ -1,6 +1,8 @@
+import {setWindowConfigurationNative} from './script-window-configuration.mjs';
 import { readClass } from '../unreal/classes.mjs';
 import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMetadata, readStructMetadata } from '../unreal/script-metadata.mjs';
 import { ScriptObjects } from './script-objects.mjs';
+import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
@@ -20,8 +22,13 @@ import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
 } from './script-actor-collision.mjs';
-import { execPlayAnim } from './play-anim.mjs';
-import { animationView } from './script-anim.mjs';
+import { execPlayAnim, execLoopAnim, execTweenAnim } from './play-anim.mjs';
+import { animationView, animationTickView } from './script-anim.mjs';
+import { tickActorAnimation } from './animation-tick.mjs';
+import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
+import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
+import { tickStandaloneActor } from './actor-tick.mjs';
+import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
 import { execActorPlaySound } from './script-sound.mjs';
@@ -31,10 +38,11 @@ import {
   dispatchWaitForLanding, pollMoveTo, pollMoveToward, pollTurnTo,
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
+import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import {
   execLineOfSightTo, execCanSee, execPlayerCanSeeMe,
-  execPickTarget, execPickAnyTarget, execAICanSee,
+  execPickTarget, execPickAnyTarget, execAICanSee, showPawnSelf, checkPawnEnemyVisible,
 } from './script-pawn-perception.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
 import { isOverlapping } from './actor-touch.mjs';
@@ -127,8 +135,13 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
  * an event never suspends halfway through an original call to fetch an asset.
  * A prepared function/state subset fails explicitly on an unprepared target. */
 export class ScriptRuntime {
-  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,boundaryNatives=[],boundaryFunctions=[]}={}) {
+  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
     this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
+    this.classLoader=nativeClassLoading?new ScriptClassLoader({assets,objects:this.objects,
+      resources:()=>this.resourceRegistry(),
+      // Retain Play's explicit deferred mesh policy on the shared archive.
+      // Other native resources still require their own host services.
+      meshLoadServices:{getLazyLoad:()=>1}}):null;
     this.states=new Map();this.structs=new Map();this.structLayouts=new Map();this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
     this.eventsEnabled=true;
     this.conversationLists=new Map();
@@ -320,21 +333,27 @@ export class ScriptRuntime {
     if(record.kind!=='Class')throw new Error(`Expected script class: ${record.key}`);
     if(!this.classes.has(record.key)){
       const pending=(async()=>{
-        const metadata=readClass(record.asset,record.index);
-        const base=metadata.base?await this.loadClass(record.asset,metadata.base):null;
-        const cls={record,metadata,base,nameCounter:0,...await this.members(record),
-          ...await this.linkedChildren(record,metadata.children),defaults:new Map(base?.defaults)};
-        cls.propertyLink=[...cls.propertyOrder,...(base?.propertyLink??[])];
-        cls.destructorLink=cls.propertyLink.filter(field=>field.metadata.flags&0x00400000);
-        for(const property of metadata.properties){
-          const field=this.lookupMember(cls,'fields',property.name);
-          if(!field)throw new Error(`Default property is not linked: ${record.key}.${property.name}`);
-          const values=new Map(cls.defaults.get(field.key));
-          let value=property.value;
-          if(property.type===10)value=await this.authoredStructProperty(record.asset,field,property,values.get(property.arrayIndex));
-          else if(!property.decoded)value={unsupported:`Undecoded default ${record.key}.${property.name}`};
-          else if([5,8].includes(property.type))value=await this.objects.resolve(record.asset,value);
-          values.set(property.arrayIndex,value);cls.defaults.set(field.key,values);
+        let cls;
+        if(this.classLoader)cls=await this.classLoader.linkClass(this,record);
+        else {
+          // Explicit decoded-metadata adapter retained for isolated VM
+          // fixtures. Play opts into the recovered native class loader.
+          const metadata=readClass(record.asset,record.index);
+          const base=metadata.base?await this.loadClass(record.asset,metadata.base):null;
+          cls={record,metadata,base,nameCounter:0,...await this.members(record),
+            ...await this.linkedChildren(record,metadata.children),defaults:new Map(base?.defaults)};
+          cls.propertyLink=[...cls.propertyOrder,...(base?.propertyLink??[])];
+          cls.destructorLink=cls.propertyLink.filter(field=>field.metadata.flags&0x00400000);
+          for(const property of metadata.properties){
+            const field=this.lookupMember(cls,'fields',property.name);
+            if(!field)throw new Error(`Default property is not linked: ${record.key}.${property.name}`);
+            const values=new Map(cls.defaults.get(field.key));
+            let value=property.value;
+            if(property.type===10)value=await this.authoredStructProperty(record.asset,field,property,values.get(property.arrayIndex));
+            else if(!property.decoded)value={unsupported:`Undecoded default ${record.key}.${property.name}`};
+            else if([5,8].includes(property.type))value=await this.objects.resolve(record.asset,value);
+            values.set(property.arrayIndex,value);cls.defaults.set(field.key,values);
+          }
         }
         if(record.key==='core.object')await this.field(this.lookupMember(cls,'fields','ObjectFlags'));
         if(record.key==='engine.actor'){
@@ -614,9 +633,11 @@ export class ScriptRuntime {
   }
   async prepareResource(reference) {
     if(!reference)return null;
-    this.resources??=new ScriptResourceRegistry({assets:this.objects.assets,objects:this.objects,
-      indexProvider:this.originalObjectIndex});
-    return this.resources.materialize(reference.asset,reference.index);
+    return this.resourceRegistry().materialize(reference.asset,reference.index);
+  }
+  resourceRegistry() {
+    return this.resources??=new ScriptResourceRegistry({assets:this.objects.assets,objects:this.objects,
+      indexProvider:this.originalObjectIndex,loader:this.classLoader});
   }
   /**
    * Finish the asynchronous package work before a synchronous original native
@@ -695,7 +716,7 @@ export class ScriptRuntime {
     const reference=this.namedReference(receiver,'Mesh').get();
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=await this.prepareResource(reference);
-    if(resource.payloadStatus!=='decoded-eager-prefix')
+    if(resource.payloadStatus!=='decoded-lodmesh')
       throw new Error(`Original mesh payload is unsupported: ${reference.key}`);
     return resource.payload;
   }
@@ -703,12 +724,51 @@ export class ScriptRuntime {
    * mesh's sequence lookup. Package/resource preparation must finish before
    * this synchronous script boundary. */
   meshPayload(receiver) {
-    const reference=this.namedReference(receiver,'Mesh').get();
+    return this.meshResource(this.namedReference(receiver,'Mesh').get())?.payload??null;
+  }
+  meshResource(reference) {
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=this.resources?.resources.get(reference.key);
-    if(!resource||this.resources.pending.has(reference.key)||resource.payloadStatus!=='decoded-eager-prefix')
+    if(!resource||this.resources.pending.has(reference.key)||resource.payloadStatus!=='decoded-lodmesh')
       throw new Error(`Original mesh resource is not prepared: ${reference.key}`);
-    return resource.payload;
+    return resource;
+  }
+  /** Original ULodMesh::GetFrame over the same prepared resource and reflected
+   * animation fields as PlayAnim/Tick. Callers supply original FCoords and a
+   * measured or modeled global UObject identity, not a package export index.
+   * This pose boundary does not select triangles, materials or lighting. */
+  getActorMeshFrame(receiver,coords,options={}) {
+    const mesh=this.meshPayload(receiver);
+    if(!mesh)throw new Error('Original GetFrame requires a prepared LodMesh');
+    return getLodMeshFrame(mesh,receiver,coords,{
+      cache:this.meshFrameCache??=createLodMeshFrameCache(),
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      objectIndex:actor=>this.soundField(actor,'ObjectIndex'),
+    },options);
+  }
+  meshTextureServices() {
+    const read=(actor,name)=>this.namedReference(actor,name).get();
+    const resource=reference=>{
+      const value=this.meshResource(reference);
+      if(!value)throw new Error('Original mesh texture array requires a prepared mesh');
+      return value;
+    };
+    return {read,getSkin:(actor,index)=>getActorSkin(actor,index,read),
+      textureCount:reference=>resource(reference).payload.objectReferences.length,
+      textureAt:(reference,index)=>resource(reference).payloadReferences.find(edge=>edge.slot===`textures[${index}]`)?.target.object??null,
+      warning:text=>this.warning?.({type:'GetMeshTexture',message:text}),
+    };
+  }
+  /** Renderer-side UMesh::GetTexture; native 1013 has separate bounds rules. */
+  getActorMeshTexture(receiver,index) {
+    const reference=this.namedReference(receiver,'Mesh').get();
+    if(!reference)throw new Error('Original GetTexture requires Actor.Mesh');
+    return getMeshTexture(reference,receiver,index,this.meshTextureServices());
+  }
+  getActorMeshSurfaces(receiver,options={}) {
+    const mesh=this.meshPayload(receiver);
+    if(!mesh)throw new Error('Original surface decoding requires a prepared LodMesh');
+    return readLodMeshSurfaces(mesh,options);
   }
   /** Native PlaySound264 services per docs/script-sound.md: reflected fields,
    * the level native graph (Model/demo driver) and the global UObject index.
@@ -829,7 +889,7 @@ export class ScriptRuntime {
     };
     return services;
   }
-  /** Native Pawn perception services (514/531/532/533/534/705) per
+  /** Native Actor/Pawn perception services (514/531/532/533/534/700/701/705) per
    * docs/script-pawn-perception.md: the shared LOS worker, the two target
    * pickers and the AICanSee visibility worker. Field reads come through the
    * soundField level graph; the trace primitives are the BSP FastLineCheck
@@ -873,13 +933,17 @@ export class ScriptRuntime {
       return (Number(this.namedReference(viewerPri,'Team').get())&0xff)
         ===(Number(this.namedReference(candPri,'Team').get())&0xff);
     };
-    /* AICanSee's lighting multiplier is the native visibility query at
-     * 0x1036bca0 (AActor light accumulation — a deep subsystem the runtime
-     * does not yet model). It stays an explicit service seam so the validator
-     * can inject the oracle's measured value; production defaults to full
-     * light (docs/script-pawn-perception.md records the boundary). */
-    services.lighting=(other,oLoc)=>this.perceptionLighting
-      ?this.perceptionLighting(other,oLoc):1;
+    // AIVisibility reads the reflected LevelInfo float, unlike MakeNoise's
+    // double ULevel clock. Full Level.Tick publishes this field before actors.
+    services.read=(actor,name)=>name==='TimeSeconds'?this.namedReference(actor,name).get():this.soundField(actor,name);
+    services.zone=actor=>this.regionValue(actor).zone;
+    services.lightLineCheck=(level,source,end,start)=>{
+      if(typeof level?.hash?.lineCheck!=='function')
+        throw new Error('AIGetLightLevel requires the live level query services');
+      return level.hash.lineCheck(start,end,[0,0,0],6,0,source).outside;
+    };
+    services.lighting=(other,oLoc)=>typeof this.perceptionLighting==='function'
+      ?this.perceptionLighting(other,oLoc):actorLightLevelExtended(other,oLoc,services);
     /* SingleLineCheck (0x103c7430): MultiLineCheck(end,start,extent=0,
      * checkActors=1,worldActor=Level,extra=4), then walk hits in order — the
      * viewer's owner chain and the target are skipped, a world (LevelInfo)
@@ -902,6 +966,30 @@ export class ScriptRuntime {
       return true;
     };
     return services;
+  }
+  /** Actor.Tick's internal visibility helpers share the already recovered LOS
+   * worker and live PawnList. Native validity and the double clock stay explicit;
+   * reflected LevelInfo.TimeSeconds is not a substitute for XLevel.TimeSeconds. */
+  pawnTickVisibilityServices(receiver,{level,isValid,failAssert}={}) {
+    const services=this.perceptionServices({receiver});
+    if(level)services.level=actor=>actor===receiver?level:this.levelFor(actor);
+    services.isProbing=(actor,name)=>this.isProbing(actor,name);
+    services.isValid=isValid??this.actorLifecycle?.references?.isValid;
+    services.failAssert=failAssert??(line=>{throw new Error(`Original Pawn visibility assertion at source line ${line}`);});
+    services.timeSeconds=world=>world?.timeSeconds;
+    services.findFunctionChecked=(actor,name)=>{
+      const record=this.lookup(actor,name);
+      if(!record)throw new Error(`Original Pawn visibility event was not found: ${name}`);
+      return record;
+    };
+    services.processEvent=(actor,record,args)=>this.processEvent(actor,record.name,args,null,record);
+    return services;
+  }
+  showPawnSelf(receiver,options={}) {
+    return showPawnSelf(receiver,this.pawnTickVisibilityServices(receiver,options));
+  }
+  checkPawnEnemyVisible(receiver,options={}) {
+    return checkPawnEnemyVisible(receiver,this.pawnTickVisibilityServices(receiver,options));
   }
   /** Record the measured global UObject index (Core.dll GObjObjects slot) for
    * an attached object. The original PlaySound channel id and other native
@@ -1272,6 +1360,7 @@ export class ScriptRuntime {
     return propertyReference(field,()=>this.defaultValue(cls,field),value=>{
       const values=field.metadata.arrayDim>1
         ?new Map(value.map((item,index)=>[index,item])):new Map([[0,value]]);
+      if(cls.loadRecord)this.classLoader.writeDefault(cls,field,values);
       cls.defaults.set(field.key,values);
     });
   }
@@ -1450,6 +1539,13 @@ export class ScriptRuntime {
         newWidth=refValue(call.evaluateArgument(2)),newHeight=refValue(call.evaluateArgument(3));
       return configureChildNative(call.receiver,newX,newY,newWidth,newHeight,
         this.windowLifecycle?.configureChild??{});
+    }
+    if(call.index===1430){
+      if(call.argumentCount!==4)throw new Error('Window.SetConfiguration requires x, y, width and height');
+      return setWindowConfigurationNative(call.receiver,...Array.from({length:4},(_,i)=>refValue(call.evaluateArgument(i))),{
+        ...this.windowLifecycle?.size,
+        askParentForReconfigure:request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration),
+      });
     }
     if(call.index===1431){
       if(call.argumentCount!==2)throw new Error('Window.SetSize requires width and height');
@@ -1769,8 +1865,10 @@ export class ScriptRuntime {
         state:this.instance(call.receiver).state,
       });
     }
-    if(call.index===259){
-      if(call.argumentCount>3)throw new Error('PlayAnim accepts at most three arguments');
+    if([259,260,294].includes(call.index)){
+      const name=call.index===259?'PlayAnim':call.index===260?'LoopAnim':'TweenAnim';
+      if(call.index===294?call.argumentCount!==2:call.argumentCount<1||call.argumentCount>(call.index===260?4:3))
+        throw new Error(`Invalid ${name} argument count`);
       const sequenceName=refValue(call.evaluateArgument(0));
       // UnrealScript encodes a skipped optional argument as EX_Nothing even
       // when a later optional argument is present (`PlayAnim('HitTorso',,
@@ -1778,21 +1876,26 @@ export class ScriptRuntime {
       // defaults for that hole; do the same after evaluating each expression.
       const rateArgument=call.argumentCount>1?refValue(call.evaluateArgument(1)):undefined;
       const tweenArgument=call.argumentCount>2?refValue(call.evaluateArgument(2)):undefined;
+      const minRateArgument=call.argumentCount>3?refValue(call.evaluateArgument(3)):undefined;
       const rate=rateArgument===undefined?1:rateArgument;
       const tweenTime=tweenArgument===undefined?-1:tweenArgument;
       const mesh=this.meshPayload(call.receiver);
       if(!mesh){
         // Original guard logs through 0x10599a68 and returns with no state write.
-        this.warning?.({type:'PlayAnimNoMesh',receiver:call.receiver,sequence:sequenceName});
+        this.warning?.({type:`${name}NoMesh`,receiver:call.receiver,sequence:sequenceName});
         return;
       }
-      return execPlayAnim(animationView(this,call.receiver),mesh,sequenceName,rate,tweenTime,
-        (kind,details)=>this.warning?.({type:'PlayAnim',kind,...details}));
+      const view=animationView(this,call.receiver);
+      const log=(kind,details)=>this.warning?.({type:name,kind,...details});
+      if(call.index===294)return execTweenAnim(view,mesh,sequenceName,rateArgument,log);
+      if(call.index===260)return execLoopAnim(view,mesh,sequenceName,rate,tweenTime,minRateArgument??0,log);
+      return execPlayAnim(view,mesh,sequenceName,rate,tweenTime,log);
     }
     if(call.index===264){
       if(call.argumentCount>6)throw new Error('PlaySound accepts at most six arguments');
       return execActorPlaySound(call,this.soundServices(call));
     }
+    if(call.index===1013)return execGetMeshTexture(call,this.meshTextureServices());
     if(call.index===266)return execMove(call,this.moveServices(call));
     if([500,502,508,510,527].includes(call.index))return this.pawnLocomotion(call);
     if(call.index===512)return execMakeNoise(call,this.noiseServices(call));
@@ -1803,6 +1906,8 @@ export class ScriptRuntime {
     if(call.index===532)return execPlayerCanSeeMe(call,this.perceptionServices(call));
     if(call.index===531)return execPickTarget(call,this.perceptionServices(call));
     if(call.index===534)return execPickAnyTarget(call,this.perceptionServices(call));
+    if(call.index===700)return execAIGetLightLevel(call,this.perceptionServices(call));
+    if(call.index===701)return execAIVisibility(call,this.perceptionServices(call));
     if(call.index===705)return execAICanSee(call,this.perceptionServices(call));
     if(call.index===2100||call.index===2101||call.index===2102){
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
@@ -1874,6 +1979,68 @@ export class ScriptRuntime {
       Object.defineProperty(state,key,{get:ref.get,set:ref.set,enumerable:true});
     }
     return state;
+  }
+  /** Original animation phase, before the script Tick/ProcessState phases.
+   * Caller owns Actor.Tick admission/order and prepares reachable callbacks. */
+  processActorAnimation(receiver,seconds) {
+    const animation=animationTickView(this,receiver);
+    return tickActorAnimation(animation,seconds,{
+      mesh:()=>this.meshPayload(receiver),simulatedPawn:animation.simulatedPawn,
+      findFunction:(name,checked)=>{
+        const record=this.lookup(receiver,name);
+        if(!record&&checked)throw new Error(`Original animation event was not found: ${name}`);
+        return record;
+      },
+      processEvent:record=>this.processEvent(receiver,record.name,[],null,record),
+    });
+  }
+  /** Recovered standalone per-actor Tick. The level scheduler supplies its
+   * clock/tag/deferred list and reached native physics/input/visibility services.
+   * Startup and world actor iteration are not invented by this entry point. */
+  processActorTick(receiver,seconds,{tickType=2,...nativeServices}) {
+    return tickStandaloneActor(receiver,seconds,tickType,{
+      showSelf:actor=>this.showPawnSelf(actor,nativeServices),
+      checkEnemyVisible:actor=>this.checkPawnEnemyVisible(actor,nativeServices),
+      ...nativeServices,
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      isA:(actor,key)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
+        return false;
+      },
+      isProbing:(actor,name)=>this.isProbing(actor,name),
+      advanceAnimation:(actor,delta)=>this.processActorAnimation(actor,delta),
+      processState:(actor,delta)=>this.instance(actor).state.process(delta),
+      processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
+      destroyActor:(actor,force)=>this.destroyActor(actor,Boolean(force)),
+    });
+  }
+  /** Paused ULevel.Tick's derived-to-base FloatProperty/CPF_Input traversal.
+   * Original writes one DWORD even when the property has multiple elements. */
+  resetActorInput(receiver) {
+    for(let cls=this.instance(receiver).cls;cls;cls=cls.base)for(const field of cls.propertyOrder) {
+      if(field.metadata.type!=='float'||!(field.metadata.flags&4))continue;
+      const ref=this.fieldReference(receiver,field);
+      (field.metadata.arrayDim>1?arrayReference(0,ref,this.warning):ref).set(0);
+    }
+  }
+  /** Original standalone world scheduling over an already prepared actor array.
+   * Native entry/exit memory/counters, calendar, viewport, physics/visibility,
+   * event manager and exact FString allocation count remain explicit services. */
+  processLevelTick(level,seconds,{tickType=2,...nativeServices}) {
+    return tickStandaloneLevel(level,seconds,tickType,{
+      ...nativeServices,
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      isA:(actor,key)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
+        return false;
+      },
+      tickActor:(actor,delta,type)=>this.processActorTick(actor,delta,{...nativeServices,level,tickType:type}),
+      processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
+      resetInputProperties:actor=>this.resetActorInput(actor),
+      cleanupDestroyed:(world,force)=>this.cleanupDestroyed(world,Boolean(force)),
+    });
   }
   /** Caller supplies Actor.Tick eligibility and ordering. This is only its
    * ProcessState → timer phase, before the separate physics implementation. */

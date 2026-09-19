@@ -8,8 +8,10 @@
  * bit-exact — return code, ordered boundary calls, and the float32 location
  * the worker leaves the pawn in.
  *
- * Covered so far: checkMove (0x103c3290), the shared per-step probe beneath
- * every reach helper.  The reach/path workers are pending (see the doc).
+ * Covers checkMove/walkReach, physics dispatch, point/actor reach workers,
+ * reachMask/directReach and the actorReachable exec. This comparator checks
+ * verdicts, boundary counts and final field bits. Flying's full ordered-call
+ * comparison is scripts/validate-pawn-flying-reach.mjs.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -106,8 +108,8 @@ function wr(name, mv, { point = [100, 0, 0], radius = 15, arg18 = 0, target = 0,
 
 /* A physics-dispatch scene (0x103c1000): thiscall(pawn; point vec3, radius,
  * target).  Routes water-zone/PHYS 1/3 -> walkReach (ported), PHYS 4 ->
- * flyReach, else -> 0.  Only the walkReach and the 0-branches are bit-exact
- * validatable here (fly/water helpers aren't ported yet). */
+ * flyReach, else -> 0. Flying is covered by validate-pawn-flying-reach.mjs;
+ * the water helper remains an unported service. */
 function dp(name, mv, { point = [100, 0, 0], radius = 15, target = 0,
                         physics = 1, zones = null, gIsEditor = 0,
                         pawn = {}, farMove = [1] } = {}) {
@@ -235,6 +237,8 @@ const scenes = [
   // Clean flat move: phase A full then a floor landing on the down-probe.
   cm('flat-reach', [H(1, 1), H(0.5, 1)]),
   cm('flat-far-drop', [H(1, 1), H(0.9, 1)]),
+  // The original prologue clears Delta.Z before the first MoveActor call.
+  cm('incoming-z-cleared', [H(1, 1), H(0.5, 1)], { delta: [40, 0, 100] }),
   // Blocked forward -> step-up/forward/step-down onto a floor.
   cm('step-up-floor', [H(0.5, 0), H(1, 1), H(1, 1), H(1, 1), H(0.5, 1)]),
   // Hit the target actor on the forward probe.
@@ -742,7 +746,8 @@ function runJsWalk(scene, mod = module) {
       if (r) a.location = dest.map(f32);
       return r;
     },
-    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
+    altMove: () => { throw new Error('jumpArc is outside this corpus'); },
+    waterReach: () => { throw new Error('waterReach is outside this corpus'); },
   };
   const ret = scene.body === 'dispatch'
     ? mod.physicsReach(pawn, j.point.map(f32), j.radius, tgt, services)
@@ -847,7 +852,8 @@ function runJsGraph(scene, mod = module) {
       if (r) a.location = dest.map(f32);
       return r;
     },
-    jumpArc: () => 0, altMove: () => 0, waterReach: () => 0, flyReach: () => 0,
+    altMove: () => { throw new Error('jumpArc is outside this corpus'); },
+    waterReach: () => { throw new Error('waterReach is outside this corpus'); },
     pointRegion: () => zoneObj('dry'), fastLineCheck: () => 1,
     navListHead: () => ref(j.navList),                        // level+0x90 head
     nextNav: n => n.__nextNav,                                // navpoint+0x42c

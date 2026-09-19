@@ -96,8 +96,10 @@ Core native 252 `Object.VRand` now reproduces the installed three-`appFrand`
 rejection loop, float32 component stores, retained-Z comparison and x87 output
 stores across 33 hash-pinned Core.dll cases. Engine native 261 `FinishAnim`
 installs latent action `0x181` and its poll clears only after `bAnimFinished`;
-the recovered rate, tween and animation-flag gates are preserved. Producing
-that flag through general mesh animation ticking remains open. See
+the recovered rate, tween and animation-flag gates are preserved. The original
+main/blend animation phase now produces that flag and completes Jaime's wait
+in a focused runtime check. General world actor scheduling/startup remains open.
+See [animation tick](script-animation-tick.md),
 [VRand evidence](script-vrand.md) and [FinishAnim evidence](script-finish-anim.md).
 
 ### Latest UI checkpoint — live Training DataLink lifecycle
@@ -193,7 +195,8 @@ and defaults. Because `AugEnviro` is unowned, Radiation10 writes
 `DeusExCharacters.GM_Trench` payload passes the complete original
 `ULodMesh::Serialize` oracle, decodes all 71 sequences in the browser and drives
 native PlayAnim 259 with original optional-argument defaults; the live hit state
-is `HitLegLeft`, frame `-4`, rate `2.5`, tween `0.4f`, last `-3`. Execution then
+is `HitLegLeft`, frame `-0.25`, rate `2.5`, tween `2.5`, last `0.75`
+(corrected against original exec in [animation controls](script-animation-controls.md)). Execution then
 stops at the exact `Human.PlayTakeHitSound -> Actor.PlaySound(264)` audio
 boundary. The focused native-145 comparison also establishes signed division,
 the zero-divisor guard, left-to-right operand evaluation, cursor advancement,
@@ -240,7 +243,7 @@ Speech-to-End chains; generic DataLink ConEvent playback remains open.
 | Conversation binding | Shared 2052/2053 dispatch covers Speech, Animation/Trade, MoveCamera, CheckObject, TransferObject and thirteen verified inherited BindActor classes. CheckObject preserves the recovered `NK_` clear and synchronous class-load branches. MeetKaplan and ChadThankful apply both next and fail actions. TransferObject preserves the recovered from/to bark/normal comparisons and class load; `DL_Rooftops` binds its real player/image references through native 2053. The original property linker and a targeted Training capture identify bFirstPerson at offset80, mask4. | [Events](script-conversation-events.md), [CheckObject](script-conversation-check-object-bind.md), [TransferObject](script-conversation-transfer-object-bind.md), [action binding](script-conversation-action-bind.md), [live capture](stage3-live-capture.md) |
 | Conversation loading/timing | ConBindEvents passes through recovered ResolveName/StaticLoadObject and constructs/purges typed ConListItems. The Jaime portrait now constructs its canonical `ULinkerLoad` on first access before the existing CreateExport identity returns. Shared2055/2056 speech lookup, FString cleanup and original DL_Start MP3 lazy loading/timing pass the combined route. Native metaclass/null-export loading, the general loader graph and ClientHearSound mixer remain open. | [Static loading](script-static-load-object.md), [speech lookup](script-conversation-speech-audio.md), [speech timing](script-conversation-sound-length.md), [preview audio](script-infolink-audio.md) |
 | DataLink lifecycle/UI | All 18 Training routes resolve canonical Mission00 Speech-to-End chains and exact audio. Installed selection/spawn/start/termination and trigger completion surround the translated playback schedule; the fixed queue advances with original HUD destruction, `PopDataLink`, and fresh shell construction. Mission00 MoveCamera→Speech executes its installed action path. The two CheckObject references proven here are non-DataLink. Exactly ten shipped DataLinks contain TransferObject image deliveries; `DL_Rooftops` now executes the original actor/class bind through native 2053. Its SetupEvent inventory action, native rendering and native audio mixing remain open. | [Live lifecycle](script-datalink-live.md), [Training catalog](script-training-datalinks.md), [TransferObject](script-conversation-transfer-object-bind.md), [DataLink](script-datalink-transmission.md) |
-| Mission triggers | OrdersTrigger queues the Training pawn's original patrol order, FlagTrigger uses recovered FlagBase storage, and DamageTrigger enters the original Radiation10 chain with the live AugmentationManager. Unowned AugEnviro yields `adjustedDamage=10`/false; body health becomes `HealthLegLeft=90`/`Health=98`, and prepared GM_Trench PlayAnim stores `HitLegLeft` frame `-4`, rate `2.5`, tween `0.4f`, last `-3`. Execution stops at the exact `Human.PlayTakeHitSound -> Actor.PlaySound(264)` audio boundary. Core native 145 has its separate signed-division and exceptional-path evidence. | [Trigger actions](script-trigger-actions.md), [damage primitives](script-core-damage-primitives.md), [Core Divide_IntInt](script-divide-int.md), [scene routing](scene-events.md), [player startup](script-player-augmentation-startup.md), [PlayAnim](script-play-anim.md) |
+| Mission triggers | OrdersTrigger queues the Training pawn's original patrol order, FlagTrigger uses recovered FlagBase storage, and DamageTrigger enters the original Radiation10 chain with the live AugmentationManager. Unowned AugEnviro yields `adjustedDamage=10`/false; body health becomes `HealthLegLeft=90`/`Health=98`, and prepared GM_Trench PlayAnim stores `HitLegLeft` frame `-0.25`, rate `2.5`, tween `2.5`, last `0.75`. Execution stops at the exact `Human.PlayTakeHitSound -> Actor.PlaySound(264)` audio boundary. Core native 145 has its separate signed-division and exceptional-path evidence. | [Trigger actions](script-trigger-actions.md), [damage primitives](script-core-damage-primitives.md), [Core Divide_IntInt](script-divide-int.md), [scene routing](scene-events.md), [player startup](script-player-augmentation-startup.md), [PlayAnim](script-play-anim.md) |
 | Atlas | Existing tiles are updated after the selected steady TriggerLight script tick, preserving UVs and padding. Native GPU/cache allocation is not modeled. | [Light cache](script-light-cache.md) |
 | Plant scripts | The recovered Plant7 Bump/Timer and decoration physics path now moves and settles the plant in the focused Play host. Burning, carried-decoration, sound and AI branches remain explicit boundaries. | [Plant contact](script-plant-contact.md), [rolling](rolling.md) |
 
@@ -791,7 +794,10 @@ the remaining branches are listed in the current table and progress notes.
   `+0x224` = `AnimMinRate` and `+0x228` = `OldAnimRate` are now bound from the
   original animation-tick body (`0x103a1cd2` clamp read, Actor.uc declaration
   order) and `+0x144` = `Velocity` from docs/camera.md; only the flags word
-  stays on the instance (`animationState`). `scripts/validate-script-lights.mjs` drives
+  stayed on the instance (`animationState`) at that checkpoint. The 2026-09-19
+  [animation controls audit](script-animation-controls.md) replaces it with
+  linked flags/SimAnim and corrects the original reciprocal arithmetic.
+  `scripts/validate-script-lights.mjs` drives
   the real LightSwitch mesh through 259 in the Play host (Off/On/All paths,
   SimAnim tail, mirror copies). At this intermediate point, running the complete
   `LightSwitch.Frob` wrapper still required global object-index assignment and

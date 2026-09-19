@@ -9,6 +9,7 @@
  * writes the same path.
  *
  *   node scripts/run-validators.mjs [--jobs N] [--filter substring] [--serial]
+ * Defaults to four validator jobs (the preferred local sweep size).
  *
  * Timings are cached in .cache/validator-timings.json and used to schedule the
  * slowest validators first, which is what keeps the tail short.  NATIVE_PROBE_
@@ -28,7 +29,7 @@ const flag = (name, fallback) => {
   return i === -1 ? fallback : argv[i + 1];
 };
 const serial = argv.includes('--serial');
-const jobs = serial ? 1 : Math.max(1, Number(flag('--jobs', os.cpus().length)));
+const jobs = serial ? 1 : Math.max(1, Number(flag('--jobs', 4)));
 const filter = flag('--filter', null);
 const timingsPath = path.join(root, '.cache', 'validator-timings.json');
 
@@ -38,8 +39,8 @@ if (!env.NATIVE_PROBE_PYTHON && existsSync(probe))
   env.NATIVE_PROBE_PYTHON = path.relative(root, probe);
 // The sweep is already CPU-saturated, so a pooled oracle must not multiply
 // the runner's jobs by a second full cpu count.  Only a handful of validators
-// carry a pooled oracle, so each one gets a bounded share — floor(cpus/5) at
-// the default job count — that shrinks the critical-path sweep without
+// carry a pooled oracle, so each one gets a bounded share — floor(cpus/jobs),
+// with the divisor capped at five — that shrinks the critical-path sweep without
 // starving the rest of the pool.  Standalone oracle runs keep the
 // unrestricted default; NATIVE_ORACLE_JOBS=1 forces the serial path.
 if (!env.NATIVE_ORACLE_JOBS)

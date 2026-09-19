@@ -10,10 +10,10 @@
  * First-load construction remains an explicit host service because the native
  * ULinkerLoad constructor owns file/archive allocation.  When that service is
  * bound, this helper publishes the returned linker into the live loader array
- * before the resolver/export walk.  The empty outermost load lifecycle is
- * implemented below; nonempty postload and loader-cleanup branches still
- * require explicit services.  No path-only or display-name fallback is
- * inferred here.
+ * before the resolver/export walk. The outermost lifecycle implements the
+ * original Preload/PostLoad passes and import cleanup, with explicit virtual
+ * dispatch, allocation and output services. No path-only or display-name
+ * fallback is inferred here. See docs/script-end-load.md.
  */
 
 import {createLinkerExport, CREATE_EXPORT_CONTRACT} from './script-create-export.mjs';
@@ -66,15 +66,18 @@ export const STATIC_LOAD_LIFECYCLE_CONTRACT = Object.freeze({
   endLoadLogFormat: 0x101af3d4,
   loadedArrayElementSize: 4,
   loadedArrayReallocTag: 0x101ab50c,
+  needLoad: 0x200,
+  nativeObject: 0x04000000,
 });
 
 export class StaticLoadObjectBoundaryError extends Error {
-  constructor(message, {kind = 'BOUNDARY', value = undefined, field = null} = {}) {
+  constructor(message, {kind = 'BOUNDARY', value = undefined, field = null, line = null} = {}) {
     super(message);
     this.name = 'StaticLoadObjectBoundaryError';
     this.code = `STATIC_LOAD_OBJECT_${kind}`;
     this.value = value;
     this.field = field;
+    this.line = line;
   }
 }
 
@@ -187,19 +190,11 @@ function beginOutermostEmpty(services, events, state) {
 }
 
 /**
- * Implement the reached empty outermost EndLoad work from Core.
- *
- * EndLoad logs first, then clears GObjLoaded's Num/Max and calls FArray::Realloc
- * with element size 4.  With cleanup state zero, the linker cleanup loop is
- * skipped and the state is written back as zero.  Each external edge is
- * required as a synchronous host service so an omitted allocator/output path
- * cannot become a guessed no-op.
+ * Core EndLoad's outermost body: preload the live queue, then postload it,
+ * release its storage and clear nonnative import pointers. Virtual calls are
+ * required synchronous services, not silently omitted work.
  */
-function endOutermostEmpty(services, events, state) {
-  // EndLoad calls Logf before rereading GObjLoaded.Num.  Keep the live array
-  // reference across that boundary so a callback that publishes an object is
-  // observed at the same point as the native loop.
-  const loadedObjects = requireArray(services.loadedObjects, 'GObjLoaded');
+function endOutermost(services, events, state) {
   const logEndLoad = requireFunction(services.logEndLoad, 'logEndLoad');
   const receiver = services.logReceiver;
   if (receiver === undefined) {
@@ -214,14 +209,33 @@ function endOutermostEmpty(services, events, state) {
   events.push({op: 'Logf', receiver, name: STATIC_LOAD_LIFECYCLE_CONTRACT.endLoadLogName,
     formatPointer: STATIC_LOAD_LIFECYCLE_CONTRACT.endLoadLogFormat});
 
-  if (loadedObjects.length !== 0) {
-    fail('StaticLoadObject reached nonempty GObjLoaded postload branch', {
-      kind: 'NONEMPTY', value: loadedObjects.length, field: 'GObjLoaded',
-    });
+  // Re-read both count and data across callbacks; native Preload may append
+  // objects and reallocate the array. PostLoad gets its own complete pass.
+  const loaded = () => requireArray(services.loadedObjects, 'GObjLoaded');
+  for (let index = 0; index < loaded().length; index += 1) {
+    const object = loaded()[index];
+    const flags = requireInt(readField(object, 'objectFlags', services),
+      'UObject flags', {min: 0, max: 0xffffffff});
+    if (!(flags & STATIC_LOAD_LIFECYCLE_CONTRACT.needLoad)) continue;
+    const linker = readField(object, 'linker', services);
+    if (linker === null || linker === 0) fail('Original EndLoad object linker assertion',
+      {kind: 'ASSERT', line: 0x91d});
+    const preload = requireFunction(services.preload, 'preload');
+    events.push({op: 'Preload', object, linker});
+    sync(preload({object, linker, archiveOffset: 0xa4, virtualSlot: 0x10}), 'preload');
   }
+  const postLoadCount = loaded().length;
+  for (let index = 0; index < loaded().length; index += 1) {
+    const object = loaded()[index];
+    const postLoad = requireFunction(services.conditionalPostLoad, 'conditionalPostLoad');
+    events.push({op: 'ConditionalPostLoad', object});
+    sync(postLoad(object), 'conditionalPostLoad');
+  }
+  if (loaded().length !== postLoadCount)
+    fail('Original EndLoad postload count assertion', {kind: 'ASSERT', line: 0x929});
 
-  // Core writes both fields before the Realloc call, even though they are
-  // already zero in this accepted empty fixture.
+  const loadedObjects = loaded();
+  // Both writes precede the allocator boundary, including for an empty queue.
   loadedObjects.length = 0;
   requireInt(state.loadedMax, 'loadState.loadedMax', {min: 0});
   state.loadedMax = 0;
@@ -239,14 +253,28 @@ function endOutermostEmpty(services, events, state) {
   const cleanupState = requireInt(state.loaderCleanupState,
     'loadState.loaderCleanupState', {min: 0});
   if (cleanupState !== 0) {
-    fail('StaticLoadObject reached nonzero loader cleanup state', {
-      kind: 'CLEANUP', value: cleanupState, field: 'loaderCleanupState',
-    });
+    // The native body captures loader Data once, but keeps reading Num.
+    const loaderData = requireArray(services.loaders, 'ULinkerLoad');
+    for (let index = 0; index < services.loaders.length; index += 1) {
+      const imports = () => requireArray(readField(loaderData[index], 'imports', services),
+        'ULinkerLoad imports');
+      for (let recordIndex = 0; recordIndex < imports().length; recordIndex += 1) {
+        const record = imports()[recordIndex];
+        const object = readField(record, 'object', services);
+        if (object === null || object === 0) continue;
+        const flags = requireInt(readField(object, 'objectFlags', services),
+          'import object flags', {min: 0, max: 0xffffffff});
+        if (!(flags & STATIC_LOAD_LIFECYCLE_CONTRACT.nativeObject)) {
+          sync(requireFunction(services.write, 'write')(record, 'object', null), 'write import object');
+          events.push({op: 'ClearImportObject', linker: loaderData[index], index: recordIndex, object});
+        }
+      }
+    }
   }
   state.loaderCleanupState = 0;
 }
 
-function lifecycleBegin(services, events) {
+export function beginScriptLoad(services, events = []) {
   const state = services.loadState;
   requireObject(state, 'loadState');
   const before = requireInt(state.nest, 'loadState.nest', {min: 0});
@@ -265,10 +293,12 @@ function lifecycleBegin(services, events) {
   }
 }
 
-function lifecycleEnd(services, events) {
+export function endScriptLoad(services, events = []) {
   const state = services.loadState;
   requireObject(state, 'loadState');
-  const before = requireInt(state.nest, 'loadState.nest', {min: 1});
+  const before = requireInt(state.nest, 'loadState.nest');
+  if (before <= 0) fail('Original EndLoad positive load nest assertion',
+    {kind: 'ASSERT', line: 0x90d});
   const after = before - 1;
   state.nest = after;
   const outermost = after === 0;
@@ -279,7 +309,7 @@ function lifecycleEnd(services, events) {
       sync(service({state, native: STATIC_LOAD_OBJECT_CONTRACT.endLoadBody}),
         'outermostEndLoad');
     } else {
-      endOutermostEmpty(services, events, state);
+      endOutermost(services, events, state);
     }
   }
 }
@@ -652,7 +682,7 @@ export function staticLoadObject(request, services = {}) {
     op: 'StaticLoadObject', classRef: request.classRef, outer: request.outer ?? null,
     path: name, filename: request.filename ?? null, flags, sandbox: request.sandbox ?? null,
   }];
-  lifecycleBegin(services, events);
+  beginScriptLoad(services, events);
   try {
     const resolved = resolveName({...request, name}, services, events);
     const root = rootOuter(resolved.outer, services);
@@ -673,7 +703,7 @@ export function staticLoadObject(request, services = {}) {
     events.push({op: 'StaticFindObject', object});
     return {object, events};
   } finally {
-    lifecycleEnd(services, events);
+    endScriptLoad(services, events);
   }
 }
 

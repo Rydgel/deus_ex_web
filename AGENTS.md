@@ -38,6 +38,9 @@ is not a gate for nonvisual script/runtime logic. Check new translation and
 integration boundaries, reuse existing original evidence, and avoid expanding
 large test corpora or repeating passing checks without a concrete unresolved issue.
 
+When a full validator sweep is needed, run it in parallel with **4 jobs**:
+`npm run validate -- --jobs 4`. Four jobs is also the runner's default.
+
 ## Subagent delegation
 
 For concrete, bounded delegated work, prefer the custom agent `luna_worker`.

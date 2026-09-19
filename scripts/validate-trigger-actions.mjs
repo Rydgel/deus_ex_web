@@ -249,10 +249,10 @@ assert.deepEqual(Object.fromEntries(bodyParts.map(field => [field, runtime.named
   HealthLegLeft: 90, HealthLegRight: 100,
 });
 assert.equal(runtime.namedReference(player, 'AnimSequence').get(), 'HitLegLeft', 'Radiation10 selects the left-leg hit animation');
-assert.equal(runtime.namedReference(player, 'AnimFrame').get(), -4, 'PlayAnim native starts HitLegLeft at its original frame');
+assert.equal(runtime.namedReference(player, 'AnimFrame').get(), -0.25, 'PlayAnim native starts HitLegLeft at its original frame');
 assert.equal(runtime.namedReference(player, 'AnimRate').get(), 2.5, 'PlayAnim native applies the original HitLegLeft rate');
-assert.equal(runtime.namedReference(player, 'TweenRate').get(), Math.fround(0.4), 'PlayAnim native applies the authored tween time');
-assert.equal(runtime.namedReference(player, 'AnimLast').get(), -3, 'PlayAnim native stores the authored last frame');
+assert.equal(runtime.namedReference(player, 'TweenRate').get(), 2.5, 'PlayAnim native applies the authored tween time');
+assert.equal(runtime.namedReference(player, 'AnimLast').get(), 0.75, 'PlayAnim native stores the authored last frame');
 assert.match(damageBoundary.message, /PlaySound/);
 
 console.log('Trigger action evidence validated: original Orders/Flag/Damage TextBuffers, function sizes, ' +

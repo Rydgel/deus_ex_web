@@ -67,6 +67,7 @@ const vecHex = v => v.map(f32hex);
 // (bLOSflag toggles) update the dword the oracle reports.
 // --------------------------------------------------------------------------
 const FIELD = {
+  velocity: 'Velocity', visTime:'VisUpdateTime', visNew:'CurrentVisibility', visOld:'LastVisibility',
   location: 'Location', rotation: 'Rotation', viewRotation: 'ViewRotation',
   collisionRadius: 'CollisionRadius', collisionHeight: 'CollisionHeight',
   baseEyeHeight: 'BaseEyeHeight', eyeHeight: 'EyeHeight', stimulus: 'Stimulus',
@@ -81,6 +82,7 @@ const FIELD = {
   nextPawn: 'nextPawn', weapon: 'Weapon', field60c: 'ViewTarget',
 };
 const FLOAT_FIELDS = new Set([
+  'visTime','visNew','visOld',
   'collisionRadius', 'collisionHeight', 'baseEyeHeight', 'eyeHeight',
   'stimulus', 'sightRadius', 'peripheralVision', 'hearingThreshold',
   'lastSeenTime', 'fovAngle', 'field458', 'aiHorizontalFov', 'aspectRatio',
@@ -113,7 +115,7 @@ function clsChain(cls) {
 }
 
 function makeActor(spec = {}, objects) {
-  const a = { __fields: {}, __clsChain: clsChain(spec.cls), __spec: spec };
+  const a = { __fields: {Velocity:[0,0,0],VisUpdateTime:0,CurrentVisibility:0,LastVisibility:0}, __clsChain: clsChain(spec.cls), __spec: spec };
   a.__fields.Name = spec.name ?? 'actor';
   for (const [key, prop] of Object.entries(FIELD)) {
     if (spec[key] === undefined) continue;
@@ -301,6 +303,8 @@ function runJs(scene, mod = module) {
     returned, returnedName: typeof returned === 'object' ? nameOf(returned, objects) : null,
     traces: captured.traces, slTraces: captured.slTraces, lights: captured.lights,
     randUsed: queues.ri,
+    visibilityCache:Object.fromEntries(Object.entries(objects).filter(([,a])=>a.__fields.VisUpdateTime!==undefined).sort(([a],[b])=>a.localeCompare(b))
+      .map(([id,a])=>[id,['VisUpdateTime','CurrentVisibility','LastVisibility'].map(k=>f32hex(a.__fields[k]))])),
     outFloats: outCells.map(c => f32hex(c.value)),
     pawn: {
       stimulus: f32hex(pawn.__fields.Stimulus ?? 0),
@@ -654,6 +658,16 @@ const scenes = [
     args: [obj('t'), flt(20), int(1), int(1), int(1), int(1)], singleLine: [1], lighting: [0.8] },
 ];
 
+// The recovered AIVisibility boundary inside 705 must reuse/interpolate its
+// cache, include velocity and publish the target's three original float fields.
+for(const [name,time,target] of [
+  ['interpolate',10.123456,{velocity:[87.719,53.125,17.687]}],
+  ['quarter-refresh',10.3,{}],['cold-refresh',11,{}],['at-quarter',10.25,{}],
+])scenes.push({name:`aic-cache-${name}`,body:'AICanSee',level:{timeSeconds:time},
+  pawn:{...NPC,visibilityThreshold:0},actors:{t:{...TGT_PAWN,location:[350,0,0],
+    visTime:10,visNew:0.41233187913894653,visOld:0.123,...target}},
+  args:[obj('t'),flt(1),int(1),int(0),int(0),int(0)],lighting:[0.213]});
+
 // --------------------------------------------------------------------------
 // Oracle convergence: run the corpus, measure every unmeasured FVector::Rotation
 // and appAtan input on real silicon, fold them into the tables, re-run until
@@ -696,7 +710,7 @@ function normalizeProbe(r) {
     traces: r.traces.map(t => ({ end: t.end.map(f32hex), start: t.start.map(f32hex) })),
     slTraces: r.slTraces.map(t => ({ pawn: ref(t.pawn), other: ref(t.other), end: t.end.map(f32hex) })),
     lights: r.lights.map(l => ({ other: ref(l.other), loc: l.loc.map(f32hex) })),
-    randUsed: r.randUsed,
+    randUsed: r.randUsed, visibilityCache:r.visibilityCache,
     outFloats: Object.values(r.outFloats ?? {}).map(f32hex),
     pawn: {
       stimulus: f32hex(r.pawn.stimulus),
@@ -725,6 +739,7 @@ function compare(name, oracle, js, body) {
   eq('slTraces', oracle.slTraces, js.slTraces);
   eq('lights', oracle.lights, js.lights);
   eq('randUsed', oracle.randUsed, js.randUsed);
+  eq('visibilityCache',oracle.visibilityCache,js.visibilityCache);
   for (const k of Object.keys(oracle.pawn)) eq(`pawn.${k}`, oracle.pawn[k], js.pawn[k]);
   return diffs.map(d => `${name}: ${d}`);
 }

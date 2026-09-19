@@ -58,7 +58,7 @@ test('LightSwitch materializes one canonical object, package outer, class and de
   assert.equal(importedClass.superClass.path, 'Engine.Mesh');
   assert.equal(importedClass.superClass.superClass.path, 'Engine.Primitive');
   assert.equal(light.globalIndex, 34271);
-  assert.equal(light.payloadStatus, 'decoded-eager-prefix');
+  assert.equal(light.payloadStatus, 'decoded-lodmesh');
   assert.equal(light.payloadComplete, false);
   assert.deepEqual(light.payload.sequences.map(sequence => sequence.name), ['All', 'Still', 'Off', 'On']);
   assert.deepEqual(light.payload.boundingBox.min, [-960, -162, -1600]);
@@ -90,12 +90,13 @@ test('class and outer edges are explicit collector references', async () => {
   const seen = [];
   const result = registry.collectReferences(light, reference => seen.push(reference));
 
-  assert.deepEqual(result.references.map(reference => reference.slot), ['outer', 'class']);
-  assert.deepEqual(seen.map(reference => reference.slot), ['outer', 'class']);
+  assert.deepEqual(result.references.map(reference => reference.slot), ['outer', 'class', 'textures[0]']);
+  assert.deepEqual(seen.map(reference => reference.slot), ['outer', 'class', 'textures[0]']);
   assert.equal(result.references[0].target, light.outer);
   assert.equal(result.references[1].target, light.nativeClass);
   assert.ok(result.references.every(reference => reference.mutable === false));
-  assert.match(result.unsupported[0], /lazy arrays/);
+  assert.equal(result.references[2].target.key, 'deusexdeco.skins.lightswitchtex1');
+  assert.match(result.unsupported[0], /live Play load finalization/);
 });
 
 test('Sound decodes its native payload while Texture retains its opaque boundary', async () => {

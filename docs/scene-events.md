@@ -122,8 +122,9 @@ subsystem startup and forced a null manager, so its `adjustedDamage=0` and
 `AugEnviro` is unowned: live `DXReduceDamage` writes `adjustedDamage=10` and
 returns false. The original body then writes `HealthLegLeft=90`, recomputes
 `Health=98`, and selects `PlayAnim('HitLegLeft',,0.1)` on the prepared
-`DeusExCharacters.GM_Trench` mesh (`AnimFrame=-4`, `AnimRate=2.5`,
-`TweenRate=0.4f`, `AnimLast=-3`). `PlayDXTakeDamageHit`, `PlayHit`, and
+`DeusExCharacters.GM_Trench` mesh (`AnimFrame=-0.25`, `AnimRate=2.5`,
+`TweenRate=2.5`, `AnimLast=0.75`; see the original-execution correction in
+[animation controls](script-animation-controls.md)). `PlayDXTakeDamageHit`, `PlayHit`, and
 `Human.PlayTakeHitSound` are prepared from the installed bytecode. The next
 exact unsupported operation is `Actor.PlaySound(264)` from
 `Human.PlayTakeHitSound`; normal scene dispatch records it as the

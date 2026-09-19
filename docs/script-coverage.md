@@ -61,8 +61,10 @@ float32 output stores; see [the native 252 evidence](script-vrand.md).
 
 Engine `Actor.FinishAnim` native 261 now dispatches its recovered animation
 field gates and latent action `0x181`; the matching poll clears only when the
-original `bAnimFinished` flag is present. The browser does not synthesize the
-animation tick that sets that flag. See [the FinishAnim evidence](script-finish-anim.md).
+original `bAnimFinished` flag is present. The recovered main/blend animation
+phase now sets that flag and releases Jaime's wait in the runtime integration
+check. General world actor scheduling/startup remains open. See
+[FinishAnim](script-finish-anim.md) and [animation tick](script-animation-tick.md).
 
 Core `Object.Log` native 231 now preserves the original FFrame argument order,
 optional `ScriptLog` EName default, `%s` formatting, and temporary FString
@@ -124,7 +126,8 @@ unowned `AugEnviro`, Radiation10 writes `adjustedDamage=10` and returns false,
 then the original body writes `HealthLegLeft=90` and `Health=98`. The canonical
 `DeusExCharacters.GM_Trench` resource and native PlayAnim 259 are prepared and
 validated in the live damage route, including the original optional-argument
-hole (`HitLegLeft`, frame `-4`, rate `2.5`, tween `0.4f`, last `-3`). The next
+hole (`HitLegLeft`, frame `-0.25`, rate `2.5`, tween `2.5`, last `0.75`), using
+the original-execution correction in [animation controls](script-animation-controls.md). The next
 explicit boundary is `Actor.PlaySound(264)` from `Human.PlayTakeHitSound`; the
 normal scene route records that unsupported audio operation without inventing
 playback.

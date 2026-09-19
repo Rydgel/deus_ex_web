@@ -99,7 +99,7 @@ test('execPlayAnim Off/On follows the NumFrames==1 and -1-tween branches', async
   assert.equal(actor.simAnim.frame, f(-1 * 10000.0));
   assert.equal(actor.simAnim.rate, 0);
   assert.equal(actor.simAnim.tween, f(10 * 1000.0));
-  assert.equal(actor.animFlags & 0x39, 0);
+  assert.equal(actor.animFlags & 0x38, 0);
 
   // Second call: previous sequence exists; 'On' still has NumFrames=1 so the
   // NumFrames==1 path keeps the TweenRate=10 fallback regardless of tween.
@@ -108,27 +108,27 @@ test('execPlayAnim Off/On follows the NumFrames==1 and -1-tween branches', async
   assert.equal(actor.TweenRate, 10);
   assert.equal(actor.simAnim.tween, f(10 * 1000.0));
 
-  // Explicit positive TweenTime: TweenRate = NumFrames * TweenTime.
+  // Original reverse division: TweenRate = 1 / (NumFrames * TweenTime).
   execPlayAnim(actor, mesh, 'Off', 2, 0.5);
-  assert.equal(actor.TweenRate, f(1 * 0.5));
-  assert.equal(actor.simAnim.tween, f(0.5 * 1000.0));
+  assert.equal(actor.TweenRate, f(1 / 0.5));
+  assert.equal(actor.simAnim.tween, f(2 * 1000.0));
 
   // NumFrames=2 'All' exercises the != 1 paths. A fresh actor has no previous
   // sequence so the tween collapses to 0 -> the "< 0 and != -1" branch.
   const fresh = {AnimSequence: 'None', animFlags: 0};
   execPlayAnim(fresh, mesh, 'All', 1, -1);
   assert.equal(fresh.AnimFrame, f(0.001));
-  assert.equal(fresh.AnimLast, f(1.0 - 2));
+  assert.equal(fresh.AnimLast, f(1.0 - 1 / 2));
   assert.equal(fresh.TweenRate, 0);
   assert.equal(fresh.AnimRate, f(1 * 30 / 2));
   assert.equal((fresh.animFlags & 0x20), 0);
 
   // With a previous sequence, TweenTime == -1 and OldAnimRate 0 gives
-  // TweenRate = NumFrames * 0.025 (0x103e03a8).
+  // TweenRate = 1 / (NumFrames * 0.025) (0x103e03a8).
   const again = {AnimSequence: 'Still', animFlags: 0};
   execPlayAnim(again, mesh, 'All', 1, -1);
-  assert.equal(again.TweenRate, f(2 * 0.025));
-  assert.equal(again.AnimFrame, f(2 / -1.0));
+  assert.equal(again.TweenRate, f(1 / (2 * 0.025)));
+  assert.equal(again.AnimFrame, f(-1.0 / 2));
 
   // A negative OldAnimRate (the previous animation was velocity-scaled) takes
   // the norm path: TweenRate = max(-OldAnimRate * |Velocity|, AnimRate * .5).
@@ -149,7 +149,7 @@ test('execPlayAnim Off/On follows the NumFrames==1 and -1-tween branches', async
   const looper = {AnimSequence: 'None', animFlags: 0};
   execPlayAnim(looper, loopMesh, 'Loop', 1, -1);
   assert.equal((looper.animFlags & 0x20) !== 0, true);
-  assert.equal(looper.AnimLast, f(1.0 - 3));
+  assert.equal(looper.AnimLast, f(1.0 - 1 / 3));
 });
 
 test('findAnimSeq performs the original linear scan', async () => {

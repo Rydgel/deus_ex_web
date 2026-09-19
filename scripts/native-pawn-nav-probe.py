@@ -708,7 +708,6 @@ class NavProbe:
                 self.write(obj + off, 'f', spec[key])
         for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
                          ('flags28', 0x28), ('field444', 0x444), ('field4ec', 0x4ec),
-                         ('markedWarpZone', 0x44c),
                          ('physics', 0x30)]:
             if key in spec:
                 self.write(obj + off, 'I', spec[key])
@@ -718,7 +717,8 @@ class NavProbe:
                 self.write(obj + off, 'B', spec[key])
         for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
                          ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
-                         ('weapon', 0x3d0), ('field398', 0x398)]:
+                         ('weapon', 0x3d0), ('field398', 0x398),
+                         ('markedWarpZone', 0x44c)]:
             ref = spec.get(key)
             if ref is not None:
                 self.write(obj + off, 'I', refs.get(ref, ref) if isinstance(ref, str) else ref)
@@ -759,6 +759,7 @@ class NavProbe:
         # watermark captured at the end of __init__ (below the persistent
         # vtable/stub/record-buffer allocations) so batches stay bounded.
         self.free = self.heap_mark
+        self.callsite_log = []
         for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
@@ -1005,11 +1006,15 @@ class NavProbe:
             rec = self.read(self.rec_mv + i * 64, '14I')
             commands.append({'op': 'moveActor', 'level': rec[0], 'actor': rec[1],
                              'delta': vec3(rec[2:5]), 'rot': vec3(rec[5:8]),
+                             'deltaBits': ['%08x' % w for w in rec[2:5]],
+                             'rotationBits': ['%08x' % w for w in rec[5:8]],
                              'hit': rec[8], 'flags': list(rec[9:13])})
         for i in range(self.read(MAIL_FM, 'I')[0]):
             rec = self.read(self.rec_fm + i * 32, '8I')
             commands.append({'op': 'farMoveActor', 'level': rec[0], 'actor': rec[1],
-                             'dest': vec3(rec[2:5]), 'test': rec[5], 'noCheck': rec[6]})
+                             'dest': vec3(rec[2:5]),
+                             'destBits': ['%08x' % w for w in rec[2:5]],
+                             'test': rec[5], 'noCheck': rec[6]})
         for i in range(self.read(MAIL_SL, 'I')[0]):
             rec = self.read(self.rec_sl + i * 64, '14I')
             commands.append({'op': 'singleLineCheck', 'level': rec[0], 'hit': rec[1],
@@ -1024,8 +1029,8 @@ class NavProbe:
             rec = self.read(self.rec_fl + i * 32, '8I')
             commands.append({'op': 'fastLineCheck', 'model': rec[0],
                              'end': vec3(rec[1:4]), 'start': vec3(rec[4:7])})
-        # Interleaved order matters — rebuild a combined sequence from a
-        # global ordering counter if needed later; for now emit per-op lists.
+        # `commands` is grouped by operation; `callsites` preserves global
+        # order so consumers can interleave each operation's captured records.
         def vec(obj, off):
             return list(self.read(obj + off, '3f'))
         def bits(obj, off):

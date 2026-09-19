@@ -120,10 +120,10 @@ assert.deepEqual(Object.fromEntries(bodyParts.map(field=>[field,ref(player,field
   HealthLegLeft:90,HealthLegRight:100,
 });
 assert.equal(ref(player,'AnimSequence'),'HitLegLeft','Radiation10 selects the left-leg hit animation');
-assert.equal(ref(player,'AnimFrame'),-4,'PlayAnim native starts HitLegLeft at its original frame');
+assert.equal(ref(player,'AnimFrame'),-0.25,'PlayAnim native starts HitLegLeft at its original frame');
 assert.equal(ref(player,'AnimRate'),2.5,'PlayAnim native applies the original HitLegLeft rate');
-assert.equal(ref(player,'TweenRate'),Math.fround(0.4),'PlayAnim native applies the authored tween time');
-assert.equal(ref(player,'AnimLast'),-3,'PlayAnim native stores the authored last frame');
+assert.equal(ref(player,'TweenRate'),2.5,'PlayAnim native applies the authored tween time');
+assert.equal(ref(player,'AnimLast'),0.75,'PlayAnim native stores the authored last frame');
 assert.ok(game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
 dispatch(damage,'UnTouch',[player]);
 assert.equal(ref(damage,'damagee'),null);

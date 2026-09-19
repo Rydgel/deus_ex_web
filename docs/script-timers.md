@@ -4,7 +4,8 @@ This document records the recovered `Actor.SetTimer`/`Actor.Tick` timer phase
 used by `src/runtime/script-timers.mjs`. The implementation is limited to the
 timer state update and the synchronous `Timer` event boundary. Actor tick
 eligibility, stasis/owner gates, lifespan, physics, and the event's script body
-remain caller/runtime responsibilities.
+are composed by the subsequent [standalone Actor.Tick](script-actor-tick.md)
+translation and linked runtime; world scheduling remains the caller's job.
 
 ## Original evidence
 

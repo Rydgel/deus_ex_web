@@ -106,8 +106,10 @@ pollFinishAnim({animation, state});
 `dispatchFinishAnim` runs the same body after the decoded ScriptVM has already
 advanced its bytecode cursor; it intentionally performs no second synthetic
 increment.  `state` is the logical state-frame object containing `latent`.
-The translation leaves all unsupported animation ticking and rendering to
-their own evidence-backed boundaries.
+The separate [animation tick](script-animation-tick.md) now sets the linked
+finished flag from original frame progression; Jaime's integration check drives
+the helper, tick and ProcessState poll without a synthetic completion flag.
+General actor scheduling and rendering remain separate boundaries.
 
 `test/finish-anim.test.mjs` covers flag mutation, both rate gates, exact
 comparison outcomes, NaN/unordered behavior, raw Code advancement, decoded

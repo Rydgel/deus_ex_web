@@ -58,3 +58,13 @@ Focused validation:
 
     node scripts/validate-infolink-content.mjs
     node scripts/validate-infolink-walking-trigger.mjs
+
+## Browser presentation update — 2026-09-19
+
+The browser now draws the original InfoLink background/border textures and
+FontMenuHeaders_DS/FontFixedWidthSmall_DS bitmap pages in the world renderer.
+The CSS replacement frame and system fonts have been removed. The current
+transmission supplies its own portrait and icon. Native GC.DrawText supplies
+scan/wrap/alignment/clipping and glyph tiles. See [the visible HUD bridge](script-play-hud.md)
+for evidence, the new font-page reference decode, and remaining native
+ComputerWindow/static-noise and root-scaling boundaries.

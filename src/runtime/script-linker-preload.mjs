@@ -17,6 +17,8 @@
  * the collector-only paths are unreachable through this archive.
  */
 
+import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
+
 const freeze = Object.freeze;
 
 export const LINKER_PRELOAD = freeze({
@@ -285,7 +287,7 @@ function archiveFlags(archive) {
 export function linkerLoadArchive({ linker, reader, linkerRoot = null, version, services = {} } = {}) {
   if (!linker || typeof linker !== 'object') throw new TypeError('linkerLoadArchive requires the ULinkerLoad record');
   if (!reader || typeof reader !== 'object') throw new TypeError('linkerLoadArchive requires the +0x440 reader');
-  const archive = {
+  const archive = Object.assign(createLinkerLoadArchive({linker, reader, services}), {
     kind: 'ULinkerLoadArchive',
     vtable: LINKER_PRELOAD.archiveVtable,
     linker,
@@ -300,7 +302,7 @@ export function linkerLoadArchive({ linker, reader, linkerRoot = null, version, 
     ar20: linkerRoot ?? linker.root ?? null,
     ar24: linkerRoot ?? linker.root ?? null,
     ar28: 0,
-  };
+  });
   archive.tell = () => required(services.readerTell, 'reader Tell (+0x28)')(reader);
   archive.seek = position => required(services.readerSeek, 'reader Seek (+0x34)')(reader, position);
   archive.precache = size => required(services.readerPrecache, 'reader Precache (+0x40)')(reader, size);
@@ -1070,7 +1072,7 @@ export function serializeTaggedProperty(tag, archive, property, data, services =
   const isBool = same(read(property, LINKER_PRELOAD.offsets.objectClass, services),
     services.boolPropertyClass ?? LINKER_PRELOAD.globals.boolPropertyClass);
   if (isBool) {
-    const mask = integer(read(property, 0x5c, services), 'UBoolProperty bitmask', { minimum: 1 });
+    const mask = integer(read(property, 0x5c, services), 'UBoolProperty bitmask', { minimum: 1, maximum: 0xffffffff });
     if (archiveFlags(archive).linkerRoot === 0) {
       fail('SerializeTaggedProperty non-stream bool path is unsupported');
     }

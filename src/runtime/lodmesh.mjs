@@ -4,16 +4,13 @@
  *
  * Layout evidence: docs/lodmesh-serialization.md, recovered by executing the
  * original Engine.dll ULodMesh::Serialize in scripts/native-lodmesh-oracle.py
- * (thunks 0x10301717 UMesh, 0x10324b9 ULodMesh, body 0x10354ab0;
+ * (thunks 0x10301717 UMesh, 0x103024b9 ULodMesh, body 0x10354ab0;
  * UPrimitive::Serialize body 0x103d82d0; AnimSeq helper 0x103a9370).
  *
- * Geometry/lazy-array element decoding is renderer scope (Stage 4) and is
- * deliberately not implemented here; the lazy markers are validated and the
- * byte position after the eager data is returned so callers can assert the
- * original serializer's consumption boundary.
+ * This small prefix reader remains for sequence-only callers. The full v68
+ * payload and deferred vertex arrays are decoded in lodmesh-payload.mjs;
+ * docs/script-mesh-payload.md supersedes the old probe's tail interpretation.
  */
-import {parsePackage} from '../unreal/package.mjs';
-
 export class LodMeshError extends Error {}
 
 /**
@@ -36,7 +33,7 @@ export function decodeLodMesh(pkg, bytes, exportIndex) {
   const boundingSphere = {center, radius};
   // UMesh::Serialize: TLazyArray markers at mesh+0x54 and mesh+0x6c. The
   // 4-byte values are package file offsets where the next field begins; the
-  // inline blob between carries the renderer's vertex data (Stage 4).
+  // inline blobs are retained by the separate full-payload decoder.
   for (let i = 0; i < 2; i++) {
     const marker = r.u32();
     skipLazyBlob(r, marker - entry.serialOffset);

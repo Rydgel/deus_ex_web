@@ -317,7 +317,7 @@ export async function createScriptDoors({
   // execActorPlaySound native, whose channel id needs the measured index. A
   // focused validation with the live capture (scripts/validate-script-lights.mjs)
   // opts 264 back out to exercise the real native.
-  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level,
+  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264] });
   const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
     if(name==='XLevel')return runtime.levelFor(object);

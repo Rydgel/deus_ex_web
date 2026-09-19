@@ -20,7 +20,7 @@ method 0x1036bca0, and SingleLineCheck calls at 0x103037b5.
 Trace subsystem is consumed, not reimplemented: FastLineCheck (0x10301a37)
 and SingleLineCheck (0x103037b5) are recording stubs that feed scripted
 hit/miss results back — the command-capture boundary.  The lighting query
-0x10303ee0 (AActor lighting accumulation, deep subsystem) is likewise a
+0x10303ee0 (AActor lighting accumulation; separately recovered in native-ai-visibility-oracle.py) is likewise a
 recording stub returning a scripted float.
 
 Transcendental authority: appAtan (Core ?appAtan@@YANN@Z, fld1;fpatan) and
@@ -783,6 +783,8 @@ class PawnPerceptionProbe:
             'slTraces': sl_traces,
             'lights': lights,
             'randUsed': self.rand_index,
+            'visibilityCache': {n: bits(a, 0x2e8) for n, a in sorted(actor_refs.items())
+                                if a and n not in pri_specs and not n.startswith('__out_')},
             'code': self.read(frame + 0xc, 'I')[0] - code,
             'pawn': {
                 'stimulus': self.f32(pawn + 0x3a0),

@@ -15,10 +15,11 @@ import { tickWalkingInteraction, traceActors, isHighlighted } from '../runtime/i
 import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray } from '../runtime/script-map-properties.mjs';
+import { createPlayHud } from '../runtime/script-play-hud.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
-  onLightingChanged = null, onDataLinkTransmission = null } = {}) {
+  onLightingChanged = null, onDataLinkTransmission = null, presentation = false } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -103,6 +104,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
+  // Player start is the viewer's scene reset. Restore the actual startup
+  // vitals, so damage/energy script writes cannot survive that reset.
+  const playerVitals=['Health','HealthHead','HealthTorso','HealthArmLeft','HealthArmRight',
+    'HealthLegLeft','HealthLegRight','Energy','EnergyMax'].map(name=>{
+    const ref=doors.scriptRuntime.runtime.namedReference(player.collisionActor,name);
+    return {ref,initial:ref.get()};
+  });
+  const hud=presentation?await createPlayHud({runtime:doors.scriptRuntime.runtime,assets,
+    player:player.collisionActor,shell:await doors.scriptRuntime.infoLinkShell(),
+    mapNorth:[...actors.values()].find(actor=>actor.className==='DeusExLevelInfo')?.values.TrueNorth??0}):null;
   // Route any unhandled actor scene event (dispatched from player-move/actor-touch,
   // or re-entrant from a VM body) into the door runtime's general VM router, so a
   // player bump runs the real DeusExDecoration.Bump — and other attached actors run
@@ -116,17 +127,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const describeTarget = actor => !actor ? null : actor.collider ? doors.describe(actor)
     : { actor, label: `${actor.name} · interaction not supported yet` };
   notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Mission-trigger scripts and actor/mesh visuals remain incomplete.');
-  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; their meshes are not rendered yet.`);
+  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; actor mesh coverage remains incomplete.`);
   const game = {
-    player, doors, collision, clock, notes, start, interaction, random,
+    player, doors, collision, clock, notes, start, interaction, random, hud,
     tick(seconds, input) { clock.advance(seconds, dt => {
       timeSeconds=Math.fround(timeSeconds+Math.fround(dt));
-      doors.tick(dt); tickWalkingInteraction(interaction,dt,trace); player.tick(dt, input);
+      doors.tick(dt); tickWalkingInteraction(interaction,dt,trace); player.tick(dt, input);hud?.tick(dt);
     }); },
     reset() {
       collision.queries.removeActor(player.collisionActor);player.actorRegistered=false;
       doors.reset();collision.registerActors(collidable);clock.reset();player.reset();timeSeconds=0;playerScene.reset();
       random.seed(randomSeed);
+      for(const {ref,initial} of playerVitals)ref.set(initial);
+      hud?.reset();
       interaction.frobTime=0;interaction.frobTarget=null;
     },
     target() { return isHighlighted(interaction,interaction.frobTarget) ? describeTarget(interaction.frobTarget) : null; },
@@ -145,7 +158,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
       return { ok: outcome.handled, message: '' };
     },
-    status() { return { player: player.status(), doors: doors.status(), hulls: collision.bsp.hulls.length,
+    status() { return { player: player.status(), doors: doors.status(), hud:hud?.snapshot()??null, hulls: collision.bsp.hulls.length,
       deferredEffects:[...player.unimplementedPhysicsEffects],
       random:{initialSeed:randomSeed,state:random.state},
       blockingActors: collision.actors.filter(actor => actor.blocking).length, collidableActors: collidable.length }; },

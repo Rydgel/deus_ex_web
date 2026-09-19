@@ -1,7 +1,8 @@
 /**
  * Recovered AActor/APawn perception natives — LineOfSightTo (native 514),
  * CanSee (533), PlayerCanSeeMe (532), PickTarget (531), PickAnyTarget (534),
- * and AICanSee (705).  The three LOS natives and the two target pickers share
+ * and AICanSee (705), plus Actor.Tick's ShowSelf/CheckEnemyVisible helpers.
+ * The three LOS natives and the two target pickers share
  * one worker body at 0x103beb50; AICanSee has its own visibility worker at
  * 0x103c6ab0 reached through exec thunk 0x10301357.
  *
@@ -24,6 +25,7 @@
  * Neither reaches the navigation graph — pathfinding is out of scope.
  */
 
+import { actorVisibilityExtended } from './script-ai-visibility.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
 import { vectorToRotator } from './script-decoration-primitives.mjs';
 import {
@@ -348,6 +350,45 @@ function nearPath(viewer, other, oLoc, eye, distSq, scaledOrDist,
   return 0;
 }
 
+/** APawn.ShowSelf103c0410: walk the live PawnList and use the original LOS
+ * worker before checked SeePlayer dispatch. The caller owns bIsPlayer/hidden
+ * admission; this helper neither adds filters nor resets SightCounter.
+ * Evidence: docs/script-pawn-tick-visibility.md. */
+export function showPawnSelf(pawn,services) {
+  const level=services.level(pawn),info=services.levelInfo(level);
+  if(!info||!services.isA(info,'LevelInfo'))throw new Error('ShowSelf requires the original LevelInfo');
+  let listener=services.pawnList(level);
+  while(listener) {
+    if(listener!==pawn) {
+      const counter=rd(services,listener,'SightCounter');
+      if((counter<0||Number.isNaN(counter))&&services.isProbing(listener,'SeePlayer')&&
+        losWorker(listener,pawn,1,0,services,services.level(listener))) {
+        const fn=services.findFunctionChecked(listener,'SeePlayer');
+        services.processEvent(listener,fn,[pawn]);
+      }
+    }
+    listener=services.nextPawn(listener);
+  }
+}
+
+/** APawn.CheckEnemyVisible103c0280. UObject validity and checked event lookup
+ * remain explicit services; a missing validity binding cannot admit an enemy.
+ * The LOS worker owns position/Stimulus writes, this helper owns the timestamp. */
+export function checkPawnEnemyVisible(pawn,services) {
+  const enemy=rd(services,pawn,'Enemy');
+  if(!enemy)return;
+  if(typeof services.isValid!=='function')throw new Error('CheckEnemyVisible requires original UObject validity');
+  if(!services.isValid(enemy))services.failAssert(0x6b4);
+  if(!losWorker(pawn,rd(services,pawn,'Enemy'),0,0,services,services.level(pawn))) {
+    const fn=services.findFunctionChecked(pawn,'EnemyNotVisible');
+    services.processEvent(pawn,fn,[]);
+  } else {
+    const seconds=services.timeSeconds(services.level(pawn));
+    if(typeof seconds!=='number')throw new Error('CheckEnemyVisible requires the native double level clock');
+    wr(services,pawn,'LastSeenTime',f32(seconds));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Exec wrappers — argument evaluation order is preserved; outs are written
 // through their references only where the body writes them.
@@ -583,7 +624,7 @@ export function execAICanSee(call, services) {
   }
 
   if (bCheckVisibility && acc > 0) {
-    acc = st(x87mul(ld(acc), ld(services.lighting(other, oLoc))));
+    acc = st(x87mul(actorVisibilityExtended(other,1,services),ld(acc))); // FST retains ST0 at 103c6e8a.
   }
 
   // clamp(acc - visibilityThreshold, 0, 1)

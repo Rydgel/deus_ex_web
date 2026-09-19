@@ -152,8 +152,10 @@ assert.deepEqual(switchMesh.sequences.map(sequence => [sequence.name, sequence.s
   assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 0);
   assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 10);
   assert.equal(runtime.namedReference(lightSwitch, 'AnimLast').get(), 0);
-  const animation = lightSwitch.animationState;
-  assert.deepEqual(animation.simAnim, {frame: -10000, rate: 0, tween: 10000, last: 0});
+  assert.deepEqual(runtime.namedReference(lightSwitch,'SimAnim').get(), {
+    'core.object.vector.x':-10000, 'core.object.vector.y':0,
+    'core.object.vector.z':10000, 'core.object.plane.w':0,
+  });
   // The NF==1 path zeroes the +0x224/+0x228 mirrors: linked AnimMinRate and
   // OldAnimRate ("= AnimRate until animation completes").
   assert.equal(runtime.namedReference(lightSwitch, 'AnimMinRate').get(), 0);
@@ -170,14 +172,14 @@ assert.deepEqual(switchMesh.sequences.map(sequence => [sequence.name, sequence.s
   // AnimRate bits, 0) selects the zero-mirror 0.025 tween (0x103e03a8).
   runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
     evaluateArgument: () => 'All'});
-  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -2);
-  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), Math.fround(0.05));
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -0.5);
+  assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 20);
   assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 15);
   // A second 'All' call sees OldAnimRate (the prior AnimRate bits, 15 > 0)
   // and copies its bits into TweenRate, as the original 0x103e0323 branch does.
   runtime.invokeNative({index: 259, receiver: lightSwitch, argumentCount: 1,
     evaluateArgument: () => 'All'});
-  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -2);
+  assert.equal(runtime.namedReference(lightSwitch, 'AnimFrame').get(), -0.5);
   assert.equal(runtime.namedReference(lightSwitch, 'TweenRate').get(), 15);
   assert.equal(runtime.namedReference(lightSwitch, 'AnimRate').get(), 15);
 }

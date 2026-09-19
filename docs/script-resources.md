@@ -39,11 +39,11 @@ remains an explicit unresolved-import boundary; the loader never substitutes a
 serialized `Class` export for a DLL-only class such as `Engine.LodMesh`.
 
 The registry exposes `references(record, visit)` as the collector boundary.
-The only edges emitted today are the serialized `Outer` and `ClassIndex`
-edges. `ULodMesh`'s decoded eager prefix contains names, values, and lazy file
-offsets, not known UObject pointers, so it adds no guessed payload edges. Its
-lazy arrays and serialized tail remain an explicit incomplete branch; they may
-still contain references that the collector does not see. Sound's recovered
+It emits serialized `Outer` and `ClassIndex` edges plus LodMesh's original
+`+0xd8` texture-array references, resolved to canonical resource identities.
+The complete version 68 mesh payload is decoded with deferred vertex loading;
+its sequence/group/notify FNames are exposed as `nameReferences`. Native heap
+ownership and finalization are still separate boundaries. Sound's recovered
 WAV payload adds no UObject edges; its format FName is exposed separately by
 `collectReferences` as `nameReferences`. Texture payloads remain opaque.
 Destruction, allocator ownership, and save/load
@@ -81,10 +81,11 @@ The `ULodMesh` registration body pushes the Engine package, `LodMesh` name,
 `UMesh` as Super, `Core.Object` as Within, instance size `0x1b0`, and the
 internal constructor before calling Core's UClass constructor on
 `0x105359d0`. Its serializer first calls `UMesh::Serialize` and then reads the
-eager AnimSeq and native tail fields. The recovered reader in
-[`lodmesh-serialization.md`](lodmesh-serialization.md) and
-`src/runtime/lodmesh.mjs` intentionally stops before the renderer's lazy
-arrays.
+AnimSeq and native tail fields. The complete payload reader and vertex unpack
+accessor in `src/runtime/lodmesh-payload.mjs` follow the original constructors,
+serializers and lazy-loader execution documented in
+[`script-mesh-payload.md`](script-mesh-payload.md). The smaller
+`src/runtime/lodmesh.mjs` remains available for sequence-only inspection.
 
 The table records constructor and serializer entry points for Sound and
 Texture because their registration and vtable evidence is concrete. Sound's
@@ -110,10 +111,12 @@ not yet recovered, so absent Texture exports remain at the explicit archive
 The first decoded resource is `DeusExDeco.u` export 606,
 `LodMesh.LightSwitch`: the package entry has class import `-4` (`Engine.LodMesh`),
 root outer `0`, serial size `1272`, and the decoder recovers the original four
-`AnimSeq` entries and bounds in the eager prefix. Its outer is the canonical
+`AnimSeq` entries, bounds and complete payload. Its outer is the canonical
 `DeusExDeco` package identity and its class edge is the canonical
 `Engine.LodMesh` descriptor. The payload status is
-`decoded-eager-prefix`, not a complete mesh resource.
+`decoded-lodmesh`; `payloadComplete` remains false because full Play load
+finalization and release are not bound. A vertex-frame read loads the eight-byte
+vertex records through their deferred array state and preserves the archive cursor.
 
 `Special.Switch4ClickOn` and `Special.Switch4ClickOff` in `DeusExSounds.u`
 are materialized as canonical `Sound` records with decoded format-name, lazy
@@ -122,7 +125,7 @@ from UObject references. `Texture` exports such as
 `DeusExDeco.Skins.LightSwitchTex1` remain opaque. Decoding does not establish
 audible playback or texture upload.
 
-No final native destructor, allocator/free-list, lazy mesh geometry, texture
+No final native destructor, allocator/free-list, actor mesh rendering, texture
 bulk-data decode, package save path, or global GObjObjects
 registration is provided. Those are required follow-up work for the complete
 Stage 3 graph or later presentation integration. The registry's unresolved and
@@ -132,6 +135,17 @@ materialization.
 registry. The Play host prepares the selected LightSwitch class, Mesh and both
 Sound constants resolved from the original Frob bytecode after map-property
 bindings are installed. `prepareMesh()` completes the LodMesh
-eager serializer before an event runs; synchronous `meshPayload()` reads that
+payload preparation before an event runs; synchronous `meshPayload()` reads that
 prepared resource, and rejects a later unprepared Mesh assignment explicitly.
 The original LightSwitch Frob validator exercises this path through PlayAnim.
+
+When native class loading is enabled (including Play), mesh preparation now
+uses the same native export record that class-default loading constructed.
+The registry exposes that `loadRecord` and its existing `meshPayload` view;
+Texture edges map directly from serialized native UObject references. Deferred
+vertex reads remain on the class loader's canonical archive. Preparation clears
+NeedLoad through the original Preload body but leaves the full queue's pending
+PostLoad flags intact. Other resource types keep their current boundaries; this
+does not flush a subset of the larger Play queue. Standalone registry inspection
+explicitly retains its detached mesh adapter. See
+[`script-mesh-load-graph.md`](script-mesh-load-graph.md).

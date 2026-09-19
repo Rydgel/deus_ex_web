@@ -5,17 +5,22 @@ import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
+import { createHudRenderer } from './hud.mjs';
+import { createTrainingNpcPreview } from './npc-mesh-preview.mjs';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.autoClear = false;
+renderer.info.autoReset=false;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.clone();
 camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let game, mode = 'play', paused = false, runtimeError = null;
+let hudRenderer=null,activeInfoLinkShell=null;
+let npcPreview=null;
 let infoLinkAudioContext=null,infoLinkAudioSources=new Set();
 let infoLinkAnimationFrame=0,infoLinkRunToken=0;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
@@ -34,13 +39,14 @@ async function activateInfoLinkAudio(){
   return infoLinkAudioContext;
 }
 function stopInfoLinkAudio(){for(const source of infoLinkAudioSources){try{source.stop();}catch{}}infoLinkAudioSources.clear();}
-async function playInfoLinkAudio(audio,context=null){
+async function playInfoLinkAudio(audio,context=null,isCurrent=()=>true){
   if(!audio?.startCue?.bytes?.byteLength||!audio?.bytes?.byteLength)
     throw new Error('The original DataLink audio payloads are unavailable');
   context??=await activateInfoLinkAudio();
   stopInfoLinkAudio();
   const decode=bytes=>context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
   const [startBuffer,speechBuffer]=await Promise.all([decode(audio.startCue.bytes),decode(audio.bytes)]);
+  if(!isCurrent())return null;
   const schedule=(buffer,when)=>{const source=context.createBufferSource();source.buffer=buffer;
     source.connect(context.destination);infoLinkAudioSources.add(source);
     source.onended=()=>infoLinkAudioSources.delete(source);source.start(when);};
@@ -48,37 +54,28 @@ async function playInfoLinkAudio(audio,context=null){
   return {context,startTime:now};
 }
 function stopInfoLinkPresentation(){
+  activeInfoLinkShell=null;
   infoLinkRunToken++;
   if(infoLinkAnimationFrame)cancelAnimationFrame(infoLinkAnimationFrame);
   infoLinkAnimationFrame=0;
   $('infolink-shell').hidden=true;
   stopInfoLinkAudio();
 }
-function drawInfoLinkTexture(canvas,texture){
-  if(canvas.dataset.texture===texture.key)return;
-  canvas.width=texture.width;canvas.height=texture.height;
-  const context=canvas.getContext('2d');
-  context.putImageData(new ImageData(new Uint8ClampedArray(texture.data),texture.width,texture.height),0,0);
-  canvas.dataset.texture=texture.key;
-}
 function startInfoLinkPresentation(shell){
+  activeInfoLinkShell=shell;
   const token=++infoLinkRunToken;
-  const element=$('infolink-shell'),portrait=$('infolink-portrait');
-  const name=$('infolink-name'),title=$('infolink-title'),queued=$('infolink-queued'),body=$('infolink-text');
   const frame=()=>{
     if(token!==infoLinkRunToken)return;
     const state=game?.doors?.scriptRuntime?.dataLinkPresentation?.();
-    if(!state){element.hidden=true;infoLinkAnimationFrame=0;return;}
-    element.hidden=!state.shellVisible;
-    title.textContent=state.title;name.style.visibility=state.titleVisible?'visible':'hidden';
-    queued.textContent=state.queuedText??'';queued.hidden=!queued.textContent;
-    body.textContent=state.text;
-    if(state.portrait==='portrait')drawInfoLinkTexture(portrait,shell.content.portrait);
-    else if(state.portrait==='icon')drawInfoLinkTexture(portrait,shell.content.dataLinkIcon);
-    portrait.hidden=state.portrait==='none'||!state.portraitVisible;
+    if(!state){$('infolink-shell').hidden=true;infoLinkAnimationFrame=0;return;}
+    // The WebGL HUD draws the original art; this region exposes its text to
+    // assistive technology without a second visual dialog.
+    $('infolink-shell').hidden=!state.shellVisible;
+    $('infolink-title').textContent=state.title;
+    $('infolink-queued').textContent=state.queuedText??'';
+    $('infolink-text').textContent=state.text;
     if(state.phase==='destroyed'){
       infoLinkAnimationFrame=0;stopInfoLinkAudio();
-      toast('DL_Start transmission complete');
       return;
     }
     infoLinkAnimationFrame=requestAnimationFrame(frame);
@@ -94,6 +91,7 @@ function resize() {
 new ResizeObserver(resize).observe($('viewport'));
 function resetCamera() {
   if (!map) return;
+  hideNpcFocus();
   if (mode === 'play' && game) {
     game.reset(); world.syncMovers(game.collision.movers);
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();
@@ -108,6 +106,7 @@ function resetCamera() {
 }
 function setMode(next) {
   mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
+  if(mode==='play')hideNpcFocus();
   keys.clear(); game?.clock.reset();
   if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
   $('play-hint').textContent = '';
@@ -142,10 +141,11 @@ async function loadMap(name) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
+  hideNpcFocus();
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame;
+  let nextWorld, nextGame, nextNpcPreview;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -156,6 +156,7 @@ async function loadMap(name) {
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
     try {
       nextGame = await createGame(nextMap, asset, assets, {
+        presentation:true,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
         onDataLinkTransmission: event => {
           if(event.kind!=='started')return;
@@ -164,11 +165,30 @@ async function loadMap(name) {
       });
     }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
+    if(nextGame&&name==='00_Training'){
+      $('gate-message').textContent='Preparing original NPC meshes…';
+      try{
+        nextNpcPreview=await createTrainingNpcPreview(nextGame.doors.scriptRuntime.runtime,assets,asset);
+        nextWorld.notes.push(`${nextNpcPreview.actors.length} NPC meshes are visible in Play and Inspect as static previews. NPC startup, AI and original mesh lighting remain unfinished.`);
+        for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
+      }catch(error){nextWorld.notes.push(`NPC meshes unavailable: ${error.message}`);}
+    }
+    const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
+    hudRenderer?.dispose();hudRenderer=nextHud;
+    if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
+    npcPreview=nextNpcPreview??null;
+    if(npcPreview){npcPreview.root.visible=true;scene.add(npcPreview.root);}
+    $('npc-focus').replaceChildren(...(npcPreview?.actors??[]).map(actor=>{
+      const option=document.createElement('option');option.value=option.textContent=actor.summary.actor;return option;
+    }));
+    $('npc-status').hidden=!npcPreview;
+    $('npc-status').textContent=npcPreview?`${npcPreview.actors.length} NPCs · static previews`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     $('light-preview').hidden = !game || name !== '00_Training';
     $('dark-door-preview').hidden = !game || name !== '00_Training';
+    $('npc-preview').hidden = !npcPreview;
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
@@ -178,6 +198,7 @@ async function loadMap(name) {
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
   } catch (error) {
+    if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();
     if (nextWorld && nextWorld !== world) nextWorld.dispose();
     busy('Could not load this map', error.message);
     throw error;
@@ -239,6 +260,27 @@ $('camera-form').onsubmit = event => {
 
 // Viewer-only preview navigation. The actual light change still executes the
 // original switch Frob and TriggerLight state scripts in the shared game host.
+function hideNpcFocus(){
+  // Camera controls are optional; authored NPC meshes remain in the scene.
+  $('npc-preview-label').hidden=true;
+}
+function focusNpcPreview(name){
+  const actor=npcPreview.actors.find(actor=>actor.summary.actor===name);
+  if(!actor)return;
+  const location=actor.location,angle=actor.rotation[1]*Math.PI/32768;
+  setCamera({position:[location[0]+Math.cos(angle)*155,location[1]+Math.sin(angle)*155,location[2]+15],
+    rotation:[-600,(actor.rotation[1]+32768)%65536,0]});
+  stopInfoLinkPresentation();npcPreview.root.visible=true;
+  $('npc-preview-title').textContent=`${npcPreview.actors.length} NPC meshes · original Training assets`;
+  $('npc-preview-label').hidden=false;togglePanel(false);
+}
+$('npc-focus').onchange=event=>focusNpcPreview(event.target.value);
+$('npc-preview').onclick=()=>{
+  if(!npcPreview||loading)return;
+  // Inspection camera only: do not teleport JC or start an invented idle.
+  focusNpcPreview($('npc-focus').value);
+};
+
 $('light-preview').onclick = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
@@ -278,60 +320,19 @@ $('dark-door-preview').onclick = () => {
   } catch(error) { pauseForRuntimeError(error); }
 };
 
-const infoColor=({r,g,b})=>`rgb(${r} ${g} ${b})`;
 async function playInfoLinkTransmission({tag='DataLink'}={}){
   if(!game||loading||currentMap!=='00_Training')return;
+  const request=++infoLinkRunToken,sourceGame=game;
+  const isCurrent=()=>request===infoLinkRunToken&&game===sourceGame;
   try{
     const audioContext=await activateInfoLinkAudio();
-    const shell=await game.doors.scriptRuntime.infoLinkShell();
-    const element=$('infolink-shell');
-    element.style.setProperty('--info-bg',infoColor(shell.colors.background));
-    element.style.setProperty('--info-border',infoColor(shell.colors.border));
-    element.style.setProperty('--info-text',infoColor(shell.colors.text));
-    element.style.setProperty('--info-header',infoColor(shell.colors.header));
-    element.style.borderStyle=shell.drawBorder?'solid':'none';
-    const portrait=shell.initializedControls.find(control=>control.name==='winPortrait');
-    const nameControl=shell.initializedControls.find(control=>control.name==='winName');
-    const queuedControl=shell.initializedControls.find(control=>control.name==='winQueued');
-    const lineControl=shell.initializedControls.find(control=>control.name==='winLine');
-    const portraitElement=$('infolink-portrait');
-    if(portrait){
-      portraitElement.style.left=`${portrait.x}px`;portraitElement.style.top=`${portrait.y}px`;
-      portraitElement.style.width=`${portrait.width}px`;portraitElement.style.height=`${portrait.height}px`;
-    }
-    portraitElement.hidden=true;
-    const nameElement=$('infolink-name');
-    if(nameControl){
-      nameElement.style.left=`${nameControl.x}px`;nameElement.style.top=`${nameControl.y}px`;
-      nameElement.style.width=`${nameControl.width}px`;nameElement.style.height=`${nameControl.height}px`;
-      nameElement.style.color=infoColor(nameControl.textColor);
-      nameElement.style.justifyContent=nameControl.horizontalAlignment===0?'flex-start':'center';
-      nameElement.style.alignItems=nameControl.verticalAlignment===1?'center':'flex-start';
-      nameElement.title=`${nameControl.font} · margins ${nameControl.horizontalMargin}, ${nameControl.verticalMargin}`;
-    }
-    nameElement.hidden=!nameControl;
-    const queuedElement=$('infolink-queued');
-    if(queuedControl){
-      queuedElement.style.left=`${queuedControl.x}px`;queuedElement.style.top=`${queuedControl.y}px`;
-      queuedElement.style.width=`${queuedControl.width}px`;queuedElement.style.height=`${queuedControl.height}px`;
-      queuedElement.style.color=infoColor(queuedControl.textColor);
-      queuedElement.style.justifyContent=queuedControl.horizontalAlignment===2?'flex-end':'flex-start';
-      queuedElement.style.alignItems=queuedControl.verticalAlignment===1?'center':'flex-start';
-    }
-    queuedElement.textContent='';queuedElement.hidden=true;
-    const lineElement=$('infolink-line');
-    if(lineControl){
-      lineElement.style.left=`${lineControl.x}px`;lineElement.style.top=`${lineControl.y}px`;
-      lineElement.style.width=`${lineControl.width}px`;lineElement.style.height=`${lineControl.height}px`;
-      lineElement.style.background=infoColor(lineControl.tileColor??shell.colors.line);
-    }
-    $('infolink-title').textContent=nameControl?.text??shell.title;
-    $('infolink-text').textContent='';
-    const presentation=game.doors.scriptRuntime.dataLinkPresentation?.();
-    await playInfoLinkAudio(presentation?.audio??shell.audio,audioContext);
+    const shell=await sourceGame.doors.scriptRuntime.infoLinkShell();
+    if(!isCurrent())return;
+    const presentation=sourceGame.doors.scriptRuntime.dataLinkPresentation?.();
+    const audio=await playInfoLinkAudio(presentation?.audio??shell.audio,audioContext,isCurrent);
+    if(!audio||!isCurrent())return;
     startInfoLinkPresentation(shell);
-    toast(`${tag} · live DataLinkPlay lifecycle`);
-  }catch(error){pauseForRuntimeError(error);}
+  }catch(error){if(isCurrent())pauseForRuntimeError(error);}
 }
 
 function look(dx, dy) {
@@ -364,6 +365,7 @@ function status() {
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: game?.status() ?? null,
+    npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
@@ -397,13 +399,21 @@ function animate(time) {
       velocity.normalize().multiplyScalar(Math.min(dt, .05) * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 900 : 240));
       camera.position.add(velocity); cameraMoved = true;
     }
+    renderer.info.reset();
     renderer.setClearColor('#06101b', 1); renderer.clear();
     if (world.sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));
       const markersVisible = world.markers.visible; world.markers.visible = false;
-      renderer.render(scene, skyCamera); world.markers.visible = markersVisible; renderer.clearDepth();
+      const npcVisible=npcPreview?.root.visible;if(npcPreview)npcPreview.root.visible=false;
+      renderer.render(scene, skyCamera); world.markers.visible = markersVisible;
+      if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
     }
     renderer.render(scene, camera);
+    if(mode==='play'&&hudRenderer){
+      const box=$('viewport').getBoundingClientRect();
+      hudRenderer.render(renderer,box.width,box.height,{shell:activeInfoLinkShell,state:activeInfoLinkShell?game.doors.scriptRuntime.dataLinkPresentation():null});
+    }
+    $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {
       lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);
       const hit = raycaster.intersectObjects(world.root.children, true).find(h => h.object.isMesh);

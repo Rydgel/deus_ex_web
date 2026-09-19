@@ -36,15 +36,18 @@ end-to-end so far:
   ~100-step loop; a clear flat-ground scene returns a genuine **1** after ~3
   iterations (phase-A forward move + `maxStep+2` down-probe each step), with
   `Location`/`Velocity` correctly restored.  All four are now **ported to JS and
-  bit-exact vs the oracle** (42 scenes, 11 mutants).
+  bit-exact vs the oracle** for the documented cases below.
 - `checkMove` return codes `5`/`1`/`−1` confirmed against scripted hits;
   `reachMask` (`0x10326d10`) returns the predicted 7-bit capability gather.
 - Boundary order for `pointReachable`: `PointRegion → FastLineCheck →
   FarMoveActor(test) → FarMoveActor(restore) → dispatch → checkMove loop →
   FarMoveActor(restore)`.
 
-Not yet oracle-verified: flying/swimming reach helpers, `jumpArc`, the
-proximity-landing `appSqrt` arc, `actorReachable`, `FindRandomDest`,
+Flying reach now has its own 30-case original-DLL comparison, including callers;
+see the contract and verification below. Navigation remains outside VM dispatch.
+
+Not yet oracle-verified: swimming reach helpers, `jumpArc`, the
+proximity-landing `appSqrt` arc, `FindRandomDest`,
 `FindPathTo`/`FindPathToward`, `PickWallAdjust`, `FindStairRotation`.
 
 ## Reachability — the call graph
@@ -68,19 +71,93 @@ proximity-landing `appSqrt` arc, `actorReachable`, `FindRandomDest`,
    start=eye)` where `eye = Location + BaseEyeHeight` (`+0x3f4`); blocked →
    return 0.
 5. `FarMoveActor(level, pawn, point, test=1, noCheck=0)` — a test teleport to
-   the destination (vtable `+0x8c`).
+   the destination (vtable `+0x8c`); on success, restore the original Location
+   with `FarMoveActor(test=1, noCheck=1)` before dispatch.
 6. Dispatch on physics through `0x103c1000` (`thunk 0x1030353f`):
-   - `Physics==4` → fly helper `0x103c3900`
+   - `Physics==4` → `flyReach` `0x103c1190`, which calls `flyMove` `0x103c3900`
    - `Physics==1` or `3` → walk/swim helper `0x103c1b70`
    - water destination → water helper `0x103c15a0`
    - else → 0.  All helpers get `(pawn; point, radius=15.0, 0, target)` —
    the `15.0` literal `float [0x104314b8]`.
-7. `FarMoveActor(level, pawn, origLocation, test=1, noCheck=1)` — restore.
-   Velocity is restored from saved stack copies before `ret`.
+7. Each reach helper ends with its own `FarMoveActor(test=1, noCheck=1)` restore
+   and Velocity copyback.
 
-The dispatcher `0x103c1000` re-tests the destination zone (`[ebp-0x30]` result
-of the `PointRegion` write) and the pawn `Physics` byte (`+0x30`) to pick the
-helper.
+The dispatcher `0x103c1000` tests the pawn's current `Region.Zone` water bit
+and its `Physics` byte (`+0x30`) to pick the helper. The point worker restores
+the test teleport before dispatch; each reach helper restores its own test
+moves at exit.
+
+## Flying contract recovered 2026-09-19
+
+Before implementing this slice, the installed, hash-verified Engine.dll was
+read again through `NavProbe`: thunk `0x10303c9c` jumps to `0x103c1190`, and
+thunk `0x1030326f` jumps to `0x103c3900`. The original unwind strings name
+these bodies `APawn::flyReachable` and `APawn::flyMove`. `0x10303422` instead
+jumps to the unported jump-arc worker `0x103c2f50`. The earlier notes calling
+`0x103c1190` a jump helper were wrong: Pawn.uc's packed flag order identifies
+`+0x318 & 0x8000` as `bCanFly`, `0x1000` as `bCanJump`, and `0x4000` as
+`bCanSwim`. Walk reach's blocked-flight branch calls the same flying body.
+Local disassemblies: `.cache/nav-disasm/w_flyMove.txt` and `w_flyReach.txt`.
+
+`flyMove(pawn, delta, target, scale, restoreOnFailure)` (`0x103c3900`):
+
+1. Save Location, compute the step-up vector `(-0, -0, MaxStepHeight)` from
+   two multiplications by the DLL's `-1.0f` at `0x104298f0`, and test-move by
+   Delta with the current Rotation and flags `(1,1,0,0)`.
+2. A non-null target hit returns 5 immediately. When Hit.Time < 1 (including
+   unordered), store `remaining = f32(1.0 - Time)`, round each remaining Delta
+   component to f32, move up, then move by the remaining **three-dimensional**
+   Delta. Only the forward retry checks the target; an up-step target hit alone
+   does not return 5. There is no step-down probe.
+3. Compare `scale * scale` against the retained x87 squared displacement
+   `(x-oldX)^2 + (y-oldY)^2 + (z-oldZ)^2`. Sufficient displacement (inclusive,
+   or unordered) returns 1. Otherwise restore Location via FarMoveActor(1,1)
+   only when the final argument is nonzero, and return 0. Rotation is read
+   again for each move. Velocity is untouched.
+
+`flyReach(pawn, point, radius, reachFlags, target)` (`0x103c1190`):
+
+1. Save Location/Velocity; accumulate reach bit 2. The step length is
+   `max(CollisionRadius, 200.0f)` (`0x10431444`), with native unordered choice
+   preserved. Store radius-squared and step-squared to f32.
+2. At each iteration compute retained x87 dx/dy/dz and their three-dimensional
+   squared distance, also storing the vector and squared distance to f32.
+   Arrival needs retained distance <= stored radius-squared **and** retained
+   abs(dz) <= CollisionHeight. Both compares include unordered. For a stored
+   distance below step-squared, call flyMove with the raw f32 vector and scale
+   8.0f; otherwise SafeNormal it, scale by the step and use 4.1f. Its final
+   restore-on-failure argument is always 0.
+3. flyMove return 5 means success; return 0 stops. Otherwise a current water
+   zone stops flight: only bCanSwim and non-pain/matching ReducedDamageType
+   allow delegation to waterReach, whose returned mask replaces reachFlags.
+   There is no dry-zone pain check in this body. The loop counter starts at
+   100 and stops when its decremented value is negative (up to 101 moves).
+4. On failure, a WarpZoneMarker whose `+0x44c` equals current Region.Zone can
+   still succeed. Always FarMoveActor(1,1) back to saved Location, then restore
+   Velocity. Return accumulated reachFlags on success, otherwise 0.
+
+The original reference cases were captured before the JS translation, using
+`node scripts/validate-pawn-flying-reach.mjs --original-only`. They confirmed
+return codes, move/restore counts and the walking fallback's combined mask 3;
+the comparison now checks every ordered boundary call and its raw argument
+bits, as well as the return and final Location/Velocity. Captures stay under
+`.cache/pawn-nav/flying-reference.json`. The original retained-distance case
+`point=(15,0.001,0), radius=15` requires a move even though the stored f32
+squared distance equals 225; a mutant using the stored value is rejected.
+
+Two adjacent issues surfaced at the integration boundary: the native checkMove
+prologue explicitly zeroes incoming Delta.Z (`0x103c32c0`), and its up-step
+multiplies both zero components by -1, producing negative zeros. The translation
+now preserves both. The probe's per-operation buffers were already reset, but
+its callsite ordering log accumulated earlier scenes; it now resets per scene
+as well. Raw argument-bit captures preserve signed zero and integer Rotation.
+
+Still unresolved: waterReach and jumpArc translations, actual level collision/
+zone service composition, and VM navigation dispatch. Accepted swimming
+handoffs, non-finite inputs and dynamically changing zones are not covered by
+this flying corpus. An accepted water handoff requires an explicit service;
+none is invented. Passing scripted-boundary comparisons does not establish
+original whole-scene flight.
 
 ## The walk/swim helper `0x103c1b70`
 
@@ -97,11 +174,12 @@ Per iteration, against `flat = (dx, dy, 0)` and `dz`:
   `0x103c3290`) moves the pawn by a scaled delta and returns a code:
   - `1` → keep stepping (loop continues);
   - `5` → reached (sets `[ebp-0x14]=1`, `edi=0`);
-  - `−1` → retry: if the needed step `≤ maxStepHeight` → `edi=1` (continue);
-    else `flags+0x318` bit `0x1000` set → `SafeNormal` + alternate-move helper
-    `0x10303422`; bit `0x8000` → `jumpArc` `0x10303c9c`.
-  - `0`/other → `pawn+0xd0` clear → fail (`reached=0`); else the alternate
-    `jumpArc`/helper result sets `reached`.
+  - Other results first test `pawn+0xd0`; a clear byte stops with failure.
+    Otherwise `bCanFly` (`0x8000`) delegates to flyReach through `0x10303c9c`.
+    Failing that, `bCanJump` (`0x1000`) accumulates reach bit 8 and, for return
+    `−1`, invokes `SafeNormal` + jumpArc through `0x10303422`. Without either
+    capability, return `−1` retries only if the current step radius exceeds
+    MaxStepHeight, clamping that radius to MaxStepHeight.
 - **Pain-zone gate** — `FootRegion.Zone` (`+0x330`) `+0x388` bit `0x20` set and
   `zone+0x350 != pawn+0x444` → `reached=0`, bail.
 - **Water gate** — `Region.Zone` water (`+0x388` bit `0x01`): needs `flags
@@ -156,7 +234,7 @@ calls per `checkMove`); a full move drops to the `maxStep+2` down-probe.
 | `+0x144` | `Velocity` | saved/restored |
 | `+0x1d4` | `CollisionRadius` | arrival/landing scale |
 | `+0x1d8` | `CollisionHeight` | arrival/landing scale |
-| `+0x318` | pawn flag dword | swim `0x4000`, jump `0x8000`, alt `0x1000`, reach-mask bits |
+| `+0x318` | pawn flag dword | swim `0x4000`, fly `0x8000`, jump `0x1000`, reach-mask bits |
 | `+0x330` | `FootRegion.Zone` | pain-zone gate |
 | `+0x33c` | `HeadRegion.Zone` | — |
 | `+0x38c` | `MaxStepHeight` | climb gate, checkMove delta |
@@ -269,29 +347,43 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
   no-holder fallback, `CR>115` gate, overhead-nav `|dz|<CH` gate, Inventory
   restore to the worker) plus 8 mutants.  The verdict is `*result`-normalized;
   unspecified actor fields are 0 (the probe zeroes fabricated memory).
-- `checkMove` `0x103c3290` — **ported to JS, bit-exact vs oracle** across 16
+- `checkMove` `0x103c3290` — **ported to JS, bit-exact vs oracle** across 17
   scenes (flat/step-up/target-hit/ledge/steep/under-moved/low-grav) plus 4
-  mutants detected (commit `26a2f08`).
+  mutants detected. The latest case additionally verifies incoming Delta.Z
+  is zeroed, and the flying-fallback comparison checks signed-zero step args.
 - `walkReach` `0x103c1b70` — **ported to JS, bit-exact vs oracle** across 11
   flag-free walking scenes (flat near+far steps, inside-radius arrival,
   below-step landing, blocked, ledge no-retry vs `CR>maxStep` clamp-retry,
   diagonal, pain gate, water-no-swim gate, velocity restore) plus 2 mutants.
-  The `+0x318`-flag helper branches — jump `0x103c1190`, arc `0x103c2f50`,
-  swim `0x103c15a0` — and the swim-enabled water gate delegate to services
-  seams that are **not yet ported** (a flag-free walker never reaches them);
-  validating those needs the helper workers recovered separately.
+  The flying corpus additionally checks the `bCanFly` fallback into flyReach.
+  Jump arc `0x103c2f50` and swimming `0x103c15a0` still require unported
+  services; the existing flag-free walking scenes do not establish them.
 - `pointReachable` worker `0x103c0d30` — **ported to JS, bit-exact vs oracle**
   across 11 scenes (dry-to-dry reach, 1e6 distance gate, editor-skip, water
   gate, water+canSwim, pain gate, pain-immune, blocked LOS, arg14 LOS skip,
   farMove-test-fail, blocked walk) plus 5 mutants.  The worker returns the
   physics-dispatch result; the exec `0x103bc710` only reads the vector arg,
-  passes `arg14=0`, and stores the result — it is wired at dispatch time, not
-  in this worker.
-- The remaining helpers (`0x103c1190` jump, `0x103c15a0` water, `0x103c3900`
-  fly, `0x103c2f50` jumpArc) share the same save→100-step→restore template and
-  are mapped; `FindRandomDest`/`FindPathTo`/`FindPathToward` share the
+  passes `arg14=0`, and stores the result. VM dispatch integration is still
+  pending. The flying corpus adds a point-worker → dispatcher → flight case.
+- `flyMove` `0x103c3900` and `flyReach` `0x103c1190` — **ported to JS**,
+  connected to physics dispatch and walkReach's bCanFly fallback, with **30/30
+  original-DLL cases and 6/6 targeted mutants** passing in
+  `scripts/validate-pawn-flying-reach.mjs`. Checks include ordered movement,
+  restore and point/LOS calls, their exact argument bits, return masks and
+  final Location/Velocity bits. There is still no live VM navigation binding.
+- The remaining helpers (`0x103c15a0` waterReach, `0x103c3ca0` waterMove and
+  `0x103c2f50` jumpArc) are mapped but unported;
+  `FindRandomDest`/`FindPathTo`/`FindPathToward` share the
   ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`/`0x103db3f0`)
   recovered at the field level — see the graph layout above.
 - `FindStairRotation` (524) is inline fp using the `GMath` sine table
   (`0x103fxxxx` via Core's `FVector::Rotation`) — integer math, no
   transcendentals; the Unicorn oracle is authoritative for it.
+
+Focused checkpoint, 2026-09-19: `validate-pawn-nav.mjs` passes 96/96 cases and
+28/28 mutants; `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6
+mutants; `npm test` passes 486/486. The full `npm run validate -- --jobs 4`
+sweep also passes all 312 validators with zero skips/failures in 162.2 seconds
+(local log: `.cache/stage3-sweep-4jobs.log`). Stage 3 remains unfinished. Next navigation
+work is original waterMove/waterReach recovery, then jumpArc and the remaining
+path workers before composing the live level services and VM dispatch.

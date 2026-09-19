@@ -33,13 +33,15 @@ and reaches the per-kind serializers and linkers below.
 byte-consuming serialization; `src/runtime/script-property-serialize-item.mjs`
 owns the per-property value read; the archive's raw 4-byte read and the
 object/name references remain the host-archive boundary supplied by
-`scripts/validate-linker-preload.mjs`, which reads the real package bytes.
+`src/runtime/script-load-graph.mjs`. The validator and Play's class loader now
+share this graph and read real package bytes through the same archive.
 
 ## Validation — against the decoded package, not itself
 
 `scripts/validate-linker-preload.mjs` runs the preload closure over the
-`DeusEx.u` linker (9346 serialized / 39,414 constructed / 1494 class exports
-once the set below is loaded), then verifies a curated set of class exports
+`DeusEx.u` linker (9,316 serialized / 10,111 constructed, plus 53 static
+re-initializations / 412 class exports once the set below is loaded), then
+verifies a curated set of class exports
 field-for-field against the project's independently decoded package through
 one per-class comparator (`verifyClassExport`): children-chain length and each
 child's name and class, per-property `ArrayDim`, `PropertyFlags` and linked
@@ -143,6 +145,24 @@ that no tag anywhere in the closure took any warn-and-skip path
   type/index/struct). A self-consistent shipped package contains none: the
   closure asserts zero such events. This path is a save-game/version-skew
   concern for Stage 6, not a hole in the preload slice.
+
+## Import verification and lazy export creation
+
+The harness now uses the recovered `Verify`, `VerifyImport`, `IndexToObject`
+and `CreateImport` bodies, including the native export-hash construction and
+registered-object admission flags. See
+[`script-linker-imports.md`](script-linker-imports.md) for the original contract
+and 30 DLL comparisons. Assertions establish that verification constructs no
+exports, including `Engine.Inventory`, and that its first reference creates it
+through the selected Engine export before DataVaultImage's super preload.
+
+The previous host path search and fixture-wide eager export construction are
+removed. Its 39,414 constructed objects were preparation breadth, not original
+`Verify` behavior; the smaller closure above contains the actual dependencies
+of the selected loads. File discovery and native service adapters remain local
+graph boundaries. Play now consumes it for class loading and serialized defaults
+through `ScriptClassLoader`; general native resource serialization and post-load
+ownership remain incomplete. See [`script-load-graph.md`](script-load-graph.md).
 
 ## Native class-registration registry
 

@@ -37,15 +37,51 @@ guard. Native event hooks and complete actor eligibility/world tick ordering
 remain separate integration work.
 
 The common native dispatcher supplies GotoState113, Enable117, Disable118,
-FRand195, VRand252, Sleep256, FinishAnim261, SetOwner272, Spawn278, Destroy279, SetTimer280, SetRotation299 and IsA303. Destroy requires an
+FRand195, VRand252, Sleep256, PlayAnim259, LoopAnim260, FinishAnim261,
+SetOwner272, Spawn278, Destroy279, SetTimer280, TweenAnim294, SetRotation299 and IsA303. Destroy requires an
 explicit validated world adapter and native object registration. Probe controls use the complete 64-entry native
 EName table. FRand shares the original random stream with player physics and
 stores the native float32 result. VRand shares that stream, performs the
 original three-component rejection sample, and preserves the recovered x87
 reciprocal/float32 store behavior. FinishAnim installs latent action `0x181`
 from the original animation-field gates and its poll clears only on the native
-`bAnimFinished` bit; the animation tick that sets that bit remains a separate
-boundary. SetRotation implements the recovered zero-delta
+`bAnimFinished` bit. `processActorAnimation` now translates the original main/
+blend phase, notifies and AnimEnd and sets that bit through the linked fields;
+38 original DLL cases and Jaime's helper→tick→FinishAnim integration pass.
+The standalone `processActorTick` entry now supplies the recovered per-actor
+admission and animation/event/state/timer/physics ordering, with 37 complete
+original function executions compared; see [actor tick](script-actor-tick.md).
+`processLevelTick` now composes standalone world scheduling with that actor
+entry and CleanupDestroyed. 31 complete original-DLL references cover the
+ordering/clock/pause boundaries; a two-frame Training fixture verifies owner
+deferral and the linked runtime. Callers still supply a prepared original actor
+array, native host services and startup; this does not enroll the full Play
+world. See [level tick](script-level-tick.md).
+Actor.Tick now defaults to the recovered ShowSelf/CheckEnemyVisible helpers,
+sharing the original LOS worker and live PawnList. 24 complete original-DLL
+helper/LOS cases pass, and the Training integration runs the actual SeePlayer
+script with BSP sight checks. UObject validity and a numeric double level clock
+remain required when reached. AICanSee now calls the recovered AIVisibility
+cache/movement worker, backed by AIGetLightLevel over live level lights and
+flag-6 collision queries. Natives 700/701 dispatch through the same functions;
+41 original worker/wrapper cases and three Training map snapshots pass.
+AIVisibility uses reflected LevelInfo.TimeSeconds, whose synchronization and
+Region initialization remain part of full-world startup/tick integration.
+See [AI lighting](script-ai-visibility.md) and [tick visibility](script-pawn-tick-visibility.md).
+See [animation tick](script-animation-tick.md). Animation control calls share the original linked booleans and SimAnim
+Plane; 37 original exec comparisons establish their frame/tween, continuation
+and replication-field writes (see [animation controls](script-animation-controls.md)).
+`getActorMeshFrame` now translates ULodMesh::GetFrame using the same prepared
+mesh, linked animation/transform fields and global UObject identity service.
+Its persistent main/four-blend caches, interpolation and transforms match 46
+complete original-DLL calls. Jaime's original helper→animation tick→vertex
+fixture checks the runtime boundary. Full-resolution surface decoding and
+skin selection now share this prepared resource. GetMeshTexture1013 preserves
+its own bounds and fallback rules, checked in 28 full native calls; original
+SetSkinStyle/ResetSkinStyle execute on Jaime. Reduced LOD, mesh lighting and
+Play rendering remain open. See [mesh frames](script-lodmesh-frame.md) and
+[surface/skin selection](script-lodmesh-materials.md).
+SetRotation implements the recovered zero-delta
 short path, with full movement branches explicitly unsupported. IsA compares the original short class name through the base chain.
 Auto state selection follows serialized child order from the derived class
 through its bases, choosing the first state with the original auto flag.

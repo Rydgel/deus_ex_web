@@ -26,7 +26,7 @@ six-argument `GNative` exec wrapper.
 
 The port is `src/runtime/script-pawn-perception.mjs`; the Unicorn oracle is
 `scripts/native-pawn-perception-probe.py`; the JS-twin comparator and mutation
-corpus live in `scripts/validate-pawn-perception.mjs` (51 scenes + 13
+corpus live in `scripts/validate-pawn-perception.mjs` (55 scenes + 13
 mutations, all bit-exact against the oracle).
 
 ## Field layout the bodies dereference
@@ -202,7 +202,9 @@ Pipeline (early-outs return `0`):
 7. **Near-target pitch floor** (`0x103c6e38`): `distSq < 22500 &&
    pitchTrap < 0.75 → pitchTrap = 0.75` (`0x10431620`/`0x1042abf8`) — a close
    target directly overhead still reads as at least 75% visible.
-8. `bCheckVisibility && acc>0`: `acc *= lighting(other, oLoc)`.
+8. `bCheckVisibility && acc>0`: call `AIVisibility(other,1)` and multiply its
+   retained x87 result by the f32 accumulator, then store f32. This includes
+   the target's visibility cache and velocity boost; see [AI lighting](script-ai-visibility.md).
 9. `acc = clamp(acc - VisibilityThreshold, 0, 1)` (`+0x5bc`).
 10. `bCheckLOS && acc>0`: `SingleLineCheck` traces; a blocked result zeroes
     `acc`.
@@ -273,3 +275,18 @@ remain unimplemented.  `PlayerCanSeeMe`'s net-player list (`NetMode==0`/`3`)
 is modeled from the level's player/`netActors` set; the dedicated server
 `NetMode` paths are recovered but exercised only through the `netMode`
 scenes in the corpus.
+
+The runtime now supplies the recovered AIGetLightLevel/AIVisibility chain.
+The isolated perception probe keeps AIGetLightLevel as a recorded query leaf;
+its complete body has a separate 41-case DLL comparison and Training map checks.
+The 55 perception cases now compare every target's three visibility-cache fields,
+including four cache-refresh/interpolation boundaries through native 705. Full
+Region/clock synchronization belongs to pending world startup/tick integration.
+
+## Actor.Tick visibility integration
+
+The same LOS worker now serves ShowSelf and CheckEnemyVisible, with 24 complete
+original-DLL helper/LOS comparisons and linked Training script/BSP checks.
+See [the recovered helper contract](script-pawn-tick-visibility.md). These
+helpers do not supply NPC startup; AICanSee's separate lighting subsystem is
+documented in [AI lighting](script-ai-visibility.md).

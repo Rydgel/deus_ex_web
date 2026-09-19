@@ -139,7 +139,9 @@ After those writes, the original `TakeDamage` path selects
 `PlayAnim('HitLegLeft', , 0.1)`, which reaches AActor `execPlayAnim` native 259.
 The canonical `DeusExCharacters.GM_Trench` resource is prepared during player
 attachment, so the live native state is `AnimSequence=HitLegLeft`,
-`AnimFrame=-4`, `AnimRate=2.5`, `TweenRate=0.4f`, and `AnimLast=-3`.
+`AnimFrame=-0.25`, `AnimRate=2.5`, `TweenRate=2.5`, and `AnimLast=0.75`.
+These values include the original-execution reciprocal correction documented in
+[animation controls](script-animation-controls.md).
 `Human.PlayTakeHitSound` then chooses its original pain-sound branch from the
 shared RNG and reaches the existing recorded-audio boundary. The scene router
 records the exact unsupported native as `DamageTrigger1.Timer mission script`

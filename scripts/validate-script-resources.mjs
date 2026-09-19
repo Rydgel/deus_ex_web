@@ -32,7 +32,7 @@ const light = await registry.materialize(deco, lightIndex);
 assert.equal(light.kind, 'LodMesh');
 assert.equal(light.nativeClass.path, 'Engine.LodMesh');
 assert.equal(light.outer.kind, 'Package');
-assert.equal(light.payloadStatus, 'decoded-eager-prefix');
+assert.equal(light.payloadStatus, 'decoded-lodmesh');
 assert.equal(light.payloadComplete, false);
 assert.deepEqual(light.payload.sequences.map(sequence => sequence.name), ['All', 'Still', 'Off', 'On']);
 assert.deepEqual(light.payload.boundingBox.min, [-960, -162, -1600]);
@@ -76,7 +76,7 @@ const report = {
   unsupported: [
     'Sound native lazy loading and audio ownership',
     'Texture bulk-data decode and native ownership',
-    'ULodMesh lazy geometry and final native release',
+    'ULodMesh renderer, native load-graph lifecycle and final release',
   ],
 };
 console.log(JSON.stringify(report, null, 2));

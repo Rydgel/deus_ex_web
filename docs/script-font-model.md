@@ -187,3 +187,14 @@ polarity, font-slot read (GetFontHeight).
 - The `|c` color scale constant `0x1005e3e8` differs in the low mantissa
   bits from the GC color scale `0x1005e3c0`; both are asserted from DLL
   bytes, not unified.
+
+### Page texture reference resolved for the live HUD
+
+The browser HUD now resolves the page headers for FontTiny,
+FontMenuHeaders_DS and FontFixedWidthSmall_DS through the original serialized
+UObject reference. Engine.dll UFont::Serialize (0x10385400), its page array
+(0x10385680), and FFontPage serializer (0x10385940) establish texture reference
+then glyph array. The three fonts' headers each contain two compact indices
+(texture and glyph count); their glyph metrics remain checked by the existing
+model. [The HUD bridge](script-play-hud.md) uses those pages with the recovered
+GC.DrawText glyph path. This does not implement general UFont load finalization.

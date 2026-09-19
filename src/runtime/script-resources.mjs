@@ -3,12 +3,12 @@
  *
  * This module deliberately stops at the evidence-backed boundary in
  * docs/script-resources.md. It links package exports to a stable outer and
- * class identity, decodes the recovered LodMesh prefix and Sound WAV payload,
+ * class identity, decodes the recovered LodMesh data and Sound WAV payload,
  * and leaves other native payloads opaque.
  */
 import {objectAt} from '../unreal/objects.mjs';
 import {ScriptObjects} from './script-objects.mjs';
-import {decodeLodMesh} from './lodmesh.mjs';
+import {decodeLodMeshPayload} from './lodmesh-payload.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
 
 export class ScriptResourceError extends Error {
@@ -137,13 +137,14 @@ function immutableCopy(value) {
  * same canonical identities for bytecode and loaded exports.
  */
 export class ScriptResourceRegistry {
-  constructor({assets, objects = null, indexProvider = null} = {}) {
+  constructor({assets, objects = null, indexProvider = null, loader = null} = {}) {
     if (!assets || typeof assets.get !== 'function' || typeof assets.resolve !== 'function') {
       throw new TypeError('ScriptResourceRegistry requires an AssetStore-like assets object');
     }
     this.assets = assets;
     this.objects = objects ?? new ScriptObjects(assets);
     this.indexProvider = indexProvider;
+    this.loader = loader;
     this.resources = new Map();
     this.pending = new Map();
     this.packages = new Map();
@@ -269,6 +270,12 @@ export class ScriptResourceRegistry {
   /** Package identity used as the implicit outer for root exports. */
   async package(assetOrName) {
     const asset = await this.#asset(assetOrName);
+    return this.packageIdentity(asset);
+  }
+
+  /** Synchronous identity boundary for an already fetched linker root. */
+  packageIdentity(asset) {
+    if (!isAsset(asset)) throw new TypeError('Package identity requires a loaded asset');
     const key = keyForAsset(asset);
     if (this.packages.has(key)) return this.packages.get(key);
     const record = {
@@ -309,6 +316,7 @@ export class ScriptResourceRegistry {
       slot: 'class', target: record.nativeClass, mutable: false,
       evidence: 'serialized export ClassIndex or native class registration',
     });
+    for (const reference of record.payloadReferences ?? []) references.push(reference);
     if (typeof visit === 'function') for (const reference of references) visit(reference);
     return references;
   }
@@ -472,9 +480,36 @@ export class ScriptResourceRegistry {
     }
     record.materialization = 'native-resource';
     if (native.resourceKind === 'LodMesh') {
-      record.payload = decodeLodMesh(record.asset.pkg, record.asset.bytes, record.index);
-      record.payloadStatus = 'decoded-eager-prefix';
-      record.unsupported.push('LodMesh lazy arrays and serialized tail are not decoded; payload references there are not collected');
+      if (this.loader) {
+        const loaded = await this.loader.load(record.object);
+        const {slotOf} = this.loader.graph;
+        if (this.loader.identity(slotOf(loaded, 0x24)) !== (record.nativeClass.object ?? record.nativeClass) ||
+            this.loader.identity(slotOf(loaded, 0x18)) !== (record.outer.object ?? record.outer))
+          throw new ScriptResourceError(`Native mesh Class/Outer identity mismatch: ${record.fullPath}`);
+        if (!loaded.meshPayload)
+          throw new ScriptResourceError(`Native mesh serializer has no payload: ${record.fullPath}`);
+        record.loadRecord = loaded;
+        record.payload = loaded.meshPayload;
+        record.payloadSource = 'original-linker-serialized';
+      } else {
+        record.payload = decodeLodMeshPayload(record.asset.pkg, record.asset.bytes, record.index);
+        record.payloadSource = 'detached-inspection';
+      }
+      record.payloadStatus = record.payload.payloadStatus;
+      record.unsupported.push(...record.payload.unsupported);
+      record.payloadReferences = [];
+      for (const {slot, index, object} of record.payload.objectReferences) {
+        if (!index) continue;
+        let target;
+        if (this.loader) {
+          const canonical = this.loader.identity(object);
+          target = await this.#materialize(canonical.asset, canonical.index, true);
+          if (target.object !== canonical)
+            throw new ScriptResourceError(`Native mesh Texture identity mismatch: ${record.fullPath}`);
+        } else target = await this.#resolveReference(record.asset, index, true);
+        record.payloadReferences.push({slot, target, mutable: false,
+          evidence: 'original UMesh::Serialize +0xd8 UObject array (0x103a9f90)'});
+      }
       return;
     }
     if(native.resourceKind==='Sound'){

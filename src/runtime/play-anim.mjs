@@ -1,153 +1,122 @@
-/**
- * Original `AActor::execPlayAnim` (native 259) and the mesh sequence lookup
- * it calls, translated from the GOTY Engine.dll.
- *
- * Evidence: docs/script-play-anim.md (complete execPlayAnim body transcribed
- * from Engine.asm, body 0x103e0160; sequence lookup bodies 0x1031c000 and
- * 0x1031c050) and docs/lodmesh-serialization.md (the serialized AnimSeq
- * layout recovered by executing the original serializer in
- * scripts/native-lodmesh-oracle.py).
- *
- * Actor field mapping (original offset -> runtime field):
- *   +0x54 AnimSequence (name index, 0 == none)  -> actor.AnimSequence
- *   +0x58 AnimFrame (float)                     -> actor.AnimFrame
- *   +0x5c AnimRate (float)                      -> actor.AnimRate
- *   +0x60 TweenRate (float)                     -> actor.TweenRate
- *   +0x144/+0x148/+0x14c Velocity               -> actor.Velocity (bound by
- *     docs/camera.md and the animation-tick body 0x103a1c98, which computes
- *     the same velocity-magnitude pattern for AnimRate < 0)
- *   +0x220 AnimLast (float, 1 - NumFrames)      -> actor.AnimLast
- *   +0x224 AnimMinRate (velocity-scaled clamp; the animation-tick body at
- *     0x103a1cd2 reads it for negative AnimRate exactly as Actor.uc declares)
- *   +0x228 OldAnimRate ("= AnimRate until animation completes"; the SimAnim
- *     tail copies bits(+0x5c) here and the TweenTime==-1 branch reads it)
- *   +0x22c..+0x238 SimAnim region               -> actor.simAnim
- *   flags bits 0x39/0x20                        -> actor.animFlags
+/** Original PlayAnim (259), LoopAnim (260), TweenAnim (294) and sequence lookup.
+ * Authority and original-execution corrections: docs/script-animation-controls.md.
+ * These control calls update animation state; they do not advance animation time.
  */
-import {LodMeshError} from './lodmesh.mjs';
-
 const f = Math.fround;
+const nameKey = value => String(value ?? 'None').toLowerCase();
+const hasSequence = value => value != null && value !== 0 && nameKey(value) !== 'none';
+const unordered = (a, b) => Number.isNaN(a) || Number.isNaN(b);
+const equalOrUnordered = (a, b) => a === b || unordered(a, b);
+const lessOrUnordered = (a, b) => a < b || unordered(a, b);
+const nonzeroOrdered = value => value !== 0 && !Number.isNaN(value);
 
-/** mesh vtable +0x68 (0x1031c000/0x1031c050): linear scan of the 0x20-stride table. */
+/** UMesh vtable +68: original FName identity comparison in the 32-byte table. */
 export function findAnimSeq(mesh, sequenceName) {
-  if (!mesh) return null;
-  return mesh.sequences.find(sequence => sequence.name === sequenceName) || null;
+  return mesh?.sequences.find(sequence => nameKey(sequence.name) === nameKey(sequenceName)) ?? null;
 }
 
-/**
- * AActor::execPlayAnim. `mesh` is the decoded LodMesh payload or null.
- * `rate` and `tweenTime` are the evaluated float arguments in declaration
- * order (Sequence, Rate default 1.0, TweenTime default -1.0; the caller's
- * native parameter loop applies the defaults). `log` receives the original
- * warning paths; both guards return without writing animation state.
- */
-export function execPlayAnim(actor, mesh, sequenceName, rate, tweenTime, log = () => {}) {
-  if (!mesh) {
-    log('playAnimNoMesh', {sequence: sequenceName});
-    return;
-  }
-  const sequence = findAnimSeq(mesh, sequenceName);
-  if (!sequence) {
-    log('playAnimUnknownSequence', {sequence: sequenceName, mesh: mesh.entry.name});
-    return;
-  }
-  // seq+0x0c NumFrames is consumed as fildl (double) in the rate expression
-  // and as a float store below; seq+0x10 is the serialized Rate multiplier
-  // and seq+0x18 the notify-array Num feeding the loop flag.
-  const numFrames = sequence.numFrames;
-  const sequenceRate = sequence.rate;
-  const loopFlag = sequence.notifyCount !== 0 ? 1 : 0;
+function sequenceOrLog(mesh, name, kind, log) {
+  if (!mesh) { log(`${kind}NoMesh`, {sequence: name}); return null; }
+  const sequence = findAnimSeq(mesh, name);
+  if (!sequence) log(`${kind}UnknownSequence`, {sequence: name, mesh: mesh.entry.name});
+  return sequence;
+}
 
-  // +0x54 == 0 (no previous sequence): TweenTime collapses to 0 (0x103e01ff).
-  const hadSequence = actor.AnimSequence !== undefined && actor.AnimSequence !== null &&
-    actor.AnimSequence !== 'None';
-  const tween = hadSequence ? tweenTime : 0;
-
-  actor.AnimSequence = sequenceName;
-  // +0x5c = fl32(fl64(Rate) * fl64(seqRate) / fl64(NumFrames)) (0x103e0210).
-  const animRate = f(Number(rate) * Number(sequence.rate) / Number(numFrames));
-  // +0x220 = fl32(1.0 - fl64(NumFrames)) (0x103e022d).
-  const animLast = f(1.0 - Number(numFrames));
-  // flags = (flags & ~0x39) | ((seq+0x18 != 0) << 5) (0x103e0244).
-  actor.animFlags = (Number(actor.animFlags ?? 0) & ~0x39) | (loopFlag << 5);
-
-  const state = {animRate, animLast, animFrame: 0, TweenRate: 0};
-  if (animLast === 0) {
-    // NumFrames == 1 (0x103e025e): AnimMinRate and OldAnimRate are zeroed.
-    actor.animFlags &= ~0x20;
+/** Shared new-sequence path; the distinct original SimAnim tails stay separate. */
+function startAnimation(actor, sequence, rate, tweenTime, looping, minRate = 0) {
+  const n = sequence.numFrames, tween = hasSequence(actor.AnimSequence) ? f(tweenTime) : 0;
+  actor.AnimSequence = sequence.name;
+  actor.AnimRate = f(f(rate) * f(sequence.rate) / n);
+  actor.AnimLast = f(1 - 1 / n);
+  if (looping) actor.AnimMinRate = minimumRate(sequence, minRate);
+  actor.animFlags = ((Number(actor.animFlags ?? 0) & ~0x38) |
+    (sequence.notifyCount ? 0x20 : 0) | (looping ? 0x10 : 0)) >>> 0;
+  if (equalOrUnordered(actor.AnimLast, 0)) {
+    actor.animFlags = (actor.animFlags & ~0x20) >>> 0;
     actor.AnimMinRate = 0;
     actor.OldAnimRate = 0;
-    if (Number(tween) > 0) {
-      state.TweenRate = f(Number(tween) / 1.0);
-      state.animRate = 0;
-      state.animFrame = f(Number(numFrames) / -1.0);
-    } else {
-      state.TweenRate = 10;
-      state.animRate = 0;
-      state.animFrame = f(Number(numFrames) / -1.0);
-    }
-    commitSimAnim(actor, state);
-    return;
+    actor.TweenRate = tween > 0 ? f(1 / tween) : 10;
+    actor.AnimRate = 0;
+    actor.AnimFrame = f(-1 / n);
+  } else if (tween > 0) {
+    actor.TweenRate = f(1 / (n * tween));
+    actor.AnimFrame = f(-1 / n);
+  } else if (equalOrUnordered(tween, -1)) {
+    actor.AnimFrame = f(-1 / n);
+    const old = f(actor.OldAnimRate ?? 0);
+    if (old > 0) actor.TweenRate = old;
+    else if (lessOrUnordered(old, 0)) {
+      const [x, y, z] = (actor.Velocity ?? [0, 0, 0]).map(f);
+      // CRT sqrt returns double; the original does not store a float norm.
+      const velocityRate = -Math.sqrt((x*x + y*y) + z*z) * old;
+      const halfRate = actor.AnimRate * 0.5;
+      actor.TweenRate = f(lessOrUnordered(halfRate, velocityRate) ? velocityRate : f(halfRate));
+    } else actor.TweenRate = f(1 / (n * 0.025));
+  } else {
+    actor.TweenRate = 0;
+    actor.AnimFrame = f(looping ? 0.0001 : 0.001);
   }
-  if (Number(tween) > 0) {
-    // 0x103e0300 branch: TweenRate = NumFrames * TweenTime; frame = -NumFrames.
-    state.TweenRate = f(Number(numFrames) * Number(tween) / 1.0);
-    state.animFrame = f(Number(numFrames) / -1.0);
-    commitSimAnim(actor, state);
-    return;
-  }
-  if (Number(tween) === -1) {
-    // 0x103e02ef: TweenTime == -1 branch; OldAnimRate (= the previous
-    // AnimRate bits) selects the tween.
-    state.animFrame = f(Number(numFrames) / -1.0);
-    const oldRate = f(Number(actor.OldAnimRate ?? 0));
-    if (oldRate > 0) {
-      state.TweenRate = oldRate;
-    } else if (oldRate === 0) {
-      state.TweenRate = f(Number(numFrames) * 0.025 / 1.0);
-    } else {
-      tweenNormPath(actor, state);
-    }
-    commitSimAnim(actor, state);
-    return;
-  }
-  // TweenTime < 0 and != -1 (0x103e03bc).
-  state.TweenRate = 0;
-  state.animFrame = f(0.001);
-  commitSimAnim(actor, state);
 }
 
-/** 0x103e0344: TweenRate = max(-OldAnimRate * |Velocity|, AnimRate * 0.5).
- * Only reachable when the previous animation was velocity-scaled (negative
- * OldAnimRate); the tween then comes from the velocity magnitude. */
-function tweenNormPath(actor, state) {
-  const velocity = actor.Velocity ?? [0, 0, 0];
-  const dot = Number(velocity[2]) ** 2 + Number(velocity[1]) ** 2 + Number(velocity[0]) ** 2;
-  // A = fl32(fl64(fl32(sqrt(dot))) * fl64(OldAnimRate) * fl64(-1.0)).
-  const a = f(Number(f(Math.sqrt(dot))) * Number(actor.OldAnimRate ?? 0) * -1.0);
-  // B = fl32(AnimRate * 0.5f).
-  const b = f(state.animRate * f(0.5));
-  state.TweenRate = b < a ? a : b;
+function minimumRate(sequence, rate) {
+  rate = f(rate);
+  return equalOrUnordered(rate, 0) ? 0 : f(f(sequence.rate) / sequence.numFrames * rate);
 }
 
-/** SimAnim tail (0x103e03c6) and the +0x228 bits mirror. */
-function commitSimAnim(actor, state) {
+function simState(actor, lastScale) {
+  const rate = actor.AnimRate * 5000;
+  return {frame: f(actor.AnimFrame * 10000), rate: rate > 32767 ? 32767 : f(rate),
+    tween: f(actor.TweenRate * 1000), last: f(actor.AnimLast * lastScale)};
+}
+
+/** AActor::execPlayAnim, 0x103e0160. */
+export function execPlayAnim(actor, mesh, sequenceName, rate, tweenTime, log = () => {}) {
+  const sequence = sequenceOrLog(mesh, sequenceName, 'playAnim', log);
+  if (!sequence) return;
+  startAnimation(actor, sequence, rate, tweenTime, false);
   const old = actor.simAnim ?? {frame: 0, rate: 0, tween: 0, last: 0};
-  const next = {
-    frame: f(Number(state.animFrame) * 10000.0),
-    rate: Math.min(f(Number(state.animRate) * 5000.0), 32767.0),
-    tween: f(Number(state.TweenRate) * 1000.0),
-    last: f(Number(state.animLast) * 10000.0),
-  };
-  if (old.frame === next.frame && old.rate === next.rate &&
-      old.tween === next.tween && old.last === next.last) {
-    next.last = f(Number(next.last) + 1.0);
-  }
+  const next = simState(actor, 10000);
+  // TEST C3; JE skips the increment on an ordered unequal component.
+  if (Object.keys(next).every(key => equalOrUnordered(old[key], next[key]))) next.last = f(next.last + 1);
   actor.simAnim = next;
-  // +0x228 = bits(+0x5c) (movl copy): OldAnimRate = the previous AnimRate.
-  actor.OldAnimRate = state.animRate;
-  actor.AnimFrame = state.animFrame;
-  actor.AnimRate = state.animRate;
-  actor.TweenRate = state.TweenRate;
-  actor.AnimLast = state.animLast;
+  actor.OldAnimRate = actor.AnimRate;
+}
+
+/** AActor::execLoopAnim, 0x103e05e0. */
+export function execLoopAnim(actor, mesh, sequenceName, rate, tweenTime, minRate, log = () => {}) {
+  const sequence = sequenceOrLog(mesh, sequenceName, 'loopAnim', log);
+  if (!sequence) return;
+  const flags = Number(actor.animFlags ?? 0) >>> 0;
+  const continuing = nameKey(actor.AnimSequence) === nameKey(sequenceName) && (flags & 0x10) &&
+    hasSequence(actor.AnimSequence) && nonzeroOrdered(lessOrUnordered(f(actor.AnimFrame), 0)
+      ? f(actor.TweenRate) : f(actor.AnimRate));
+  if (continuing) {
+    actor.animFlags = (flags & ~0x08) >>> 0;
+    actor.AnimRate = f(f(rate) * f(sequence.rate) / sequence.numFrames);
+    actor.AnimMinRate = minimumRate(sequence, minRate);
+    const old = actor.simAnim ?? {frame: 0, rate: 0, tween: 0, last: 0};
+    const next = {...old, rate: f(actor.AnimRate * 5000),
+      last: f((1 - 1 / sequence.numFrames) * -10000)};
+    actor.OldAnimRate = actor.AnimRate;
+    // Like PlayAnim, bump the replicated last component only when unchanged.
+    if (Object.keys(next).every(key => equalOrUnordered(old[key], next[key]))) next.last = f(next.last + 1);
+    actor.simAnim = next;
+  } else {
+    startAnimation(actor, sequence, rate, tweenTime, true, minRate);
+    actor.OldAnimRate = actor.AnimRate;
+    actor.simAnim = simState(actor, -10000);
+  }
+}
+
+/** AActor::execTweenAnim, 0x103e0bd0. */
+export function execTweenAnim(actor, mesh, sequenceName, time, log = () => {}) {
+  const sequence = sequenceOrLog(mesh, sequenceName, 'tweenAnim', log);
+  if (!sequence) return;
+  actor.AnimSequence = sequence.name;
+  actor.animFlags = (Number(actor.animFlags ?? 0) & ~0x38) >>> 0;
+  actor.AnimLast = actor.AnimMinRate = actor.AnimRate = actor.OldAnimRate = 0;
+  time = f(time);
+  actor.TweenRate = time > 0 ? f(1 / (sequence.numFrames * time)) : 0;
+  actor.AnimFrame = time > 0 ? f(-1 / sequence.numFrames) : 0;
+  actor.simAnim = {frame: f(actor.AnimFrame * 10000), rate: 0, tween: f(actor.TweenRate * 1000), last: 0};
 }

@@ -42,7 +42,7 @@ observed `GetPackageLinker` flags are consequently `0x2a` (`2 | 0x28`).  The
 probe does not generalize the meaning of other load-flag bits; bit `0x40` is
 the only predicate needed for this route.
 
-## Nested and empty outermost load lifecycle
+## Load lifecycle
 
 The `BeginLoad` thunk `0x10103328` jumps to body `0x10155410`.  The
 `EndLoad` thunk `0x10102f27` jumps to body `0x10155510`; these are distinct
@@ -63,31 +63,39 @@ checks and writes:
    pointer at `linker + 0x90`.  No reader virtual is called by this check.
 2. `EndLoad` logs through `FOutputDevice::Logf` thunk `0x10102a95` with
    `GWarn` (`0x101a7c3c`), `EName=0x308`, and format pointer `0x101af3d4`.
-3. It walks the `GObjLoaded` array at data/count
-   `0x1029e638`/`0x1029e63c`.  Each reached object whose flags at `+0x1c`
-   contain the native post-load bit is sent to its `ConditionalPostLoad`
-   virtual; an empty array skips that walk.
+3. It first walks the live `GObjLoaded` array at data/count
+   `0x1029e638`/`0x1029e63c`, preloading entries whose flags contain
+   `0x200` through their linker's archive. It then snapshots the count and
+   walks the live array again, directly calling `ConditionalPostLoad` on every
+   entry; that helper gates virtual PostLoad on `0x01000000`. The final count
+   must equal the snapshot. Empty arrays skip both passes.
 4. It writes both `GObjLoaded.Num` and `GObjLoaded.Max` (`0x1029e640`) to zero,
    then calls `FArray::Realloc` through `0x10101753` to body `0x10145440`
    with element size `4`.  The empty fixture still reaches the allocator
    boundary with old data `0`, byte count `0`, and tag pointer `0x101ab50c`.
 5. If the cleanup state at `0x102a2658` is zero, the linker cleanup loop is
    skipped and the body writes that state back to zero.  A nonzero state
-   enters a loader loop reading each linker at `+0x7c` and `+0x78`; that
-   mutation graph remains unsupported here.
+   enters a loader loop reading each linker at `+0x7c` and `+0x78`. It clears
+   each nonnull import Object lacking object flag `0x04000000`, preserving
+   SourceLinker and SourceIndex, then resets the counter.
 
 The native probe now runs both cases.  Its outermost fixture starts with
 `GObjLoaded.Num=0`, an empty registration queue, `G_LOAD_STATE=0`, and
 `G_LOAD_NEST=0`, while retaining the preloaded `DeusExConText` linker/export.
 It observes `BeginLoad` `0 -> 1`, the empty checks above, then `EndLoad`
 `1 -> 0`, `Logf`, and the original `FArray::Realloc` body before the final
-state write.  The JavaScript helper implements this empty branch only when
+state write. The JavaScript helper implements this empty branch when
 the host supplies `loadedObjects`, `loaders` with a readable `reader` field,
 `registrationQueueHead: null|0`, `loadedMax`, `loaderCleanupState: 0`, a
 `logReceiver` plus synchronous `logEndLoad`, and synchronous `reallocLoaded`
 services.  These services are required so omitted output/allocator behavior
-cannot become an inferred no-op.  Nonempty `GObjLoaded` post-load dispatch and
-nonzero linker cleanup remain explicit boundaries.
+cannot become an inferred no-op. The helper now also implements the nonempty
+passes and import cleanup, requiring synchronous Preload and
+ConditionalPostLoad services. Seventeen additional original-DLL cases cover
+that work and metadata PostLoad, including live array replacement and class
+Bind/superclass call order. See [`script-end-load.md`](script-end-load.md).
+The prepared browser resource graph still supplies only the empty lifecycle;
+its resource serializers and PostLoad overrides remain unbound.
 
 ## Already-loaded `GetPackageLinker` path
 
@@ -276,9 +284,10 @@ hash/import tables, existing export pointers, and the empty outermost
 first-load constructor after `ResolveName`; direct and grouped exports that
 are explicitly prepared retain the existing-linker path. The graph remains a
 focused initialized fixture rather than the captured 40-entry native loader
-array. The nonempty `ConditionalPostLoad` graph, nonzero linker cleanup,
-first-load file search, `StaticFindObject` fallback, and sandbox/GUID
-behavior remain unsupported until each native graph is separately bound.
+array. The shared helper supports nonempty EndLoad and metadata PostLoad, but
+this prepared graph has not yet bound the required resource serializers and
+virtual overrides. First-load file search, `StaticFindObject` fallback and
+sandbox/GUID behavior also remain unsupported until separately bound.
 Null-export construction and native metaclass loading are bound only through
 the recovered `CreateExport` body: `scripts/validate-static-load-createexport.mjs`
 drives an absent `DeusEx.u` class export from `staticLoadObject` into it.

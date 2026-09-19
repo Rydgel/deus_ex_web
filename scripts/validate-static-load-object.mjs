@@ -3,6 +3,7 @@ import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 
 import {gameDirectory} from './game-directory.mjs';
+import {conditionalPostLoad, postLoadObject} from '../src/runtime/script-post-load.mjs';
 import {
   STATIC_LOAD_OBJECT_CONTRACT,
   STATIC_LOAD_LIFECYCLE_CONTRACT,
@@ -342,8 +343,8 @@ assert.deepEqual(
   'StaticLoadObject outermost empty lifecycle and call order',
 );
 
-// EndLoad rereads GObjLoaded.Num after Logf.  A focused callback mutation must
-// therefore stop at the explicit nonempty postload boundary before Realloc.
+// EndLoad rereads GObjLoaded.Num after Logf. Its newly supported nonempty path
+// must still reject an object whose native fields/services are unresolved.
 const lateLoadedObjects = [];
 const lateLoadState = {
   nest: 0,
@@ -377,10 +378,51 @@ assert.throws(() => staticLoadObject({
   reallocLoaded: () => assert.fail('Realloc must not follow late GObjLoaded publication'),
   staticFindObject: () => null,
 }), error => error instanceof StaticLoadObjectBoundaryError &&
-  error.code === 'STATIC_LOAD_OBJECT_NONEMPTY');
+  error.code === 'STATIC_LOAD_OBJECT_FIELD' && error.field === 'objectFlags');
 assert.equal(lateLoadState.nest, 0);
 assert.deepEqual(lateCalls, ['Logf']);
 assert.equal(lateLoadedObjects.length, 1);
+
+// Connect the newly recovered EndLoad body to StaticLoadObject itself. The
+// separate native EndLoad oracle proves its internals; this check proves that
+// objects published by the export service now reach those bodies and cleanup.
+const pending = {label: 'newly-loaded', objectFlags: 0x01000200, linker};
+const pendingImport = {object: pending, sourceLinker: linker, sourceIndex: 7};
+linker.imports = [pendingImport];
+const completeState = {nest: 0, registrationQueueHead: null, loadedMax: 1, loaderCleanupState: 1};
+const completeQueue = [], completionCalls = [];
+const completeServices = {
+  ...existingServices, loadState: completeState, loadedObjects: completeQueue,
+  write: (object, field, value) => { object[field] = value; },
+  createExport: () => { completeQueue.push(pending); return loadedObject; },
+  logReceiver: {label: 'GWarn'}, logEndLoad: () => completionCalls.push('Logf'),
+  preload: ({object, linker: owner}) => {
+    assert.equal(object, pending);
+    assert.equal(owner, linker);
+    completionCalls.push('Preload');
+    object.objectFlags &= ~0x200;
+  },
+  conditionalPostLoad: object => {
+    completionCalls.push('ConditionalPostLoad');
+    conditionalPostLoad(object, completeServices);
+  },
+  postLoad: object => {
+    completionCalls.push('PostLoad');
+    postLoadObject(object, completeServices);
+  },
+  reallocLoaded: ({num, max}) => {
+    assert.equal(num, 0);
+    assert.equal(max, 0);
+    completionCalls.push('Realloc');
+  },
+};
+assert.equal(staticLoadObject(existingRequest, completeServices).object, loadedObject);
+assert.deepEqual(completionCalls, ['Logf', 'Preload', 'ConditionalPostLoad', 'PostLoad', 'Realloc']);
+assert.equal(pending.objectFlags, 0x20000000);
+assert.deepEqual(completeQueue, []);
+assert.equal(completeState.nest, 0);
+assert.equal(completeState.loaderCleanupState, 0);
+assert.deepEqual(pendingImport, {object: null, sourceLinker: linker, sourceIndex: 7});
 
 // A missing loaded linker must stop at the explicit first-load service.  This
 // catches a helper that quietly turns a display-name hit into a loaded object.

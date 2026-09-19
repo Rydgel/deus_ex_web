@@ -73,8 +73,9 @@ The original `ClientFlash` body still performs `DesiredFlashScale += Scale` and
 `SetDamagePercent` takes its zero-percent branch and does not call that helper
 before the hit response. The current live path writes
 `HealthLegLeft=90`, recomputes `Health=98`, and stores the canonical GM_Trench
-`HitLegLeft` state (`AnimFrame=-4`, `AnimRate=2.5`, `TweenRate=0.4f`,
-`AnimLast=-3`). The hit response bodies are prepared from their installed
+`HitLegLeft` state (`AnimFrame=-0.25`, `AnimRate=2.5`, `TweenRate=2.5`,
+`AnimLast=0.75`; see the original-execution correction in
+[animation controls](script-animation-controls.md)). The hit response bodies are prepared from their installed
 bytecode; `Human.PlayTakeHitSound` reaches the existing `Actor.PlaySound(264)`
 audio boundary, where normal Play records the deferred mission-script effect
 and the focused validator retains the exact caller path.
