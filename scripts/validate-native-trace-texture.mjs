@@ -51,4 +51,20 @@ for(const [index,c] of cases.entries()){
   finalTexName:nameOf(reference.results[index].finalTexName),finalTexGroup:groupOf(reference.results[index].finalTexGroup)};
  try{assert.deepEqual(actual,expected);}catch{mismatches++;console.log(JSON.stringify({index,actual,expected}));}
 }
+// Real VM calls may omit the trailing optional expressions — the UC compiler
+// emits only the supplied arguments and the exec's OPTX macros then keep the
+// pre-stored Location/zero defaults (docs/script-trace.md). A short call must
+// still reach MultiLineCheck rather than fail arity.
+{
+ let shortQuery;const shortWorld={id:'world',lineage:['engine.levelinfo']};
+ const shortSource={id:'self',position:[10,20,30],worldActor:shortWorld};
+ const shortSlot=initial=>{const s={reference:true,value:initial,get(){return s.value},set(v){s.value=v}};return s;};
+ const shortOut={actor:shortSlot(null),name:shortSlot(0),group:shortSlot(0),flags:shortSlot(0),location:shortSlot([0,0,0]),normal:shortSlot([0,0,0])};
+ const short=createTraceTextureIterator({receiver:shortSource,argumentCount:8,
+  evaluateArgument:i=>[null,shortOut.actor,shortOut.name,shortOut.group,shortOut.flags,shortOut.location,shortOut.normal,[1,2,3]][i],
+  levelFor:()=>({hash:{multiLineCheck(q){shortQuery=q;return[];}},model:{nodes:[],surfaces:[]},surfaceTexture:[]})});
+ assert.equal(short.next(),false);
+ try{assert.deepEqual({start:shortQuery.start,extent:shortQuery.extent},{start:[10,20,30],extent:[0,0,0]});}
+ catch{mismatches++;console.log('short-call defaults mismatch');}
+}
 console.log(JSON.stringify({cases:cases.length,mismatches}));if(mismatches)process.exitCode=1;

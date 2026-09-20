@@ -31,6 +31,7 @@ import { walkingSurfacePrelude } from './walking-surface.mjs';
 import { processPlayerHitWall, setSupportBase, setBase } from './walking-callbacks.mjs';
 import { setActorPhysics, findActorBase } from './script-actor-collision.mjs';
 import { playerMove } from './player-move.mjs';
+import { moveQuery } from './move-query.mjs';
 import { actorBlockedBy, checkActorEncroachment } from './check-encroachment.mjs';
 import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
 import { farMoveActor } from './relocation.mjs';
@@ -74,7 +75,7 @@ function regionBinding(field, actor, name) {
  * fields exactly like installActorCollisionView, and host-only physics state
  * (motionFlags, hitSlopedWall, pawnFlags) lives on the actor's host props like
  * the player path's motionFlags. Cached on the actor as `_pawnPhysics`. */
-function pawnPhysicsView(actor, services) {
+export function pawnPhysicsView(actor, services) {
   if (actor._pawnPhysics) return actor._pawnPhysics;
   const { field, level, worldActor } = services;
   const get = name => field(actor, name).get();
@@ -178,6 +179,10 @@ function pawnPhysicsView(actor, services) {
     const result = moveActor(pawn, delta, null, services, dispatch, decorate);
     return { time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f), actor: result.hit?.actor ?? null };
   };
+  /* ULevel::MoveActor under bTest=1 (vtable +0x88): the recovered test-move
+   * the navigation natives' probing workers (checkMove/flyMove) drive. */
+  pawn.testMove = (delta, rotation, flags) =>
+    testMoveActor(pawn, delta, rotation, flags, services, decorate);
   pawn.farMove = (position, test, noCheck) => {
     // farMoveActor's passenger detach scans level.actors for child.base===actor;
     // map Base entries are host identities, never the view.
@@ -255,11 +260,58 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
   }, newRotation);
 }
 
+/** ULevel::MoveActor with bTest=1 (vtable +0x88, Engine.dll 0x103990e0): the
+ * query prefix, FCheckResult write, position/rotation commit, hash
+ * re-registration and SetActorZone(actor,test=1,0) still run; the
+ * standing-rider, fit-retry and Touch event sections are gated off by bTest.
+ * The navigation workers (checkMove 0x103c3290, flyMove 0x103c3900) call it
+ * with bIgnorePawns=1, bIgnoreBalls=0, bNoFail=0. Returns the FCheckResult
+ * fields the workers read: { time, normal, actor, item }. */
+function testMoveActor(pawn, delta, newRotation, flags, services, decorate) {
+  const { level, worldActor } = services;
+  if ((flags?.test ?? 0) !== 1 || (flags?.ignoreBalls ?? 0) !== 0 || (flags?.noFail ?? 0) !== 0)
+    throw new Error(`MoveActor flag combination is not linked: test=${flags?.test} ignoreBalls=${flags?.ignoreBalls} noFail=${flags?.noFail}`);
+  const miss = { time: 1, normal: [0, 0, 0], actor: null, item: -1 };
+  // 0x1039912d: non-editor !static && !movable -> return 0, untouched fields.
+  // A static source passes this gate; moveQuery's shared player-path static
+  // rejection then answers it as a no-move (its position/hit outcome matches
+  // what a sub-epsilon commit produces).
+  if (!pawn.static && pawn.movable === false) return miss;
+  const rotation = newRotation ? newRotation.slice() : [...pawn.rotation];
+  if (delta.every(v => Math.abs(v) < .0001)) {               // 0x1039915a..0x103991c6
+    if (sameRotation(rotation, pawn.rotation)) return miss;  // rot equal -> ret 1
+    if (!pawn.standingCount) { pawn.rotation = rotation; return miss; }
+    // StandingCount nonzero falls into the full path; the recovered query
+    // answers it without multiLineCheck, and the commit/zone steps still run.
+  }
+  const query = moveQuery({ source: pawn, worldActor, start: pawn.position,
+    delta, extent: [pawn.radius, pawn.radius, pawn.height],
+    multiLineCheck: q => level.hash.multiLineCheck(q).map(h => (decorate(h.actor), h)),
+    ignorePawns: Boolean(flags?.ignorePawns) });
+  // 0x10399c9a: hash remove -> commit location/rotation -> hash add (0x10399d11).
+  if (pawn.flags & 1) level.hash.removeActor(pawn.self);
+  pawn.position = query.position;
+  pawn.rotation = rotation;
+  if (pawn.flags & 1) level.hash.addActor(pawn.self);
+  pawn.setActorZone(1, 0);                                    // 0x10399f0f
+  return query.hit ? { time: query.hit.time, normal: query.hit.normal?.slice() ?? [0, 0, 0],
+    actor: query.hit.actor ?? null, item: query.hit.item ?? -1 } : miss;
+}
+
 /** farMoveActor's level needs the non-player encroachment variant and the
  * pawn's zone update. The hash query runs on the host identity so the
  * candidate===actor self-exclusion holds. */
 function farLevel(pawn, actor, services, dispatch) {
   const level = Object.create(services.level);
+  // The collision hash registers the host identity, not the field view; the
+  // queries wrappers key bounds/location on the registered object. Map the
+  // view arg to the host so remove/add actually re-register the pawn's
+  // cylinder instead of silently no-oping on the unregistered view.
+  const hash = Object.create(services.level.hash);
+  hash.removeActor = a => services.level.hash.removeActor(a === pawn ? actor : a);
+  hash.addActor = a => services.level.hash.addActor(a === pawn ? actor : a);
+  // The base level's `hash` is an accessor; shadow it with an own property.
+  Object.defineProperty(level, 'hash', { value: hash, enumerable: true });
   level.checkEncroachment = (a, position, rotation, notify) =>
     checkActorEncroachment(a, position, rotation, notify, {
       worldActor: services.worldActor, dispatch,

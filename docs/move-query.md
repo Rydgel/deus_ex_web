@@ -84,8 +84,9 @@ selects the first qualifying blocker, preserving native equal-time ordering.
 World inclusion and hash actor inclusion belong to that callback according to
 `worldActor` and `checkActors`.
 
-Default flags only: test-move, ignore-pawns/decorations, ignore-bases and no-fail
-are0 in the native corpus. Movement of bases/riders, brush encroachment, collision
+Default flags only: test-move, ignore-bases and no-fail are0 in the native
+corpus; `ignorePawns` is now a supported option (see the section below).
+Movement of bases/riders, brush encroachment, collision
 hash removal/reinsertion, touch/bump/zone callbacks, attachment updates and the
 scene rejection branches are caller responsibilities and unimplemented by
 this query helper. It returns a planned translation, not a complete scene move.
@@ -133,3 +134,18 @@ corpus adds those decoration cases (424 total, zero mismatches), so `moveQuery`
 accepts a decoration cylinder (`source.decoration`) and reuses the same path for
 a pushed `Plant2` under `physFalling` (docs/script-plant-contact.md). The
 controlled-player guard was only a validation scope, not a native branch.
+
+## `bIgnorePawns` candidate gate (2026-09-20)
+
+Recovered at `0x103995ea` in `ULevel::MoveActor`: when the flag is set, the
+hit-list scan skips every **non-static** candidate whose class ancestry
+reaches `APawn` (`0x1058c660`) or `ADecoration` (`0x10578d48`) — the static
+bit check runs first, so static pawns/decorations still block. `moveQuery`
+now accepts `ignorePawns` and applies exactly that filter; the option is used
+by the recovered `checkMove` search inside `AIPickRandomDestination`, whose
+MoveActor calls carry `bTest=1, bIgnorePawns=1` (the step-through-pawns
+contract the original navigation relies on). Scene-side effects under
+`bTest` (hash remove → commit → hash re-add → `SetActorZone(test=1)`, no
+touch/bump/zone events, rider loop dead under `bTest`) live in the recovered
+test-move path in `script-pawn-physics.mjs`; see
+[pawn navigation](script-pawn-nav.md) for the 709 integration.

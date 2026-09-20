@@ -37,4 +37,17 @@ for(const [index,c] of cases.entries()){
  }
  try{assert.deepEqual(actual,reference.results[index]);}catch{mismatches++;console.log(JSON.stringify({index,actual,expected:reference.results[index]}));}
 }
+// A real foreach can omit the optional Start/Extent expressions; the exec's
+// OPTX macros then keep the pre-stored Location/zero defaults
+// (docs/script-trace.md). The controller must accept the short call.
+{
+ let shortQuery;const shortOut={actor:'seed',location:[9,9,9],normal:[8,8,8]};
+ const sink=name=>({reference:true,get:()=>shortOut[name],set:value=>{shortOut[name]=value;}});
+ const short=createTraceActorsIterator({receiver:{position:[10,20,30],worldActor:'world'},argumentCount:5,
+  evaluateArgument:i=>[null,sink('actor'),sink('location'),sink('normal'),[1,2,3]][i],
+  levelFor:()=>({hash:{multiLineCheck(q){shortQuery=q;return[];}}})});
+ assert.equal(short.next(),false);
+ try{assert.deepEqual({start:shortQuery.start,extent:shortQuery.extent},{start:[10,20,30],extent:[0,0,0]});}
+ catch{mismatches++;console.log('short-call defaults mismatch');}
+}
 console.log(JSON.stringify({cases:cases.length,mismatches}));if(mismatches)process.exitCode=1;

@@ -18,6 +18,7 @@ import {
   x87load, x87add, x87mul, x87div, x87neg, x87recip, x87store,
   x87storeDouble, x87sqrt, x87safeNormal, x87width, x87ftol,
 } from './script-vm.mjs';
+import { fcoordsAxes } from './script-pawn-locomotion.mjs';
 
 const f32 = Math.fround;
 
@@ -33,6 +34,7 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     findStairRotation:Object.freeze({ index: 524, thunk: 0x10303111, body: 0x103bb880 }),
     findRandomDest:   Object.freeze({ index: 525, thunk: 0x103014f1, body: 0x103bcb90, worker: 0x103dc700 }),
     pickWallAdjust:   Object.freeze({ index: 526, thunk: 0x10303968, body: 0x103bb7e0, worker: 0x103c4150 }),
+    aiPickRandomDestination: Object.freeze({ index: 709, thunk: 0x1030181b, body: 0x103c86f0, worker: 0x103c7fc0 }),
   }),
   // Shared workers beneath the exec bodies.
   workers: Object.freeze({
@@ -45,6 +47,10 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     jumpArc:     0x103c2f50,
     reachMask:   0x10326d10,  // 7-bit capability gather (thiscall)
     directReach: 0x103dad20,  // NavigationPoint ReachSpec scan
+    aiDirection: 0x1036d030,  // biased random rotator (thunk 0x10301f0f)
+    aiPickSearch:0x103c78a0,  // stepped-move band search (thunk 0x103011d6)
+    aiScore:     0x103c7f80,  // f32 range classifier (thunk 0x10303319)
+    waterMove:   0x103c3ca0,  // swim move (thunk 0x10303f53) — unported boundary
   }),
   // Level vtable slots the workers call.
   vtable: Object.freeze({
@@ -78,6 +84,17 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     climbCoeff:  Object.freeze({ address: 0x10431418, value: 0.8 }),     // double
     innerRadius: Object.freeze({ address: 0x104314b8, value: 15 }),      // float
     maxDistSq:   Object.freeze({ address: 0x104314a8, value: 1000000 }), // double
+    // AIPickRandomDestination constants (709 chain).
+    yawPosScale:  Object.freeze({ address: 0x1042ae00, value: 32767 }),    // float
+    yawNegScale:  Object.freeze({ address: 0x1042ae04, value: -32768 }),   // float
+    pitchPosScale:Object.freeze({ address: 0x1042adf8, value: 16383 }),    // float
+    pitchNegScale:Object.freeze({ address: 0x1042adfc, value: -16384 }),   // float
+    oneFloat:     Object.freeze({ address: 0x10429c50, value: 1 }),        // float
+    multFloor:    Object.freeze({ address: 0x1042d544, value: 9.999999747378752e-05 }), // float 0x38d1b717
+    stepMin:      Object.freeze({ address: 0x1042eae4, value: 5 }),        // float
+    stepMax:      Object.freeze({ address: 0x104316a0, value: 25 }),       // float
+    searchRadius: Object.freeze({ address: 0, value: 15 }),                // arg24 (unused by 0x103c78a0)
+    half:         Object.freeze({ address: 0x1042ac10, value: 0.5 }),      // double
   }),
 });
 
@@ -97,7 +114,9 @@ const ld64 = v => {
 };
 
 const D1 = ld64(1), D07 = ld64(0.7), D2 = ld64(2), D08 = ld64(0.8), D0 = ld64(0);
-const D095 = ld64(0.95), D1f = ld(1.0), D15 = ld(15.0);
+const D095 = ld64(0.95), D1f = ld(1.0), D15 = ld(15.0), D05 = ld64(0.5);
+const f32buf = new Float32Array(1), u32buf = new Uint32Array(f32buf.buffer);
+const ldBits = u => { u32buf[0] = u >>> 0; return ld(f32buf[0]); };
 
 /** FCOM/FUCOM status flags: C0 below, C3 equal, both when unordered. */
 const x87compare = (a, b) => {
@@ -748,4 +767,218 @@ export function actorReachable(pawn, target, services) {
   }
   if (origInv) t = origInv;                                 // 0x103bc583 undo
   return actorWorker(pawn, t, 0, services);                 // 0x103024be
+}
+
+// ---------------------------------------------------------------------------
+// AIPickRandomDestination — native 709 (exec 0x103c86f0, thunk 0x1030181b).
+// The exec evaluates nine args into 4-byte slots (Dir arrives as two ints,
+// not a rotator) and invokes worker 0x103c7fc0, which loops the random
+// direction helper 0x1036d030 + band search 0x103c78a0 up to `tries` times.
+// ---------------------------------------------------------------------------
+
+/**
+ * Range score 0x103c7f80 (cdecl; {min, x, max} f32 args).  `fcomp min`
+ * C0 (below or unordered) -> -1; `fcomp max` strictly above -> +1; else 0.
+ */
+const aiScore = (minSq, x, maxSq) =>
+  ltU(ld(x), ld(minSq)) ? -1 : gtU(ld(x), ld(maxSq)) ? 1 : 0;
+
+/**
+ * One appFrand draw of direction helper 0x1036d030.  `u = 2*frand-1` stays in
+ * 80-bit; the |u| magnitude is remapped through d' = f32((clamp+1)/2):
+ *   |u|<=d' (or unordered) -> m = |u|(1-d')/d'
+ *   |u|> d'                -> m = (|u|-d')d'/(1-d') + (1-d')
+ * The sign comes from the f32 *store* of u (C0 -> negative scale), then
+ * m*scale truncates through MSVCRT _ftol (0x10413652) to the int offset.
+ */
+function aiDraw(frand, d, posScale, negScale) {
+  const r = ld64(frand());                               // extended f64 draw
+  const u = sub(x87add(r, r), D1f);                      // fadd st0,st0; fsub 1.0f
+  const uf = st(u);                                      // fst dword [ebp-0x14]
+  const a = x87compare(u, D0).c0 ? x87neg(u) : u;        // fcom 0; fchs -> |u|
+  const oneMinusD = sub(D1, ld(d));                      // fsubr qword 1.0
+  const m = leU(a, ld(d))                                // test ah,0x41 -> inner
+    ? x87div(x87mul(a, oneMinusD), ld(d))
+    : x87add(x87div(x87mul(sub(a, ld(d)), ld(d)), oneMinusD), oneMinusD);
+  const scale = ltU(ld(uf), D0) ? negScale : posScale;   // fcomp 0 on f32(u)
+  return x87ftol(x87mul(m, ld(scale)));
+}
+
+/**
+ * Direction helper 0x1036d030 (thiscall pawn — unused; out rot*, centralYaw,
+ * yawDist, centralPitch, pitchDist).  Distributions clamp to [0,1] (NaN -> 0),
+ * fold to d' = f32((clamp+1)*0.5), then two draws offset the centers.
+ * Returns [pitch, yaw, 0] int components — the caller's FRotator layout.
+ */
+export function aiDirection(frand, centralYaw, yawDist, centralPitch, pitchDist) {
+  // 0x1036d04b/0x1036d088: fcomp 0 -> C0 -> 0; fcomp 1.0f -> C0 keep, else 1.0.
+  const clamp01 = v => ltU(ld(v), D0) ? 0 : ltU(ld(v), D1f) ? f32(v) : 1.0;
+  const dy = st(x87mul(x87add(ld(clamp01(yawDist)), D1), D05));   // [ebp+0x10]
+  const dp = st(x87mul(x87add(ld(clamp01(pitchDist)), D1), D05)); // [ebp+0x18]
+  const yawOff = aiDraw(frand, dy, 32767.0, -32768.0);            // 0x1036d0d8
+  const pitchOff = aiDraw(frand, dp, 16383.0, -16384.0);          // 0x1036d14c
+  return [(centralPitch + pitchOff) | 0, (centralYaw + yawOff) | 0, 0];
+}
+
+/**
+ * Band search 0x103c78a0 (thiscall pawn; origin vec3, yaw, pitch, minR, maxR,
+ * arg24, out vec3*).  Steps the pawn along dirVec = XAxis(FCoords{pitch,yaw,0})
+ * with stride = clamp(CollisionRadius,5,25) through checkMove/flyMove/swimMove,
+ * scoring distSq(loc-origin) against [minR²,maxR²] after each step.  The first
+ * in-band position (or the band-crossing position) becomes the candidate; the
+ * pawn is FarMoveActor-restored and its Velocity saved/restored on exit.
+ * arg24 is pushed by callers but never read by the body.
+ * Mode: regionZone water -> 3 (swimMove boundary); Physics 1|3 -> 1 (walk);
+ * 4 -> 2 (fly); anything else -> 0 early, before any restore/out write.
+ */
+export function aiPickSearch(pawn, origin, yaw, pitch, minR, maxR, arg24, out, services) {
+  const minSq = st(x87mul(ld(minR), ld(minR)));           // [ebp-0x4c]
+  const maxSq = st(x87mul(ld(maxR), ld(maxR)));           // [ebp-0x48]
+  const startLoc = services.location(pawn).map(f32);      // [ebp-0x64..]
+  const startVel = services.velocity(pawn).map(f32);      // [ebp-0x74..]
+  let step = rd(services, pawn, 'CollisionRadius');       // [ebp-0x14]
+  const best = [...startLoc];                             // [ebp-0x3c..]
+  let haveBest = 0, cont = 1, iters = 0x64;               // -0x40, -0x18, -0x44
+  if (services.gIsEditor?.())                             // [0x10599c94]
+    throw new Error('aiPickSearch asserts !GIsEditor (0x103c7977)');
+  // 0x103c798f: step<5|NaN -> 5; else step>25 (ordered) -> 25.
+  if (ltU(ld(step), ld(5.0))) step = 5.0;
+  else if (!leU(ld(step), ld(25.0))) step = 25.0;
+  // prevScore [ebp+0x20] = score(minSq, f32(distSq0), maxSq).  The two native
+  // sites associate differently: the initializer at 0x103c79bf computes
+  // (dx²+dz²)+dy² while the in-loop site at 0x103c7cc3 computes (dx²+dy²)+dz².
+  const dsqInit = (loc, org) => {
+    const dz = sub(ld(loc[2]), ld(org[2])), dy = sub(ld(loc[1]), ld(org[1])),
+          dx = sub(ld(loc[0]), ld(org[0]));
+    return st(x87add(x87add(x87mul(dx, dx), x87mul(dz, dz)), x87mul(dy, dy)));
+  };
+  const dsqLoop = (loc, org) => {
+    const dz = sub(ld(loc[2]), ld(org[2])), dy = sub(ld(loc[1]), ld(org[1])),
+          dx = sub(ld(loc[0]), ld(org[0]));
+    return st(x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz)));
+  };
+  let prevScore = aiScore(minSq, dsqInit(startLoc, origin), maxSq);
+  // Mode select (0x103c7a0a): region-zone water first, then the physics byte.
+  let mode;
+  if (services.regionZone(pawn).water) mode = 3;
+  else {
+    const phys = rd(services, pawn, 'Physics');           // pawn+0x30
+    if (phys === 1 || phys === 3) mode = 1;
+    else if (phys === 4) mode = 2;
+    else return 0;                                        // 0x103c7b71 no restore
+  }
+  // dirVec = FCoords{pitch: mode==1?0:pitch, yaw, roll:0}.XAxis — the mode-1
+  // rotator literal has pitch=0 (0x103c7b12 stores edi=0 over the arg).
+  const dirVec = fcoordsAxes([mode === 1 ? 0 : pitch, yaw, 0])[1];
+  const rdt = rd(services, pawn, 'ReducedDamageType');    // pawn+0x444
+  while (cont === 1) {                                    // 0x103c7a89
+    const stepVec = [st(x87mul(ld(dirVec[0]), ld(step))),
+                     st(x87mul(ld(dirVec[1]), ld(step))),
+                     st(x87mul(ld(dirVec[2]), ld(step)))];
+    let code;
+    if (mode === 1) code = checkMove(pawn, stepVec, 0, 4.1, 0, services);
+    else if (mode === 2) code = flyMove(pawn, stepVec, 0, 4.1, 0, services);
+    else {                                                // mode 3 swimMove
+      if (typeof services.waterMove !== 'function')
+        throw new Error('aiPickSearch requires the original waterMove service (0x103c3ca0)');
+      code = services.waterMove(pawn, stepVec, 0, 4.1, 0);
+    }
+    cont = code;                                          // [ebp-0x18]
+    if (code !== 1) {                                     // 0x103c7c25
+      if (!rd(services, pawn, 'CollideFlag')) cont = 0;   // pawn+0xd0 byte
+      else if (mode === 1 && code === -1 &&
+               gtU(ld(step), ld(rd(services, pawn, 'MaxStepHeight')))) {
+        cont = 1; step = rd(services, pawn, 'MaxStepHeight'); // retry at maxStep
+      }
+    }
+    const fz = services.footZone(pawn);                   // pawn+0x330 zone
+    if (fz.pain && fz.damageType !== rdt) cont = 0;       // 0x103c7c5e
+    const rz = services.regionZone(pawn);                 // pawn+0xc8 zone
+    if (mode !== 3 ? rz.water : !rz.water) cont = 0;      // 0x103c7c80
+    if (--iters < 0) { cont = 0; continue; }              // 0x103c7ca8 skip score
+    if (cont === 1) {                                     // 0x103c7cb9
+      const loc = services.location(pawn);
+      const sc = aiScore(minSq, dsqLoop(loc, origin), maxSq);
+      if (sc === 0) {                                     // entered the band
+        best[0] = f32(loc[0]); best[1] = f32(loc[1]); best[2] = f32(loc[2]);
+        haveBest = 1;
+        if (prevScore > 0) cont = 0;                      // fell back into band
+      } else if (prevScore !== sc) {
+        if (prevScore === 0) cont = 0;                    // left the band: keep best
+        else {                                            // jumped over the band
+          best[0] = f32(loc[0]); best[1] = f32(loc[1]); best[2] = f32(loc[2]);
+          haveBest = 1; cont = 0;
+        }
+      }
+      prevScore = sc;                                     // [ebp+0x20]
+    }
+  }
+  // Exit (0x103c7d7a): restore Location via level->FarMoveActor(test=1,
+  // noCheck=1), restore Velocity, write *out = best when the ptr is nonnull.
+  farMove(services, pawn, startLoc);
+  const vel = services.velocity(pawn);
+  vel[0] = startVel[0]; vel[1] = startVel[1]; vel[2] = startVel[2];
+  if (out) { out[0] = best[0]; out[1] = best[1]; out[2] = best[2]; }
+  return haveBest;
+}
+
+/**
+ * Worker 0x103c7fc0 (thiscall pawn; minDist, maxDist, centralYaw, yawDist,
+ * centralPitch, pitchDist, tries, multiplier, out).  tries clamps to >=1 and
+ * multiplier to [9.9999997e-05, 1.0]; each attempt draws a random direction
+ * and searches the band [minDist/mult, maxDist/mult].  A hit with mult<1
+ * re-searches the same direction for distance d*mult (minR=maxR=f32(d*mult)).
+ * *out receives the last search's candidate unconditionally; return = found.
+ * usePitch: Physics!=1 && (Physics!=3 || regionZone water) — set at 0x103c8041.
+ */
+export function aiPickWorker(pawn, minDist, maxDist, centralYaw, yawDist,
+                             centralPitch, pitchDist, tries, mult, out, services) {
+  tries = (tries | 0) >= 1 ? tries | 0 : 1;               // [ebp+0x20] >= 1
+  const EPS = ldBits(0x38d1b717);                         // [ebp+0x24] clamp
+  if (ltU(ld(mult), EPS)) mult = st(EPS);                 // 9.9999997e-5
+  else if (!ltU(ld(mult), D1f)) mult = 1.0;               // fcomp 1.0f: keep below
+  const saved = services.location(pawn).map(f32);         // [ebp-0x34..] = loc
+  let usePitch = 0;                                       // [ebp-0x14]
+  const phys = rd(services, pawn, 'Physics');
+  if (phys !== 1) {
+    if (phys !== 3 || services.regionZone(pawn).water) usePitch = 1;
+  }
+  let found = 0;                                          // ecx across the loop
+  for (; tries > 0; tries--) {                            // 0x103c805d jle exit
+    const dir = aiDirection(services.frand, centralYaw, yawDist, centralPitch, pitchDist);
+    const minR = st(x87div(ld(minDist), ld(mult)));
+    const maxR = st(x87div(ld(maxDist), ld(mult)));
+    found = aiPickSearch(pawn, services.location(pawn).map(f32), dir[1],
+                         usePitch ? dir[0] : 0, minR, maxR, 15.0, saved, services);
+    if (found && ltU(ld(mult), D1)) {                     // 0x103c80e2 mult<1
+      const loc = services.location(pawn);                // (restored = startLoc)
+      const dx = sub(ld(saved[0]), ld(loc[0])), dy = sub(ld(saved[1]), ld(loc[1])),
+            dz = sub(ld(saved[2]), ld(loc[2]));
+      const d = appSqrt(x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz)));
+      const band = st(x87mul(d, ld(mult)));               // f32(d*mult) [ebp-0x18]
+      found = aiPickSearch(pawn, services.location(pawn).map(f32), dir[1],
+                           usePitch ? dir[0] : 0, band, band, 15.0, saved, services);
+    }
+    if (found) break;                                     // 0x103c8171
+  }
+  if (out) { out[0] = saved[0]; out[1] = saved[1]; out[2] = saved[2]; }
+  return found;
+}
+
+/**
+ * exec body 0x103c86f0 — native(709) AIPickRandomDestination.  The script
+ * signature is (f minDist, f maxDist, int centralYaw, f yawDist,
+ * int centralPitch, f pitchDist, int tries, f multiplier, out vector dest):
+ * nine 4-byte slots evaluated in order.  `args` are already evaluated; `dest`
+ * is the caller's out-vector sink — a {reference,set} local, a plain array,
+ * or a non-reference value (the native temp slot: writes are discarded).
+ */
+export function execAiPickRandomDestination(receiver, args, dest, services) {
+  const sink = Array.isArray(dest) ? dest
+    : dest && typeof dest.set === 'function' ? [0, 0, 0] : null;
+  const found = aiPickWorker(receiver,
+    f32(args[0]), f32(args[1]), args[2] | 0, f32(args[3]),
+    args[4] | 0, f32(args[5]), args[6] | 0, f32(args[7]), sink, services);
+  if (sink && !Array.isArray(dest)) dest.set(sink);
+  return found;
 }

@@ -81,4 +81,14 @@ for(const [index,c] of cases.entries()){
  try{assert.deepEqual(actual,expected);}catch{mismatches++;console.log(JSON.stringify({index,actual,expected}));}
  try{assert.deepEqual(boundActual,reference.results[index]);}catch{mismatches++;console.log(JSON.stringify({index,boundActual,expected:reference.results[index]}));}
 }
+// A real foreach can omit the optional Loc expression; the exec then keeps
+// the pre-stored Location copy (docs/script-actor-queries.md).
+{
+ const shortLevel={actors:[{id:'near',position:[11,20,30],radius:0,cls:CHAIN.Actor}]};
+ const shortOut={actor:null},shortSink={reference:true,get:()=>shortOut.actor,set:v=>{shortOut.actor=v;}};
+ const short=createRadiusActorsIterator({receiver:{position:[10,20,30],radius:0,cls:CHAIN.Actor},argumentCount:3,
+  evaluateArgument:i=>[null,shortSink,10][i],actorClass:ACTOR,levelFor:()=>shortLevel,isA});
+ try{assert.equal(short.next(),true);assert.equal(shortOut.actor.id,'near');}
+ catch{mismatches++;console.log('short-call default Loc mismatch');}
+}
 console.log(JSON.stringify({cases:cases.length,mismatches}));if(mismatches)process.exitCode=1;

@@ -83,7 +83,17 @@ BODIES = {
     'PickWallAdjust': 0x103bb7e0,      # native 526 exec
     'wallAdjustWorker': 0x103c4150,
     'FindStairRotation': 0x103bb880,   # native 524 exec
+    # AIPickRandomDestination (709) chain: exec -> worker -> direction helper +
+    # band-search helper (UnPawnExt.cpp, assert "!GIsEditor" at +0x2a8).
+    'aiPickExec': 0x103c86f0,          # native 709 exec
+    'aiPickWorker': 0x103c7fc0,        # thiscall(pawn; 9 args) -> bool
+    'aiPickSearch': 0x103c78a0,        # stepped-move band search
+    'aiDirection': 0x1036d030,         # biased random rotator helper
 }
+
+# Engine IAT slot for Core's appFrand — patched to a scripted queue for the
+# AI-pick bodies so the random-direction inputs are observable/deterministic.
+APPFRAND_IAT = 0x10599cb8
 
 # Command-capture boundaries patched in place at their thunk VAs.
 POINTREGION_THUNK = 0x1030391d   # -> UModel::PointRegion 0x103f5db0
@@ -123,6 +133,7 @@ MAIL_FM = 0x1ff00100   # FarMoveActor   header
 MAIL_SL = 0x1ff00180   # SingleLineCheck header
 MAIL_PR = 0x1ff00280   # PointRegion    header
 MAIL_FL = 0x1ff00300   # FastLineCheck  header
+MAIL_FR = 0x1ff00380   # appFrand       header (scripted float queue)
 
 # Deep enough that a ~100-step reach loop can't exhaust a scripted boundary
 # (each list is padded by repeating its last entry to this depth).
@@ -358,6 +369,23 @@ def isa_stub():
         'b801000000', 'c20400')
 
 
+def frand_stub():
+    """appFrand record stub (patched over the Core IAT slot).  st0 = the next
+    scripted f64 from the queue; the mailbox keeps count/index/base like the
+    other boundary stubs so consumption order stays observable.  cdecl ret.
+    The queue stores doubles because appFrand's real result is the exact
+    80-bit product rand*(1/32767f) — at most 39 significant bits, so an f64
+    load reproduces the extended value bit-for-bit where an f32 would not."""
+    mc, mi, mb = MAIL_FR, MAIL_FR + 4, MAIL_FR + 8
+    return hx(
+        '8b0d', struct.pack('<I', mi).hex(),        # ecx = result idx
+        '8b15', struct.pack('<I', mb).hex(),        # edx = results base
+        'dd04ca',                                 # fld qword [edx+ecx*8]
+        'ff05', struct.pack('<I', mi).hex(),        # ++idx
+        'ff05', struct.pack('<I', mc).hex(),        # ++count
+        'c3')
+
+
 class ProbeError(RuntimeError):
     pass
 
@@ -489,6 +517,12 @@ class NavProbe:
         table = bytes().join(struct.pack('<f', math.sin(i * 6.283185307179586 / 16384))
                              for i in range(16384))
         cpu.mem_write(SINE_TABLE, table)
+        # The AI-pick bodies are the only corpus callers of appFrand; replace the
+        # Core import with the scripted queue so random draws are deterministic
+        # and observable (the real MSVCRT rand would need thread-local state).
+        self.frand_body = self.deploy(frand_stub())
+        self.write(APPFRAND_IAT, 'I', self.frand_body)
+        self.stub_frand = self.frand_body
         # GNatives evaluator stubs.
         self.write(GNATIVES + TOK_VECTOR * 4, 'I', self.deploy(dword_stub(3)))
         self.write(GNATIVES + TOK_FLOAT * 4, 'I', self.deploy(dword_stub(1)))
@@ -760,7 +794,7 @@ class NavProbe:
         # vtable/stub/record-buffer allocations) so batches stay bounded.
         self.free = self.heap_mark
         self.callsite_log = []
-        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL):
+        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
         self.probing_results = scene.get('probing', [])
@@ -798,6 +832,12 @@ class NavProbe:
         for i, v in enumerate(fl):
             self.write(fl_mem + i * 4, 'I', v)
         self.write(MAIL_FL + 8, 'I', fl_mem)
+        # Scripted appFrand draws (f64 each) for the AI-pick direction helper.
+        fr = pad(scene.get('frand', []), 0.5)
+        fr_mem = self.alloc(8 * len(fr))
+        for i, v in enumerate(fr):
+            self.write(fr_mem + i * 8, 'd', v)
+        self.write(MAIL_FR + 8, 'I', fr_mem)
 
         # Zones (built before actors so region fields can reference them).
         zones = {name: self.zone(spec) for name, spec in scene.get('zones', {}).items()}
@@ -968,7 +1008,7 @@ class NavProbe:
                         self.write(self.stack + 4 + i * 4, 'f', arg['f'])
                         continue
                     if 'i' in arg:
-                        self.write(self.stack + 4 + i * 4, 'I', arg['i'])
+                        self.write(self.stack + 4 + i * 4, 'I', arg['i'] & 0xffffffff)
                         continue
                     if 'ref' in arg:
                         self.write(self.stack + 4 + i * 4, 'I', refs.get(arg['ref'], 0))
@@ -1050,7 +1090,7 @@ class NavProbe:
             'counts': {op: self.read(mail, 'I')[0]
                        for op, mail in [('moveActor', MAIL_MV), ('farMoveActor', MAIL_FM),
                                         ('singleLineCheck', MAIL_SL), ('pointRegion', MAIL_PR),
-                                        ('fastLineCheck', MAIL_FL)]},
+                                        ('fastLineCheck', MAIL_FL), ('frand', MAIL_FR)]},
             'callsites': [[op, '%x' % site] for op, site in self.callsite_log],
             'mvres': [[self.read(mv_mem + i * 48, 'I')[0],
                        round(self.read(mv_mem + i * 48 + 0x28, 'f')[0], 4)]
@@ -1066,6 +1106,7 @@ class NavProbe:
             },
             'probingUsed': self.probing_index,
             'hitbuf': ['%08x' % w for w in self.read(refs['hitbuf'], '12I')],
+            'vecbuf': ['%08x' % w for w in self.read(refs['vecbuf'], '4I')],
             'pawnAddress': pawn,
             'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
             'levelAddress': lvl,

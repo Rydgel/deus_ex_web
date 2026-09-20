@@ -130,6 +130,20 @@ Cases (`scripts/native-trace-texture-oracle.py` →
   `Actor` clears.
 - `breakAfter=3` — the published world-hit texture values are retained.
 
+### Optional-argument arity (all four iterator execs)
+
+The original execs use OPTX macros: optional parameters keep their pre-stored
+defaults when the caller emits no expression, so legal call frames carry
+`required..max` arguments — `ScriptedPawn.GetFloorMaterial` calls
+`foreach TraceTexture(..., End)` with **8** expressions, leaving `Start`/
+`Extent` at the `Location`/`(0,0,0)` defaults. The VM supplies only the
+emitted expressions, so `createTraceActorsIterator`,
+`createTraceTextureIterator`, `createRadiusActorsIterator` and
+`createVisibleActorsIterator` each accept their full required..max range and
+evaluate an optional slot only when its expression exists. Focused short-call
+checks in the four validators assert the omitted slots reach the query with
+the recovered defaults; the oracle scenes keep emitting all arguments.
+
 ## Unverified scope
 
 - The iterator protocol is exercised as `0x2f` start → `next()` publish →

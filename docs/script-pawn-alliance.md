@@ -53,16 +53,16 @@ memory and literal evaluators are the only supplied graph boundaries.
 
 `node scripts/validate-mib-startup-boundary.mjs` exercises the real Training Play
 host, script dispatch and linked class/property storage. At seed 1 and 1/60-second
-frames, the MIB now passes `IsValidEnemy`, progresses through the BreatheLight
-tween and lands, then stops on tick 6 at original
-`ScriptedPawn.Wandering.PickDestination -> AIPickRandomDestination` (709).
-Reset reproduces that same boundary. This is a runtime integration check, not
-an original-game visual comparison. **The reported pose remains unresolved.**
+frames, the MIB passes `IsValidEnemy`, progresses through the BreatheLight
+tween, lands, and — since the 2026-09-20 native-709 integration — executes
+`ScriptedPawn.Wandering.PickDestination -> AIPickRandomDestination` through
+the recovered exec chain and wanders (~98 u on load, ~100 u after reset,
+continued successful pick episodes through 1920 ticks, zero NPC failures).
+This is a runtime integration check, not an original-game visual comparison.
 
-Next native research entry points in the verified Engine.dll: exec709 thunk
-`103029b9` -> `103c86f0`, worker `1030181b` -> `103c7fc0`, direction helper
-`10301f0f` -> `1036d030`, and destination-search helper `103011d6` -> `103c78a0`.
-The latter performs collision test moves and restores position/velocity; a
-random point without that search would not establish the original behavior.
-These are research entry points only: their full contracts and original
-reference cases have not been established and no replacement is admitted.
+The former 709 boundary is resolved: exec `103029b9` -> `103c86f0`, worker
+`1030181b` -> `103c7fc0`, direction helper `10301f0f` -> `1036d030`, and
+destination-search helper `103011d6` -> `103c78a0` are ported and oracle-verified
+in [pawn navigation](script-pawn-nav.md). The search's collision test moves run
+the recovered test-mode `MoveActor` contract (`bTest=1, bIgnorePawns=1`) against
+the live collision hash, with `FarMoveActor` restore after each search.

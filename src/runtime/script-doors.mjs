@@ -506,6 +506,13 @@ export async function createScriptDoors({
       // PlayAnim(259) is not a boundary: the runtime runs the real execPlayAnim
       // native, so the switch's animation state is applied (only rendering is Stage-4).
       if (lightSwitch) { decorationEffect(call, 'SwitchSound'); return 0; }
+      // ScriptedPawn's direct PlaySound sites are ambient effect audio
+      // (PlayFootStep, idle/scan/alert sounds) whose returns the scripts
+      // discard; their gameplay propagation rides on the separately recorded
+      // AI event natives (713-716). Record and return boundary channel id 0 —
+      // same lifetime contract as the decoration PushSound above — so a pawn
+      // keeps ticking through the audio gap instead of freezing mid-walk.
+      if (path.startsWith('scriptedpawn.')) { decorationEffect(call, 'PawnSound'); return 0; }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
@@ -753,6 +760,11 @@ export async function createScriptDoors({
     // so those class chains link at load too, same as each NPC's own.
     await prepareNpcClass(playerClass);
     await prepareNpcClass(levelClass);
+    // ScriptedPawn idle/bark calls reach the player's spawned BarkManager
+    // (player.barkManager.StartBark/BuildBarkName). Its subsystem class chain
+    // links at load as well so the bodies reach their real boundaries.
+    const barkManager = runtime.namedReference(playerActor, 'barkManager')?.get?.();
+    if (barkManager) await prepareNpcClass(runtime.instance(barkManager).cls);
     for (const actor of npcPawns) {
       try {
         await prepareNpcClass(identities.get(actor).cls);

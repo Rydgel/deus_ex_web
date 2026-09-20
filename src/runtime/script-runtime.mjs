@@ -39,7 +39,8 @@ import {
   dispatchWaitForLanding, pollMoveTo, pollMoveToward, pollTurnTo,
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
-import { runScriptPawnPhysics } from './script-pawn-physics.mjs';
+import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
+import { execAiPickRandomDestination } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -888,6 +889,9 @@ export class ScriptRuntime {
       },
       readField:(actor,name)=>this.namedReference(actor,name).get(),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
+      // FindFunctionChecked against the object's class chain: NULL when the
+      // class never declares the name (e.g. SpawnNotification on pawns).
+      findFunction:(actor,name)=>this.lookup(actor,name)?.function??null,
       zone:actor=>this.locomotionZone(actor),
     };
   }
@@ -2006,6 +2010,16 @@ export class ScriptRuntime {
     if(call.index===700)return execAIGetLightLevel(call,this.perceptionServices(call));
     if(call.index===701)return execAIVisibility(call,this.perceptionServices(call));
     if(call.index===705)return execAICanSee(call,this.perceptionServices(call));
+    if(call.index===709){
+      // execAIPickRandomDestination 0x103c86f0: nine evaluated slots; the
+      // first eight are values, `dest` keeps its reference so the out-vector
+      // write reaches the caller (a non-reference temp discards it).
+      if(call.argumentCount!==9)throw new Error('AIPickRandomDestination requires nine arguments');
+      const args=[];
+      for(let i=0;i<8;i++)args.push(refValue(call.evaluateArgument(i)));
+      return execAiPickRandomDestination(call.receiver,args,call.evaluateArgument(8),
+        this.pawnNavServices(call.receiver));
+    }
     if(call.index===650){
       // execInitEventManager 0x103023b0 -> 0x10384a90: the lazy +0x550
       // UEventManager creator LevelInfo.PreBeginPlay invokes. The Map is the
@@ -2217,10 +2231,14 @@ export class ScriptRuntime {
    * populates the original PendingTouch tail. Physics modes outside
    * {Walking=1,Falling=2}, non-Pawn actors and the unsupported zone-event
    * branches stay explicit boundaries. */
-  processActorPhysics(receiver,seconds) {
+  /** Shared live-level services for the script-attached pawn consumers:
+   * performPhysics (processActorPhysics) and the native-709 pick chain. Field
+   * reads route through namedReference bindings; world queries come from the
+   * level collision hash; zone events dispatch through processEvent. */
+  pawnPhysicsServices(receiver) {
     const level=this.levelFor(receiver);
     if(!level?.hash)throw new Error('Pawn physics requires the level collision hash');
-    return runScriptPawnPhysics(receiver,seconds,{
+    return {
       field:(actor,name)=>this.namedReference(actor,name),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
@@ -2245,7 +2263,62 @@ export class ScriptRuntime {
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
         return Math.fround(this.rng.frand());
       },
-    });
+    };
+  }
+  processActorPhysics(receiver,seconds) {
+    return runScriptPawnPhysics(receiver,seconds,this.pawnPhysicsServices(receiver));
+  }
+  /** Native 709 AIPickRandomDestination services (docs/script-pawn-nav.md):
+   * the oracle-validated direction/search/worker chain drives the live pawn
+   * through the pawnPhysicsView — Location/Velocity bindings, the Region and
+   * FootRegion zone reads, MoveActor(bTest=1,bIgnorePawns=1) probes through
+   * the recovered test-move, and FarMoveActor(test=1,noCheck=1) restores. The
+   * +0xd0 CollideFlag byte is Region.ZoneNumber; +0x444 is ReducedDamageType.
+   * Water zones reach the unported swimMove boundary explicitly. */
+  pawnNavServices(receiver) {
+    const base=this.pawnPhysicsServices(receiver),level=base.level;
+    const view=pawnPhysicsView(receiver,base);
+    const navZone=zone=>{
+      if(!zone)return {water:false,pain:false,damageType:'None',gravityZ:undefined};
+      const read=name=>{try{return this.namedReference(zone,name).get();}catch{return zone?.values?.[name];}};
+      return {water:Boolean(read('bWaterZone')),pain:Boolean(read('bPainZone')),
+        damageType:read('DamageType')??'None',gravityZ:read('ZoneGravity')?.[2]};
+    };
+    const zoneOf=(actor,name)=>this.namedReference(actor,name).get()?.['engine.actor.pointregion.zone']
+      ??level.pointRegion(view.position).zone;
+    return {
+      read:(actor,name)=>name==='CollideFlag'
+        ?(this.regionValue(actor).zoneNumber??0)&0xff      // pawn+0xd0 byte
+        :this.namedReference(actor,name).get(),
+      location:actor=>this.namedReference(actor,'Location').get(),
+      velocity:actor=>{
+        // The workers restore Velocity by mutating the returned vector; bind
+        // it to a live host array (the field binding's get copies).
+        if(!Array.isArray(actor.velocity))actor.velocity=this.namedReference(actor,'Velocity').get();
+        return actor.velocity;
+      },
+      regionZone:actor=>navZone(zoneOf(actor,'Region')),
+      footZone:actor=>navZone(zoneOf(actor,'FootRegion')),
+      zoneGravity:actor=>Math.fround(navZone(zoneOf(actor,'Region')).gravityZ??-950),
+      isA:(actor,key)=>{
+        const tail=lower(String(key).split('.').pop());
+        for(let cls=this.instance(actor)?.cls;cls;cls=cls.base)if(lower(cls.record.name)===tail)return true;
+        return false;
+      },
+      gIsEditor:()=>false,
+      frand:()=>{
+        if(typeof this.rng?.frand!=='function')throw new Error('AIPickRandomDestination requires the shared original RNG stream');
+        return this.rng.frand();
+      },
+      moveActor:(actor,delta,rotation,flags)=>{
+        if(actor!==receiver)throw new Error('AIPickRandomDestination MoveActor on a non-receiver actor is unlinked');
+        return view.testMove(delta,rotation,flags);
+      },
+      farMoveActor:(actor,dest,test,noCheck)=>{
+        if(actor!==receiver)throw new Error('AIPickRandomDestination FarMoveActor on a non-receiver actor is unlinked');
+        return view.farMove(dest,test,noCheck);
+      },
+    };
   }
   createIterator(call) {
     if(call.index===309||call.index===1000){

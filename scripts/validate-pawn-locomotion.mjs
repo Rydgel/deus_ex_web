@@ -123,6 +123,9 @@ function makeServices(objectsByName, events) {
   return {
     isA: (actor, name) => !!actor?.clsChain?.includes(name.toLowerCase()),
     readField: (actor, name) => actor[FIELD_NAME[name] ?? name],
+    // The oracle's FindFunctionChecked stub always resolves; the JS seam
+    // dispatches only on a hit, so the twin returns truthy to match.
+    findFunction: () => ({}),
     processEvent: (actor, name, args) => events.push({ this: actor, name, args }),
     zone: zoneOf,
   };
@@ -489,8 +492,8 @@ const MUTATIONS = [
   { name: 'walk-pitch-pawn-gate', pattern: 'if (!(target && services.isA(target, \'Pawn\'))) desired = [0, yaw, rot[2]];',
     replacement: 'if (target && services.isA(target, \'Pawn\')) desired = [0, yaw, rot[2]];',
     expect: ['ptt-walk-pitch-pawn', 'ptt-walk-pitch-nonpawn'] },
-  { name: 'tactics-physics-gate', pattern: 'if (p.bAdvancedTactics && p.physics === 1) s.processEvent',
-    replacement: 'if (p.bAdvancedTactics && p.physics === 2) s.processEvent',
+  { name: 'tactics-physics-gate', pattern: 'if (!(p.bAdvancedTactics && p.physics === 1)) return;',
+    replacement: 'if (!(p.bAdvancedTactics && p.physics === 2)) return;',
     expect: ['pmt-tactics', 'pmt-tactics-falling', 'pmtw-tactics'] },
   { name: 'swim-gate', pattern: 'if (!p.bCanSwim && zone && zone.waterZone) p.moveTimer = -1;',
     replacement: 'if (!p.bCanSwim && zone && !zone.waterZone) p.moveTimer = -1;',

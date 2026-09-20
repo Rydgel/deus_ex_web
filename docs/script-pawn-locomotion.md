@@ -128,13 +128,20 @@ consumes no operand). `MoveTo`/`MoveToward` clamp `DesiredSpeed` to
   facing helper, `latent=0` on completion.
 - **MoveTo (501)**: `Destination` is snapshotted before and restored after the
   event+helpers (immune to event side effects). `bAdvancedTactics` + walking
-  fires `SpawnNotification` on the pawn. Facing helper then steer/arrive;
-  `latent=0` when the helper reports done.
+  runs `pawn.FindFunctionChecked(SpawnNotification)` → `ProcessEvent` — on
+  shipped pawn classes the lookup misses (only `SpawnNotify` declares the
+  function), the miss path is a nonfatal `Logf` returning NULL, and
+  `AActor::ProcessEvent`'s `XLevel+0x4f0` bit-0x2 gate drops the NULL before
+  Core `ProcessEvent` dereferences it: an effective no-op. The runtime
+  therefore dispatches the event only when the receiver's class chain
+  actually resolves it — observable contract unchanged. Facing helper then
+  steer/arrive; `latent=0` when the helper reports done.
 - **MoveToward (503)**: `MoveTarget==0` → `latent=0`. Destination is rebuilt
   each tick from the live target location — flying pawn targets offset
   `z += CollisionHeight*0.7`, Spider physics offsets by
   `CollisionRadius*Floor` — then `Focus=Destination`, `DesiredSpeed` is saved,
-  tactics event fires, helpers run, `latent=0` on done, `Destination`
+  the same tactics `SpawnNotification` lookup fires (NULL-resolution no-op as
+  above), helpers run, `latent=0` on done, `Destination`
   re-snapshots the live location, and pawn targets unconditionally restore
   `DesiredSpeed` plus force `MoveTimer=-1` when the target's
   `Region.Zone+0x388&1` water flag is set and the pawn lacks `bCanSwim`

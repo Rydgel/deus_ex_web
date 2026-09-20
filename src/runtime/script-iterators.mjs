@@ -124,7 +124,9 @@ export function createTraceActorsIterator({
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('TraceActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('TraceActors requires levelFor');
-  if (argumentCount !== 7) throw new RangeError(`TraceActors takes seven arguments; got ${String(argumentCount)}`);
+  // The exec's OPTX macros make Start/Extent optional: valid calls carry
+  // five to seven argument expressions.
+  if (argumentCount < 5 || argumentCount > 7) throw new RangeError(`TraceActors takes five to seven arguments; got ${String(argumentCount)}`);
 
   evaluateArgument(0);
   const outActor = writeSlot(evaluateArgument(1));
@@ -132,8 +134,8 @@ export function createTraceActorsIterator({
   const outNormal = writeSlot(evaluateArgument(3));
   const end = refValue(evaluateArgument(4));
   const startDefault = receiver.position;
-  const start = refValue(evaluateArgument(5)) ?? startDefault;
-  const extent = refValue(evaluateArgument(6)) ?? [0, 0, 0];
+  const start = (argumentCount > 5 ? refValue(evaluateArgument(5)) : undefined) ?? startDefault;
+  const extent = (argumentCount > 6 ? refValue(evaluateArgument(6)) : undefined) ?? [0, 0, 0];
 
   const level = levelFor(receiver);
   const queries = level?.hash;
@@ -176,7 +178,9 @@ export function createTraceTextureIterator({
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('TraceTexture requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('TraceTexture requires levelFor');
-  if (argumentCount !== 10) throw new RangeError(`TraceTexture takes ten arguments; got ${String(argumentCount)}`);
+  // The exec's OPTX macros make Start/Extent optional: valid calls carry
+  // eight to ten argument expressions.
+  if (argumentCount < 8 || argumentCount > 10) throw new RangeError(`TraceTexture takes eight to ten arguments; got ${String(argumentCount)}`);
 
   evaluateArgument(0);
   const outActor = writeSlot(evaluateArgument(1));
@@ -187,8 +191,8 @@ export function createTraceTextureIterator({
   const outNormal = writeSlot(evaluateArgument(6));
   const end = refValue(evaluateArgument(7));
   const startDefault = receiver.position;
-  const start = refValue(evaluateArgument(8)) ?? startDefault;
-  const extent = refValue(evaluateArgument(9)) ?? [0, 0, 0];
+  const start = (argumentCount > 8 ? refValue(evaluateArgument(8)) : undefined) ?? startDefault;
+  const extent = (argumentCount > 9 ? refValue(evaluateArgument(9)) : undefined) ?? [0, 0, 0];
 
   const level = levelFor(receiver);
   const queries = level?.hash;
@@ -259,13 +263,14 @@ export function createRadiusActorsIterator({
   if (typeof evaluateArgument !== 'function') throw new TypeError('RadiusActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('RadiusActors requires levelFor');
   if (typeof isA !== 'function') throw new TypeError('RadiusActors requires isA');
-  if (argumentCount !== 4) throw new RangeError(`RadiusActors takes four arguments; got ${String(argumentCount)}`);
+  // Loc is optional: valid calls carry three or four argument expressions.
+  if (argumentCount < 3 || argumentCount > 4) throw new RangeError(`RadiusActors takes three or four arguments; got ${String(argumentCount)}`);
 
   const baseValue = refValue(evaluateArgument(0));
   const outActor = writeSlot(evaluateArgument(1));
   const radius = f32(refValue(evaluateArgument(2)) ?? 0);
   const locationDefault = receiver.position.map(f32);
-  const loc = (refValue(evaluateArgument(3)) ?? locationDefault).map(f32);
+  const loc = ((argumentCount > 3 ? refValue(evaluateArgument(3)) : undefined) ?? locationDefault).map(f32);
   const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
 
   let index = 0;
@@ -310,13 +315,15 @@ export function createVisibleActorsIterator({
   if (typeof evaluateArgument !== 'function') throw new TypeError('VisibleActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('VisibleActors requires levelFor');
   if (typeof isA !== 'function') throw new TypeError('VisibleActors requires isA');
-  if (argumentCount !== 4) throw new RangeError(`VisibleActors takes four arguments; got ${String(argumentCount)}`);
+  // Radius/Loc are optional: valid calls carry two to four argument
+  // expressions (the exec pre-stores a zero Radius before the Loc default).
+  if (argumentCount < 2 || argumentCount > 4) throw new RangeError(`VisibleActors takes two to four arguments; got ${String(argumentCount)}`);
 
   const baseValue = refValue(evaluateArgument(0));
   const outActor = writeSlot(evaluateArgument(1));
-  const radius = f32(refValue(evaluateArgument(2)) ?? 0);
+  const radius = f32(argumentCount > 2 ? refValue(evaluateArgument(2)) ?? 0 : 0);
   const locationDefault = receiver.position.map(f32);
-  const loc = (refValue(evaluateArgument(3)) ?? locationDefault).map(f32);
+  const loc = ((argumentCount > 3 ? refValue(evaluateArgument(3)) : undefined) ?? locationDefault).map(f32);
   const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
 
   let index = 0;

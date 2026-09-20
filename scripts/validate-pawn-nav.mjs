@@ -233,6 +233,87 @@ function flatWalk(depth) {
   return mv;
 }
 
+/* aiDirection scene (0x1036d030): thiscall(pawn; out rot*, centralYaw i,
+ * yawDist f, centralPitch i, pitchDist f).  Consumes two scripted appFrand
+ * draws (f64 queue) and writes {pitch,yaw,roll=0} into vecbuf. */
+function ad(name, { cy = 0, yd = 0, cp = 0, pd = 0, frand = [0.5] } = {}) {
+  // NaN can't cross the JSON payload: pass the raw f32 dword instead.
+  const f = v => (Number.isNaN(v) ? { i: 0x7fc00000 } : { f: v });
+  return {
+    name, body: 'aiDirection', this: 'self',
+    zones: { dry: { gravityZ: -950 } },
+    pawn: { ...BASE_PAWN },
+    frand,
+    directArgs: [{ ref: 'vecbuf' }, { i: cy }, f(yd), { i: cp }, f(pd)],
+    js: { cy, yd, cp, pd, frand, pawn: { ...BASE_PAWN } },
+  };
+}
+
+/* aiPickSearch scene (0x103c78a0): thiscall(pawn; origin vec3, yaw i, pitch i,
+ * minR f, maxR f, arg24 f, out vec3*).  The stepped-move loop consumes the
+ * scripted MoveActor sequence through checkMove/flyMove; outNull exercises the
+ * native's null-out-ptr tail. */
+function as(name, mv, { origin = [0, 0, 0], yaw = 0x4000, pitch = 0,
+                        minR = 40, maxR = 100, zones = null, gIsEditor = 0,
+                        pawn = {}, outNull = 0 } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  return {
+    name, body: 'aiPickSearch', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    directArgs: [{ f: origin[0] }, { f: origin[1] }, { f: origin[2] },
+                 { i: yaw }, { i: pitch }, { f: minR }, { f: maxR }, { f: 15.0 },
+                 outNull ? { i: 0 } : { ref: 'vecbuf' }],
+    moveActor: mv,
+    js: { origin, yaw, pitch, minR, maxR, gIsEditor, zones: z,
+          pawn: { ...BASE_PAWN, ...pawn }, outNull },
+  };
+}
+
+/* aiPickWorker scene (0x103c7fc0): thiscall(pawn; minDist f, maxDist f,
+ * centralYaw i, yawDist f, centralPitch i, pitchDist f, tries i, mult f,
+ * out vec3*).  Each try consumes two frand draws through aiDirection. */
+function ap(name, mv, { minDist = 40, maxDist = 100, cy = 0x4000, yd = 1,
+                        cp = 0, pd = 1, tries = 1, mult = 1, frand = [0.5],
+                        zones = null, gIsEditor = 0, pawn = {}, outNull = 0 } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  return {
+    name, body: 'aiPickWorker', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    frand,
+    directArgs: [{ f: minDist }, { f: maxDist }, { i: cy }, { f: yd },
+                 { i: cp }, { f: pd }, { i: tries }, { f: mult },
+                 outNull ? { i: 0 } : { ref: 'vecbuf' }],
+    moveActor: mv,
+    js: { minDist, maxDist, cy, yd, cp, pd, tries, mult, frand, gIsEditor,
+          zones: z, pawn: { ...BASE_PAWN, ...pawn }, outNull },
+  };
+}
+
+/* aiPickExec scene (0x103c86f0, native 709): the nine script args evaluate
+ * through the token stream; `out` resolves to vecbuf via GPropAddr while
+ * `nothing` leaves GPropAddr=0 so the worker writes the dead temp slot. */
+function ax(name, mv, { minDist = 40, maxDist = 100, cy = 0x4000, yd = 1,
+                        cp = 0, pd = 1, tries = 1, mult = 1, frand = [0.5],
+                        zones = null, pawn = {}, outKind = 'out' } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  return {
+    name, body: 'aiPickExec', this: 'self',
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    frand,
+    moveActor: mv,
+    args: [{ kind: 'float', value: minDist }, { kind: 'float', value: maxDist },
+           { kind: 'int', value: cy }, { kind: 'float', value: yd },
+           { kind: 'int', value: cp }, { kind: 'float', value: pd },
+           { kind: 'int', value: tries }, { kind: 'float', value: mult },
+           outKind === 'out' ? { kind: 'out', value: 'vecbuf' } : { kind: 'nothing' }],
+    js: { args: [minDist, maxDist, cy, yd, cp, pd, tries, mult], frand,
+          outRef: outKind === 'out', zones: z, pawn: { ...BASE_PAWN, ...pawn } },
+  };
+}
+
 const scenes = [
   // Clean flat move: phase A full then a floor landing on the down-probe.
   cm('flat-reach', [H(1, 1), H(0.5, 1)]),
@@ -647,6 +728,95 @@ const scenes = [
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
     moveActor: [H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1)],
   }),
+
+  // -- aiDirection 0x1036d030 (out = {pitch,yaw,0} ints) ----------------------
+  // Neutral draws (u=0) leave the centers untouched.
+  ad('ad-neutral', { cy: 0x4000, yd: 1, cp: 0, pd: 1, frand: [0.5, 0.5] }),
+  // Quarter draws: d'=0.625, m=0.3 -> yawOff=trunc(0.3*-32768)=-9830,
+  // pitchOff=trunc(0.3*16383)=4914 -> out {4914, 100-9830, 0}.
+  ad('ad-quarter', { cy: 100, yd: 0.25, cp: 0, pd: 0.25, frand: [0.25, 0.75] }),
+  // Zero distributions (d'=0.5) with extreme draws hit the outer remap:
+  // u=-1 -> m=1 -> -32768; u=+1 -> m=1 -> +16383.
+  ad('ad-extremes', { cy: 0, yd: 0, cp: 0, pd: 0, frand: [0.0, 1.0] }),
+  // Inner-remap inside the fold point (u=0.5 <= d'=0.75): m=u(1-d)/d; the
+  // pitch distribution differs (0.375 -> d'=0.6875) so the draws stay distinct.
+  ad('ad-inner', { cy: 0, yd: 0.5, cp: 0, pd: 0.375, frand: [0.75, 0.25] }),
+  // Distribution clamps: yd<0 -> 0 (d'=0.5), pd>=1 -> 1 (d'=1 -> offset 0).
+  ad('ad-clamps', { cy: 0x100, yd: -0.25, cp: 0x200, pd: 2.5, frand: [0.75, 0.75] }),
+  // NaN distribution clamps to 0 through the unordered FCOM path.
+  ad('ad-nan-dist', { cy: 0, yd: NaN, cp: 0, pd: NaN, frand: [0.75, 0.25] }),
+  // Yaw offset wraps the int32 rotator component past 0xffff.
+  ad('ad-wrap', { cy: 0x8000, yd: 0, cp: 0, pd: 0, frand: [0.0, 0.5] }),
+
+  // -- aiPickSearch 0x103c78a0 ----------------------------------------------
+  // Flat walk enters the [40,100] band and is pushed out by the scripted
+  // down-probe sinking (oracle: candidate ~88.88y with the sine-table x drift).
+  as('as-flat-band', flatWalk(8), { yaw: 0x4000 }),
+  // First step blocked by a wall -> cont=0 -> ret 0, out = startLoc.
+  as('as-blocked', [H(0.5, 0), H(1, 1), H(0.5, 0), H(0.6, 0)],
+     { pawn: { collideFlag: 1 } }),
+  // Tiny band jumped over in one step: prev -1 -> +1 -> best = overshoot pos.
+  as('as-overshoot', flatWalk(4), { minR: 1, maxR: 10 }),
+  // PHYS_Flying -> flyMove path (no down-probe; pitch arg is used).
+  as('as-fly', [H(1, 1), H(1, 1), H(1, 1), H(1, 1), H(1, 1), H(1, 1)],
+     { pawn: { physics: 4 }, pitch: 0x2000 }),
+  // PHYS_Falling -> mode 0: early 0 with no farMove and no out write.
+  as('as-phys0', [], { pawn: { physics: 2 } }),
+  // Ledge with step>maxStep -> retry at maxStep, then exits when ledge repeats.
+  as('as-maxstep-retry', [H(1, 1), H(1, 1), H(1, 1), H(1, 1)],
+     { pawn: { collisionRadius: 30, collideFlag: 1 } }),
+  // Foot-zone pain gate stops the loop after the first step.
+  as('as-pain-stop', flatWalk(8),
+     { zones: { hot: { gravityZ: -950, pain: 1, damageType: 7 } },
+       pawn: { collideFlag: 1, footZone: 'hot', field444: 0 } }),
+  // Band unreachable inside 100 iterations -> ret 0, out = startLoc.
+  as('as-iter-cap', flatWalk(110), { minR: 3000, maxR: 4000 }),
+  // Null out ptr: the native skips the out write; vecbuf stays zeroed.
+  as('as-nullout', flatWalk(8), { yaw: 0x4000, outNull: 1 }),
+  // CR=4 < stepMin: the stride floor lifts the step to 5 (still under-moved
+  // at 5 >= 4.1 scale) — pinned by the ai-step-floor mutation.
+  as('as-small-step', flatWalk(30), { minR: 40, maxR: 100,
+     pawn: { collisionRadius: 4 } }),
+  // CR=30 > stepMax: the stride clamps to 25 — pinned by ai-step-clamp.
+  as('as-stride-clamp', flatWalk(12), { minR: 40, maxR: 100,
+     pawn: { collisionRadius: 30 } }),
+
+  // -- aiPickWorker 0x103c7fc0 ----------------------------------------------
+  // Single try through direction + search.
+  ap('ap-flat', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                               frand: [0.5, 0.5], tries: 1, mult: 1 }),
+  // tries=0 clamps to 1 -> still runs exactly one attempt.
+  ap('ap-tries0', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                                frand: [0.5, 0.5], tries: 0, mult: 1 }),
+  // mult=0 clamps to 9.9999997e-05 -> band [4e5,1e6] unreachable -> ret 0.
+  ap('ap-mult-floor', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                                    frand: [0.5, 0.5], tries: 1, mult: 0 }),
+  // mult=0.5: first search finds in [80,200], then a second search pulls the
+  // destination to f32(dist*0.5) along the same direction.
+  ap('ap-second-stage', flatWalk(16), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                                       frand: [0.5, 0.5], tries: 1, mult: 0.5 }),
+  // First direction blocked (wall), second reaches -> tries consumed twice.
+  ap('ap-retry', [H(0.5, 0), H(1, 1), H(0.5, 0), H(0.6, 0), ...flatWalk(10)],
+     { cy: 0x4000, yd: 1, cp: 0, pd: 1, tries: 2, mult: 1,
+       frand: [0.5, 0.5, 0.25, 0.75], pawn: { collideFlag: 1 } }),
+  // Walking pawns mask the pitch arg (usePitch=0): the pitch draw is consumed
+  // but the search receives pitch=0.
+  ap('ap-walk-nopitch', flatWalk(8), { cy: 0x4000, yd: 0, cp: 0x1000, pd: 0,
+                                      frand: [0.0, 1.0], tries: 1, mult: 1 }),
+  // Flying pawn: usePitch=1 -> the random pitch reaches flyMove's dirVec.
+  ap('ap-fly-pitch', [H(1, 1), H(1, 1), H(1, 1), H(1, 1), H(1, 1), H(1, 1)],
+     { cy: 0x4000, yd: 0, cp: 0x1000, pd: 0, frand: [0.0, 1.0],
+       tries: 1, mult: 1, pawn: { physics: 4 } }),
+
+  // -- aiPickExec 0x103c86f0 (native 709, verdict in *result) ------------------
+  // Full script path: nine tokens -> worker -> *result=1, vecbuf=candidate.
+  ax('ax-flat', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                              frand: [0.5, 0.5], tries: 1, mult: 1 }),
+  // Non-reference out arg: GPropAddr stays 0 -> worker writes the temp slot;
+  // *result still gets the verdict while vecbuf stays zeroed.
+  ax('ax-out-temp', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
+                                  frand: [0.5, 0.5], tries: 1, mult: 1,
+                                  outKind: 'nothing' }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -865,13 +1035,95 @@ function runJsGraph(scene, mod = module) {
   return { ret, moves, farMoves, slc: sli, locationBits: vecBits(pawn.location) };
 }
 
-function normalizeProbe(r, isExec) {
+/* AI-pick twin (709 chain): direction/search/worker/exec bodies share the
+ * moveActor/farMove boundary stubs plus the scripted appFrand queue.  `outBuf`
+ * mirrors the probe's vecbuf: direction writes int rotator words, the rest
+ * write float32 vector components. */
+function runJsPick(scene, mod = module) {
+  const j = scene.js;
+  const zones = j.zones || {};
+  const zoneObj = n => {
+    const s = zones[n] || {};
+    return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ };
+  };
+  const pawn = {
+    location: (j.pawn.location || [0, 0, 0]).map(f32),
+    velocity: (j.pawn.velocity || [0, 0, 0]).map(f32),
+    Rotation: (j.pawn.rotation || [0, 0, 0]).slice(),
+    CollisionRadius: f32(j.pawn.collisionRadius), CollisionHeight: f32(j.pawn.collisionHeight),
+    MaxStepHeight: f32(j.pawn.maxStepHeight), GroundSpeed: f32(j.pawn.groundSpeed ?? 200),
+    Flags318: j.pawn.flags318 | 0, ReducedDamageType: j.pawn.field444 | 0,
+    CollideFlag: j.pawn.collideFlag | 0, Physics: j.pawn.physics | 0,
+    BaseEyeHeight: f32(j.pawn.baseEyeHeight ?? 40),
+    zoneGravity: f32((zones[j.pawn.regionZone] || {}).gravityZ ?? -950),
+    __rz: j.pawn.regionZone ?? 'dry', __fz: j.pawn.footZone ?? 'dry',
+  };
+  const scripted = scene.moveActor || [];
+  const frSeq = j.frand || [0.5];
+  let idx = 0, moves = 0, farMoves = 0, fri = 0;
+  const services = {
+    location: a => a.location, velocity: a => a.velocity,
+    read: (a, n) => a[n],
+    zoneGravity: a => a.zoneGravity,
+    gIsEditor: () => !!j.gIsEditor,
+    regionZone: a => zoneObj(a.__rz ?? 'dry'),
+    footZone: a => zoneObj(a.__fz ?? 'dry'),
+    frand: () => frSeq[Math.min(fri++, frSeq.length - 1)],
+    moveActor: (a, delta, rot, flags) => {
+      moves++;
+      const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
+      commitMove(a.location, delta, h.time);
+      return { time: h.time, normal: h.normal, actor: 0, item: h.item };
+    },
+    farMoveActor: (a, dest, test, noCheck) => {
+      farMoves++; a.location = dest.map(f32); return 1;
+    },
+    // The mode-3 swim body 0x103c3ca0 is not ported: keep it explicit.
+    waterMove: () => { throw new Error('waterMove is outside this corpus'); },
+  };
+  const outBuf = [0, 0, 0];
+  let ret;
+  if (scene.body === 'aiDirection') {
+    const dir = mod.aiDirection(services.frand, j.cy, j.yd, j.cp, j.pd);
+    outBuf[0] = dir[0]; outBuf[1] = dir[1]; outBuf[2] = dir[2];
+    ret = 1;   // eax is the out pointer — the vecbuf compare carries fidelity
+  } else if (scene.body === 'aiPickSearch') {
+    ret = mod.aiPickSearch(pawn, j.origin.map(f32), j.yaw | 0, j.pitch | 0,
+                           f32(j.minR), f32(j.maxR), 15.0,
+                           j.outNull ? null : outBuf, services);
+  } else if (scene.body === 'aiPickWorker') {
+    ret = mod.aiPickWorker(pawn, f32(j.minDist), f32(j.maxDist), j.cy | 0, f32(j.yd),
+                           j.cp | 0, f32(j.pd), j.tries | 0, f32(j.mult),
+                           j.outNull ? null : outBuf, services);
+  } else {
+    // aiPickExec: nine evaluated slots; a {set} ref for `out`, null for the
+    // dead temp slot the native writes when the arg is not a reference.
+    const dest = j.outRef
+      ? { set: v => { outBuf[0] = v[0]; outBuf[1] = v[1]; outBuf[2] = v[2]; } }
+      : null;
+    ret = mod.execAiPickRandomDestination(pawn, j.args, dest, services);
+  }
+  return { ret, moves, farMoves, frand: fri,
+           outBits: scene.body === 'aiDirection'
+             ? outBuf.map(w => (w >>> 0).toString(16).padStart(8, '0'))
+             : vecBits(outBuf),
+           locationBits: vecBits(pawn.location) };
+}
+
+// aiDirection returns the out pointer in eax — normalized to a nonzero flag
+// (the vecbuf compare carries the real fidelity check for those scenes).
+const PTR_RET_BODIES = new Set(['aiDirection']);
+function normalizeProbe(r, isExec, body) {
   return {
     // Exec natives write the verdict to *result; workers return it in eax.
-    ret: isExec ? parseInt(r.resultOut, 16) : r.returned | 0,
+    ret: isExec ? parseInt(r.resultOut, 16)
+        : PTR_RET_BODIES.has(body) ? (r.returned !== 0 ? 1 : 0)
+        : r.returned | 0,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
     slc: r.counts.singleLineCheck,
+    frand: r.counts.frand,
+    outBits: r.vecbuf.slice(0, 3),
     locationBits: r.pawn.locationBits,
     velocityBits: r.pawn.velocityBits,
   };
@@ -883,6 +1135,9 @@ function compare(name, o, j) {
   if (o.moves !== j.moves) d.push(`${name}: moveActor calls ${o.moves} != ${j.moves}`);
   if (o.farMoves !== j.farMoves) d.push(`${name}: farMoveActor calls ${o.farMoves} != ${j.farMoves}`);
   if (j.slc !== undefined && o.slc !== j.slc) d.push(`${name}: singleLineCheck calls ${o.slc} != ${j.slc}`);
+  if (j.frand !== undefined && o.frand !== j.frand) d.push(`${name}: frand draws ${o.frand} != ${j.frand}`);
+  if (j.outBits && o.outBits.join() !== j.outBits.join())
+    d.push(`${name}: out ${o.outBits} != ${j.outBits}`);
   if (o.locationBits.join() !== j.locationBits.join())
     d.push(`${name}: location ${o.locationBits} != ${j.locationBits}`);
   if (j.velocityBits && o.velocityBits.join() !== j.velocityBits.join())
@@ -890,9 +1145,11 @@ function compare(name, o, j) {
   return d;
 }
 
-const EXEC_BODIES = new Set(['actorReachable']);
+const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec']);
+const PICK_BODIES = new Set(['aiDirection', 'aiPickSearch', 'aiPickWorker', 'aiPickExec']);
 const runFor = scene =>
-  (scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
+  (PICK_BODIES.has(scene.body) ? runJsPick
+   : scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
    : scene.body === 'reachMask' || scene.body === 'directReach' || scene.body === 'actorWorker' || EXEC_BODIES.has(scene.body) ? runJsGraph
    : runJs);
 
@@ -913,7 +1170,7 @@ for (let i = 0; i < scenes.length; i++) {
   let js;
   try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
-  const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body)), js);
+  const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body), scene.body), js);
   if (diffs.length) { failures++; diffs.forEach(d => console.log(`FAIL ${d}`)); }
 }
 const passed = scenes.length - failures;
@@ -1090,6 +1347,50 @@ const MUTATIONS = [
     pattern: 'if (origInv) t = origInv;',
     replacement: 'if (false) t = origInv;',
     expect: ['ae-inv-worker'] },
+
+  // -- AIPickRandomDestination (709) chain mutants ---------------------------
+  // Score classifier: dropping the below-min branch makes sub-min positions
+  // read sc=0 -> haveBest flips early.  Only observable where the band is
+  // missed or overshot; a clean band entry rewrites best to the same loc.
+  { name: 'ai-score-min',
+    pattern: 'ltU(ld(x), ld(minSq)) ? -1 : gtU(ld(x), ld(maxSq)) ? 1 : 0;',
+    replacement: 'false ? -1 : gtU(ld(x), ld(maxSq)) ? 1 : 0;',
+    expect: ['as-overshoot', 'as-maxstep-retry', 'as-iter-cap',
+             'ap-mult-floor', 'ap-second-stage'] },
+  // Search step floor 5.0 -> 0.5: a CR=4 pawn strides 0.5 instead of 5 and
+  // under-moves checkMove's 4.1 scale on every step -> blocked.
+  { name: 'ai-step-floor',
+    pattern: 'if (ltU(ld(step), ld(5.0))) step = 5.0;',
+    replacement: 'if (ltU(ld(step), ld(0.5))) step = 0.5;',
+    expect: ['as-small-step'] },
+  // The stride upper clamp dropped: CR=30 steps 30 at a time instead of 25,
+  // landing on a different in-band candidate.
+  { name: 'ai-step-clamp',
+    pattern: '  else if (!leU(ld(step), ld(25.0))) step = 25.0;',
+    replacement: '',
+    expect: ['as-stride-clamp'] },
+  // usePitch mask dropped: walking keeps pitch=0 anyway, but the flying scene
+  // now always receives pitch=0 -> different dirVec -> different candidate.
+  { name: 'ai-usepitch',
+    pattern: '    if (phys !== 3 || services.regionZone(pawn).water) usePitch = 1;',
+    replacement: '    if (false) usePitch = 1;',
+    expect: ['ap-fly-pitch'] },
+  // Second-stage multiplier search dropped: the mult<1 hit keeps the far
+  // candidate instead of re-searching at f32(dist*mult).
+  { name: 'ai-second-stage',
+    pattern: 'if (found && ltU(ld(mult), D1)) {                     // 0x103c80e2 mult<1',
+    replacement: 'if (false) {',
+    expect: ['ap-second-stage'] },
+  // tries clamp dropped: tries=0 runs zero attempts -> ret 0.
+  { name: 'ai-tries-clamp',
+    pattern: 'tries = (tries | 0) >= 1 ? tries | 0 : 1;',
+    replacement: 'tries = 0;',
+    expect: ['ap-tries0'] },
+  // The yaw draw consumed the pitch distribution (and vice versa).
+  { name: 'ai-draw-swap',
+    pattern: 'const yawOff = aiDraw(frand, dy, 32767.0, -32768.0);            // 0x1036d0d8',
+    replacement: 'const yawOff = aiDraw(frand, dp, 32767.0, -32768.0);            // 0x1036d0d8',
+    expect: ['ad-inner', 'ad-clamps'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');
@@ -1116,7 +1417,7 @@ for (const mut of MUTATIONS) {
     if (!r?.result) continue;
     let js;
     try { js = runFor(scenes[i])(scenes[i], mutMod); } catch { flipped.push(scenes[i].name); continue; }
-    if (compare(scenes[i].name, normalizeProbe(r.result, EXEC_BODIES.has(scenes[i].body)), js).length) flipped.push(scenes[i].name);
+    if (compare(scenes[i].name, normalizeProbe(r.result, EXEC_BODIES.has(scenes[i].body), scenes[i].body), js).length) flipped.push(scenes[i].name);
   }
   const missed = mut.expect.filter(n => !flipped.includes(n));
   if (!flipped.length || missed.length) {

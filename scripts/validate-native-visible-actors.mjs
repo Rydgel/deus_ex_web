@@ -87,4 +87,18 @@ for(const [index,c] of cases.entries()){
  try{assert.deepEqual(actual,expected);}catch{mismatches++;console.log(JSON.stringify({index,actual,expected}));}
  try{assert.deepEqual(boundActual,reference.results[index]);}catch{mismatches++;console.log(JSON.stringify({index,boundActual,expected:reference.results[index]}));}
 }
+// A real foreach can omit the optional Radius/Loc expressions; the exec's
+// pre-stored defaults are a zero Radius (no distance gate) and the receiver
+// Location (docs/script-actor-queries.md).
+{
+ const shortChecks=[];
+ const shortLevel={actors:[{id:'far',position:[9999,0,0],actorFlags:0,cls:CHAIN.Actor}],model:{},
+  fastLineCheck:(model,first,second)=>{shortChecks.push({first,second});return 1;}};
+ const shortOut={actor:null},shortSink={reference:true,get:()=>shortOut.actor,set:v=>{shortOut.actor=v;}};
+ const short=createVisibleActorsIterator({receiver:{position:[10,20,30],actorFlags:0,cls:CHAIN.Actor},argumentCount:2,
+  evaluateArgument:i=>[null,shortSink][i],actorClass:ACTOR,levelFor:()=>shortLevel,isA});
+ try{assert.equal(short.next(),true);assert.equal(shortOut.actor.id,'far');
+  assert.deepEqual(shortChecks,[{first:[9999,0,0],second:[10,20,30]}]);}
+ catch{mismatches++;console.log('short-call defaults mismatch');}
+}
 console.log(JSON.stringify({cases:cases.length,mismatches}));if(mismatches)process.exitCode=1;

@@ -119,6 +119,11 @@ class filtering, negative `Radius` (squared), and early-break out
 retention. Mutations dropping the hidden skip, applying the distance gate
 at `Radius == 0` or swapping the `FastLineCheck` arguments are caught.
 
+Both iterator factories accept the legal `required..max` argument range:
+trailing `optional` parameters evaluate only when their expression is
+emitted, so a short call leaves `Radius`/`Loc` at the pre-stored defaults —
+see [trace evidence](script-trace.md#optional-argument-arity-all-four-iterator-execs).
+
 ### 298 `SetBase` — exec `0x103e1a90`, body `0x10369c80`
 
 The exec evaluates `NewBase` once, then calls the body as

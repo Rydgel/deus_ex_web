@@ -530,9 +530,15 @@ export function pollTurnToward({ pawn, state, services } = {}) {
 }
 
 /** The bAdvancedTactics+PHYS_Walking SpawnNotification event shared by the
- * move polls (FindFunctionChecked then ProcessEvent on the pawn itself). */
+ * move polls (FindFunctionChecked then ProcessEvent on the pawn itself).
+ * No shipped pawn class declares SpawnNotification — the function lives on
+ * SpawnNotify — so the original lookup returns NULL (logged via GWarn->Logf,
+ * nonfatal) and AActor::ProcessEvent's XLevel+0x4f0 bit-0x2 gate then drops
+ * the NULL before Core ProcessEvent can dereference it. Observable contract:
+ * the dispatch fires only when the class actually resolves the function. */
 function tacticsEvent(p, s) {
-  if (p.bAdvancedTactics && p.physics === 1) s.processEvent(p.self, 'SpawnNotification', []);
+  if (!(p.bAdvancedTactics && p.physics === 1)) return;
+  if (s.findFunction?.(p.self, 'SpawnNotification')) s.processEvent(p.self, 'SpawnNotification', []);
 }
 
 /** Engine 0x103bd060 — MoveTo poll.  Destination is snapshotted across the

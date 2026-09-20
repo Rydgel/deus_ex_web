@@ -326,6 +326,95 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
 4. Everything else → `actorWorker(pawn, originalTarget, 0)` (thunk
    `0x103024be`), with the Inventory restored first.
 
+## `AIPickRandomDestination` native 709 — `execAIPickRandomDestination` `0x103c86f0`
+
+Script signature (all `Wandering.PickDestination` call sites pass an **int**
+yaw — the declared `Dir` rotator param arrives as one 4-byte slot):
+
+```text
+AIPickRandomDestination(float minDist, float maxDist, int centralYaw,
+    float yawDist, int centralPitch, float pitchDist, int tries,
+    float multiplier, out vector dest)
+```
+
+Four recovered bodies, all ported to `src/runtime/script-pawn-nav.mjs` and
+oracle-verified bit-exact (27 scenes across the four bodies plus 7 chain
+mutants, inside the validator's shared 123-scene corpus in
+`scripts/validate-pawn-nav.mjs`, driven by `scripts/native-pawn-nav-probe.py`
+under Unicorn with a scripted `appFrand` queue):
+
+- **Direction helper `0x1036d030`** (`aiDirection`): `yawDist`/`pitchDist`
+  clamp to `[0,1]` (NaN→0), fold to `d' = f32((clamp+1)·0.5)`; two draws per
+  call map `u=2·frand−1` through the piecewise fold `m=|u|≤d' ? |u|(1−d')/d' :
+  ((|u|−d')·d'/(1−d'))+(1−d')` with the sign taken from the **f32 store** of
+  `u`.  Scales: yaw `±32767/32768`, pitch `±16383/16384`; the offset truncates
+  through MSVCRT `_ftol` and adds the central terms.  `dist=0` ⇒ `d'=0.5` ⇒
+  `m=|u|` — a uniform ±full-circle draw.
+- **Band search `0x103c78a0`** (`aiPickSearch`): strides the pawn along
+  `dirVec = XAxis(FCoords{pitch,yaw,0})` — empirically `f32(cp·cy),
+  f32(cp·sy), sp` — with `stride = clamp(CollisionRadius, 5, 25)`, calling
+  `checkMove`/`flyMove`/`swimMove` per step.  The init score associates
+  `(dx²+dz²)+dy²` (`0x103c79bf`) while the in-loop score associates
+  `(dx²+dy²)+dz²` (`0x103c7cc3`) — both preserved.  Mode: region water → 3
+  (unported `swimMove` boundary), Physics 1|3 → 1 (walk), 4 → 2 (fly), else
+  early return before any restore/out write.  The pawn's Location/Velocity
+  are snapshotted and `FarMoveActor(test=1,noCheck=1)`-restored; `*out`
+  receives the last candidate.
+- **Worker `0x103c7fc0`** (`aiPickWorker`): `tries=max(tries,1)`,
+  `mult=clamp(mult, 9.9999997e-5, 1.0)`.  Per attempt: `aiDirection` →
+  `aiPickSearch` over band `[f32(minR/mult), f32(maxR/mult)]`; when found and
+  `mult<1`, a second search re-verifies the destination pulled to `d·mult`
+  along the same direction.  `*out` is written unconditionally (found
+  position or the entry location on failure); returns 0/1.
+- **Exec `0x103c86f0`**: evaluates the nine script args left to right; the
+  `out vector` keeps its reference so the native writes back to the caller's
+  `destLoc`.
+
+### Live dispatch (2026-09-20 follow-up)
+
+`ScriptRuntime.invokeNative` index 709 builds `pawnNavServices` over the
+existing `pawnPhysicsView` seam: `Location`/`Velocity` bindings (the module
+restores Velocity by mutating a **live** host array — the field binding's
+get copies, so the nav seam binds `actor.velocity` directly), `Region`/
+`FootRegion` zone reads via the reflected point-region struct, the pawn
+`+0xd0` byte as `Region.ZoneNumber` and `+0x444` as `ReducedDamageType`.
+
+The `checkMove` steps run the recovered **test-mode `MoveActor`** contract
+(hash remove → commit → hash re-add → `SetActorZone(test=1)`, no events) with
+`bTest=1, bIgnorePawns=1`: `move-query.mjs` now filters non-static Pawn- and
+Decoration-ancestry candidates per the original `0x103995ea` gate.
+
+Training `mib1` live result: reaches 709 in `Wandering.PickDestination`,
+executes the recovered searches, and wanders — default seed 1 succeeds on
+pick #15 (~tick 559) and continues through four wander legs over 1920 ticks
+with zero NPC failures.  Failed episodes follow the original pacing (six
+`tries=1` iterations, then `Sleep(0.5)` + ~6 s pause before retry).
+`scripts/validate-mib-startup-boundary.mjs` now asserts this live contract
+on both load and reset.
+
+Boundaries reached while wandering and their resolution:
+
+- `TraceTexture`/`TraceActors`/`RadiusActors`/`VisibleActors` accepted only
+  their full argument count; the UC compiler legitimately emits fewer
+  expressions for trailing `optional` params (the execs' OPTX macros keep
+  the pre-stored defaults).  Gates now accept the required..max range —
+  `GetFloorMaterial`'s 8-arg `foreach TraceTexture` runs.
+- `ScriptedPawn` ambient `PlaySound(264)` sites (footsteps, idle/scan/alert
+  sounds, discarded returns) are recorded nonfatal boundaries — the pawn
+  keeps ticking; AI propagation stays on the separately recorded 713–716
+  natives.  `human.playtakehitsound` and other measured stop points still
+  throw through `soundBoundary`.
+- `pollMoveTo`/`pollMoveToward` fire `SpawnNotification` through
+  `FindFunctionChecked`: no shipped pawn class declares it (the function
+  lives on `SpawnNotify`), so the original miss logs a nonfatal `Logf` and
+  returns NULL, which `AActor::ProcessEvent`'s `XLevel+0x4f0` bit-0x2 gate
+  drops before Core `ProcessEvent` can dereference it.  The runtime now
+  dispatches only on a real resolution — observable contract unchanged.
+
+Remaining explicit boundaries: `swimMove`/`waterMove`/`waterReach`,
+`jumpArc`, and the ReachSpec BFS path workers stay unported; bark speech and
+audible playback are Stage 4.
+
 ## Verification status
 
 - `reachMask` `0x10326d10` 7-bit gather — **ported to JS, bit-exact vs oracle**
@@ -365,6 +454,15 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
   physics-dispatch result; the exec `0x103bc710` only reads the vector arg,
   passes `arg14=0`, and stores the result. VM dispatch integration is still
   pending. The flying corpus adds a point-worker → dispatcher → flight case.
+- `AIPickRandomDestination` exec chain `0x103c86f0`/`0x103c7fc0`/
+  `0x103c78a0`/`0x1036d030` — **ported to JS, bit-exact vs oracle** across
+  27 scenes (direction distribution/clamps/sign/NaN, band-search flat/
+  blocked/overshoot/fly/physics-gate/maxstep-retry/pain-stop/iter-cap/
+  null-out/stride clamps, worker tries/mult clamps, second-stage pull-in,
+  retry, pitch masking, exec verdict and out-slot handling) plus 7 chain
+  mutants, and **dispatched live** through `invokeNative` →
+  `pawnNavServices`; the Training MIB wanders in Play mode (see the section
+  above for the service contract and the boundary resolutions).
 - `flyMove` `0x103c3900` and `flyReach` `0x103c1190` — **ported to JS**,
   connected to physics dispatch and walkReach's bCanFly fallback, with **30/30
   original-DLL cases and 6/6 targeted mutants** passing in
@@ -380,10 +478,11 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
   (`0x103fxxxx` via Core's `FVector::Rotation`) — integer math, no
   transcendentals; the Unicorn oracle is authoritative for it.
 
-Focused checkpoint, 2026-09-19: `validate-pawn-nav.mjs` passes 96/96 cases and
-28/28 mutants; `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6
-mutants; `npm test` passes 486/486. The full `npm run validate -- --jobs 4`
-sweep also passes all 312 validators with zero skips/failures in 162.2 seconds
-(local log: `.cache/stage3-sweep-4jobs.log`). Stage 3 remains unfinished. Next navigation
-work is original waterMove/waterReach recovery, then jumpArc and the remaining
-path workers before composing the live level services and VM dispatch.
+Focused checkpoint, 2026-09-20 (supersedes the 2026-09-19 note):
+`validate-pawn-nav.mjs` passes 123/123 cases and 35/35 mutants;
+`validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
+`npm test` passes 487/487. Native 709 is live — the Training MIB wanders in
+Play (`validate-mib-startup-boundary.mjs` passes load and reset). Stage 3
+remains unfinished. Next navigation work is original waterMove/waterReach
+recovery, then jumpArc and the remaining ReachSpec path workers
+(`FindRandomDest`/`FindPathTo`/`FindPathToward`).

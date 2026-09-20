@@ -3,9 +3,11 @@
 This milestone is **not complete**. The real Play host now runs the original
 startup chain for every pawn-ancestry Training map actor and ticks them
 through the recovered `ULevel::Tick` path; Jaime lands, enters `Standing` and
-loops `BreatheLight` under the shared clock. The armed NPCs, cameras, two AI
-natives, the root-window conversation path and renderer lighting remain
-explicit boundaries below. The following contract comes from the installed
+loops `BreatheLight` under the shared clock, and the MIB enters `Wandering`
+through the now-implemented `AIPickRandomDestination` native. The armed
+NPCs, cameras, the remaining `FindPathToward` AI native, the root-window
+conversation path and renderer lighting remain explicit boundaries below.
+The following contract comes from the installed
 GOTY packages, not a replacement startup routine.
 
 ## Original startup prerequisites
@@ -80,13 +82,16 @@ Current explicit boundaries, all recorded rather than substituted:
   first `startup` tick.
 * `engine.PlayerReplicationInfo` startup is unprepared; reached by `Camera4`-`7`
   (`Camera` has PlayerPawn ancestry) during `PostBeginPlay`.
-* `Pawn.AIPickRandomDestination` (native 709) and `Pawn.FindPathToward`
-  (native 517) are unimplemented; reached by wandering/patrol bodies.
-  `ScriptedPawn.IsValidEnemy` and its alliance queries (2105–2107) are now
-  translated and original-DLL verified. Training `mib1` passes the former
-  tick-2 enemy-check boundary but stops at 709 on tick 6 with seed 1 and
-  1/60-second frames, still in the negative-frame `BreatheLight` tween.
-  The stuck pose therefore remains unresolved; see [alliance checks](script-pawn-alliance.md).
+* `Pawn.AIPickRandomDestination` (native 709) is implemented, oracle-verified
+  and dispatched live — Training `mib1` now passes the former tick-2
+  enemy-check boundary, lands, and wanders: with seed 1 and 1/60-second
+  frames the first six `tries=1` picks all exhaust their search (faithful;
+  the original pacing sleeps ~6 s between episodes), pick #15 succeeds and
+  the pawn moves ~98 u, with further successful wander legs through 1920
+  ticks and no NPC failures. `Pawn.FindPathToward` (native 517) remains
+  unimplemented and is reached by patrol bodies the MIB does not run. See
+  [pawn navigation](script-pawn-nav.md#aipickrandomdestination-native-709---execaipickrandomdestination-0x103c86f0)
+  and [alliance checks](script-pawn-alliance.md).
 * `DeusExRootWindow.CanStartConversation` is unprepared; reached by the
   JaimeReyes2 conversation check.
 
@@ -128,6 +133,12 @@ runs the LoadMap event chain once per load/reset. Measured on Training:
   at rate 0.5 (frame 0.0958 -> 0.8458 across 600 ticks).
 * `ScientistMale0` moves through `Patrolling` and settles into `Standing` at a
   new location through the recovered script path.
+* `mib1` lands in `Wandering`, runs `AIPickRandomDestination` through the
+  live native-709 dispatch, and moves toward picked destinations across
+  load and reset (~98 u travelled on the default seed, further wander legs
+  over 1920 ticks, zero NPC failures). Ambient `PlaySound` calls from
+  footsteps/scans are recorded nonfatal boundaries rather than pawn-killing
+  errors.
 * `Shadow0` spawns under Jaime, attaches one real BSP surface through the
   recovered `AttachDecal` sweep, and is stored on the pawn.
 * The pawn list stays cycle-free; player reset restores serialized state,
