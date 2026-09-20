@@ -94,6 +94,12 @@ for(const field of bodyParts)runtime.namedReference(player,field).set(100);
 health.set(100);
 desiredFlashScale.set(0);
 desiredFlashFog.set([0,0,0]);
+// Human.PlayTakeHitSound gates its PlaySound on a cooldown that consumes an
+// FRand() draw: `Level.TimeSeconds - LastPainSound < FRand() + 0.5` returns
+// early without reaching the native. The single Timer inside this window fires
+// at TimeSeconds ~= 1.0, so pin LastPainSound far in the past to keep the gate
+// deterministic instead of leaving the boundary on an RNG draw.
+runtime.namedReference(player,'LastPainSound').set(-100);
 assert.ok(augmentationSystem.get(),'Player startup creates AugmentationSystem before damage interaction');
 const unwrappedCallFunction=runtime.callFunction;
 let liveAdjustedDamage;
