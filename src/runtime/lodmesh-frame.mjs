@@ -106,7 +106,10 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
   matrix=matrix.map((v,row)=>v.map((x,i)=>st(row?x87mul(ld(x),ld(scale[i])):x87div(ld(x),ld(scale[i])))));
   // These operands stay constant for every vertex and blend slot in this
   // call. Reuse their exact x87 loads; retain every original store/order.
-  const loadedMatrix=matrix.map(row=>row.map(ld)),loadedOrigin=mesh.origin.map(ld);
+  const kernel=services.kernel;
+  const loadedMatrix=kernel?null:matrix.map(row=>row.map(ld)),loadedOrigin=kernel?null:mesh.origin.map(ld);
+  const runKernel=options=>kernel.run({source,frameVertexCount:mesh.frameVertexCount,
+    output,stride,matrix,origin:mesh.origin,...options});
   const frameVertex=(frame,i)=>{
     const at=(frame*mesh.frameVertexCount+i)*8;
     if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
@@ -135,7 +138,8 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
           count=available;vertexCount=count-special;entry.valid=count;
         }
       }
-      for(let i=0;i<count;i++) {
+      if(kernel)runKernel({count,entry,second:targetFrame,alpha,tween:true,blend:channel>=0});
+      else for(let i=0;i<count;i++) {
         if(alpha>0)entry.vertices.set(interpolate(vectorAt(entry.vertices,i),frameVertex(targetFrame,i),alpha),i*3);
         publish(i,vectorAt(entry.vertices,i),channel>=0);
       }
@@ -149,7 +153,8 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
         fraction=st(sub(ld(phase),ld(integer)));
         first=sequence.startFrame+integer%sequence.numFrames;second=sequence.startFrame+((integer+1)|0)%sequence.numFrames;
       }
-      for(let i=0;i<count;i++) {
+      if(kernel)runKernel({count,entry,first,second,alpha:fraction,blend:channel>=0});
+      else for(let i=0;i<count;i++) {
         const pose=fraction>0?interpolate(frameVertex(first,i),frameVertex(second,i),fraction):frameVertex(first,i);
         entry.vertices.set(pose,i*3);publish(i,pose,channel>=0);
       }

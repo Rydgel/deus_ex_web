@@ -4,6 +4,8 @@ __pycache__/
 node_modules/
 coverage/
 dist/
+native/**/target/
+src/runtime/lodmesh-kernel.wasm
 test-results/
 playwright-report/
 game/

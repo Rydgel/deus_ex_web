@@ -12,7 +12,9 @@ for(const directory of ['Maps','System','Textures','Sounds','Music'])
     files.push({path:`${directory}/${name}`,read:()=>readFile(`${root}/${directory}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
-const preview=await createTrainingNpcPreview(game.doors.scriptRuntime.runtime,assets,asset);
+const javascript=process.argv.includes('--javascript');
+const preview=await createTrainingNpcPreview(game.doors.scriptRuntime.runtime,assets,asset,javascript?{kernel:null}:{});
+if(!javascript&&preview.summary.poseBackend!=='rust-wasm')throw new Error(preview.summary.kernelError);
 try {
   for(let i=0;i<30;i++){game.tick(1/60,{});preview.update();}
   const tick=[],mesh=[];
@@ -25,7 +27,7 @@ try {
     return {mean:values.reduce((sum,n)=>sum+n,0)/values.length,median:sorted[60],p95:sorted[114]};
   };
   console.log(JSON.stringify({map:asset.name,seed:1,frames:120,secondsPerFrame:1/60,
-    meshes:preview.actors.length,milliseconds:{simulation:stats(tick),meshPosing:stats(mesh),
+    meshes:preview.actors.length,poseBackend:preview.summary.poseBackend,milliseconds:{simulation:stats(tick),meshPosing:stats(mesh),
       total:stats(tick.map((value,i)=>value+mesh[i]))},
     unsupportedNpcs:[...game.doors.scriptRuntime.npcFailures].map(([actor,message])=>({actor:actor.name,message}))},null,2));
 } finally {preview.dispose();}

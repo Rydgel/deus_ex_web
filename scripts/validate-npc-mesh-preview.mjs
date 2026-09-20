@@ -25,6 +25,7 @@ const snapshot=()=>actors.map(actor=>fields.map(name=>{
 }));
 const before=structuredClone(snapshot()),player=structuredClone(game.player.status());
 const preview=await createTrainingNpcPreview(runtime,assets,asset);
+assert.equal(preview.summary.poseBackend,'rust-wasm',preview.summary.kernelError);
 assert.deepEqual(snapshot(),before,'inspection must not change actor state');
 assert.deepEqual(game.player.status(),player,'inspection must not move or tick JC');
 for(const name of ['JaimeReyes0','ScientistMale0','MedicalBot0','RepairBot0'])

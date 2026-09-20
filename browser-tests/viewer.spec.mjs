@@ -64,9 +64,12 @@ test('production opens local File objects, reports missing packages, and sends n
     await expect(page.locator('#gate-message')).toContainText('Missing package');
     const beforeFiles = requests.length;
     await page.locator('#folder').setInputFiles(gameDirectory()); await ready(page);
-    expect(await state(page)).toMatchObject({ map: '00_Training', renderErrors: [], triangles: 24427 });
+    expect(await state(page)).toMatchObject({ map: '00_Training', renderErrors: [], triangles: 24427,
+      npcPreview:{poseBackend:'rust-wasm',kernelError:null} });
     await expect(page.locator('#toast')).toBeEmpty();
-    expect(requests.slice(beforeFiles)).toEqual([]);
+    // The authored kernel is loaded lazily. Selecting original data may fetch
+    // that same-origin static asset, but must never transmit the game files.
+    expect(requests.slice(beforeFiles).every(r=>r.method==='GET'&&new URL(r.url).pathname.endsWith('.wasm'))).toBe(true);
     expect(requests.every(r => r.method === 'GET' && new URL(r.url).origin === 'http://127.0.0.1:5174')).toBe(true);
     await page.screenshot({ path: 'reports/browser/production-training.png' });
     expect(failures).toEqual([]);

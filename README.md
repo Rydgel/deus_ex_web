@@ -220,10 +220,12 @@ completion percentage.
 
 ## Open the viewer
 
-Use Node 22.12 or newer (or a newer supported Node LTS release):
+Use Node 22.12 or newer (or a newer supported Node LTS release), and a Rust
+toolchain with the WebAssembly target (tested with Rust 1.95):
 
 ```sh
 npm ci
+rustup target add wasm32-unknown-unknown
 npm run dev
 ```
 
@@ -231,6 +233,12 @@ Open `http://127.0.0.1:5173`. With the extracted `Deus Ex GOTY Edition/` directo
 present, training loads automatically. Otherwise choose the game folder containing
 Maps, Textures, and System. The local production preview always uses this folder picker.
 Original data is kept outside source control and outside the website build.
+
+Development, production builds and unit tests compile the small authored
+Rust mesh kernel automatically. Play uses it for exact per-vertex animation
+math; scripts and simulation remain JavaScript. If Wasm cannot load, the
+existing JavaScript pose path remains available. See the
+[measurements and fidelity checks](docs/lodmesh-wasm.md).
 
 Drag to look around, or double-click to lock the mouse. In **Play**, WASD/arrow
 keys move, Space jumps, Ctrl crouches, Shift walks, and F/right-click uses a door.

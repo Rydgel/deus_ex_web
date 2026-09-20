@@ -60,6 +60,7 @@ if(process.argv.includes('--reference-only')) {
   process.exit(0);
 }
 const {getLodMeshFrame,createLodMeshFrameCache}=await import('../src/runtime/lodmesh-frame.mjs');
+const kernel=process.argv.includes('--wasm')?await (await import('../src/runtime/lodmesh-wasm.mjs')).loadLodMeshKernel():null;
 const bytesEqual=(actual,expected,label)=>{
   const a=Buffer.from(actual.buffer,actual.byteOffset,actual.byteLength),b=Buffer.from(expected,'base64');
   assert.equal(a.length,b.length,label);
@@ -87,7 +88,7 @@ for(const [rowIndex,row] of rows.entries()) {
     const stride=step.stride??20,output=new Uint8Array(mesh.frameVertexCount*stride).fill(0x55);
     events.length=0;
     const result=getLodMeshFrame(mesh,actors.actor,step.coords??[0,0,0,1,0,0,0,1,0,0,0,1],
-      {cache,read:(a,n)=>a[n],objectIndex:a=>a.index},{vertexCount:step.count??mesh.frameVertexCount,stride,output});
+      {cache,kernel,read:(a,n)=>a[n],objectIndex:a=>a.index},{vertexCount:step.count??mesh.frameVertexCount,stride,output});
     assert.equal(result.vertexCount,original.count,label);bytesEqual(result.output,original.output,label);
     assert.deepEqual(events,original.events,`${label} cache calls`);
     assert.deepEqual([...cache.entries.keys()].map(String).sort(),Object.keys(original.cache).sort(),`${label} cache keys`);

@@ -111,3 +111,9 @@ operation, float store, cache mutation and blend order is retained; the same
 helper counts exact uint32 limbs for values under 2^128, avoiding temporary
 binary strings while preserving the wide-value fallback. This is arithmetic
 overhead removal, not a change to precision, animation rate or mesh detail.
+
+The optional [Rust/Wasm vertex kernel](lodmesh-wasm.md) now accelerates the
+same inner loops in Play. JavaScript retains the GetFrame control flow and
+caches. `validate-lodmesh-frame.mjs --captured --wasm` checks the same 46 native
+references through the bulk-memory ABI; omitting `--wasm` checks the retained
+JavaScript implementation.

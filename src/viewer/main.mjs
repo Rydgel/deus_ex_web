@@ -168,7 +168,8 @@ async function loadMap(name) {
     if(nextGame&&name==='00_Training'){
       $('gate-message').textContent='Preparing original NPC meshes…';
       try{
-        nextNpcPreview=await createTrainingNpcPreview(nextGame.doors.scriptRuntime.runtime,assets,asset);
+        nextNpcPreview=await createTrainingNpcPreview(nextGame.doors.scriptRuntime.runtime,assets,asset,
+          new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{});
         nextWorld.notes.push(`${nextNpcPreview.actors.length} NPC meshes render live original startup and animation in Play. Armed-NPC weapon spawning, some AI natives and original mesh lighting remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`NPC meshes unavailable: ${error.message}`);}

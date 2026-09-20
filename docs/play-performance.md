@@ -1,5 +1,10 @@
 # Live NPC frame-time investigation
 
+The subsequent [measured Rust/Wasm vertex kernel](lodmesh-wasm.md) reduces
+Training mesh posing from 13.0 to 2.3 ms/frame while retaining the same 46
+original-DLL byte comparisons. The investigation below describes the earlier
+scheduling and JavaScript arithmetic changes.
+
 The September 20, 2026 local Training profile found two costs introduced into
 ordinary Play when NPC startup/ticking and animated meshes became live:
 

@@ -8,6 +8,10 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "predev": "npm run build:wasm",
+    "prebuild": "npm run build:wasm",
+    "pretest": "npm run build:wasm",
     "test": "node --test test/*.test.mjs",
     "inspect": "node scripts/inspect-package.mjs",
     "inventory": "node scripts/inventory.mjs",

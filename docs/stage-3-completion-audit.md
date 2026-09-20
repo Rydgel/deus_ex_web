@@ -1,4 +1,4 @@
-# Stage 3 completion audit — 2026-09-19
+# Stage 3 completion audit — 2026-09-20
 
 Visible checkpoint: Training's **NPC mesh preview** now displays 14 original
 character/bot meshes, including the people beside and behind Jaime.
@@ -37,6 +37,17 @@ required..max arity on the four iterator factories (`GetFloorMaterial`'s
 boundaries; the `SpawnNotification` `FindFunctionChecked` miss is now the
 original's logged-NULL no-op. See [pawn navigation](script-pawn-nav.md) and
 [alliance evidence](script-pawn-alliance.md).
+
+2026-09-20 performance follow-up: Play now uses a small Rust/Wasm kernel for
+GetFrame's per-vertex interpolation and transforms, retaining the original
+extended-precision arithmetic and a JavaScript fallback. In the same local
+Training CPU workload, posing drops from 13.0 to 2.3 ms/frame and combined
+simulation/posing from 19.8 to 9.0 ms. Both backends match the existing 46
+original-DLL GetFrame captures byte for byte. All 490 unit tests, the 14-mesh
+integration validator, four focused browser tests and the production build
+pass. This improves basic playability; it does not close the remaining
+object-lifecycle, native-dispatch or conversation gates. See the
+[kernel boundary, measurements and development workflow](lodmesh-wasm.md).
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

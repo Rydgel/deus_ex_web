@@ -454,3 +454,6 @@ the earlier stages; this milestone closes coverage gaps rather than postponing t
 - WebAssembly may be considered for parts of our implementation if measurements
   justify it. That is an implementation choice, not a switch to another game engine
   or an assumption that the Windows binaries can compile to the web.
+  The [GetFrame vertex kernel](lodmesh-wasm.md) is the first measured Rust/Wasm
+  component. Gameplay and runtime control flow remain JavaScript; changes to
+  the kernel's operations also require updating and validating its JS fallback.

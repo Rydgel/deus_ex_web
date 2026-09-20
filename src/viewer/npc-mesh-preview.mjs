@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
+import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 
 // Original Training capture, class/name identity checked by the integration validator.
 export const TRAINING_NPC_IDENTITIES=Object.freeze({JaimeReyes0:34333,ScientistMale0:34368,
@@ -15,8 +16,13 @@ export const TRAINING_NPC_IDENTITIES=Object.freeze({JaimeReyes0:34333,ScientistM
  * runtime's pose fields change, so original startup/animation is visible in
  * ordinary Play without preview controls. Original mesh lighting remains a
  * boundary. Contracts and captured cache identity: docs/npc-mesh-preview.md. */
-export async function createTrainingNpcPreview(runtime,assets,asset) {
+export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
+  let kernelError=null;
+  if(kernel===undefined) {
+    try{kernel=await loadLodMeshKernel();}
+    catch(error){kernel=null;kernelError=error.message;}
+  }
   // Measured GObjObjects identities from the same original Training capture.
   // These select fixtures and cache keys, never character-specific drawing.
   const root=new THREE.Group(),actors=[],errors=[];root.visible=false;
@@ -24,19 +30,19 @@ export async function createTrainingNpcPreview(runtime,assets,asset) {
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
       if(runtime.namedReference(actor,'bHidden').get())continue;
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex});
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));
   return {root,actors,update(){for(const actor of actors)actor.update();},
     dispose(){for(const actor of actors)actor.dispose();},
-    summary:{actors:actors.map(actor=>actor.summary),errors,
+    summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
       shading:'texture-only inspection',startup:'original'}};
 }
 
-export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex}) {
+export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');
@@ -45,7 +51,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   // frame jumps straight to the new sequence instead of blending from the
   // previous displayed pose. This cache owns only this inspection identity.
   const cache=createLodMeshFrameCache(),coords=[0,0,0,1,0,0,0,1,0,0,0,1];
-  const services={cache,read,objectIndex:object=>{
+  const services={cache,kernel,read,objectIndex:object=>{
     if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
     return originalObjectIndex;
   }};
