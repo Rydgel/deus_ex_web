@@ -10,14 +10,18 @@ incomplete. See [preview evidence and scope](npc-mesh-preview.md).
 
 Latest integration: the Play host runs the original startup chain
 (`PreBeginPlay → BeginPlay → PostBeginPlay → SetInitialState →
-PostPostBeginPlay`) for every pawn-ancestry map actor, ticks them through the
-recovered `ULevel::Tick`/`APawn::performPhysics` path, and the renderer
-resamples the live pose through GetFrame each frame. Jaime lands, enters
+PostPostBeginPlay`) for every map actor the standalone linker admits, ticks
+them through the recovered `ULevel::Tick`/`APawn::performPhysics` path, and
+the renderer resamples the live pose through GetFrame each frame. Standalone
+`ULinkerLoad::CreateExport` admission refuses Training's 992 `Brush` exports
+and the four UnrealEd `Camera4`–`7` exports before construction — their
+serialized `Level.Actors` slots stay null, they never join
+`PawnList`/collision/startup/tick/reset, and no `PlayerReplicationInfo` is
+spawned for them ([map actors](script-map-actors.md)). Jaime lands, enters
 `Standing` and loops `BreatheLight` under the shared clock; player reset
 restores serialized state and re-runs the chain. The recorded boundaries are
-`PlayerReplicationInfo` startup for
-cameras, `FindPathToward`, the root-window conversation check,
-and environment-mapped surfaces
+`FindPathToward` and environment-mapped surfaces — the camera PRI startup and
+the root-window conversation check are no longer boundaries
 ([startup evidence and exact boundary](script-npc-startup-animation.md),
 [Decal evidence](script-decal-startup.md)). Stage 3 is **not complete** while
 those boundaries and the full Play/reset/visibility verification remain open.

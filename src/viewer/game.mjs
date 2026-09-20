@@ -15,7 +15,7 @@ import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { tickWalkingInteraction, traceActors, isHighlighted } from '../runtime/interaction.mjs';
 import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
-import { mapActorArray } from '../runtime/script-map-properties.mjs';
+import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
@@ -28,7 +28,14 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const playerDefaults = await defaults.get(dx, dx.exportsByPath.get('jcdentonmale'));
   const zoneDefault = await defaults.get(engine, engine.exportsByPath.get('zoneinfo'));
   const actors = new Map();
-  for (const actor of map.actors) actors.set(actor.index, { ...actor, values: await defaults.forActor(asset, actor) });
+  // The standalone map linker refuses to construct exports its CreateExport
+  // gates reject — Training's Brush and Camera exports carry only
+  // RF_LoadForEdit flags and never become objects. Serialized references to
+  // them (Level.Actors slots, Owner/Base fields) resolve to null, so they are
+  // never built here: they cannot collide, join PawnList, run startup or tick.
+  for (const actor of map.actors)
+    if (mapExportAdmitted(map.pkg, actor.index))
+      actors.set(actor.index, { ...actor, values: await defaults.forActor(asset, actor) });
   const zones = map.model.zones.map(z => actors.get(z.actor)?.values ?? zoneDefault);
   const collidable = [];
   for (const actor of actors.values()) {

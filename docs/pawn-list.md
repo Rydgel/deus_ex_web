@@ -59,6 +59,14 @@ startup spawns/destruction and full Game.InitGame are not replaced with an
 assertion that they have no effect. A later JC PreBeginPlay prepends to the live
 result; callers must include all additional pawns actually created by startup.
 
+**Admission correction:** the `Camera` entries below are a serialized-ancestry
+census, not the live list. The standalone `ULinkerLoad::CreateExport` refuses
+them (and the `Brush` exports) before construction — `RF_LoadForEdit`-only
+flags and the `NAME_Camera` class gate — so they never run `AddPawn` and never
+join `Level.PawnList`. See [map actors](script-map-actors.md#standalone-export-admission).
+The real standalone PawnList therefore starts at the first admitted pawn
+(`UNATCOTroop3` for Training), not the cameras.
+
 Run `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node
 scripts/validate-native-pawn-startup.mjs`. The audit includes actor-slot numbers,
 ancestry, raw/default links and properties in ignored startup.json; native list

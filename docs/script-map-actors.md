@@ -14,6 +14,33 @@ the existing spawned player. The native SpawnActor append at
 This binding supplies actor identities, not the still-incomplete native startup
 of every actor class.
 
+## Standalone export admission
+
+Not every serialized actor reference produces an object. The standalone map
+linker runs `ULinkerLoad::CreateExport` with `ContextFlags = GIsClient |
+GIsServer` (`0x00030000`, the same word `script-load-graph.mjs` installs on the
+game linker), and two gates run before construction ([the recovered
+body](script-create-export.md)):
+
+- `0x1012e278`–`0x1012e283`: `Export.ObjectFlags & ContextFlags` must be
+  nonzero. Exports authored with only `RF_LoadForEdit` never reach
+  construction in a local game — Training's 992 `Brush` exports (`0x2340001`)
+  and the four UnrealEd viewport cameras `Camera4`–`Camera7` (`0x2340000`).
+- `0x1012e2fd`–`0x1012e318`: `LoadClass->Name == NAME_Camera` refuses a
+  `Camera`-class export regardless of its flags.
+
+A refused export's `_Object` stays null: it is never constructed, never joins
+`Level.Actors` as a live identity, `PawnList` or the collision hash, and its
+startup — including `Pawn.PreBeginPlay`'s `PlayerReplicationInfo` spawn for
+the PlayerPawn-ancestry cameras — never runs. `mapExportAdmitted`
+(`script-map-properties.mjs`) is the shared predicate; `createGame` applies
+it before building the live actor map, `mapActorArray` maps each refused
+serialized slot to `null` like an authored zero reference, and a map-authored
+reference to a refused export resolves to `null` the same way. The serialized
+order and the zero slots are preserved — AllActors, the other iterators and
+the recovered `ULevel::Tick` scheduling already skip null entries. Evidence:
+`scripts/validate-map-actor-admission.mjs`.
+
 The shared binding also exposes each map export's actual Name and its linked
 Class identity. These native header fields do not come from the zero/default
 property payload; mutation still requires the native rename/reconstruction path.
@@ -42,9 +69,12 @@ property storage now uses the linked runtime defaults so, for example,
 LightSwitch.Mesh resolves to `DeusExDeco.LightSwitch` instead of None. Runtime
 writes are separate from authored values so reset can restore the original map.
 
-The focused original-training composition checked all 1,337 serialized slots
-(including 29 nulls), the appended JC identity, canonical resolution of every
-non-null actor, the inherited switch mesh and AllActors' `cratelight` fanout:
+The focused original-training composition checked all 1,337 serialized slots:
+the 29 authored nulls stay null, the 312 admitted exports keep their live
+identities, and the 996 standalone-refused exports (992 `Brush`, 4 `Camera`)
+resolve to null rather than a live object — see the admission contract above.
+It also checked the appended JC identity, the inherited switch mesh and
+AllActors' `cratelight` fanout:
 TriggerLight0, TriggerLight1, TriggerLight2, TriggerLight3. The iterator clears
 its out reference at exhaustion. Existing door opening and reset also passed
 through the expanded shared host. These checks do not claim that every attached

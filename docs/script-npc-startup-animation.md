@@ -88,8 +88,17 @@ Current explicit boundaries, all recorded rather than substituted:
   ticking, and `ULevel::DestroyActor` cleanup on Player reset. See
   [NPC weapon startup](script-npc-weapon-startup.md) and
   `validate-npc-weapon-startup.mjs` / `validate-weapon-construction.mjs`.
-* `engine.PlayerReplicationInfo` startup is unprepared; reached by `Camera4`-`7`
-  (`Camera` has PlayerPawn ancestry) during `PostBeginPlay`.
+* ~~`engine.PlayerReplicationInfo` startup is unprepared; reached by
+  `Camera4`-`7` (`Camera` has PlayerPawn ancestry) during `PostBeginPlay`~~ —
+  **resolved by admission, not construction.** Those four exports are the
+  UnrealEd viewport cameras serialized into the map; the standalone linker's
+  `ULinkerLoad::CreateExport` refuses them before construction — they carry
+  only `RF_LoadForEdit` flags (`0x2340000`, no GIsClient/GIsServer bit) and
+  their class is `NAME_Camera` — so `_Object` stays null, their
+  `Level.Actors` slots resolve to null, and `Pawn.PreBeginPlay`'s PRI spawn
+  never runs. They never join `PawnList`, the collision hash, startup or
+  reset. See [map actors](script-map-actors.md) and
+  `validate-map-actor-admission.mjs`.
 * `Pawn.AIPickRandomDestination` (native 709) is implemented, oracle-verified
   and dispatched live — Training `mib1` now passes the former tick-2
   enemy-check boundary, lands, and wanders: with seed 1 and 1/60-second
@@ -100,8 +109,12 @@ Current explicit boundaries, all recorded rather than substituted:
   unimplemented and is reached by patrol bodies the MIB does not run. See
   [pawn navigation](script-pawn-nav.md#aipickrandomdestination-native-709---execaipickrandomdestination-0x103c86f0)
   and [alliance checks](script-pawn-alliance.md).
-* `DeusExRootWindow.CanStartConversation` is unprepared; reached by the
-  JaimeReyes2 conversation check.
+* ~~`DeusExRootWindow.CanStartConversation` is unprepared; reached by the
+  JaimeReyes2 conversation check~~ — the player's `rootWindow` class chain is
+  now linked at load (`prepareNpcs`), so the check dispatches to the prepared
+  `DeusExRootWindow` body rather than failing on the class. This clears only
+  the startup-preparation boundary; the conversation system's own later
+  natives and presentation remain separate Stage-3/4 work.
 
 Original extracts remain outside Git under `.cache/research/pawn-startup/`;
 animation controls, tick and frame evidence are

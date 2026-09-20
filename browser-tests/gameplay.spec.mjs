@@ -12,7 +12,7 @@ test('training plays with gravity, stances, blocked doors, linked use, stairs an
   await mkdir('reports/movement/browser', { recursive: true });
   const initial = await player(page);
   expect(await status(page)).toMatchObject({ mode: 'play', renderErrors: [],
-    npcPreview:{poseBackend:'rust-wasm',kernelError:null},gameplay: { hulls: 3183, blockingActors: 59 } });
+    npcPreview:{poseBackend:'rust-wasm',kernelError:null},gameplay: { hulls: 3183, blockingActors: 55 } });
   expect(initial).toMatchObject({ radius: 20, height: 43, grounded: true });
   await page.locator('#scene').click({ position: { x: 500, y: 350 } });
   await page.keyboard.down('Control');

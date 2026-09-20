@@ -351,9 +351,13 @@ back into `Level.Actors`.
   now part of the shared move for callers that supply the service; the
   decoration physics callers do not yet, so their behaviour is unchanged and
   the gap is recorded rather than silently closed.
-* `Shadow.Tick`, `Camera` `PlayerReplicationInfo` startup, `FindPathToward`
-  and `DeusExRootWindow.CanStartConversation` remain the boundaries listed in
-  `docs/script-npc-startup-animation.md`.
+* `Shadow.Tick` and `FindPathToward` remain the boundaries listed in
+  `docs/script-npc-startup-animation.md`. The `Camera4`–`7` exports are refused
+  by standalone `ULinkerLoad::CreateExport` admission before construction, so
+  their `PlayerReplicationInfo` startup never runs ([map
+  actors](script-map-actors.md)); the `rootWindow`/`CanStartConversation` chain
+  is linked at load and its checks dispatch to the prepared
+  `DeusExRootWindow` body.
 * `DeusExWeapon` `globalconfig SwingOffset` (class config) is not loaded from
   `DeusEx.ini` by the class loader.
 

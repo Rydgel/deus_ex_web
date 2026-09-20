@@ -11,6 +11,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { createScriptLights } from '../src/runtime/script-lights.mjs';
+import { mapExportAdmitted } from '../src/runtime/script-map-properties.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadOriginalGObjects } from './original-gobjects.mjs';
 
@@ -37,7 +38,12 @@ const runtime = game.doors.scriptRuntime.runtime;
 const player = game.player.collisionActor, level = runtime.levelFor(player);
 assert.ok(level.actors.length > map.level.actors.length + 1);
 for (const [index, ref] of map.level.actors.entries()) {
-  assert.equal(level.actors[index], ref ? await runtime.objects.resolve(mapAsset, ref) : null);
+  // Exports the standalone linker's CreateExport refused (mapExportAdmitted —
+  // Training's Brush and Camera exports) were never constructed, so their
+  // serialized slots resolve to null in the live array.
+  const expected = ref && mapExportAdmitted(map.pkg, ref)
+    ? await runtime.objects.resolve(mapAsset, ref) : null;
+  assert.equal(level.actors[index], expected);
 }
 assert.equal(level.actors[map.level.actors.length], player);
 const mapLightActors = map.actors.filter(actor => /^TriggerLight[0-3]$/i.test(actor.name));

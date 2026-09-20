@@ -1,5 +1,31 @@
 import {readObject} from '../unreal/objects.mjs';
 
+/** The standalone map linker's ContextFlags word (+0xa0): GIsClient|GIsServer,
+ * the same value script-load-graph.mjs installs on every game linker. */
+const STANDALONE_CONTEXT_FLAGS = 0x00030000;
+
+/**
+ * The two admission gates `ULinkerLoad::CreateExport` applies before an export
+ * becomes an object (recovered at docs/script-create-export.md):
+ *
+ * - `0x1012e278`–`0x1012e283`: `Export.ObjectFlags & ContextFlags` must be
+ *   nonzero. A local game links its map with GIsClient|GIsServer
+ *   (`0x30000`), so exports authored with only `RF_LoadForEdit` — Training's
+ *   992 Brush exports (`0x2340001`) and the four UnrealEd viewport cameras
+ *   (`0x2340000`) — are refused before construction and `_Object` stays null.
+ * - `0x1012e2fd`–`0x1012e318`: `LoadClass->Name == NAME_Camera` refuses any
+ *   export whose class object is named `Camera`, independent of its flags.
+ *
+ * A refused export is never constructed: every serialized reference to it —
+ * a `Level.Actors` slot, an Owner/Base/MyMarker property — resolves to null,
+ * exactly like an authored zero reference.
+ */
+export function mapExportAdmitted(pkg, ref) {
+  const entry = pkg.exports[ref - 1];
+  if (!entry) throw new Error(`Invalid map export reference: ${ref}`);
+  return (entry.flags & STANDALONE_CONTEXT_FLAGS) !== 0 && entry.className !== 'Camera';
+}
+
 /** Bind serialized map properties to canonical script identities. Class defaults
  * keep their original package provenance; only map-authored refs use map indices.
  * See docs/script-map-actors.md. */
@@ -8,7 +34,10 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
   let rawProperties;
   // Map-authored object refs keep actor-slot identities; class records also
   // need their linked ancestry — the original package linker always builds it.
+  // Refs to exports the standalone linker refused resolve to the same null
+  // the original's unconstructed _Object slot yields.
   const resolveMapObject=async(source,index)=>{
+    if(index>0&&!mapExportAdmitted(source.pkg,index))return null;
     if(index>0&&actors.has(index))return actors.get(index);
     const object=await runtime.objects.resolve(source,index);
     if(object?.kind==='Class')await runtime.loadClass(source,index);
@@ -61,6 +90,10 @@ export function mapActorArray(map, actors, levelInfo, spawned = []) {
   }
   const result = map.level.actors.map(ref => {
     if (ref === 0) return null;
+    // An export the standalone linker's CreateExport refused was never
+    // constructed; its serialized slot resolves to null like an authored
+    // zero reference (docs/script-map-actors.md, mapExportAdmitted).
+    if (!mapExportAdmitted(map.pkg, ref)) return null;
     if (!actors.has(ref)) throw new Error(`Original actor-array reference is not linked: ${ref}`);
     return actors.get(ref);
   });
