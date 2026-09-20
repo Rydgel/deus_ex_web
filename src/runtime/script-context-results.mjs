@@ -4,6 +4,11 @@ import { zeroValue } from './script-values.mjs';
 const PROPERTY_OPS = new Set([0x00, 0x01, 0x02, 0x29]);
 const FUNCTION_OPS = new Set([0x1b, 0x1c, 0x38]);
 const CONTEXT_OP = 0x19;
+const CLASS_CONTEXT_OP = 0x12;
+// execClassContext (0x12) and execContext (0x19) share the same decoded shape
+// and the same null-context contract: 'Accessed None', skip the value bytes,
+// zero valueSize of result. Result preparation must therefore recognize both.
+const CONTEXT_OPS = new Set([CLASS_CONTEXT_OP, CONTEXT_OP]);
 const STRUCT_MEMBER_OP = 0x36;
 const BOOL_VARIABLE_OP = 0x2d;
 const PROPERTY_TYPES = Object.freeze({
@@ -227,7 +232,7 @@ async function expressionNode(runtime, script, node, seen = new Set()) {
       const descriptor = await expressionNode(runtime, script, node.value, seen);
       return descriptor?.type === 'bool' ? descriptor : null;
     }
-    if (node.op === CONTEXT_OP) return contextNode(runtime, script, node, seen);
+    if (CONTEXT_OPS.has(node.op)) return contextNode(runtime, script, node, seen);
     return null;
   } finally {
     seen.delete(node);
@@ -252,7 +257,7 @@ export async function prepareContextResults(runtime, script, decoded) {
   const result = new Map();
   if (!decoded?.expressions || typeof decoded.expressions.values !== 'function') return result;
   for (const node of decoded.expressions.values()) {
-    if (node?.op !== CONTEXT_OP || !node.value) continue;
+    if (!CONTEXT_OPS.has(node?.op) || !node.value) continue;
     try {
       const descriptor = await contextNode(runtime, script, node, new Set());
       if (!descriptor) continue;

@@ -1,8 +1,11 @@
 # Null object contexts in the original VM
 
 This note records the null branch of `execContext` (script opcode `0x19`).
-The authority is the installed Deus Ex GOTY `Core.dll`, rather than a public
-engine implementation. The binary is SHA-256
+`execClassContext` (script opcode `0x12`, `0x1012edb0`) shares the same
+decoded shape and the same null-context contract — `Accessed None`, skip the
+value bytes, zero `valueSize` of result — so `prepareContextResults`
+recognizes both opcodes. The authority is the installed Deus Ex GOTY
+`Core.dll`, rather than a public engine implementation. The binary is SHA-256
 `8bf3039e14f849942ee70a95bdf26cf1f636245926e30106bbe58b7097eba7e4`; the
 disassembly is `.cache/research/Core.asm`.
 

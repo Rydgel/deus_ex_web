@@ -392,7 +392,11 @@ Implemented 2026-09-20. What landed:
 * **VM support.** `execClassContext` (`0x12`) shares `execContext`'s
   null/skip contract so `Class<Ammo>(...).default.AmmoAmount` and the
   `Default.mpPickupAmmoCount = PickupAmmoCount` class-default write run
-  (`defaultReference` resolves `Default` on a class receiver).
+  (`defaultReference` resolves `Default` on a class receiver). A null class
+  context zero-fills the `valueSize` result like an ordinary null Context —
+  `prepareContextResults` now prepares `0x12` nodes too, so
+  `Class<X>(None).default.Member` returns the typed zero instead of throwing
+  ([null contexts](script-null-context.md)).
 * **MoveActor rider section.** `move-riders.mjs` translates
   `0x103998a0`–`0x10399bb0` — the `StandingCount`-gated walk of
   `Level.Actors` that recursively `MoveActor`s every based child with

@@ -46,6 +46,24 @@ test('prepares fixed scalar, bool-wrapper, and canonical struct Context results'
   assert.equal(result.has(stringValue), false);
 });
 
+test('prepares a ClassContext (0x12) null result like an ordinary Context', async () => {
+  const fields = new Map([
+    [1, field(1, 'class', { propertyClassRef: 9 })],
+    [2, field(2, 'int')],
+  ]);
+  const runtime = { objects: { reference: (_script, index) => fields.get(index) }, field: async record => record };
+  const intValue = { op: 0x01, fieldIndex: 2 };
+  const decoded = { expressions: new Map([
+    // Class<Ammo>(AmmoClass).default.AmmoAmount — a class-typed context whose
+    // null case must zero the int result, matching execClassContext's memset.
+    [10, { op: 0x12, offset: 10, context: { op: 0x01, fieldIndex: 1 }, value: intValue, valueSize: 4 }],
+  ]) };
+
+  const result = await prepareContextResults(runtime, { asset, entry: { path: 'Fixture' } }, decoded);
+  assert.equal(result.size, 1);
+  assert.equal(zeroContextResult(result, intValue, 4), 0);
+});
+
 test('zeroContextResult rejects an unprepared value or an encoded-width mismatch', () => {
   const value = { op: 0x01, fieldIndex: 1 };
   const result = new Map([[value, {
