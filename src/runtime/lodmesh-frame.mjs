@@ -5,7 +5,10 @@ import {x87load,x87store,x87add,x87neg,x87mul,x87div} from './script-vm.mjs';
 const ld=x87load,st=x87store,f=Math.fround,sub=(a,b)=>x87add(a,x87neg(b));
 const identity=()=>[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
 const dot=(v,row)=>st(x87add(x87add(x87mul(v[0],ld(row[0])),x87mul(v[1],ld(row[1]))),x87mul(v[2],ld(row[2]))));
-const transform=(v,coords,point)=>coords.slice(1).map(row=>dot(v.map((x,i)=>point?sub(ld(x),ld(coords[0][i])):ld(x)),row));
+const transform=(v,coords,point)=>{
+  const local=v.map((x,i)=>point?sub(ld(x),ld(coords[0][i])):ld(x));
+  return coords.slice(1).map(row=>dot(local,row));
+};
 const compose=(coords,matrix)=>coords.map((v,i)=>transform(v,matrix,i===0));
 function rotate(coords,rotation) {
   const [p,y,r]=rotation,s=rotatorSin,c=a=>s((a+0x4000)|0);
@@ -64,10 +67,12 @@ function frameInteger(phase) {
 }
 // X keeps subtraction/product extended; Y/Z store both before the final add.
 function interpolate(a,b,t) {
+  const alpha=ld(t);
   return a.map((value,i)=>{
-    let delta=sub(ld(b[i]),ld(value));if(i)delta=ld(st(delta));
-    let product=x87mul(delta,ld(t));if(i)product=ld(st(product));
-    return st(x87add(product,ld(value)));
+    const base=ld(value);
+    let delta=sub(ld(b[i]),base);if(i)delta=ld(st(delta));
+    let product=x87mul(delta,alpha);if(i)product=ld(st(product));
+    return st(x87add(product,base));
   });
 }
 const vectorAt=(array,index)=>Array.from(array.subarray(index*3,index*3+3));
@@ -99,6 +104,9 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
   matrix=rotate(rotate(matrix,read(services,actor,'Rotation')),mesh.rotation);
   matrix=compose(matrix,identity()); // Core FScale's zero-shear pass.
   matrix=matrix.map((v,row)=>v.map((x,i)=>st(row?x87mul(ld(x),ld(scale[i])):x87div(ld(x),ld(scale[i])))));
+  // These operands stay constant for every vertex and blend slot in this
+  // call. Reuse their exact x87 loads; retain every original store/order.
+  const loadedMatrix=matrix.map(row=>row.map(ld)),loadedOrigin=mesh.origin.map(ld);
   const frameVertex=(frame,i)=>{
     const at=(frame*mesh.frameVertexCount+i)*8;
     if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
@@ -149,9 +157,13 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
     cache.unlock(entry);
   }
   function publish(i,pose,blend) {
-    const origin=blend?frameVertex(0,i):mesh.origin;
-    const vector=pose.map((v,j)=>st(sub(ld(v),ld(origin[j]))));
-    const result=transform(vector,matrix,!blend);
+    const origin=blend?frameVertex(0,i).map(ld):loadedOrigin;
+    const vector=pose.map((v,j)=>{
+      const component=ld(st(sub(ld(v),origin[j])));
+      return blend?component:sub(component,loadedMatrix[0][j]);
+    });
+    const result=loadedMatrix.slice(1).map(row=>st(x87add(
+      x87add(x87mul(vector[0],row[0]),x87mul(vector[1],row[1])),x87mul(vector[2],row[2]))));
     for(let j=0;j<3;j++){
       const at=i*stride+j*4;
       out.setFloat32(at,blend?st(x87add(ld(result[j]),ld(out.getFloat32(at,true)))):result[j],true);

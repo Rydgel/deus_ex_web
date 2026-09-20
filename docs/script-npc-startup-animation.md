@@ -80,8 +80,13 @@ Current explicit boundaries, all recorded rather than substituted:
   first `startup` tick.
 * `engine.PlayerReplicationInfo` startup is unprepared; reached by `Camera4`-`7`
   (`Camera` has PlayerPawn ancestry) during `PostBeginPlay`.
-* `ScriptedPawn.IsValidEnemy` (native 2105) and `Pawn.FindPathToward`
-  (native 517) are unimplemented; reached by perception/patrol bodies.
+* `Pawn.AIPickRandomDestination` (native 709) and `Pawn.FindPathToward`
+  (native 517) are unimplemented; reached by wandering/patrol bodies.
+  `ScriptedPawn.IsValidEnemy` and its alliance queries (2105–2107) are now
+  translated and original-DLL verified. Training `mib1` passes the former
+  tick-2 enemy-check boundary but stops at 709 on tick 6 with seed 1 and
+  1/60-second frames, still in the negative-frame `BreatheLight` tween.
+  The stuck pose therefore remains unresolved; see [alliance checks](script-pawn-alliance.md).
 * `DeusExRootWindow.CanStartConversation` is unprepared; reached by the
   JaimeReyes2 conversation check.
 
@@ -89,6 +94,12 @@ Original extracts remain outside Git under `.cache/research/pawn-startup/`;
 animation controls, tick and frame evidence are
 already recorded in [animation tick](script-animation-tick.md) and
 [mesh frames](script-lodmesh-frame.md).
+
+Play scheduling follow-up: the shared clock now follows the recovered level
+frame delta, rather than wrapping this actor path in the former browser-only
+120 Hz accumulator. Each supported NPC receives one tick per browser frame;
+slow frames retain the original 0.4-second delta ceiling and physics' own
+remaining-time subdivisions. See [performance investigation](play-performance.md).
 
 ## Display integration contract
 

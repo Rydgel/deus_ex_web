@@ -16,11 +16,18 @@ resamples the live pose through GetFrame each frame. Jaime lands, enters
 `Standing` and loops `BreatheLight` under the shared clock; player reset
 restores serialized state and re-runs the chain. The recorded boundaries are
 weapon `SpawnActor` for armed NPCs, `PlayerReplicationInfo` startup for
-cameras, `IsValidEnemy`/`FindPathToward`, the root-window conversation check,
+cameras, `AIPickRandomDestination`/`FindPathToward`, the root-window conversation check,
 and environment-mapped surfaces
 ([startup evidence and exact boundary](script-npc-startup-animation.md),
 [Decal evidence](script-decal-startup.md)). Stage 3 is **not complete** while
 those boundaries and the full Play/reset/visibility verification remain open.
+
+2026-09-20 MIB follow-up: `IsValidEnemy` and both alliance queries are now
+translated and compared with 31 executions of the original DeusEx.dll. The
+real Training MIB passes that earlier Tick boundary, lands, then stops in
+`Wandering.PickDestination` at native 709 (`AIPickRandomDestination`). His
+animation is still in its initial tween at that point; the reported pose is
+**not fixed**. See [alliance evidence and live boundary](script-pawn-alliance.md).
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

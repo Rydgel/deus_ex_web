@@ -37,7 +37,18 @@ export const X87_INDEFINITE = 0xffc00000;
  * value = (-1)^neg * sig * 2^exp; {inf:true} is an infinity; {nan:bits} keeps
  * the float32 NaN payload (the larger-significand operand propagates quieted;
  * invalid operations produce the real indefinite 0xffc00000). */
-export const x87width = x => x.toString(2).length;
+// Loaded floats and most intermediates fit in 128 bits. Count their high
+// 32-bit limb without allocating a binary string (hot in mesh GetFrame).
+// Convert only an exact uint32 limb to Number: converting the whole BigInt
+// would round values just below powers of two up and miscount their width.
+export const x87width = x => {
+  if (x < 0n) return x.toString(2).length;
+  if (x < 0x100000000n) return 32 - Math.clz32(Number(x)) || 1;
+  if (x < 0x10000000000000000n) return 64 - Math.clz32(Number(x >> 32n));
+  if (x < 0x1000000000000000000000000n) return 96 - Math.clz32(Number(x >> 64n));
+  if (x < 0x100000000000000000000000000000000n) return 128 - Math.clz32(Number(x >> 96n));
+  return x.toString(2).length;
+};
 // Round a positive significand to `width` bits, nearest-even; returns
 // [significand, rightShiftApplied].
 const x87round = (sig, width) => {
@@ -143,9 +154,10 @@ export const x87div = (a, b) => {
 // nearest-even, honoring denormal and overflow boundaries.
 export const x87store = v => {
   if (v.nan !== undefined) return f32num(v.nan);
-  if (v.inf || v.exp + x87width(v.sig) - 1 > 127) return f32num((v.neg << 31) | 0x7f800000);
-  if (v.sig === 0n) return f32num(v.neg << 31);
+  if (v.inf) return f32num((v.neg << 31) | 0x7f800000);
   let e = v.exp + x87width(v.sig) - 1;
+  if (e > 127) return f32num((v.neg << 31) | 0x7f800000);
+  if (v.sig === 0n) return f32num(v.neg << 31);
   if (e >= -126) {
     const shift = v.exp + 23 - e;
     let sig;

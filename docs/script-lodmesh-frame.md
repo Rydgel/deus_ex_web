@@ -102,3 +102,12 @@ now supplied by the separate [surface path](script-lodmesh-materials.md).
 Reduced LOD, mesh lighting, NPC startup, draw submission and whole-world
 enrollment remain unfinished. Cache heap allocation/eviction and native
 exception unwinding remain explicit services.
+
+For live Play, GetFrame now reuses exact loaded coordinate/origin operands
+within a call and computes each vertex's origin subtraction once for all
+three dot products. Interpolation also reuses loaded operands. Every x87
+operation, float store, cache mutation and blend order is retained; the same
+46 original captures still match byte for byte. The shared significand-width
+helper counts exact uint32 limbs for values under 2^128, avoiding temporary
+binary strings while preserving the wide-value fallback. This is arithmetic
+overhead removal, not a change to precision, animation rate or mesh detail.

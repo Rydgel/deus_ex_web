@@ -61,8 +61,13 @@ an accepted press against the cached target, installing a label for the mover's
 next ProcessState. Browser use does not immediately interpolate or force Frob
 into PlayerTick. Original actor/input evidence is in [door-state.md](door-state.md).
 
-The browser uses a fixed 120 Hz accumulator and the original 0.4-second maximum
-actor-time ceiling. Fixed 120 Hz is a browser choice, not original frame cadence.
+The browser now submits one level tick per animation frame, using the recovered
+TimeDilation multiplication and 0.005–0.4-second actor delta clamp. Level time
+advances before that clamp. The former browser-only 120 Hz accumulator caused
+slow frames to replay NPC physics many times, creating a catch-up backlog;
+it is retained only in synthetic movement fixtures. Original remaining-time
+physics subdivisions still run inside each actor tick. See
+[timing evidence and performance checks](play-performance.md).
 Mouse radians are converted at the integer rotator boundary; exact device
 accumulation/custom bindings are not claimed. Controls currently match the
 installed always-run/hold-crouch settings. Browser F-use is an added binding;

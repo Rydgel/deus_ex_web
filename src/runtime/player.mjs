@@ -272,6 +272,8 @@ export class Player {
   }
 }
 
+// Retained for synthetic movement fixtures. Play uses the original level
+// frame delta (level-tick.mjs), not this former 120 Hz catch-up accumulator.
 export class FixedClock {
   constructor(step = FIXED_STEP) { this.step = step; this.accumulator = 0; }
   advance(seconds, tick) {

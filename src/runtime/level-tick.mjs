@@ -14,6 +14,21 @@ function storeDouble(value) {
   const rounded=x87storeDouble(value);
   return (rounded.neg?-1:1)*Number(rounded.sig)*2**rounded.exp;
 }
+
+/** ULevel.Tick 103a5468..103a5487 and 103a54c8..103a54df. One input
+ * frame advances the double clock before clamping the actor delta. Shared by
+ * the full scheduler and the Play host's currently admitted actor subset. */
+export function levelTickTime(timeSeconds,seconds,timeDilation) {
+  const input=f(seconds),dilation=f(timeDilation);
+  if(!Number.isFinite(input)||!Number.isFinite(dilation)||!Number.isFinite(timeSeconds))
+    throw new Error('Level.Tick nonfinite clock inputs are not implemented');
+  const product=x87mul(x87load(input),x87load(dilation));
+  let delta=x87store(product);
+  const time=x87add(product,loadDouble(timeSeconds));
+  if(delta<f(0.005)||Number.isNaN(delta))delta=f(0.005);
+  else if(!(delta<f(0.4)))delta=f(0.4);
+  return {timeSeconds:storeDouble(time),infoTimeSeconds:x87store(time),delta};
+}
 function playerDistance(location,origin) {
   if(!location.every(Number.isFinite)||!origin.every(Number.isFinite))
     throw new Error('Level.Tick nonfinite distance coordinates are not implemented');
@@ -44,15 +59,11 @@ export function tickStandaloneLevel(level,seconds,tickType,services) {
     throw new Error('Level.Tick nonfinite clock inputs are not implemented');
   const mark=services.beginTick(level,input);
   level.inTick=1;
-  const product=x87mul(x87load(input),x87load(dilation));
-  let delta=x87store(product);
-  const time=x87add(product,loadDouble(level.timeSeconds));
-  level.timeSeconds=storeDouble(time);
-  write(info,'TimeSeconds',x87store(time));
+  const frame=levelTickTime(level.timeSeconds,input,dilation),delta=frame.delta;
+  level.timeSeconds=frame.timeSeconds;
+  write(info,'TimeSeconds',frame.infoTimeSeconds);
   services.updateTime(info);
   if(read(info,'bPlayersOnly'))tickType=1;
-  if(delta<f(0.005)||Number.isNaN(delta))delta=f(0.005);
-  else if(!(delta<f(0.4)))delta=f(0.4);
 
   // appStricmp compares to an empty UTF-16 C string, independently of the
   // FString allocation count later tested for EventManager admission.

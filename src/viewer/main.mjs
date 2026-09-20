@@ -107,7 +107,7 @@ function resetCamera() {
 function setMode(next) {
   mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
   if(mode==='play')hideNpcFocus();
-  keys.clear(); game?.clock.reset();
+  keys.clear();
   if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
   $('play-hint').textContent = '';
   $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
@@ -120,7 +120,7 @@ function useDoor() {
 }
 function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack};paused=true;
-  keys.clear();drag=false;game.clock.reset();document.exitPointerLock?.();
+  keys.clear();drag=false;document.exitPointerLock?.();
   showStats();
   $('toast').textContent=`Play paused: ${error.message}. Choose Player start to reset.`;
 }
@@ -358,8 +358,8 @@ document.addEventListener('keydown', event => {
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
 document.addEventListener('keyup', event => keys.delete(event.code));
-window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; game?.clock.reset(); });
-document.addEventListener('visibilitychange', () => { keys.clear(); game?.clock.reset(); if (document.hidden) paused = true; });
+window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; });
+document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) paused = true; });
 function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,

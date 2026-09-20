@@ -4,7 +4,8 @@ import { readModel } from '../unreal/model.mjs';
 import { pointZone } from '../unreal/lighting.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { CollisionWorld, BspCollider } from '../runtime/collision.mjs';
-import { Player, FixedClock } from '../runtime/player.mjs';
+import { Player } from '../runtime/player.mjs';
+import { levelTickTime } from '../runtime/level-tick.mjs';
 import { Doors } from '../runtime/doors.mjs';
 import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
@@ -90,7 +91,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     return [...actors.values()].some(actor => String(actor.values?.Tag ?? '').toLowerCase() === wanted);
   };
   const doors = new Doors(collision.movers, playerDefaults.MaxFrobDistance, collision,
-    {eventHasRecipients}), clock = new FixedClock();
+    {eventHasRecipients});
   let timeSeconds=0;
   const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,surfaceTextures,
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
@@ -106,6 +107,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
+  const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
+  const levelDilation=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeDilation');
   // Player start is the viewer's scene reset. Restore the actual startup
   // vitals, so damage/energy script writes cannot survive that reset.
   const playerVitals=['Health','HealthHead','HealthTorso','HealthArmLeft','HealthArmRight',
@@ -131,17 +134,23 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Mission-trigger scripts and actor/mesh visuals remain incomplete.');
   if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; actor mesh coverage remains incomplete.`);
   const game = {
-    player, doors, collision, clock, notes, start, interaction, random, hud,
-    tick(seconds, input) { clock.advance(seconds, dt => {
-      timeSeconds=Math.fround(timeSeconds+Math.fround(dt));
+    player, doors, collision, notes, start, interaction, random, hud,
+    tick(seconds, input) {
+      // One browser frame is one level tick, including on slow frames. The
+      // original physics routines own their remaining-time subdivisions.
+      player.timeDilation=levelDilation.get();
+      const frame=levelTickTime(timeSeconds,seconds,player.timeDilation),dt=frame.delta;
+      timeSeconds=frame.timeSeconds;
+      levelTime.set(frame.infoTimeSeconds);
       doors.tick(dt); tickWalkingInteraction(interaction,dt,trace); player.tick(dt, input);hud?.tick(dt);
-    }); },
+    },
     reset() {
       collision.queries.removeActor(player.collisionActor);player.actorRegistered=false;
-      collision.registerActors(collidable);clock.reset();player.reset();timeSeconds=0;playerScene.reset();
+      collision.registerActors(collidable);player.reset();timeSeconds=0;playerScene.reset();
       // doors.reset() re-adds map pawns to the pawn list that playerScene.reset
       // just rebuilt from the collidable set, so it must run after it.
       doors.reset();
+      levelTime.set(0);
       random.seed(randomSeed);
       for(const {ref,initial} of playerVitals)ref.set(initial);
       hud?.reset();

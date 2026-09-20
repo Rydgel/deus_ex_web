@@ -99,3 +99,14 @@ Focused commands: `node scripts/validate-level-tick.mjs`,
 `node scripts/validate-gm-trench-play-anim.mjs`, and `npm run build`.
 These checks do not establish complete NPC startup, full-world execution,
 native visibility/physics services or final mesh rendering.
+
+## Play frame timing integration
+
+The time calculation is shared through `levelTickTime`: both the complete
+scheduler and the bounded Play host use the same extended product, separate
+double/float time stores, and actor delta clamp. Play supplies one call per
+browser animation frame, with no outer fixed-step accumulator. It publishes
+TimeSeconds before actors run and reads the live LevelInfo.TimeDilation.
+This does not enroll additional actors or claim the complete level scheduler
+is connected to Play. `validate-play-frame.mjs` checks the new admission
+boundary; the 31 original-DLL cases above continue to check the shared math.

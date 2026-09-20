@@ -42,6 +42,7 @@ import {
 import { runScriptPawnPhysics } from './script-pawn-physics.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
+import { execPawnAlliance } from './script-pawn-alliance.mjs';
 import {
   execLineOfSightTo, execCanSee, execPlayerCanSeeMe,
   execPickTarget, execPickAnyTarget, execAICanSee, showPawnSelf, checkPawnEnemyVisible,
@@ -2065,6 +2066,14 @@ export class ScriptRuntime {
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
       return this.bindConversationEvents(call.receiver);
     }
+    if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,{
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      isA:(actor,key)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)
+          if(cls.record.key===key)return true;
+        return false;
+      },
+    });
     if(call.index===113){
       if(call.argumentCount>2)throw new Error('GotoState accepts at most two name arguments');
       const name=call.argumentCount?refValue(call.evaluateArgument(0)):'None';
