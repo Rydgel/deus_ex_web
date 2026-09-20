@@ -43,11 +43,18 @@ for(let run=0;run<2;run++) {
   const spawn=[...mib.position];
   // Wander episodes pause ~6.5s between attempts on failure; seed 1 first
   // succeeds around tick 559. 900 ticks covers two-plus episodes with margin.
-  for(let i=0;i<900&&!npcFailures.has(mib);i++)game.tick(1/60,{});
+  // The startup tween finishing is observed DURING the loop: a completed
+  // walk episode legitimately starts a fresh BreatheLight tween, which leaves
+  // AnimFrame negative again at whatever tick the window happens to end on.
+  let tweenFinished=false;
+  for(let i=0;i<900&&!npcFailures.has(mib);i++){
+    game.tick(1/60,{});
+    if(get('AnimFrame')>=0)tweenFinished=true;
+  }
   assert.equal(npcFailures.has(mib),false,'MIB ticked through startup and wandering without a boundary');
   assert.ok(enemyChecks>0,'real script dispatch completed the recovered enemy native');
   assert.equal(get('Physics'),1,'MIB landed and stayed in PHYS_Walking');
-  assert.ok(get('AnimFrame')>=0,'startup tween finished — the pawn is no longer frozen mid-pose');
+  assert.ok(tweenFinished,'startup tween finished — the pawn is no longer frozen mid-pose');
   assert.ok(picks>0,'Wandering.PickDestination reached native 709 in live ticking');
   assert.ok(successes>0,'at least one recovered search found a destination');
   const moved=Math.hypot(...mib.position.map((v,i)=>v-spawn[i]));

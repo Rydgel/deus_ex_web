@@ -22,7 +22,7 @@ import {prepareDataLinkFunctions} from './script-datalink-transmission.mjs';
 import {
   SCRIPTED_ACTOR_CONSTRUCTION,resolveInheritedActorConstructor,verifyDataLinkPlayDefaults,
 } from './script-scripted-actor-construction.mjs';
-import {inventoryImageChain,inventoryImageSelection} from './script-spawn.mjs';
+import {inventoryConstructorChain,inventorySelection} from './script-spawn.mjs';
 import {refValue} from './script-vm.mjs';
 import {setActorTimer,updateActorTimer} from './script-timers.mjs';
 import {createInfoLinkTimeline,infoLinkTimelineState} from './script-infolink-timeline.mjs';
@@ -123,10 +123,11 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
       nativeConstructor:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.internalConstructor,
       nativeVtable:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.vtable},
   });
-  // Every concrete DataVaultImage subclass is admitted by its linked
-  // Engine.Inventory ancestry, so the nine shipped DataLink image classes share
-  // one route instead of one class key each.
-  const admitted=cls=>cls===dataLinkClass||inventoryImageChain(cls)!==null;
+  // Every concrete script-only Engine.Weapon/Engine.Inventory subclass is
+  // admitted by its linked native-root ancestry, so the shipped DataLink image
+  // classes and the armed-NPC weapon/ammo classes share one route instead of
+  // one class key each.
+  const admitted=cls=>cls===dataLinkClass||inventoryConstructorChain(cls)!==null;
   runtime.actorLifecycle={
     validateSpawn:args=>admitted(args.cls)&&args.level===level,
     construction:{
@@ -140,8 +141,8 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
     },
     resolveConstructor:cls=>{
       if(cls===dataLinkClass)return selection;
-      const imageSelection=inventoryImageSelection(cls);
-      if(imageSelection)return imageSelection;
+      const selected=inventorySelection(cls);
+      if(selected)return selected;
       throw new Error('Live DataLink constructor received another class');
     },
   };

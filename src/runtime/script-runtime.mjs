@@ -17,8 +17,11 @@ import { conditionalDestroyScriptObject, destroyScriptObject } from './script-ob
 import { setScriptOwner } from './script-owner.mjs';
 import { destroyScriptActor } from './script-destroy.mjs';
 import { constructFreshScriptObject, allocateFreshScriptObject, constructActorBase, nativeConstructorFor } from './script-object-construction.mjs';
-import { checkActorEncroachment } from './check-encroachment.mjs';
+import { checkActorEncroachment, actorBlockedBy } from './check-encroachment.mjs';
 import { setBase } from './walking-callbacks.mjs';
+import { playerMove } from './player-move.mjs';
+import { moveActorRiders } from './move-riders.mjs';
+import { farMoveActor } from './relocation.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
@@ -49,13 +52,13 @@ import {
   execPickTarget, execPickAnyTarget, execAICanSee, showPawnSelf, checkPawnEnemyVisible,
 } from './script-pawn-perception.mjs';
 import { fastLineCheck } from './fast-line-check.mjs';
-import { isOverlapping } from './actor-touch.mjs';
+import { isOverlapping, beginTouch, endTouch } from './actor-touch.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
 import { execSetLocation } from './script-set-location.mjs';
 import { bindActorConversations } from './script-conversation-wrapper.mjs';
 import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
-import { execScriptSpawn, inventoryImageChain, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay, spawnScriptInventoryActor } from './script-spawn.mjs';
+import { execScriptSpawn, inventoryConstructorChain, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay, spawnScriptInventoryActor } from './script-spawn.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -1265,6 +1268,80 @@ export class ScriptRuntime {
       actorEntered:zone=>this.processEvent(zone,'ActorEntered',[receiver]),
     },test,force);
   }
+  /** The shared collision/dispatch service table for a spawned collision-view
+   * actor's recovered ULevel move/relocation entries. The hash's `$world`
+   * sentinel is the hit identity; the script-visible Level actor it maps to
+   * for event dispatch is actors[0] (same mapping as SpawnActor's). */
+  spawnedMoveServices(view,level) {
+    const levelActor=target=>target===level?.hash?.levelInfo?level.actors[0]:target;
+    const dispatch=(a,name,args)=>this.dispatchSpawnedEvent(levelActor(a),name,args);
+    return {
+      worldActor:level.hash.levelInfo,
+      multiLineCheck:query=>level.hash.multiLineCheck(query),
+      removeActor:actor=>level.hash.removeActor(actor),
+      addActor:actor=>level.hash.addActor(actor),
+      dispatch,
+      isBlockedBy:(source,other)=>actorBlockedBy(source,other,{worldActor:level.hash.levelInfo}),
+      isOverlapping:(a,b)=>isOverlapping(a,b),
+      beginTouch:(a,b)=>beginTouch(a,b,dispatch),
+      endTouch:(a,b,suppress)=>endTouch(a,b,suppress,dispatch),
+      setActorZone:(a,test,force)=>this.setSpawnActorZone(a,test,force),
+      checkEncroachment:(a,position,rotation,notify)=>checkActorEncroachment(a,position,rotation,notify,{
+        worldActor:level.hash.levelInfo,
+        encroachmentCheck:(s,p,r,e)=>level.hash.actorEncroachmentCheck(s,p,r,e),
+        dispatch}),
+      // 0x103998a0-0x10399bb0: a spawned actor carrying riders recurses into
+      // the same recovered MoveActor entry for each based child.
+      moveRiders:(src,finalDelta,rot)=>moveActorRiders(src,finalDelta,rot,{
+        actors:level.actors,
+        baseOf:other=>other.base!==undefined?other.base:this.namedReference(other,'Base').get(),
+        location:other=>other.position??this.namedReference(other,'Location').get(),
+        rotation:other=>other.rotation??this.namedReference(other,'Rotation').get(),
+        isPawn:other=>Boolean(other.lineage?.includes('engine.pawn')),
+        addViewRotationYaw:(other,dyaw)=>{
+          const ref=this.namedReference(other,'ViewRotation');
+          const value=ref.get();
+          ref.set([value[0],(value[1]+dyaw)|0,value[2]]);
+        },
+        moveActor:(other,riderDelta,riderRot)=>this.moveSpawnedActor(other,riderDelta,riderRot),
+        actorLocation:()=>src.position,
+        actorRotation:()=>src.rotation,
+      }),
+    };
+  }
+  /** ULevel::MoveActor for a spawned collision-view actor — the recursive
+   * rider entry the based-rider section calls (test=0, ignorePawns=0,
+   * ignoreBases=1, noFail=0). Map/host actors are not admitted: their own
+   * recovered entries are the pawn/decoration routes. */
+  moveSpawnedActor(view,delta,rotation) {
+    if(!this.collisionViewActors.has(view))
+      throw new Error('MoveActor for a non-spawned rider is not linked');
+    const level=this.levelFor(view);
+    if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
+    return playerMove(view,delta,this.spawnedMoveServices(view,level),rotation);
+  }
+  /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
+   * the recovered relocation (hash remove, FindSpot/encroachment gates,
+   * based-child detach through SetBase, Location/OldLocation write,
+   * SetActorZone) with the level's services bound for this host. */
+  relocateSpawnedActor(view,destination,test,noCheck) {
+    if(!this.collisionViewActors.has(view))
+      throw new Error('FarMoveActor for a non-spawned actor is not linked');
+    const level=this.levelFor(view);
+    if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
+    const move=this.spawnedMoveServices(view,level);
+    const adapter=Object.create(level);
+    adapter.hash=level.hash;
+    adapter.editor=level.editor;
+    adapter.netMode=level.netMode??0;
+    adapter.actors=level.actors;
+    adapter.findSpot=(extent,position,checkActors,checkFirst)=>
+      level.findSpot(extent,position,checkActors,checkFirst);
+    adapter.checkEncroachment=move.checkEncroachment;
+    adapter.setBase=(child,target,notify)=>setBase(child,target,move.dispatch,notify);
+    adapter.setActorZone=(a,t,force)=>this.setSpawnActorZone(a,t,force);
+    return farMoveActor(adapter,view,destination,test,noCheck);
+  }
   spawnActor(args) {
     const cls=args.cls?.linkedClass;
     if(!cls)throw new Error('Spawn class is not linked');
@@ -1283,10 +1360,19 @@ export class ScriptRuntime {
       isActorClass:cls=>{for(;cls;cls=cls.base)if(cls===this.actorClass)return true;return false;},
       validate:input=>lifecycle?.validateSpawn?.(input),
       resolveConstructor:cls=>lifecycle?.resolveConstructor?.(cls),
-      construct:(cls,options,context)=>this.constructObject(cls,options,
-        context?.constructorSelection
-          ?{...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)}
-          :lifecycle.construction),
+      construct:(cls,options,context)=>{
+        const identity=this.constructObject(cls,options,
+          context?.constructorSelection
+            ?{...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)}
+            :lifecycle.construction);
+        // Every SpawnActor product is an actor: bind the same native
+        // destructor chain mapActorNativeObject installs on map exports —
+        // ConditionalDestroy -> AActor::Destroy (auxiliary object slot empty)
+        // -> UObject::Destroy — so ULevel::DestroyActor can run it later.
+        const object=this.instance(identity).nativeObject;
+        if(object){object.auxiliary=null;object.destroy=receiver=>this.destroyActorBase(receiver);}
+        return identity;
+      },
       setRegion:(...values)=>this.setRegion(...values),
       setNativeLevel:(actor,level)=>{this.instance(actor).nativeObject.xLevel=level;},
       setOwner:(actor,owner)=>this.setOwner(actor,owner),
@@ -1326,10 +1412,10 @@ export class ScriptRuntime {
     // runtime's subclass-startup admission gate.
     if(spawnActorRejectedByGates({...args,cls},services))return null;
     const spawn=key==='deusex.datalinkplay'?spawnScriptDataLinkPlay
-      // Admitted by linked DataVaultImage -> Engine.Inventory ancestry, which is
-      // what UClass::Bind's constructor copy-down actually depends on, rather
-      // than by class name.
-      :inventoryImageChain(cls)?spawnScriptInventoryActor
+      // Admitted by linked script-only ancestry down to the native
+      // Engine.Weapon/Engine.Inventory root, which is what UClass::Bind's
+      // constructor copy-down actually depends on, rather than by class name.
+      :inventoryConstructorChain(cls)?spawnScriptInventoryActor
       :key==='engine.camerapoint'?spawnScriptCameraPoint
       :typeof lifecycle?.spawnActor==='function'
         ?(spawnArgs,spawnServices)=>lifecycle.spawnActor(spawnArgs,spawnServices)
@@ -1346,6 +1432,16 @@ export class ScriptRuntime {
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       isProbing:(actor,name)=>this.isProbing(actor,name),
+      // ULevel::DestroyActor detaches the target's Base and every based child
+      // through the same recovered AActor::SetBase the execSetBase native
+      // dispatch above routes; worldActor (LevelInfo) maps to level.actors[0]
+      // identically.
+      setBase:(actor,target,notify)=>{
+        const level=this.levelFor(actor);
+        const dispatch=(a,name,args)=>this.dispatchSpawnedEvent(
+          a===level?.hash?.levelInfo?level.actors[0]:a,name,args);
+        return setBase(actor,target,dispatch,notify);
+      },
       setOwner:(actor,owner)=>this.setOwner(actor,owner),
       conditionalDestroy:actor=>this.conditionalDestroy(actor),
     },netForce);
@@ -1390,6 +1486,12 @@ export class ScriptRuntime {
     this.instance(receiver).bindings.set(field.key,binding);
   }
   defaultReference(receiver,field) {
+    // Inside execClassContext (`ClassExpr.default.Member`) the receiver is
+    // the class identity itself; Default resolves on that class's defaults.
+    if(receiver?.kind==='Class'){
+      if(!receiver.linkedClass)throw new Error(`Class-context Default requires a linked class: ${receiver.key}`);
+      return this.classDefaultReference(receiver.linkedClass,field);
+    }
     return this.classDefaultReference(this.instance(receiver).cls,field);
   }
   classDefaultReference(cls,field) {
@@ -2259,6 +2361,9 @@ export class ScriptRuntime {
         return this.processEvent(target,name,args);
       },
       isProbing:(actor,name)=>this.isProbing(actor,name),
+      // The MoveActor based-rider section recurses into MoveActor for each
+      // based child; only spawned collision-view actors are admitted there.
+      moveRider:(other,delta,rotation)=>this.moveSpawnedActor(other,delta,rotation),
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
         return Math.fround(this.rng.frand());

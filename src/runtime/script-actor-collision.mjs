@@ -103,6 +103,11 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   values:{value:values},collisionValues:{value:values},
   model:{value:null},movingBrush:{value:false},projectile:{value:false},
   controlledPlayer:{value:false},isPawn:{value:false},
+  // moveQuery's source-type gate marker: a spawned script-actor collision
+  // view admitted to the recovered MoveActor translation. `pawn`/`decoration`
+  // stay false — the non-pawn MoveActor tail (CheckEncroachment at
+  // 0x10399bf5) is the original branch these actors take.
+  scriptView:{value:true},pawn:{value:false},decoration:{value:false},
   standingCount:{get:field('StandingCount'),set:fieldWrite('StandingCount')},
   touching:{value:[null,null,null,null]},
   actorFlags:{get:()=>(read(actor,'bStatic')?1:0)|(read(actor,'bDeleteMe')?0x80:0)|
@@ -116,7 +121,12 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   blockActors:bit(1,'bBlockActors'),blockPlayers:bit(1,'bBlockPlayers'),
   blocking:{get(){return this.blockPlayers;}},
   position:{get:field('Location'),set:fieldWrite('Location')},
+  oldLocation:{get:field('OldLocation'),set:fieldWrite('OldLocation')},
   rotation:{get:field('Rotation'),set:fieldWrite('Rotation')},
+  // motionFlags carries the native +0x?? motion byte; the only bit this host
+  // tracks is bJustTeleported (0x100, Actor.uc:416) written by FarMoveActor.
+  motionFlags:{get:()=>read(actor,'bJustTeleported')?0x100:0,
+   set:v=>write(actor,'bJustTeleported',Boolean(v&0x100))},
   radius:{get:field('CollisionRadius'),set:fieldWrite('CollisionRadius')},
   height:{get:field('CollisionHeight'),set:fieldWrite('CollisionHeight')},
   base:{get:field('Base'),set:fieldWrite('Base')},

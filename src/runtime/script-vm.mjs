@@ -773,7 +773,12 @@ export function compileFunction(fn) {
           case 0x0f: return assign(evaluate(n.left), refValue(evaluate(n.right)));
           case 0x14: return assign(evaluate(n.left),Boolean(refValue(evaluate(n.right))));
           case 0x17: return instance;
-          case 0x19: {
+          case 0x12: case 0x19: {
+            // execClassContext (0x1012edb0) shares execContext's null/skip
+            // contract: a null context logs 'Accessed None', skips the value
+            // bytes and zeroes valueSize of result; a non-null context
+            // evaluates the value expression against it (a class for 0x12 —
+            // `SomeClass.default.Member` resolves Default on that class).
             const context=refValue(evaluate(n.context,receiver));
             if(context!==null && context!==undefined)return evaluate(n.value,context);
             services.warning?.({type:'Accessed None',script:fn.entry.path,offset:n.offset});

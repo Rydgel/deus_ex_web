@@ -18,9 +18,12 @@ export function farMoveActor(level, actor, destination, test = 0, noCheck = 0) {
   if (success) {
     if (!test) {
       if (actor.standingCount) {
+        // Children store the mover's identity in +0xc4 Base; callers that
+        // move through a field view (the pawn view) carry it as `self`.
+        const self = actor.self ?? actor;
         for (let index = 0; index < level.actors.length; index++) {
           const child = level.actors[index];
-          if (child && child.base === actor) level.setBase(child, null, true);
+          if (child && child.base === self) level.setBase(child, null, true);
         }
       }
       actor.motionFlags = ((actor.motionFlags ?? 0) | 0x100) >>> 0;

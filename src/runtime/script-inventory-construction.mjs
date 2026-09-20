@@ -9,8 +9,12 @@
  * pointer down the chain — here the Engine.AInventory constructor, not the
  * Engine.AActor one.  This module records that exact selection, the
  * AInventory native registration/ctor evidence, and the linked property
- * layout needed by the SpawnActor host.  It is not a generic Inventory
- * constructor or SpawnActor replacement.  See docs/script-datavault-image.md.
+ * layout needed by the SpawnActor host.  The armed-NPC weapon chain
+ * (DeusExWeapon -> Engine.Weapon, native) inherits AWeapon's constructor the
+ * same way; its recovered registration/thunk/vtable evidence is recorded
+ * alongside.  It is not a generic Inventory constructor or SpawnActor
+ * replacement.  See docs/script-datavault-image.md and
+ * docs/script-npc-weapon-startup.md.
  */
 
 const freeze = value => Object.freeze(value);
@@ -77,6 +81,43 @@ const ENGINE_INVENTORY = freeze({
   processEvent: freeze({slot: 0x10, thunk: 0x10302d74}),
 });
 
+// Engine.Weapon is the other admitted native Inventory subclass: the armed
+// Training NPCs' ScriptedPawn.InitializeInventory spawns DeusExWeapon leaves
+// through UClass::Bind's copy-down, which selects AWeapon's ClassConstructor.
+// Evidence: docs/script-npc-weapon-startup.md ("Native construction").
+const ENGINE_WEAPON = freeze({
+  ...ENGINE_DLL,
+  package: 'Engine',
+  className: 'Weapon',
+  key: 'engine.weapon',
+  packageExport: 9,
+  exportFlags: 0x040f0004,
+  serializedClassFlags: 0x33,
+  super: 'Engine.Inventory',
+  // Engine.Weapon is exports[8]; its Super is the Engine.Inventory export.
+  superPackageExport: 6,
+  registration: 0x1035f110,
+  rawRegistrationFlags: 0x04084004,
+  staticClass: 0x1057c3f8,
+  // AWeapon's static parent pointer is AInventory::PrivateStaticClass.
+  superStaticClass: 0x10576f70,
+  instanceSize: 0x504,
+  // Thunk chain 0x10302ef5 -> 0x10342a70 (null-this guard) -> 0x10303fb7 ->
+  // body 0x10342a90; the body calls ??0AActor@@QAE@XZ at 0x10342aad, runs the
+  // eight ENoInit/FStringNoInit member constructions (which write no member
+  // bytes), then stores the final vtable at 0x10342b43.
+  internalConstructor: 0x10302ef5,
+  constructorBody: 0x10342a90,
+  actorConstructorCall: 0x10303431,
+  intermediateVtable: 0x104268dc,
+  vtable: 0x104287a4,
+  // AWeapon's vtable equals AInventory's in every slot except +0x0c (the
+  // vector deleting destructor); the SpawnActor-used slots are identical.
+  initExecution: freeze({slot: 0x38, thunk: 0x10302194, body: 0x103deb40}),
+  spawned: freeze({slot: 0x74, thunk: 0x10303373, body: 0x1030d730}),
+  processEvent: freeze({slot: 0x10, thunk: 0x10302d74}),
+});
+
 const DATAVAULTIMAGE = freeze({
   package: 'DeusEx',
   className: 'DataVaultImage',
@@ -130,6 +171,14 @@ const IMAGE02_NYC_WAREHOUSE = freeze({
 export const INVENTORY_CONSTRUCTION = freeze({
   binaries: freeze({engine: ENGINE_DLL, deusEx: DEUSEX_PACKAGE}),
   engineInventory: ENGINE_INVENTORY,
+  engineWeapon: ENGINE_WEAPON,
+  // The native classes whose recovered ClassConstructor a script-only
+  // Inventory chain may inherit. Any other native class on the chain is an
+  // explicit unimplemented constructor family.
+  nativeRoots: freeze({
+    [ENGINE_INVENTORY.key]: ENGINE_INVENTORY,
+    [ENGINE_WEAPON.key]: ENGINE_WEAPON,
+  }),
   dataVaultImage: DATAVAULTIMAGE,
   image02NycWarehouse: IMAGE02_NYC_WAREHOUSE,
   chain: freeze([
@@ -194,41 +243,40 @@ const leafName = record => CHAIN_LABELS.get(String(record.key).toLowerCase()) ??
   (typeof record.name === 'string' && record.name ? record.name : String(record.key).split('.').pop());
 
 /**
- * Select the original inherited constructor for a concrete DataVaultImage
- * subclass, given its linked `UClass::Bind` chain from the leaf down to
- * `Engine.Inventory`.
+ * Select the original inherited constructor for a script-only Inventory
+ * subclass, given its linked `UClass::Bind` chain from the leaf down to the
+ * first native class, `root` (an `INVENTORY_CONSTRUCTION.nativeRoots` entry —
+ * `Engine.Weapon` or `Engine.Inventory`).
  *
  * The chain is what the original body actually walks: `UClass::Bind` recurses
  * to the superclass and copies its post-call `ClassConstructor` down
  * (`0x10127b5a`-`0x10127b60`), so any number of script-only subclasses between
- * the leaf and `Engine.Inventory` inherit the AInventory constructor.  Every
- * record above `Engine.Inventory` must therefore carry a null constructor: a
- * native subclass that declared its own would stop the copy-down, and silently
- * reusing the AInventory body for it would be wrong.  `Engine.Inventory` itself
- * must carry the recovered registration constructor and vtable.
+ * the leaf and the native root inherit the root constructor.  Every record
+ * above the root must therefore carry a null constructor: a native subclass
+ * that declared its own would stop the copy-down, and silently reusing the
+ * root body for it would be wrong.  The root itself must carry the recovered
+ * registration constructor and vtable.
  *
  * `propertiesSize` is the leaf's linked `UStruct::Link` result, supplied by the
  * caller rather than assumed, because a subclass that declares its own fields
- * has a larger one than `DataVaultImage`.
+ * has a larger one than the root's instance size.
  */
-export function resolveInheritedInventoryConstructorChain(chain, propertiesSize) {
-  if (!Array.isArray(chain) || chain.length < 3)
-    throw new TypeError('The inherited Inventory chain needs a leaf, DataVaultImage and Engine.Inventory');
-  const inventory = chain[chain.length - 1];
-  const dataVaultImage = chain[chain.length - 2];
-  requireClassRecord(inventory, ENGINE_INVENTORY.key, 'Engine.Inventory');
-  requireClassRecord(dataVaultImage, DATAVAULTIMAGE.key, 'DataVaultImage');
+export function resolveInheritedInventoryConstructorChain(chain, propertiesSize, root = ENGINE_INVENTORY) {
+  if (!Array.isArray(chain) || chain.length < 2)
+    throw new TypeError('The inherited Inventory chain needs a leaf and its native root class');
+  const native = chain[chain.length - 1];
+  requireClassRecord(native, root.key, `${root.package}.${root.className}`);
   for (const record of chain.slice(0, -1)) {
     if (!record || typeof record !== 'object' || typeof record.key !== 'string')
       throw new TypeError('The inherited Inventory chain needs linked class records');
     if (record.nativeConstructor !== null)
       throw new Error(`${leafName(record)} unexpectedly carries an independent native constructor`);
   }
-  if (inventory.nativeConstructor !== ENGINE_INVENTORY.internalConstructor)
-    throw new Error('Engine.Inventory ClassConstructor does not match the recovered registration');
-  if (inventory.nativeVtable !== ENGINE_INVENTORY.vtable)
-    throw new Error('Engine.Inventory native vtable does not match the recovered constructor body');
-  if (!Number.isInteger(propertiesSize) || propertiesSize < INVENTORY_CONSTRUCTION.layout.inventoryPropertiesSize)
+  if (native.nativeConstructor !== root.internalConstructor)
+    throw new Error(`${root.package}.${root.className} ClassConstructor does not match the recovered registration`);
+  if (native.nativeVtable !== root.vtable)
+    throw new Error(`${root.package}.${root.className} native vtable does not match the recovered constructor body`);
+  if (!Number.isInteger(propertiesSize) || propertiesSize < root.instanceSize)
     throw new Error('The inherited Inventory chain needs the leaf linked PropertiesSize');
   // UField::Bind on the leaf, then one UClass::Bind per superclass visit, then
   // the copy-down in reverse visit order.
@@ -239,9 +287,9 @@ export function resolveInheritedInventoryConstructorChain(chain, propertiesSize)
   return freeze({
     classKey: String(chain[0].key).toLowerCase(),
     inherited: true,
-    constructor: ENGINE_INVENTORY.internalConstructor,
-    constructorBody: ENGINE_INVENTORY.constructorBody,
-    nativeVtable: ENGINE_INVENTORY.vtable,
+    constructor: root.internalConstructor,
+    constructorBody: root.constructorBody,
+    nativeVtable: root.vtable,
     propertiesSize,
     bindOrder: freeze(bindOrder),
   });
@@ -253,6 +301,7 @@ export function resolveInheritedInventoryConstructorChain(chain, propertiesSize)
  */
 export function resolveInheritedInventoryConstructor({image02, dataVaultImage, inventory} = {}) {
   requireClassRecord(image02, IMAGE02_NYC_WAREHOUSE.key, 'Image02_NYC_Warehouse');
+  requireClassRecord(dataVaultImage, DATAVAULTIMAGE.key, 'DataVaultImage');
   return resolveInheritedInventoryConstructorChain([image02, dataVaultImage, inventory],
-    INVENTORY_CONSTRUCTION.layout.image02PropertiesSize);
+    INVENTORY_CONSTRUCTION.layout.image02PropertiesSize, ENGINE_INVENTORY);
 }

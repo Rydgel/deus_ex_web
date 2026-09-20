@@ -144,6 +144,19 @@ export function constructInventory(object) {
   object.nativeVtable=0x104286f8;
 }
 
+/** Engine AWeapon registration selects 10302ef5 -> 10342a70 (null-this guard)
+ * -> 10303fb7 -> body 10342a90. The body calls ??0AActor@@QAE@XZ
+ * (0x10303431, at 0x10342aad), runs the eight ENoInit/FStringNoInit member
+ * constructions at +0x320/+0x32c/+0x338/+0x3c8/+0x3d4/+0x3e0/+0x41c/+0x428 —
+ * which write no member bytes — then installs the final AWeapon vtable
+ * 0x104287a4 (store at 0x10342b43). Select this only for the DeusExWeapon
+ * chain, whose script-only classes inherit this ClassConstructor through
+ * UClass::Bind. See docs/script-npc-weapon-startup.md. */
+export function constructWeapon(object) {
+  constructActorBase(object);
+  object.nativeVtable=0x104287a4;
+}
+
 /** ADecal's original ctor 10331090 clears only its native SurfList header
  * beyond the inherited construction, then installs vtable 10426f74.
  * decalSurfaces is bound to the same reflected SurfList by the spawn host.
@@ -156,13 +169,14 @@ export function constructDecal(object) {
 
 /** Map a verified UClass::Bind constructor selection to this host's native
  * body. Only the recovered registrations are admitted: AActor's own
- * constructor (inherited by the scripted ConPlayBase/DataLinkPlay chain) and
- * AInventory's (inherited by the DataVaultImage/Image02 chain), and ADecal's
- * (inherited by Shadow). */
+ * constructor (inherited by the scripted ConPlayBase/DataLinkPlay chain),
+ * AInventory's (inherited by the DataVaultImage/Image02 chain), AWeapon's
+ * (inherited by the DeusExWeapon chain), and ADecal's (inherited by Shadow). */
 export function nativeConstructorFor(selection){
   const constructor=selection?.constructor;
   if(constructor===0x10302dab)return constructActorBase;
   if(constructor===0x1030299b)return constructInventory;
+  if(constructor===0x10302ef5)return constructWeapon;
   if(constructor===0x10303a26)return constructDecal;
   throw new Error('Original constructor selection is not implemented');
 }

@@ -12,6 +12,7 @@ import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
+import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
 import { setActorCollisionSize } from './script-actor-collision.mjs';
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
@@ -727,12 +728,13 @@ export async function createScriptDoors({
   // permanently skip that statement on retry (the original links all script
   // code at load).
   const npcPawns = [];
+  const npcPawnSet = new Set();
   const npcFailures = new Map();
   for (const actor of level.actors ?? []) {
     const record = actor && actor !== playerActor ? identities.get(actor) : null;
     if (!record) continue;
     for (let cls = record.cls; cls; cls = cls.base)
-      if (cls.record.key === 'engine.pawn') { npcPawns.push(actor); break; }
+      if (cls.record.key === 'engine.pawn') { npcPawns.push(actor); npcPawnSet.add(actor); break; }
   }
 
   const preparedNpcClasses = new Set();
@@ -765,10 +767,44 @@ export async function createScriptDoors({
     // links at load as well so the bodies reach their real boundaries.
     const barkManager = runtime.namedReference(playerActor, 'barkManager')?.get?.();
     if (barkManager) await prepareNpcClass(runtime.instance(barkManager).cls);
+    // ScriptedPawn conversation checks reach into the player's UI:
+    // DeusExPlayer.CanStartConversation calls
+    // DeusExRootWindow(rootWindow).CanStartConversation — link that class
+    // chain at load for the same reason as barkManager.
+    const rootWindow = runtime.namedReference(playerActor, 'rootWindow')?.get?.();
+    if (rootWindow) await prepareNpcClass(runtime.instance(rootWindow).cls);
     for (const actor of npcPawns) {
       try {
         await prepareNpcClass(identities.get(actor).cls);
         await runtime.prepareMesh(actor);
+        // ScriptedPawn.InitializeInventory's Spawn calls run on the pawn's
+        // first ProcessState tick against the serialized InitialInventory
+        // slots. Link and prepare every referenced item class — plus its own
+        // class-valued defaults (Weapon.AmmoName reaches the body's
+        // Class<Ammo> cast) — now, at load: the VM advances a state cursor
+        // before dispatch, so a prepare-on-demand failure would permanently
+        // skip an already-consumed statement.
+        const initialInventory = runtime.namedReference(actor, 'InitialInventory')?.get?.() ?? [];
+        for (const slot of initialInventory) {
+          for (const [key, value] of Object.entries(slot ?? {})) {
+            if (!key.toLowerCase().endsWith('.inventory') || !value) continue;
+            const itemClass = await runtime.loadClass(value.asset, value.index);
+            await prepareNpcClass(itemClass);
+            // Only classes that declare/inherit AmmoName (Weapon ancestry)
+            // reference a second class through it — Ammo subclasses do not.
+            const ammoField = runtime.lookupMember(itemClass, 'fields', 'AmmoName');
+            const ammoRef = ammoField ? runtime.defaultValue(itemClass, ammoField) : null;
+            if (ammoRef) {
+              const ammoClass = await runtime.loadClass(ammoRef.asset, ammoRef.index);
+              await prepareNpcClass(ammoClass);
+              if (ammoClass.nameCounter === 0) ammoClass.nameCounter = 1;
+            }
+            // Fresh-object naming continues each class's original counter;
+            // the player-startup subsystem spawn applies the same convention
+            // (script-player-startup.mjs).
+            if (itemClass.nameCounter === 0) itemClass.nameCounter = 1;
+          }
+        }
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
@@ -792,10 +828,28 @@ export async function createScriptDoors({
     level: npcTickLevel, tickType: 2,
     allocateDeferredActor: () => ({}),
     readInput: () => { throw new Error('Actor.Tick player input is not linked'); },
-    // Weapon FarMoveActor is reached only once a pawn carries a weapon; the
-    // armed-NPC SpawnActor boundary keeps that slot empty for now.
-    farMoveActor: () => { throw new Error('Actor.Tick weapon FarMoveActor is not linked'); },
+    // The Actor.Tick pawn tail runs FarMoveActor(Weapon, Location, 0, 0) once
+    // a pawn carries a weapon. Training's NPCs keep Weapon = None, so this is
+    // linked but unexercised by them (docs/script-npc-weapon-startup.md).
+    farMoveActor: (actor, destination, test, noCheck) =>
+      runtime.relocateSpawnedActor(actor, destination, test, noCheck),
   };
+
+  // Runtime-spawned actors (NPC inventory items, spawned Shadows) live at the
+  // tail of Level.Actors. Track them separately from the serialized map set:
+  // the reset path destroys them through the recovered ULevel::DestroyActor
+  // instead of restoring them, and the destroyed-actor ledger must never
+  // reintroduce them (docs/script-npc-weapon-startup.md "Reset lifecycle").
+  const npcSpawned = new Set();
+  const npcSpawnedOwner = new Map();
+  function collectSpawned(from) {
+    for (let index = from; index < level.actors.length; index++) {
+      const actor = level.actors[index];
+      if (!actor || npcSpawned.has(actor)) continue;
+      npcSpawned.add(actor);
+      npcSpawnedOwner.set(actor, runtime.namedReference(actor, 'Owner')?.get?.() ?? null);
+    }
+  }
 
   const NPC_STARTUP_EVENTS = Object.freeze(['PreBeginPlay', 'BeginPlay', 'PostBeginPlay', 'SetInitialState', 'PostPostBeginPlay']);
   function runNpcStartup(actor) {
@@ -814,6 +868,22 @@ export async function createScriptDoors({
   // Inventory SpawnActor inside InitializeInventory — is recorded and left out
   // of ticking instead of resuming a half-advanced state.
   function resetNpcs() {
+    // Destroy every runtime-spawned actor first, in reverse spawn order, so
+    // Inventory.Destroyed -> Pawn.DeleteInventory / Weapon.Destroyed ->
+    // Owner.Weapon clear / SetBase(NULL) StandingCount-1 / SetOwner(NULL)
+    // LostChild all run while the owner pawns still hold their live state —
+    // exactly the recovered ULevel::DestroyActor order the original's level
+    // reload implies (docs/script-npc-weapon-startup.md "Reset lifecycle").
+    // This is also what fixes the measured spawned-Shadow leak (15->29->52).
+    for (const actor of [...npcSpawned].reverse()) {
+      if (!level.actors.includes(actor)) continue;
+      let instance = null;
+      try { instance = runtime.instance(actor); } catch { instance = null; }
+      if (!instance || instance.pendingKill) continue;
+      runtime.destroyActor(actor, false);
+    }
+    npcSpawned.clear();
+    npcSpawnedOwner.clear();
     npcFailures.clear();
     for (const actor of npcPawns) {
       try {
@@ -828,6 +898,11 @@ export async function createScriptDoors({
         for (const prop of NPC_HOST_PROPS) delete actor[prop];
         if (actor.values?.Location) actor.position = [...actor.values.Location];
         actor.isPawn = true; actor.pawnFlags = 0; actor.touching = [null, null, null, null];
+        // The recovered AActor::SetBase (walking-callbacks.mjs) mutates
+        // standingCount on the raw host — NPC inventory SetBase(Self) calls
+        // arrive through the script, not a binding — so reseed it from the
+        // serialized field like the other live host props.
+        actor.standingCount = actor.values?.StandingCount ?? 0;
         level.hash?.addActor(actor);
         // The collidable rebuild already places every lineage pawn in
         // Level.PawnList, but the original builds that list solely through
@@ -835,7 +910,14 @@ export async function createScriptDoors({
         // own AddPawn inserts it exactly once (a second head-insert would
         // self-cycle the list that MakeNoise and perception walk).
         removePawn(level, actor);
-        runNpcStartup(actor);
+        const spawnedFrom = level.actors.length;
+        try {
+          runNpcStartup(actor);
+        } finally {
+          // Pawn startup spawns (each NPC's Shadow) join the tracked set even
+          // when the chain reaches a boundary partway through.
+          collectSpawned(spawnedFrom);
+        }
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
@@ -1073,18 +1155,48 @@ export async function createScriptDoors({
     // DataLinkPlay is a spawned Actor. Its selected playback state and Timer
     // phase run after ProcessState and before physics, on the same fixed tick.
     liveDataLink?.tick(delta);
-    // Pawn phase: the recovered standalone Actor.Tick for every script-attached
-    // map pawn in serialized actor-array order (the player's own route is
-    // separate). An NPC whose startup hit an explicit boundary stays in its
+    // Pawn phase: the recovered standalone Actor.Tick runs in Level.Actors
+    // array order — the original ULevel::Tick iteration. Serialized map pawns
+    // (the player's own route is separate) plus every runtime-spawned
+    // Inventory-ancestry actor: the items append after their owner and tick
+    // after it in the same frame (docs/script-npc-weapon-startup.md "Ticking
+    // the spawned items"). Spawned Shadows (Decal ancestry) are NOT ticked —
+    // the recorded Shadow.Tick boundary (docs/script-decal-startup.md). An
+    // actor whose startup/tick hit an explicit boundary stays in its
     // serialized pose rather than resuming a half-advanced state.
-    for (const actor of npcPawns) {
-      if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
-      // startup state's Begin: InitializePawn -> InitializeInventory runs on
-      // the first ProcessState tick, so the armed NPCs' weapon SpawnActor
-      // boundary surfaces here rather than at reset. Recording it leaves the
-      // pawn out of later ticks instead of resuming a half-advanced state.
-      try { runtime.processActorTick(actor, delta, npcTickOptions); }
-      catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+    for (let index = 0; index < level.actors.length; index++) {
+      const actor = level.actors[index];
+      if (!actor) continue;
+      if (npcPawnSet.has(actor)) {
+        if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
+        // startup state's Begin: InitializePawn -> InitializeInventory runs on
+        // the first ProcessState tick, so the armed NPCs' weapon SpawnActor
+        // boundary surfaces here rather than at reset. Recording it leaves the
+        // pawn out of later ticks instead of resuming a half-advanced state.
+        const spawnedFrom = level.actors.length;
+        try { runtime.processActorTick(actor, delta, npcTickOptions); }
+        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+        collectSpawned(spawnedFrom);
+      } else if (npcSpawned.has(actor)) {
+        // Only Inventory-ancestry spawned actors tick (weapons/ammo);
+        // Decal-ancestry spawned Shadows are the recorded non-ticked case.
+        let lineage = null;
+        try { lineage = runtime.instance(actor).cls; } catch { continue; }
+        let inventory = false;
+        for (let cls = lineage; cls; cls = cls.base)
+          if (cls.record.key === 'engine.inventory') { inventory = true; break; }
+        if (!inventory || lineage === null) continue;
+        const owner = npcSpawnedOwner.get(actor) ?? runtime.namedReference(actor, 'Owner').get();
+        if (runtime.instance(actor).pendingKill) continue;
+        if (owner && npcFailures.has(owner)) continue;
+        const spawnedFrom = level.actors.length;
+        try { runtime.processActorTick(actor, delta, npcTickOptions); }
+        catch (error) {
+          npcFailures.set(owner ?? actor,
+            `${actor.name ?? runtime.namedReference(actor, 'Name').get()}: ${String(error?.message ?? error)}`);
+        }
+        collectSpawned(spawnedFrom);
+      }
     }
     // Physics phase follows ProcessState and the timer phase for each actor.
     for (const decoration of decorations) {
@@ -1116,6 +1228,15 @@ export async function createScriptDoors({
   const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor});
   liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
     player:playerActor,shell:infoLinkShellValue,onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
+  // player.rootWindow is the shell's native-backed root window
+  // (script-datalink-live sets it). Window hierarchy natives reachable from
+  // NPC ticks — GetRootWindow(1425) via DeusExPlayer.CanStartConversation →
+  // DeusExRootWindow.CanStartConversation — read the same +0x138 parent and
+  // +0x28 type words the shell allocates, so publish those readers for the
+  // whole Play session rather than only inside the DataLink lifecycle.
+  runtime.windowLifecycle={...runtime.windowLifecycle,
+    hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
+      readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
   playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
     player:playerActor,warning:message=>callbacks.warning?.(message)});
   await prepareShadowStartup(runtime,assets,level);
@@ -1131,13 +1252,22 @@ export async function createScriptDoors({
   // docs/script-destroy.md, docs/script-world-destroy.md.
   runtime.actorLifecycle={...runtime.actorLifecycle,...destroyServices};
   level.collisionHash=destroyServices.collisionHash;
+  // SpawnActor's bTicked write reads the original Level+0x10c tick parity —
+  // the npcTickLevel tag the recovered actor-tick scheduler owns.
+  Object.defineProperty(level,'tickParity',{
+    configurable:true,enumerable:true,
+    get:()=>Boolean(npcTickLevel.tickTag),
+  });
   const baseDestroyActor=runtime.destroyActor.bind(runtime);
   runtime.destroyActor=(receiver,netForce=false)=>{
     const saved=destroyedActors.snapshot(receiver);
     const accepted=baseDestroyActor(receiver,netForce);
     // Record only a request that actually cleared the saved Level.Actors slot;
     // the recovered gates can accept an already-deleting actor without one.
-    if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null)destroyedActors.record(receiver,saved);
+    // Runtime-spawned actors (NPC inventory, Shadows) are never ledgered —
+    // reset must not reintroduce them as serialized map actors.
+    if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null&&identities.has(receiver))
+      destroyedActors.record(receiver,saved);
     return accepted;
   };
   // Eagerly link every pawn class's script surface and decode its mesh before

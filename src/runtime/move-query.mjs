@@ -25,7 +25,7 @@ export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,i
   // therefore uses the same path, and so does a script-attached pawn cylinder.
   // Proven by native-move-query-oracle.py with sourceControlledPlayer:false
   // (docs/move-query.md, docs/script-plant-contact.md).
-  if((!source?.controlledPlayer && !source?.decoration && !source?.pawn) || source.movingBrush)throw new Error('Move query requires a controlled-player, pawn or decoration cylinder');
+  if((!source?.controlledPlayer && !source?.decoration && !source?.pawn && !source?.scriptView) || source.movingBrush)throw new Error('Move query requires a controlled-player, pawn, decoration or spawned-script-actor cylinder');
   start=start.map(f);delta=delta.map(f);extent=extent.map(f);
   if([...start,...delta,...extent].some(v=>!Number.isFinite(v)))throw new Error('Nonfinite movement query unsupported');
   // Original non-editor immovable/static rejection precedes the tiny gate.

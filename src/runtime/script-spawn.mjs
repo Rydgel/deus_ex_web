@@ -196,82 +196,130 @@ export function spawnScriptDataLinkPlay(args,services) {
 }
 
 /**
- * The linked `DataVaultImage -> Engine.Inventory -> Engine.Actor -> Core.Object`
- * ancestry, or null for any other class.  This is the shape Core UClass::Bind
- * needs in order to copy Engine.AInventory's ClassConstructor (0x1030299b) and
- * vtable (0x104286f8) down to a script-only subclass: the copy-down recurses
- * through however many script subclasses the chain holds, so the admitted set
- * is an ancestry, not a class name.  The abstract DataVaultImage parent itself
- * is rejected earlier by the shared prologue abstract gate.
+ * The linked script-only ancestry down to a native `Engine.Weapon` or
+ * `Engine.Inventory` root, or null for any other class.  This is the shape
+ * Core UClass::Bind needs in order to copy the native root's ClassConstructor
+ * and vtable down to a script-only subclass: the copy-down recurses through
+ * however many script subclasses the chain holds, so the admitted set is an
+ * ancestry, not a class name.  Returns `{chain, root}` where `chain` holds
+ * the leaf through the native root and `root` is the native root's key.
+ *
+ * A chain whose first native class is neither recovered root returns null
+ * when it never reaches Engine.Inventory — but a native node that does sit
+ * above an Engine.Inventory ancestor is a different constructor family whose
+ * copy-down this route must not silently reproduce, so that case throws.
  */
-export function inventoryImageChain(cls) {
+export function inventoryConstructorChain(cls) {
   const evidence=INVENTORY_CONSTRUCTION;
   const chain=[];
   for(let node=cls;node;node=node.base){
-    chain.push(node);
-    if(classKey(node)===evidence.engineInventory.key){
-      // Below Engine.Inventory the original chain is fixed.
-      if(classKey(node.base)!==SCRIPTED_ACTOR_CONSTRUCTION.engineActor.key||
-          classKey(node.base.base)!=='core.object'||node.base.base.base!=null)return null;
-      // DataVaultImage must be the class Engine.Inventory was reached through,
-      // so an unrelated Inventory subclass does not enter this path.
-      return chain.length>=3&&classKey(chain[chain.length-2])===evidence.dataVaultImage.key
-        ?chain:null;
+    const key=classKey(node);
+    if(((node.metadata?.entry?.flags??0)&0x04000000)===0){
+      chain.push(node);
+      continue;
     }
+    chain.push(node);
+    // The first native class is where the copy-down stops.
+    let inventory;
+    if(key===evidence.engineWeapon.key){
+      if(classKey(node.base)!==evidence.engineInventory.key)return null;
+      inventory=node.base;
+    }else if(key===evidence.engineInventory.key){
+      inventory=node;
+    }else{
+      for(let probe=node.base;probe;probe=probe.base)
+        if(classKey(probe)===evidence.engineInventory.key)
+          throw new Error(`UClass::Bind native constructor family is not implemented for ${key}`);
+      return null;
+    }
+    // Below Engine.Inventory the original chain is fixed.
+    if(classKey(inventory.base)!==SCRIPTED_ACTOR_CONSTRUCTION.engineActor.key||
+        classKey(inventory.base.base)!=='core.object'||inventory.base.base.base!=null)return null;
+    return {chain,root:key};
   }
   return null;
 }
 
 /**
- * Build the inherited-constructor selection for an admitted DataVaultImage
- * subclass from its linked chain, deriving each record the way UClass::Bind
- * reads it: a class carries its own ClassConstructor only when it is RF_Native
- * (0x04000000), which is the same flag the recovered Bind body tests before it
- * would reach native DLL-export resolution. A native subclass on this chain,
- * or a subclass that declares its own fields, is refused rather than given
- * Engine.Inventory's body and DataVaultImage's PropertiesSize.
+ * The pinned DataVaultImage case of the general chain: the class
+ * Engine.Inventory was reached through must be DataVaultImage, so an
+ * unrelated Inventory subclass does not enter the image route.  The abstract
+ * DataVaultImage parent itself is rejected earlier by the shared prologue
+ * abstract gate.
  */
-export function inventoryImageSelection(cls) {
-  const chain=inventoryImageChain(cls);
-  if(!chain)return null;
+export function inventoryImageChain(cls) {
+  const selected=inventoryConstructorChain(cls);
+  if(!selected)return null;
+  const {chain}=selected;
+  return chain.length>=3&&classKey(chain[chain.length-2])===INVENTORY_CONSTRUCTION.dataVaultImage.key
+    ?chain:null;
+}
+
+/** The leaf's serialized PropertiesSize — the original UStruct::Link result
+ * stored in the linked class record (+0x3c), which a subclass's own fields
+ * enlarge. The spawn sequence needs it for the constructor selection check. */
+function linkedPropertiesSize(cls) {
+  const size=cls?.loadRecord?.nativeSlots?.get(0x3c)?.value;
+  if(!Number.isInteger(size))throw new Error(`Original class ${classKey(cls)} has no linked PropertiesSize`);
+  return size;
+}
+
+/**
+ * Build the inherited-constructor selection for an admitted Inventory-ancestry
+ * class from its linked chain, deriving each record the way UClass::Bind reads
+ * it: a class carries its own ClassConstructor only when it is RF_Native
+ * (0x04000000), which is the same flag the recovered Bind body tests before it
+ * would reach native DLL-export resolution.  A script subclass that declares
+ * its own fields (DeusExWeapon's 136) is legal here because the leaf's real
+ * linked PropertiesSize is used rather than a pinned subclass size.
+ */
+export function inventorySelection(cls) {
+  const selected=inventoryConstructorChain(cls);
+  if(!selected)return null;
   const evidence=INVENTORY_CONSTRUCTION;
+  const root=evidence.nativeRoots[selected.root];
   const records=[];
-  for(const node of chain){
+  for(const node of selected.chain){
     const key=classKey(node);
-    if(key===evidence.engineInventory.key){
-      records.push({key,nativeConstructor:evidence.engineInventory.internalConstructor,
-        nativeVtable:evidence.engineInventory.vtable});
+    if(key===selected.root){
+      records.push({key,nativeConstructor:root.internalConstructor,
+        nativeVtable:root.vtable});
       break;
     }
     if(((node.metadata?.entry?.flags??0)&0x04000000)!==0)
       throw new Error(`UClass::Bind native DLL-export resolution is not implemented for ${key}`);
-    if(key!==evidence.dataVaultImage.key&&node.propertyOrder?.length)
-      throw new Error(`${key} declares its own fields; its linked PropertiesSize is required`);
     records.push({key,nativeConstructor:null});
   }
-  return resolveInheritedInventoryConstructorChain(records,
-    evidence.layout.dataVaultImagePropertiesSize);
+  return resolveInheritedInventoryConstructorChain(records,linkedPropertiesSize(cls),root);
+}
+
+/** The image route's pinned entry point, kept for the route that pinned the
+ * evidence: DataVaultImage-admitted chains only. */
+export function inventoryImageSelection(cls) {
+  return inventoryImageChain(cls)?inventorySelection(cls):null;
 }
 
 function selectInventoryConstructor(cls,chain,services) {
   const evidence=INVENTORY_CONSTRUCTION;
+  const root=evidence.nativeRoots[chain.root];
   if(typeof services.resolveConstructor!=='function')
-    throw new Error('DataVaultImage Spawn requires the original UClass::Bind constructor service');
+    throw new Error('Inventory Spawn requires the original UClass::Bind constructor service');
   const selection=services.resolveConstructor(cls);
-  const expected=evidence.engineInventory;
   if(!selection||selection.classKey!==classKey(cls)||
-      selection.inherited!==true||selection.constructor!==expected.internalConstructor||
-      selection.nativeVtable!==expected.vtable||
+      selection.inherited!==true||selection.constructor!==root.internalConstructor||
+      selection.nativeVtable!==root.vtable||
       !Number.isInteger(selection.propertiesSize)||
-      selection.propertiesSize<evidence.layout.inventoryPropertiesSize)
-    throw new Error('DataVaultImage Spawn requires the inherited Engine.Inventory constructor binding');
+      selection.propertiesSize<root.instanceSize)
+    throw new Error(`SpawnActor ${classKey(cls)} requires the inherited ${root.package}.${root.className} constructor binding`);
   return selection;
 }
 
 /**
- * Accepted ULevel::SpawnActor path for a concrete DeusEx DataVaultImage
- * subclass, admitted by its linked Engine.Inventory ancestry rather than by
- * class name. Unlike the DataLinkPlay/CameraPoint path these classes carry authored
+ * Accepted ULevel::SpawnActor path for a concrete script-only subclass of
+ * `Engine.Weapon`/`Engine.Inventory` — the DataVaultImage route that pinned
+ * the evidence plus the armed-NPC weapon/ammo route.  Classes are admitted by
+ * their linked native-root ancestry rather than by class name. Unlike the
+ * DataLinkPlay/CameraPoint path these classes carry authored
  * collision defaults (bBlockActors), so the bounded collision-default gate
  * is replaced by the original sequence actually recovered for it:
  * the pre-startup hash registration (0x103953b7-0x103953cf, before
@@ -285,7 +333,7 @@ export function spawnScriptInventoryActor(args,services) {
   const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
     processEvent,setActorZone,validate}=services;
   if(spawnActorRejectedByGates(args,services))return null;
-  const chain=inventoryImageChain(cls);
+  const chain=inventoryConstructorChain(cls);
   if(!chain)
     throw new Error(`SpawnActor ${classKey(cls)} subclass startup is not implemented`);
   if(typeof validate!=='function'||validate(args)!==true)

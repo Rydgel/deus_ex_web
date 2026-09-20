@@ -31,6 +31,7 @@ import { walkingSurfacePrelude } from './walking-surface.mjs';
 import { processPlayerHitWall, setSupportBase, setBase } from './walking-callbacks.mjs';
 import { setActorPhysics, findActorBase } from './script-actor-collision.mjs';
 import { playerMove } from './player-move.mjs';
+import { moveActorRiders } from './move-riders.mjs';
 import { moveQuery } from './move-query.mjs';
 import { actorBlockedBy, checkActorEncroachment } from './check-encroachment.mjs';
 import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
@@ -183,12 +184,12 @@ export function pawnPhysicsView(actor, services) {
    * the navigation natives' probing workers (checkMove/flyMove) drive. */
   pawn.testMove = (delta, rotation, flags) =>
     testMoveActor(pawn, delta, rotation, flags, services, decorate);
-  pawn.farMove = (position, test, noCheck) => {
+  pawn.farMove = (position, test, noCheck) =>
     // farMoveActor's passenger detach scans level.actors for child.base===actor;
-    // map Base entries are host identities, never the view.
-    if (pawn.standingCount) unsupported('FarMoveActor detaching pawn passengers');
-    return farMoveActor(farLevel(pawn, actor, services, dispatch), pawn, position, test, noCheck);
-  };
+    // map Base entries are host identities, never the view (relocation.mjs
+    // reads actor.self). The detach runs the recovered SetBase through
+    // farLevel.setBase.
+    farMoveActor(farLevel(pawn, actor, services, dispatch), pawn, position, test, noCheck);
   pawn.findSpot = (position, extent, checkActors, checkFirst) => {
     const fitted = [...position];
     return level.findSpot(extent, fitted, checkActors, checkFirst) ? fitted : null;
@@ -257,6 +258,28 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
     endTouch: (a, b, suppress) => endTouch(a, decorate(b), suppress, dispatch),
     setActorZone: (a, test, force) => a === pawn ? pawn.setActorZone(test, force)
       : unsupported('MoveActor zone update for a non-pawn source'),
+    // 0x103998a0-0x10399bb0: based riders ride the committed move. The base
+    // identity riders store is the host actor (pawn.self), not the view; the
+    // recursive rider MoveActor only admits spawned collision-view riders
+    // (ScriptRuntime.moveSpawnedActor raises the explicit boundary for any
+    // other identity).
+    moveRiders: (src, finalDelta, rot) => moveActorRiders(pawn.self, finalDelta, rot, {
+      actors: level.actors,
+      baseOf: other => other.base !== undefined ? other.base : services.field(other, 'Base').get(),
+      location: other => other.position ?? services.field(other, 'Location').get(),
+      rotation: other => other.rotation ?? services.field(other, 'Rotation').get(),
+      isPawn: other => Boolean(other.lineage?.includes('engine.pawn')),
+      addViewRotationYaw: (other, dyaw) => {
+        const ref = services.field(other, 'ViewRotation');
+        const value = ref.get();
+        ref.set([value[0], (value[1] + dyaw) | 0, value[2]]);
+      },
+      moveActor: (other, riderDelta, riderRot) => services.moveRider
+        ? services.moveRider(other, riderDelta, riderRot)
+        : unsupported('rider MoveActor'),
+      actorLocation: () => pawn.position,
+      actorRotation: () => pawn.rotation,
+    }),
   }, newRotation);
 }
 
@@ -318,7 +341,10 @@ function farLevel(pawn, actor, services, dispatch) {
       encroachmentCheck: (s, p, r, e) => services.level.hash.actorEncroachmentCheck(s === pawn ? actor : s, p, r, e) });
   level.setActorZone = (a, test, force) => a === pawn ? pawn.setActorZone(test, force)
     : unsupported('FarMoveActor zone update for a non-pawn source');
-  level.setBase = () => unsupported('FarMoveActor detaching pawn passengers');
+  // 0x10398e10 region: a non-test far move of a pawn with StandingCount!=0
+  // detaches every based child through the recovered AActor::SetBase
+  // (SetBase(child, NULL, 1) -> StandingCount-1 -> Detach -> BaseChange).
+  level.setBase = (child, target, notify) => setBase(child, target, dispatch, notify);
   return level;
 }
 

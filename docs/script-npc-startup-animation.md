@@ -76,10 +76,18 @@ transform to still be live at removal), then the same chain re-runs.
 
 Current explicit boundaries, all recorded rather than substituted:
 
-* `ScriptedPawn.InitializeInventory` calls `Spawn(Weapon..., self)` — generic
-  weapon `SpawnActor` and the `DeusExWeapon`/`DeusExAmmo` constructor chain are
-  unimplemented. Reached by `UNATCOTroop0`-`3` and `JosephManderley0` on the
-  first `startup` tick.
+* ~~`ScriptedPawn.InitializeInventory` calls `Spawn(Weapon..., self)`~~ —
+  **implemented 2026-09-20.** `UNATCOTroop0`/`1`/`3` and `JosephManderley0`
+  now run the authored body through original bytecode on their first
+  `ProcessState` tick: the `Engine.Weapon`/`Engine.Inventory` constructor
+  copy-down families, the recovered `ULevel::SpawnActor` order (including
+  the pre-startup hash gate the weapons' authored `bCollideActors` sets),
+  `GiveTo`/`AddInventory`/`SetBase` attachment, `AmmoName` ammo wiring and
+  `SetupWeapon(false)`'s `Weapon = None` outcome, the `MoveActor` based-rider
+  section as the items ride the landing pawn (`StandingCount` 3), per-item
+  ticking, and `ULevel::DestroyActor` cleanup on Player reset. See
+  [NPC weapon startup](script-npc-weapon-startup.md) and
+  `validate-npc-weapon-startup.mjs` / `validate-weapon-construction.mjs`.
 * `engine.PlayerReplicationInfo` startup is unprepared; reached by `Camera4`-`7`
   (`Camera` has PlayerPawn ancestry) during `PostBeginPlay`.
 * `Pawn.AIPickRandomDestination` (native 709) is implemented, oracle-verified

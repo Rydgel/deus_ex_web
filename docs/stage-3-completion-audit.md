@@ -15,7 +15,7 @@ recovered `ULevel::Tick`/`APawn::performPhysics` path, and the renderer
 resamples the live pose through GetFrame each frame. Jaime lands, enters
 `Standing` and loops `BreatheLight` under the shared clock; player reset
 restores serialized state and re-runs the chain. The recorded boundaries are
-weapon `SpawnActor` for armed NPCs, `PlayerReplicationInfo` startup for
+`PlayerReplicationInfo` startup for
 cameras, `FindPathToward`, the root-window conversation check,
 and environment-mapped surfaces
 ([startup evidence and exact boundary](script-npc-startup-animation.md),
@@ -37,6 +37,29 @@ required..max arity on the four iterator factories (`GetFloorMaterial`'s
 boundaries; the `SpawnNotification` `FindFunctionChecked` miss is now the
 original's logged-NULL no-op. See [pawn navigation](script-pawn-nav.md) and
 [alliance evidence](script-pawn-alliance.md).
+
+2026-09-20 armed-NPC inventory follow-up: the `InitializeInventory`
+`SpawnActor` blocker is removed. `UClass::Bind`'s constructor copy-down is
+now generalized — script-only ancestry is admitted down to the recovered
+`Engine.Weapon` (`0x10302ef5`, vtable `0x104287a4`) or `Engine.Inventory`
+roots — so `UNATCOTroop0`/`1`/`3` spawn `WeaponAssaultGun`/`Ammo762mm`/
+`WeaponCombatKnife` and `JosephManderley0` spawns `WeaponPistol`/`Ammo10mm`/
+`WeaponCombatKnife` through the shared recovered `ULevel::SpawnActor` order,
+attach them via the scripted `GiveTo`/`AddInventory`/`SetBase`, and keep
+`Weapon = None` through `SetupWeapon(false)` exactly as the original. The
+integration surfaced and resolved three latent contracts: the `MoveActor`
+based-rider section (`0x103998a0`–`0x10399bb0`, now ported as
+`move-riders.mjs` and exercised by the landing pawns' `StandingCount` 3),
+`execClassContext` for `Class.default.Member` reads/writes, and
+runtime-spawned actor lifecycle on Player reset — the spawned items and
+Shadows are now destroyed through the recovered `ULevel::DestroyActor`
+instead of leaking (measured Shadow growth 15→29→52 is gone) and are never
+reintroduced by the destroyed-actor ledger. `Actor.Tick`'s weapon
+`FarMoveActor` tail is linked to the recovered relocation but stays
+unexercised while `Weapon = None`. `validate-npc-weapon-startup.mjs`
+asserts the load/reset/300-tick contract per NPC;
+`validate-weapon-construction.mjs` pins the Engine.dll registration, thunk
+and vtable evidence. See [NPC weapon startup](script-npc-weapon-startup.md).
 
 2026-09-20 performance follow-up: Play now uses a small Rust/Wasm kernel for
 GetFrame's per-vertex interpolation and transforms, retaining the original
