@@ -407,7 +407,8 @@ Implemented 2026-09-20. What landed:
   remove/commit, and the non-pawn `CheckEncroachment` tail
   (`0x10399bb5`–`0x10399c8e`) runs for callers that supply the service.
   `ScriptRuntime.moveSpawnedActor` is the recursive rider entry; it admits
-  only spawned collision views.
+  only spawned collision views and passes the authored `bIgnoreBases=1`, so a
+  colliding item is not blocked by the base carrying it.
 * **Attachment.** `GiveTo`/`AddInventory`/`SetBase`/`SetPhysics` run through
   the existing recovered bindings; the items land in the pawn's inventory
   chain in head-insert order (knife, ammo, weapon — the reverse of spawn

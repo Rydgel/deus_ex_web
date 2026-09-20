@@ -1318,7 +1318,10 @@ export class ScriptRuntime {
       throw new Error('MoveActor for a non-spawned rider is not linked');
     const level=this.levelFor(view);
     if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
-    return playerMove(view,delta,this.spawnedMoveServices(view,level),rotation);
+    // The only caller is the recovered based-rider MoveActor (vtable +0x88)
+    // which passes bIgnoreBases=1 — a riding item must not be blocked by the
+    // base carrying it.
+    return playerMove(view,delta,{...this.spawnedMoveServices(view,level),ignoreBases:true},rotation);
   }
   /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
    * the recovered relocation (hash remove, FindSpot/encroachment gates,

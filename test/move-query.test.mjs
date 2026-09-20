@@ -28,6 +28,16 @@ test('original first blocking result skips self/based actors without owner exclu
   assert.equal(result.hit.actor,owned);
 });
 
+test('bIgnoreBases skips the mover own base; without it the base blocks the move',()=>{
+  const carrier={flags:15},rider={controlledPlayer:true,flags:15,base:carrier};
+  const cfg={source:rider,worldActor:world,start:[0,0,0],delta:[10,0,0],extent:[17,17,42]};
+  // Source->IsBasedOn(carrier) is only consulted when bIgnoreBases is set;
+  // otherwise the carrier base is an ordinary blocker and clamps delta to 0.
+  assert.deepEqual(moveQuery({...cfg,multiLineCheck:()=>[hit(carrier,.01)]}).delta,[0,0,0]);
+  const moved=moveQuery({...cfg,ignoreBases:true,multiLineCheck:()=>[hit(carrier,.01)]});
+  assert.deepEqual(moved.delta,[10,0,0]);assert.equal(moved.success,true);assert.equal(moved.hit,null);
+});
+
 test('source and target blocking categories are reciprocal; brush uses collide-world',()=>{
   const player={flags:8,controlledPlayer:true},actor={flags:8},brush={flags:8,movingBrush:true};
   assert.equal(moveQuery({...base,source:{controlledPlayer:true,flags:11},multiLineCheck:()=>[hit(actor),hit(player)]}).hit.actor,player);

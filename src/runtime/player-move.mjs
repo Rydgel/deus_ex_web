@@ -8,9 +8,9 @@ function basedOn(actor,base){const seen=new Set();for(let a=actor;a;a=a.base){if
  * original's nearly-zero-delta path still applies the new rotation before
  * returning, without hash/touch/zone bookkeeping.
  * Geometry, hash, script, touching and zone callbacks are explicit boundaries. */
-export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,addActor,dispatch,isBlockedBy,isOverlapping,beginTouch,endTouch,setActorZone,moveRiders,noFail,checkEncroachment},newRotation=null){
+export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,addActor,dispatch,isBlockedBy,isOverlapping,beginTouch,endTouch,setActorZone,moveRiders,noFail,checkEncroachment,ignoreBases=false},newRotation=null){
  const requested=delta.map(f),rotation=newRotation?[...newRotation]:[...source.rotation];let hits=[];
- const query=moveQuery({source,worldActor,start:source.position,delta:requested,extent:[source.radius,source.radius,source.height],multiLineCheck:q=>(hits=multiLineCheck(q))});
+ const query=moveQuery({source,worldActor,start:source.position,delta:requested,extent:[source.radius,source.radius,source.height],multiLineCheck:q=>(hits=multiLineCheck(q)),ignoreBases});
  if(source.static || source.movable===false)return query;
  if(requested.every(v=>Math.abs(v)<.0001)){source.rotation=rotation;return query;}
  const eligibleScanned=!!(source.flags&14)&&hits.some(h=>!basedOn(h.actor,source));

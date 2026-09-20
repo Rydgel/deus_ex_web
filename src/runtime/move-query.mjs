@@ -18,7 +18,7 @@ function basedOn(actor,source){
  * rejection. Scene mutation/events and nondefault move flags are not implemented here.
  * Evidence and original comparisons: docs/move-query.md.
  */
-export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,ignorePawns=false}){
+export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,ignorePawns=false,ignoreBases=false}){
   // MoveActor's query/selection/math is source-type independent: it keys on each
   // candidate's type and the source's block flags, never on whether the source is
   // a player. A decoration cylinder (e.g. a pushed Plant2 under physFalling)
@@ -46,6 +46,11 @@ export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,i
       // based-on and block tests.
       if(ignorePawns&&other&&!(other.actorFlags&1)&&
         (other.lineage?.includes('engine.pawn')||other.lineage?.includes('engine.decoration')))continue;
+      // ULevel::MoveActor bIgnoreBases (Engine.dll 0x10399651): when set, the
+      // mover skips candidates that are its own bases — Source->IsBasedOn(hit).
+      // This is what lets a colliding attached item ride its base through the
+      // recursive rider MoveActor without being blocked by it.
+      if(ignoreBases&&basedOn(source,other))continue;
       if(basedOn(other,source))continue;
       let blocks;
       if(other===worldActor)blocks=!!(sourceFlags&2);
