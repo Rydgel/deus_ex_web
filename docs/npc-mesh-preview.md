@@ -1,9 +1,18 @@
 # Training NPC mesh inspection
 
-These are **static mesh previews, visible in Play and Inspect**, not completed NPC support.
-It displays the existing Training actors at their authored location, rotation and
-scale. It does not run startup, change animation state, or claim original mesh
-lighting, distance LOD, AI or conversations.
+These meshes are **live bindings to the script-attached map actors, visible in
+Play and Inspect**. The runtime resolves each actor to the same object the VM
+mutates, so `update()` resamples the original `GetFrame` path whenever
+AnimSequence, AnimFrame, transform or blend fields change under the shared
+clock. Original startup now runs at load for the supported pawn set; it does
+not claim original mesh lighting, distance LOD, AI or conversations.
+
+The display adapter samples runtime pose changes into the existing vertex
+buffers and recomputes bounds. Its persistent per-actor cache preserves original
+tween history. Unchanged poses require no geometry upload; hidden/deleted actors
+stop drawing. It supplies no separate animation clock — the script runtime's
+tick advances poses in Play and leaves them frozen in Inspect; see the
+[startup contract and live results](script-npc-startup-animation.md).
 
 ## Evidence established before the draw adapter
 
@@ -45,13 +54,17 @@ reflection coordinates. Character-specific geometry or skin logic is absent.
 Training loads these meshes automatically with the map. The preview button and
 Focus selector move only the inspection camera. Returning to Play or Player
 start hides the focus controls but keeps the meshes visible. A footer label
-identifies the static previews in either mode. Preparing or displaying them must leave the
+identifies the live NPC binding in either mode. Preparing or displaying them must leave the
 player, actor animation fields and runtime pause/error state unchanged.
 
 `validate-npc-mesh-preview.mjs` checks this new integration boundary using the
 actual Training runtime and local original identity capture: all 18 captured
 identities, 14 complete mesh/texture uploads, explicit guard boundaries and
-unchanged actor/player fields. Existing native frame and material comparisons
+unchanged actor/player fields during sampling. A separate controlled section
+calls each actor's original PlayWaiting method, advances the recovered animation
+phase and verifies the shared buffer updates, tween continuity, bounds and
+visibility. This is a script-animation fixture, not normal Play startup.
+Existing native frame and material comparisons
 establish the original behavior; this integration check does not establish
 whole-renderer fidelity. Browser inspection confirms Jaime's room companions
 and the medical bot are visible at their original locations with the scope label

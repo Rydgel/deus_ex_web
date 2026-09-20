@@ -6,6 +6,14 @@ import {readObject} from '../unreal/objects.mjs';
 export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
   const authored = new Map();
   let rawProperties;
+  // Map-authored object refs keep actor-slot identities; class records also
+  // need their linked ancestry — the original package linker always builds it.
+  const resolveMapObject=async(source,index)=>{
+    if(index>0&&actors.has(index))return actors.get(index);
+    const object=await runtime.objects.resolve(source,index);
+    if(object?.kind==='Class')await runtime.loadClass(source,index);
+    return object;
+  };
   for (const [ordinal,property] of (actor.properties ?? []).entries()) {
     const field = runtime.lookupMember(cls, 'fields', property.name);
     if (!field) throw new Error(`Map property is not linked: ${actor.name}.${property.name}`);
@@ -20,13 +28,9 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
       if(!raw||raw.name!==property.name||raw.arrayIndex!==property.arrayIndex||raw.type!==property.type)
         throw new Error(`Original map property order changed: ${actor.name}.${property.name}`);
       const initial=authored.get(field.key)?.get(property.arrayIndex)??cls.defaults.get(field.key)?.get(property.arrayIndex);
-      value=await runtime.authoredStructProperty(asset,field,raw,initial,
-        (source,index)=>index>0&&actors.has(index)?actors.get(index):runtime.objects.resolve(source,index));
+      value=await runtime.authoredStructProperty(asset,field,raw,initial,resolveMapObject);
     } else if (!property.decoded) value = {unsupported: `Undecoded map property ${actor.name}.${property.name}`};
-    else if ([5, 8].includes(property.type)) {
-      value = property.value > 0 && actors.has(property.value)
-        ? actors.get(property.value) : await runtime.objects.resolve(asset, property.value);
-    }
+    else if ([5, 8].includes(property.type)) value=await resolveMapObject(asset,property.value);
     if (!authored.has(field.key)) authored.set(field.key, new Map());
     authored.get(field.key).set(property.arrayIndex, value);
   }

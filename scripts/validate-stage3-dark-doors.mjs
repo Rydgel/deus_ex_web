@@ -29,7 +29,11 @@ assert.equal(runtime.classLoader.identity(moverClass.loadRecord),moverClass.reco
 const createIterator=runtime.createIterator.bind(runtime);
 const iterations=[];
 runtime.createIterator=call=>{
-  const iterator=createIterator(call),record={native:call.index,next:0,matches:0};iterations.push(record);
+  const iterator=createIterator(call);
+  // Live NPC perception ticks issue their own CycleActors/AllActors scans; the
+  // sequence this check asserts belongs to the two door panels' own bodies.
+  if(!pair.includes(call.receiver))return iterator;
+  const record={native:call.index,next:0,matches:0};iterations.push(record);
   return {next(){record.next++;const found=iterator.next();if(found)record.matches++;return found;}};
 };
 const tick=seconds=>{for(let frame=0;frame<Math.round(seconds*120);frame++)game.tick(1/120,{});};

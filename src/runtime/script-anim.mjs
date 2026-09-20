@@ -87,7 +87,8 @@ export function animationTickView(runtime,actor) {
     const blend={get simAnim(){return readSim(element('SimBlendAnim'));},
       set simAnim(value){writeSim(element('SimBlendAnim'),value);}};
     for(const [key,name] of Object.entries({AnimSequence:'BlendAnimSequence',AnimFrame:'BlendAnimFrame',
-      AnimRate:'BlendAnimRate',TweenRate:'BlendTweenRate',AnimLast:'BlendAnimLast',AnimMinRate:'BlendAnimMinRate'}))
+      AnimRate:'BlendAnimRate',TweenRate:'BlendTweenRate',AnimLast:'BlendAnimLast',AnimMinRate:'BlendAnimMinRate',
+      OldAnimRate:'OldBlendAnimRate'}))
       Object.defineProperty(blend,key,{get:()=>element(name).get(),set:value=>element(name).set(value)});
     return blend;
   });

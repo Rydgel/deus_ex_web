@@ -102,7 +102,7 @@ export function spawnActorRejectedByGates(args,services) {
   return false;
 }
 
-export function spawnScriptActor(args,services,{kind,key,constructorSelection=false}) {
+export function spawnScriptActor(args,services,{kind,key,constructorSelection=false,nativeConstructorSelection=null}) {
   const {cls,level,name,owner,instigator,location,rotation}=args;
   const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
     processEvent,setActorZone,validate}=services;
@@ -110,7 +110,8 @@ export function spawnScriptActor(args,services,{kind,key,constructorSelection=fa
   if(classKey(cls)!==key)throw new Error(`SpawnActor ${kind} subclass startup is not implemented`);
   if(typeof validate!=='function'||validate(args)!==true)
     throw new Error('SpawnActor requires verified native defaults and complete world bindings');
-  const selected=constructorSelection?selectDataLinkPlayConstructor(cls,services):null;
+  const selected=nativeConstructorSelection??(constructorSelection?selectDataLinkPlayConstructor(cls,services):null);
+  if(selected&&selected.classKey!==key)throw new Error('SpawnActor constructor selection has a different class identity');
   if(!Array.isArray(level.actors)||!level.actors[0]||!level.nativeObject?.outer)
     throw new Error('SpawnActor requires LevelInfo and the native level Outer package');
   if(level.editor||level.undo!==null||level.spawnTracking!==false)

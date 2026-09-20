@@ -1,6 +1,6 @@
 import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
-import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator } from './script-decoration-primitives.mjs';
+import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator, rotatorToVector } from './script-decoration-primitives.mjs';
 import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
 import { getAxes } from './camera.mjs';
 import { rotatorSin } from './coords.mjs';
@@ -793,6 +793,7 @@ export function compileFunction(fn) {
             if(!field?.reference)throw new Error('BoolVariable requires a property');
             return {reference:true,get:()=>Boolean(refValue(field)),set:value=>assign(field,Boolean(value))};
           }
+          case 0x39: return rotatorToVector(refValue(evaluate(n.value,instance)));
           case 0x3a: return refValue(evaluate(n.value)) & 255;
           case 0x3c: return f(refValue(evaluate(n.value)) & 255);
           case 0x3d: return refValue(evaluate(n.value)) & 255;
@@ -820,6 +821,14 @@ export function compileFunction(fn) {
             const value=refValue(field);return reference(value,Array.isArray(value)?{X:0,Y:1,Z:2,Pitch:0,Yaw:1,Roll:2}[n.name]:n.name);
           }
           case 0x0b: return undefined;
+          case 0x0d: {
+            // EX_GotoLabel: redirect the state frame's Code to the label
+            // offset resolved through the current state chain.
+            if(!frame.state)throw new Error('GotoLabel requires a state frame');
+            if(!services.gotoLabel)throw new Error('GotoLabel service is not linked');
+            services.gotoLabel(instance,refValue(evaluate(n.value,instance)));
+            return undefined;
+          }
           default: throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
         }
       };

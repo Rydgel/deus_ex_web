@@ -99,7 +99,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
   // Native GetPlayerPawn720 follows XLevel.Engine.Client.Viewports[0].Actor.
   // This local Play session owns one viewport, bound to its controlled JC.
-  playerScene.level.engine = {client:{viewports:[{actor:player.collisionActor}]}};
+  // UClient::Decals is a config bool the original defaults to True; pawn
+  // startup reaches AttachDecal through SpawnShadow and reads it here.
+  playerScene.level.engine = {client:{decals:true,viewports:[{actor:player.collisionActor}]}};
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
@@ -136,7 +138,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     }); },
     reset() {
       collision.queries.removeActor(player.collisionActor);player.actorRegistered=false;
-      doors.reset();collision.registerActors(collidable);clock.reset();player.reset();timeSeconds=0;playerScene.reset();
+      collision.registerActors(collidable);clock.reset();player.reset();timeSeconds=0;playerScene.reset();
+      // doors.reset() re-adds map pawns to the pawn list that playerScene.reset
+      // just rebuilt from the collidable set, so it must run after it.
+      doors.reset();
       random.seed(randomSeed);
       for(const {ref,initial} of playerVitals)ref.set(initial);
       hud?.reset();

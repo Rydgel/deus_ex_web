@@ -106,11 +106,17 @@ serialized value.
 
 The original returns to the initial map state by reloading the level. This host
 reuses actor identities across "Player start", so a small ledger records what a
-destruction cleared — the `Level.Actors` slot, the touch slots and the native
-object's flags — and restores them on reset, clearing the actor's authored
-property store so the values `ExitProperties` released come back. The live
-collision hash is rebuilt wholesale by the scene reset and is not touched by the
-ledger.
+destruction cleared — the `Level.Actors` slot and the native object's flags —
+and restores them on reset, clearing the actor's authored property store so the
+values `ExitProperties` released come back. The touch slots are *not* restored
+from the pre-destruction snapshot: `DestroyActor`'s `EndTouch` pass cleared both
+sides of every live pair, so the surviving counterpart no longer holds the
+destroyed actor and a one-sided restore would suppress the next `BeginTouch`'s
+reciprocal `Touch` dispatch (the second session's `OrdersTrigger2.Touch` never
+fires). `playerScene.reset()`'s `prepareActor` already rebuilds `touching` from
+the serialized `Touching[i]` fields, which is the reload-equivalent state. The
+live collision hash is rebuilt wholesale by the scene reset and is not touched
+by the ledger.
 
 ## Focused check
 

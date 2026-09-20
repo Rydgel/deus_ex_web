@@ -22,14 +22,16 @@ function sequenceOrLog(mesh, name, kind, log) {
   return sequence;
 }
 
-/** Shared new-sequence path; the distinct original SimAnim tails stay separate. */
-function startAnimation(actor, sequence, rate, tweenTime, looping, minRate = 0) {
+/** Shared new-sequence path; the distinct original SimAnim tails stay separate.
+ * Blend slots run the same field writes minus animFlags (execPlayBlendAnim
+ * never touches them) and read the shared actor Velocity. */
+function startAnimation(actor, sequence, rate, tweenTime, looping, minRate = 0, {flags = true, velocity} = {}) {
   const n = sequence.numFrames, tween = hasSequence(actor.AnimSequence) ? f(tweenTime) : 0;
   actor.AnimSequence = sequence.name;
   actor.AnimRate = f(f(rate) * f(sequence.rate) / n);
   actor.AnimLast = f(1 - 1 / n);
   if (looping) actor.AnimMinRate = minimumRate(sequence, minRate);
-  actor.animFlags = ((Number(actor.animFlags ?? 0) & ~0x38) |
+  if (flags) actor.animFlags = ((Number(actor.animFlags ?? 0) & ~0x38) |
     (sequence.notifyCount ? 0x20 : 0) | (looping ? 0x10 : 0)) >>> 0;
   if (equalOrUnordered(actor.AnimLast, 0)) {
     actor.animFlags = (actor.animFlags & ~0x20) >>> 0;
@@ -46,7 +48,7 @@ function startAnimation(actor, sequence, rate, tweenTime, looping, minRate = 0) 
     const old = f(actor.OldAnimRate ?? 0);
     if (old > 0) actor.TweenRate = old;
     else if (lessOrUnordered(old, 0)) {
-      const [x, y, z] = (actor.Velocity ?? [0, 0, 0]).map(f);
+      const [x, y, z] = (velocity ?? actor.Velocity ?? [0, 0, 0]).map(f);
       // CRT sqrt returns double; the original does not store a float norm.
       const velocityRate = -Math.sqrt((x*x + y*y) + z*z) * old;
       const halfRate = actor.AnimRate * 0.5;
@@ -106,6 +108,24 @@ export function execLoopAnim(actor, mesh, sequenceName, rate, tweenTime, minRate
     actor.OldAnimRate = actor.AnimRate;
     actor.simAnim = simState(actor, -10000);
   }
+}
+
+/** AActor::execPlayBlendAnim, 0x103e0d80. The same recovered new-sequence
+ * path as PlayAnim over the per-slot Blend* arrays: no animFlags write, and
+ * SimBlendAnim quantizes rate at *10000 without the 16-bit clamp. */
+export function execPlayBlendAnim(view, mesh, sequenceName, rate, tweenTime, slot, log = () => {}) {
+  slot = Number(slot) | 0;
+  if (slot < 0 || slot > 3) { log('blendSlotRange', {slot}); return; }
+  const sequence = sequenceOrLog(mesh, sequenceName, 'playBlendAnim', log);
+  if (!sequence) return;
+  const blend = view.blends[slot];
+  startAnimation(blend, sequence, rate, tweenTime, false, 0, {flags: false, velocity: view.Velocity});
+  const old = blend.simAnim ?? {frame: 0, rate: 0, tween: 0, last: 0};
+  const next = {frame: f(blend.AnimFrame * 10000), rate: f(blend.AnimRate * 10000),
+    tween: f(blend.TweenRate * 1000), last: f(blend.AnimLast * 10000)};
+  if (Object.keys(next).every(key => equalOrUnordered(old[key], next[key]))) next.last = f(next.last + 1);
+  blend.simAnim = next;
+  blend.OldAnimRate = blend.AnimRate;
 }
 
 /** AActor::execTweenAnim, 0x103e0bd0. */

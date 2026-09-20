@@ -12,6 +12,7 @@ export class ScriptClassLoader {
     this.graph = createScriptLoadGraph({captureEvents, meshLoadServices});
     this.identities = new WeakMap();
     this.nativeRecords = new WeakMap();
+    this.linking = new Set();
     this.prepareQueue = Promise.resolve();
     this.bits = new DataView(new ArrayBuffer(4));
   }
@@ -133,6 +134,11 @@ export class ScriptClassLoader {
   }
 
   async linkClass(runtime, record) {
+    this.linking.add(record.key);
+    try { return await this.linkClassBody(runtime, record); }
+    finally { this.linking.delete(record.key); }
+  }
+  async linkClassBody(runtime, record) {
     const loaded = await this.load(record);
     const {slotOf, superOf, nameText, propertyKindOf} = this.graph;
     const superIdentity = this.identity(superOf(loaded));
@@ -176,6 +182,24 @@ export class ScriptClassLoader {
         if (data.has(offset)) values.set(index, this.value(property, data.get(offset)));
       }
       if (values.size) cls.defaults.set(field.key, values);
+    }
+    // Class-valued defaults (class'WeaponAssaultGun' inside InitialInventory)
+    // must carry linked ancestry before the VM can cast them. The original
+    // linker loads referenced exports while serializing defaults; identity()
+    // only mints the record, so link every Class record reachable here.
+    const referenced = new Set();
+    const collect = value => {
+      if (value == null) return;
+      if (value.kind === 'Class') { referenced.add(value); return; }
+      if (Array.isArray(value)) { for (const member of value) collect(member); return; }
+      if (typeof value === 'object' && !value.kind) for (const member of Object.values(value)) collect(member);
+    };
+    for (const values of cls.defaults.values()) for (const value of values.values()) collect(value);
+    // A back-edge (A's defaults reference B, B's reference A) resolves the way
+    // the original linker does: the export already on the load stack is
+    // returned in progress instead of awaited into a circular dependency.
+    for (const classRecord of referenced) {
+      if (!this.linking.has(classRecord.key)) await runtime.loadClass(classRecord.asset, classRecord.index);
     }
     return cls;
   }

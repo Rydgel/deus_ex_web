@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
-import {POLY,toView} from '../unreal/geometry.mjs';
+import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 
 // Original Training capture, class/name identity checked by the integration validator.
@@ -11,8 +11,10 @@ export const TRAINING_NPC_IDENTITIES=Object.freeze({JaimeReyes0:34333,ScientistM
   UNATCOTroop1:34401,MedicalBot0:34440,RepairBot0:34519,
   UNATCOTroop2:34601,UNATCOTroop0:34612,UNATCOTroop3:34668});
 
-/** Bounded asset inspection, never a substitute for NPC startup/lighting.
- * Original contracts and the captured cache identity: docs/npc-mesh-preview.md. */
+/** Live NPC mesh binding: update() resamples GetFrame whenever the shared
+ * runtime's pose fields change, so original startup/animation is visible in
+ * ordinary Play without preview controls. Original mesh lighting remains a
+ * boundary. Contracts and captured cache identity: docs/npc-mesh-preview.md. */
 export async function createTrainingNpcPreview(runtime,assets,asset) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   // Measured GObjObjects identities from the same original Training capture.
@@ -27,27 +29,56 @@ export async function createTrainingNpcPreview(runtime,assets,asset) {
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));
-  return {root,actors,dispose(){for(const actor of actors)actor.dispose();},
+  return {root,actors,update(){for(const actor of actors)actor.update();},
+    dispose(){for(const actor of actors)actor.dispose();},
     summary:{actors:actors.map(actor=>actor.summary),errors,
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
-      shading:'texture-only inspection',startup:false}};
+      shading:'texture-only inspection',startup:'original'}};
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const actorName=read(actor,'Name');
+  const meshReference=read(actor,'Mesh');
   const payload=await runtime.prepareMesh(actor);
-  const frame=getLodMeshFrame(payload,actor,[0,0,0,1,0,0,0,1,0,0,0,1],{
-    cache:createLodMeshFrameCache(),read,objectIndex:()=>originalObjectIndex,
-  });
-  const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
+  // GetFrame's tween cache must survive draw submissions. Recreating it each
+  // frame jumps straight to the new sequence instead of blending from the
+  // previous displayed pose. This cache owns only this inspection identity.
+  const cache=createLodMeshFrameCache(),coords=[0,0,0,1,0,0,0,1,0,0,0,1];
+  const services={cache,read,objectIndex:object=>{
+    if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
+    return originalObjectIndex;
+  }};
+  const frame=getLodMeshFrame(payload,actor,coords,services);
   const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets);
   const root=new THREE.Group(),materials=[],gpuTextures=[],groups=new Map();
+  let disposed=false,lastPose=null;
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
   const dispose=()=>{
+    if(disposed)return;disposed=true;
     root.traverse(object=>object.geometry?.dispose());
     for(const material of materials)material.dispose();
     for(const texture of gpuTextures)texture.dispose();
+    // A failed pose may have left an internal lease outstanding; disposal
+    // still releases this private cache and must not mask the original error.
+    cache.entries.clear();
+  };
+  const pose=()=>{
+    const animationActor=read(actor,'bAnimByOwner')?(read(actor,'Owner')??actor):actor;
+    return [animationActor,read(animationActor,'bParticles'),read(actor,'DrawScale'),
+      ...read(actor,'Location'),...read(actor,'Rotation'),...read(actor,'PrePivot'),
+      read(animationActor,'AnimSequence'),read(animationActor,'AnimFrame'),
+      ...read(animationActor,'BlendAnimSequence'),...read(animationActor,'BlendAnimFrame')];
+  };
+  const copyPositions=(positions,indices)=>{
+    const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
+    for(let corner=0;corner<indices.length;corner++){
+      const offset=indices[corner]*12,at=corner*3;
+      // Same reflection as toView, retaining the original special-vertex prefix.
+      positions[at]=vertices.getFloat32(offset+4,true);
+      positions[at+1]=vertices.getFloat32(offset+8,true);
+      positions[at+2]=-vertices.getFloat32(offset,true);
+    }
   };
   try {
     for(const [faceIndex,face] of faces.entries()) {
@@ -56,11 +87,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       const reference=runtime.getActorMeshTexture(actor,face.texture);
       if(!reference)throw new Error(`${actorName} skin slot ${face.texture} is empty`);
       const key=`${reference.key}:${face.flags}`;
-      if(!groups.has(key))groups.set(key,{reference,flags:face.flags,positions:[],uvs:[],faces:[]});
+      if(!groups.has(key))groups.set(key,{reference,flags:face.flags,indices:[],uvs:[],faces:[]});
       const group=groups.get(key);
       for(const corner of [0,2,1]) {
-        const offset=face.vertices[corner]*12;
-        group.positions.push(...toView([0,4,8].map(n=>vertices.getFloat32(offset+n,true))));
+        group.indices.push(face.vertices[corner]);
         group.uvs.push(...face.uv[corner].map(value=>value/256));
       }
       group.faces.push(faceIndex);
@@ -92,16 +122,37 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       }
       material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length};
       const geometry=new THREE.BufferGeometry();
-      geometry.setAttribute('position',new THREE.Float32BufferAttribute(group.positions,3));
+      const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
+      geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
       geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
+      geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
+      group.geometry=geometry;
       const mesh=new THREE.Mesh(geometry,material);
       mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
     }
-    return {root,dispose,location:[...read(actor,'Location')],rotation:[...read(actor,'Rotation')],
-      summary:{actor:actorName,mesh:read(actor,'Mesh').key,triangles:faces.length,
+    const summary={actor:actorName,mesh:meshReference.key,triangles:faces.length,
         textures:[...new Set([...groups.values()].map(group=>group.reference.key))],
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
-        shading:'texture-only inspection',startup:false}};
+        shading:'texture-only inspection',startup:'original'};
+    lastPose=pose();
+    return {root,dispose,
+      get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
+      update(){
+        if(disposed)return false;
+        root.visible=!read(actor,'bHidden')&&!read(actor,'bDeleteMe');
+        if(!root.visible)return false;
+        if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
+        const current=pose();
+        if(current.every((value,index)=>Object.is(value,lastPose[index])))return false;
+        getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
+        for(const group of groups.values()){
+          const positions=group.geometry.getAttribute('position');
+          copyPositions(positions.array,group.indices);positions.needsUpdate=true;
+          group.geometry.computeBoundingBox();group.geometry.computeBoundingSphere();
+        }
+        lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
+        return true;
+      },summary};
   } catch(error) {dispose();throw error;}
 }

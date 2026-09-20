@@ -76,6 +76,17 @@ static unsigned long long st=0x9e3779b97f4a7c15ULL;
 static unsigned nxt(void){ st^=st<<13; st^=st>>7; st^=st<<17; return (unsigned)(st>>32); }
 
 int main(int argc,char**argv){
+    /* DrawLodMesh passes a rounded double FOV product, not a widened float.
+     * Reuse the exact Core appTan sequence for focused double-input captures. */
+    if(argc>1 && !strcmp(argv[1],"--double-tan")) {
+        unsigned long long bits;
+        while(scanf("%llx",&bits)==1) {
+            double d; memcpy(&d,&bits,8); set_cw(0x037f);
+            res_t o=probe_tan(d);
+            printf("%016llx,%08x,%016llx,%04x\n",bits,o.rbits,o.sig,o.se);
+        }
+        return 0;
+    }
     int sweep = argc>1 ? atoi(argv[1]) : 0;
     unsigned short cw0=get_cw();
     fprintf(stderr,"CRT default control word = 0x%04x (PC=%d)\n",cw0,(cw0>>8)&3);

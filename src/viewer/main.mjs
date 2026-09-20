@@ -169,7 +169,7 @@ async function loadMap(name) {
       $('gate-message').textContent='Preparing original NPC meshes…';
       try{
         nextNpcPreview=await createTrainingNpcPreview(nextGame.doors.scriptRuntime.runtime,assets,asset);
-        nextWorld.notes.push(`${nextNpcPreview.actors.length} NPC meshes are visible in Play and Inspect as static previews. NPC startup, AI and original mesh lighting remain unfinished.`);
+        nextWorld.notes.push(`${nextNpcPreview.actors.length} NPC meshes render live original startup and animation in Play. Armed-NPC weapon spawning, some AI natives and original mesh lighting remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`NPC meshes unavailable: ${error.message}`);}
     }
@@ -182,7 +182,7 @@ async function loadMap(name) {
       const option=document.createElement('option');option.value=option.textContent=actor.summary.actor;return option;
     }));
     $('npc-status').hidden=!npcPreview;
-    $('npc-status').textContent=npcPreview?`${npcPreview.actors.length} NPCs · static previews`:'';
+    $('npc-status').textContent=npcPreview?`${npcPreview.actors.length} NPCs · live animation`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
@@ -398,6 +398,11 @@ function animate(time) {
       velocity.copy(forward).multiplyScalar(z).addScaledVector(right, x); velocity.y += y;
       velocity.normalize().multiplyScalar(Math.min(dt, .05) * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 900 : 240));
       camera.position.add(velocity); cameraMoved = true;
+    }
+    // Draw the current shared-runtime pose; rendering neither chooses an
+    // animation nor advances NPC time — the script runtime owns both.
+    if(npcPreview&&!runtimeError){
+      try{npcPreview.update();}catch(error){pauseForRuntimeError(error);}
     }
     renderer.info.reset();
     renderer.setClearColor('#06101b', 1); renderer.clear();

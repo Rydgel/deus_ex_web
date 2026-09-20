@@ -334,17 +334,37 @@ assert.equal(runtime.namedReference(switchActor, 'ConListItems').get(), null);
 
 // The positive path on the same attached instance: as MunitionsTrooper it links
 // the Frob -> Take ConListItem chain, each item's `con` the matched conversation.
+// Live pawns have already run their own PostPostBeginPlay ConBindEvents, so the
+// shared Conversation objects may carry ambient owner references; the bind
+// contract this checks is the exact +1 this actor's bind adds.
+const ref=(object,key)=>runtime.namedReference(object,key);
+const ambientCon = conName => {
+  for (const actor of level.actors) {
+    if (!actor || actor === switchActor) continue;
+    let items;
+    try { items = ref(actor, 'ConListItems').get(); } catch { continue; }
+    for (let item = items; item; item = ref(item, 'next').get()) {
+      const con = ref(item, 'con').get();
+      if (ref(con, 'conName').get() === conName) return con;
+    }
+  }
+  return null;
+};
+const ambientFirst = ambientCon('MunitionsTrooperFrob'), ambientSecond = ambientCon('MunitionsTrooperTake');
+const firstBase = ambientFirst ? ref(ambientFirst, 'ownerRefCount').get() : 0;
+const secondBase = ambientSecond ? ref(ambientSecond, 'ownerRefCount').get() : 0;
 const savedBind = runtime.namedReference(switchActor, 'BindName').get();
 runtime.namedReference(switchActor, 'BindName').set('MunitionsTrooper');
 runtime.invokeNative({ index: 2101, receiver: switchActor, argumentCount: 0, evaluateArgument: () => undefined });
 const chain = runtime.namedReference(switchActor, 'ConListItems').get();
-const ref=(object,key)=>runtime.namedReference(object,key);
 const next=ref(chain,'next').get();
 const firstCon=ref(chain,'con').get(),secondCon=ref(next,'con').get();
 assert.deepEqual([ref(firstCon,'conName').get(),ref(secondCon,'conName').get(),ref(next,'next').get()],
   ['MunitionsTrooperFrob', 'MunitionsTrooperTake', null]);
-assert.equal(ref(firstCon,'ownerRefCount').get(),1);
-assert.equal(ref(secondCon,'ownerRefCount').get(),1);
+if (ambientFirst) assert.equal(firstCon, ambientFirst, 'the bind resolves the same shared Conversation the live pawn owns');
+if (ambientSecond) assert.equal(secondCon, ambientSecond, 'the bind resolves the same shared Conversation the live pawn owns');
+assert.equal(ref(firstCon,'ownerRefCount').get(),firstBase+1);
+assert.equal(ref(secondCon,'ownerRefCount').get(),secondBase+1);
 for(const item of [chain,next]){
   assert.equal(runtime.instance(item).cls.record.key,'consys.conlistitem');
   assert.equal(runtime.instance(item).nativeObject.nativeVtable,0x1001346c);
@@ -354,8 +374,8 @@ for(const item of [chain,next]){
 runtime.namedReference(switchActor, 'BindName').set(savedBind);
 runtime.invokeNative({index:2101,receiver:switchActor,argumentCount:0});
 assert.equal(ref(switchActor,'ConListItems').get(),null);
-assert.equal(ref(firstCon,'ownerRefCount').get(),0);
-assert.equal(ref(secondCon,'ownerRefCount').get(),0);
+assert.equal(ref(firstCon,'ownerRefCount').get(),firstBase);
+assert.equal(ref(secondCon,'ownerRefCount').get(),secondBase);
 assert.equal(released.length,2);
 assert.deepEqual(registry.freeIndices,released.map(object=>object.index));
 assert.ok(released.every(object=>object.flags===0x80800004&&registry.objects[object.index]===null));

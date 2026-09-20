@@ -81,8 +81,14 @@ runtime.processEvent = (actor, event, args) => {
   return processEvent(actor, event, args);
 };
 const input = { forward: 1, right: 0, yaw: game.player.yaw, pitch: 0, jump: false, crouch: false, walk: false };
-let opened = false, frames = 0;
+// Live map pawns tick now, and their script bodies can join the ULevel
+// deferred-destroy chain mid-session (e.g. ScriptedPawn KillShadow on an
+// AttachDecal failure). Deleted is the chain head before this destruction's
+// prepend — capture the head each tick so the assert names the real prior
+// entry instead of assuming this is the session's first destruction.
+let opened = false, frames = 0, headBefore = null;
 while (level.actors[slot] !== null && frames++ < 1200) {
+  headBefore = level.pendingDeleted;
   game.tick(1 / 120, input);
   if (!opened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); opened = true; }
 }
@@ -101,9 +107,9 @@ assert.deepEqual(trigger.touching, [null, null, null, null]);
 assert.equal(nativeObject.flags >>> 0, ((exportEntry.flags | 0x00800000 | 0x80000000) >>> 0));
 assert.equal(nativeObject.linker, null);
 // Play prepends the target to the ULevel deferred chain; Deleted keeps the
-// previous head, which is null for the first destruction of this session.
+// previous head (a shadow destroyed by live pawn startup/ticks, or null).
 assert.equal(level.pendingDeleted, trigger);
-assert.equal(ref(trigger, 'Deleted').get(), null);
+assert.equal(ref(trigger, 'Deleted').get(), headBefore);
 
 // A repeated request on an already-deleting actor is idempotent and returns
 // true before looking up an actor-array slot it no longer has.
@@ -120,7 +126,11 @@ game.reset();
 assert.equal(level.actors[slot], trigger, 'reset returns the actor to its original slot');
 assert.equal(ref(trigger, 'bDeleteMe').get(), false);
 assert.equal(nativeObject.flags >>> 0, exportEntry.flags >>> 0);
-assert.equal(level.pendingDeleted, null);
+// The ledger cleared session-one destroys; a shadow whose reset-startup
+// AttachDecal fails is destroyed again and becomes the new chain head —
+// the only destruction NPC startup can produce.
+assert.ok(level.pendingDeleted === null || level.pendingDeleted.name?.startsWith('Shadow'),
+  'the deferred chain holds only reset-time shadow destroys after restore');
 assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collision hash registration');
 
 let second = 0, reopened = false;

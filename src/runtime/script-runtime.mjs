@@ -5,9 +5,10 @@ import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
+import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
@@ -22,7 +23,7 @@ import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
 } from './script-actor-collision.mjs';
-import { execPlayAnim, execLoopAnim, execTweenAnim } from './play-anim.mjs';
+import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim } from './play-anim.mjs';
 import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
@@ -38,6 +39,7 @@ import {
   dispatchWaitForLanding, pollMoveTo, pollMoveToward, pollTurnTo,
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
+import { runScriptPawnPhysics } from './script-pawn-physics.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import {
@@ -142,6 +144,18 @@ export class ScriptRuntime {
       // Retain Play's explicit deferred mesh policy on the shared archive.
       // Other native resources still require their own host services.
       meshLoadServices:{getLazyLoad:()=>1}}):null;
+    if(this.classLoader){
+      const resolve=this.objects.resolve.bind(this.objects);
+      this.objects.resolve=async(asset,index)=>{
+        try{return await resolve(asset,index);}catch(error){
+          // ULinkerLoad::VerifyImport resolves native-registered objects
+          // (Core.Class, Engine.Viewport, Engine.Music...) that appear only as
+          // imports — the metadata path knows package exports alone, so the
+          // recovered linker's import table owns those misses.
+          const record=this.classLoader.graph.indexToObject(this.classLoader.graph.buildLinker(asset.name),index);
+          return this.classLoader.identity(record);
+        }};
+    }
     this.states=new Map();this.structs=new Map();this.structLayouts=new Map();this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
     this.eventsEnabled=true;
     this.conversationLists=new Map();
@@ -248,6 +262,7 @@ export class ScriptRuntime {
       structReference:(ref,script,node)=>this.structReference(ref,this.objects.operand(script,node)),
       warning:message=>this.warning?.(message),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
+      gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
         if(call.index===384)return pollActorSleep(this.instance(call.receiver),call.state,call.seconds);
         if(call.index===0x181)return pollFinishAnim({
@@ -267,6 +282,12 @@ export class ScriptRuntime {
     // await its own promise instead of reporting the invalid linked layout.
     if(struct&&ancestry.includes(struct.key))throw new Error(`Cyclic by-value script struct: ${struct.key}`);
     if(!record.fieldPending)record.fieldPending=(async()=>{
+      if(record.metadata.type==='array'&&record.metadata.innerRef){
+        const inner=await this.objects.resolve(record.asset,record.metadata.innerRef);
+        // Dynamic container cycles need their own VM/value contract. Linking
+        // the scalar inner here suffices for native integer-array storage.
+        if(inner?.kind==='IntProperty')record.metadata.innerMetadata=(await this.field(inner)).metadata;
+      }
       if(struct){
         record.metadata.structKey=struct.key;
         record.metadata.structFields=await this.structFields(struct,ancestry);
@@ -351,7 +372,13 @@ export class ScriptRuntime {
             let value=property.value;
             if(property.type===10)value=await this.authoredStructProperty(record.asset,field,property,values.get(property.arrayIndex));
             else if(!property.decoded)value={unsupported:`Undecoded default ${record.key}.${property.name}`};
-            else if([5,8].includes(property.type))value=await this.objects.resolve(record.asset,value);
+            else if([5,8].includes(property.type)){
+              value=await this.objects.resolve(record.asset,value);
+              // A class-valued default (class'WeaponAssaultGun') is usable
+              // only with its linked ancestry, which the original package
+              // linker always builds; object references need no such work.
+              if(value?.kind==='Class')await this.loadClass(value.asset,value.index);
+            }
             values.set(property.arrayIndex,value);cls.defaults.set(field.key,values);
           }
         }
@@ -535,6 +562,8 @@ export class ScriptRuntime {
         // Parsed packages omit linked ElementSize. StrProperty::Link establishes
         // the 12-byte FString stride; generic struct offsets remain unresolved.
         if(offset===0x38&&property.metadata?.type==='string'&&property.metadata.elementSize==null)return 12;
+        if(offset===0x5c&&property.metadata?.type==='array'&&property.metadata.innerMetadata)
+          return property.metadata.innerMetadata;
         if(offset===0x5c&&property.metadata?.type==='struct'){
           const members=property.metadata.structFields;
           if(!members)throw new Error(`Original struct destructor fields are not linked: ${property.key}`);
@@ -613,7 +642,12 @@ export class ScriptRuntime {
       return [member.key,values[lower(member.name)]];
     }));
   }
-  async authoredStructProperty(asset,field,property,initialValue,resolveObject=(asset,index)=>this.objects.resolve(asset,index)) {
+  async authoredStructProperty(asset,field,property,initialValue,resolveObject=async(asset,index)=>{
+    const object=await this.objects.resolve(asset,index);
+    // Same linked-ancestry contract as the plain class-valued default above.
+    if(object?.kind==='Class')await this.loadClass(asset,index);
+    return object;
+  }) {
     const key=field.metadata.structKey;
     if(!key||lower(property.struct)!==key.split('.').at(-1))
       throw new Error(`Authored struct tag does not match linked property: ${field.key}`);
@@ -1407,6 +1441,30 @@ export class ScriptRuntime {
     return this.callFunction(record,call.receiver,call.argumentCount,call.evaluateArgument,call);
   }
   invokeNative(call) {
+    if(call.record?.key==='engine.decal.attachdecal')return execAttachDecal(call,{
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      clientFor:actor=>{
+        const engine=this.levelFor(actor)?.engine;
+        if(!engine||!Object.hasOwn(engine,'client'))
+          throw new DecalBoundaryError('Client.Decals','AttachDecal requires the original Engine.Client binding');
+        return engine.client;
+      },warning:this.warning,
+      attachSurfaces:(actor,distance,direction)=>attachDecalSurfaces(actor,distance,direction,{
+        model:this.levelFor(actor)?.model,
+        read:(a,n)=>this.namedReference(a,n).get(),
+        write:(a,n,v)=>this.namedReference(a,n).set(v),
+        frand:()=>{if(typeof this.rng?.frand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');return Math.fround(this.rng.frand());},
+      }),
+    });
+    if(call.record?.key==='engine.decal.detachdecal')return execDetachDecal(call,{
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      detachSurfaces:actor=>detachDecalSurfaces(actor,{
+        model:this.levelFor(actor)?.model,
+        read:(a,n)=>this.namedReference(a,n).get(),
+        write:(a,n,v)=>this.namedReference(a,n).set(v),
+      }),
+    });
     // A host may claim specific natives as external boundaries (see constructor);
     // those are delegated to the `native` callback before any built-in body runs.
     if(this.boundaryNatives.has(call.index)){
@@ -1831,8 +1889,24 @@ export class ScriptRuntime {
     // skipped optional arguments from the current +0x1dc bits, and
     // SetPhysics routes its Walking/None base transitions through the
     // recovered FindBase/SetSupportBase chain against the live level hash.
-    // Other receivers keep their host-native paths.
-    if(this.collisionViewActors.has(call.receiver)&&(call.index===262||call.index===283||call.index===298||call.index===3970)){
+    // Map-attached actors run the same SetBase/SetPhysics bodies on their
+    // bound host props; SetCollision/SetCollisionSize keep the host paths.
+    // Mover receivers and DeusExDecoration-script callers keep theirs.
+    let collisionReceiver=this.collisionViewActors.has(call.receiver);
+    if(!collisionReceiver&&(call.index===298||call.index===3970)){
+      const scriptPath=lower(String(call.script?.entry?.path??call.record?.entry?.path??''));
+      const attached=this.instances.get(call.receiver);
+      collisionReceiver=attached&&!scriptPath.startsWith('deusexdecoration.')
+        &&(()=>{
+          let actor=false;
+          for(let c=attached.cls;c;c=c.base){
+            if(c.record.key==='engine.mover')return false;
+            if(c.record.key==='engine.actor')actor=true;
+          }
+          return actor;
+        })();
+    }
+    if(collisionReceiver&&(call.index===262||call.index===283||call.index===298||call.index===3970)){
       const level=this.levelFor(call.receiver);
       const dispatch=(a,name,args)=>this.dispatchSpawnedEvent(
         a===level?.hash?.levelInfo?level.actors[0]:a,name,args);
@@ -1865,6 +1939,14 @@ export class ScriptRuntime {
         state:this.instance(call.receiver).state,
       });
     }
+    if(call.index===282){
+      // AActor::IsAnimating/execIsAnimating 0x103e15c0: AnimSequence != None
+      // && (AnimFrame<0 ? TweenRate==0 : AnimRate!=0) — +0x54/+0x58/+0x5c/+0x60
+      // fields, both compares against double 0.0.
+      const view=animationView(this,call.receiver);
+      if(lower(view.AnimSequence)==='none')return 0;
+      return (view.AnimFrame<0?view.TweenRate===0:view.AnimRate!==0)?1:0;
+    }
     if([259,260,294].includes(call.index)){
       const name=call.index===259?'PlayAnim':call.index===260?'LoopAnim':'TweenAnim';
       if(call.index===294?call.argumentCount!==2:call.argumentCount<1||call.argumentCount>(call.index===260?4:3))
@@ -1891,6 +1973,20 @@ export class ScriptRuntime {
       if(call.index===260)return execLoopAnim(view,mesh,sequenceName,rate,tweenTime,minRateArgument??0,log);
       return execPlayAnim(view,mesh,sequenceName,rate,tweenTime,log);
     }
+    if(call.index===1010){
+      if(call.argumentCount<1||call.argumentCount>4)throw new Error('Invalid PlayBlendAnim argument count');
+      const sequenceName=refValue(call.evaluateArgument(0));
+      // Same optional-argument hole convention as PlayAnim above.
+      const rateArgument=call.argumentCount>1?refValue(call.evaluateArgument(1)):undefined;
+      const tweenArgument=call.argumentCount>2?refValue(call.evaluateArgument(2)):undefined;
+      const slotArgument=call.argumentCount>3?refValue(call.evaluateArgument(3)):undefined;
+      const rate=rateArgument===undefined?1:rateArgument;
+      const tweenTime=tweenArgument===undefined?-1:tweenArgument;
+      const slot=slotArgument===undefined?0:slotArgument;
+      const mesh=this.meshPayload(call.receiver);
+      const log=(kind,details)=>this.warning?.({type:'PlayBlendAnim',kind,...details});
+      return execPlayBlendAnim(animationTickView(this,call.receiver),mesh,sequenceName,rate,tweenTime,slot,log);
+    }
     if(call.index===264){
       if(call.argumentCount>6)throw new Error('PlaySound accepts at most six arguments');
       return execActorPlaySound(call,this.soundServices(call));
@@ -1909,6 +2005,62 @@ export class ScriptRuntime {
     if(call.index===700)return execAIGetLightLevel(call,this.perceptionServices(call));
     if(call.index===701)return execAIVisibility(call,this.perceptionServices(call));
     if(call.index===705)return execAICanSee(call,this.perceptionServices(call));
+    if(call.index===650){
+      // execInitEventManager 0x103023b0 -> 0x10384a90: the lazy +0x550
+      // UEventManager creator LevelInfo.PreBeginPlay invokes. The Map is the
+      // callback registry 710/711 populate; its presence alone gates 713-716.
+      call.receiver.aiEventManager??=new Map();
+      return;
+    }
+    if(call.index===710||call.index===711){
+      // execAISetEventCallback 0x1036d440 / execAIClearEventCallback
+      // 0x1036d660: both gate on XLevel->LevelInfo->+0x550, the level AI
+      // event manager. The original creates that object lazily through an
+      // exec-time getter (0x10384a90); until it exists the natives silently
+      // return — which is also the state during LoadMap PreBeginPlay.
+      // Registration is a find-or-insert keyed by (reactor, eventName) into
+      // the manager's hash-bucket list (worker 0x10382990), removal the same
+      // find + unlink (0x10382b90); a Map preserves the observable contract.
+      const levelForManager=this.levelFor(call.receiver);
+      const manager=(levelForManager?.levelInfo??levelForManager?.actors?.[0])?.aiEventManager;
+      if(!manager)return;
+      const eventName=refValue(call.evaluateArgument(0));
+      if(call.index===711){manager.get(call.receiver)?.delete(eventName);return;}
+      const callback=refValue(call.evaluateArgument(1));
+      const scoreCallback=call.argumentCount>2?refValue(call.evaluateArgument(2)):'';
+      // Recovered exec defaults (0x1036d4b9): visibility=1, dir=1, cylinder=0, LOS=1.
+      const checks=[true,true,false,true].map((initial,index)=>
+        call.argumentCount>index+3?Boolean(refValue(call.evaluateArgument(index+3))):initial);
+      let callbacks=manager.get(call.receiver);
+      if(!callbacks){callbacks=new Map();manager.set(call.receiver,callbacks);}
+      callbacks.set(eventName,{callback,scoreCallback,checks});
+      return;
+    }
+    if(call.index===713||call.index===714||call.index===715||call.index===716){
+      // execAISendEvent 0x1036d750 / AIStartEvent 0x1036d8e0 / AIEndEvent
+      // 0x1036da70 / AIClearEvent 0x1036dba0 all gate on the same lazily
+      // created XLevel->LevelInfo->+0x550 manager as the callback natives
+      // above; while it is absent — the LoadMap/startup state — the natives
+      // silently return. Manager methods are a separate recovered boundary.
+      const levelForManager=this.levelFor(call.receiver);
+      const manager=(levelForManager?.levelInfo??levelForManager?.actors?.[0])?.aiEventManager;
+      if(!manager)return;
+      // A present manager makes the UEventManager::AI*Event methods the
+      // propagation boundary; the host owns them (deferred recording now).
+      if(!this.native)throw new Error('Original AI event manager is not implemented');
+      return this.native({...call,runtime:this,eventManager:manager});
+    }
+    if(call.index===723){
+      // execLastRendered 0x1036de30: fld f32 LastRenderTime (+0x34),
+      // fsubr qword XLevel->TimeSeconds (+0xdc) — st0 is the x87 double
+      // clock minus the float field — then fcom 0.0f keeps st0 unless the
+      // C0 branch fires, so the f32 result is max(delta, 0) and NaN clamps
+      // to 0 like any unordered compare.
+      const clock=this.soundField(call.receiver,'TimeSeconds');
+      const last=Math.fround(this.namedReference(call.receiver,'LastRenderTime').get());
+      const delta=clock-last;
+      return delta<0||Number.isNaN(delta)?0:Math.fround(delta);
+    }
     if(call.index===2100||call.index===2101||call.index===2102){
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
       return this.bindConversationEvents(call.receiver);
@@ -2013,6 +2165,7 @@ export class ScriptRuntime {
       processState:(actor,delta)=>this.instance(actor).state.process(delta),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       destroyActor:(actor,force)=>this.destroyActor(actor,Boolean(force)),
+      performPhysics:(actor,delta)=>this.processActorPhysics(actor,delta),
     });
   }
   /** Paused ULevel.Tick's derived-to-base FloatProperty/CPF_Input traversal.
@@ -2048,6 +2201,43 @@ export class ScriptRuntime {
     this.instance(receiver).state.process(seconds);
     return updateActorTimer(this.timerState(receiver),seconds,()=>this.processEvent(receiver,'Timer'));
   }
+  /** Original APawn::performPhysics (Engine.dll 0x103c9a70) for a
+   * script-attached map pawn: physWalking/physFalling dispatch, the
+   * physicsRotation gate, MoveTimer decay and AvgPhysicsTime averaging. World
+   * queries come from the live level hash; the synchronous move path never
+   * populates the original PendingTouch tail. Physics modes outside
+   * {Walking=1,Falling=2}, non-Pawn actors and the unsupported zone-event
+   * branches stay explicit boundaries. */
+  processActorPhysics(receiver,seconds) {
+    const level=this.levelFor(receiver);
+    if(!level?.hash)throw new Error('Pawn physics requires the level collision hash');
+    return runScriptPawnPhysics(receiver,seconds,{
+      field:(actor,name)=>this.namedReference(actor,name),
+      isA:(actor,key)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
+        return false;
+      },
+      level,worldActor:level.hash.levelInfo,
+      // ZoneInfo fields on an attached zone read through namedReference (live
+      // store); the hash levelInfo's values carry the same serialized slots.
+      zoneFields:zone=>{
+        const read=name=>{try{return this.namedReference(zone,name).get();}catch{return zone?.values?.[name];}};
+        return {get ZoneGravity(){return read('ZoneGravity');},get ZoneVelocity(){return read('ZoneVelocity');},
+          get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');}};
+      },
+      dispatch:(target,name,args=[])=>{
+        const record=this.lookup(target,name);
+        if(!record)return undefined;
+        if(!record.function)throw new Error(`Original event is not prepared: ${record.key}`);
+        return this.processEvent(target,name,args);
+      },
+      isProbing:(actor,name)=>this.isProbing(actor,name),
+      random:()=>{
+        if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
+        return Math.fround(this.rng.frand());
+      },
+    });
+  }
   createIterator(call) {
     if(call.index===309||call.index===1000){
       // execTraceActors/execTraceTexture run one MultiLineCheck at
@@ -2056,11 +2246,11 @@ export class ScriptRuntime {
       const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
       return create({...call,levelFor:this.levelFor});
     }
-    if(call.index===310||call.index===311||call.index===306){
-      // execRadiusActors/execVisibleActors/execBasedActors scan
-      // Level->Actors in native order; the candidate Class->+0x28 ancestry
-      // walk is the attached instance's cls chain, same as AllActors. See
-      // docs/script-actor-queries.md.
+    if(call.index===310||call.index===311||call.index===306||call.index===1002){
+      // execRadiusActors/execVisibleActors/execBasedActors/execCycleActors
+      // scan Level->Actors in native order; the candidate Class->+0x28
+      // ancestry walk is the attached instance's cls chain, same as
+      // AllActors. See docs/script-actor-queries.md.
       if(!this.actorClass||!this.levelFor)throw new Error('Actor iterators require a linked original actor array');
       const isA=(actor,base)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
@@ -2073,6 +2263,7 @@ export class ScriptRuntime {
         return createBasedActorsIterator({...call,actorClass:this.actorClass.record,
           levelFor:this.levelFor,isA,baseOf:actor=>this.fieldReference(actor,baseField).get()});
       }
+      if(call.index===1002)return createCycleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
       const create=call.index===310?createRadiusActorsIterator:createVisibleActorsIterator;
       return create({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
     }

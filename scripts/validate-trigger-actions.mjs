@@ -190,7 +190,9 @@ assert.deepEqual(actions.handleNative({ index: 720, argumentCount: 0, receiver: 
 assert.equal(game.collision.doorCallbacks.dispatch(orders, 'Touch', [player]), true);
 assert.equal(runtime.namedReference(pawn, 'Orders').get(), 'Patrolling');
 assert.equal(runtime.namedReference(pawn, 'OrderTag').get(), 'gunroom');
-assert.equal(runtime.namedReference(pawn, 'NextState').get(), 'Patrolling');
+// StartUp.BeginState set bInterruptState on the live pawn, so SetState is an
+// immediate GotoState here rather than a queued NextState.
+assert.equal(runtime.instance(pawn).state?.stateNode?.record?.name, 'Patrolling');
 
 const flag = find('FlagTrigger0');
 assert.equal(game.collision.doorCallbacks.dispatch(flag, 'Touch', [player]), true);

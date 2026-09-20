@@ -22,9 +22,10 @@ export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck})
   // MoveActor's query/selection/math is source-type independent: it keys on each
   // candidate's type and the source's block flags, never on whether the source is
   // a player. A decoration cylinder (e.g. a pushed Plant2 under physFalling)
-  // therefore uses the same path. Proven by native-move-query-oracle.py with
-  // sourceControlledPlayer:false (docs/move-query.md, docs/script-plant-contact.md).
-  if((!source?.controlledPlayer && !source?.decoration) || source.movingBrush)throw new Error('Move query requires a controlled-player or decoration cylinder');
+  // therefore uses the same path, and so does a script-attached pawn cylinder.
+  // Proven by native-move-query-oracle.py with sourceControlledPlayer:false
+  // (docs/move-query.md, docs/script-plant-contact.md).
+  if((!source?.controlledPlayer && !source?.decoration && !source?.pawn) || source.movingBrush)throw new Error('Move query requires a controlled-player, pawn or decoration cylinder');
   start=start.map(f);delta=delta.map(f);extent=extent.map(f);
   if([...start,...delta,...extent].some(v=>!Number.isFinite(v)))throw new Error('Nonfinite movement query unsupported');
   // Original non-editor immovable/static rejection precedes the tiny gate.

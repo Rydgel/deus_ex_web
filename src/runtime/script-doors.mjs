@@ -12,6 +12,10 @@ import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
+import { setActorCollisionSize } from './script-actor-collision.mjs';
+import { addPawn, removePawn } from './pawn-list.mjs';
+import { prepareShadowStartup } from './script-decal.mjs';
+import { prepareConversationBinding } from './script-conversation-startup.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -347,6 +351,7 @@ export async function createScriptDoors({
   const playerClass = await loadClass(deusEx, 'jcdentonmale', 'JCDentonMale class');
 
   const functions = {
+    initEventManager: await prepare(engine, 'levelinfo.initeventmanager', 'LevelInfo.InitEventManager'),
     actorBeginEvent: await prepare(engine, 'actor.beginevent', 'Actor.BeginEvent'),
     actorEndEvent: await prepare(engine, 'actor.endevent', 'Actor.EndEvent'),
     actorHitWall: await prepare(engine, 'actor.hitwall', 'Actor.HitWall'),
@@ -503,7 +508,7 @@ export async function createScriptDoors({
       if (lightSwitch) { decorationEffect(call, 'SwitchSound'); return 0; }
       return soundBoundary(call);
     }
-    if (decoration && call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
+    if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
     if (call.index === 265) {
       if (decoration) decorationEffect(call, 'StopSound');
       // DataLinkPlay/ConPlayBase stop the player speech channel at termination.
@@ -511,8 +516,9 @@ export async function createScriptDoors({
       // ended on the supported path; there is no native channel id to stop here.
       return undefined;
     }
-    if (decoration && call.index === 714) { decorationEffect(call, 'AIStartEvent'); return null; }
-    if (decoration && call.index === 715) { decorationEffect(call, 'AIEndEvent'); return undefined; }
+    if (call.index === 714) { decorationEffect(call, 'AIStartEvent'); return null; }
+    if (call.index === 715) { decorationEffect(call, 'AIEndEvent'); return undefined; }
+    if (call.index === 716) { decorationEffect(call, 'AIClearEvent'); return undefined; }
     if (call.index === 301) {
       runtime.instance(call.receiver).state.latent = 302;
       return undefined;
@@ -521,6 +527,25 @@ export async function createScriptDoors({
       if (call.receiver?.interpolation?.interpolating) return undefined;
       runtime.instance(call.receiver).state.latent = 0;
       return undefined;
+    }
+    if (call.index === 529 || call.index === 530) {
+      if(call.argumentCount!==0)throw new Error('AddPawn/RemovePawn accept no arguments');
+      if(!identities.has(call.receiver)||!call.receiver.lineage?.includes('engine.pawn'))
+        throw new Error('AddPawn/RemovePawn require a linked scene Pawn');
+      // These recovered natives deliberately do not deduplicate the list.
+      // Reflected NextPawn/PawnList already bind to these same host slots.
+      (call.index===529?addPawn:removePawn)(level,call.receiver);
+      return undefined;
+    }
+    // Existing map identities already expose position/radius/height and the
+    // collision flags through the scene host. Use the same recovered native
+    // as spawned actors: remove from the hash, write both f32 sizes, re-add.
+    // Pawn.PreBeginPlay reaches this through Actor.PreBeginPlay before shadow
+    // construction. Do not run that lifecycle on an already populated list.
+    if (call.index === 283 && identities.has(call.receiver)) {
+      if(call.argumentCount!==2)throw new Error('SetCollisionSize requires radius and height');
+      return setActorCollisionSize(call.receiver,refValue(call.evaluateArgument(0)),
+        refValue(call.evaluateArgument(1)),{level});
     }
     if (call.index === 3970) {
       const value = refValue(call.evaluateArgument(0));
@@ -627,6 +652,13 @@ export async function createScriptDoors({
   }
 
   await attach(levelInfo, levelClass, 'level');
+  // LevelInfo.PreBeginPlay's InitEventManager (native 650) lazily creates the
+  // +0x550 UEventManager during the original LoadMap startup pass; once it
+  // exists the AI event natives (713-716) reach their propagation boundary
+  // instead of silently returning. Run that real init here so decoration
+  // AIStartEvent/AISendEvent reach the recorded deferred boundary until the
+  // full actor-startup pass owns this call.
+  runtime.callFunction(functions.initEventManager, levelInfo, 0);
   await attach(playerActor, playerClass, 'player');
   // The browser creates JCDentonMale before the script level is attached.
   // ULevel::SpawnActor would have written this inherited Actor.Level slot
@@ -673,6 +705,129 @@ export async function createScriptDoors({
     if (!actor.lineage.includes('deusex.deusexdecoration') && !actor.lineage.includes('engine.decoration')) continue;
     if (queries) linkDecorationCollision(queries, actor);
     decorations.push(actor);
+  }
+
+  // ---- Original map-pawn startup and per-tick scheduling ----
+  // Attached pawn-ancestry map actors in serialized actor-array order,
+  // excluding the player (it runs its own recovered PlayerTick route). Each
+  // pawn runs the recovered LoadMap event chain once per load/reset —
+  // InitExecution then PreBeginPlay -> BeginPlay -> PostBeginPlay ->
+  // SetInitialState -> PostPostBeginPlay — and is then ticked through the
+  // recovered standalone Actor.Tick (animation -> ProcessState -> physics ->
+  // pawn tail) each frame. Every scripted method and state on the class chain
+  // is prepared BEFORE startup: the VM advances a state cursor before
+  // dispatch, so a prepare-on-demand throw inside a state body would
+  // permanently skip that statement on retry (the original links all script
+  // code at load).
+  const npcPawns = [];
+  const npcFailures = new Map();
+  for (const actor of level.actors ?? []) {
+    const record = actor && actor !== playerActor ? identities.get(actor) : null;
+    if (!record) continue;
+    for (let cls = record.cls; cls; cls = cls.base)
+      if (cls.record.key === 'engine.pawn') { npcPawns.push(actor); break; }
+  }
+
+  const preparedNpcClasses = new Set();
+  const prepareNpcMember = async member => {
+    if (member.kind === 'State' || member.function) return;
+    const index = member.asset?.exportsByPath?.get(member.key.slice(member.key.indexOf('.') + 1));
+    if (index != null) await runtime.prepareFunction(member.asset, index);
+  };
+  async function prepareNpcClass(cls) {
+    for (let node = cls; node && node.record.key !== 'core.object'; node = node.base) {
+      if (preparedNpcClasses.has(node)) continue;
+      preparedNpcClasses.add(node);
+      for (const member of node.methods?.values() ?? []) await prepareNpcMember(member);
+      for (const state of node.states?.values() ?? []) {
+        if (state.kind !== 'State') continue;
+        const index = state.asset?.exportsByPath?.get(state.key.slice(state.key.indexOf('.') + 1));
+        const prepared = index != null ? await runtime.prepareState(state.asset, index) : null;
+        for (const member of prepared?.methods?.values() ?? []) await prepareNpcMember(member);
+      }
+    }
+  }
+  async function prepareNpcs() {
+    // Pawn bodies also invoke virtuals on attached non-pawn objects — the
+    // player's SeePlayer/CanStartConversation path and LevelInfo services —
+    // so those class chains link at load too, same as each NPC's own.
+    await prepareNpcClass(playerClass);
+    await prepareNpcClass(levelClass);
+    for (const actor of npcPawns) {
+      try {
+        await prepareNpcClass(identities.get(actor).cls);
+        await runtime.prepareMesh(actor);
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
+  }
+
+  // The ULevel::Tick actor-view over the scene level: ULevel::TimeSeconds is
+  // the original double the game clock owns; TickTag and the deferred list are
+  // the level tick's persistent parity state.
+  const npcTickLevel = Object.create(level);
+  Object.assign(npcTickLevel, { netMode: 0, demoRecDriver: null, tickTag: 0, deferredHead: null, inTick: 0 });
+  Object.defineProperty(npcTickLevel, 'timeSeconds', { get: () => level.timeSeconds() });
+  // Actor.Region.Zone->LastRenderTime, reached by the stasis gate only after
+  // LastRenderTime and bStasis/bForceStasis admit the actor.
+  npcTickLevel.zoneLastRenderTime = actor => {
+    const region = runtime.namedReference(actor, 'Region').get();
+    const zone = region?.['engine.actor.pointregion.zone'] ?? level.actors?.[0];
+    return runtime.namedReference(zone, 'LastRenderTime').get();
+  };
+  const npcTickOptions = {
+    level: npcTickLevel, tickType: 2,
+    allocateDeferredActor: () => ({}),
+    readInput: () => { throw new Error('Actor.Tick player input is not linked'); },
+    // Weapon FarMoveActor is reached only once a pawn carries a weapon; the
+    // armed-NPC SpawnActor boundary keeps that slot empty for now.
+    farMoveActor: () => { throw new Error('Actor.Tick weapon FarMoveActor is not linked'); },
+  };
+
+  const NPC_STARTUP_EVENTS = Object.freeze(['PreBeginPlay', 'BeginPlay', 'PostBeginPlay', 'SetInitialState', 'PostPostBeginPlay']);
+  function runNpcStartup(actor) {
+    runtime.initExecution(actor);
+    for (const name of NPC_STARTUP_EVENTS) runtime.processEvent(actor, name);
+  }
+  const NPC_HOST_PROPS = Object.freeze(['position', 'rotation', 'physics', 'base', 'velocity',
+    'standingCount', 'motionFlags', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
+    'marker', 'specialGoal', 'clientUpdate', 'simOldPosition', 'simOldRotYaw', 'simOldRotPitch',
+    'simOldRotRoll', 'simInterpolate', 'realPosition', 'realRotation', 'ambientSound',
+    'nextPawn', 'collisionValues', '_pawnPhysics']);
+  // Restore the serialized map state the original regains by reloading the
+  // level, relink the pawn into Level.PawnList (playerScene.reset rebuilds the
+  // list from the collidable set only), then re-run the LoadMap startup chain.
+  // An actor whose startup reaches an explicit boundary — e.g. the armed NPCs'
+  // Inventory SpawnActor inside InitializeInventory — is recorded and left out
+  // of ticking instead of resuming a half-advanced state.
+  function resetNpcs() {
+    npcFailures.clear();
+    for (const actor of npcPawns) {
+      try {
+        // The collision hash validates that the live transform still matches
+        // the registration (level-queries changeActor contract): unregister
+        // through the current hash BEFORE restoring serialized state — the
+        // closure `queries` goes stale after reset's registerActors rebuild —
+        // then re-register at the restored location so no tick window leaves
+        // the pawn unregistered.
+        level.hash?.removeActor(actor);
+        identities.get(actor).store.clear();
+        for (const prop of NPC_HOST_PROPS) delete actor[prop];
+        if (actor.values?.Location) actor.position = [...actor.values.Location];
+        actor.isPawn = true; actor.pawnFlags = 0; actor.touching = [null, null, null, null];
+        level.hash?.addActor(actor);
+        // The collidable rebuild already places every lineage pawn in
+        // Level.PawnList, but the original builds that list solely through
+        // Pawn.PreBeginPlay's AddPawn — evict the host entry so the script's
+        // own AddPawn inserts it exactly once (a second head-insert would
+        // self-cycle the list that MakeNoise and perception walk).
+        removePawn(level, actor);
+        runNpcStartup(actor);
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
   }
 
   // Live TriggerLights (base Engine.TriggerLight). createScriptLights shares this
@@ -764,6 +919,10 @@ export async function createScriptDoors({
     // player-scene.reset() relinks Level.PawnList. Attach any newly linked
     // identity before a later FinishNotify can traverse it. Bindings themselves
     // read the list dynamically on every script field access.
+    // Map pawns restore their serialized state and re-run the LoadMap startup
+    // chain (the original reloads the level on "Player start"). This must run
+    // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
+    resetNpcs();
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
@@ -902,6 +1061,19 @@ export async function createScriptDoors({
     // DataLinkPlay is a spawned Actor. Its selected playback state and Timer
     // phase run after ProcessState and before physics, on the same fixed tick.
     liveDataLink?.tick(delta);
+    // Pawn phase: the recovered standalone Actor.Tick for every script-attached
+    // map pawn in serialized actor-array order (the player's own route is
+    // separate). An NPC whose startup hit an explicit boundary stays in its
+    // serialized pose rather than resuming a half-advanced state.
+    for (const actor of npcPawns) {
+      if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
+      // startup state's Begin: InitializePawn -> InitializeInventory runs on
+      // the first ProcessState tick, so the armed NPCs' weapon SpawnActor
+      // boundary surfaces here rather than at reset. Recording it leaves the
+      // pawn out of later ticks instead of resuming a half-advanced state.
+      try { runtime.processActorTick(actor, delta, npcTickOptions); }
+      catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+    }
     // Physics phase follows ProcessState and the timer phase for each actor.
     for (const decoration of decorations) {
       if (!queries) continue;
@@ -923,6 +1095,7 @@ export async function createScriptDoors({
     }
     // Advance the TriggerLights' Alpha animation (their Tick/ProcessState phase).
     const lightTicks = lights.tick(delta);
+    npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
     const lightingChanges = lightTicks.map(result => result.lightingChange).filter(Boolean);
     if (onLightingChanged && lightingChanges.length) onLightingChanged(lightingChanges);
     return records.length;
@@ -933,6 +1106,8 @@ export async function createScriptDoors({
     player:playerActor,shell:infoLinkShellValue,onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
   playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
     player:playerActor,warning:message=>callbacks.warning?.(message)});
+  await prepareShadowStartup(runtime,assets,level);
+  await prepareConversationBinding(runtime,level);
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
   runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
 
@@ -953,9 +1128,13 @@ export async function createScriptDoors({
     if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null)destroyedActors.record(receiver,saved);
     return accepted;
   };
+  // Eagerly link every pawn class's script surface and decode its mesh before
+  // the initial reset() runs the NPC startup chain synchronously.
+  await prepareNpcs();
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
+    npcPawns, npcFailures,
     infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems };
 }

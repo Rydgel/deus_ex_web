@@ -119,7 +119,12 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   return {dispatch,level,hooks,reset(){
     worldActor.values={...levelValues};
     level.pawnList=null;
-    for(const actor of actors)prepareActor(actor);
+    // prepareActor restores serialized collision fields (radius/height) on
+    // actors that registerActors already re-registered with their live
+    // collisionValues transform — the hash requires the registered transform
+    // to still be live at removal, so each restore runs inside changeActor's
+    // remove-mutate-re-add (level-queries.mjs).
+    for(const actor of actors)collision.queries.changeActor(actor,()=>prepareActor(actor));
     for(const actor of actors)if(actor.isPawn)addPawn(level,actor);
     Object.assign(source,{worldActor,standingCount:0,touching:[null,null,null,null],isPawn:true,pawnFlags:2,
       actorFlags:(player.defaults.bStatic?1:0)|(player.defaults.bMovable?0x80000:0)|(player.defaults.bCollideWhenPlacing?0x20000:0),

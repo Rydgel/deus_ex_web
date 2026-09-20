@@ -1,4 +1,5 @@
 import {getAxes} from './camera.mjs';
+import {rotatorSin} from './coords.mjs';
 const f=Math.fround;
 const bits=new DataView(new ArrayBuffer(4));
 const value=arg=>arg?.reference?arg.get():arg;
@@ -12,6 +13,16 @@ export function vectorToRotator(vector) {
   const yaw=Math.trunc(Math.atan2(y,x)*scale)|0;
   const pitch=Math.trunc(Math.atan2(z,Math.sqrt(x*x+y*y))*scale)|0;
   return [pitch,yaw,0];
+}
+
+/** Core FRotator::Vector via the recovered sine table; the rotation matrix X
+ * row (roll cancels), matching the execGetAxes convention in camera.mjs. */
+export function rotatorToVector(rotation) {
+  if(!Array.isArray(rotation)||rotation.length!==3||rotation.some(v=>!Number.isInteger(v)))throw new Error('RotatorToVector requires integer Unreal rotator units');
+  const [pitch,yaw]=rotation;
+  const sp=rotatorSin(pitch),cp=rotatorSin((pitch+16384)|0);
+  const sy=rotatorSin(yaw),cy=rotatorSin((yaw+16384)|0);
+  return [f(cp*cy),f(cp*sy),sp];
 }
 
 function truncateIntFloatProduct(a,b) {

@@ -144,13 +144,25 @@ export function constructInventory(object) {
   object.nativeVtable=0x104286f8;
 }
 
+/** ADecal's original ctor 10331090 clears only its native SurfList header
+ * beyond the inherited construction, then installs vtable 10426f74.
+ * decalSurfaces is bound to the same reflected SurfList by the spawn host.
+ * See docs/script-decal-startup.md. */
+export function constructDecal(object) {
+  constructActorBase(object);
+  object.decalSurfaces=[];
+  object.nativeVtable=0x10426f74;
+}
+
 /** Map a verified UClass::Bind constructor selection to this host's native
  * body. Only the recovered registrations are admitted: AActor's own
  * constructor (inherited by the scripted ConPlayBase/DataLinkPlay chain) and
- * AInventory's (inherited by the DataVaultImage/Image02 chain). */
+ * AInventory's (inherited by the DataVaultImage/Image02 chain), and ADecal's
+ * (inherited by Shadow). */
 export function nativeConstructorFor(selection){
   const constructor=selection?.constructor;
   if(constructor===0x10302dab)return constructActorBase;
   if(constructor===0x1030299b)return constructInventory;
+  if(constructor===0x10303a26)return constructDecal;
   throw new Error('Original constructor selection is not implemented');
 }

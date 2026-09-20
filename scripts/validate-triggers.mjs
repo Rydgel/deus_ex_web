@@ -72,7 +72,10 @@ const orders=find('OrdersTrigger0'),pawn=find('JaimeReyes1');
 assert.deepEqual(touch(orders),[]);
 assert.equal(ref(pawn,'Orders'),'Patrolling');
 assert.equal(ref(pawn,'OrderTag'),'gunroom');
-assert.equal(ref(pawn,'NextState'),'Patrolling');
+// The live pawn ran its original StartUp.BeginState, so bInterruptState is set
+// and ScriptedPawn.SetState routes to GotoState: the pawn lands in Patrolling
+// immediately rather than queuing NextState for a later tick.
+assert.equal(runtime.instance(pawn).state?.stateNode?.record?.name,'Patrolling');
 const flag=find('FlagTrigger0'),flagBase=game.doors.scriptRuntime.triggerActions.flagBase;
 assert.deepEqual(touch(flag),[]);
 assert.equal(flagBase.getBool('MunitionsTrooperReady'),true);

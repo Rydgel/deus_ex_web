@@ -91,11 +91,26 @@ and open work](docs/movement.md).
   original DLL execution. GetFrame now produces transformed, interpolated
   vertices with persistent tween caches and all four additive blend channels;
   46 complete original-DLL calls match byte for byte. Jaime's original helpers
-  and animation tick feed this same pose path. The browser now draws 14 static
-  Training NPC meshes through the shared frame/material path. Reduced LOD,
-  original mesh lighting and NPC startup/live animation remain unfinished
+  and animation tick feed this same pose path. The browser now draws 14
+  Training NPC meshes through the shared frame/material path, re-posed live
+  from the runtime's animated fields. Reduced LOD, original mesh lighting and
+  the four environment-mapped troop surfaces remain unfinished
   ([mesh payload](docs/script-mesh-payload.md),
   [frame evaluation](docs/script-lodmesh-frame.md)).
+- **NPC startup-to-display integration:** the Play host runs the original
+  `PreBeginPlay → BeginPlay → PostBeginPlay → SetInitialState →
+  PostPostBeginPlay` chain for every pawn-ancestry map actor, ticks them
+  through the recovered `ULevel::Tick`/`APawn::performPhysics` path, and the
+  renderer resamples live `AnimSequence`/`AnimFrame` through GetFrame every
+  frame — NPCs are visible and animating in ordinary Play, across Inspect →
+  Play and player reset. `Pawn.PreBeginPlay`'s native `AddPawn` owns
+  `Level.PawnList` membership; Shadow spawn reaches the recovered `AttachDecal`
+  BSP sweep with `Engine.Client.Decals = true`. Remaining explicit boundaries:
+  weapon `SpawnActor` for armed NPCs, `PlayerReplicationInfo` for cameras, the
+  `IsValidEnemy`/`FindPathToward` natives, the root-window conversation check,
+  and environment-mapped surfaces for the four UNATCO troops
+  ([exact boundary and evidence](docs/script-npc-startup-animation.md),
+  [Decal startup](docs/script-decal-startup.md)).
 - **NPC surfaces and skins:** full-resolution triangle/material/UV decoding
   matches original Render instruction ranges for all 629 LightSwitch/GM_Trench
   faces. Skin selection and GetMeshTexture1013 match 28 full native calls.

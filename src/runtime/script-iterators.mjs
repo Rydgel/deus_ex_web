@@ -347,6 +347,67 @@ export function createVisibleActorsIterator({
   };
 }
 
+/** Original execCycleActors 0x1036e9d0 (native index 1002). The exec
+ * evaluates BaseClass, the out Actor and out int Index expressions once —
+ * a null BaseClass defaults to class'Actor' (0x1057cdf0) — then reads
+ * *Index once into a private cursor clamped to [0, Actors.Num()). Each
+ * resume clears the Actor out, re-clamps the saved step bound to
+ * min(bound, Actors.Num()) and scans the Level->Actors array forward from
+ * the cursor, wrapping it to 0 whenever it reaches Num. A candidate yields
+ * when its Class ancestry reaches BaseClass: *Actor publishes it and
+ * *Index receives the position after it. The step counter survives between
+ * resumes, so one foreach pass can wrap through the array at most once;
+ * exhaustion still writes *Index (the wrapped cursor) with Actor=None.
+ * Evidence: Engine.dll execCycleActors at 0x1036e9d0 (thunk 0x1030400c). */
+export function createCycleActorsIterator({
+  receiver,
+  argumentCount,
+  evaluateArgument,
+  actorClass,
+  levelFor,
+  isA,
+}) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('CycleActors requires evaluateArgument');
+  if (typeof levelFor !== 'function') throw new TypeError('CycleActors requires levelFor');
+  if (typeof isA !== 'function') throw new TypeError('CycleActors requires isA');
+  if (argumentCount !== 3) throw new RangeError(`CycleActors takes three arguments; got ${String(argumentCount)}`);
+
+  const baseValue = refValue(evaluateArgument(0));
+  const outActor = writeSlot(evaluateArgument(1));
+  const indexArgument = evaluateArgument(2);
+  const outIndex = writeSlot(indexArgument);
+  const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+
+  const actors = () => {
+    const array = levelFor(receiver)?.actors;
+    if (!array || typeof array.length !== 'number')
+      throw new TypeError('CycleActors levelFor(receiver) must provide an actors array');
+    return array;
+  };
+  const startIndex = refValue(indexArgument) | 0;
+  let bound = actors().length;
+  let cursor = startIndex >= 0 && startIndex < bound ? startIndex : 0;
+  let steps = 0;
+
+  return {
+    next() {
+      outActor.set(null);
+      const array = actors();
+      if (array.length < bound) bound = array.length;
+      while (steps < bound) {
+        if (cursor >= array.length) cursor = 0;
+        const actor = array[cursor++]; steps++;
+        if (actor === null || actor === undefined) continue;
+        if (!isA(actor, baseClass)) continue;
+        outActor.set(actor); outIndex.set(cursor);
+        return true;
+      }
+      outIndex.set(cursor);
+      return false;
+    },
+  };
+}
+
 /** Original execBasedActors 0x103e4800 (native index 306). The exec evaluates
  * BaseClass and the out Actor expression, defaults a null BaseClass to
  * class'Actor' (0x1057cdf0), clears the out slot and resumes the

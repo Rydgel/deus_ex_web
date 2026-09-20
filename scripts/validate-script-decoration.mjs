@@ -11,7 +11,10 @@ import {gameDirectory} from './game-directory.mjs';
 
 const root=gameDirectory();
 const assets=new AssetStore((await readdir(`${root}/System`)).map(name=>({path:name,read:()=>readFile(`${root}/System/${name}`)})));
-const deus=await assets.get('DeusEx'),calls=[],level={editor:false};
+const deus=await assets.get('DeusEx'),calls=[],level={editor:false,
+  // LevelInfo.PreBeginPlay's InitEventManager creates the +0x550 UEventManager
+  // lazily; present, the AI event natives delegate to the host boundary.
+  levelInfo:{aiEventManager:new Map()}};
 // PlaySound (264) is a recorded host boundary here (see the file header): this
 // focused Plant2.Bump test verifies the script's native-call order and args, not
 // the full sound engine, so it owns 264 rather than running execActorPlaySound.

@@ -77,7 +77,16 @@ function structKey(metadata) {
 function scalarDescriptor(parts, metadata = parts.metadata) {
   const type = typeOf(metadata);
   if (!type) fail(`Unsupported property type for ${parts.key}`, parts, type);
-  if (type === 'array' || type === 'map') {
+  if (type === 'array') {
+    const inner=innerMetadata(metadata);
+    // Core UArrayProperty::CopySingleValue's non-owning int path. Native
+    // Decal.SurfList needs whole-value storage, not dynamic indexing opcodes.
+    if(!inner||typeOf(inner)!=='int'||(inner.flags&0x400000)||
+      (inner.arrayDim??1)!==1)
+      fail(`Dynamic array values require a linked non-owning IntProperty for ${parts.key}`,parts,type);
+    return {key:parts.key,type,metadata,elementSize:12,inner};
+  }
+  if (type === 'map') {
     fail(`Dynamic ${type} values are not implemented for ${parts.key}`, parts, type);
   }
   if (type === 'fixedArray') {
@@ -130,7 +139,7 @@ function describe(field) {
   const type = typeOf(metadata);
   if (!type) fail(`Unsupported property type for ${parts.key}`, parts, type);
 
-  if (type === 'array' || type === 'map') {
+  if (type === 'map') {
     fail(`Dynamic ${type} values are not implemented for ${parts.key}`, parts, type);
   }
 
@@ -258,6 +267,9 @@ function copyScalar(value, descriptor, operation = 'copyValue') {
     // UObjectProperty/ClassProperty copies the pointer.  Object identity is
     // the value in the original VM; cloning a linked object would be wrong.
     case 'object': case 'class': return value ?? null;
+    case 'array':
+      if(!Array.isArray(value))throw new TypeError(`${operation} requires an Array for ${descriptor.key}`);
+      return value.map(item=>Number(item)|0);
     case 'struct': {
       const key = descriptor.structKey;
       if (!SUPPORTED_STRUCTS.has(key)) return copyGenericStruct(value, metadata, descriptor, operation);
@@ -303,6 +315,7 @@ function zeroScalar(descriptor) {
     case 'name': return 'None';
     case 'string': return '';
     case 'object': case 'class': return null;
+    case 'array': return [];
     case 'struct':
       if (SUPPORTED_STRUCTS.has(descriptor.structKey)) return [0, 0, 0];
       return zeroGenericStruct(descriptor.metadata, descriptor);

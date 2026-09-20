@@ -82,7 +82,13 @@ const jaime=await runtime.objects.resolve(mapAsset,jaimeIndex);
 const jaimeMesh=runtime.namedReference(jaime,'Mesh').get();
 const originalRecord=jaimeMesh.loadRecord;
 assert.ok(originalRecord);
-assert.equal(originalRecord.meshPayload,undefined);
+// The live NPC preview decoded Jaime's LodMesh during scene setup, so this
+// record's payload is already resident; a mesh the preview never touched keeps
+// the original lazy-payload slot until its own prepareMesh runs.
+const plantIndex=mapAsset.exportsByPath.get('plant2');
+assert.ok(plantIndex);
+const plantMesh=runtime.namedReference(await runtime.objects.resolve(mapAsset,plantIndex),'Mesh').get();
+assert.equal(plantMesh.loadRecord.meshPayload,undefined,'unviewed map meshes keep the lazy payload slot');
 const [jaimePayload,repeated]=await Promise.all([runtime.prepareMesh(jaime),runtime.prepareMesh(jaime)]);
 assert.equal(jaimePayload,repeated);
 assert.equal(jaimeMesh.loadRecord,originalRecord);
@@ -187,7 +193,11 @@ assert.equal(jaimeState.latent,0x181);
 runtime.processActorAnimation(jaime,0.3);
 assert.equal(get('AnimFrame'),0.75);assert.equal(get('AnimRate'),0);
 assert.equal(get('bAnimFinished'),true);
-runtime.processActorScript(jaime,0.3);
+// Poll the FinishAnim latent directly: bAnimFinished clears it. The live pawn's
+// real StartUp state would otherwise resume its own bytecode here and install
+// its next latent (Sleep), which is correct live behaviour but not the
+// FinishAnim contract under test.
+runtime.services.pollLatent({index:0x181,receiver:jaime,state:jaimeState,seconds:0.3});
 assert.equal(jaimeState.latent,0);
 assert.equal(get('RemoteRole'),2,'Jaime defaults to a simulated remote proxy');
 assert.equal(get('SimAnim')['core.object.vector.x'],-2500,'RemoteRole gates the completion replication write');

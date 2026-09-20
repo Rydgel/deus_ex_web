@@ -3,12 +3,17 @@ const f=Math.fround;
 function basedOn(actor,base){const seen=new Set();for(let a=actor;a;a=a.base){if(a===base)return true;if(seen.has(a))throw Error('Cyclic actor Base chain');seen.add(a);}return false;}
 
 /** Ordinary original controlled-player MoveActor, unchanged rotation/no riders.
+ * `newRotation` is the ULevel::MoveActor absolute rotation argument; callers
+ * that move without rotating pass null and keep the source rotation. The
+ * original's nearly-zero-delta path still applies the new rotation before
+ * returning, without hash/touch/zone bookkeeping.
  * Geometry, hash, script, touching and zone callbacks are explicit boundaries. */
-export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,addActor,dispatch,isBlockedBy,isOverlapping,beginTouch,endTouch,setActorZone}){
+export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,addActor,dispatch,isBlockedBy,isOverlapping,beginTouch,endTouch,setActorZone},newRotation=null){
  if(source.standingCount)throw Error('Player MoveActor based passengers unsupported');
- const requested=delta.map(f),rotation=[...source.rotation];let hits=[];
+ const requested=delta.map(f),rotation=newRotation?[...newRotation]:[...source.rotation];let hits=[];
  const query=moveQuery({source,worldActor,start:source.position,delta:requested,extent:[source.radius,source.radius,source.height],multiLineCheck:q=>(hits=multiLineCheck(q))});
- if(source.static || source.movable===false || requested.every(v=>Math.abs(v)<.0001))return query;
+ if(source.static || source.movable===false)return query;
+ if(requested.every(v=>Math.abs(v)<.0001)){source.rotation=rotation;return query;}
  const eligibleScanned=!!(source.flags&14)&&hits.some(h=>!basedOn(h.actor,source));
  if(source.flags&1)removeActor(source);
  source.position=source.position.map((v,i)=>f(f(v)+query.delta[i]));source.rotation=rotation;

@@ -3,9 +3,24 @@
 Visible checkpoint: Training's **NPC mesh preview** now displays 14 original
 character/bot meshes, including the people beside and behind Jaime.
 They use a shared actor-mesh draw adapter; the four guards' reflective materials
-remain unsupported. These static, texture-only previews load automatically and
-remain visible in Play and Inspect, including after Player start. NPC startup, original mesh lighting, distance LOD
-and AI remain incomplete. See [preview evidence and scope](npc-mesh-preview.md).
+remain unsupported. The meshes are re-posed live from the runtime's animated
+fields in Play and Inspect, including after Player start. Original mesh
+lighting, distance LOD and the unresolved startup/tick boundaries remain
+incomplete. See [preview evidence and scope](npc-mesh-preview.md).
+
+Latest integration: the Play host runs the original startup chain
+(`PreBeginPlay → BeginPlay → PostBeginPlay → SetInitialState →
+PostPostBeginPlay`) for every pawn-ancestry map actor, ticks them through the
+recovered `ULevel::Tick`/`APawn::performPhysics` path, and the renderer
+resamples the live pose through GetFrame each frame. Jaime lands, enters
+`Standing` and loops `BreatheLight` under the shared clock; player reset
+restores serialized state and re-runs the chain. The recorded boundaries are
+weapon `SpawnActor` for armed NPCs, `PlayerReplicationInfo` startup for
+cameras, `IsValidEnemy`/`FindPathToward`, the root-window conversation check,
+and environment-mapped surfaces
+([startup evidence and exact boundary](script-npc-startup-animation.md),
+[Decal evidence](script-decal-startup.md)). Stage 3 is **not complete** while
+those boundaries and the full Play/reset/visibility verification remain open.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

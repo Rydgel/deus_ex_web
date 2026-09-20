@@ -128,7 +128,6 @@ export function createDestroyedActorLedger({ level, runtime }) {
   function snapshot(receiver) {
     return {
       slot: level.actors.indexOf(receiver),
-      touching: Array.isArray(receiver.touching) ? [...receiver.touching] : null,
       flags: runtime.instance(receiver).nativeObject?.flags ?? null,
     };
   }
@@ -145,7 +144,6 @@ export function createDestroyedActorLedger({ level, runtime }) {
       if (object && saved.flags !== null) {
         object.flags = saved.flags; object.linker = null; object.linkerIndex = -1; object.auxiliary = null;
       }
-      if (saved.touching) receiver.touching = saved.touching.slice();
     }
     entries.clear();
     level.pendingDeleted = null;
