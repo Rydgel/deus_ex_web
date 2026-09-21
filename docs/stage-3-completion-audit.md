@@ -10,8 +10,8 @@ incomplete. See [preview evidence and scope](npc-mesh-preview.md).
 
 Latest integration: the Play host runs the original startup chain
 (`PreBeginPlay → BeginPlay → PostBeginPlay → SetInitialState →
-PostPostBeginPlay`) for every map actor the standalone linker admits, ticks
-them through the recovered `ULevel::Tick`/`APawn::performPhysics` path, and
+PostPostBeginPlay`) for every pawn-ancestry map actor the standalone linker
+admits, ticks them through the recovered `ULevel::Tick`/`APawn::performPhysics` path, and
 the renderer resamples the live pose through GetFrame each frame. Standalone
 `ULinkerLoad::CreateExport` admission refuses Training's 992 `Brush` exports
 and the four UnrealEd `Camera4`–`7` exports before construction — their
@@ -83,8 +83,8 @@ candidate collection, the lazy-sorted upstreamPaths BFS, route reversal,
 pass-2 endpoint marking, and the SpecialCost/SpecialHandling tail — and
 dispatched live through `invokeNative` → `pawnNavServices` over the
 serialized nav graph and the live ReachSpec table. The shared validator
-corpus is now 138/138 scenes bit-exact with 35/35 targeted mutants, and
-Training `Secretary0` patrols to `PatrolPoint4` in Play mode
+corpus is now 140/140 scenes bit-exact with 35/35 targeted mutants, and
+Training `Secretary0` selects `PatrolPoint4` and begins moving in Play mode
 (`validate-secretary-patrol.mjs`). Corrected fabrication evidence this
 round: `upstreamPaths` is `+0x320` (the `+0x3a0` array is `PrunedPaths`),
 the ReachSpec record opens with `distance` (`+0x00`) then `start` (`+0x04`),
@@ -92,6 +92,18 @@ the ReachSpec record opens with `distance` (`+0x00`) then `start` (`+0x04`),
 and the pawn's reach anchor is `MoveTarget` (`+0x34c`), not `Anchor`.
 `landPredict`/falling-target delegation and the water helpers remain
 explicit unported boundaries. See [pawn navigation](script-pawn-nav.md).
+
+2026-09-21 review corrections: full 32-node candidate lists now retain later
+closer/equal-key candidates in the original sorted order; navigation's
+`Flags1dc` reads the actual collision bits, including `bBlockActors`, rather
+than the unrelated `+0x28` actor flags; and native 517 preserves
+`bClearPaths=1` for explicit `EX_Nothing` arguments. Two added original-DLL
+scenes, 15 comparisons through decoded VM/runtime dispatch, and the live
+Plant2/LevelInfo binding checks cover those previously missed boundaries.
+The 499 unit tests, Secretary integration and MIB load/reset checks pass.
+Secretary's observed 3.8-unit movement and stop roughly 28 units from the
+waypoint remain unverified against original arrival/timeout behavior; the
+passing route-selection validator does not close that locomotion question.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

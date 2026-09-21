@@ -2130,8 +2130,12 @@ export class ScriptRuntime {
       // bSinglePath=0, bClearPaths=1); the result slot receives the found
       // actor only when the worker succeeds — matching the native tail.
       const target=call.argumentCount>0?refValue(call.evaluateArgument(0)):null;
-      const bSingle=call.argumentCount>1?refValue(call.evaluateArgument(1))|0:0;
-      const bClear=call.argumentCount>2?refValue(call.evaluateArgument(2))|0:1;
+      const singleArgument=call.argumentCount>1?refValue(call.evaluateArgument(1)):undefined;
+      const clearArgument=call.argumentCount>2?refValue(call.evaluateArgument(2)):undefined;
+      // EX_Nothing leaves the native's pre-seeded slot untouched, just as
+      // an omitted tail does (bClearPaths = 1 at Engine.dll 0x103bca11).
+      const bSingle=singleArgument===undefined?0:singleArgument|0;
+      const bClear=clearArgument===undefined?1:clearArgument|0;
       return execFindPathToward(call.receiver,target,bSingle,bClear,
         this.pawnNavServices(call.receiver));
     }
@@ -2404,12 +2408,11 @@ export class ScriptRuntime {
     };
     const zoneOf=(actor,name)=>this.namedReference(actor,name).get()?.['engine.actor.pointregion.zone']
       ??level.pointRegion(view.position).zone;
-    /* The native reach workers read the packed bool words directly. Actor
-     * +0x1dc, Pawn +0x318 and Mover +0x4ec pack each class's serialized bool
-     * declarations in order; the VM stores the same values as named logical
-     * properties, so the dword is synthesized per read and decomposed per
-     * write (Pawn.uc/Actor.uc/Mover.uc declaration order, verified against
-     * the reachMask/scout/exec disassembly bit positions). */
+    /* The native reach workers read packed bool words directly. Bind the
+     * consumed masks at Actor +0x1dc, Pawn +0x318 and Mover +0x4ec to their
+     * named VM fields (docs/script-pawn-nav.md). Actor's collision word is
+     * distinct from its +0x28 flags: bNoDelete must never stand in for
+     * bBlockActors. Only verified bits are exposed for the partial words. */
     const flagWords={
       Flags318:[['bBehindView',0x1],['bIsPlayer',0x2],['bJustLanded',0x4],['bUpAndOut',0x8],
         ['bIsWalking',0x10],['bHitSlopedWall',0x20],['bNeverSwitchOnPickup',0x40],['bWarping',0x80],
@@ -2419,15 +2422,10 @@ export class ScriptRuntime {
         ['bFromWall',0x100000],['bHunting',0x200000],['bAvoidLedges',0x400000],['bStopAtLedges',0x800000],
         ['bJumpOffPawn',0x1000000],['bShootSpecial',0x2000000],['bAutoActivate',0x4000000],['bIsHuman',0x8000000],
         ['bIsFemale',0x10000000],['bIsMultiSkinned',0x20000000],['bCountJumps',0x40000000],['bAdvancedTactics',0x80000000]],
-      Flags1dc:[['bStatic',0x1],['bHidden',0x2],['bNoDelete',0x4],['bAnimFinished',0x8],
-        ['bAnimLoop',0x10],['bAnimNotify',0x20],['bAnimByOwner',0x40],['bDeleteMe',0x80],
-        ['bAssimilated',0x100],['bTicked',0x200],['bLightChanged',0x400],['bDynamicLight',0x800],
-        ['bTimerLoop',0x1000],['bCanTeleport',0x2000],['bIsSecretGoal',0x4000],['bIsKillGoal',0x8000],
-        ['bIsItemGoal',0x10000],['bCollideWhenPlacing',0x20000],['bTravel',0x40000],['bMovable',0x80000],
-        ['bHighDetail',0x100000],['bStasis',0x200000],['bForceStasis',0x400000],['bIsPawn',0x800000],
-        ['bNetTemporary',0x1000000],['bNetOptional',0x2000000],['bReplicateInstigator',0x4000000],
-        ['bTrailerSameRotation',0x8000000],['bTrailerPrePivot',0x10000000],['bClientAnim',0x20000000],
-        ['bSimFall',0x40000000]],
+      // actorWorker tests bit2 at 0x103c0b26. These low collision bits are
+      // also recovered by AActor::SetCollision; no upper bits are consumed.
+      Flags1dc:[['bCollideActors',0x1],['bCollideWorld',0x2],
+        ['bBlockActors',0x4],['bBlockPlayers',0x8]],
       // +0x4ec bit3 is the only Mover flag the nav workers read (scoutD/
       // directReach): bPlayerOnly. The word's other bits are unverified.
       Flags4ec:[['bPlayerOnly',0x8]],

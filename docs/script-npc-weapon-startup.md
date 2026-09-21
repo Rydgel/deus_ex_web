@@ -351,8 +351,10 @@ back into `Level.Actors`.
   now part of the shared move for callers that supply the service; the
   decoration physics callers do not yet, so their behaviour is unchanged and
   the gap is recorded rather than silently closed.
-* `Shadow.Tick` and `FindPathToward` remain the boundaries listed in
-  `docs/script-npc-startup-animation.md`. The `Camera4`–`7` exports are refused
+* `Shadow.Tick` remains unsupported. `FindPathToward` is now linked through
+  the shared navigation services; Secretary0's final patrol arrival/timeout
+  behavior still needs original verification (see
+  [pawn navigation](script-pawn-nav.md)). The `Camera4`–`7` exports are refused
   by standalone `ULinkerLoad::CreateExport` admission before construction, so
   their `PlayerReplicationInfo` startup never runs ([map
   actors](script-map-actors.md)); the `rootWindow`/`CanStartConversation` chain

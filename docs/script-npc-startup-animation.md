@@ -105,8 +105,10 @@ Current explicit boundaries, all recorded rather than substituted:
   frames the first six `tries=1` picks all exhaust their search (faithful;
   the original pacing sleeps ~6 s between episodes), pick #15 succeeds and
   the pawn moves ~98 u, with further successful wander legs through 1920
-  ticks and no NPC failures. `Pawn.FindPathToward` (native 517) remains
-  unimplemented and is reached by patrol bodies the MIB does not run. See
+  ticks and no NPC failures. `Pawn.FindPathToward` (native 517) is now
+  implemented through the shared navigation services; Secretary0 selects
+  PatrolPoint4 and begins moving, with final arrival/timeout fidelity still
+  unverified. See
   [pawn navigation](script-pawn-nav.md#aipickrandomdestination-native-709---execaipickrandomdestination-0x103c86f0)
   and [alliance checks](script-pawn-alliance.md).
 * ~~`DeusExRootWindow.CanStartConversation` is unprepared; reached by the

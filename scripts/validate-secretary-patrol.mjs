@@ -6,12 +6,12 @@
  * answer.  The recovered worker runs on the serialized nav graph
  * (NavigationPointList, upstreamPaths/Paths/PrunedPaths, the ULevel ReachSpec
  * table) through the shared pawnNavServices seam; the patrol script then runs
- * MoveToward and — after the patrol episode — lands in the designed Standing
+ * MoveToward and — after the patrol episode — lands in the scripted Standing
  * terminus (PatrolPoint4.NextPatrolPoint==None -> PickDestination ->
- * GotoState('Standing')).  The pawn's walk stalls ~28u short on the descent
- * to PatrolPoint4's lower floor (MoveTimer expiry in the locomotion poll);
- * that is the move-physics subsystem's boundary, not 517's — the native call
- * itself returns the correct node. */
+ * GotoState('Standing')). The current run moves 3.8u and stops ~28u from
+ * PatrolPoint4. This route-selection check does not establish original
+ * patrol-arrival fidelity: arrival tolerances, latent polling and the
+ * movement/timeout trace still need comparison with the original. */
 import assert from 'node:assert/strict';
 import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
@@ -28,6 +28,20 @@ const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,pr
 const {runtime,npcPawns,npcFailures}=game.doors.scriptRuntime;
 const secretary=npcPawns.find(actor=>actor.name==='Secretary0');
 assert.ok(secretary,'00_Training must contain Secretary0');
+// Pin the live property adapter, not just the oracle's fabricated raw word.
+// actorWorker reads target+0x1dc & 4 (0x103c0b26): bBlockActors. Plant2
+// blocks actors but is deletable; LevelInfo has the opposite combination.
+const level=runtime.levelFor(secretary),nav=runtime.pawnNavServices(secretary);
+const plant=level.actors.find(actor=>actor?.name==='Plant2');
+assert.ok(plant,'00_Training must contain Plant2');
+for(const [actor,blocks,noDelete] of [[plant,true,false],[level.actors[0],false,true]]){
+  const read=name=>runtime.namedReference(actor,name).get();
+  assert.equal(read('bBlockActors'),blocks,`${actor.name} authored bBlockActors`);
+  assert.equal(read('bNoDelete'),noDelete,`${actor.name} authored bNoDelete`);
+  const expected=Number(read('bCollideActors'))|Number(read('bCollideWorld'))<<1|
+    Number(blocks)<<2|Number(read('bBlockPlayers'))<<3;
+  assert.equal(nav.read(actor,'Flags1dc')&15,expected,`${actor.name} live native collision bits`);
+}
 const get=name=>runtime.namedReference(secretary,name).get();
 const invoke=runtime.invokeNative.bind(runtime);
 let calls=0,successes=0;

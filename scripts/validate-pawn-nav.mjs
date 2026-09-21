@@ -17,7 +17,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { x87load, x87add, x87mul, x87store } from '../src/runtime/script-vm.mjs';
+import { compileFunction, x87load, x87add, x87mul, x87store } from '../src/runtime/script-vm.mjs';
+import { ScriptRuntime } from '../src/runtime/script-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const modulePath = path.join(root, 'src/runtime/script-pawn-nav.mjs');
@@ -284,6 +285,21 @@ function flatWalk(depth) {
   const mv = [];
   for (let i = 0; i < depth; i++) { mv.push(H(1, 1)); mv.push(H(0.1, 1)); }
   return mv;
+}
+
+// Fill the pawn-side candidate list before encountering the only node with
+// a direct route to the distant target. sortedInsert must admit that late
+// node even at capacity, including before an existing equal-distance node.
+function crowdedPathScene(name, firstX) {
+  const navPoints = Object.fromEntries(Array.from({length: 32}, (_, i) =>
+    [`n${i}`, {location: [i === 0 ? firstX : 100 + i, 0, 0],
+      nextNav: i === 31 ? 'late' : `n${i + 1}`}]));
+  navPoints.late = {location: [10, 0, 0], paths: [0], nextNav: 'tgt'};
+  navPoints.tgt = {location: [2000, 0, 0]};
+  return fx(name, {navList: 'n0', navPoints, moveActor: flatWalk(12),
+    reachSpecs: [{start: 'late', end: 'tgt', distance: 1990,
+      radius: 30, height: 50, flags: 0}],
+    singleLine: [{ret: 1, hit: {actor: 0, time: 1}}]});
 }
 
 /* aiDirection scene (0x1036d030): thiscall(pawn; out rot*, centralYaw i,
@@ -882,6 +898,8 @@ const scenes = [
                                   outKind: 'nothing' }),
 
   // -- FindPathToward 0x103bc9c0 + worker 0x103db3f0 (native 517) ------------
+  crowdedPathScene('fpt-full-list-closer', 100),
+  crowdedPathScene('fpt-full-list-equal', 10),
   // Null target: *result=0 without touching the worker.
   fx('fpt-null-target', {
     target: null, navList: 'navA',
@@ -1209,7 +1227,7 @@ const ISA = {
   mover: ['Mover', 'Actor'], inventory: ['Inventory', 'Actor'],
   trigger: ['Trigger', 'Triggers', 'Actor'], levelinfo: ['LevelInfo', 'Actor'],
 };
-function runJsGraph(scene, mod = module) {
+function runJsGraph(scene, mod = module, throughRuntime = false) {
   const j = scene.js;
   const zones = j.zones || {};
   const zoneObj = n => {
@@ -1356,8 +1374,25 @@ function runJsGraph(scene, mod = module) {
     ret = mod.actorReachable(pawn, target, services);
   else if (scene.body === 'pathTowardWorker')
     ret = mod.pathTowardWorker(pawn, target, j.bSingle | 0, foundCell, j.bClear | 0, services);
-  else if (scene.body === 'findPathToward')
-    ret = mod.execFindPathToward(pawn, target, j.bSingle | 0, j.bClear | 0, services);
+  else if (scene.body === 'findPathToward') {
+    if (throughRuntime) {
+      // Decode the SAME argument tokens the native oracle evaluates. In
+      // particular, EX_Nothing must reach invokeNative as undefined rather
+      // than being replaced here with the desired default from scene.js.
+      const args = scene.args.flatMap(arg => arg.kind === 'nothing' ? [0x0b]
+        : arg.kind === 'object' ? (target ? [0x20, 1] : [0x2a])
+        : [0x1d, ...Array.from({length: 4}, (_, i) => (arg.value >>> (8 * i)) & 255)]);
+      const bytes = Uint8Array.from([0x04, 0x62, 0x05, ...args, 0x16]);
+      const vm = compileFunction({pkg: {imports: [], exports: [{name: 'Target'}]},
+        entry: {path: scene.name}, bytes, size: bytes.length + (target ? 3 : 0)});
+      const host = {boundaryNatives: new Set(), collisionViewActors: new WeakSet(),
+        pawnNavServices: () => services};
+      ret = vm.run(pawn, {}, {objectReference: () => target,
+        invokeNative: call => ScriptRuntime.prototype.invokeNative.call(host, call)});
+    } else {
+      ret = mod.execFindPathToward(pawn, target, j.bSingle | 0, j.bClear | 0, services);
+    }
+  }
   else ret = mod.actorWorker(pawn, target, j.argC, services);
   // foundbuf/result slot values resolve to node names for comparison.
   const nameOf = new Map(Object.entries(actors).map(([n, a]) => [a, n]));
@@ -1572,7 +1607,7 @@ const probeResults = runProbe(scenes.map(s => {
   return scene;
 }));
 
-let failures = 0;
+let failures = 0, runtimeCases = 0;
 for (let i = 0; i < scenes.length; i++) {
   const r = probeResults[i];
   const scene = scenes[i];
@@ -1584,10 +1619,18 @@ for (let i = 0; i < scenes.length; i++) {
   try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
   const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body), scene.body), js);
+  if (scene.body === 'findPathToward') {
+    runtimeCases++;
+    try {
+      diffs.push(...compare(`${scene.name} VM/runtime`, normalizeProbe(r.result, true, scene.body),
+        runJsGraph(scene, module, true)));
+    } catch (error) { diffs.push(`${scene.name} VM/runtime: ${error.stack ?? error}`); }
+  }
   if (diffs.length) { failures++; diffs.forEach(d => console.log(`FAIL ${d}`)); }
 }
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav: ${passed}/${scenes.length} scenes bit-exact`);
+console.log(`Compared ${runtimeCases} FindPathToward scenes through decoded VM/runtime dispatch.`);
 
 // ---------------------------------------------------------------------------
 // Mutation coverage: each edit rewrites one behavior the disassembly dictates.

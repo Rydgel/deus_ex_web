@@ -399,25 +399,58 @@ unreachable — dispatched through `pawnNavServices.specialHandling`
 head (`level.actors[0]`), the `nextNavigationPoint` chain, `Paths`/
 `PrunedPaths`/`upstreamPaths` index arrays, the live `level.reachSpecs`
 table (`start`/`end` resolved to live actors), `Flags318`/`Flags1dc`/
-`Flags4ec` words synthesized from the named bool properties in declaration
-order, and `isA('NavPoint')` normalized to the real `NavigationPoint` class.
+`Flags4ec` bits bound to the recovered native property offsets/masks, and
+`isA('NavPoint')` normalized to the real `NavigationPoint` class.
+
+**2026-09-21 review contracts.** The hash-checked Engine.dll establishes
+three cases missed by the initial integration:
+
+* `sortedInsert` (`0x103dd170`) searches for the insertion position before
+  the `index < 32` gate (`0x103dd1e7`). It increments the count only below
+  32 (`0x103dd204`–`0x103dd210`) and shifts only through that capped count.
+  A full list therefore admits a closer candidate, discards the farthest,
+  and inserts equal keys before existing equal keys. Executing the original
+  helper with keys 100…131 and a new key 1 yields 1,100…130 at count 32.
+* `actorWorker` tests `target+0x1dc & 4` at `0x103c0b26`. This is
+  `bBlockActors`, as independently recovered by `AActor::SetCollision`
+  (`0x10369200`, see [actor collision](script-datavault-image.md)); it is
+  not `bNoDelete` in the separate `+0x28` actor word. Navigation needs the
+  four verified low collision bits: `bCollideActors=1`, `bCollideWorld=2`,
+  `bBlockActors=4`, `bBlockPlayers=8`. No upper-bit behavior is claimed here.
+* `execFindPathToward` seeds its third argument to 1 at `0x103bca11`
+  before evaluating it through GNatives at `0x103bca2b`. `EX_Nothing`
+  leaves that slot unchanged. Both a missing argument and an explicit
+  `EX_Nothing` preserve the default; an explicitly supplied zero stays zero.
+  Oracle comparisons must include `compileFunction` →
+  `ScriptRuntime.invokeNative`, since calling the worker with pre-resolved
+  defaults cannot verify this binding.
 
 Training `Secretary0` (`Orders=Patrolling`, `OrderTag=sec1`) reaches 517 in
 `Patrolling.Moving` and receives `PatrolPoint4` — the only nav node inside
 the native 800-unit candidate radius — then runs `MoveToward` and lands in
-the designed `Standing` terminus (`NextPatrolPoint==None`).  Verified by
-`scripts/validate-secretary-patrol.mjs`.  Its walk stalls ~28 u short on the
-descent to the patrol point's lower floor (locomotion `MoveTimer` expiry) —
-the move-physics subsystem's boundary, not 517's; the native call itself
-returns the correct node.
+the script's `Standing` terminus (`NextPatrolPoint==None`). Checked by
+`scripts/validate-secretary-patrol.mjs`: the current seed-1 run moves only
+3.8 units and stops roughly 28 units from the point. The route-selection
+check does **not** establish original patrol-arrival fidelity. Compare the
+original arrival tolerances, latent poll and movement/timeout trace before
+deciding whether that stop needs a locomotion fix.
 
-**Oracle coverage.**  138/138 scenes bit-exact and 35/35 targeted mutants in
+**Oracle coverage.**  140/140 scenes bit-exact and 35/35 targeted mutants in
 `scripts/validate-pawn-nav.mjs`: direct reach, `MoveTarget` anchor seeding,
 BFS relax/order/abort (`bSinglePath` 5th-pop abort, 1000-pop cap),
 pass-2 (`scoutD` endpoint marking + reverse + second-hop refinement),
 `bClearPaths` clear/no-clear, single-path, the exec tail (`bShootSpecial`/
 `SpecialPause` clears, `SpecialHandling` probe, `SpecialGoal` clear), and
-the `EX_Nothing` default-arg path.  The probe's `IsProbing` hook intercepts
+the `EX_Nothing` default-arg path. Two full-list scenes pin late closer and
+equal-key insertion against the original worker. All 15 FindPathToward exec
+scenes also compare the decoded VM → `ScriptRuntime.invokeNative` path to
+the same oracle, including node reset fields for `EX_Nothing` and explicit
+zero. The live Secretary validator checks `Flags1dc` on Training's Plant2
+(blocking/deletable) and LevelInfo (nonblocking/nondeletable), independently
+of the oracle's fabricated raw flag words. Each of these regressions failed
+before its corresponding correction.
+
+The probe's `IsProbing` hook intercepts
 the real `?IsProbing@UObject@@QAEHVFName@@@Z` export (the `VFName` by-value
 mangling — the earlier `QBEH` lookup silently missed and let fabricated
 objects reach the real function).
@@ -572,7 +605,7 @@ audible playback are Stage 4.
 - `FindPathToward` exec `0x103bc9c0` + worker `0x103db3f0` and its helpers
   (`navScoutA`–`navScoutE`, `navSearchBFS`, `reverse`, sorted insert/remove,
   `navTailSet`) — **ported to JS, bit-exact vs oracle** across the shared
-  138-scene corpus (35/35 mutants) and **dispatched live** through
+  140-scene corpus (35/35 mutants) and **dispatched live** through
   `invokeNative` → `pawnNavServices`; Training `Secretary0` patrols in Play
   mode (see the section above).  Falling-target delegation
   (`landPredict`/`findPathTo`) remains an explicit unported service.
@@ -586,11 +619,13 @@ audible playback are Stage 4.
   transcendentals; the Unicorn oracle is authoritative for it.
 
 Focused checkpoint (supersedes the 2026-09-20 note):
-`validate-pawn-nav.mjs` passes 138/138 cases and 35/35 mutants;
+`validate-pawn-nav.mjs` passes 140/140 cases and 35/35 mutants, including
+15 original comparisons through VM/runtime dispatch;
 `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
 `npm test` passes 499/499. Natives 709 and 517 are live — the Training MIB
-wanders and `Secretary0` patrols to `PatrolPoint4` in Play
+wanders and `Secretary0` selects `PatrolPoint4` and begins moving in Play
 (`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
-Stage 3 remains unfinished. Next navigation work is original
-waterMove/waterReach recovery, then jumpArc and the remaining ReachSpec
-path workers (`FindRandomDest`/`FindPathTo`).
+Stage 3 remains unfinished. The current patrol stopping behavior needs an
+original locomotion comparison. Remaining navigation implementation includes
+waterMove/waterReach, jumpArc and the ReachSpec path workers
+`FindRandomDest`/`FindPathTo`.

@@ -1016,17 +1016,20 @@ const navDistSq = (a, b) => {
 /**
  * sortedInsert 0x103dd170 — insert before the first keys[i] >= key, shifting
  * the tail right (keys round-trip through fild/ftol, identity for int32).
- * Caps at 32 entries; the MSVC skip-ahead probes reduce to this linear scan.
+ * The index gate at 0x103dd1e7 precedes the capped count increment: a full
+ * list still admits a closer/equal key and drops its last entry. The MSVC
+ * skip-ahead probes reduce to this linear scan.
  */
 function navInsert(list, item, key) {
   const n = list.count;
-  if (n >= 32) return;
   let i = 0;
   while (i < n && list.keys[i] < key) i++;
-  for (let j = n; j > i; j--) { list.items[j] = list.items[j - 1]; list.keys[j] = list.keys[j - 1]; }
+  if (i >= 32) return;
+  const count = Math.min(n + 1, 32);
+  for (let j = count - 1; j > i; j--) { list.items[j] = list.items[j - 1]; list.keys[j] = list.keys[j - 1]; }
   list.items[i] = item;
   list.keys[i] = key | 0;
-  list.count = n + 1;
+  list.count = count;
 }
 
 /** listRemove 0x103dd2a0 — shift items/keys left from index i, count--. */
