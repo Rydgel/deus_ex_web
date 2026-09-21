@@ -10,11 +10,27 @@ not original game travel or evidence that keys and the Training route work.
 It does not unlock doors, grant items, set conversation flags, select a frob
 target or start dialogue. Normal startup, targeting, **F**, and conversation
 bytecode still own the interaction. Wait a few seconds for startup, then press
-**F**. **Player start** restores the normal spawn. Subtitles remain incomplete.
+**F**. **Player start** restores the normal spawn. Enable the **Conversation
+subtitles** diagnostics toggle (seeded from the installed `bSubtitles`
+globalconfig) to see the first-person panel.
 
 Verified with the instructor browser regression entering through this button
-and the real F key (including speech, termination and reset); production build
-passes. This shortcut does not establish end-to-end Training progression.
+and the real F key (including subtitles on/off, speech, termination and reset);
+production build passes. This shortcut does not establish end-to-end Training
+progression.
+
+**Manual route from the Training spawn (attempted, not claimed complete).**
+`PlayerStart1` is at `(-1149, 826, -65)`; the nearest munitions instructor,
+`UNATCOTroop3`, is at `(2945, 982, -71)` — about 4100 units due east, through
+the spawn room's closed door and the training corridors. A manual keyboard walk
+from the spawn was tried in the browser; ordinary movement runs, but the full
+spawn-to-instructor course (its doors and layout) is not yet a scripted
+end-to-end route, so both the browser regression and
+`scripts/validate-instructor-conversation.mjs` use the collision-safe approach
+setup above and then real movement/targeting/`F`. The interaction itself —
+`HighlightCenterObject` targeting, `game.use()`, the `ConPlay` bytecode,
+subtitles and the Mission00 timer — runs entirely on original scripts and the
+live simulation.
 
 > **Checkpoint update, 2026-09-21:** the subtitle window boundary is closed.
 > `XWindow::ConfigureChild`'s two conditional leaves — BoundsUpdate `0x10051160`
