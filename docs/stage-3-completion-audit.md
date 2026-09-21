@@ -1,5 +1,16 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint verification, 2026-09-21:** 509 unit tests and the production build
+> pass. The instructor browser flow with original subtitles-off defaults and
+> Liberty Island loading passed, as did focused startup, inventory, patrol,
+> DataLink and native translation checks. **Subtitle presentation remains
+> incomplete:** explicitly enabling `player.bSubtitles` reaches an unsupported
+> `ConfigureChild` boundsUpdate service. The renderer adapter is present, but
+> visible subtitle layout is not verified and must not be counted as complete.
+> Earlier HUD references below cover the default presentation path only. The
+> next continuation should finish that window boundary and rerun the browser
+> flow with subtitles enabled. Stage 3 remains open.
+
 Visible checkpoint: Training's **NPC mesh preview** now displays 14 original
 character/bot meshes, including the people beside and behind Jaime.
 They use a shared actor-mesh draw adapter; the four guards' reflective materials
@@ -166,42 +177,30 @@ destruction and all 18 Training DataLink routes. All 508 unit tests, the
 production build, the Training browser walkthrough and the focused WebGL draw
 feedback test pass. These checks do not establish original zone visibility.
 
-2026-09-21 instructor-conversation follow-up: the Training munitions-instructor
-face-to-face conversation flow is recovered and its **entry and selection** are
-implemented and verified through the ordinary Play frob path, but the
-first-person **presentation** remains an explicit boundary — this route is **not
-complete**. Both instructors (`UNATCOTroop0`/`UNATCOTroop3`, BindName
-MunitionsTrooper) bind `MunitionsTrooperFrob` then `MunitionsTrooperTake`; both
-are first-person, non-interactive conversations (no letterbox camera). The new
-`ConEventRandomLabel` intrinsics 2060/2061/2062 (`GetLabelCount`/`GetLabel`/
-`GetRandomLabel`) are translated from the hash-pinned ConSys.dll bodies
-(0x1000a0c0/0x1000a110/0x1000a270) with the native `labels` DynamicArray decoded
-by the object loader, so the greeting cycles A1..A5 then draws `appRand()%Num`
-(`scripts/validate-conversation-random-label.mjs`). `prepareFaceConversations`
-(`src/runtime/script-conversation-face-live.mjs`, wired into `createScriptDoors`)
-attaches the full authored graph (Conversation/ConFlagRef/ConEvent/ConSpeech) for
-every non-bark, non-DataLink conversation a present pawn can invoke — selected by
-`conOwnerName == a present pawn BindName`, not by name — and prepares
-`Conversation.IsSpeakingActor`. `scripts/validate-instructor-conversation.mjs`
-drives the public Frob dispatch and asserts, over the original bytecode, that
-`GetActiveConversation` selects Frob when `MunitionsTrooperReady` is false and
-Take when true (the authored `ConFlagRef` gate), that walking the player into and
-out of the instructor's authored `FlagTrigger` flips `MunitionsTrooperReady`
-through `FlagTrigger.Touch`/`UnTouch` (now prepared in `createScriptDoors`; its
-`GetPlayerPawn`/`FlagBase.SetBool` natives already route through the trigger
-handler) so the Take path is reachable in ordinary Play, that the whole
-`StartConversation` gate chain reaches `Spawn(class'ConPlay')` with the correct
-conversation for the invoking instructor, and that reset restores the fresh
-selection. The remaining boundary is the ConPlay first-person presentation past
-`Spawn(class'ConPlay')` — a host harness confirms ConPlay constructs, the window
-is created and `currentEvent` is set, then execution reaches
-`DeusExPlayer.CreateHistoryObject` (native 3002) in `ConPlayBase.SetupHistory`,
-followed by the SetupEventSpeech/WaitForSpeech/termination chain and the Stage-4
-`ClientHearSound` audio. Nothing is stubbed to pass a conversation; a frobbed
-instructor runs the real selection and stops at that explicit boundary. Evidence:
-[`script-instructor-conversation.md`](script-instructor-conversation.md). All 508
-unit tests, conversation binding, Training DataLink live, Secretary patrol and the
-two new validators pass.
+2026-09-21 instructor playback continuation: ordinary targeting/use now runs
+ConPlay construction, original event/state bytecode, speech lookup and timing,
+first-person window/text, history, transfers and termination. Both munitions
+instructors retain the correct participant identity. Walking into their authored
+FlagTrigger selects Take; its 29 transfer events include moving an existing
+player-owned item. Repeat interaction and reset during active speech are covered.
+Player start restores Ready and random-label progress. The package FString reader
+now preserves raw UTF-16 code units, fixing Liberty Island's load regression.
+
+All 18 Training meshes now render, including the four guards' PF_Environment
+materials. Focused original Render and TileWindow instruction probes establish
+normal/UV and selected dialogue layout calculations; the existing GetFrame
+Rust/Wasm path and JavaScript fallback remain. Browser audio decodes original
+speech and follows original channel start/stop; script timers own progression.
+See [instructor evidence](script-instructor-conversation.md).
+
+This does **not** close the instructor assignment or Stage 3: Mission00.Timer's
+independent inventory enforcement is not scheduled, general inventory/equipment
+and belt presentation remain incomplete, and the complete Training course route
+from spawn has not been demonstrated. Integration uses explicit approach setup
+followed by real movement/targeting/use. Native mixer/phonemes, original mesh
+lighting/LOD and complete window reconfiguration remain open. Final object GC
+retains its existing deferred boundary. No full original-game visual/audio match
+is claimed.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

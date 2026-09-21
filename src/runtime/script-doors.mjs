@@ -21,6 +21,7 @@ import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
+import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 
 const f = Math.fround;
@@ -332,6 +333,7 @@ export async function createScriptDoors({
   // execActorPlaySound native, whose channel id needs the measured index. A
   // focused validation with the live capture (scripts/validate-script-lights.mjs)
   // opts 264 back out to exercise the real native.
+  let liveConPlay=null;
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264] });
   const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
@@ -514,6 +516,8 @@ export async function createScriptDoors({
   }
 
   function nativeCall(call) {
+    const faceNative=liveConPlay?.handleNative(call);
+    if(faceNative?.handled)return faceNative.value;
     const triggerNative=triggerActions.handleNative(call);
     if(triggerNative.handled)return triggerNative.value;
     const path = nativePath(call);
@@ -1281,7 +1285,11 @@ export async function createScriptDoors({
 
   function reset() {
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
+    liveConPlay?.reset();
     liveDataLink?.reset();
+    faceConversations?.reset?.();
+    triggerActions.flagBase.entries.clear();
+    for (const [key, value] of initialFlags) triggerActions.flagBase.entries.set(key, {...value});
     for (const record of records) resetMover(record);
     // Re-run the TriggerLights' native startup so they return to TriggerToggle.
     lights.reset();
@@ -1319,7 +1327,8 @@ export async function createScriptDoors({
     if (!record) return { handled: false };
     if (!record.function)
       throw new Error(`Original scene event is not prepared: ${runtime.instance(target).cls.record.key}.${event}`);
-    const result = runtime.processEvent(target, event, args);
+    const invoke=()=>runtime.processEvent(target,event,args);
+    const result=liveConPlay?liveConPlay.withLifecycle(invoke):invoke();
     // A pushable decoration's Bump starts a SetTimer(0.2) push-sound lifetime the
     // tick advances (bumpedDecorations); track it here now that decoration Bump
     // routes through the general path (docs/script-plant-contact.md).
@@ -1443,14 +1452,20 @@ export async function createScriptDoors({
     for (let index = 0; index < level.actors.length; index++) {
       const actor = level.actors[index];
       if (!actor) continue;
-      if (npcPawnSet.has(actor)) {
+      if(liveConPlay.spawned.has(actor)) {
+        if(!runtime.instance(actor).pendingKill){
+          const spawnedFrom=level.actors.length;
+          liveConPlay.withLifecycle(()=>runtime.processActorTick(actor,delta,npcTickOptions));
+          collectSpawned(spawnedFrom);
+        }
+      } else if (npcPawnSet.has(actor)) {
         if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
         // startup state's Begin: InitializePawn -> InitializeInventory runs on
         // the first ProcessState tick, so the armed NPCs' weapon SpawnActor
         // boundary surfaces here rather than at reset. Recording it leaves the
         // pawn out of later ticks instead of resuming a half-advanced state.
         const spawnedFrom = level.actors.length;
-        try { runtime.processActorTick(actor, delta, npcTickOptions); }
+        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
       } else if (npcSpawned.has(actor)) {
@@ -1466,7 +1481,7 @@ export async function createScriptDoors({
         if (runtime.instance(actor).pendingKill) continue;
         if (owner && npcFailures.has(owner)) continue;
         const spawnedFrom = level.actors.length;
-        try { runtime.processActorTick(actor, delta, npcTickOptions); }
+        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) {
           npcFailures.set(owner ?? actor,
             `${actor.name ?? runtime.namedReference(actor, 'Name').get()}: ${String(error?.message ?? error)}`);
@@ -1522,6 +1537,10 @@ export async function createScriptDoors({
   // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent
   // graphs. docs/script-instructor-conversation.md.
   const faceConversations=await prepareFaceConversations(runtime,{assets,level});
+  liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:infoLinkShellValue,
+    conversations:faceConversations.conversations,prepareClass:prepareNpcClass,
+    onSpeech:event=>callbacks.conversationSpeech?.(event)});
+  const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
   runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
 
@@ -1559,7 +1578,7 @@ export async function createScriptDoors({
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures,
     infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay };
 }
 
 export default createScriptDoors;

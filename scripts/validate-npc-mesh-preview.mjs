@@ -30,10 +30,8 @@ assert.deepEqual(snapshot(),before,'inspection must not change actor state');
 assert.deepEqual(game.player.status(),player,'inspection must not move or tick JC');
 for(const name of ['JaimeReyes0','ScientistMale0','MedicalBot0','RepairBot0'])
   assert.ok(preview.actors.some(actor=>actor.summary.actor===name),`Missing ${name}`);
-assert.equal(preview.actors.length,14);
-assert.equal(preview.summary.errors.length,4);
-assert.ok(preview.summary.errors.every(error=>error.message==='Environment-mapped mesh preview is unsupported'));
-console.log('Explicit unsupported boundaries:',preview.summary.errors);
+assert.equal(preview.actors.length,18);
+assert.deepEqual(preview.summary.errors,[]);
 assert.equal(preview.root.visible,false);
 for(const actor of preview.actors) {
   let triangles=0;
@@ -113,4 +111,4 @@ set('bDeleteMe',true);view.update();assert.equal(view.root.visible,false);
 assert.deepEqual(game.player.status(),player,'mesh sampling and controlled NPC animation do not tick JC');
 preview.dispose();
 assert.equal(view.update(),false,'disposed geometry is not uploaded again');
-console.log('NPC preview: 14 shared runtime poses, persistent buffers/tweens/bounds, hidden/deleted actors, read-only sampling.');
+console.log('NPC preview: 18 shared runtime poses, persistent buffers/tweens/bounds, hidden/deleted actors, read-only sampling.');

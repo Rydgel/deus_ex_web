@@ -32,6 +32,10 @@ test('compact indices reject truncation and overflow', () => {
 test('package strings decode ANSI and UTF-16 with required terminators', () => {
   assert.equal(new Reader(Uint8Array.from([4, 68, 88, 33, 0])).string(), 'DX!');
   assert.equal(new Reader(Uint8Array.from([0x83, 0x41, 0, 0xa9, 0x03, 0, 0])).string(), 'AΩ');
+  // Core FString serializes raw TCHAR units, including BOM and lone surrogates.
+  const wide = new Reader(Uint8Array.from([0x84, 0xff, 0xfe, 0, 0xd8, 0x41, 0, 0, 0]));
+  assert.equal(wide.string(), '\ufeff\ud800A');
+  assert.equal(wide.offset, 9);
   assert.throws(() => new Reader(Uint8Array.from([2, 65, 66])).string(), /Unterminated/);
   assert.throws(() => new Reader(Uint8Array.from([5, 65])).string(), /Truncated/);
 });

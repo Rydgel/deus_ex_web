@@ -40,6 +40,7 @@ export async function createPlayHud({runtime,assets,player,shell,mapNorth=0}){
     'hudcompassdisplay.drawbackground','hudcompassdisplay.drawborder','hudcompassdisplay.postdrawbackground',
     'hudbasewindow.initwindow','hudbasewindow.stylechanged','progressbarwindow.usescaledcolor',
     'hudinfolinkdisplay.drawbackground','hudinfolinkdisplay.drawborder',
+    'hudsharedborderwindow.drawbackground','hudsharedborderwindow.drawborder',
     'progressbarwindow.setvalues','progressbarwindow.setcurrentvalue','progressbarwindow.setvertical',
     'progressbarwindow.updatebars','progressbarwindow.getbarcolor','crosshair.initwindow',
     'crosshair.setcrosshaircolor','colorthememanager.getcurrenthudcolortheme','colortheme.getcolorfromname',
@@ -114,7 +115,7 @@ export async function createPlayHud({runtime,assets,player,shell,mapNorth=0}){
   for(const object of [hit,compass])for(const name of ['texBackground','texBorder'])await imageFor(read(object,name));
   await imageFor(read(compass,'texTickBox'));
   const gc={};runtime.attach(gc,classes.get('extension.gc'));
-  for(const path of ['gc.setstyle','gc.settilecolor','gc.drawtexture'])await prepare(ext,path);
+  for(const path of ['gc.setstyle','gc.settilecolor','gc.drawtexture','gc.drawborders'])await prepare(ext,path);
   function decorationCommands(object,post=false){
     const commands=[];
     // Existing InfoLink windows now expose their native dimensions to DrawWindow.
@@ -125,7 +126,7 @@ export async function createPlayHud({runtime,assets,player,shell,mapNorth=0}){
     }
     scoped(()=>{
       const native=runtime.native,boundaries=runtime.boundaryNatives;
-      runtime.boundaryNatives=new Set([...boundaries,1212,1230,1284]);
+      runtime.boundaryNatives=new Set([...boundaries,1212,1230,1284,1289]);
       let style=1,color=[255,255,255];
       runtime.native=call=>{
         const args=Array.from({length:call.argumentCount},(_,i)=>deref(call.evaluateArgument(i)));
@@ -133,6 +134,9 @@ export async function createPlayHud({runtime,assets,player,shell,mapNorth=0}){
         else if(call.index===1230)color=hudColor(args[0]);
         else if(call.index===1284){const [x,y,width,height,u,v,texture]=args;
           commands.push({x,y,width,height,u,v,texture:texture.key,style,color});}
+        else if(call.index===1289){const [x,y,width,height,l,r,t,b,borders]=args;
+          if(l||r||t||b||args[9]||args[10])throw new Error('HUD border margin/stretch path is not bound');
+          commands.push({x,y,width,height,borders,style,color});}
         else return native(call);
       };
       try{if(post)invoke(object,'PostDrawBackground',[gc]);
@@ -153,7 +157,7 @@ export async function createPlayHud({runtime,assets,player,shell,mapNorth=0}){
     energy:read(hit,'energyPercent'),underwater:read(hit,'bUnderwater'),
     compass:{north:read(compass,'mapNorth'),yaw:read(compass,'lastPlayerYaw'),
       drawPos:read(compass,'drawPos'),wrapPos:read(compass,'wrapPos')},textures:images.size});
-  return {hit,compass,cross,windows,children,images,read,rect,tile,visible,background,scoped,invoke,snapshot,
+  return {runtime,player,shell,hit,compass,cross,windows,children,images,read,rect,tile,visible,background,scoped,invoke,snapshot,
     decorationCommands,
     tick(delta){scoped(()=>{invoke(hit,'Tick',[delta]);invoke(compass,'Tick',[delta]);});},
     reset(){scoped(()=>{for(const name of parts){const part=read(hit,name);

@@ -1,3 +1,5 @@
+import {setWindowHeightNative} from './script-window-size.mjs';
+import {setTileWindow} from './script-window-tile.mjs';
 import {setWindowConfigurationNative} from './script-window-configuration.mjs';
 import { readClass } from '../unreal/classes.mjs';
 import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMetadata, readStructMetadata } from '../unreal/script-metadata.mjs';
@@ -26,7 +28,7 @@ import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
 } from './script-actor-collision.mjs';
-import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim } from './play-anim.mjs';
+import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim, execTweenBlendAnim } from './play-anim.mjs';
 import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
@@ -1734,6 +1736,13 @@ export class ScriptRuntime {
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       });
     }
+    if(call.index===1434){
+      if(call.argumentCount!==1)throw new Error('Window.SetHeight requires one height argument');
+      return setWindowHeightNative(call.receiver,refValue(call.evaluateArgument(0)),{
+        ...this.windowLifecycle?.size,
+        askParentForReconfigure:request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration),
+      });
+    }
     if(call.index===1433){
       if(call.argumentCount!==1)throw new Error('Window.SetWidth requires one width argument');
       const width=refValue(call.evaluateArgument(0));
@@ -1912,6 +1921,10 @@ export class ScriptRuntime {
     if(call.index===2054){
       if(call.argumentCount!==0)throw new Error('ClearBindEvents accepts no arguments');
       return clearConversationEvents(call.receiver,{read:(object,key)=>this.namedReference(object,key).get()});
+    }
+    if(call.index>=1535&&call.index<=1545){
+      const args=Array.from({length:call.argumentCount},(_,i)=>refValue(call.evaluateArgument(i)));
+      return setTileWindow(call.receiver,call.index,args,this.windowLifecycle?.tile);
     }
     if(call.index===2055){
       if(call.argumentCount>1)throw new Error('GetSpeechAudio accepts one integer argument');
@@ -2122,6 +2135,13 @@ export class ScriptRuntime {
       if(call.index===294)return execTweenAnim(view,mesh,sequenceName,rateArgument,log);
       if(call.index===260)return execLoopAnim(view,mesh,sequenceName,rate,tweenTime,minRateArgument??0,log);
       return execPlayAnim(view,mesh,sequenceName,rate,tweenTime,log);
+    }
+    if(call.index===1012){
+      if(call.argumentCount<2||call.argumentCount>3)throw new Error('Invalid TweenBlendAnim argument count');
+      const sequence=refValue(call.evaluateArgument(0)),time=refValue(call.evaluateArgument(1));
+      const slot=call.argumentCount>2?refValue(call.evaluateArgument(2))??0:0;
+      return execTweenBlendAnim(animationTickView(this,call.receiver),this.meshPayload(call.receiver),sequence,time,slot,
+        (kind,details)=>this.warning?.({type:'TweenBlendAnim',kind,...details}));
     }
     if(call.index===1010){
       if(call.argumentCount<1||call.argumentCount>4)throw new Error('Invalid PlayBlendAnim argument count');

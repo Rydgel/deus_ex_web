@@ -4,14 +4,10 @@ import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
+import {meshVertexNormals,meshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 
-// Original Training capture, class/name identity checked by the integration validator.
-export const TRAINING_NPC_IDENTITIES=Object.freeze({JaimeReyes0:34333,ScientistMale0:34368,
-  WaltonSimons0:34539,mib1:34533,JaimeReyes1:34328,JaimeReyes2:34315,
-  JosephManderley0:34396,ScientistFemale0:34393,Secretary0:34390,
-  ScientistFemale1:34512,Doctor1:34508,Doctor0:34602,
-  UNATCOTroop1:34401,MedicalBot0:34440,RepairBot0:34519,
-  UNATCOTroop2:34601,UNATCOTroop0:34612,UNATCOTroop3:34668});
+export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
+import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 
 /** Live NPC mesh binding: update() resamples GetFrame whenever the shared
  * runtime's pose fields change, so original startup/animation is visible in
@@ -36,7 +32,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));
-  return {root,actors,update(){for(const actor of actors)actor.update();},
+  return {root,actors,update(cameraPosition){for(const actor of actors)actor.update(cameraPosition);},
     dispose(){for(const actor of actors)actor.dispose();},
     summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
@@ -59,6 +55,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   }};
   const frame=getLodMeshFrame(payload,actor,coords,services);
   const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets);
+  const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  let points=null,normals=null;
+  function updateNormals(){
+    const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
+    points=Array.from({length:frame.output.byteLength/12},(_,i)=>[0,4,8].map(o=>vertices.getFloat32(i*12+o,true)));
+    normals=meshVertexNormals(points,faces);
+  }
+  if(hasEnvironment)updateNormals();
+  const environmentTexture=()=>{
+    const direct=read(actor,'Texture');if(direct)return direct;
+    const region=read(actor,'Region'),zone=region['engine.actor.pointregion.zone'];
+    const fromZone=zone&&read(zone,'EnvironmentMap');if(fromZone)return fromZone;
+    const fromLevel=read(read(actor,'Level'),'EnvironmentMap');if(fromLevel)return fromLevel;
+    let fallback=null;
+    for(let i=0;i<payload.objectReferences.length;i++)fallback=runtime.getActorMeshTexture(actor,i)??fallback;
+    return fallback;
+  };
   const root=new THREE.Group(),materials=[],gpuTextures=[],groups=new Map();
   let disposed=false,lastPose=null;
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
@@ -91,8 +104,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   try {
     for(const [faceIndex,face] of faces.entries()) {
       if(face.flags&POLY.Invisible)continue;
-      if(face.flags&POLY.Environment)throw new Error('Environment-mapped mesh preview is unsupported');
-      const reference=runtime.getActorMeshTexture(actor,face.texture);
+      const reference=face.flags&POLY.Environment?environmentTexture():runtime.getActorMeshTexture(actor,face.texture);
       if(!reference)throw new Error(`${actorName} skin slot ${face.texture} is empty`);
       const key=`${reference.key}:${face.flags}`;
       if(!groups.has(key))groups.set(key,{reference,flags:face.flags,indices:[],uvs:[],faces:[]});
@@ -147,21 +159,34 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     lastPose=pose();
     return {root,dispose,
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
-      update(){
+      update(cameraPosition){
         if(disposed)return false;
         root.visible=!read(actor,'bHidden')&&!read(actor,'bDeleteMe');
         if(!root.visible)return false;
         if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         const current=pose();
-        if(current.every((value,index)=>Object.is(value,lastPose[index])))return false;
-        getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
-        for(const group of groups.values()){
-          const positions=group.geometry.getAttribute('position');
-          copyPositions(positions.array,group.indices);positions.needsUpdate=true;
-          group.geometry.computeBoundingBox();group.geometry.computeBoundingSphere();
+        const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
+        if(poseChanged){
+          getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
+          if(hasEnvironment)updateNormals();
+          for(const group of groups.values()){
+            const positions=group.geometry.getAttribute('position');
+            copyPositions(positions.array,group.indices);positions.needsUpdate=true;
+            group.geometry.computeBoundingBox();group.geometry.computeBoundingSphere();
+          }
+        }
+        if(hasEnvironment&&cameraPosition){
+          for(const group of groups.values())if(group.flags&POLY.Environment){
+            const uv=group.geometry.getAttribute('uv');
+            for(let i=0;i<group.indices.length;i++){
+              const index=group.indices[i];
+              uv.array.set(meshEnvironmentUV(points[index].map((v,j)=>Math.fround(v-cameraPosition[j])),normals[index]),i*2);
+            }
+            uv.needsUpdate=true;
+          }
         }
         lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
-        return true;
+        return poseChanged||hasEnvironment;
       },summary};
   } catch(error) {dispose();throw error;}
 }

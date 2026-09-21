@@ -18,23 +18,23 @@
  * map's conversation-owning pawns can invoke — selected by conOwnerName ==
  * a present pawn BindName, never by a hardcoded conversation name.
  *
- * The recovered selection then reaches `conPlay = Spawn(class'ConPlay')`. The
- * ConPlay first-person presentation (window construction, speech playback,
- * termination and player-state restoration) is the explicit remaining boundary
- * recorded in the evidence document. */
+ * The selected graph is consumed by the original ConPlay state machine. */
 
+import { copyValue } from './script-values.mjs';
 import { loadMissionConversations } from './script-conversation-binding.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
 function readMaybe(runtime, object, key) {
-  try { return runtime.namedReference(object, key).get(); } catch { return undefined; }
+  const instance=runtime.instances.get(object);
+  if(!instance||!runtime.lookupMember(instance.cls,'fields',key))return undefined;
+  return runtime.namedReference(object,key).get();
 }
 
 /** Prepare one conversation's authored object graph: its ConFlagRef chain, its
  * ConEvent chain (Conversation.eventList -> ConEvent.nextEvent, including the
  * ConEventRandomLabel head) and each event's ConSpeech. Idempotent. */
-async function prepareConversationGraph(runtime, conversation) {
+async function prepareConversationGraph(runtime, conversation, objects) {
   let prepared = 0;
   // prepareObject attaches the object, after which its own linked next-pointer
   // is readable; walk each chain to completion with a cycle guard.
@@ -42,17 +42,23 @@ async function prepareConversationGraph(runtime, conversation) {
   for (let flagRef = readMaybe(runtime, conversation, 'flagRefList'); flagRef;) {
     if (seenFlags.has(flagRef)) throw new Error('Conversation flag-ref chain is cyclic');
     seenFlags.add(flagRef);
-    await runtime.prepareObject(flagRef); prepared++;
+    await runtime.prepareObject(flagRef); objects.add(flagRef); prepared++;
     flagRef = runtime.namedReference(flagRef, 'nextFlagRef').get();
   }
   const seenEvents = new Set();
   for (let event = readMaybe(runtime, conversation, 'eventList'); event;) {
     if (seenEvents.has(event)) throw new Error('Conversation event chain is cyclic');
     seenEvents.add(event);
-    await runtime.prepareObject(event); prepared++;
+    await runtime.prepareObject(event); objects.add(event); prepared++;
     // conSpeech exists only on ConEventSpeech; other ConEvent subclasses lack it.
     const speech = readMaybe(runtime, event, 'conSpeech');
-    if (speech) { await runtime.prepareObject(speech); prepared++; }
+    if (speech) { await runtime.prepareObject(speech); objects.add(speech); prepared++; }
+    const eventFlags = new Set();
+    for (let eventFlag = readMaybe(runtime, event, 'flagRef'); eventFlag;) {
+      if (eventFlags.has(eventFlag)) throw new Error('Conversation event flag-ref chain is cyclic');
+      eventFlags.add(eventFlag);await runtime.prepareObject(eventFlag);objects.add(eventFlag);prepared++;
+      eventFlag=runtime.namedReference(eventFlag,'nextFlagRef').get();
+    }
     event = runtime.namedReference(event, 'nextEvent').get();
   }
   return prepared;
@@ -91,10 +97,9 @@ export async function prepareFaceConversations(runtime, { assets, level, package
     if (bindName && bindName !== 'none') bindNames.add(bindName);
   }
 
-  let descriptors;
-  try { descriptors = loadMissionConversations(conText, missionNumber); }
-  catch { return { conversations: [], preparedObjects: 0, missionNumber }; } // no mission list -> nothing to prepare
+  const descriptors = loadMissionConversations(conText, missionNumber);
   const conversations = [];
+  const objects = new Set();
   let preparedObjects = 0;
   for (const descriptor of descriptors) {
     if (!descriptor.conOwnerName || !bindNames.has(lower(descriptor.conOwnerName))) continue;
@@ -106,7 +111,8 @@ export async function prepareFaceConversations(runtime, { assets, level, package
     const conversation = await runtime.objects.resolve(conText, descriptor.ref);
     await runtime.prepareObject(conversation);
     if (readMaybe(runtime, conversation, 'bDataLinkCon')) continue;
-    preparedObjects += 1 + await prepareConversationGraph(runtime, conversation);
+    objects.add(conversation);
+    preparedObjects += 1 + await prepareConversationGraph(runtime, conversation, objects);
     conversations.push({ conversation, conName: descriptor.conName, conOwnerName: descriptor.conOwnerName });
   }
 
@@ -116,5 +122,13 @@ export async function prepareFaceConversations(runtime, { assets, level, package
   const isSpeakingActor = conSys.exportsByPath.get('conversation.isspeakingactor');
   if (isSpeakingActor) await runtime.prepareFunction(conSys, isSpeakingActor);
 
-  return { conversations, preparedObjects, missionNumber };
+  // Preserve canonical ObjectProperty identities, copying owned typed values.
+  const baseline = [...objects].map(object => ({ object, fields:
+    runtime.instance(object).cls.propertyLink.filter(field => !field.key.startsWith('core.object.'))
+      .map(field => [field, copyValue(field, runtime.fieldReference(object, field).get())]) }));
+  const reset = () => {
+    for (const {object, fields} of baseline)
+      for (const [field, value] of fields) runtime.fieldReference(object, field).set(copyValue(field, value));
+  };
+  return { conversations, preparedObjects, missionNumber, reset };
 }

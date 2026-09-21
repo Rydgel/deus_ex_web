@@ -4,6 +4,13 @@ import { compileFunction, primitiveNativeIndices } from '../src/runtime/script-v
 
 const pkg = { imports: [], exports: [{ name: 'Value' }, { name: 'Amount' }] };
 function compile(bytes, size) { return compileFunction({ pkg, entry: { path: 'Fixture' }, bytes: Uint8Array.from(bytes), size }); }
+test('Assert evaluates once, continues on true and stops on false with the source line',()=>{
+  const vm=compile([9,234,0,1,1,4,38],10);
+  let calls=0;
+  assert.equal(vm.run({get Value(){calls++;return true;}}),1);
+  assert.equal(calls,1);
+  assert.throws(()=>vm.run({Value:false}),/Script assertion failed: Fixture, line 234/);
+});
 test('VM resolves local/instance references, native out parameters, and float32 arithmetic', () => {
   // Value += Amount; return Value. Serialized field indices expand to 4 bytes.
   const vm = compile([184, 1, 1, 0, 2, 22, 4, 1, 1], 18);

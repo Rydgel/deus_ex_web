@@ -102,3 +102,14 @@ export function resizeWindowNative(object, newWidth, newHeight, services = {}) {
 }
 
 export const setWindowSizeNative = resizeWindowNative;
+
+/** XWindow.SetHeight 0x1004d0e0, exec1434 0x10052260.
+ * Unlike Resize, this does not read or write width. */
+export function setWindowHeightNative(object,newHeight,services={}) {
+  const height=requested(number(newHeight,'newHeight'));
+  const old=number(services.read(object,0xa0,'f32'),'stored height');
+  if(x87C3Equal(height,old))return false;
+  services.write(object,0xa0,'f32',height);
+  services.askParentForReconfigure({object,height,native:0x1004e060});
+  return true;
+}

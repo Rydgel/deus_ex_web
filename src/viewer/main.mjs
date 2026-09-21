@@ -23,6 +23,28 @@ let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null,activeInfoLinkShell=null;
 let npcPreview=null;
 let infoLinkAudioContext=null,infoLinkAudioSources=new Set();
+const conversationAudio=new Map();
+function stopConversationAudio(id){
+  for(const [key,entry] of conversationAudio)if(id===undefined||id===key){
+    entry.cancelled=true;entry.source?.stop();conversationAudio.delete(key);
+  }
+}
+async function playConversationSpeech(event){
+  stopConversationAudio(event.id);
+  if(event.kind==='stop')return;
+  const entry={cancelled:false,source:null};conversationAudio.set(event.id,entry);
+  try{
+    const context=await activateInfoLinkAudio(),bytes=event.audio.bytes;
+    const buffer=await context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
+    if(entry.cancelled)return;
+    const source=context.createBufferSource();entry.source=source;source.buffer=buffer;
+    source.playbackRate.value=event.parameters[2]/100;
+    const gain=context.createGain();gain.gain.value=event.parameters[0]/100;
+    source.connect(gain);gain.connect(context.destination);
+    source.onended=()=>{if(conversationAudio.get(event.id)===entry)conversationAudio.delete(event.id);};
+    source.start();
+  }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);pauseForRuntimeError(error);}
+}
 let infoLinkAnimationFrame=0,infoLinkRunToken=0;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
@@ -55,6 +77,7 @@ async function playInfoLinkAudio(audio,context=null,isCurrent=()=>true){
   return {context,startTime:now};
 }
 function stopInfoLinkPresentation(){
+  stopConversationAudio();
   activeInfoLinkShell=null;
   infoLinkRunToken++;
   if(infoLinkAnimationFrame)cancelAnimationFrame(infoLinkAnimationFrame);
@@ -120,6 +143,7 @@ function useDoor() {
   catch(error) { pauseForRuntimeError(error); }
 }
 function pauseForRuntimeError(error) {
+  stopConversationAudio();
   runtimeError={message:error.message,stack:error.stack};paused=true;
   keys.clear();drag=false;document.exitPointerLock?.();
   showStats();
@@ -159,6 +183,7 @@ async function loadMap(name) {
       nextGame = await createGame(nextMap, asset, assets, {
         presentation:true,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
+        onConversationSpeech:event=>{void playConversationSpeech(event);},
         onDataLinkTransmission: event => {
           if(event.kind!=='started')return;
           queueMicrotask(()=>playInfoLinkTransmission(event));
@@ -412,7 +437,7 @@ function animate(time) {
     // Draw the current shared-runtime pose; rendering neither chooses an
     // animation nor advances NPC time — the script runtime owns both.
     if(npcPreview&&!runtimeError){
-      try{npcPreview.update();}catch(error){pauseForRuntimeError(error);}
+      try{npcPreview.update(fromView(camera.position.toArray()));}catch(error){pauseForRuntimeError(error);}
     }
     renderer.info.reset();
     renderer.setClearColor('#06101b', 1); renderer.clear();

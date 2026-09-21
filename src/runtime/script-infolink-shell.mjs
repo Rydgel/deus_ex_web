@@ -8,6 +8,7 @@
  * allocator ownership and several internal child-window callbacks remain host
  * leaves documented in docs/script-window-computer.md.
  */
+import {constructTileWindow,initTileWindow} from './script-window-tile.mjs';
 import {prepareDataLinkFunctions} from './script-datalink-transmission.mjs';
 import {
   constructWindowNative, constructWindowGcNative, setWindowGcFontsNative,
@@ -116,6 +117,16 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     if(!index)throw new Error(`Missing original DeusEx.${path}`);
     await runtime.prepareFunction(deusEx,index);
   }
+  const [conWindowClass,tileWindowClass]=await Promise.all([
+    load(deusEx,'hudconwindowfirst'),load(extension,'tilewindow')]);
+  for(const asset of [deusEx,extension])for(const entry of asset.pkg.exports){
+    if(entry.className!=='Function')continue;
+    const path=entry.path.toLowerCase();
+    if(path.startsWith('hudconwindowfirst.')||path.startsWith('tilewindow.')||
+      path==='deusexhud.createconwindowfirst')
+      await runtime.prepareFunction(asset,asset.exportsByPath.get(path));
+  }
+  const conversationWindows=new WeakSet();
   const root={name:'InfoLinkPreviewRoot'},hud={name:'InfoLinkPreviewHUD'};
   const manager={name:'InfoLinkPreviewThemeManager'},theme={name:'ColorThemeHUD_Default'};
   runtime.attach(root,rootClass);runtime.attach(hud,hudClass);runtime.attach(manager,managerClass);runtime.attach(theme,themeClass);
@@ -224,6 +235,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     text:rawServices,
     surface,
     computer,
+    tile:{...rawServices,askParentForReconfigure:surface.askParentForReconfigure},
     destroy,
     order:{...rawServices,
       addChild:({parent,child:added,flag})=>addWindowChildNative(parent,added,flag,{
@@ -254,9 +266,16 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
       }else if(request.classObject===computerWindowClass.record&&request.outer===child){
         textControl=created={name:'InfoLinkTextPreview'};createdClass=computerWindowClass;
         events.push('winText StaticConstructObject');
+      }else if((request.classObject===conWindowClass.record&&request.outer===hud)||
+        (conversationWindows.has(request.outer)&&
+          [tileWindowClass.record,textWindowClass.record,windowClass.record].includes(request.classObject))){
+        createdClass=request.classObject.linkedClass;
+        created={name:createdClass.record.name};conversationWindows.add(created);
       }else throw new Error('InfoLink shell received different StaticConstructObject class/outer');
       memory.allocate(created);runtime.attach(created,createdClass);
-      if(created===textControl)constructComputerWindowNative(created,{...rawServices,
+      if(createdClass===tileWindowClass)constructTileWindow(created,{...rawServices,
+        coreObjectConstructor:({object:target})=>memory.write(target,0,'u32',0x10179dfc)});
+      else if(created===textControl)constructComputerWindowNative(created,{...rawServices,
         constructWindow:({object:target})=>constructWindowNative(target,{...rawServices,
           coreObjectConstructor:({object:base})=>memory.write(base,0,'u32',0x10179dfc)})});
       else constructWindowNative(created,{...rawServices,
@@ -264,7 +283,11 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
       return created;
     },
     initVtable:request=>{
-      if(request.object===nameControl||request.object===queuedControl){
+      if(runtime.instance(request.object).cls===tileWindowClass){
+        initTileWindow(request.object,request.parent,{...rawServices,
+          initWindow:args=>initWindowNative(args,initServices)});
+      }else if(request.object===nameControl||request.object===queuedControl||
+        (conversationWindows.has(request.object)&&runtime.instance(request.object).cls===textWindowClass)){
         events.push(`${request.object===nameControl?'winName':'winQueued'} XTextWindow::Init`);
         initTextWindowNative(request.object,request.parent,{...rawServices,
           initWindow:args=>initWindowNative(args,initServices),
@@ -425,8 +448,9 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     boundary,events:Object.freeze(events.slice()),
     objects:Object.freeze({portrait,static:staticControl,name:nameControl,queued:queuedControl,
       text:textControl,line:lineControl,computerText:computerTextWindow,computerInput:computerInputWindow}),
-    withLifecycle(callback){const previous=runtime.windowLifecycle;runtime.windowLifecycle=lifecycle;
-      try{return callback();}finally{runtime.windowLifecycle=previous;}},
+    withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
+      runtime.windowLifecycle=lifecycle;playerTheme.set(manager);
+      try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
     recreate(){
       if(!destroyedWindows.has(shellObject))
         throw new Error('InfoLink shell must follow Window.Destroy before recreation');

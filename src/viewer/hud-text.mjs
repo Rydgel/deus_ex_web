@@ -7,6 +7,10 @@ import {decodeFontExport,writeFontImage,UFONT,FONT_PAGE} from '../runtime/script
 import {GC} from '../runtime/script-gc-state-model.mjs';
 import {gcDrawText} from '../runtime/script-gc-draw-text.mjs';
 import {gcSetTextColor} from '../runtime/script-gc-set-text-color.mjs';
+import {gcGetTextExtent} from '../runtime/script-gc-get-text-extent.mjs';
+import {gcDrawBorders} from '../runtime/script-gc-draw-borders.mjs';
+import {gcSetStyle} from '../runtime/script-gc-set-style.mjs';
+import {gcSetTileColor} from '../runtime/script-gc-set-tile-color.mjs';
 import {f32Bits,bitsToF32} from '../runtime/script-gc-draw-model.mjs';
 
 export async function createHudText(assets,names){
@@ -23,6 +27,7 @@ export async function createHudText(assets,names){
     node=mem.allocRaw(0x40),ri=mem.allocRaw(4),riTable=mem.allocRaw(0x100);
   put(canvas,0x78,viewport);put(canvas,0x7c,node);put(node,0,viewport);put(viewport,0x64,ri);
   put(ri,0,riTable);put(riTable,0x7c,3);put(gc.base,GC.canvas,canvas);
+  const canvasTable=mem.allocRaw(0x60);put(canvas,0,canvasTable);put(canvasTable,0x5c,4);
   put(gc.base,GC.flags,2);put(gc.base,GC.textPolyFlags,0x802);put(gc.base,GC.textFlags,1);
   put(gc.base,0x9c,1);put(gc.base,0xa0,1);put(gc.base,GC.depth,1);
   const texCache={records:Array.from({length:5},()=>mem.allocRaw(0x84)),static:mem.allocRaw(0x84),head:0,count:0};
@@ -56,16 +61,34 @@ export async function createHudText(assets,names){
     callVirtual(slot,object,command){
       if(slot===1){put(command.record,0,object);return;}
       if(slot===2)return;
-      if(slot!==3)throw new Error('Unsupported HUD text render operation');
-      emit({image:byPointer.get(mem.read(command.record,'u32')),x:bitsToF32(command.x),y:bitsToF32(command.y),
+      if(slot!==3&&slot!==4)throw new Error('Unsupported HUD text render operation');
+      emit({image:byPointer.get(slot===3?mem.read(command.record,'u32'):command.texture),x:bitsToF32(command.x),y:bitsToF32(command.y),
         width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
         color:command.color.slice(0,3).map(bits=>bitsToF32(bits)*255),style:command.polyFlags&4?3:2});
     },
   };
   return {images,fonts,
+    measure({font,text,width}){
+      const pointer=fonts.get(font.toLowerCase());if(!pointer)throw new Error(`HUD font not prepared: ${font}`);
+      put(gc.base,GC.normalFont,pointer);put(gc.base,GC.boldFont,pointer);
+      return gcGetTextExtent(gc,Math.fround(width),text,services);
+    },
+    borders(draw,{images,x,y,width,height,color,style}){
+      const pointers=images.map(image=>{
+        if(!image)return 0;
+        let pointer=texturePointers.get(image.key);
+        if(!pointer){pointer=mem.allocRaw(0x60);texturePointers.set(image.key,pointer);
+          put(pointer,0x34,image.width,'i32');put(pointer,0x38,image.height,'i32');byPointer.set(pointer,image);}
+        return pointer;
+      });
+      put(gc.base,GC.clipX,x,'f32');put(gc.base,GC.clipY,y,'f32');put(gc.base,GC.clipWidth,width,'f32');put(gc.base,GC.clipHeight,height,'f32');
+      gcSetStyle(gc,style,services);gcSetTileColor(gc,(color[0]|color[1]<<8|color[2]<<16)>>>0,services);emit=draw;
+      gcDrawBorders(gc,...[x,y,width,height,0,0,0,0].map(f32Bits),pointers,false,false,services);
+    },
     draw(draw,{font,text,x,y,width,height,color=[255,255,255],hAlign=0,vAlign=0,wrap=true}){
       const pointer=fonts.get(font.toLowerCase());if(!pointer)throw new Error(`HUD font not prepared: ${font}`);
       put(gc.base,GC.normalFont,pointer);put(gc.base,GC.boldFont,pointer);
+      put(gc.base,GC.flags,2);
       put(gc.base,GC.clipX,x,'f32');put(gc.base,GC.clipY,y,'f32');put(gc.base,GC.clipWidth,width,'f32');put(gc.base,GC.clipHeight,height,'f32');
       put(gc.base,GC.hAlign,hAlign,'u8');put(gc.base,GC.vAlign,vAlign,'u8');put(gc.base,GC.textFlags,wrap?1:0);
       gcSetTextColor(gc,(color[0]|color[1]<<8|color[2]<<16)>>>0,services);emit=draw;

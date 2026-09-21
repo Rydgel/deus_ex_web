@@ -140,3 +140,18 @@ export function execTweenAnim(actor, mesh, sequenceName, time, log = () => {}) {
   actor.AnimFrame = time > 0 ? f(-1 / sequence.numFrames) : 0;
   actor.simAnim = {frame: f(actor.AnimFrame * 10000), rate: 0, tween: f(actor.TweenRate * 1000), last: 0};
 }
+
+/** Engine execTweenBlendAnim 0x103e1300; original LipSynch mouth-close tail. */
+export function execTweenBlendAnim(view,mesh,sequenceName,time,slot=0,log=()=>{}) {
+  slot=Number(slot)|0;
+  if(slot<0||slot>3){log('blendSlotRange',{slot});return;}
+  const sequence=sequenceOrLog(mesh,sequenceName,'tweenBlendAnim',log);
+  if(!sequence)return;
+  const blend=view.blends[slot];
+  blend.AnimSequence=sequence.name;
+  blend.AnimLast=blend.AnimMinRate=blend.AnimRate=blend.OldAnimRate=0;
+  time=f(time);
+  blend.TweenRate=time>0?f(1/(sequence.numFrames*time)):0;
+  blend.AnimFrame=time>0?f(-1/sequence.numFrames):0;
+  blend.simAnim={frame:f(blend.AnimFrame*10000),rate:0,tween:f(blend.TweenRate*1000),last:0};
+}

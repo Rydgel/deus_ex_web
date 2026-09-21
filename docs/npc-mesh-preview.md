@@ -35,8 +35,8 @@ and are U/256, V/256. GetFrame indices already include the special-vertex
 prefix. The viewer's existing reflection `[x,y,z] -> [y,z,-x]` requires reversing
 the original triangle winding. Original skins, palette masking and face flags
 are retained. Static texture decoding and GPU surface-flag handling reuse the
-world viewer's established conventions; animated/environment textures are not
-admitted by this bounded preview.
+world viewer's established conventions; animated/procedural textures remain unsupported. The selected PF_Environment
+path is now recovered; see [instructor material evidence](script-instructor-conversation.md#guard-environment-materials-recovered-selected-path).
 
 The mesh uses **texture-only inspection shading**, explicitly labeled in the
 view. `bUnlit` remains false on the actor. No guessed mesh lighting is installed
@@ -45,11 +45,11 @@ a claim that DrawLodMesh's distance-dependent topology is complete.
 
 `createActorMeshPreview` is shared by every admitted actor. The Training
 fixture uses the same capture's 18 identities, listed in
-`TRAINING_NPC_IDENTITIES` and checked against the local capture. Fourteen meshes
+`TRAINING_NPC_IDENTITIES` and checked against the local capture. All eighteen meshes
 render, including `WaltonSimons0` and `mib1` beside Jaime and `ScientistMale0`
-behind him. The four guards have PF_Environment surfaces;
-the preview explicitly reports them as unsupported instead of inventing
-reflection coordinates. Character-specific geometry or skin logic is absent.
+behind him. The four guards use the recovered PF_Environment texture selection,
+normal accumulation and reflection UV path. Their UVs update with the camera
+even when the pose is unchanged. Character-specific geometry or skin logic is absent.
 
 Training loads these meshes automatically with the map. The preview button and
 Focus selector move only the inspection camera. Returning to Play or Player
@@ -59,7 +59,7 @@ player, actor animation fields and runtime pause/error state unchanged.
 
 `validate-npc-mesh-preview.mjs` checks this new integration boundary using the
 actual Training runtime and local original identity capture: all 18 captured
-identities, 14 complete mesh/texture uploads, explicit guard boundaries and
+identities, 18 complete mesh/texture uploads, recovered guard materials and
 unchanged actor/player fields during sampling. A separate controlled section
 calls each actor's original PlayWaiting method, advances the recovered animation
 phase and verifies the shared buffer updates, tween continuity, bounds and
@@ -68,9 +68,9 @@ Existing native frame and material comparisons
 establish the original behavior; this integration check does not establish
 whole-renderer fidelity. Browser inspection confirms Jaime's room companions
 and the medical bot are visible at their original locations with the scope label
-present. The current UI can focus any of the 14 rendered actors.
+present. The current UI can focus any of the 18 rendered actors.
 
 Visibility follow-up: browser checks confirm automatic loading in Play,
-Inspect-to-Play switching and Player start all retain 14 visible mesh previews
+Inspect-to-Play switching and Player start all retain 18 visible mesh previews
 with no runtime error. The former mode/reset handlers incorrectly hid the
 mesh group along with the focus controls; only the controls are now hidden.

@@ -81,7 +81,15 @@ export class Reader {
     if (bytes[end] !== 0 || (wide && bytes[end + 1] !== 0)) {
       throw new PackageError('Unterminated package string', this.offset - bytes.length);
     }
-    return new TextDecoder(wide ? 'utf-16le' : 'windows-1252', { fatal: true }).decode(bytes.subarray(0, end));
+    if (wide) {
+      // Original FString archive loading copies TCHAR units, including lone
+      // surrogates and BOMs. TextDecoder rejects/replaces or strips those.
+      let value = '';
+      for (let index = 0; index < end; index += 2)
+        value += String.fromCharCode(bytes[index] | bytes[index + 1] << 8);
+      return value;
+    }
+    return new TextDecoder('windows-1252', { fatal: true }).decode(bytes.subarray(0, end));
   }
 }
 

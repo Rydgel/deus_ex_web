@@ -770,6 +770,12 @@ export function compileFunction(fn) {
           case 0x02:
             if(!services.defaultReference)throw new Error('Default property is not linked');
             return services.defaultReference(receiver,fn,n);
+          case 0x09:
+            // Core execAssert 1012fcc0 reads a uint16 source line, evaluates
+            // one bool, then reports NAME_Critical on zero (1012fcf9).
+            if(!refValue(evaluate(n.value,instance)))
+              throw new Error(`Script assertion failed: ${fn.entry.path}, line ${n.target}`);
+            return undefined;
           case 0x0f: return assign(evaluate(n.left), refValue(evaluate(n.right)));
           case 0x14: return assign(evaluate(n.left),Boolean(refValue(evaluate(n.right))));
           case 0x17: return instance;

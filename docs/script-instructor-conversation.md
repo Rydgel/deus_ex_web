@@ -1,5 +1,16 @@
 # Training munitions-instructor conversation
 
+> **Checkpoint verification, 2026-09-21:** 509 unit tests and the production build
+> pass. The instructor browser flow with original subtitles-off defaults and
+> Liberty Island loading passed, as did focused startup, inventory, patrol,
+> DataLink and native translation checks. **Subtitle presentation remains
+> incomplete:** explicitly enabling `player.bSubtitles` reaches an unsupported
+> `ConfigureChild` boundsUpdate service. The renderer adapter is present, but
+> visible subtitle layout is not verified and must not be counted as complete.
+> Earlier HUD references below cover the default presentation path only. The
+> next continuation should finish that window boundary and rerun the browser
+> flow with subtitles enabled. Stage 3 remains open.
+
 The Training munitions instructors are `UNATCOTroop0` and `UNATCOTroop3`
 (`00_Training`), both `BindName = MunitionsTrooper`. `ConBindEvents` binds them
 `MunitionsTrooperFrob` (Conversation3) then `MunitionsTrooperTake`
@@ -7,7 +18,26 @@ The Training munitions instructors are `UNATCOTroop0` and `UNATCOTroop3`
 [conversation binding](script-conversation-binding.md); confirmed live by
 `tools/dump-conlist-win.c`). `UNATCOTroop1`/`UNATCOTroop2` have a different
 BindName and bind nothing. This document records the recovered face-to-face
-conversation contract, what is implemented, and the exact remaining boundary.
+conversation contract, live playback, and the remaining fidelity limits.
+
+## Continuation contracts — 2026-09-21
+
+The Liberty Island preparation failure is in the package string adapter.
+Core FString archive operator `0x101459b0`, reached through
+UStrProperty.SerializeItem `0x10167750`, loads negative-count strings as raw
+16-bit units. It does not validate Unicode scalar values or strip a byte-order
+mark. The existing original-DLL SerializeItem probe, supplied with
+`[0x84,0xff,0xfe,0x00,0xd8,0x41,0x00,0,0]`, returns
+`[0xfeff,0xd800,0x0041,0]` with Num/Max 4. The package Reader must preserve
+those units too. See [the recovered serializer](script-property-serialize-item.md).
+
+Public Player start restores a fresh browser scene. Conversation package
+objects persist as host identities, so their mutable reflected values must be
+restored from their pre-play values, along with the live flag-base state. A
+flag set by FlagTrigger.Touch and RandomLabel.cycleIndex previously survived that
+reset; both now restore their fresh values. Tests must observe reset directly, without clearing a flag or setting a
+conversation field afterward. This host reset is distinct from original map
+travel, which can deliberately carry flags and conversation history.
 
 Original evidence is the installed data (`Deus Ex GOTY Edition`), the class
 `ScriptText` sources embedded in `DeusEx.u`/`ConSys.u`/`DeusExConText.u`
@@ -33,7 +63,7 @@ letterbox camera and no player choices. `bInvokeFrob/Bump/Radius=true`.
 - `flagRefList`: `ConFlagRef { FlagName=MunitionsTrooperReady, Value=true }` —
   plays only when `MunitionsTrooperReady == True`.
 - `eventList`: `ConEventSetFlag` (clears `MunitionsTrooperReady` back to false) →
-  `ConEventJump "Take"` → 30 `ConEventTransferObject` moving Multitool/Lockpick
+  `ConEventJump "Take"` → 29 `ConEventTransferObject` moving Multitool/Lockpick
   and every training weapon **from JCDenton to MunitionsTrooper** →
   `ConEventJump "Start"` → `ConEventRandomLabel "Start"` → three speeches
   (A1..A3) → `ConEventEnd`. This is the end-of-training "surrender your gear"
@@ -81,7 +111,7 @@ ScriptedPawn.Frob(Frobber, frobWith)              (.cache/research/ScriptedPawn.
 into its idle/standing state (~150 Play ticks from load); before that
 `CanConverse` correctly refuses.
 
-## 3. ConPlay first-person presentation (recovered; the remaining boundary)
+## 3. ConPlay first-person presentation (implemented selected path)
 
 `ConPlay expands ConPlayBase expands Actor` (both in `DeusEx.u`, script-only,
 inheriting `Engine.Actor`'s constructor through `UClass::Bind`). ConPlay.uc:
@@ -127,51 +157,171 @@ non-DataLink conversation a present pawn can invoke, and prepares
 `Conversation.IsSpeakingActor`. In Training this is `MunitionsTrooperFrob`,
 `MunitionsTrooperTake` and `JaimeBark`.
 
-`scripts/validate-instructor-conversation.mjs` drives the **public Frob path**
-and asserts, all through the original bytecode over the attached graph:
-- both instructors bind `MunitionsTrooperFrob` → `MunitionsTrooperTake`;
-- `GetActiveConversation` selects Frob when `MunitionsTrooperReady` is false and
-  Take when true, for the invoking instructor (participant identity preserved
-  across the shared BindName);
-- a real Frob dispatch runs the whole `StartConversation` gate chain
-  (`CanStartConversation`, `CanConverse`, `GetActiveConversation`, the
-  participant `IsSpeakingActor` test) and reaches `Spawn(class'ConPlay')` with
-  the correct conversation selected;
-- the greeting's `ConEventRandomLabel` cycles A1..A5;
-- public `game.reset()` restores the fresh (flag-false) selection;
-- **walking the player into and out of the authored FlagTrigger** flips
-  `MunitionsTrooperReady` (`FlagTrigger.Touch`/`UnTouch`) so the instructor
-  selects Take while the player stands there and Frob after leaving — the Take
-  path reached through ordinary movement, not a forced flag.
+`scripts/validate-instructor-conversation.mjs` enters through actual
+HighlightCenterObject targeting and public `game.use()`. It verifies both owners,
+the two routes, original speech IDs and emitter identity, all 29 transfer events,
+an owned Lockpick moving from JC to the invoking instructor, history creation,
+original timer/Sleep/End termination, HUD rendering, and active reset followed
+by another successful greeting. It also checks that all 18 Training NPC meshes
+prepare, including all four environment-mapped guards. The fixture repositions
+JC for approach setup; walking into FlagTrigger sets Ready naturally. It never
+assigns frobTarget, Ready, event labels, timers or participant states.
 
-`ConEventRandomLabel`'s natives are compared against the recovered ConSys.dll
-bodies in `scripts/validate-conversation-random-label.mjs`.
+The greeting rotates through the original random-label behavior. A repeated
+use within one second of LastConEndTime is rejected by
+DeusExPlayer.GetActiveConversation (source lines 7922–7923); the validator waits
+past that original gate before repeating. First-person movement remains active
+throughout; media-ended never advances the script.
 
-## Remaining boundary (measured, not yet implemented)
+### Remaining fidelity limits
 
-The first-person **presentation** past `Spawn(class'ConPlay')`. A host research
-harness that composes a ConPlay spawn (through the recovered
-`spawnScriptActor` path and the canonical registry) confirms ConPlay
-constructs, `con` resolves to `MunitionsTrooperFrob`, `CreateConWindowFirst`
-returns the window, `currentEvent` is set to the `ConEventRandomLabel` head, and
-execution reaches `ConPlayBase.SetupHistory`, whose first unbuilt native is
-**`DeusExPlayer.CreateHistoryObject` (native 3002, DeusEx.dll 0x10014640)** —
-it constructs a `ConHistory` and links it to the player. Past that lie
-`CreateHistoryEvent` (3003)/`ConHistory.AddEvent`, the conversation-speech font
-lookups (window natives), `TurnSpeakingActors`, the first-person window
-`Clear/DisplayName/DisplayText`, `PlaySpeech`/`GetSpeechAudio` with the
-`ClientHearSound` audio boundary (Stage 4), the `WaitForSpeech` timer schedule,
-and `TerminateConversation`. These are the explicit next dependencies; none is
-stubbed or force-returned in the shipped runtime — a frobbed instructor runs the
-real selection and stops at the `Spawn(class'ConPlay')` boundary.
+This is a substantial playable conversation increment, **not completion of the
+whole instructor assignment or Stage 3**. Mission00.Timer's independent
+RemoveAllInventory enforcement has not been scheduled in Play. Normal inventory
+pickup/equipment/belt support and a complete walk from the Training spawn to
+both instructors remain broader dependencies; the current integration/browser
+checks use explicit approach setup. No substitute mission timer is installed.
 
-## Host service inputs vs original evidence
+Browser speech decodes the original MP3 bytes and starts/stops from the original
+PlaySound/StopSound channel, preserving its volume and pitch. Native mixer
+spatialization and phoneme generation are not implemented. The DLL-derived
+speech length and script Timer/Sleep sequence own progression. No original-game
+audio mix or pixel-for-pixel conversation screenshot comparison has been made.
+The layout/material comparisons below establish specific native calculations,
+not whole-renderer fidelity (lighting, LOD and adaptive reflection subdivision
+remain open).
 
-- Original evidence: the two conversations' event graphs, flags and speeches; the
-  FlagTrigger/Mission00 gate (`FlagTrigger.Touch`/`UnTouch` run live in Play); the
-  frob→StartConversation→GetActiveConversation bytecode; `ConEventRandomLabel`
-  intrinsics 2060/2061/2062 (ConSys.dll bodies).
-- Host service input: the `flagBase` (Extension.FlagBase get/set) already present
-  for the DataLink/trigger paths; the player's `rootWindow` shell.
-- Unresolved: the ConPlay first-person presentation tail above, and the audible
-  `ClientHearSound` speech playback (Stage 4).
+Reset destroys active windows through Window.Destroy, destroys the ConPlay actor,
+clears player ownership, stops pending or playing browser speech, destroys history
+script properties/linker ownership, and restores authored conversation fields
+and flags. Native final GC remains the existing runtime boundary: destroyed
+objects can retain deferred registry slots. This is not save/load or map-travel
+flag/history persistence.
+
+### Host service inputs vs original evidence
+
+The installed conversation graph, ConPlay scripts, original native constructors,
+binders, speech lookup/duration, flag mutations and Actor.Tick establish runtime
+behavior. Host services supply canonical registry identities, loaded package
+resources, a viewport listener, browser audio transport and the bounded window
+presentation adapter. Unsupported conversation/UI/mixer paths are not claimed
+by the two successful Training routes.
+
+## Playback continuation contracts
+
+ConPlay's class is script-only (`ClassFlags=0x32`) and inherits ConPlayBase →
+Engine.Actor. The recovered class linker gives PropertiesSize `0x404` (base
+`0x3c0`, Actor `0x318`). It uses the same verified Actor constructor and
+noncolliding SpawnActor startup as DataLinkPlay, with its own exact class gate.
+The original ConPlay and ConPlayBase functions and states own event selection,
+turning, history, timers, speech flags and termination; the host schedules the
+spawned actor through the existing Actor.Tick implementation.
+
+DeusEx.dll `execCreateHistoryObject` `0x10014640` and
+`execCreateHistoryEvent` `0x100146d0` consume EndFunctionParms, allocate with
+`GetOuter(Self)`, NAME_None and flags 0, then call ConSys constructors. Sizes
+are `0x5c` and `0x48`. ConSys `0x1000ca00` zeros firstEvent/lastEvent/next at
+`+0x50/+0x54/+0x58`; `0x1000cb70` zeros next at `+0x44`. Their vtables are
+`0x10013568`/`0x100135bc`, replaced by the importing DeusEx wrappers with
+`0x10027fe8`/`0x1002803c`. Reflected strings and scalar defaults come from
+StaticAllocateObject/InitProperties. History.AddEvent is original bytecode.
+The browser world allocation registry supplies the level package Outer for
+preplaced actors, matching their original serialized ownership.
+
+HUDConWindowFirst uses the existing XWindow constructor/Init and TextWindow
+services. Its original InitWindow creates a TileWindow with ORDER_Down,
+HALIGN_Full/VALIGN_Top, unequal widths/heights and margins 20/10. The native
+TileWindow constructor `Extension.dll 0x100150a0` calls UObject, zeros the
+rectangle at `+0xd4..+0xe8` and row array at `+0x168..+0x170`, and selects
+vtable `0x1005b760`. Init `0x10048360` calls XWindow.Init and writes orientation
+and directions zero, margins 3/3, spacing 1/1, alignment 3/3, flags
+`(old & ~4) | 11`. Setter bodies `0x100150f0..0x10015260` write the corresponding
+fields and call AskParentForReconfigure; SetOrder `0x10048560` maps the 12
+orders to orientation/directions/wrapping. ORDER_Down selects 1/0/0 and clears
+wrapping. Browser drawing remains a presentation adapter; the full native
+TileWindow sizing/reconfiguration/render tree is not established by these
+setter contracts.
+
+The name separator reaches Window.SetHeight (1434): exec `0x10052260`
+evaluates one float (initial zero), consumes End, then calls `0x1004d0e0`.
+The worker clamps negative/unordered input to +0, compares against +0xa0
+using x87 C3, writes only height and asks for reconfiguration when different.
+
+The first speech finishes through the original timer and End event. Its NPC
+LipSynch tail additionally reaches TweenBlendAnim (1012), Engine thunk
+`0x10302a6d` → `0x103e1300`. The wrapper evaluates name, float time and optional
+int slot (default zero), then checks slot 0..3, Mesh and FindAnimSeq. Success
+writes BlendAnimSequence; zeros BlendAnimLast/MinRate/Rate/OldRate; positive
+ordered time sets TweenRate=1/(NumFrames*time), Frame=-1/NumFrames, otherwise
+both zero. SimBlendAnim stores Frame*10000, Rate*10000, TweenRate*1000,
+Last*10000. Unlike TweenAnim it does not alter main animation flags. This is
+needed even without the audio system's phoneme stream: bWasSpeaking makes
+Pawn.LipSynch close the mouth when speech stops. Phoneme generation remains an
+explicit audio-presentation limitation.
+
+ConEventSetFlag's original body traverses its own flagRef chain (separate from
+the conversation admission flags), calls SetBool, then FlagBase.SetExpiration
+(1122). Extension exec `0x10025be0` reads Name, byte type, int expiration;
+worker `0x10024990` calls FindFlag (`0x10023be0`) and writes +0x3c only on a
+match. It does not add a missing flag or substitute default expiration for
+-1. The live store admits FLAG_Bool (0); other flag types remain unsupported.
+
+### Remaining native steps recovered during continuation
+
+Core `execAssert` (`10101d61 -> 1012fcc0`) reads the uint16 source line,
+executes one bool operand and reports NAME_Critical (`0x2f9`) on zero. The VM
+now stops with that source line; it does not discard ConPlay's assertion.
+
+The Take event script fabricates a missing giver item before transfer
+(`ConPlayBase.SetupEventTransferObject`), including when the giver is JC.
+All event-referenced inventory classes and their AmmoName classes must have
+startup/state bytecode prepared before synchronous playback. This is original
+behavior, not a host confiscation loop. Spawned ConPlay ticks in Level.Actors
+order after the preplaced pawns, and items it spawns join that same traversal.
+
+### Guard environment materials: recovered selected path
+
+Hash-verified Render.dll SHA256
+`607f1077c5cd3e25f8a4cde1ffacf4cf9260aebc92a72be40721cd6955bd75d1`:
+DrawLodMesh `10b101d3..10b10314` accumulates normalized face cross products
+into all three vertex normals, before visibility/backface rejection. Normalize
+uses `FastInvSqrt(dot+0.001f)`, with the tables initialized by `10b024b0`
+(pow exponent -0.5, 1024 mantissa and 512 exponent entries). The summed vertex
+normal receives the same normalization at `10b10863..10b10912`.
+
+PF_Environment texture selection at `10b10634` tries Actor.Texture, then
+Region.Zone.EnvironmentMap, then Level.EnvironmentMap, retaining the last
+nonnull ordinary skin if none supplies an environment map. Training guards
+have Actor.Texture=DeusExItems.Skins.PinkMaskTex. No reflective flag is removed.
+
+DrawGouraudPolygon `10b0bae9..10b0bbbc` computes D=UnsafeNormal(view vertex),
+R=D-2*dot(D,N)*N, transforms R through Frame.Uncoords (+64), and writes
+U=(1+R.x)*UScale*128, V=(1+R.y)*VScale*128. DrawLodMesh supplies texture
+size*scale/256, so normalized sampler UV is (1+R.xy)/2. The world-space browser
+calculation cancels the view/inverse-view rotation algebraically. Float-store
+and cancellation differences are bounded in the focused original-DLL probe;
+this does not establish native clipping, adaptive reflection subdivision,
+lighting or complete DrawLodMesh fidelity. Those pre-existing renderer gaps
+remain. The new probe executes actual normal/UV instructions and original
+lookup-table initialization; only CRT math leaves are supplied by the harness.
+
+The selected TileWindow `ORDER_Down`, FillParent, full-width/top-aligned,
+no-wrap/no-equal-size path is recovered from `Extension 10048a90..10049181`.
+With a specified width it queries each visible child's preferred height at
+max(0,width-2*hMargin). A single row stores integer width and running integer
+height (truncate after each child+minorSpacing, then subtract final spacing).
+Preferred height adds both vertical margins. Configuration uses the original
+float child heights for cumulative Y and the integer row width for full-width
+children. `scripts/native-conversation-tile-oracle.py` executes that entire
+method with explicit child query and allocator leaves, including fractional
+cases that distinguish these stores.
+
+TextWindow preferred-size `100465a0` uses GC.GetTextExtent at width minus both
+text margins when wrapping; the selected min/max-lines=-1 branch adds both
+margins at `10046768`. HUDConWindowFirst clamps to its authored minHeight.
+DeusExHUD.ConfigurationChanged centers min(screenWidth-100,800), positions it
+20 pixels above infoBottom (screen bottom when the unimplemented belt is
+absent). Original DrawBackground/DrawBorder and GC.DrawBorders supply the art;
+original bitmap fonts and GC text measurement/drawing supply the text.
+General TileWindow wrapping, other orders and general window reconfiguration
+remain unsupported; this is the recovered selected presentation adapter.

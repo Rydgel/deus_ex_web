@@ -20,7 +20,7 @@ import { createPlayHud } from '../runtime/script-play-hud.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
-  onLightingChanged = null, onDataLinkTransmission = null, presentation = false } = {}) {
+  onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, presentation = false } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -119,6 +119,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // startup reaches AttachDecal through SpawnShadow and reads it here.
   playerScene.level.engine = {client:{decals:true,viewports:[{actor:player.collisionActor}]}};
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
+  collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
@@ -145,7 +146,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     behindView: Boolean(playerDefaults.bBehindView), npcHighlighting: Boolean(playerDefaults.bNPCHighlighting) };
   const trace = (end,start,extent) => traceActors(collision.queries,player,end,start,extent);
   const describeTarget = actor => !actor ? null : actor.collider ? doors.describe(actor)
-    : { actor, label: `${actor.name} · interaction not supported yet` };
+    : actor.lineage?.includes('deusex.scriptedpawn')
+      ? {actor,label:doors.scriptRuntime.runtime.namedReference(actor,'FamiliarName').get()}
+      : { actor, label: `${actor.name} · interaction not supported yet` };
   notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Mission-trigger scripts and actor/mesh visuals remain incomplete.');
   if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; actor mesh coverage remains incomplete.`);
   const game = {

@@ -1,173 +1,95 @@
-/** Focused validation of the Training munitions-instructor conversation
- * selection, entered through the same public interaction path as Play
- * (ScriptedPawn.Frob -> DeusExPlayer.StartConversation). Evidence and boundary
- * chain: docs/script-instructor-conversation.md. Requires the local install.
- *
- * What this asserts, all through the original bytecode over the attached
- * conversation object graph (no host reimplementation of the selection):
- *   - Both instructors (UNATCOTroop0/UNATCOTroop3, BindName MunitionsTrooper)
- *     bind MunitionsTrooperFrob then MunitionsTrooperTake.
- *   - GetActiveConversation selects MunitionsTrooperFrob when
- *     MunitionsTrooperReady is false and MunitionsTrooperTake when it is true
- *     (the authored ConFlagRef gate), for the invoking instructor.
- *   - A public Frob dispatch runs the whole StartConversation gate chain
- *     (CanStartConversation, CanConverse, GetActiveConversation, the
- *     participant IsSpeakingActor test) and reaches the recovered
- *     `Spawn(class'ConPlay')` boundary with the correct conversation selected —
- *     the first-person ConPlay presentation is the explicit remaining boundary.
- *   - The ConEventRandomLabel head cycles A1..A5 (the authored greeting).
- *   - Public game.reset() restores the fresh selection.
- */
+/** Public Play targeting/use over original conversation bytecode and objects.
+ * Research setup repositions the player; it never sets frobTarget, Ready,
+ * conversation labels, timers, speech completion or participant state. */
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
-import { AssetStore } from '../src/unreal/assets.mjs';
-import { decodeMap } from '../src/unreal/map.mjs';
-import { gameDirectory } from './game-directory.mjs';
-
-const IM_FROB = 1; // EInvokeMethod { IM_Bump=0, IM_Frob=1, ... } (DeusExPlayer.uc:308)
-const root = gameDirectory();
-const files = [];
-for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
-  for (const name of await readdir(`${root}/${dir}`)) files.push({ path: `${dir}/${name}`, read: () => readFile(`${root}/${dir}/${name}`) });
-const assets = new AssetStore(files);
-const mapAsset = await assets.get('00_Training');
-const map = decodeMap(mapAsset.bytes);
-const { createGame } = await import('../src/viewer/game.mjs');
-const game = await createGame(map, mapAsset, assets, { randomSeed: 1 });
-const runtime = game.doors.scriptRuntime.runtime;
-const deusEx = await assets.get('DeusEx');
-const level = runtime.levelFor(game.player.collisionActor);
-const player = game.player.collisionActor;
-const live = name => level.actors.find(a => a?.index === map.actors.find(x => x?.name === name)?.index) ?? null;
-const troop3 = live('UNATCOTroop3'), troop0 = live('UNATCOTroop0');
-assert.ok(troop3 && troop0, 'both instructors are live');
-const ref = (o, k) => runtime.namedReference(o, k);
-const conNameOf = con => con == null ? null : ref(con, 'conName').get();
-
-// 1. Both instructors bind Frob then Take (shared BindName, prepend order).
-for (const [nm, t] of [['UNATCOTroop3', troop3], ['UNATCOTroop0', troop0]]) {
-  const bound = [];
-  for (let item = ref(t, 'ConListItems').get(); item; item = ref(item, 'next').get())
-    bound.push(conNameOf(ref(item, 'con').get()));
-  assert.deepEqual(bound, ['MunitionsTrooperFrob', 'MunitionsTrooperTake'], `${nm} binds Frob then Take`);
-}
-
-// Both instructors expose the same two conversations to the runtime's face
-// preparation, keyed by BindName, not by conversation name.
-const faceNames = game.doors.scriptRuntime.faceConversations.conversations.map(c => c.conName);
-assert.ok(faceNames.includes('MunitionsTrooperFrob') && faceNames.includes('MunitionsTrooperTake'),
-  'both instructor conversations are prepared for live play');
-
-const noInput = { forward: 0, strafe: 0, turn: 0, lookUp: 0, jump: false, crouch: false, fire: false, altFire: false };
-for (let i = 0; i < 200; i++) game.tick(1 / 60, noInput); // land + reach a conversable state
-assert.equal(ref(troop3, 'bCanConverse').get(), true, 'the instructor reaches a conversable state');
-
-const flagBase = ref(player, 'flagBase').get();
-const setReady = value => flagBase.setBool('MunitionsTrooperReady', value);
-const clearReady = () => flagBase.entries.delete('munitionstrooperready');
-
-// GetActiveConversation runs the real selection bytecode for a given instructor.
-const getActive = await runtime.prepareFunction(deusEx, deusEx.exportsByPath.get('deusexplayer.getactiveconversation'));
-function selectFor(instructor) {
-  const result = runtime.callFunction(getActive, player, 2, i => [instructor, IM_FROB][i]);
-  const con = result?.reference ? result.get() : result;
-  return conNameOf(con);
-}
-
-// 2. Flag-gated selection for the near instructor (UNATCOTroop3).
-clearReady();
-assert.equal(selectFor(troop3), 'MunitionsTrooperFrob', 'flag false -> Frob greeting');
-setReady(true);
-assert.equal(selectFor(troop3), 'MunitionsTrooperTake', 'flag true -> Take (surrender gear)');
-clearReady();
-assert.equal(selectFor(troop3), 'MunitionsTrooperFrob', 'clearing the flag restores Frob');
-
-// 3. The whole public Frob path runs and reaches the ConPlay spawn boundary
-// with the correct conversation selected. Capture the selected conversation
-// from the participant IsSpeakingActor test the real StartConversation runs.
-let selectedCon = null;
-const originalCall = runtime.callFunction.bind(runtime);
-runtime.callFunction = (record, receiver, ac, ev, ctx) => {
-  if (record?.key === 'consys.conversation.isspeakingactor') selectedCon = receiver;
-  return originalCall(record, receiver, ac, ev, ctx);
+import {readFile,readdir} from 'node:fs/promises';
+import {AssetStore} from '../src/unreal/assets.mjs';
+import {decodeMap} from '../src/unreal/map.mjs';
+import {gameDirectory} from './game-directory.mjs';
+import {createGame} from '../src/viewer/game.mjs';
+import {createHudRenderer} from '../src/viewer/hud.mjs';
+import {createTrainingNpcPreview} from '../src/viewer/npc-mesh-preview.mjs';
+const root=gameDirectory(),files=[];
+for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
+  files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
+const assets=new AssetStore(files),asset=await assets.get('00_Training'),map=decodeMap(asset.bytes),audio=[];
+const game=await createGame(map,asset,assets,{randomSeed:1,presentation:true,onConversationSpeech:e=>audio.push(e)});
+const host=game.doors.scriptRuntime,runtime=host.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const get=(o,k)=>runtime.namedReference(o,k).get(),live=name=>level.actors.find(a=>a?.name===name);
+const idle={forward:0,right:0,yaw:0,pitch:-.3,jump:false,crouch:false,walk:false};
+const tick=(n=1,input=idle)=>{for(let i=0;i<n;i++)game.tick(1/60,input);};
+const shell=await host.infoLinkShell(),hud=await createHudRenderer(game.hud,assets,shell);
+const render=()=>hud.render({clearDepth(){},render(){}},1000,700);
+const preview=await createTrainingNpcPreview(runtime,assets,asset,{kernel:null});
+assert.equal(preview.summary.errors.length,0,JSON.stringify(preview.summary.errors));
+assert.equal(preview.actors.length,18);
+const ready=()=>get(player,'flagBase').getBool('MunitionsTrooperReady');
+function place(p){game.collision.queries.changeActor(player,()=>{game.player.position=p;game.player.velocity=[0,0,0];});}
+function aim(t){const p=get(t,'Location');place([p[0]-80,p[1],p[2]]);tick(10);
+ assert.equal(game.interaction.frobTarget,t,'ordinary HighlightCenterObject selects the instructor');}
+const events=[];const call=runtime.callFunction.bind(runtime);
+runtime.callFunction=(record,receiver,count,evaluate,context)=>{
+ if(record?.key.startsWith('deusex.conplaybase.setupevent'))events.push(record.key.split('.').at(-1));
+ return call(record,receiver,count,evaluate,context);
 };
-function frobReachesConPlay(instructor) {
-  selectedCon = null;
-  ref(player, 'conPlay').set(null);
-  let boundary = null;
-  try { game.doors.scriptRuntime.dispatchEvent(instructor, 'Frob', [player, null]); }
-  catch (e) { boundary = e.message; }
-  return { boundary, selected: conNameOf(selectedCon) };
+function start(t,name){
+ aim(t);assert.equal(game.use().ok,true);
+ const p=get(player,'conPlay');assert.ok(p);assert.equal(get(get(p,'con'),'conName'),name);
+ assert.equal(get(p,'startActor'),t);assert.equal(get(p,'player'),player);
+ assert.equal(game.interaction.stateName,'PlayerWalking'); // authored first-person/non-interactive path
+ tick();render();preview.update(game.player.eye);
+ return {p,window:get(p,'conWinFirst')};
 }
-clearReady();
-let r3 = frobReachesConPlay(troop3);
-assert.match(r3.boundary ?? '', /unprepared Actor subclass: deusex\.conplay/,
-  'the Frob path reaches the recovered Spawn(class\'ConPlay\') boundary');
-assert.equal(r3.selected, 'MunitionsTrooperFrob', 'the public Frob selected the Frob conversation');
-
-// 4. The other instructor (participant identity). Reposition the player next to
-// UNATCOTroop0 for the height/line-of-sight gate (a debug reposition for test
-// setup; the flow itself is unchanged), then run the same public path.
-const t0 = ref(troop0, 'Location').get();
-game.collision.queries.changeActor(player, () => { game.player.position = [t0[0] - 70, t0[1], t0[2] + 10]; });
-for (let i = 0; i < 5; i++) game.tick(1 / 60, noInput);
-clearReady();
-assert.equal(selectFor(troop0), 'MunitionsTrooperFrob', 'UNATCOTroop0 selects Frob when flag false');
-setReady(true);
-assert.equal(selectFor(troop0), 'MunitionsTrooperTake', 'UNATCOTroop0 selects Take when flag true');
-clearReady();
-const r0 = frobReachesConPlay(troop0);
-assert.match(r0.boundary ?? '', /unprepared Actor subclass: deusex\.conplay/, 'UNATCOTroop0 Frob reaches ConPlay spawn');
-assert.equal(r0.selected, 'MunitionsTrooperFrob', 'UNATCOTroop0 Frob selected its own Frob conversation');
-runtime.callFunction = originalCall;
-
-// 5. The greeting's ConEventRandomLabel cycles A1..A5 (the authored line set).
-const frobCon = game.doors.scriptRuntime.faceConversations.conversations
-  .find(c => c.conName === 'MunitionsTrooperFrob').conversation;
-const randomLabelHead = ref(frobCon, 'eventList').get();
-assert.equal(runtime.instance(randomLabelHead).cls.record.key, 'consys.coneventrandomlabel');
-const picks = [];
-for (let i = 0; i < 5; i++) picks.push(runtime.invokeNative({ index: 2062, receiver: randomLabelHead, argumentCount: 0, evaluateArgument: () => undefined }));
-assert.deepEqual(picks, ['A1', 'A2', 'A3', 'A4', 'A5'], 'the greeting cycles the five authored labels in order');
-
-// 6. Public reset restores the fresh selection (flag false -> Frob).
-game.reset();
-for (let i = 0; i < 200; i++) game.tick(1 / 60, noInput);
-clearReady();
-const afterReset = live('UNATCOTroop3');
-assert.equal(selectFor(afterReset), 'MunitionsTrooperFrob', 'a fresh interaction after reset selects Frob again');
-
-// 7. The Take path is enabled by the *authored* FlagTrigger through ordinary
-// movement — not by setting the flag directly. Walking into the instructor's
-// co-located FlagTrigger (radius 300, bWhileStandingOnly, flagValue=true) runs
-// FlagTrigger.Touch -> flagBase.SetBool(MunitionsTrooperReady, true); leaving
-// runs UnTouch -> false. (A debug reposition places the player on the approach;
-// the movement, trigger and flag are all the original mechanism.)
-const flagTrigger = live('FlagTrigger1');
-const trigLoc = ref(flagTrigger, 'Location').get();
-const t3 = ref(afterReset, 'Location').get();
-const distToTrigger = () => Math.hypot(game.player.position[0] - trigLoc[0], game.player.position[1] - trigLoc[1]);
-const readMaybeFlag = () => ref(player, 'flagBase').get().getBool('MunitionsTrooperReady');
-const walk = dir => game.tick(1 / 60, { forward: dir, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false });
-// Drop the player onto the approach floor ~333u west of the instructor, just
-// outside the trigger's (radius + player radius) reach.
-game.collision.queries.changeActor(game.player.collisionActor, () => { game.player.position = [t3[0] - 333, t3[1] - 60, t3[2] + 40]; });
-for (let i = 0; i < 40; i++) walk(0);
-clearReady();
-assert.ok(distToTrigger() > 300, `player starts outside the FlagTrigger radius (dist ${Math.round(distToTrigger())})`);
-assert.equal(readMaybeFlag(), false, 'MunitionsTrooperReady starts false outside the trigger');
-let enteredTick = -1;
-for (let i = 0; i < 300 && enteredTick < 0; i++) { walk(1); if (readMaybeFlag()) enteredTick = i; }
-assert.ok(enteredTick >= 0, 'walking into the FlagTrigger set MunitionsTrooperReady true (FlagTrigger.Touch)');
-assert.equal(selectFor(afterReset), 'MunitionsTrooperTake',
-  'standing in the authored FlagTrigger makes the instructor select Take');
-let exitedTick = -1;
-for (let i = 0; i < 400 && exitedTick < 0; i++) { walk(-1); if (!readMaybeFlag()) exitedTick = i; }
-assert.ok(exitedTick >= 0, 'walking back out cleared MunitionsTrooperReady (FlagTrigger.UnTouch)');
-assert.equal(selectFor(afterReset), 'MunitionsTrooperFrob', 'leaving the trigger restores the Frob greeting');
-
-console.log('Instructor conversation selection validated through the public Frob path: ' +
-  'both instructors bind Frob->Take, GetActiveConversation picks Frob/Take by the MunitionsTrooperReady ' +
-  'flag, the full StartConversation gate chain reaches Spawn(class\'ConPlay\') with the right conversation, ' +
-  'the greeting cycles A1..A5, reset restores the fresh selection, and walking into/out of the authored ' +
-  'FlagTrigger drives MunitionsTrooperReady so the Take path is reachable in ordinary Play.');
+function finish({p,window}){
+ let frames=0;while(get(player,'conPlay')&&frames++<1000){tick();render();}
+ assert.ok(frames<1000,'original Timer/Sleep/End terminates');
+ assert.equal(get(player,'conPlay'),null);assert.equal(runtime.instance(p).pendingKill,true);
+ assert.equal(shell.isDestroyed(window),true);assert.equal(game.interaction.stateName,'PlayerWalking');
+ assert.equal(host.npcFailures.size,0);
+ return frames;
+}
+tick(200);
+for(const name of ['UNATCOTroop3','UNATCOTroop0']){
+ const t=live(name),bound=[];
+ for(let item=get(t,'ConListItems');item;item=get(item,'next'))bound.push(get(get(item,'con'),'conName'));
+ assert.deepEqual(bound,['MunitionsTrooperFrob','MunitionsTrooperTake']);
+ const flow=start(t,'MunitionsTrooperFrob');
+ assert.equal(audio.filter(e=>e.kind==='speech').at(-1).emitter,t);
+ assert.equal(audio.filter(e=>e.kind==='speech').at(-1).audio.soundId,name.endsWith('3')?19:20);
+ finish(flow);
+}
+// Fresh reset is directly observable, with no post-reset mutation.
+game.reset();assert.equal(ready(),false);assert.equal(get(player,'conHistory'),null);
+const frob=host.faceConversations.conversations.find(c=>c.conName==='MunitionsTrooperFrob').conversation;
+assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);tick(200);
+const troop=live('UNATCOTroop3'),position=get(troop,'Location');
+// Original Spawn/GiveTo creates a nonempty player inventory fixture.
+const dx=await assets.get('DeusEx'),lockpickClass=await runtime.loadClass(dx,dx.exportsByPath.get('lockpick'));
+const heldItem=runtime.invokeNative({index:278,receiver:player,argumentCount:1,evaluateArgument:()=>lockpickClass.record});
+runtime.processEvent(heldItem,'GiveTo',[player]);
+assert.equal(get(heldItem,'Owner'),player);assert.equal(get(player,'Inventory'),heldItem);
+place([position[0]-333,position[1]-60,position[2]+40]);tick(40,{...idle,pitch:0});
+assert.equal(ready(),false);
+let entered=0;while(!ready()&&entered++<300)tick(1,{...idle,forward:1,pitch:0});
+assert.ok(entered<300,'walking enters the authored FlagTrigger');
+const before=events.length,take=start(troop,'MunitionsTrooperTake');
+assert.equal(ready(),false,'authored SetFlag clears Ready');
+assert.equal(events.slice(before).filter(e=>e==='setupeventtransferobject').length,29);
+assert.ok(events.slice(before).includes('setupeventjump'));
+assert.ok(get(troop,'Inventory'),'original transfers populate recipient inventory');
+finish(take);
+assert.equal(get(player,'Inventory'),null);assert.equal(get(heldItem,'Owner'),troop);
+// This research-created fixture was outside the Play spawn scheduler.
+runtime.destroyActor(heldItem);
+// Allow the original participant state to finish returning to idle.
+tick(70);
+// Repeat while still inside: Frob again, original first greeting after reset.
+const fresh=start(troop,'MunitionsTrooperFrob');
+assert.equal(audio.filter(e=>e.kind==='speech').at(-1).audio.soundId,19);
+const activeAudio=audio.at(-1);assert.equal(activeAudio.kind,'speech');
+game.reset();assert.equal(get(player,'conPlay'),null);assert.equal(get(player,'conHistory'),null);
+assert.equal(shell.isDestroyed(fresh.window),true);assert.equal(audio.at(-1).kind,'stop');
+assert.equal(ready(),false);assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);
+tick(200);finish(start(live('UNATCOTroop3'),'MunitionsTrooperFrob'));
+assert.equal(host.npcFailures.size,0);hud.dispose();preview.dispose();
+console.log('Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfers, original speech/history/timing, visible guard materials, default subtitles-off HUD, repeat and active reset.');

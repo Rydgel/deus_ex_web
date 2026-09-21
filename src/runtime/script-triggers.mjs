@@ -77,6 +77,7 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   AllActors: 304,
   SetBool: 1100,
   GetBool: 1110,
+  SetExpiration: 1122,
 });
 
 /**
@@ -148,6 +149,13 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       calls.push({ method: 'GetBool', name: name ?? 'None', value });
       return value;
     },
+    setExpiration(name,type,expiration) {
+      if(type!==0)throw new Error('FlagBase.SetExpiration supports only the recovered live bool store');
+      if(!Number.isInteger(expiration))throw new TypeError('Flag expiration requires a signed int');
+      const entry=current(name);
+      if(entry)entry.expiration=expiration|0;
+      calls.push({method:'SetExpiration',name,type,expiration:expiration|0,found:Boolean(entry)});
+    },
     getEntry(name) {
       const entry = current(name);
       return entry ? { ...entry } : null;
@@ -211,6 +219,11 @@ export function createScriptTriggers({
       const bAdd = call.argumentCount > 2 ? evaluateValue(call, 2) : true;
       const expiration = call.argumentCount > 3 ? evaluateValue(call, 3) : -1;
       return { handled: true, value: flagBase.setBool(name, value, bAdd, expiration) };
+    }
+    if(index===TRIGGER_NATIVE_INDICES.SetExpiration){
+      if(call.receiver!==flagBase||call.argumentCount!==3)throw new Error('FlagBase.SetExpiration receiver/arguments');
+      flagBase.setExpiration(evaluateValue(call,0),evaluateValue(call,1)&255,evaluateValue(call,2));
+      return {handled:true,value:undefined};
     }
     if (index === TRIGGER_NATIVE_INDICES.GetBool) {
       if (call.receiver !== flagBase) throw new Error('FlagBase.GetBool reached with an unbound receiver');

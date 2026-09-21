@@ -5,11 +5,20 @@ import * as THREE from 'three';
 import {hudColor} from '../runtime/script-play-hud.mjs';
 import {createHudText} from './hud-text.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
+import {conversationHudFrame} from './conversation-hud.mjs';
 
 export async function createHudRenderer(hud,assets,shell){
-  const text=await createHudText(assets,['DeusExUI.FontTiny','DeusExUI.FontMenuHeaders_DS','DeusExUI.FontFixedWidthSmall_DS']);
+  const dx=await assets.get('DeusEx');
+  const cls=await hud.runtime.loadClass(dx,dx.exportsByPath.get('hudconwindowfirst'));
+  const defaultOf=name=>hud.runtime.defaultValue(cls,hud.runtime.lookupMember(cls,'fields',name));
+  const text=await createHudText(assets,[...new Set(['DeusExUI.FontTiny','DeusExUI.FontMenuHeaders_DS',
+    'DeusExUI.FontFixedWidthSmall_DS','DeusExUI.FontMenuSmall_DS',defaultOf('fontName').key])]);
   const store=new TextureStore(assets);
   for(const field of ['texBackgrounds','texBorders'])for(const ref of hud.read(shell.object,field)){
+    const data=await store.get(ref.asset,ref.index,true);hud.images.set(ref.key,{key:ref.key,...data.mips[0]});
+  }
+  for(const field of ['texBackgrounds','texBorders'])for(const ref of defaultOf(field)){
+    if(!ref||hud.images.has(ref.key))continue;
     const data=await store.get(ref.asset,ref.index,true);hud.images.set(ref.key,{key:ref.key,...data.mips[0]});
   }
   const scene=new THREE.Scene(),camera=new THREE.OrthographicCamera(0,1,0,1,-1,1);
@@ -56,7 +65,11 @@ export async function createHudRenderer(hud,assets,shell){
     for(const a of Object.values(attrs))a.needsUpdate=true;
   }
   const decorate=(object,x,y,post=false)=>{
-    for(const command of hud.decorationCommands(object,post))draw({...command,x:x+command.x,y:y+command.y,image:hud.images.get(command.texture)});
+    for(const command of hud.decorationCommands(object,post)){
+      const positioned={...command,x:x+command.x,y:y+command.y};
+      if(command.borders)text.borders(draw,{...positioned,images:command.borders.map(ref=>ref&&hud.images.get(ref.key))});
+      else draw({...positioned,image:hud.images.get(command.texture)});
+    }
   };
   function children(object,x,y,clip=null){
     for(const child of hud.children.get(object)??[]){
@@ -114,6 +127,15 @@ export async function createHudRenderer(hud,assets,shell){
       const body=controls.winText;
       text.draw(draw,{font:body.font,text:state.text,x:x+body.x,y:y+body.y,width:body.width,height:body.height,
         color:[info.colors.text.r,info.colors.text.g,info.colors.text.b]});
+    }
+    const face=conversationHudFrame(hud.runtime,hud.player,shell,width,height,text.measure);
+    if(face){
+      decorate(face.window,face.x,face.y);
+      for(const c of face.children){
+        if(c.text!==undefined)text.draw(draw,{...c,x:face.x+c.x+c.mx,y:face.y+c.y+c.my,
+          width:c.width-2*c.mx,height:c.height-2*c.my});
+        else draw({image:white,x:face.x+c.x,y:face.y+c.y,width:c.width,height:c.height,...hud.tile(c.object)});
+      }
     }
     for(let i=count;i<quads.length;i++)quads[i].visible=false;
     renderer.clearDepth();renderer.render(scene,camera);
