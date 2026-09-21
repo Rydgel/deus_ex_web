@@ -43,9 +43,17 @@ letterbox camera and no player choices. `bInvokeFrob/Bump/Radius=true`.
 - `00_Training` places `FlagTrigger0`/`FlagTrigger1` at the two instructors
   (`FlagName=MunitionsTrooperReady`, `bWhileStandingOnly=true`,
   `CollisionRadius=300`; class defaults `bSetFlag=true`, `flagValue=true`,
-  `bTrigger=false`). `Trigger.Touch` (global, `TT_PlayerProximity`) sets the flag
-  **true** while the player stands within 300u; `UnTouch` sets it **false** on
-  leaving (`.cache/reference/Trigger_engine.uc`, extracted `FlagTrigger.uc`).
+  `bTrigger=false`). `FlagTrigger.Touch` (which overrides the base
+  `Trigger.Touch`; `TT_PlayerProximity`) sets the flag **true** while the player
+  stands within the trigger's cylinder; `UnTouch` sets it **false** on leaving
+  (extracted `FlagTrigger.uc`, `.cache/reference/Trigger_engine.uc`).
+  `FlagTrigger.Touch`/`UnTouch` are now prepared in `createScriptDoors`, and
+  their `GetPlayerPawn` (720) and `FlagBase.SetBool` natives already route
+  through the trigger native handler, so walking into the instructor's
+  FlagTrigger during ordinary Play sets `MunitionsTrooperReady` — this is the
+  authored condition that makes the Take conversation selectable, verified end to
+  end by driving the player through the trigger in
+  `scripts/validate-instructor-conversation.mjs`.
 - `Mission00.Timer` (`Mission00.uc`) removes the player's remaining inventory
   while `MunitionsTrooperReady` is true. So the flag means "at the instructor,
   surrender the training gear": frob with the flag false → the Frob greeting;
@@ -130,7 +138,11 @@ and asserts, all through the original bytecode over the attached graph:
   participant `IsSpeakingActor` test) and reaches `Spawn(class'ConPlay')` with
   the correct conversation selected;
 - the greeting's `ConEventRandomLabel` cycles A1..A5;
-- public `game.reset()` restores the fresh (flag-false) selection.
+- public `game.reset()` restores the fresh (flag-false) selection;
+- **walking the player into and out of the authored FlagTrigger** flips
+  `MunitionsTrooperReady` (`FlagTrigger.Touch`/`UnTouch`) so the instructor
+  selects Take while the player stands there and Frob after leaving — the Take
+  path reached through ordinary movement, not a forced flag.
 
 `ConEventRandomLabel`'s natives are compared against the recovered ConSys.dll
 bodies in `scripts/validate-conversation-random-label.mjs`.
@@ -156,8 +168,9 @@ real selection and stops at the `Spawn(class'ConPlay')` boundary.
 ## Host service inputs vs original evidence
 
 - Original evidence: the two conversations' event graphs, flags and speeches; the
-  FlagTrigger/Mission00 gate; the frob→StartConversation→GetActiveConversation
-  bytecode; `ConEventRandomLabel` intrinsics 2060/2061/2062 (ConSys.dll bodies).
+  FlagTrigger/Mission00 gate (`FlagTrigger.Touch`/`UnTouch` run live in Play); the
+  frob→StartConversation→GetActiveConversation bytecode; `ConEventRandomLabel`
+  intrinsics 2060/2061/2062 (ConSys.dll bodies).
 - Host service input: the `flagBase` (Extension.FlagBase get/set) already present
   for the DataLink/trigger paths; the player's `rootWindow` shell.
 - Unresolved: the ConPlay first-person presentation tail above, and the audible

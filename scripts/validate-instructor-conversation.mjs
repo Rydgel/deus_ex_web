@@ -137,7 +137,37 @@ clearReady();
 const afterReset = live('UNATCOTroop3');
 assert.equal(selectFor(afterReset), 'MunitionsTrooperFrob', 'a fresh interaction after reset selects Frob again');
 
+// 7. The Take path is enabled by the *authored* FlagTrigger through ordinary
+// movement — not by setting the flag directly. Walking into the instructor's
+// co-located FlagTrigger (radius 300, bWhileStandingOnly, flagValue=true) runs
+// FlagTrigger.Touch -> flagBase.SetBool(MunitionsTrooperReady, true); leaving
+// runs UnTouch -> false. (A debug reposition places the player on the approach;
+// the movement, trigger and flag are all the original mechanism.)
+const flagTrigger = live('FlagTrigger1');
+const trigLoc = ref(flagTrigger, 'Location').get();
+const t3 = ref(afterReset, 'Location').get();
+const distToTrigger = () => Math.hypot(game.player.position[0] - trigLoc[0], game.player.position[1] - trigLoc[1]);
+const readMaybeFlag = () => ref(player, 'flagBase').get().getBool('MunitionsTrooperReady');
+const walk = dir => game.tick(1 / 60, { forward: dir, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false });
+// Drop the player onto the approach floor ~333u west of the instructor, just
+// outside the trigger's (radius + player radius) reach.
+game.collision.queries.changeActor(game.player.collisionActor, () => { game.player.position = [t3[0] - 333, t3[1] - 60, t3[2] + 40]; });
+for (let i = 0; i < 40; i++) walk(0);
+clearReady();
+assert.ok(distToTrigger() > 300, `player starts outside the FlagTrigger radius (dist ${Math.round(distToTrigger())})`);
+assert.equal(readMaybeFlag(), false, 'MunitionsTrooperReady starts false outside the trigger');
+let enteredTick = -1;
+for (let i = 0; i < 300 && enteredTick < 0; i++) { walk(1); if (readMaybeFlag()) enteredTick = i; }
+assert.ok(enteredTick >= 0, 'walking into the FlagTrigger set MunitionsTrooperReady true (FlagTrigger.Touch)');
+assert.equal(selectFor(afterReset), 'MunitionsTrooperTake',
+  'standing in the authored FlagTrigger makes the instructor select Take');
+let exitedTick = -1;
+for (let i = 0; i < 400 && exitedTick < 0; i++) { walk(-1); if (!readMaybeFlag()) exitedTick = i; }
+assert.ok(exitedTick >= 0, 'walking back out cleared MunitionsTrooperReady (FlagTrigger.UnTouch)');
+assert.equal(selectFor(afterReset), 'MunitionsTrooperFrob', 'leaving the trigger restores the Frob greeting');
+
 console.log('Instructor conversation selection validated through the public Frob path: ' +
   'both instructors bind Frob->Take, GetActiveConversation picks Frob/Take by the MunitionsTrooperReady ' +
   'flag, the full StartConversation gate chain reaches Spawn(class\'ConPlay\') with the right conversation, ' +
-  'the greeting cycles A1..A5, and reset restores the fresh selection.');
+  'the greeting cycles A1..A5, reset restores the fresh selection, and walking into/out of the authored ' +
+  'FlagTrigger drives MunitionsTrooperReady so the Take path is reachable in ordinary Play.');

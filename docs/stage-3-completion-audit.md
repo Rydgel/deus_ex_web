@@ -185,8 +185,11 @@ every non-bark, non-DataLink conversation a present pawn can invoke — selected
 `Conversation.IsSpeakingActor`. `scripts/validate-instructor-conversation.mjs`
 drives the public Frob dispatch and asserts, over the original bytecode, that
 `GetActiveConversation` selects Frob when `MunitionsTrooperReady` is false and
-Take when true (the authored `ConFlagRef` gate; the flag is set by the map's
-`FlagTrigger`s and consumed by `Mission00.Timer`), that the whole
+Take when true (the authored `ConFlagRef` gate), that walking the player into and
+out of the instructor's authored `FlagTrigger` flips `MunitionsTrooperReady`
+through `FlagTrigger.Touch`/`UnTouch` (now prepared in `createScriptDoors`; its
+`GetPlayerPawn`/`FlagBase.SetBool` natives already route through the trigger
+handler) so the Take path is reachable in ordinary Play, that the whole
 `StartConversation` gate chain reaches `Spawn(class'ConPlay')` with the correct
 conversation for the invoking instructor, and that reset restores the fresh
 selection. The remaining boundary is the ConPlay first-person presentation past

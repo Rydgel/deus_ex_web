@@ -433,6 +433,15 @@ export async function createScriptDoors({
     triggerTouch: await prepare(engine, 'trigger.touch', 'Trigger.Touch'),
     triggerIsRelevant: await prepare(engine, 'trigger.isrelevant', 'Trigger.IsRelevant'),
     triggerUnTouch: await prepare(engine, 'trigger.untouch', 'Trigger.UnTouch'),
+    // FlagTrigger.Touch/UnTouch override the base and set/clear a flag on the
+    // player's FlagBase (via GetPlayerPawn 720 and FlagBase.SetBool, both routed
+    // through nativeCall/triggerActions). Training's MunitionsTrooperReady
+    // FlagTriggers use bSetFlag/flagValue=true/bWhileStandingOnly: standing
+    // within 300u sets it true, leaving sets it false — the authored gate that
+    // makes the instructor's Take conversation selectable.
+    // docs/script-instructor-conversation.md.
+    flagTriggerTouch: await prepare(deusEx, 'flagtrigger.touch', 'FlagTrigger.Touch'),
+    flagTriggerUnTouch: await prepare(deusEx, 'flagtrigger.untouch', 'FlagTrigger.UnTouch'),
     // Training's standalone Radiation10 body reaches this exact inherited
     // chain after TakeDamage writes the body-part health fields.  Keep the
     // original script bodies intact: PlayDXTakeDamageHit calls the JC override
