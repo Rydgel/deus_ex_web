@@ -200,10 +200,12 @@ throughout; media-ended never advances the script.
 
 This is a substantial playable conversation increment, **not completion of the
 whole instructor assignment or Stage 3**. Mission00.Timer's independent
-RemoveAllInventory enforcement has not been scheduled in Play. Normal inventory
+RemoveAllInventory enforcement is now scheduled in Play through the canonical
+`DeusExLevelInfo.SpawnScript → Mission00` spawn and the shared Actor.Tick
+scheduler ([script-mission-timer.md](script-mission-timer.md)). Normal inventory
 pickup/equipment/belt support and a complete walk from the Training spawn to
 both instructors remain broader dependencies; the current integration/browser
-checks use explicit approach setup. No substitute mission timer is installed.
+checks use explicit approach setup.
 
 Browser speech decodes the original MP3 bytes and starts/stops from the original
 PlaySound/StopSound channel, preserving its volume and pitch. Native mixer

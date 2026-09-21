@@ -78,6 +78,7 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   SetBool: 1100,
   GetBool: 1110,
   SetExpiration: 1122,
+  SetDefaultExpiration: 1125,
 });
 
 /**
@@ -94,6 +95,10 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
 export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
   const entries = new Map();
   const calls = [];
+  // XFlagBase::SetDefaultExpiration (native 1125, exec 0x10025dc0) writes the
+  // raw int to +0x128; SetBool substitutes it for an expiration of -1. The
+  // constructor 0x100239a0 zeroes it, matching the default here.
+  let currentDefaultExpiration = defaultExpiration | 0;
   const initial = initialFlags instanceof Map
     ? initialFlags.entries()
     : Object.entries(initialFlags ?? {});
@@ -118,7 +123,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       const boolValue = nativeBool(value, 'value');
       const requestedExpiration = expiration === undefined ? -1 : expiration;
       const effectiveExpiration = requestedExpiration === -1
-        ? defaultExpiration : requestedExpiration;
+        ? currentDefaultExpiration : requestedExpiration;
 
       // The native body returns false without inserting a missing flag when
       // bAdd is false.
@@ -156,6 +161,13 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       if(entry)entry.expiration=expiration|0;
       calls.push({method:'SetExpiration',name,type,expiration:expiration|0,found:Boolean(entry)});
     },
+    /** Extension.FlagBase.SetDefaultExpiration(int): writes the raw int to +0x128. */
+    setDefaultExpiration(expiration) {
+      if(!Number.isInteger(expiration))throw new TypeError('Flag default expiration requires a signed int');
+      currentDefaultExpiration=expiration|0;
+      calls.push({method:'SetDefaultExpiration',expiration:currentDefaultExpiration});
+    },
+    get defaultExpiration(){return currentDefaultExpiration;},
     getEntry(name) {
       const entry = current(name);
       return entry ? { ...entry } : null;
@@ -223,6 +235,12 @@ export function createScriptTriggers({
     if(index===TRIGGER_NATIVE_INDICES.SetExpiration){
       if(call.receiver!==flagBase||call.argumentCount!==3)throw new Error('FlagBase.SetExpiration receiver/arguments');
       flagBase.setExpiration(evaluateValue(call,0),evaluateValue(call,1)&255,evaluateValue(call,2));
+      return {handled:true,value:undefined};
+    }
+    if(index===TRIGGER_NATIVE_INDICES.SetDefaultExpiration){
+      if(call.receiver!==flagBase||call.argumentCount!==1)throw new Error('FlagBase.SetDefaultExpiration receiver/arguments');
+      if(typeof flagBase.setDefaultExpiration!=='function')throw new Error('FlagBase.SetDefaultExpiration is unsupported for this store');
+      flagBase.setDefaultExpiration(evaluateValue(call,0));
       return {handled:true,value:undefined};
     }
     if (index === TRIGGER_NATIVE_INDICES.GetBool) {

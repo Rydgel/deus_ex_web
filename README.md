@@ -47,6 +47,16 @@ or push further hosting updates unless the user asks.
   selected conversation inventory transfers also run through original scripts
   ([DataLink scope](docs/script-datalink-live.md),
   [transfer evidence](docs/script-datavault-image.md)).
+- Frobbing a Training munitions instructor runs the original first-person
+  `ConPlay` conversation: the speaker name and speech-text subtitle panel show
+  when the `bSubtitles` preference is on (a discoverable diagnostics toggle,
+  seeded from the installed globalconfig) and hide when off, both with original
+  speech. `Mission00.Timer` — spawned by `DeusExLevelInfo.SpawnScript` and
+  ticked through the shared scheduler — confiscates and destroys the player's
+  remaining inventory while standing at the instructor
+  ([conversation](docs/script-instructor-conversation.md),
+  [window layer](docs/script-window-bounds-update.md),
+  [mission timer](docs/script-mission-timer.md)).
 - Play now shows the original health silhouette, energy meter and turning
   compass. Original HUD bytecode reads live player state. InfoLink transmissions
   use the original frame textures, portraits and bitmap fonts, replacing the

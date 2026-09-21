@@ -10,8 +10,24 @@
 > text, and the off branch hides the panel while speech plays. The local
 > viewport listener is bound to `PlayerPawn.Player` so `GetDisplayName` resolves
 > the name. `scripts/validate-instructor-conversation.mjs` asserts both states.
-> The full native TileWindow render tree remains Stage 4. **Mission00.Timer's
-> inventory enforcement is still open at this checkpoint.** Stage 3 remains open.
+> The full native TileWindow render tree remains Stage 4.
+>
+> **Mission00.Timer inventory enforcement (2026-09-21):**
+> `DeusExLevelInfo.SpawnScript` spawns the `Mission00` actor through the
+> original bytecode (a prepared `Spawn` route for the Info-derived, script-only
+> class); its `PostPostBeginPlay → SetTimer(1.0, True)` runs `Mission00.Timer`
+> through the shared `processActorTick` scheduler in `Level.Actors` order, no
+> substitute loop. On the first tick `InitStateMachine` sets `flags`/`localURL`
+> (with `FlagBase.SetDefaultExpiration` native 1125 newly recovered and the
+> GLog device supplied), then the timer removes the player's remaining
+> inventory while `MunitionsTrooperReady` is true
+> (`RemoveAllInventory → DeleteInventory + Destroy`). Reset destroys and
+> re-spawns one fresh mission actor. `scripts/validate-mission-timer.mjs`
+> asserts the nonempty-inventory, ownership, destruction, trigger entry/exit and
+> reset cases; the instructor validator covers the Take transfer with the
+> mission active ([script-mission-timer.md](script-mission-timer.md)).
+> General inventory/belt and the whole Training route remain open. Stage 3
+> remains open.
 
 Visible checkpoint: Training's **NPC mesh preview** now displays 14 original
 character/bot meshes, including the people beside and behind Jaime.

@@ -22,6 +22,7 @@ import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
+import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 
 const f = Math.fround;
@@ -334,8 +335,15 @@ export async function createScriptDoors({
   // focused validation with the live capture (scripts/validate-script-lights.mjs)
   // opts 264 back out to exercise the real native.
   let liveConPlay=null;
+  let liveMission=null;
+  // GLog output device: Object.Log (native 231) is a synchronous side channel
+  // with no gameplay effect. MissionScript.InitStateMachine logs its startup
+  // line, so supply the host sink the original always has, recording a bounded
+  // ring for diagnostics rather than leaving it an explicit boundary throw.
+  const scriptLog=[];
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
-    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264] });
+    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264],
+    logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();} });
   const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
     if(name==='XLevel')return runtime.levelFor(object);
     const field={Engine:'engine',Client:'client',Viewports:'viewports',Actor:'actor'}[name];
@@ -1286,6 +1294,10 @@ export async function createScriptDoors({
   function reset() {
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveConPlay?.reset();
+    // Destroy the mission actor before the map reload so its reset-time
+    // destruction precedes the NPC startup's shadow destroys (it is re-spawned
+    // into the restored world after resetNpcs, below).
+    liveMission?.destroy();
     liveDataLink?.reset();
     faceConversations?.reset?.();
     triggerActions.flagBase.entries.clear();
@@ -1310,6 +1322,9 @@ export async function createScriptDoors({
     // viewer, not Level.Tick, drives this pawn (docs/script-instructor-conversation.md).
     const viewport = level?.engine?.client?.viewports?.[0] ?? null;
     if (viewport) runtime.namedReference(playerActor, 'Player').set(viewport);
+    // Re-spawn the mission actor into the freshly restored world so its timer
+    // and state machine start over (the original reloads the level on reset).
+    liveMission?.spawn();
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
@@ -1496,6 +1511,13 @@ export async function createScriptDoors({
             `${actor.name ?? runtime.namedReference(actor, 'Name').get()}: ${String(error?.message ?? error)}`);
         }
         collectSpawned(spawnedFrom);
+      } else if (liveMission?.has(actor)) {
+        // The mission state machine ticks in Level.Actors order like the map
+        // pawns; its SetTimer fires Mission00.Timer through Actor.Tick.
+        const spawnedFrom = level.actors.length;
+        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
+        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+        collectSpawned(spawnedFrom);
       }
     }
     // Physics phase follows ProcessState and the timer phase for each actor.
@@ -1549,6 +1571,11 @@ export async function createScriptDoors({
   liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:infoLinkShellValue,
     conversations:faceConversations.conversations,prepareClass:prepareNpcClass,
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
+  // Mission00's timer: DeusExLevelInfo.SpawnScript spawns the mission actor,
+  // whose PostPostBeginPlay SetTimer runs Mission00.Timer through the shared
+  // scheduler. Created after liveConPlay so its one-shot spawn route wraps the
+  // conversation lifecycle (docs/script-mission-timer.md).
+  liveMission=await createLiveMissionRuntime({runtime,assets,level,player:playerActor});
   const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
   runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
@@ -1587,7 +1614,7 @@ export async function createScriptDoors({
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures,
     infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
 
 export default createScriptDoors;
