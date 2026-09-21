@@ -427,13 +427,14 @@ three cases missed by the initial integration:
 
 Training `Secretary0` (`Orders=Patrolling`, `OrderTag=sec1`) reaches 517 in
 `Patrolling.Moving` and receives `PatrolPoint4` — the only nav node inside
-the native 800-unit candidate radius — then runs `MoveToward` and lands in
-the script's `Standing` terminus (`NextPatrolPoint==None`). Checked by
-`scripts/validate-secretary-patrol.mjs`: the current seed-1 run moves only
-3.8 units and stops roughly 28 units from the point. The route-selection
-check does **not** establish original patrol-arrival fidelity. Compare the
-original arrival tolerances, latent poll and movement/timeout trace before
-deciding whether that stop needs a locomotion fix.
+the native 800-unit candidate radius for its first leg. Running the original
+`PatrolPoint.PreBeginPlay` now resolves `NextPatrolPoint`, so the script
+continues to PatrolPoint5 and back instead of entering Standing after one
+leg. `validate-secretary-patrol.mjs` verifies walking arrival with positive
+MoveTimer at both points, then compares the 1900-tick route after public
+`game.reset()` with fresh load. The ~28u vertical offset is allowed by the
+original walking arrival rule, which zeroes dz before checking horizontal
+distance `<16u`. See [patrol evidence](script-pawn-locomotion.md#live-patrol-verification--00_training-secretary0).
 
 **Oracle coverage.**  140/140 scenes bit-exact and 35/35 targeted mutants in
 `scripts/validate-pawn-nav.mjs`: direct reach, `MoveTarget` anchor seeding,
@@ -623,9 +624,8 @@ Focused checkpoint (supersedes the 2026-09-20 note):
 15 original comparisons through VM/runtime dispatch;
 `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
 `npm test` passes 499/499. Natives 709 and 517 are live — the Training MIB
-wanders and `Secretary0` selects `PatrolPoint4` and begins moving in Play
+wanders and `Secretary0` follows the PatrolPoint4↔PatrolPoint5 route in Play
 (`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
-Stage 3 remains unfinished. The current patrol stopping behavior needs an
-original locomotion comparison. Remaining navigation implementation includes
+Stage 3 remains unfinished. Remaining navigation implementation includes
 waterMove/waterReach, jumpArc and the ReachSpec path workers
 `FindRandomDest`/`FindPathTo`.

@@ -106,9 +106,11 @@ Current explicit boundaries, all recorded rather than substituted:
   the original pacing sleeps ~6 s between episodes), pick #15 succeeds and
   the pawn moves ~98 u, with further successful wander legs through 1920
   ticks and no NPC failures. `Pawn.FindPathToward` (native 517) is now
-  implemented through the shared navigation services; Secretary0 selects
-  PatrolPoint4 and begins moving, with final arrival/timeout fidelity still
-  unverified. See
+  implemented through the shared navigation services; Secretary0 follows
+  PatrolPoint4↔PatrolPoint5 after the original patrol-point startup resolves
+  their links. Both arrivals satisfy the recovered walking rule with time
+  remaining, and public reset repeats the route. See
+  [patrol evidence](script-pawn-locomotion.md#live-patrol-verification--00_training-secretary0),
   [pawn navigation](script-pawn-nav.md#aipickrandomdestination-native-709---execaipickrandomdestination-0x103c86f0)
   and [alliance checks](script-pawn-alliance.md).
 * ~~`DeusExRootWindow.CanStartConversation` is unprepared; reached by the

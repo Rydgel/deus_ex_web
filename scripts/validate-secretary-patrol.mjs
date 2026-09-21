@@ -9,9 +9,9 @@
  *
  * Each MoveToward leg is instrumented through pollPawnLocomotion to capture the
  * exact completion moment: the recovered steer/arrival helper (0x103be200)
- * clears the latent only on arrival — horizontal distance <16u with the
- * vertical check |dz|<max(CollisionHeight,48) — while MoveTimer>0 distinguishes
- * arrival from timeout. Load and reset both re-run the chain. */
+ * clears the latent on arrival — horizontal distance <16u for PHYS_Walking
+ * (the helper zeroes dz) — while MoveTimer>0 distinguishes arrival from
+ * timeout. Load and the public game.reset() both re-run the chain. */
 import assert from 'node:assert/strict';
 import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
@@ -80,12 +80,14 @@ runtime.pollPawnLocomotion=call=>{
       target:target?.name??null,
       horizontal:tloc?Math.hypot(loc[0]-tloc[0],loc[1]-tloc[1]):Infinity,
       vertical:tloc?Math.abs(loc[2]-tloc[2]):Infinity,
+      physics:get('Physics'),
       moveTimer:get('MoveTimer'),
     });
   }
   return result;
 };
 const destSequence=[];
+const trace=[];
 let lastDest=null;
 const patrol=(ticks)=>{
   for(let i=0;i<ticks&&!npcFailures.has(secretary);i++){
@@ -93,6 +95,10 @@ const patrol=(ticks)=>{
     const dest=get('destPoint');
     assert.notEqual(stateName(),'Standing','patrol must not terminate in Standing');
     if(dest!==lastDest){destSequence.push(dest?.name??'null');lastDest=dest;}
+    trace.push({location:[...get('Location')],physics:get('Physics'),
+      state:stateName(),latent:runtime.instance(secretary).state.latent,
+      target:get('MoveTarget')?.name??null,destination:dest?.name??null,
+      moveTimer:get('MoveTimer')});
   }
 };
 // ~1900 ticks: land, arrive PatrolPoint4, pausetime pause, walk ~880u to
@@ -104,33 +110,36 @@ assert.ok(calls>0,'Patrolling reached native 517 in live ticking');
 assert.ok(successes>0,'at least one recovered path search found a patrol point');
 assert.deepEqual(destSequence,['PatrolPoint4','PatrolPoint5','PatrolPoint4'],
   `PickDestination chains NextPatrolPoint sec1->sec2->sec1: ${destSequence}`);
-// Both legs terminated by the recovered arrival rule (horizontal <16u,
-// |dz|<max(CollisionHeight,48), MoveTimer still positive) — not timeout or
-// target loss.
-assert.ok(completions.length>=2,`expected arrivals at both patrol points: ${JSON.stringify(completions)}`);
-const height=Math.max(get('CollisionHeight'),48);
-for(const c of completions){
-  assert.ok(c.target,'MoveToward completion with a live target (not target loss)');
-  assert.ok(c.horizontal<16&&c.vertical<height,
-    `arrival tolerance: ${c.horizontal.toFixed(1)}u horizontal <16, ${c.vertical.toFixed(1)}u vertical <${height}`);
-  assert.ok(c.moveTimer>0,`arrival before MoveTimer expiry (${c.moveTimer.toFixed(2)}s remaining)`);
+// Both legs terminate by the recovered walking arrival rule (horizontal
+// <16u; dz is zeroed), with MoveTimer still positive and a live target.
+function assertArrivals(){
+  assert.ok(completions.length>=2,`expected arrivals at both patrol points: ${JSON.stringify(completions)}`);
+  for(const c of completions){
+    assert.ok(c.target,'MoveToward completion with a live target (not target loss)');
+    assert.equal(c.physics,1,'patrol arrival uses PHYS_Walking');
+    assert.ok(c.horizontal<16,`walking arrival tolerance: ${c.horizontal.toFixed(1)}u horizontal <16`);
+    assert.ok(c.moveTimer>0,`arrival before MoveTimer expiry (${c.moveTimer.toFixed(2)}s remaining)`);
+  }
+  assert.ok(completions.some(c=>c.target==='PatrolPoint4'),'arrived at PatrolPoint4');
+  assert.ok(completions.some(c=>c.target==='PatrolPoint5'),'arrived at PatrolPoint5');
+  assert.equal(stateName(),'Patrolling','secretary is still patrolling');
 }
-assert.ok(completions.some(c=>c.target==='PatrolPoint4'),'arrived at PatrolPoint4');
-assert.ok(completions.some(c=>c.target==='PatrolPoint5'),'arrived at PatrolPoint5');
-assert.equal(stateName(),'Patrolling','secretary is still patrolling');
-// Reset: the LoadMap chain re-runs, patrol-point links re-resolve and the
-// secretary restarts the same deterministic route.
-game.doors.reset();
+assertArrivals();
+const loadCompletions=structuredClone(completions),loadTrace=structuredClone(trace);
+// Exercise the public reset entry point: it restores the random stream,
+// collision state and clock before the doors subsystem replays startup.
+game.reset();
 assert.equal(ref(pp4,'NextPatrolPoint'),pp5,'reset re-runs PatrolPoint4.PreBeginPlay');
 assert.ok(Math.abs(Math.hypot(...ref(pp4,'lookDir'))-200)<0.5,'reset re-derives lookDir');
 assert.equal(stateName(),'StartUp','reset returns the secretary to StartUp');
-completions.length=0;destSequence.length=0;lastDest=null;
-patrol(400);
+completions.length=0;destSequence.length=0;trace.length=0;lastDest=null;
+patrol(1900);
 assert.equal(npcFailures.has(secretary),false,
   `post-reset patrol runs without a boundary: ${npcFailures.get(secretary)}`);
-assert.ok(completions.some(c=>c.target==='PatrolPoint4'),
-  `post-reset patrol arrives at PatrolPoint4 again: ${JSON.stringify(completions)}`);
-assert.deepEqual(destSequence,['PatrolPoint4','PatrolPoint5'],
-  `post-reset route repeats sec1->sec2: ${destSequence}`);
+assertArrivals();
+assert.deepEqual(destSequence,['PatrolPoint4','PatrolPoint5','PatrolPoint4'],
+  `post-reset route repeats sec1->sec2->sec1: ${destSequence}`);
+assert.deepEqual(completions,loadCompletions,'public reset reproduces both arrival geometries and timers');
+assert.deepEqual(trace,loadTrace,'public reset reproduces the complete 1900-tick patrol trace');
 console.log(`PASS Secretary0 patrol: ${successes}/${calls} FindPathToward, `+
   `${completions.length} post-reset arrivals, continuous sec1<->sec2 loop, load+reset verified.`);

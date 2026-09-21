@@ -106,7 +106,7 @@ The 499 unit tests, Secretary integration and MIB load/reset checks pass.
 observation is resolved and was two separate things. The stop itself is the
 recovered walking-arrival rule (`steerArrive200` zeroes `d.z`, so arrival is
 horizontal `<16u`; both patrol points sit ~28u below the secretary's floor) —
-not a bug. The real mismatch was upstream: `ULevel::LoadMap` dispatches
+not a bug. The real mismatch was upstream: `UGameEngine::LoadMap` dispatches
 `PreBeginPlay` to every actor (`0x1038d99a`–`0x1038d9cc`), and
 `PatrolPoint.PreBeginPlay` resolves serialized `Nextpatrol` names into
 `NextPatrolPoint` via the `AllActors` tag iterator. Only pawn-ancestry actors
@@ -119,11 +119,15 @@ the load/reset startup chain; the live trace shows land → arrive PatrolPoint4
 boundaries. `ScientistMale0` patrols comp1↔comp2 the same way.
 `validate-secretary-patrol.mjs` now instruments each `MoveToward` completion
 to prove arrival (not timeout/target loss), asserts the `destPoint` cycle,
-and covers load+reset link resolution. Evidence:
+and covers load+reset link resolution. The reviewed validator uses public
+`game.reset()` and compares both arrival records and the complete 1900-tick
+patrol trace with fresh load. Evidence:
 [script-pawn-locomotion.md](script-pawn-locomotion.md#live-patrol-verification--00_training-secretary0).
-Pre-existing reset gap noted there: post-reset the secretary lands on a lower
-BSP surface (z≈18.8 vs 23.3) — patrol topology identical, floor-selection
-difference unresolved.
+The earlier reset floor discrepancy came from calling only `doors.reset()`;
+the public reset reproduces the fresh-load floor. The startup host's event
+ordering remains incomplete: it runs all five events per pawn, then per
+patrol point, while the original uses separate passes over the live actor
+array. This patrol fix does not close the general LoadMap lifecycle.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

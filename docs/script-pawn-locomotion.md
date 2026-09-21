@@ -269,19 +269,26 @@ Explicitly unverified/unsupported:
 `Goto('Patrol')`. `HitWall` calls `CheckOpenDoor`; `SetFall` resumes at
 `ContinuePatrol`.
 
-`PatrolPoint.PreBeginPlay` (Engine.u export 4304, decoded bytecode):
+`PatrolPoint.PreBeginPlay` (Engine.u export 4305, one-based, decoded bytecode;
+also checked against the class's embedded ScriptText):
 
 ```uc
-lookDir = 200 * vector(Rotation);            // @0: native 213 (vector*float)
+lookDir = 200 * vector(Rotation);            // @0: native 213
 NextPatrolPoint = None;                      // @17
 if (Nextpatrol != 'None')                    // @24: native 255 name!=
     foreach AllActors(class'PatrolPoint', CurPoint, Nextpatrol)  // @39: native 304
-        if (CurPoint != None)                // @60: native 119
+        if (CurPoint != self)                // @60: native 119, EX_Self @69
+        {
             NextPatrolPoint = CurPoint;      // @71
-Super.PreBeginPlay();                        // @87: callnative functionIndex=207
+            break;                          // @82: jump to IteratorPop @86
+        }
+Super.PreBeginPlay();                        // @87: final functionIndex=207
 ```
 
-The original `ULevel::LoadMap` dispatches `PreBeginPlay` to **every** actor in
+The loop selects the first matching actor other than itself. The source's
+empty name literal is encoded as name-table index 0 (`None`).
+
+The original `UGameEngine::LoadMap` dispatches `PreBeginPlay` to **every** actor in
 a dedicated pass (`0x1038d99a`–`0x1038d9cc`, docs/pawn-list.md), so each
 serialized `Nextpatrol` name resolves at load: `PatrolPoint4 → PatrolPoint5`
 (sec1→sec2), `PatrolPoint5 → PatrolPoint4`, `PatrolPoint0 ↔ PatrolPoint1`
@@ -290,9 +297,13 @@ ran the chain, so `NextPatrolPoint` stayed `None` and the patrol terminated in
 `Standing` after the first leg. `script-doors.mjs` now admits
 `engine.patrolpoint`-ancestry actors to the same load/reset chain (class-chain
 prepare, serialized-state restore, `InitExecution` + the five startup events);
-other non-pawn classes stay unadmitted.
+other non-pawn classes stay unadmitted. The host still runs all five events
+per pawn, then per patrol point; the original's separate event passes across
+the live actor array remain an integration gap. This patrol check does not
+establish general LoadMap ordering fidelity.
 
-Observed deterministic trace (`randomSeed=1`, `1/60` s): land t≈4;
+Observed deterministic trace (`randomSeed=1`, `1/60` s; t is the zero-based
+tick index): land t≈4;
 `FindPathToward`→`MoveToward(PatrolPoint4)` t=5 (`MoveTimer≈2.11`); arrival
 t≈12 at ~15.2u horizontal with `MoveTimer≈2.0` remaining — the recovered
 arrival rule, **not** timeout; `TurnTo`+`Sleep` pause; t=146
@@ -302,22 +313,25 @@ arrival rule, **not** timeout; `TurnTo`+`Sleep` pause; t=146
 unreachable because `NextPatrolPoint` is never `None`. `ScientistMale0`
 patrols comp1↔comp2 identically (175u legs, pausetime 10/6).
 
-The ~28u gap between the pawn's stopped `Location` and each point is **not** a
-mismatch: both points sit at z≈−4.9 while the secretary's floor is z≈23.3,
-and the walking arrival test zeroes `d.z` before the `<256` compare — arrival
-is horizontal-only for `PHYS_Walking`, so stopping ~15u horizontal (~28u 3D)
+The ~28u vertical offset between the pawn's stopped `Location` and each point
+is consistent with arrival: both points sit at z≈−4.9 while the secretary's
+floor is z≈23.3, and the walking arrival test zeroes `d.z` before the `<256`
+compare — arrival
+is horizontal-only for `PHYS_Walking`, so stopping ~15u horizontal (~32u 3D)
 is exactly the original rule.
 
 `scripts/validate-secretary-patrol.mjs` instruments `pollPawnLocomotion` index
 503 to capture each completion at the instant `state.latent` clears (target
-still bound) and asserts every leg is arrival-terminated (horizontal `<16`,
-`|dz| < max(CollisionHeight,48)`, `MoveTimer>0`, live `MoveTarget`), the
+still bound) and asserts every leg is arrival-terminated (`PHYS_Walking`,
+horizontal `<16`, `MoveTimer>0`, live `MoveTarget`), the
 `destPoint` sequence is `[PatrolPoint4, PatrolPoint5, PatrolPoint4]`, the
-state never reaches `Standing`, and reset re-resolves the links and repeats
-the route.
+state never reaches `Standing`, and public `game.reset()` re-resolves the
+links and repeats both legs. Arrival geometry/timers and all 1900 samples of
+Location, Physics, state, latent action, target, destination and MoveTimer
+must match the fresh-load run exactly.
 
-Known reset-side gap (pre-existing, unrelated to this fix): after
-`doors.reset()` the secretary lands on a lower BSP surface at z≈18.8 instead
-of the fresh-load z≈23.3 at the same spawn — the patrol topology is identical
-but the floor-selection difference between the initial collision hash and the
-reset rebuild is unresolved.
+Review correction: the earlier z≈18.8 versus z≈23.3 comparison called only
+`doors.reset()`, bypassing the public reset's random reseed, collision rebuild
+and clock reset. A direct 20-tick comparison reproduced the discrepancy for
+that partial reset and matched fresh load exactly through `game.reset()`.
+It therefore does not establish a floor-selection defect in the public reset.
