@@ -68,18 +68,46 @@ const clsKey = actor => {
 const priCount = () => level.actors.filter(a => a && clsKey(a) === 'engine.playerreplicationinfo').length;
 
 function assertAdmission(label) {
-  // Serialized-slot correspondence: refused -> null, admitted -> the live
-  // object bound to that export index. Runtime spawns append past the
-  // serialized length and are out of this assertion's scope.
-  assert.equal(level.actors.length >= map.level.actors.length, true, `${label}: spawned tail appends`);
+  // The LoadMap tail (Engine.dll 0x1038dcd5) rebuilds Level.Actors after
+  // startup: slots 0 and 1 copy verbatim, then every non-null static actor in
+  // original order, then every non-null dynamic actor. Refused-export nulls
+  // and actors destroyed mid-startup are compacted out, so the live array no
+  // longer maps 1:1 onto the serialized slots — the checks below assert the
+  // partition's real invariants instead of positional correspondence.
+  const mapRefs = new Set(map.level.actors.filter(ref => ref !== 0));
+  const live = level.actors.filter(actor => actor);
+  const byIndex = new Map(live.filter(actor => Number.isInteger(actor.index)).map(actor => [actor.index, actor]));
+  // Refused and zero-ref exports were never constructed: no live actor binds
+  // their export index. Admitted actors keep their identity in the array.
   for (let slot = 0; slot < map.level.actors.length; slot++) {
-    const ref = map.level.actors[slot], live = level.actors[slot];
+    const ref = map.level.actors[slot];
     if (ref === 0 || !mapExportAdmitted(map.pkg, ref)) {
-      assert.equal(live, null, `${label}: slot ${slot} (${map.pkg.exports[ref - 1]?.name ?? 'zero'}) resolves to null`);
+      assert.equal(byIndex.has(ref), false,
+        `${label}: slot ${slot} (${map.pkg.exports[ref - 1]?.name ?? 'zero'}) never joins the live array`);
     } else {
-      assert.equal(live?.index, ref, `${label}: slot ${slot} (${map.pkg.exports[ref - 1].name}) keeps its actor`);
+      assert.equal(byIndex.get(ref)?.index, ref, `${label}: slot ${slot} (${map.pkg.exports[ref - 1].name}) keeps its actor`);
     }
   }
+  // Head: slots 0 and 1 are copied verbatim (slot 1 keeps its null).
+  assert.equal(level.actors[0], byIndex.get(map.level.actors[0]) ?? null, `${label}: slot 0 is the serialized LevelInfo`);
+  assert.equal(level.actors[1] ?? null, map.level.actors[1] ? byIndex.get(map.level.actors[1]) ?? null : null,
+    `${label}: slot 1 is verbatim`);
+  // Tail: every actor at index >= 2 with a serialized bStatic lands before the
+  // iFirstNetActor boundary; the rest are dynamic, in original relative order.
+  const isStatic = actor => { try { return Boolean(runtime.namedReference(actor, 'bStatic').get()); } catch { return false; } };
+  const firstNet = level.iFirstNetActor;
+  assert.equal(Number.isInteger(firstNet), true, `${label}: iFirstNetActor recorded`);
+  const tail = level.actors.slice(2);
+  const serializedTail = tail.filter(actor => mapRefs.has(actor.index));
+  const expected = serializedTail.filter(isStatic).concat(serializedTail.filter(actor => !isStatic(actor)));
+  assert.deepEqual(serializedTail, expected, `${label}: statics precede dynamics preserving serialized order`);
+  // Dynamic-section tail order: map actors precede runtime spawns (which were
+  // appended after the serialized entries pre-partition).
+  const dynamicTail = tail.slice(firstNet - 2);
+  const lastMapIndex = dynamicTail.reduce((last, actor, i) => mapRefs.has(actor.index) ? i : last, -1);
+  const firstSpawnIndex = dynamicTail.findIndex(actor => !mapRefs.has(actor.index));
+  assert.ok(firstSpawnIndex === -1 || firstSpawnIndex > lastMapIndex,
+    `${label}: runtime-spawned actors stay after serialized dynamics`);
   // No refused export can be a live pawn, collidable or mover: it was never
   // constructed, so it cannot join PawnList or the collision hash.
   for (const pawn of npcPawns)

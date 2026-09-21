@@ -295,8 +295,13 @@ export async function createLiveDataLinkRuntime({
 
   function resolveTrigger(entry,supplied=null){
     if(supplied)return supplied;
-    const candidate=level.actors?.[entry.route.trigger.actorSlot];
-    return candidate?.name===entry.route.trigger.name?candidate:null;
+    const route=entry.route.trigger;
+    const candidate=level.actors?.[route.actorSlot];
+    // The LoadMap tail partition (Engine.dll 0x1038dcd5) compacts and reorders
+    // the tail of Level.Actors, so the serialized slot only resolves the actor
+    // before startup partitioning; the authored route name is the identity.
+    return candidate?.name===route.name?candidate
+      :level.actors?.find(actor=>actor?.name===route.name)??null;
   }
 
   function callPrepared(record,receiver,args=[]){

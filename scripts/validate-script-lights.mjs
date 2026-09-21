@@ -1,9 +1,10 @@
 /** Focused execution of the original 00_Training TriggerLight subset.
  *
- * Use the actual Play actor identities/property bindings. The player subsystem
- * actors are appended after the serialized level actors, so this validator
- * verifies the preserved map prefix instead of the obsolete map-plus-player
- * actor count.
+ * Use the actual Play actor identities/property bindings. The LoadMap tail
+ * partition (Engine.dll 0x1038dcd5) rebuilds Level.Actors after startup —
+ * slots 0/1 verbatim, then non-null statics, then non-null dynamics — so the
+ * serialized slots no longer map positionally; this validator verifies actor
+ * identity membership instead.
  */
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -36,16 +37,18 @@ const deusEx = await assets.get('DeusEx');
 const game = await createGame(map, mapAsset, assets, {randomSeed: 1});
 const runtime = game.doors.scriptRuntime.runtime;
 const player = game.player.collisionActor, level = runtime.levelFor(player);
-assert.ok(level.actors.length > map.level.actors.length + 1);
+// Exports the standalone linker's CreateExport refused (mapExportAdmitted —
+// Training's Brush and Camera exports) were never constructed, so no live
+// actor binds their export index; admitted exports keep their object identity
+// somewhere in the partitioned array, and the player subsystem actors are
+// appended participants of the dynamic tail.
 for (const [index, ref] of map.level.actors.entries()) {
-  // Exports the standalone linker's CreateExport refused (mapExportAdmitted —
-  // Training's Brush and Camera exports) were never constructed, so their
-  // serialized slots resolve to null in the live array.
   const expected = ref && mapExportAdmitted(map.pkg, ref)
     ? await runtime.objects.resolve(mapAsset, ref) : null;
-  assert.equal(level.actors[index], expected);
+  assert.equal(expected === null ? level.actors.every(actor => actor?.index !== ref) : level.actors.includes(expected),
+    true, `serialized slot ${index} keeps its admission identity`);
 }
-assert.equal(level.actors[map.level.actors.length], player);
+assert.ok(level.actors.includes(player));
 const mapLightActors = map.actors.filter(actor => /^TriggerLight[0-3]$/i.test(actor.name));
 assert.deepEqual(mapLightActors.map(actor => actor.name), ['TriggerLight0', 'TriggerLight1', 'TriggerLight2', 'TriggerLight3']);
 assert.deepEqual(mapLightActors.map(actor => actor.index), [111, 113, 114, 110]);

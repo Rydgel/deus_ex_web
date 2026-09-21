@@ -13,7 +13,11 @@ import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
-import { setActorCollisionSize } from './script-actor-collision.mjs';
+import { setActorCollisionSize, findActorBase } from './script-actor-collision.mjs';
+import { setBase } from './walking-callbacks.mjs';
+import { setActorZone } from './zone.mjs';
+import { pawnPhysicsView } from './script-pawn-physics.mjs';
+import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
@@ -717,16 +721,16 @@ export async function createScriptDoors({
 
   // ---- Original map-pawn startup and per-tick scheduling ----
   // Attached pawn-ancestry map actors in serialized actor-array order,
-  // excluding the player (it runs its own recovered PlayerTick route). Each
-  // pawn runs the recovered LoadMap event chain once per load/reset —
-  // InitExecution then PreBeginPlay -> BeginPlay -> PostBeginPlay ->
-  // SetInitialState -> PostPostBeginPlay — and is then ticked through the
-  // recovered standalone Actor.Tick (animation -> ProcessState -> physics ->
-  // pawn tail) each frame. Every scripted method and state on the class chain
-  // is prepared BEFORE startup: the VM advances a state cursor before
-  // dispatch, so a prepare-on-demand throw inside a state body would
-  // permanently skip that statement on retry (the original links all script
-  // code at load).
+  // excluding the player (it runs its own recovered PlayerTick route). Map
+  // startup runs the recovered UGameEngine::LoadMap shared passes — one
+  // InitExecution pass, then the shared event/native passes below — over the
+  // live actor array each load/reset (see the LoadMap block under resetNpcs);
+  // pawns are then ticked through the recovered standalone Actor.Tick
+  // (animation -> ProcessState -> physics -> pawn tail) each frame. Every
+  // scripted method and state on the class chain is prepared BEFORE startup:
+  // the VM advances a state cursor before dispatch, so a prepare-on-demand
+  // throw inside a state body would permanently skip that statement on retry
+  // (the original links all script code at load).
   const npcPawns = [];
   const npcPawnSet = new Set();
   const npcFailures = new Map();
@@ -746,11 +750,12 @@ export async function createScriptDoors({
   // first leg instead of continuing. Other non-pawn classes stay unadmitted
   // until a live original body reaches them.
   const npcPatrolPoints = [];
+  const npcPatrolPointSet = new Set();
   for (const actor of level.actors ?? []) {
     const record = actor && actor !== playerActor ? identities.get(actor) : null;
     if (!record) continue;
     for (let cls = record.cls; cls; cls = cls.base)
-      if (cls.record.key === 'engine.patrolpoint') { npcPatrolPoints.push(actor); break; }
+      if (cls.record.key === 'engine.patrolpoint') { npcPatrolPoints.push(actor); npcPatrolPointSet.add(actor); break; }
   }
 
   const preparedNpcClasses = new Set();
@@ -834,6 +839,23 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    // The LoadMap base-fixup pass (0x1038daad-0x1038dbe0) runs AttachTag
+    // SetBase and FindBase on Decoration/Inventory/Pawn ancestry actors; the
+    // SupportActor/Attach/Detach/BaseChange dispatches resolve through each
+    // hit actor's own chain — e.g. DeusExDecoration overrides BaseChange — so
+    // those class chains link at load like the admitted event classes.
+    for (const actor of level.actors ?? []) {
+      if (!actor || actor === playerActor) continue;
+      const record = identities.get(actor);
+      if (!record || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)) continue;
+      let gated = false;
+      for (let cls = record.cls; cls; cls = cls.base)
+        if (cls.record.key === 'engine.decoration' || cls.record.key === 'engine.inventory') { gated = true; break; }
+      if (!gated) continue;
+      // A class whose methods cannot link is a load-time boundary, not a
+      // per-actor startup failure: the dispatch would throw later anyway.
+      await prepareNpcClass(record.cls);
+    }
   }
 
   // The ULevel::Tick actor-view over the scene level: ULevel::TimeSeconds is
@@ -876,11 +898,181 @@ export async function createScriptDoors({
     }
   }
 
-  const NPC_STARTUP_EVENTS = Object.freeze(['PreBeginPlay', 'BeginPlay', 'PostBeginPlay', 'SetInitialState', 'PostPostBeginPlay']);
-  function runNpcStartup(actor) {
-    runtime.initExecution(actor);
-    for (const name of NPC_STARTUP_EVENTS) runtime.processEvent(actor, name);
+  // ---- UGameEngine::LoadMap shared startup passes (Engine.dll 0x1038c1f0) ----
+  // The original does not run InitExecution + all five startup events per actor.
+  // It runs one dedicated pass per step over the live Level.Actors array, with
+  // native operations between the event passes. Each pass loop rereads the
+  // array data pointer and Num per iteration and skips null slots, so actors
+  // appended during a pass are reached by it and destroyed actors drop out.
+  // Admission stays the supported class scope — map pawns and map PatrolPoints
+  // plus nothing else; the original dispatches to every non-null slot, so an
+  // actor appended mid-startup of a class outside that scope would be
+  // re-dispatched there while this host leaves it to its SpawnActor chain.
+  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor);
+  // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
+  // apply to every actor the original would have had in the array at LoadMap:
+  // the serialized map actors and actors these same passes spawn. The player
+  // and its post-load subsystems are excluded exactly like the original, whose
+  // SpawnPlayActor runs after LoadMap.
+  const startupNative = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor));
+  const startupField = (actor, name) => runtime.namedReference(actor, name);
+  const startupRead = (actor, name) => { try { return startupField(actor, name).get(); } catch { return undefined; } };
+  function runStartupEvent(event) {
+    forEachLiveActor(level, actor => {
+      if (!startupAdmitted(actor) || npcFailures.has(actor)) return;
+      const spawnedFrom = level.actors.length;
+      try { runtime.processEvent(actor, event); }
+      catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+      finally {
+        // Pawn startup spawns (each NPC's Shadow) join the tracked set even
+        // when the chain reaches a boundary partway through.
+        collectSpawned(spawnedFrom);
+      }
+    });
   }
+  function runStartupInitExecution() {
+    // 0x1038d869-0x1038d885: UObject::InitExecution (vtable +0x38) pass.
+    forEachLiveActor(level, actor => {
+      if (!startupAdmitted(actor) || npcFailures.has(actor)) return;
+      try { runtime.initExecution(actor); }
+      catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+    });
+  }
+  const POINTREGION_KEYS = Object.freeze({ zone: 'engine.actor.pointregion.zone',
+    leaf: 'engine.actor.pointregion.ileaf', zoneNumber: 'engine.actor.pointregion.zonenumber' });
+  const regionField = (actor, name) => ({
+    get: () => {
+      const value = startupField(actor, name).get();
+      return { zone: value?.[POINTREGION_KEYS.zone] ?? null,
+        leaf: value?.[POINTREGION_KEYS.leaf] ?? -1, zoneNumber: value?.[POINTREGION_KEYS.zoneNumber] ?? 0 };
+    },
+    set: value => startupField(actor, name).set({ [POINTREGION_KEYS.zone]: value.zone ?? null,
+      [POINTREGION_KEYS.leaf]: value.leaf ?? -1, [POINTREGION_KEYS.zoneNumber]: value.zoneNumber ?? 0 }),
+  });
+  // The world argument for the recovered ULevel::SetActorZone body. The event
+  // callbacks dispatch the real script events when a caller passes test=0; the
+  // LoadMap pass uses test=1, which suppresses them like the original.
+  const startupZoneWorld = {
+    levelInfo, netMode: 0,
+    pointRegion: position => level.pointRegion(position),
+    actorLeaving: (zone, actor) => runtime.processEvent(zone, 'ActorLeaving', [actor]),
+    zoneChange: (actor, zone) => runtime.processEvent(actor, 'ZoneChange', [zone]),
+    actorEntered: (zone, actor) => runtime.processEvent(zone, 'ActorEntered', [actor]),
+    footZoneChange: (pawn, zone) => runtime.processEvent(pawn, 'FootZoneChange', [zone]),
+    headZoneChange: (pawn, zone) => runtime.processEvent(pawn, 'HeadZoneChange', [zone]),
+  };
+  function setStartupActorZone(actor) {
+    // Pawns reuse the cached pawnPhysicsView so the Region/Foot/Head writes
+    // land on the same field bindings the physics path reads. Other actors
+    // only carry the ordinary Actor region triple the non-pawn route writes.
+    const view = actor.isPawn
+      ? (actor._pawnPhysics ?? pawnPhysicsView(actor, runtime.pawnPhysicsServices(actor)))
+      : { isPawn: false,
+        get deleted() { return Boolean(startupRead(actor, 'bDeleteMe')); },
+        get position() { return startupField(actor, 'Location').get(); },
+        get region() { return regionField(actor, 'Region').get(); },
+        set region(value) { regionField(actor, 'Region').set(value); } };
+    setActorZone(view, startupZoneWorld, true, true);
+  }
+  // Base-fixup gate at 0x1038db2c-0x1038dba2: IsA against Engine.Decoration
+  // (0x10578d48), Engine.Inventory (0x10576f70) and Engine.Pawn (0x1058c660).
+  const STARTUP_BASE_ANCESTRY = Object.freeze(['engine.decoration', 'engine.inventory', 'engine.pawn']);
+  function startupBaseEligible(actor) {
+    if (Array.isArray(actor?.lineage)) return STARTUP_BASE_ANCESTRY.some(key => actor.lineage.includes(key));
+    try {
+      for (let cls = runtime.instance(actor).cls; cls; cls = cls.base)
+        if (STARTUP_BASE_ANCESTRY.includes(cls.record.key)) return true;
+    } catch { /* unattached identity */ }
+    return false;
+  }
+  // SetBase/SupportActor dispatch with the same levelInfo identity mapping the
+  // spawned-actor services use (a BSP trace hits the collision worldActor,
+  // which is the script LevelInfo).
+  const startupBaseDispatch = (target, name, args = []) => runtime.dispatchSpawnedEvent(
+    target === level?.hash?.levelInfo ? level.actors[0] : target, name, args);
+  function fixupStartupBase(actor) {
+    // 0x1038dace-0x1038db02: a live AttachTag name binds to the first live
+    // actor whose Tag matches through AActor::SetBase(other, bNotify=0).
+    const attachTag = startupRead(actor, 'AttachTag');
+    if (hasNamedValue(attachTag)) {
+      for (let index = 0; index < level.actors.length; index++) {
+        const other = level.actors[index];
+        if (other == null || other === actor) continue;
+        if (lower(startupRead(other, 'Tag')) !== lower(attachTag)) continue;
+        setBase(actor, other, startupBaseDispatch, false);
+        break;
+      }
+      return;
+    }
+    // 0x1038db11-0x1038dbd5: otherwise Base==NULL && bCollideWorld && the
+    // class gate && Physics in {0,5} runs AActor::FindBase; a hit on the
+    // LevelInfo (BSP) is un-based again by SetBase(NULL, 0).
+    if ((actor.base ?? startupRead(actor, 'Base') ?? null) !== null) return;
+    if (!startupRead(actor, 'bCollideWorld')) return;
+    if (!startupBaseEligible(actor)) return;
+    const physics = Number(startupRead(actor, 'Physics') ?? 0);
+    if (physics !== 0 && physics !== 5) return;
+    findActorBase(actor, { lineCheck: (...args) => level.hash.lineCheck(...args), dispatch: startupBaseDispatch });
+    if ((actor.base ?? null) === levelInfo || (actor.base ?? null) === level?.hash?.levelInfo)
+      setBase(actor, null, startupBaseDispatch, false);
+  }
+  function clearStartupTouching() {
+    // 0x1038d7f7-0x1038d824: writes actor+0xe8..+0xf0 on every live actor —
+    // Touching[0..2]; the original leaves Touching[3] untouched.
+    forEachLiveActor(level, actor => {
+      if (!startupNative(actor) || npcFailures.has(actor)) return;
+      if (Array.isArray(actor.touching) && actor.touching.length === 4) {
+        actor.touching[0] = actor.touching[1] = actor.touching[2] = null;
+        return;
+      }
+      try {
+        const touching = startupField(actor, 'Touching').get();
+        if (Array.isArray(touching) && touching.length === 4)
+          startupField(actor, 'Touching').set([null, null, null, touching[3] ?? null]);
+      } catch { /* an identity without script Touching storage */ }
+    });
+  }
+  function setStartupActorZones() {
+    // 0x1038da02-0x1038da26: ULevel::SetActorZone(actor, 1, 1) on vtable +0xac.
+    // test=1 suppresses the zone callbacks; force=1 rebuilds Region (and the
+    // pawn Foot/Head regions) from PointRegion.
+    forEachLiveActor(level, actor => {
+      if (!startupNative(actor) || npcFailures.has(actor)) return;
+      setStartupActorZone(actor);
+    });
+  }
+  function writeStartupLastRenderTime() {
+    // 0x1038da26-0x1038da45: LastRenderTime = -10.0f on every live actor.
+    forEachLiveActor(level, actor => {
+      if (!startupNative(actor) || npcFailures.has(actor)) return;
+      try { startupField(actor, 'LastRenderTime').set(-10); }
+      catch { /* an identity without script LastRenderTime storage */ }
+    });
+  }
+  function fixupStartupBases() {
+    forEachLiveActor(level, actor => {
+      if (!startupNative(actor) || npcFailures.has(actor)) return;
+      fixupStartupBase(actor);
+    });
+  }
+  function partitionStartupActors() {
+    const { actors, firstNetActor } = partitionActorArray(level.actors, actor =>
+      Boolean(startupRead(actor, 'bStatic') ?? actor?.static ?? ((actor?.actorFlags ?? 0) & 1)));
+    level.iFirstNetActor = firstNetActor;
+    level.actors = actors;
+  }
+  function clearStartupPawnList() {
+    // Level.PawnList membership is the original's callback-order list: the
+    // host's collidable rebuild inserted every pawn already, so evict those
+    // entries and let the PreBeginPlay pass rebuild membership solely through
+    // each pawn's own AddPawn — a second head-insert would self-cycle the
+    // list MakeNoise and perception walk (docs/pawn-list.md).
+    const seen = new Set();
+    for (let pawn = level.pawnList; pawn && !seen.has(pawn); pawn = pawn.nextPawn) seen.add(pawn);
+    for (const pawn of seen) pawn.nextPawn = null;
+    level.pawnList = null;
+  }
+
   const NPC_HOST_PROPS = Object.freeze(['position', 'rotation', 'physics', 'base', 'velocity',
     'standingCount', 'motionFlags', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
     'marker', 'specialGoal', 'clientUpdate', 'simOldPosition', 'simOldRotYaw', 'simOldRotPitch',
@@ -910,6 +1102,9 @@ export async function createScriptDoors({
     npcSpawned.clear();
     npcSpawnedOwner.clear();
     npcFailures.clear();
+    // Restore the serialized map state before any startup callback can observe
+    // another actor — the same reload state the original reaches by loading
+    // the level. The passes below then run LoadMap's shared schedule.
     for (const actor of npcPawns) {
       try {
         // The collision hash validates that the live transform still matches
@@ -922,44 +1117,67 @@ export async function createScriptDoors({
         identities.get(actor).store.clear();
         for (const prop of NPC_HOST_PROPS) delete actor[prop];
         if (actor.values?.Location) actor.position = [...actor.values.Location];
-        actor.isPawn = true; actor.pawnFlags = 0; actor.touching = [null, null, null, null];
+        actor.isPawn = true; actor.pawnFlags = 0;
+        // Serialized Touching refs — the LoadMap pass below clears slots
+        // 0..2 like the original; serialized Touching[3] stays authoritative.
+        actor.touching = [0, 1, 2, 3].map(i => actorByIndex.get(actor.values?.[i ? `Touching[${i}]` : 'Touching']) ?? null);
         // The recovered AActor::SetBase (walking-callbacks.mjs) mutates
         // standingCount on the raw host — NPC inventory SetBase(Self) calls
         // arrive through the script, not a binding — so reseed it from the
         // serialized field like the other live host props.
         actor.standingCount = actor.values?.StandingCount ?? 0;
+        actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+        actor.waitingPawn = actorByIndex.get(actor.values?.WaitingPawn) ?? null;
+        actor.marker = actorByIndex.get(actor.values?.MyMarker) ?? null;
         level.hash?.addActor(actor);
-        // The collidable rebuild already places every lineage pawn in
-        // Level.PawnList, but the original builds that list solely through
-        // Pawn.PreBeginPlay's AddPawn — evict the host entry so the script's
-        // own AddPawn inserts it exactly once (a second head-insert would
-        // self-cycle the list that MakeNoise and perception walk).
-        removePawn(level, actor);
-        const spawnedFrom = level.actors.length;
-        try {
-          runNpcStartup(actor);
-        } finally {
-          // Pawn startup spawns (each NPC's Shadow) join the tracked set even
-          // when the chain reaches a boundary partway through.
-          collectSpawned(spawnedFrom);
-        }
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
-    // PatrolPoint actors get the same serialized-state restore and LoadMap
-    // chain; their PreBeginPlay re-derives NextPatrolPoint/lookDir. They hold
-    // no pawn host props and never move, so the restore is just the field
-    // store and Location.
+    // PatrolPoint actors get the same serialized-state restore; they hold no
+    // pawn host props and never move, so the restore is just the field store
+    // and Location.
     for (const actor of npcPatrolPoints) {
       try {
         identities.get(actor).store.clear();
         if (actor.values?.Location) actor.position = [...actor.values.Location];
-        runNpcStartup(actor);
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    clearStartupPawnList();
+    clearStartupTouching();
+    // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
+    // pass; standalone netMode 0 is a server, so that pass never runs here.
+    runStartupInitExecution();
+    // 0x1038d885-0x1038d899: LevelInfo +0x4f0 |= 0x42 — bBegunPlay|bStartup.
+    // The cold path also zeros ULevel+0xdc/+0xe0 and LevelInfo+0x478
+    // (TimeSeconds); the game clock owns those and restores them on reset.
+    startupField(levelInfo, 'bBegunPlay').set(true);
+    startupField(levelInfo, 'bStartup').set(true);
+    startupField(levelInfo, 'TimeSeconds').set(0);
+    // 0x1038d897: the original calls `Game->InitGame(Options, Error)` when
+    // LevelInfo.Game is set. In the original standalone LoadMap the GameInfo
+    // is spawned inside LoadMap itself before this point; this host has no
+    // original game spawn — the live DataLink fixture populates Game with a
+    // 'DataLink runtime' stub for the script reads that need it, so the
+    // InitGame dispatch remains an unimplemented LoadMap branch (documented
+    // in docs/script-loadmap-startup.md), not a runtime call on the stub.
+    runStartupEvent('PreBeginPlay');
+    runStartupEvent('BeginPlay');
+    setStartupActorZones();
+    writeStartupLastRenderTime();
+    runStartupEvent('PostBeginPlay');
+    runStartupEvent('SetInitialState');
+    fixupStartupBases();
+    // 0x1038dbe0: LevelInfo +0x4f0 &= ~0x40 — bStartup clear before the last pass.
+    startupField(levelInfo, 'bStartup').set(false);
+    runStartupEvent('PostPostBeginPlay');
+    // 0x1038dcd5 tail: static/dynamic partition with the net boundary recorded.
+    partitionStartupActors();
+    // SpawnPlayActor's player construction runs after LoadMap and the player's
+    // own Pawn.PreBeginPlay -> AddPawn owns the list head.
+    addPawn(level, playerActor);
   }
 
   // Live TriggerLights (base Engine.TriggerLight). createScriptLights shares this
@@ -1171,6 +1389,17 @@ export async function createScriptDoors({
 
   function tick(seconds) {
     const delta = f(seconds);
+    // URender::DrawWorld stamps Actor+0x34 (LastRenderTime) on every actor it
+    // draws; the browser host draws the whole level each frame, so the live
+    // clock is the honest stamp until a per-actor render pass exists. Without
+    // it the LoadMap -10 baseline leaves bStasis pawns permanently gated by
+    // actorInStasis (fresh zone/self render times are what admit the tick).
+    const renderedAt = npcTickLevel.timeSeconds;
+    for (const actor of level.actors) {
+      if (!actor) continue;
+      try { runtime.namedReference(actor, 'LastRenderTime').set(renderedAt); }
+      catch { /* an identity without script LastRenderTime storage */ }
+    }
     for (const record of records) {
       // Actor.Tick's ProcessState phase precedes performPhysics. A newly
       // selected label therefore executes here, and a latent 302 is polled

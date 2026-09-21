@@ -315,7 +315,11 @@ const switchTexture=runtime.meshResource(lightField('Mesh')).payloadReferences.f
 assert.equal(runtime.getActorMeshTexture(lightSwitch,0),switchTexture);
 assert.equal(runtime.invokeNative({index:1013,receiver:lightSwitch,argumentCount:0}),switchTexture);
 const tickLevel={timeSeconds:1,netMode:0,demoRecDriver:null,tickTag:1,deferredHead:null,
-  zoneLastRenderTime:()=>{throw new Error('Unexpected renderer stasis boundary in the young LightSwitch fixture');}};
+  // LoadMap's LastRenderTime=-10 pass (Engine.dll 0x1038da26) makes the actor
+  // stasis-eligible, so the gate consults the zone render stamp and
+  // DistanceFromPlayer; this fixture renders and sits next to the player.
+  zoneLastRenderTime:()=>tickLevel.timeSeconds};
+runtime.namedReference(lightSwitch,'DistanceFromPlayer').set(0);
 assert.equal(runtime.processActorTick(lightSwitch,0.2,{level:tickLevel}),1);
 assert.equal(lightField('AnimFrame'),0);assert.equal(lightField('bAnimFinished'),true);
 assert.equal(lightField('bTicked'),true);
@@ -334,6 +338,11 @@ runtime.namedReference(worldInfo,'Pauser').set('');
 runtime.namedReference(worldInfo,'bPlayersOnly').set(false);
 runtime.namedReference(lightSwitch,'Owner').set(parentLight); // Explicit owner-before-child scheduling input.
 runtime.namedReference(parentLight,'Owner').set(null);
+// The level tick recomputes DistanceFromPlayer from the real positions (the
+// player is far), and LoadMap's -10 LastRenderTime makes the serialized
+// bStasis actor stasis-eligible now — pin it off so the fixture still
+// exercises the owner-defer retry rather than the stasis early-out.
+runtime.namedReference(lightSwitch,'bStasis').set(false);
 for(const actor of [lightSwitch,parentLight])runtime.namedReference(actor,'bTicked').set(false);
 runtime.processEvent(lightSwitch,'Frob',[player,null]);
 const tickWorld={...tickLevel,actors:[worldInfo,lightSwitch,parentLight,null],firstDynamicActor:1,

@@ -129,6 +129,25 @@ ordering remains incomplete: it runs all five events per pawn, then per
 patrol point, while the original uses separate passes over the live actor
 array. This patrol fix does not close the general LoadMap lifecycle.
 
+2026-09-22 LoadMap scheduler follow-up: the per-actor startup chain above is
+now replaced by the recovered shared pass structure. `script-doors.mjs` runs
+`resetNpcs()` as separate passes over the live `Level.Actors` array in the
+original order — Touching[0..2] clear, `InitExecution`, `bBegunPlay|bStartup`,
+`PreBeginPlay`, `BeginPlay`, `SetActorZone(test=1)`, `LastRenderTime=-10`,
+`PostBeginPlay`, `SetInitialState`, AttachTag/FindBase fixup, `bStartup`
+clear, `PostPostBeginPlay`, then the static/dynamic tail partition with
+`iFirstNetActor` — each pass rereading the array pointer and count per
+iteration so appends extend a pass and destroyed actors drop out
+([script-loadmap-startup.md](script-loadmap-startup.md)). Admission stays
+map pawns + map PatrolPoints for the event chain; native passes cover every
+map actor and startup spawn. Two integration consequences surfaced and were
+resolved: the `-10` render baseline engages `bStasis` gating, so the doors
+tick now stamps drawn actors like `URender::DrawWorld` (headless fixtures
+supply both stasis inputs explicitly), and the partition invalidated the
+serialized-slot trigger lookup in `script-datalink-live.mjs` (resolved by
+the authored route name). `Game->InitGame`, non-pawn event admission and all
+client/net branches remain open, so Stage 3 is still incomplete.
+
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused
 validator proves only the named original path that it exercises; it does not

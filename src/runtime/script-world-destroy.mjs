@@ -138,7 +138,16 @@ export function createDestroyedActorLedger({ level, runtime }) {
 
   function restore(clearStore = null) {
     for (const [receiver, saved] of entries) {
-      if (level.actors[saved.slot] === null) level.actors[saved.slot] = receiver;
+      // The LoadMap tail compacts/partitions Level.Actors at the end of
+      // startup (Engine.dll 0x1038dcd5), so a slot recorded before that pass
+      // can now hold a different actor. Reinsert at the recorded position
+      // when the slot is occupied — the startup partition re-derives the
+      // static/dynamic order either way, and dropping the actor silently is
+      // never correct.
+      if (!level.actors.includes(receiver)) {
+        if (level.actors[saved.slot] === null) level.actors[saved.slot] = receiver;
+        else level.actors.splice(Math.min(saved.slot, level.actors.length), 0, receiver);
+      }
       clearStore?.(receiver);
       const object = runtime.instance(receiver).nativeObject;
       if (object && saved.flags !== null) {

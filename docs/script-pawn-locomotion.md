@@ -295,11 +295,13 @@ serialized `Nextpatrol` name resolves at load: `PatrolPoint4 → PatrolPoint5`
 (comp1↔comp2). The demonstrated runtime gap was that only pawn-ancestry actors
 ran the chain, so `NextPatrolPoint` stayed `None` and the patrol terminated in
 `Standing` after the first leg. `script-doors.mjs` now admits
-`engine.patrolpoint`-ancestry actors to the same load/reset chain (class-chain
-prepare, serialized-state restore, `InitExecution` + the five startup events);
-other non-pawn classes stay unadmitted. The host still runs all five events
-per pawn, then per patrol point; the original's separate event passes across
-the live actor array remain an integration gap. This patrol check does not
+`engine.patrolpoint`-ancestry actors to the same load/reset chain and runs the
+recovered shared pass structure — `InitExecution`, startup flags,
+`PreBeginPlay`, `BeginPlay`, `SetActorZone`, `LastRenderTime=-10`,
+`PostBeginPlay`, `SetInitialState`, base fixup, `bStartup` clear,
+`PostPostBeginPlay` and the static/dynamic actor partition — as separate
+passes over the live actor array ([LoadMap scheduler](script-loadmap-startup.md)).
+Other non-pawn classes stay unadmitted, so this patrol check does not
 establish general LoadMap ordering fidelity.
 
 Observed deterministic trace (`randomSeed=1`, `1/60` s; t is the zero-based

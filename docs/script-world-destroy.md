@@ -108,7 +108,13 @@ The original returns to the initial map state by reloading the level. This host
 reuses actor identities across "Player start", so a small ledger records what a
 destruction cleared — the `Level.Actors` slot and the native object's flags —
 and restores them on reset, clearing the actor's authored property store so the
-values `ExitProperties` released come back. The touch slots are *not* restored
+values `ExitProperties` released come back. The LoadMap tail partition
+([script-loadmap-startup.md](script-loadmap-startup.md)) compacts and reorders
+the array at the end of startup, so the recorded slot can hold a different
+actor by then: the restore writes the slot when it is still null and inserts at
+the recorded position when it is occupied — the partition re-derives the
+static/dynamic order either way, and silently dropping the actor is never
+correct. The touch slots are *not* restored
 from the pre-destruction snapshot: `DestroyActor`'s `EndTouch` pass cleared both
 sides of every live pair, so the surviving counterpart no longer holds the
 destroyed actor and a one-sided restore would suppress the next `BeginTouch`'s

@@ -64,15 +64,18 @@ establish any of these prerequisites.
 The Play host now runs that whole chain at load: each pawn's class methods and
 states are prepared before dispatch (the VM advances a state cursor before a
 call, so prepare-on-demand inside a state body would permanently skip
-statements), then `PreBeginPlay -> BeginPlay -> PostBeginPlay ->
-SetInitialState -> PostPostBeginPlay` runs in serialized actor order, and
-`Actor.Tick` advances animation, `ProcessState` and `APawn::performPhysics`
+statements), then the recovered `UGameEngine::LoadMap` shared passes run over
+the live actor array — `InitExecution`, startup flags, `PreBeginPlay`,
+`BeginPlay`, `SetActorZone`, `LastRenderTime=-10`, `PostBeginPlay`,
+`SetInitialState`, base fixup, `bStartup` clear, `PostPostBeginPlay` and the
+static/dynamic partition ([LoadMap scheduler](script-loadmap-startup.md)) —
+and `Actor.Tick` advances animation, `ProcessState` and `APawn::performPhysics`
 each frame. `Pawn.PreBeginPlay`'s own `AddPawn` owns `Level.PawnList`
 membership — the host evicts its pre-built collidable entry before startup so
 the list is never double-inserted (a second head-insert self-cycles the list
 `MakeNoise` walks). On player reset the serialized state is restored between
 collision-hash removal and re-registration (the hash requires the registered
-transform to still be live at removal), then the same chain re-runs.
+transform to still be live at removal), then the same shared passes re-run.
 
 Current explicit boundaries, all recorded rather than substituted:
 

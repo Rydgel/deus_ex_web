@@ -232,6 +232,13 @@ runtime.callFunction = function captureDamageReduction(record, receiver, argumen
   return result;
 };
 runtime.namedReference(damage, 'damagee').set(player);
+// Human.PlayTakeHitSound gates its PlaySound on a cooldown that consumes an
+// FRand() draw: `Level.TimeSeconds - LastPainSound < FRand() + 0.5` returns
+// early without reaching the native. LoadMap's TimeSeconds=0 startup write
+// (Engine.dll 0x1038d885) leaves this dispatch inside the window, so pin
+// LastPainSound far in the past to keep the boundary deterministic instead
+// of leaving it on an RNG draw.
+runtime.namedReference(player, 'LastPainSound').set(-100);
 let damageBoundary;
 try {
   assert.throws(() => game.doors.scriptRuntime.dispatchEvent(damage, 'Timer', []), error => {
