@@ -47,6 +47,12 @@ or push further hosting updates unless the user asks.
   selected conversation inventory transfers also run through original scripts
   ([DataLink scope](docs/script-datalink-live.md),
   [transfer evidence](docs/script-datavault-image.md)).
+- From Training `PlayerStart1`, held forward movement reaches the spawn
+  door. Use opens that unlocked pair. The Train nano key north of the east
+  wall is picked up into the key ring, and Enter with the ring in hand
+  unlocks the trainer door before a second use opens it
+  ([nano key](docs/script-nanokey.md)). The munitions instructor is farther
+  east and is not reached by this walk.
 - Frobbing a Training munitions instructor runs the original first-person
   `ConPlay` conversation: the speaker name and speech-text subtitle panel show
   when the `bSubtitles` preference is on (a discoverable diagnostics toggle,

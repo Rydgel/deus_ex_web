@@ -1,5 +1,15 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-21 (Training opening walk):** held forward
+> input from `PlayerStart1` is sustained until `UN_maindoor`, which opens
+> through `DeusExMover.Frob`. `CreateKeyRing` spawns the ring; `NanoKey0`
+> (`Train`) is picked up by `ParseRightClick` → `GiveKey` → `new NanoKeyInfo`.
+> `Enter` with the ring in hand unlocks `keydoor`, and the following use opens
+> it. `UNATCOTroop3` / `MunitionsTrooperReady` are not reached: the east
+> corridor ends in world geometry, and `paddoor` / `hackdoor` remain locked
+> keypad doors. Stage 3 remains open. See
+> [script-nanokey.md](script-nanokey.md).
+>
 > **Checkpoint update, 2026-09-21 (subtitles):** the subtitle window boundary is
 > closed. `XWindow::ConfigureChild`'s BoundsUpdate `0x10051160` and
 > SortWindowLists `0x10045140` leaves are recovered bit-exact vs Extension.dll

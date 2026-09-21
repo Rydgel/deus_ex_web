@@ -19,18 +19,25 @@ and the real F key (including subtitles on/off, speech, termination and reset);
 production build passes. This shortcut does not establish end-to-end Training
 progression.
 
-**Manual route from the Training spawn (attempted, not claimed complete).**
-`PlayerStart1` is at `(-1149, 826, -65)`; the nearest munitions instructor,
-`UNATCOTroop3`, is at `(2945, 982, -71)` — about 4100 units due east, through
-the spawn room's closed door and the training corridors. A manual keyboard walk
-from the spawn was tried in the browser; ordinary movement runs, but the full
-spawn-to-instructor course (its doors and layout) is not yet a scripted
-end-to-end route, so both the browser regression and
-`scripts/validate-instructor-conversation.mjs` use the collision-safe approach
-setup above and then real movement/targeting/`F`. The interaction itself —
-`HighlightCenterObject` targeting, `game.use()`, the `ConPlay` bytecode,
-subtitles and the Mission00 timer — runs entirely on original scripts and the
-live simulation.
+**Opening walk from `PlayerStart1` (partial).**
+`PlayerStart1` is `(-1149, 826, -65)`, facing east (`Rotation` yaw 0). Held
+forward input is sustained: about 900 units east in ~210 frames at run speed,
+then the closed `UN_maindoor` pair (`DeusExMover16`/`17`) stops the pawn.
+`F` is `ParseRightClick` and runs `DeusExMover.Frob`; both panels open and the
+player walks on to the east wall near `(586, 826)`. North of that wall,
+`NanoKey0` (`KeyID=Train`) is picked up by the same use key into the ring
+`CreateKeyRing` spawned. `1` calls `PutInHand`/`UpdateInHand`. `Enter` is
+`ParseLeftClick` and, with the ring in hand, unlocks `keydoor`
+(`DeusExMover47`/`48`). A following `F` opens that pair. See
+[the nano key contract](script-nanokey.md).
+
+`UNATCOTroop3` is still at `(2945, 982, -71)`. Walking through the open trainer
+door does not reach it: the east corridor is world geometry, and `paddoor` /
+`hackdoor` stay locked keypad doors. `MunitionsTrooperReady` is not set by
+this walk. The instructor browser check and
+`scripts/validate-instructor-conversation.mjs` still use the collision-safe
+approach above, then real movement, targeting and `F`. That approach is not
+this opening walk.
 
 > **Checkpoint update, 2026-09-21:** the subtitle window boundary is closed.
 > `XWindow::ConfigureChild`'s two conditional leaves — BoundsUpdate `0x10051160`
