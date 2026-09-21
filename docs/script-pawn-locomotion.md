@@ -257,3 +257,67 @@ Explicitly unverified/unsupported:
   but have no oracle coverage — the probe serializes non-finite floats as
   `f32:0xXXXXXXXX` tokens only in outputs, not scene inputs.
 - `vectorToRotator` non-finite inputs are unsupported.
+
+## Live patrol verification — 00_Training Secretary0
+
+`ScriptedPawn.Patrolling` (extracted `ScriptedPawn.uc`): `WaitForLanding` →
+`PickDestination` (`destPoint = PatrolPoint(destPoint).NextPatrolPoint`, else
+`PickStartPoint`; `None` → `GotoState('Standing')`) → `Moving` loop
+(`FindPathToward` → `MoveToward` → `CheckDestLoc` until
+`MoveTarget==destPoint`) → `Pausing` (`pausetime>0` or no next point:
+`TurnTo(Location+lookDir)` → `Sleep(pausetime*(1-0.9*restlessness))`) →
+`Goto('Patrol')`. `HitWall` calls `CheckOpenDoor`; `SetFall` resumes at
+`ContinuePatrol`.
+
+`PatrolPoint.PreBeginPlay` (Engine.u export 4304, decoded bytecode):
+
+```uc
+lookDir = 200 * vector(Rotation);            // @0: native 213 (vector*float)
+NextPatrolPoint = None;                      // @17
+if (Nextpatrol != 'None')                    // @24: native 255 name!=
+    foreach AllActors(class'PatrolPoint', CurPoint, Nextpatrol)  // @39: native 304
+        if (CurPoint != None)                // @60: native 119
+            NextPatrolPoint = CurPoint;      // @71
+Super.PreBeginPlay();                        // @87: callnative functionIndex=207
+```
+
+The original `ULevel::LoadMap` dispatches `PreBeginPlay` to **every** actor in
+a dedicated pass (`0x1038d99a`–`0x1038d9cc`, docs/pawn-list.md), so each
+serialized `Nextpatrol` name resolves at load: `PatrolPoint4 → PatrolPoint5`
+(sec1→sec2), `PatrolPoint5 → PatrolPoint4`, `PatrolPoint0 ↔ PatrolPoint1`
+(comp1↔comp2). The demonstrated runtime gap was that only pawn-ancestry actors
+ran the chain, so `NextPatrolPoint` stayed `None` and the patrol terminated in
+`Standing` after the first leg. `script-doors.mjs` now admits
+`engine.patrolpoint`-ancestry actors to the same load/reset chain (class-chain
+prepare, serialized-state restore, `InitExecution` + the five startup events);
+other non-pawn classes stay unadmitted.
+
+Observed deterministic trace (`randomSeed=1`, `1/60` s): land t≈4;
+`FindPathToward`→`MoveToward(PatrolPoint4)` t=5 (`MoveTimer≈2.11`); arrival
+t≈12 at ~15.2u horizontal with `MoveTimer≈2.0` remaining — the recovered
+arrival rule, **not** timeout; `TurnTo`+`Sleep` pause; t=146
+`PickDestination`→`PatrolPoint5`, `MoveToward` with `MoveTimer≈31.23`; walk
+~880u; arrival t≈1615 at ~15u horizontal; pause; t=1780 → `PatrolPoint4`
+(`MoveTimer≈30.25`). The route loops sec1↔sec2 indefinitely — `Standing` is
+unreachable because `NextPatrolPoint` is never `None`. `ScientistMale0`
+patrols comp1↔comp2 identically (175u legs, pausetime 10/6).
+
+The ~28u gap between the pawn's stopped `Location` and each point is **not** a
+mismatch: both points sit at z≈−4.9 while the secretary's floor is z≈23.3,
+and the walking arrival test zeroes `d.z` before the `<256` compare — arrival
+is horizontal-only for `PHYS_Walking`, so stopping ~15u horizontal (~28u 3D)
+is exactly the original rule.
+
+`scripts/validate-secretary-patrol.mjs` instruments `pollPawnLocomotion` index
+503 to capture each completion at the instant `state.latent` clears (target
+still bound) and asserts every leg is arrival-terminated (horizontal `<16`,
+`|dz| < max(CollisionHeight,48)`, `MoveTimer>0`, live `MoveTarget`), the
+`destPoint` sequence is `[PatrolPoint4, PatrolPoint5, PatrolPoint4]`, the
+state never reaches `Standing`, and reset re-resolves the links and repeats
+the route.
+
+Known reset-side gap (pre-existing, unrelated to this fix): after
+`doors.reset()` the secretary lands on a lower BSP surface at z≈18.8 instead
+of the fresh-load z≈23.3 at the same spawn — the patrol topology is identical
+but the floor-selection difference between the initial collision hash and the
+reset rebuild is unresolved.

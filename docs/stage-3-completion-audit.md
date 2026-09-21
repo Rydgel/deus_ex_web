@@ -101,9 +101,29 @@ than the unrelated `+0x28` actor flags; and native 517 preserves
 scenes, 15 comparisons through decoded VM/runtime dispatch, and the live
 Plant2/LevelInfo binding checks cover those previously missed boundaries.
 The 499 unit tests, Secretary integration and MIB load/reset checks pass.
-Secretary's observed 3.8-unit movement and stop roughly 28 units from the
-waypoint remain unverified against original arrival/timeout behavior; the
-passing route-selection validator does not close that locomotion question.
+
+2026-09-21 patrol verification: the earlier "moved 3.8u, stopped ~28u short"
+observation is resolved and was two separate things. The stop itself is the
+recovered walking-arrival rule (`steerArrive200` zeroes `d.z`, so arrival is
+horizontal `<16u`; both patrol points sit ~28u below the secretary's floor) —
+not a bug. The real mismatch was upstream: `ULevel::LoadMap` dispatches
+`PreBeginPlay` to every actor (`0x1038d99a`–`0x1038d9cc`), and
+`PatrolPoint.PreBeginPlay` resolves serialized `Nextpatrol` names into
+`NextPatrolPoint` via the `AllActors` tag iterator. Only pawn-ancestry actors
+ran the chain, so `NextPatrolPoint` stayed `None` and `PickDestination` drove
+the secretary to `Standing` after one leg instead of looping sec1↔sec2
+forever. `script-doors.mjs` now admits `engine.patrolpoint`-ancestry actors to
+the load/reset startup chain; the live trace shows land → arrive PatrolPoint4
+(~15u horizontal, `MoveTimer≈2.0` left) → pause → depart to PatrolPoint5
+(`MoveTimer≈31.23`) → arrive → pause → return leg — continuous, no
+boundaries. `ScientistMale0` patrols comp1↔comp2 the same way.
+`validate-secretary-patrol.mjs` now instruments each `MoveToward` completion
+to prove arrival (not timeout/target loss), asserts the `destPoint` cycle,
+and covers load+reset link resolution. Evidence:
+[script-pawn-locomotion.md](script-pawn-locomotion.md#live-patrol-verification--00_training-secretary0).
+Pre-existing reset gap noted there: post-reset the secretary lands on a lower
+BSP surface (z≈18.8 vs 23.3) — patrol topology identical, floor-selection
+difference unresolved.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

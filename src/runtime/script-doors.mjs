@@ -737,6 +737,22 @@ export async function createScriptDoors({
       if (cls.record.key === 'engine.pawn') { npcPawns.push(actor); npcPawnSet.add(actor); break; }
   }
 
+  // The original runs the LoadMap event chain for every map actor, not just
+  // pawns. PatrolPoint ancestry is the non-pawn subset the live ScriptedPawn
+  // Patrolling path demonstrates: PatrolPoint.PreBeginPlay resolves the
+  // serialized Nextpatrol name into NextPatrolPoint through the AllActors
+  // iterator and seeds lookDir = 200*vector(Rotation). Without that chain the
+  // link stays None and a patrolling pawn ends its route in Standing after the
+  // first leg instead of continuing. Other non-pawn classes stay unadmitted
+  // until a live original body reaches them.
+  const npcPatrolPoints = [];
+  for (const actor of level.actors ?? []) {
+    const record = actor && actor !== playerActor ? identities.get(actor) : null;
+    if (!record) continue;
+    for (let cls = record.cls; cls; cls = cls.base)
+      if (cls.record.key === 'engine.patrolpoint') { npcPatrolPoints.push(actor); break; }
+  }
+
   const preparedNpcClasses = new Set();
   const prepareNpcMember = async member => {
     if (member.kind === 'State' || member.function) return;
@@ -805,6 +821,15 @@ export async function createScriptDoors({
             if (itemClass.nameCounter === 0) itemClass.nameCounter = 1;
           }
         }
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
+    // PatrolPoint class chains link at load for the same reason: their
+    // PreBeginPlay bodies run in resetNpcs on every load/reset.
+    for (const actor of npcPatrolPoints) {
+      try {
+        await prepareNpcClass(identities.get(actor).cls);
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
@@ -918,6 +943,19 @@ export async function createScriptDoors({
           // when the chain reaches a boundary partway through.
           collectSpawned(spawnedFrom);
         }
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
+    // PatrolPoint actors get the same serialized-state restore and LoadMap
+    // chain; their PreBeginPlay re-derives NextPatrolPoint/lookDir. They hold
+    // no pawn host props and never move, so the restore is just the field
+    // store and Location.
+    for (const actor of npcPatrolPoints) {
+      try {
+        identities.get(actor).store.clear();
+        if (actor.values?.Location) actor.position = [...actor.values.Location];
+        runNpcStartup(actor);
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
