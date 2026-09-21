@@ -17,6 +17,7 @@ import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
+import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const root=gameDirectory(),files=[];
@@ -28,6 +29,9 @@ const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,pr
 const {runtime,npcPawns,npcFailures}=game.doors.scriptRuntime;
 const secretary=npcPawns.find(actor=>actor.name==='Secretary0');
 assert.ok(secretary,'00_Training must contain Secretary0');
+// Controlled visibility fixture: keep the observed secretary rendered for
+// the entire patrol. Headless game.tick() must not manufacture visibility.
+const rendered=actorRenderFeedback(runtime,secretary);
 const level=runtime.levelFor(secretary),nav=runtime.pawnNavServices(secretary);
 const point=name=>level.actors.find(actor=>actor?.name===name);
 const [pp4,pp5,pp0,pp1]=['PatrolPoint4','PatrolPoint5','PatrolPoint0','PatrolPoint1'].map(point);
@@ -91,6 +95,7 @@ const trace=[];
 let lastDest=null;
 const patrol=(ticks)=>{
   for(let i=0;i<ticks&&!npcFailures.has(secretary);i++){
+    rendered();
     game.tick(1/60,{});
     const dest=get('destPoint');
     assert.notEqual(stateName(),'Standing','patrol must not terminate in Standing');

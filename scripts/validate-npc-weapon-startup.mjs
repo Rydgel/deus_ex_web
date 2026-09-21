@@ -18,6 +18,7 @@ import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
+import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const root = gameDirectory(), files = [];
@@ -91,6 +92,9 @@ for (const actor of npcPawns) {
   if (name in EXPECTED) targets.set(name, actor);
 }
 assert.equal(targets.size, 4, 'all four armed Training NPCs are scripted pawns');
+// This headless fixture continuously observes the four target pawns. Supply
+// that visibility input explicitly; the live renderer owns draw feedback.
+const rendered = [...targets.values()].map(pawn => actorRenderFeedback(runtime, pawn));
 
 // npcFailures overwrites the entry on each repeated failure; keep the first
 // message per actor so the boundary report names the original failure.
@@ -113,6 +117,7 @@ for (let run = 0; run < 3; run++) {
   }
 
   for (let i = 0; i < 300; i++) {
+    for (const notify of rendered) notify();
     game.tick(1 / 60, {});
     observeFailures();
   }

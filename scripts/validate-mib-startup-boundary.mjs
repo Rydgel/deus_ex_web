@@ -10,6 +10,7 @@ import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
+import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const root=gameDirectory(),files=[];
@@ -22,6 +23,10 @@ const {runtime,npcPawns,npcFailures}=game.doors.scriptRuntime;
 const mib=npcPawns.find(actor=>actor.name==='mib1');
 assert.ok(mib);
 const get=name=>runtime.namedReference(mib,name).get();
+// Controlled visibility fixture: this route observes the MIB continuously.
+// Production visibility comes from WebGL submissions, never game.tick().
+const rendered=actorRenderFeedback(runtime,mib);
+const tick=()=>{rendered();game.tick(1/60,{});};
 const invoke=runtime.invokeNative.bind(runtime);
 let enemyChecks=0,picks=0,successes=0;
 runtime.invokeNative=call=>{
@@ -36,7 +41,7 @@ for(let run=0;run<2;run++) {
   if(run)game.reset();
   enemyChecks=0;picks=0;successes=0;
   assert.equal(npcFailures.has(mib),false);
-  game.tick(1/60,{});
+  tick();
   assert.equal(get('AnimSequence').toLowerCase(),'breathelight');
   const firstFrame=get('AnimFrame');
   assert.ok(firstFrame<0,'original startup selected a tween');
@@ -48,7 +53,7 @@ for(let run=0;run<2;run++) {
   // AnimFrame negative again at whatever tick the window happens to end on.
   let tweenFinished=false;
   for(let i=0;i<900&&!npcFailures.has(mib);i++){
-    game.tick(1/60,{});
+    tick();
     if(get('AnimFrame')>=0)tweenFinished=true;
   }
   assert.equal(npcFailures.has(mib),false,'MIB ticked through startup and wandering without a boundary');

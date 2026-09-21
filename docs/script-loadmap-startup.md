@@ -7,6 +7,9 @@ TArray, with native operations between the event passes. This page records
 the recovered pass structure, the array-mutation semantics, what the Play
 host implements, and the branches still unsupported.
 
+Engine.dll SHA-256:
+`0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4`.
+
 ## Recovered pass structure
 
 Every pass loop reloads `engine.Level(+0x68).Actors` data pointer (+0x2c)
@@ -17,7 +20,7 @@ pass.
 
 | Order | Operation | Range | Notes |
 | ----- | --------- | ----- | ----- |
-| 0 | Touching[0..2] clear | `0x1038d7f7-0x1038d824` | Writes `actor+0xe8..+0xf0`; `Touching[3]` untouched. Inside the `bBegunPlay`-not-set branch (`0x1038d6f6`). |
+| 0 | Touching[0..3] clear | `0x1038d7f7-0x1038d824` | Writes all four slots at `actor+0xe8..+0xf4`; EAX increments before each store. Inside the `bBegunPlay`-not-set branch (`0x1038d6f6`). |
 | 1 | `InitExecution` | `0x1038d869-0x1038d885` | UObject vtable +0x38 on each live actor. |
 | 2 | `ULevel::IsServer` client pass | vtable +0x84 | Standalone (netMode 0) is a server; the client-only Role swap/destroy loop never runs. |
 | 3 | `bBegunPlay \| bStartup` | `0x1038d885-0x1038d899` | `LevelInfo+0x4f0 |= 0x42`. Cold path also zeros `ULevel+0xdc/+0xe0` and `LevelInfo+0x478` (`TimeSeconds`). |
@@ -86,17 +89,57 @@ receiver's own overrides (`DeusExDecoration.BaseChange` et al.); the
 Decoration/Inventory class chains are prepared at load for this reason.
 A BSP hit (`LevelInfo`) is un-based again like the original.
 
-## Renderer `LastRenderTime` accommodation
+## Review contracts — 2026-09-21
 
-The `-10` write makes serialized `bStasis`/`bForceStasis` actors
-stasis-eligible (`actorInStasis`, `src/runtime/actor-tick.mjs`). In the
-original, `URender::DrawWorld` re-stamps `actor+0x34` for every drawn actor
-and the zone stamps update through the same path — the browser host draws
-the whole level every frame, so `doors.tick` stamps every live actor with
-the current `TimeSeconds` at the top of the tick. Without it, no renderer
-ever refreshes the baseline and bStasis pawns would stay gated forever.
-Fixtures that bypass the doors tick must supply both stasis inputs
-(`zoneLastRenderTime`, `DistanceFromPlayer`) explicitly.
+The clear loop increments EAX before storing at `actor+eax*4+0xe4`
+(`0x1038d811`, `0x1038d818`). EAX reaches 1, 2, 3 and 4: all four
+Touching slots at `+0xe8..+0xf4` clear. Executing the original loop with
+`[111,222,333,444]` produces `[0,0,0,0]`; the initial three-slot translation
+was wrong.
+
+A browser reset emulates a fresh map reload. It must restore the authored
+actor-array prefix (including nulls) before the first shared pass. Reusing
+the previous run's partition changes callback order: Training Secretary0
+precedes PatrolPoint4 on load but followed it on reset. Player/subsystem
+identities that persist in this host stay in the appended tail; tracked NPC
+spawns are destroyed before restoring that prefix.
+
+Render.dll SHA-256
+`607f1077c5cd3e25f8a4cde1ffacf4cf9260aebc92a72be40721cd6955bd75d1`
+establishes two distinct writes. `0x10b25150..0x10b25161` copies the
+LevelInfo float TimeSeconds (`+0x478`) to the drawn actor's LastRenderTime
+(`+0x34`). `0x10b1766d..0x10b1768d` writes that float to
+`Model+0x108+24*zoneNumber`, not to the ZoneInfo actor's LastRenderTime.
+`FZoneProperties` serialization (`0x103aed30`) reads the actor reference
+and two masks but leaves the transient timestamp out; fresh zero-initialized
+model storage supplies its initial zero. The original stasis reader and
+its controlled original-DLL cases already use this separate model slot
+([Actor.Tick](script-actor-tick.md)).
+
+The browser must report actual actor draw submissions; simulation ticks,
+headless execution, hidden meshes and frustum-rejected meshes cannot refresh
+an actor timestamp. The current renderer lacks original BSP/portal zone
+visibility, so it must leave model zone stamps unrefreshed instead of
+fabricating a recent draw for the whole level. Actor draw feedback does not
+establish original visibility/occlusion fidelity.
+
+## Renderer feedback
+
+`src/viewer/actor-render-feedback.mjs` copies the current LevelInfo float
+clock from a mesh's `onAfterRender` callback. `main.mjs` installs it on
+actor-backed world meshes (currently movers); `npc-mesh-preview.mjs`
+installs it on each NPC mesh. Hidden actors, hidden parents and meshes
+rejected by the view frustum receive no submission callback. Headless
+`game.tick()` leaves timestamps alone. This replaces the incorrect blanket
+tick write, which refreshed even Training's 311 hidden actors and defeated
+the original stasis gate.
+
+`player-scene.mjs` owns separate transient model-zone timestamp storage,
+initialized and reset to zero. The NPC tick adapter reads it through
+Region.ZoneNumber. Original BSP/portal visibility and its zone writes remain
+unimplemented. Headless movement fixtures explicitly provide draw feedback
+for the actor they observe continuously; they do not establish original
+camera visibility. The original Actor.Tick stasis conditions stay enabled.
 
 ## Remaining gaps
 
@@ -109,8 +152,10 @@ Fixtures that bypass the doors tick must supply both stasis inputs
   be prepared and verified.
 * The `IsServer` client-only pass and all net-mode branches are unwired by
   design (standalone only).
-* A per-actor/per-zone render pass does not exist; the whole-level
-  LastRenderTime stamp is the host accommodation described above.
+* The browser's draw submissions supply actor render timestamps, but original
+  BSP/portal visibility and model-zone timestamp updates remain unsupported.
+  Non-rendered actors can therefore enter stasis in cases where original
+  visible-zone feedback would keep them active.
 
 Focused mechanics tests: `test/script-loadmap-startup.test.mjs` (null-slot
 skipping, mid-pass array reassignment, shrink, append visibility, head-slot
@@ -119,3 +164,10 @@ preservation, compaction, static ordering, `iFirstNetActor`). Integration:
 shared passes), `scripts/validate-map-actor-admission.mjs` (partition-aware
 admission), `scripts/validate-world-destroy.mjs` (destroyed-ledger restore
 after partitioning).
+
+Review boundaries: `scripts/validate-loadmap-startup.mjs` executes the
+original Touching clear loop and actor timestamp store through
+`scripts/native-loadmap-state-oracle.py`, then checks fresh/reset pass order,
+the fourth contact slot, hidden headless actors, stasis, draw feedback and
+zone-storage reset. `browser-tests/render-feedback.spec.mjs` exercises actual
+WebGL submissions, hidden actors/parents and frustum rejection.

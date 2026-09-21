@@ -3,6 +3,7 @@ import {TextureStore} from '../unreal/textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
+import {actorRenderFeedback} from './actor-render-feedback.mjs';
 
 // Original Training capture, class/name identity checked by the integration validator.
 export const TRAINING_NPC_IDENTITIES=Object.freeze({JaimeReyes0:34333,ScientistMale0:34368,
@@ -44,6 +45,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
+  const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');
   const payload=await runtime.prepareMesh(actor);
@@ -135,6 +137,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       geometry.computeBoundingSphere();
       group.geometry=geometry;
       const mesh=new THREE.Mesh(geometry,material);
+      mesh.onAfterRender=rendered;
       mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
     }
     const summary={actor:actorName,mesh:meshReference.key,triangles:faces.length,

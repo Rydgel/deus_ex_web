@@ -53,6 +53,10 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     // Native graph slots read by native dispatch (Level.Model, null demo driver):
     // the original Play path has no demo recorder attached.
     model, demoRecDriver: null, timeSeconds,
+    // UModel's transient FZoneProperties.LastRenderTime, separate from the
+    // ZoneInfo actor field. Original BSP/portal visibility feedback remains
+    // unsupported; never manufacture visible zones from a simulation tick.
+    zoneLastRenderTimes:new Float32Array(model.zones.length),
     // Per-surface texture records (walkingSurfaceTextures) for native 1000's
     // hit.Item -> Model->Surfs[iSurf] material lookup.
     surfaceTexture: surfaceTextures,

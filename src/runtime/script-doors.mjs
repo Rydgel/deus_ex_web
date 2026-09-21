@@ -316,6 +316,11 @@ export async function createScriptDoors({
   if (!playerActor || typeof playerActor !== 'object') throw new TypeError('createScriptDoors requires the existing player actor');
   if (onLightingChanged != null && typeof onLightingChanged !== 'function') throw new TypeError('createScriptDoors onLightingChanged must be a function');
 
+  // Keep the authored slot order before player subsystems append or LoadMap
+  // partitions the live array. Public reset emulates reloading that map.
+  const initialActorArray = [...level.actors];
+  const initialActorSet = new Set(initialActorArray.filter(Boolean));
+
   const engine = await assets.get('Engine');
   const deusEx = await assets.get('DeusEx');
   // PlaySound (264) is a recorded mover-sound boundary in the live game and
@@ -864,12 +869,13 @@ export async function createScriptDoors({
   const npcTickLevel = Object.create(level);
   Object.assign(npcTickLevel, { netMode: 0, demoRecDriver: null, tickTag: 0, deferredHead: null, inTick: 0 });
   Object.defineProperty(npcTickLevel, 'timeSeconds', { get: () => level.timeSeconds() });
-  // Actor.Region.Zone->LastRenderTime, reached by the stasis gate only after
+  // UModel.Zones[Actor.Region.ZoneNumber].LastRenderTime, reached only after
   // LastRenderTime and bStasis/bForceStasis admit the actor.
   npcTickLevel.zoneLastRenderTime = actor => {
     const region = runtime.namedReference(actor, 'Region').get();
-    const zone = region?.['engine.actor.pointregion.zone'] ?? level.actors?.[0];
-    return runtime.namedReference(zone, 'LastRenderTime').get();
+    // InStasis reads UModel.Zones[Region.ZoneNumber], not ZoneInfo+0x34.
+    const number = region?.['engine.actor.pointregion.zonenumber'];
+    return level.zoneLastRenderTimes?.[number];
   };
   const npcTickOptions = {
     level: npcTickLevel, tickType: 2,
@@ -1017,18 +1023,18 @@ export async function createScriptDoors({
       setBase(actor, null, startupBaseDispatch, false);
   }
   function clearStartupTouching() {
-    // 0x1038d7f7-0x1038d824: writes actor+0xe8..+0xf0 on every live actor —
-    // Touching[0..2]; the original leaves Touching[3] untouched.
+    // EAX increments before [actor+eax*4+0xe4] at 0x1038d818: all four
+    // Touching slots (+0xe8..+0xf4) clear, with no Touch/UnTouch dispatch.
     forEachLiveActor(level, actor => {
       if (!startupNative(actor) || npcFailures.has(actor)) return;
       if (Array.isArray(actor.touching) && actor.touching.length === 4) {
-        actor.touching[0] = actor.touching[1] = actor.touching[2] = null;
+        actor.touching.fill(null);
         return;
       }
       try {
         const touching = startupField(actor, 'Touching').get();
         if (Array.isArray(touching) && touching.length === 4)
-          startupField(actor, 'Touching').set([null, null, null, touching[3] ?? null]);
+          startupField(actor, 'Touching').set([null, null, null, null]);
       } catch { /* an identity without script Touching storage */ }
     });
   }
@@ -1102,6 +1108,11 @@ export async function createScriptDoors({
     npcSpawned.clear();
     npcSpawnedOwner.clear();
     npcFailures.clear();
+    // Destruction must see the old world first. Now reload the authored map
+    // prefix, preserving the surviving player/subsystem tail exactly once.
+    const persistentTail = level.actors.filter(actor => actor && !initialActorSet.has(actor));
+    level.actors = [...initialActorArray, ...persistentTail];
+    level.zoneLastRenderTimes?.fill(0);
     // Restore the serialized map state before any startup callback can observe
     // another actor — the same reload state the original reaches by loading
     // the level. The passes below then run LoadMap's shared schedule.
@@ -1118,8 +1129,7 @@ export async function createScriptDoors({
         for (const prop of NPC_HOST_PROPS) delete actor[prop];
         if (actor.values?.Location) actor.position = [...actor.values.Location];
         actor.isPawn = true; actor.pawnFlags = 0;
-        // Serialized Touching refs — the LoadMap pass below clears slots
-        // 0..2 like the original; serialized Touching[3] stays authoritative.
+        // Restore serialized Touching refs before LoadMap clears all four.
         actor.touching = [0, 1, 2, 3].map(i => actorByIndex.get(actor.values?.[i ? `Touching[${i}]` : 'Touching']) ?? null);
         // The recovered AActor::SetBase (walking-callbacks.mjs) mutates
         // standingCount on the raw host — NPC inventory SetBase(Self) calls
@@ -1389,17 +1399,6 @@ export async function createScriptDoors({
 
   function tick(seconds) {
     const delta = f(seconds);
-    // URender::DrawWorld stamps Actor+0x34 (LastRenderTime) on every actor it
-    // draws; the browser host draws the whole level each frame, so the live
-    // clock is the honest stamp until a per-actor render pass exists. Without
-    // it the LoadMap -10 baseline leaves bStasis pawns permanently gated by
-    // actorInStasis (fresh zone/self render times are what admit the tick).
-    const renderedAt = npcTickLevel.timeSeconds;
-    for (const actor of level.actors) {
-      if (!actor) continue;
-      try { runtime.namedReference(actor, 'LastRenderTime').set(renderedAt); }
-      catch { /* an identity without script LastRenderTime storage */ }
-    }
     for (const record of records) {
       // Actor.Tick's ProcessState phase precedes performPhysics. A newly
       // selected label therefore executes here, and a latent 302 is polled

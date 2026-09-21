@@ -132,7 +132,7 @@ array. This patrol fix does not close the general LoadMap lifecycle.
 2026-09-22 LoadMap scheduler follow-up: the per-actor startup chain above is
 now replaced by the recovered shared pass structure. `script-doors.mjs` runs
 `resetNpcs()` as separate passes over the live `Level.Actors` array in the
-original order — Touching[0..2] clear, `InitExecution`, `bBegunPlay|bStartup`,
+original order — Touching[0..3] clear, `InitExecution`, `bBegunPlay|bStartup`,
 `PreBeginPlay`, `BeginPlay`, `SetActorZone(test=1)`, `LastRenderTime=-10`,
 `PostBeginPlay`, `SetInitialState`, AttachTag/FindBase fixup, `bStartup`
 clear, `PostPostBeginPlay`, then the static/dynamic tail partition with
@@ -141,12 +141,30 @@ iteration so appends extend a pass and destroyed actors drop out
 ([script-loadmap-startup.md](script-loadmap-startup.md)). Admission stays
 map pawns + map PatrolPoints for the event chain; native passes cover every
 map actor and startup spawn. Two integration consequences surfaced and were
-resolved: the `-10` render baseline engages `bStasis` gating, so the doors
-tick now stamps drawn actors like `URender::DrawWorld` (headless fixtures
-supply both stasis inputs explicitly), and the partition invalidated the
+resolved: the `-10` render baseline engages `bStasis` gating (the initial
+blanket tick stamp was incorrect and is replaced by the review below), and
+the partition invalidated the
 serialized-slot trigger lookup in `script-datalink-live.mjs` (resolved by
 the authored route name). `Game->InitGame`, non-pawn event admission and all
 client/net branches remain open, so Stage 3 is still incomplete.
+
+2026-09-21 scheduler review: executing the original clear loop proves that
+all four Touching slots clear, including the previously missed fourth slot.
+Public reset now restores the pre-partition authored slot order before the
+shared startup passes while preserving persistent host subsystems. Actor
+render timestamps now update on actual WebGL draw submission, rather than
+on every simulation tick. Model-zone timestamps have separate transient
+storage; the old adapter incorrectly read the ZoneInfo actor's timestamp.
+Original BSP/portal visibility and its zone timestamp updates remain open.
+The focused original-instruction/live-host validator covers these boundaries;
+headless patrol fixtures explicitly supply continuous visibility for their
+observed NPC. See [startup evidence and remaining gaps](script-loadmap-startup.md).
+Review validation: all 10 startup boundary checks pass (the pre-fix scheduler
+fails the affected checks), as do Secretary load/reset patrol, MIB wandering,
+three armed-NPC inventory runs, NPC mesh preview, actor admission, world
+destruction and all 18 Training DataLink routes. All 508 unit tests, the
+production build, the Training browser walkthrough and the focused WebGL draw
+feedback test pass. These checks do not establish original zone visibility.
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

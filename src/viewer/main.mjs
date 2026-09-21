@@ -7,6 +7,7 @@ import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createTrainingNpcPreview } from './npc-mesh-preview.mjs';
+import { actorRenderFeedback } from './actor-render-feedback.mjs';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -165,6 +166,14 @@ async function loadMap(name) {
       });
     }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
+    if(nextGame){
+      const runtime=nextGame.doors.scriptRuntime.runtime;
+      const byName=new Map(runtime.levelFor(nextGame.player.collisionActor).actors.filter(Boolean).map(actor=>[actor.name,actor]));
+      nextWorld.root.traverse(mesh=>{
+        const actor=mesh.isMesh&&byName.get(mesh.userData.actor);
+        if(actor)mesh.onAfterRender=actorRenderFeedback(runtime,actor);
+      });
+    }
     if(nextGame&&name==='00_Training'){
       $('gate-message').textContent='Preparing original NPC meshes…';
       try{
