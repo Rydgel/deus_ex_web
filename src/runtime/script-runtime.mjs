@@ -58,6 +58,7 @@ import { execSetLocation } from './script-set-location.mjs';
 import { bindActorConversations } from './script-conversation-wrapper.mjs';
 import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
+import { RANDOM_LABEL_NATIVE, decodeRandomLabelLabels, getLabelCount, getLabel, getRandomLabel } from './script-conversation-random-label.mjs';
 import { execScriptSpawn, inventoryConstructorChain, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay, spawnScriptInventoryActor } from './script-spawn.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
@@ -728,6 +729,14 @@ export class ScriptRuntime {
         throw new Error('Loaded Actor preparation requires the original world host');
       const stored=readObject(asset.pkg,asset.bytes,reference.index);
       if(stored.stack!==null)throw new Error('Loaded object saved execution stacks are not implemented');
+      // ConEventRandomLabel carries a `native private DynamicArray labels`
+      // payload after its tagged properties (docs/script-instructor-conversation.md,
+      // script-conversation-random-label.mjs). Decode it; every other trailing
+      // native payload remains an explicit boundary.
+      let randomLabels=null;
+      if(cls.record.key===RANDOM_LABEL_NATIVE.classKey&&stored.reader.offset!==entry.serialSize){
+        randomLabels=decodeRandomLabelLabels(stored.reader,asset.pkg.version);
+      }
       if(stored.reader.offset!==entry.serialSize)
         throw new Error(`Loaded object has an unsupported native payload: ${reference.key}`);
       const initial=await prepareMapProperties(this,asset,{...reference,properties:stored.properties},cls,new Map());
@@ -736,6 +745,7 @@ export class ScriptRuntime {
         slots.set(field.key,copyValue(field,initial(field)));
       const resource=await this.prepareResource(reference);
       this.attach(reference,cls,slots);
+      if(randomLabels!==null)this.instance(reference).randomLabels=randomLabels;
       const immutable=(name,get)=>this.bindProperty(reference,this.lookupMember(cls,'fields',name),{
         get,set:()=>{throw new Error(`Loaded ${name} mutation requires its native lifecycle service`);},
       });
@@ -1869,6 +1879,36 @@ export class ScriptRuntime {
       return enableComputerWordWrapNative(call.receiver,refValue(call.evaluateArgument(0)),this.windowLifecycle?.computer??{});
     }
     if(call.index===2052||call.index===2053)return this.conversationEventNative(call);
+    if(call.index===RANDOM_LABEL_NATIVE.getLabelCount||call.index===RANDOM_LABEL_NATIVE.getLabel||
+        call.index===RANDOM_LABEL_NATIVE.getRandomLabel){
+      const labels=this.instance(call.receiver).randomLabels;
+      if(!Array.isArray(labels))
+        throw new Error('ConEventRandomLabel native reached an object without a decoded labels payload');
+      if(call.index===RANDOM_LABEL_NATIVE.getLabelCount){
+        if(call.argumentCount!==0)throw new Error('GetLabelCount accepts no arguments');
+        return getLabelCount(labels);
+      }
+      if(call.index===RANDOM_LABEL_NATIVE.getLabel){
+        if(call.argumentCount!==1)throw new Error('GetLabel accepts one index argument');
+        return getLabel(labels,refValue(call.evaluateArgument(0))|0);
+      }
+      // GetRandomLabel: reads/writes cycleIndex(+0x50) and bLabelsCycled(+0x54)
+      // and, in the random branch, draws from the shared Core appRand stream.
+      if(call.argumentCount!==0)throw new Error('GetRandomLabel accepts no arguments');
+      const flags={
+        bCycleEvents:Boolean(this.namedReference(call.receiver,'bCycleEvents').get()),
+        bCycleOnce:Boolean(this.namedReference(call.receiver,'bCycleOnce').get()),
+        bCycleRandom:Boolean(this.namedReference(call.receiver,'bCycleRandom').get()),
+      };
+      const cycleRef=this.namedReference(call.receiver,'cycleIndex');
+      const cycledRef=this.namedReference(call.receiver,'bLabelsCycled');
+      const appRand=typeof this.rng?.rand==='function'?()=>this.rng.rand():null;
+      const result=getRandomLabel(labels,flags,
+        {cycleIndex:cycleRef.get()|0,bLabelsCycled:Boolean(cycledRef.get())},appRand);
+      cycleRef.set(result.cycleIndex);
+      cycledRef.set(result.bLabelsCycled);
+      return result.label;
+    }
     if(call.index===2054){
       if(call.argumentCount!==0)throw new Error('ClearBindEvents accepts no arguments');
       return clearConversationEvents(call.receiver,{read:(object,key)=>this.namedReference(object,key).get()});

@@ -166,6 +166,40 @@ destruction and all 18 Training DataLink routes. All 508 unit tests, the
 production build, the Training browser walkthrough and the focused WebGL draw
 feedback test pass. These checks do not establish original zone visibility.
 
+2026-09-21 instructor-conversation follow-up: the Training munitions-instructor
+face-to-face conversation flow is recovered and its **entry and selection** are
+implemented and verified through the ordinary Play frob path, but the
+first-person **presentation** remains an explicit boundary — this route is **not
+complete**. Both instructors (`UNATCOTroop0`/`UNATCOTroop3`, BindName
+MunitionsTrooper) bind `MunitionsTrooperFrob` then `MunitionsTrooperTake`; both
+are first-person, non-interactive conversations (no letterbox camera). The new
+`ConEventRandomLabel` intrinsics 2060/2061/2062 (`GetLabelCount`/`GetLabel`/
+`GetRandomLabel`) are translated from the hash-pinned ConSys.dll bodies
+(0x1000a0c0/0x1000a110/0x1000a270) with the native `labels` DynamicArray decoded
+by the object loader, so the greeting cycles A1..A5 then draws `appRand()%Num`
+(`scripts/validate-conversation-random-label.mjs`). `prepareFaceConversations`
+(`src/runtime/script-conversation-face-live.mjs`, wired into `createScriptDoors`)
+attaches the full authored graph (Conversation/ConFlagRef/ConEvent/ConSpeech) for
+every non-bark, non-DataLink conversation a present pawn can invoke — selected by
+`conOwnerName == a present pawn BindName`, not by name — and prepares
+`Conversation.IsSpeakingActor`. `scripts/validate-instructor-conversation.mjs`
+drives the public Frob dispatch and asserts, over the original bytecode, that
+`GetActiveConversation` selects Frob when `MunitionsTrooperReady` is false and
+Take when true (the authored `ConFlagRef` gate; the flag is set by the map's
+`FlagTrigger`s and consumed by `Mission00.Timer`), that the whole
+`StartConversation` gate chain reaches `Spawn(class'ConPlay')` with the correct
+conversation for the invoking instructor, and that reset restores the fresh
+selection. The remaining boundary is the ConPlay first-person presentation past
+`Spawn(class'ConPlay')` — a host harness confirms ConPlay constructs, the window
+is created and `currentEvent` is set, then execution reaches
+`DeusExPlayer.CreateHistoryObject` (native 3002) in `ConPlayBase.SetupHistory`,
+followed by the SetupEventSpeech/WaitForSpeech/termination chain and the Stage-4
+`ClientHearSound` audio. Nothing is stubbed to pass a conversation; a frobbed
+instructor runs the real selection and stops at that explicit boundary. Evidence:
+[`script-instructor-conversation.md`](script-instructor-conversation.md). All 508
+unit tests, conversation binding, Training DataLink live, Secretary patrol and the
+two new validators pass.
+
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused
 validator proves only the named original path that it exercises; it does not

@@ -21,6 +21,7 @@ import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
+import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -1507,6 +1508,11 @@ export async function createScriptDoors({
     player:playerActor,warning:message=>callbacks.warning?.(message)});
   await prepareShadowStartup(runtime,assets,level);
   await prepareConversationBinding(runtime,level);
+  // Prepare the live face-to-face (ConPlay) conversations the map's
+  // conversation-owning pawns can invoke, so a frobbed instructor runs the real
+  // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent
+  // graphs. docs/script-instructor-conversation.md.
+  const faceConversations=await prepareFaceConversations(runtime,{assets,level});
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
   runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
 
@@ -1544,7 +1550,7 @@ export async function createScriptDoors({
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures,
     infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations };
 }
 
 export default createScriptDoors;
