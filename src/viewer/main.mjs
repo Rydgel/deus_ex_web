@@ -224,6 +224,7 @@ async function loadMap(name) {
     $('light-preview').hidden = !game || name !== '00_Training';
     $('dark-door-preview').hidden = !game || name !== '00_Training';
     $('npc-preview').hidden = !npcPreview;
+    $('instructor-preview').hidden = !game || name !== '00_Training';
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
@@ -314,6 +315,28 @@ $('npc-preview').onclick=()=>{
   if(!npcPreview||loading)return;
   // Inspection camera only: do not teleport JC or start an invented idle.
   focusNpcPreview($('npc-focus').value);
+};
+
+// Viewer test navigation only. Original startup, targeting and Frob still run;
+// no keys, doors, flags, target or conversation state are assigned here.
+$('instructor-preview').onclick=()=>{
+  if(!game||loading||currentMap!=='00_Training')return;
+  try{
+    setMode('play');resetCamera();
+    const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor;
+    const instructor=runtime.levelFor(player).actors.find(actor=>actor?.name==='UNATCOTroop3');
+    if(!instructor)throw new Error('Training instructor is unavailable');
+    const location=runtime.namedReference(instructor,'Location').get();
+    game.collision.queries.changeActor(player,()=>{
+      game.player.position=[location[0]-80,location[1],location[2]];
+      game.player.velocity=[0,0,0];
+    });
+    yaw=0;pitch=-.3;camera.rotation.set(pitch,yaw,0);
+    camera.position.fromArray(toView(game.player.eye));
+    drag=false;document.exitPointerLock?.();togglePanel(false);$('scene').focus();
+    void activateInfoLinkAudio().catch(error=>pauseForRuntimeError(error));
+    toast('Instructor preview · wait a few seconds, then press F to speak. Player start returns to the beginning.');
+  }catch(error){pauseForRuntimeError(error);}
 };
 
 $('light-preview').onclick = () => {

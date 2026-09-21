@@ -1,5 +1,21 @@
 # Training munitions-instructor conversation
 
+## Local access while the Training route is incomplete
+
+The viewer's **Instructor preview** button resets the Play scene and places JC
+beside `UNATCOTroop3`, using the collision-safe position already exercised by
+the instructor integration fixture (80 units west of the authored Location,
+facing east with pitch -0.3 radians). This is explicitly viewer test navigation,
+not original game travel or evidence that keys and the Training route work.
+It does not unlock doors, grant items, set conversation flags, select a frob
+target or start dialogue. Normal startup, targeting, **F**, and conversation
+bytecode still own the interaction. Wait a few seconds for startup, then press
+**F**. **Player start** restores the normal spawn. Subtitles remain incomplete.
+
+Verified with the instructor browser regression entering through this button
+and the real F key (including speech, termination and reset); production build
+passes. This shortcut does not establish end-to-end Training progression.
+
 > **Checkpoint verification, 2026-09-21:** 509 unit tests and the production build
 > pass. The instructor browser flow with original subtitles-off defaults and
 > Liberty Island loading passed, as did focused startup, inventory, patrol,
