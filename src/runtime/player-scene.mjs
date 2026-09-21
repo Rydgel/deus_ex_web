@@ -9,6 +9,8 @@ import { scriptTrace } from './script-trace.mjs';
 import { createSceneEvents } from './scene-events.mjs';
 import { addPawn } from './pawn-list.mjs';
 import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
+import { moveActorRiders } from './move-riders.mjs';
+import { setBase as setActorBase } from './walking-callbacks.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
@@ -47,6 +49,25 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   const move=delta=>playerMove(source,delta,{worldActor,
     multiLineCheck:q=>collision.queries.multiLineCheck(q),removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
     dispatch,isBlockedBy:playerBlockedBy,isOverlapping,beginTouch:touch,endTouch:untouch,setActorZone:updateZone,
+    // CreateKeyRing SetBase(Self) gives the player a based rider. The recovered
+    // MoveActor rider section must run once StandingCount is nonzero.
+    moveRiders:(src,finalDelta,rot)=>moveActorRiders(source,finalDelta,rot,{
+      actors:level.actors,
+      baseOf:other=>other.base!==undefined?other.base:null,
+      location:other=>other.position,
+      rotation:other=>other.rotation??[0,0,0],
+      isPawn:other=>Boolean(other.controlledPlayer||other.lineage?.includes('engine.pawn')),
+      addViewRotationYaw:(other,dyaw)=>{
+        if(!other.viewRotation)return;
+        other.viewRotation=[other.viewRotation[0],(other.viewRotation[1]+dyaw)|0,other.viewRotation[2]];
+      },
+      moveActor:(other,riderDelta,riderRot)=>{
+        if(typeof hooks.moveRider!=='function')throw Error('rider MoveActor is not linked');
+        return hooks.moveRider(other,riderDelta,riderRot);
+      },
+      actorLocation:()=>source.position,
+      actorRotation:()=>source.rotation,
+    }),
   });
   player.nativeMove=move;
   const level={editor:false,netMode:0,actors:[worldActor,...actors,source],
@@ -70,7 +91,8 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     },
     checkEncroachment:(actor,position,rotation,notify)=>checkPlayerEncroachment(actor,position,rotation,notify,
       {worldActor,encroachmentCheck:(...args)=>collision.queries.actorEncroachmentCheck(...args),dispatch}),
-    setBase:()=>unsupported('FarMoveActor detaching player passengers'),setActorZone:updateZone,
+    // FarMoveActor detaches based children (the key ring) through SetBase(child, None).
+    setBase:(child,target,notify)=>setActorBase(child,target,dispatch,notify),setActorZone:updateZone,
   };
   collision.playerActor=source;
   collision.doorCallbacks={dispatch,

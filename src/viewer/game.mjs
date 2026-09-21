@@ -151,6 +151,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // player bump runs the real DeusExDecoration.Bump — and other attached actors run
   // their real event bytecode — instead of pausing at the scene adapter.
   playerScene.hooks.dispatchEvent=(target,event,args)=>doors.scriptRuntime.dispatchEvent(target,event,args);
+  playerScene.hooks.moveRider=(actor,delta,rotation)=>doors.scriptRuntime.runtime.moveSpawnedActor(actor,delta,rotation);
   const interaction = { get position() { return player.position; }, get viewRotation() { return player.viewRotation; },
     get baseEyeHeight() { return player.baseEyeHeight; }, maxFrobDistance: playerDefaults.MaxFrobDistance,
     frobTime: 0, frobTarget: null, carriedDecoration: null, stateName: 'PlayerWalking',
@@ -195,9 +196,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     use() {
       const actor = interaction.frobTarget;
       if (!actor) return { ok: false, message: 'Nothing selected' };
+      const runtime = doors.scriptRuntime.runtime;
+      // HighlightCenterObject's cache is the host stand-in for DeusExPlayer.FrobTarget.
+      // ParseRightClick reads that property. A NanoKey is picked up there, not via Frob.
+      if (actor.lineage?.includes('deusex.nanokey')) {
+        runtime.namedReference(player.collisionActor, 'FrobTarget').set(actor);
+        runtime.processEvent(player.collisionActor, 'ParseRightClick', []);
+        const picked = runtime.namedReference(player.collisionActor, 'KeyList').get();
+        interaction.frobTarget = runtime.namedReference(player.collisionActor, 'FrobTarget').get();
+        return { ok: Boolean(picked), message: picked ? '' : 'Nothing selected' };
+      }
       if (actor.lineage?.includes('engine.mover')) {
         const target = describeTarget(actor);
-        return target?.mover ? doors.use(target,player.position) : { ok: false, message: target?.label ?? 'Nothing selected' };
+        return target?.mover ? doors.use(target, player.position, null) : { ok: false, message: target?.label ?? 'Nothing selected' };
       }
       // Non-mover frob: run the actor's real Frob bytecode through the general VM
       // router (docs/scene-events.md). A handled Frob ran the real body; an
@@ -206,6 +217,28 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // (main.mjs surfaces it) — e.g. LightSwitch.Frob's anim/audio until M2 step 2.
       const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
       return { ok: outcome.handled, message: '' };
+    },
+    // Enter is ParseLeftClick. With the nanokey ring in hand this is DoFrob(Self, inHand).
+    useHeld() {
+      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
+      const actor = interaction.frobTarget;
+      const hand = runtime.namedReference(pawn, 'inHand').get();
+      const key = hand ? runtime.instance(hand).cls.record.key : '';
+      if (!actor?.lineage?.includes('engine.mover') || (key !== 'deusex.nanokeyring' && key !== 'deusex.lockpick'))
+        return { ok: false, message: 'Nothing selected' };
+      const target = describeTarget(actor);
+      return target?.mover ? doors.use(target, player.position, hand) : { ok: false, message: target?.label ?? 'Nothing selected' };
+    },
+    // Object-belt selection is still the HUD. This calls the original
+    // PutInHand/UpdateInHand pair those belt slots use for the key ring.
+    selectNanoKeyRing() {
+      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
+      const ring = runtime.namedReference(pawn, 'KeyRing').get();
+      if (!ring) return false;
+      const hand = runtime.namedReference(pawn, 'inHand').get();
+      runtime.processEvent(pawn, 'PutInHand', [hand === ring ? null : ring]);
+      runtime.processEvent(pawn, 'UpdateInHand', []);
+      return runtime.namedReference(pawn, 'inHand').get() === ring;
     },
     status() { return { player: player.status(), doors: doors.status(), hud:hud?.snapshot()??null, hulls: collision.bsp.hulls.length,
       deferredEffects:[...player.unimplementedPhysicsEffects],

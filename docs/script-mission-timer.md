@@ -56,11 +56,12 @@ host loop. Each `Mission00.Timer`:
    count (both crates present ⇒ no `DL_Lockpick`) and the holo-Bob hide (not
    played ⇒ skipped).
 
-`RemoveAllInventory` walks `Player.Inventory`; for each displayable item or
-`Ammo` it runs the class branches (`DeusExWeapon.ScopeOff/LaserOff`,
-`DeusExPickup.Activate` if active, `ChargedPickup` removal) and then
-`Player.DeleteInventory(item)` + `item.Destroy()`, re-reading `Player.Inventory`
-until the chain is exhausted.
+`RemoveAllInventory` walks `Player.Inventory`. A displayable item
+(`bDisplayableInv`) or `Ammo` runs the class branches
+(`DeusExWeapon.ScopeOff/LaserOff`, `DeusExPickup.Activate` if active,
+`ChargedPickup` removal) and then `Player.DeleteInventory(item)` +
+`item.Destroy()`. Anything else, including the non-displayable `NanoKeyRing`,
+is left on the chain. The walk re-reads `Player.Inventory` until it is exhausted.
 
 ## Interaction with the Take conversation
 

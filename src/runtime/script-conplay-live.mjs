@@ -17,7 +17,8 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   const [playClass,historyClass,historyEventClass]=await Promise.all([
     load(deus,'conplay'),load(conSys,'conhistory'),load(conSys,'conhistoryevent')]);
   const paths=new Set(['deusexplayer.endconversation','deusexplayer.createhistoryobject',
-    'deusexplayer.createhistoryevent','deusexplayer.getdisplayname','conhistory.addevent']);
+    'deusexplayer.createhistoryevent','deusexplayer.getdisplayname','conhistory.addevent',
+    'conlistitem.findconversationbyname']);
   for(const asset of [deus,conSys,engine])for(const [path,index] of asset.exportsByPath){
     const kind=asset.pkg.exports[index-1].className;
     if(!(path.startsWith('conplay.')||path.startsWith('conplaybase.')||path.startsWith('conversation.')||paths.has(path)))continue;

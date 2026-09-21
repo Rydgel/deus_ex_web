@@ -6,8 +6,8 @@
  * browser scene already owns the player identity, so this adapter links that
  * identity to the prepared bytecode and supplies only the verified generic
  * script-Actor Spawn path needed by the subsystem classes. It deliberately
- * stops at NanoKeyRing.CreateKeyRing: inventory construction has not yet been
- * recovered.
+ * continues through CreateKeyRing. NanoKeyRing is a script-only Inventory
+ * subclass and uses that spawn path; see docs/script-nanokey.md.
  *
  * Evidence: .cache/reference/DeusExPlayer.uc:424-550, 1249-1261;
  * AugmentationManager/CreateAugmentations and AddDefaultAugmentations in the
@@ -50,7 +50,6 @@ export const PLAYER_AUGMENTATION_STARTUP = freeze({
     'AugDefense1', 'AugAqualung1', 'AugDatalink1', 'AugHeartLung1',
     'AugPower1',
   ]),
-  boundary: freeze({ classKey: 'deusex.nanokeyring', function: 'CreateKeyRing' }),
 });
 
 export class PlayerStartupBoundaryError extends Error {
@@ -166,7 +165,7 @@ async function prepareActorLineage(runtime, cls) {
   for (const current of lineage.reverse()) await prepareClassLifecycle(runtime, current);
 }
 
-function installSubsystemSpawn(runtime, level, supportedClasses, nanoKeyRingClass) {
+function installSubsystemSpawn(runtime, level, supportedClasses) {
   const lifecycle = runtime.actorLifecycle;
   if (!lifecycle?.construction) {
     throw new PlayerStartupBoundaryError(
@@ -188,22 +187,10 @@ function installSubsystemSpawn(runtime, level, supportedClasses, nanoKeyRingClas
     },
   };
   lifecycle.validateSpawn = args => {
-    if (args.cls === nanoKeyRingClass) {
-      throw new PlayerStartupBoundaryError(
-        'Player startup reached CreateKeyRing; NanoKeyRing construction/GiveTo is not implemented',
-        { boundary: 'deusex.nanokeyring', function: 'CreateKeyRing' },
-      );
-    }
     if (supportedClasses.has(args.cls)) return args.level === level;
     return typeof priorValidate === 'function' ? priorValidate(args) : false;
   };
   lifecycle.spawnActor = (args, services) => {
-    if (args.cls === nanoKeyRingClass) {
-      throw new PlayerStartupBoundaryError(
-        'Player startup reached CreateKeyRing; NanoKeyRing construction/GiveTo is not implemented',
-        { boundary: 'deusex.nanokeyring', function: 'CreateKeyRing' },
-      );
-    }
     if (!supportedClasses.has(args.cls)) {
       throw new PlayerStartupBoundaryError(
         `Player startup requested an unprepared Actor subclass: ${classKey(args.cls)}`,
@@ -298,6 +285,27 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
   const themeManagerClass = await loadClass(runtime, deusEx, 'ColorThemeManager');
   const skillManagerClass = await loadClass(runtime, deusEx, 'SkillManager');
   const nanoKeyRingClass = await loadClass(runtime, deusEx, 'NanoKeyRing');
+  const engine = await assets.get('Engine');
+  // CreateKeyRing's Spawn/GiveTo/SetBase and the later GiveKey `new` run the
+  // original bodies. Prepare that call graph before InitializeSubSystems.
+  await prepareActorLineage(runtime, nanoKeyRingClass);
+  await loadClass(runtime, deusEx, 'NanoKeyInfo');
+  for (const [packageAsset, path] of [
+    [engine, 'Inventory.GiveTo'], [engine, 'Inventory.BecomeItem'], [engine, 'Pawn.AddInventory'],
+    [deusEx, 'DeusExPlayer.AddInventory'], [deusEx, 'DeusExPlayer.DeleteInventory'],
+    [deusEx, 'DeusExPlayer.RemoveItemFromSlot'], [deusEx, 'DeusExPlayer.SetInvSlots'],
+    [deusEx, 'DeusExRootWindow.DeleteInventory'], [deusEx, 'DeusExRootWindow.AddInventory'],
+    [engine, 'Pawn.DeleteInventory'],
+    [deusEx, 'DeusExPlayer.CreateKeyRing'],
+    [deusEx, 'NanoKeyRing.GiveKey'], [deusEx, 'NanoKeyRing.HasKey'], [deusEx, 'NanoKeyRing.GetPlayer'],
+    [deusEx, 'DeusExPlayer.CreateNanoKeyInfo'], [deusEx, 'DeusExPlayer.PickupNanoKey'],
+    [deusEx, 'DeusExPlayer.ParseRightClick'], [deusEx, 'DeusExPlayer.RestrictInput'],
+    [deusEx, 'DeusExPlayer.PutInHand'], [deusEx, 'DeusExPlayer.UpdateInHand'],
+    [deusEx, 'DeusExPlayer.SetInHand'], [deusEx, 'DeusExPlayer.SetInHandPending'],
+    [deusEx, 'DeusExPlayer.UpdateCarcassEvent'],
+    [deusEx, 'SkilledTool.BringUp'], [deusEx, 'SkilledTool.PlayUseAnim'],
+    [deusEx, 'DeusExPickup.BaseChange'],
+  ]) await prepareFunction(runtime, packageAsset, path);
   // GivePlayerAugmentation reports a newly acquired level through the
   // installed PlayerPawnExt.ClientMessage script event. The normal defaults
   // reach this UI path while the manager is being built. Its localized Sprintf
@@ -308,7 +316,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     requiredExport(extension, 'PlayerPawnExt.ClientMessage'));
   const createThemes = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateColorThemeManager');
   const initialize = await prepareFunction(runtime, deusEx, 'DeusExPlayer.InitializeSubSystems');
-  await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateKeyRing');
+  const createKeyRing = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateKeyRing');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.CreateAugmentations');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.AddDefaultAugmentations');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.GivePlayerAugmentation');
@@ -358,7 +366,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     await prepareActorLineage(runtime, cls);
     if (cls.nameCounter === 0) cls.nameCounter = 1;
   }
-  installSubsystemSpawn(runtime, level, supportedClasses, nanoKeyRingClass);
+  installSubsystemSpawn(runtime, level, supportedClasses);
   runtime.boundaryFunctions.set(playerClientMessage.key, ({ warning: ignoredWarning } = {}) => {
     // The original event's only effect in this startup path is UI delivery;
     // do not evaluate its Sprintf argument or fabricate a viewport message.
@@ -392,11 +400,31 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
   verifyExactList(names, PLAYER_AUGMENTATION_STARTUP.defaultObjectNames, 'Player subsystem object names');
   void linked;
   void locationDefaults;
+  const keyRing = runtime.namedReference(player, 'KeyRing').get();
+  if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
+    throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');
+  if (runtime.namedReference(keyRing, 'Owner').get() !== player)
+    throw new Error('NanoKeyRing Owner is not JCDentonMale');
+  const discardKeyRing = () => {
+    const ring = runtime.namedReference(player, 'KeyRing').get();
+    if (ring) runtime.destroyActor(ring, false);
+    runtime.namedReference(player, 'KeyRing').set(null);
+    runtime.namedReference(player, 'KeyList').set(null);
+    if (runtime.namedReference(player, 'inHand').get() === ring) {
+      runtime.namedReference(player, 'inHand').set(null);
+      runtime.namedReference(player, 'inHandPending').set(null);
+    }
+  };
+  const spawnKeyRing = () => {
+    if (!runtime.namedReference(player, 'KeyRing').get()) runtime.callFunction(createKeyRing, player, 0);
+  };
   return freeze({
     manager,
     augmentations: freeze(augmentations),
     classKeys: freeze(augmentations.map(item => classKey(runtime.instance(item).cls))),
     boundary,
+    discardKeyRing,
+    spawnKeyRing,
     supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls))),
     locationSlots: freeze(locationDefaults.map(slot => freeze({
       numSlots: readStructMember(slot, 'NumSlots'),

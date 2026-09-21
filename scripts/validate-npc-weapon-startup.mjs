@@ -124,8 +124,13 @@ for (let run = 0; run < 3; run++) {
 
   const label = run === 0 ? 'load' : `reset ${run}`;
   const items = spawnedInventory();
-  assert.equal(items.length, 12, `${label}: exactly the twelve NPC-spawned inventory actors`);
-  assert.equal(new Set(items).size, 12, `${label}: no duplicate inventory actors`);
+  const player = game.player.collisionActor;
+  const rings = items.filter(item => instance(item).cls.record.key === 'deusex.nanokeyring');
+  const npcItems = items.filter(item => !rings.includes(item));
+  assert.equal(rings.length, 1, `${label}: CreateKeyRing spawned one NanoKeyRing`);
+  assert.equal(get(rings[0], 'Owner'), player, `${label}: the key ring is the player's`);
+  assert.equal(npcItems.length, 12, `${label}: exactly the twelve NPC-spawned inventory actors`);
+  assert.equal(new Set(items).size, items.length, `${label}: no duplicate inventory actors`);
   const shadows = shadowCount();
   if (run === 0) {
     // The load run's AttachDecal draws sit wherever the shared stream stood

@@ -80,7 +80,8 @@ assert.equal(events.slice(before).filter(e=>e==='setupeventtransferobject').leng
 assert.ok(events.slice(before).includes('setupeventjump'));
 assert.ok(get(troop,'Inventory'),'original transfers populate recipient inventory');
 finish(take);
-assert.equal(get(player,'Inventory'),null);assert.equal(get(heldItem,'Owner'),troop);
+assert.equal(get(player,'Inventory'),get(player,'KeyRing'),'the non-transferred key ring stays');
+assert.equal(get(heldItem,'Owner'),troop);
 // This research-created fixture was outside the Play spawn scheduler.
 runtime.destroyActor(heldItem);
 // Allow the original participant state to finish returning to idle.

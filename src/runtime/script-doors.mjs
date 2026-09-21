@@ -1292,6 +1292,7 @@ export async function createScriptDoors({
     }});
 
   function reset() {
+    playerStartup?.discardKeyRing?.();
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveConPlay?.reset();
     // Destroy the mission actor before the map reload so its reset-time
@@ -1325,6 +1326,7 @@ export async function createScriptDoors({
     // Re-spawn the mission actor into the freshly restored world so its timer
     // and state machine start over (the original reloads the level on reset).
     liveMission?.spawn();
+    playerStartup?.spawnKeyRing?.();
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
@@ -1345,7 +1347,11 @@ export async function createScriptDoors({
    * adapter. Synchronous: the movement/touch callers dispatch within the tick, so
    * event functions must be prepared at setup (per milestone), not on demand. */
   function dispatchEvent(target, event, args = []) {
-    if (!identities.has(target))
+    let attached = identities.has(target);
+    if (!attached) {
+      try { attached = Boolean(runtime.instance(target)); } catch { attached = false; }
+    }
+    if (!attached)
       throw new Error(`Scene event target is not attached to the script runtime: ${target?.name ?? '<unnamed>'}.${event}`);
     const record = runtime.lookup(target, event);
     if (!record) return { handled: false };

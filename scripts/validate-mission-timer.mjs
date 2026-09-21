@@ -59,10 +59,14 @@ assert.ok(entered<300,'walking enters the instructor FlagTrigger');
 assert.equal(ready(),true,'standing in the FlagTrigger sets MunitionsTrooperReady');
 
 // Standing at the instructor (Ready true, no conversation): the mission timer
-// removes and destroys the inventory within its next cycle.
-let removedAt=-1;for(let i=0;i<130&&removedAt<0;i++){tick(1,{...idle,pitch:0});if(get(player,'Inventory')===null)removedAt=i;}
-assert.ok(removedAt>=0,'Mission00.Timer removed the player inventory while Ready is true');
-assert.equal(get(player,'Inventory'),null,'player inventory is empty after enforcement');
+// removes and destroys displayable inventory within its next cycle.
+// RemoveAllInventory skips items that are not bDisplayableInv and not Ammo,
+// so the NanoKeyRing CreateKeyRing spawned stays on the chain.
+const ring=get(player,'KeyRing');
+let removedAt=-1;for(let i=0;i<130&&removedAt<0;i++){tick(1,{...idle,pitch:0});if(runtime.instance(item).pendingKill)removedAt=i;}
+assert.ok(removedAt>=0,'Mission00.Timer removed the displayable inventory while Ready is true');
+assert.equal(get(player,'Inventory'),ring,'the non-displayable key ring remains');
+assert.equal(runtime.instance(ring).pendingKill,false,'RemoveAllInventory does not destroy the key ring');
 assert.equal(runtime.instance(item).pendingKill,true,'the confiscated item is destroyed (DeleteInventory + Destroy)');
 assert.equal(get(item,'Owner'),null,'the destroyed item is no longer owned by the player');
 assert.equal(host.npcFailures.size,0,'no actor tick failures');

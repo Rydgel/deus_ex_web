@@ -3,8 +3,7 @@
  * The fixture is the real 00_Training map and installed GOTY packages. The
  * browser player is attached to LevelInfo, then the original
  * DeusExPlayer.InitializeSubSystems bytecode runs through
- * CreateAugmentations/AddDefaultAugmentations/CreateSkills and stops at the
- * explicit NanoKeyRing inventory boundary.
+ * CreateAugmentations/AddDefaultAugmentations/CreateSkills and CreateKeyRing.
  */
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -84,10 +83,10 @@ const getAugLevelValue = runtime.lookup(manager, 'GetAugLevelValue');
 assert.equal(runtime.callFunction(getAugLevelValue, manager, 1, () => runtime.instance(enviro).cls.record), -1,
   'unowned AugEnviro returns the original -1 sentinel');
 
-assert.deepEqual(startup.boundary, {
-  boundary: PLAYER_AUGMENTATION_STARTUP.boundary.classKey,
-  function: PLAYER_AUGMENTATION_STARTUP.boundary.function,
-  message: 'Player startup reached CreateKeyRing; NanoKeyRing construction/GiveTo is not implemented',
-});
+assert.equal(startup.boundary, null);
+const keyRing = ref(player, 'KeyRing');
+assert.equal(runtime.instance(keyRing).cls.record.key, 'deusex.nanokeyring');
+assert.equal(ref(keyRing, 'Owner'), player);
+assert.equal(ref(player, 'KeyList'), null, 'a fresh ring holds no keys');
 
-console.log('Player augmentation startup passed: 00_Training creates AugmentationManager1, preserves the capture-backed 21-class linked list and defaults, and stops explicitly at NanoKeyRing.CreateKeyRing.');
+console.log('Player augmentation startup passed: 00_Training creates AugmentationManager1, preserves the capture-backed 21-class linked list and defaults, and spawns the NanoKeyRing.');

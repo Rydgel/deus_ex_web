@@ -25,7 +25,7 @@ export function createSceneEvents(player,{deferMissionEvent,dispatchEvent}={}) {
       return;
     }
     if (target === player) {
-      if (['Bump','BumpWall','HitWall','Touch','UnTouch','UnderLift','EncroachedByMover','BeginEvent','EndEvent'].includes(event)) return;
+      if (['Bump','BumpWall','HitWall','Touch','UnTouch','UnderLift','EncroachedByMover','BeginEvent','EndEvent','Attach','Detach'].includes(event)) return;
       const other = args[0];
       if (event === 'EncroachedBy') { if (isA(other,'engine.pawn')) return unsupported(target,'gibbedBy'); return; }
       if (event === 'EncroachingOn') return Boolean(other?.model || isA(other,'engine.brush') || (player.warping && isA(other,'engine.pawn')));

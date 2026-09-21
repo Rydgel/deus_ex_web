@@ -136,7 +136,7 @@ function setMode(next) {
   keys.clear();
   if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
   $('play-hint').textContent = '';
-  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
+  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · 1 nanokey ring · Enter use ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
 }
 function useDoor() {
@@ -415,6 +415,16 @@ document.addEventListener('keydown', event => {
   if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
+  if (event.code === 'Enter' && !event.repeat && mode === 'play' && game && !runtimeError) {
+    try { const result = game.useHeld(); if (result.message) toast(result.message); }
+    catch (error) { pauseForRuntimeError(error); }
+    event.preventDefault();
+  }
+  if (event.code === 'Digit1' && !event.repeat && mode === 'play' && game && !runtimeError) {
+    try { toast(game.selectNanoKeyRing() ? 'Nanokey ring in hand' : 'Nanokey ring put away'); }
+    catch (error) { pauseForRuntimeError(error); }
+    event.preventDefault();
+  }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
     if(mode==='play'&&runtimeError){event.preventDefault();return;}
     if(mode==='play'&&currentMap==='00_Training')activateInfoLinkAudio().catch(()=>{});

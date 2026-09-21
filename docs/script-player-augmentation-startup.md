@@ -70,13 +70,13 @@ following manager state:
 
 ## Explicit boundaries
 
-`CreateKeyRing` is the first unsupported startup dependency in standalone
-Training. Its `Spawn(class'NanoKeyRing')` / inventory `GiveTo` path is not
-implemented, so the adapter reports the typed boundary
-`deusex.nanokeyring / CreateKeyRing` after the manager, augmentations, themes,
-and skills have been created. The default augmentation notification also
-reaches `PlayerPawnExt.ClientMessage`; its localized `Sprintf` conversion is
-kept as an explicit UI boundary while the original ownership, linked-list,
+`CreateKeyRing` now runs. `NanoKeyRing` is admitted by the script-only
+Inventory spawn path (`GiveTo`, `AddInventory`, `GotoState('Idle2')`,
+`SetBase`). The object belt UI is still absent; selecting the ring calls
+`PutInHand` and `UpdateInHand` directly. See [the nano key contract](script-nanokey.md).
+The default augmentation notification still reaches
+`PlayerPawnExt.ClientMessage`; its localized `Sprintf` conversion is kept as
+an explicit UI boundary while the original ownership, linked-list,
 active-state, and location-count writes are retained.
 
 The installed-map validator checks all of these assertions against the live
@@ -88,4 +88,4 @@ DEUS_EX_GAME_DIR='Deus Ex GOTY Edition' node scripts/validate-player-augmentatio
 
 The current output proves `AugmentationManager1`, the 21-class list and names,
 ownership and active defaults, location capacities/counts, the unowned
-`AugEnviro` sentinel, and the exact `NanoKeyRing.CreateKeyRing` boundary.
+`AugEnviro` sentinel, and a spawned `NanoKeyRing` owned by JC.

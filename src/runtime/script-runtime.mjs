@@ -269,6 +269,7 @@ export class ScriptRuntime {
       arrayReference:(index,ref)=>arrayReference(index,ref,this.warning),
       structReference:(ref,script,node)=>this.structReference(ref,this.objects.operand(script,node)),
       warning:message=>this.warning?.(message),
+      newObject:request=>this.newObject(request),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
       gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
@@ -485,6 +486,51 @@ export class ScriptRuntime {
   /** Construct fresh script storage using the class-default/template values,
    * followed by registry insertion and a verified class-native constructor.
    * This deliberately does not run the separate SpawnActor startup sequence. */
+  /** Opcode 0x11 for CreateNanoKeyInfo: `new(Self) class'NanoKeyInfo'`.
+   * Optional name/flags stay NAME_None and 0. Other classes stay unsupported.
+   * The object uses the recovered fresh-construction host and the UObject
+   * vtable store already performed first by the actor constructor. */
+  newObject({outer, name, flags, classRef}) {
+    if (String(name ?? 'None').toLowerCase() !== 'none' || (flags ?? 0) !== 0)
+      throw new Error('new optional name and flags are only recovered as None and 0');
+    const cls = classRef?.linkedClass;
+    if (!cls || cls.record.key !== 'deusex.nanokeyinfo')
+      throw new Error(`new is only recovered for NanoKeyInfo, got ${classRef?.key ?? 'None'}`);
+    if (!outer) throw new Error('new(Self) requires the player outer');
+    if (!Number.isInteger(cls.nameCounter)) cls.nameCounter = 0;
+    const playerNative = this.playerNativeObject(outer);
+    const base = this.actorLifecycle?.construction;
+    if (!base?.registry || typeof base.findObject !== 'function' || typeof base.internName !== 'function')
+      throw new Error('new requires the live object registry');
+    return this.constructObject(cls, {outer: playerNative, name: 'None', flags: 0, template: null}, {
+      ...base,
+      validate: args => args.cls === cls && args.outer === playerNative && args.template === null &&
+        args.flags === 0 && String(args.name).toLowerCase() === 'none',
+      nativeConstructor(object) { object.nativeVtable = 0x10179dfc; },
+    });
+  }
+  playerNativeObject(player) {
+    const instance = this.instance(player);
+    if (Number.isInteger(instance.nativeObject?.index)) return instance.nativeObject;
+    if (instance.nativeObject) throw new Error('Player native object index is unmeasured');
+    const level = this.levelFor(player);
+    const packageOuter = level?.nativeObject?.outer;
+    if (!packageOuter || !Number.isInteger(packageOuter.index))
+      throw new Error('new(Self) requires the level package outer');
+    const construction = this.actorLifecycle?.construction;
+    const spelled = this.namedReference(player, 'Name').get();
+    const fname = construction.internName(typeof spelled === 'string' && spelled ? spelled : 'JCDentonMale');
+    if (!fname || !Number.isInteger(fname.index)) throw new Error('Player FName is not interned');
+    const object = {
+      identity: player, index: -1, hashNext: null, stateFrame: instance.state ?? null,
+      linker: null, linkerIndex: -1, auxiliary: null, outer: packageOuter, flags: 0,
+      name: fname.name, nameIndex: fname.index, objectClass: instance.cls,
+      destroy: receiver => this.destroyActorBase(receiver),
+    };
+    construction.registry.add(object);
+    instance.nativeObject = object;
+    return object;
+  }
   constructObject(cls,options,services) {
     return this.initializeObjectStorage(cls,options,services,constructFreshScriptObject);
   }
@@ -1976,10 +2022,10 @@ export class ScriptRuntime {
       // execFastTrace 0x103e35e0: Start's Location default is copied before
       // the optional argument's expression runs; both vectors push by value
       // into Level->Model->FastLineCheck and the byte result returns masked.
-      if(call.argumentCount!==2)throw new Error('FastTrace takes two arguments');
+      if(call.argumentCount<1||call.argumentCount>2)throw new Error('FastTrace takes an end and an optional start');
       const source=call.receiver,end=refValue(call.evaluateArgument(0));
       const startDefault=source.position;
-      const start=refValue(call.evaluateArgument(1))??startDefault;
+      const start=call.argumentCount>1?(refValue(call.evaluateArgument(1))??startDefault):startDefault;
       const level=this.levelFor(source),model=level?.model;
       if(!model)throw new Error('FastTrace requires the live level BSP model');
       return scriptFastTrace(model,source,end,start,level.fastLineCheck);

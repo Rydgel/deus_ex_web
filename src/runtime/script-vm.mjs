@@ -844,6 +844,18 @@ export function compileFunction(fn) {
             const value=refValue(field);return reference(value,Array.isArray(value)?{X:0,Y:1,Z:2,Pitch:0,Yaw:1,Roll:2}[n.name]:n.name);
           }
           case 0x0b: return undefined;
+          case 0x11: {
+            // CreateNanoKeyInfo: new(Self) class'NanoKeyInfo'. Four operands
+            // are outer, optional name, optional flags, class. EX_Nothing
+            // leaves the P_GET defaults (NAME_None, flags 0).
+            if (typeof services.newObject !== 'function') throw new Error('new is not linked');
+            const outer = refValue(evaluate(n.args[0], instance));
+            const nameNode = n.args[1], flagsNode = n.args[2];
+            const name = nameNode.op === 0x0b ? 'None' : refValue(evaluate(nameNode, instance));
+            const flags = flagsNode.op === 0x0b ? 0 : refValue(evaluate(flagsNode, instance));
+            const classRef = refValue(evaluate(n.args[3], instance));
+            return services.newObject({ outer, name, flags, classRef });
+          }
           case 0x0d: {
             // EX_GotoLabel: redirect the state frame's Code to the label
             // offset resolved through the current state chain.

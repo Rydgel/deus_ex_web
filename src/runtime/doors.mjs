@@ -69,7 +69,7 @@ export class Doors {
   describe(mover) {
     return { mover, label: !mover.supported ? 'Door behavior not supported yet' : mover.values.bLocked && closed(mover) ? "It's locked" : mover.target === 1 ? 'Close door' : 'Open door' };
   }
-  use(target, playerPosition) {
+  use(target, playerPosition, frobWith = null) {
     if (!target) return { ok: false, message: 'No door in reach' };
     const mover = target.mover, v = mover.values;
     if (!mover.supported) return { ok: false, message: target.label };
@@ -77,7 +77,7 @@ export class Doors {
     // runtime is linked: frobbable/destroyed/slave, lock and one-way state, the
     // localized refusal message and the Tag fanout are its decisions, not ours.
     if (this.scriptRuntime) {
-      const outcome = this.scriptRuntime.frob(mover);
+      const outcome = this.scriptRuntime.frob(mover, undefined, frobWith);
       const opened = outcome.triggered.length > 0;
       if (opened) this.uses++;
       return { ok: opened,
