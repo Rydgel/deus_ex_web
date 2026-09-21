@@ -1301,6 +1301,15 @@ export async function createScriptDoors({
     // chain (the original reloads the level on "Player start"). This must run
     // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
     resetNpcs();
+    // Bind the local viewport listener onto PlayerPawn.Player. The engine sets
+    // this to the possessing viewport for the local player; here it is the same
+    // Client.Viewports[0] listener GetPlayerPawn (720) already follows. Original
+    // reachable bytecode such as DeusExPlayer.GetDisplayName gates on
+    // (player == None) — an unset viewport made the conversation speaker name
+    // resolve to "" — while the native readInput path stays dormant because the
+    // viewer, not Level.Tick, drives this pawn (docs/script-instructor-conversation.md).
+    const viewport = level?.engine?.client?.viewports?.[0] ?? null;
+    if (viewport) runtime.namedReference(playerActor, 'Player').set(viewport);
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound

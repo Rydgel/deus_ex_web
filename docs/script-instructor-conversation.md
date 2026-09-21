@@ -16,16 +16,23 @@ Verified with the instructor browser regression entering through this button
 and the real F key (including speech, termination and reset); production build
 passes. This shortcut does not establish end-to-end Training progression.
 
-> **Checkpoint verification, 2026-09-21:** 509 unit tests and the production build
-> pass. The instructor browser flow with original subtitles-off defaults and
-> Liberty Island loading passed, as did focused startup, inventory, patrol,
-> DataLink and native translation checks. **Subtitle presentation remains
-> incomplete:** explicitly enabling `player.bSubtitles` reaches an unsupported
-> `ConfigureChild` boundsUpdate service. The renderer adapter is present, but
-> visible subtitle layout is not verified and must not be counted as complete.
-> Earlier HUD references below cover the default presentation path only. The
-> next continuation should finish that window boundary and rerun the browser
-> flow with subtitles enabled. Stage 3 remains open.
+> **Checkpoint update, 2026-09-21:** the subtitle window boundary is closed.
+> `XWindow::ConfigureChild`'s two conditional leaves — BoundsUpdate `0x10051160`
+> (recursive absolute-bounds/clip, GC copy, child recursion) and SortWindowLists
+> `0x10045140` (inert on the shell's empty manager lists) — are recovered
+> bit-exact against Extension.dll and wired into the conversation window service
+> ([script-window-bounds-update.md](script-window-bounds-update.md)). Enabling
+> `DeusExPlayer.bSubtitles` now runs `SetupEventSpeechPost → Show/Clear/
+> DisplayName/DisplayText` to completion: the first-person panel shows the
+> original speaker display name (via `GetDisplayName`, which needed the local
+> viewport listener now bound to `PlayerPawn.Player`) and the original speech
+> text, and hides with the original Hide branch when the preference is off while
+> speech still plays. The preference is the original `bSubtitles` globalconfig
+> (shipped `True` in User.ini), read at startup and toggled by a discoverable
+> diagnostics checkbox; the class default is unchanged.
+> `scripts/validate-instructor-conversation.mjs` now asserts hidden-by-default,
+> enabled name/text, and toggle-off hiding, all with speech. The full native
+> TileWindow reconfiguration/render tree remains Stage 4. Stage 3 remains open.
 
 The Training munitions instructors are `UNATCOTroop0` and `UNATCOTroop3`
 (`00_Training`), both `BindName = MunitionsTrooper`. `ConBindEvents` binds them

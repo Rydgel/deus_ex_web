@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { AssetStore } from '../unreal/assets.mjs';
+import { readGlobalConfigBool } from '../unreal/user-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
@@ -19,6 +20,7 @@ const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.
 camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
+let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null,activeInfoLinkShell=null;
 let npcPreview=null;
@@ -182,6 +184,7 @@ async function loadMap(name) {
     try {
       nextGame = await createGame(nextMap, asset, assets, {
         presentation:true,
+        subtitles: subtitlePreference,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
         onConversationSpeech:event=>{void playConversationSpeech(event);},
         onDataLinkTransmission: event => {
@@ -250,6 +253,10 @@ async function setFiles(files) {
   const names = [...next.files.values()].filter(f => /\.(dx|unr)$/i.test(f.path)).map(f => f.name).sort();
   if (!names.length) throw new Error('No maps found. Choose the game folder containing Maps, Textures, and System.');
   assets = next;
+  // Honor the installed DeusExPlayer.bSubtitles globalconfig (shipped True) as
+  // the initial conversation-subtitle preference; the diagnostics toggle flips it.
+  subtitlePreference = await readGlobalConfigBool(files, 'DeusEx.DeusExPlayer', 'bSubtitles', false);
+  const subtitleToggle = $('subtitles'); if (subtitleToggle) subtitleToggle.checked = subtitlePreference;
   $('map').replaceChildren(...names.map(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
   await loadMap(names.find(n => n.toLowerCase() === '00_training') ?? names[0]);
 }
@@ -270,6 +277,7 @@ $('close-panel').onclick = () => togglePanel(false);
 $('wireframe').onchange = event => { if (world) for (const material of world.materials.values()) material.wireframe = event.target.checked; };
 $('actor-markers').onchange = event => { if (world) world.markers.visible = event.target.checked; };
 $('lighting').onchange = event => { if (world) world.lightingEnabled.value = event.target.checked ? 1 : 0; };
+$('subtitles').onchange = event => { subtitlePreference = event.target.checked; if (game) game.subtitles = subtitlePreference; };
 $('brightness').oninput = event => {
   const value = Number(event.target.value);
   if (world) world.displayGamma.value = 1 / (2.5 * value);

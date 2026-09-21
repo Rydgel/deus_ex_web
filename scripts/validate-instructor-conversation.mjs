@@ -9,6 +9,8 @@ import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createHudRenderer} from '../src/viewer/hud.mjs';
 import {createTrainingNpcPreview} from '../src/viewer/npc-mesh-preview.mjs';
+import {WINDOW_TEXT_OFFSETS} from '../src/runtime/script-window-text.mjs';
+import {WINDOW_DESTROY_OFFSETS} from '../src/runtime/script-window-destroy.mjs';
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
   files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
@@ -91,5 +93,57 @@ game.reset();assert.equal(get(player,'conPlay'),null);assert.equal(get(player,'c
 assert.equal(shell.isDestroyed(fresh.window),true);assert.equal(audio.at(-1).kind,'stop');
 assert.equal(ready(),false);assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);
 tick(200);finish(start(live('UNATCOTroop3'),'MunitionsTrooperFrob'));
+assert.equal(host.npcFailures.size,0);
+
+// Subtitle presentation. ConPlay.SetupEventSpeechPost shows the first-person
+// panel when player.bSubtitles is on and hides it (speech audio still plays)
+// when off. Read the live original HUDConWindowFirst tree so a hidden or empty
+// panel cannot pass as subtitle rendering.
+const T=WINDOW_TEXT_OFFSETS,Wo=WINDOW_DESTROY_OFFSETS;
+function panel(){
+ const play=get(player,'conPlay');if(!play)return null;
+ const win=get(play,'conWinFirst');if(!win||shell.isDestroyed(win))return null;
+ const tile=get(win,'lowerConWindow'),texts=[];
+ for(let c=shell.readNative(tile,Wo.firstChild,'ptr');c;c=shell.readNative(c,Wo.nextSibling,'ptr'))
+  if(runtime.instance(c).cls.record.key==='extension.textwindow')texts.push(shell.readNative(c,T.text,'string'));
+ return {visible:Boolean(shell.readNative(win,Wo.windowFlags,'u32')&1),texts};
+}
+function greet(subtitlesOn){ // fresh reset, set preference, drive one greeting; snapshot at first speech
+ game.reset();assert.equal(ready(),false);
+ game.subtitles=subtitlesOn;assert.equal(game.subtitles,subtitlesOn);
+ tick(200); // let the instructor reach its idle/standing state (bCanConverse)
+ const before=audio.length; // before the first tick so start()'s own tick is covered
+ const flow=start(live('UNATCOTroop3'),'MunitionsTrooperFrob');
+ const spoke=()=>audio.slice(before).some(e=>e.kind==='speech');
+ let snap=spoke()?panel():null;
+ for(let i=0;i<200&&!snap&&get(player,'conPlay');i++){tick();render();if(spoke())snap=panel();}
+ return {flow,snap,spoke:spoke()};
+}
+const troopName=get(live('UNATCOTroop3'),'UnfamiliarName');
+assert.ok(troopName.length>0,'the instructor has a non-empty display name');
+// The player viewport listener resolves the speaker name — an unset one made it "".
+assert.ok(get(player,'Player'),'PlayerPawn.Player (viewport listener) is bound');
+
+// Disabled (the class default): the panel stays hidden while speech plays.
+const off=greet(false);
+assert.ok(off.spoke,'speech plays with subtitles off');
+assert.ok(off.snap,'conWinFirst exists with subtitles off');
+assert.equal(off.snap.visible,false,'subtitles off hides the panel (original Hide branch)');
+finish(off.flow);
+
+// Enabled through the same DeusExPlayer.bSubtitles preference the viewer toggle drives.
+const on=greet(true);
+assert.ok(on.snap&&on.snap.visible,'subtitles on shows the panel');
+assert.equal(on.snap.texts[0],troopName,'name window shows the original speaker display name');
+assert.ok(on.snap.texts.slice(1).some(t=>typeof t==='string'&&t.length>0),
+  'a speech line is rendered, not an empty panel');
+assert.ok(audio.filter(e=>e.kind==='speech').at(-1),'original speech still plays with subtitles on');
+finish(on.flow);
+
+// Toggling the preference back off hides the panel again (on/off semantics).
+const back=greet(false);
+assert.ok(back.snap,'conWinFirst exists after toggling subtitles off');
+assert.equal(back.snap.visible,false,'toggling subtitles off hides the panel again');
+finish(back.flow);
 assert.equal(host.npcFailures.size,0);hud.dispose();preview.dispose();
-console.log('Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfers, original speech/history/timing, visible guard materials, default subtitles-off HUD, repeat and active reset.');
+console.log('Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfers, original speech/history/timing, visible guard materials, repeat and active reset. Subtitles: hidden-by-default panel, enabled panel with original speaker name "'+troopName+'" and speech text, and toggle-off hiding — all with speech playing.');

@@ -17,6 +17,7 @@ import {initWindowNative} from './script-window-init.mjs';
 import {addWindowChildNative,getRootWindowNative} from './script-window-hierarchy.mjs';
 import {WINDOW_RECONFIGURE_GLOBALS} from './script-window-reconfigure.mjs';
 import {WINDOW_CONFIGURE_CHILD_GLOBALS} from './script-window-configure-child.mjs';
+import {boundsUpdateNative,sortWindowListsNative} from './script-window-bounds-update.mjs';
 import {setWindowSizeNative,WINDOW_SIZE_OFFSETS} from './script-window-size.mjs';
 import {setVisibilityNative} from './script-window-visibility.mjs';
 import {WINDOW_POSITION_OFFSETS} from './script-window-position.mjs';
@@ -159,12 +160,18 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     parentRequestedReconfiguration:()=>0,configurationChanged:()=>{},resizeChild:()=>{},
   };
   // ConfigureChild shares the reconfiguration globals and leaf surface
-  // (configurationChanged/resizeChild); conditional leafs such as
-  // diagnostic, safeDestroy, boundsUpdate and sortWindowLists stay
-  // unprovided so reaching them remains an explicit boundary error.
+  // (configurationChanged/resizeChild). The conditional bounds/list leaves are
+  // the recovered Extension bodies: BoundsUpdate 0x10051160 propagates the
+  // absolute-bounds/clip struct (and GC copy) down the subtree, and
+  // SortWindowLists 0x10045140 re-sorts the type>=1 ancestor's (here empty)
+  // window lists. The diagnostic and SafeDestroy leaves stay unprovided so
+  // reaching them remains an explicit boundary error.
   const configureChild={...rawServices,
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
     configurationChanged:()=>{},resizeChild:()=>{},
+    boundsUpdate:({object})=>boundsUpdateNative(object,{read:memory.read,write:memory.write}),
+    sortWindowLists:({object,child})=>sortWindowListsNative(object,child,
+      {read:memory.read,write:memory.write,addressOf:memory.addressOf}),
   };
   const visibility={...rawServices,
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
@@ -229,6 +236,9 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     hierarchy:{readParent:object=>memory.read(object,O.parent,'ptr'),readType:object=>memory.read(object,O.type,'u8')},
     reconfiguration,
     configureChild,
+    // GetTopChild/GetBottomChild/sibling walks (HUDConWindowFirst.DestroyChildren
+    // clears the tile through GetTopChild) read the raw child/flag fields.
+    sensitivity:rawServices,
     size:rawServices,
     position:rawServices,
     backgroundStyle,

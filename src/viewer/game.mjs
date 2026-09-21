@@ -20,7 +20,8 @@ import { createPlayHud } from '../runtime/script-play-hud.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
-  onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, presentation = false } = {}) {
+  onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, presentation = false,
+  subtitles = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -132,6 +133,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     const ref=doors.scriptRuntime.runtime.namedReference(player.collisionActor,name);
     return {ref,initial:ref.get()};
   });
+  // Conversation subtitles are DeusExPlayer.bSubtitles (globalconfig). The
+  // original ConPlay.SetupEventSpeechPost shows the first-person panel when the
+  // flag is on and hides it when off with speech audio; the class default is
+  // off and the shipped install sets it on in User.ini. The caller passes the
+  // installed preference; the viewer exposes a discoverable toggle. Re-applied
+  // on reset so Player start keeps the chosen preference.
+  const subtitlesRef=doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles');
+  let subtitlePreference=typeof subtitles==='boolean'?subtitles:null;
+  const applySubtitles=()=>{ if(subtitlePreference!==null)subtitlesRef.set(subtitlePreference); };
+  applySubtitles();
   const hud=presentation?await createPlayHud({runtime:doors.scriptRuntime.runtime,assets,
     player:player.collisionActor,shell:await doors.scriptRuntime.infoLinkShell(),
     mapNorth:[...actors.values()].find(actor=>actor.className==='DeusExLevelInfo')?.values.TrueNorth??0}):null;
@@ -174,9 +185,12 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       doors.reset();
       levelTime.set(0);
       for(const {ref,initial} of playerVitals)ref.set(initial);
+      applySubtitles();
       hud?.reset();
       interaction.frobTime=0;interaction.frobTarget=null;
     },
+    get subtitles(){ return Boolean(subtitlesRef.get()); },
+    set subtitles(value){ subtitlePreference=Boolean(value); applySubtitles(); },
     target() { return isHighlighted(interaction,interaction.frobTarget) ? describeTarget(interaction.frobTarget) : null; },
     use() {
       const actor = interaction.frobTarget;

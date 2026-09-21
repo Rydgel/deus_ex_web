@@ -1,15 +1,17 @@
 # Stage 3 completion audit — 2026-09-20
 
-> **Checkpoint verification, 2026-09-21:** 509 unit tests and the production build
-> pass. The instructor browser flow with original subtitles-off defaults and
-> Liberty Island loading passed, as did focused startup, inventory, patrol,
-> DataLink and native translation checks. **Subtitle presentation remains
-> incomplete:** explicitly enabling `player.bSubtitles` reaches an unsupported
-> `ConfigureChild` boundsUpdate service. The renderer adapter is present, but
-> visible subtitle layout is not verified and must not be counted as complete.
-> Earlier HUD references below cover the default presentation path only. The
-> next continuation should finish that window boundary and rerun the browser
-> flow with subtitles enabled. Stage 3 remains open.
+> **Checkpoint update, 2026-09-21 (subtitles):** the subtitle window boundary is
+> closed. `XWindow::ConfigureChild`'s BoundsUpdate `0x10051160` and
+> SortWindowLists `0x10045140` leaves are recovered bit-exact vs Extension.dll
+> ([script-window-bounds-update.md](script-window-bounds-update.md)) and wired
+> into the conversation window service; enabling the original `bSubtitles`
+> globalconfig (a discoverable diagnostics toggle; class default unchanged) runs
+> `SetupEventSpeechPost` to completion with the original speaker name and speech
+> text, and the off branch hides the panel while speech plays. The local
+> viewport listener is bound to `PlayerPawn.Player` so `GetDisplayName` resolves
+> the name. `scripts/validate-instructor-conversation.mjs` asserts both states.
+> The full native TileWindow render tree remains Stage 4. **Mission00.Timer's
+> inventory enforcement is still open at this checkpoint.** Stage 3 remains open.
 
 Visible checkpoint: Training's **NPC mesh preview** now displays 14 original
 character/bot meshes, including the people beside and behind Jaime.
