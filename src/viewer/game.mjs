@@ -105,6 +105,14 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
   playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
+  // ULevel ReachSpec table (+0x8c, 28-byte records): serialized start/end are
+  // map-export refs; the nav natives walk them as live actors. readLevel's
+  // decode order already matches the native layout (distance,start,end,
+  // radius,height,flags,pruned).
+  playerScene.level.reachSpecs = map.level.reachSpecs.map(s => ({
+    distance: s.distance, start: actors.get(s.start) ?? null, end: actors.get(s.end) ?? null,
+    radius: s.radius, height: s.height, reachFlags: s.flags, pruned: s.pruned,
+  }));
   // Native GetPlayerPawn720 follows XLevel.Engine.Client.Viewports[0].Actor.
   // This local Play session owns one viewport, bound to its controlled JC.
   // UClient::Decals is a config bool the original defaults to True; pawn
@@ -152,13 +160,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       doors.tick(dt); tickWalkingInteraction(interaction,dt,trace); player.tick(dt, input);hud?.tick(dt);
     },
     reset() {
+      // Reseed before doors.reset() replays NPC startup: SpawnShadow/AttachDecal
+      // and startup natives draw from the shared stream, so the seed must be
+      // restored first for reset runs to replay one identical stream.
+      random.seed(randomSeed);
       collision.queries.removeActor(player.collisionActor);player.actorRegistered=false;
       collision.registerActors(collidable);player.reset();timeSeconds=0;playerScene.reset();
       // doors.reset() re-adds map pawns to the pawn list that playerScene.reset
       // just rebuilt from the collidable set, so it must run after it.
       doors.reset();
       levelTime.set(0);
-      random.seed(randomSeed);
       for(const {ref,initial} of playerVitals)ref.set(initial);
       hud?.reset();
       interaction.frobTime=0;interaction.frobTarget=null;

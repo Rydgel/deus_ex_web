@@ -19,8 +19,9 @@ serialized `Level.Actors` slots stay null, they never join
 `PawnList`/collision/startup/tick/reset, and no `PlayerReplicationInfo` is
 spawned for them ([map actors](script-map-actors.md)). Jaime lands, enters
 `Standing` and loops `BreatheLight` under the shared clock; player reset
-restores serialized state and re-runs the chain. The recorded boundaries are
-`FindPathToward` and environment-mapped surfaces — the camera PRI startup and
+restores serialized state and re-runs the chain. `FindPathToward` is no
+longer a boundary (see the 517 follow-up below); the recorded boundaries are
+environment-mapped surfaces — the camera PRI startup and
 the root-window conversation check are no longer boundaries
 ([startup evidence and exact boundary](script-npc-startup-animation.md),
 [Decal evidence](script-decal-startup.md)). Stage 3 is **not complete** while
@@ -75,6 +76,22 @@ integration validator, four focused browser tests and the production build
 pass. This improves basic playability; it does not close the remaining
 object-lifecycle, native-dispatch or conversation gates. See the
 [kernel boundary, measurements and development workflow](lodmesh-wasm.md).
+
+FindPathToward follow-up: native 517 (`exec 0x103bc9c0` → worker
+`0x103db3f0`) is ported through the shared navigation service — scoutA–E
+candidate collection, the lazy-sorted upstreamPaths BFS, route reversal,
+pass-2 endpoint marking, and the SpecialCost/SpecialHandling tail — and
+dispatched live through `invokeNative` → `pawnNavServices` over the
+serialized nav graph and the live ReachSpec table. The shared validator
+corpus is now 138/138 scenes bit-exact with 35/35 targeted mutants, and
+Training `Secretary0` patrols to `PatrolPoint4` in Play mode
+(`validate-secretary-patrol.mjs`). Corrected fabrication evidence this
+round: `upstreamPaths` is `+0x320` (the `+0x3a0` array is `PrunedPaths`),
+the ReachSpec record opens with `distance` (`+0x00`) then `start` (`+0x04`),
+`ULevel+0x90` is `ReachSpecs.Num`, the nav-list head is `LevelInfo+0x548`,
+and the pawn's reach anchor is `MoveTarget` (`+0x34c`), not `Anchor`.
+`landPredict`/falling-target delegation and the water helpers remain
+explicit unported boundaries. See [pawn navigation](script-pawn-nav.md).
 
 This audit applies the required systems and done criterion in
 [`roadmap.md:293-312`](roadmap.md#3-execute-game-behavior). A green focused

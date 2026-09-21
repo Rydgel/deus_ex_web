@@ -225,6 +225,59 @@ function ae(name, { target = 'tgt', navList = null, navPoints = null,
   return s;
 }
 
+/* A pathTowardWorker scene (0x103db3f0): thiscall(pawn; target, bSinglePath,
+ * ANavigationPoint** foundbuf, bClearPaths).  The found node lands in
+ * foundbuf; the nav-graph fields are the serialized NavigationPoint layout
+ * (paths +0x360 / prunedPaths +0x3a0 outbound, upstreamPaths +0x320 inbound,
+ * search state +0x420..+0x448).  fastLine/singleLine/farMove/moveActor/
+ * pointRegion/specialCost/probing are the scripted boundary queues. */
+function fp(name, { target = 'tgt', bSingle = 0, bClear = 1, navList = null,
+                    navPoints = null, actors = null, zones = null, gIsEditor = 0,
+                    pawn = {}, singleLine = null, farMove = [1], fastLine = [1],
+                    moveActor = [], reachSpecs = [], specialCost = null,
+                    probing = null, specialHandling = null,
+                    pointRegion = ['dry'] } = {}) {
+  const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
+  const pr = pointRegion.map(r => (typeof r === 'string' ? { zone: r } : r));
+  const s = {
+    name, body: 'pathTowardWorker', this: 'self', gIsEditor,
+    zones: z,
+    pawn: { ...BASE_PAWN, ...pawn },
+    singleLine, moveActor, farMove, fastLine, reachSpecs, pointRegion: pr,
+    directArgs: [target ? { ref: target } : { i: 0 }, { i: bSingle },
+                 { ref: 'foundbuf' }, { i: bClear }],
+    js: { target, bSingle, bClear, gIsEditor, zones: z, farMove, fastLine,
+          moveActor, navList, pawn: { ...BASE_PAWN, ...pawn },
+          actors: actors || {}, navPoints: navPoints || {}, singleLine,
+          specialCost, probing, specialHandling, pointRegion: pr },
+  };
+  if (actors) s.actors = actors;
+  if (navPoints) s.navPoints = navPoints;
+  if (navList) s.navList = navList;
+  if (specialCost) s.specialCost = specialCost;
+  if (probing) s.probing = probing;
+  return s;
+}
+
+/* A FindPathToward exec scene (0x103bc9c0, native 517): the three script
+ * args (target object, optional bSinglePath=0, optional bClearPaths=1)
+ * evaluate through the token stream; the result slot carries the found
+ * actor pointer. */
+function fx(name, opts = {}) {
+  const { target = 'tgt', bSingle = 0, bClear = 1 } = opts;
+  const s = fp(name, { ...opts, target, bSingle, bClear });
+  s.body = 'findPathToward';
+  delete s.directArgs;
+  // The native always evaluates three GNatives args; omitted optional params
+  // compile to EX_Nothing tokens so the exec's pre-initialized defaults
+  // (bSinglePath=0, bClearPaths=1) survive the eval.
+  const toks = [target ? { kind: 'object', value: target } : { kind: 'object', value: '__none' },
+                { kind: 'int', value: bSingle }, { kind: 'int', value: bClear }];
+  s.args = toks.slice(0, opts.argCount ?? 3);
+  while (s.args.length < 3) s.args.push({ kind: 'nothing' });
+  return s;
+}
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -456,9 +509,9 @@ const scenes = [
     reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 8 }],
     pawn: { collisionRadius: 20, collisionHeight: 40 },
   }),
-  // The second (upstream +0x3a0) path array finds the spec too.
-  dr('dr-upstream', {
-    navPoints: { src: { upstreamPaths: [0] } }, actors: { tgt: {} },
+  // The second outbound array (+0x3a0 PrunedPaths) finds the spec too.
+  dr('dr-pruned', {
+    navPoints: { src: { prunedPaths: [0] } }, actors: { tgt: {} },
     reachSpecs: [{ start: 'src', end: 'tgt', radius: 20, height: 40, flags: 0 }],
     pawn: { collisionRadius: 20, collisionHeight: 40 },
   }),
@@ -635,10 +688,12 @@ const scenes = [
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
   }),
   // NavPoint target found in the nav list within radius -> fast-path 1.
+  // (ReachSpecs.Num>0 at level+0x90 is the fast-path gate.)
   ae('ae-nav-hit', {
     navList: 'n0',
     navPoints: { tgt: { location: [30, 0, 0] }, n0: { location: [50, 0, 0], nextNav: 'tgt' } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'tgt', distance: 20, radius: 20, height: 40, flags: 0 }],
   }),
   // Nearby nav point reaches the target via a ReachSpec -> directReach 1.
   ae('ae-nav-direct', {
@@ -655,6 +710,7 @@ const scenes = [
     navPoints: { a1: { location: [30, 0, 0] }, n0: { location: [10, 0, 0] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1, moveTarget: 'a1' },
     target: 'a1',
+    reachSpecs: [{ start: 'a1', end: 'a1', distance: 1, radius: 20, height: 40, flags: 0 }],
   }),
   // Anchor within radius reaches the far target via a ReachSpec.
   ae('ae-anchor-direct', {
@@ -671,12 +727,14 @@ const scenes = [
     navList: 'n0',
     navPoints: { tgt: { location: [500, 0, 0] }, n0: { location: [30, 0, 0] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 1, radius: 20, height: 40, flags: 0 }],
   }),
   // Same but PHYS_Flying (4) -> falls through to the worker (slc=1 proves it).
   ae('ae-nav-flying-unreach', {
     navList: 'n0',
     navPoints: { tgt: { location: [500, 0, 0] }, n0: { location: [30, 0, 0] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 4 },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 1, radius: 20, height: 40, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
   }),
   // No nav point within radius -> found=0 -> worker fallback.
@@ -684,6 +742,7 @@ const scenes = [
     navList: 'n0',
     navPoints: { tgt: { location: [300, 0, 0] }, n0: { location: [500, 0, 0] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 1, radius: 20, height: 40, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
   }),
   // Inventory target with a +0x398 holder -> redirect onto the nav point.
@@ -692,6 +751,7 @@ const scenes = [
     actors: { tgt: { cls: 'inventory', location: [50, 0, 0], field398: 'hold' } },
     navPoints: { hold: { location: [30, 0, 0] }, n0: { location: [10, 0, 0], nextNav: 'hold' } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'hold', distance: 20, radius: 20, height: 40, flags: 0 }],
     // Blocked slc makes the un-redirected worker path return 0 so the redirect
     // is observable (redirect -> fast-path 1, no redirect -> worker 0).
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
@@ -707,6 +767,7 @@ const scenes = [
     navList: 'tgt',
     navPoints: { tgt: { location: [30, 0, 0] } },
     pawn: { collisionRadius: 200, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'tgt', end: 'tgt', distance: 1, radius: 20, height: 40, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
   }),
   // Nav point above the pawn's collision height -> |dz|>=CH -> not within ->
@@ -715,6 +776,7 @@ const scenes = [
     navList: 'n0',
     navPoints: { tgt: { location: [200, 0, 0] }, n0: { location: [30, 0, 100] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 1, radius: 20, height: 40, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 0.5 } }],
   }),
   // Inventory redirect where the holder nav point is NOT within radius -> the
@@ -725,6 +787,7 @@ const scenes = [
     actors: { tgt: { cls: 'inventory', location: [50, 0, 0], field398: 'hold' } },
     navPoints: { hold: { location: [500, 0, 0] }, n0: { location: [500, 0, 0] } },
     pawn: { collisionRadius: 20, collisionHeight: 40, physics: 1 },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 1, radius: 20, height: 40, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
     moveActor: [H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1), H(1, 1), H(0.1, 1)],
   }),
@@ -817,6 +880,210 @@ const scenes = [
   ax('ax-out-temp', flatWalk(8), { cy: 0x4000, yd: 1, cp: 0, pd: 1,
                                   frand: [0.5, 0.5], tries: 1, mult: 1,
                                   outKind: 'nothing' }),
+
+  // -- FindPathToward 0x103bc9c0 + worker 0x103db3f0 (native 517) ------------
+  // Null target: *result=0 without touching the worker.
+  fx('fpt-null-target', {
+    target: null, navList: 'navA',
+    navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // Missing LevelInfo+0x548 nav list: the worker gates out immediately.
+  fp('fpt-no-navlist', {
+    navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // Empty ReachSpec table (level+0x90): second entry gate fails.
+  fp('fpt-no-specs', {
+    navList: 'navA', navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [],
+  }),
+  // Anchored pawn with a direct spec edge to the navpoint target: scoutB
+  // validates navA, directReach wins, *result=target.
+  fx('fpt-direct', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'tgt' },
+      tgt: { location: [40, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 30, radius: 30, height: 50, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Same edge via the Anchor seed (pawn+0x34c MoveTarget): scoutA seeds
+  // items[0] directly, skipping scoutB's eye-LOS + pointWorker validation.
+  fx('fpt-anchor-direct', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'tgt', collisionHeight: 40 },
+      tgt: { location: [40, 0, 0] },
+    },
+    pawn: { moveTarget: 'navA' },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 30, radius: 30, height: 50, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // No direct edge: scoutC hops items[0] -> pawn fit-tests into navA, then
+  // pointWorker(targetLoc, arg14=0) passes -> found = target.
+  fx('fpt-hop', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], nextNav: 'tgt' },
+      tgt: { location: [20, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // BFS-1 route: scoutD flags navB (navA's outbound neighbor), then the
+  // backward walk over tgt's upstreamPaths relaxes navB and pops it as the
+  // bEndPoint -> found = navB (first hop toward the target).
+  fx('fpt-bfs1', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],   // scoutB sees navA; scoutC navA->tgt LOS fails
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // bSpecialCost node: scoutA's reset calls SpecialCost (scripted 50); the
+  // relax cost becomes tgt.vW 0 + 200 + 50 + bPW 190 = 440.
+  fx('fpt-bfs1-specialcost', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], flags448: 8, nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    specialCost: [50],
+  }),
+  // Seeded target with no inbound edge: BFS-1 exhausts, seeded -> fail.
+  fx('fpt-bfs1-nospec', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Exec tail on the fpt-bfs1 graph: bShootSpecial clears, SpecialPause
+  // zeroes, and a result equal to SpecialGoal clears SpecialGoal.
+  fx('fpt-exec-tail', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    pawn: { flags318: 0x2000000, specialPause: 5.0, specialGoal: 'navB' },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    probing: [0],
+  }),
+  // Six-hop chain navA->n0->n1->n2->n3->n4->tgt: the bEndPoint marker lands
+  // on n0 (navA's outbound neighbor); BFS-1 relaxes n4..n0 back from tgt and
+  // pops n0 -> found = first hop n0.
+  fx('fpt-bfs-deep', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'n0' },
+      n0: { location: [70, 0, 0], upstreamPaths: [0], nextNav: 'n1' },
+      n1: { location: [130, 0, 0], upstreamPaths: [1], nextNav: 'n2' },
+      n2: { location: [190, 0, 0], upstreamPaths: [2], nextNav: 'n3' },
+      n3: { location: [250, 0, 0], upstreamPaths: [3], nextNav: 'n4' },
+      n4: { location: [310, 0, 0], upstreamPaths: [4], nextNav: 'tgt' },
+      tgt: { location: [370, 0, 0], upstreamPaths: [5] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'n0', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n1', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n1', end: 'n2', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n2', end: 'n3', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n3', end: 'n4', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n4', end: 'tgt', distance: 60, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Same chain with bSinglePath=1: the 5th pop aborts before n0 wins.
+  fx('fpt-singlepath-abort', {
+    bSingle: 1, navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'n0' },
+      n0: { location: [70, 0, 0], upstreamPaths: [0], nextNav: 'n1' },
+      n1: { location: [130, 0, 0], upstreamPaths: [1], nextNav: 'n2' },
+      n2: { location: [190, 0, 0], upstreamPaths: [2], nextNav: 'n3' },
+      n3: { location: [250, 0, 0], upstreamPaths: [3], nextNav: 'n4' },
+      n4: { location: [310, 0, 0], upstreamPaths: [4], nextNav: 'tgt' },
+      tgt: { location: [370, 0, 0], upstreamPaths: [5] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'n0', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n1', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n1', end: 'n2', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n2', end: 'n3', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n3', end: 'n4', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'n4', end: 'tgt', distance: 60, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // Pass 2 on a non-navpoint target: navB's actorWorker to tgt fails (the
+  // target floats 200 above the node, past the climb gate), so the worker
+  // re-collects, flags navB's outbound neighbor navX, validates navB, then
+  // BFS-2 runs from navA over navA's inbound navX->navA spec.  The reversed
+  // chain makes navA the tail; the hop-2 FLC + pointWorker check returns
+  // navX.
+  // No anchor reachable: every anchor-scan FastLineCheck fails, so flag14
+  // stays 0 and the worker takes pass 2 — scoutD marks the target-side
+  // head's (navB) outbound neighbour navX as bEndPoint, scoutB validates
+  // navB from the pawn, and BFS-2 runs navA.upstreamPaths -> navX.
+  fx('fpt-pass2', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], upstreamPaths: [2], nextNav: 'navX' },
+      navX: { location: [50, 0, 0], upstreamPaths: [0, 1], nextNav: 'navB' },
+      navB: { location: [290, 0, 0], paths: [1] },
+    },
+    actors: { tgt: { cls: 'actor', location: [290, 0, 200] } },
+    reachSpecs: [{ start: 'navA', end: 'navX', distance: 40, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navX', distance: 240, radius: 30, height: 50, flags: 0 },
+                 { start: 'navX', end: 'navA', distance: 40, radius: 30, height: 50, flags: 0 }],
+    // scoutB-FLC navA, scoutC-FLC navA->tgt, 3 scan FLCs (navB,navX,navA),
+    // pass2 scoutB-FLC navB, hop2 FLC.
+    fastLine: [1, 0, 0, 0, 0, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    moveActor: flatWalk(60),
+  }),
+  // bClearPaths=0 skips scoutA's reset: the fabricated visitedWeight/cost
+  // survive into the BFS instead of being overwritten (10M / ExtraCost).
+  fx('fpt-noclear', {
+    bClear: 0, navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'tgt',
+              visitedWeight: 77, cost: 33 },
+      tgt: { location: [40, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 30, radius: 30, height: 50, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // argCount=2 leaves bClearPaths at its native default 1 -> the reset runs.
+  fx('fpt-default-clear', {
+    argCount: 2, bSingle: 0, navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'tgt',
+              visitedWeight: 77, cost: 33 },
+      tgt: { location: [40, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 30, radius: 30, height: 50, flags: 0 }],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -936,6 +1203,7 @@ const ISA = {
   playerpawn: ['PlayerPawn', 'Pawn', 'Actor'],
   scriptedpawn: ['ScriptedPawn', 'Pawn', 'Actor'],
   navpoint: ['NavPoint', 'Actor'], navigationpoint: ['NavPoint', 'Actor'],
+  patrolpoint: ['PatrolPoint', 'NavPoint', 'Actor'],
   warpzonemarker: ['WarpZoneMarker', 'NavPoint', 'Actor'],
   inventoryspot: ['InventorySpot', 'NavPoint', 'Actor'],
   mover: ['Mover', 'Actor'], inventory: ['Inventory', 'Actor'],
@@ -949,7 +1217,9 @@ function runJsGraph(scene, mod = module) {
     return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ };
   };
   const mkActor = spec => {
-    const cls = spec.cls || 'actor';
+    // A trailing '*' fabricates a subclass of the named class (probe side);
+    // the twin flattens it into the ancestry list.
+    const cls = (spec.cls || 'actor').replace(/\*+$/, '');
     return {
       location: (spec.location || [0, 0, 0]).map(f32),
       velocity: (spec.velocity || [0, 0, 0]).map(f32),
@@ -965,9 +1235,19 @@ function runJsGraph(scene, mod = module) {
       Flags1dc: spec.flags1dc | 0, Flags4ec: spec.field4ec | 0,
       CollideFlag: spec.collideFlag | 0, Physics: spec.physics | 0,
       zoneGravity: f32((zones[spec.regionZone] || {}).gravityZ ?? -950),
+      // NavigationPoint search state (+0x420..+0x448). The probe packs the
+      // +0x448 bools into flags448; the twin keeps them as named fields.
+      visitedWeight: spec.visitedWeight | 0, bestPathWeight: spec.bestPathWeight | 0,
+      cost: spec.cost | 0, ExtraCost: spec.extraCost | 0,
+      bPlayerOnly: !!(spec.flags448 & 1) || !!spec.bPlayerOnly,
+      bEndPoint: !!(spec.flags448 & 2) || !!spec.bEndPoint,
+      bEndPointOnly: !!(spec.flags448 & 4) || !!spec.bEndPointOnly,
+      bSpecialCost: !!(spec.flags448 & 8) || !!spec.bSpecialCost,
+      SpecialPause: f32(spec.specialPause ?? 0),
       __isA: ISA[cls] || ['Actor'],
       __rz: spec.regionZone ?? 'dry', __fz: spec.footZone ?? 'dry',
       __paths: spec.paths || [], __upstream: spec.upstreamPaths || [],
+      __pruned: spec.prunedPaths || [],
     };
   };
   const actors = {};
@@ -979,11 +1259,17 @@ function runJsGraph(scene, mod = module) {
   actors.self = pawn;
   const ref = v => (typeof v === 'string' ? (actors[v] ?? 0) : v);
   // Ref-valued fields resolve only after every actor exists.
-  for (const [n, spec] of Object.entries(j.navPoints || {}))
+  for (const [n, spec] of Object.entries(j.navPoints || {})) {
     actors[n].__nextNav = ref(spec.nextNav);
+    actors[n].nextOrdered = ref(spec.nextOrdered);
+    actors[n].prevOrdered = ref(spec.prevOrdered);
+    actors[n].previousPath = ref(spec.previousPath);
+    actors[n].startPath = ref(spec.startPath);
+  }
   for (const [n, spec] of Object.entries(j.actors || {}))
     actors[n].Field398 = ref(spec.field398);
-  pawn.Anchor = ref(j.pawn.moveTarget);                       // pawn+0x34c
+  pawn.MoveTarget = ref(j.pawn.moveTarget);                   // pawn+0x34c
+  pawn.SpecialGoal = ref(j.pawn.specialGoal);                 // pawn+0x45c
   const specs = (scene.reachSpecs || []).map(s => ({
     start: ref(s.start), distance: s.distance | 0, end: ref(s.end),
     radius: s.radius | 0, height: s.height | 0, reachFlags: s.flags | 0, pruned: s.pruned | 0,
@@ -991,19 +1277,42 @@ function runJsGraph(scene, mod = module) {
   const target = ref(j.target);
   const scripted = scene.moveActor || [];
   const slSeq = j.singleLine || null, farSeq = j.farMove || null;
-  let idx = 0, moves = 0, farMoves = 0, sli = 0, fi = 0;
+  const flSeq = j.fastLine || null, prSeq = j.pointRegion || null;
+  let idx = 0, moves = 0, farMoves = 0, sli = 0, fi = 0, fli = 0;
+  let sci = 0, shi = 0, pri = 0, pqi = 0;
+  const scCalls = [], shCalls = [];
   const services = {
     location: a => a.location, velocity: a => a.velocity,
     read: (a, n) => a[n],
+    write: (a, n, v) => { a[n] = v; },
     zoneGravity: a => a.zoneGravity,
     gIsEditor: () => !!j.gIsEditor,
     regionZone: a => zoneObj(a.__rz ?? 'dry'),
     footZone: a => zoneObj(a.__fz ?? 'dry'),
     isA: (a, key) => !!(a && a.__isA && a.__isA.includes(key)),
+    // IsProbing consumes the same scripted queue the probe's hook serves.
+    isProbing: (a, name) => {
+      const arr = j.probing || [0];
+      return arr[Math.min(pri++, arr.length - 1)] | 0;
+    },
     level: a => ({ model: { id: 'model' } }),
     model: lvl => lvl.model,
     reachSpecTable: a => specs,
+    // +0x320 upstreamPaths (inbound), +0x360 Paths and +0x3a0 PrunedPaths
+    // (both outbound).
     paths: a => a.__paths, upstreamPaths: a => a.__upstream,
+    prunedPaths: a => a.__pruned,
+    specialCost: (nav, p) => {
+      const arr = j.specialCost || [0];
+      const v = arr[Math.min(sci++, arr.length - 1)];
+      scCalls.push({ nav, pawn: p });
+      return v | 0;
+    },
+    specialHandling: (node, p) => {
+      const arr = j.specialHandling || [null];
+      shCalls.push({ node, pawn: p });
+      return ref(arr[Math.min(shi++, arr.length - 1)]);
+    },
     singleLineCheck: (src, end, start, flags, extent, extra) => {
       const arr = slSeq || [{ ret: 1, hit: { actor: 0, time: 1 } }];
       const r = arr[Math.min(sli++, arr.length - 1)];
@@ -1024,15 +1333,70 @@ function runJsGraph(scene, mod = module) {
     },
     altMove: () => { throw new Error('jumpArc is outside this corpus'); },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
-    pointRegion: () => zoneObj('dry'), fastLineCheck: () => 1,
-    navListHead: () => ref(j.navList),                        // level+0x90 head
+    landPredict: () => { throw new Error('landPredict is outside this corpus'); },
+    findPathToWorker: () => { throw new Error('findPathToWorker is outside this corpus'); },
+    pointRegion: pt => {
+      const arr = prSeq || [{ zone: 'dry' }];
+      const r = arr[Math.min(pqi++, arr.length - 1)];
+      return zoneObj(typeof r === 'string' ? r : (r.zone || 'dry'));
+    },
+    fastLineCheck: (model, end, start) => {
+      const arr = flSeq || [1];
+      return arr[Math.min(fli++, arr.length - 1)] | 0;
+    },
+    navListHead: () => ref(j.navList),                        // LevelInfo+0x548
     nextNav: n => n.__nextNav,                                // navpoint+0x42c
   };
-  const ret = scene.body === 'reachMask' ? mod.reachMask(pawn, services)
-    : scene.body === 'directReach' ? mod.directReach(pawn, actors[j.source], target, services)
-    : scene.body === 'actorReachable' ? mod.actorReachable(pawn, target, services)
-    : mod.actorWorker(pawn, target, j.argC, services);
-  return { ret, moves, farMoves, slc: sli, locationBits: vecBits(pawn.location) };
+  const foundCell = { node: null };
+  let ret;
+  if (scene.body === 'reachMask') ret = mod.reachMask(pawn, services);
+  else if (scene.body === 'directReach')
+    ret = mod.directReach(pawn, actors[j.source], target, services);
+  else if (scene.body === 'actorReachable')
+    ret = mod.actorReachable(pawn, target, services);
+  else if (scene.body === 'pathTowardWorker')
+    ret = mod.pathTowardWorker(pawn, target, j.bSingle | 0, foundCell, j.bClear | 0, services);
+  else if (scene.body === 'findPathToward')
+    ret = mod.execFindPathToward(pawn, target, j.bSingle | 0, j.bClear | 0, services);
+  else ret = mod.actorWorker(pawn, target, j.argC, services);
+  // foundbuf/result slot values resolve to node names for comparison.
+  const nameOf = new Map(Object.entries(actors).map(([n, a]) => [a, n]));
+  const navOut = FOUND_BODIES.has(scene.body);
+  const navState = {};
+  for (const [n, a] of Object.entries(actors)) {
+    if (n === 'self') continue;
+    navState[n] = {
+      visitedWeight: a.visitedWeight | 0, bestPathWeight: a.bestPathWeight | 0,
+      nextOrdered: nameOf.get(a.nextOrdered) || (a.nextOrdered ? '?obj' : '0'),
+      prevOrdered: nameOf.get(a.prevOrdered) || (a.prevOrdered ? '?obj' : '0'),
+      startPath: nameOf.get(a.startPath) || (a.startPath ? '?obj' : '0'),
+      previousPath: nameOf.get(a.previousPath) || (a.previousPath ? '?obj' : '0'),
+      cost: a.cost | 0, extraCost: a.ExtraCost | 0,
+      flags448: ((a.bPlayerOnly ? 1 : 0) | (a.bEndPoint ? 2 : 0)
+        | (a.bEndPointOnly ? 4 : 0) | (a.bSpecialCost ? 8 : 0)),
+    };
+  }
+  return {
+    // findPathToward's result slot is an actor pointer: null -> '0' like the
+    // probe's zeroed resultOut; live actors resolve to their scene name.
+    ret: scene.body === 'findPathToward'
+      ? (ret ? (nameOf.get(ret) || '?obj') : '0')
+      : (ret && typeof ret === 'object') ? (nameOf.get(ret) || '?obj') : ret,
+    moves, farMoves, slc: sli, fli,
+    locationBits: vecBits(pawn.location),
+    // The 517 bodies also emit the found slot, per-node search state, and the
+    // pawn's special-nav fields; other bodies leave them undefined so the
+    // compare skips them (the probe only reports them for FOUND_BODIES).
+    found: navOut ? (foundCell.node ? (nameOf.get(foundCell.node) || '?obj') : '0')
+                  : undefined,
+    scCalls: navOut ? scCalls.length : undefined,
+    shCalls: navOut ? shCalls.length : undefined,
+    navState: navOut ? navState : undefined,
+    specialGoal: navOut ? (nameOf.get(pawn.SpecialGoal) || (pawn.SpecialGoal ? '?obj' : '0'))
+                        : undefined,
+    specialPause: navOut ? pawn.SpecialPause : undefined,
+    flags318: navOut ? pawn.Flags318 : undefined,
+  };
 }
 
 /* AI-pick twin (709 chain): direction/search/worker/exec bodies share the
@@ -1113,15 +1477,41 @@ function runJsPick(scene, mod = module) {
 // aiDirection returns the out pointer in eax — normalized to a nonzero flag
 // (the vecbuf compare carries the real fidelity check for those scenes).
 const PTR_RET_BODIES = new Set(['aiDirection']);
+// Bodies whose result slot (or &found cell) carries an actor pointer — the
+// probe reports the raw address; resolve it through the scene's address map.
+const FOUND_BODIES = new Set(['pathTowardWorker', 'findPathToward']);
 function normalizeProbe(r, isExec, body) {
+  const nameOf = new Map(Object.entries(r.addresses || {}).map(([n, a]) => [a, n]));
+  // Probe address fields are hex strings; the addresses map keys are ints.
+  const addr = s => {
+    const v = typeof s === 'string' ? parseInt(s, 16) : s;
+    return nameOf.get(v) || (v === 0 ? '0' : String(s));
+  };
+  const navBodies = FOUND_BODIES.has(body);
   return {
     // Exec natives write the verdict to *result; workers return it in eax.
-    ret: isExec ? parseInt(r.resultOut, 16)
+    // FindPathToward's result slot is an actor pointer, not a verdict int.
+    ret: body === 'findPathToward' ? addr(r.resultOut)
+        : isExec ? parseInt(r.resultOut, 16)
         : PTR_RET_BODIES.has(body) ? (r.returned !== 0 ? 1 : 0)
         : r.returned | 0,
+    found: navBodies ? addr(r.found) : undefined,
+    navState: navBodies
+      ? Object.fromEntries(Object.entries(r.navState).map(([n, s]) => [n, {
+          visitedWeight: s.visitedWeight, bestPathWeight: s.bestPathWeight,
+          nextOrdered: addr(s.nextOrdered), prevOrdered: addr(s.prevOrdered),
+          startPath: addr(s.startPath), previousPath: addr(s.previousPath),
+          cost: s.cost, extraCost: s.extraCost, flags448: parseInt(s.flags448, 16),
+        }]))
+      : undefined,
+    specialGoal: navBodies ? addr(r.pawnSpecial.specialGoal) : undefined,
+    specialPause: navBodies ? r.pawnSpecial.specialPause : undefined,
+    flags318: navBodies ? r.pawn.flags : undefined,
+    scCalls: navBodies ? r.counts.specialCost : undefined,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
     slc: r.counts.singleLineCheck,
+    fli: r.counts.fastLineCheck,
     frand: r.counts.frand,
     outBits: r.vecbuf.slice(0, 3),
     locationBits: r.pawn.locationBits,
@@ -1142,15 +1532,38 @@ function compare(name, o, j) {
     d.push(`${name}: location ${o.locationBits} != ${j.locationBits}`);
   if (j.velocityBits && o.velocityBits.join() !== j.velocityBits.join())
     d.push(`${name}: velocity ${o.velocityBits} != ${j.velocityBits}`);
+  if (j.found !== undefined && o.found !== j.found)
+    d.push(`${name}: found ${o.found} != ${j.found}`);
+  if (j.fli !== undefined && o.fli !== j.fli)
+    d.push(`${name}: fastLineCheck calls ${o.fli} != ${j.fli}`);
+  if (j.scCalls !== undefined && o.scCalls !== j.scCalls)
+    d.push(`${name}: specialCost calls ${o.scCalls} != ${j.scCalls}`);
+  if (j.specialGoal !== undefined && o.specialGoal !== j.specialGoal)
+    d.push(`${name}: specialGoal ${o.specialGoal} != ${j.specialGoal}`);
+  if (j.specialPause !== undefined && o.specialPause !== j.specialPause)
+    d.push(`${name}: specialPause ${o.specialPause} != ${j.specialPause}`);
+  if (j.flags318 !== undefined && (o.flags318 | 0) !== (j.flags318 | 0))
+    d.push(`${name}: flags318 ${(o.flags318 >>> 0).toString(16)} != ${(j.flags318 >>> 0).toString(16)}`);
+  if (j.navState && o.navState) {
+    for (const n of new Set([...Object.keys(o.navState), ...Object.keys(j.navState)])) {
+      const a = o.navState[n], b = j.navState[n];
+      if (!a || !b) { d.push(`${name}: navState ${n} missing`); continue; }
+      for (const k of Object.keys(b))
+        if (String(a[k]) !== String(b[k]))
+          d.push(`${name}: navState ${n}.${k} ${a[k]} != ${b[k]}`);
+    }
+  }
   return d;
 }
 
-const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec']);
+const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec', 'findPathToward']);
 const PICK_BODIES = new Set(['aiDirection', 'aiPickSearch', 'aiPickWorker', 'aiPickExec']);
+const GRAPH_BODIES = new Set(['reachMask', 'directReach', 'actorWorker',
+                              'pathTowardWorker', 'findPathToward']);
 const runFor = scene =>
   (PICK_BODIES.has(scene.body) ? runJsPick
    : scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
-   : scene.body === 'reachMask' || scene.body === 'directReach' || scene.body === 'actorWorker' || EXEC_BODIES.has(scene.body) ? runJsGraph
+   : GRAPH_BODIES.has(scene.body) || EXEC_BODIES.has(scene.body) ? runJsGraph
    : runJs);
 
 // ---------------------------------------------------------------------------
@@ -1260,13 +1673,17 @@ const MUTATIONS = [
   // Radius gate never rejects: the under-radius spec now reaches the SLC and
   // returns 1 instead of being filtered out.
   { name: 'dr-radius-gate',
-    pattern: 'if ((spec.radius | 0) < cri) continue;',
-    replacement: 'if ((spec.radius | 0) < 0) continue;',
+    // Unique via the ftoi comment; scoutD/BFS share the dims gate.
+    pattern: 'if ((spec.radius | 0) < cri) continue;                // spec+0x0c < ftoi(CR)',
+    replacement: 'if ((spec.radius | 0) < 0) continue;                // spec+0x0c < ftoi(CR)',
     expect: ['dr-radius'] },
   // The cannot-open-Mover continue becomes a hard accept.
   { name: 'dr-mover-gate',
-    pattern: 'if (!(f318 & 0x10000)) continue;',
-    replacement: 'if (!(f318 & 0x10000)) return 1;',
+    // Unique via the next line; scoutD repeats the same mover gate.
+    pattern: 'if (!(f318 & 0x10000)) continue;                    // !bCanOpenDoors\n'
+           + '        if (f318 & 0x2) return 1;',
+    replacement: 'if (!(f318 & 0x10000)) return 1;                      // !bCanOpenDoors\n'
+           + '        if (f318 & 0x2) return 1;',
     expect: ['dr-mover-blocked'] },
 
   // -- actorWorker (0x103c0630) mutants -------------------------------------

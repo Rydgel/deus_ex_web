@@ -197,16 +197,17 @@ export function reachMask(pawn, services) {
  * directReach worker 0x103dad20.
  *   int directReach(this=pawn; AActor* source; AActor* target)
  *
- * Scans `source`'s two NavigationPoint ReachSpec index arrays (+0x360 then
- * +0x3a0, 16 slots, -1 terminated) for a spec whose `end` (+0x08) is `target`
- * and that admits the pawn's dimensions/capabilities.  A qualifying spec is
- * confirmed by SingleLineCheck(source.loc -> target.loc, flags=6, zero extent):
- * a clear trace, or a non-Mover hit, or a Mover the pawn can open, returns 1.
+ * Scans `source`'s two outbound NavigationPoint ReachSpec index arrays
+ * (Paths +0x360 then PrunedPaths +0x3a0, 16 slots, -1 terminated) for a spec
+ * whose `end` (+0x08) is `target` and that admits the pawn's
+ * dimensions/capabilities.  A qualifying spec is confirmed by
+ * SingleLineCheck(source.loc -> target.loc, flags=6, zero extent): a clear
+ * trace, or a non-Mover hit, or a Mover the pawn can open, returns 1.
  * Only a Mover the pawn cannot open makes it advance to the next index.
  *
- * ReachSpec record (level +0x8c, 28-byte stride): +0x00 start, +0x04 distance,
- * +0x08 end, +0x0c collisionRadius(int), +0x10 collisionHeight(int),
- * +0x14 reachFlags, +0x18 pruned.
+ * ReachSpec record (level +0x8c, 28-byte stride): +0x00 distance,
+ * +0x04 start, +0x08 end, +0x0c collisionRadius(int), +0x10
+ * collisionHeight(int), +0x14 reachFlags, +0x18 pruned.
  */
 export function directReach(pawn, source, target, services) {
   const table = services.reachSpecTable(pawn);              // pawn->level +0x8c
@@ -215,7 +216,7 @@ export function directReach(pawn, source, target, services) {
   const f318 = rd(services, pawn, 'Flags318') >>> 0;
   const mask = reachMask(pawn, services);
   const end = services.location(target), start = services.location(source);
-  for (const arr of [services.paths(source), services.upstreamPaths(source)]) {
+  for (const arr of [services.paths(source), services.prunedPaths(source)]) {
     for (let i = 0; i < 16; i++) {                          // [ebp-0x14] < 0x10
       // Fixed 16-dword array; absent slots read as the -1 terminator.
       const idx = i < arr.length ? (arr[i] | 0) : -1;
@@ -751,7 +752,7 @@ export function actorReachable(pawn, target, services) {
         return ltU(x87add(x87mul(dx, dx), x87mul(dy, dy)), radiusSq);
       };
       let found = 0;                                        // [ebp+8]
-      const anchor = rd(services, pawn, 'Anchor');          // pawn+0x34c
+      const anchor = rd(services, pawn, 'MoveTarget');      // pawn+0x34c Anchor
       if (anchor && services.isA(anchor, 'NavPoint') && within(anchor)) {
         found = 1;                                          // 0x103bc35b
         if (anchor === t || directReach(pawn, anchor, t, services)) return 1;
@@ -981,4 +982,601 @@ export function execAiPickRandomDestination(receiver, args, dest, services) {
     args[4] | 0, f32(args[5]), args[6] | 0, f32(args[7]), sink, services);
   if (sink && !Array.isArray(dest)) dest.set(sink);
   return found;
+}
+
+// ---------------------------------------------------------------------------
+// FindPathToward — native 517 (exec 0x103bc9c0, worker 0x103db3f0).
+//
+// The worker keeps two sorted 32-slot candidate lists matching the native
+// { item[32], key[32], count } (0x108 bytes): the pawn-side list keyed by
+// int32 distSq to the pawn and the target-side list keyed by int32 distSq to
+// the target.  Path-node search state lives on the NavigationPoint objects:
+// visitedWeight +0x420, bestPathWeight +0x428, nextOrdered/prevOrdered
+// +0x430/+0x434 (open-list links), startPath +0x438, previousPath +0x43c
+// (route chain), cost +0x440, ExtraCost +0x444, and the +0x448 bool pack
+// (bPlayerOnly 0x1, bEndPoint 0x2, bEndPointOnly 0x4, bSpecialCost 0x8).
+// The route graph is the level ReachSpec table (+0x8c, 28-byte records:
+// +0x00 distance, +0x04 start, +0x08 end, +0x0c radius, +0x10 height,
+// +0x14 reachFlags, +0x18 pruned) indexed through the nodes' outbound
+// Paths +0x360 / PrunedPaths +0x3a0 and inbound upstreamPaths +0x320 arrays.
+// ---------------------------------------------------------------------------
+
+const wr = (services, obj, name, v) => services.write(obj, name, v);
+
+/** The native's 32-slot { item, key, count } candidate list. */
+const navList = () => ({ items: new Array(32).fill(null), keys: new Int32Array(32), count: 0 });
+
+/** int32 distSq key (0x10413652 __ftol of the 80-bit sum of squared f32 deltas). */
+const navDistSq = (a, b) => {
+  const dx = sub(ld(a[0]), ld(b[0])), dy = sub(ld(a[1]), ld(b[1])),
+        dz = sub(ld(a[2]), ld(b[2]));
+  return x87ftol(x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz)));
+};
+
+/**
+ * sortedInsert 0x103dd170 — insert before the first keys[i] >= key, shifting
+ * the tail right (keys round-trip through fild/ftol, identity for int32).
+ * Caps at 32 entries; the MSVC skip-ahead probes reduce to this linear scan.
+ */
+function navInsert(list, item, key) {
+  const n = list.count;
+  if (n >= 32) return;
+  let i = 0;
+  while (i < n && list.keys[i] < key) i++;
+  for (let j = n; j > i; j--) { list.items[j] = list.items[j - 1]; list.keys[j] = list.keys[j - 1]; }
+  list.items[i] = item;
+  list.keys[i] = key | 0;
+  list.count = n + 1;
+}
+
+/** listRemove 0x103dd2a0 — shift items/keys left from index i, count--. */
+function navRemove(list, i) {
+  for (let j = i + 1; j < list.count; j++) { list.items[j - 1] = list.items[j]; list.keys[j - 1] = list.keys[j]; }
+  list.count--;
+}
+
+/**
+ * routeReverse 0x103dd810 — in-place singly-linked reversal of the +0x43c
+ * previousPath chain.  After the call the pre-reverse tail is the head and
+ * tail.prevPath names the second hop.
+ */
+function navReverse(node, services) {
+  let prev = null, cur = node;
+  while (cur) {
+    const next = rd(services, cur, 'previousPath') ?? null;
+    wr(services, cur, 'previousPath', prev);
+    prev = cur;
+    cur = next;
+  }
+  return prev;
+}
+
+/**
+ * scoutA 0x103da210 — candidate-list builder (thiscall `this`=pawn-side
+ * list; args pawn, targetLoc, otherList, bClearPaths, anchorFlag*, seededFlag).
+ *
+ * The pawn's MoveTarget (+0x34c) seeds this->items[0] with key 0 when it is
+ * a NavigationPoint within |dz| < anchorCH + pawnCH and dx²+dy² < CR² (CR
+ * doubled for a bIsPlayer pawn whose anchor is an InventorySpot); the out
+ * anchor flag is set.  Then, when bClearPaths is set, every node in the
+ * level's nav list is reset: nextOrdered/prevOrdered cleared, +0x448 bit1
+ * (bEndPoint) cleared, visitedWeight = 10000000, cost = bSpecialCost(bit3)
+ * ? SpecialCost(pawn) : ExtraCost.  Finally each node within int32 distSq
+ * < 640000 (800²) of the pawn is sorted-inserted into `this` (unless the
+ * anchor already seeded it) and each node within 800 of the target into
+ * `other` (unless the caller pre-seeded it).
+ */
+function navScoutA(thisList, pawn, targetLoc, otherList, bClearPaths, state, services) {
+  const anchor = rd(services, pawn, 'MoveTarget');          // pawn+0x34c
+  if (anchor && services.isA(anchor, 'NavPoint')) {
+    const ploc = services.location(pawn), aloc = services.location(anchor);
+    const dz = sub(ld(aloc[2]), ld(ploc[2]));
+    const zGate = x87add(ld(rd(services, anchor, 'CollisionHeight')),
+                         ld(rd(services, pawn, 'CollisionHeight')));
+    const dx = sub(ld(aloc[0]), ld(ploc[0])), dy = sub(ld(aloc[1]), ld(ploc[1]));
+    const rSq = x87mul(ld(rd(services, pawn, 'CollisionRadius')),
+                       ld(rd(services, pawn, 'CollisionRadius')));
+    let radiusSq = rSq;                                     // [ebp-0x34]
+    const f318 = rd(services, pawn, 'Flags318') >>> 0;
+    if ((f318 & 0x2) && services.isA(anchor, 'InventorySpot')) {
+      const d = appSqrt(x87mul(rSq, ld(4.0)));              // CR*2 via sqrt(4r²)
+      radiusSq = x87mul(d, d);                              // (2*CR)², 80-bit
+    }
+    if (ltU(ltU(dz, D0) ? x87neg(dz) : dz, zGate) &&
+        ltU(x87add(x87mul(dx, dx), x87mul(dy, dy)), radiusSq)) {
+      thisList.items[0] = anchor;
+      thisList.keys[0] = 0;
+      thisList.count = 1;
+      state.anchor = 1;                                     // *[ebp+0x20]
+    }
+  }
+  const ploc = services.location(pawn);
+  for (let nav = services.navListHead(pawn); nav; nav = services.nextNav(nav)) {
+    if (bClearPaths) {                                      // 0x103da2f4 reset
+      wr(services, nav, 'nextOrdered', null);               // +0x430
+      wr(services, nav, 'prevOrdered', null);               // +0x434
+      wr(services, nav, 'bEndPoint', false);                // +0x448 &~ 2
+      wr(services, nav, 'visitedWeight', 10000000);         // +0x420
+      const cost = rd(services, nav, 'bSpecialCost')        // +0x448 & 8
+        ? services.specialCost(nav, pawn) | 0               // 0x10302af9 event
+        : rd(services, nav, 'ExtraCost') | 0;               // +0x444
+      wr(services, nav, 'cost', cost);                      // +0x440
+    }
+    if (!state.anchor) {                                    // this: pawn keys
+      const key = navDistSq(ploc, services.location(nav));
+      if (key < 640000) navInsert(thisList, nav, key);
+    }
+    if (!state.seeded) {                                    // other: target keys
+      const key = navDistSq(targetLoc, services.location(nav));
+      if (key < 640000) navInsert(otherList, nav, key);
+    }
+  }
+}
+
+/**
+ * scoutB 0x103da610 — head validator (thiscall list; args pawn, outFlag*).
+ *
+ * While items remain: items[0] must FastLineCheck to the pawn eye
+ * (loc.z + BaseEyeHeight) and pass pointWorker(pawn, loc, 1); failures are
+ * removed and the scan retries.  On the first passing node keys[0] becomes
+ * ftol(sqrt(keys[0])); when it is < max(ftol(CR),48) and |nav.z-pawn.z| < CH
+ * the out flag is set (the pawn is at the node), else the node is marked
+ * bEndPoint (+0x448|2) with bestPathWeight (+0x428) = keys[0].
+ */
+function navScoutB(list, pawn, outFlag, services) {
+  const model = services.model(services.level(pawn));
+  const ploc = services.location(pawn);
+  const eye = [ploc[0], ploc[1], st(x87add(ld(ploc[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
+  while (list.count > 0) {                                  // [ebp-0x14] > 0
+    const nav = list.items[0];
+    if (!services.fastLineCheck(model, services.location(nav), eye)) { navRemove(list, 0); continue; }
+    if (!pointWorker(pawn, services.location(nav), 1, services)) { navRemove(list, 0); continue; }
+    list.keys[0] = x87ftol(appSqrt(ld(list.keys[0])));      // sqrt distSq -> dist
+    const thresh = Math.max(x87ftol(ld(rd(services, pawn, 'CollisionRadius'))), 48);
+    const dz = sub(ld(services.location(nav)[2]), ld(ploc[2]));
+    if (list.keys[0] < thresh &&
+        ltU(ltU(dz, D0) ? x87neg(dz) : dz, ld(rd(services, pawn, 'CollisionHeight')))) {
+      outFlag.v = 1;                                        // *[ebp+0x10]
+      return 1;
+    }
+    wr(services, nav, 'bEndPoint', true);                   // +0x448 |= 2
+    wr(services, nav, 'bestPathWeight', list.keys[0]);      // +0x428
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * scoutC 0x103da880 — direct-hop test (thiscall list; args pawn, targetLoc).
+ *
+ * items[0] must sit within distSq < 640000 of the target and FastLineCheck
+ * to it; then FarMoveActor(pawn -> items[0], test=1, noCheck=0) is attempted
+ * and pointWorker(pawn, targetLoc, 0) decides success.  On success the pawn
+ * stays at items[0] (the caller restores it).  Failure collapses the list to
+ * count=1; only a pointWorker failure (after the test move landed) restores
+ * the pawn's original location first.
+ */
+function navScoutC(list, pawn, targetLoc, services) {
+  const origLoc = services.location(pawn).map(f32);         // [ebp-0x28..]
+  const nav = list.items[0];
+  const model = services.model(services.level(pawn));
+  const nloc = services.location(nav);
+  const dx = sub(ld(targetLoc[0]), ld(nloc[0])), dy = sub(ld(targetLoc[1]), ld(nloc[1])),
+        dz = sub(ld(targetLoc[2]), ld(nloc[2]));
+  const dSq = x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz));
+  // 0x103da907: distSq/FLC/farMove failures jump straight to count=1.
+  if (ltU(dSq, ld(640000.0)) &&                             // 0x103da8f6
+      services.fastLineCheck(model, nloc, targetLoc) &&
+      services.farMoveActor(pawn, nloc.map(f32), 1, 0)) {   // 0x103da949
+    if (pointWorker(pawn, targetLoc, 0, services)) return 1; // 0x103da983
+    services.farMoveActor(pawn, origLoc, 1, 1);             // 0x103da9b5-0x103da9d4
+  }
+  list.count = 1;                                           // [ebx+0x100] = 1
+  return 0;                                                 // 0x103da9dd
+}
+
+/**
+ * scoutD 0x103daaa0 — endpoint marker (thiscall list; arg pawn).
+ *
+ * items[0].cost is pinned to 1000000, then items[0]'s outbound spec arrays
+ * (Paths +0x360, then PrunedPaths +0x3a0) are scanned: specs with
+ * radius >= ftol(CR), height >= ftol(CH), and (reachFlags & mask) ==
+ * reachFlags are edge-tested by SingleLineCheck(spec.start.loc ->
+ * spec.end.loc, flags=6).  A blocking Mover vetoes unless the pawn has
+ * bCanOpenDoors (0x10000) and is either bIsPlayer (0x2) or the mover lacks
+ * bPlayerOnly (+0x4ec bit3).  Each passing spec.end is flagged bEndPoint
+ * (+0x448|2) with bestPathWeight (+0x428) = spec.distance.
+ */
+function navScoutD(list, pawn, services) {
+  const head = list.items[0];
+  wr(services, head, 'cost', 1000000);                      // +0x440 = 0xf4240
+  const cri = x87ftol(ld(rd(services, pawn, 'CollisionRadius')));
+  const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight')));
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  const mask = reachMask(pawn, services);
+  const table = services.reachSpecTable(pawn);
+  for (const arr of [services.paths(head), services.prunedPaths(head)]) {
+    for (let i = 0; i < 16; i++) {                          // [ebp-0x14] < 0x10
+      const idx = i < arr.length ? (arr[i] | 0) : -1;
+      if (idx === -1) break;                                // -1 terminator
+      const spec = table[idx];
+      if (!spec) continue;
+      if ((spec.radius | 0) < cri) continue;                // spec+0x0c
+      if ((spec.height | 0) < chi) continue;                // spec+0x10
+      if (((spec.reachFlags | 0) & mask) !== (spec.reachFlags | 0)) continue;
+      const hit = services.singleLineCheck(pawn, services.location(spec.end),
+        services.location(spec.start), 6, [0, 0, 0], 0);    // 0x103dadf2
+      if (hit.actor && services.isA(hit.actor, 'Mover')) {
+        if (!(f318 & 0x10000)) continue;                    // !bCanOpenDoors
+        if (!(f318 & 0x2) && (rd(services, hit.actor, 'Flags4ec') & 8)) continue;
+      }
+      wr(services, spec.end, 'bEndPoint', true);            // end+0x448 |= 2
+      wr(services, spec.end, 'bestPathWeight', spec.distance | 0); // end+0x428
+    }
+  }
+}
+
+/**
+ * scoutE 0x103db0e0 — post-BFS candidate refinement (thiscall pawn-side
+ * list; args pawn, foundPtr*).
+ *
+ * routeW = items[0].visitedWeight + keys[0].  Candidates i=1..count whose
+ * w = cand.visitedWeight + ftol(sqrt(keys[i])) satisfy w < routeW and
+ * |cand.z - pawn.z| < 120 pass unconditionally when the direction dot
+ * (cand.loc-pawn.loc)·(found.loc-pawn.loc) < 0; otherwise they need
+ * w < max(ftol(routeW*0.85), routeW-150).  Of the passing set, the LAST
+ * candidate that FastLineChecks to the pawn eye and passes pointWorker
+ * becomes *foundPtr.
+ */
+function navScoutE(list, pawn, foundPtr, services) {
+  const model = services.model(services.level(pawn));
+  const ploc = services.location(pawn);
+  const floc = services.location(foundPtr.node);            // *[ebp+0x10]
+  const routeW = (rd(services, list.items[0], 'visitedWeight') | 0) + (list.keys[0] | 0);
+  const eye = [ploc[0], ploc[1], st(x87add(ld(ploc[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
+  const dirx = sub(ld(floc[0]), ld(ploc[0])), diry = sub(ld(floc[1]), ld(ploc[1])),
+        dirz = sub(ld(floc[2]), ld(ploc[2]));
+  const capA = x87ftol(x87mul(ld(routeW), ld(0.85)));       // 0x1042ac10-era const
+  const capB = (routeW - 150) | 0;
+  const cap = Math.max(capA, capB);
+  const passing = navList();
+  for (let i = 1; i < list.count; i++) {                    // [ebp-0x18] = 1..
+    const cand = list.items[i];
+    const cloc = services.location(cand);
+    const w = (rd(services, cand, 'visitedWeight') | 0) +
+             x87ftol(appSqrt(ld(list.keys[i])));
+    if (w >= routeW) continue;                              // 0x103db1d4
+    const dz = sub(ld(cloc[2]), ld(ploc[2]));
+    if (geU(ltU(dz, D0) ? x87neg(dz) : dz, ld(120.0))) continue; // 0x103db203
+    const dot = x87add(x87add(x87mul(sub(ld(cloc[0]), ld(ploc[0])), dirx),
+                              x87mul(sub(ld(cloc[1]), ld(ploc[1])), diry)),
+                              x87mul(sub(ld(cloc[2]), ld(ploc[2])), dirz));
+    if (geU(dot, D0) && w >= cap) continue;                 // 0x103db268
+    navInsert(passing, cand, w);                            // sub-list
+  }
+  for (let i = 0; i < passing.count; i++) {                 // last passing wins
+    const cand = passing.items[i];
+    const cloc = services.location(cand);
+    if (!services.fastLineCheck(model, cloc, eye)) continue;
+    if (!pointWorker(pawn, cloc, 1, services)) continue;
+    foundPtr.node = cand;                                   // *[ebp+0x10]
+  }
+}
+
+/**
+ * BFS 0x103dcd60 — lazy-sorted Dijkstra over upstreamPaths (thiscall pawn;
+ * args startNode, foundPtr*, bSinglePath, reachMask).
+ *
+ * The open list is the nav objects' nextOrdered/prevOrdered chain sorted by
+ * visitedWeight; `head` advances lazily at ftol(nIns*0.5) steps.  Each pop
+ * relaxes the node's inbound specs (upstreamPaths +0x320): spec.radius >=
+ * ftol(CR), spec.height >= ftol(CH), (reachFlags & mask) == reachFlags, and
+ * the relaxed candidate spec.start gains
+ *   newCost = cur.visitedWeight + spec.distance + cand.cost
+ *             + (cand.bEndPoint ? cand.bestPathWeight : 0)
+ * only on strict improvement over its current visitedWeight, re-linking it
+ * into the sorted open list and pointing cand.previousPath at cur.  A popped
+ * bEndPoint node wins: start.previousPath is nulled and *foundPtr = node.
+ * Caps: bSinglePath aborts after 4 pops, 1000 pops total, 500 insert steps.
+ */
+function navSearchBFS(pawn, start, foundPtr, bSinglePath, mask, services) {
+  const cri = x87ftol(ld(rd(services, pawn, 'CollisionRadius')));
+  const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight')));
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  const table = services.reachSpecTable(pawn);
+  let head = start;                                         // ebx
+  let nIns = 1;                                             // [ebp-0x14]
+  let advanced = 0;                                         // [ebp-0x20]
+  let pops = 0;                                             // [ebp-0x24]
+  for (let cur = start; cur; cur = rd(services, cur, 'nextOrdered') ?? null) {
+    if (rd(services, cur, 'bEndPoint')) {                   // +0x448 & 2
+      wr(services, start, 'previousPath', null);            // start+0x43c = 0
+      foundPtr.node = cur;                                  // *found = endpoint
+      return 1;
+    }
+    const skipNode = rd(services, cur, 'bPlayerOnly') && !(f318 & 0x2) && cur !== start;
+    if (!skipNode) {                                        // 0x103dce0a
+      const upstream = services.upstreamPaths(cur);         // +0x320 inbound
+      for (let i = 0; i < 16; i++) {
+        const idx = i < upstream.length ? (upstream[i] | 0) : -1;
+        if (idx === -1) break;
+        const spec = table[idx];
+        if (!spec) continue;
+        if ((spec.radius | 0) < cri) continue;
+        if ((spec.height | 0) < chi) continue;
+        if (((spec.reachFlags | 0) & mask) !== (spec.reachFlags | 0)) continue;
+        const cand = spec.start;                            // spec+0x04
+        const newCost = ((rd(services, cur, 'visitedWeight') | 0) +
+                         (spec.distance | 0) + (rd(services, cand, 'cost') | 0) +
+                         (rd(services, cand, 'bEndPoint')
+                           ? (rd(services, cand, 'bestPathWeight') | 0) : 0)) | 0;
+        if ((rd(services, cand, 'visitedWeight') | 0) <= newCost) continue; // no improvement
+        // Unlink the candidate from the open list when it is already linked.
+        if (rd(services, cand, 'prevOrdered')) {
+          const p = rd(services, cand, 'prevOrdered'), n = rd(services, cand, 'nextOrdered');
+          wr(services, p, 'nextOrdered', n);
+          if (n) wr(services, n, 'prevOrdered', p);
+          if (head === cand) {
+            if ((rd(services, p, 'visitedWeight') | 0) > newCost) head = p;
+          } else if ((rd(services, cand, 'visitedWeight') | 0) > (rd(services, head, 'visitedWeight') | 0) &&
+                     newCost < (rd(services, head, 'visitedWeight') | 0)) {
+            nIns--;
+          }
+        } else if (newCost <= (rd(services, head, 'visitedWeight') | 0)) {
+          nIns++;
+        }
+        wr(services, cand, 'previousPath', cur);            // cand+0x43c = cur
+        wr(services, cand, 'visitedWeight', newCost);       // cand+0x420
+        // Sorted reinsertion after pos = (head.vW < newCost) ? head : cur.
+        let pos = (rd(services, head, 'visitedWeight') | 0) < newCost ? head : cur;
+        let walk = 0, nxt;
+        while ((nxt = rd(services, pos, 'nextOrdered') ?? null) &&
+               (rd(services, nxt, 'visitedWeight') | 0) < newCost) {
+          pos = nxt;
+          if (++walk > 500) return 0;                       // 0x103dd034 assert
+        }
+        if (nxt !== cand) {
+          const after = rd(services, pos, 'nextOrdered') ?? null;
+          wr(services, cand, 'nextOrdered', after);
+          wr(services, cand, 'prevOrdered', pos);
+          wr(services, pos, 'nextOrdered', cand);
+          if (after) wr(services, after, 'prevOrdered', cand);
+        }
+      }
+      // Lazy head advance at ftol(nIns*0.5) steps (0x103dcfd2-0x103dcfff).
+      nIns++;
+      const capN = x87ftol(x87mul(ld(nIns), D05));
+      while (advanced < capN) {
+        advanced++;
+        const n = rd(services, head, 'nextOrdered') ?? null;
+        if (n) head = n;
+      }
+    }
+    pops++;
+    if (bSinglePath && pops > 4) return 0;                  // 0x103dd01c
+    if (pops > 1000) return 0;                              // 0x103dd02a cap
+  }
+  return 0;
+}
+
+/**
+ * Worker 0x103db3f0 — thiscall(pawn; AActor* target, int bSinglePath,
+ * ANavigationPoint** found, int bClearPaths).
+ *
+ * Entry: *found = 0; a null target, missing nav list (LevelInfo+0x548), or
+ * an empty ReachSpec table (level+0x90) fails immediately.  A non-falling
+ * pawn chasing a falling pawn (target IsA Pawn && target.Physics == 2)
+ * delegates to the findPathTo worker through landPredict — an unported
+ * boundary here.
+ *
+ * The two candidate lists: `this` (pawn-side keys) and `other` (target-side
+ * keys).  A NavigationPoint target pre-seeds `other`.  scoutA collects;
+ * empty lists fail.  The pawn-side head is validated by scoutB (unless the
+ * anchor seeded it); a direct target hop succeeds through directReach
+ * (navpoint targets) or scoutC; otherwise scoutD marks the pawn head's
+ * outbound neighbors as endpoints and BFS-1 runs from the target anchor
+ * (scanned by FastLineCheck + farMove + actorWorker, or bHunting fallback).
+ * scoutE may refine the result over pawn-side candidates.  When no target
+ * anchor was reachable, pass 2 re-collects, scoutD marks the target head's
+ * outbound neighbors, scoutB validates, BFS-2 runs from the pawn anchor,
+ * the route chain is reversed, and a second-hop FLC+pointWorker check may
+ * return the hop after the pawn's anchor.
+ */
+export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, services) {
+  found.node = null;                                        // *[ebp+0x10] = 0
+  if (!target) return 0;
+  const level = services.level(pawn);
+  if (!services.navListHead(pawn)) return 0;                // LevelInfo+0x548
+  if (!(services.reachSpecTable(pawn)?.length > 0)) return 0; // level+0x90
+
+  const pawnPhys = rd(services, pawn, 'Physics') | 0;       // pawn+0x30
+  if (pawnPhys !== 4 && services.isA(target, 'Pawn') &&
+      (rd(services, target, 'Physics') | 0) === 2) {        // PHYS_Falling
+    // 0x10303972: landPredict -> findPathTo worker (0x103dc1d0).
+    if (typeof services.landPredict !== 'function' ||
+        typeof services.findPathToWorker !== 'function')
+      throw new Error('FindPathToward falling-pawn delegation is unported (0x103c2530/0x103dc1d0)');
+    const out = [0, 0, 0];
+    services.landPredict(target, services.velocity(target), out);
+    return services.findPathToWorker(pawn, out, bSinglePath, found, bClearPaths);
+  }
+
+  const origLoc = services.location(pawn).map(f32);         // [ebp-0x20..]
+  const targetLoc = services.location(target);              // ebx = &target.loc
+  const model = services.model(level);
+  const listP = navList();                                  // [ebp-0x24c] pawn side
+  const listT = navList();                                  // [ebp-0x144] target side
+  const state = { anchor: 0, seeded: 0 };                   // [ebp-0x24]/[ebp-0x14]
+  if (services.isA(target, 'NavPoint')) {                   // chain 0x1057a128
+    listT.items[0] = target; listT.keys[0] = 0; listT.count = 1;
+    state.seeded = 1;
+  }
+  navScoutA(listP, pawn, targetLoc, listT, bClearPaths, state, services);
+  if (listP.count === 0) return 0;                          // [ebp-0x14c]==0
+  if (listT.count === 0) return 0;                          // [ebp-0x44]==0
+
+  const fail = () => { services.farMoveActor(pawn, origLoc, 1, 1); return 0; };
+
+  if (!state.anchor) {                                      // [ebp-0x24]==0
+    const flag = { v: 0 };
+    if (!navScoutB(listP, pawn, flag, services)) return fail();
+    state.anchor = flag.v;
+  }
+  if (state.anchor) {                                       // 0x103db642 else ->0x103db72e
+    // Direct-target block (0x103db648): navpoint targets try directReach on
+    // the pawn-side head first; scoutC is the hop fallback for every kind.
+    if (services.isA(target, 'NavPoint') &&
+        directReach(pawn, listP.items[0], target, services)) {
+      found.node = target;
+      services.farMoveActor(pawn, origLoc, 1, 1);
+      return 1;
+    }
+    if (navScoutC(listP, pawn, targetLoc, services)) {
+      found.node = services.isA(target, 'NavPoint') ? target : listP.items[0];
+      services.farMoveActor(pawn, origLoc, 1, 1);
+      return 1;
+    }
+    navScoutD(listP, pawn, services);                       // 0x103db722 endpoints
+  }
+
+  // Target-anchor scan (0x103db733) over the target-side candidates.
+  if (!state.seeded) {
+    for (let i = 0; i < listT.count; i++) {
+      const item = listT.items[i], iloc = services.location(item);
+      if (!services.fastLineCheck(model, iloc, targetLoc)) continue;
+      if (!services.farMoveActor(pawn, iloc.map(f32), 1, 0)) continue;
+      if (!actorWorker(pawn, target, 1, services)) continue;
+      state.seeded = 1;                                     // [ebp-0x14] = 1
+      listT.items[0] = item;
+      listT.keys[0] = x87ftol(appSqrt(ld(listT.keys[i])));
+      break;
+    }
+    const f318 = rd(services, pawn, 'Flags318') >>> 0;
+    if (!state.seeded && (f318 & 0x200000)) state.seeded = 1; // bHunting
+  }
+
+  // BFS-1 (0x103db857): from the target-side head back over upstream paths.
+  wr(services, listT.items[0], 'visitedWeight', listT.keys[0]);
+  const bfsOut = { node: null };                            // [ebp+8]
+  const mask = reachMask(pawn, services);
+  if (navSearchBFS(pawn, listT.items[0], bfsOut, bSinglePath, mask, services)) {
+    found.node = bfsOut.node;
+    services.farMoveActor(pawn, origLoc, 1, 1);             // 0x103db892 restore
+    if (!state.anchor && !bSinglePath)                      // [ebp-0x24]==0
+      navScoutE(listP, pawn, found, services);              // 0x103018cf
+    return 1;
+  }
+  if (state.seeded) return fail();                          // 0x103db8f6
+
+  // Pass 2 (0x103db901): no target anchor — re-collect, mark the target
+  // head's outbound neighbors, validate it, and search from the pawn head.
+  navScoutA(listP, pawn, targetLoc, listT, bClearPaths, state, services);
+  navScoutD(listT, pawn, services);
+  if (!state.seeded) {
+    const flag = { v: 0 };
+    if (!navScoutB(listT, pawn, flag, services)) return fail();
+    state.seeded = flag.v;
+  }
+  wr(services, listP.items[0], 'visitedWeight', listP.keys[0]);
+  const bfs2 = { node: null };                              // [ebp+0x14]
+  if (!navSearchBFS(pawn, listP.items[0], bfs2, bSinglePath, mask, services)) return fail();
+  services.farMoveActor(pawn, origLoc, 1, 1);               // 0x103db9a1 restore
+
+  // 0x103db9ca-0x103dba34: fail when |target->found|² > |target->pawn|² —
+  // the route must land closer to the target than the pawn already is.
+  const fl = services.location(bfs2.node), pl = services.location(pawn);
+  const tfx = sub(ld(targetLoc[0]), ld(fl[0])), tfy = sub(ld(targetLoc[1]), ld(fl[1])),
+        tfz = sub(ld(targetLoc[2]), ld(fl[2]));
+  const tfSq = x87add(x87add(x87mul(tfx, tfx), x87mul(tfy, tfy)), x87mul(tfz, tfz));
+  const tpx = sub(ld(targetLoc[0]), ld(pl[0])), tpy = sub(ld(targetLoc[1]), ld(pl[1])),
+        tpz = sub(ld(targetLoc[2]), ld(pl[2]));
+  // fst [ebp+0xc]/fmul [ebp+0xc]: the x-delta squares against its f32 store.
+  const tpSq = x87add(x87add(x87mul(tpx, ld(st(tpx))), x87mul(tpy, tpy)), x87mul(tpz, tpz));
+  if (gtU(tfSq, tpSq)) return 0;                            // 0x103dbc14 no restore
+
+  found.node = bfs2.node;                                   // *found = chain head
+  let tail = bfs2.node;
+  while (rd(services, tail, 'previousPath')) tail = rd(services, tail, 'previousPath');
+  navReverse(bfs2.node, services);                          // 0x10302ffe
+  found.node = tail;                                        // pre-reverse tail
+  const hop2 = rd(services, tail, 'previousPath') ?? null;  // [ebp+0xc]
+  if (hop2) {
+    const dz = sub(ld(services.location(tail)[2]), ld(pl[2]));
+    const near = ltU(ltU(dz, D0) ? x87neg(dz) : dz, ld(120.0));
+    if ((state.anchor && listP.items[0] === tail) || near) {
+      const eye = [pl[0], pl[1], st(x87add(ld(pl[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
+      const hloc = services.location(hop2);
+      if (services.fastLineCheck(model, hloc, eye) &&
+          pointWorker(pawn, hloc, 1, services)) {
+        found.node = hop2;
+        services.farMoveActor(pawn, origLoc, 1, 1);         // 0x103dbb56
+        return 1;
+      }
+    }
+    return 1;                                               // 0x103dbba3
+  }
+  if (state.anchor && tail === listP.items[0]) return 0;    // 0x103dbba1
+  return 1;                                                 // 0x103dbba3
+}
+
+/**
+ * tailSet 0x103c5de0 — SpecialHandling follow-up (thiscall pawn; &result).
+ *
+ * Dispatches the result node's SpecialHandling event with the pawn as the
+ * argument; the returned actor replaces *result.  A null/unchanged goal,
+ * a pawn without bCanDoSpecial (0x20000), or an unreachable goal exits.
+ * A reachable goal that itself probes SpecialHandling is dispatched once
+ * more; a distinct reachable second goal replaces *result.  When the goal
+ * is not directly reachable the worker re-paths toward it (bClearPaths=1)
+ * and a successful, distinct result replaces *result while the pawn keeps
+ * the goal as SpecialGoal (+0x45c).
+ */
+function navTailSet(pawn, result, services) {
+  const origFound = result.node;                            // [ebp+8] save
+  let goal = services.specialHandling(result.node, pawn);   // SpecialHandling event
+  result.node = goal;                                       // [esi] = goal
+  if (!goal || goal === origFound) return;
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  if (!(f318 & 0x20000)) return;                            // !bCanDoSpecial
+  wr(services, pawn, 'SpecialGoal', goal);                  // pawn+0x45c
+  if (!actorWorker(pawn, goal, 0, services)) {              // 0x103024be
+    const repath = { node: null };
+    if (!pathTowardWorker(pawn, goal, 0, repath, 1, services)) return;
+    if (repath.node === origFound) return;
+    wr(services, pawn, 'SpecialGoal', result.node);         // = goal
+    result.node = repath.node;
+    return;
+  }
+  if (!services.isProbing(result.node, 'SpecialHandling')) return; // 0x15a
+  const goal2 = services.specialHandling(result.node, pawn);
+  if (!goal2 || goal2 === result.node || result.node === origFound) return;
+  if (!actorWorker(pawn, goal2, 0, services)) return;
+  result.node = goal2;
+}
+
+/**
+ * execFindPathToward 0x103bc9c0 — native(517).
+ *   (AActor* target, optional int bSinglePath /*=0*\/, optional int bClearPaths /*=1*\/)
+ *
+ * Evaluates the three parameters (bSinglePath default 0, bClearPaths
+ * default 1) and calls the worker.  The post-worker tail clears
+ * bShootSpecial (+0x318 &~ 0x2000000) and SpecialPause (+0x460 = 0)
+ * unconditionally; a nonnull result that probes SpecialHandling (0x15a)
+ * runs tailSet, and a result equal to SpecialGoal clears it.
+ * Returns the found Actor (or null), matching the native's result slot.
+ */
+export function execFindPathToward(pawn, target, bSinglePath, bClearPaths, services) {
+  if (!target) return null;                                 // 0x103bca3a
+  const found = { node: null };                             // [ebp-0x10]
+  const result = { node: null };                            // [ebp+8] result slot
+  if (pathTowardWorker(pawn, target, bSinglePath | 0, found, bClearPaths | 0, services))
+    result.node = found.node;                               // 0x103bca8f
+  const f318 = rd(services, pawn, 'Flags318') >>> 0;
+  wr(services, pawn, 'Flags318', (f318 & ~0x2000000) >>> 0); // clear bShootSpecial
+  wr(services, pawn, 'SpecialPause', 0);                    // pawn+0x460 = 0
+  if (result.node && services.isProbing(result.node, 'SpecialHandling'))
+    navTailSet(pawn, result, services);                     // 0x1030216c
+  if (result.node === rd(services, pawn, 'SpecialGoal'))
+    wr(services, pawn, 'SpecialGoal', null);                // pawn+0x45c = 0
+  return result.node;
 }

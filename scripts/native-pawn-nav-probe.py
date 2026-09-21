@@ -79,6 +79,7 @@ BODIES = {
     'FindPathTo': 0x103bc800,          # native 518 exec
     'pathToWorker': 0x103dc1d0,
     'FindPathToward': 0x103bc9c0,      # native 517 exec
+    'findPathToward': 0x103bc9c0,
     'pathTowardWorker': 0x103db3f0,
     'PickWallAdjust': 0x103bb7e0,      # native 526 exec
     'wallAdjustWorker': 0x103c4150,
@@ -98,6 +99,7 @@ APPFRAND_IAT = 0x10599cb8
 # Command-capture boundaries patched in place at their thunk VAs.
 POINTREGION_THUNK = 0x1030391d   # -> UModel::PointRegion 0x103f5db0
 FASTLINE_THUNK = 0x10301a37      # -> UModel::FastLineCheck(end,start)
+SPECIALCOST_THUNK = 0x10302af9   # -> SpecialCost event dispatch 0x1033bb50
 EH_PROLOG = 0x104134d0           # __CxxFrameHandler helper — unreachable on clean paths.
 
 # Fixed original globals.
@@ -134,6 +136,7 @@ MAIL_SL = 0x1ff00180   # SingleLineCheck header
 MAIL_PR = 0x1ff00280   # PointRegion    header
 MAIL_FL = 0x1ff00300   # FastLineCheck  header
 MAIL_FR = 0x1ff00380   # appFrand       header (scripted float queue)
+MAIL_SC = 0x1ff00400   # SpecialCost    header (scripted int queue)
 
 # Deep enough that a ~100-step reach loop can't exhaust a scripted boundary
 # (each list is padded by repeating its last entry to this depth).
@@ -369,6 +372,28 @@ def isa_stub():
         'b801000000', 'c20400')
 
 
+def specialcost_stub(mail, recs):
+    """NavigationPoint.SpecialCost dispatch stub (thunk 0x10302af9 ->
+    0x1033bb50 FindFunction+ProcessEvent).  thiscall ecx=nav; stack:
+    [ret][pawn] -> ret 4.  eax = scripted int, args recorded like the other
+    boundary stubs."""
+    mc, mi, mb = mail, mail + 4, mail + 8
+    return hx(
+        '53',
+        '8b1d', struct.pack('<I', mc).hex(),
+        'c1e305',
+        '81c3', struct.pack('<I', recs).hex(),
+        '890b',                                     # nav (ecx)
+        '8b442408', '894304',                       # pawn arg
+        'ff05', struct.pack('<I', mc).hex(),
+        '8b1d', struct.pack('<I', mi).hex(),
+        '8b0d', struct.pack('<I', mb).hex(),
+        '8b0499',                                   # eax = [ecx+ebx*4]
+        'ff05', struct.pack('<I', mi).hex(),
+        '5b',
+        'c20400')
+
+
 def frand_stub():
     """appFrand record stub (patched over the Core IAT slot).  st0 = the next
     scripted f64 from the queue; the mailbox keeps count/index/base like the
@@ -543,6 +568,7 @@ class NavProbe:
         self.rec_sl = self.alloc(64 * RESULT_DEPTH)
         self.rec_pr = self.alloc(32 * RESULT_DEPTH)
         self.rec_fl = self.alloc(32 * RESULT_DEPTH)
+        self.rec_sc = self.alloc(32 * RESULT_DEPTH)
         # Boundary stub addresses -> op name, so the code hook can log which
         # call site (the return address at [esp] on stub entry) invoked each.
         self.stub_entry = {}
@@ -555,7 +581,8 @@ class NavProbe:
             self.stub_entry[addr] = op
         for op, thunk, builder in [
                 ('pointRegion', POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr)),
-                ('fastLineCheck', FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl))]:
+                ('fastLineCheck', FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl)),
+                ('specialCost', SPECIALCOST_THUNK, specialcost_stub(MAIL_SC, self.rec_sc))]:
             cpu.mem_write(thunk, builder)
             self.stub_entry[thunk] = op
         self.callsite_log = []
@@ -565,7 +592,7 @@ class NavProbe:
         self.fail_body = exports['core.dll'].get('?appFailAssert@@YAXPBD0H@Z')
         self.unwind_body = exports['core.dll'].get('?appUnwindf@@YAXPBGZZ')
         self.warnf_body = exports['core.dll'].get('?appWarnf@@YAXPBGZZ')
-        self.probing_body = exports['core.dll'].get('?IsProbing@UObject@@QBEHVName@@@Z')
+        self.probing_body = exports['core.dll'].get('?IsProbing@UObject@@QAEHVFName@@@Z')
         if self.isa_body:
             cpu.mem_write(self.isa_body, isa_stub())
         self.missed_oracles = []
@@ -742,9 +769,17 @@ class NavProbe:
                 self.write(obj + off, 'f', spec[key])
         for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
                          ('flags28', 0x28), ('field444', 0x444), ('field4ec', 0x4ec),
-                         ('physics', 0x30)]:
+                         ('physics', 0x30),
+                         # NavigationPoint path-search state: +0x448 packs
+                         # bPlayerOnly(1)/bEndPoint(2)/bEndPointOnly(4)/
+                         # bSpecialCost(8)/bOneWayPath(0x10).
+                         ('visitedWeight', 0x420), ('bestPathWeight', 0x428),
+                         ('cost', 0x440), ('extraCost', 0x444), ('flags448', 0x448)]:
             if key in spec:
                 self.write(obj + off, 'I', spec[key])
+        for key, off in [('specialPause', 0x460)]:
+            if key in spec:
+                self.write(obj + off, 'f', spec[key])
         # Byte-sized fields (walkReach reads the +0xd0 collide flag as a byte).
         for key, off in [('collideFlag', 0xd0)]:
             if key in spec:
@@ -752,15 +787,25 @@ class NavProbe:
         for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
                          ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
                          ('weapon', 0x3d0), ('field398', 0x398),
-                         ('markedWarpZone', 0x44c)]:
+                         ('markedWarpZone', 0x44c),
+                         # NavigationPoint path-search links + Pawn special nav.
+                         ('nextOrdered', 0x430), ('prevOrdered', 0x434),
+                         ('startPath', 0x438), ('previousPath', 0x43c),
+                         ('specialGoal', 0x45c)]:
             ref = spec.get(key)
-            if ref is not None:
-                self.write(obj + off, 'I', refs.get(ref, ref) if isinstance(ref, str) else ref)
+            # String refs resolve only when the target already exists; the
+            # second pass (run() below) fills in forward references.
+            if isinstance(ref, str):
+                if ref in refs:
+                    self.write(obj + off, 'I', refs[ref])
+            elif ref is not None:
+                self.write(obj + off, 'I', ref)
         return obj
 
-    def level(self, spec, actor_list, reach_specs, nav_list_head):
+    def level(self, spec, actor_list, reach_specs):
         """ULevel: +0 vtable, +0x2c Actors.Data, +0x30 Actors.Num, +0x8c
-        ReachSpec TArray data, +0x90 nav-list head, +0x98 Model."""
+        ReachSpec TArray data, +0x90 ReachSpec TArray Num, +0x98 Model.
+        The nav-list head lives on LevelInfo (+0x548), not here."""
         lvl = self.alloc(0x600)
         self.write(lvl, 'I', self.vtable)
         actors = self.alloc(4 * max(1, len(actor_list)))
@@ -769,20 +814,21 @@ class NavProbe:
         self.write(lvl + 0x2c, 'I', actors)
         self.write(lvl + 0x30, 'I', len(actor_list))
         # ReachSpec TArray: contiguous 28-byte records
-        # {+0:start,+4:distance,+8:end,+0xc:radius,+0x10:height,+0x14:flags,+0x18:pruned}
+        # {+0:distance,+4:start,+8:end,+0xc:radius,+0x10:height,+0x14:flags,+0x18:pruned}
         if reach_specs:
             mem = self.alloc(28 * len(reach_specs))
             for i, s in enumerate(reach_specs):
                 o = mem + i * 28
-                self.write(o + 0x00, 'I', s.get('start', 0))
-                self.write(o + 0x04, 'I', s.get('distance', 0))
+                self.write(o + 0x00, 'I', s.get('distance', 0))
+                self.write(o + 0x04, 'I', s.get('start', 0))
                 self.write(o + 0x08, 'I', s.get('end', 0))
                 self.write(o + 0x0c, 'I', s.get('radius', 0))
                 self.write(o + 0x10, 'I', s.get('height', 0))
                 self.write(o + 0x14, 'I', s.get('flags', 0))
                 self.write(o + 0x18, 'I', s.get('pruned', 0))
             self.write(lvl + 0x8c, 'I', mem)
-        self.write(lvl + 0x90, 'I', nav_list_head)
+        self.write(lvl + 0x90, 'I', len(reach_specs))   # ReachSpecs.Num
+        self.write(lvl + 0x94, 'I', len(reach_specs))   # ReachSpecs.Max
         model = self.alloc(0x40)
         self.write(lvl + 0x98, 'I', model)
         return lvl, model
@@ -794,7 +840,7 @@ class NavProbe:
         # vtable/stub/record-buffer allocations) so batches stay bounded.
         self.free = self.heap_mark
         self.callsite_log = []
-        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR):
+        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR, MAIL_SC):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
         self.probing_results = scene.get('probing', [])
@@ -838,6 +884,13 @@ class NavProbe:
         for i, v in enumerate(fr):
             self.write(fr_mem + i * 8, 'd', v)
         self.write(MAIL_FR + 8, 'I', fr_mem)
+        # Scripted NavigationPoint.SpecialCost returns (int each) for
+        # bSpecialCost nodes reset inside scoutA.
+        sc = pad(scene.get('specialCost', []), 0)
+        sc_mem = self.alloc(4 * len(sc))
+        for i, v in enumerate(sc):
+            self.write(sc_mem + i * 4, 'i', v)
+        self.write(MAIL_SC + 8, 'I', sc_mem)
 
         # Zones (built before actors so region fields can reference them).
         zones = {name: self.zone(spec) for name, spec in scene.get('zones', {}).items()}
@@ -853,18 +906,24 @@ class NavProbe:
             self.write(pr_mem + i * 12, '3I', zref, r.get('leaf', 0), r.get('zoneNumber', 0))
         self.write(MAIL_PR + 8, 'I', pr_mem)
         actors = {}
-        # Navigation points get their Paths[]/upstreamPaths[] arrays.
+        # Navigation points get their spec index arrays: upstreamPaths
+        # +0x320 (inbound, spec.end==node), Paths +0x360 and PrunedPaths
+        # +0x3a0 (outbound, spec.start==node), VisNoReachPaths +0x3e0.
+        # Each is 16 dwords, -1 terminated.
         for name, spec in scene.get('navPoints', {}).items():
             obj = self.actor(spec, refs)
-            self.write(obj + 0x24, 'I', NAVPOINT_CLASS)
-            for i, idx in enumerate(spec.get('paths', [])):
-                self.write(obj + 0x360 + i * 4, 'i', idx)
-            if len(spec.get('paths', [])) < 16:
-                self.write(obj + 0x360 + len(spec.get('paths', [])) * 4, 'i', -1)
-            for i, idx in enumerate(spec.get('upstreamPaths', [])):
-                self.write(obj + 0x3a0 + i * 4, 'i', idx)
-            if len(spec.get('upstreamPaths', [])) < 16:
-                self.write(obj + 0x3a0 + len(spec.get('upstreamPaths', [])) * 4, 'i', -1)
+            # navPoints default to ANavigationPoint; a spec cls (e.g.
+            # 'navpoint*' for a fabricated NavigationPoint subclass such as
+            # PatrolPoint) keeps the class actor() resolved.
+            if 'cls' not in spec:
+                self.write(obj + 0x24, 'I', NAVPOINT_CLASS)
+            for key, off in [('upstreamPaths', 0x320), ('paths', 0x360),
+                             ('prunedPaths', 0x3a0), ('visNoReachPaths', 0x3e0)]:
+                arr = spec.get(key, [])
+                for i, idx in enumerate(arr):
+                    self.write(obj + off + i * 4, 'i', idx)
+                if len(arr) < 16:
+                    self.write(obj + off + len(arr) * 4, 'i', -1)
             for key, off in [('regionZone', 0xc8), ('footZone', 0x330), ('headZone', 0x33c)]:
                 ref = spec.get(key)
                 if ref in zones:
@@ -888,15 +947,18 @@ class NavProbe:
         actors['self'] = pawn
         refs['self'] = pawn
         # Second pass: resolve actor->actor refs that needed all objects first.
+        ref_fields = [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
+                      ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c),
+                      ('nextOrdered', 0x430), ('prevOrdered', 0x434),
+                      ('startPath', 0x438), ('previousPath', 0x43c),
+                      ('specialGoal', 0x45c)]
         for name, spec in list(scene.get('navPoints', {}).items()) + list(scene.get('actors', {}).items()):
             obj = actors[name]
-            for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
-                             ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c)]:
+            for key, off in ref_fields:
                 ref = spec.get(key)
                 if isinstance(ref, str) and ref in refs:
                     self.write(obj + off, 'I', refs[ref])
-        for key, off in [('enemy', 0x3cc), ('moveTarget', 0x34c), ('faceTarget', 0x350),
-                         ('owner', 0x3c), ('nextPawn', 0x498), ('nextNav', 0x42c)]:
+        for key, off in ref_fields:
             ref = pz.get(key)
             if isinstance(ref, str) and ref in refs:
                 self.write(pawn + off, 'I', refs[ref])
@@ -916,7 +978,7 @@ class NavProbe:
         self.write(levelinfo + 0x548, 'I', refs.get(li_spec.get('navList', scene.get('navList', '')), nav_head))
         actor_list = [levelinfo] + [a for n, a in actors.items()
                                     if n != 'self' and a != levelinfo]
-        lvl, model = self.level(scene.get('level', {}), actor_list, reach_specs, nav_head)
+        lvl, model = self.level(scene.get('level', {}), actor_list, reach_specs)
         self.write(pawn + 0xac, 'I', lvl)
         self.write(pawn + 0xa8, 'I', levelinfo)
         for n, a in actors.items():
@@ -926,7 +988,7 @@ class NavProbe:
         refs['__model'] = model
         # Named scratch buffers for by-reference out params (FCheckResult,
         # FVector outs).  Referenced from directArgs as e.g. 'hitbuf'.
-        for name, size in [('hitbuf', 64), ('vecbuf', 64), ('scratch', 256)]:
+        for name, size in [('hitbuf', 64), ('vecbuf', 64), ('scratch', 256), ('foundbuf', 16)]:
             refs[name] = self.alloc(size)
 
         # Deferred hit records — 'actor' resolves named refs now that every
@@ -1069,6 +1131,9 @@ class NavProbe:
             rec = self.read(self.rec_fl + i * 32, '8I')
             commands.append({'op': 'fastLineCheck', 'model': rec[0],
                              'end': vec3(rec[1:4]), 'start': vec3(rec[4:7])})
+        for i in range(self.read(MAIL_SC, 'I')[0]):
+            rec = self.read(self.rec_sc + i * 32, '8I')
+            commands.append({'op': 'specialCost', 'nav': rec[0], 'pawn': rec[1]})
         # `commands` is grouped by operation; `callsites` preserves global
         # order so consumers can interleave each operation's captured records.
         def vec(obj, off):
@@ -1090,7 +1155,8 @@ class NavProbe:
             'counts': {op: self.read(mail, 'I')[0]
                        for op, mail in [('moveActor', MAIL_MV), ('farMoveActor', MAIL_FM),
                                         ('singleLineCheck', MAIL_SL), ('pointRegion', MAIL_PR),
-                                        ('fastLineCheck', MAIL_FL), ('frand', MAIL_FR)]},
+                                        ('fastLineCheck', MAIL_FL), ('frand', MAIL_FR),
+                                        ('specialCost', MAIL_SC)]},
             'callsites': [[op, '%x' % site] for op, site in self.callsite_log],
             'mvres': [[self.read(mv_mem + i * 48, 'I')[0],
                        round(self.read(mv_mem + i * 48 + 0x28, 'f')[0], 4)]
@@ -1105,6 +1171,28 @@ class NavProbe:
                 'moveTarget': self.read(pawn + 0x34c, 'I')[0],
             },
             'probingUsed': self.probing_index,
+            'found': '%08x' % self.read(refs['foundbuf'], 'I')[0],
+            # NavigationPoint post-run search state (+0x420 visitedWeight,
+            # +0x428 bestPathWeight, +0x430/+0x434 ordered links, +0x438
+            # startPath, +0x43c previousPath, +0x440 cost, +0x444 ExtraCost,
+            # +0x448 flags) plus the pawn special-nav fields.
+            'navState': {
+                name: {
+                    'visitedWeight': self.read(obj + 0x420, 'i')[0],
+                    'bestPathWeight': self.read(obj + 0x428, 'i')[0],
+                    'nextOrdered': '%08x' % self.read(obj + 0x430, 'I')[0],
+                    'prevOrdered': '%08x' % self.read(obj + 0x434, 'I')[0],
+                    'startPath': '%08x' % self.read(obj + 0x438, 'I')[0],
+                    'previousPath': '%08x' % self.read(obj + 0x43c, 'I')[0],
+                    'cost': self.read(obj + 0x440, 'i')[0],
+                    'extraCost': self.read(obj + 0x444, 'i')[0],
+                    'flags448': '%08x' % self.read(obj + 0x448, 'I')[0],
+                } for name, obj in actors.items() if name != 'self'
+            },
+            'pawnSpecial': {
+                'specialGoal': '%08x' % self.read(pawn + 0x45c, 'I')[0],
+                'specialPause': self.read(pawn + 0x460, 'f')[0],
+            },
             'hitbuf': ['%08x' % w for w in self.read(refs['hitbuf'], '12I')],
             'vecbuf': ['%08x' % w for w in self.read(refs['vecbuf'], '4I')],
             'pawnAddress': pawn,

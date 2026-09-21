@@ -44,11 +44,12 @@ end-to-end so far:
   FarMoveActor(restore)`.
 
 Flying reach now has its own 30-case original-DLL comparison, including callers;
-see the contract and verification below. Navigation remains outside VM dispatch.
+see the contract and verification below.  `AIPickRandomDestination` (709) and
+`FindPathToward` (517) are dispatched live in Play mode.
 
 Not yet oracle-verified: swimming reach helpers, `jumpArc`, the
-proximity-landing `appSqrt` arc, `FindRandomDest`,
-`FindPathTo`/`FindPathToward`, `PickWallAdjust`, `FindStairRotation`.
+proximity-landing `appSqrt` arc, `FindRandomDest`, `FindPathTo`,
+`PickWallAdjust`, `FindStairRotation`.
 
 ## Reachability — the call graph
 
@@ -252,11 +253,14 @@ Normal, `+0x24` Time, `+0x28` Item.
 From `actorReachable`'s direct-spec worker `0x103dad20` and `ULevel.cpp`:
 
 - `ULevel.ReachSpecs` `+0x8c` — `TArray` of 28-byte `ReachSpec`:
-  `{+0x00 Start, +0x04 distance, +0x08 End, +0x0c collisionRadius,
+  `{+0x00 distance, +0x04 Start, +0x08 End, +0x0c collisionRadius,
    +0x10 collisionHeight, +0x14 reachFlags, +0x18 pruned}`.
-- `NavigationPoint.Paths[16]` `+0x360` — ReachSpec indices, `-1` terminator.
-- `NavigationPoint.upstreamPaths[16]` `+0x3a0`.
-- `ULevel+0x90` — NavigationPoint list head; `LevelInfo+0x548` also holds it.
+  `ULevel+0x90` is the array's `Num` — the path workers gate on it nonzero.
+- `NavigationPoint.Paths[16]` `+0x360` — outbound ReachSpec indices, `-1`
+  terminator.  `PrunedPaths[16]` `+0x3a0` is the second outbound array;
+  `upstreamPaths[16]` `+0x320` is the inbound array the BFS relaxes.
+- `LevelInfo+0x548` — the `NavigationPointList` head (serialized on the map
+  actor; the chain itself is serialized `nextNavigationPoint` links `+0x42c`).
 - `reachMask` `0x10326d10` (`thunk 0x1030321a`) gathers a 7-bit capability mask
   from `flags+0x318` — bits `0x2/0x2000/0x8000/0x4000/0x1000/0x10000/0x20000`
   → compact bits `0..6` (`R_WALK/R_FLY/R_SWIM/R_JUMP/R_DOOR/R_SPECIAL/
@@ -271,8 +275,8 @@ confirmed by `SingleLineCheck(source.loc -> target.loc, flags=6, zero extent,
 extra=0)`: a clear trace, a non-`Mover` hit, or a `Mover` the pawn can open
 returns 1.  The `Mover` (`class 0x1058bb58`) rule: skip the spec unless pawn
 `+0x318 & 0x10000` (bCanOpenDoors); if `+0x318 & 0x2` is clear the mover is
-openable only when its `+0x4ec & 0x8` is clear.  Both `Paths` (`+0x360`) and
-`upstreamPaths` (`+0x3a0`) are scanned in turn.
+openable only when its `+0x4ec & 0x8` is clear.  Both outbound arrays are
+scanned in turn — `Paths` (`+0x360`) then `PrunedPaths` (`+0x3a0`).
 
 ## `actorReachable` worker `0x103c0630`
 
@@ -317,7 +321,7 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
    - horizontal radius `R=max(pawn.CR, 48.0)` (`0x10430a68`), `R²` cached.
    - a nav point is *within* iff `|nav.z−pawn.z| < pawn.CollisionHeight`
      **and** `dx²+dy² < R²`.
-   - the pawn's `Anchor` (`+0x34c`) is checked first if it is a NavigationPoint
+   - the pawn's `MoveTarget` (`+0x34c`) is checked first if it is a NavigationPoint
      within bounds; then the list `level+0x90 → +0x42c (nextNav)` is walked.
    - a candidate returns `1` when it `== target` or `directReach(pawn, nav,
      target)` succeeds.
@@ -325,6 +329,102 @@ the `0x103c0630` worker.  The verdict goes to `*result`, not eax.  The
      (PHYS_Flying) which falls through.
 4. Everything else → `actorWorker(pawn, originalTarget, 0)` (thunk
    `0x103024be`), with the Inventory restored first.
+
+## `FindPathToward` native 517 — exec `0x103bc9c0` → worker `0x103db3f0`
+
+`actor FindPathToward(actor target, optional bool bSinglePath=0, optional
+bool bClearPaths=1)` — the ReachSpec path search Training's `Patrolling`
+state calls (`MoveTarget = FindPathToward(destPoint)`).  The exec always
+evaluates three GNatives slots; omitted optionals compile to `EX_Nothing`
+so the pre-stored defaults survive (517's third slot is pre-set to 1).
+On a non-null target it runs the worker with `&found` out-param; afterwards
+it clears `bShootSpecial` (`+0x318 & ~0x2000000`) and `SpecialPause`
+(`+0x460`), runs `navTailSet` when the result probes `SpecialHandling`
+(`IsProbing` name `0x15a`), and clears `SpecialGoal` when it equals the
+result.  `*result` receives the found node only when the worker succeeds.
+
+Worker `0x103db3f0` (`thiscall pawn; target, bSinglePath, &found, bClearPaths`):
+
+1. Gates: `*found=0`; null target, absent `LevelInfo+0x548` nav list, or
+   `ULevel+0x90 == 0` (empty ReachSpec table) → 0.  A falling target
+   (`Physics==2`) delegates through `landPredict` → the `findPathTo` worker
+   `0x103dc1d0` — an explicit unported service boundary.
+2. `navScoutA` collects two sorted 32-slot candidate lists over the serialized
+   nav chain: `listA` keyed by pawn-distSq (seeded by `MoveTarget` within
+   `|dz|<CH_a+CH_p` and `distSq<CR²`, doubled for `bIsPlayer`+`InventorySpot`),
+   `listB` keyed by target-distSq; both cap at `distSq<640000` (800²).  With
+   `bClearPaths` each node resets `nextOrdered/prevOrdered=0`,
+   `+0x448 &= ~2` (bEndPoint), `visitedWeight=10M` (`+0x420`), and
+   `cost = bSpecialCost(bit3 of +0x448) ? SpecialCost(pawn) : ExtraCost`.
+3. `flag24==0` → `navScoutB(listB)`: validates the pawn-side head via
+   eye-`FastLineCheck` + `pointWorker(nav.loc,1)` (retrying after removal);
+   a head within `max(ftol(CR),48)` and `|dz|<CH` sets `flag24` (at-nav),
+   else marks `+0x448|=2` and stores `bestPathWeight=sqrt(key)`.
+4. `flag24` set (navpoint target or at-nav) → the direct block:
+   `directReach(pawn, listB.items[0], target)` for NavigationPoint targets,
+   else `navScoutC` — `distSq<640000` + `FLC(items0→targetLoc)` +
+   `FarMoveActor(pawn→items0,1,0)` + `pointWorker(target,0)`; success returns
+   `*found=target` (or `items0`), the pawn left at items0 for the caller to
+   restore.  Only a `pointWorker` failure restores the pawn before
+   `count=1` — distSq/FLC/farMove failures collapse the list directly.
+5. Otherwise the worker scans `listA` for a reachable anchor:
+   `FLC(item→targetLoc)` + `FarMoveActor(pawn→item)` + `actorWorker(pawn,
+   target,1)`; a winner is promoted to `items[0]` (`keys[0]=sqrt(key)`) and
+   sets `flag14`; `bHunting` (`+0x318 & 0x200000`) forces `flag14`.
+6. `items0.visitedWeight = keys0` then `navSearchBFS` — a lazy-sorted
+   doubly-linked open list (`nextOrdered`/`prevOrdered` `+0x430/+0x434`) that
+   relaxes each popped node's `upstreamPaths` with
+   `newCost = cur.vW + spec.dist + cand.cost + (bEndPoint ? cand.bestPathWeight : 0)`;
+   strict improvement unlinks and sorted-reinserts.  Endpoint hit records
+   `start.prevPath=0; *found=node`.  Caps: `bSinglePath` aborts above 4 pops,
+   1000 pops total, 500-node insert scan.
+7. When `flag14==0` the BFS-1 result is retried as pass 2: `navScoutA` again,
+   `navScoutD(listB)` marks the target-side head's outbound spec ends
+   `bEndPoint` with `bestPathWeight=spec.distance` (raw bits; dims/mask/edge
+   `SingleLineCheck`/mover gates as `directReach`), `navScoutB(listB)`
+   validates it, then BFS-2 runs from `listA.items[0]` → `reverse(*found)` →
+   `*found` = chain tail.  `flag24` or `|dz|<120` then runs the second-hop
+   `FLC(pawnEye→hop2)` + `pointWorker(hop2)` refinement that may replace
+   `*found` with the second hop; a single-node anchored chain fails instead.
+8. Success restores the pawn via `FarMoveActor(origLoc,1,1)` and returns 1.
+
+`navTailSet` (`0x103bca4a`) re-probes `SpecialHandling` on the found node,
+tracks `SpecialGoal`, and re-paths via the worker when the special goal is
+unreachable — dispatched through `pawnNavServices.specialHandling`
+(`dispatchSpawnedEvent`) and `specialCost` in the scoutA reset.
+
+**Live dispatch.** `invokeNative` index 517 evaluates the three slots
+(defaults 0/1 for the omitted-optional `EX_Nothing` tail) and calls
+`execFindPathToward` over `pawnNavServices`: serialized `NavigationPointList`
+head (`level.actors[0]`), the `nextNavigationPoint` chain, `Paths`/
+`PrunedPaths`/`upstreamPaths` index arrays, the live `level.reachSpecs`
+table (`start`/`end` resolved to live actors), `Flags318`/`Flags1dc`/
+`Flags4ec` words synthesized from the named bool properties in declaration
+order, and `isA('NavPoint')` normalized to the real `NavigationPoint` class.
+
+Training `Secretary0` (`Orders=Patrolling`, `OrderTag=sec1`) reaches 517 in
+`Patrolling.Moving` and receives `PatrolPoint4` — the only nav node inside
+the native 800-unit candidate radius — then runs `MoveToward` and lands in
+the designed `Standing` terminus (`NextPatrolPoint==None`).  Verified by
+`scripts/validate-secretary-patrol.mjs`.  Its walk stalls ~28 u short on the
+descent to the patrol point's lower floor (locomotion `MoveTimer` expiry) —
+the move-physics subsystem's boundary, not 517's; the native call itself
+returns the correct node.
+
+**Oracle coverage.**  138/138 scenes bit-exact and 35/35 targeted mutants in
+`scripts/validate-pawn-nav.mjs`: direct reach, `MoveTarget` anchor seeding,
+BFS relax/order/abort (`bSinglePath` 5th-pop abort, 1000-pop cap),
+pass-2 (`scoutD` endpoint marking + reverse + second-hop refinement),
+`bClearPaths` clear/no-clear, single-path, the exec tail (`bShootSpecial`/
+`SpecialPause` clears, `SpecialHandling` probe, `SpecialGoal` clear), and
+the `EX_Nothing` default-arg path.  The probe's `IsProbing` hook intercepts
+the real `?IsProbing@UObject@@QAEHVFName@@@Z` export (the `VFName` by-value
+mangling — the earlier `QBEH` lookup silently missed and let fabricated
+objects reach the real function).
+
+Remaining explicit boundaries: falling-target delegation (`landPredict` +
+the `findPathTo` worker) and `waterReach`/`waterMove`/`jumpArc` stay
+unported service seams — they throw rather than guess.
 
 ## `AIPickRandomDestination` native 709 — `execAIPickRandomDestination` `0x103c86f0`
 
@@ -431,7 +531,7 @@ audible playback are Stage 4.
   target) plus 6 mutants.
 - `actorReachable` exec `0x103bc1a0` — **ported to JS, bit-exact vs oracle**
   across 14 scenes (null arg, non-NavigationPoint worker fallback, nav-list
-  hit, `directReach` reach, Anchor hit/reach, found-but-unreachable non-flying
+  hit, `directReach` reach, MoveTarget hit/reach, found-but-unreachable non-flying
   0 vs PHYS_Flying fallback, none-near fallback, Inventory holder redirect,
   no-holder fallback, `CR>115` gate, overhead-nav `|dz|<CH` gate, Inventory
   restore to the worker) plus 8 mutants.  The verdict is `*result`-normalized;
@@ -469,20 +569,28 @@ audible playback are Stage 4.
   `scripts/validate-pawn-flying-reach.mjs`. Checks include ordered movement,
   restore and point/LOS calls, their exact argument bits, return masks and
   final Location/Velocity bits. There is still no live VM navigation binding.
+- `FindPathToward` exec `0x103bc9c0` + worker `0x103db3f0` and its helpers
+  (`navScoutA`–`navScoutE`, `navSearchBFS`, `reverse`, sorted insert/remove,
+  `navTailSet`) — **ported to JS, bit-exact vs oracle** across the shared
+  138-scene corpus (35/35 mutants) and **dispatched live** through
+  `invokeNative` → `pawnNavServices`; Training `Secretary0` patrols in Play
+  mode (see the section above).  Falling-target delegation
+  (`landPredict`/`findPathTo`) remains an explicit unported service.
 - The remaining helpers (`0x103c15a0` waterReach, `0x103c3ca0` waterMove and
   `0x103c2f50` jumpArc) are mapped but unported;
-  `FindRandomDest`/`FindPathTo`/`FindPathToward` share the
-  ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`/`0x103db3f0`)
+  `FindRandomDest`/`FindPathTo` share the
+  ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`)
   recovered at the field level — see the graph layout above.
 - `FindStairRotation` (524) is inline fp using the `GMath` sine table
   (`0x103fxxxx` via Core's `FVector::Rotation`) — integer math, no
   transcendentals; the Unicorn oracle is authoritative for it.
 
-Focused checkpoint, 2026-09-20 (supersedes the 2026-09-19 note):
-`validate-pawn-nav.mjs` passes 123/123 cases and 35/35 mutants;
+Focused checkpoint (supersedes the 2026-09-20 note):
+`validate-pawn-nav.mjs` passes 138/138 cases and 35/35 mutants;
 `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
-`npm test` passes 487/487. Native 709 is live — the Training MIB wanders in
-Play (`validate-mib-startup-boundary.mjs` passes load and reset). Stage 3
-remains unfinished. Next navigation work is original waterMove/waterReach
-recovery, then jumpArc and the remaining ReachSpec path workers
-(`FindRandomDest`/`FindPathTo`/`FindPathToward`).
+`npm test` passes 499/499. Natives 709 and 517 are live — the Training MIB
+wanders and `Secretary0` patrols to `PatrolPoint4` in Play
+(`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
+Stage 3 remains unfinished. Next navigation work is original
+waterMove/waterReach recovery, then jumpArc and the remaining ReachSpec
+path workers (`FindRandomDest`/`FindPathTo`).

@@ -43,7 +43,7 @@ import {
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
-import { execAiPickRandomDestination } from './script-pawn-nav.mjs';
+import { execAiPickRandomDestination, execFindPathToward } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -2125,6 +2125,16 @@ export class ScriptRuntime {
       return execAiPickRandomDestination(call.receiver,args,call.evaluateArgument(8),
         this.pawnNavServices(call.receiver));
     }
+    if(call.index===517){
+      // execFindPathToward 0x103bc9c0: three evaluated slots (target,
+      // bSinglePath=0, bClearPaths=1); the result slot receives the found
+      // actor only when the worker succeeds — matching the native tail.
+      const target=call.argumentCount>0?refValue(call.evaluateArgument(0)):null;
+      const bSingle=call.argumentCount>1?refValue(call.evaluateArgument(1))|0:0;
+      const bClear=call.argumentCount>2?refValue(call.evaluateArgument(2))|0:1;
+      return execFindPathToward(call.receiver,target,bSingle,bClear,
+        this.pawnNavServices(call.receiver));
+    }
     if(call.index===650){
       // execInitEventManager 0x103023b0 -> 0x10384a90: the lazy +0x550
       // UEventManager creator LevelInfo.PreBeginPlay invokes. The Map is the
@@ -2394,10 +2404,81 @@ export class ScriptRuntime {
     };
     const zoneOf=(actor,name)=>this.namedReference(actor,name).get()?.['engine.actor.pointregion.zone']
       ??level.pointRegion(view.position).zone;
+    /* The native reach workers read the packed bool words directly. Actor
+     * +0x1dc, Pawn +0x318 and Mover +0x4ec pack each class's serialized bool
+     * declarations in order; the VM stores the same values as named logical
+     * properties, so the dword is synthesized per read and decomposed per
+     * write (Pawn.uc/Actor.uc/Mover.uc declaration order, verified against
+     * the reachMask/scout/exec disassembly bit positions). */
+    const flagWords={
+      Flags318:[['bBehindView',0x1],['bIsPlayer',0x2],['bJustLanded',0x4],['bUpAndOut',0x8],
+        ['bIsWalking',0x10],['bHitSlopedWall',0x20],['bNeverSwitchOnPickup',0x40],['bWarping',0x80],
+        ['bUpdatingDisplay',0x100],['bCanStrafe',0x200],['bFixedStart',0x400],['bReducedSpeed',0x800],
+        ['bCanJump',0x1000],['bCanWalk',0x2000],['bCanSwim',0x4000],['bCanFly',0x8000],
+        ['bCanOpenDoors',0x10000],['bCanDoSpecial',0x20000],['bDrowning',0x40000],['bLOSflag',0x80000],
+        ['bFromWall',0x100000],['bHunting',0x200000],['bAvoidLedges',0x400000],['bStopAtLedges',0x800000],
+        ['bJumpOffPawn',0x1000000],['bShootSpecial',0x2000000],['bAutoActivate',0x4000000],['bIsHuman',0x8000000],
+        ['bIsFemale',0x10000000],['bIsMultiSkinned',0x20000000],['bCountJumps',0x40000000],['bAdvancedTactics',0x80000000]],
+      Flags1dc:[['bStatic',0x1],['bHidden',0x2],['bNoDelete',0x4],['bAnimFinished',0x8],
+        ['bAnimLoop',0x10],['bAnimNotify',0x20],['bAnimByOwner',0x40],['bDeleteMe',0x80],
+        ['bAssimilated',0x100],['bTicked',0x200],['bLightChanged',0x400],['bDynamicLight',0x800],
+        ['bTimerLoop',0x1000],['bCanTeleport',0x2000],['bIsSecretGoal',0x4000],['bIsKillGoal',0x8000],
+        ['bIsItemGoal',0x10000],['bCollideWhenPlacing',0x20000],['bTravel',0x40000],['bMovable',0x80000],
+        ['bHighDetail',0x100000],['bStasis',0x200000],['bForceStasis',0x400000],['bIsPawn',0x800000],
+        ['bNetTemporary',0x1000000],['bNetOptional',0x2000000],['bReplicateInstigator',0x4000000],
+        ['bTrailerSameRotation',0x8000000],['bTrailerPrePivot',0x10000000],['bClientAnim',0x20000000],
+        ['bSimFall',0x40000000]],
+      // +0x4ec bit3 is the only Mover flag the nav workers read (scoutD/
+      // directReach): bPlayerOnly. The word's other bits are unverified.
+      Flags4ec:[['bPlayerOnly',0x8]],
+    };
+    const flagRead=(actor,name)=>flagWords[name].reduce((w,[field,mask])=>{
+      let set=false;
+      try{set=Boolean(this.namedReference(actor,field).get());}catch{set=false;}
+      return w|(set?mask:0);
+    },0)>>>0;
+    const flagWrite=(actor,name,v)=>{
+      for(const [field,mask] of flagWords[name]){
+        try{this.namedReference(actor,field).set(Boolean(v&mask));}catch{/* field absent on this class */}
+      }
+    };
+    const ref=(actor,name)=>this.namedReference(actor,name);
     return {
       read:(actor,name)=>name==='CollideFlag'
         ?(this.regionValue(actor).zoneNumber??0)&0xff      // pawn+0xd0 byte
-        :this.namedReference(actor,name).get(),
+        :name in flagWords?flagRead(actor,name)
+        :ref(actor,name).get(),
+      write:(actor,name,v)=>name in flagWords?flagWrite(actor,name,v):ref(actor,name).set(v),
+      level:actor=>this.levelFor(actor),
+      model:lvl=>lvl?.model,
+      // ULevel nav surface: LevelInfo.NavigationPointList (+0x548), the
+      // +0x42c nextNavigationPoint chain, the spec index arrays (+0x360
+      // Paths / +0x3a0 PrunedPaths / +0x320 upstreamPaths) and the level
+      // ReachSpec table resolved to live actors by the scene.
+      navListHead:actor=>{
+        const lvl=this.levelFor(actor);
+        return ref(lvl?.actors?.[0],'NavigationPointList')?.get()??null;
+      },
+      nextNav:nav=>ref(nav,'nextNavigationPoint').get()??null,
+      paths:nav=>ref(nav,'Paths').get(),
+      upstreamPaths:nav=>ref(nav,'upstreamPaths').get(),
+      prunedPaths:nav=>ref(nav,'PrunedPaths').get(),
+      reachSpecTable:actor=>this.levelFor(actor)?.reachSpecs??[],
+      pointRegion:point=>navZone(level.pointRegion(point)?.zone),
+      fastLineCheck:(model,first,second)=>fastLineCheck(model,first,second),
+      // ULevel::SingleLineCheck (&hit, source, end, start, flags, extent,
+      // extra): the level-queries port returns {time, actor} with actor null
+      // on a clear trace.
+      singleLineCheck:(source,end,start,flags,extent,extra)=>{
+        const lvl=this.levelFor(source);
+        if(!lvl?.hash?.lineCheck)throw new Error('FindPathToward requires the live level collision hash');
+        return lvl.hash.lineCheck(start,end,extent,flags,extra,source);
+      },
+      // SpecialCost (NavigationPoint event, int) and SpecialHandling (Actor
+      // event, actor) are script dispatches with declared return values.
+      specialCost:(nav,pawn)=>this.dispatchSpawnedEvent(nav,'SpecialCost',[pawn])|0,
+      specialHandling:(node,pawn)=>this.dispatchSpawnedEvent(node,'SpecialHandling',[pawn])??null,
+      isProbing:(actor,name)=>this.isProbing(actor,name),
       location:actor=>this.namedReference(actor,'Location').get(),
       velocity:actor=>{
         // The workers restore Velocity by mutating the returned vector; bind
@@ -2409,7 +2490,9 @@ export class ScriptRuntime {
       footZone:actor=>navZone(zoneOf(actor,'FootRegion')),
       zoneGravity:actor=>Math.fround(navZone(zoneOf(actor,'Region')).gravityZ??-950),
       isA:(actor,key)=>{
-        const tail=lower(String(key).split('.').pop());
+        // 'NavPoint' is the native's ANavigationPoint key (scoutA/exec gates).
+        let tail=lower(String(key).split('.').pop());
+        if(tail==='navpoint')tail='navigationpoint';
         for(let cls=this.instance(actor)?.cls;cls;cls=cls.base)if(lower(cls.record.name)===tail)return true;
         return false;
       },
