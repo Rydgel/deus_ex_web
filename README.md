@@ -74,9 +74,14 @@ or push further hosting updates unless the user asks.
   and the nanokey), so the collidable props JC walks into are no longer invisible.
   **NPC mesh preview → Focus** jumps the inspection camera between the characters.
   The meshes stay visible after returning to Play or resetting to Player start.
-  These are texture-only previews; original mesh lighting, distance LOD, item
-  pickup and weapon use remain unfinished, and one procedural NanoKey effect face
-  is skipped. See [preview scope and evidence](docs/npc-mesh-preview.md).
+  These are texture-only previews; original mesh lighting and distance LOD remain
+  unfinished, and one procedural NanoKey effect face is skipped. See
+  [preview scope and evidence](docs/npc-mesh-preview.md).
+- Frobbing a Training weapon, ammo, tool, food or key **picks it up** into JC's
+  inventory through the original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give,
+  and the item's world mesh disappears; **Player start** returns items to the
+  world. Selecting a picked-up weapon into hand (its first-person view mesh) and
+  weapon fire remain unfinished. See [item pickup](docs/script-item-pickup.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.

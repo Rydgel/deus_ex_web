@@ -116,14 +116,12 @@ bottom-right with the item's original belt `Icon` and `ItemName`, so putting the
 nanokey ring in and out of hand is visible. This is a Play readout of real state,
 not the original object-belt window.
 
-### Located boundary: item pickup
+### Item pickup (implemented) and the remaining boundary
 
-Picking up a Training weapon/tool runs the real frob path F → `ParseRightClick`
-→ `DeusExPlayer.DoFrob` → **`DeusExPlayer.HandleItemPickup`**, which executes a
-`foreach` iterator that is not linked on this VM path (`src/runtime/script-vm.mjs`
-`Original iterator native is not linked`). The iterator subsystem exists
-(`script-runtime.mjs` `createIterator`: AllActors 304, RadiusActors 310, …). The
-nanokey ring pickup works through a different `DoFrob` → `KeyList` branch. This is
-the entry point for the pickup + object-belt increment; breaking crates then needs
-weapon equip + fire + `TakeDamage` + destruction, and reaching `UNATCOTroop3`
-still needs the locked keypad doors `paddoor`/`hackdoor`.
+Picking up a Training weapon/tool/ammo/food/key now runs the real frob give path
+F → `ParseRightClick` → `HandleItemPickup` → `DoFrob` → the item's Pickup-state
+`Frob`, taking it into JC's inventory; the item's world mesh then hides through
+this scene's own `bHidden` path. See [item pickup](script-item-pickup.md). The
+remaining boundary is selecting a picked-up weapon into hand (its first-person
+view mesh is not prepared) plus weapon fire / crate breaking, and reaching
+`UNATCOTroop3` still needs the locked keypad doors `paddoor`/`hackdoor`.

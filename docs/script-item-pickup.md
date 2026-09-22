@@ -1,0 +1,68 @@
+# World item pickup (Training)
+
+Frobbing a world weapon, ammo, tool, food or key in Play takes it into JC's
+inventory through the original frob give path. Before this, frobbing an item did
+nothing: map-placed inventory items never entered their auto Pickup state, so the
+item's `Frob` resolved to the empty base `Engine.Actor.Frob`.
+
+## Evidence
+
+`Engine.Inventory` (and every subclass — `Weapon`, `Ammo`, `Pickup`,
+`DeusExPickup`, `DeusExWeapon`) declares an `auto state Pickup` (STATE_Auto,
+`stateFlags & 2`). `AActor::SetInitialState` enters that auto state when
+`InitialState` is None. The runtime's LoadMap startup runs SetInitialState, but
+`startupAdmitted` covered only pawns and patrol points, so a world item stayed
+stateless and `runtime.lookup(item,'Frob')` returned `engine.actor.frob`.
+
+The give itself is entirely original bytecode:
+
+- `DeusExPlayer.ParseRightClick` → `HandleItemPickup(FrobTarget)`:
+  `GetWeaponOrAmmo`/`FindInventoryType` decide combine-vs-new, `FindInventorySlot`
+  assigns the inventory-grid slot (`invPosX/invPosY`), then it calls
+  `DoFrob(Self, inHand)`.
+- `DeusExPlayer.DoFrob` runs `foreach FrobTarget.BasedActors(...)` (a
+  context-wrapped native iterator, native 306), calls the item's Pickup-state
+  `Frob`, and `FrobTarget.SetBase(Frobber)`.
+- `Inventory.Pickup.Frob` asks `Level.Game.PickupQuery`, plays the pickup sound,
+  and gives the item — `Weapon.GiveTo` also spawns the weapon's default ammo and
+  calls `Weapon.SetSwitchPriority` (which reads `Class.Name`).
+
+## What the port adds
+
+- **Startup admission.** World Inventory-ancestry pickups (no Owner, not hidden,
+  positioned) join the LoadMap startup set so SetInitialState puts them in their
+  Pickup state. The spawned nanokey ring is Owner-carried and excluded.
+- **Give-path preparation.** The `Level.Game` GameInfo (PickupQuery) and, for
+  weapons, the default ammo class link at load, next to the existing
+  Decoration/Inventory class-chain preparation. The give path is otherwise
+  already prepared bytecode.
+- **Two enabling runtime fixes.** The VM now unwraps a context-wrapped `foreach`
+  iterator (`FrobTarget.BasedActors`), and `fieldReference` serves the immutable
+  `Name` on an unattached class object (`SetSwitchPriority`'s `Class.Name`).
+- **Pickup sound boundary.** `Inventory.Pickup.Frob`'s `PlaySound` records a
+  deferred audio boundary (channel id 0), like the decoration/pawn sounds.
+- **Public path.** `game.use()` routes an inventory frob through
+  `ParseRightClick` (the same path the nanokey ring uses), so the grid slot is
+  assigned; the item's world mesh then hides through the actor mesh scene's own
+  `bHidden` path.
+- **Reset lifecycle.** `resetNpcs` detaches items JC acquired in Play from the
+  Inventory list and restores the serialized pickups to the world un-owned (via
+  `store.clear`), so **Player start** returns the items and leaves only the
+  re-spawned key ring. The ammo a weapon pickup spawns is a play-time spawn and
+  is left orphaned (no Location, unlinked).
+
+`scripts/validate-item-pickup.mjs` covers the startup Pickup state, the grid
+give (a weapon takes a real slot; ammo/tool/food enter the list), the NanoKey key
+ring, the mesh hide, and the reset lifecycle. Verified for
+`WeaponCrowbar1`, `WeaponCombatKnife0`, `Ammo10mm2`, `Candybar0`, `HazMatSuit2`,
+`Multitool0` and `NanoKey0`.
+
+## Boundary: selecting a picked-up weapon into hand
+
+`PutInHand(weapon)` sets `inHand`, but `UpdateInHand` prepares the weapon's
+first-person view mesh (e.g. `deusexitems.crowbar`) and reaches
+`Original mesh resource is not prepared`. Picked-up weapons also keep
+`bInObjectBelt=false`/`beltPos=-1` — the object belt is populated HUD-side, which
+is not modeled. So general equipment switching (and weapon fire / crate breaking)
+remains unbuilt past pickup; the nanokey ring's `1`/`Enter` selection is the
+supported in-hand case.
