@@ -1,47 +1,101 @@
 import { safeNormal, twoWallAdjust } from './steps.mjs';
+import { x87add, x87load, x87mul, x87neg, x87store } from './script-vm.mjs';
 
 const f = Math.fround;
 const add = (a, b) => a.map((v, i) => f(v + b[i]));
 const sub = (a, b) => a.map((v, i) => f(v - b[i]));
 const scale = (a, s) => a.map(v => f(v * s));
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const PHYS_NONE = 0;
+const X87_ONE = Object.freeze({ neg: 0, sig: 1n, exp: 0 });
 
-/** Dry, non-bouncing player path of AActor.physFalling (Engine.dll 0x103d0a50).
- * World movement/queries and landing/wall events are supplied by the caller;
- * this function does not implement swimming, surface events or landing fitting. */
-export function falling(pawn, seconds, iterations = 0) {
+/** `RemainingTime += TimeTick * (1.0 - Hit.Time)` exactly as both original sites
+ * emit it (bounce refund 0x103d1de0, floor refund 0x103d1e0e): `fld Hit.Time;
+ * fsubr qword 1.0; fmul dword TimeTick; fadd dword RemainingTime; fstp dword`.
+ * The difference, product and sum stay on the x87 stack (64-bit significand,
+ * control word 0x037f as in the native oracle) and round once at the store. */
+const refundTime = (remaining, time, step) =>
+  x87store(x87add(x87mul(x87add(X87_ONE, x87neg(x87load(time))), x87load(step)), x87load(remaining)));
+
+/** AActor.physFalling (Engine.dll 0x103d0a50): the dry Pawn (player) path, the
+ * non-Pawn path and the bBounce wall-hit branch. World movement/queries and the
+ * reached engine/script events are supplied by the caller; this function does
+ * not implement swimming/buoyancy, surface events or landing fitting.
+ *
+ * `options` (all explicit; the defaults are the previously validated player path):
+ *  - `nonPawn`: the source is not a Pawn (`IsA(APawn)` false at 0x103d0a7d). The
+ *    Pawn walking prelude and the whole air-control/acceleration-clamp block
+ *    (0x103d0bca -> 0x103d0e0c) are skipped: Acceleration is used unchanged,
+ *    including its Z. Pass it for projectiles/fragments, inventory and
+ *    decorations.
+ *  - `bounce`: the source's bBounce (actor+0x1ec bit 0x10). A host that exposes a
+ *    live boolean `bBounce` is read instead at every place the native re-reads
+ *    the flag (0x103d1d81 and 0x103d22ce), so a script that clears it is seen.
+ *  - `hitWallEvent(normal, actor)`: required whenever the bounce branch is
+ *    reached. It is the original direct script event dispatch
+ *    `ProcessEvent(FindFunctionChecked(NAME_HitWall), {HitNormal, Wall})`
+ *    (0x103d1d8c-0x103d1dcc) — NOT processHitWall — so it includes
+ *    ProcessEvent's own probe gate and every effect of the script body. The
+ *    host must reflect those effects (Velocity, Physics, bBounce, ...) on `pawn`
+ *    before returning.
+ *
+ * Bounce semantics recovered from 0x103d1d08-0x103d1dfa and 0x103d22ce-0x103d22e6:
+ * every blocked move (Hit.Time < 1, floors included — processLanded and
+ * processHitWall are never called while bBounce) dispatches HitWall; Physics ==
+ * PHYS_None afterwards returns at once (no Acceleration restore); otherwise the
+ * first two bounces of this call refund `(1 - Hit.Time) * TimeTick`, the bounce
+ * counter increments, no slide move is made, and the end-of-substep velocity
+ * recomputation is skipped, so Velocity is whatever the script left. The loop
+ * then continues under the ordinary remaining-time/8-iteration bound.
+ */
+export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce = false, hitWallEvent } = {}) {
   const dt = f(seconds);
   if (!(dt > 0) || dt > f(.4)) throw new Error('Falling requires an original actor timestep in (0, 0.4]');
+  const bouncing = () => (typeof pawn.bBounce === 'boolean' ? pawn.bBounce : Boolean(bounce));
+  const requireHitWallEvent = () => {
+    if (typeof hitWallEvent !== 'function')
+      throw new Error('Bouncing physFalling requires an explicit hitWallEvent(normal, actor) script dispatch (0x103d1d8c)');
+  };
+  if (bouncing()) requireHitWallEvent();
   // Original Pawn branch 103d0a7d–103d0ac2 calls the same surface/ladder
   // prelude as walking, before reading acceleration or the current zone.
-  if (pawn.walkingPrelude?.(dt,iterations)) return;
+  if (!nonPawn && pawn.walkingPrelude?.(dt,iterations)) return;
+  // 0x103d0aca: Region.ZoneNumber == 0 logs (Inventory/Decoration/Pawn at
+  // ROLE_Authority), dispatches FellOutOfWorld and returns. Not translated.
+  if (pawn.zoneNumber === 0) throw new Error('physFalling outside the world (Region.ZoneNumber 0 -> FellOutOfWorld, 0x103d0aca) is not supported');
   const savedAcceleration = pawn.acceleration.map(f);
   const gravity = pawn.gravity.map(f), zoneVelocity = pawn.zoneVelocity.map(f);
-  let acceleration = [...savedAcceleration], airControl = f(pawn.airControl), speedLimit = 0;
+  let speedLimit = 0;
   pawn.position = pawn.position.map(f); pawn.velocity = pawn.velocity.map(f);
-  if (airControl > f(.15)) {
-    const direction = safeNormal(acceleration), limit = f(airControl * f(pawn.accelRate));
-    const delta = scale(add(pawn.velocity, scale(direction, limit)), dt); delta[2] = 0;
-    if (pawn.airControlBlocked(delta)) airControl = f(.05);
+  if (nonPawn) pawn.acceleration = [...savedAcceleration];
+  else {
+    let acceleration = [...savedAcceleration], airControl = f(pawn.airControl);
+    if (airControl > f(.15)) {
+      const direction = safeNormal(acceleration), limit = f(airControl * f(pawn.accelRate));
+      const delta = scale(add(pawn.velocity, scale(direction, limit)), dt); delta[2] = 0;
+      if (pawn.airControlBlocked(delta)) airControl = f(.05);
+    }
+    let accelerationLimit = f(airControl * f(pawn.accelRate));
+    acceleration[2] = 0;
+    const horizontalSpeed = Math.sqrt(pawn.velocity[0] ** 2 + pawn.velocity[1] ** 2);
+    if (horizontalSpeed < 10) accelerationLimit = f(accelerationLimit + (10 - horizontalSpeed) / dt);
+    else if (horizontalSpeed >= f(pawn.groundSpeed)) {
+      if (airControl <= f(.05)) accelerationLimit = 1;
+      else speedLimit = f(horizontalSpeed);
+    }
+    if (dot(acceleration, acceleration) > accelerationLimit * accelerationLimit) acceleration = scale(safeNormal(acceleration), accelerationLimit);
+    pawn.acceleration = acceleration;
   }
-  let accelerationLimit = f(airControl * f(pawn.accelRate));
-  acceleration[2] = 0;
-  const horizontalSpeed = Math.sqrt(pawn.velocity[0] ** 2 + pawn.velocity[1] ** 2);
-  if (horizontalSpeed < 10) accelerationLimit = f(accelerationLimit + (10 - horizontalSpeed) / dt);
-  else if (horizontalSpeed >= f(pawn.groundSpeed)) {
-    if (airControl <= f(.05)) accelerationLimit = 1;
-    else speedLimit = f(horizontalSpeed);
-  }
-  if (dot(acceleration, acceleration) > accelerationLimit * accelerationLimit) acceleration = scale(safeNormal(acceleration), accelerationLimit);
-  pawn.acceleration = acceleration;
-  let remaining = dt, apexSplit = false;
+  let remaining = dt, apexSplit = false, numBounces = 0;
   while (remaining > 0 && iterations < 8) {
     iterations++;
     let step = remaining > .1 ? f(Math.min(remaining * .5, f(.1))) : remaining;
     const origin = [...pawn.position], oldVelocity = [...pawn.velocity];
     pawn.justTeleported = false;
     remaining = f(remaining - step);
-    const integrate = () => add(oldVelocity, scale(scale(add(acceleration, gravity), .5), step));
+    // Each integration re-reads the actor's Acceleration (actor+0x150), which the
+    // Pawn prelude stored clamped; a script event may have changed it since.
+    const integrate = () => add(oldVelocity, scale(scale(add(pawn.acceleration, gravity), .5), step));
     pawn.velocity = integrate();
     if (!apexSplit && (oldVelocity[2] > 0) !== (pawn.velocity[2] > 0) && Math.abs(oldVelocity[2]) > 5 && Math.abs(pawn.velocity[2]) > 5) {
       apexSplit = true;
@@ -57,32 +111,46 @@ export function falling(pawn, seconds, iterations = 0) {
     }
     const delta = scale(add(pawn.velocity, zoneVelocity), step);
     let hit = pawn.move(delta);
-    if (hit.time < 1) {
-      if (hit.normal[2] > .7) {
-        remaining = f(remaining + (1 - hit.time) * step);
+    // 0x103d1ca2: a MoveActor whose touch/bump events destroyed the actor
+    // (bDeleteMe, actor+0x28 bit 0x80) ends physics without restoring anything.
+    if (pawn.bDeleteMe) return;
+    const blocked = hit.time < 1;
+    if (blocked) {
+      if (bouncing()) {
+        requireHitWallEvent();
+        hitWallEvent([...hit.normal], hit.actor ?? null);
+        if (pawn.physics === PHYS_NONE) return;
+        if (numBounces < 2) remaining = refundTime(remaining, hit.time, step);
+        numBounces++;
+      } else if (hit.normal[2] > .7) {
+        remaining = refundTime(remaining, hit.time, step);
         if (!pawn.justTeleported && hit.time > .1 && hit.time * step > f(.003)) {
           pawn.velocity = scale(sub(pawn.position, origin), 1 / (hit.time * step));
         }
         pawn.landed(hit, remaining, iterations);
         return;
-      }
-      pawn.hitWall(hit);
-      const oldNormal = [...hit.normal];
-      let slide = scale(sub(delta, scale(hit.normal, dot(delta, hit.normal))), 1 - hit.time);
-      if (dot(slide, delta) >= 0) {
-        hit = pawn.move(slide);
-        if (hit.time < 1) {
-          if (hit.normal[2] > .7) { pawn.landed(hit, 0, iterations); return; }
-          pawn.hitWall(hit);
-          slide = twoWallAdjust({ desired: safeNormal(delta), delta: slide, normal: hit.normal, oldNormal, time: hit.time });
-          const ditch = oldNormal[2] > 0 && hit.normal[2] > 0 && slide[2] === 0 && dot(oldNormal, hit.normal) < 0;
+      } else {
+        pawn.hitWall(hit);
+        const oldNormal = [...hit.normal];
+        let slide = scale(sub(delta, scale(hit.normal, dot(delta, hit.normal))), 1 - hit.time);
+        if (dot(slide, delta) >= 0) {
           hit = pawn.move(slide);
-          if (ditch || hit.normal[2] > .7) { pawn.landed(hit, 0, iterations); return; }
+          if (hit.time < 1) {
+            if (hit.normal[2] > .7) { pawn.landed(hit, 0, iterations); return; }
+            pawn.hitWall(hit);
+            slide = twoWallAdjust({ desired: safeNormal(delta), delta: slide, normal: hit.normal, oldNormal, time: hit.time });
+            const ditch = oldNormal[2] > 0 && hit.normal[2] > 0 && slide[2] === 0 && dot(oldNormal, hit.normal) < 0;
+            hit = pawn.move(slide);
+            if (ditch || hit.normal[2] > .7) { pawn.landed(hit, 0, iterations); return; }
+          }
         }
+        const traveledVelocity = scale(sub(pawn.position, origin), 1 / step);
+        oldVelocity[0] = traveledVelocity[0]; oldVelocity[1] = traveledVelocity[1];
       }
-      const traveledVelocity = scale(sub(pawn.position, origin), 1 / step);
-      oldVelocity[0] = traveledVelocity[0]; oldVelocity[1] = traveledVelocity[1];
     }
+    // 0x103d22ce: bBounce and bJustTeleported are re-read after the substep's
+    // events. A bouncing actor that was blocked keeps the Velocity its HitWall left.
+    if (blocked && bouncing()) continue;
     if (!pawn.justTeleported) {
       pawn.velocity = sub(scale(sub(pawn.position, origin), 1 / step), zoneVelocity);
       if (pawn.velocity[2] < oldVelocity[2] || oldVelocity[2] >= 0) pawn.velocity = sub(scale(pawn.velocity, 2), oldVelocity);

@@ -44,3 +44,51 @@ test('original floor impact passes the unused interval and measured impact veloc
   assert.deepEqual(p.velocity, [200.24514770507812, 31.225725173950195, -323.7497863769531]);
   assert.deepEqual(p.acceleration, [9.805807113647461, 49.02903366088867, 0]);
 });
+
+// bBounce fragment cases captured from the original physFalling
+// (scripts/validate-native-falling.mjs, fragment ancestry, controlled HitWall).
+function fragment(response, script) {
+  const events = [], p = { position: [-804.27, 1125.16, -84.02].map(f), velocity: [120, -40, -300], acceleration: [0, 0, 0],
+    gravity: [0, 0, -950], zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, bBounce: true, events,
+    move(delta) {
+      events.push({ move: [...delta] });
+      const hit = events.length === 1 ? response : { time: 1, normal: [0, 0, 0] };
+      p.position = p.position.map((v, i) => f(v + f(delta[i] * hit.time)));
+      return { ...hit, actor: hit.time < 1 ? 'level' : null };
+    },
+    hitWall() { throw new Error('bouncing falls never reach processHitWall'); },
+    landed() { throw new Error('bouncing falls never reach processLanded'); },
+  };
+  const hitWallEvent = (normal, actor) => { events.push({ hitWallEvent: normal, actor }); script(p, normal); };
+  return { p, run: seconds => falling(p, seconds, 0, { nonPawn: true, bounce: true, hitWallEvent }) };
+}
+const reflect = (p, n) => {
+  const v = p.velocity, d = f((v[0] * n[0] + v[1] * n[1]) + v[2] * n[2]);
+  p.velocity = v.map((a, i) => f(f(.4) * f(f(f(d * n[i]) * -2) + a)));
+};
+
+test('a bouncing floor contact dispatches HitWall, refunds time and keeps the script velocity', () => {
+  const { p, run } = fragment({ time: f(.25), normal: [0, 0, 1] }, reflect);
+  run(.1);
+  assert.deepEqual(p.events.map(e => Object.keys(e)[0]), ['move', 'hitWallEvent', 'move']);
+  assert.deepEqual(p.events[1], { hitWallEvent: [0, 0, 1], actor: 'level' });
+  assert.deepEqual(p.events[2].move, [4.199999809265137, -1.399999976158142, 7.694530963897705]);
+  assert.equal(p.physics, 2);
+  assert.deepEqual(p.position, [-798.5700073242188, 1123.260009765625, -80.3723373413086]);
+  assert.deepEqual(p.velocity, [48.000282287597656, -16.00055694580078, 46.37507629394531]);
+});
+
+test('a bouncing contact whose HitWall sets PHYS_None ends physFalling at once', () => {
+  const stop = p => { p.physics = 0; p.velocity = [0, 0, 0]; p.acceleration = [0, 0, 0]; p.bBounce = false; };
+  const { p, run } = fragment({ time: f(.25), normal: [-1, 0, 0] }, stop);
+  run(.1);
+  assert.equal(p.events.length, 2);
+  assert.deepEqual(p.position, [-802.77001953125, 1124.6600341796875, -88.0668716430664]);
+  assert.deepEqual(p.velocity, [0, 0, 0]);
+});
+
+test('the bounce branch requires the explicit script HitWall dispatch', () => {
+  const p = { position: [0, 0, 0], velocity: [0, 0, -10], acceleration: [0, 0, 0], gravity: [0, 0, -950],
+    zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, move: () => ({ time: 1, normal: [0, 0, 0] }) };
+  assert.throws(() => falling(p, .1, 0, { nonPawn: true, bounce: true }), /hitWallEvent/);
+});
