@@ -879,12 +879,30 @@ export function compileFunction(fn) {
           // GotoLabel or Stop during the statement is not overwritten afterward.
           frame.cursor = entry.next;
           if(n.op===0x2f){
-            if(n.value.op!=='native'||!services.iterator)throw new Error('Original iterator native is not linked');
-            const iterator=services.iterator({index:n.value.index,receiver:instance,script:fn,frame,
-              argumentCount:n.value.args.length,evaluateArgument:index=>evaluate(n.value.args[index],instance)});
-            const continuation={iterator,body:entry.next,after:statements.get(n.target).next};
-            if(iterator.next())frame.iterators.push(continuation);
-            else frame.cursor=continuation.after;
+            if(!services.iterator)throw new Error('Original iterator native is not linked');
+            // The foreach operand is either a direct native iterator (AllActors,
+            // ...) or one called in a context (execContext, e.g.
+            // FrobTarget.BasedActors). execContext changes the iterator native's
+            // Object to the context; the argument expressions still evaluate in
+            // the caller's frame. Its null contract also applies: a null context
+            // logs Accessed None and runs zero iterations.
+            const after=statements.get(n.target).next;
+            let call=n.value,receiver=instance,skipped=false;
+            if(call.op===0x19){
+              const context=refValue(evaluate(call.context,instance));
+              if(context===null||context===undefined){
+                services.warning?.({type:'Accessed None',script:fn.entry.path,offset:call.offset});
+                frame.cursor=after;skipped=true;
+              }else{receiver=context;call=call.value;}
+            }
+            if(!skipped){
+              if(call.op!=='native')throw new Error('Original iterator native is not linked');
+              const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
+                argumentCount:call.args.length,evaluateArgument:index=>evaluate(call.args[index],instance)});
+              const continuation={iterator,body:entry.next,after};
+              if(iterator.next())frame.iterators.push(continuation);
+              else frame.cursor=continuation.after;
+            }
           }else if(n.op===0x31){
             const current=frame.iterators.at(-1);
             if(!current)throw new Error('IteratorNext without an active iterator');
