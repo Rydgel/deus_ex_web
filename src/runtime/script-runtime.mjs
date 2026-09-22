@@ -1380,13 +1380,36 @@ export class ScriptRuntime {
    * recovered entries are the pawn/decoration routes. */
   moveSpawnedActor(view,delta,rotation) {
     if(!this.collisionViewActors.has(view))
-      throw new Error('MoveActor for a non-spawned rider is not linked');
+      return this.moveHeldRider(view,delta,rotation);
     const level=this.levelFor(view);
     if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
     // The only caller is the recovered based-rider MoveActor (vtable +0x88)
     // which passes bIgnoreBases=1 — a riding item must not be blocked by the
     // base carrying it.
     return playerMove(view,delta,{...this.spawnedMoveServices(view,level),ignoreBases:true},rotation);
+  }
+  /** The based-rider MoveActor for a HELD item — a serialized (map) or spawned
+   * Inventory actor a pawn carries after GiveTo's BecomeItem
+   * (bCollideActors = bCollideWorld = false, Physics None, StandingCount 0),
+   * not a spawned collision view. The recovered recursive body
+   * (docs/script-npc-weapon-startup.md, 0x103998a0-0x10399c8e) skips the
+   * MultiLineCheck query for the null cylinder, and the non-pawn
+   * CheckEncroachment tail (0x10399bf5) early-returns false for it
+   * (+0x1dc & 0x0d == 0, null Brush), so the move commits unconditionally:
+   * Location += FinalDelta / Rotation = NewRotation with no hash work, no
+   * bump/touch dispatch, then SetActorZone(item, 0, 0). Any other non-view
+   * rider (a colliding map actor, a moving brush) keeps the explicit boundary. */
+  moveHeldRider(view,delta,rotation) {
+    const read=name=>this.namedReference(view,name).get();
+    const collides=read('bCollideActors')||read('bCollideWorld');
+    const held=Boolean(view?.lineage?.includes('engine.inventory'))&&!collides&&(read('Physics')|0)===0;
+    if(!held)throw new Error('MoveActor for a non-spawned rider is not linked');
+    const f=Math.fround;
+    const location=read('Location');
+    this.namedReference(view,'Location').set(location.map((v,i)=>f(f(v)+delta[i])));
+    this.namedReference(view,'Rotation').set([rotation[0]|0,rotation[1]|0,rotation[2]|0]);
+    this.setSpawnActorZone(view,0,0);
+    return {success:true,delta:[...delta],position:read('Location'),time:1,hit:null};
   }
   /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
    * the recovered relocation (hash remove, FindSpot/encroachment gates,

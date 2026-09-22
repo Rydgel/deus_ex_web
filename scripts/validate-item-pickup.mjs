@@ -67,6 +67,23 @@ for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','Ammo10mm2','Candybar0'
 assert.ok(get(live('WeaponCrowbar1'),'invPosX')>=0&&get(live('WeaponCrowbar1'),'invPosY')>=0,
   'the crowbar received an inventory-grid slot');
 
+// GiveTo's SetBase(Frobber) makes each picked-up item a based rider on the
+// player, so walking runs the recovered based-rider MoveActor for a held item
+// (Inventory ancestry, no collision, PHYS_None). Before this the first player
+// move raised "MoveActor for a non-spawned rider"; now the held item commits
+// Location += delta and tracks the player. docs/script-item-pickup.md.
+{
+  const crowbar=live('WeaponCrowbar1');
+  assert.equal(get(crowbar,'Base'),player,'the picked-up crowbar is based on the player');
+  const beforePlayer=game.player.position.slice(),beforeItem=get(crowbar,'Location').slice();
+  for(let i=0;i<20;i++)game.tick(1/60,{forward:1,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+  const dPlayer=game.player.position.map((v,i)=>v-beforePlayer[i]);
+  const dItem=get(crowbar,'Location').map((v,i)=>v-beforeItem[i]);
+  assert.ok(Math.hypot(...dPlayer)>1,'the player can walk while carrying the crowbar without pausing');
+  for(let i=0;i<3;i++)assert.ok(Math.abs(dPlayer[i]-dItem[i])<0.01,`the carried crowbar tracks the player on axis ${i}`);
+  assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'walking with a carried item raises no failure');
+}
+
 // A frobbed world NanoKey enters the key ring, not the inventory grid.
 {
   const nk=live('NanoKey0'),beforeKeys=get(player,'KeyList');

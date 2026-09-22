@@ -344,9 +344,13 @@ back into `Level.Actors`.
 * `InitializeInventory`'s ownerless `spawn(AmmoName)` branch: not reached by
   the Training data (ammo already present from the slot loop).
 * `MoveActor` rider recursion for a rider that is a map actor (host identity)
-  or that itself collides / carries riders: the rider move is the same
-  recovered body, but only spawned collision-view riders are admitted; other
-  riders raise an explicit error.
+  is now handled for the **held-item** case: a based Inventory-ancestry rider
+  with no collision and `PHYS_None` runs the recovered light body through
+  `ScriptRuntime.moveHeldRider` (the player's picked-up items —
+  [item pickup](script-item-pickup.md#carrying-a-picked-up-item-while-walking)).
+  A non-view rider that itself collides or carries riders still raises the
+  explicit error; only spawned collision-view riders take the full `playerMove`
+  body.
 * Non-pawn source `CheckEncroachment` inside `MoveActor` (`0x10399bf5`) is
   now part of the shared move for callers that supply the service; the
   decoration physics callers do not yet, so their behaviour is unchanged and
