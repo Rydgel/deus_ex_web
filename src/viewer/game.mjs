@@ -219,6 +219,21 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         const target = describeTarget(actor);
         return target?.mover ? doors.use(target, player.position, null) : { ok: false, message: target?.label ?? 'Nothing selected' };
       }
+      // A world inventory pickup (weapon, ammo, tool, food) runs the original
+      // right-click frob path: DeusExPlayer.ParseRightClick -> HandleItemPickup
+      // (which assigns the inventory-grid slot) -> DoFrob -> the item's real
+      // Pickup-state Frob give. This is the same public path the nanokey ring
+      // uses above; startup put the item in its auto Pickup state.
+      if (actor.lineage?.includes('engine.inventory')) {
+        const pawn = player.collisionActor;
+        runtime.namedReference(pawn, 'FrobTarget').set(actor);
+        runtime.processEvent(pawn, 'ParseRightClick', []);
+        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
+        const taken = runtime.namedReference(actor, 'Owner').get() === pawn
+          || runtime.namedReference(actor, 'bHidden').get()
+          || runtime.namedReference(actor, 'bDeleteMe').get();
+        return { ok: Boolean(taken), message: taken ? `Picked up ${itemLabel(actor)}` : '' };
+      }
       // Non-mover frob: run the actor's real Frob bytecode through the general VM
       // router (docs/scene-events.md). A handled Frob ran the real body; an
       // unhandled one has no Frob override (the empty-event no-op).

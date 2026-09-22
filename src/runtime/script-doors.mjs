@@ -545,6 +545,11 @@ export async function createScriptDoors({
       // same lifetime contract as the decoration PushSound above — so a pawn
       // keeps ticking through the audio gap instead of freezing mid-walk.
       if (path.startsWith('scriptedpawn.')) { decorationEffect(call, 'PawnSound'); return 0; }
+      // An inventory item plays a one-shot pickup sound from its Pickup-state
+      // Frob when it is taken. Record it as a deferred audio boundary (channel
+      // id 0), the same lifetime contract as the decoration/pawn sounds above,
+      // so the pickup completes instead of freezing at the audio gap.
+      if (/\.pickup\.frob$/.test(path)) { decorationEffect(call, 'PickupSound'); return 0; }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
@@ -785,6 +790,24 @@ export async function createScriptDoors({
       if (cls.record.key === 'engine.patrolpoint') { npcPatrolPoints.push(actor); npcPatrolPointSet.add(actor); break; }
   }
 
+  // World inventory pickups: Engine.Inventory-ancestry items placed in the map
+  // and not yet carried (no Owner, not hidden, positioned). Admitting them to
+  // the LoadMap startup runs SetInitialState -> GotoState('Auto'), the auto
+  // Pickup state (STATE_Auto) every Inventory class declares, so a frobbed item
+  // dispatches the real Inventory.Pickup.Frob give path instead of the empty
+  // base Actor.Frob. The spawned nanokey ring is Owner-carried, so it is
+  // excluded (docs/script-item-pickup.md).
+  const npcPickups = [];
+  const npcPickupSet = new Set();
+  for (const actor of level.actors ?? []) {
+    const record = actor && actor !== playerActor ? identities.get(actor) : null;
+    if (!record) continue;
+    if (runtime.namedReference(actor, 'Owner').get() || runtime.namedReference(actor, 'bHidden').get()
+      || !runtime.namedReference(actor, 'Location').get()) continue;
+    for (let cls = record.cls; cls; cls = cls.base)
+      if (cls.record.key === 'engine.inventory') { npcPickups.push(actor); npcPickupSet.add(actor); break; }
+  }
+
   const preparedNpcClasses = new Set();
   const prepareNpcMember = async member => {
     if (member.kind === 'State' || member.function) return;
@@ -866,6 +889,30 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    // World inventory pickups reach their give path when frobbed: link the
+    // Level.Game GameInfo (PickupQuery) and, for weapons, the default ammo class
+    // their GiveTo spawns. The item class chains themselves link in the
+    // Decoration/Inventory base-fixup pass below.
+    const gameInfo = runtime.namedReference(playerActor, 'Level').get();
+    const gameObject = gameInfo && runtime.namedReference(gameInfo, 'Game').get();
+    if (gameObject) { try { await prepareNpcClass(runtime.instance(gameObject).cls); }
+      catch (error) { npcFailures.set(gameObject, String(error?.message ?? error)); } }
+    for (const actor of npcPickups) {
+      try {
+        const cls = identities.get(actor).cls;
+        await prepareNpcClass(cls);
+        const ammoField = runtime.lookupMember(cls, 'fields', 'AmmoName');
+        const ammoRef = ammoField ? runtime.defaultValue(cls, ammoField) : null;
+        if (ammoRef) {
+          const ammoClass = await runtime.loadClass(ammoRef.asset, ammoRef.index);
+          await prepareNpcClass(ammoClass);
+          if (ammoClass.nameCounter === 0) ammoClass.nameCounter = 1;
+        }
+        if (cls.nameCounter === 0) cls.nameCounter = 1;
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
     // The LoadMap base-fixup pass (0x1038daad-0x1038dbe0) runs AttachTag
     // SetBase and FindBase on Decoration/Inventory/Pawn ancestry actors; the
     // SupportActor/Attach/Detach/BaseChange dispatches resolve through each
@@ -936,7 +983,7 @@ export async function createScriptDoors({
   // plus nothing else; the original dispatches to every non-null slot, so an
   // actor appended mid-startup of a class outside that scope would be
   // re-dispatched there while this host leaves it to its SpawnActor chain.
-  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor);
+  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor) || npcPickupSet.has(actor);
   // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
   // apply to every actor the original would have had in the array at LoadMap:
   // the serialized map actors and actors these same passes spawn. The player
@@ -1170,6 +1217,29 @@ export async function createScriptDoors({
     // pawn host props and never move, so the restore is just the field store
     // and Location.
     for (const actor of npcPatrolPoints) {
+      try {
+        identities.get(actor).store.clear();
+        if (actor.values?.Location) actor.position = [...actor.values.Location];
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
+    // The map reload returns picked-up items to the world. discardKeyRing above
+    // already removed the ring; detach everything JC acquired during play from
+    // the Inventory list — the serialized pickups (returned to the world by the
+    // store.clear below) and the ammo their GiveTo spawned (a play spawn, so it
+    // is not in the serialized map set and is left orphaned, holding no
+    // Location). spawnKeyRing re-adds the ring after resetNpcs.
+    let prevInv = null, invItem = runtime.namedReference(playerActor, 'Inventory').get();
+    while (invItem && typeof invItem === 'object') {
+      const nextInv = runtime.namedReference(invItem, 'Inventory').get();
+      if (npcPickupSet.has(invItem) || !initialActorSet.has(invItem)) {
+        if (prevInv) runtime.namedReference(prevInv, 'Inventory').set(nextInv);
+        else runtime.namedReference(playerActor, 'Inventory').set(nextInv);
+      } else prevInv = invItem;
+      invItem = nextInv;
+    }
+    for (const actor of npcPickups) {
       try {
         identities.get(actor).store.clear();
         if (actor.values?.Location) actor.position = [...actor.values.Location];
