@@ -135,6 +135,7 @@ import {
 } from './script-dynamic-load-object.mjs';
 import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
+import {execRotRand} from './script-rot-rand.mjs';
 
 const lower=name=>String(name).toLowerCase();
 /** exec bodies resolve each out expression to a raw address; a non-assignable
@@ -2132,6 +2133,7 @@ export class ScriptRuntime {
       if(call.argumentCount!==0)throw new Error('VRand accepts no arguments');
       return execVRand(this.rng);
     }
+    if(call.index===320)return execRotRand(call,{rng:this.rng});
     if(call.index===167){
       if(call.argumentCount!==1)throw new Error('Rand requires one integer argument');
       const max=refValue(call.evaluateArgument(0));

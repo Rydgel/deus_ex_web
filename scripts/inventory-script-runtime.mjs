@@ -56,6 +56,7 @@ const bindings={
     {index:167,scope:'Rand with an explicit shared original MSVCRT stream and signed int32 Max validation'},
     {index:195,scope:'FRand with the shared original MSVCRT random stream and float32 result'},
     {index:252,scope:'VRand with the original rejection-sampled unit-vector algorithm, shared MSVCRT stream and x87 reciprocal/float32 stores'},
+    {index:320,scope:'RotRand: Yaw then Pitch = (2*rand())%65535, Roll only when the optional bRoll is true, on the shared MSVCRT stream'},
     {index:261,scope:'FinishAnim wrapper and latent action 0x181 poll over the linked animation view; animation-tick completion remains an explicit boundary'},
     {index:231,scope:'Core Object.Log with recovered argument/default-tag order and an explicit synchronous GLog output-device service'},
     {index:256,scope:'Sleep, finite actor state path'},
