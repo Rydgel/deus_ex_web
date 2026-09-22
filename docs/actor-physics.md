@@ -124,3 +124,107 @@ Unverified: the script bodies (reflection arithmetic, `SetPhysics`) are doubles;
 the real ones run through the VM and native `setPhysics` at integration.
 `Hit.Actor` is always the LevelInfo stand-in. The x87 control word is the
 harness's `0x037f`; the game's runtime control word is not measured.
+
+## AActor::performPhysics (0x103c9770): dispatch and tail
+
+Non-Pawn actors use `AActor::performPhysics(DeltaTime)` (export thunk
+`0x10303242`; `APawn` overrides it). `0x103c9799`–`0x103c97ab` switches on
+`Physics - 2` (unsigned, `> 9` skips) through the table at `0x103c99a4`:
+
+| Physics | Target | Action |
+| --- | --- | --- |
+| 0 None, 1 Walking | — | nothing (out of table range) |
+| 2 Falling | `0x10302fef` → `0x103d0a50` | `physFalling(DeltaTime, 0)` |
+| 3 Swimming, 4 Flying, 5 Rotating, 10 Spider | `0x103c98ed` | nothing (tail only) |
+| 6 Projectile | `0x10302261` → `0x103d4600` | `physProjectile(DeltaTime, 0)` |
+| 7 Rolling | `0x10301109` → `0x103d4b80` | `physRolling(DeltaTime, 0)` |
+| 8 Interpolating | `0x10301a5a` → `0x103dd8a0` (`physPathing`) | `OldLocation = Location`, call, then `Velocity = (Location - OldLocation) * (1/DeltaTime)` |
+| 9 MovingBrush | `0x10303238` → `0x103de690` | same bracket around `physMovingBrush` |
+| 11 Trailer | `0x103029dc` → `0x103d7850` | `physTrailer(DeltaTime)` |
+
+For 8/9 the velocity store is: X/Y differences stored float32, the reciprocal
+`fdivr 1.0` stored float32 (`fst`) and multiplied, but Z keeps the extended
+difference and the extended reciprocal (`fmulp`). Not translated here.
+
+Tail (all Physics values), `src/runtime/actor-rotation.mjs` `performPhysicsTail`:
+
+1. `0x103c98ed`–`0x103c990a`: if any of RotationRate Pitch/Yaw/Roll has a nonzero
+   **low word** (`test 0xffff`), call `physicsRotation(DeltaTime)`. A rate of
+   exactly ±65536·k is skipped (`physicsRotationGate`).
+2. `0x103c9917`–`0x103c995f`: if `PendingTouch` (`+0x21c`) is set, dispatch
+   `PendingTouch->eventPostTouch(this)` (`FindFunctionChecked(NAME_PostTouch
+   [0x105835d0])` + ProcessEvent with `{Other = this}`), then **re-read**
+   PendingTouch and unlink one link: `this->PendingTouch = Old->PendingTouch;
+   Old->PendingTouch = NULL` (`services.postTouch(target, other)`). A PostTouch
+   that clears the field would make the original dereference NULL; the
+   translation throws there.
+
+## AActor::physicsRotation (0x103ca1e0) and fixedTurn (0x103c9dc0)
+
+`physicsRotation(actor, deltaTime, {moveActor, isProbing, endedRotation})`:
+
+1. `0x103ca20a`–`0x103ca254`: return unless bRotateToDesired or bFixedRotationDir;
+   with bRotateToDesired return when `Rotation == DesiredRotation` (all three full
+   int32 components; no event).
+2. `0x103ca25a`–`0x103ca29c`: `delta = _ftol(fild(RotationRate.X) * DeltaTime)`
+   for Roll, Yaw, Pitch. The int32 × float32 product is exact on the x87 stack;
+   `_ftol` truncates and keeps the low DWORD (`rotationDelta`, via
+   `x87int32/x87mul/x87ftol`). Binary64 is not enough: 20 corpus products (e.g.
+   `671088635 * 0.4f`, exactly `268435457.99999997`) truncate one higher in double,
+   and the original agrees with the x87 value.
+3. Yaw, then Pitch, then Roll (`0x103ca2a1`/`0x103ca2d5`/`0x103ca305`): an axis
+   turns only when its delta is nonzero and not (bRotateToDesired and
+   `DesiredRotation.X == NewRotation.X`); then `NewRotation.X =
+   fixedTurn(NewRotation.X, DesiredRotation.X, delta)`. Untouched axes keep their
+   unnormalized int32 value.
+4. `0x103ca32f`–`0x103ca3d7`: if NewRotation differs from Rotation, call
+   `XLevel->MoveActor(this, FVector(0,0,0), NewRotation, Hit(Time 1.0), 0, 0, 0, 0)`
+   through the level vtable `+0x88` (`services.moveActor(delta, rotation)`; its
+   Boolean is ignored). For a movable actor with StandingCount 0 and no brush the
+   original MoveActor short path (`0x10399104`–`0x1039923d`) only stores Rotation;
+   bStatic or !bMovable returns false without storing; riders/brushes enter the
+   full path. `setScriptRotation` (docs/script-set-rotation.md) implements that
+   short path and throws for the full one.
+5. `0x103ca3dd`–`0x103ca447`: re-read bRotateToDesired, Rotation and
+   DesiredRotation; if rotating to desired and now equal, and
+   `IsProbing(NAME_EndedRotation)` (hard-coded index 325 = `0x145`: Core
+   `0x10115670` returns true without a state frame or when ProbeMask bit 25 is
+   set), dispatch `EndedRotation` (no parms).
+
+`fixedTurn(current, desired, deltaRate, flags)` (`& 0xffff` on both angles first;
+`deltaRate == 0` returns `current & 0xffff`):
+
+| bFixedRotationDir | bRotateToDesired | Result |
+| --- | --- | --- |
+| yes | no | `current + deltaRate` |
+| yes | yes | Deus Ex branch: move `deltaRate` in its own sign's direction (distance measured that way round, adding 65536 as needed) but stop at desired |
+| no | yes | shortest way (`< 0x8000` difference, else the other way, `0x8000` itself goes the other way), by `min(distance, |deltaRate|)`; `neg` keeps INT_MIN negative |
+| no | no | `current` |
+
+All results are `& 0xffff`.
+
+### Validation
+
+`scripts/native-actor-rotation-oracle.py` enters the unchanged `performPhysics`
+with Physics None or Rotating, so the switch does nothing and the original gate,
+physicsRotation, fixedTurn, the **real** ULevel::MoveActor (level vtable `+0x88`
+→ `0x103990e0`; entering its full path at `0x10399240` raises), Core IsProbing
+and the PendingTouch tail run. EndedRotation/PostTouch are recorded at a
+ProcessEvent thunk. The validator passes the recorded MoveActor requests to
+`setScriptRotation`.
+
+```sh
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-native-actor-rotation.mjs
+node --test test/actor-rotation.test.mjs
+```
+
+Result: **1174 cases, maxError 0, 0 mismatches**. Stats: 1163 reach
+physicsRotation (11 stopped by the low-word gate), 934 MoveActor calls (18 refused
+by bStatic/!bMovable), 204 EndedRotation events, 4 PostTouch dispatches. Families:
+RandSpin-style fixed-direction fragment spins, post-bounce rotate-to-desired with
+0.75ⁿ-scaled rates, fixedTurn wrap/half-turn boundaries for both flag
+combinations, early returns, probe on/off, unmovable/static actors, the gate,
+PendingTouch chains, SecurityCamera-style PHYS_Rotating sweeps (RotationRate
+65535,65535,0 with bRotateToDesired), `_ftol` exactness stress and seeded int32
+extremes. The oracle also checks the MoveActor call-site constants (zero Delta,
+`Hit.Time = 1`, four zero flags) and the DeltaTime reaching physicsRotation.
