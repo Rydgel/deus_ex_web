@@ -2032,14 +2032,19 @@ export class ScriptRuntime {
       // bTraceActors?0x37:6 and extra=0 over a zeroed 44-byte FCheckResult
       // (Time=1.0, Item=-1); hit.Actor is the result and the record's
       // Location/Normal publish verbatim — zeroed on a miss.
-      if(call.argumentCount!==6)throw new Error('Trace takes six arguments');
+      // HitLocation/HitNormal/EndTrace are required; StartTrace, bTraceActors
+      // and Extent are optional (Actor.uc:845). A caller that omits a trailing
+      // optional (Pawn.TraceShot passes only five, dropping Extent) stops the
+      // P_GET_*_OPTX sequence early, so evaluate each optional only when present
+      // and fall back to the same pre-stored defaults the original uses.
+      if(call.argumentCount<3||call.argumentCount>6)throw new Error('Trace takes three to six arguments');
       const outLocation=call.evaluateArgument(0),outNormal=call.evaluateArgument(1);
       const end=refValue(call.evaluateArgument(2)),source=call.receiver;
       const startDefault=source.position;
-      const start=refValue(call.evaluateArgument(3))??startDefault;
+      const start=(call.argumentCount>3?refValue(call.evaluateArgument(3)):null)??startDefault;
       const traceDefault=Boolean(source.flags&1);
-      const traceActors=refValue(call.evaluateArgument(4))??traceDefault;
-      const extent=refValue(call.evaluateArgument(5))??[0,0,0];
+      const traceActors=(call.argumentCount>4?refValue(call.evaluateArgument(4)):null)??traceDefault;
+      const extent=(call.argumentCount>5?refValue(call.evaluateArgument(5)):null)??[0,0,0];
       const queries=this.levelFor(source)?.hash;
       if(typeof queries?.lineCheck!=='function')
         throw new Error('Trace requires the live level query services');

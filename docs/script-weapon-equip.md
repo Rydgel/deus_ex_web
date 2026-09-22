@@ -89,8 +89,64 @@ table. The crowbar is group 10 (`Digit0`).
   drawn in a single call.
 - **First-person view-model rendering** in the viewport (only the pose state is
   applied).
-- **Weapon fire / damage** and the crate's `TakeDamage` -> destruction (the next
-  increment).
+- **Weapon fire / damage** and the crate's `TakeDamage` -> destruction (see the
+  traced path and boundaries below).
+
+## Crate breaking: traced path and boundaries
+
+The original chain from a crowbar swing to a broken crate was traced end to end;
+several subsystems between "fire runs" and "the crate breaks" are unbuilt, so
+this increment stops here and records them precisely rather than faking a break.
+
+```text
+(fire input, unwired) -> DeusExWeapon.Fire (bHandToHand)
+  -> GotoState('NormalFire'); PlaySelectiveFiring (PlayAnim 'Attack'); PlayFiringSound
+  -> [MESH NOTIFY on the Attack animation] -> HandToHandAttack -> TraceFire(0.0)
+       GetAxes(ViewRotation); ComputeProjectileStart; AdjustAim
+       -> Pawn.TraceShot(HitLocation,HitNormal,EndTrace,StartTrace)   Pawn.uc:1173
+            -> Trace(...,True)  native 277, five args (Extent omitted)
+       -> ProcessTraceHit(Other,...) -> Other.TakeDamage(HitDamage*mult, Pawn(Owner), HitLocation, 1000*X, damageType)
+  -> DeusExDecoration Active.TakeDamage: HitPoints -= Damage; when <=0:
+       DropThings; Frag(WoodFragment,...) -> Spawn(WoodFragment)xN -> Destroy()
+       -> Containers.Destroyed (Spawn TrashPaper/Rat/contents) -> DeusExDecoration.Destroyed
+```
+
+Landed here: the native-277 `Trace` optional-argument fix, so `TraceShot`'s
+five-argument call runs instead of raising the arg-count boundary
+(`validate-trace-shot.mjs`).
+
+Boundaries that still stand (each a real, separate slice):
+
+1. **No fire input is wired in Play.** Only equip/selection is connected; there
+   is no left-click -> `Fire`. This is deliberate — see boundary 2.
+2. **The crowbar's hit is a mesh notify.** `HandToHandAttack` /
+   `OwnerHandToHandAttack` are "called by the MESH NOTIFY for the H2H weapons"
+   during the `Attack` animation. The animation-notify subsystem (decoding and
+   dispatching a `LodMesh` sequence's notify frames) is not implemented, so a
+   swing never triggers `TraceFire` on its own.
+3. **The weapon fire state machine is latent and must run under the tick
+   scheduler.** `Fire` -> `GotoState('NormalFire')` -> `Sleep(GetShotTime())` /
+   `FinishAnim` are latent actions. Driving `Fire`/`TraceFire`/`HandToHandAttack`
+   directly, outside the ticked latent scheduler, runs the state body without
+   its suspension points and grows memory without bound (an *external*-memory
+   runaway that a JS heap cap does not contain — it OOM-killed the process in
+   testing). This path must only be exercised through the real per-frame latent
+   scheduler; the safe `TraceShot`-into-the-floor check
+   (`validate-trace-shot.mjs`) covers the native-277 fix without touching it.
+   `Pawn.TraceShot` is itself recursive (re-traces from the hit on a Pawn); any
+   future wiring must bound that (and, per the project's direction, heavy or
+   recursive per-frame work belongs in the Rust/Wasm kernel, not deep JS
+   recursion).
+4. **Breakable decorations are not in their auto state `Active`.** LoadMap
+   startup state admission covers pawns, patrol points and Inventory pickups,
+   not decorations, so a crate's `Active.TakeDamage` (the whole destruction
+   logic) is out of scope — its damage resolves to the empty base `Actor.TakeDamage`.
+5. **HitDamage math:** one crowbar hit is 6, below the crate's 10 HitPoints, so
+   at least two connecting swings are required.
+6. **Destruction spawns are unadmitted:** `Frag` -> `Spawn(WoodFragment)`,
+   `DropThings` -> `Spawn(contents)` and `Containers.Destroyed` ->
+   `Spawn(TrashPaper/Rat)` need `SpawnActor` admission for those Fragment /
+   Decoration / Pawn / content classes.
 
 ## Reset lifecycle
 

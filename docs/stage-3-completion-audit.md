@@ -13,9 +13,15 @@
 > `PlayAnim('Select')`, and the select sound is a recorded audio boundary. The
 > HUD shows the in-hand item. No object belt is modeled — number keys resolve
 > the weapon by `InventoryGroup` through the engine's `Inventory.WeaponChange`
-> walk. First-person view-model rendering, per-frame put-away, and weapon fire /
-> the crate's `TakeDamage` -> destruction remain the next increment. Stage 3
-> remains open. See [weapon equip](script-weapon-equip.md).
+> walk. The instant-hit trace's native-277 `Trace` optional-argument fix landed
+> (`Pawn.TraceShot`'s five-argument call now runs — `validate-trace-shot.mjs`),
+> but the full crowbar -> crate chain is traced-and-recorded, not built: it is
+> gated on the animation mesh-notify dispatch, the latent fire state machine
+> (which must run under the tick scheduler — exercising it in isolation runs
+> away in memory), decoration auto-state `Active` admission, and the destruction's
+> Fragment/content spawns. First-person view-model rendering and per-frame
+> put-away also remain. Stage 3 remains open. See
+> [weapon equip](script-weapon-equip.md) for the traced path and boundaries.
 
 > **Checkpoint update, 2026-09-21 (Training opening walk):** held forward
 > input from `PlayerStart1` is sustained until `UN_maindoor`, which opens
