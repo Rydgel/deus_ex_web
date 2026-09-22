@@ -39,22 +39,26 @@ assert.equal(scene.root.visible,false,'scene root starts hidden; the viewer reve
 // Layer composition: all 18 captured NPCs, plus the visible prop set.
 assert.equal(scene.summary.npcs,18,'all captured NPC identities render');
 assert.equal(scene.npcActors.length,18);
-assert.equal(scene.summary.props,45,`expected 45 visible prop meshes, got ${scene.summary.props}`);
+assert.equal(scene.summary.props,46,`expected 46 visible prop meshes, got ${scene.summary.props}`);
 assert.equal(scene.actors.length,scene.summary.npcs+scene.summary.props);
 assert.equal(scene.summary.poseBackend,'rust-wasm',scene.summary.kernelError);
 
-// Errors are non-fatal texture-decode skips only, and never an NPC.
-for(const e of scene.summary.errors){
-  assert.ok(!(e.actor in TRAINING_NPC_IDENTITIES),`captured NPC failed to render: ${e.actor}: ${e.message}`);
-  assert.match(e.message,/Texture|skin|unsupported/,`unexpected mesh error for ${e.actor}: ${e.message}`);
-}
+// No actor fails outright; every actor renders at least its solid faces.
+assert.deepEqual(scene.summary.errors,[],`unexpected mesh errors: ${JSON.stringify(scene.summary.errors)}`);
+
+// The one undecodable skin in Training is the NanoKey's procedural FireTexture
+// effect face; it is skipped so the solid key body still draws, and recorded.
+assert.equal(scene.summary.skipped.length,1,`expected only the NanoKey fire face skipped: ${JSON.stringify(scene.summary.skipped)}`);
+assert.equal(scene.summary.skipped[0].actor,'NanoKey0');
+assert.match(scene.summary.skipped[0].texture,/biocell_sfx/);
 
 // The props JC walks into and frobs must be present with real geometry.
 const propByName=new Map(scene.propActors.map(p=>[p.summary.actor,p]));
 for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','CrateBreakableMedGeneral1','CrateBreakableMedGeneral2',
   'CrateUnbreakableMed0','CrateUnbreakableSmall0','Plant0','Plant2','Ammo10mm2','DataCube0','Keypad0',
-  'LightSwitch0','SecurityCamera0','Multitool0'])
+  'LightSwitch0','SecurityCamera0','Multitool0','NanoKey0'])
   assert.ok(propByName.has(name),`missing prop mesh ${name}`);
+assert.ok(propByName.get('NanoKey0').summary.triangles>0,'the NanoKey body renders despite its skipped effect face');
 
 // Every prop mesh carries finite geometry, matched UVs and a decoded skin.
 let propTriangles=0;
@@ -111,4 +115,4 @@ assert.deepEqual(snapshot(),before,'disposing meshes must not mutate runtime act
 
 console.log(`actor mesh scene: ${scene.summary.npcs} NPC + ${scene.summary.props} prop meshes, `+
   `${scene.summary.triangles} triangles (${propTriangles} prop), backend ${scene.summary.poseBackend}, `+
-  `${scene.summary.errors.length} non-fatal skip(s): ${scene.summary.errors.map(e=>e.actor).join(', ')||'none'}`);
+  `${scene.summary.skipped.length} skipped face(s): ${scene.summary.skipped.map(s=>`${s.actor}/${s.texture}`).join(', ')||'none'}`);

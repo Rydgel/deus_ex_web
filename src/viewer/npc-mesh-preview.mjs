@@ -84,6 +84,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
     dispose(){for(const actor of actors)actor.dispose();},
     summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
       npcs:npcActors.length,props:propActors.length,
+      skipped:actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s}))),
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
       shading:'texture-only inspection',startup:'original'}};
 }
@@ -121,7 +122,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     for(let i=0;i<payload.objectReferences.length;i++)fallback=runtime.getActorMeshTexture(actor,i)??fallback;
     return fallback;
   };
-  const root=new THREE.Group(),materials=[],gpuTextures=[],groups=new Map();
+  const root=new THREE.Group(),materials=[],gpuTextures=[],groups=new Map(),skipped=[];
   let disposed=false,lastPose=null;
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
   const dispose=()=>{
@@ -164,44 +165,57 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       }
       group.faces.push(faceIndex);
     }
+    const failed=[];
     for(const [key,group] of groups) {
-      let flags=group.flags;
-      let data=await textures.get(group.reference.asset,group.reference.index,Boolean(flags&POLY.Masked));
-      if(data.procedural||data.values.AnimNext)throw new Error('Animated/procedural mesh preview is unsupported');
-      for(const [name,flag] of Object.entries({bMasked:POLY.Masked,bTranslucent:POLY.Translucent,
-        bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))
-        if(data.values[name])flags|=flag;
-      if(flags&POLY.Masked&&!data.masked)data=await textures.get(group.reference.asset,group.reference.index,true);
-      const first=data.mips[0],texture=new THREE.DataTexture(first.data,first.width,first.height,THREE.RGBAFormat);
-      gpuTextures.push(texture);texture.colorSpace=THREE.SRGBColorSpace;texture.flipY=false;
-      texture.wrapS=texture.wrapT=THREE.RepeatWrapping;
-      texture.magFilter=flags&POLY.NoSmooth?THREE.NearestFilter:THREE.LinearFilter;
-      const last=data.mips.at(-1),complete=last.width===1&&last.height===1;
-      if(complete&&data.mips.length>1)texture.mipmaps=data.mips;
-      texture.generateMipmaps=!complete;
-      texture.minFilter=flags&POLY.NoSmooth?THREE.NearestMipmapNearestFilter:THREE.LinearMipmapLinearFilter;
-      texture.needsUpdate=true;
-      const material=new THREE.MeshBasicMaterial({map:texture,
-        side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
-      materials.push(material);
-      if(flags&(POLY.Translucent|POLY.Modulated)) {
-        material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
-        material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
-        material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+      try {
+        let flags=group.flags;
+        let data=await textures.get(group.reference.asset,group.reference.index,Boolean(flags&POLY.Masked));
+        if(data.procedural||data.values.AnimNext)throw new Error('Animated/procedural mesh skin is unsupported');
+        for(const [name,flag] of Object.entries({bMasked:POLY.Masked,bTranslucent:POLY.Translucent,
+          bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))
+          if(data.values[name])flags|=flag;
+        if(flags&POLY.Masked&&!data.masked)data=await textures.get(group.reference.asset,group.reference.index,true);
+        const first=data.mips[0],texture=new THREE.DataTexture(first.data,first.width,first.height,THREE.RGBAFormat);
+        gpuTextures.push(texture);texture.colorSpace=THREE.SRGBColorSpace;texture.flipY=false;
+        texture.wrapS=texture.wrapT=THREE.RepeatWrapping;
+        texture.magFilter=flags&POLY.NoSmooth?THREE.NearestFilter:THREE.LinearFilter;
+        const last=data.mips.at(-1),complete=last.width===1&&last.height===1;
+        if(complete&&data.mips.length>1)texture.mipmaps=data.mips;
+        texture.generateMipmaps=!complete;
+        texture.minFilter=flags&POLY.NoSmooth?THREE.NearestMipmapNearestFilter:THREE.LinearMipmapLinearFilter;
+        texture.needsUpdate=true;
+        const material=new THREE.MeshBasicMaterial({map:texture,
+          side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
+        materials.push(material);
+        if(flags&(POLY.Translucent|POLY.Modulated)) {
+          material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
+          material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
+          material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+        }
+        material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length};
+        const geometry=new THREE.BufferGeometry();
+        const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
+        geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
+        geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+        group.geometry=geometry;
+        const mesh=new THREE.Mesh(geometry,material);
+        mesh.onAfterRender=rendered;
+        mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
+      } catch(error) {
+        // Skip a single undecodable face group (e.g. a procedural FireTexture
+        // effect face) and keep drawing the mesh's solid faces. Animated and
+        // procedural mesh skins stay unsupported; the drawn faces are exact.
+        failed.push(key);skipped.push({texture:group.reference.key,message:error.message});
       }
-      material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length};
-      const geometry=new THREE.BufferGeometry();
-      const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
-      geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
-      geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-      group.geometry=geometry;
-      const mesh=new THREE.Mesh(geometry,material);
-      mesh.onAfterRender=rendered;
-      mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
     }
-    const summary={actor:actorName,mesh:meshReference.key,triangles:faces.length,
+    // Drop skipped groups so the live pose/UV updates only touch drawn geometry.
+    for(const key of failed)groups.delete(key);
+    if(!root.children.length)
+      throw new Error(skipped.map(s=>`${s.texture}: ${s.message}`).join('; ')||`${actorName} has no renderable faces`);
+    const summary={actor:actorName,mesh:meshReference.key,skipped,
+        triangles:[...groups.values()].reduce((total,group)=>total+group.faces.length,0),
         textures:[...new Set([...groups.values()].map(group=>group.reference.key))],
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
         shading:'texture-only inspection',startup:'original'};
