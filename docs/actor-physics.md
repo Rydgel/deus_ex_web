@@ -125,6 +125,15 @@ the real ones run through the VM and native `setPhysics` at integration.
 `Hit.Actor` is always the LevelInfo stand-in. The x87 control word is the
 harness's `0x037f`; the game's runtime control word is not measured.
 
+## AActor::processLanded (0x103cef60) for Inventory and Projectile sources
+
+See [landing.md](landing.md#non-pawn-sources-and-the-bbouncevelocity-zone):
+`actorLanded(host, hit, {zone})` in `src/runtime/landing.mjs` — the bBounceVelocity
+zone branch (`0x103cef92`, every non-Pawn), then `Landed(HitNormal)` and, only
+while still PHYS_Falling, `setPhysics(PHYS_None, HitActor)` (`0x103d03a9`). The
+Decoration footprint/counter branch and the Pawn blocks are skipped. 506-case
+landing corpus, maxError 0.
+
 ## AActor::performPhysics (0x103c9770): dispatch and tail
 
 Non-Pawn actors use `AActor::performPhysics(DeltaTime)` (export thunk

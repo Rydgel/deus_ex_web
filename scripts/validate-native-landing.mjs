@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { processLanded, decorationLanded } from '../src/runtime/landing.mjs';
+import { processLanded, decorationLanded, actorLanded } from '../src/runtime/landing.mjs';
 import { safeNormal } from '../src/runtime/steps.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
@@ -78,6 +78,36 @@ for (const velocity of [[80, -20, -120], [0, 0, -300], [120, -30, 18], [-24, 12,
   invariancePairs.push([off, on]);
 }
 
+// Non-Decoration non-Pawn landings: an Inventory (dropped Lockpick) and a
+// Projectile (fragment) ancestry. Only Landed and, while still falling,
+// setPhysics(PHYS_None) run; actor+0x324 is a subclass field and must stay intact.
+for (const ancestry of ['inventory', 'projectile']) {
+  for (const velocity of [[0, 0, 0], [80, -20, -120], [-60, 45, -260], [0, 0, -950]]) {
+    for (const base of [null, 'floor']) for (const eventPhysics of [null, 0, 1, 2, 3]) {
+      add({ ancestry, landingCounter: 0x5a5a5a5a, physics: 2, base, velocity, eventPhysics, acceleration: [3, -4, 5],
+        position: [-804.27, 1125.16, -84.02].map(f), radius: ancestry === 'inventory' ? 11.75 : 6, height: ancestry === 'inventory' ? f(1.9) : 1,
+        remaining: f(.2), iterations: 3 });
+    }
+  }
+  for (const physics of [0, 1, 3, 7]) add({ ancestry, landingCounter: 7, physics, base: 'floor', velocity: [10, 0, -5], acceleration: [0, 0, 0] });
+  for (const normal of [[0, 0, 1], [.6, 0, .8], [0, -.71, .70420164]]) add({ ancestry, landingCounter: 0, normal: normal.map(f), velocity: [1, 2, -300], acceleration: [0, 0, 0] });
+}
+// processLanded's first branch: a non-Pawn (bIsPawn clear) in a bBounceVelocity
+// zone with a nonzero ZoneVelocity is bounced (Velocity = ZoneVelocity + 80 Z) and
+// nothing else happens; -0 components compare equal to zero. A Pawn (bIsPawn set)
+// skips it. '-0' encodes a negative zero through JSON.
+for (const zoneVelocity of [[0, 0, 0], ['-0', 0, '-0'], [30, 0, 0], ['-0', 0, 5], [-200, 50, -10], [0, f(1e-30), 0], [0, 0, -80]]) {
+  for (const bBounceVelocity of [false, true]) {
+    const zone = { bBounceVelocity, velocity: zoneVelocity };
+    for (const ancestry of ['inventory', 'projectile']) add({ ancestry, zone, landingCounter: 0x5a5a5a5a, velocity: [80, -20, -120], acceleration: [0, 0, 0] });
+    // A spent counter (5) skips the read-only footprint probes; the bounce path
+    // leaves it at 5 while the ordinary decoration landing resets it to 0.
+    add({ decoration: true, zone, landingCounter: 5, velocity: [80, -20, -120], acceleration: [0, 0, 0], supportTime: f(1),
+      radius: 23.26, height: 43.88, position: [-804.27, 1125.16, -84.02].map(f) });
+    add({ bIsPawn: true, zone, remaining: f(.2), iterations: 2 });
+  }
+}
+
 const directory = path.resolve('reports/movement/native-landing');
 await mkdir(directory, { recursive: true });
 const casesFile = path.join(directory, 'cases.json');
@@ -124,8 +154,13 @@ function run(input) {
     },
   };
   pawn.landingCounter = input.landingCounter ?? 0;
-  if (input.decoration) decorationLanded(pawn, { normal: input.normal, actor: 'floor' });
-  else processLanded(pawn, { normal: input.normal, actor: 'floor' }, input.remaining, input.iterations);
+  const zone = input.zone && { bBounceVelocity: input.zone.bBounceVelocity,
+    ZoneVelocity: input.zone.velocity.map(value => (value === '-0' ? -0 : value)) };
+  const hit = { normal: input.normal, actor: 'floor' };
+  if (input.ancestry) actorLanded(pawn, hit, { zone });
+  else if (input.decoration) decorationLanded(pawn, hit, { zone });
+  // The Pawn path never reads the zone: bIsPawn skips the bBounceVelocity branch.
+  else processLanded(pawn, hit, input.remaining, input.iterations);
   return { position: pawn.position, velocity: pawn.velocity, acceleration: pawn.acceleration,
     physics: pawn.physics, landingCounter: pawn.landingCounter, base: pawn.base, events };
 }
@@ -154,7 +189,7 @@ const outcome = result => ({ position: result.position, velocity: result.velocit
   acceleration: result.acceleration, physics: result.physics, base: result.base, landingCounter: result.landingCounter });
 const invarianceFailures = invariancePairs.filter(([off, on]) => !same(outcome(native.results[off]), outcome(native.results[on])));
 const summary = { binaryHashes: native.hashes, cases: cases.length,
-  scope: 'dry Pawn and non-Pawn decoration landing with original setPhysics and controlled world, Landed, support basing, walking and CRT random callbacks',
+  scope: 'dry Pawn, non-Pawn decoration and non-Decoration (inventory/projectile ancestry) landing, including the bBounceVelocity zone branch, with original setPhysics and controlled world, Landed, support basing, walking and CRT random callbacks',
   comparison: 'exact state, query parameters, callback order and arguments, including signed zero', maxError, mismatches,
   footprintInvariancePairs: invariancePairs.length, invarianceFailures };
 await writeFile(path.join(directory, 'comparison.json'), JSON.stringify({ summary, comparisons }, null, 2));

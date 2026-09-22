@@ -43,4 +43,36 @@ This establishes landing decisions under the supplied callback boundaries. Real
 query, fitting, relocation, basing and random-stream implementations have separate
 native comparisons and are connected in Play. Original source supplies JC's
 bJustLanded change; animation, audio and damage remain explicit later-stage
-callbacks. Water/zone-bounce and non-Pawn landing are outside the dry slice.
+callbacks. Water is outside the dry slice.
+
+## Non-Pawn sources and the bBounceVelocity zone
+
+`processLanded` is class-dependent only through inlined IsA walks and bIsPawn:
+
+| Original instructions | Source | Behavior |
+| --- | --- | --- |
+| `0x103cef92`–`0x103cf11f` | any with bIsPawn (`+0x28` bit `0x800000`) clear | in a zone with bBounceVelocity (ZoneInfo `+0x388` bit 9) and a ZoneVelocity with any component that does not compare equal to 0 (`-0`/NaN count as 0): `Velocity = (0+ZV.X, 0+ZV.Y, 80+ZV.Z)`, return. No Landed, no physics change, no counter reset. |
+| `0x103cf124` | IsA(Pawn) | the dry Pawn path above (`processLanded`) |
+| `0x103cf597`–`0x103d02a1` | IsA(ADecoration `0x10578d48`) | read-only landing-footprint probes while `numLandings` (`+0x324`) < 5, else reset it to 0 (`decorationLanded`) |
+| `0x103d02ab`–`0x103d03b5` | all | `Landed(HitNormal)`; if still PHYS_Falling: `setPhysics(IsA(Pawn) ? Walking : None, HitActor)` |
+| `0x103d03ba`–`0x103d0488` | IsA(Pawn) and Walking | SafeNormal Acceleration, `physWalking` if remaining > 0.01 |
+
+For an Inventory (a dropped Lockpick) or a Projectile/Fragment, IsA(Decoration)
+is false, so `actorLanded(host, hit, {zone})` is: the bBounceVelocity branch, then
+Landed, then `setPhysics(PHYS_None, HitActor)` only while still falling. `+0x324`
+is a subclass field there and is never touched; a Landed that selects Walking does
+not start walking for a non-Pawn. `decorationLanded` and `actorLanded` accept an
+optional `{zone: {bBounceVelocity, ZoneVelocity}}` for the first branch;
+`zoneBounceLanding` is exported. Fragments normally bounce (bBounce) and never
+call processLanded (docs/actor-physics.md).
+
+`scripts/native-landing-oracle.py` now also runs fake Lockpick/WoodFragment
+script classes chained to the DLL's `AInventory` (`0x10576f70`) and `AProjectile`
+(`0x10578850`) static classes, bIsPawn per case, and a separate ZoneInfo with
+bBounceVelocity and ZoneVelocity (signed zeros included). The full corpus is **506
+cases, maxError 0**: 122 inventory/projectile landings (Landed physics changes,
+bases, normals, the `+0x324` sentinel unchanged), 15 bounced non-Pawn landings
+(inventory, projectile and decoration; a bounced decoration keeps its counter),
+zero/`-0` zone velocities that land normally, and 14 bIsPawn Pawn cases (7 in
+bBounceVelocity zones) that take the ordinary Pawn path. The footprint invariance
+pairs still hold.

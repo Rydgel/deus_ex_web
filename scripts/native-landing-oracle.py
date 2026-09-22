@@ -43,6 +43,24 @@ class NativeLanding(collision.NativeCollision):
         # decoration class a null SuperField so IsA(Pawn) walks off the chain.
         self.decoration_class = 0x10578d48
         self.write(self.decoration_class + 0x28, 'I', 0)
+        # Non-Decoration non-Pawn ancestry: fake script classes chained to the
+        # DLL's own AInventory (Lockpick -> SkilledTool -> DeusExPickup -> Pickup
+        # -> AInventory) and AProjectile (WoodFragment -> DeusExFragment ->
+        # Fragment -> AProjectile), both -> AActor (0x1057cdf0) -> none.
+        actor_class = 0x1057cdf0
+        self.write(actor_class + 0x28, 'I', 0)
+        self.ancestry = {}
+        for name, native, depth in [('inventory', 0x10576f70, 4), ('projectile', 0x10578850, 3)]:
+            self.write(native + 0x28, 'I', actor_class)
+            parent = native
+            for _ in range(depth):
+                cls = self.alloc(0x40)
+                self.write(cls + 0x28, 'I', parent)
+                parent = cls
+            self.ancestry[name] = parent
+        # A separate ZoneInfo for the bBounceVelocity cases (other cases keep the
+        # floor actor as their zone, as before).
+        self.zone = self.alloc(0x1000)
 
     def actor_name(self, pointer):
         if pointer not in [0, self.floor]:
@@ -113,8 +131,21 @@ class NativeLanding(collision.NativeCollision):
 
     def landed(self, case):
         self.case, self.random_index = case, 0
-        # A Pawn (default) or a non-Pawn decoration (class 0x10578d48).
-        self.write(self.pawn + 0x24, 'I', self.decoration_class if case.get('decoration') else 0x1058c660)
+        # A Pawn (default), a non-Pawn decoration (class 0x10578d48), or an
+        # inventory/projectile ancestry.
+        cls = self.ancestry.get(case.get('ancestry'))
+        if cls is None:
+            cls = self.decoration_class if case.get('decoration') else 0x1058c660
+        self.write(self.pawn + 0x24, 'I', cls)
+        self.write(self.pawn + 0x28, 'I', 0x800000 if case.get('bIsPawn') else 0)
+        zone = case.get('zone')
+        if zone is None:
+            self.write(self.pawn + 0xc8, 'I', self.floor)
+        else:
+            signed = [-0.0 if value == '-0' else value for value in zone['velocity']]
+            self.write(self.zone + 0x388, 'I', 0x200 if zone['bBounceVelocity'] else 0)
+            self.write(self.zone + 0x328, '3f', *signed)
+            self.write(self.pawn + 0xc8, 'I', self.zone)
         self.write(self.pawn + 0x324, 'I', case.get('landingCounter', 0))
         self.write(self.pawn + 0x30, 'B', case['physics'])
         self.write(self.pawn + 0xc4, 'I', self.floor if case['base'] else 0)

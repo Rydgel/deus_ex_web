@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { processLanded } from '../src/runtime/landing.mjs';
+import { processLanded, actorLanded, decorationLanded } from '../src/runtime/landing.mjs';
 
 const f = Math.fround;
 // Expectations below were captured from the original DLL in the optional
@@ -68,4 +68,40 @@ test('a changed fitted position keeps falling and perturbs velocity even when re
   assert.deepEqual(state.velocity, [124.93515014648438, 12.605059623718262, -300]);
   assert.deepEqual(state.acceleration, [20, -50, 0]);
   assert.equal(state.physics, 2);
+});
+
+// Non-Decoration non-Pawn (inventory/projectile ancestry) and bBounceVelocity
+// landings, captured from the original by scripts/validate-native-landing.mjs.
+function actor(changes = {}) {
+  const events = [];
+  const state = { velocity: [80, -20, -120], acceleration: [0, 0, 0], physics: 2, landingCounter: 0x5a5a5a5a,
+    landedEvent(normal) { events.push({ landed: normal }); },
+    setPhysics(physics, floor) { events.push({ setPhysics: physics, floor }); state.physics = physics; state.velocity = [0, 0, 0]; },
+    ...changes,
+  };
+  return { state, events };
+}
+
+test('an inventory or projectile landing is Landed then PHYS_None, leaving subclass fields alone', () => {
+  const { state, events } = actor();
+  actorLanded(state, hit);
+  assert.deepEqual(events, [{ landed: [0, 0, 1] }, { setPhysics: 0, floor: 'floor' }]);
+  assert.equal(state.landingCounter, 0x5a5a5a5a);
+  const walking = actor({ landedEvent() { walking.state.physics = 1; } });
+  actorLanded(walking.state, hit);
+  assert.equal(walking.state.physics, 1); // no setPhysics and no walking continuation for a non-Pawn
+});
+
+test('a bBounceVelocity zone bounces a non-Pawn instead of landing it', () => {
+  const zone = { bBounceVelocity: true, ZoneVelocity: [-0, 0, 5] };
+  for (const land of [actorLanded, decorationLanded]) {
+    const { state, events } = actor({ landingCounter: 5 });
+    land(state, hit, { zone });
+    assert.deepEqual(events, []);
+    assert.ok(Object.is(state.velocity[0], 0) && state.velocity[2] === 85);
+    assert.equal(state.landingCounter, 5);
+  }
+  const still = actor();
+  actorLanded(still.state, hit, { zone: { bBounceVelocity: true, ZoneVelocity: [-0, 0, -0] } });
+  assert.equal(still.events.length, 2); // -0 components compare equal to zero
 });

@@ -42,10 +42,42 @@ export function processLanded(pawn, hit, remainingTime, iterations) {
  * dispatch the script Landed(HitNormal) event, then — only while still
  * PHYS_Falling after that event — call setPhysics(PHYS_None), which rebases the
  * decoration onto the floor actor and zeroes its velocity and acceleration
- * (0x103c95f0). The moving-zone landing-velocity branch (nonzero ZoneVelocity) and
- * the read-only footprint probes are outside this dry entry point. */
-export function decorationLanded(pawn, hit) {
+ * (0x103c95f0). Passing `{zone}` applies the bBounceVelocity branch first (see
+ * zoneBounceLanding); without it that branch is outside this entry point. The
+ * read-only footprint probes are not reproduced. */
+export function decorationLanded(pawn, hit, { zone } = {}) {
+  if (zoneBounceLanding(pawn, zone)) return;
   pawn.landingCounter = 0;
   pawn.landedEvent(hit.normal);
   if (pawn.physics === 2) pawn.setPhysics(0, hit.actor);
+}
+
+/** Original AActor.processLanded for a non-Pawn source that is not a Decoration
+ * (e.g. an Inventory such as a dropped Lockpick, or a Projectile/Fragment):
+ * 0x103cef60 -> IsA(Pawn) false -> 0x103cf597 -> IsA(ADecoration) false ->
+ * 0x103d02ab. After the bBounceVelocity zone branch (zoneBounceLanding, applied
+ * when `zone` is passed) it dispatches the script Landed(HitNormal) event
+ * (ProcessEvent, NAME_Landed) and — only while still PHYS_Falling afterwards —
+ * calls setPhysics(PHYS_None, HitActor) (0x103d03a9). There is no landing counter
+ * (actor+0x324 belongs to the subclass and is untouched), no footprint probe and,
+ * for a non-Pawn, no walking continuation even if Landed selected PHYS_Walking. */
+export function actorLanded(host, hit, { zone } = {}) {
+  if (zoneBounceLanding(host, zone)) return;
+  host.landedEvent(hit.normal);
+  if (host.physics === 2) host.setPhysics(0, hit.actor);
+}
+
+/** processLanded's first test (0x103cef92-0x103cf11f), reached by every source
+ * whose bIsPawn (actor+0x28 bit 0x800000) is clear: in a zone with bBounceVelocity
+ * (ZoneInfo+0x388 bit 9) and a nonzero ZoneVelocity, store
+ * Velocity = (0 + ZV.X, 0 + ZV.Y, 80 + ZV.Z) and return — no Landed event, no
+ * physics change, no landing-counter reset. Each ZoneVelocity component is
+ * fcomp'ed against 0.0, so -0 and NaN count as zero. `zone` is
+ * {bBounceVelocity, ZoneVelocity}. */
+export function zoneBounceLanding(host, zone) {
+  if (!zone?.bBounceVelocity) return false;
+  const velocity = (zone.ZoneVelocity ?? [0, 0, 0]).map(f);
+  if (!velocity.some(value => value < 0 || value > 0)) return false;
+  host.velocity = [f(0 + velocity[0]), f(0 + velocity[1]), f(80 + velocity[2])];
+  return true;
 }
