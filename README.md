@@ -68,12 +68,15 @@ or push further hosting updates unless the user asks.
   use the original frame textures, portraits and bitmap fonts, replacing the
   browser-styled dialog ([visible HUD scope](docs/script-play-hud.md)). Walk
   forward from Training's spawn to see Jaime's transmission.
-- Training automatically shows **14 original character/bot meshes** in Play and
-  Inspect, including the people beside and behind Jaime. **NPC mesh preview →
-  Focus** jumps the inspection camera between them. The meshes stay visible after
-  returning to Play or resetting to Player start. These are static, texture-only previews; NPC startup,
-  lighting and AI remain unfinished. The four guards currently require unsupported
-  reflective materials. See [preview scope and evidence](docs/npc-mesh-preview.md).
+- Training automatically shows **every visible actor mesh** in Play and Inspect —
+  18 original character/bot meshes plus 46 prop meshes (crates, the crowbar and
+  combat-knife pickups, ammo, plants, datacubes, keypads, security cameras, lights
+  and the nanokey), so the collidable props JC walks into are no longer invisible.
+  **NPC mesh preview → Focus** jumps the inspection camera between the characters.
+  The meshes stay visible after returning to Play or resetting to Player start.
+  These are texture-only previews; original mesh lighting, distance LOD, item
+  pickup and weapon use remain unfinished, and one procedural NanoKey effect face
+  is skipped. See [preview scope and evidence](docs/npc-mesh-preview.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.

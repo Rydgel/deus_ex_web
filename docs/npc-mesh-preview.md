@@ -74,3 +74,56 @@ Visibility follow-up: browser checks confirm automatic loading in Play,
 Inspect-to-Play switching and Player start all retain 18 visible mesh previews
 with no runtime error. The former mode/reset handlers incorrectly hid the
 mesh group along with the focus controls; only the controls are now hidden.
+
+## Whole-level prop meshes (`createActorMeshScene`)
+
+Play no longer draws only the 18 captured NPCs. `createActorMeshScene` composes
+the captured NPC layer with a general prop layer over every other visible
+`LodMesh` actor in the live level — crates, the crowbar and combat-knife pickups,
+ammo, plants, datacubes, keypads, security cameras, shop/cage lights, lamps,
+multitools and the world NanoKey — so the collidable props JC walks into and
+frobs are no longer invisible cylinders. `main.mjs` builds it for any map that
+has a Play game. Training renders 18 NPC + 46 prop meshes (~11,974 triangles).
+
+Props reuse the same `createActorMeshPreview`. A captured NPC keeps its measured
+GObjObjects index; a prop uses a synthetic per-actor cache key. Each preview owns
+an isolated `GetFrame` cache, and that key selects only tween/blend heap identity,
+never the drawn geometry — every Training prop is `AnimSequence None`, so the
+drawn pose is exact. `scripts/validate-actor-mesh-scene.mjs` checks the
+composition, finite geometry, decoded skins, that static props do not re-upload
+while environment props (camera lenses, datacube screens, the reflective HazMat
+suit) track the camera, determinism, and that building the layer never moves,
+ticks or mutates the shared runtime actors.
+
+### Partial-face rendering
+
+`createActorMeshPreview` builds each face group independently. An undecodable or
+procedural/animated skin is skipped (recorded in `summary.skipped`) and the mesh
+still draws its remaining solid faces. The world NanoKey carries a procedural
+`FireTexture` effect face (`effects.electricity.biocell_sfx`, no stored pixel
+data); its body renders while only that effect face is omitted. Skipped groups
+are removed before the live pose/UV update, and an actor with no renderable face
+still fails explicitly.
+
+### Frob labels, safe prop frobs, in-hand HUD
+
+Frob labels read the object's own original `ItemName` ("Crowbar", "General Supply
+Crate", "10mm Ammo", "Houseplant"). A decoration/item whose real `Frob` reaches an
+unbuilt subsystem — a DataCube's text parser, or item pickup's unlinked actor
+iterator — surfaces the boundary as a message instead of halting the scene;
+conversation pawns still pause honestly. The Play HUD draws the live `inHand` item
+bottom-right with the item's original belt `Icon` and `ItemName`, so putting the
+nanokey ring in and out of hand is visible. This is a Play readout of real state,
+not the original object-belt window.
+
+### Located boundary: item pickup
+
+Picking up a Training weapon/tool runs the real frob path F → `ParseRightClick`
+→ `DeusExPlayer.DoFrob` → **`DeusExPlayer.HandleItemPickup`**, which executes a
+`foreach` iterator that is not linked on this VM path (`src/runtime/script-vm.mjs`
+`Original iterator native is not linked`). The iterator subsystem exists
+(`script-runtime.mjs` `createIterator`: AllActors 304, RadiusActors 310, …). The
+nanokey ring pickup works through a different `DoFrob` → `KeyList` branch. This is
+the entry point for the pickup + object-belt increment; breaking crates then needs
+weapon equip + fire + `TakeDamage` + destruction, and reaching `UNATCOTroop3`
+still needs the locked keypad doors `paddoor`/`hackdoor`.
