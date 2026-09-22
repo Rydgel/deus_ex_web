@@ -39,6 +39,55 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
       shading:'texture-only inspection',startup:'original'}};
 }
 
+/** Whole-level actor mesh layer for Play: the captured NPC bindings above plus
+ * every other visible LodMesh actor (crates, plants, weapons/ammo pickups,
+ * datacubes, keypads, cameras, lights) so the collidable props JC walks into
+ * and frobs are no longer invisible. Props use a synthetic per-actor cache key:
+ * `createActorMeshPreview` owns an isolated GetFrame cache per actor, and that
+ * key selects only tween/blend heap identity, never the drawn geometry — these
+ * props carry AnimSequence None, so a synthetic key is exact. The measured NPC
+ * identities keep their captured index for animation-history fidelity. Shading
+ * stays texture-only, as documented for the NPC layer. */
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player}={}) {
+  let kernelError=null;
+  if(kernel===undefined) {
+    try{kernel=await loadLodMeshKernel();}
+    catch(error){kernel=null;kernelError=error.message;}
+  }
+  const root=new THREE.Group();root.visible=false;
+  const npcActors=[],propActors=[],errors=[];
+  let npc=null;
+  if(asset.name.toLowerCase()==='00_training') {
+    try {
+      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel});
+      root.add(npc.root);npc.root.visible=true;
+      npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
+    } catch(error) {errors.push({actor:'NPCs',message:error.message});}
+  }
+  const level=player?runtime.levelFor(player):null;
+  const read=(actor,name)=>{try{return runtime.namedReference(actor,name).get();}catch{return undefined;}};
+  let synthetic=0x40000000;
+  for(const actor of level?.actors??[]) {
+    if(!actor||actor===player||actor.name in TRAINING_NPC_IDENTITIES)continue;
+    const mesh=read(actor,'Mesh');
+    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind))continue;
+    if(read(actor,'bHidden')||read(actor,'bDeleteMe')||!read(actor,'Location'))continue;
+    try {
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel});
+      preview.root.visible=true;root.add(preview.root);propActors.push(preview);
+    } catch(error) {errors.push({actor:actor.name??'?',message:error.message});}
+  }
+  const actors=[...npcActors,...propActors];
+  if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
+  return {root,actors,npcActors,propActors,
+    update(cameraPosition){for(const actor of actors)actor.update(cameraPosition);},
+    dispose(){for(const actor of actors)actor.dispose();},
+    summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
+      npcs:npcActors.length,props:propActors.length,
+      triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
+      shading:'texture-only inspection',startup:'original'}};
+}
+
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const rendered=actorRenderFeedback(runtime,actor);

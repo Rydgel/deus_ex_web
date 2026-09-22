@@ -7,7 +7,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createHudRenderer } from './hud.mjs';
-import { createTrainingNpcPreview } from './npc-mesh-preview.mjs';
+import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
 
 const $ = id => document.getElementById(id);
@@ -202,31 +202,32 @@ async function loadMap(name) {
         if(actor)mesh.onAfterRender=actorRenderFeedback(runtime,actor);
       });
     }
-    if(nextGame&&name==='00_Training'){
-      $('gate-message').textContent='Preparing original NPC meshes…';
+    if(nextGame){
+      $('gate-message').textContent='Preparing original actor meshes…';
       try{
-        nextNpcPreview=await createTrainingNpcPreview(nextGame.doors.scriptRuntime.runtime,assets,asset,
-          new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{});
-        nextWorld.notes.push(`${nextNpcPreview.actors.length} NPC meshes render live original startup and animation in Play. Armed-NPC weapon spawning, some AI natives and original mesh lighting remain unsupported.`);
+        nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{
+          player:nextGame.player.collisionActor,
+          ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
+        nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses in Play. Original mesh lighting, distance LOD and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
-      }catch(error){nextWorld.notes.push(`NPC meshes unavailable: ${error.message}`);}
+      }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
     hudRenderer?.dispose();hudRenderer=nextHud;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     npcPreview=nextNpcPreview??null;
     if(npcPreview){npcPreview.root.visible=true;scene.add(npcPreview.root);}
-    $('npc-focus').replaceChildren(...(npcPreview?.actors??[]).map(actor=>{
+    $('npc-focus').replaceChildren(...((npcPreview?.npcActors??npcPreview?.actors??[]).map(actor=>{
       const option=document.createElement('option');option.value=option.textContent=actor.summary.actor;return option;
-    }));
+    })));
     $('npc-status').hidden=!npcPreview;
-    $('npc-status').textContent=npcPreview?`${npcPreview.actors.length} NPCs · live animation`:'';
+    $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     $('light-preview').hidden = !game || name !== '00_Training';
     $('dark-door-preview').hidden = !game || name !== '00_Training';
-    $('npc-preview').hidden = !npcPreview;
+    $('npc-preview').hidden = !npcPreview?.npcActors?.length;
     $('instructor-preview').hidden = !game || name !== '00_Training';
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
