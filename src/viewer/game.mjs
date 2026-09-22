@@ -157,12 +157,21 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     frobTime: 0, frobTarget: null, carriedDecoration: null, stateName: 'PlayerWalking',
     behindView: Boolean(playerDefaults.bBehindView), npcHighlighting: Boolean(playerDefaults.bNPCHighlighting) };
   const trace = (end,start,extent) => traceActors(collision.queries,player,end,start,extent);
+  // The frob label reads the object's own original name: inventory items and
+  // weapons carry ItemName ("Crowbar", "10mm Ammo"), decorations fall back to
+  // their actor name. This is the name only, not a claim that every frob is
+  // implemented — item pickup and weapon use remain unbuilt (see notes below).
+  const itemLabel = actor => {
+    try { const name = doors.scriptRuntime.runtime.namedReference(actor, 'ItemName').get();
+      if (name && String(name).toLowerCase() !== 'none') return name; } catch { /* not an item */ }
+    return actor.name;
+  };
   const describeTarget = actor => !actor ? null : actor.collider ? doors.describe(actor)
     : actor.lineage?.includes('deusex.scriptedpawn')
       ? {actor,label:doors.scriptRuntime.runtime.namedReference(actor,'FamiliarName').get()}
-      : { actor, label: `${actor.name} · interaction not supported yet` };
-  notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Mission-trigger scripts and actor/mesh visuals remain incomplete.');
-  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active; actor mesh coverage remains incomplete.`);
+      : { actor, label: itemLabel(actor) };
+  notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Item pickup, weapon use, mission-trigger scripts and locked keypad doors remain incomplete.');
+  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Their meshes now render texture-only in Play; item pickup and weapon use are not yet supported.`);
   const game = {
     player, doors, collision, notes, start, interaction, random, hud,
     tick(seconds, input) {
@@ -212,11 +221,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       }
       // Non-mover frob: run the actor's real Frob bytecode through the general VM
       // router (docs/scene-events.md). A handled Frob ran the real body; an
-      // unhandled one has no Frob override (the empty-event no-op). A prepared body
-      // that reaches an unbuilt native/subsystem throws, pausing play honestly
-      // (main.mjs surfaces it) — e.g. LightSwitch.Frob's anim/audio until M2 step 2.
-      const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
-      return { ok: outcome.handled, message: '' };
+      // unhandled one has no Frob override (the empty-event no-op).
+      try {
+        const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
+        return { ok: outcome.handled, message: '' };
+      } catch (error) {
+        // A conversation pawn's Frob still pauses honestly on an unbuilt boundary
+        // (that path is covered by the instructor checks). A decoration or item
+        // whose real Frob reaches an unbuilt subsystem — e.g. a DataCube's text
+        // parser, or item pickup's actor iterator — surfaces the boundary as a
+        // message instead of halting the scene, so exploring visible props is safe.
+        if (actor.lineage?.includes('deusex.scriptedpawn')) throw error;
+        return { ok: false, message: `${describeTarget(actor)?.label ?? actor.name} — interaction not yet supported` };
+      }
     },
     // Enter is ParseLeftClick. With the nanokey ring in hand this is DoFrob(Self, inHand).
     useHeld() {
