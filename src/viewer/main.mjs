@@ -229,6 +229,7 @@ async function loadMap(name) {
     $('dark-door-preview').hidden = !game || name !== '00_Training';
     $('npc-preview').hidden = !npcPreview?.npcActors?.length;
     $('instructor-preview').hidden = !game || name !== '00_Training';
+    $('weapon-preview').hidden = !game || name !== '00_Training';
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
@@ -348,6 +349,34 @@ $('instructor-preview').onclick=()=>{
   }catch(error){pauseForRuntimeError(error);}
 };
 
+// Places Play beside the Training weapon crate, picks up the crowbar through the
+// public frob path, and equips it through the original group-10 PutInHand path.
+// The crowbar and crates sit past the locked keypad doors that the training
+// scripts open; this is the same curated placement the other preview buttons use
+// (changeActor next to the target). Real gameplay reaches them by walking once
+// those doors open.
+$('weapon-preview').onclick = async () => {
+  if (!game || loading || currentMap !== '00_Training') return;
+  try {
+    setMode('play'); resetCamera();
+    const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+    const crowbar = runtime.levelFor(player).actors.find(actor => actor?.name === 'WeaponCrowbar1');
+    if (!crowbar) throw new Error('Training crowbar is unavailable');
+    const location = runtime.namedReference(crowbar, 'Location').get();
+    game.collision.queries.changeActor(player, () => {
+      game.player.position = [location[0] - 48, location[1], location[2]];
+      game.player.velocity = [0, 0, 0];
+    });
+    yaw = 0; pitch = -0.15; camera.rotation.set(pitch, yaw, 0);
+    camera.position.fromArray(toView(game.player.eye));
+    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    game.interaction.frobTarget = crowbar;
+    const picked = game.use();
+    const equipped = await game.selectWeaponGroup(10);
+    toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? `${equipped.label} equipped (press 0 to select, F to frob)` : 'select with key 0'}`);
+  } catch (error) { pauseForRuntimeError(error); }
+};
+
 $('light-preview').onclick = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
@@ -421,9 +450,19 @@ document.addEventListener('keydown', event => {
     catch (error) { pauseForRuntimeError(error); }
     event.preventDefault();
   }
-  if (event.code === 'Digit1' && !event.repeat && mode === 'play' && game && !runtimeError) {
-    try { toast(game.selectNanoKeyRing() ? 'Nanokey ring in hand' : 'Nanokey ring put away'); }
-    catch (error) { pauseForRuntimeError(error); }
+  if (/^Digit[0-9]$/.test(event.code) && !event.repeat && mode === 'play' && game && !runtimeError) {
+    // Number keys select the weapon in JC's inventory whose InventoryGroup
+    // matches (Digit0 == group 10), through the original Inventory.WeaponChange
+    // walk -> PutInHand path. When that group holds no weapon, key 1 keeps its
+    // nanokey-ring behavior (the ring's special belt slot).
+    const group = event.code === 'Digit0' ? 10 : Number(event.code.slice(5));
+    (async () => {
+      try {
+        const result = await game.selectWeaponGroup(group);
+        if (result.ok) toast(`${result.label ?? 'Weapon'} in hand`);
+        else if (event.code === 'Digit1') toast(game.selectNanoKeyRing() ? 'Nanokey ring in hand' : 'Nanokey ring put away');
+      } catch (error) { pauseForRuntimeError(error); }
+    })();
     event.preventDefault();
   }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {

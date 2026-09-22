@@ -172,6 +172,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       : { actor, label: itemLabel(actor) };
   notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Item pickup, weapon use, mission-trigger scripts and locked keypad doors remain incomplete.');
   if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Their meshes now render texture-only in Play; item pickup and weapon use are not yet supported.`);
+  // Original in-hand toggle: PutInHand sets inHandPending, UpdateInHand runs the
+  // transition (a weapon draws through SwitchWeapon -> ChangedWeapon -> BringUp).
+  // Passing the item selects it; passing it again while it is already
+  // in/pending hand puts it away, exactly as a belt slot re-press does.
+  const putInHandToggle = item => {
+    const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
+    const hand = runtime.namedReference(pawn, 'inHand').get();
+    const pending = runtime.namedReference(pawn, 'inHandPending').get();
+    const already = hand === item || pending === item;
+    runtime.processEvent(pawn, 'PutInHand', [already ? null : item]);
+    runtime.processEvent(pawn, 'UpdateInHand', []);
+    return runtime.namedReference(pawn, 'inHand').get();
+  };
   const game = {
     player, doors, collision, notes, start, interaction, random, hud,
     tick(seconds, input) {
@@ -267,10 +280,36 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
       const ring = runtime.namedReference(pawn, 'KeyRing').get();
       if (!ring) return false;
-      const hand = runtime.namedReference(pawn, 'inHand').get();
-      runtime.processEvent(pawn, 'PutInHand', [hand === ring ? null : ring]);
-      runtime.processEvent(pawn, 'UpdateInHand', []);
-      return runtime.namedReference(pawn, 'inHand').get() === ring;
+      return putInHandToggle(ring) === ring;
+    },
+    // General in-hand selection through the original bytecode. A weapon draws
+    // its first-person (player-view) mesh the moment it enters the hand — the
+    // bring-up runs PlayAnim('Select') on it — so its Mesh resource is decoded
+    // before the synchronous PutInHand/UpdateInHand pair runs (the pickup path
+    // itself only prepares the class chain). docs/script-weapon-equip.md.
+    async selectItem(item) {
+      if (!item) return { selected: false, name: null, label: null };
+      const runtime = doors.scriptRuntime.runtime;
+      const meshRef = runtime.namedReference(item, 'Mesh').get();
+      if (meshRef && ['LodMesh', 'Mesh'].includes(meshRef.kind)) await runtime.prepareMesh(item);
+      const now = putInHandToggle(item);
+      const selected = now === item;
+      return { selected, name: now?.name ?? null,
+        label: selected ? String(runtime.namedReference(item, 'ItemName').get() ?? item.name) : null };
+    },
+    // A number key resolves the weapon in JC's inventory whose InventoryGroup
+    // matches, through the original Inventory.WeaponChange walk (the same
+    // resolution DeusExRootWindow.ActivateObjectInBelt reaches before PutInHand),
+    // then selects it. No object belt is modeled: the item comes from the real
+    // inventory chain, not a fabricated slot table.
+    async selectWeaponGroup(group) {
+      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
+      const head = runtime.namedReference(pawn, 'Inventory').get();
+      if (!head) return { ok: false, name: null };
+      const weapon = runtime.dispatchSpawnedEvent(head, 'WeaponChange', [group]);
+      if (!weapon) return { ok: false, name: null, label: null };
+      const result = await game.selectItem(weapon);
+      return { ok: result.selected, name: result.name, label: result.label };
     },
     status() { return { player: player.status(), doors: doors.status(), hud:hud?.snapshot()??null, hulls: collision.bsp.hulls.length,
       deferredEffects:[...player.unimplementedPhysicsEffects],

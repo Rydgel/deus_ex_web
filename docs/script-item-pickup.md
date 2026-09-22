@@ -84,12 +84,13 @@ reset lifecycle. Verified for
 `WeaponCrowbar1`, `WeaponCombatKnife0`, `Ammo10mm2`, `Candybar0`, `HazMatSuit2`,
 `Multitool0` and `NanoKey0`.
 
-## Boundary: selecting a picked-up weapon into hand
+## Selecting a picked-up weapon into hand
 
-`PutInHand(weapon)` sets `inHand`, but `UpdateInHand` prepares the weapon's
-first-person view mesh (e.g. `deusexitems.crowbar`) and reaches
-`Original mesh resource is not prepared`. Picked-up weapons also keep
-`bInObjectBelt=false`/`beltPos=-1` — the object belt is populated HUD-side, which
-is not modeled. So general equipment switching (and weapon fire / crate breaking)
-remains unbuilt past pickup; the nanokey ring's `1`/`Enter` selection is the
-supported in-hand case.
+Selecting a picked-up weapon draws it in hand through the original
+`PutInHand` -> `UpdateInHand` -> `SwitchWeapon` -> `ChangedWeapon` ->
+`Weapon.RaiseUp` -> `BringUp` -> `PlaySelect` path, now that the weapon's
+first-person mesh is decoded and the weapon-select sound is a recorded audio
+boundary. Number keys select by the weapon's `InventoryGroup` through the
+engine's `Inventory.WeaponChange` walk (no object belt is modeled). See
+[weapon equip](script-weapon-equip.md). Weapon fire / damage and the crate's
+`TakeDamage` -> destruction remain the next increment.

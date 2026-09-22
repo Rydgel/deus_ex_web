@@ -79,9 +79,15 @@ or push further hosting updates unless the user asks.
   [preview scope and evidence](docs/npc-mesh-preview.md).
 - Frobbing a Training weapon, ammo, tool, food or key **picks it up** into JC's
   inventory through the original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give,
-  and the item's world mesh disappears; **Player start** returns items to the
-  world. Selecting a picked-up weapon into hand (its first-person view mesh) and
-  weapon fire remain unfinished. See [item pickup](docs/script-item-pickup.md).
+  and the item's world mesh disappears; a carried item follows JC as a based
+  rider while walking, and **Player start** returns items to the world. See
+  [item pickup](docs/script-item-pickup.md).
+- **Selecting** a picked-up weapon draws it in hand through the original
+  `PutInHand`/`UpdateInHand`/`SwitchWeapon`/`BringUp`/`PlaySelect` path (number
+  keys map to weapon groups; the `Crowbar preview` button places JC beside the
+  Training weapons, picks up the crowbar and equips it), and the HUD shows the
+  in-hand item. The first-person view-model rendering and weapon fire / crate
+  breaking remain unfinished. See [weapon equip](docs/script-weapon-equip.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.

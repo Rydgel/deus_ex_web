@@ -1,5 +1,22 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-22 (pick up, carry and equip):** frobbing a
+> Training weapon/ammo/tool/food/key takes it into JC's inventory through the
+> original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give
+> ([item pickup](script-item-pickup.md)); a carried item is a based rider that
+> now follows JC while walking through the recovered held-item `MoveActor`
+> (`moveHeldRider`), where the first step used to pause Play. **Selecting** a
+> picked-up weapon draws it in hand through the original `PutInHand` ->
+> `UpdateInHand` -> `SwitchWeapon` -> `ChangedWeapon` -> `RaiseUp` -> `BringUp`
+> -> `PlaySelect` path: the crowbar reaches `DeusExWeapon.Active` with
+> `inHand`/`SelectedItem`/`Weapon` set, its first-person LodMesh is decoded for
+> `PlayAnim('Select')`, and the select sound is a recorded audio boundary. The
+> HUD shows the in-hand item. No object belt is modeled — number keys resolve
+> the weapon by `InventoryGroup` through the engine's `Inventory.WeaponChange`
+> walk. First-person view-model rendering, per-frame put-away, and weapon fire /
+> the crate's `TakeDamage` -> destruction remain the next increment. Stage 3
+> remains open. See [weapon equip](script-weapon-equip.md).
+
 > **Checkpoint update, 2026-09-21 (Training opening walk):** held forward
 > input from `PlayerStart1` is sustained until `UN_maindoor`, which opens
 > through `DeusExMover.Frob`. `CreateKeyRing` spawns the ring; `NanoKey0`

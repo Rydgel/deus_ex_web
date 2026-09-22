@@ -26,10 +26,13 @@ export async function createHudRenderer(hud,assets,shell){
   // Training spawn carries only the nanokey ring); an item without a decodable
   // Icon is simply skipped.
   const beltIcons=new Map();
+  // Reserve the key (null) before awaiting so a lazy render-time load is not
+  // started twice for the same icon; a failed decode simply stays null.
   const loadIcon=async icon=>{
     if(!icon||beltIcons.has(icon.key))return;
+    beltIcons.set(icon.key,null);
     try{const data=await store.get(icon.asset,icon.index,true);beltIcons.set(icon.key,{key:icon.key,...data.mips[0]});}
-    catch{beltIcons.set(icon.key,null);}
+    catch{/* leaves the reserved null so the item draws nothing */}
   };
   for(let item=hud.read(hud.player,'Inventory'),n=0;item&&n<64;item=hud.read(item,'Inventory'),n++)
     await loadIcon(hud.read(item,'Icon'));
@@ -123,7 +126,12 @@ export async function createHudRenderer(hud,assets,shell){
     // when its icon did not decode. This is a Play readout, not the original
     // object-belt window.
     const held=hud.read(hud.player,'inHand');
-    const heldIcon=held&&beltIcons.get(hud.read(held,'Icon')?.key);
+    // An item picked up after the HUD was built (e.g. a frobbed weapon) is not
+    // in the map-start preload, so decode its icon lazily on first selection;
+    // it draws from the following frame once the load resolves.
+    const heldIconRef=held&&hud.read(held,'Icon');
+    if(heldIconRef&&!beltIcons.has(heldIconRef.key))void loadIcon(heldIconRef);
+    const heldIcon=heldIconRef&&beltIcons.get(heldIconRef.key);
     if(heldIcon){
       const size=48,pad=14,x=width-size-pad,y=height-size-pad;
       draw({image:heldIcon,x,y,width:size,height:size,style:2});

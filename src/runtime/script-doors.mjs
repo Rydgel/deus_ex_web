@@ -550,6 +550,14 @@ export async function createScriptDoors({
       // id 0), the same lifetime contract as the decoration/pawn sounds above,
       // so the pickup completes instead of freezing at the audio gap.
       if (/\.pickup\.frob$/.test(path)) { decorationEffect(call, 'PickupSound'); return 0; }
+      // A weapon's select/idle/fire effect sounds (Weapon.PlaySelect ->
+      // Owner.PlaySound(SelectSound), and the DeusExWeapon firing sites) are
+      // one-shot effect audio whose return the scripts discard or use only as a
+      // channel id later stopped through StopSound. Record them as a deferred
+      // audio boundary (channel id 0), the same lifetime contract as the
+      // decoration/pawn/pickup sounds above, so weapon selection and fire run
+      // to completion instead of freezing at the Stage-4 audio gap.
+      if (path.startsWith('weapon.') || path.startsWith('deusexweapon.')) { decorationEffect(call, 'WeaponSound'); return 0; }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
@@ -1247,6 +1255,14 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    // The original Player start reloads the level, giving a fresh player with an
+    // empty hand and no drawn weapon; this host reuses the player identity, so
+    // clear the in-hand / weapon selection it may have made in Play. The selected
+    // item itself is a serialized pickup already returned to the world above; at
+    // map start these player fields are None/false (their class defaults).
+    for (const field of ['inHand', 'inHandPending', 'ClientInHandPending', 'SelectedItem', 'Weapon', 'PendingWeapon'])
+      runtime.namedReference(playerActor, field).set(null);
+    runtime.namedReference(playerActor, 'bInHandTransition').set(false);
     clearStartupPawnList();
     clearStartupTouching();
     // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
