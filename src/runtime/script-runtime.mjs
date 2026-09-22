@@ -708,6 +708,13 @@ export class ScriptRuntime {
     return readScriptStructValue(asset,field,property.data,{initialValue,resolveObject});
   }
   fieldReference(receiver,field) {
+    // A class object is not attached as a script instance, but execContext still
+    // reads its immutable Object Name — Weapon.SetSwitchPriority compares
+    // Class.Name against the config WeaponPriority list during a weapon pickup.
+    // Serve Name from the class record; other header fields on an unattached
+    // class stay an explicit boundary.
+    if(receiver?.kind==='Class'&&field.key==='core.object.name'&&!this.instances.has(receiver))
+      return propertyReference(field,()=>receiver.name,()=>{throw new Error('Class Name is immutable');});
     const instance=this.instance(receiver);
     const binding=instance.bindings.get(field.key);
     if(binding)return propertyReference(field,binding.get,binding.set);
