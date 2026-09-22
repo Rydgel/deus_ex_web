@@ -21,6 +21,18 @@ export async function createHudRenderer(hud,assets,shell){
     if(!ref||hud.images.has(ref.key))continue;
     const data=await store.get(ref.asset,ref.index,true);hud.images.set(ref.key,{key:ref.key,...data.mips[0]});
   }
+  // Preload the original belt icons for the player's inventory so the in-hand
+  // item can be drawn with its own art. Inventory is small at map start (the
+  // Training spawn carries only the nanokey ring); an item without a decodable
+  // Icon is simply skipped.
+  const beltIcons=new Map();
+  const loadIcon=async icon=>{
+    if(!icon||beltIcons.has(icon.key))return;
+    try{const data=await store.get(icon.asset,icon.index,true);beltIcons.set(icon.key,{key:icon.key,...data.mips[0]});}
+    catch{beltIcons.set(icon.key,null);}
+  };
+  for(let item=hud.read(hud.player,'Inventory'),n=0;item&&n<64;item=hud.read(item,'Inventory'),n++)
+    await loadIcon(hud.read(item,'Icon'));
   const scene=new THREE.Scene(),camera=new THREE.OrthographicCamera(0,1,0,1,-1,1);
   const textures=new Map(),materials=new Map(),quads=[];
   const white={key:'$hud-solid',width:1,height:1,data:new Uint8Array([255,255,255,255])};
@@ -105,6 +117,21 @@ export async function createHudRenderer(hud,assets,shell){
     const image=hud.images.get(hud.background(hud.cross)?.key);
     if(image)draw({image,x:Math.trunc((width-image.width)/2+.5),y:Math.trunc((height-image.height)/2+.5),
       width:image.width,height:image.height,color:[255,255,255],style:2});
+    // In-hand item indicator: draw the selected belt/key item with its own
+    // original icon so putting it in and out of hand (the nanokey ring today)
+    // is visible. Reads the live inHand field; nothing is drawn when empty or
+    // when its icon did not decode. This is a Play readout, not the original
+    // object-belt window.
+    const held=hud.read(hud.player,'inHand');
+    const heldIcon=held&&beltIcons.get(hud.read(held,'Icon')?.key);
+    if(heldIcon){
+      const size=48,pad=14,x=width-size-pad,y=height-size-pad;
+      draw({image:heldIcon,x,y,width:size,height:size,style:2});
+      const name=hud.read(held,'ItemName');
+      if(name&&String(name).toLowerCase()!=='none')
+        text.draw(draw,{font:'DeusExUI.FontTiny',text:String(name),x:x-72,y:y+size-10,width:size+68,height:10,
+          color:[210,210,180],hAlign:2});
+    }
     if(dialog?.state?.shellVisible){
       const {state,shell:info}=dialog;
       // DeusExHUD.ConfigurationChanged: no visible log => (hitWidth+20,0).
