@@ -157,10 +157,12 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
 export async function createLiveDataLinkRuntime({
   runtime,assets,engine,deusEx,level,levelInfo,player,shell,onLifecycle=null,spawnWorldPrepared=false,
 }={}){
-  if(!runtime||!assets?.get||!level||!levelInfo||!player||!shell?.object)
+  if(!runtime||!assets?.get||!level||!levelInfo||!player||typeof shell?.create!=='function')
     throw new TypeError('Live DataLink runtime requires the linked Play world and InfoLink shell');
+  if(shell.object)throw new TypeError('Live DataLink requires a deferred InfoLink shell: the HUD has no display until a DataLink starts');
   if(onLifecycle!=null&&typeof onLifecycle!=='function')
     throw new TypeError('Live DataLink onLifecycle must be a function');
+  const baseShell=shell;
   let currentShell=shell;
   const [core,conSys,conText,extension]=await Promise.all([
     assets.get('Core'),assets.get('ConSys'),assets.get('DeusExConText'),assets.get('Extension'),
@@ -347,7 +349,7 @@ export async function createLiveDataLinkRuntime({
 
   function destroyCurrentShell(){
     const old=currentShell;
-    if(old.isDestroyed(old.object))return old;
+    if(!old.object||old.isDestroyed(old.object))return old;
     if(get(runtime,old.hud,'infoLink')!==old.object)
       throw new Error('Live DataLink HUD did not own the current InfoLink before destruction');
     callPrepared(destroyInfoLink,old.hud);
@@ -358,8 +360,14 @@ export async function createLiveDataLinkRuntime({
     return old;
   }
 
-  function recreateCurrentShell(old=currentShell){
-    currentShell=old.recreate();
+  // DataLinkPlay.StartConversation: datalink = rootWindow.hud.CreateInfoLinkWindow().
+  // Each start constructs its own display through that installed HUD body,
+  // which also hides msgLog and asks the HUD to lay the display out.
+  function createDisplay(play){
+    if(currentShell.object&&!currentShell.isDestroyed(currentShell.object))
+      throw new Error('Live DataLink start found an undestroyed InfoLink display');
+    currentShell=currentShell.create();
+    set(runtime,play,'dataLink',currentShell.object);
     return currentShell;
   }
 
@@ -406,10 +414,10 @@ export async function createLiveDataLinkRuntime({
       index=>[newPlayer,newInvokeActor,bForcePlay][index]);
     if(!accepted)return false;
     const trigger=get(runtime,play,'datalinkTrigger');
-    callPrepared(showTextCursor,currentShell.object,[false]);
     set(runtime,play,'lastSpeechTextLength',0);set(runtime,play,'bEndTransmission',false);
-    set(runtime,play,'eventTimer',0);set(runtime,play,'dataLink',currentShell.object);
-    set(runtime,currentShell.hud,'infoLink',currentShell.object);set(runtime,play,'currentEvent',entry.speech);
+    set(runtime,play,'eventTimer',0);createDisplay(play);
+    set(runtime,play,'currentEvent',entry.speech);
+    callPrepared(showTextCursor,currentShell.object,[false]);
     set(runtime,play,'bStartTransmission',true);
     setActorTimer(runtime.timerState(play),get(runtime,play,'blinkRate'),true);
     active={play,entry,con,speech:entry.speech,endEvent:entry.endEvent,trigger:resolveTrigger(entry,trigger),
@@ -422,14 +430,15 @@ export async function createLiveDataLinkRuntime({
     const {play}=record;
     set(runtime,play,'con',next.conversation);set(runtime,play,'startCon',next.conversation);
     set(runtime,play,'datalinkTrigger',next.trigger);
-    set(runtime,play,'dataLink',null);set(runtime,currentShell.hud,'infoLink',null);
+    if(get(runtime,play,'dataLink')!==null||get(runtime,currentShell.hud,'infoLink')!==null)
+      throw new Error('Queued Training DataLink started before the previous InfoLink was destroyed');
     set(runtime,play,'bEndTransmission',false);set(runtime,play,'eventTimer',0);
     const accepted=runtime.callFunction(prepared.get('deusex.conplaybase.startconversation'),play,3,
       index=>[player,null,false][index]);
     if(!accepted)throw new Error(`Queued Training DataLink ${next.entry.route.dataLinkTag} failed ConPlayBase.StartConversation`);
     set(runtime,play,'lastSpeechTextLength',0);set(runtime,play,'bEndTransmission',false);
-    set(runtime,play,'eventTimer',0);set(runtime,play,'dataLink',currentShell.object);
-    set(runtime,currentShell.hud,'infoLink',currentShell.object);set(runtime,play,'currentEvent',next.speech);
+    set(runtime,play,'eventTimer',0);createDisplay(play);
+    set(runtime,play,'currentEvent',next.speech);
     callPrepared(showTextCursor,currentShell.object,[false]);
     set(runtime,play,'bStartTransmission',true);
     setActorTimer(runtime.timerState(play),get(runtime,play,'blinkRate'),true);
@@ -552,7 +561,7 @@ export async function createLiveDataLinkRuntime({
       set(runtime,play,'eventTimer',value);
       if(value>get(runtime,play,'endDelay')){
         setActorTimer(runtime.timerState(play),0,false);set(runtime,play,'bEndTransmission',false);
-        const destroyedShell=destroyCurrentShell();
+        destroyCurrentShell();
         set(runtime,play,'dataLink',null);
         if(queue.length){
           const next=queue.shift();
@@ -560,7 +569,6 @@ export async function createLiveDataLinkRuntime({
           const conversationResult=popped?.reference?popped.get():popped;
           if(conversationResult!==next.conversation)
             throw new Error(`Original DataLink queue popped a different conversation for ${next.entry.route.dataLinkTag}`);
-          recreateCurrentShell(destroyedShell);
           startQueued(record,next);
         }else finishPlay();
       }
@@ -581,11 +589,13 @@ export async function createLiveDataLinkRuntime({
 
   function reset(){
     if(active){const index=level.actors.indexOf(active.play);if(index>=0)level.actors[index]=null;}
-    if(active&&!currentShell.isDestroyed(currentShell.object)){
+    if(active&&currentShell.object&&!currentShell.isDestroyed(currentShell.object)){
       if(get(runtime,currentShell.hud,'infoLink')!==currentShell.object)
         throw new Error('Live DataLink reset found an unpublished active InfoLink');
-      recreateCurrentShell(destroyCurrentShell());
-    }else if(currentShell.isDestroyed(currentShell.object))recreateCurrentShell();
+      destroyCurrentShell();
+    }
+    // A fresh session has no InfoLink display until its first DataLink starts.
+    currentShell=baseShell;
     queue.length=0;
     pendingAdmission=null;
     set(runtime,player,'dataLinkPlay',null);set(runtime,currentShell.hud,'infoLink',null);

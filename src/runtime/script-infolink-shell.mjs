@@ -85,7 +85,7 @@ function requireControlBoundary(error){
   return String(error.message);
 }
 
-export async function createInfoLinkShellPreview({runtime,assets,player,windowHost=null}={}){
+export async function createInfoLinkShellPreview({runtime,assets,player,windowHost=null,deferWindow=false}={}){
   if(!runtime?.attach||!runtime?.prepareFunction)throw new TypeError('InfoLink shell requires ScriptRuntime');
   if(!assets?.get)throw new TypeError('InfoLink shell requires AssetStore');
   runtime.instance(player);
@@ -385,11 +385,35 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
       :windowHost.lifecycle.askParentForReconfigure(request);
   }
   const newChild=await runtime.prepareFunction(extension,extension.exportsByPath.get('window.newchild'));
+  // DataLinkPlay.StartConversation obtains its display from this HUD body:
+  // None if one exists, else NewChild, msgLog.Hide(), AskParentForReconfigure.
+  const createInfoLinkIndex=deusEx.exportsByPath.get('deusexhud.createinfolinkwindow');
+  if(!createInfoLinkIndex)throw new Error('Missing original DeusEx.DeusExHUD.CreateInfoLinkWindow');
+  const createInfoLinkWindow=await runtime.prepareFunction(deusEx,createInfoLinkIndex);
   const [audio,content]=await Promise.all([
     loadInfoLinkPreviewAudio(assets),loadInfoLinkPreviewContent(assets),
   ]);
+  // Services shared by every display the shell constructs. A deferred shell
+  // (Play) has these without a display: the original HUD has no InfoLink
+  // until a DataLink starts.
+  const services={root,hud,audio,content,
+    withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
+      runtime.windowLifecycle=sharedLifecycle;if(!windowHost)playerTheme.set(manager);
+      try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
+    readNative:(object,offset,kind)=>memory.read(object,offset,kind),
+    // Adopt a runtime-attached object (e.g. the live DataLink harness's
+    // HUDReceivedDisplay) into the shell's native window storage so Window
+    // natives invoked on it execute against real fields.
+    adoptWindow:(object,parent=hud)=>{memory.allocate(object);
+      constructWindowNative(object,{...rawServices,
+        coreObjectConstructor:({object:base})=>memory.write(base,0,'u32',0x10179dfc)});
+      memory.write(object,O.parent,'ptr',parent);return object;},
+    isDestroyed:object=>destroyedWindows.has(object),
+    // The DataLink start edge: run the installed CreateInfoLinkWindow body.
+    create:()=>constructShell(true),
+  };
 
-  function constructShell(){
+  function constructShell(viaHud=false){
     const previousTheme=playerTheme.get();
     const previousRngState=runtime.rng?.state;
     const previousLifecycle=runtime.windowLifecycle;
@@ -398,13 +422,23 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
     textControl=lineControl=computerTextWindow=computerInputWindow=boundary=null;
     if(!windowHost)playerTheme.set(manager);
     runtime.windowLifecycle=sharedLifecycle;
+    const infoLink=runtime.namedReference(hud,'infolink');
+    if(viaHud&&infoLink.get()!==null)
+      throw new Error('DeusExHUD.CreateInfoLinkWindow would return None: an InfoLink display already exists');
+    let returned=null;
   try{
-    runtime.callFunction(newChild,hud,1,()=>infoClass.record);
+    if(viaHud){const value=runtime.callFunction(createInfoLinkWindow,hud,0);returned=value?.reference?value.get():value;}
+    else runtime.callFunction(newChild,hud,1,()=>infoClass.record);
     boundary='Original HUDInfoLinkDisplay.CreateControls completed all six authored controls';
-  }catch(error){boundary=requireControlBoundary(error);events.push('winText allocation boundary');}
+  }catch(error){
+    // A control boundary inside NewChild leaves the rest of CreateInfoLinkWindow unexecuted.
+    if(viaHud)throw error;
+    boundary=requireControlBoundary(error);events.push('winText allocation boundary');}
   finally{runtime.windowLifecycle=previousLifecycle;playerTheme.set(previousTheme);
     if(Number.isInteger(previousRngState)&&typeof runtime.rng?.seed==='function')runtime.rng.seed(previousRngState);}
   if(!child)throw new Error('InfoLink shell did not allocate HUDInfoLinkDisplay');
+  if(viaHud&&(returned!==child||infoLink.get()!==child))
+    throw new Error('DeusExHUD.CreateInfoLinkWindow did not publish and return the constructed display');
   if(!portrait)throw new Error('InfoLink shell did not allocate winPortrait');
   if(!staticControl)throw new Error('InfoLink shell did not allocate winStatic');
   if(!nameControl)throw new Error('InfoLink shell did not allocate winName');
@@ -510,27 +544,16 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
     boundary,events:Object.freeze(events.slice()),
     objects:Object.freeze({portrait,static:staticControl,name:nameControl,queued:queuedControl,
       text:textControl,line:lineControl,computerText:computerTextWindow,computerInput:computerInputWindow}),
-    withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
-      runtime.windowLifecycle=sharedLifecycle;if(!windowHost)playerTheme.set(manager);
-      try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
+    ...services,
     recreate(){
       if(!destroyedWindows.has(shellObject))
         throw new Error('InfoLink shell must follow Window.Destroy before recreation');
-      return constructShell();
+      return constructShell(viaHud);
     },
-    readNative:(object,offset,kind)=>memory.read(object,offset,kind),
-    // Adopt a runtime-attached object (e.g. the live DataLink harness's
-    // HUDReceivedDisplay) into the shell's native window storage so Window
-    // natives invoked on it execute against real fields.
-    adoptWindow:(object,parent=hud)=>{memory.allocate(object);
-      constructWindowNative(object,{...rawServices,
-        coreObjectConstructor:({object:base})=>memory.write(base,0,'u32',0x10179dfc)});
-      memory.write(object,O.parent,'ptr',parent);return object;},
-    isDestroyed:object=>destroyedWindows.has(object),
     native:Object.freeze({lockCount:memory.read(child,O.lock,'i32'),
       visible:Boolean(memory.read(child,O.flags,'u32')&1),parent:memory.read(child,O.parent,'ptr')===hud}),
   });
   }
 
-  return constructShell();
+  return deferWindow?Object.freeze({object:null,objects:Object.freeze({}),...services}):constructShell();
 }

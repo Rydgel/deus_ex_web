@@ -14,7 +14,11 @@ export async function createHudRenderer(hud,assets,shell){
   const text=await createHudText(assets,[...new Set(['DeusExUI.FontTiny','DeusExUI.FontMenuHeaders_DS',
     'DeusExUI.FontFixedWidthSmall_DS','DeusExUI.FontMenuSmall_DS',defaultOf('fontName').key])]);
   const store=new TextureStore(assets);
-  for(const field of ['texBackgrounds','texBorders'])for(const ref of hud.read(shell.object,field)){
+  // HUDInfoLinkDisplay's panel art is class-default data; Play has no display
+  // object until a DataLink's CreateInfoLinkWindow constructs one.
+  const infoClass=await hud.runtime.loadClass(dx,dx.exportsByPath.get('hudinfolinkdisplay'));
+  const infoDefault=name=>hud.runtime.defaultValue(infoClass,hud.runtime.lookupMember(infoClass,'fields',name));
+  for(const field of ['texBackgrounds','texBorders'])for(const ref of infoDefault(field)){
     const data=await store.get(ref.asset,ref.index,true);hud.images.set(ref.key,{key:ref.key,...data.mips[0]});
   }
   for(const field of ['texBackgrounds','texBorders'])for(const ref of defaultOf(field)){

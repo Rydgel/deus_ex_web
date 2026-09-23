@@ -68,14 +68,46 @@ shell lifecycle dispatches the original `DeusExHUD.DescendantRemoved` event,
 which clears `hud.infoLink`; the play object's `dataLink` reference is then
 cleared in the source order. With no queued route, the spawned play actor is
 marked for deletion. With a queued route, the original `PopDataLink` selects
-the next canonical Conversation and `HUDInfoLinkDisplay.CreateControls`
-constructs a new display and control tree on the same root/HUD graph before
-that route starts. The new display has a distinct object identity and the old
-tree remains destroyed. `script-doors.infoLinkShell()` always returns the
-current tree.
+the next canonical Conversation before that route starts.
+
+## Display construction at each start
+
+`DataLinkPlay.StartConversation` obtains its display from
+`rootWindow.hud.CreateInfoLinkWindow()` after its first three field writes.
+Play now runs that installed `DeusExHUD.CreateInfoLinkWindow` body at every
+start, fresh or queued: it returns None when a display exists, else
+`NewChild(Class'HUDInfoLinkDisplay')` (whose `CreateControls` builds all six
+controls), `msgLog.Hide()`, `infolink.AskParentForReconfigure()` and the
+`infolink` assignment. The live adapter then stores the returned display in
+`dataLink` and continues with `currentEvent`, `ShowTextCursor(False)`,
+`bStartTransmission` and the timer, in source order. Play's shell is created
+with `deferWindow`, so the HUD has no InfoLink display before the first
+DataLink, after a normal finish, or after reset. Each start has a distinct
+display identity. `script-doors.infoLinkShell()` returns the current display,
+or the display-less shell services when none exists.
+
+Previously a display was prebuilt at startup and only republished. Two Play
+pauses came from that. A route that started after a normal finish, rather
+than from the queue, republished the destroyed display. Its end then failed
+`finishPlay` ("tried to remove its play actor before destroying the InfoLink
+window"): natural movement reaches this at the end of DL_Key, after DL_Start
+and a queued DL_Door. The start also skipped `msgLog.Hide()`, so a pickup
+message shown before the DataLink kept the log visible. The next
+`ClientMessage` → `HUDLogDisplay.AddLog` → `DeusExHUD.ConfigurationChanged`
+then moved the delegated display under the log. The general window host has
+no family for that display, so the move paused Play with "Native window has no
+admitted family". This was the Training crowbar/knife table under
+DataLinkTrigger31. `validate-infolink-walking-trigger` covers the unqueued
+DL_Door display. `validate-play-hud` covers the hidden log and a message sent
+during the InfoLink.
+
+Unverified boundary: shell construction restores `runtime.rng` after
+`StaticWindow.RandomizeStatic`. The original consumes the shared stream at
+this point. Whether the two streams and call counts coincide has not been
+measured.
 
 `reset()` destroys an active window through the same original HUD path,
-reconstructs a clean shell, clears all 18 `*_Played` flags, removes a live play,
+leaves no display until the next DataLink start, clears all 18 `*_Played` flags, removes a live play,
 restores each authored trigger's collision and bookkeeping fields, and permits
 a fresh session. The catalog intentionally leaves noncanonical Mission00 DataLinks,
 multi-event branches, unsupported `ConEvent` actions, and the original native
@@ -89,8 +121,9 @@ Focused checks:
     node scripts/validate-training-datalink-live.mjs
 
 The first validator checks all 18 map/package/audio records. The second
-checks movement into `DataLinkTrigger23`, recursive window destruction, and
-fresh construction on reset. The focused live validator admits every canonical
+checks movement into `DataLinkTrigger23`, recursive window destruction, an
+unqueued DL_Door display built after DL_Start finishes, and no display after
+reset until the next start. The focused live validator admits every canonical
 route, checks its resolved chain and route-specific presentation/audio, and
 proves that queue advance destroys the first shell and publishes a distinct
 new shell around the original `PopDataLink` result. The live validator also

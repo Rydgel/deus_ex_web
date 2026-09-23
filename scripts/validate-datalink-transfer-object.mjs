@@ -139,12 +139,13 @@ assert.ok(level.actors.includes(play), 'spawned DataLinkPlay was appended to Lev
 
 // Populate the ConPlayBase/DataLinkPlay fields the way the live lifecycle does
 // for an InfoLink: the bound conversation, the player, no first-person window,
-// the constructed HUDInfoLinkDisplay shell, and the current transfer event.
+// and the current transfer event. SetupEventTransferObject does not read
+// dataLink, and Play has no display outside a DataLink start, so it stays None.
 const shell = await game.doors.scriptRuntime.infoLinkShell();
 set(play, 'con', conversation);
 set(play, 'player', player);
 set(play, 'conWinThird', null);
-set(play, 'dataLink', shell.object);
+set(play, 'dataLink', null);
 set(play, 'currentEvent', event);
 
 // The DataVaultImage branch ends at

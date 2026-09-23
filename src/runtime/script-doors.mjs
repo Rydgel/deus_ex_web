@@ -1902,7 +1902,9 @@ export async function createScriptDoors({
     playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
     playerLogs.enableMessages();
   }
-  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost});
+  // Deferred: DataLinkPlay.StartConversation constructs each display through
+  // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
+  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost,deferWindow:true});
   liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
     player:playerActor,shell:infoLinkShellValue,spawnWorldPrepared:nativeHud,
     onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});

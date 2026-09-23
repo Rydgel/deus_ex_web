@@ -59,12 +59,29 @@ assert.equal(runtime.namedReference(trigger,'bCollideActors').get(),false);
 assert.equal(trigger.collideActors,false);
 assert.equal(game.doors.scriptRuntime.triggerActions.flagBase.getEntry('DL_Start_Played')?.value,true);
 assert.equal(game.doors.scriptRuntime.dataLinkPresentation().phase,'destroyed');
+// A later route starting after a normal finish (not queued) runs
+// DataLinkPlay.StartConversation's DeusExHUD.CreateInfoLinkWindow again: a new
+// display, published on the HUD, destroyed through the same end path.
+const doorTrigger=runtime.levelFor(player).actors.find(actor=>actor?.name==='DataLinkTrigger24');
+assert.equal(doorTrigger?.values.datalinkTag,'dl_door');
+frames=0;
+while(events.length===4&&frames++<480)game.tick(1/120,{...input,yaw:game.player.yaw});
+assert.equal(events.at(-1)?.kind,'started','walking on enters DataLinkTrigger24 after DL_Start finished');
+assert.equal(events.at(-1).tag,'dl_door');
+const doorShell=await game.doors.scriptRuntime.infoLinkShell();
+assert.notEqual(doorShell.object,firstShell.object,'a fresh route constructs its own HUDInfoLinkDisplay');
+assert.equal(doorShell.isDestroyed(doorShell.object),false);
+assert.equal(runtime.namedReference(hud,'infoLink').get(),doorShell.object);
+assert.equal(runtime.namedReference(runtime.namedReference(player,'dataLinkPlay').get(),'dataLink').get(),doorShell.object);
+for(let index=0;index<1500&&events.at(-1).kind!=='destroyed';index++)game.tick(1/120,neutral);
+assert.deepEqual(events.slice(4).map(event=>event.kind),['started','speech','ending','destroyed']);
+assert.equal(doorShell.isDestroyed(doorShell.object),true);
+assert.equal(runtime.namedReference(hud,'infoLink').get(),null);
 const firstEventCount=events.length;
 game.reset();
 const resetShell=await game.doors.scriptRuntime.infoLinkShell();
-assert.notEqual(resetShell.object,firstShell.object,
-  'reset exposes a freshly constructed HUDInfoLinkDisplay after native destruction');
-assert.equal(resetShell.isDestroyed(resetShell.object),false);
+assert.equal(resetShell.object,null,'a reset session has no InfoLink display before its first DataLink');
+assert.equal(runtime.namedReference(hud,'infoLink').get(),null);
 assert.equal(resetShell.root,firstShell.root);assert.equal(resetShell.hud,firstShell.hud);
 assert.equal(game.doors.scriptRuntime.triggerActions.flagBase.getEntry('DL_Start_Played'),null,
   'reset begins a fresh Training session with no played DataLink flag');
@@ -76,6 +93,10 @@ assert.equal(events.length,firstEventCount+1,'reset permits the authored one-sho
 assert.equal(events.at(-1).kind,'started');
 assert.notEqual(runtime.namedReference(player,'dataLinkPlay').get(),play,
   'the new session spawns a fresh DataLinkPlay object');
+const sessionShell=await game.doors.scriptRuntime.infoLinkShell();
+assert.ok(sessionShell.object&&![firstShell.object,doorShell.object].includes(sessionShell.object),
+  'the new session constructs a fresh display at its first DataLink start');
 console.log(`Live InfoLink lifecycle passed: normal movement entered DataLinkTrigger23 after ${frames} fixed frames, `+
   'spawned DataLinkPlay, published its HUD child, ran start/speech/end states, set DL_Start_Played, '+
-  'called DatalinkFinished, disabled the one-shot trigger, recursively destroyed the HUD child, removed the play actor, and reconstructed a fresh shell on reset.');
+  'called DatalinkFinished, disabled the one-shot trigger, recursively destroyed the HUD child, removed the play actor; '+
+  'a later unqueued DL_Door constructed and destroyed its own display, and reset left no display until the next DataLink start.');

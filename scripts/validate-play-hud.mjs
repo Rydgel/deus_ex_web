@@ -75,6 +75,21 @@ const glyphs=[];text.draw(c=>glyphs.push(c),{font:'DeusExUI.FontMenuHeaders_DS',
 assert.equal(glyphs.length,11);assert.equal(glyphs[0].image.key,'DeusExUI.FontMenuHeaders_DS.Texture17');
 assert.deepEqual([glyphs[0].x,glyphs[0].y,glyphs[0].width,glyphs[0].height],[94,17,7,11]);
 assert.ok(glyphs.every(c=>c.x>=94&&c.x+c.width<=387&&c.y>=15&&c.y+c.height<=30));
+// DataLinkPlay.StartConversation -> DeusExHUD.CreateInfoLinkWindow hides a
+// visible msgLog; a message during the InfoLink waits (HUDLogDisplay.AddLog)
+// rather than laying the display out below the log.
+assert.equal((await game.doors.scriptRuntime.infoLinkShell()).object,null,'No InfoLink display exists before a DataLink');
+runtime.dispatchSpawnedEvent(player,'ClientMessage',['Log before InfoLink','',false]);
+const msgLog=hud.read(hud.hud,'msgLog');assert.equal(hud.visible(msgLog),true);
+const walk={forward:1,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false};
+for(let i=0;i<240&&!game.doors.scriptRuntime.dataLinkActive();i++)game.tick(1/120,walk);
 const shell=await game.doors.scriptRuntime.infoLinkShell();
+assert.ok(shell.object,'Walking into DL_Start constructs the InfoLink display');
+assert.equal(hud.read(hud.hud,'infolink'),shell.object);
+assert.equal(hud.visible(msgLog),false,'Original CreateInfoLinkWindow hides the message log');
+runtime.dispatchSpawnedEvent(player,'ClientMessage',['Log during InfoLink','',false]);
+assert.equal(hud.visible(msgLog),false,'A message during the InfoLink waits');
+assert.equal(hud.read(msgLog,'bMessagesWaiting'),true);
+hud.commands(960,600,view);
 assert.deepEqual(hud.decorationCommands(shell.object).map(c=>[c.x,c.width,c.height]),[[0,256,114],[256,175,114],[0,256,114],[256,175,114]]);
-console.log('Play HUD passed: original Init/Tick/Draw, shared root, key ring/belt, pickup/equip/put-away, ammo, AugLight, frob, log, health/energy/compass, reset, InfoLink crops and bitmap-font glyphs.');
+console.log('Play HUD passed: original Init/Tick/Draw, shared root, key ring/belt, pickup/equip/put-away, ammo, AugLight, frob, log, health/energy/compass, reset, CreateInfoLinkWindow log hiding, InfoLink crops and bitmap-font glyphs.');
