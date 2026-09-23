@@ -2428,6 +2428,10 @@ export class ScriptRuntime {
       const rate=refValue(call.evaluateArgument(0)),loop=refValue(call.evaluateArgument(1));
       return setActorTimer(this.timerState(call.receiver),rate,loop);
     }
+    // Extension window/GC natives owned by the installed window host
+    // (src/runtime/script-window-host.mjs); unhandled indices fall through.
+    const windowNative=this.windowLifecycle?.handleNative?.(call);
+    if(windowNative?.handled)return windowNative.value;
     if(!this.native)throw new Error(`Unimplemented original native ${call.index}`);
     return this.native({...call,runtime:this});
   }
