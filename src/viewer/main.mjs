@@ -138,7 +138,7 @@ function setMode(next) {
   keys.clear();
   if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
   $('play-hint').textContent = '';
-  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Click or Enter fire / use item in hand · 1 nanokey ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
+  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Click or Enter fire / use item in hand · 1–9 belt · 0 nanokey ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
 }
 function useDoor() {
@@ -355,7 +355,7 @@ $('instructor-preview').onclick=()=>{
 };
 
 // Places Play beside the Training weapon crate, picks up the crowbar through the
-// public frob path, and equips it through the original group-10 PutInHand path.
+// public frob path, equips its original belt slot, then faces the adjacent crates.
 // The crowbar and crates sit past the locked keypad doors that the training
 // scripts open; this is the same curated placement the other preview buttons use
 // (changeActor next to the target). Real gameplay reaches them by walking once
@@ -380,7 +380,16 @@ $('weapon-preview').onclick = async () => {
     const belt=game.hud.read(game.hud.hud,'belt');
     const position=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===crowbar);
     const equipped = await game.activateBelt(position);
-    toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? `${equipped.label} equipped (press ${position} to select, F to frob)` : 'select from the object belt'}`);
+    const crate=runtime.levelFor(player).actors.find(actor=>actor?.name==='CrateBreakableMedGeneral1');
+    const at=runtime.namedReference(crate,'Location').get();
+    // This diagnostic placement matches validate-crowbar-crate's measured
+    // reachable trace, while every swing still runs through public input/ticks.
+    game.collision.queries.changeActor(player,()=>{
+      game.player.position=[at[0],at[1]+64,-128+43+0.2];game.player.velocity=[0,0,0];
+    });
+    yaw=-Math.PI/2;pitch=Math.atan2(at[2]-(game.player.position[2]+40),64);
+    camera.rotation.set(pitch,yaw,0);camera.position.fromArray(toView(game.player.eye));
+    toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? 'Click or press Enter twice to break the crate' : 'select from the object belt'}`);
   } catch (error) { pauseForRuntimeError(error); }
 };
 
