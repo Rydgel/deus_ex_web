@@ -218,6 +218,7 @@ export function invalidateTreeConfiguration(W, win) {
 }
 /** 0x1004e520 ReconfigureTree(bool bInvalidate). */
 export function reconfigureTree(W, win, invalidate) {
+  if(W.externalSubtree?.(win))return; // Existing InfoLink/ConPlay presentation owner.
   if (invalidate) invalidateTreeConfiguration(W, win);
   let w = win;
   while (w && (W.u8(w, O.flags) & 1)) w = W.ptr(w, O.parent);
@@ -346,6 +347,7 @@ export function tickTree(W, win, delta) {
   lockWindow(W, win);
   try {
     tickTree(W, higherSibling(W, win, 0), delta);
+    if(W.externalSubtree?.(win))return;
     if (W.u8(win, O.flags) & 0x10) return;
     W.v.tick(win, delta);
     if (W.u8(win, O.flags) & 0x10) return;
@@ -379,6 +381,7 @@ export function initializeWindows(W, root) {
     W.boundary('XRootWindow::InitializeWindows initCount assertion (0x1003bcc4)');
 }
 export function invokeWindowReady(W, root, win) {
+  if(W.externalSubtree?.(win))return;
   for (let child = bottomChild(W, win, 1); child; child = higherSibling(W, child, 1)) invokeWindowReady(W, root, child);
   if (!(W.u8(win, O.flags) & 8)) {
     W.processScript(win, 'WindowReady', [], {checked: true});
@@ -393,6 +396,7 @@ export function invokeWindowReady(W, root, win) {
 // explicit boundaries when their root flags are set).
 // ---------------------------------------------------------------------------
 export function drawTree(W, win, canvas, debugTexture, frameTimer, hMultiplier, vMultiplier) {
+  if(W.externalSubtree?.(win))return;
   lockWindow(W, win);
   try {
     const gc = W.ptr(win, O.gGc);
@@ -460,6 +464,8 @@ function getMouseWindow() { return null; }
  * returns before its clip-list work; any other configuration is a boundary.
  */
 function drawRawBackground(W, root, gc, texture) {
-  if (!texture) return;
+  // GetRawBackgroundClipList 1003c5f0: bRender && !bClipRender subtracts
+  // the null clip (1003c6b3), emptying the list. No DrawPattern is emitted.
+  if ((W.u32(root, ROOT.renderFlags)&3)===1) return;
   W.boundary('XRootWindow::DrawRawBackground with a raw background texture (0x1003c720)');
 }

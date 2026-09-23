@@ -128,7 +128,9 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   function absolute(target, offset) {
     if (typeof target === 'number') return (target + (offset ?? 0)) >>> 0;
     const record = objects.get(target);
-    if (!record) fail('Native heap accessed an unallocated object', {object: target, offset});
+    // Resource images are lazily supplied by external(), and retain their
+    // canonical package identity instead of being allocated UObject hosts.
+    if (!record) return (addressOf(target) + (offset ?? 0)) >>> 0;
     if (offset < 0 || offset >= record.size)
       fail(`Native heap offset 0x${offset.toString(16)} is outside the object image`, {object: target, offset});
     return (record.address + offset) >>> 0;
@@ -176,6 +178,12 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   /** Object-relative access used by the window natives. */
   const read = (target, offset, kind) => readAt(absolute(target, offset), kind);
   const write = (target, offset, kind, value) => writeAt(absolute(target, offset), kind, value);
+  function copyBytes(destination, source, count) {
+    const values=[...side].filter(([at])=>at>=source&&at<source+count).map(([at,value])=>[destination+at-source,value]);
+    bytes.copyWithin(destination-HEAP_BASE,source-HEAP_BASE,source-HEAP_BASE+count);
+    for(const at of side.keys())if(at>=destination&&at<destination+count)side.delete(at);
+    for(const [at,value] of values)side.set(at,value);
+  }
 
   /** Address-based access used by the XGC/UFont natives (hud-text shape). */
   const mem = {
@@ -186,7 +194,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   };
 
   const api = {
-    bytes, allocRaw, allocate, isAllocated, addressOf, objectAt, read, write, mem,
+    bytes, allocRaw, allocate, isAllocated, addressOf, objectAt, read, write, mem, copyBytes,
     objectAddress: object => {
       const record = objects.get(object);
       if (!record) fail('Native heap object has no address', {object});

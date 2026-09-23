@@ -836,6 +836,9 @@ export function compileFunction(fn) {
             return Math.trunc(value)|0;
           }
           case 0x50: return vectorToRotator(refValue(evaluate(n.value,instance)));
+          // Core execIntToString 10131600: evaluate one signed DWORD,
+          // FString::Printf with the UTF-16 "%i" constant at 101aaf70.
+          case 0x53: return String(refValue(evaluate(n.value,instance)) | 0);
           case 0x56: return scriptObjectToString(refValue(evaluate(n.value,instance)));
           case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
           case 0x36: {
@@ -868,11 +871,12 @@ export function compileFunction(fn) {
         }
       };
       frame.resume = () => {
-        let budget = 2048;
+        // Host runaway guard; HUDMultiSkills.RefreshKey visits all 255 input keys.
+        let budget = 16384;
         // A native iterator owns its body loop until Next/Pop, including when
         // a body statement changes the actor's latent action.
         while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
-          if (!budget--) throw new Error('VM instruction budget exceeded');
+          if (!budget--) throw new Error(`VM instruction budget exceeded in ${fn.name??fn.objectName??'script'}`);
           const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
           const n = entry.node;
           // Native state calls may replace Code. Advance before dispatch so a

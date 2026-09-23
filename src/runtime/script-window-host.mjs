@@ -38,6 +38,22 @@ import {decodeFontExport, writeFontImage, UFONT, FONT_PAGE} from './script-font-
 import {readObject} from '../unreal/objects.mjs';
 import {readTexture} from '../unreal/textures.mjs';
 import {refValue} from './script-vm.mjs';
+import {dispatchWindowHostNative} from './script-window-host-natives.mjs';
+import {dispatchGcNative} from './script-window-gc-dispatch.mjs';
+import {gcPushGC} from './script-gc-push-gc.mjs';
+import {gcPopGC} from './script-gc-pop-gc.mjs';
+import {gcCopyGC} from './script-gc-copy-gc.mjs';
+import {gcGetTextExtent} from './script-gc-get-text-extent.mjs';
+import {gcGetFontHeight} from './script-gc-get-font-height.mjs';
+import {gcEnableDrawing} from './script-gc-enable-drawing.mjs';
+import {gcTileEmitGate,bitsToF32} from './script-gc-draw-model.mjs';
+import * as D from './script-window-family-draw.mjs';
+import * as Log from './script-window-text-log.mjs';
+import * as L from './script-window-family-layout.mjs';
+import {createInputConsole} from './script-input-console.mjs';
+import {rootTickNative} from './script-window-root-tick.mjs';
+import {setToggleNative} from './script-window-toggle-set.mjs';
+import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -91,6 +107,7 @@ const HUD_CLASS_PATHS = Object.freeze([
 
 export async function createWindowHost({runtime, assets, player, gameConfig = null}) {
   if (!runtime?.attach || !assets?.get) throw new TypeError('Window host requires ScriptRuntime and AssetStore');
+  const inputConsole=await createInputConsole(runtime,assets);
   const packages = new Map();
   for (const name of ['Core', 'Engine', 'Extension', 'DeusEx', 'DeusExUI', 'ConSys']) packages.set(name, await assets.get(name));
   const extension = packages.get('Extension'), deusEx = packages.get('DeusEx');
@@ -121,6 +138,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (deusEx.pkg.exports[index - 1].className !== 'Class') continue;
     classes.set(`deusex.${path}`, await runtime.loadClass(deusEx, index));
   }
+  const core=packages.get('Core');await runtime.prepareFunction(core,core.exportsByPath.get('object.getenum'));
   const gcClass = classes.get('extension.gc');
 
   // ------------------------------------------------------------------
@@ -175,6 +193,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     ['preferredSizeDepth', 0], ['granularityDepth', 0], ['rootWindowList', null], ['global100aeafc', null],
   ]);
   const boundaryLog = [];
+  let lastTickTime=performance.now()/1000;
   const W = {
     heap,
     u8: (o, off) => heap.read(o, off, 'u8'), u16: (o, off) => heap.read(o, off, 'u16'),
@@ -193,6 +212,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     setPawnRootWindow: (pawn, root) => runtime.namedReference(pawn, 'rootWindow').set(root),
     processScript: (win, event, args, options) => processScript(win, event, args, options),
     canvasComputeRenderSize: () => {},
+    tickOffset:()=>f(performance.now()/1000-lastTickTime),
   };
   // FArray over heap storage ({Data, Num, Max} at the given offset).
   W.farray = {
@@ -203,7 +223,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const max = W.i32(o, off + 8), num = W.i32(o, off + 4), old = W.u32(o, off);
       if (max <= 0) { W.setU32(o, off, 0); return; }
       const address = heap.allocRaw(max * elementSize);
-      if (old) heap.bytes.copyWithin(address - 0x21000000, old - 0x21000000, old - 0x21000000 + Math.min(num, max) * elementSize);
+      if (old) heap.copyBytes(address,old,Math.min(num,max)*elementSize);
       W.setU32(o, off, address);
     },
     empty(o, off, elementSize, slack = 0) { W.setI32(o, off + 4, 0); W.setI32(o, off + 8, slack); W.farray.realloc(o, off, elementSize); },
@@ -215,8 +235,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     remove(o, off, index, count, elementSize) {
       const data = W.u32(o, off), num = W.i32(o, off + 4);
-      const base = data - 0x21000000;
-      heap.bytes.copyWithin(base + index * elementSize, base + (index + count) * elementSize, base + num * elementSize);
+      heap.copyBytes(data+index*elementSize,data+(index+count)*elementSize,(num-index-count)*elementSize);
       W.setI32(o, off + 4, num - count);
     },
     ptr: (o, off, i) => heap.mem.read(W.u32(o, off) + 4 * i, 'ptr'),
@@ -340,6 +359,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   let nameCounter = 0;
   const families = new WeakMap();
+  const externalSubtrees = new WeakSet();
+  W.externalSubtree=win=>externalSubtrees.has(win);
   const destroyed = new WeakSet();
   function familyOf(win) {
     const family = families.get(win);
@@ -444,6 +465,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const is = (win, ...keys) => keys.includes(familyOf(win));
   const V = {
+    convertVectorToCoordinates:(win,vector)=>is(win,'extension.rootwindow')?rootVectorToCoordinates(W,win,vector):windowVectorToCoordinates(W,win,vector),
     childAdded: (win, child) => processScript(win, 'ChildAdded', [child]),            // 0x100034c0
     childRemoved: (win, child) => processScript(win, 'ChildRemoved', [child]),        // 0x100034e0
     descendantAdded(win, child) {                                                      // 0x10003500 / RadioBox 0x10038b90
@@ -596,17 +618,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     processScript(win, 'ParentRequestedPreferredSize', args);
     return {width: f(args[1]), height: f(args[3])};
   }
-  function textPreferredSize() { return boundary('XTextWindow::ParentRequestedPreferredSize is wired in the layout slice'); }
-  function tileComputeChildSizes() { return boundary('XTileWindow::ComputeChildSizes is wired in the layout slice'); }
-  function tabGroupPreferredSize() { return boundary('XTabGroupWindow::ParentRequestedPreferredSize is wired in the layout slice'); }
-  function radioBoxPreferredSize() { return boundary('XRadioBoxWindow::ParentRequestedPreferredSize is wired in the layout slice'); }
-  function tileConfigurationChanged() { return boundary('XTileWindow::ConfigurationChanged is wired in the layout slice'); }
-  function tabGroupConfigurationChanged(win) {                                          // 0x10045640
-    if (W.u8(win, 0x164) & 2) boundary('XTabGroupWindow::ConfigurationChanged bSizeChildrenToParent branch');
-    return processScript(win, 'ConfigurationChanged', []);
-  }
-  function radioBoxConfigurationChanged() { return boundary('XRadioBoxWindow::ConfigurationChanged is wired in the layout slice'); }
-  function textLogConfigurationChanged() { return boundary('XTextLogWindow::ConfigurationChanged is wired in the layout slice'); }
+  const textPreferredSize=(...args)=>L.textPreferredSize(W,...args);
+  const tileComputeChildSizes=(...args)=>L.tileComputeChildSizes(W,...args);
+  const tabGroupPreferredSize=(...args)=>L.tabGroupPreferredSize(W,...args);
+  const radioBoxPreferredSize=(...args)=>L.radioBoxPreferredSize(W,...args);
+  const tileConfigurationChanged=(win)=>L.tileConfigurationChanged(W,win);
+  const tabGroupConfigurationChanged=(win)=>L.tabGroupConfigurationChanged(W,win);
+  const radioBoxConfigurationChanged=(win)=>L.radioBoxConfigurationChanged(W,win);
+  function textLogConfigurationChanged(win) { return Log.textLogConfigurationChanged(W,win); }
   function radioBoxDescendantAdded(win, child) {                                         // 0x10038b90 (after the script bridge)
     if (!W.isA(child, 'extension.togglewindow')) return;
     let w = child;
@@ -617,14 +636,27 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   }
   function radioBoxDescendantRemoved() { return boundary('XRadioBoxWindow::DescendantRemoved is wired in the destroy slice'); }
   function rootDescendantRemoved() { return boundary('XRootWindow::DescendantRemoved is wired in the destroy slice'); }
-  function radioBoxToggleChanged() { return boundary('XRadioBoxWindow::ToggleChanged is not recovered'); }
-  function changeButtonAppearance() { return boundary('XButtonWindow::ChangeButtonAppearance is wired with the button natives'); }
-  function buttonTick() { return undefined; }
-  function textLogTick() { return boundary('XTextLogWindow::Tick is wired in the tick slice'); }
-  function rootTickVirtual() { return boundary('XRootWindow::Tick is wired in the tick slice'); }
-  function textDraw() { return boundary('XTextWindow::Draw is wired in the draw slice'); }
-  function buttonDraw() { return boundary('XButtonWindow::Draw is wired in the draw slice'); }
-  function textLogDraw() { return boundary('XTextLogWindow::Draw is wired in the draw slice'); }
+  function radioBoxToggleChanged(win,button,toggle) { // 10038a60
+    if(is(button,'extension.togglewindow')){
+      if(toggle){
+        for(let i=0;i<W.farray.num(win,0x178);i++)if(W.farray.ptr(win,0x178,i)===button){
+          const old=W.ptr(win,0x184);if(old===button)return 1;
+          W.setPtr(win,0x184,button);if(old)setToggleNative(old,0,lifecycle.toggle);break;
+        }
+      }else if(W.u8(win,0x174)&1){
+        if(W.ptr(win,0x184)===button)setToggleNative(button,1,lifecycle.toggle);return 1;
+      }else if(W.ptr(win,0x184)!==button)return 1;
+      else W.setPtr(win,0x184,null);
+    }
+    return processScript(win,'ToggleChanged',[button,Boolean(toggle)],{result:false})?1:0;
+  }
+  function changeButtonAppearance(win) { return D.changeButtonAppearance(W,win); }
+  function buttonTick(win,delta) { return D.buttonTick(W,win,delta); }
+  function textLogTick(win,delta) { return Log.textLogTick(W,win,delta); }
+  function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:()=>boundary('Root Tick reached SetFocusWindow')}); }
+  function textDraw(win,gc) { return D.textDraw(W,win,gc); }
+  function buttonDraw(win,gc) { return D.buttonDraw(W,win,gc); }
+  function textLogDraw(win,gc) { return Log.textLogDraw(W,win,gc); }
   function cleanUpFamily() { return boundary('Window CleanUp is wired in the destroy slice'); }
   function safeDestroy() { return boundary('Window SafeDestroy is wired in the destroy slice'); }
 
@@ -635,9 +667,23 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     host: null,
     errorDevice: {name: 'GError'},
     isScriptable: () => true,
+    handleNative: call => {
+      const input=inputConsole.playerConsoleCommand(call);if(input.handled)return input;
+      const gc=dispatchGcNative(heap,gcServices,call);
+      return gc.handled?gc:dispatchWindowHostNative(W,call);
+    },
     hierarchy: {readParent: object => heap.read(object, T.O.parent, 'ptr'), readType: object => heap.read(object, T.O.type, 'u8')},
     reconfiguration, configureChild: configureChildServices, visibility,
-    sensitivity: rawServices, size: rawServices, position: rawServices, text: rawServices,
+    sensitivity: {...rawServices,
+      checkFocusWindow: ({object})=>T.checkFocusWindow(W,object),
+      checkGrabbedWindow: ({object})=>T.checkGrabbedWindow(W,object),
+      makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object),
+      notifySensitivityChanged: ({object,sensitive})=>T.invokeSensitivityChange(W,object,sensitive)},
+    size: rawServices, position: rawServices, text: rawServices,
+    toggle: {...rawServices,
+      read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
+      toggleChanged:({object,source,toggle})=>V.toggleChanged(object,source,toggle)},
+    changeStyle:{...rawServices,dispatchVirtual:({object})=>V.styleChanged(object)},
     backgroundStyle: {...rawServices, generatePolyFlags: ({gc}) => updatePolyFlagsFromFlags(gcMemory(gc, gcServices), heap.objectAddress(gc))},
     surface: rawServices,
     tile: {...rawServices, askParentForReconfigure: ({object}) => askParentForReconfigure(object)},
@@ -656,7 +702,50 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     askParentForReconfigure: ({object}) => askParentForReconfigure(object),
     safeDestroy: ({object}) => safeDestroy(object),
   };
-  const gcServices = {mem: heap.mem, objectAddress: object => heap.objectAddress(object)};
+  const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
+    allocateObject: ()=>heap.allocRaw(GC.size),constructUObject: ()=>{},
+  };
+  const drawCommands=[];
+  const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x80);
+  const viewport=heap.allocRaw(0xc0),node=heap.allocRaw(0x300),renderInterface=heap.allocRaw(4),renderTable=heap.allocRaw(0x100),canvasTable=heap.allocRaw(0x60);
+  const put=(at,off,value,kind='u32')=>heap.mem.write(at+off,kind,value);
+  W.setU32(canvas,0,canvasTable);put(canvasTable,0x5c,4);
+  W.setU32(canvas,0x78,viewport);W.setU32(canvas,0x7c,node);put(node,0,viewport);
+  put(viewport,0x64,renderInterface);put(renderInterface,0,renderTable);put(renderTable,0x7c,3);
+  gcServices.texCache={records:Array.from({length:5},()=>heap.allocRaw(0x84)),static:heap.allocRaw(0x84),head:0,count:0};
+  gcServices.callVirtual=(slot,object,command)=>{
+    if(slot===1){put(command.record,0,object);return;}
+    if(slot===2)return;
+    if(slot!==3&&slot!==4)boundary(`Unknown HUD renderer virtual ${slot}`);
+    const pointer=slot===3?heap.mem.read(command.record,'u32'):command.texture;
+    const resource=resourceImages.get(pointer);if(!resource)boundary(`Unknown HUD texture pointer ${pointer}`);
+    drawCommands.push({texture:resource.ref,x:bitsToF32(command.x),y:bitsToF32(command.y),
+      width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
+      ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),
+      color:command.color.slice(0,3).map(bits=>bitsToF32(bits)*255),
+      style:command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1});
+  };
+  W.gc = {
+    services:gcServices,
+    get(win){const gc=W.ptr(win,T.O.wGc);if(gc){gcPushGC(gc,gcServices);gcCopyGC(gc,heap.addressOf(W.ptr(win,T.O.gGc)),gcServices);}return gc;},
+    release(_win,gc){if(gc)gcPopGC(gc,-1,gcServices);},
+    textExtent:(gc,width,text)=>gcGetTextExtent(gc,width,text,gcServices),
+    fontHeight:(gc,space)=>gcGetFontHeight(gc,space,gcServices),
+    push:gc=>gcPushGC(gc,gcServices),pop:(gc,depth)=>gcPopGC(gc,depth,gcServices),
+    setCanvas:(gc,canvas)=>W.setPtr(gc,GC.canvas,canvas), // XGC::SetCanvas 0x10026ec0
+    setMultipliers:(gc,h,v)=>{W.setI32(gc,0x9c,h);W.setI32(gc,0xa0,v);}, // 0x10026ed0
+    enableDrawing:(gc,enabled)=>gcEnableDrawing(gc,enabled,gcServices),
+    drawIconPattern:(gc,x,y,w,h,u,v,ul,vl,texture)=>gcTileEmitGate(gcMemory(gc,gcServices),{x,y,w,h,u,v,ul,vl,texture:heap.addressOf(texture)}),
+    cleanUp(){ // XGC::CleanUp 100269b0 -> cache flush 10026a20.
+      const cache=gcServices.texCache;
+      for(const record of cache.records){
+        const texture=heap.mem.read(record,'u32');
+        if(texture)gcServices.callVirtual(2,texture,{record});
+        heap.mem.write(record,'u32',0);heap.mem.write(record+0x80,'u32',0);
+      }
+      cache.head=0;cache.count=0;
+    },
+  };
 
   // ------------------------------------------------------------------
   // Root construction: APlayerPawnExt::ConstructRootWindow 0x10037e70.
@@ -671,14 +760,25 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     F.initRootWindow(W, root, pawn);
     processScript(root, 'InitWindow', [], {checked: true});
     setVisibility(root, true);
+    host.root=root;host.hud=runtime.namedReference(root,'hud').get();
     return root;
   }
 
   const host = {
     runtime, heap, W, lifecycle, classes, globals, boundaryLog, soundRequests, resourceImages, textureInfo,
+    root:null,hud:null,owns:object=>families.has(object),
+    delegateLegacySubtree:object=>externalSubtrees.add(object),
+    raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
+    canvas,node,
+    tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
+    draw(root,width,height){
+      W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
+      T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
+      drawCommands.length=0;T.paintWindows(W,root,canvas);return drawCommands.slice();
+    },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};
       return host;
