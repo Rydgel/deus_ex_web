@@ -1974,10 +1974,27 @@ export async function createScriptDoors({
   await prepareNpcs();
   await prepareCrateLifecycle({runtime,assets,level,decorations:npcDecorations,
     prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
+  // The original has every function and state of its loaded script packages in
+  // memory before LoadMap runs BeginPlay. The VM links/compiles bodies
+  // asynchronously and cannot do so mid-execution, so a body nobody prepared
+  // ahead (a HUD screen pushed by a Frob, a declared notification) stopped as a
+  // host-only "not prepared" gap. Prepare them all; a body whose preparation
+  // fails keeps that failure, recorded here, as its boundary.
+  const scriptPreparationFailures=new Map();
+  for(const name of ['Core','Engine','Extension','ConSys','DeusEx']){
+    const packageAsset=await assets.get(name);
+    for(const [position,entry] of packageAsset.pkg.exports.entries()){
+      if(entry.className!=='Function'&&entry.className!=='State')continue;
+      try{
+        if(entry.className==='Function')await runtime.prepareFunction(packageAsset,position+1);
+        else await runtime.prepareState(packageAsset,position+1);
+      }catch(error){scriptPreparationFailures.set(`${name}.${entry.path}`,String(error?.message??error));}
+    }
+  }
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
-    npcPawns, npcFailures,
+    npcPawns, npcFailures, scriptPreparationFailures,
     infoLinkShell,playerStartup,windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
