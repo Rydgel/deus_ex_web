@@ -1537,6 +1537,13 @@ export async function createScriptDoors({
     }});
 
   function reset() {
+    // Player start reloads the map and its inventory. Reuse the native window
+    // tree, but clear its belt through the original helper before the new
+    // KeyRing GiveTo/AddInventory path publishes the replacement in slot 0.
+    if(windowHost?.hud){
+      const belt=runtime.namedReference(windowHost.hud,'belt').get();
+      runtime.callFunction(runtime.lookup(belt,'ClearBelt'),belt,0);
+    }
     playerStartup?.discardKeyRing?.();
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveConPlay?.reset();
