@@ -32,6 +32,9 @@ Prioritize runtime implementation over performance optimization. Retain
 JavaScript unless later measurements identify a specific bottleneck that
 justifies WebAssembly; performance work is limited to basic playability for now.
 
+Focus current reverse engineering on single-player. Multiplayer is the last
+priority and may remain explicitly unsupported or incomplete.
+
 During Stage 3, keep verification focused. Original bytecode/source and clearly
 recovered native instructions establish the behavior contract. Visual comparison
 is not a gate for nonvisual script/runtime logic. Check new translation and
