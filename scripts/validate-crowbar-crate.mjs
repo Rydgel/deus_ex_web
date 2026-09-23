@@ -8,6 +8,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
+import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -16,6 +17,8 @@ const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
 const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get();
+const meshes=await createActorMeshScene(runtime,assets,asset,{player});
+const previewFor=actor=>meshes.actors.find(preview=>preview.actor===actor);
 const live=name=>level.actors.find(a=>a?.name===name);
 const stateKey=o=>runtime.instance(o).state?.stateNode?.record?.key??'none';
 function place(item){const loc=get(item,'Location');
@@ -57,6 +60,9 @@ swing();
 assert.equal(get(upper,'HitPoints'),hp-damage,'first original notify applies authored damage');
 assert.equal(get(upper,'ScaleGlow'),Math.fround(Math.fround(Math.fround((hp-damage)/hp)*Math.fround(0.9))+Math.fround(0.1)),'ResetScaleGlow darkens surviving crate');
 assert.equal(runtime.instance(upper).pendingKill,false);
+meshes.update();
+assert.ok(previewFor(upper).root.children.every(mesh=>mesh.material.color.r===get(upper,'ScaleGlow')),
+ 'first-hit damage glow reaches crate materials');
 assert.ok(traces.size>0,'original hit-effect actor is spawned');
 assert.ok([...traces].every(actor=>runtime.instance(actor).pendingKill),'0.1-second Timer destroys hit effects');
 swing();
@@ -72,13 +78,24 @@ assert.ok(lockpick,'Containers.Destroyed spawns the authored Lockpick contents')
 assert.equal(get(lockpick,'Physics'),0,'Inventory landing settles lockpick');
 assert.ok(get(lockpick,'Base'),'landing assigns support base');
 assert.equal(stateKey(lockpick),'deusex.deusexpickup.pickup','dropped lockpick enters Pickup state');
+meshes.update();await meshes.ready();meshes.update();
+assert.equal(previewFor(upper),undefined,'destroyed crate releases its draw resource');
+for(const actor of [...fragments,lockpick]){
+ const preview=previewFor(actor);assert.ok(preview,`${actor.name} has a dynamic mesh`);
+ assert.ok(preview.root.visible,`${actor.name} draws at its live location`);
+ assert.ok(preview.root.children.every(mesh=>[...mesh.geometry.getAttribute('position').array].every(Number.isFinite)));
+ if(fragments.has(actor))assert.ok(preview.summary.textures.includes(skin.key),'fragment renders inherited crate skin');
+}
+assert.deepEqual(meshes.summary.errors,[]);
 let faded=false;
 const maxLife=Math.max(...[...fragments].map(actor=>get(actor,'LifeSpan')));
 for(let frame=0;frame<Math.ceil((maxLife+0.1)*60);frame++){
- tick(1);
+ tick(1);meshes.update();
  for(const actor of fragments)if(!runtime.instance(actor).pendingKill&&get(actor,'LifeSpan')<1.5){
   assert.equal(get(actor,'Style'),3,'fragment Tick selects STY_Translucent');
-  assert.ok(get(actor,'ScaleGlow')<1,'fragment Tick fades before expiry');faded=true;
+  assert.ok(get(actor,'ScaleGlow')<1,'fragment Tick fades before expiry');
+  assert.ok(previewFor(actor).root.children.every(mesh=>mesh.material.transparent&&
+   mesh.material.color.r===get(actor,'ScaleGlow')),'fragment fade reaches its live draw materials');faded=true;
  }
 }
 assert.ok(faded,'fragment fade executed');
@@ -92,4 +109,8 @@ assert.equal(stateKey(upper),'deusex.deusexdecoration.active');
 assert.ok(!level.actors.includes(lockpick),'reset destroys spawned contents');
 assert.ok([...fragments,...traces].every(a=>!level.actors.includes(a)),'reset leaves no spawned effects');
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0);
-console.log('crowbar crate: ticked hits, original damage, six fragments/bounce/fade/expiry, dropped Lockpick landing, effect timers and reset passed.');
+meshes.update();await meshes.ready();meshes.update();
+assert.ok(previewFor(upper)?.root.visible,'reset redraws the restored crate');
+assert.ok([...fragments,lockpick].every(actor=>!previewFor(actor)),'reset releases spawned draw resources');
+meshes.dispose();
+console.log('crowbar crate: ticked hits, original damage, six fragments/bounce/fade/expiry, dropped Lockpick landing, dynamic meshes/glow, effect timers and reset passed.');

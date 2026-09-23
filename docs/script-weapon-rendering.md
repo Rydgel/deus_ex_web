@@ -81,3 +81,10 @@ retained camera/depth, and reset. `validate-actor-mesh-scene.mjs` adds a display
 fixture for runtime identity reconciliation, deleted visibility, ScaleGlow and
 translucent Style. These integration checks reuse GetFrame/material evidence;
 they do not establish whole-renderer visual equivalence.
+
+The full `validate-crowbar-crate.mjs` ticked input case also binds this draw
+layer: it verifies the surviving crate's damage glow, disposal of the destroyed
+crate mesh, six actual spawned WoodFragment meshes with the inherited crate
+skin, the dropped Lockpick mesh, live fragment translucent fade, and restored
+crate/removed spawned meshes on reset. No synthetic Spawn or direct fire call
+is used in that integration case.

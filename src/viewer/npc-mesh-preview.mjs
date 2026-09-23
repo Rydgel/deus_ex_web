@@ -94,7 +94,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
     if(disposed||!level)return;
     const live=new Set(level.actors);
     for(const [actor,preview] of bindings)if(!live.has(actor)){
-      root.remove(preview.root);preview.dispose();bindings.delete(actor);
+      preview.root.removeFromParent();preview.dispose();bindings.delete(actor);
       for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}
       refreshSummary();
     }
