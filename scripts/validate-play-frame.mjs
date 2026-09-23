@@ -17,7 +17,11 @@ const time=runtime.namedReference(level.actors[0],'TimeSeconds');
 const dilation=runtime.namedReference(level.actors[0],'TimeDilation');
 const tickActor=runtime.processActorTick.bind(runtime),calls=[];
 runtime.processActorTick=(actor,seconds,options)=>{
-  calls.push({actor,seconds});return tickActor(actor,seconds,options);
+  // Whether the owner had already ticked this frame when the call began (the
+  // recovered owner-deferral test compares Owner.bTicked with TickTag).
+  const owner=runtime.namedReference(actor,'Owner').get();
+  const ownerTicked=owner?Number(Boolean(runtime.namedReference(owner,'bTicked').get()))===options?.level?.tickTag:true;
+  const result=tickActor(actor,seconds,options);calls.push({actor,seconds,result,ownerTicked});return result;
 };
 const hudTick=game.hud.tick.bind(game.hud),hudDeltas=[];
 game.hud.tick=dt=>{hudDeltas.push(dt);return hudTick(dt);};
@@ -32,7 +36,17 @@ for(const [seconds,scale,expected] of [[1/64,1,1/64],[1/8,1,1/8],[1,1,Math.froun
   game.tick(seconds,{});elapsed+=seconds*scale;
   assert.equal(game.player.steps,steps+1,'one player tick per host frame');
   assert.ok(calls.length>0,'supported NPCs still tick');
-  assert.equal(new Set(calls.map(call=>call.actor)).size,calls.length,'no NPC catch-up loop');
+  // An owner-deferred actor (the player's carried key ring) returns 0 from its
+  // first Actor.Tick and is retried from ULevel::Tick's deferred list once its
+  // owner has ticked (docs/script-level-tick.md); no actor completes twice.
+  // An owner that skipped its own tick (the stasis return precedes the
+  // bTicked write) keeps its items deferred, exactly like the original.
+  const completed=calls.filter(call=>call.result!==0);
+  assert.equal(new Set(completed.map(call=>call.actor)).size,completed.length,'no NPC catch-up loop');
+  const incomplete=calls.filter(call=>call.result===0&&!completed.some(done=>done.actor===call.actor));
+  assert.ok(incomplete.every(call=>!call.ownerTicked&&
+    runtime.namedReference(call.actor,'Owner').get()!==game.player.collisionActor),
+    'only actors whose owner skipped its own tick stay deferred');
   assert.ok(calls.every(call=>call.seconds===expected));
   assert.deepEqual(hudDeltas,[expected],'HUD shares the actor delta');
   assert.equal(level.timeSeconds(),elapsed,'double clock advances before the actor clamp');

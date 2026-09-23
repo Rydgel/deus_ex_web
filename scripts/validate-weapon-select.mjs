@@ -68,10 +68,13 @@ const beforeWalk=game.player.position.slice();
 const crowbarBefore=get(crowbar,'Location').slice();
 for(let i=0;i<20;i++)game.tick(1/60,{forward:1,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
 const playerDelta=game.player.position.map((v,i)=>v-beforeWalk[i]);
-const crowbarDelta=get(crowbar,'Location').map((v,i)=>v-crowbarBefore[i]);
 assert.ok(Math.hypot(...playerDelta)>1,`the player walks while carrying the crowbar (moved ${Math.hypot(...playerDelta).toFixed(1)}u)`);
-for(let i=0;i<3;i++)assert.ok(Math.abs(playerDelta[i]-crowbarDelta[i])<0.01,
-  `the held crowbar tracks the player on axis ${i} (player ${playerDelta[i].toFixed(2)} vs item ${crowbarDelta[i].toFixed(2)})`);
+assert.ok(crowbarBefore.some((v,i)=>v!==get(crowbar,'Location')[i]),'the drawn crowbar moved with its owner');
+// Actor.Tick's pawn tail FarMoveActor(Weapon, Location, 0, 0) places the drawn
+// weapon at its owner's Location after every player tick (the based-rider
+// MoveActor carries it during the move itself).
+for(let i=0;i<3;i++)assert.equal(get(crowbar,'Location')[i],Math.fround(game.player.position[i]),
+  `the drawn crowbar sits at the player's Location on axis ${i}`);
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'no actor failures while walking with the weapon');
 
 // selectItem toggles: re-selecting the in-hand item requests it be put away.

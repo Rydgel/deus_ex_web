@@ -41,6 +41,11 @@ export class Player {
       get base() { return player.physicsPawn?.base ?? null; },
       get rotation() { return player.bodyRotation; }, set rotation(value) { player.bodyRotation = value; },
       get baseEyeHeight() { return player.baseEyeHeight; },
+      // The viewer's camera integrates look input (the original UpdateRotation
+      // is not run), so the script-visible view fields read the live player.
+      get viewRotation() { return player.viewRotation; }, set viewRotation(value) { player.viewRotation = value; },
+      get eyeHeight() { return player.eyeHeight; }, set eyeHeight(value) { player.eyeHeight = value; },
+      get walkBob() { return player.walkBob; },
       get physics() { return player.physicsPawn?.physics ?? (player.grounded ? 1 : 2); },
       get isCrouching() { return Boolean(player.controls?.isCrouching); },
       get oldLocation() { return player.physicsPawn?.oldLocation ?? player.spawnOldLocation; },

@@ -111,8 +111,9 @@ export class Doors {
     this.uses++;
     return { ok: true, message: mover.target ? 'Opening door' : 'Closing door', actors: group.map(m => m.name) };
   }
-  tick(dt) {
-    if(this.scriptRuntime)return this.scriptRuntime.tick(dt);
+  tick(dt, options = {}) {
+    if(this.scriptRuntime)return this.scriptRuntime.tick(dt, options);
+    options.tickPlayer?.(dt);
     for (const m of this.movers) {
       if (!m.active) continue;
       if (m.scriptState) processDoorState(m.scriptState,{

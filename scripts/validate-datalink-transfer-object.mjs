@@ -207,7 +207,12 @@ assert.equal(get(firstImage, 'imageDescription'), 'NYC Warehouse');
 assert.strictEqual(get(firstImage, 'Owner'), player, 'AddInventory SetOwner(player)');
 assert.strictEqual(get(firstImage, 'Instigator'), player, 'GiveTo assigns Instigator');
 assert.strictEqual(get(player, 'Inventory'), firstImage, 'image is the head of the player Inventory chain');
-assert.equal(get(firstImage, 'Inventory'), null, 'image terminates the Inventory chain');
+// Pawn.AddInventory head-inserts, so the image precedes the NanoKeyRing that
+// player startup's CreateKeyRing already gave JC (docs/script-nanokey.md).
+const keyRing = get(player, 'KeyRing');
+assert.ok(keyRing, 'player startup gave JC the NanoKeyRing first');
+assert.strictEqual(get(firstImage, 'Inventory'), keyRing, 'the image is linked ahead of the startup key ring');
+assert.equal(get(keyRing, 'Inventory'), null, 'the key ring still terminates the Inventory chain');
 
 // SpawnCopy and BecomeItem field writes (Inventory.uc:298-345).
 assert.equal(get(firstImage, 'bHeldItem'), true, 'SpawnCopy sets bHeldItem');

@@ -24,6 +24,8 @@ import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
+import { performActorPhysics } from './actor-physics.mjs';
+import { playerDistance } from './level-tick.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -292,6 +294,34 @@ function makeBinding(record, field) {
     },
   };
   if (dynamic[key]) return dynamic[key];
+  // The controlled player's view state lives on the viewer's movement port:
+  // the camera integrates look input instead of PlayerPawn.UpdateRotation, so
+  // original bodies (DeusExWeapon.TraceFire's GetAxes(ViewRotation),
+  // CalcDrawOffset's EyeHeight/WalkBob, HighlightCenterObject) read it live.
+  // UpdateRotation stores `ViewRotation.Pitch & 65535` (PlayerPawn.uc:3342)
+  // and leaves Yaw unmasked; the read applies the same representation.
+  if (host.controlledPlayer) {
+    const view = {
+      viewrotation: {
+        get: () => { const r = host.viewRotation ?? ZERO_VECTOR; return [(r[0] | 0) & 65535, r[1] | 0, r[2] | 0]; },
+        set: value => { host.viewRotation = vector(value, true); },
+      },
+      eyeheight: { get: () => f(host.eyeHeight ?? 0), set: value => { host.eyeHeight = f(value); } },
+      baseeyeheight: {
+        get: () => f(host.baseEyeHeight ?? values.BaseEyeHeight ?? 0),
+        set: () => { throw new Error('Player BaseEyeHeight is owned by the viewer movement port'); },
+      },
+      walkbob: {
+        get: () => vector(host.walkBob ?? ZERO_VECTOR),
+        set: () => { throw new Error('Player WalkBob is owned by the recovered CheckBob port'); },
+      },
+      biscrouching: {
+        get: () => Boolean(host.isCrouching),
+        set: () => { throw new Error('Player bIsCrouching is owned by the recovered stance port'); },
+      },
+    };
+    if (view[key]) return view[key];
+  }
 
   return {
     get: () => {
@@ -558,6 +588,11 @@ export async function createScriptDoors({
       // decoration/pawn/pickup sounds above, so weapon selection and fire run
       // to completion instead of freezing at the Stage-4 audio gap.
       if (path.startsWith('weapon.') || path.startsWith('deusexweapon.')) { decorationEffect(call, 'WeaponSound'); return 0; }
+      // A carried tool's use sound (NanoKeyRing/SkilledTool UseIt state code,
+      // now reached because carried items tick) and a crate fragment's
+      // ImpactSound/MiscSound on HitWall are the same one-shot effect audio.
+      if (path.startsWith('nanokeyring.') || path.startsWith('skilledtool.')) { decorationEffect(call, 'ToolSound'); return 0; }
+      if (path.startsWith('deusexfragment.') || path.startsWith('fragment.')) { decorationEffect(call, 'FragmentSound'); return 0; }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
@@ -816,6 +851,40 @@ export async function createScriptDoors({
       if (cls.record.key === 'engine.inventory') { npcPickups.push(actor); npcPickupSet.add(actor); break; }
   }
 
+  // Map decorations: Engine.Decoration-ancestry actors. The LoadMap startup
+  // dispatches its event passes to every live actor; admitting them runs their
+  // PreBeginPlay..PostPostBeginPlay chain, and SetInitialState's
+  // GotoState('Auto') enters DeusExDecoration's `auto state Active`, whose
+  // TakeDamage owns the HitPoints/ResetScaleGlow/Frag destruction path a
+  // crowbar swing reaches (docs/script-weapon-fire.md). Their startup bodies
+  // draw no random numbers in Training (bGenerateFlies is false, so
+  // PreBeginPlay's `bGenerateFlies && FRand() < 0.1` short-circuits).
+  const npcDecorations = [];
+  const npcDecorationSet = new Set();
+  for (const actor of level.actors ?? []) {
+    const record = actor && actor !== playerActor ? identities.get(actor) : null;
+    if (!record) continue;
+    for (let cls = record.cls; cls; cls = cls.base)
+      if (cls.record.key === 'engine.decoration') { npcDecorations.push(actor); npcDecorationSet.add(actor); break; }
+  }
+
+  // A carried item's Actor.Tick advances its animation over its CURRENT Mesh —
+  // the player-view mesh once BecomeItem swaps it in — through the synchronous
+  // meshPayload boundary, which cannot await. Decode every view mesh a
+  // carriable item can switch to at load (its own values and class defaults).
+  async function prepareItemViewMeshes(cls, actor = null) {
+    for (const name of ['Mesh', 'PlayerViewMesh', 'PickupViewMesh', 'ThirdPersonMesh']) {
+      const field = runtime.lookupMember(cls, 'fields', name);
+      if (!field) continue;
+      for (const reference of [actor ? runtime.namedReference(actor, name).get() : null, runtime.defaultValue(cls, field)]) {
+        if (!reference || !['LodMesh', 'Mesh'].includes(reference.kind)) continue;
+        const resource = await runtime.prepareResource(reference);
+        if (resource.payloadStatus !== 'decoded-lodmesh')
+          throw new Error(`Original item view mesh payload is unsupported: ${reference.key}`);
+      }
+    }
+  }
+
   const preparedNpcClasses = new Set();
   const prepareNpcMember = async member => {
     if (member.kind === 'State' || member.function) return;
@@ -852,6 +921,23 @@ export async function createScriptDoors({
     // chain at load for the same reason as barkManager.
     const rootWindow = runtime.namedReference(playerActor, 'rootWindow')?.get?.();
     if (rootWindow) await prepareNpcClass(runtime.instance(rootWindow).cls);
+    // A carried DeusExWeapon's per-frame Tick and fire path reach the player's
+    // subsystems — CalculateAccuracy/GetWeaponSkill -> SkillSystem and its
+    // skill objects, GetShotTime/ProcessTraceHit -> AugmentationSystem's
+    // GetAugLevelValue over the augmentation chain — so those class chains
+    // link at load for the same reason (docs/script-weapon-fire.md).
+    // The player-startup NanoKeyRing is carried from the first frame; its
+    // view meshes join the same load-time preparation as the map pickups.
+    await prepareItemViewMeshes(await runtime.loadClass(deusEx, deusEx.exportsByPath.get('nanokeyring')));
+    const skills = runtime.namedReference(playerActor, 'SkillSystem')?.get?.();
+    const augmentations = runtime.namedReference(playerActor, 'AugmentationSystem')?.get?.();
+    for (const [manager, head] of [[skills, 'FirstSkill'], [augmentations, 'FirstAug']]) {
+      if (!manager) continue;
+      await prepareNpcClass(runtime.instance(manager).cls);
+      for (let node = runtime.namedReference(manager, head).get(), guard = 0; node && guard < 64;
+        node = runtime.namedReference(node, 'next').get(), guard++)
+        await prepareNpcClass(runtime.instance(node).cls);
+    }
     for (const actor of npcPawns) {
       try {
         await prepareNpcClass(identities.get(actor).cls);
@@ -909,6 +995,7 @@ export async function createScriptDoors({
       try {
         const cls = identities.get(actor).cls;
         await prepareNpcClass(cls);
+        await prepareItemViewMeshes(cls, actor);
         const ammoField = runtime.lookupMember(cls, 'fields', 'AmmoName');
         const ammoRef = ammoField ? runtime.defaultValue(cls, ammoField) : null;
         if (ammoRef) {
@@ -965,6 +1052,48 @@ export async function createScriptDoors({
       runtime.relocateSpawnedActor(actor, destination, test, noCheck),
   };
 
+  // Non-Pawn AActor::performPhysics (actor-physics.mjs), reached from the
+  // recovered Actor.Tick of every admitted non-Pawn actor. A linked map
+  // decoration's Falling/Rolling run the recovered, oracle-validated routines
+  // (runDecorationPhysics: physFalling/processLanded/physRolling and the
+  // non-Pawn processHitWall 0x103cecc0) against the LIVE level hash (the
+  // creation-time `queries` closure is replaced by a rebuilt hash on every
+  // reset). physicsRotation (0x103ca1e0) and the other movement modes stay
+  // explicit boundaries until linked.
+  const linkedDecorations = new Set(decorations);
+  function decorationMovement(actor, delta) {
+    if (!linkedDecorations.has(actor) || !level.hash)
+      throw new Error(`Non-Pawn physFalling/physRolling for ${runtime.instance(actor).cls.record.key} is not linked`);
+    runDecorationPhysics(actor, delta, {
+      queries: level.hash,
+      zone: zoneAt?.(actor.position ?? actor.values?.Location) ?? {},
+      landedEvent: normal => runtime.processEvent(actor, 'Landed', [normal]),
+      // Non-Pawn processHitWall (0x103cecc0), recovered and oracle-validated as
+      // processDecorationHitWall (docs/walking-callbacks.md): return for a Pawn
+      // wall, else dispatch the unmodified HitWall(normal,wall) only while the
+      // decoration probes HitWall. No Pawn direction/MinHitWall/MoveTimer path.
+      onHitWall: hit => processDecorationHitWall(actor, hit?.normal ?? [0, 0, 0], hit?.actor ?? null, {
+        isProbing: (source, name) => runtime.isProbing(source, name),
+        dispatch: (source, event, args) => runtime.processEvent(source, event, args),
+      }),
+      // physRolling calls eventHitWall directly for any hit (no processHitWall).
+      onHitWallEvent: (normal, wall) => runtime.processEvent(actor, 'HitWall', [normal, wall ?? null]),
+    });
+  }
+  runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
+    read: (target, name) => runtime.namedReference(target, name).get(),
+    write: (target, name, value) => runtime.namedReference(target, name).set(value),
+    physFalling: decorationMovement,
+    physRolling: decorationMovement,
+    physicsRotation: target => {
+      throw new Error(`AActor::physicsRotation (0x103ca1e0) is not linked for ${runtime.instance(target).cls.record.key}`);
+    },
+    processEvent: (target, name, args) => runtime.processEvent(target, name, args),
+    unsupported: (target, what) => {
+      throw new Error(`Non-Pawn performPhysics ${what} is not linked for ${runtime.instance(target).cls.record.key}`);
+    },
+  });
+
   // Runtime-spawned actors (NPC inventory items, spawned Shadows) live at the
   // tail of Level.Actors. Track them separately from the serialized map set:
   // the reset path destroys them through the recovered ULevel::DestroyActor
@@ -991,7 +1120,8 @@ export async function createScriptDoors({
   // plus nothing else; the original dispatches to every non-null slot, so an
   // actor appended mid-startup of a class outside that scope would be
   // re-dispatched there while this host leaves it to its SpawnActor chain.
-  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor) || npcPickupSet.has(actor);
+  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor) || npcPickupSet.has(actor)
+    || npcDecorationSet.has(actor);
   // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
   // apply to every actor the original would have had in the array at LoadMap:
   // the serialized map actors and actors these same passes spawn. The player
@@ -1255,6 +1385,24 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    // Decorations regain their serialized state too (HitPoints, ScaleGlow,
+    // state frame, a pushed position): the original reloads them with the
+    // level. A decoration whose hash cylinder tracks its live position is
+    // moved inside the rebuilt hash's remove/re-add (level-queries contract).
+    for (const actor of npcDecorations) {
+      try {
+        identities.get(actor).store.clear();
+        const restore = () => {
+          if (actor.values?.Location) actor.position = [...actor.values.Location];
+          delete actor.velocity; delete actor.acceleration; delete actor.landingCounter;
+          actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+        };
+        if (level.hash && actor.collisionValues && actor.collideActors !== false) level.hash.changeActor(actor, restore);
+        else restore();
+      } catch (error) {
+        npcFailures.set(actor, String(error?.message ?? error));
+      }
+    }
     // The original Player start reloads the level, giving a fresh player with an
     // empty hand and no drawn weapon; this host reuses the player identity, so
     // clear the in-hand / weapon selection it may have made in Play. The selected
@@ -1263,6 +1411,8 @@ export async function createScriptDoors({
     for (const field of ['inHand', 'inHandPending', 'ClientInHandPending', 'SelectedItem', 'Weapon', 'PendingWeapon'])
       runtime.namedReference(playerActor, field).set(null);
     runtime.namedReference(playerActor, 'bInHandTransition').set(false);
+    // A held fire button does not survive the reload either (input byte 0).
+    runtime.namedReference(playerActor, 'bFire').set(0);
     clearStartupPawnList();
     clearStartupTouching();
     // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
@@ -1413,6 +1563,9 @@ export async function createScriptDoors({
     // and state machine start over (the original reloads the level on reset).
     liveMission?.spawn();
     playerStartup?.spawnKeyRing?.();
+    // The reloaded player is a fresh SpawnActor product: bTicked = !Level tick
+    // parity (script-spawn.mjs), so the first frame defers what it owns.
+    runtime.namedReference(playerActor, 'bTicked').set(!Boolean(npcTickLevel.tickTag));
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
@@ -1532,8 +1685,58 @@ export async function createScriptDoors({
     return { ok: true, mover, actors: selected };
   }
 
-  function tick(seconds) {
+  // Inventory the player carries, walked from Pawn.Inventory: picked-up map
+  // pickups and items spawned into the chain (GiveTo's ammo, the key ring).
+  // The original ULevel::Tick ticks every live actor; this host admits the
+  // carried ones (Physics None, no collision after BecomeItem), which is what
+  // advances a drawn weapon's latent states, animation notifies and Tick
+  // (docs/script-weapon-fire.md). World pickups still resting in their Pickup
+  // state stay unticked: their PHYS_Falling needs the non-Pawn performPhysics.
+  function playerCarriedItems() {
+    const carried = new Set();
+    for (let item = runtime.namedReference(playerActor, 'Inventory').get(), guard = 0;
+      item && typeof item === 'object' && guard < 256; item = runtime.namedReference(item, 'Inventory').get(), guard++)
+      carried.add(item);
+    return carried;
+  }
+  // One carried item's Actor.Tick. A boundary reached by the player's own
+  // weapon is not skipped silently: it is recorded and rethrown so Play pauses
+  // on the explicit original boundary instead of freezing the weapon mid-state.
+  function tickCarried(actor, delta) {
+    if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) return 0;
+    const spawnedFrom = level.actors.length;
+    let ticked = 0;
+    try { ticked = liveConPlay.withLifecycle(() => runtime.processActorTick(actor, delta, npcTickOptions)); }
+    catch (error) {
+      npcFailures.set(actor, String(error?.message ?? error));
+      throw error;
+    } finally { collectSpawned(spawnedFrom); }
+    return ticked;
+  }
+
+  function tick(seconds, { tickPlayer = null } = {}) {
     const delta = f(seconds);
+    // ULevel::Tick 0x103a55c1-0x103a5698: with the first viewport's Actor a
+    // PlayerPawn holding a Player, snapshot its Location and write
+    // DistanceFromPlayer for every non-null slot from FirstDynamicActor (+0x110,
+    // the LoadMap partition boundary) — all distances precede all ticks. The
+    // stasis gate and ScriptedPawn.Tick read it; the map's serialized editor
+    // value is never current (docs/script-level-tick.md).
+    const viewer = level?.engine?.client?.viewports?.[0]?.actor ?? null;
+    if (viewer === playerActor && runtime.namedReference(playerActor, 'Player').get()) {
+      const origin = [...runtime.namedReference(playerActor, 'Location').get()];
+      for (let index = level.iFirstNetActor ?? 0; index < level.actors.length; index++) {
+        const actor = level.actors[index];
+        if (!actor) continue;
+        let reference;
+        try { reference = runtime.namedReference(actor, 'DistanceFromPlayer'); } catch { continue; }
+        reference.set(playerDistance(runtime.namedReference(actor, 'Location').get(), origin));
+      }
+    }
+    // ULevel::Tick clears the deferred-actor list before its actor loop.
+    npcTickLevel.deferredHead = null;
+    let progress = 0;
+    const carried = playerCarriedItems();
     for (const record of records) {
       // Actor.Tick's ProcessState phase precedes performPhysics. A newly
       // selected label therefore executes here, and a latent 302 is polled
@@ -1542,11 +1745,9 @@ export async function createScriptDoors({
       tickMoverInterpolation(record.mover.interpolation, delta);
       updateDisplay(record);
     }
-    // Advance the push-sound Timer for any bumped decoration. updateActorTimer
-    // no-ops once the one-shot rate has been cleared, so a decoration can stay
-    // tracked cheaply and re-fire if bumped again.
-    for (const decoration of bumpedDecorations)
-      updateActorTimer(runtime.timerState(decoration), delta, () => runtime.processEvent(decoration, 'Timer', []));
+    // A bumped decoration's SetTimer(0.2) push-sound lifetime now advances in
+    // its own Actor.Tick timer phase (the decoration branch below), in
+    // Level.Actors order, instead of a separate host pass.
     // Mission triggers share the recovered native timer step. DamageTrigger's
     // original Timer runs the prepared Training radiation chain, including the
     // GM_Trench PlayAnim state write, and stops at Human.PlayTakeHitSound's
@@ -1571,9 +1772,24 @@ export async function createScriptDoors({
       if(liveConPlay.spawned.has(actor)) {
         if(!runtime.instance(actor).pendingKill){
           const spawnedFrom=level.actors.length;
-          liveConPlay.withLifecycle(()=>runtime.processActorTick(actor,delta,npcTickOptions));
+          progress+=liveConPlay.withLifecycle(()=>runtime.processActorTick(actor,delta,npcTickOptions));
           collectSpawned(spawnedFrom);
         }
+      } else if (carried.has(actor)) {
+        // Owner = the player, whose own route runs after this loop: the
+        // recovered owner test defers the item onto the deferred list below.
+        progress += tickCarried(actor, delta);
+      } else if (npcDecorationSet.has(actor)) {
+        // Map decorations run the recovered Actor.Tick: stasis gate (bStasis,
+        // LastRenderTime), animation, the DeusExDecoration.Tick event, state
+        // code, the Timer phase (a bump's push-sound lifetime) and the non-Pawn
+        // performPhysics above. A reached boundary records the decoration and
+        // leaves it out of later ticks, like the map pawns.
+        if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
+        const spawnedFrom = level.actors.length;
+        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
+        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
+        collectSpawned(spawnedFrom);
       } else if (npcPawnSet.has(actor)) {
         if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
         // startup state's Begin: InitializePawn -> InitializeInventory runs on
@@ -1581,7 +1797,7 @@ export async function createScriptDoors({
         // boundary surfaces here rather than at reset. Recording it leaves the
         // pawn out of later ticks instead of resuming a half-advanced state.
         const spawnedFrom = level.actors.length;
-        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
+        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
       } else if (npcSpawned.has(actor)) {
@@ -1597,7 +1813,7 @@ export async function createScriptDoors({
         if (runtime.instance(actor).pendingKill) continue;
         if (owner && npcFailures.has(owner)) continue;
         const spawnedFrom = level.actors.length;
-        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
+        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) {
           npcFailures.set(owner ?? actor,
             `${actor.name ?? runtime.namedReference(actor, 'Name').get()}: ${String(error?.message ?? error)}`);
@@ -1607,32 +1823,42 @@ export async function createScriptDoors({
         // The mission state machine ticks in Level.Actors order like the map
         // pawns; its SetTimer fires Mission00.Timer through Actor.Tick.
         const spawnedFrom = level.actors.length;
-        try { liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
+        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
       }
     }
-    // Physics phase follows ProcessState and the timer phase for each actor.
-    for (const decoration of decorations) {
-      if (!queries) continue;
-      runDecorationPhysics(decoration, delta, {
-        queries,
-        zone: zoneAt?.(decoration.position ?? decoration.values?.Location) ?? {},
-        landedEvent: normal => runtime.processEvent(decoration, 'Landed', [normal]),
-        // Non-Pawn processHitWall (0x103cecc0), recovered and oracle-validated as
-        // processDecorationHitWall (docs/walking-callbacks.md): return for a Pawn
-        // wall, else dispatch the unmodified HitWall(normal,wall) only while the
-        // decoration probes HitWall. No Pawn direction/MinHitWall/MoveTimer path.
-        onHitWall: hit => processDecorationHitWall(decoration, hit?.normal ?? [0, 0, 0], hit?.actor ?? null, {
-          isProbing: (source, name) => runtime.isProbing(source, name),
-          dispatch: (source, event, args) => runtime.processEvent(source, event, args),
-        }),
-        // physRolling calls eventHitWall directly for any hit (no processHitWall).
-        onHitWallEvent: (normal, actor) => runtime.processEvent(decoration, 'HitWall', [normal, actor ?? null]),
-      });
-    }
+    // Decoration physics now runs inside each decoration's Actor.Tick above
+    // (non-Pawn performPhysics), not as a separate pass after the pawns.
     // Advance the TriggerLights' Alpha animation (their Tick/ProcessState phase).
     const lightTicks = lights.tick(delta);
+    // The player's own route (the viewer's recovered movement port) runs after
+    // the scripted actors, as before; its Actor.Tick writes bTicked = TickTag&1
+    // (actor-tick.mjs), which is what releases the actors it owns.
+    if (typeof tickPlayer === 'function') { tickPlayer(delta); progress = (progress + 1) | 0; }
+    runtime.namedReference(playerActor, 'bTicked').set(Boolean(npcTickLevel.tickTag & 1));
+    // ULevel::Tick's deferred list (level-tick.mjs): actors whose Owner had not
+    // ticked yet when the loop reached them — the player's carried weapon —
+    // tick now, once their owner's bTicked matches this frame's TickTag. Nodes
+    // were pushed at the head, so they run in reverse deferral order.
+    while (npcTickLevel.deferredHead && progress !== 0) {
+      let node = npcTickLevel.deferredHead;
+      npcTickLevel.deferredHead = null; progress = 0;
+      while (node) {
+        if (Number(Boolean(runtime.namedReference(node.actor, 'bTicked').get())) !== npcTickLevel.tickTag) {
+          if (carried.has(node.actor)) progress = (progress + tickCarried(node.actor, delta)) | 0;
+          else if (!npcFailures.has(node.actor) && !runtime.instance(node.actor).pendingKill) {
+            // Any other owner-deferred actor keeps the NPC failure contract.
+            const spawnedFrom = level.actors.length;
+            try { progress = (progress + liveConPlay.withLifecycle(() =>
+              runtime.processActorTick(node.actor, delta, npcTickOptions))) | 0; }
+            catch (error) { npcFailures.set(node.actor, String(error?.message ?? error)); }
+            collectSpawned(spawnedFrom);
+          }
+        }
+        node = node.next;
+      }
+    }
     npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
     const lightingChanges = lightTicks.map(result => result.lightingChange).filter(Boolean);
     if (onLightingChanged && lightingChanges.length) onLightingChanged(lightingChanges);

@@ -29,7 +29,7 @@ export function levelTickTime(timeSeconds,seconds,timeDilation) {
   else if(!(delta<f(0.4)))delta=f(0.4);
   return {timeSeconds:storeDouble(time),infoTimeSeconds:x87store(time),delta};
 }
-function playerDistance(location,origin) {
+export function playerDistance(location,origin) {
   if(!location.every(Number.isFinite)||!origin.every(Number.isFinite))
     throw new Error('Level.Tick nonfinite distance coordinates are not implemented');
   const [x,y,z]=location.map((v,i)=>x87add(x87load(v),x87neg(x87load(origin[i]))));

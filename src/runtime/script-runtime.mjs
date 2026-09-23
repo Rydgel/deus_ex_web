@@ -1411,6 +1411,29 @@ export class ScriptRuntime {
     this.setSpawnActorZone(view,0,0);
     return {success:true,delta:[...delta],position:read('Location'),time:1,hit:null};
   }
+  /** ULevel::FarMoveActor (0x10398ba0, relocation.mjs farMoveActor) for a HELD
+   * item — the Actor.Tick pawn tail's FarMoveActor(Weapon, Location, 0, 0)
+   * (actor-tick.mjs) on the player's drawn weapon. Same held gate as
+   * moveHeldRider: an Inventory actor with no collision and Physics None. The
+   * recovered body then takes no hash work (collides() false), skips FindSpot
+   * (bCollideWorld/bCollideWhenPlacing clear), and CheckEncroachment's
+   * non-colliding early return (+0x1dc & 0x0d == 0, null Brush) admits it; with
+   * StandingCount 0 it sets bJustTeleported (motion flag 0x100), writes
+   * Location = OldLocation = destination and runs SetActorZone(item, 0, 0). */
+  relocateHeldItem(view,destination) {
+    const read=name=>this.namedReference(view,name).get();
+    const collides=read('bCollideActors')||read('bCollideWorld')||read('bCollideWhenPlacing');
+    const held=Boolean(view?.lineage?.includes('engine.inventory'))&&!collides&&(read('Physics')|0)===0;
+    if(!held)throw new Error('FarMoveActor for a non-held map actor is not linked');
+    if(read('bStatic')||!read('bMovable'))return false;
+    if((read('StandingCount')|0)!==0)throw new Error('Held-item FarMoveActor with based children is not linked');
+    const f=Math.fround,position=destination.map(v=>f(v));
+    this.namedReference(view,'bJustTeleported').set(true);
+    this.namedReference(view,'Location').set(position);
+    this.namedReference(view,'OldLocation').set(position.slice());
+    this.setSpawnActorZone(view,0,0);
+    return true;
+  }
   /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
    * the recovered relocation (hash remove, FindSpot/encroachment gates,
    * based-child detach through SetBase, Location/OldLocation write,
@@ -2529,6 +2552,15 @@ export class ScriptRuntime {
     };
   }
   processActorPhysics(receiver,seconds) {
+    // Actor.Tick dispatches vtable +0x8c: APawn::performPhysics for pawns, the
+    // non-Pawn AActor::performPhysics (actor-physics.mjs) otherwise, whose
+    // movement services the Play host links (this.actorPhysics).
+    let pawn=false;
+    for(let cls=this.instance(receiver).cls;cls;cls=cls.base)if(cls.record.key==='engine.pawn'){pawn=true;break;}
+    if(!pawn){
+      if(typeof this.actorPhysics!=='function')throw new Error('Non-Pawn AActor::performPhysics is not linked');
+      return this.actorPhysics(receiver,seconds);
+    }
     return runScriptPawnPhysics(receiver,seconds,this.pawnPhysicsServices(receiver));
   }
   /** Native 709 AIPickRandomDestination services (docs/script-pawn-nav.md):
