@@ -21,6 +21,14 @@ bytecode with zero unimplemented-boundary pauses.*
 
 ## The native tail is finite and mostly not Stage 3
 
+> **2026-09-23 correction:** the inventory now counts an index as bound only
+> when a runtime dispatch site routes it ([coverage](script-coverage.md)). That
+> gives 305 bound and 276 unbound (1,386 call sites). The earlier 294/287 split
+> counted 51 translated modules that nothing dispatches (ListWindow, EditWindow,
+> button, TextWindow) and missed 62 dispatched indices, including 260, 294,
+> 705, 709 and 2105-2107. The bucket table below predates that correction and
+> has not been recomputed.
+
 581 distinct direct native indices are decoded across all packages; 294 are
 bound, 287 are not. Bucketing the 287 unsupported by subsystem:
 

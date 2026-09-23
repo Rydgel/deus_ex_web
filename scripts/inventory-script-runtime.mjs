@@ -5,6 +5,8 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {readFunctionMetadata,readStateMetadata} from '../src/unreal/script-metadata.mjs';
 import {decodeScript} from '../src/unreal/bytecode.mjs';
 import {primitiveNativeIndices} from '../src/runtime/script-vm.mjs';
+import {TRIGGER_NATIVE_INDICES} from '../src/runtime/script-triggers.mjs';
+import {RANDOM_LABEL_NATIVE} from '../src/runtime/script-conversation-random-label.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 // Inspect the engine/game/UI script packages, without loading unrelated audio
@@ -145,45 +147,134 @@ const bindings={
     {index:2101,scope:'DeusExDecoration.ConBindEvents same recovered mission-list path for the selected decoration route'},
     {index:2102,scope:'ScriptedPawn.ConBindEvents same recovered mission-list path for the selected scripted-pawn route'}],
 };
-// Natives implemented as dedicated runtime modules each record `nativeIndex: N`.
-// That is real execution support the hand-maintained catalogue above does not
-// enumerate, so scan for it and fold it in — otherwise the supported/unsupported
-// split reports a stale list (e.g. the whole XWindow/XListWindow family read as
-// "unsupported" long after it was bound). Keyed by module for a readable scope.
-const runtimeDir=path.resolve('src/runtime'),moduleNatives=new Map();
-for(const file of (await readdir(runtimeDir)).filter(name=>name.endsWith('.mjs'))){
-  const text=await readFile(path.join(runtimeDir,file),'utf8');
-  for(const match of text.matchAll(/nativeIndex:\s*(0x[0-9a-fA-F]+|\d+)/g)){
-    const index=Number(match[1]);
-    if(Number.isInteger(index)&&index>0&&!moduleNatives.has(index))moduleNatives.set(index,file);
+// Support means a VM dispatch path: the primitive switch above, or an index that
+// one of the runtime's native dispatch sites actually routes. Read each site's
+// code with comments and string/template/regex contents blanked, so prose, error
+// messages and module metadata cannot credit an index. A translated module
+// (`nativeIndex: N`) that only its validator imports has no dispatch path; it is
+// reported under translatedWithoutDispatch and not counted.
+const nativeConstants={TRIGGER_NATIVE_INDICES,RANDOM_LABEL_NATIVE};
+const dispatchSites=[
+  {site:'ScriptRuntime.invokeNative',file:'src/runtime/script-runtime.mjs',start:/\n {2}invokeNative\(call\) \{/},
+  {site:'ScriptRuntime latent poll',file:'src/runtime/script-runtime.mjs',start:/pollLatent:call=>\{/},
+  {site:'ScriptRuntime.createIterator',file:'src/runtime/script-runtime.mjs',start:/\n {2}createIterator\(call\) \{/},
+  {site:'window host natives',file:'src/runtime/script-window-host-natives.mjs',start:/export function dispatchWindowHostNative\(/},
+  {site:'window host GC table',file:'src/runtime/script-window-gc-dispatch.mjs',start:/const natives\s*=\s*new Map\(/,table:true},
+  {site:'window host sound',file:'src/runtime/script-window-sound.mjs',start:/export function dispatchWindowSoundNative\(/},
+  {site:'window host actor references',file:'src/runtime/script-window-actor-refs.mjs',start:/const dispatch = call =>/},
+  {site:'Play host nativeCall',file:'src/runtime/script-doors.mjs',start:/function nativeCall\(call\) \{/},
+  {site:'Play host latent poll',file:'src/runtime/script-doors.mjs',start:/runtime\.pollLatent = \([^)]*\) => \{/},
+  {site:'Play trigger natives',file:'src/runtime/script-triggers.mjs',start:/function handleNative\(call\) \{/},
+  {site:'Play ConPlay natives',file:'src/runtime/script-conplay-live.mjs',start:/function handleNative\(call\)\{/},
+  {site:'player log store',file:'src/runtime/script-player-log.mjs',start:/runtime\.native=call=>\{/},
+  {site:'HUD background draw',file:'src/runtime/script-play-hud.mjs',start:/runtime\.native=call=>\{/},
+  {site:'player overlay draw',file:'src/viewer/weapon-view-model.mjs',start:/runtime\.native=call=>\{/},
+];
+function blankNonCode(source){
+  let out='',i=0,previous='';
+  const regexAllowed=()=>/[=(,:;!&|?{}[]/.test(previous)||/\b(return|typeof|case|throw|in|of)\s*$/.test(out.slice(-16));
+  while(i<source.length){
+    const c=source[i],next=source[i+1];
+    if(c==='/'&&next==='/'){while(i<source.length&&source[i]!=='\n'){out+=' ';i++;}continue;}
+    if(c==='/'&&next==='*'){
+      out+='  ';i+=2;
+      while(i<source.length&&!(source[i]==='*'&&source[i+1]==='/')){out+=source[i]==='\n'?'\n':' ';i++;}
+      out+='  ';i+=2;continue;
+    }
+    const quote=c==='"'||c==="'"||c==='`'?c:c==='/'&&regexAllowed()?'/':null;
+    if(quote){
+      out+=quote;i++;
+      while(i<source.length&&source[i]!==quote){
+        if(source[i]==='\\'){out+='  ';i+=2;continue;}
+        if(quote==='/'&&source[i]==='['){while(i<source.length&&source[i]!==']'){out+=' ';i++;}}
+        out+=source[i]==='\n'?'\n':' ';i++;
+      }
+      out+=quote;i++;previous=quote;continue;
+    }
+    out+=c;if(!/\s/.test(c))previous=c;i++;
   }
-  // Latent-native modules (e.g. script-pawn-locomotion.mjs) register each native
-  // as `index: N, poll: M, setup: 0x..` — a setup body and its per-tick poll are
-  // both real execution support, so credit both indices of that paired shape.
-  for(const match of text.matchAll(/index:\s*(\d+),\s*poll:\s*(\d+)/g)){
-    for(const index of [Number(match[1]),Number(match[2])])
-      if(Number.isInteger(index)&&index>0&&!moduleNatives.has(index))moduleNatives.set(index,file);
+  return out;
+}
+function siteBody(text,{site,start,table}){
+  const match=start.exec(text);
+  if(!match)throw new Error(`Native dispatch site not found: ${site}`);
+  const at=match.index;
+  if(table)return text.slice(at,text.indexOf(']);',at)+3);
+  // Anchors end at (or just before) the body brace; parameter braces precede it.
+  for(let i=text.indexOf('{',at+match[0].length-1),depth=0;i<text.length;i++){
+    if(text[i]==='{')depth++;
+    else if(text[i]==='}'&&--depth===0)return text.slice(at,i+1);
+  }
+  throw new Error(`Native dispatch site is unterminated: ${site}`);
+}
+function routedIndices(body){
+  const found=new Set();
+  // A branch that only throws for its index refuses the native; it is no route.
+  const code=body.replace(/if\s*\(\s*(?:call\.)?index\s*===\s*(?:0x[0-9a-fA-F]+|\d+)\s*\)\s*throw\b/g,'');
+  for(const match of code.matchAll(/\bindex\s*[!=]==\s*(0x[0-9a-fA-F]+|\d+)\b/g))found.add(Number(match[1]));
+  for(const match of code.matchAll(/\bindex\s*[!=]==\s*([A-Z_]+)\.(\w+)/g)){
+    const index=nativeConstants[match[1]]?.[match[2]];
+    if(!Number.isInteger(index))throw new Error(`Unresolved native index constant ${match[1]}.${match[2]}`);
+    found.add(index);
+  }
+  for(const match of code.matchAll(/\[([\d,\s]+)\]\.includes\(\s*(?:call\.)?index\s*\)/g))
+    for(const item of match[1].split(','))if(item.trim())found.add(Number(item));
+  for(const match of code.matchAll(/\bindex\s*>=\s*(\d+)\s*&&\s*(?:call\.)?index\s*<=\s*(\d+)/g))
+    for(let index=Number(match[1]);index<=Number(match[2]);index++)found.add(index);
+  for(const match of code.matchAll(/\bcase\s+(\d+)\s*:/g))found.add(Number(match[1]));
+  for(const match of code.matchAll(/\[\s*(\d+)\s*,\s*gc\w+\s*\]/g))found.add(Number(match[1]));
+  return found;
+}
+const dispatchedIndices=new Map(),sourceText=new Map();
+for(const entry of dispatchSites){
+  if(!sourceText.has(entry.file))sourceText.set(entry.file,blankNonCode(await readFile(path.resolve(entry.file),'utf8')));
+  entry.indices=[...routedIndices(siteBody(sourceText.get(entry.file),entry))].sort((a,b)=>a-b);
+  for(const index of entry.indices){
+    if(!dispatchedIndices.has(index))dispatchedIndices.set(index,[]);
+    dispatchedIndices.get(index).push(entry.site);
   }
 }
-bindings.modules=[...moduleNatives].sort((a,b)=>a[0]-b[0])
-  .map(([index,file])=>({index,scope:`implemented in src/runtime/${file}`}));
+const primitiveIndices=new Set(bindings.primitives);
+const catalogued=new Set(),catalogueWithoutDispatch=[];
+for(const [group,entries] of Object.entries(bindings)){
+  if(group==='primitives')continue;
+  for(const entry of entries){
+    catalogued.add(entry.index);
+    entry.sites=dispatchedIndices.get(entry.index)??[];
+    if(!entry.sites.length&&!primitiveIndices.has(entry.index))catalogueWithoutDispatch.push({group,index:entry.index});
+  }
+}
+bindings.dispatched=[...dispatchedIndices].filter(([index])=>!catalogued.has(index)&&!primitiveIndices.has(index))
+  .sort((a,b)=>a[0]-b[0])
+  .map(([index,sites])=>({index,sites,scope:'routed by the listed dispatch sites; branch scope not catalogued'}));
+const translatedWithoutDispatch=[];
+for(const directory of ['src/runtime','src/viewer'])for(const file of (await readdir(path.resolve(directory))).filter(name=>name.endsWith('.mjs'))){
+  const text=await readFile(path.resolve(directory,file),'utf8');
+  for(const match of text.matchAll(/nativeIndex:\s*(0x[0-9a-fA-F]+|\d+)/g)){
+    const index=Number(match[1]);
+    if(index>0&&!primitiveIndices.has(index)&&!dispatchedIndices.has(index)&&!translatedWithoutDispatch.some(item=>item.index===index))
+      translatedWithoutDispatch.push({index,module:`${directory}/${file}`});
+  }
+}
+translatedWithoutDispatch.sort((a,b)=>a.index-b.index);
 const directNativeTotals=new Map();
 for(const pkg of packages)for(const [index,count] of Object.entries(pkg.directNativeCalls))
   directNativeTotals.set(Number(index),(directNativeTotals.get(Number(index))??0)+count);
-const supportedDirectNativeIndices=new Set(Object.values(bindings).flatMap(group=>
-  group.map(entry=>typeof entry==='number'?entry:entry.index)));
+const supportedDirectNativeIndices=new Set([...primitiveIndices,...dispatchedIndices.keys()]);
 const unsupportedDirectNativeCalls=[...directNativeTotals]
   .filter(([index])=>!supportedDirectNativeIndices.has(index))
   .sort((a,b)=>b[1]-a[1]||a[0]-b[0])
   .map(([index,count])=>({index,count}));
-const report={packages,bindings,directNativeSummary:{
+const report={packages,bindings,
+  dispatchSites:dispatchSites.map(({site,file,indices})=>({site,file,indices})),
+  catalogueWithoutDispatch,translatedWithoutDispatch,directNativeSummary:{
   totalCalls:[...directNativeTotals.values()].reduce((sum,count)=>sum+count,0),
   distinctIndices:directNativeTotals.size,
   supportedDistinctIndices:[...directNativeTotals.keys()].filter(index=>supportedDirectNativeIndices.has(index)).length,
   unsupportedDistinctIndices:unsupportedDirectNativeCalls.length,
   unsupportedDirectNativeCalls},finalNativeCalls:[...finalCalls].flatMap(([key,count])=>
   declarations.has(key)?[{...declarations.get(key),count}]:[]),
-  note:'Declarations and decoded opcodes do not establish execution support. Bindings describe scoped branches only; directNativeSummary ranks unlisted direct indices by decoded call count; virtual dispatch and unindexed native hooks require separate coverage.'};
+  note:'Declarations and decoded opcodes do not establish execution support. Supported direct indices are the VM primitives plus indices a runtime dispatch site routes; bindings describe scoped branches only and do not prove every branch. directNativeSummary ranks the remaining direct indices by decoded call count; translatedWithoutDispatch lists translated modules no dispatch site reaches; virtual dispatch and unindexed native hooks require separate coverage.'};
 const output=path.resolve(process.argv[2]??'.cache/script-runtime-inventory.json');
 await mkdir(path.dirname(output),{recursive:true});await writeFile(output,JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify({report:output,packages:packages.map(p=>({name:p.name,classes:p.classes,
@@ -193,5 +284,8 @@ console.log(JSON.stringify({report:output,packages:packages.map(p=>({name:p.name
     distinctIndices:report.directNativeSummary.distinctIndices,
     supportedDistinctIndices:report.directNativeSummary.supportedDistinctIndices,
     unsupportedDistinctIndices:report.directNativeSummary.unsupportedDistinctIndices,
-    topUnsupportedDirectNativeCalls:unsupportedDirectNativeCalls.slice(0,20)}},null,2));
-if(packages.some(p=>p.decodeErrors.length))process.exitCode=1;
+    unsupportedDirectNativeCalls:unsupportedDirectNativeCalls.reduce((sum,{count})=>sum+count,0),
+    topUnsupportedDirectNativeCalls:unsupportedDirectNativeCalls.slice(0,20)},
+  uncataloguedDispatchedIndices:bindings.dispatched.length,
+  translatedWithoutDispatch:translatedWithoutDispatch.length,catalogueWithoutDispatch},null,2));
+if(packages.some(p=>p.decodeErrors.length)||catalogueWithoutDispatch.length)process.exitCode=1;
