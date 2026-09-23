@@ -66,30 +66,51 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   }
   const level=player?runtime.levelFor(player):null;
   const read=(actor,name)=>{try{return runtime.namedReference(actor,name).get();}catch{return undefined;}};
-  let synthetic=0x40000000;
-  for(const actor of level?.actors??[]) {
-    if(!actor||actor===player||actor.name in TRAINING_NPC_IDENTITIES)continue;
+  let synthetic=0x40000000,disposed=false;
+  const actors=[...npcActors],bindings=new Map(npcActors.map(preview=>[preview.actor,preview]));
+  const pending=new Map(),failed=new WeakMap();
+  const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,
+    npcs:npcActors.length,props:0,skipped:[],triangles:0,
+    shading:'texture-only inspection',startup:'original'};
+  const refreshSummary=()=>{
+    summary.actors=actors.map(actor=>actor.summary);summary.props=propActors.length;summary.npcs=npcActors.length;
+    summary.skipped=actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s})));
+    summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
+  };
+  const admit=actor=>{
     const mesh=read(actor,'Mesh');
-    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind))continue;
-    if(read(actor,'bHidden')||read(actor,'bDeleteMe')||!read(actor,'Location'))continue;
-    try {
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel});
-      preview.root.visible=true;root.add(preview.root);propActors.push(preview);
-    } catch(error) {errors.push({actor:actor.name??'?',message:error.message});}
-  }
-  const actors=[...npcActors,...propActors];
+    if(disposed||!actor||actor===player||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
+    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||read(actor,'bHidden')||read(actor,'bDeleteMe')||!read(actor,'Location'))return;
+    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel})
+      .then(preview=>{
+        if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
+        preview.root.visible=!read(actor,'bHidden');root.add(preview.root);
+        bindings.set(actor,preview);actors.push(preview);propActors.push(preview);refreshSummary();
+      }).catch(error=>{failed.set(actor,mesh);errors.push({actor:actor.name??'?',message:error.message});})
+      .finally(()=>pending.delete(actor));
+    pending.set(actor,task);
+  };
+  const reconcile=()=>{
+    if(disposed||!level)return;
+    const live=new Set(level.actors);
+    for(const [actor,preview] of bindings)if(!live.has(actor)){
+      root.remove(preview.root);preview.dispose();bindings.delete(actor);
+      for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}
+      refreshSummary();
+    }
+    for(const actor of live)admit(actor);
+  };
+  reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
-  return {root,actors,npcActors,propActors,
-    update(cameraPosition){for(const actor of actors)actor.update(cameraPosition);},
-    dispose(){for(const actor of actors)actor.dispose();},
-    summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
-      npcs:npcActors.length,props:propActors.length,
-      skipped:actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s}))),
-      triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
-      shading:'texture-only inspection',startup:'original'}};
+  return {root,actors,npcActors,propActors,summary,
+    update(cameraPosition){reconcile();for(const actor of actors)actor.update(cameraPosition);},
+    // Asset decode is asynchronous; useful both for load and focused integration checks.
+    async ready(){await Promise.all(pending.values());},
+    dispose(){disposed=true;for(const actor of actors)actor.dispose();},
+  };
 }
 
-export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null}) {
+export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
@@ -220,13 +241,27 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
         shading:'texture-only inspection',startup:'original'};
     lastPose=pose();
-    return {root,dispose,
+    return {actor,root,dispose,
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition){
         if(disposed)return false;
-        root.visible=!read(actor,'bHidden')&&!read(actor,'bDeleteMe');
+        root.visible=(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
         if(!root.visible)return false;
         if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
+        // Actor.uc declares ScaleGlow as the lighting multiplier. This applies
+        // it to this renderer's explicitly texture-only inspection lighting.
+        const glow=Math.min(1,read(actor,'ScaleGlow')),style=read(actor,'Style');
+        for(const material of materials){
+          material.color.setRGB(glow,glow,glow);
+          const flags=material.userData.flags;
+          const translucent=style===3||Boolean(flags&POLY.Translucent);
+          const modulated=!translucent&&(style===4||Boolean(flags&POLY.Modulated));
+          material.transparent=translucent||modulated;material.depthWrite=!material.transparent;
+          material.blending=material.transparent?THREE.CustomBlending:THREE.NormalBlending;
+          material.blendSrc=translucent?THREE.OneFactor:THREE.DstColorFactor;
+          material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+          material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
+        }
         const current=pose();
         const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
         if(poseChanged){

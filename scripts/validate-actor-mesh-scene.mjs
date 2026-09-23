@@ -109,6 +109,30 @@ assert.equal(again.summary.triangles,scene.summary.triangles,'scene triangle tot
 assert.equal(again.summary.props,scene.summary.props);
 again.dispose();
 
+// Live Level.Actors reconciliation: a removed identity releases its draw resource,
+// and an identity first appearing after scene construction is decoded on update.
+// This is a display fixture only; SpawnActor/destruction are tested separately.
+const crate=level.actors.find(a=>a?.name==='CrateBreakableMedGeneral2');
+const cratePreview=propByName.get(crate.name),slot=level.actors.indexOf(crate);
+level.actors[slot]=null;scene.update();
+assert.equal(scene.actors.includes(cratePreview),false,'removed actor leaves the scene');
+level.actors[slot]=crate;scene.update();await scene.ready();scene.update();
+const restored=scene.propActors.find(p=>p.actor===crate);
+assert.ok(restored,'a newly encountered live identity acquires its mesh');
+const glow=get(crate,'ScaleGlow'),style=get(crate,'Style'),deleted=get(crate,'bDeleteMe');
+runtime.namedReference(crate,'ScaleGlow').set(Math.fround(.46));
+restored.update();
+assert.ok(restored.root.children.every(mesh=>mesh.material.color.r===Math.fround(.46)),
+  'damage ScaleGlow reaches every material');
+runtime.namedReference(crate,'Style').set(3);restored.update();
+assert.ok(restored.root.children.every(mesh=>mesh.material.transparent&&!mesh.material.depthWrite),
+  'fragment STY_Translucent reaches live materials');
+runtime.namedReference(crate,'bDeleteMe').set(true);restored.update();
+assert.equal(restored.root.visible,false,'deleted crate stops drawing');
+runtime.namedReference(crate,'ScaleGlow').set(glow);
+runtime.namedReference(crate,'Style').set(style);
+runtime.namedReference(crate,'bDeleteMe').set(deleted);restored.update();
+
 // Disposal releases geometry without disturbing the runtime.
 scene.dispose();
 assert.deepEqual(snapshot(),before,'disposing meshes must not mutate runtime actor fields');

@@ -125,3 +125,14 @@ this scene's own `bHidden` path. See [item pickup](script-item-pickup.md). The
 remaining boundary is selecting a picked-up weapon into hand (its first-person
 view mesh is not prepared) plus weapon fire / crate breaking, and reaching
 `UNATCOTroop3` still needs the locked keypad doors `paddoor`/`hackdoor`.
+
+### Runtime-spawned identities and damage/fade fields
+
+The layer now reconciles live Level.Actors on every update. Mesh actors spawned
+after map load (including crate fragments and dropped contents) acquire the same
+GPU resources asynchronously. Deleted actors hide immediately; identities
+removed on destruction/reset release their draw resources. Original ScaleGlow
+and live Style update materials without altering actor animation. Their native
+color multiplication and the first-person DrawActor path are recorded in
+[weapon/rendering evidence](script-weapon-rendering.md). Mesh lighting remains
+explicitly texture-only inspection shading.
