@@ -61,3 +61,50 @@ HUDMultiSkills.RefreshKey with a deterministic End/A BuySkills fixture. The
 first original enum index must win. This caller requires the separately
 recovered VM opcode 0x53 IntToString (the HUD work's conversion addition).
 No native config writes or input command execution are claimed.
+
+## Deferred multiplayer startup research
+
+The single-player Training scope explicitly defers
+DeusExRootWindow.ConditionalBindMultiplayerKeys. No implementation of that
+routine, Core.Object.GetEnum, or SET InputExt is included in this query adapter.
+The following recovered native evidence is retained for that future work;
+it does not establish a complete SET contract.
+
+- Original DeusExRootWindow.InitWindow calls ConditionalBindMultiplayerKeys.
+  The routine scans all 255 key indices and returns when any binding equals
+  Talk, TeamTalk, BuySkills, KillerProfile or ShowScores. Otherwise it tests
+  whether T, Y, B, K and Equals are empty and issues five SET InputExt commands
+  assigning those aliases. IsKeyAssigned obtains its key name with
+  mid(string(GetEnum(enum'EInputKey',key)),3).
+- Core.Object.GetEnum export thunk 0x10102194 leads to body 0x1013e9a0.
+  It evaluates the object and integer arguments in order and initializes the
+  result to FName index zero at 0x1013ea12. Null objects return that None name.
+  For a nonnull object, it walks Class(+0x24), then Super(+0x28), looking for
+  Core.Enum's static class 0x1029d6d0. A wrong class also returns None. Negative
+  indices and indices at or above UEnum.Names.Num(+0x38) return None; valid
+  indices read the FName DWORD at Names.Data(+0x34)+index*4
+  (0x1013eaa0–0x1013eaa6). This is generic enum access, not an input-specific
+  name table.
+- UObject.StaticExec thunk 0x101011a9 leads to body 0x10153110. Its SET branch
+  at 0x101532da–0x10153386 parses the class and property tokens with ParseToken
+  (maximum 256, escape handling enabled), resolves a UClass with
+  StaticFindObject and the property with FindField, skips spaces before the
+  remaining value, then invokes GlobalSetProperty with propagation enabled.
+  The SET literal at 0x101aea50 was verified in the original Core.dll.
+- GlobalSetProperty thunk 0x10102e64 leads to body 0x101523a0. With propagation
+  enabled it visits live objects whose class chain includes the target class,
+  calls the property's ImportText virtual(+0x84) with port flags 1 and the
+  object's property address (0x10152463), then invokes object virtual+0x40
+  (0x10152474; the exact callback behavior remains unresolved here). It also
+  imports the value into Class.Defaults.Data(+0x4d4) at the property's offset
+  (0x101524ca), then calls the defaults object's SaveConfig(0x4000,null) at
+  0x10152505. Native SET therefore has persistence and instance/default
+  propagation semantics beyond changing one query binding map.
+
+The selected unquoted FString ImportText behavior, inherited InputExt property
+schema, object callback effects, and config-save behavior still need recovery
+and validation before this branch can be implemented. A future browser config
+sink must state its persistence contract; it must not silently write the
+original installation's INI files or claim a transient map alone reproduces
+the native operation. This research uses the same original Core.dll fingerprint
+as the query validator; no original binaries or extracted source are committed.
