@@ -1,5 +1,20 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-23 (crowbar and original HUD):** public fire
+> input now advances the weapon through the real tick scheduler and mesh
+> notify. Two connecting Training crowbar hits produce 10 → 4 → −2 crate
+> health, six original wood fragments, dropped Lockpick contents, bounce,
+> fade/expiry and reset. First-person RenderOverlays/CalcDrawOffset now draws
+> the original animated mesh. The installed DeusExRootWindow/DeusExHUD
+> initialize the ten-slot belt, health, ammo, AugLight, frob brackets and log
+> through recovered native family layout and GC drawing. Digit keys invoke
+> original ActivateBelt. These supersede the corresponding September 22
+> boundaries below. Mesh lighting, deferred sound playback, general window
+> lifecycle and the remaining runtime paths are still open; InfoLink/ConPlay
+> retain their documented bounded presenters. Multiplayer is last priority
+> and may remain incomplete. See [crate evidence](script-crate-destruction.md),
+> [HUD scope](script-play-hud.md), and [weapon rendering](script-weapon-rendering.md).
+
 > **Checkpoint update, 2026-09-22 (pick up, carry and equip):** frobbing a
 > Training weapon/ammo/tool/food/key takes it into JC's inventory through the
 > original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give

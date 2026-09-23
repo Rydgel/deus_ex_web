@@ -86,8 +86,8 @@ or push further hosting updates unless the user asks.
 - **Selecting** a picked-up weapon draws it in hand through the original
   `PutInHand`/`UpdateInHand`/`SwitchWeapon`/`BringUp`/`PlaySelect` path (number
   keys invoke the original `ActivateBelt N`; the `Crowbar preview` button places
-  JC beside the Training weapons, picks up the crowbar and equips its actual
-  belt slot). Left click or Enter swings the crowbar through the original
+  JC beside the Training weapons, picks up the crowbar, equips its actual
+  belt slot and faces the stacked crates). Left click or Enter swings the crowbar through the original
   ticked weapon states and mesh notify. Two hits break a Training crate,
   spawning its original wood fragments and Lockpick contents; fragments
   bounce, fade and expire, and Player start restores the crate. The first-person
