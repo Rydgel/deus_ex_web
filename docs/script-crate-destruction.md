@@ -4,6 +4,11 @@ The authority is the installed DeusEx.u/Engine.u TextBuffer and bytecode,
 and Engine.dll's recovered SpawnActor, falling, landing and rotation bodies.
 Extracted source stays in `.cache/research/crate` outside Git.
 
+Preparation follows each actor's linked fields: Engine.Decoration declares
+Contents/Content2/Content3, while fragType is introduced by DeusExDecoration.
+Maps containing other Decoration subclasses must not read a nonexistent
+fragType; authored instance references override the prepared class defaults.
+
 `DeusExDecoration.Active.TakeDamage` subtracts qualifying damage, darkens a
 survivor with ResetScaleGlow, or calls DropThings, clears Event, assigns
 Instigator, emits noise and calls Frag. DropThings sets based actors Falling.

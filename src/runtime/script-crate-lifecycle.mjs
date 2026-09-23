@@ -44,8 +44,12 @@ export async function prepareCrateLifecycle({runtime,assets,level,decorations,pr
     if(path.startsWith('tracehit')&&dx.pkg.exports[index-1].className==='Class')
       await prepare(await runtime.loadClass(dx,index));
   for(const actor of decorations){
-    await prepare(runtime.instance(actor).cls);
+    const cls=runtime.instance(actor).cls;
+    await prepare(cls);
     for(const name of ['fragType','Contents','Content2','Content3']){
+      // Engine.Decoration has contents, but fragType is introduced by
+      // DeusExDecoration. Other original Decoration subclasses lack it.
+      if(!runtime.lookupMember(cls,'fields',name))continue;
       const reference=runtime.namedReference(actor,name).get();
       if(reference)await prepare(await runtime.loadClass(reference.asset,reference.index));
     }
