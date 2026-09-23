@@ -1447,10 +1447,9 @@ export class ScriptRuntime {
     if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
     const move=this.spawnedMoveServices(view,level);
     const adapter=Object.create(level);
-    adapter.hash=level.hash;
-    adapter.editor=level.editor;
-    adapter.netMode=level.netMode??0;
-    adapter.actors=level.actors;
+    // Play's level exposes these as accessors; shadow them with own properties.
+    for(const [key,value] of [['hash',level.hash],['editor',level.editor],['netMode',level.netMode??0],['actors',level.actors]])
+      Object.defineProperty(adapter,key,{value,enumerable:true,writable:true});
     adapter.findSpot=(extent,position,checkActors,checkFirst)=>
       level.findSpot(extent,position,checkActors,checkFirst);
     adapter.checkEncroachment=move.checkEncroachment;

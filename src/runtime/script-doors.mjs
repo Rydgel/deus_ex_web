@@ -1577,6 +1577,11 @@ export async function createScriptDoors({
     // viewer, not Level.Tick, drives this pawn (docs/script-instructor-conversation.md).
     const viewport = level?.engine?.client?.viewports?.[0] ?? null;
     if (viewport) runtime.namedReference(playerActor, 'Player').set(viewport);
+    // ULevel::SpawnPlayActor 0x1039719d, after SetPlayer/Role/RemoteRole:
+    // ShowFlags = SHOW_Backdrop|SHOW_Actors|SHOW_PlayerCtrl|SHOW_RealTime.
+    // Render's overlay gate reads SHOW_Actors. RendMap (+0x600, stored next
+    // from ebx) is not modeled here.
+    runtime.namedReference(playerActor, 'ShowFlags').set(0x480c);
     // Re-spawn the mission actor into the freshly restored world so its timer
     // and state machine start over (the original reloads the level on reset).
     liveMission?.spawn();

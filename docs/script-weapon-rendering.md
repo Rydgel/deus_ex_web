@@ -23,11 +23,49 @@ Engine.dll UCanvas::execDrawActor thunk 0x10303d05 reaches 0x10377ed0. It
 initializes the optional ClearZ word to zero (0x10377f3c), clears depth only
 when nonzero (0x10377f85–0x10377f9e), and calls URender::DrawActor at
 0x10377fae. Render.dll 0x10b262c0 creates an FDynamicSprite and dispatches
-DrawActorSprite using the existing frame. Thus the crowbar uses the world
-camera/projection and existing depth; a special overlay camera or unconditional
-clearDepth would contradict this selected path. The browser Canvas is an
-explicit drawing boundary; native UCanvas construction and unrelated Canvas
-natives are not claimed.
+DrawActorSprite using the existing frame. The overlay therefore uses the world
+camera/projection. A special overlay camera would contradict this path. The
+browser Canvas is an explicit drawing boundary; native UCanvas construction and
+unrelated Canvas natives are not claimed.
+
+## Render entry: ClearZ and the viewing actor's event
+
+An earlier version of this page said the crowbar keeps the world's depth. The
+DrawActor argument alone did not establish that. The entry point is
+`URender::DrawWorld` in Render.dll (0x10b1ce49–0x10b1cec8), after the world is
+drawn. It reads the viewport Actor (`Viewport+0x30`). Target is None when
+`bBehindView` (+0x318 bit 0) is set, else `ViewTarget` (+0x60c) or the Actor
+itself. When `GIsEditor` is clear, Target is set and the Actor's `ShowFlags`
+(+0x5fc) has `SHOW_Actors` (8), it does four things in order. It sets
+`GUglyHackFlags |= 1` and calls `Viewport->RenDev` (+0x64) vtable +0x90 with
+the frame. It calls `FindFunctionChecked(ENGINE_RenderOverlays)` and
+`ProcessEvent` with `Viewport->Canvas` (+0x5c). Finally it clears the hack
+bit. Vtable +0x90 is `ClearZ(FSceneNode*)` in the primary vtables of both
+UD3DRenderDevice and USoftwareRenderDevice (their exported symbols). So depth
+is cleared once before every player overlay, and overlays draw over world
+geometry. `ENGINE_RenderOverlays` is the Engine.dll FName global 0x10583600;
+Render.dll imports it (slot 0x10b5d704) and this is its only use. The field
+offsets come from the shipped PlayerPawn declaration order: `Player` +0x5d4 …
+`ShowFlags` +0x5fc, `RendMap` +0x600, `ViewTarget` +0x60c.
+
+`ULevel::SpawnPlayActor` stores `ShowFlags = 0x480c` at 0x1039719d
+(`SHOW_Backdrop|SHOW_Actors|SHOW_PlayerCtrl|SHOW_RealTime`). The store follows
+`SetPlayer`, `Role = ROLE_Authority` and `RemoteRole`. Play applies it where
+reset binds `Player`. The following `RendMap` store (+0x600, from `ebx`) is
+not modeled. No original script reads `ShowFlags`.
+
+The event is `DeusExPlayer.RenderOverlays`. It calls `Super.RenderOverlays`,
+which is PlayerPawnExt → PlayerPawn: `Weapon.RenderOverlays`, then
+`myHUD.RenderOverlays` (no HUD class overrides the empty Actor event; myHUD is
+None in Training). Unless the player is in state Interpolating or Paralyzed,
+it then calls `inHand.RenderOverlays` for a non-Weapon inHand. For the
+NanoKeyRing and other pickups, that is `Inventory.RenderOverlays`: owner/net
+gates, `SetLocation(Owner.Location + CalcDrawOffset())`,
+`SetRotation(Pawn(Owner).ViewRotation)` and `Canvas.DrawActor(self,false)`.
+The item draws its `PlayerViewMesh`, which `BecomeItem` assigns. Carried
+runtime-spawned items, such as the KeyRing spawned at startup, relocate
+through the recovered spawned-actor FarMoveActor path.
+`GUglyHackFlags` bit 1 and its mesh-renderer effects are not modeled.
 
 The display uses the native-compared LodMesh GetFrame/material accessors already
 used by the actor mesh scene. DrawActor is allowed to draw carried bHidden
@@ -60,15 +98,16 @@ original-game lighting claim.
 
 `createWeaponViewModel(runtime,assets,player)` prepares a typed Canvas drawing
 boundary. Call `render(renderer,camera)` after the world draw and before HUD in
-Play, and `dispose()` when replacing the map. `ready()` awaits the selected
-weapon's decoded draw resources for focused checks; ordinary frames stage them
-on demand. The native-467 hook exists only during synchronous RenderOverlays
+Play, and `dispose()` when replacing the map. `render` applies the DrawWorld
+gates, clears depth, dispatches the viewing actor's RenderOverlays event and
+draws each submitted DrawActor. `ready()` awaits the Weapon and inHand draw
+resources for focused checks; ordinary frames stage them on demand. The native-467 hook exists only during synchronous RenderOverlays
 and is restored even on an error. SetLocation still goes through the runtime's
 FarMoveActor binding. The script event writes the actual held actor transform,
 as the original does; the next pawn tick places Weapon at its owner's Location.
 
-Only the player's Weapon route is wired here. Nonweapon inHand overlays, muzzle
-flash Canvas.DrawIcon, original mesh lighting, distance LOD, native Canvas
+The Weapon and non-Weapon inHand routes are wired through the player's event.
+Muzzle flash Canvas.DrawIcon, GUglyHackFlags, original mesh lighting, distance LOD, native Canvas
 construction, and all other Canvas effects remain unsupported. An unbuilt
 Canvas effect raises its existing native boundary rather than substituting art.
 The crowbar's live mesh pose is sampled without calling Fire, advancing time or
@@ -77,7 +116,8 @@ running a separate animation. A pending GPU resource can delay its first draw.
 Focused validation uses the original Training package and real runtime actors:
 `validate-weapon-view-model.mjs` checks the bytecode placement, unchanged animation
 during drawing, live scheduler-driven Select pose, original visibility gates,
-retained camera/depth, and reset. `validate-actor-mesh-scene.mjs` adds a display
+the shared camera, one ClearZ per overlay pass, the bBehindView/SHOW_Actors
+gates, the key ring's Inventory.RenderOverlays placement, and reset. `validate-actor-mesh-scene.mjs` adds a display
 fixture for runtime identity reconciliation, deleted visibility, ScaleGlow and
 translucent Style. These integration checks reuse GetFrame/material evidence;
 they do not establish whole-renderer visual equivalence.

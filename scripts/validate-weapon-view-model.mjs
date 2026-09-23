@@ -30,10 +30,13 @@ runtime.relocation??={actorFor:actor=>actor,
   farMoveActor:(_level,actor,destination)=>runtime.relocateHeldItem(actor,destination)};
 const view=await createWeaponViewModel(runtime,assets,player);
 await view.ready();
-const camera=new THREE.PerspectiveCamera(75,4/3,1,65536),draws=[];
+const camera=new THREE.PerspectiveCamera(75,4/3,1,65536),draws=[];let clears=0;
+// Render.dll clears Z once before the viewing actor's RenderOverlays; the
+// script's Canvas.DrawActor omits its optional ClearZ (default false).
 const renderer={render(scene,usedCamera){
   draws.push(scene);assert.equal(usedCamera,camera,'original Canvas uses the world frame');
-},clearDepth(){assert.fail('DrawActor omitted ClearZ; native optional default is false');}};
+},clearDepth(){clears++;}};
+assert.equal(get(player,'ShowFlags'),0x480c,'SpawnPlayActor ShowFlags');
 const native=runtime.native,boundaries=[...runtime.boundaryNatives];
 const pose=()=>[get(crowbar,'AnimSequence'),get(crowbar,'AnimFrame'),get(crowbar,'AnimRate')];
 const before=pose();
@@ -41,6 +44,7 @@ const offset=runtime.callFunction(runtime.lookup(crowbar,'CalcDrawOffset'),crowb
 const expected=get(player,'Location').map((n,i)=>Math.fround(n+offset[i]));
 view.render(renderer,camera);
 assert.equal(view.summary.draws,1);assert.equal(view.summary.loading,false);
+assert.equal(clears,1,'one RenDev ClearZ precedes RenderOverlays');
 assert.equal(view.summary.mesh,'deusexitems.crowbar');
 assert.deepEqual(get(crowbar,'Location'),expected,'original CalcDrawOffset reaches original SetLocation');
 assert.deepEqual(get(crowbar,'Rotation'),[...get(player,'ViewRotation').slice(0,2),0]);
@@ -58,6 +62,11 @@ set(crowbar,'bHideWeapon',false);
 const fov=get(player,'DesiredFOV');set(player,'DesiredFOV',fov+1);
 view.render(renderer,camera);assert.equal(view.summary.draws,0);
 set(player,'DesiredFOV',fov);
+// Render's own gates: bBehindView selects no target; SHOW_Actors is required.
+clears=0;set(player,'bBehindView',true);view.render(renderer,camera);
+assert.equal(view.summary.draws,0);assert.equal(clears,0);set(player,'bBehindView',false);
+set(player,'ShowFlags',0x480c&~8);view.render(renderer,camera);
+assert.equal(view.summary.draws,0);assert.equal(clears,0);set(player,'ShowFlags',0x480c);
 
 // Observe the shared ticked selection animation through persistent GPU buffers.
 // All actor time advances exclusively through game.tick, without calling Fire.
@@ -68,7 +77,28 @@ assert.equal(mesh.geometry.getAttribute('position'),positions,'persistent geomet
 assert.ok(old.some((v,i)=>v!==positions.array[i]),'ticked Select animation changes the view pose');
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0);
 
+// DeusExPlayer.RenderOverlays draws a non-Weapon inHand through its inherited
+// Inventory.RenderOverlays: the key ring from belt slot 0.
+const ring=get(player,'KeyRing');assert.ok(ring);
+assert.equal((await game.activateBelt(0)).ok,true);
+for(let i=0;i<120&&get(player,'inHand')!==ring;i++)
+  game.tick(1/60,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+assert.equal(get(player,'inHand'),ring);assert.equal(get(player,'Weapon'),null);
+assert.equal(get(ring,'Mesh'),get(ring,'PlayerViewMesh'),'carried ring uses its PlayerViewMesh');
+await view.ready();
+const ringPose=[get(ring,'AnimSequence'),get(ring,'AnimFrame')];
+const ringOffset=runtime.callFunction(runtime.lookup(ring,'CalcDrawOffset'),ring);
+const ringAt=get(player,'Location').map((n,i)=>Math.fround(n+ringOffset[i]));
+view.render(renderer,camera);
+assert.equal(view.summary.draws,1,'the key ring is drawn');assert.equal(view.summary.actor,ring.name);
+assert.equal(view.summary.mesh,get(ring,'PlayerViewMesh').key);
+assert.deepEqual(get(ring,'Location'),ringAt,'Inventory.CalcDrawOffset reaches SetLocation');
+assert.deepEqual(get(ring,'Rotation'),get(player,'ViewRotation'),'Inventory.RenderOverlays copies ViewRotation');
+assert.deepEqual([get(ring,'AnimSequence'),get(ring,'AnimFrame')],ringPose,'drawing does not animate the ring');
+const ringPreview=view.scene.children.find(root=>root.visible);
+assert.ok(ringPreview&&ringPreview.children.every(m=>[...m.geometry.getAttribute('position').array].every(Number.isFinite)));
+
 game.reset();view.render(renderer,camera);
 assert.equal(view.summary.draws,0,'Player start clears the drawn weapon');
 view.dispose();
-console.log('weapon view model: original crowbar overlay placement, live ticked Select pose, hidden/FOV gates, shared camera/depth and reset pass');
+console.log('player view model: Render ClearZ + RenderOverlays gates, original crowbar overlay placement, live ticked Select pose, hidden/FOV gates, key ring inHand overlay and reset pass');
