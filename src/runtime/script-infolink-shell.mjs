@@ -151,7 +151,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
     memory.write(root,O.type,'u8',3);memory.write(root,O.flags,'u32',1);memory.write(root,O.parent,'ptr',null);
     memory.write(hud,O.flags,'u32',1);memory.write(hud,O.parent,'ptr',root);
   }
-  const globals=new Map([...Object.values(WINDOW_RECONFIGURE_GLOBALS),
+  const globals=windowHost?.globals??new Map([...Object.values(WINDOW_RECONFIGURE_GLOBALS),
     ...Object.values(WINDOW_CONFIGURE_CHILD_GLOBALS)].map(name=>[name,0]));
   let events=[];
   let child=null,portrait=null,staticControl=null,nameControl=null,queuedControl=null;
@@ -177,8 +177,10 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
     configurationChanged:()=>{},resizeChild:()=>{},
     boundsUpdate:({object})=>boundsUpdateNative(object,{read:memory.read,write:memory.write}),
-    sortWindowLists:({object,child})=>sortWindowListsNative(object,child,
-      {read:memory.read,write:memory.write,addressOf:memory.addressOf}),
+    sortWindowLists:request=>windowHost
+      ?windowHost.lifecycle.configureChild.sortWindowLists(request)
+      :sortWindowListsNative(request.object,request.child,
+        {read:memory.read,write:memory.write,addressOf:memory.addressOf}),
   };
   const visibility={...rawServices,
     readGlobal:name=>globals.get(name),writeGlobal:(name,_kind,value)=>globals.set(name,value),
