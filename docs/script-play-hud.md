@@ -22,7 +22,12 @@ binaries and captures remain local and ignored. See [host evidence](script-windo
   including `ORDER_LeftThenUp`. `CreateNanoKeySlot` uses slot zero. Subsequent
   pickups enter through `DeusExPlayer.AddInventory` → root `AddInventory` →
   `AddObjectToBelt`. Digit keys run `DeusExPlayer.ActivateBelt N`, matching
-  User.ini. Repeated slot selection is left to the original scripts.
+  User.ini. Repeated slot selection is left to the original scripts. The
+  existing player scheduler now calls `UpdateInHand` before movement: original
+  `PlayerWalking.PlayerTick` calls it through `MultiplayerTick` (which also
+  serves single player) before `Super.PlayerTick`. This resumes the hand
+  transition without manually advancing the weapon state machine. Other
+  unrecovered PlayerTick effects remain separate boundaries.
 - Original hit/compass/ammo ticks read the live player and weapon. The original
   health flash, energy and breath bars, compass wrapping, ammo labels and belt
   selection draw through their own windows. `AugmentationManager.RefreshAugDisplay`
@@ -68,7 +73,8 @@ recorded at their native call boundary until a playback backend is connected.
 
 `node scripts/validate-play-hud.mjs` exercises the live original HUD tree,
 canonical root/HUD/key-ring identities, ten slots, AugLight, six live health
-fields, damage flash, energy, compass, reset, legacy InfoLink frame crops and
+fields, damage flash, energy, compass, frob corners, original pickup-to-belt,
+ActivateBelt/equip/put-away, ammo, log rows, reset, legacy InfoLink frame crops and
 original bitmap-font glyph output. Native family layout, root tick, scene frame,
 actor-reference and GC validators cover their translation boundaries against
 the shipped DLL. Browser checks additionally cover native layout, pickup/belt

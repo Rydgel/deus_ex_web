@@ -37,6 +37,35 @@ const rotation=runtime.namedReference(player,'Rotation');rotation.set([0,16384,0
 assert.equal(hud.snapshot().compass.yaw,16384);
 assert.equal(hud.read(hud.compass,'UnitsPerPixel'),Math.fround(65536/240));
 assert.equal(hud.snapshot().compass.drawPos,-32);assert.equal(hud.snapshot().compass.wrapPos,208);
+// Source-owned frob projection, AddInventory -> belt, ActivateBelt -> weapon,
+// and ammo read the same player/items as gameplay. No fire state is driven here.
+const level=runtime.levelFor(player),crowbar=level.actors.find(actor=>actor?.name==='WeaponCrowbar1');
+const at=runtime.namedReference(crowbar,'Location').get();
+game.collision.queries.changeActor(player,()=>{game.player.position=[at[0]-48,at[1],at[2]];game.player.velocity=[0,0,0];});
+runtime.namedReference(player,'FrobTarget').set(crowbar);
+const view={location:game.player.eye,rotation:[0,0,0],fov:75};
+console.log('HUD integration: frob draw');
+const frobCommands=hud.commands(960,600,view);
+assert.ok(frobCommands.filter(c=>c.texture.name==='Solid').length>=16,'Original frob DrawBox emits shadow and foreground corners');
+assert.ok(frobCommands.every(c=>['x','y','width','height'].every(k=>Number.isFinite(c[k]))));
+console.log('HUD integration: pickup');
+game.interaction.frobTarget=crowbar;assert.equal(game.use().ok,true);
+const slots=hud.read(hud.read(hud.hud,'belt'),'objects');
+const slot=slots.findIndex(window=>hud.read(window,'item')===crowbar);
+assert.equal(slot,1,'First eligible pickup enters original free belt slot1');
+console.log('HUD integration: activate',slot);
+assert.equal((await game.activateBelt(slot)).ok,true);
+console.log('HUD integration: tick equip');
+for(let i=0;i<40;i++)game.tick(1/60,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+assert.ok(runtime.namedReference(player,'Weapon').get()===crowbar,'Belt-selected crowbar is the live Weapon');
+hud.commands(960,600,view);assert.ok(hud.read(hud.read(hud.hud,'ammo'),'weapon')===crowbar,'Ammo widget reads live weapon');
+console.log('HUD integration: log');
+await game.activateBelt(slot);
+for(let i=0;i<40;i++)game.tick(1/60,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+assert.ok(runtime.namedReference(player,'Weapon').get()===null,'Repeated belt activation puts the weapon away under the scheduler');
+runtime.dispatchSpawnedEvent(player,'ClientMessage',['Native HUD log check','',false]);
+const log=hud.read(hud.read(hud.hud,'msgLog'),'winLog');
+assert.ok(hud.host.raw.read(log,0x17c,'i32')>0,'Original ClientMessage enters native TextLog rows');
 game.reset();hud.tick(1/120);assert.equal(hud.snapshot().health.legLeft.health,100);assert.equal(hud.snapshot().energy,100);
 const text=await createHudText(assets,['DeusExUI.FontTiny','DeusExUI.FontMenuHeaders_DS','DeusExUI.FontFixedWidthSmall_DS']);
 const glyphs=[];text.draw(c=>glyphs.push(c),{font:'DeusExUI.FontMenuHeaders_DS',text:'Jaime Reyes',x:94,y:15,width:293,height:15,vAlign:1});

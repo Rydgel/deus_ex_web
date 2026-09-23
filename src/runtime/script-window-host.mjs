@@ -52,6 +52,7 @@ import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
 import {rootTickNative} from './script-window-root-tick.mjs';
+import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
 import {createWindowActorRefDispatcher} from './script-window-actor-refs.mjs';
 import {writeWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {setToggleNative} from './script-window-toggle-set.mjs';
@@ -233,6 +234,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     processScript: (win, event, args, options) => processScript(win, event, args, options),
     canvasComputeRenderSize: () => {},
     tickOffset:()=>f(performance.now()/1000-lastTickTime),
+    soundPawnFields:pawn=>({location:runtime.namedReference(pawn,'Location').get(),viewRotation:runtime.namedReference(pawn,'ViewRotation').get()}),
+    deferWindowSound:request=>soundRequests.push(request),
   };
   // FArray over heap storage ({Data, Num, Max} at the given offset).
   W.farray = {
@@ -628,7 +631,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),
     removeWindowFromTables: (tabGroup, win) => F.removeWindowFromTables(W, tabGroup, win),
     safeDestroy: win => safeDestroy(win),
-    playSound: (win, sound) => { if (sound) soundRequests.push({window: win, sound}); },
+    playSound: (...args)=>windowPlaySound(W,...args),
   };
   const soundRequests = [];
 
@@ -689,6 +692,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     errorDevice: {name: 'GError'},
     isScriptable: () => true,
     handleNative: call => {
+      const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
       const reference=actorRefs(call);if(reference.handled)return reference;
       const input=inputConsole.playerConsoleCommand(call);if(input.handled)return input;
       const gc=dispatchGcNative(heap,gcServices,call);

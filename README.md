@@ -63,8 +63,9 @@ or push further hosting updates unless the user asks.
   ([conversation](docs/script-instructor-conversation.md),
   [window layer](docs/script-window-bounds-update.md),
   [mission timer](docs/script-mission-timer.md)).
-- Play now shows the original health silhouette, energy meter and turning
-  compass. Original HUD bytecode reads live player state. InfoLink transmissions
+- Play constructs the original DeusExHUD: health/energy/compass, the ten-slot
+  object belt, ammo, AugLight, frob brackets and log read live state through
+  original scripts and native window/GC translations. InfoLink transmissions
   use the original frame textures, portraits and bitmap fonts, replacing the
   browser-styled dialog ([visible HUD scope](docs/script-play-hud.md)). Walk
   forward from Training's spawn to see Jaime's transmission.

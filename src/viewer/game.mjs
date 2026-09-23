@@ -205,6 +205,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         if (runtime) {
           runtime.namedReference(player.collisionActor, 'FrobTarget').set(interaction.frobTarget ?? null);
           runtime.namedReference(player.collisionActor, 'FrobTime').set(Math.fround(interaction.frobTime));
+          // PlayerWalking.PlayerTick -> MultiplayerTick (also single player),
+          // before Super.PlayerTick/movement: original per-frame hand transition.
+          runtime.processEvent(player.collisionActor,'UpdateInHand',[]);
         }
         player.tick(dt, input);
         // Actor.Tick's pawn tail: FarMoveActor(Weapon, Location, 0, 0).
