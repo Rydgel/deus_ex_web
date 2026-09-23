@@ -367,9 +367,14 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   if(windowHost){
     sharedLifecycle.handleNative=call=>{
       if(owned.has(call.receiver))return {handled:false};
-      if(call.index===1409&&!windowHost.lifecycle.destroy)
-        throw new Error('Native HUD Window.Destroy requires its own recovered lifecycle');
       return windowHost.lifecycle.handleNative(call);
+    };
+    if(!windowHost.lifecycle.destroy)sharedLifecycle.destroy={...sharedLifecycle.destroy,
+      onEvent:details=>{
+        if(details.op==='SafeDestroy'&&!owned.has(details.object))
+          throw new Error('Native HUD Window.Destroy requires its own recovered lifecycle');
+        lifecycle.destroy.onEvent(details);
+      },
     };
     sharedLifecycle.processScript=request=>owned.has(request.object)
       ?runtime.processWindowScript(request):windowHost.lifecycle.processScript(request);
