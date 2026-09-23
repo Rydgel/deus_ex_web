@@ -48,7 +48,10 @@ called by root initialization even in single player, is an explicit recorded
 boundary; it does not modify bindings or block the Training HUD.
 
 InfoLink and ConPlay keep their existing specialized presentation and lifecycle
-owners. They share the real root, HUD and byte heap; their delegated subtrees
+owners. Their frame adapter reads requested SetSize dimensions at +0x9c/+0xa0;
+their partial layout does not populate the configured +0x80/+0x84 dimensions.
+General HUD windows read configured dimensions through native field bindings.
+They share the real root, HUD and byte heap; their delegated subtrees
 are excluded from general tree layout/tick/draw/readiness to avoid applying two
 owners to them. Native ComputerWindow cursor, fade and static interference are
 not completed by this change. Received-item presentation retains its previously

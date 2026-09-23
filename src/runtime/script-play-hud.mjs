@@ -1,11 +1,11 @@
 /** Original DeusExHUD tree driven by recovered Extension native layout/GC.
  * InfoLink/ConPlay retain their explicitly bounded presentation owners. */
 import {TextureStore} from '../unreal/textures.mjs';
+import {WINDOW_SIZE_OFFSETS as REQUESTED_SIZE} from './script-window-size.mjs';
 const parts=['head','torso','armLeft','armRight','legLeft','legRight'];
 const deref=value=>value?.reference?value.get():value;
 export const hudColor=value=>['r','g','b'].map(key=>value[`core.object.color.${key}`]);
 const unpack=value=>[value&255,(value>>>8)&255,(value>>>16)&255];
-const SIZE={width:0x80,height:0x84};
 export async function createPlayHud({runtime,assets,player,shell,host}){
   if(!host?.root||!host?.hud)throw new Error('Play HUD requires the original initialized window host');
   const read=(object,name)=>runtime.namedReference(object,name).get();
@@ -22,8 +22,11 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   const gc={};runtime.attach(gc,host.classes.get('extension.gc'));
   function decorationCommands(object,post=false){
     const commands=[];
-    // Existing InfoLink windows now expose their native dimensions to DrawWindow.
-    for(const [name,offset] of [['width',SIZE.width],['height',SIZE.height]]){
+    // The delegated InfoLink/ConPlay presenter still draws at SetSize's
+    // requested dimensions (+9c/+a0). Its bounded lifecycle does not perform
+    // native layout into +80/+84; general HUD windows already have their own
+    // true configured-size bindings and must keep them.
+    for(const [name,offset] of [['width',REQUESTED_SIZE.width],['height',REQUESTED_SIZE.height]]){
       const instance=runtime.instance(object),field=runtime.lookupMember(instance.cls,'fields',name);
       if(!instance.bindings.has(field.key))instance.bindings.set(field.key,{
         get:()=>shell.readNative(object,offset,'f32'),set:()=>{throw new Error('HUD dimensions require Window setters');}});
@@ -33,6 +36,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
       runtime.boundaryNatives=new Set([...boundaries,1212,1230,1284,1289]);
       let style=1,color=[255,255,255];
       runtime.native=call=>{
+        if(![1212,1230,1284,1289].includes(call.index))return native(call);
         const args=Array.from({length:call.argumentCount},(_,i)=>deref(call.evaluateArgument(i)));
         if(call.index===1212)style=args[0];
         else if(call.index===1230)color=hudColor(args[0]);
@@ -41,7 +45,6 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
         else if(call.index===1289){const [x,y,width,height,l,r,t,b,borders]=args;
           if(l||r||t||b||args[9]||args[10])throw new Error('HUD border margin/stretch path is not bound');
           commands.push({x,y,width,height,borders,style,color});}
-        else return native(call);
       };
       try{if(post)invoke(object,'PostDrawBackground',[gc]);
         else{invoke(object,'DrawBackground',[gc]);invoke(object,'DrawBorder',[gc]);}}
