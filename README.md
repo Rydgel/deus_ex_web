@@ -84,15 +84,17 @@ or push further hosting updates unless the user asks.
   [item pickup](docs/script-item-pickup.md).
 - **Selecting** a picked-up weapon draws it in hand through the original
   `PutInHand`/`UpdateInHand`/`SwitchWeapon`/`BringUp`/`PlaySelect` path (number
-  keys map to weapon groups; the `Crowbar preview` button places JC beside the
-  Training weapons, picks up the crowbar and equips it), and the HUD shows the
-  in-hand item. Left click or Enter now swings the crowbar through the original
+  keys invoke the original `ActivateBelt N`; the `Crowbar preview` button places
+  JC beside the Training weapons, picks up the crowbar and equips its actual
+  belt slot). Left click or Enter swings the crowbar through the original
   ticked weapon states and mesh notify. Two hits break a Training crate,
   spawning its original wood fragments and Lockpick contents; fragments
-  bounce, fade and expire, and Player start restores the crate. First-person
-  view-model rendering remains unfinished. See [weapon equip](docs/script-weapon-equip.md) and
-  [weapon fire evidence](docs/script-weapon-fire.md) and
-  [crate destruction](docs/script-crate-destruction.md).
+  bounce, fade and expire, and Player start restores the crate. The first-person
+  mesh follows original RenderOverlays/CalcDrawOffset and GetFrame; original
+  mesh lighting remains unfinished. See [weapon equip](docs/script-weapon-equip.md),
+  [weapon fire evidence](docs/script-weapon-fire.md),
+  [crate destruction](docs/script-crate-destruction.md), and
+  [weapon rendering](docs/script-weapon-rendering.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.
@@ -192,11 +194,12 @@ and open work](docs/movement.md).
   Training light-switch off/on changes reach the query through real BSP traces;
   three map snapshots also match the DLL. Full startup and Region/clock
   synchronization remain open ([AI lighting evidence](docs/script-ai-visibility.md)).
-- **Visible progress:** the health/energy/compass and InfoLink rendering bridge
-  connects selected original scripts to the browser. Window.SetConfiguration
-  now has ten original-DLL comparisons; bitmap text uses the recovered native
-  glyph path and real font pages. Full HUD lifecycle, root scaling, static
-  interference and whole-renderer visual equivalence remain open
+- **Visible HUD:** original DeusExHUD initialization, native family layout and
+  GC drawing provide the object belt, health/energy/compass, ammo, AugLight,
+  frob brackets and log. Root scaling uses the original integer multipliers.
+  InfoLink/ConPlay retain their bounded presentation owners on the same root;
+  general focus/destruction, static interference and whole-renderer visual
+  equivalence remain open
   ([evidence and boundaries](docs/script-play-hud.md)).
 - **Object/runtime foundation:** recovered class/property linking, construction,
   serialization and GC components support the selected live paths. Absent-export

@@ -5,10 +5,11 @@ The host translates the installed `Extension.dll` (SHA-256
 and executes the installed `DeusEx.u` / `Extension.u` functions. Local extracted
 TextBuffers and disassembly remain outside Git.
 
-This is work in progress and is not yet the Play HUD. Unsupported native
-families, layout branches, drawing and destruction stop at explicit boundaries.
-The existing Play presentation bridge remains active until construction and
-rendering are verified. A new module alone does not establish compatibility.
+The host now supplies the Play HUD tree. Unsupported native families, focus,
+window timers and destruction stop at explicit boundaries. InfoLink/ConPlay
+retain their documented compatibility owners within the same root/heap; see
+[Play HUD scope](script-play-hud.md). Integration validation is distinct from
+original-DLL comparison, and neither establishes complete renderer equivalence.
 
 ## Source contract
 
@@ -46,3 +47,36 @@ Native leaves added during continuation:
 Heap allocation addresses are host storage. They are not original pointer
 values; pointer tie-breaking in otherwise equal focus ordering is therefore an
 unverified boundary. Uninitialized native alpha bytes are zeroed explicitly.
+
+## Continuation evidence
+
+Text Draw (10046930) aligns/wraps, dispatches the script DrawWindow, then emits
+the native text. Button Draw (100082c0) applies its current style, emits its
+pattern, then executes Text Draw. RadioBox ToggleChanged (10038a60) maintains
+the selected toggle and untoggles the previous entry before script dispatch.
+TextLog AddLog/UpdateText/ConfigurationChanged/Tick/Draw are 100476a0,10047dc0,
+10047910,10047c30,10047a10. The original separator at10098e58 is a single LF;
+rows hold float timeout, FString and color. Paused logs preserve all timeouts.
+
+Window.ConvertScriptString 10050710 scans UTF-16 pairs: `|n` becomes LF, other
+pipe pairs remain literal (including `||n`). EnableTranslucentText1004dc90
+writes bit1 of Window+74 and forwards it to the existing general GC.
+GetGC1004ddc0 pushes the working GC and copies the window general GC;
+ReleaseGC1004de50 pops it. GC cleanup100269b0→10026a20 unlocks and clears each
+of the five native texture-cache records before resetting head/count.
+
+GetTickOffset1004fda0 calls1003a3b0 with update=0: current monotonic time minus
+the prior tick timestamp, stored to float. The browser supplies that monotonic
+clock with performance.now; it does not substitute game TimeSeconds.
+Full-viewport rendering makes GetRawBackgroundClipList1003c5f0 subtract the
+null render clip at1003c6b3, so DrawRawBackground emits no tiles for that branch.
+
+The VM IntToString token53 follows Core10131600's signed DWORD and `%i`
+format string at101aaf70. The host's runaway guard was raised from2048 to16384
+statements because original HUDMultiSkills.RefreshKey legitimately scans all
+255 input keys; this limit is a host safeguard, not an original engine value.
+
+The native family layout, root tick, actor reference and scene-frame modules
+record their original addresses and comparison suites separately. The GC
+dispatcher only marshals script references, bool DWORDs, colors, texture/font
+pointers and raw float words into the already recovered GC bodies.

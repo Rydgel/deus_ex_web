@@ -123,7 +123,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
-    queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
+    nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   const levelDilation=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeDilation');
   // Player start is the viewer's scene reset. Restore the actual startup
@@ -144,7 +144,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const applySubtitles=()=>{ if(subtitlePreference!==null)subtitlesRef.set(subtitlePreference); };
   applySubtitles();
   const hud=presentation?await createPlayHud({runtime:doors.scriptRuntime.runtime,assets,
-    player:player.collisionActor,shell:await doors.scriptRuntime.infoLinkShell(),
+    player:player.collisionActor,shell:await doors.scriptRuntime.infoLinkShell(),host:doors.scriptRuntime.windowHost,
     mapNorth:[...actors.values()].find(actor=>actor.className==='DeusExLevelInfo')?.values.TrueNorth??0}):null;
   // Route any unhandled actor scene event (dispatched from player-move/actor-touch,
   // or re-entrant from a VM body) into the door runtime's general VM router, so a
@@ -338,11 +338,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       return { selected, name: now?.name ?? null,
         label: selected ? String(runtime.namedReference(item, 'ItemName').get() ?? item.name) : null };
     },
-    // A number key resolves the weapon in JC's inventory whose InventoryGroup
-    // matches, through the original Inventory.WeaponChange walk (the same
-    // resolution DeusExRootWindow.ActivateObjectInBelt reaches before PutInHand),
-    // then selects it. No object belt is modeled: the item comes from the real
-    // inventory chain, not a fabricated slot table.
+    // User.ini binds each digit to original DeusExPlayer.ActivateBelt N.
+    async activateBelt(position){
+      if(!hud)throw new Error('ActivateBelt requires the original HUD object belt');
+      const runtime=doors.scriptRuntime.runtime,pawn=player.collisionActor;
+      const belt=hud.read(hud.hud,'belt'),item=hud.invoke(belt,'GetObjectFromBelt',[position]);
+      if(item){const mesh=runtime.namedReference(item,'Mesh').get();if(mesh&&['LodMesh','Mesh'].includes(mesh.kind))await runtime.prepareMesh(item);}
+      hud.scoped(()=>runtime.dispatchSpawnedEvent(pawn,'ActivateBelt',[position]));
+      return {ok:Boolean(item),name:item?.name??null,label:item?runtime.namedReference(item,'ItemName').get():null};
+    },
     async selectWeaponGroup(group) {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
       const head = runtime.namedReference(pawn, 'Inventory').get();

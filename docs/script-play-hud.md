@@ -1,95 +1,72 @@
-# Visible single-player HUD bridge
+# Original Play HUD
 
-## Original contract (recorded before the browser integration)
+Play constructs the installed `DeusExRootWindow` and `DeusExHUD` through their
+original `InitWindow` bytecode. The shared native window host supplies the
+recovered Extension family constructors, initialization, preferred sizes,
+configuration, tree tick and GC drawing. The runtime uses one canonical
+`player.rootWindow` and HUD for inventory, messages, InfoLink and ConPlay.
 
 The authority is the installed `DeusEx.u` / `Extension.u` embedded source and
-bytecode, not a recreated HUD design. The relevant TextBuffers are local-only
-under `.cache/reference/`: `HUDHitDisplay`, `HUDCompassDisplay`, `HUDBaseWindow`,
-`ProgressBarWindow`, `Crosshair`, `Window`, and `DeusExHUD`.
+bytecode, plus `Extension.dll` and `Engine.dll` instructions. Extracted source,
+binaries and captures remain local and ignored. See [host evidence](script-window-host.md),
+[GC drawing](script-gc-draw-model.md), [root tick](script-window-root-tick.md),
+[projection](script-window-scene-frame.md), and [input queries](script-input-console.md).
 
-* `HUDHitDisplay.InitWindow` creates an 84×106 display. Six translucent body
-  pieces use the original textures and configurations (head 39,17,4,7;
-  torso 36,25,10,23; left/right arms 46/26,27,10,23; left/right legs
-  41/33,44,8,36). The white body outline is lowered behind those pieces.
-  Energy and breath bars are 5×55 at (15,20) and (61,20).
-* `SetHitColor` owns the 0.4-second damage flash, 1-second healing transition,
-  and 0.5-second refresh. `Window.GetColorScaled` has strict thresholds
-  0.80, 0.40, 0.10, and zero. Run these original functions, including the
-  VM's float/int/byte conversions, instead of copying their color arithmetic.
-* `ProgressBarWindow` owns value clamping, integer bar height, and color.
-  `HUDHitDisplay.Tick` reads the live player's six health fields, Energy,
-  EnergyMax and HeadRegion; it shows the breath bar only underwater.
-* `HUDCompassDisplay` is 73×40. A 55×22 clip at (13,7) contains two
-  240×15 copies of `HUDCompassTicks`. The installed Tick reads actor Rotation
-  and map TrueNorth, masks to 65535, and wraps the two strips. The bytecode uses float division for
-  `65536 / tickWidth`; float32 storage and truncation of drawPos are significant. At unchanged initial yaw zero,
-  the original Tick intentionally leaves both strips at their initial position.
-* `DeusExHUD.ConfigurationChanged` places health at (0,0), compass at
-  (0,hitHeight+4), and the crosshair at (viewport-size)/2+0.5.
-* `HUDBaseWindow.StyleChanged` reads the selected original theme and the
-  player border/background translucency flags. DrawBackground/DrawBorder
-  supply their own original texture crops; there is no replacement frame art.
+## Original behavior
 
-The previously recovered Window setters/constructor, GC tile source extents,
-clipping, color factors, and translucent/masked flags provide native evidence:
-[Window construction](script-window-construction.md),
-[GC drawing](script-gc-draw-model.md), [GC state](script-gc-state.md).
-Browser compositing is a presentation adapter. Full native HUD allocation,
-layout/focus/GC ownership and original-renderer pixel equivalence are not
-established by this bridge. Only the named HUD subset is admitted; inventory,
-weapon selection, other HUD windows and configurable root scaling remain open.
+- `DeusExHUD.InitWindow` creates ammo, hit, crosshair, object belt, active items,
+  damage, compass, multiplayer skills, information, log, frob, augmentation,
+  mission text, bark and received-item windows. `ConfigurationChanged` places
+  these windows; the browser does not reproduce that layout with constants.
+- `HUDObjectBelt` creates its ten slots with the original RadioBox/Tile families,
+  including `ORDER_LeftThenUp`. `CreateNanoKeySlot` uses slot zero. Subsequent
+  pickups enter through `DeusExPlayer.AddInventory` → root `AddInventory` →
+  `AddObjectToBelt`. Digit keys run `DeusExPlayer.ActivateBelt N`, matching
+  User.ini. Repeated slot selection is left to the original scripts.
+- Original hit/compass/ammo ticks read the live player and weapon. The original
+  health flash, energy and breath bars, compass wrapping, ammo labels and belt
+  selection draw through their own windows. `AugmentationManager.RefreshAugDisplay`
+  resumes the original post-root initialization step, including the possessed
+  AugLight icon under the installed `bHUDShowAllAugs` preference.
+- Frob brackets use original `FrobDisplayWindow.DrawWindow`, original window
+  world-to-screen conversion and an Engine scene frame populated with the
+  same camera origin, rotator and horizontal FOV as Play. The renderer currently
+  uses 75 degrees; the scene-frame module records its admitted FOVs.
+- HUD visibility, theme, border/background translucency, ammo format and log
+  settings read the supplied User.ini/DefUser.ini scalar values. A missing
+  scalar retains the compiled class default. Original theme-manager functions
+  select the colors and textures.
+- The native root chooses integer horizontal/vertical multipliers from the
+  physical drawing-buffer size using the original 640×480 threshold math.
+  Native GC clipping, glyphs, texture extents, colors and command order feed
+  the Three.js compositor. No separate in-hand icon is drawn.
 
-## Browser result and remaining boundaries
+## Explicit remaining boundaries
 
-Play now executes the installed InitWindow, SetHitColor, ProgressBarWindow and
-compass Tick bodies. The bridge constructs native Window storage using the
-existing constructor, binds script width/height to native setter storage, and
-adapts NewChild/Lower to a presentation-owned child list. Map north is supplied
-from the original map actor. That child list is not the complete native focus,
-layout, destruction or GC graph. The selected HUD panels are enabled by the
-browser; importing the user's original HUD visibility configuration is still open.
+Multiplayer is deferred by user request. `ConditionalBindMultiplayerKeys`,
+called by root initialization even in single player, is an explicit recorded
+boundary; it does not modify bindings or block the Training HUD.
 
-The final tile sink uses the same WebGL context as the world. All HUD tiles stay
-in one ordered render list: translucent background/frame first, then opaque
-portraits and masked glyphs. Source pixels and crops are preserved. The browser
-currently uses one logical HUD pixel per CSS pixel; original root multipliers
-and configuration-dependent scaling remain open.
+InfoLink and ConPlay keep their existing specialized presentation and lifecycle
+owners. They share the real root, HUD and byte heap; their delegated subtrees
+are excluded from general tree layout/tick/draw/readiness to avoid applying two
+owners to them. Native ComputerWindow cursor, fade and static interference are
+not completed by this change. Received-item presentation retains its previously
+recorded boundary. General window destruction, active focus navigation,
+window timers, menus, cursor rendering and debug overlays remain unsupported
+when reached. These are explicit errors, not silent substitute behavior.
 
-InfoLink no longer has a CSS replacement frame or system-font text. Its original
-DrawBackground/DrawBorder bytecode emits two 256/175-wide texture pieces for each
-layer, at height 114. DeusExHUD's no-visible-log placement is (hitWidth+20,0).
-The runtime's current transmission supplies its own portrait, icon and text.
-The three bitmap fonts are FontTiny, FontMenuHeaders_DS and
-FontFixedWidthSmall_DS. The renderer uses the already DLL-compared GC.DrawText
-body, including its scan, wrap, alignment, clipping, glyph coordinates, texture
-cache and PushGC/PopGC. This is a presentation bridge for ComputerWindow's text;
-its native cursor/fade/static-noise rasterization remains open. Exact whole-HUD
-pixel equivalence against the original renderer is not claimed.
+The final WebGL tile compositor is a browser adapter. Whole-renderer pixel
+identity against the original rasterizer is not established. Original 3D mesh
+lighting also remains separate from this HUD work. Window audio requests are
+recorded at their native call boundary until a playback backend is connected.
 
-### Newly resolved native boundaries
+## Focused validation
 
-`Window.SetConfiguration` native 1430: the exec at 0x10051fe0 marshals four
-floats and calls 0x1004cd40; the exported wrapper at 0x10003330 calls the same
-body. It clamps negative/unordered sizes, compares alignment then x/y/w/h,
-clears both alignment bytes, writes all four fields, and calls
-AskParentForReconfigure once. Ten original DLL cases compare all 512 object
-bytes and call counts, including unchanged, either position or size changed,
-alignment reset, negative sizes, NaN and negative zero.
-
-`UFont::Serialize` 0x10385400 calls the page-array helper at 0x10385680.
-The page helper 0x10385940 calls archive UObject-reference slot +0x18 for the
-texture, followed by the glyph-array serializer. This resolves the formerly
-opaque four-byte page header in the three selected fonts as a compact texture
-reference followed by a compact glyph count. The glyph records and final
-charsPerPage are checked against the existing decoded metrics, and each page
-loads through its actual package reference.
-
-Focused checks:
-
-    node scripts/validate-window-configuration.mjs
-    node scripts/validate-play-hud.mjs
-
-The HUD check exercises source-owned initialization/draw crops, live six-part
-health and its damage flash, energy, compass, reset, and the actual bitmap font
-page at the recovered glyph-render boundary. Browser checks cover normal
-walking, door use, successive transmissions, turning, Inspect and map changes.
+`node scripts/validate-play-hud.mjs` exercises the live original HUD tree,
+canonical root/HUD/key-ring identities, ten slots, AugLight, six live health
+fields, damage flash, energy, compass, reset, legacy InfoLink frame crops and
+original bitmap-font glyph output. Native family layout, root tick, scene frame,
+actor-reference and GC validators cover their translation boundaries against
+the shipped DLL. Browser checks additionally cover native layout, pickup/belt
+selection, frob brackets, ammo, log placement and shared dialogue behavior.

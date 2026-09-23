@@ -13,9 +13,15 @@ for(const d of ['System','Textures','Maps','Sounds','Music'])for(const n of awai
 const assets=new AssetStore(files),a=await assets.get('00_Training');
 const game=await createGame(decodeMap(a.bytes),a,assets,{randomSeed:1,presentation:true});
 const {hud}=game,runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor;
+const commands=hud.commands(960,600,{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+assert.ok(commands.length>50,'Original native tree emits HUD tiles and glyphs');
+assert.equal(hud.root,runtime.namedReference(player,'rootWindow').get());
+assert.equal(hud.hud,(await game.doors.scriptRuntime.infoLinkShell()).hud);
+assert.equal(hud.read(hud.read(hud.hud,'belt'),'objects').length,10);
+assert.equal(hud.snapshot().belt[0],runtime.namedReference(player,'KeyRing').get().name);
 assert.deepEqual(hud.rect(hud.hit),{x:0,y:0,width:84,height:106});
 assert.deepEqual(hud.rect(hud.compass),{x:0,y:110,width:73,height:40});
-assert.equal(hud.windows.length,15);
+assert.equal(hud.read(hud.read(hud.read(hud.hud,'activeItems'),'winAugsContainer'),'iconCount'),1);
 assert.deepEqual(hud.decorationCommands(hud.hit).map(c=>[c.x,c.y,c.width,c.height,c.style]),[[11,11,60,76,3],[0,0,84,106,3]]);
 for(let i=0;i<130;i++)hud.tick(1/120);
 for(const part of Object.values(hud.snapshot().health))assert.deepEqual(part,{health:100,displayedHealth:100,color:[0,255,0]});

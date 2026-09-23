@@ -377,8 +377,10 @@ $('weapon-preview').onclick = async () => {
     drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
     game.interaction.frobTarget = crowbar;
     const picked = game.use();
-    const equipped = await game.selectWeaponGroup(10);
-    toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? `${equipped.label} equipped (press 0 to select, F to frob)` : 'select with key 0'}`);
+    const belt=game.hud.read(game.hud.hud,'belt');
+    const position=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===crowbar);
+    const equipped = await game.activateBelt(position);
+    toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? `${equipped.label} equipped (press ${position} to select, F to frob)` : 'select from the object belt'}`);
   } catch (error) { pauseForRuntimeError(error); }
 };
 
@@ -476,18 +478,8 @@ document.addEventListener('keydown', event => {
     event.preventDefault();
   }
   if (/^Digit[0-9]$/.test(event.code) && !event.repeat && mode === 'play' && game && !runtimeError) {
-    // Number keys select the weapon in JC's inventory whose InventoryGroup
-    // matches (Digit0 == group 10), through the original Inventory.WeaponChange
-    // walk -> PutInHand path. When that group holds no weapon, key 1 keeps its
-    // nanokey-ring behavior (the ring's special belt slot).
-    const group = event.code === 'Digit0' ? 10 : Number(event.code.slice(5));
-    (async () => {
-      try {
-        const result = await game.selectWeaponGroup(group);
-        if (result.ok) toast(`${result.label ?? 'Weapon'} in hand`);
-        else if (event.code === 'Digit1') toast(game.selectNanoKeyRing() ? 'Nanokey ring in hand' : 'Nanokey ring put away');
-      } catch (error) { pauseForRuntimeError(error); }
-    })();
+    const position=Number(event.code.slice(5));
+    (async()=>{try{await game.activateBelt(position);}catch(error){pauseForRuntimeError(error);}})();
     event.preventDefault();
   }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
@@ -561,7 +553,7 @@ function animate(time) {
     }
     if(mode==='play'&&hudRenderer){
       const box=$('viewport').getBoundingClientRect();
-      hudRenderer.render(renderer,box.width,box.height,{shell:activeInfoLinkShell,state:activeInfoLinkShell?game.doors.scriptRuntime.dataLinkPresentation():null});
+      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,{shell:activeInfoLinkShell,state:activeInfoLinkShell?game.doors.scriptRuntime.dataLinkPresentation():null},{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
     }
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {

@@ -38,7 +38,7 @@ export function dispatchWindowHostNative(W, call) {
     case 1485: value=W.gc.get(win);break;
     case 1486: W.gc.release(win,arg(0,null));break;
     case 1487: W.setPtr(win,0x118,arg(0,null));break; // XWindow::SetClientObject 0x10003390
-    case 1489: {const vector=arg(0,null),r=W.v.convertVectorToCoordinates(win,['x','y','z'].map(k=>vector[`core.object.vector.${k}`]));out(1,r.x);out(2,r.y);value=r.visible;break;}
+    case 1489: {const vector=arg(0,null),r=W.v.convertVectorToCoordinates(win,Array.isArray(vector)?vector:['x','y','z'].map(k=>vector[`core.object.vector.${k}`]));out(1,r.x);out(2,r.y);value=r.visible;break;}
     case 1492: value=W.tickOffset();break;
     case 1510: W.setPtr(win,0x5a8,arg(0,null));break; // 0x10039390
     case 1511: for(let i=0;i<5;i++)W.setPtr(win,0x5ac+4*i,arg(i,null));break; // 0x100393a0

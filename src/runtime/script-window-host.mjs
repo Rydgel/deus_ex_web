@@ -140,13 +140,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (deusEx.pkg.exports[index - 1].className !== 'Class') continue;
     classes.set(`deusex.${path}`, await runtime.loadClass(deusEx, index));
   }
-  const core=packages.get('Core');await runtime.prepareFunction(core,core.exportsByPath.get('object.getenum'));
   const gcClass = classes.get('extension.gc');
-  for(const path of ['augmentationmanager.refreshaugdisplay','deusexplayer.clearaugmentationdisplay','deusexplayer.addaugmentationdisplay','deusexplayer.updateaugmentationdisplaystatus'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
+  for(const path of ['augmentation.gethotkey','augmentation.isactive','augmentationmanager.refreshaugdisplay','deusexplayer.clearaugmentationdisplay','deusexplayer.addaugmentationdisplay','deusexplayer.updateaugmentationdisplaystatus'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
   // These globalconfig fields are consumed by original HUD Init/UpdateSettings.
   // Keep compiled defaults where the supplied installation has no scalar.
   const config=inputConsole.config;
-  for(const name of ['bObjectBeltVisible','bHitDisplayVisible','bAmmoDisplayVisible','bDisplayAmmoByClip',
+  for(const name of ['bObjectNames','bObjectBeltVisible','bHitDisplayVisible','bAmmoDisplayVisible','bDisplayAmmoByClip',
     'bAugDisplayVisible','bCompassVisible','bCrosshairVisible','bHUDShowAllAugs',
     'bHUDBordersVisible','bHUDBordersTranslucent','bHUDBackgroundTranslucent']){
     const value=config.get('DeusEx.DeusExPlayer',name);
@@ -808,6 +807,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};
+      // Multiplayer is explicitly deferred. Original single-player InitWindow
+      // invokes this key-rebinding helper, but Training does not need it.
+      runtime.boundaryFunctions.set('deusex.deusexrootwindow.conditionalbindmultiplayerkeys',()=>{
+        boundaryLog.push({function:'DeusExRootWindow.ConditionalBindMultiplayerKeys',reason:'Multiplayer key initialization deferred'});
+      });
       return host;
     },
   };
