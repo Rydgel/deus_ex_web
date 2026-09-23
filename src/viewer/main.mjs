@@ -8,6 +8,7 @@ import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
+import { createWeaponViewModel } from './weapon-view-model.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
 
 const $ = id => document.getElementById(id);
@@ -24,6 +25,7 @@ let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null,activeInfoLinkShell=null;
 let npcPreview=null;
+let weaponViewModel=null;
 let infoLinkAudioContext=null,infoLinkAudioSources=new Set();
 const conversationAudio=new Map();
 function stopConversationAudio(id){
@@ -172,7 +174,7 @@ async function loadMap(name) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame, nextNpcPreview;
+  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -213,7 +215,9 @@ async function loadMap(name) {
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
+    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,nextGame.player.collisionActor);
     hudRenderer?.dispose();hudRenderer=nextHud;
+    weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     npcPreview=nextNpcPreview??null;
     if(npcPreview){npcPreview.root.visible=true;scene.add(npcPreview.root);}
@@ -239,6 +243,7 @@ async function loadMap(name) {
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
   } catch (error) {
+    if(nextWeaponViewModel&&nextWeaponViewModel!==weaponViewModel)nextWeaponViewModel.dispose();
     if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();
     if (nextWorld && nextWorld !== world) nextWorld.dispose();
     busy('Could not load this map', error.message);
@@ -502,6 +507,7 @@ function status() {
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: game?.status() ?? null,
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
+    weaponViewModel:weaponViewModel?.summary??null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
@@ -550,6 +556,9 @@ function animate(time) {
       if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
     }
     renderer.render(scene, camera);
+    if(mode==='play'&&weaponViewModel&&!runtimeError){
+      try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
+    }
     if(mode==='play'&&hudRenderer){
       const box=$('viewport').getBoundingClientRect();
       hudRenderer.render(renderer,box.width,box.height,{shell:activeInfoLinkShell,state:activeInfoLinkShell?game.doors.scriptRuntime.dataLinkPresentation():null});
