@@ -194,7 +194,24 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const frame=levelTickTime(timeSeconds,seconds,player.timeDilation),dt=frame.delta;
       timeSeconds=frame.timeSeconds;
       levelTime.set(frame.infoTimeSeconds);
-      doors.tick(dt); tickWalkingInteraction(interaction,dt,trace); player.tick(dt, input);hud?.tick(dt);
+      // The scripted actors tick first; the player's own route runs at the
+      // end of that level tick so the actors it owns (a drawn weapon) follow it
+      // through ULevel::Tick's deferred list (docs/script-weapon-fire.md).
+      doors.tick(dt, { tickPlayer: () => {
+        tickWalkingInteraction(interaction,dt,trace);
+        // HighlightCenterObject's result is DeusExPlayer.FrobTarget/FrobTime;
+        // original bodies (ParseLeftClick, the HUD frob display) read them.
+        const runtime = doors.scriptRuntime?.runtime;
+        if (runtime) {
+          runtime.namedReference(player.collisionActor, 'FrobTarget').set(interaction.frobTarget ?? null);
+          runtime.namedReference(player.collisionActor, 'FrobTime').set(Math.fround(interaction.frobTime));
+        }
+        player.tick(dt, input);
+        // Actor.Tick's pawn tail: FarMoveActor(Weapon, Location, 0, 0).
+        const weapon = runtime?.namedReference(player.collisionActor, 'Weapon').get();
+        if (weapon) runtime.relocateHeldItem(weapon, player.position);
+      } });
+      hud?.tick(dt);
     },
     reset() {
       // Reseed before doors.reset() replays NPC startup: SpawnShadow/AttachDecal
@@ -273,6 +290,30 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         return { ok: false, message: 'Nothing selected' };
       const target = describeTarget(actor);
       return target?.mover ? doors.use(target, player.position, hand) : { ok: false, message: target?.label ?? 'Nothing selected' };
+    },
+    // LeftMouse and Enter are bound to `ParseLeftClick|Fire` in the installed
+    // User.ini, and its Fire alias is `Button bFire | Fire`: a press runs the
+    // ParseLeftClick exec, raises the bFire button byte, then runs the Fire
+    // exec (DeusExPlayer.Fire -> PlayerPawn.Fire -> Weapon.Fire). Release
+    // clears bFire, which DeusExWeapon.Finish reads to swing again while held.
+    // A key ring/lockpick used on a targeted door keeps the host door route
+    // (the same DoFrob(Self, inHand) branch of ParseLeftClick, plus its door
+    // display bookkeeping), then Fire runs as the binding does.
+    pressFire() {
+      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
+      const actor = interaction.frobTarget;
+      const hand = runtime.namedReference(pawn, 'inHand').get();
+      const key = hand ? runtime.instance(hand).cls.record.key : '';
+      let result = { ok: false, message: '' };
+      if (actor?.lineage?.includes('engine.mover') && (key === 'deusex.nanokeyring' || key === 'deusex.lockpick'))
+        result = game.useHeld();
+      else runtime.processEvent(pawn, 'ParseLeftClick', []);
+      runtime.namedReference(pawn, 'bFire').set(1);
+      runtime.processEvent(pawn, 'Fire', [0]);
+      return result;
+    },
+    releaseFire() {
+      doors.scriptRuntime.runtime.namedReference(player.collisionActor, 'bFire').set(0);
     },
     // Object-belt selection is still the HUD. This calls the original
     // PutInHand/UpdateInHand pair those belt slots use for the key ring.

@@ -86,8 +86,11 @@ or push further hosting updates unless the user asks.
   `PutInHand`/`UpdateInHand`/`SwitchWeapon`/`BringUp`/`PlaySelect` path (number
   keys map to weapon groups; the `Crowbar preview` button places JC beside the
   Training weapons, picks up the crowbar and equips it), and the HUD shows the
-  in-hand item. The first-person view-model rendering and weapon fire / crate
-  breaking remain unfinished. See [weapon equip](docs/script-weapon-equip.md).
+  in-hand item. Left click or Enter now swings the crowbar through the original
+  ticked weapon states and mesh notify, reaching crate damage (10 → 4 HP).
+  Hit-effect spawning, crate destruction and first-person view-model rendering
+  remain unfinished. See [weapon equip](docs/script-weapon-equip.md) and
+  [weapon fire evidence](docs/script-weapon-fire.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.

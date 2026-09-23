@@ -136,7 +136,7 @@ function setMode(next) {
   keys.clear();
   if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
   $('play-hint').textContent = '';
-  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · 1 nanokey ring · Enter use ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
+  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Click or Enter fire / use item in hand · 1 nanokey ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
 }
 function useDoor() {
@@ -435,9 +435,29 @@ function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
 }
-$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus(); if (event.button === 2) useDoor(); else { drag = true; $('scene').setPointerCapture(event.pointerId); } } };
+// LeftMouse is bound to `ParseLeftClick|Fire` (installed User.ini). With the
+// pointer locked, press/release are the button edges; unlocked, left-drag
+// stays mouse look and a click without movement fires on release.
+let clickStart = null;
+function pressFire() {
+  if (mode !== 'play' || !game || loading || runtimeError) return;
+  try { const result = game.pressFire(); if (result?.message) toast(result.message); }
+  catch (error) { pauseForRuntimeError(error); }
+}
+function releaseFire() {
+  if (mode !== 'play' || !game || loading) return;
+  try { game.releaseFire(); } catch (error) { pauseForRuntimeError(error); }
+}
+$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus(); if (event.button === 2) useDoor(); else if (event.button === 0 && document.pointerLockElement === $('scene')) pressFire(); else { drag = true; clickStart = { x: event.clientX, y: event.clientY }; $('scene').setPointerCapture(event.pointerId); } } };
 $('scene').oncontextmenu = event => event.preventDefault();
-$('scene').onpointerup = () => { drag = false; };
+$('scene').onpointerup = event => {
+  drag = false;
+  if (event.button !== 0) return;
+  if (document.pointerLockElement === $('scene')) { releaseFire(); return; }
+  const moved = clickStart && Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y);
+  clickStart = null;
+  if (moved !== null && moved < 4) { pressFire(); releaseFire(); }
+};
 $('scene').onpointercancel = () => { drag = false; };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
 document.addEventListener('pointermove', event => { if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
@@ -445,9 +465,9 @@ document.addEventListener('keydown', event => {
   if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
+  // Enter shares LeftMouse's `ParseLeftClick|Fire` binding.
   if (event.code === 'Enter' && !event.repeat && mode === 'play' && game && !runtimeError) {
-    try { const result = game.useHeld(); if (result.message) toast(result.message); }
-    catch (error) { pauseForRuntimeError(error); }
+    pressFire();
     event.preventDefault();
   }
   if (/^Digit[0-9]$/.test(event.code) && !event.repeat && mode === 'play' && game && !runtimeError) {
@@ -473,7 +493,7 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
-document.addEventListener('keyup', event => keys.delete(event.code));
+document.addEventListener('keyup', event => { keys.delete(event.code); if (event.code === 'Enter') releaseFire(); });
 window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; });
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) paused = true; });
 function status() {
