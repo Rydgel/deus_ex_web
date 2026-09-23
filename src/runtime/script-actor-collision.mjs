@@ -101,7 +101,7 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   lineage:{value:Object.freeze([...lineage])},
   worldActor:{value:worldActor},
   values:{value:values},collisionValues:{value:values},
-  model:{value:null},movingBrush:{value:false},projectile:{value:false},
+  model:{value:null},movingBrush:{value:false},projectile:{value:lineage.includes('engine.projectile')},
   controlledPlayer:{value:false},isPawn:{value:false},
   // moveQuery's source-type gate marker: a spawned script-actor collision
   // view admitted to the recovered MoveActor translation. `pawn`/`decoration`

@@ -157,6 +157,13 @@ export function constructWeapon(object) {
   object.nativeVtable=0x104287a4;
 }
 
+/** AProjectile body 0x103442e0: UObject then the final vtable; all inline
+ * FName/FPlane/FString ENoInit constructors preserve default-copied bytes. */
+export function constructProjectile(object) {
+  object.nativeVtable=0x10179dfc;
+  object.nativeVtable=0x10428850;
+}
+
 /** ADecal's original ctor 10331090 clears only its native SurfList header
  * beyond the inherited construction, then installs vtable 10426f74.
  * decalSurfaces is bound to the same reflected SurfList by the spawn host.
@@ -177,6 +184,7 @@ export function nativeConstructorFor(selection){
   if(constructor===0x10302dab)return constructActorBase;
   if(constructor===0x1030299b)return constructInventory;
   if(constructor===0x10302ef5)return constructWeapon;
+  if(constructor===0x103014e7)return constructProjectile;
   if(constructor===0x10303a26)return constructDecal;
   throw new Error('Original constructor selection is not implemented');
 }

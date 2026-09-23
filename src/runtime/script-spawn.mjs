@@ -1,3 +1,4 @@
+import {projectileConstructorChain, projectileSelection} from './script-projectile-construction.mjs';
 import {refValue} from './script-vm.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
 import {INVENTORY_CONSTRUCTION, resolveInheritedInventoryConstructorChain} from './script-inventory-construction.mjs';
@@ -329,9 +330,8 @@ function selectInventoryConstructor(cls,chain,services) {
  * Physics in {0,5}) between SetInitialState and PostPostBeginPlay.
  */
 export function spawnScriptInventoryActor(args,services) {
-  const {cls,level,name,owner,instigator,location,rotation}=args;
-  const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
-    processEvent,setActorZone,validate}=services;
+  const {cls}=args;
+  const {validate}=services;
   if(spawnActorRejectedByGates(args,services))return null;
   const chain=inventoryConstructorChain(cls);
   if(!chain)
@@ -339,6 +339,27 @@ export function spawnScriptInventoryActor(args,services) {
   if(typeof validate!=='function'||validate(args)!==true)
     throw new Error('SpawnActor requires verified native defaults and complete world bindings');
   const selected=selectInventoryConstructor(cls,chain,services);
+  return spawnCollisionActor(args,services,selected,false);
+}
+
+/** AProjectile inherits Actor startup; its placement branch is recovered at
+ * 0x103950fb–0x103951b6 (docs/script-crate-destruction.md). */
+export function spawnScriptProjectileActor(args,services) {
+  if(spawnActorRejectedByGates(args,services))return null;
+  if(!projectileConstructorChain(args.cls))throw new Error('Unverified Projectile constructor chain');
+  if(services.validate?.(args)!==true)throw new Error('Projectile spawn world is not verified');
+  const expected=projectileSelection(args.cls,linkedPropertiesSize(args.cls));
+  const selected=services.resolveConstructor(args.cls);
+  for(const key of ['classKey','inherited','constructor','nativeVtable','propertiesSize'])
+    if(selected?.[key]!==expected[key])throw new Error('Projectile constructor binding differs from original');
+  return spawnCollisionActor(args,services,selected,true);
+}
+
+function spawnCollisionActor(args,services,selected,projectile) {
+  const {cls,level,name,owner,instigator,rotation}=args;
+  const location=args.location.slice();
+  const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
+    processEvent,setActorZone}=services;
   if(!Array.isArray(level.actors)||!level.actors[0]||!level.nativeObject?.outer)
     throw new Error('SpawnActor requires LevelInfo and the native level Outer package');
   if(level.editor||level.undo!==null||level.spawnTracking!==false)
@@ -346,9 +367,15 @@ export function spawnScriptInventoryActor(args,services) {
   if(typeof level.tickParity!=='boolean'||typeof level.spawnNotifyGuard?.active!=='boolean')
     throw new Error('SpawnActor requires level tick parity and the global notification guard');
   // 0x103950fb-0x103951ae: bCollideWorld or bCollideWhenPlacing class defaults
-  // would route through ULevel::FindSpot (+0xb0). Both are clear on the
-  // admitted class; keep the unimplemented branch explicit like the shared path.
-  if(defaultRead(cls,'bCollideWorld')||defaultRead(cls,'bCollideWhenPlacing'))
+  // route through ULevel::FindSpot (+0xb0). Admitted Inventory defaults
+  // keep these clear; Projectile defaults exercise the recovered branch.
+  if(projectile){
+    if(defaultRead(cls,'bCollideWorld')||(defaultRead(cls,'bCollideWhenPlacing')&&read(level.actors[0],'NetMode')!==3)){
+      if(typeof level.findSpot!=='function')throw new Error('Projectile placement requires FindSpot');
+      const radius=defaultRead(cls,'CollisionRadius'),height=defaultRead(cls,'CollisionHeight');
+      if(!level.findSpot([radius,radius,height],location,0,1))return null;
+    }
+  }else if(defaultRead(cls,'bCollideWorld')||defaultRead(cls,'bCollideWhenPlacing'))
     throw new Error('SpawnActor Inventory FindSpot placement is not implemented');
   const index=level.actors.length;
   level.actors.push(null);
