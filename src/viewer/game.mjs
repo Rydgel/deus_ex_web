@@ -170,12 +170,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     : actor.lineage?.includes('deusex.scriptedpawn')
       ? {actor,label:doors.scriptRuntime.runtime.namedReference(actor,'FamiliarName').get()}
       : { actor, label: itemLabel(actor) };
-  notes.push('First playable subset: movement, translating TriggerToggle doors, pushable-decoration bumps, and frob interactions (a LightSwitch toggles its TriggerLights). Item pickup, weapon use, mission-trigger scripts and locked keypad doors remain incomplete.');
-  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Their meshes now render texture-only in Play; item pickup and weapon use are not yet supported.`);
-  // Original in-hand toggle: PutInHand sets inHandPending, UpdateInHand runs the
-  // transition (a weapon draws through SwitchWeapon -> ChangedWeapon -> BringUp).
-  // Passing the item selects it; passing it again while it is already
-  // in/pending hand puts it away, exactly as a belt slot re-press does.
+  notes.push('Training Play supports movement, translating doors, decoration physics, frob interactions, item pickup and weapon use. Mission progression remains incomplete.');
+  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Original mesh lighting remains incomplete.`);
+  // Legacy research helper: choose item/None before original PutInHand and
+  // UpdateInHand. Its toggle is host policy, not the original belt-key path;
+  // user digits below call ActivateBelt without changing its argument.
   const putInHandToggle = item => {
     const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
     const hand = runtime.namedReference(pawn, 'inHand').get();
@@ -318,8 +317,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     releaseFire() {
       doors.scriptRuntime.runtime.namedReference(player.collisionActor, 'bFire').set(0);
     },
-    // Object-belt selection is still the HUD. This calls the original
-    // PutInHand/UpdateInHand pair those belt slots use for the key ring.
+    // Legacy research helper for headless checks; Play uses ActivateBelt(0).
     selectNanoKeyRing() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
       const ring = runtime.namedReference(pawn, 'KeyRing').get();

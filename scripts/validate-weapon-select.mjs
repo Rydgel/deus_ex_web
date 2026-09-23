@@ -82,7 +82,7 @@ assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'no actor failures whil
 // the put-away animation (Active -> DownWeapon -> Weapon None), so inHand only
 // clears across later frames; the pending target flips immediately. Assert the
 // request was honored (inHandPending cleared), not that the weapon vanished in
-// one call — that per-frame drive-down is the recorded next boundary.
+// one call. The native HUD integration test checks the per-frame drive-down.
 await game.selectItem(crowbar);
 assert.equal(get(player,'inHandPending'),null,'re-selecting the in-hand crowbar requests it be put away');
 assert.equal(get(player,'inHand'),crowbar,'the crowbar stays drawn until the put-away animation ticks down');
@@ -90,7 +90,7 @@ assert.equal(get(player,'inHand'),crowbar,'the crowbar stays drawn until the put
 // No startup or tick failures were introduced.
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'no actor failures after selection');
 
-// The nanokey ring's number-1 selection still works through the shared path.
+// The legacy nanokey ring research helper still works through the shared path.
 game.reset();
 assert.equal(game.selectNanoKeyRing(),true,'the nanokey ring still selects into hand after reset');
 

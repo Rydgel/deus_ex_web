@@ -29,6 +29,7 @@ import {
   setActorCollision, setActorCollisionSize, setActorPhysics,
 } from './script-actor-collision.mjs';
 import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim, execTweenBlendAnim } from './play-anim.mjs';
+import { execGetAnimGroup } from './script-get-anim-group.mjs';
 import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
@@ -2216,6 +2217,10 @@ export class ScriptRuntime {
       if(lower(view.AnimSequence)==='none')return 0;
       return (view.AnimFrame<0?view.TweenRate===0:view.AnimRate!==0)?1:0;
     }
+    if(call.index===293)return execGetAnimGroup(call,{
+      mesh:()=>this.meshPayload(call.receiver),
+      log:(kind,details)=>this.warning?.({type:'GetAnimGroup',kind,...details}),
+    });
     if([259,260,294].includes(call.index)){
       const name=call.index===259?'PlayAnim':call.index===260?'LoopAnim':'TweenAnim';
       if(call.index===294?call.argumentCount!==2:call.argumentCount<1||call.argumentCount>(call.index===260?4:3))

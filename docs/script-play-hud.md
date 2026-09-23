@@ -22,7 +22,9 @@ binaries and captures remain local and ignored. See [host evidence](script-windo
   including `ORDER_LeftThenUp`. `CreateNanoKeySlot` uses slot zero. Subsequent
   pickups enter through `DeusExPlayer.AddInventory` → root `AddInventory` →
   `AddObjectToBelt`. Digit keys run `DeusExPlayer.ActivateBelt N`, matching
-  User.ini. Repeated slot selection is left to the original scripts. The
+  User.ini. The original root passes the slot item directly to PutInHand:
+  repeating a populated slot retains that item; selecting an empty slot
+  requests None and puts the held item away. The
   existing player scheduler now calls `UpdateInHand` before movement: original
   `PlayerWalking.PlayerTick` calls it through `MultiplayerTick` (which also
   serves single player) before `Super.PlayerTick`. This resumes the hand
