@@ -628,6 +628,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   W.native = {
     configureChild, askParentForReconfigure, setVisibility, setChildVisibility,
     setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
+    makeAcceleratorTableDirty: win => T.makeAcceleratorTableDirty(W, win),
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),
     removeWindowFromTables: (tabGroup, win) => F.removeWindowFromTables(W, tabGroup, win),
     safeDestroy: win => safeDestroy(win),

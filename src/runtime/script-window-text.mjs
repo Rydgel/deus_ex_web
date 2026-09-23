@@ -156,12 +156,18 @@ export function setAcceleratorKeyNative(window,key,services={}){
   return value;
 }
 
-/** XWindow::SetAcceleratorText scans the first UTF-16 "|&" marker. */
+/** XWindow::SetAcceleratorText 0x1004f310 scans UTF-16 units for "|&". A '|'
+ * whose next unit is not '&' also consumes that unit (0x1004f34f then
+ * 0x1004f378 each add 2), so "||&k" yields no key. A final '|' steps past the
+ * terminator into unrelated heap bytes; that read is not reproduced. */
 export function setAcceleratorTextNative(window,value,services={}){
   const text=value===null?'':textValue(value,'accelerator text');
   let key=0;
-  for(let index=0;index<text.length;index++)if(text.charCodeAt(index)===0x7c&&text.charCodeAt(index+1)===0x26){
-    key=text.charCodeAt(index+2)||0;break;
+  for(let index=0;index<text.length;){
+    if(text.charCodeAt(index++)!==0x7c)continue;
+    if(index===text.length)throw new Error('XWindow::SetAcceleratorText reads past the terminator after a final "|"');
+    if(text.charCodeAt(index++)!==0x26)continue;
+    key=text.charCodeAt(index)||0;break;
   }
   return setAcceleratorKeyNative(window,key,services);
 }

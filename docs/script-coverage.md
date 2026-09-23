@@ -27,10 +27,38 @@ their named/native-hook route; they cannot be treated as one shared native-zero
 implementation. The inventory does not resolve every virtual call or count its
 runtime frequency.
 
-The report lists the VM's primitive indices and explicitly scoped bindings for
-the common runtime, triggers, doors, decorations, sound, animation, windows,
-conversation and other adapters. A listed binding does not establish every
-branch of that native.
+The report counts a direct native index as supported only when the VM has a
+dispatch path for it: the primitive switch in `script-vm.mjs`, or a branch in
+one of the runtime's native dispatch sites (`ScriptRuntime.invokeNative`, its
+latent-poll and iterator routes, the installed window host, the Play host
+`nativeCall` and its trigger/ConPlay handlers, and the player-log, HUD and
+overlay native overrides). The script reads those site bodies with comments and
+string contents blanked, so it cannot count an index that only a comment or
+module metadata names. `bindings` keeps the catalogued scope for the common
+runtime, triggers, doors, decorations, sound, animation, windows and
+conversation, attaches each entry's dispatch sites, and lists routed indices
+that have no catalogued scope under `dispatched`. A catalogued entry with no
+dispatch site makes the script exit nonzero. A listed binding does not
+establish every branch of that native.
+
+The 2026-09-23 inventory routes **324 of the 581** direct indices (115
+primitives, 209 through dispatch sites), covering 37,975 of 39,280 decoded
+direct call sites. **257 indices (1,305 call sites) have no dispatch path.**
+Nineteen of the routed indices are this date's window-host additions, verified
+together by the [differential exec-body harness](native-exec-diff.md). The
+first corrected count, before those additions, was 305/276. That replaced an
+earlier count of 295/286, which came from a scan of `nativeIndex:` module
+declarations. That scan counted 51 direct indices whose
+translated modules are imported only by their own validators, mainly the
+ListWindow, EditWindow, button/checkbox and TextWindow setters and
+`Window.IsKeyDown`. It missed 62 indices the runtime does dispatch, such as
+LoopAnim 260, TweenAnim 294, AICanSee 705, AIPickRandomDestination 709 and
+the alliance natives 2105-2107. The report now lists such modules under
+`translatedWithoutDispatch` (now 68 modules, 45 of them direct indices with 600
+call sites); they become supported only when a dispatch site routes them. The
+most-called indices still unsupported are `Window.IsKeyDown` 1470 (53 call
+sites), `Object.SaveConfig` 536 (49), `TextWindow.GetText` 1552 (47),
+`TextWindow.AppendText` 1551 (40) and the ListWindow row/column natives.
 For example, mover SetPhysics only accepts an already active MovingBrush mode,
 and PlaySound records a deferred effect without producing audio. Stage 2 contains
 additional recovered engine helpers whose general script call bindings remain
