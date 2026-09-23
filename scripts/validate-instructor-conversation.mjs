@@ -21,7 +21,8 @@ const get=(o,k)=>runtime.namedReference(o,k).get(),live=name=>level.actors.find(
 const idle={forward:0,right:0,yaw:0,pitch:-.3,jump:false,crouch:false,walk:false};
 const tick=(n=1,input=idle)=>{for(let i=0;i<n;i++)game.tick(1/60,input);};
 const shell=await host.infoLinkShell(),hud=await createHudRenderer(game.hud,assets,shell);
-const render=()=>hud.render({clearDepth(){},render(){}},1000,700);
+const render=()=>hud.render({clearDepth(){},render(){}},1000,700,null,
+ {location:game.player.eye,rotation:game.player.viewRotation,fov:75});
 const preview=await createTrainingNpcPreview(runtime,assets,asset,{kernel:null});
 assert.equal(preview.summary.errors.length,0,JSON.stringify(preview.summary.errors));
 assert.equal(preview.actors.length,18);
