@@ -1888,6 +1888,9 @@ export async function createScriptDoors({
     await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
     playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
       player:playerActor,warning:message=>callbacks.warning?.(message)});
+    // ConstructRootWindow belongs to the possessing viewport. The root's
+    // original ConsoleCommand calls must already see that UPlayer identity.
+    runtime.namedReference(playerActor,'Player').set(level.engine.client.viewports[0]);
     const {createWindowHost}=await import('./script-window-host.mjs');
     windowHost=await createWindowHost({runtime,assets,player:playerActor});
     windowHost.install();windowHost.constructRootWindow(playerActor);
