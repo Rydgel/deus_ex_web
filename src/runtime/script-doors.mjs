@@ -11,6 +11,7 @@ import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers
 import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
+import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
 import { setActorCollisionSize, findActorBase } from './script-actor-collision.mjs';
@@ -1537,6 +1538,7 @@ export async function createScriptDoors({
     }});
 
   function reset() {
+    playerLogs?.reset();
     // Player start reloads the map and its inventory. Reuse the native window
     // tree, but clear its belt through the original helper before the new
     // KeyRing GiveTo/AddInventory path publishes the replacement in slot 0.
@@ -1881,7 +1883,7 @@ export async function createScriptDoors({
     return records.length;
   }
 
-  let windowHost=null;
+  let windowHost=null,playerLogs=null;
   if(nativeHud){
     // HUD.InitWindow reads the initialized augmentation/theme/inventory
     // graph. Allocate that actor world before the native root is constructed.
@@ -1894,6 +1896,8 @@ export async function createScriptDoors({
     const {createWindowHost}=await import('./script-window-host.mjs');
     windowHost=await createWindowHost({runtime,assets,player:playerActor});
     windowHost.install();windowHost.constructRootWindow(playerActor);
+    playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
+    playerLogs.enableMessages();
   }
   const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost});
   liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
@@ -1964,7 +1968,7 @@ export async function createScriptDoors({
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures,
-    infoLinkShell,playerStartup,windowHost,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
+    infoLinkShell,playerStartup,windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
 
