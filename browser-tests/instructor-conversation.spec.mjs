@@ -43,7 +43,7 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
   const t=r.levelFor(p).actors.find(a=>a?.name==='UNATCOTroop3'),loc=r.namedReference(t,'Location').get();
   g.collision.queries.changeActor(p,()=>{g.player.position=[loc[0]-80,loc[1],loc[2]];g.player.velocity=[0,0,0];});f.aim();
  });
- await page.getByRole('button',{name:'Instructor preview',exact:true}).click();
+ await page.getByLabel('Preview',{exact:true}).selectOption('instructor');
  await page.waitForFunction(()=>{
   const g=window.__instructorFixture.game(),r=g.doors.scriptRuntime.runtime;
   const t=r.levelFor(g.player.collisionActor).actors.find(a=>a?.name==='UNATCOTroop3');

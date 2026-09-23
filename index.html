@@ -15,11 +15,14 @@
         <select id="mode" aria-label="Movement mode"><option value="play">Play</option><option value="inspect">Inspect</option></select>
         <button id="choose">Choose game folder</button>
         <button id="reset" disabled>Player start</button>
-        <button id="light-preview" hidden>Light switch preview</button>
-        <button id="dark-door-preview" hidden>Dark door preview</button>
-        <button id="npc-preview" hidden>NPC mesh preview</button>
-        <button id="instructor-preview" hidden title="Reset Play beside the Training instructor to test interaction">Instructor preview</button>
-        <button id="weapon-preview" hidden title="Reset Play beside the Training weapons: pick up the crowbar and equip it">Crowbar preview</button>
+        <select id="preview" hidden aria-label="Preview" title="Jump to a Training test setup">
+          <option value="" selected>Previews…</option>
+          <option value="light">Light switch</option>
+          <option value="dark-door">Dark-room doors</option>
+          <option value="npc">NPC meshes</option>
+          <option value="instructor" title="Reset Play beside the Training instructor to test interaction">Instructor</option>
+          <option value="weapon" title="Reset Play beside the Training weapons: pick up the crowbar and equip it">Crowbar and crates</option>
+        </select>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
       </div>
       <input id="folder" type="file" webkitdirectory multiple hidden />

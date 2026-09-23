@@ -229,11 +229,9 @@ async function loadMap(name) {
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
-    $('light-preview').hidden = !game || name !== '00_Training';
-    $('dark-door-preview').hidden = !game || name !== '00_Training';
-    $('npc-preview').hidden = !npcPreview?.npcActors?.length;
-    $('instructor-preview').hidden = !game || name !== '00_Training';
-    $('weapon-preview').hidden = !game || name !== '00_Training';
+    const training = Boolean(game) && name === '00_Training';
+    setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
+      instructor: training, weapon: training});
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
@@ -309,8 +307,22 @@ $('camera-form').onsubmit = event => {
   catch (error) { toast(error.message); }
 };
 
-// Viewer-only preview navigation. The actual light change still executes the
-// original switch Frob and TriggerLight state scripts in the shared game host.
+// Viewer-only preview navigation, grouped in one toolbar menu. Each entry runs
+// its handler below; the menu returns to its placeholder after every choice.
+const previews = {};
+function setPreviewsAvailable(available) {
+  const menu = $('preview');
+  for (const option of menu.options) if (option.value) option.hidden = option.disabled = !available[option.value];
+  menu.value = ''; menu.hidden = ![...menu.options].some(option => option.value && !option.disabled);
+}
+$('preview').onchange = event => {
+  const run = previews[event.target.value];
+  event.target.value = ''; $('scene').focus();
+  void run?.();
+};
+
+// The actual light change still executes the original switch Frob and
+// TriggerLight state scripts in the shared game host.
 function hideNpcFocus(){
   // Camera controls are optional; authored NPC meshes remain in the scene.
   $('npc-preview-label').hidden=true;
@@ -326,7 +338,7 @@ function focusNpcPreview(name){
   $('npc-preview-label').hidden=false;togglePanel(false);
 }
 $('npc-focus').onchange=event=>focusNpcPreview(event.target.value);
-$('npc-preview').onclick=()=>{
+previews.npc=()=>{
   if(!npcPreview||loading)return;
   // Inspection camera only: do not teleport JC or start an invented idle.
   focusNpcPreview($('npc-focus').value);
@@ -334,7 +346,7 @@ $('npc-preview').onclick=()=>{
 
 // Viewer test navigation only. Original startup, targeting and Frob still run;
 // no keys, doors, flags, target or conversation state are assigned here.
-$('instructor-preview').onclick=()=>{
+previews.instructor=()=>{
   if(!game||loading||currentMap!=='00_Training')return;
   try{
     setMode('play');resetCamera();
@@ -357,10 +369,10 @@ $('instructor-preview').onclick=()=>{
 // Places Play beside the Training weapon crate, picks up the crowbar through the
 // public frob path, equips its original belt slot, then faces the adjacent crates.
 // The crowbar and crates sit past the locked keypad doors that the training
-// scripts open; this is the same curated placement the other preview buttons use
+// scripts open; this is the same curated placement the other previews use
 // (changeActor next to the target). Real gameplay reaches them by walking once
 // those doors open.
-$('weapon-preview').onclick = async () => {
+previews.weapon = async () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
     setMode('play'); resetCamera();
@@ -393,7 +405,7 @@ $('weapon-preview').onclick = async () => {
   } catch (error) { pauseForRuntimeError(error); }
 };
 
-$('light-preview').onclick = () => {
+previews.light = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
     const runtime=game.doors.scriptRuntime.runtime;
@@ -412,9 +424,9 @@ $('light-preview').onclick = () => {
 };
 
 // Viewer navigation for the newly admitted original TriggerToggle pair. The
-// button uses the normal game.use path; opening/closing and empty padoor fanout
+// preview uses the normal game.use path; opening/closing and empty padoor fanout
 // remain owned by the installed Mover bytecode.
-$('dark-door-preview').onclick = () => {
+previews['dark-door'] = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
     const pair=game.collision.movers.filter(mover=>
