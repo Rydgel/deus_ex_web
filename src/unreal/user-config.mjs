@@ -49,3 +49,27 @@ export async function readGlobalConfigBool(files, section, key, fallback = false
   }
   return fallback;
 }
+
+/** Prepared scalar view shared by the input/HUD hosts. A missing property is
+ * undefined, so callers can retain the original class default. Existing empty
+ * values intentionally suppress the fallback, like the boolean reader above. */
+export async function readUserConfig(files) {
+  const sources=[];
+  for(const leaf of ['User.ini','DefUser.ini']){
+    const file=findConfigFile(files,leaf);
+    if(file)sources.push({file:leaf,text:await readText(file)});
+  }
+  return {available:sources.length>0,files:sources.map(source=>source.file),
+    get(section,key){
+      for(const source of sources){
+        const value=parseIniValue(source.text,section,key);
+        if(value!==undefined)return value;
+      }
+      return undefined;
+    },
+  };
+}
+
+export async function readUserConfigValue(files,section,key,fallback=undefined) {
+  return (await readUserConfig(files)).get(section,key)??fallback;
+}

@@ -6,8 +6,10 @@ export class AssetStore {
   constructor(files) {
     this.files = new Map();
     this.packages = new Map();
+    this.configFiles = [];
     for (const file of files) {
       const leaf = file.path.replaceAll('\\', '/').split('/').pop();
+      if (/\.ini$/i.test(leaf)) this.configFiles.push(file);
       if (!/\.(u|utx|dx|unr|uax|umx)$/i.test(leaf)) continue;
       const name = leaf.replace(/\.[^.]+$/, '');
       const key = name.toLowerCase();
