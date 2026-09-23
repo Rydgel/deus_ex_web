@@ -22,7 +22,10 @@ export function dispatchWindowHostNative(W, call) {
       W.setF32(win,0xf8,arg(2,-1));W.setF32(win,0xfc,arg(3,-1));
       const color=arg(4,null);W.setU32(win,0x100,color?packed(color):0x00ffffff);break;
     }
-    case 1469: value=String(arg(0,'')).split('\0',1)[0].replaceAll('|n','\n');break; // 10050710: other | pairs copy unchanged.
+    case 1469: { // 10050710 scans pairs: |n becomes LF; other | pairs stay literal.
+      const text=String(arg(0,'')).split('\0',1)[0];value='';
+      for(let i=0;i<text.length;i++){const c=text[i];if(c!=='|'){value+=c;continue;}const next=text[++i];value+=next==='n'?'\n':('|'+(next??''));}break;
+    }
     case 1462: T.resizeChild(W,win);break;
     case 1463: value=T.queryPreferredWidth(W,win,arg(0,0));break;
     case 1464: value=T.queryPreferredHeight(W,win,arg(0,0));break;

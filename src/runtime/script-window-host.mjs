@@ -52,6 +52,8 @@ import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
 import {rootTickNative} from './script-window-root-tick.mjs';
+import {createWindowActorRefDispatcher} from './script-window-actor-refs.mjs';
+import {writeWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {setToggleNative} from './script-window-toggle-set.mjs';
 import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
 
@@ -140,6 +142,25 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   }
   const core=packages.get('Core');await runtime.prepareFunction(core,core.exportsByPath.get('object.getenum'));
   const gcClass = classes.get('extension.gc');
+  for(const path of ['augmentationmanager.refreshaugdisplay','deusexplayer.clearaugmentationdisplay','deusexplayer.addaugmentationdisplay','deusexplayer.updateaugmentationdisplaystatus'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
+  // These globalconfig fields are consumed by original HUD Init/UpdateSettings.
+  // Keep compiled defaults where the supplied installation has no scalar.
+  const config=inputConsole.config;
+  for(const name of ['bObjectBeltVisible','bHitDisplayVisible','bAmmoDisplayVisible','bDisplayAmmoByClip',
+    'bAugDisplayVisible','bCompassVisible','bCrosshairVisible','bHUDShowAllAugs',
+    'bHUDBordersVisible','bHUDBordersTranslucent','bHUDBackgroundTranslucent']){
+    const value=config.get('DeusEx.DeusExPlayer',name);
+    if(value!==undefined)runtime.namedReference(player,name).set(/^(true|1)$/i.test(value));
+  }
+  for(const [name,convert] of [['logTimeout',Math.fround],['maxLogLines',v=>Number(v)&255],
+    ['translucencyLevel',v=>Number(v)&255],['MenuThemeName',String],['HUDThemeName',String]]){
+    const value=config.get('DeusEx.DeusExPlayer',name);
+    if(value!==undefined)runtime.namedReference(player,name).set(convert(value));
+  }
+  const themeManager=runtime.namedReference(player,'ThemeManager').get();
+  if(themeManager)for(const prefix of ['Menu','HUD'])runtime.dispatchSpawnedEvent(themeManager,`Set${prefix}ThemeByName`,[runtime.namedReference(player,`${prefix}ThemeName`).get()]);
+  for(const path of ['deusexplayer.activatebelt','deusexplayer.restrictinput'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
+
 
   // ------------------------------------------------------------------
   // Native heap with resource images for textures and fonts.
@@ -663,11 +684,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   // Lifecycle published to the shared runtime natives (windowLifecycle).
   // ------------------------------------------------------------------
+  const actorRefs=createWindowActorRefDispatcher(W,{isDeleted:actor=>runtime.namedReference(actor,'bDeleteMe').get()});
   const lifecycle = {
     host: null,
     errorDevice: {name: 'GError'},
     isScriptable: () => true,
     handleNative: call => {
+      const reference=actorRefs(call);if(reference.handled)return reference;
       const input=inputConsole.playerConsoleCommand(call);if(input.handled)return input;
       const gc=dispatchGcNative(heap,gcServices,call);
       return gc.handled?gc:dispatchWindowHostNative(W,call);
@@ -707,7 +730,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   };
   const drawCommands=[];
   const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x80);
-  const viewport=heap.allocRaw(0xc0),node=heap.allocRaw(0x300),renderInterface=heap.allocRaw(4),renderTable=heap.allocRaw(0x100),canvasTable=heap.allocRaw(0x60);
+  const sceneFrame={name:'HUDSceneFrame'};heap.allocate(sceneFrame,0x300);
+  const viewport=heap.allocRaw(0xc0),node=heap.addressOf(sceneFrame),renderInterface=heap.allocRaw(4),renderTable=heap.allocRaw(0x100),canvasTable=heap.allocRaw(0x60);
   const put=(at,off,value,kind='u32')=>heap.mem.write(at+off,kind,value);
   W.setU32(canvas,0,canvasTable);put(canvasTable,0x5c,4);
   W.setU32(canvas,0x78,viewport);W.setU32(canvas,0x7c,node);put(node,0,viewport);
@@ -761,6 +785,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     processScript(root, 'InitWindow', [], {checked: true});
     setVisibility(root, true);
     host.root=root;host.hud=runtime.namedReference(root,'hud').get();
+    const augManager=runtime.namedReference(pawn,'AugmentationSystem').get();
+    if(augManager)runtime.dispatchSpawnedEvent(augManager,'RefreshAugDisplay',[]);
     return root;
   }
 
@@ -774,7 +800,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,
     tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
-    draw(root,width,height){
+    draw(root,width,height,view){
+      if(view){writeWindowSceneFrame(W,node,{...view,width,height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
       drawCommands.length=0;T.paintWindows(W,root,canvas);return drawCommands.slice();

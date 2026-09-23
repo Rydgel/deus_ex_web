@@ -107,11 +107,12 @@ export function dispatchGcNative(heap,services,call) {
  const a=raw.map(refValue),set=(i,v)=>{if(raw[i]?.reference)raw[i].set(v);};
  let value;
  switch(call.index){
+  case 1210:case 1214:case 1216:case 1218:case 1220:case 1247:case 1258:case 1260:a[0]=a[0]?1:0;break;
   case 1230:case 1240:a[0]=pack(a[0]);break;
   case 1242:case 1243:case 1244:case 1270:a[0]=heap.addressOf(a[0]);break;
   case 1245:a[0]=heap.addressOf(a[0]);a[1]=heap.addressOf(a[1]);break;
   case 1272:a[0]??=-1;break;
-  case 1281:a[0]??=false;break;
+  case 1281:a[0]=a[0]?1:0;break;
   case 1262:a[0]??=0;a[1]??=0;break;
  }
  if(call.index===1280){value=fn(call.receiver,a[0],a[3],services);set(1,value.width);set(2,value.height);value=undefined;}
