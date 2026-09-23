@@ -365,8 +365,12 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   };
   const sharedLifecycle=windowHost?mergeLifecycle(lifecycle,windowHost.lifecycle):lifecycle;
   if(windowHost){
-    sharedLifecycle.handleNative=call=>owned.has(call.receiver)
-      ?{handled:false}:windowHost.lifecycle.handleNative(call);
+    sharedLifecycle.handleNative=call=>{
+      if(owned.has(call.receiver))return {handled:false};
+      if(call.index===1409&&!windowHost.lifecycle.destroy)
+        throw new Error('Native HUD Window.Destroy requires its own recovered lifecycle');
+      return windowHost.lifecycle.handleNative(call);
+    };
     sharedLifecycle.processScript=request=>owned.has(request.object)
       ?runtime.processWindowScript(request):windowHost.lifecycle.processScript(request);
     // Keep the shell's recovered, bounded reconfiguration path for controls
