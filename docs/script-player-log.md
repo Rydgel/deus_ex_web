@@ -7,6 +7,12 @@ FirstLog when empty), assigns LastLog, and returns the new object. DeusExLog is
 a native Object class with String text and DeusExLog next; SetLogText is a
 single script assignment. These original script bodies own the list.
 
+Enabling the original ClientMessage path also prepares Core.Object.Sprintf's
+installed bytecode (Object.uc:340–390). Localized pickup/key messages use its
+four optional coerce-string arguments, percent substitutions and `%%` branch;
+the host does not format those messages itself. The item-pickup validator
+exercises those original callers with the native HUD enabled.
+
 DeusEx.dll SHA256
 `b91002f3e7658c0562d28bccc887cf9db79a47a19f5e09e8be460c9d0c0bee04`:
 

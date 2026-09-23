@@ -7,12 +7,12 @@ export function constructPlayerLog(object){
 }
 
 export async function preparePlayerLogStore({runtime,assets,player}){
-  const dx=await assets.get('DeusEx'),extension=await assets.get('Extension');
+  const dx=await assets.get('DeusEx'),extension=await assets.get('Extension'),core=await assets.get('Core');
   const cls=await runtime.loadClass(dx,dx.exportsByPath.get('deusexlog'));
   for(const field of cls.propertyLink??[])await runtime.field(field);
   for(const [asset,paths] of [[dx,['deusexplayer.createlogobject','deusexplayer.addlog','deusexlog.setlogtext',
     'deusexrootwindow.clientmessage','hudlogdisplay.addlog']],
-    [extension,['playerpawnext.clientmessage']]])for(const path of paths)
+    [extension,['playerpawnext.clientmessage']],[core,['object.sprintf']]])for(const path of paths)
       await runtime.prepareFunction(asset,asset.exportsByPath.get(path));
   const logs=new Set();
   const create=receiver=>{
