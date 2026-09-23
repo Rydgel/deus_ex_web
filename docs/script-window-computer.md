@@ -99,3 +99,26 @@ The direct Print temporary FString allocation/copy/free sequence is represented
 by the already-resolved JavaScript string. The resulting UTF-16 event stream,
 field values, and timing are bounded and validated against the original body;
 allocator identity and lifetime are intentionally outside this slice.
+
+## Shared Play root
+
+The general HUD integration supplies `windowHost` to `createInfoLinkShellPreview`.
+The shell then uses the existing DeusExRootWindow/DeusExHUD identities and the
+host's native byte heap. It does not replace either initialized window or the
+HUD's original receivedItems object. The original HUDInfoLinkDisplay.NewChild
+and its six-control CreateControls path still execute through the shell's
+previously recovered ComputerWindow boundary. ConPlay's first-person window
+uses the same compatibility path.
+
+While a DataLink/ConPlay callback runs, lifecycle calls on shell-owned windows
+use that bounded implementation; calls on the general HUD use its own native
+services. The general host delegates the InfoLink/ConPlay subtrees to the
+existing specialized presentation and layout implementation. This is an
+explicit remaining native-window gap, not a claim that ComputerWindow paint,
+WindowReady, or general input handling are complete. Original actor-world
+allocation is separated from DataLink playback setup so player subsystems can
+exist before the full HUD's InitWindow reads them.
+
+The existing shell, DataLink TransferObject, and player-subsystem validators
+pass after this refactor. The shared native-host branch is verified with the
+Play HUD integration rather than those headless shell-only cases.

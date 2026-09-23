@@ -47,7 +47,7 @@ function get(runtime,object,name){return runtime.namedReference(object,name).get
 
 /** Build the exact script/native world prerequisites for DataLinkPlay Spawn
  * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */
-async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
+export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
   const [dataLinkClass,imageClass,gameClass,mutatorClass]=await Promise.all([
     runtime.loadClass(deusEx,requiredExport(deusEx,'DataLinkPlay')),
     runtime.loadClass(deusEx,requiredExport(deusEx,'Image02_NYC_Warehouse')),
@@ -155,7 +155,7 @@ async function bindSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
  * `shell` is the HUDInfoLinkDisplay child built by createInfoLinkShellPreview.
  */
 export async function createLiveDataLinkRuntime({
-  runtime,assets,engine,deusEx,level,levelInfo,player,shell,onLifecycle=null,
+  runtime,assets,engine,deusEx,level,levelInfo,player,shell,onLifecycle=null,spawnWorldPrepared=false,
 }={}){
   if(!runtime||!assets?.get||!level||!levelInfo||!player||!shell?.object)
     throw new TypeError('Live DataLink runtime requires the linked Play world and InfoLink shell');
@@ -183,7 +183,7 @@ export async function createLiveDataLinkRuntime({
   const playEventSetup=await prepare(runtime,deusEx,'DataLinkPlay.PlayEvent.SetupEvent');
   const setupEventSpeech=await prepare(runtime,deusEx,'DataLinkPlay.SetupEventSpeech');
   const setupEventEnd=await prepare(runtime,deusEx,'ConPlayBase.SetupEventEnd');
-  const spawnWorld=await bindSpawnWorld({runtime,engine,deusEx,level,levelInfo});
+  if(!spawnWorldPrepared)await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
 
   // The catalog is the admission/content/audio source of truth.  Resolve all
   // three original package objects for every route so the VM still receives
@@ -263,10 +263,13 @@ export async function createLiveDataLinkRuntime({
   // original function key rather than a substitute implementation.
   const receivedClass=await runtime.loadClass(deusEx,requiredExport(deusEx,'HUDReceivedDisplay'));
   const receivedItems=[];
-  const receivedDisplay={name:'HUDReceivedDisplay DataLink runtime'};
-  runtime.attach(receivedDisplay,receivedClass);
-  shell.adoptWindow?.(receivedDisplay,shell.hud);
-  set(runtime,shell.hud,'receivedItems',receivedDisplay);
+  const originalReceivedDisplay=get(runtime,shell.hud,'receivedItems');
+  const receivedDisplay=originalReceivedDisplay??{name:'HUDReceivedDisplay DataLink runtime'};
+  if(!originalReceivedDisplay){
+    runtime.attach(receivedDisplay,receivedClass);
+    shell.adoptWindow?.(receivedDisplay,shell.hud);
+    set(runtime,shell.hud,'receivedItems',receivedDisplay);
+  }
   runtime.boundaryFunctions.set('deusex.hudreceiveddisplay.additem',call=>{
     const item=call.argumentCount>0?refValue(call.evaluateArgument(0)):null;
     const count=call.argumentCount>1?refValue(call.evaluateArgument(1)):null;

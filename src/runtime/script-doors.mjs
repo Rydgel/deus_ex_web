@@ -9,7 +9,7 @@ import { processDecorationHitWall } from './walking-callbacks.mjs';
 import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
 import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
-import { createLiveDataLinkRuntime } from './script-datalink-live.mjs';
+import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
@@ -345,6 +345,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
+  nativeHud = false,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -1873,9 +1874,21 @@ export async function createScriptDoors({
     return records.length;
   }
 
-  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor});
+  let windowHost=null;
+  if(nativeHud){
+    // HUD.InitWindow reads the initialized augmentation/theme/inventory
+    // graph. Allocate that actor world before the native root is constructed.
+    await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
+    playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
+      player:playerActor,warning:message=>callbacks.warning?.(message)});
+    const {createWindowHost}=await import('./script-window-host.mjs');
+    windowHost=await createWindowHost({runtime,assets,player:playerActor});
+    windowHost.install();windowHost.constructRootWindow(playerActor);
+  }
+  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost});
   liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
-    player:playerActor,shell:infoLinkShellValue,onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
+    player:playerActor,shell:infoLinkShellValue,spawnWorldPrepared:nativeHud,
+    onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
   // player.rootWindow is the shell's native-backed root window
   // (script-datalink-live sets it). Window hierarchy natives reachable from
   // NPC ticks — GetRootWindow(1425) via DeusExPlayer.CanStartConversation →
@@ -1885,7 +1898,7 @@ export async function createScriptDoors({
   runtime.windowLifecycle={...runtime.windowLifecycle,
     hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
       readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
-  playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
+  if(!nativeHud)playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
     player:playerActor,warning:message=>callbacks.warning?.(message)});
   await prepareShadowStartup(runtime,assets,level);
   await prepareConversationBinding(runtime,level);
@@ -1941,7 +1954,7 @@ export async function createScriptDoors({
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures,
-    infoLinkShell,playerStartup,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
+    infoLinkShell,playerStartup,windowHost,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
 

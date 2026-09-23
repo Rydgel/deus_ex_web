@@ -15,7 +15,7 @@ import {
 } from './script-window-construction.mjs';
 import {initWindowNative} from './script-window-init.mjs';
 import {addWindowChildNative,getRootWindowNative} from './script-window-hierarchy.mjs';
-import {WINDOW_RECONFIGURE_GLOBALS} from './script-window-reconfigure.mjs';
+import {askParentForReconfigureNative,WINDOW_RECONFIGURE_GLOBALS} from './script-window-reconfigure.mjs';
 import {WINDOW_CONFIGURE_CHILD_GLOBALS} from './script-window-configure-child.mjs';
 import {boundsUpdateNative,sortWindowListsNative} from './script-window-bounds-update.mjs';
 import {setWindowSizeNative,WINDOW_SIZE_OFFSETS} from './script-window-size.mjs';
@@ -85,7 +85,7 @@ function requireControlBoundary(error){
   return String(error.message);
 }
 
-export async function createInfoLinkShellPreview({runtime,assets,player}={}){
+export async function createInfoLinkShellPreview({runtime,assets,player,windowHost=null}={}){
   if(!runtime?.attach||!runtime?.prepareFunction)throw new TypeError('InfoLink shell requires ScriptRuntime');
   if(!assets?.get)throw new TypeError('InfoLink shell requires AssetStore');
   runtime.instance(player);
@@ -128,22 +128,29 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
       await runtime.prepareFunction(asset,asset.exportsByPath.get(path));
   }
   const conversationWindows=new WeakSet();
-  const root={name:'InfoLinkPreviewRoot'},hud={name:'InfoLinkPreviewHUD'};
+  const root=windowHost?.root??{name:'InfoLinkPreviewRoot'},hud=windowHost?.hud??{name:'InfoLinkPreviewHUD'};
+  if(windowHost&&(!windowHost.root||!windowHost.hud||!windowHost.raw))
+    throw new Error('Shared InfoLink shell requires a constructed native root and HUD');
   const manager={name:'InfoLinkPreviewThemeManager'},theme={name:'ColorThemeHUD_Default'};
-  runtime.attach(root,rootClass);runtime.attach(hud,hudClass);runtime.attach(manager,managerClass);runtime.attach(theme,themeClass);
+  if(!windowHost){runtime.attach(root,rootClass);runtime.attach(hud,hudClass);}
+  runtime.attach(manager,managerClass);runtime.attach(theme,themeClass);
   runtime.namedReference(root,'parentPawn').set(player);
   runtime.namedReference(root,'hud').set(hud);
   const playerTheme=runtime.namedReference(player,'ThemeManager');
   runtime.namedReference(manager,'currentHUDTheme').set(theme);
 
-  const memory=createRawMemory();
-  for(const object of [root,hud]){
+  const owned=new WeakSet();
+  const storage=windowHost?.raw??createRawMemory();
+  const memory={...storage,allocate:object=>{owned.add(object);return storage.allocate(object);}};
+  for(const object of windowHost?[]:[root,hud]){
     memory.allocate(object);
     constructWindowNative(object,{read:memory.read,write:memory.write,
       coreObjectConstructor:({object:target})=>memory.write(target,0,'u32',0x10179dfc)});
   }
-  memory.write(root,O.type,'u8',3);memory.write(root,O.flags,'u32',1);memory.write(root,O.parent,'ptr',null);
-  memory.write(hud,O.flags,'u32',1);memory.write(hud,O.parent,'ptr',root);
+  if(!windowHost){
+    memory.write(root,O.type,'u8',3);memory.write(root,O.flags,'u32',1);memory.write(root,O.parent,'ptr',null);
+    memory.write(hud,O.flags,'u32',1);memory.write(hud,O.parent,'ptr',root);
+  }
   const globals=new Map([...Object.values(WINDOW_RECONFIGURE_GLOBALS),
     ...Object.values(WINDOW_CONFIGURE_CHILD_GLOBALS)].map(name=>[name,0]));
   let events=[];
@@ -283,6 +290,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
         created={name:createdClass.record.name};conversationWindows.add(created);
       }else throw new Error('InfoLink shell received different StaticConstructObject class/outer');
       memory.allocate(created);runtime.attach(created,createdClass);
+      if(request.outer===hud)windowHost?.delegateLegacySubtree(created);
       if(createdClass===tileWindowClass)constructTileWindow(created,{...rawServices,
         coreObjectConstructor:({object:target})=>memory.write(target,0,'u32',0x10179dfc)});
       else if(created===textControl)constructComputerWindowNative(created,{...rawServices,
@@ -332,6 +340,39 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     setVisibility:request=>{events.push(`${controlName(request.object)} SetVisibility`);
       return setVisibilityNative(request,visibility);},
   };
+  // One player root/HUD and one byte-addressed heap serve both window paths.
+  // InfoLink's ComputerWindow and the existing conversation presenter retain
+  // their documented partial lifecycle. Calls on the native HUD (including
+  // inventory updates during ConPlay) keep the general host's lifecycle.
+  const shellConstruction=request=>(request.outer===hud&&
+    [infoClass.record,conWindowClass.record].includes(request.classObject))||owned.has(request.outer);
+  const requestObject=value=>owned.has(value)?value:
+    value?.object??value?.window??value?.receiver??value?.parent??null;
+  const mergeLifecycle=(legacy,native)=>{
+    const merged={...native};
+    for(const [key,value] of Object.entries(legacy)){
+      const other=native?.[key];
+      if(typeof value==='function'&&typeof other==='function'){
+        merged[key]=(...args)=>(key==='staticConstructObject'?shellConstruction(args[0]):owned.has(requestObject(args[0])))
+          ?value(...args):other(...args);
+      }else if(value&&typeof value==='object'&&other&&typeof other==='object'&&key!=='errorDevice')
+        merged[key]=mergeLifecycle(value,other);
+      else merged[key]=value;
+    }
+    return merged;
+  };
+  const sharedLifecycle=windowHost?mergeLifecycle(lifecycle,windowHost.lifecycle):lifecycle;
+  if(windowHost){
+    sharedLifecycle.handleNative=call=>owned.has(call.receiver)
+      ?{handled:false}:windowHost.lifecycle.handleNative(call);
+    sharedLifecycle.processScript=request=>owned.has(request.object)
+      ?runtime.processWindowScript(request):windowHost.lifecycle.processScript(request);
+    // Keep the shell's recovered, bounded reconfiguration path for controls
+    // whose layout remains owned by the specialized presenter.
+    sharedLifecycle.askParentForReconfigure=request=>owned.has(request.object)
+      ?askParentForReconfigureNative(request.object,reconfiguration)
+      :windowHost.lifecycle.askParentForReconfigure(request);
+  }
   const newChild=await runtime.prepareFunction(extension,extension.exportsByPath.get('window.newchild'));
   const [audio,content]=await Promise.all([
     loadInfoLinkPreviewAudio(assets),loadInfoLinkPreviewContent(assets),
@@ -344,8 +385,8 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     events=[];
     child=portrait=staticControl=nameControl=queuedControl=null;
     textControl=lineControl=computerTextWindow=computerInputWindow=boundary=null;
-    playerTheme.set(manager);
-    runtime.windowLifecycle=lifecycle;
+    if(!windowHost)playerTheme.set(manager);
+    runtime.windowLifecycle=sharedLifecycle;
   try{
     runtime.callFunction(newChild,hud,1,()=>infoClass.record);
     boundary='Original HUDInfoLinkDisplay.CreateControls completed all six authored controls';
@@ -459,7 +500,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player}={}){
     objects:Object.freeze({portrait,static:staticControl,name:nameControl,queued:queuedControl,
       text:textControl,line:lineControl,computerText:computerTextWindow,computerInput:computerInputWindow}),
     withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
-      runtime.windowLifecycle=lifecycle;playerTheme.set(manager);
+      runtime.windowLifecycle=sharedLifecycle;if(!windowHost)playerTheme.set(manager);
       try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
     recreate(){
       if(!destroyedWindows.has(shellObject))
