@@ -1893,6 +1893,9 @@ export async function createScriptDoors({
     // ConstructRootWindow belongs to the possessing viewport. The root's
     // original ConsoleCommand calls must already see that UPlayer identity.
     runtime.namedReference(playerActor,'Player').set(level.engine.client.viewports[0]);
+    // The former presentation adapter was created after prepareNpcs. Its
+    // replacement calls the player's original HUD getters during root Init.
+    await prepareNpcClass(playerClass);
     const {createWindowHost}=await import('./script-window-host.mjs');
     windowHost=await createWindowHost({runtime,assets,player:playerActor});
     windowHost.install();windowHost.constructRootWindow(playerActor);
