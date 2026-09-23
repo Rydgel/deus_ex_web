@@ -387,7 +387,7 @@ $('weapon-preview').onclick = async () => {
     game.collision.queries.changeActor(player,()=>{
       game.player.position=[at[0],at[1]+64,-128+43+0.2];game.player.velocity=[0,0,0];
     });
-    yaw=-Math.PI/2;pitch=Math.atan2(at[2]-(game.player.position[2]+40),64);
+    yaw=Math.PI/2;pitch=Math.atan2(at[2]-(game.player.position[2]+40),64);
     camera.rotation.set(pitch,yaw,0);camera.position.fromArray(toView(game.player.eye));
     toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? 'Click or press Enter twice to break the crate' : 'select from the object belt'}`);
   } catch (error) { pauseForRuntimeError(error); }
