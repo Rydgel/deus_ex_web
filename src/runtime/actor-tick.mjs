@@ -62,7 +62,7 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
     }
   } else if(get('Role')>=2) {
     if(pawn&&isA(actor,'engine.playerpawn')&&get('Player')) {
-      if(isA(actor,'engine.camera')&&!get('bFrozen'))return 1;
+      if(isA(actor,'engine.camera')&&!(get('ShowFlags')&0x800))return 1;
       services.readInput(get('Player'),delta);
       event('PlayerInput',[delta]);
       event('PlayerTick',[delta]);

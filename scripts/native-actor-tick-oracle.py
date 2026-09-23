@@ -21,7 +21,7 @@ FIELDS = {'LastRenderTime': (0x34, 'f'), 'DistanceFromPlayer': (0x38, 'f'),
           'Physics': (0x30, 'B'), 'Role': (0x31, 'B'), 'RemoteRole': (0x32, 'B'),
           'flags2': (0x2c, 'I'), 'pawnFlags': (0x318, 'I'), 'pawnFlags2': (0x31c, 'I'),
           'SightCounter': (0x320, 'f'), 'PainTime': (0x324, 'f'), 'SpeechTime': (0x328, 'f'),
-          'cameraFlags': (0x5fc, 'I')}
+          'ShowFlags': (0x5fc, 'I')}
 NAMES = {0x105836b8: 'Tick', 0x10583718: 'Timer', 0x105836b0: 'Expired',
          0x105836a0: 'UpdateEyeHeight', 0x105836c4: 'PainTimer', 0x105836c0: 'SpeechTimer',
          0x105835c0: 'UpdateTactics', 0x1058368c: 'PlayerInput', 0x105836b4: 'PlayerTick'}

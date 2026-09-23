@@ -42,9 +42,19 @@ target's ViewRotation/EyeHeight and optional Weapon.PlayerViewOffset to
 TargetViewRotation/TargetEyeHeight/TargetWeaponViewOffset (+864/+870/+874).
 
 Otherwise, a PlayerPawn with Player (+5d4) runs ReadInput(delta), PlayerInput,
-PlayerTick, then ReadInput(-1). Camera ancestry with bFrozen (+5fc bit 800)
-clear returns early before input. Non-controlled actors return immediately
-when tick type is 1; otherwise dispatch Tick(delta) only when probing Tick.
+PlayerTick, then ReadInput(-1). Camera ancestry (static class 1057b510) with
+ShowFlags & SHOW_PlayerCtrl clear returns 1 before input: 103a2599 loads the
+dword at +5fc and `test ah,8` (bit 800) jumps to the `mov eax,1` exit at
+103a1aed. +5fc is `ShowFlags`, not `bFrozen`: the embedded PlayerPawn
+declarations put Player +5d4, Password (FString, 12 bytes), DodgeClickTimer,
+DodgeClickTime, Bob, LandBob, AppliedBob, bobtime, then ShowFlags +5fc,
+RendMap +600, Misc1, Misc2 and ViewTarget +60c (matching
+[pawn perception](script-pawn-perception.md)); `bFrozen` is a later bool
+after JumpSound. ULevel::SpawnPlayActor independently stores
+ShowFlags=0x480c (SHOW_Backdrop|SHOW_Actors|SHOW_PlayerCtrl|SHOW_RealTime)
+at +5fc and RendMap at +600 (1039719d/103971a7). Non-controlled actors
+return immediately when tick type is 1; otherwise dispatch Tick(delta) only
+when probing Tick.
 Both admitted script branches then run ProcessState(delta) followed by Timer.
 The separate [timer contract](script-timers.md) preserves remainder, one-shot
 clearing and synchronous callback effects.

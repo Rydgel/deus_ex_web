@@ -50,7 +50,7 @@ add('pawn-flag-without-class',{animFlags:0x800001,PainTime:0.125});
 add('local-player-input',{pawnFlags:2},{kind:'PlayerPawn',viewport:true});
 add('player-without-viewport',{pawnFlags:2},{kind:'PlayerPawn'});
 add('camera-input-guard',{pawnFlags:2},{kind:'Camera',viewport:true});
-add('camera-input-enabled',{pawnFlags:2,cameraFlags:0x800},{kind:'Camera',viewport:true});
+add('camera-input-enabled',{pawnFlags:2,ShowFlags:0x800},{kind:'Camera',viewport:true});
 const root=gameDirectory();
 const reference=JSON.parse(execFileSync(process.env.DEUS_EX_NATIVE_PYTHON??'.cache/native-probe-env/bin/python',
   ['scripts/native-actor-tick-oracle.py',root],{input:JSON.stringify(cases),encoding:'utf8',maxBuffer:8*1024*1024}));
@@ -67,11 +67,11 @@ const floats={LastRenderTime:0x34,DistanceFromPlayer:0x38,TimerRate:0x48,TimerCo
   SightCounter:0x320,PainTime:0x324,SpeechTime:0x328,TargetEyeHeight:0x870};
 const vectors={Location:[0x114,false],Velocity:[0x144,false],Rotation:[0x120,true],ViewRotation:[0x3dc,true],
   TargetViewRotation:[0x864,true],TargetWeaponViewOffset:[0x874,false]};
-const bytes={Physics:0x30,Role:0x31,RemoteRole:0x32};
+const bytes={Physics:0x30,Role:0x31,RemoteRole:0x32},ints={ShowFlags:0x5fc};
 const flags={bHidden:[0x28,2],bTicked:[0x28,0x200],bTimerLoop:[0x28,0x1000],
   bStasis:[0x28,0x200000],bForceStasis:[0x28,0x400000],bIsPawn:[0x28,0x800000],
   bTransient:[0x2c,2],bIsPlayer:[0x318,2],bAdvancedTactics:[0x318,0x80000000],
-  bViewTarget:[0x31c,1],bFrozen:[0x5fc,0x800]};
+  bViewTarget:[0x31c,1]};
 for(let i=0;i<cases.length;i++) {
   const sample=cases[i],original=reference.cases[i],buffer=Buffer.from(original.before,'hex');
   const actor={},target=sample.viewTarget?{...sample.viewTarget,kind:'Pawn',
@@ -80,6 +80,7 @@ for(let i=0;i<cases.length;i++) {
     if(object!==actor)return object[key];
     if(Object.hasOwn(floats,key))return buffer.readFloatLE(floats[key]);
     if(Object.hasOwn(bytes,key))return buffer[bytes[key]];
+    if(Object.hasOwn(ints,key))return buffer.readInt32LE(ints[key]);
     if(Object.hasOwn(flags,key)){const [at,mask]=flags[key];return Boolean(buffer.readUInt32LE(at)&mask);}
     if(Object.hasOwn(vectors,key)){const [at,int]=vectors[key];return [0,1,2].map(n=>buffer[int?'readInt32LE':'readFloatLE'](at+n*4));}
     if(key==='Owner')return 'ownerTicked' in sample?{bTicked:sample.ownerTicked}:null;
