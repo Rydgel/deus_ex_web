@@ -26,6 +26,8 @@ import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
 import { playerDistance } from './level-tick.mjs';
+import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
+import { runSpawnedActorFalling, runActorRotation } from './script-actor-physics.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -580,6 +582,7 @@ export async function createScriptDoors({
       // id 0), the same lifetime contract as the decoration/pawn sounds above,
       // so the pickup completes instead of freezing at the audio gap.
       if (/\.pickup\.frob$/.test(path)) { decorationEffect(call, 'PickupSound'); return 0; }
+      if (path === 'deusexpickup.playlandingsound') { decorationEffect(call, 'PickupLandedSound'); return 0; }
       // A weapon's select/idle/fire effect sounds (Weapon.PlaySelect ->
       // Owner.PlaySound(SelectSound), and the DeusExWeapon firing sites) are
       // one-shot effect audio whose return the scripts discard or use only as a
@@ -1058,8 +1061,8 @@ export async function createScriptDoors({
   // (runDecorationPhysics: physFalling/processLanded/physRolling and the
   // non-Pawn processHitWall 0x103cecc0) against the LIVE level hash (the
   // creation-time `queries` closure is replaced by a rebuilt hash on every
-  // reset). physicsRotation (0x103ca1e0) and the other movement modes stay
-  // explicit boundaries until linked.
+  // reset). Spawned collision actors use live field-backed falling and landing;
+  // physicsRotation (0x103ca1e0) is shared by map and spawned actors.
   const linkedDecorations = new Set(decorations);
   function decorationMovement(actor, delta) {
     if (!linkedDecorations.has(actor) || !level.hash)
@@ -1083,16 +1086,21 @@ export async function createScriptDoors({
   runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
     read: (target, name) => runtime.namedReference(target, name).get(),
     write: (target, name, value) => runtime.namedReference(target, name).set(value),
-    physFalling: decorationMovement,
+    physFalling: (actor,delta)=>runtime.collisionViewActors.has(actor)
+      ?runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{})
+      :decorationMovement(actor,delta),
     physRolling: decorationMovement,
-    physicsRotation: target => {
-      throw new Error(`AActor::physicsRotation (0x103ca1e0) is not linked for ${runtime.instance(target).cls.record.key}`);
-    },
+    physicsRotation: (target,delta)=>runActorRotation(runtime,target,delta),
     processEvent: (target, name, args) => runtime.processEvent(target, name, args),
     unsupported: (target, what) => {
       throw new Error(`Non-Pawn performPhysics ${what} is not linked for ${runtime.instance(target).cls.record.key}`);
     },
   });
+
+  runtime.relocation={actorFor:actor=>actor,
+    farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.collisionViewActors.has(actor)
+      ?runtime.relocateSpawnedActor(actor,destination,test,noCheck)
+      :runtime.relocateHeldItem(actor,destination)};
 
   // Runtime-spawned actors (NPC inventory items, spawned Shadows) live at the
   // tail of Level.Actors. Track them separately from the serialized map set:
@@ -1801,14 +1809,14 @@ export async function createScriptDoors({
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
       } else if (npcSpawned.has(actor)) {
-        // Only Inventory-ancestry spawned actors tick (weapons/ammo);
-        // Decal-ancestry spawned Shadows are the recorded non-ticked case.
+        // Inventory, Projectile and TraceHitSpawner actors share Actor.Tick.
+        // Decal-ancestry spawned Shadows remain the recorded non-ticked case.
         let lineage = null;
         try { lineage = runtime.instance(actor).cls; } catch { continue; }
-        let inventory = false;
+        let admitted = false;
         for (let cls = lineage; cls; cls = cls.base)
-          if (cls.record.key === 'engine.inventory') { inventory = true; break; }
-        if (!inventory || lineage === null) continue;
+          if (['engine.inventory','engine.projectile','deusex.tracehitspawner'].includes(cls.record.key)) { admitted = true; break; }
+        if (!admitted || lineage === null) continue;
         const owner = npcSpawnedOwner.get(actor) ?? runtime.namedReference(actor, 'Owner').get();
         if (runtime.instance(actor).pendingKill) continue;
         if (owner && npcFailures.has(owner)) continue;
@@ -1927,6 +1935,8 @@ export async function createScriptDoors({
   // Eagerly link every pawn class's script surface and decode its mesh before
   // the initial reset() runs the NPC startup chain synchronously.
   await prepareNpcs();
+  await prepareCrateLifecycle({runtime,assets,level,decorations:npcDecorations,
+    prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,

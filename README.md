@@ -87,10 +87,12 @@ or push further hosting updates unless the user asks.
   keys map to weapon groups; the `Crowbar preview` button places JC beside the
   Training weapons, picks up the crowbar and equips it), and the HUD shows the
   in-hand item. Left click or Enter now swings the crowbar through the original
-  ticked weapon states and mesh notify, reaching crate damage (10 → 4 HP).
-  Hit-effect spawning, crate destruction and first-person view-model rendering
-  remain unfinished. See [weapon equip](docs/script-weapon-equip.md) and
-  [weapon fire evidence](docs/script-weapon-fire.md).
+  ticked weapon states and mesh notify. Two hits break a Training crate,
+  spawning its original wood fragments and Lockpick contents; fragments
+  bounce, fade and expire, and Player start restores the crate. First-person
+  view-model rendering remains unfinished. See [weapon equip](docs/script-weapon-equip.md) and
+  [weapon fire evidence](docs/script-weapon-fire.md) and
+  [crate destruction](docs/script-crate-destruction.md).
 - Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
   the local installation through the bounded script VM.
 - Unit/format tests, real-data validation commands, and browser regression tests.

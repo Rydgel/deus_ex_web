@@ -153,11 +153,9 @@ component is nonzero in its low 16 bits. After that comes one `PendingTouch`
 `PendingTouch`. A linked decoration's Falling/Rolling run the existing
 oracle-validated routines (`runDecorationPhysics`) against the **live** level
 hash. The old separate decoration-physics pass used the creation-time hash
-closure, which a reset rebuilds. `physicsRotation`, `physProjectile` and the
-remaining modes are explicit boundaries. The four `SecurityCamera`s
-(`RotationRate` 65535,65535,0, `bRotateToDesired`) reach `physicsRotation`
-when they are not in stasis. They are recorded as boundaries until it is
-linked.
+closure, which a reset rebuilds. `physicsRotation` now uses the recovered, oracle-validated rotation body,
+including the four SecurityCameras and spawned fragments. `physProjectile`
+and the remaining movement modes are explicit boundaries.
 
 `ULevel::Tick`'s DistanceFromPlayer pass (0x103a55c1–0x103a5698) now runs
 first each frame. It writes `DistanceFromPlayer` for every slot from
@@ -165,12 +163,13 @@ FirstDynamicActor (+0x110, the LoadMap partition boundary) with the
 recovered `playerDistance`. The map's serialized editor value (e.g. Plant7's
 8672) is never current. The stasis gate and `ScriptedPawn.Tick` read it.
 
-## Result in Play so far
+## Crate destruction continuation
 
-A swing now reaches `CrateBreakableMedGeneral1.Active.TakeDamage`. The first
-hit takes `HitPoints` 10 → 4 and runs `ResetScaleGlow` (ScaleGlow 1 → 0.46).
-The spawned `TraceHitHandNonPenSpawner` is the next boundary: its SpawnActor
-class admission, then the second hit's destruction spawns.
+The focused placement hits the upper stacked `CrateBreakableMedGeneral2`.
+Two swings now run damage 10 → 4 → −2, hit-effect timers, Frag, Destroy and
+Containers.Destroyed. Six wood fragments bounce, fade and expire; the
+authored Lockpick falls and lands. Reset restores the crate and removes
+spawned actors. See [crate destruction evidence and limits](script-crate-destruction.md).
 
 ## Focused checks
 
