@@ -52,8 +52,12 @@ scheduler with original Training data. Its fixed placement hits the upper
 stacked `CrateBreakableMedGeneral2`: 10 → 4 → −2 HP, six WoodFragments,
 the crate's mesh texture copied to their Skin, bounce and settling, the
 authored Lockpick contents landing on a support, 0.1-second hit-effect
-expiry, fragment fade and LifeSpan expiry, then reset restoring the crate
-and removing spawned actors. The float32 ResetScaleGlow expression yields
+expiry, walking beside the uncollected Lockpick through public player input,
+fragment fade and LifeSpan expiry, then reset restoring the crate and removing
+spawned actors. The movement case preserves the spawned collision view's
+read-only, class-derived `isPawn=false`: the original engine observes class
+ancestry and never writes classification back to the hit actor. The float32
+ResetScaleGlow expression yields
 0.4599999785423279 on the first hit (not float32(0.46)).
 
 The existing native oracles establish falling/bounce, rotation, landing and

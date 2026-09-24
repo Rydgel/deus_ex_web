@@ -31,3 +31,9 @@ test('unsupported landing relocation fails before inventing movement or randomne
  player.collision.findSpot=position=>position.map((v,i)=>v+(i===0?1:0));
  assert.throws(()=>runPlayerPhysics(player,.05,input),/FarMoveActor/);
 });
+test('collision classification remains read-only for spawned actor views',()=>{
+ const {player,world}=fixture();
+ Object.defineProperty(world,'isPawn',{value:false});
+ assert.doesNotThrow(()=>runPlayerPhysics(player,.05,input));
+ assert.equal(world.isPawn,false);
+});

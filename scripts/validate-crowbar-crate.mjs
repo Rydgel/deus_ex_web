@@ -78,6 +78,16 @@ assert.ok(lockpick,'Containers.Destroyed spawns the authored Lockpick contents')
 assert.equal(get(lockpick,'Physics'),0,'Inventory landing settles lockpick');
 assert.ok(get(lockpick,'Base'),'landing assigns support base');
 assert.equal(stateKey(lockpick),'deusex.deusexpickup.pickup','dropped lockpick enters Pickup state');
+// The browser regression occurred when walking into the dropped contents
+// before frobbing them: the spawned collision view's class marker is
+// intentionally read-only and must only be observed by player physics.
+const beforeContentsMove=game.player.position.slice();
+input.forward=1;
+assert.doesNotThrow(()=>tick(30),'walking beside dropped contents must not mutate their class identity');
+input.forward=0;
+assert.notDeepEqual(game.player.position,beforeContentsMove,'the public walking path advances after crate destruction');
+assert.equal(lockpick.isPawn,false,'the dropped Inventory retains its canonical non-Pawn classification');
+assert.ok(level.actors.includes(lockpick),'movement does not implicitly pick up the Lockpick');
 meshes.update();await meshes.ready();meshes.update();
 assert.equal(previewFor(upper),undefined,'destroyed crate releases its draw resource');
 for(const actor of [...fragments,lockpick]){

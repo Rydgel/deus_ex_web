@@ -1,5 +1,16 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (movement beside spawned crate contents):**
+>
+> * Player physics no longer rewrites an existing class-derived `isPawn`
+>   marker after a collision trace. Spawned actor collision views deliberately
+>   expose that marker read-only; the original engine's ancestry checks observe
+>   actor type without mutating it.
+> * A focused regression reproduces the former `"isPawn" is read-only` pause,
+>   and the Training crate integration now walks through public input beside
+>   the dropped, uncollected Lockpick while preserving its non-Pawn identity.
+>   See [crate evidence](script-crate-destruction.md).
+
 > **Checkpoint update, 2026-09-24 (ToggleWindow button overrides):**
 >
 > * ToggleWindow's mouse press/release and programmatic PressButton now retain

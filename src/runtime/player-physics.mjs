@@ -25,7 +25,15 @@ export function runPlayerPhysics(player,dt,{acceleration,groundSpeed,isWalking,z
   canJump:Boolean(defaults.bCanJump),isPlayer:true,isWalking,gravity:zone.ZoneGravity??[0,0,-950],
   friction:zone.ZoneGroundFriction??8,zoneVelocity:zone.ZoneVelocity??[0,0,0],terminalVelocity:zone.ZoneTerminalVelocity??2500});
  const decorate=actor=>{
-  if(actor){actor.isPawn=isA(actor,'pawn');actor.pushableDecoration=isA(actor,'decoration')&&Boolean(actor.values?.bPushable);actor.mass=actor.values?.Mass;actor.standingCount??=actor.values?.StandingCount??0;}
+  if(actor){
+   // Map actors receive this host marker during scene preparation. Spawned
+   // collision views expose the same class-derived marker as a read-only
+   // property; the original IsA test observes classification and never writes
+   // it back to the hit actor.
+   if(!('isPawn' in actor))actor.isPawn=isA(actor,'pawn');
+   actor.pushableDecoration=isA(actor,'decoration')&&Boolean(actor.values?.bPushable);
+   actor.mass=actor.values?.Mass;actor.standingCount??=actor.values?.StandingCount??0;
+  }
   return actor;
  };
  const dispatch=(target,event,args)=>{
