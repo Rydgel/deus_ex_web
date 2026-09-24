@@ -1095,6 +1095,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
+    // Browser/viewport adapter into the already recovered root mouse route.
+    // Coordinates are drawing-buffer pixels, matching the root canvas size.
+    pointer(root,{x=0,y=0,dx=0,dy=0,relative=false,key=null,action=null}){
+      if(!W.i32(root,Input.ROOT_INPUT.mouseGrab))return false;
+      const px=relative?f(W.f32(root,Mouse.MOUSE.mouseX)+f(dx)):f(x);
+      const py=relative?f(W.f32(root,Mouse.MOUSE.mouseY)+f(dy)):f(y);
+      Mouse.setRootCursorPos(W,root,px,py);
+      if(key!==null&&action!==null)Input.rootProcess(W,root,key,action);
+      return true;
+    },
     draw(root,width,height,view){
       if(view){writeWindowSceneFrame(W,node,{...view,width,height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);

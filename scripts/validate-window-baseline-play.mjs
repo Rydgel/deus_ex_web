@@ -146,9 +146,9 @@ if(target==='MedicalBot'){
   assert.equal(W.i32(clip,0x178),0,'clip feedback agrees at the first row');
   const rootWindow=host.root;
   const click=win=>{
-    invoke(win,1453,[W.f32(win,0x80)*.5,W.f32(win,0x84)*.5]);
-    assert.equal(host.key(rootWindow,1,1),1,'root consumes a grabbed left-button press');
-    assert.equal(host.key(rootWindow,1,3),1,'root consumes a grabbed left-button release');
+    const x=W.f32(win,0xd4)+W.f32(win,0x80)*.5,y=W.f32(win,0xd8)+W.f32(win,0x84)*.5;
+    assert.equal(game.windowPointer({x,y,key:1,action:1}),true,'Play offers a grabbed left-button press to the root');
+    assert.equal(game.windowPointer({x,y,key:1,action:3}),true,'Play offers a grabbed left-button release to the root');
   };
   click(last);
   assert.equal(W.i32(scale,0x1c8),Math.min(limit,W.i32(scale,0x1d0)),'root mouse routing activates the down button');
@@ -156,6 +156,10 @@ if(target==='MedicalBot'){
   click(first);
   assert.equal(W.i32(scale,0x1c8),0,'root mouse routing activates the up button');
   assert.equal(W.ptr(rootWindow,0x5c4),null,'release clears the temporary mouse grab');
+  const beforeMove=[W.f32(rootWindow,0x590),W.f32(rootWindow,0x594)];
+  assert.equal(game.windowPointer({relative:true,dx:-1,dy:2}),true,'a grabbed pointer-lock delta is offered to the root');
+  assert.deepEqual([W.f32(rootWindow,0x590),W.f32(rootWindow,0x594)],
+    [beforeMove[0]-1,beforeMove[1]+2],'relative browser motion advances the original root cursor');
   const thumbX=W.f32(scale,0x210)+0.5,thumbY=W.f32(scale,0x214)+0.5;
   assert.equal(W.v.mouseButtonPressed(scale,thumbX,thumbY,1,1),true);
   assert.equal(W.u8(scale,0x258)&1,1,'press inside the original thumb starts dragging');

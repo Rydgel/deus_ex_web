@@ -245,6 +245,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       if (key < 0) return false;
       return Boolean(hud.key(key, pressed ? 1 : 3));
     },
+    // The browser supplies drawing-buffer coordinates (or scaled relative
+    // motion under pointer lock). The root accepts them only while a modal
+    // owns the original mouse-event grab counter.
+    windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
     use() {
       const actor = interaction.frobTarget;
       if (!actor) return { ok: false, message: 'Nothing selected' };

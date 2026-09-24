@@ -10,6 +10,7 @@ import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { createWeaponViewModel } from './weapon-view-model.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
+import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -523,10 +524,20 @@ function releaseFire() {
   if (mode !== 'play' || !game || loading) return;
   try { game.releaseFire(); } catch (error) { pauseForRuntimeError(error); }
 }
-$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus(); if (event.button === 2) useDoor(); else if (event.button === 0 && document.pointerLockElement === $('scene')) pressFire(); else { drag = true; clickStart = { x: event.clientX, y: event.clientY }; $('scene').setPointerCapture(event.pointerId); } } };
+function windowPointer(event,action=null){
+  if(mode!=='play'||!game||runtimeError||!world||loading)return false;
+  const canvas=$('scene'),sample=windowPointerSample(event,canvas.getBoundingClientRect(),
+    renderer.domElement.width,renderer.domElement.height,document.pointerLockElement===canvas);
+  if(action!==null){const key=pointerButtonKey(event.button);if(key<0)return false;sample.key=key;sample.action=action;}
+  try{return game.windowPointer(sample);}catch(error){pauseForRuntimeError(error);return true;}
+}
+$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus();
+  if(windowPointer(event,1)){keys.clear();drag=false;clickStart=null;$('scene').setPointerCapture(event.pointerId);event.preventDefault();return;}
+  if (event.button === 2) useDoor(); else if (event.button === 0 && document.pointerLockElement === $('scene')) pressFire(); else { drag = true; clickStart = { x: event.clientX, y: event.clientY }; $('scene').setPointerCapture(event.pointerId); } } };
 $('scene').oncontextmenu = event => event.preventDefault();
 $('scene').onpointerup = event => {
   drag = false;
+  if(windowPointer(event,3)){clickStart=null;event.preventDefault();return;}
   if (event.button !== 0) return;
   if (document.pointerLockElement === $('scene')) { releaseFire(); return; }
   const moved = clickStart && Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y);
@@ -535,7 +546,7 @@ $('scene').onpointerup = event => {
 };
 $('scene').onpointercancel = () => { drag = false; };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
-document.addEventListener('pointermove', event => { if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
+document.addEventListener('pointermove', event => { if(windowPointer(event))return; if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
 // XInputExt::Process: a key the player's root window consumes (a grabbing modal
 // such as the keypad) releases every held binding and reaches nothing else.
 function windowKey(event, pressed) {

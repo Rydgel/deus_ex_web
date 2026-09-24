@@ -1,5 +1,19 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (Play pointer-to-root adapter):**
+>
+> * Play now offers absolute and pointer-lock-relative mouse samples to the
+>   recovered root route before world look/fire/use whenever a modal owns the
+>   root mouse-event grab. CSS coordinates are scaled to the HUD drawing buffer;
+>   left/right/middle edges use their original EInputKey values.
+> * Focused conversion cases pass, and the live medical screen activates its
+>   authored scrollbar through the public `game.windowPointer` boundary while
+>   retaining scale/clip feedback. The browser conversion is explicitly a host
+>   adapter; exact WinDrv sampling/capture and wheel delivery remain unverified.
+> * ToggleWindow overrides, Scale drawing/value formatting, and full bot-screen
+>   interaction remain open. Stage 3 is unfinished. See
+>   [window input evidence](script-window-input.md).
+
 > **Checkpoint update, 2026-09-24 (root mouse-button routing):**
 >
 > * Original `HandleButtons`, mouse capture/release, focus-on-press,

@@ -258,6 +258,26 @@ Reproduce with
 `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-window-mouse-focus-diff.mjs`,
 `node scripts/validate-window-baseline-play.mjs`, and `npm run build`.
 
+### Play browser adapter
+
+The Play adapter now offers pointer input to the root before world look, fire
+or use, preserving the ordering established by `XInputExt::Process` at
+`0x1002d0b0`. It returns unconsumed while the root mouse-event grab count at
+`+0x5cc` is zero. While grabbed, unlocked pointer positions are converted from
+CSS pixels to the WebGL drawing-buffer pixels used by the root canvas;
+pointer-lock motion is scaled the same way and accumulated from the root's
+current cursor. Both paths call the recovered `SetRootCursorPos`. Browser
+left/right/middle edges map to `IK_LeftMouse`/`IK_RightMouse`/`IK_MiddleMouse`
+and pass through `XRootWindow::Process`, so a consumed edge cannot also fire a
+weapon or frob the world.
+
+This coordinate conversion is an explicit browser platform adapter, not a
+claim that WinDrv delivered cursor samples by an identical API. Its observable
+window-side contract is covered by the existing original-DLL oracle; the
+adapter's CSS/drawing-buffer conversion has focused unit cases, and the live
+Training medical screen activates its authored scrollbar through the public
+`game.windowPointer` route with absolute and pointer-lock-relative samples.
+
 ## Window timers
 
 A window keeps an active timer list at `+0x128` and a free list at `+0x12c`, both
@@ -406,9 +426,9 @@ GRANTED, closed keypad, restored HUD, open doorway, no browser errors.
 
 * Full platform Viewport construction and paused Level.Tick scheduling remain
   outside the attached script prefix; see the viewport contract above.
-* Play's browser pointer adapter still treats movement as camera look; while a
-  modal holds the mouse grab it must map browser coordinates/edges to the now
-  recovered root route instead.
+* The browser pointer adapter reproduces the recovered window-side contract,
+  but exact WinDrv cursor sampling and platform capture behavior have not been
+  measured. Browser wheel edges are not mapped yet.
 * Play's input is a JavaScript key-to-action map, not the User.ini bindings that
   `XInputExt::Process` executes. The consumed-key rule maps to clearing Play's
   held keys.
