@@ -23,6 +23,12 @@ import {createNativeHeap} from './script-native-heap.mjs';
 import {nativeWindowLayout, NATIVE_WINDOW_CLASS_SIZES} from './script-window-native-layout.mjs';
 import * as T from './script-window-tree-natives.mjs';
 import * as F from './script-window-families.mjs';
+import * as S from './script-window-scroll-children.mjs';
+import * as A from './script-window-scroll-area.mjs';
+import * as SL from './script-window-scroll-layout.mjs';
+import * as SC from './script-window-scroll-configuration.mjs';
+import {setSensitivityNative} from './script-window-sensitivity.mjs';
+import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
 import {initWindowNative} from './script-window-init.mjs';
 import {addWindowChildNative, removeWindowChildNative} from './script-window-hierarchy.mjs';
@@ -85,6 +91,10 @@ const FAMILIES = Object.freeze({
   'extension.modalwindow': {vtable: F.VTABLES.modalwindow},
   'extension.rootwindow': {vtable: F.VTABLES.rootwindow},
   'extension.computerwindow': {vtable: F.VTABLES.computerwindow},
+  'extension.scalewindow': {vtable:S.CHILD_VTABLES.scale},
+  'extension.scalemanagerwindow': {vtable:S.CHILD_VTABLES.manager},
+  'extension.clipwindow': {vtable:S.CHILD_VTABLES.clip},
+  'extension.scrollareawindow': {vtable:A.SCROLL_AREA.vtable},
   'extension.editwindow': {vtable: 0x1005b50c},
 });
 
@@ -106,7 +116,7 @@ export function nativeWindowFamily(cls) {
 
 /** Classes whose every function/state the HUD tree may reach. */
 const HUD_CLASS_PATHS = Object.freeze([
-  ['Extension', ['window', 'textwindow', 'buttonwindow', 'togglewindow', 'tilewindow', 'tabgroupwindow',
+  ['Extension', ['scalewindow','scalemanagerwindow','clipwindow','scrollareawindow','window', 'textwindow', 'buttonwindow', 'togglewindow', 'tilewindow', 'tabgroupwindow',
     'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'gc', 'extensionobject']],
   ['DeusEx', ['deusexrootwindow', 'deusexhud', 'hudbasewindow', 'hudsharedborderwindow', 'hudammodisplay',
     'hudhitdisplay', 'crosshair', 'hudobjectbelt', 'hudobjectslot', 'hudactiveitemsdisplay',
@@ -423,6 +433,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   }
   function constructFamily(win, family) {
     switch (family) {
+      case 'extension.scalewindow': return S.constructScrollChild(W,win,'scale');
+      case 'extension.scalemanagerwindow': return S.constructScrollChild(W,win,'manager');
+      case 'extension.clipwindow': return S.constructScrollChild(W,win,'clip');
+      case 'extension.scrollareawindow': return A.constructScrollAreaWindow(W,win);
       case 'extension.window': return constructWindowNative(win, {...rawServices, coreObjectConstructor: () => {}});
       case 'extension.textwindow': return F.constructTextWindow(W, win);
       case 'extension.buttonwindow': return F.constructButtonWindow(W, win);
@@ -461,8 +475,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   W.initWindow = (win, parent) => initWindowNative({window: win, parent}, initServices);
   W.initText = (win, parent) => initTextWindowNative(win, parent, {...rawServices,
     initWindow: args => initWindowNative(args, initServices), makeAcceleratorTableDirty: ({object}) => T.makeAcceleratorTableDirty(W, object)});
+  W.initTabGroup=(win,parent)=>F.initTabGroupWindow(W,win,parent);
+  W.createNewWindow=(name,parent,flag)=>createNewWindowNative({newClass:classes.get(`extension.${name.toLowerCase()}`).record,parent,bShow:Boolean(flag),errorDevice:lifecycle.errorDevice},lifecycle);
   function initFamily(win, parent) {
     switch (familyOf(win)) {
+      case 'extension.scalewindow': return S.initScale(W,win,parent);
+      case 'extension.scalemanagerwindow': return S.initScaleManager(W,win,parent);
+      case 'extension.clipwindow': return S.initClip(W,win,parent);
+      case 'extension.scrollareawindow': return A.initScrollAreaWindow(W,win,parent);
       case 'extension.window': return W.initWindow(win, parent);
       case 'extension.textwindow': return W.initText(win, parent);
       case 'extension.buttonwindow': return F.initButtonWindow(W, win, parent);
@@ -506,7 +526,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const V = {
     convertVectorToCoordinates:(win,vector)=>is(win,'extension.rootwindow')?rootVectorToCoordinates(W,win,vector):windowVectorToCoordinates(W,win,vector),
     childAdded: (win, child) => processScript(win, 'ChildAdded', [child]),            // 0x100034c0
-    childRemoved: (win, child) => processScript(win, 'ChildRemoved', [child]),        // 0x100034e0
+    childRemoved(win, child) {                                                       // 0x100034e0 / 0x10042480
+      if(is(win,'extension.scalemanagerwindow'))return S.managerChildRemoved(W,win,child,processScript);
+      return processScript(win,'ChildRemoved',[child]);
+    },
     descendantAdded(win, child) {                                                      // 0x10003500 / RadioBox 0x10038b90
       processScript(win, 'DescendantAdded', [child]);
       if (is(win, 'extension.radioboxwindow')) radioBoxDescendantAdded(win, child);
@@ -520,6 +543,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     parentRequestedPreferredSize(win, bW, w, bH, h) {
       switch (familyOf(win)) {
+        case 'extension.scalewindow': return SL.scalePreferredSize(W,win);
+        case 'extension.scalemanagerwindow': return SL.managerPreferredSize(W,win);
+        case 'extension.clipwindow': return SL.clipPreferredSize(W,win,bW,w,bH,h);
+        case 'extension.scrollareawindow': return SL.scrollAreaPreferredSize(W,win,bW,w,bH,h);
         case 'extension.textwindow': case 'extension.buttonwindow': case 'extension.togglewindow':
         case 'extension.textlogwindow': return textPreferredSize(win, bW, w, bH, h);
         case 'extension.tilewindow': return tileComputeChildSizes(win, bW, w, bH, h);
@@ -530,7 +557,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
     },
     parentRequestedGranularity(win, hg, vg) {
-      if (is(win, 'extension.window', 'extension.tabgroupwindow', 'extension.modalwindow', 'extension.rootwindow', 'extension.radioboxwindow', 'extension.computerwindow')) {
+      if(is(win,'extension.tilewindow'))return SL.tileGranularity(W,win,hg,vg);
+      if (is(win, 'extension.window', 'extension.tabgroupwindow', 'extension.modalwindow', 'extension.rootwindow', 'extension.radioboxwindow', 'extension.computerwindow', 'extension.scalewindow', 'extension.scalemanagerwindow', 'extension.clipwindow', 'extension.scrollareawindow')) {
         const args = [f(hg), f(vg)];
         processScript(win, 'ParentRequestedGranularity', args);
         return {h: f(args[0]), v: f(args[1])};
@@ -539,6 +567,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     childRequestedVisibilityChange(win, child, visible) {
       switch (familyOf(win)) {
+        case 'extension.scalemanagerwindow': case 'extension.clipwindow': case 'extension.scrollareawindow':
         case 'extension.tilewindow':                                                    // 0x10048940
           setChildVisibility(child, visible); askParentForReconfigure(win); return;
         case 'extension.tabgroupwindow': case 'extension.modalwindow': case 'extension.rootwindow':
@@ -550,6 +579,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     childRequestedReconfiguration(win, child) {
       switch (familyOf(win)) {
         case 'extension.tilewindow': case 'extension.tabgroupwindow': case 'extension.modalwindow':
+        case 'extension.scalemanagerwindow': case 'extension.clipwindow': case 'extension.scrollareawindow':
         case 'extension.radioboxwindow': return 0;                                     // 0x100421d0
         case 'extension.rootwindow': return T.rootChildRequestedReconfiguration(W, win, child) ? 1 : 0;
         default: return processScript(win, 'ChildRequestedReconfiguration', [child], {result: false}) ? 1 : 0;
@@ -557,6 +587,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     configurationChanged(win) {
       switch (familyOf(win)) {
+        case 'extension.scrollareawindow': return SC.scrollAreaConfiguration(W,win);
+        case 'extension.scalemanagerwindow': return SC.managerConfiguration(W,win);
+        case 'extension.scalewindow': return SC.scaleConfiguration(W,win);
+        case 'extension.clipwindow': return SC.clipConfiguration(W,win);
         case 'extension.tilewindow': return tileConfigurationChanged(win);
         case 'extension.tabgroupwindow': case 'extension.modalwindow': case 'extension.rootwindow':
           return tabGroupConfigurationChanged(win);
@@ -605,6 +639,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
       }
     },
+    scaleAttributesChanged:(win,...args)=>is(win,'extension.scalemanagerwindow')?SC.managerScaleAttributes(W,win,...args):processScript(win,'ScaleAttributesChanged',args,{result:false}),
+    // XWindow::ClipAttributesChanged 0x10003f00 / ScrollArea 0x10043b50.
+    clipAttributesChanged:(win,...args)=>is(win,'extension.scrollareawindow')?SC.scrollClipAttributes(W,win,...args):processScript(win,'ClipAttributesChanged',args,{result:false}),
     postDraw: (win, gc) => processScript(win, 'PostDrawWindow', [gc]),                  // 0x10003c80
     styleChanged: win => processScript(win, 'StyleChanged', []),                        // 0x10003d10
     mouseGrabLost: () => undefined,                                                     // 0x10003be0
@@ -646,6 +683,20 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     buttonActivated: (win, source) => processScript(win, 'ButtonActivated', [source], {result: false}),
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
+  // The four new families override these native slots. Until translated,
+  // reject them explicitly instead of silently using Window/TabGroup behavior.
+  for(const [family,methods] of Object.entries({
+    'extension.scalewindow':['mouseMoved','mouseButtonPressed','mouseButtonReleased','tick','draw'],
+    'extension.scalemanagerwindow':['buttonActivated','scalePositionChanged'],
+    'extension.clipwindow':['childRequestedShowArea'],
+    'extension.scrollareawindow':['descendantRemoved','mouseButtonPressed','scaleRangeChanged','clipPositionChanged'],
+  }))for(const method of methods){
+    const inherited=V[method];V[method]=(win,...args)=>{
+      if(is(win,family))return boundary(`${family}.${method} native override is not recovered`);
+      if(!inherited)return boundary(`Window.${method} script bridge is not recovered`);
+      return inherited(win,...args);
+    };
+  }
   W.v = V;
 
   // ------------------------------------------------------------------
@@ -682,6 +733,17 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   function setChildVisibility(win, visible) { return setChildVisibilityNative({object: win, visible: Boolean(visible)}, visibility); }
   W.native = {
     configureChild, askParentForReconfigure, setVisibility, setChildVisibility,
+    tabGroupPreferredSize:(...args)=>L.tabGroupPreferredSize(W,...args),
+    setSensitivity:(object,sensitive)=>setSensitivityNative({object,sensitive},lifecycle.sensitivity),
+    setScaleButtons:(...args)=>S.managerSetButtons(W,...args),
+    setScale:(...args)=>S.managerSetScale(W,...args),
+    setOrientation:(...args)=>S.scaleOrientation(W,...args),
+    setNumTicks:(...args)=>S.scaleNumTicks(W,...args),
+    setThumbSpan:(...args)=>S.scaleThumbSpan(W,...args),
+    enableStretchedScale:(...args)=>S.stretchScale(W,...args),
+    forceChildSize:(...args)=>S.forceClipChildSize(W,...args),
+    enableAutoRepeat:(win,...args)=>dispatchWindowHostNative(W,{index:1595,receiver:win,argumentCount:args.length,evaluateArgument:i=>args[i]}),
+    changeScalePosition:()=>boundary('Scale.ChangeScalePosition 0x1003f5a0 is not recovered'),
     setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
     makeAcceleratorTableDirty: win => T.makeAcceleratorTableDirty(W, win),
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),

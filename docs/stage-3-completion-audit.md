@@ -1,5 +1,115 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scrollbar manager child removal):**
+>
+> * ScaleManager.ChildRemoved now runs its script event before clearing only
+>   the first live matching child slot, preserving original alias/callback order.
+> * Ten original-DLL comparisons verify full images and script calls. The live
+>   Training manager dispatch check passes; ScrollArea descendant removal remains
+>   guarded. See [child-removal evidence](script-window-scroll-removal.md).
+> * This closes one cleanup callback. Bot audio, full screen destruction,
+>   scrolling/input and Stage 3 remain incomplete.
+
+> **Checkpoint update, 2026-09-24 (scroll-area configuration):**
+>
+> * ScrollArea, ScaleManager, Scale and Clip now complete the reached native
+>   child-placement chain, including clip counts, scrollbar ranges and button
+>   sensitivity propagation. MedicalBot proceeds to Actor.PlaySound264 in
+>   HUDMedBotHealthScreen.SetMedicalBot; RepairBot's audio boundary is unchanged.
+> * 29 original configuration chains compare all images and ordered services;
+>   three SetRanges comparisons raise the child-body total to 37. Existing 29
+>   preferred-sizing comparisons, both bot integration routes and build pass.
+> * The [reached layout/configuration slice](script-window-scroll-configuration.md)
+>   is complete. Audio, drawing/tick/input, scrolling movement and cleanup remain
+>   guarded. No full bot screen, visual equivalence, full sweep or Stage 3
+>   completion is claimed.
+
+> **Checkpoint update, 2026-09-24 (scroll-area preferred sizing):**
+>
+> * Four preferred-size overrides plus Clip's child/unit/overflow query chain
+>   and the reached Tile granularity override now run in Play.
+> * 29 original-DLL comparisons match full memory, outputs and service order,
+>   including nested families, auto-hide convergence/trial-limit behavior and
+>   original margin/hidden-child quirks.
+> * MedicalBot now completes QueryPreferredSize and reaches the explicit
+>   ScrollArea.ConfigurationChanged boundary. The [preferred-sizing slice](script-window-scroll-layout.md)
+>   is complete; placement, callbacks, draw/input and full bot screens remain open.
+>   Focused integration and build pass; no full sweep or Stage 3 completion claim.
+
+> **Checkpoint update, 2026-09-24 (scrollbar construction and initialization):**
+>
+> * ScrollArea/ScaleManager/Scale/Clip now construct in Play through recovered
+>   native bodies. Original PersonaScrollAreaWindow.InitWindow and StyleChanged
+>   return, and the medical route creates both sets of six health-region controls.
+> * 34 new child-family original-body comparisons pass, alongside the ten
+>   ScrollArea composition cases. Sixteen Scale execs add 224 comparisons;
+>   the common total is 683 cases across 49 natives. Existing button texture/color
+>   translations are connected to Play. Focused integration and build pass.
+> * This [bounded slice](script-window-scroll-children.md) completes scrollbar
+>   construction/initialization. MedicalBot now stops at the explicit scroll-area
+>   preferred-size/layout boundary; draw/input/cleanup remain guarded. RepairBot's
+>   PlaySound boundary is unchanged. Full bot screens and Stage 3 remain open.
+
+> **Checkpoint update, 2026-09-24 (scroll-area setup prerequisite):**
+>
+> * ScrollAreaWindow constructor, full nine-child Init sequence and
+>   EnableScrolling now have translations with explicit child-family services.
+>   Ten original-DLL body comparisons verify complete images and service order.
+> * Scrollbar distance, area margins and auto-hide (1701–1703) are dispatched;
+>   53 new exec comparisons pass, including x87 NaN/equality branches. The
+>   window-native comparison total is 459 across 33 natives. Build passes.
+> * This [prerequisite milestone](script-window-scroll-area.md) does not admit
+>   the scroll-area family into Play. ScaleManager/Scale/Clip lifecycles and
+>   scroll-area virtual overrides remain unrecovered. Both bot interaction
+>   boundaries are unchanged; no full screen or Stage 3 completion is claimed.
+
+> **Checkpoint update, 2026-09-24 (bot button accelerators):**
+>
+> * Native1439 `Window.SetAcceleratorText` now dispatches the original scanner
+>   and nearest-modal dirty-table update. Sixteen complete original-exec and
+>   parent-memory comparisons pass, including embedded NUL and repeated pipes.
+> * Both bot routes return from original SetButtonText with their installed
+>   localized labels and accelerator keys. Baseline initialization remains
+>   checked. MedicalBot now reaches unsupported ScrollAreaWindow construction;
+>   RepairBot reaches RepairBotRaiseArm PlaySound in SetRepairBot.
+> * The [bounded milestone](script-window-accelerator-text.md) is complete;
+>   bot screen completion and Stage 3 remain open. Focused integration, existing
+>   window/text comparisons and build pass. No full sweep is claimed.
+
+> **Checkpoint update, 2026-09-24 (bot button baseline initialization):**
+>
+> * Native1484 `Window.SetBaselineData` is now recovered and dispatched. Its
+>   two optional floats default to 2/1; it updates the existing GC or returns
+>   unchanged when that context is null. All 22 full exec/GC cases match the
+>   original DLL. The common oracle now supports pointer-linked memory images.
+> * Both Training bot Frob routes return from original
+>   PersonaBorderButtonWindow.InitWindow, including StyleChanged, with their
+>   authored 1/1 values stored in the GC. The next explicit boundary for both
+>   screens is native1439 `Window.SetAcceleratorText` in SetButtonText.
+> * The [bounded milestone](script-window-baseline.md) is complete. Both bot
+>   integration checks, existing 406 window-native comparisons and build pass.
+>   Full bot screens and Stage 3 remain incomplete. No full sweep is claimed.
+
+> **Checkpoint update, 2026-09-24 (keypad close):**
+>
+> * PopWindow now completes UnPauseGame through an attached Engine.Viewport
+>   script prefix and Engine.Console. The HUD returns, DSTY_None replaces the
+>   mask, bUIPaused/bShowMenu clear, Console leaves Menuing, and the original
+>   PlayerPawn/GameInfo.SetPause(False) clears Level.Pauser.
+> * [Original construction evidence](script-viewport-console.md) covers
+>   GameEngine.Init, WindowsClient.NewViewport, UViewport/UConsole initialization
+>   and SetPlayer. Viewport's registry superclass is corrected from Client
+>   (actually its Within class) to Player.
+> * The keypad validator checks successful close and existing identity readers;
+>   validate-viewport-console checks native instruction guards and five original
+>   SetPause cases. Browser F → 0012 showed GRANTED, then a restored HUD and open
+>   doorway with no errors. The preview required a small downward aim adjustment.
+> * Required four-job sweep: 370 passed, 0 skipped; only the three pre-existing
+>   failures (gameplay, native-player-sequence/Mission01, npc-mesh-preview).
+> * This does not complete GameInfo startup, platform window/input construction,
+>   multiplayer or the scheduler's true-paused behavior. The next UI boundaries
+>   remain HandleButtons, Toggle PressButton and Medical/RepairBot SetBaselineData.
+
 > **Checkpoint update, 2026-09-24 (keypad input path):**
 >
 > * **Keypad.** Keypad0 now works in Play through the original window input path

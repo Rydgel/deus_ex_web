@@ -19,7 +19,7 @@ const RECEIVER_SIZE=0x800;
 // Window-host natives whose recovered bodies are self-contained receiver
 // reads/writes (optionally with AskParentForReconfigure).
 const NATIVES=[1424,1474,1487,1495,1500,1510,1511,1512,1513,1514,1515,1516,1517,1518,1521,1522,1555,1559,1560,1561,1562,1563,
-  1564,1572,1573,1595,1596,1597,1843,1844];
+  1564,1572,1573,1595,1596,1597,1620,1621,1622,1624,1625,1629,1630,1631,1632,1633,1634,1635,1637,1641,1651,1652,1701,1702,1703,1843,1844];
 // FString receiver fields a native reads, with the texts each case cycles
 // through. Their 12 raw bytes hold oracle-local pointers and are not compared.
 const STRINGS={
@@ -98,6 +98,19 @@ for(const index of NATIVES){
     plan.push({native,values,bytes,strings,oracle:{id:`${index}:${round}:${n}`,exec:native.exec,strings,
       this:Buffer.from(bytes).toString('hex'),params:native.params.map((shape,i)=>encodeParam(shape,values[i]))}});
   });
+}
+// Focused ScrollArea x87 branches: equality preserves signed zero; an
+// unordered comparison skips that axis, but another unequal axis writes both.
+for(const [index,old,values] of [
+  [1701,[-0],[0]],[1701,[NaN],[3]],[1701,[3],[NaN]],
+  [1701,[Infinity],[Infinity]],[1701,[Infinity],[-Infinity]],
+  [1702,[NaN,2],[3,2]],[1702,[NaN,2],[3,4]],
+  [1702,[1,2],[NaN,4]],[1702,[-0,0],[0,-0]],
+]){
+  const native=natives.get(index),bytes=patternBytes(RECEIVER_SIZE,index),view=new DataView(bytes.buffer);
+  old.forEach((v,i)=>view.setFloat32((index===1701?0x178:0x170)+i*4,v,true));
+  plan.push({native,values,bytes,strings:[],oracle:{id:`${index}:comparison:${plan.length}`,exec:native.exec,
+    this:Buffer.from(bytes).toString('hex'),params:native.params.map((shape,i)=>encodeParam(shape,values[i]))}});
 }
 const results=runOracle(plan.map(entry=>entry.oracle));
 const summary=new Map(),failures=[],notLeaf=[];

@@ -164,7 +164,7 @@ export function setAcceleratorKeyNative(window,key,services={}){
  * 0x1004f378 each add 2), so "||&k" yields no key. A final '|' steps past the
  * terminator into unrelated heap bytes; that read is not reproduced. */
 export function setAcceleratorTextNative(window,value,services={}){
-  const text=value===null?'':textValue(value,'accelerator text');
+  const text=value===null?'':textValue(value,'accelerator text').split('\0',1)[0];
   let key=0;
   for(let index=0;index<text.length;){
     if(text.charCodeAt(index++)!==0x7c)continue;

@@ -14,7 +14,7 @@ needs its own oracle, validator and translation module.
   inside Extension.dll run as part of the body. `AskParentForReconfigure`
   (`0x1004e060`) and `MakeAcceleratorTableDirty` (`0x1004c1d0`) are recorded
   as events. The run stops when it leaves the image, makes a virtual call or
-  writes a global. Such a run is not a leaf, and it is reported but not
+  writes outside the declared images. Such a run is not a leaf, and it is reported but not
   compared.
 * `scripts/native-exec-diff-lib.mjs` reads parameter classes and optional/out
   flags from the original UnrealScript signature, and exec addresses from the
@@ -79,3 +79,32 @@ Core and MSVCRT: [text parser](script-text-parser.md).
   final `|` makes the original read past the terminator into unrelated heap
   bytes, so that case is now an explicit error. No shipped localized string
   ends in `|`.
+
+### Pointer-linked receiver images (2026-09-24)
+
+The same oracle now accepts `pointees: [{offset, bytes}]`: it maps each image,
+writes its address into the receiver field, allows writes within that image and
+returns its complete bytes. Calls into Extension still execute the original
+bodies. `validate-window-baseline.mjs` uses this for Window+0x130 → GC, covering
+22 native1484 calls with null/present context and optional/edge float arguments.
+It compares both full images (normalizing only the relocated pointer), untouched
+return bytes, events and parameter consumption. Existing 406 leaf comparisons
+still pass. This does not supply arbitrary native object graphs or virtual calls.
+
+
+### Scroll-area settings (2026-09-24)
+
+Natives1701–1703 add 53 comparisons, bringing the dispatcher suite to 459
+across 33 natives. Focused NaN, infinity, equality and signed-zero cases verify
+x87 C3 branches for SetScrollbarDistance and SetAreaMargins. The constructor,
+nine-child initialization and visibility composition use the separate bounded
+[scroll-area body check](script-window-scroll-area.md), with child services
+explicitly outside that comparison.
+
+### Scale settings (2026-09-24)
+
+Sixteen Scale execs add 224 full receiver/result/event comparisons; the total is
+683 across 49 natives. These cover orientation, textures/caps, stretching,
+styles/colors, margins, tick-count/position reads, thumb step and sounds. Stateful
+range/geometry and child wiring use the bounded original-body runner described
+in [scroll child families](script-window-scroll-children.md).

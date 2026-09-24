@@ -1,11 +1,16 @@
 /** Window host leaves recovered from the shipped Extension.dll.
  * This dispatcher supplies the native memory/services to existing translations.
  * It does not replace script methods. See docs/script-window-host.md. */
+import {setButtonTexturesNative} from './script-window-set-button-textures.mjs';
+import {setButtonColorsNative} from './script-window-set-button-colors.mjs';
+import * as S from './script-window-scroll-children.mjs';
+import {enableScrollAreaScrolling,setScrollAreaDistance,setScrollAreaMargins,autoHideScrollAreaBars} from './script-window-scroll-area.mjs';
 import {refValue} from './script-vm.mjs';
 import * as T from './script-window-tree-natives.mjs';
 import {addLog,clearLog} from './script-window-text-log.mjs';
+import {gcSetBaselineData} from './script-gc-set-baseline-data.mjs';
 import {gcEnableTranslucentText} from './script-gc-enable-translucent-text.mjs';
-import {convertScriptString,enableTextAsAcceleratorNative} from './script-window-text.mjs';
+import {convertScriptString,enableTextAsAcceleratorNative,setAcceleratorTextNative} from './script-window-text.mjs';
 import {addTimer,removeTimer} from './script-window-timers.mjs';
 import {setCursorPos} from './script-window-mouse.mjs';
 import {pressButtonNative} from './script-window-press-button.mjs';
@@ -26,6 +31,11 @@ export function dispatchWindowHostNative(W, call) {
     case 1426: value=T.getModalWindow(W,win);break;
     case 1427: value=T.getTabGroupWindow(W,win);break;
     case 1429: {const root=T.getRootWindow(W,win);value=root?W.ptr(root,T.ROOT.parentPawn):null;break;}
+    case 1439: // exec 0x100524a0 passes the FString directly, without pipe conversion.
+      setAcceleratorTextNative(win,arg(0,''),{
+        read:(object,offset,kind)=>W.heap.read(object,offset,kind),
+        write:(object,offset,kind,raw)=>W.heap.write(object,offset,kind,raw),
+        makeAcceleratorTableDirty:({object})=>W.native.makeAcceleratorTableDirty(object)});break;
     case 1454: { // XWindow::SetDefaultCursor 0x1004fab0; exec 0x10052c20.
       W.setPtr(win,0xf0,arg(0,null));W.setPtr(win,0xf4,arg(1,null));
       W.setF32(win,0xf8,arg(2,-1));W.setF32(win,0xfc,arg(3,-1));
@@ -41,6 +51,11 @@ export function dispatchWindowHostNative(W, call) {
     case 1483: { // 1004dc90, exec default true at 10053f18.
       const enabled=arg(0,true)?1:0,old=W.u32(win,0x74);
       if(((old>>>1)&1)!==enabled){W.setU32(win,0x74,(old&~2)|(enabled<<1));const gc=W.ptr(win,0x130);if(gc)gcEnableTranslucentText(gc,enabled,W.gc.services);}break;
+    }
+    case 1484: { // exec 0x10053de0 -> XWindow::SetBaselineData 0x1004dd30.
+      // Evaluate both arguments before the method reads its existing GC.
+      const baseline=arg(0,2),underline=arg(1,1),gc=W.ptr(win,0x130);
+      if(gc)gcSetBaselineData(gc,baseline,underline,W.gc.services);break;
     }
     case 1485: value=W.gc.get(win);break;
     case 1486: W.gc.release(win,arg(0,null));break;
@@ -113,6 +128,14 @@ export function dispatchWindowHostNative(W, call) {
     case 1521: // LockMouse 0x1003a290
       W.setU32(win,0x5a4,(W.u32(win,0x5a4)&~6)|((arg(0,true)?1:0)<<1)|((arg(1,true)?1:0)<<2));break;
     case 1522: bits(0x5a4,8,arg(0,true));break;                   // ShowCursor 0x1003a310
+    case 1592: setButtonTexturesNative(win,...Array.from({length:6},(_,i)=>arg(i,null)),{
+      read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
+    case 1593: {
+      const colors=Array.from({length:6},(_,i)=>arg(i,null));
+      if(colors.some(v=>v===null))W.boundary('SetButtonColors omitted-color stack alpha is not modeled');
+      setButtonColorsNative(win,...colors.map(packed),{
+        read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
+    }
     case 1595: // ButtonWindow.EnableAutoRepeat 0x10007aa0; float defaults at 0x10059df8/0x10059dfc
       bits(0x174,4,arg(0,true));W.setF32(win,0x17c,arg(1,0.5));W.setF32(win,0x180,arg(2,Math.fround(0.1)));break;
     case 1596: bits(0x174,8,arg(0,true));break;                   // EnableRightMouseClick 0x10007ae0
@@ -122,6 +145,24 @@ export function dispatchWindowHostNative(W, call) {
         read:(object,offset,kind)=>W.heap.read(object,offset,kind),
         write:(object,offset,kind,raw)=>W.heap.write(object,offset,kind,raw),
         makeAcceleratorTableDirty:({object})=>W.native.makeAcceleratorTableDirty(object)});break;
+    case 1620: S.scaleOrientation(W,win,arg(0,0));break;
+    case 1621: S.scaleTexture(W,win,arg(0,null),arg(1,0),arg(2,0),arg(3,0),arg(4,0));break;
+    case 1622: S.thumbTexture(W,win,arg(0,null),arg(1,0),arg(2,0));break;
+    case 1624: S.thumbCaps(W,win,arg(0,null),arg(1,null),arg(2,0),arg(3,0),arg(4,0),arg(5,0));break;
+    case 1625: S.stretchScale(W,win,arg(0,true)?1:0);break;
+    case 1629: case 1630: case 1631: W.setU8(win,0x17c+call.index-1629,arg(0,0));break;
+    case 1632: case 1633: case 1634: W.setU32(win,0x17f+4*(call.index-1632),packed(arg(0,null)));break;
+    case 1635: S.scaleMargins(W,win,arg(0,0),arg(1,0));break;
+    case 1636: S.scaleNumTicks(W,win,arg(0,0));break;
+    case 1637: value=W.i32(win,0x1c4);break;
+    case 1638: S.scaleThumbSpan(W,win,arg(0,1));break;
+    case 1641: value=W.i32(win,0x1c8);break;
+    case 1651: W.setI32(win,0x1d0,Math.max(1,arg(0,0)|0));break;
+    case 1652: {const sounds=[arg(0,null),arg(1,null),arg(2,null)];sounds.forEach((v,i)=>W.setPtr(win,0x1f4+4*i,v));break;}
+    case 1700: enableScrollAreaScrolling(W,win,arg(0,true)?1:0,arg(1,true)?1:0);break;
+    case 1701: setScrollAreaDistance(W,win,arg(0,0));break; // exec 0x10043ec0
+    case 1702: setScrollAreaMargins(W,win,arg(0,0),arg(1,0));break; // exec 0x10043f40
+    case 1703: autoHideScrollAreaBars(W,win,arg(0,true)?1:0);break; // exec 0x10044000
     case 1843: W.setU8(win,0x20c,arg(0,0));break;                 // CheckboxWindow.SetCheckboxStyle 0x1000a9a0
     case 1844: { // SetCheckboxColor 0x1000a9b0: one unaligned dword at +0x20d
       const color=packed(arg(0,null));for(let i=0;i<4;i++)W.setU8(win,0x20d+i,color>>>(8*i));break;

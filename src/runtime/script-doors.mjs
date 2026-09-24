@@ -1592,7 +1592,7 @@ export async function createScriptDoors({
     // chain (the original reloads the level on "Player start"). This must run
     // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
     resetNpcs();
-    // Bind the local viewport listener onto PlayerPawn.Player. The engine sets
+    // Rebind the attached local viewport onto PlayerPawn.Player. The engine sets
     // this to the possessing viewport for the local player; here it is the same
     // Client.Viewports[0] listener GetPlayerPawn (720) already follows. Original
     // reachable bytecode such as DeusExPlayer.GetDisplayName gates on
@@ -1912,6 +1912,11 @@ export async function createScriptDoors({
     return records.length;
   }
 
+  // The script-visible UViewport/Console graph must precede root construction.
+  // Platform window/input construction remains outside this projection.
+  const {attachLocalViewportConsole}=await import('./script-viewport-console.mjs');
+  if(level?.engine?.client?.viewports?.[0])
+    await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:playerActor});
   let windowHost=null,playerLogs=null;
   if(nativeHud){
     // HUD.InitWindow reads the initialized augmentation/theme/inventory
@@ -1922,9 +1927,6 @@ export async function createScriptDoors({
     runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
     playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
       player:playerActor,warning:message=>callbacks.warning?.(message)});
-    // ConstructRootWindow belongs to the possessing viewport. The root's
-    // original ConsoleCommand calls must already see that UPlayer identity.
-    runtime.namedReference(playerActor,'Player').set(level.engine.client.viewports[0]);
     // The former presentation adapter was created after prepareNpcs. Its
     // replacement calls the player's original HUD getters during root Init.
     await prepareNpcClass(playerClass);

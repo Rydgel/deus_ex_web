@@ -117,6 +117,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   }));
   // Native GetPlayerPawn720 follows XLevel.Engine.Client.Viewports[0].Actor.
   // This local Play session owns one viewport, bound to its controlled JC.
+  // createScriptDoors attaches its original Player script prefix and Console
+  // before constructing the HUD (docs/script-viewport-console.md).
   // UClient::Decals is a config bool the original defaults to True; pawn
   // startup reaches AttachDecal through SpawnShadow and reads it here.
   playerScene.level.engine = {client:{decals:true,viewports:[{actor:player.collisionActor}]}};

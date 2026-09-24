@@ -96,16 +96,35 @@ assert.equal(get(get(window, 'winText'), 'Text') ?? null, '~~GRANTED~~', 'Valida
 assert.ok(recipients.every(mover => mover.interpolation.interpolating && mover.interpolation.key === 1),
   'KeypadRunEvents triggers both paddoor movers');
 
-// KeypadDelay fires one second later and PopWindow destroys the keypad. The
-// following DeusExRootWindow.UnPauseGame reads parentPawn.Player.Console: Play's
-// viewport is a host listener without the original UPlayer/Console objects.
-assert.throws(() => tick(90), /not attached to script runtime/);
-assert.equal(failedStack?.at(-1), 'deusex.deusexrootwindow.unpausegame', 'the stop is UnPauseGame after PopWindow');
-assert.equal(failedStack[0], 'deusex.deusexrootwindow.popwindow', 'the stop is inside root.PopWindow');
+// KeypadDelay now completes PopWindow -> UnPauseGame -> GameInfo.SetPause.
+const viewport = get(player, 'Player'), consoleObject = get(viewport, 'Console');
+runtime.gotoState(consoleObject, 'Menuing');
+assert.equal(runtime.instance(consoleObject).state.stateNode.record.key, 'engine.console.menuing');
+runtime.namedReference(level.actors[0], 'Pauser').set('Close reference');
+tick(90);
+assert.equal(failedStack, null, 'the original close chain completes');
+assert.equal(get(rootWindow, 'bUIPaused'), false);
+assert.equal(W.u8(rootWindow, 0x3c), 0, 'DSTY_None clears the background style');
+assert.ok(W.u32(get(rootWindow, 'hud'), 0x30) & 1, 'ShowHud restores HUD visibility');
+assert.equal(get(player, 'bShowMenu'), false);
+assert.equal(get(level.actors[0], 'Pauser'), '', 'GameInfo.SetPause(False) clears Pauser');
+assert.equal(viewport, level.engine.client.viewports[0]);
+assert.equal(className(viewport), 'Viewport');
+assert.equal(get(viewport, 'Actor'), player);
+assert.equal(get(consoleObject, 'Viewport'), viewport);
+assert.equal(className(consoleObject), 'Console');
+assert.equal(get(consoleObject, 'TopLine'), 63);
+assert.equal(get(consoleObject, 'BorderSize'), 1);
+assert.equal(runtime.instance(consoleObject).state.stateNode, null);
 assert.ok(events.includes('KeypadDelay'), 'InvokeTimers ran the KeypadDelay timer function');
 assert.equal(host.isDestroyed(window), true, 'PopWindow destroyed the keypad window');
 assert.equal(get(keypad, 'keypadwindow'), null, 'HUDKeypadWindow.DestroyWindow cleared the owner');
 assert.equal(W.i32(rootWindow, 0x5d0), 0, 'hiding the modal released the keyboard grab');
 assert.equal(W.i32(rootWindow, 0x5cc), 0, 'hiding the modal released the mouse grab');
+assert.equal(runtime.callFunction(runtime.lookup(player, 'GetPlayerPawn'), player), player,
+  'native 720 still follows Client.Viewports[0].Actor');
+assert.equal(typeof runtime.callFunction(runtime.lookup(player, 'ConsoleCommand'), player, 1, ()=>'KEYBINDING W'), 'string');
+assert.notEqual(runtime.callFunction(runtime.lookup(player, 'GetDisplayName'), player, 1, ()=>keypad), '',
+  'GetDisplayName still sees Player');
 console.log('Keypad0 opens with the DataLink active, grabs input, places the cursor, accepts 0012 through original key routing, opens both paddoor movers, ' +
-  'and its KeypadDelay timer destroys the window; UnPauseGame\'s Player.Console remains the explicit boundary');
+  'and its KeypadDelay timer destroys the window and completes UnPauseGame through the attached Viewport/Console and GameInfo.SetPause');

@@ -22,6 +22,12 @@ export class ScriptResourceError extends Error {
 // These are addresses in the original Deus Ex GOTY Engine.dll image. They are
 // metadata only; no host function is called by this registry.
 const NATIVE_SPECS = Object.freeze({
+  'engine.viewport': {
+    packageName: 'Engine', name: 'Viewport', staticClass: 0x10581068,
+    instanceSize: 0xf8, registrationBody: 0x10372370,
+    superKey: 'engine.player', withinKey: 'engine.client',
+    unsupportedReason: 'Only inherited Player script storage and local Console linkage are attached; platform viewport construction is unsupported',
+  },
   'core.object': {
     packageName: 'Core', name: 'Object', staticClass: 0x1029e0d0,
     instanceSize: 0x28, registrationBody: 0x10150cc0,

@@ -136,7 +136,8 @@ export const ENGINE_CLASSES = freeze({
   Sound:                row({staticClass: 0x10580868, internalCtor: 0x10303891, super: 0x1029e0d0, instanceSize: 0x54}),
   Music:                row({staticClass: 0x10580368, internalCtor: 0x103036a7, instanceSize: 0x4c}),
   AudioSubsystem:       row({staticClass: 0x1057fe68, internalCtor: 0x10370f70, instanceSize: 0x2c}),
-  Viewport:             row({staticClass: 0x10581068, internalCtor: null, super: 0x10581668, instanceSize: 0xf8}),
+  // 0x103723a1 pushes Within=Client; 0x103723a6 pushes Super=Player.
+  Viewport:             row({staticClass: 0x10581068, internalCtor: null, super: 0x1058cd68, instanceSize: 0xf8}),
   Client:               row({staticClass: 0x10581668, internalCtor: 0x10303bc0, instanceSize: 0x98}),
   Canvas:               row({staticClass: 0x10581c68, internalCtor: 0x103011f9, instanceSize: 0x84}),
   Console:              row({staticClass: 0x105823e0, internalCtor: 0x1030127b, instanceSize: 0x810}),

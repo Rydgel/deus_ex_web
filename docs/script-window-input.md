@@ -5,8 +5,8 @@ DataCube0. The keypad needs several window subsystems: the modal input grab,
 cursor placement and hit testing, focus, the root window's key routing, window
 timers, button presses and destruction of the Modal and Button families. All of
 them are now translated from the bodies below, wired into Play, and compared
-with the original DLL. Closing the keypad still stops at the UPlayer/Console
-boundary described under "Play reach".
+with the original DLL. Closing the keypad now completes UnPauseGame through
+the attached Viewport/Console graph and original GameInfo.SetPause bytecode.
 
 ## Authority
 
@@ -351,16 +351,18 @@ DataLink is playing when Frob runs.
 
 The viewer's Previews menu has a Keypad entry that places JC in front of it.
 
-`PopWindow` then calls `DeusExRootWindow.UnPauseGame`, and that stops Play. It
-reads `parentPawn.Player.Console`, but Play's viewport is a host listener
-object, not the original UPlayer with its `Engine.Console` (DeusEx.ini
-`Console=Engine.Console`). The next step there is `parentPawn.SetPause(False)`.
-Closing any PushWindow screen reaches the same step.
+`PopWindow` then completes `DeusExRootWindow.UnPauseGame`: bUIPaused and
+bShowMenu are false, the background is DSTY_None, the HUD is visible, the
+attached Engine.Console leaves its state, and GameInfo.SetPause(False) clears
+Level.Pauser. [Viewport and Console evidence](script-viewport-console.md)
+records the native construction/linkage contract and the remaining pause scope.
+The browser route (Previews → Keypad, aim at it, F, 0012) was also checked:
+GRANTED, closed keypad, restored HUD, open doorway, no browser errors.
 
 ## Unresolved
 
-* The UPlayer/Viewport and Console objects that `UnPauseGame` needs: their
-  construction (`UGameEngine::Init`, `UConsole::_Init`) has not been traced.
+* Full platform Viewport construction and paused Level.Tick scheduling remain
+  outside the attached script prefix; see the viewport contract above.
 * Mouse input: `HandleButtons` (mouse clicks), and Play's pointer look while a
   modal holds the mouse grab (the original routes mouse axes to the root
   instead of the view).

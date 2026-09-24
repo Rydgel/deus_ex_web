@@ -79,6 +79,7 @@ EXT = EXTENSION_BASE  # rebased rva -> address helper base
 # string marshals, and the frame->Code advancement (one opcode byte per
 # marshalled param plus the result-eat) are all observable.
 NATIVES = {
+    'SetAcceleratorText': {'mode': 'exec', 'body': EXT + 0x524a0, 'kind': 'execVoid'},
     'SetText': {'mode': 'exec', 'body': EXT + 0x46a30, 'kind': 'execVoid'},
     'AppendText': {'mode': 'exec', 'body': EXT + 0x46b80, 'kind': 'execVoid'},
     'GetText': {'mode': 'exec', 'body': EXT + 0x46cd0, 'kind': 'execString'},
@@ -549,7 +550,18 @@ class TextWindowProbe(_NATIVE.NativeCollision):
         spec = case['spec']
         args = case.get('args', [])
         this = self.begin_case(spec)
+        images = []
+        if case.get('captureImages'):
+            current = this
+            while current:
+                images.append({'address': current,
+                               'before': bytes(self.cpu.mem_read(current, WINDOW_SIZE)).hex()})
+                current = self.read(current + O['parent'], 'I')[0]
         out = self.run_exec(info, this, args, spec)
+        if images:
+            for image in images:
+                image['after'] = bytes(self.cpu.mem_read(image['address'], WINDOW_SIZE)).hex()
+            out['images'] = images
         out['events'] = list(self.events)
         out['state'] = self.dump_state(this)
         return out
@@ -569,3 +581,9 @@ def oracle_main(method, section, root=None):
         'body': NATIVES[method]['body'],
         'cases': results,
     }))
+
+
+if __name__ == '__main__':
+    request = json.load(sys.stdin)
+    probe = TextWindowProbe(Path(sys.argv[1]))
+    print(json.dumps([probe.run_case(request['method'], case) for case in request['cases']]))

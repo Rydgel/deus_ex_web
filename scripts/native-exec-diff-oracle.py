@@ -130,6 +130,16 @@ class ExecDiff(_NATIVE.NativeCollision):
         this_bytes = bytes.fromhex(case['this'])
         this = self.this = self.alloc(len(this_bytes))
         self.cpu.mem_write(this, this_bytes)
+        # Optional pointer-linked images let exec bodies follow real receiver
+        # fields. Each block is mapped and compared in full by the caller;
+        # native callees execute normally, without pointer-service stubs.
+        blocks = []
+        for block in case.get('pointees', []):
+            data = bytes.fromhex(block['bytes'])
+            address = self.alloc(len(data))
+            self.cpu.mem_write(address, data)
+            self.write(this + block['offset'], 'I', address)
+            blocks.append((block['offset'], address, len(data)))
         # FString receiver fields: {Data, ArrayNum, ArrayMax} over a UTF-16
         # buffer with its terminator (ArrayNum counts it; empty is all zero).
         for field in case.get('strings', []):
@@ -156,6 +166,7 @@ class ExecDiff(_NATIVE.NativeCollision):
         # prologues/epilogues write; it is frame-local, not a global effect.
         self.regions = [(this, len(this_bytes)), (code, 0x40), (frame, 0x40), (result, 0x20),
                         (self.stack - 0x10000, 0x10010), (0, 0x10000)]
+        self.regions += [(address, length) for _, address, length in blocks]
         out = {'id': case['id']}
         try:
             self.call(self.entry, this, self.frame_args(frame, result))
@@ -169,6 +180,9 @@ class ExecDiff(_NATIVE.NativeCollision):
             out['status'] = 'error'
             out['reason'] = str(error)[:200]
         out['this'] = bytes(self.cpu.mem_read(this, len(this_bytes))).hex()
+        if blocks:
+            out['pointees'] = [{'offset': offset, 'bytes': bytes(self.cpu.mem_read(address, length)).hex()}
+                               for offset, address, length in blocks]
         out['result'] = bytes(self.cpu.mem_read(result, 0x20)).hex()
         out['codeAdvance'] = self.read(frame + 0xc, 'I')[0] - code
         out['paramsLeft'] = len(self.params)
