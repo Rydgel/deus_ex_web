@@ -143,6 +143,11 @@ frontier:
 | Resource graph | `DynamicLoadObject` of `DXFonts` | ShowMainMenu |
 | Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (Lamp.Frob, AugLight) | QuickSave, Teleporter0 |
 
+The SDK headers ([SDK reference](sdk-reference.md)) name each screen row's exact
+retail functions. `CheckboxWindow` adds `Init`, `CleanUp`,
+`ParentRequestedPreferredSize` and `Draw` to the recovered toggle chain. The
+Inventory row is `XTextWindow::ParentRequestedGranularity` `0x10046880`.
+
 Choose work by family, not by site. The two movement rows use the
 already-recovered `MoveActor`/`FarMoveActor` bodies, which Play admits only
 for the player, spawned views and held items. Admitting map actors closes all
