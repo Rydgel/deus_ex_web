@@ -40,3 +40,31 @@ Reproduce: `node scripts/validate-window-scroll-removal.mjs`,
 Both bot integration routes and the production build pass (the existing bundle
 size warning remains). No full validator sweep was needed for this slice.
 No visual equivalence, full cleanup or Stage 3 completion is claimed.
+
+## Next slice: ScrollArea descendant removal
+
+Contract recorded before translation from the same hash-pinned Extension.dll:
+XScrollAreaWindow::DescendantRemoved at 0x10043980–0x10043a42. It compares the
+argument with +14c, +150, +154, +158, +15c, +160, +164, +168 and +16c, in that
+order. The first match is cleared and the function returns immediately; aliases
+in later slots remain. Unrelated pointers cause no writes, and null is compared
+normally. There is no ProcessScript call, inherited callback, reconfiguration,
+or child dereference anywhere in this body.
+
+Original reference cases will cover all nine slots, aliases, unrelated children,
+and null with and without a matching slot, comparing full images and absence of
+script calls before admission to the host. Full recursive family destruction
+remains outside this notification-only slice.
+
+The ScrollArea follow-up now passes 13 original-DLL comparisons (23 total with
+ScaleManager), including all nine reference slots and the null/alias cases.
+The host routes this native override directly, before its generic script bridge.
+The Training medical-screen fixture verifies that removing its up button and
+vertical scale clears the corresponding area references, preserves the down
+button, manager and clip, and executes no script event. These direct virtual
+notifications do not claim full tree unlink/destruction. Bot audio and remaining
+scrolling/input/destructor boundaries are unchanged.
+
+Follow-up verification: both bot integration routes, the production build and
+`git diff --check` pass; the build retains its existing bundle-size warning.
+No full sweep was run for this bounded callback addition.

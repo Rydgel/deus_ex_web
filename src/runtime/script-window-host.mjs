@@ -535,6 +535,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if (is(win, 'extension.radioboxwindow')) radioBoxDescendantAdded(win, child);
     },
     descendantRemoved(win, child) {                                                    // 0x10003520 / RadioBox / Modal / Root
+      if (is(win, 'extension.scrollareawindow')) return A.scrollAreaDescendantRemoved(W,win,child);
       if (is(win, 'extension.radioboxwindow')) return radioBoxDescendantRemoved(win, child);
       if (is(win, 'extension.rootwindow')) rootDescendantRemoved(win, child);        // then XModalWindow's
       processScript(win, 'DescendantRemoved', [child]);
@@ -689,7 +690,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     'extension.scalewindow':['mouseMoved','mouseButtonPressed','mouseButtonReleased','tick','draw'],
     'extension.scalemanagerwindow':['buttonActivated','scalePositionChanged'],
     'extension.clipwindow':['childRequestedShowArea'],
-    'extension.scrollareawindow':['descendantRemoved','mouseButtonPressed','scaleRangeChanged','clipPositionChanged'],
+    'extension.scrollareawindow':['mouseButtonPressed','scaleRangeChanged','clipPositionChanged'],
   }))for(const method of methods){
     const inherited=V[method];V[method]=(win,...args)=>{
       if(is(win,family))return boundary(`${family}.${method} native override is not recovered`);

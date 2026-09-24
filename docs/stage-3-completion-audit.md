@@ -1,5 +1,17 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scroll-area descendant removal):**
+>
+> * ScrollArea.DescendantRemoved now clears the first matching one of its nine
+>   stored descendant references without dispatching a script event, matching
+>   the original native override.
+> * Thirteen original-DLL cases cover all slots, alias ordering and null/unrelated
+>   arguments; the removal comparison total is 23. Live Training window dispatch
+>   verifies reference clearing and absence of script calls. See
+>   [removal evidence](script-window-scroll-removal.md).
+> * Full recursive family destruction, bot audio and scrolling/input remain
+>   incomplete. This closes only the descendant-removal callback.
+
 > **Checkpoint update, 2026-09-24 (scrollbar manager child removal):**
 >
 > * ScaleManager.ChildRemoved now runs its script event before clearing only

@@ -119,6 +119,14 @@ if(target==='MedicalBot'){
   assert.equal(W.ptr(manager,0x158),scale,'unrelated scale is preserved');
   W.v.childRemoved(manager,scale);
   assert.equal(W.ptr(manager,0x158),null,'manager clears the removed scale');
-  assert.throws(()=>W.v.descendantRemoved(area,first),/scrollareawindow.descendantRemoved native override/);
+  const beforeRemovalEvents=completed.length;
+  W.v.descendantRemoved(area,first);
+  assert.equal(child(0x164),null,'area clears its removed up-button reference');
+  assert.equal(child(0x168),last,'area preserves the down-button reference');
+  W.v.descendantRemoved(area,scale);
+  assert.equal(child(0x158),null,'area clears its removed vertical scale');
+  assert.equal(child(0x150),manager,'area preserves the vertical manager');
+  assert.equal(child(0x16c),clip,'area preserves the clip');
+  assert.equal(completed.length,beforeRemovalEvents,'area removal emits no script event');
 }
 console.log(`window-baseline-play: ${target} completes button baseline and accelerator initialization; next explicit boundary is ${target==='MedicalBot'?'MedicalBot PlaySound (scroll-area layout complete)':'RepairBot PlaySound'}`);

@@ -4,6 +4,14 @@
 export const SCROLL_AREA = Object.freeze({constructor:0x100186e0,init:0x10042d80,
   enableScrolling:0x10043160,vtable:0x1005bcec,size:0x180});
 
+/** 0x10043980: no script event; clear only the first matching descendant slot.
+ * Evidence: docs/script-window-scroll-removal.md. */
+export function scrollAreaDescendantRemoved(W,win,child){
+  for(let off=0x14c;off<=0x16c;off+=4){
+    if(W.ptr(win,off)===child){W.setPtr(win,off,null);return;}
+  }
+}
+
 export function constructScrollAreaWindow(W,win){
   W.uobjectConstructor(win);
   for(let off=0xd4;off<=0xe8;off+=4)W.setU32(win,off,0);
