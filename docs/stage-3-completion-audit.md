@@ -1,5 +1,14 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scroll movement chain):**
+>
+> * Scrollbar buttons and wheel callbacks now run MoveThumb, position/range
+>   broadcasts, clip movement and scrollbar feedback. 41 original-DLL cases
+>   compare full images, return values and ordered services; live bot integration
+>   and build pass. See [movement evidence](script-window-scroll-movement.md).
+> * Value-field formatting, drag/repeat, show-area, drawing and complete cleanup
+>   remain explicit boundaries; bot audio and Stage 3 remain incomplete.
+
 > **Checkpoint update, 2026-09-24 (scroll-area descendant removal):**
 >
 > * ScrollArea.DescendantRemoved now clears the first matching one of its nine

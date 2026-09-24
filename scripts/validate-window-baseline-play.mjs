@@ -113,6 +113,13 @@ if(target==='MedicalBot'){
   // Exercise the recovered removal virtual on the real constructed manager.
   // This isolates notification dispatch; full recursive screen cleanup remains guarded.
   const manager=child(0x150),first=W.ptr(manager,0x14c),last=W.ptr(manager,0x150);
+  const initialPosition=W.i32(scale,0x1c8),limit=Math.max(0,W.i32(scale,0x1c4)-W.i32(scale,0x1cc));
+  assert.equal(W.v.buttonActivated(manager,last),true,'original scrollbar down-button route is consumed');
+  assert.equal(W.i32(scale,0x1c8),Math.min(limit,initialPosition+W.i32(scale,0x1d0)),'button moves the thumb by its authored step');
+  assert.equal(W.i32(clip,0x178),W.i32(scale,0x1c8),'range callback synchronizes clip row');
+  assert.equal(W.v.buttonActivated(manager,first),true,'original scrollbar up-button route is consumed');
+  assert.equal(W.i32(scale,0x1c8),0,'up button returns to the first row');
+  assert.equal(W.i32(clip,0x178),0,'clip feedback agrees at the first row');
   W.v.childRemoved(manager,first);
   assert.equal(W.ptr(manager,0x14c),null,'manager clears the removed first button');
   assert.equal(W.ptr(manager,0x150),last,'unrelated second button is preserved');

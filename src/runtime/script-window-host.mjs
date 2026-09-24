@@ -27,6 +27,7 @@ import * as S from './script-window-scroll-children.mjs';
 import * as A from './script-window-scroll-area.mjs';
 import * as SL from './script-window-scroll-layout.mjs';
 import * as SC from './script-window-scroll-configuration.mjs';
+import * as SM from './script-window-scroll-movement.mjs';
 import {setSensitivityNative} from './script-window-sensitivity.mjs';
 import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
@@ -658,6 +659,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     changeButtonAppearance: win => changeButtonAppearance(win), boundary}));
   // Key routing and button activation (docs/script-window-input.md).
   Object.assign(V, {
+    scalePositionChanged:(win,...args)=>is(win,'extension.scalemanagerwindow')?SM.managerScalePosition(W,win,...args):processScript(win,'ScalePositionChanged',args,{result:false}),
+    scaleRangeChanged:(win,...args)=>is(win,'extension.scrollareawindow')?SM.scrollScaleRange(W,win,...args):processScript(win,'ScaleRangeChanged',args,{result:false}),
+    clipPositionChanged:(win,...args)=>is(win,'extension.scrollareawindow')?SM.scrollClipPosition(W,win,...args):processScript(win,'ClipPositionChanged',args,{result:false}),
     // vtable +0xbc: XWindow::RawKeyPressed 0x10003750 in every admitted family.
     rawKeyPressed: (win, key, action, repeat) =>
       processScript(win, 'RawKeyPressed', [key & 0xff, action & 0xff, Boolean(repeat)], {result: false}),
@@ -681,16 +685,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         addActivateTimer: Timers.addActivateTimer, activateButton: (w, k) => W.native.activateButton(w, k)});
     },
     // vtable +0xe8 / +0xec: XWindow::ButtonActivated 0x10003d20 / ButtonActivatedRight 0x10003d50.
-    buttonActivated: (win, source) => processScript(win, 'ButtonActivated', [source], {result: false}),
+    buttonActivated: (win, source) => is(win,'extension.scalemanagerwindow')?SM.managerButtonActivated(W,win,source):processScript(win, 'ButtonActivated', [source], {result: false}),
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
+  const inheritedMousePressed=V.mouseButtonPressed;
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
   // The four new families override these native slots. Until translated,
   // reject them explicitly instead of silently using Window/TabGroup behavior.
   for(const [family,methods] of Object.entries({
     'extension.scalewindow':['mouseMoved','mouseButtonPressed','mouseButtonReleased','tick','draw'],
-    'extension.scalemanagerwindow':['buttonActivated','scalePositionChanged'],
     'extension.clipwindow':['childRequestedShowArea'],
-    'extension.scrollareawindow':['mouseButtonPressed','scaleRangeChanged','clipPositionChanged'],
   }))for(const method of methods){
     const inherited=V[method];V[method]=(win,...args)=>{
       if(is(win,family))return boundary(`${family}.${method} native override is not recovered`);
@@ -744,7 +748,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     enableStretchedScale:(...args)=>S.stretchScale(W,...args),
     forceChildSize:(...args)=>S.forceClipChildSize(W,...args),
     enableAutoRepeat:(win,...args)=>dispatchWindowHostNative(W,{index:1595,receiver:win,argumentCount:args.length,evaluateArgument:i=>args[i]}),
-    changeScalePosition:()=>boundary('Scale.ChangeScalePosition 0x1003f5a0 is not recovered'),
+    changeScalePosition:(...args)=>SM.changeScalePosition(W,...args),
+    getScaleValueString:()=>boundary('Scale.GetValueString 0x1003e460 formatting is not recovered'),
     setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
     makeAcceleratorTableDirty: win => T.makeAcceleratorTableDirty(W, win),
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),
