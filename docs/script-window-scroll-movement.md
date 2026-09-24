@@ -64,3 +64,29 @@ claimed by this slice. Bot setup still reaches Actor.PlaySound.
 
 Reproduce: `node scripts/validate-window-scroll-movement.mjs`,
 `node scripts/validate-window-baseline-play.mjs`, and `npm run build`.
+
+## UnrealScript native entry points (contract before dispatch)
+
+Installed declarations and exec bodies: SetTickPosition1640 (40f20),
+MoveThumb1650 (41540), SetChildPosition1680 (c6f0), GetChildPosition1681
+(c780). Setters seed argument locals with zero, evaluate left-to-right, advance
+past EndFunctionParms, then call the recovered workers. MoveThumb masks its
+argument to a byte before calling. Void result storage is untouched.
+
+GetChildPosition clears GPropAddr independently before each argument and retains
+each resulting lvalue (or uses its local temporary). Both arguments evaluate
+before either output is written. The worker b5e0 reads/writes horizontal first,
+then reads/writes vertical; aliased outputs, including a first output aliased to
+the receiver's vertical position, must retain that order. Focused original exec
+cases precede dispatcher wiring; worker behavior reuses the complete comparisons
+above.
+
+Twenty original exec comparisons now pass for these four dispatch entries,
+including zero-initialized skipped expressions, signed edges, byte masking,
+argument order, independent/aliased/missing lvalues and receiver-field aliasing.
+Setters' worker calls are explicit leaves in this wrapper oracle; their full
+bodies are verified by the movement comparisons. The live Training integration
+invokes all four through ScriptRuntime native dispatch, verifies clip/scale
+feedback and out-parameter readback, then destroys the subtree. Both bot routes
+and build pass. Drawing, root mouse-button routing, value-string formatting and
+bot Actor.PlaySound remain explicit boundaries. Stage 3 is unfinished.

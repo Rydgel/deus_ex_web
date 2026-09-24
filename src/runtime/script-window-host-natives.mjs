@@ -156,9 +156,20 @@ export function dispatchWindowHostNative(W, call) {
     case 1636: S.scaleNumTicks(W,win,arg(0,0));break;
     case 1637: value=W.i32(win,0x1c4);break;
     case 1638: S.scaleThumbSpan(W,win,arg(0,1));break;
+    case 1640: W.native.setTickPosition(win,arg(0,0)|0);break;
     case 1641: value=W.i32(win,0x1c8);break;
+    case 1650: W.native.moveThumb(win,arg(0,0)&255);break;
     case 1651: W.setI32(win,0x1d0,Math.max(1,arg(0,0)|0));break;
     case 1652: {const sounds=[arg(0,null),arg(1,null),arg(2,null)];sounds.forEach((v,i)=>W.setPtr(win,0x1f4+4*i,v));break;}
+    case 1680: W.native.setClipPosition(win,arg(0,0)|0,arg(1,0)|0);break;
+    case 1681: {
+      // Both lvalues are captured before writing. The first write may alias
+      // the receiver's row; read that row only afterward (original b5e0).
+      const col=call.evaluateArgument(0),row=call.evaluateArgument(1);
+      if(col?.reference)col.set(W.i32(win,0x174));
+      if(row?.reference)row.set(W.i32(win,0x178));
+      break;
+    }
     case 1700: enableScrollAreaScrolling(W,win,arg(0,true)?1:0,arg(1,true)?1:0);break;
     case 1701: setScrollAreaDistance(W,win,arg(0,0));break; // exec 0x10043ec0
     case 1702: setScrollAreaMargins(W,win,arg(0,0),arg(1,0));break; // exec 0x10043f40

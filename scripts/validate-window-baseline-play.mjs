@@ -130,6 +130,14 @@ if(target==='MedicalBot'){
   W.v.childRequestedShowArea(clip,W.ptr(clip,0x140),0,0,1,1);
   assert.equal(W.i32(clip,0x178),0,'show-area brings the content origin back into view');
   assert.equal(W.i32(scale,0x1c8),0,'show-area synchronizes the scrollbar');
+  const invoke=(receiver,index,args)=>runtime.invokeNative({receiver,index,argumentCount:args.length,evaluateArgument:i=>args[i]});
+  invoke(scale,1640,[7]);
+  assert.equal(W.i32(clip,0x178),W.i32(scale,0x1c8),'SetTickPosition script native reaches clip feedback');
+  invoke(scale,1650,[0]);
+  invoke(clip,1680,[0,3]);
+  const readback=[null,null];
+  invoke(clip,1681,[0,1].map(i=>({reference:true,get:()=>readback[i],set:v=>{readback[i]=v;}})));
+  assert.deepEqual(readback,[W.i32(clip,0x174),W.i32(clip,0x178)],'GetChildPosition captures both original out parameters');
   W.v.childRemoved(manager,first);
   assert.equal(W.ptr(manager,0x14c),null,'manager clears the removed first button');
   assert.equal(W.ptr(manager,0x150),last,'unrelated second button is preserved');

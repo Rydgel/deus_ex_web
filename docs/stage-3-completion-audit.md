@@ -1,5 +1,22 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scroll movement native dispatch):**
+>
+> * SetTickPosition1640, MoveThumb1650, SetChildPosition1680 and
+>   GetChildPosition1681 now reach the verified movement implementation.
+>   Twenty original exec comparisons verify argument/lvalue order, byte masking,
+>   cursor advancement and void result preservation. Runtime dispatch, both bot
+>   integration routes and build pass.
+> * This work block adds 87 movement/input/show-area comparisons, ten cleanup
+>   cases and twenty exec cases. It enables recursive medical scroll-subtree
+>   cleanup and coherent movement through the host and script-native boundaries.
+> * Next boundaries: Scale drawing, root mouse-button routing, value-field
+>   formatting and bot Actor.PlaySound. Native heap reclamation remains outside
+>   this logical host. Full bot screens, visual fidelity and Stage 3 are unfinished.
+>   See [movement](script-window-scroll-movement.md),
+>   [input](script-window-scroll-input.md), [show-area](script-window-scroll-show-area.md)
+>   and [cleanup](script-window-scroll-cleanup.md). No full sweep was needed.
+
 > **Checkpoint update, 2026-09-24 (scroll subtree cleanup):**
 >
 > * Scale/Manager/Clip/ScrollArea now join the recovered host destruction path.
