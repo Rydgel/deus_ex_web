@@ -131,3 +131,44 @@ hierarchies to avoid hanging a browser host; the original native loop has no
 equivalent browser-side guard.  No claim is made here that a complete live
 DataLink or InfoLink lifecycle is integrated until those explicit services
 are wired by the owning runtime slice.
+
+## Play integration: the native window host (2026-09-23)
+
+The native HUD host (`src/runtime/script-window-host.mjs`) now binds this module
+for its own windows as `lifecycle.destroy`, so `Window.Destroy` (1409) and
+`Window.DestroyAllChildren` (1459, exec `0x10052f00`: `P_FINISH`, then
+`KillAllChildren`) run in Play. The InfoLink shell keeps its own services for the
+windows it owns; the merged lifecycle routes each call by owner. Each window
+family supplies its own virtuals, read from the Extension vtables:
+
+| Family | CleanUp (`+0x58`) | deleting destructor (`+0x0c`) |
+| --- | --- | --- |
+| Window | `XWindow::CleanUp` `0x1004bec0` | `0x10004860` → `~XWindow` |
+| TextWindow | `0x10045c30`: empty the text FString `+0x168`, then XWindow's | `0x10009120` → `~XTextWindow` `0x10008d40` |
+| TileWindow | `0x10048430`: empty the 12-byte-element FArray `+0x168`, then XWindow's | `0x100155d0` → `~XTileWindow` `0x10014ee0` |
+
+* `ChildRemoved` (`+0x6c`) is `XWindow::ChildRemoved` `0x100034e0` for every
+  family: `ProcessScript(ChildRemoved, &child, 0)`. `DescendantRemoved` (`+0x74`) is
+  `XWindow::DescendantRemoved` `0x10003520`, except XModalWindow `0x10037400`
+  (the script event, then clearing `+0x178` if it is the child) and XRootWindow
+  `0x1003b5c0`. The root first clears `+0x624` (the last button window) with the
+  GLog line `Tried to remove lastbuttonwindow descendant. %s`, then runs the modal
+  body. XRadioBoxWindow's `0x10038cb0` is not recovered and stays an explicit
+  boundary.
+* Each deleting destructor runs ConditionalDestroy under its own vtable, then under
+  the XWindow and XExtensionObject vtables, then `~UObject`. The first run
+  reaches the window's Destroy virtual, `XWindow::Destroy` `0x1004c010`: PreDestroy
+  (a no-op, since `bBeingDestroyed` is set), the zero-lock assertion, then
+  `UObject::Destroy` (`RF` flag `0x80000000` and ExitProperties). The flags live at
+  UObject `+0x1c`. Host windows have no registry slot, and the host heap never
+  frees; a destroyed window loses its family, so any later native on it is an
+  explicit boundary.
+* A window's GC contexts go through the XGC deleting destructor: `~XGC`
+  `0x10002c70` → `XGC::Destroy` `0x10026d40`. For a window's own GC that is
+  PopGC(0), then unlinking and deleting every free-list node (`+0xb0` through each
+  node's `+0xac`), with a GLog warning past 16 nodes. Destroying a pushed node
+  (owner `+0xb4` set), the GC allocation lists at `+0x128`/`+0x12c`, and the
+  CleanUp/destructors of other families are explicit boundaries.
+
+`scripts/validate-datacube-read.mjs` exercises this when a DataCube's paragraph
+TextWindows are cleared.

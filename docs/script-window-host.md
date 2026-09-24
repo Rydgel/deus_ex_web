@@ -72,7 +72,25 @@ Full-viewport rendering makes GetRawBackgroundClipList1003c5f0 subtract the
 null render clip at1003c6b3, so DrawRawBackground emits no tiles for that branch.
 
 The VM IntToString token53 follows Core10131600's signed DWORD and `%i`
-format string at101aaf70. The host's runaway guard was raised from2048 to16384
+format string at101aaf70. FloatToString (token 0x55, Core `execFloatToString`
+`0x10131ca0`) is `FString::Printf(L"%f", (double)F)` with the format constant
+at `0x101aaf78`. `scriptFloatToString` prints the float's exact decimal
+expansion to six places, rounding half away from zero. It does this only when
+a 17-significant-digit intermediate would print the same text. NaN/Inf, -0,
+more than 17 integer digits and those double-rounding cases are explicit,
+because MSVCRT's spelling there is not measured. Aiming at a hackable device
+reaches it: `FrobDisplayWindow.DrawWindow` → `FormatString` of the hack
+strength.
+
+The InfoLink/ConPlay presentation subtree that `delegateLegacySubtree`
+registers belongs to its legacy shell. Tick, draw, reconfigure and WindowReady
+already skip it. The visibility, sensitivity and init-count walks
+(`RecomputeInitTree`, `InvokeVisibilityChange`, `InvokeSensitivityChange`) now
+skip it too. Before, `DeusExRootWindow.ShowHud(False)` during a DataLink
+reached a shell window with no host family. It also counted shell windows that
+never receive WindowReady, which broke every later `InitializeWindows`. The
+original sends those windows VisibilityChanged. Delivering it inside the
+delegated shell is part of that shell's remaining work. The host's runaway guard was raised from2048 to16384
 statements because original HUDMultiSkills.RefreshKey legitimately scans all
 255 input keys; this limit is a host safeguard, not an original engine value.
 

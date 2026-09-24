@@ -1,5 +1,84 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (keypad input path):**
+>
+> * **Keypad.** Keypad0 now works in Play through the original window input path
+>   ([window input](script-window-input.md)):
+>   * `game.use()` opens HUDKeypadWindow. The modal grabs the keyboard and mouse,
+>     the cursor is placed, and focus goes to the button under it.
+>   * Typing `0012` runs the original digit route through the scripts.
+>     ValidateCode then shows `~~GRANTED~~` and opens both `paddoor` movers.
+>   * One second later the KeypadDelay timer pops and destroys the window.
+>   * `PopWindow` then reaches `UnPauseGame`, which needs the original
+>     UPlayer/`Engine.Console` objects. Play's viewport is a host listener, so
+>     Play pauses there. This is the next boundary, and every PushWindow screen
+>     reaches it when it closes.
+> * **Newly translated and wired.** Window timers (1490/1491 and InvokeTimers),
+>   the modal grab, SetCursorPos (1453) and ProcessMouseMove with hit testing.
+>   Also AskParentToShowArea, MoveFocus and CheckFocusWindow, root key routing,
+>   PressButton and ActivateButton (1598/1590), IsKeyDown (1470), Core `GetEnum`,
+>   and destruction of the Button, Modal and TabGroup families. Four new
+>   validators compare them with the unchanged DLL bodies or check the Play path:
+>   `validate-window-timer-diff`, `validate-window-grab-diff`,
+>   `validate-window-mouse-focus-diff` and `validate-keypad`.
+> * **Found in the browser.** Aiming at the keypad broke the whole HUD paint:
+>   `FrobDisplayWindow` formats the hack strength with FloatToString (VM token
+>   0x55), which is now `%f` from Core `execFloatToString`. Opening it during the
+>   DataLink then failed: `ShowHud(False)` walked into the delegated InfoLink
+>   subtree, and a stale init count broke `InitializeWindows`. The visibility,
+>   sensitivity and init walks now skip that subtree, as tick and draw already
+>   did. The grabbed-mouse cursor is now drawn (PaintWindows' cursor branch and
+>   QueryCursor). The viewer's Previews menu has a Keypad entry.
+> * **Fixes on the way.** UnlockWindow now skips SafeDestroy when the lock count
+>   is already zero (`jle 0x1004c18f`). Before, it ran SafeDestroy for any window
+>   being destroyed.
+>   SetActorZone's head query uses `EyeHeight` (+0x3f8) rather than
+>   `BaseEyeHeight`. The player's and movers' script Region/Foot/HeadRegion are
+>   bound to the stored SetActorZone result ([zone](zone.md)).
+> * **Next boundaries.** UPlayer/Console construction and `SetPause`; mouse
+>   clicks (`XRootWindow::HandleButtons`); the medical and repair bots
+>   (`Window.SetBaselineData` 1484); decoration carrying.
+
+> **Checkpoint update, 2026-09-23 (information devices):**
+>
+> * **DataCube reading.** Frobbing DataCube0 in Play now shows its text, which
+>   carries the `paddoor` code `0012`, in the HUD information display. It adds the
+>   DataVault note and closes when JC walks away or frobs again. BookOpen0 and
+>   DataCube2 read the same way. The DeusExText.dll parser natives (2210–2221) are
+>   translated from the DLL and match it across all 492 shipped texts plus 27 edge
+>   cases, state compared after every step
+>   ([text parser](script-text-parser.md)). The parser alpha bytes are heap
+>   addresses, modelled as 0; they do not reach drawing.
+> * **General fixes on the way.** The VM's `switch` now follows Core
+>   `execSwitch`/`execCase`: stacked case labels and fall-through had silently
+>   skipped case bodies ([scene events](scene-events.md)). `game.use()` now takes
+>   the original `ParseRightClick → DoFrob` route for every non-mover target, so
+>   pickup animation and `Futz` run. A pushable decoration is grabbed, and that
+>   stops at the explicit carry boundary. `new` follows Core `execNew`
+>   (transient package for a None Outer; script-only Object subclasses admitted by
+>   native ancestry). Native 751 `CriticalDelete` dispatches recovered deleting
+>   destructors. Native window destruction is bound in the Play host for the
+>   Window, TextWindow and TileWindow families, including GC destruction
+>   ([window destruction](script-window-destroy.md)). New TextWindow natives
+>   1482, 1551, 1555 and 1559–1563 were added; SetText/AppendText now apply the exec
+>   pipe conversion.
+> * **Text layout fix.** The HUD's `GetTextExtent` adapter now passes the native X/Y
+>   extents to the TextWindow and TextLogWindow layout, which had read them as zero or
+>   NaN. The DataCube text is visible in the browser, and the validator checks the
+>   glyphs drawn inside the display.
+> * **Next boundaries.** The keypad (`XModalWindow::VisibilityChanged` grab), the
+>   medical and repair bots (`Window.SetBaselineData` 1484), Lamp (PlaySound
+>   outside the per-path allowlist) and decoration carrying
+>   (`PutCarriedDecorationInHand`). The information display's rendering has not
+>   been compared pixel for pixel with the original.
+> * **Player zone fields (fixed).** `HUDHitDisplay.Tick` used to log Accessed None
+>   at offset 465 on every tick because the player's script `HeadRegion` was never
+>   written. That issue predated the changes above. The player's script `Region`,
+>   `FootRegion` and `HeadRegion` now bind to the storage that the translated
+>   `SetActorZone` writes. Idle Training ticks now log 0 warnings instead of 60.
+>   The head query now uses `EyeHeight` (`+0x3f8`) rather than `BaseEyeHeight`,
+>   per the original linked property offsets ([zone](zone.md)).
+
 > **Checkpoint update, 2026-09-23 (reach probe, eager preparation, family
 > verification):**
 >

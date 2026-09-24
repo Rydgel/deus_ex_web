@@ -50,6 +50,21 @@ bytes, found:
 The pointer-following, global-writing and virtual-calling groups need
 structured receiver memory or recorded services, not a new oracle per native.
 
+### Update (2026-09-23, DataCube reading)
+
+The TextWindow leaves SetWordWrap (1555, `0x10045fb0`), SetMinLines (1559),
+SetMaxLines (1560), ResetLines (1561), SetMinWidth (1562) and ResetMinWidth
+(1563) were added: 406 cases are identical across 30 natives. SetMinWidth
+keeps the x87 compare branches: a negative or NaN width becomes +0, and an
+equal or unordered old value skips the store. AppendText (1551),
+CarriageReturn (1482) and SetText's `ConvertScriptString` write outside the
+receiver (the static pipe-conversion buffer or a returned FString), so they are
+not leaf cases. They are translated from their bodies and checked by
+`scripts/validate-window-text.mjs` and `scripts/validate-datacube-read.mjs`.
+
+The DeusExText.dll parser family uses its own harness, because its methods call
+Core and MSVCRT: [text parser](script-text-parser.md).
+
 ## Findings the harness exposed
 
 * `RootWindow.SetRawBackground` (1516) stores R, G and B as 0xff for an

@@ -18,7 +18,8 @@ export function pointRegion(model,position,levelInfo,zoneActors,numZones=zoneAct
 
 /** Original SetActorZone1039b940, ordinary Actor/Pawn route. Test suppresses events,
  * never region stores. World callbacks receive (zone,pawn), or (pawn,newZone)
- * for the pawn's ZoneChange/FootZoneChange/HeadZoneChange events.
+ * for the pawn's ZoneChange/FootZoneChange/HeadZoneChange events. The head
+ * query adds Pawn.EyeHeight (+0x3f8, 1039bdb7; BaseEyeHeight is +0x3f4).
  */
 export function setActorZone(pawn,world,test=false,force=false){
  if(pawn.deleted)return;
@@ -34,7 +35,7 @@ export function setActorZone(pawn,world,test=false,force=false){
  const foot=world.pointRegion([f(pawn.position[0]),f(pawn.position[1]),f(pawn.position[2]-pawn.height)]);
  if(foot.zone!==pawn.footRegion.zone&&!test)invoke('footZoneChange',pawn,foot.zone);
  pawn.footRegion={...foot};
- const head=world.pointRegion([f(pawn.position[0]),f(pawn.position[1]),f(pawn.position[2]+pawn.baseEyeHeight)]);
+ const head=world.pointRegion([f(pawn.position[0]),f(pawn.position[1]),f(pawn.position[2]+pawn.eyeHeight)]);
  if(head.zone!==pawn.headRegion.zone&&!test)invoke('headZoneChange',pawn,head.zone);
  pawn.headRegion={...head};
  if(world.netMode!==3&&pawn.playerReplicationInfo)pawn.playerReplicationInfo.playerZone=pawn.region.zone;

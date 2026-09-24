@@ -41,10 +41,12 @@ assert.equal(ref(plant, 'ConListItems'), null, 'no bound conversation (StartConv
 const outcome = game.doors.scriptRuntime.dispatchEvent(plant, 'Frob', [player, null]);
 assert.deepEqual(outcome, { handled: true, result: true }, 'the real DeusExDecoration.Frob ran through the general router (no scene-adapter pause)');
 
-// game.use() routes a non-mover frob target through the router (was: "interaction
-// not supported yet"). frobTarget is the live actor traceActors would select.
+// game.use() takes the original right-click route, DeusExPlayer.ParseRightClick.
+// A pushable decoration is grabbed there (GrabDecoration), not frobbed; its
+// carry relocation (SetLocation of a map decoration) is an explicit boundary.
 game.interaction.frobTarget = plant;
-assert.deepEqual(game.use(), { ok: true, message: '' }, 'game.use() runs the decoration Frob via the general router');
+assert.deepEqual(game.use(), { ok: false, message: 'Houseplant — interaction not yet supported' },
+  'ParseRightClick grabs the pushable plant and stops at the unsupported carry relocation');
 
 // The mover Frob path is unchanged: a mover target still routes to doors.use().
 const mover = level.actors.find(a => a?.lineage?.includes('engine.mover') && game.collision.movers.includes(a));
@@ -88,7 +90,7 @@ assert.equal(ref(lightSwitch, 'AnimSequence'), 'Off');
 assert.deepEqual(dirs(), before, 'the TriggerLights reversed back');
 
 console.log('General Frob validated in the Play host: a plain decoration (Plant7) runs the real ' +
-  'DeusExDecoration.Frob through the general router, game.use() routes non-mover frobs to it, and the ' +
-  'mover path is intact. LightSwitch0.Frob runs end-to-end (roadmap item #3): the cratelight AllActors ' +
+  'DeusExDecoration.Frob through the general router, game.use() takes the original ParseRightClick route ' +
+  '(the pushable plant reaches the GrabDecoration carry boundary), and the mover path is intact. LightSwitch0.Frob runs end-to-end (roadmap item #3): the cratelight AllActors ' +
   'fanout toggles all four TriggerLights via their state Trigger, the real PlayAnim sets AnimSequence ' +
   "(On/Off), and the click is a recorded Stage-4 audio boundary; a second frob reverses everything.");

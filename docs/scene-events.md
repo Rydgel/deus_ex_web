@@ -49,12 +49,20 @@ delegation contract; the live path is exercised by `validate-plant-push`,
 
 ### Frob (item #2, M2; roadmap item #3)
 
-`game.use()` routes a non-mover frob target through the router as
-`Frob(player, None)`. A plain decoration runs its real inherited
-`DeusExDecoration.Frob` — the empty `Actor.Frob` base, `DeusExPlayer.StartConversation`
-(early-false while `ConListItems` is null, the training case; **not** replaced with
-an unconditional false, per docs/script-light-switch.md), then the `Event`/`AllActors`
-trigger fanout (skipped when `Event` is None).
+`game.use()` sends every non-mover frob target through the original
+right-click path, `DeusExPlayer.ParseRightClick` (dispatched through this router so
+a pawn's conversation gets the presenter lifecycle). ParseRightClick checks
+`RestrictInput`, grabs a pushable decoration (`GrabDecoration`), and otherwise calls
+`DoFrob`: the target's `Frob(player, None)`, the owned-object `Futz` AI event and
+`PlayPickupAnim` (`PushButton` within 16 units of height, else `Pickup`). Before
+2026-09-23 the host called `Frob` directly, which skipped DoFrob and frobbed a
+pushable decoration instead of grabbing it. Grabbing now reaches the explicit
+carry boundary (`PutCarriedDecorationInHand`'s `SetLocation` of a map decoration).
+A plain decoration's `Frob` is its real inherited `DeusExDecoration.Frob` — the empty
+`Actor.Frob` base, `DeusExPlayer.StartConversation` (early-false while `ConListItems`
+is null, the training case; **not** replaced with an unconditional false, per
+docs/script-light-switch.md), then the `Event`/`AllActors` trigger fanout (skipped
+when `Event` is None).
 
 **LightSwitch → TriggerLights (roadmap item #3, done).** Frobbing a `LightSwitch`
 runs its full override: `Super.Frob`'s `AllActors('cratelight')` fanout calls
@@ -93,7 +101,8 @@ their authored event chains are linked. See
 Core operators `==`/`!=` bool (natives 242/243).
 
 **Base Trigger (done).** `Trigger.Touch` runs its real `IsRelevant` gate — the
-`switch(TriggerType)` (a new VM **EX_Switch/EX_Case** control-flow lowering) and the
+`switch(TriggerType)` (the VM **EX_Switch/EX_Case** lowering; see the Core semantics
+below) and the
 native **`ClassIsChildOf`** (258) — then the `Event`/`AllActors` → `Actor.Trigger`
 fanout (the validated mechanism the LightSwitch also uses). Training's only base
 `Trigger0` is `TT_ClassProximity` for `Carcass` (a corpse-detection trigger that opens
@@ -145,3 +154,16 @@ reciprocal touching bookkeeping still runs. What is not yet built (subsequent AI
 later damage effects, flag expiration and datalink transmission/completion) is recorded as a
 deferred mission-script effect at its boundary rather than being invented — an
 explicit, honest whole-game fidelity gap, closed incrementally per trigger type.
+
+### EX_Switch / EX_Case (Core execSwitch 0x1012f850, execCase 0x1012fa20)
+
+`execSwitch` owns the case scan. It reads the switch value's size byte, evaluates
+the value, then walks the `EX_Case` chain: each case skips its token, reads the
+next-case offset, stops at `0xffff` (default or terminator) or evaluates its value
+and compares it (`appMemcmp` over the size, or `appStricmp` of the two FStrings for
+size 0). A match enters the code after that case; a mismatch jumps to the next
+case. `execCase`, reached only by falling into a case, just steps over its
+expression. Stacked labels (`case 0: case 9: case 10:`) and case bodies without a
+`break` therefore fall through. Until 2026-09-23 the VM compared at every
+`EX_Case`, so a stacked label's body never ran: InformationDevices.ProcessTag lost
+its text (`case 0`) and colour (`case 15`) tags.

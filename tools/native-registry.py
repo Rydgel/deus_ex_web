@@ -104,7 +104,7 @@ def registry(image):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("package", nargs="?", default="Engine",
-                    choices=["Engine", "Extension"])
+                    choices=["Engine", "Extension", "DeusExText", "ConSys", "DeusEx"])
     ap.add_argument("--root", default=str(ROOT))
     ap.add_argument("--index", type=int, help="print only this native index")
     ap.add_argument("--json", help="write the full table to this path")

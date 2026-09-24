@@ -316,6 +316,12 @@ jobs by default), or explicitly `npm run validate -- --jobs 4`. Use focused
 validators while developing a Stage 3 slice; a full sweep is not required
 after every small change. The runner locates the local native-probe Python
 environment automatically and reports failures and skipped checks separately.
+It also bounds memory. Validators run in their own process groups. A validator
+starts only while the recorded peaks fit the budget (`--mem-budget`, default
+half of physical memory up to 8 GiB). One that passes the per-validator cap
+(`--mem-cap`, default 6 GiB) is killed and reported as failed. On macOS the
+runner measures memory footprint, including compressed and swapped pages, and
+it admits fewer jobs under system memory pressure.
 
 Build before browser testing. One mouse-lock check opens a focused Chromium window;
 that check requires a desktop session. Browser screenshots go into `reports/browser/`.

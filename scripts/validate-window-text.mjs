@@ -8,7 +8,7 @@ import {readFunctionMetadata} from '../src/unreal/script-metadata.mjs';
 import {
   WINDOW_TEXT_NATIVE,WINDOW_TEXT_OFFSETS,GC_TEXT_OFFSETS,
   initTextWindowNative,setTextAlignmentsNative,setTextMarginsNative,
-  setWindowFontNative,setWindowTextColorNative,setTextNative,
+  setWindowFontNative,setWindowTextColorNative,setTextNative,appendTextNative,convertScriptString,
 } from '../src/runtime/script-window-text.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
@@ -17,6 +17,7 @@ const assets=new AssetStore((await readdir(system)).map(name=>({path:`System/${n
 const extension=await assets.get('Extension');
 const functions=[
   ['textwindow.settext',WINDOW_TEXT_NATIVE.setText,['string']],
+  ['textwindow.appendtext',WINDOW_TEXT_NATIVE.appendText,['string']],
   ['textwindow.settextalignments',WINDOW_TEXT_NATIVE.setTextAlignments,['byte','byte']],
   ['textwindow.settextmargins',WINDOW_TEXT_NATIVE.setTextMargins,['float','float']],
   ['window.setfont',WINDOW_TEXT_NATIVE.setFont,['object']],
@@ -103,4 +104,20 @@ assert.equal(setTextNative(window,'|&Q',services),true);
 assert.equal(m.fields(window).get(WINDOW_TEXT_OFFSETS.acceleratorKey),'Q'.charCodeAt(0));
 assert.equal(dirty.length,1);assert.equal(reconfigure.length,4);
 
-console.log('Window text passed: installed TextWindow metadata and DLL bodies, native Init defaults, alignment/margin branches, font/GC propagation, packed colors, accelerator scan, and SetText guard.');
+// XTextWindow::AppendText 0x10045e60 has no unchanged guard: even an empty
+// append asks the parent to reconfigure, and an accelerator text re-derives
+// its key from the whole text.
+appendTextNative(window,'',services);
+assert.equal(m.fields(window).get(WINDOW_TEXT_OFFSETS.text),'|&Q');assert.equal(reconfigure.length,5);
+appendTextNative(window,' more',services);
+assert.equal(m.fields(window).get(WINDOW_TEXT_OFFSETS.text),'|&Q more');assert.equal(reconfigure.length,6);
+assert.equal(dirty.length,1,'the unchanged accelerator key does not dirty the table');
+const plain={},p=memoryFixture();p.fields(plain).set(WINDOW_TEXT_OFFSETS.text,'');p.fields(plain).set(WINDOW_TEXT_OFFSETS.textFlags,1);
+const plainReconfigure=[];
+appendTextNative(plain,'Jaime\0tail',{read:p.read,write:p.write,askParentForReconfigure:request=>plainReconfigure.push(request)});
+assert.equal(p.fields(plain).get(WINDOW_TEXT_OFFSETS.text),'Jaime','the appended C string stops at its NUL');
+assert.equal(plainReconfigure.length,1);
+// Window.ConvertScriptString 0x10050710, applied by the SetText/AppendText execs.
+assert.equal(convertScriptString('a|nb||nc|x|'),'a\nb||nc|x|');
+
+console.log('Window text passed: installed TextWindow metadata and DLL bodies, native Init defaults, alignment/margin branches, font/GC propagation, packed colors, accelerator scan, SetText guard, AppendText and the exec pipe conversion.');

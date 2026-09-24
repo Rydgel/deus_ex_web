@@ -18,7 +18,7 @@ import {loadExtensionNatives,patternBytes,encodeParam,runOracle} from './native-
 const RECEIVER_SIZE=0x800;
 // Window-host natives whose recovered bodies are self-contained receiver
 // reads/writes (optionally with AskParentForReconfigure).
-const NATIVES=[1424,1474,1487,1495,1500,1510,1511,1512,1513,1514,1515,1516,1517,1518,1521,1522,
+const NATIVES=[1424,1474,1487,1495,1500,1510,1511,1512,1513,1514,1515,1516,1517,1518,1521,1522,1555,1559,1560,1561,1562,1563,
   1564,1572,1573,1595,1596,1597,1843,1844];
 // FString receiver fields a native reads, with the texts each case cycles
 // through. Their 12 raw bytes hold oracle-local pointers and are not compared.

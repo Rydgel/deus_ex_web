@@ -2,8 +2,11 @@
 
 Contract traced before translation: Engine SetActorZone1039b940–1039be94 and
 PointRegion103f5db0–103f5f32. For an ordinary Pawn, SetActorZone queries center,
-feet at Location.Z-CollisionHeight and head at Location.Z+BaseEyeHeight. Region
-is Actor+c8; FootRegion Pawn+330; HeadRegion+33c; BaseEyeHeight+3f8.
+feet at Location.Z-CollisionHeight and head at Location.Z+EyeHeight. Region
+is Actor+c8; FootRegion Pawn+330; HeadRegion+33c; EyeHeight+3f8 (flds
+1039bdb7). An earlier revision of this note named +3f8 BaseEyeHeight; the
+linked Engine.u property offsets place BaseEyeHeight at +3f4 and EyeHeight
+at +3f8 (see "Controlled player script regions" below).
 
 If center Zone changes and test=false: oldZone.ActorLeaving(actor),
 actor.ZoneChange(newZone), then Region store, then newZone.ActorEntered(actor).
@@ -64,13 +67,13 @@ with real actor identities or null. The fallback must be the same LevelInfo
 identity used by line queries and all three initial pawn regions.
 
 `setActorZone(pawn,world,test=false,force=false)` owns ordinary Pawn region updates.
-State includes position, height, baseEyeHeight, region/footRegion/headRegion,
+State includes position, height, eyeHeight, region/footRegion/headRegion,
 deleted and optional playerReplicationInfo.playerZone. World supplies levelInfo,
 netMode and pointRegion(position). Required-on-use callbacks are
 actorLeaving(zone,pawn), zoneChange(pawn,newZone), actorEntered(zone,pawn),
 footZoneChange(pawn,newZone), headZoneChange(pawn,newZone). They run in original
 order and may mutate pawn state; later foot/head queries observe changed location,
-height or BaseEyeHeight as the DLL does. A missing event callback fails explicitly.
+height or EyeHeight as the DLL does. A missing event callback fails explicitly.
 Initialize all three regions as `{zone:levelInfo,leaf:-1,zoneNumber:0}` when
 reproducing spawn setup. Ordinary MoveActor and FarMoveActor pass test and force0.
 
@@ -103,6 +106,79 @@ node --test test/zone.test.mjs
 Ignored native case/results are `.cache/zone/{cases,original}.json`. The native
 harness does not execute entire game script event bodies. Unsupported water/pain,
 warp/custom zone callbacks, general actor classes and full startup remain explicit.
+The harness case field that the oracle writes to +3f8 is named `eyeHeight`
+(it was `baseEyeHeight`). Renaming it did not change the native writes. A
+fresh original run, without `--reuse`, still compares 28/28 exactly.
+
+## Controlled player script regions
+
+Original fact: SetActorZone writes the Region, FootRegion and HeadRegion
+script properties themselves. It does not write a separate native copy.
+
+- **Linked property offsets.** The properties read back from the original
+  Engine.u linker records give these UProperty offsets (`+0x48`):
+  `Actor.Region` `0xc8`, `Pawn.FootRegion` `0x330` and `Pawn.HeadRegion`
+  `0x33c`. Each is a 12-byte PointRegion (`Zone`, `iLeaf`, `ZoneNumber`).
+  The same records give `Pawn.BaseEyeHeight` `0x3f4` and `Pawn.EyeHeight`
+  `0x3f8`. They agree with `Location` `0x114`, `CollisionHeight` `0x1d8`
+  and `Physics` `0x30`, which the same body dereferences.
+  `native-pawn-perception-probe.py` and `native-actor-tick-oracle.py`
+  already map `EyeHeight` to `+0x3f8`.
+- **Stores in SetActorZone.** The center store sets `esi = actor+0xc8` at
+  `1039bc05` and stores the triple at `1039bcb7`–`bcbf`. The foot store
+  uses `edi = actor+0x330` (`1039bd83`) and stores at `1039bdc0`–`bdd5`.
+  The head query loads `EyeHeight` at `1039bdb7`. The head store uses
+  `esi = actor+0x33c` (`1039be2a`) and stores at `1039be4a`–`be52`.
+
+In the browser, the controlled JC is the player scene's `collisionActor`.
+The scene runs the translated `setActorZone` on that host for three calls:
+the reset/spawn `force` call, every `MoveActor` (`test=0,force=0`) and
+FarMoveActor. The host keeps the result in
+`region`/`footRegion`/`headRegion`. `script-doors.mjs` `makeBinding` binds
+the player's script `Region`, `FootRegion` and `HeadRegion` to those same
+host props. The script fields and the native stores therefore share one
+storage, like the single +c8/+330/+33c slots in the original. The binding
+converts only between `{zone,leaf,zoneNumber}` and the linked
+`engine.actor.pointregion.{zone,ileaf,zonenumber}` members. It adds no zone
+logic. Before this binding existed, the script fields kept their class
+default (`Zone=None`). `HUDHitDisplay.Tick` then logged Accessed None at
+offset 465 (`player.HeadRegion.Zone.bWaterZone`) on every Play tick.
+
+Script-attached map pawns already route these fields through
+`pawnPhysicsView` (`regionBinding`), which now also binds `EyeHeight` for the
+head query.
+
+Moving brushes follow the same rule. The player scene runs `updateZone` on
+each Training mover: once forced at reset, and again after every nonzero move
+(`moveMover`). It keeps the non-Pawn center region on the mover host. The
+binding applies to hosts with `movingBrush` as well as the controlled player,
+so each mover's script `Region` is that storage too. Movers have no
+Foot/HeadRegion properties. Before this change, a mover's script `Region`
+kept the LoadMap startup-pass value even after the mover had moved. Measured
+in 00_Training: all 25 movers' script `Region` equals a fresh PointRegion at
+their `Location` at startup, after DeusExMover19/20 (darkdoor) open, and
+after `game.reset()`. The darkdoor panels' leaves move from 1629/1629 to
+1645/1630 when opened. None of the extracted Mover/DeusExMover sources read
+`Region`, so this corrects state rather than any visible behaviour.
+
+Measured in 00_Training (`createGame`, seed 1, presentation on):
+
+- **Warning count.** 60 idle ticks produced 60 Accessed None warnings, all
+  `HUDHitDisplay.Tick@465`. After the binding they produce 0.
+- **Start values.** At the PlayerStart the script fields read LevelInfo /
+  leaf 3262 / ZoneNumber 1 for all three regions. These match the native
+  PointRegion captures above.
+- **Movement.** The run walked about 900 units, crouched and stood, then
+  was placed near DataCube0, DataCube1 and BookOpen0 and walked. It then
+  compared the script fields with fresh PointRegion queries at `Location`,
+  `Location-CollisionHeight` and `Location+EyeHeight`. All 540 ticks
+  matched, covering 7 distinct center/foot/head leaf triples. Foot leaves
+  differed from center leaves in some of them.
+
+Every Training region resolves to the LevelInfo zone actor, so none of
+these ticks crossed a zone identity. The dry ZoneChange/FootZoneChange/
+HeadZoneChange callbacks therefore stay behind the separately documented
+dry-callback boundary. Water/pain entry remains unsupported.
 
 ## Player collision-hash insertion during original spawning
 

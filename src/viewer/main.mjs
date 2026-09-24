@@ -231,7 +231,7 @@ async function loadMap(name) {
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
-      instructor: training, weapon: training});
+      instructor: training, weapon: training, datacube: training, keypad: training});
     $('infolink-shell').hidden = true;
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     resetCamera(); showStats();
@@ -405,6 +405,53 @@ previews.weapon = async () => {
   } catch (error) { pauseForRuntimeError(error); }
 };
 
+// Places Play in front of DataCube0 (the paddoor code) and aims at it. Reading
+// is the normal F key: ParseRightClick -> DoFrob -> InformationDevices.Frob.
+previews.datacube = () => {
+  if (!game || loading || currentMap !== '00_Training') return;
+  try {
+    setMode('play'); resetCamera();
+    const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+    const cube = runtime.levelFor(player).actors.find(actor => actor?.name === 'DataCube0');
+    if (!cube) throw new Error('Training DataCube0 is unavailable');
+    const at = runtime.namedReference(cube, 'Location').get();
+    game.collision.queries.changeActor(player, () => {
+      game.player.position = [at[0] - 56, at[1], at[2] + 48];
+      game.player.velocity = [0, 0, 0];
+    });
+    for (let frame = 0; frame < 30; frame++)
+      game.tick(1 / 60, {forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false});
+    yaw = 0; pitch = Math.atan2(at[2] - game.player.eye[2], 56);
+    camera.rotation.set(pitch, yaw, 0); camera.position.fromArray(toView(game.player.eye));
+    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    // The highlight a tick computes from this aim; set here like the crowbar preview.
+    game.interaction.frobTarget = cube;
+    toast('DataCube preview · press F to read it; walk away or press F again to close.');
+  } catch (error) { pauseForRuntimeError(error); }
+};
+
+previews.keypad = () => {
+  if (!game || loading || currentMap !== '00_Training') return;
+  try {
+    setMode('play'); resetCamera();
+    const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+    const keypad = runtime.levelFor(player).actors.find(actor => actor?.name === 'Keypad0');
+    if (!keypad) throw new Error('Training Keypad0 is unavailable');
+    const at = runtime.namedReference(keypad, 'Location').get();
+    game.collision.queries.changeActor(player, () => {
+      game.player.position = [at[0] - 48, at[1], at[2]];
+      game.player.velocity = [0, 0, 0];
+    });
+    for (let frame = 0; frame < 30; frame++)
+      game.tick(1 / 60, {forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false});
+    yaw = 0; pitch = Math.atan2(at[2] - game.player.eye[2], 48);
+    camera.rotation.set(pitch, yaw, 0); camera.position.fromArray(toView(game.player.eye));
+    drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
+    game.interaction.frobTarget = keypad;
+    toast('Keypad preview · press F to open it, then type the DataCube code 0012.');
+  } catch (error) { pauseForRuntimeError(error); }
+};
+
 previews.light = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
@@ -489,7 +536,16 @@ $('scene').onpointerup = event => {
 $('scene').onpointercancel = () => { drag = false; };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
 document.addEventListener('pointermove', event => { if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
+// XInputExt::Process: a key the player's root window consumes (a grabbing modal
+// such as the keypad) releases every held binding and reaches nothing else.
+function windowKey(event, pressed) {
+  if (mode !== 'play' || !game || runtimeError || !world || loading) return false;
+  if (/INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return false;
+  try { return game.windowKey(event.code, pressed); }
+  catch (error) { pauseForRuntimeError(error); return true; }
+}
 document.addEventListener('keydown', event => {
+  if (windowKey(event, true)) { keys.clear(); event.preventDefault(); return; }
   if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
@@ -511,7 +567,7 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
-document.addEventListener('keyup', event => { keys.delete(event.code); if (event.code === 'Enter') releaseFire(); });
+document.addEventListener('keyup', event => { if (windowKey(event, false)) event.preventDefault(); keys.delete(event.code); if (event.code === 'Enter') releaseFire(); });
 window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; });
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) paused = true; });
 function status() {

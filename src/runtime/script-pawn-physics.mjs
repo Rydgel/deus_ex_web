@@ -94,7 +94,8 @@ export function pawnPhysicsView(actor, services) {
   bind('destination', 'Destination'); bind('moveTimer', 'MoveTimer');
   bind('avgPhysicsTime', 'AvgPhysicsTime'); bind('standingCount', 'StandingCount');
   bind('radius', 'CollisionRadius'); bind('height', 'CollisionHeight');
-  bind('baseEyeHeight', 'BaseEyeHeight'); bind('desiredRotation', 'DesiredRotation');
+  bind('baseEyeHeight', 'BaseEyeHeight'); bind('eyeHeight', 'EyeHeight');
+  bind('desiredRotation', 'DesiredRotation');
   bind('rotationRate', 'RotationRate'); bind('owner', 'Owner');
   for (const [prop, name] of [['groundSpeed', 'GroundSpeed'], ['accelRate', 'AccelRate'],
     ['airControl', 'AirControl'], ['maxStepHeight', 'MaxStepHeight'], ['minHitWall', 'MinHitWall'],
@@ -225,7 +226,7 @@ export function pawnPhysicsView(actor, services) {
     const position = pawn.position;
     pawn.region = level.pointRegion(position);
     pawn.footRegion = level.pointRegion([position[0], position[1], f(position[2] - pawn.height)]);
-    pawn.headRegion = level.pointRegion([position[0], position[1], f(position[2] + pawn.baseEyeHeight)]);
+    pawn.headRegion = level.pointRegion([position[0], position[1], f(position[2] + pawn.eyeHeight)]);
   }
   // Track the live position in the collision hash the way a mover/decoration
   // does, so moves re-register the pawn's cylinder at the moved cell. The

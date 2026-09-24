@@ -10,6 +10,8 @@ import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
 import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
+import { createExtStringSource } from './script-text-parser-natives.mjs';
+import { readObject } from '../unreal/objects.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
@@ -297,6 +299,24 @@ function makeBinding(record, field) {
     },
   };
   if (dynamic[key]) return dynamic[key];
+  // ULevel::SetActorZone (0x1039b940) stores straight into the linked
+  // Region (+0xc8), FootRegion (+0x330) and HeadRegion (+0x33c) properties.
+  // The player scene runs that translated body on the controlled player and
+  // on moving brushes (player-scene.mjs updateZone), keeping the result on
+  // the host, so those script fields are that same storage (docs/zone.md).
+  const regionProp = { region: 'region', footregion: 'footRegion', headregion: 'headRegion' }[key];
+  if (regionProp && (host.controlledPlayer || host.movingBrush)) return {
+    get: () => {
+      const region = host[regionProp];
+      if (!region) return record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field);
+      return { 'engine.actor.pointregion.zone': region.zone ?? null,
+        'engine.actor.pointregion.ileaf': region.leaf ?? -1,
+        'engine.actor.pointregion.zonenumber': region.zoneNumber ?? 0 };
+    },
+    set: value => { host[regionProp] = { zone: value?.['engine.actor.pointregion.zone'] ?? null,
+      leaf: value?.['engine.actor.pointregion.ileaf'] ?? -1,
+      zoneNumber: value?.['engine.actor.pointregion.zonenumber'] ?? 0 }; },
+  };
   // The controlled player's view state lives on the viewer's movement port:
   // the camera integrates look input instead of PlayerPawn.UpdateRotation, so
   // original bodies (DeusExWeapon.TraceFire's GetAxes(ViewRotation),
@@ -598,6 +618,10 @@ export async function createScriptDoors({
       // ImpactSound/MiscSound on HitWall are the same one-shot effect audio.
       if (path.startsWith('nanokeyring.') || path.startsWith('skilledtool.')) { decorationEffect(call, 'ToolSound'); return 0; }
       if (path.startsWith('deusexfragment.') || path.startsWith('fragment.')) { decorationEffect(call, 'FragmentSound'); return 0; }
+      // HUDKeypadWindow.PressButton's tone and ValidateCode's success/failure
+      // sounds are one-shot UI audio whose returns the script discards
+      // (docs/script-window-input.md, Sounds): the same deferred contract.
+      if (path === 'hudkeypadwindow.pressbutton' || path === 'hudkeypadwindow.validatecode') { decorationEffect(call, 'KeypadSound'); return 0; }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
@@ -1893,6 +1917,9 @@ export async function createScriptDoors({
     // HUD.InitWindow reads the initialized augmentation/theme/inventory
     // graph. Allocate that actor world before the native root is constructed.
     await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
+    // DeusExTextParser.OpenText loads InformationDevices' XExtString texts
+    // from DeusExText (docs/script-text-parser.md).
+    runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
     playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
       player:playerActor,warning:message=>callbacks.warning?.(message)});
     // ConstructRootWindow belongs to the possessing viewport. The root's

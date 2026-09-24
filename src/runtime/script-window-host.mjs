@@ -33,6 +33,7 @@ import {askParentForReconfigureNative, WINDOW_RECONFIGURE_GLOBALS} from './scrip
 import {configureChildNative, WINDOW_CONFIGURE_CHILD_GLOBALS} from './script-window-configure-child.mjs';
 import {boundsUpdateNative} from './script-window-bounds-update.mjs';
 import {setVisibilityNative, setChildVisibilityNative} from './script-window-visibility.mjs';
+import {cleanUpWindowNative, preDestroyWindowNative, safeDestroyWindowNative} from './script-window-destroy.mjs';
 import {updatePolyFlagsFromFlags, gcMemory, GC} from './script-gc-state-model.mjs';
 import {decodeFontExport, writeFontImage, UFONT, FONT_PAGE} from './script-font-model.mjs';
 import {readObject} from '../unreal/objects.mjs';
@@ -46,20 +47,29 @@ import {gcCopyGC} from './script-gc-copy-gc.mjs';
 import {gcGetTextExtent} from './script-gc-get-text-extent.mjs';
 import {gcGetFontHeight} from './script-gc-get-font-height.mjs';
 import {gcEnableDrawing} from './script-gc-enable-drawing.mjs';
+import {gcSetStyle} from './script-gc-set-style.mjs';
+import {gcSetTileColor} from './script-gc-set-tile-color.mjs';
+import {gcDrawIcon} from './script-gc-draw-icon.mjs';
 import {gcTileEmitGate,bitsToF32} from './script-gc-draw-model.mjs';
 import * as D from './script-window-family-draw.mjs';
 import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
-import {rootTickNative} from './script-window-root-tick.mjs';
+import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
 import {createWindowActorRefDispatcher} from './script-window-actor-refs.mjs';
 import {writeWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {setToggleNative} from './script-window-toggle-set.mjs';
+import * as Timers from './script-window-timers.mjs';
+import * as Input from './script-window-input.mjs';
+import * as Mouse from './script-window-mouse.mjs';
 import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
+import {activateButtonNative} from './script-window-activate-button.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
+const f32BitsView = new DataView(new ArrayBuffer(4));
+const f32BitsOf = value => (f32BitsView.setFloat32(0, value, true), f32BitsView.getUint32(0, true));
 const NATIVE_WINDOW_KEYS = new Set(Object.keys(NATIVE_WINDOW_CLASS_SIZES));
 
 /** Native class families admitted by the host, keyed by Extension class key. */
@@ -214,6 +224,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     ['preferredSizeDepth', 0], ['granularityDepth', 0], ['rootWindowList', null], ['global100aeafc', null],
   ]);
   const boundaryLog = [];
+  const timerNodes = new Set();
   let lastTickTime=performance.now()/1000;
   const W = {
     heap,
@@ -231,9 +242,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     addToRoot: () => {},
     isA: (win, key) => { for (let c = runtime.instance(win).cls; c; c = c.base) if (c.record.key === key) return true; return false; },
     setPawnRootWindow: (pawn, root) => runtime.namedReference(pawn, 'rootWindow').set(root),
+    setPawnField: (pawn, name, value) => runtime.namedReference(pawn, name).set(value),
     processScript: (win, event, args, options) => processScript(win, event, args, options),
     canvasComputeRenderSize: () => {},
-    tickOffset:()=>f(performance.now()/1000-lastTickTime),
+    // XRootWindow::GetWindowsTickOffset(0) 0x1003a3b0 over the host clock.
+    tickOffset:()=>Timers.windowsTickOffset(performance.now()/1000,lastTickTime),
+    // XWindow::AddTimer's GMalloc(0x20): a registered node, so pointer walks
+    // of the timer lists (XWindow::CleanUp) resolve it.
+    allocTimerNode:()=>{const node={windowTimerNode:true};heap.allocate(node,Timers.WINDOW_TIMER.size);timerNodes.add(node);return node;},
     soundPawnFields:pawn=>({location:runtime.namedReference(pawn,'Location').get(),viewRotation:runtime.namedReference(pawn,'ViewRotation').get()}),
     deferWindowSound:request=>soundRequests.push(request),
   };
@@ -497,11 +513,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     descendantRemoved(win, child) {                                                    // 0x10003520 / RadioBox / Modal / Root
       if (is(win, 'extension.radioboxwindow')) return radioBoxDescendantRemoved(win, child);
+      if (is(win, 'extension.rootwindow')) rootDescendantRemoved(win, child);        // then XModalWindow's
       processScript(win, 'DescendantRemoved', [child]);
-      if (is(win, 'extension.modalwindow', 'extension.rootwindow')) {
-        if (W.ptr(win, 0x178) === child) W.setPtr(win, 0x178, null);                    // 0x10037444
-        if (is(win, 'extension.rootwindow')) rootDescendantRemoved(win, child);
-      }
+      if (is(win, 'extension.modalwindow', 'extension.rootwindow') && W.ptr(win, 0x178) === child)
+        W.setPtr(win, 0x178, null);                                                     // 0x10037444
     },
     parentRequestedPreferredSize(win, bW, w, bH, h) {
       switch (familyOf(win)) {
@@ -551,10 +566,18 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
     },
     visibilityChanged(win, visible) {
-      processScript(win, 'VisibilityChanged', [Boolean(visible)]);                     // 0x10003610 / 0x10037330
-      if (is(win, 'extension.modalwindow') && W.ptr(win, T.O.parent))
-        boundary('XModalWindow::VisibilityChanged keyboard/mouse grab for a child modal');
+      // XModalWindow::VisibilityChanged 0x10037330: the script event, then the
+      // root keyboard/mouse grab counters for a parented modal.
+      if (is(win, 'extension.modalwindow')) return Input.modalVisibilityChanged(W, win, visible, T.getRootWindow);
+      processScript(win, 'VisibilityChanged', [Boolean(visible)]);                     // 0x10003610
       if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VisibilityChanged is not recovered');
+    },
+    // vtable +0x78, called by InvokeTimers for a nameless timer: XButtonWindow::
+    // Timer 0x100080e0 for the Button/Toggle/Checkbox families; every other
+    // family keeps XWindow::Timer 0x100504f0 (`ret 0xc`).
+    timer(win, id) {
+      if (is(win, 'extension.buttonwindow', 'extension.togglewindow'))
+        Timers.buttonTimer(W, win, id, changeButtonAppearance);
     },
     sensitivityChanged(win, sensitive) {
       processScript(win, 'SensitivityChanged', [Boolean(sensitive)]);                  // 0x10003630
@@ -589,8 +612,40 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if (is(win, 'extension.radioboxwindow')) return radioBoxToggleChanged(win, button, toggle);
       return processScript(win, 'ToggleChanged', [button, Boolean(toggle)], {result: false}) ? 1 : 0; // 0x10003d80
     },
-    cleanUp: win => cleanUpFamily(win),
+    cleanUp: win => { destroyFamily(win).members?.(win); return cleanUpWindowNative(win, destroyServices); },
   };
+  // Mouse position, hit-test and focus virtuals (vtable +0x60, +0x8c,
+  // +0x9c..+0xb4) of the admitted families: script-window-mouse.mjs.
+  Object.assign(V, Mouse.mouseFocusVirtuals(W, {familyOf, processScript: (win, event, args, options) => processScript(win, event, args, options),
+    changeButtonAppearance: win => changeButtonAppearance(win), boundary}));
+  // Key routing and button activation (docs/script-window-input.md).
+  Object.assign(V, {
+    // vtable +0xbc: XWindow::RawKeyPressed 0x10003750 in every admitted family.
+    rawKeyPressed: (win, key, action, repeat) =>
+      processScript(win, 'RawKeyPressed', [key & 0xff, action & 0xff, Boolean(repeat)], {result: false}),
+    // vtable +0xcc: XWindow::VirtualKeyPressed 0x10003a40; Computer/Edit override it.
+    virtualKeyPressed(win, key, repeat) {
+      if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VirtualKeyPressed 0x1000f530 is not recovered');
+      if (is(win, 'extension.editwindow')) boundary('XEditWindow::VirtualKeyPressed 0x10021480 is not recovered');
+      return processScript(win, 'VirtualKeyPressed', [key & 0xff, Boolean(repeat)], {result: false});
+    },
+    // Root vtable +0x124 / +0x12c.
+    handleVirtualKeyboard(root, key, action, repeat) {
+      if (!is(root, 'extension.rootwindow')) boundary('HandleVirtualKeyboard reached a non-root window');
+      return Input.handleVirtualKeyboard(W, root, key, action, repeat, {topChild: T.topChild, lowerSibling: T.lowerSibling});
+    },
+    handleButtons: () => boundary('XRootWindow::HandleButtons 0x1003b960 (mouse buttons) is not recovered'),
+    // Button-family vtable +0x124.
+    pressButton(win, key) {
+      if (is(win, 'extension.togglewindow')) boundary('XToggleWindow::PressButton 0x10049c30 is not recovered');
+      if (!is(win, 'extension.buttonwindow')) boundary('PressButton reached a non-button window');
+      return Input.buttonPressButton(W, win, key, {changeButtonAppearance: w => changeButtonAppearance(w),
+        addActivateTimer: Timers.addActivateTimer, activateButton: (w, k) => W.native.activateButton(w, k)});
+    },
+    // vtable +0xe8 / +0xec: XWindow::ButtonActivated 0x10003d20 / ButtonActivatedRight 0x10003d50.
+    buttonActivated: (win, source) => processScript(win, 'ButtonActivated', [source], {result: false}),
+    buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
+  });
   W.v = V;
 
   // ------------------------------------------------------------------
@@ -632,6 +687,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),
     removeWindowFromTables: (tabGroup, win) => F.removeWindowFromTables(W, tabGroup, win),
     safeDestroy: win => safeDestroy(win),
+    invokeTimers: (win, delta) => Timers.invokeTimers(W, win, delta),
+    setFocusWindow: (win, target) => Mouse.setFocusWindow(W, win, target),
+    getMouseWindow: root => Mouse.getMouseWindow(W, root, null),
+    paintCursor: (root, gc, mouse) => Mouse.paintCursor(W, root, gc, mouse),
+    moveTabGroup: (win, direction) => moveTabGroupNative(W, win, direction, {...T, ...F, setFocusWindow: (root, target) => Mouse.setFocusWindow(W, root, target)}),
+    moveFocus: (win, direction, wrap) => Mouse.moveFocus(W, win, direction, wrap,
+      {getTabGroupWindow: T.getTabGroupWindow, moveTabGroup: (root, move) => W.native.moveTabGroup(root, move)}),
+    // XButtonWindow::ActivateButton 0x100077e0 through its existing translation.
+    activateButton: (win, key) => activateButtonNative(win, key, {read: (object, offset, kind) => heap.read(object, offset, offset === 0 && kind === 'ptr' ? 'u32' : kind),
+      activateButton: ({object, source, virtualSlot}) => virtualSlot === 0xec ? V.buttonActivatedRight(object, source) : V.buttonActivated(object, source)}),
     playSound: (...args)=>windowPlaySound(W,...args),
   };
   const soundRequests = [];
@@ -658,8 +723,19 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const index = W.farray.add(win, 0x178, 1, 4);
     W.farray.setPtr(win, 0x178, index, child);
   }
-  function radioBoxDescendantRemoved() { return boundary('XRadioBoxWindow::DescendantRemoved is wired in the destroy slice'); }
-  function rootDescendantRemoved() { return boundary('XRootWindow::DescendantRemoved is wired in the destroy slice'); }
+  function radioBoxDescendantRemoved() { return boundary('XRadioBoxWindow::DescendantRemoved (0x10038cb0) is not recovered'); }
+  // XRootWindow::DescendantRemoved 0x1003b5c0: forget +0x624 (the last
+  // button window) with its GLog line, then XModalWindow's body.
+  function rootDescendantRemoved(win, child) {
+    if (W.ptr(win, 0x624) !== child) return;
+    boundaryLog.push({log: 'GLog', text: `Tried to remove lastbuttonwindow descendant. ${objectFullName(child)}`});
+    W.setPtr(win, 0x624, null);
+  }
+  function objectFullName(object) {
+    const path = [];
+    for (let at = object; at; at = at.outer) path.unshift(at.name);
+    return `${runtime.instance(object).cls.record.name} ${path.join('.')}`;
+  }
   function radioBoxToggleChanged(win,button,toggle) { // 10038a60
     if(is(button,'extension.togglewindow')){
       if(toggle){
@@ -677,12 +753,113 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   function changeButtonAppearance(win) { return D.changeButtonAppearance(W,win); }
   function buttonTick(win,delta) { return D.buttonTick(W,win,delta); }
   function textLogTick(win,delta) { return Log.textLogTick(W,win,delta); }
-  function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:()=>boundary('Root Tick reached SetFocusWindow')}); }
+  function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target)}); }
   function textDraw(win,gc) { return D.textDraw(W,win,gc); }
   function buttonDraw(win,gc) { return D.buttonDraw(W,win,gc); }
   function textLogDraw(win,gc) { return Log.textLogDraw(W,win,gc); }
-  function cleanUpFamily() { return boundary('Window CleanUp is wired in the destroy slice'); }
-  function safeDestroy() { return boundary('Window SafeDestroy is wired in the destroy slice'); }
+  // ------------------------------------------------------------------
+  // Destruction: the recovered SafeDestroy/PreDestroy/KillAllChildren/CleanUp
+  // order (script-window-destroy.mjs) over each family's own CleanUp and
+  // deleting destructor. docs/script-window-destroy.md.
+  // ------------------------------------------------------------------
+  const UOBJECT_FLAGS = 0x1c, RF_DESTROYED = 0x00800000, RF_BASE_DESTROYED = 0x80000000;
+  const DESTROY_FAMILIES = {
+    // XWindow::CleanUp 0x1004bec0 and deleting destructor 0x10004860.
+    'extension.window': {},
+    // XTextWindow::CleanUp 0x10045c30 empties the text FString (+0x168)
+    // before XWindow::CleanUp; ~XTextWindow 0x10008d40 finalizes it again.
+    'extension.textwindow': {members: win => W.heap.write(win, 0x168, 'string', '')},
+    // XTileWindow::CleanUp 0x10048430 / ~XTileWindow 0x10014ee0: the
+    // 12-byte-element FArray at +0x168.
+    'extension.tilewindow': {members: win => W.farray.empty(win, 0x168, 0xc)},
+    // XButtonWindow::CleanUp 0x10007770 is XTextWindow::CleanUp; ~XButtonWindow
+    // 0x100091d0 reaches ~XTextWindow's FString finalization.
+    'extension.buttonwindow': {members: win => W.heap.write(win, 0x168, 'string', '')},
+    // XTabGroupWindow::CleanUp 0x10044ea0: leave an enclosing modal's table,
+    // then empty the row/column tables; ~XTabGroupWindow destroys them.
+    'extension.tabgroupwindow': {members: win => tabGroupCleanUp(win), destructor: win => tabGroupTables(win)},
+    // XModalWindow::CleanUp 0x10036cf0: RemoveTabGroupFromTable(self), empty the
+    // +0x17c tab-group table, ClearAcceleratorTable, then XTabGroupWindow::CleanUp.
+    // ~XModalWindow 0x10005110 destroys +0x17c, then ~XTabGroupWindow's tables.
+    'extension.modalwindow': {
+      members: win => {
+        F.removeTabGroupFromTable(W, win, win);
+        W.farray.empty(win, 0x17c, 4);
+        F.clearAcceleratorTable(W, win);
+        tabGroupCleanUp(win);
+      },
+      destructor: win => { W.farray.empty(win, 0x17c, 4); tabGroupTables(win); },
+    },
+  };
+  function tabGroupTables(win) { W.farray.empty(win, 0x14c, 4); W.farray.empty(win, 0x158, 4); }
+  function tabGroupCleanUp(win) {
+    const modal = T.getModalWindow(W, win);
+    if (modal && modal !== win) F.removeTabGroupFromTable(W, modal, win);
+    tabGroupTables(win);
+  }
+  function destroyFamily(win) {
+    const spec = DESTROY_FAMILIES[families.get(win)];
+    if (!spec) boundary(`Window destruction is not recovered for ${families.get(win) ?? 'an unadmitted window'}`);
+    return spec;
+  }
+  // Core ConditionalDestroy 0x1014fdb0 with XWindow::Destroy 0x1004c010 as
+  // the virtual: PreDestroy (already bBeingDestroyed), the zero-lock
+  // assertion, then UObject::Destroy (RF flag and ExitProperties).
+  function conditionalDestroyWindow(win) {
+    const flags = W.u32(win, UOBJECT_FLAGS);
+    if (flags & RF_DESTROYED) return false;
+    W.setU32(win, UOBJECT_FLAGS, flags | RF_DESTROYED);
+    preDestroyWindowNative(win, destroyServices);
+    if (W.i32(win, T.O.lock) > 0) boundary('XWindow::Destroy asserts a zero lock count');
+    W.setU32(win, UOBJECT_FLAGS, W.u32(win, UOBJECT_FLAGS) | RF_BASE_DESTROYED);
+    runtime.exitProperties(win);
+    return true;
+  }
+  // XGC deleting destructor -> ~XGC 0x10002c70 -> XGC::Destroy 0x10026d40 for
+  // a window's own (unpushed) GC: PopGC(0), then every free-list node is
+  // unlinked and deleted, with a GLog warning past 16. Host GCs have no
+  // registry slot and the host heap never frees.
+  function destroyGc(gc) {
+    const Lg = gcMemory(gc, gcServices), base = Lg.base;
+    if (Lg.read(base + GC.owner, 'u32') !== 0) boundary('Destroying a pushed XGC node is not recovered');
+    gcPopGC(gc, 0, gcServices);
+    let count = 0;
+    for (let node = Lg.read(base + GC.freeList, 'u32'); node; node = Lg.read(base + GC.freeList, 'u32')) {
+      Lg.write(base + GC.freeList, 'u32', Lg.read(node + GC.stackTop, 'u32'));
+      count++;
+    }
+    if (count > 16) boundaryLog.push({log: 'GLog', text: `***WARNING: GC contains an abnormally large GC stack! (${count})`});
+  }
+  const destroyServices = {
+    ...rawServices,
+    setVisibility: ({object, visible}) => setVisibility(object, visible),
+    setSelectability: ({object, selectable}) => T.setSelectability(W, object, selectable),
+    processScript: ({object, event, parameters, thirdArgument}) => {
+      if (parameters !== null) boundary('Window destruction ProcessScript with parameters');
+      return processScript(object, event, [], {checked: thirdArgument !== 0});
+    },
+    cleanUp: ({object, baseCleanUp}) => { destroyFamily(object).members?.(object); return baseCleanUp(); },
+    childRemoved: ({parent, child}) => V.childRemoved(parent, child),
+    descendantRemoved: ({ancestor, child}) => V.descendantRemoved(ancestor, child),
+    // XWindow::CleanUp frees each timer node through GMalloc->Free.
+    freeGc: ({object}) => {
+      if (!timerNodes.delete(object)) boundary('Window timer list release reached a node the timer allocator did not create');
+    },
+    destroyGc: ({object}) => destroyGc(object),
+    // The whole scalar deleting destructor: the family members after its own
+    // ConditionalDestroy, then the XWindow and XExtensionObject steps, ~UObject
+    // (host windows have no registry slot) and operator delete.
+    deleteWindow: ({object}) => {
+      const spec = destroyFamily(object);
+      conditionalDestroyWindow(object);
+      (spec.destructor ?? spec.members)?.(object);
+      conditionalDestroyWindow(object);
+      conditionalDestroyWindow(object);
+      destroyed.add(object);
+      families.delete(object);
+    },
+  };
+  function safeDestroy(win) { return safeDestroyWindowNative(win, destroyServices); }
 
   // ------------------------------------------------------------------
   // Lifecycle published to the shared runtime natives (windowLifecycle).
@@ -701,6 +878,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     hierarchy: {readParent: object => heap.read(object, T.O.parent, 'ptr'), readType: object => heap.read(object, T.O.type, 'u8')},
     reconfiguration, configureChild: configureChildServices, visibility,
+    // Window.SetFocusWindow (1440) runs script-window-focus.mjs with these leaves.
+    focus: Mouse.focusServices(W),
     sensitivity: {...rawServices,
       checkFocusWindow: ({object})=>T.checkFocusWindow(W,object),
       checkGrabbedWindow: ({object})=>T.checkGrabbedWindow(W,object),
@@ -728,6 +907,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     setVisibility: ({object, visible}) => setVisibility(object, visible),
     askParentForReconfigure: ({object}) => askParentForReconfigure(object),
     safeDestroy: ({object}) => safeDestroy(object),
+    destroy: destroyServices,
   };
   const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
     allocateObject: ()=>heap.allocRaw(GC.size),constructUObject: ()=>{},
@@ -757,12 +937,21 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     services:gcServices,
     get(win){const gc=W.ptr(win,T.O.wGc);if(gc){gcPushGC(gc,gcServices);gcCopyGC(gc,heap.addressOf(W.ptr(win,T.O.gGc)),gcServices);}return gc;},
     release(_win,gc){if(gc)gcPopGC(gc,-1,gcServices);},
-    textExtent:(gc,width,text)=>gcGetTextExtent(gc,width,text,gcServices),
+    // XGC::GetTextExtent writes the X and Y extents; the layout bodies read them
+    // as the text width and height.
+    textExtent:(gc,width,text)=>{
+      const extent=gcGetTextExtent(gc,width,text,gcServices);
+      return {width:extent.xExtent,height:extent.yExtent};
+    },
     fontHeight:(gc,space)=>gcGetFontHeight(gc,space,gcServices),
     push:gc=>gcPushGC(gc,gcServices),pop:(gc,depth)=>gcPopGC(gc,depth,gcServices),
     setCanvas:(gc,canvas)=>W.setPtr(gc,GC.canvas,canvas), // XGC::SetCanvas 0x10026ec0
     setMultipliers:(gc,h,v)=>{W.setI32(gc,0x9c,h);W.setI32(gc,0xa0,v);}, // 0x10026ed0
     enableDrawing:(gc,enabled)=>gcEnableDrawing(gc,enabled,gcServices),
+    // XGC::SetStyle 0x10027170, SetTileColor 0x100274f0 and DrawIcon 0x100289c0.
+    setStyle:(gc,style)=>gcSetStyle(gc,style,gcServices),
+    setTileColor:(gc,color)=>gcSetTileColor(gc,color>>>0,gcServices),
+    drawIcon:(gc,x,y,texture)=>gcDrawIcon(gc,f32BitsOf(x),f32BitsOf(y),heap.addressOf(texture),gcServices),
     drawIconPattern:(gc,x,y,w,h,u,v,ul,vl,texture)=>gcTileEmitGate(gcMemory(gc,gcServices),{x,y,w,h,u,v,ul,vl,texture:heap.addressOf(texture)}),
     cleanUp(){ // XGC::CleanUp 100269b0 -> cache flush 10026a20.
       const cache=gcServices.texCache;
@@ -797,6 +986,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const host = {
     runtime, heap, W, lifecycle, classes, globals, boundaryLog, soundRequests, resourceImages, textureInfo,
     root:null,hud:null,owns:object=>families.has(object),
+    // Original Engine Actor.EInputKey names (index = EInputKey value).
+    inputKeyNames:inputConsole.names,
     delegateLegacySubtree:object=>externalSubtrees.add(object),
     raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,
@@ -804,6 +995,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,
     tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
+    // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
+    key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
     draw(root,width,height,view){
       if(view){writeWindowSceneFrame(W,node,{...view,width,height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);

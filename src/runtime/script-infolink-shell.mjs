@@ -348,8 +348,9 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   // inventory updates during ConPlay) keep the general host's lifecycle.
   const shellConstruction=request=>(request.outer===hud&&
     [infoClass.record,conWindowClass.record].includes(request.classObject))||owned.has(request.outer);
+  // A GC release follows its owner window, DescendantRemoved its ancestor.
   const requestObject=value=>owned.has(value)?value:
-    value?.object??value?.window??value?.receiver??value?.parent??null;
+    value?.owner??value?.object??value?.window??value?.receiver??value?.parent??value?.ancestor??null;
   const mergeLifecycle=(legacy,native)=>{
     const merged={...native};
     for(const [key,value] of Object.entries(legacy)){

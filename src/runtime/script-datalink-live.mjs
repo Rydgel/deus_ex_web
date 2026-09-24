@@ -107,7 +107,10 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
   names.buckets[names.hashBucket(none.text)]=none;
   const outer={identity:{},index:-1,name:'TrainingRuntime',outer:null};
   const nativeLevel={identity:{},index:-1,name:'MyLevel',outer};
-  for(const object of [outer,nativeLevel]){
+  // UObject::GetTransientPackage (Core 0x10102450): the outer execNew uses
+  // for a None Outer. Its index is this host registry's, not a measured one.
+  const transientPackage={identity:{},index:-1,name:'Transient',outer:null};
+  for(const object of [outer,nativeLevel,transientPackage]){
     object.nameIndex=names.intern(object.name).index;registry.add(object);
   }
   const lookup=createScriptObjectLookup({registry,names});
@@ -138,6 +141,15 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
         runtime.instance(object.identity).sleepTimeLeft=0;
       },
       nativeConstructor:constructActorBase,
+      transientPackage,
+    },
+    // Final UObject release for CriticalDelete, with the live-game values of
+    // the two ~UObject gates (docs/script-object-release.md).
+    objectRelease:{
+      gates:{[0x102a2644]:1,[0x101e5550]:0},
+      registry,isValid:object=>registry.objects[object.index]===object,
+      freeStateFrame:()=>{throw new Error('CriticalDelete reached an object with a state frame');},
+      freeObject:object=>{object.released=true;},
     },
     resolveConstructor:cls=>{
       if(cls===dataLinkClass)return selection;

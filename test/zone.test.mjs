@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {pointRegion,setActorZone,dryPlayerZoneCallbacks}from'../src/runtime/zone.mjs';
 const region=zone=>({zone,leaf:-1,zoneNumber:0});
-function fixture(){const p={position:[10,20,30],height:43,baseEyeHeight:40,region:region('world'),footRegion:region('world'),headRegion:region('world')};const events=[];let index=0;
+function fixture(){const p={position:[10,20,30],height:43,eyeHeight:40,region:region('world'),footRegion:region('world'),headRegion:region('world')};const events=[];let index=0;
  const world={levelInfo:'world',pointRegion:pos=>{events.push(['point',pos]);return {zone:['a','b','c'][index++],leaf:index,zoneNumber:index};},actorLeaving:()=>events.push(['leaving',p.region.zone]),zoneChange:()=>events.push(['zone',p.region.zone]),actorEntered:()=>events.push(['entered',p.region.zone]),footZoneChange:()=>events.push(['foot',p.footRegion.zone]),headZoneChange:()=>events.push(['head',p.headRegion.zone])};return{p,world,events};}
 test('native center and foot/head callbacks observe previous region fields',()=>{const{p,world,events}=fixture();setActorZone(p,world);assert.deepEqual(events,[['point',[10,20,30]],['leaving','world'],['zone','world'],['entered','a'],['point',[10,20,-13]],['foot','world'],['point',[10,20,70]],['head','world']]);assert.equal(p.headRegion.zone,'c');});
 test('native test option suppresses events while still replacing regions',()=>{const{p,world,events}=fixture();setActorZone(p,world,true);assert.equal(events.length,3);assert.equal(p.region.zone,'a');});

@@ -95,11 +95,14 @@ export function bottomChild(W, win, visibleOnly) {
   return w;
 }
 
-/** 0x1004c140 LockWindow / 0x1004c150 UnlockWindow (SafeDestroy leaf). */
+/** 0x1004c140 LockWindow / 0x1004c150 UnlockWindow (SafeDestroy leaf). The
+ * `jle 0x1004c18f` at 0x1004c17d skips both the decrement and the
+ * destroying-flag SafeDestroy when the lock count is already <= 0. */
 export function lockWindow(W, win) { W.setI32(win, O.lock, W.i32(win, O.lock) + 1); }
 export function unlockWindow(W, win) {
   const count = W.i32(win, O.lock);
-  if (count > 0) W.setI32(win, O.lock, count - 1);
+  if (count <= 0) return;
+  W.setI32(win, O.lock, count - 1);
   if (W.u8(win, O.flags) & 0x10) W.native.safeDestroy(win);
 }
 
@@ -190,6 +193,10 @@ export function resizeChild(W, win) {
 // ---------------------------------------------------------------------------
 /** 0x10050d70 RecomputeInitTree(bool): uninitialized windows adjust root initCount. */
 export function recomputeInitTree(W, win, visible) {
+  // A delegated InfoLink/ConPlay presentation subtree is owned by its legacy
+  // shell (tick, draw, reconfigure and WindowReady already skip it); its windows
+  // never enter this root's init accounting.
+  if (W.externalSubtree?.(win)) return;
   if (!(W.u8(win, O.flags) & 8)) {
     const root = getRootWindow(W, win);
     if (root) W.setI32(root, ROOT.initCount, W.i32(root, ROOT.initCount) + (visible ? 1 : -1));
@@ -199,6 +206,7 @@ export function recomputeInitTree(W, win, visible) {
 }
 /** 0x10050e30 InvokeVisibilityChange(bool): +0x94 virtual, sound, visible children. */
 export function invokeVisibilityChange(W, win, visible) {
+  if (W.externalSubtree?.(win)) return; // Delegated presentation owner, as above.
   W.v.visibilityChanged(win, visible);
   W.native.playSound(win, W.ptr(win, visible ? O.visibleSound : O.invisibleSound), f(-1), f(1));
   for (let child = W.ptr(win, O.firstChild); child; child = W.ptr(child, O.nextSibling))
@@ -206,6 +214,7 @@ export function invokeVisibilityChange(W, win, visible) {
 }
 /** 0x10050ef0 InvokeSensitivityChange(bool): +0x98 virtual, sensitive children. */
 export function invokeSensitivityChange(W, win, sensitive) {
+  if (W.externalSubtree?.(win)) return; // Delegated presentation owner, as above.
   W.v.sensitivityChanged(win, sensitive);
   for (let child = W.ptr(win, O.firstChild); child; child = W.ptr(child, O.nextSibling))
     if (W.u8(child, O.flags) & 2) invokeSensitivityChange(W, child, sensitive);
@@ -276,13 +285,21 @@ export function checkGrabbedWindow(W, win) {
  * MoveFocus; those branches are explicit boundaries until a focusable window
  * is reachable in Play (the HUD never takes keyboard focus).
  */
+/** 0x10050b80 CheckFocusWindow: an untraversable focus falls back to the top
+ * modal's preferred focus, then MoveFocus(1, 1), then no focus. */
 export function checkFocusWindow(W, win) {
   const root = getRootWindow(W, win);
   if (!root) return;
   const focus = W.ptr(root, ROOT.focus);
   if (!focus) return;
   if (isTraversable(W, focus, 1)) return;
-  W.boundary('XWindow::CheckFocusWindow with an untraversable focus window (MoveFocus 0x1004ef30)');
+  let modal = topChild(W, root, 1);
+  while (modal && W.u8(modal, O.type) < 2) modal = lowerSibling(W, modal, 1);
+  modal ??= root;
+  const preferred = W.ptr(modal, ROOT.preferredFocus);
+  if (preferred && isTraversable(W, preferred, 1)) W.native.setFocusWindow(win, preferred);
+  if (W.ptr(root, ROOT.focus) !== focus) return;
+  if (W.native.moveFocus(root, 1, 1) === focus) W.native.setFocusWindow(root, null);
 }
 
 /** 0x1004c390 SetSelectability(bool). */
@@ -360,13 +377,9 @@ export function tickTree(W, win, delta) {
     unlockWindow(W, win);
   }
 }
-export function invokeTimers(W, win, delta) {
-  if (W.u8(win, O.flags) & 0x10) return;
-  lockWindow(W, win);
-  try {
-    if (W.u32(win, O.firstTimer)) W.boundary('XWindow::InvokeTimers with an armed AddTimer timer (0x10051340)');
-  } finally { unlockWindow(W, win); }
-}
+// XWindow::InvokeTimers 0x10051340 lives in script-window-timers.mjs with the
+// rest of the timer family; TickTree reaches it through W.native.invokeTimers.
+export function invokeTimers(W, win, delta) { W.native.invokeTimers(win, delta); }
 export function rootTick(W, root, delta) {
   lockWindow(W, root);
   try {
@@ -429,7 +442,9 @@ export function drawTree(W, win, canvas, debugTexture, frameTimer, hMultiplier, 
 export function paintWindows(W, root, canvas) {
   const gc = W.ptr(root, O.gGc);
   if (!canvas || !gc) return;
-  getMouseWindow(W, root);
+  // 0x1003aafd: GetMouseWindow(NULL, &x, &y) before any drawing; it feeds the
+  // cursor branch below (script-window-mouse.mjs).
+  const mouse = W.native.getMouseWindow ? W.native.getMouseWindow(root) : null;
   W.setI32(root, ROOT.paintCycles, 0);
   const saved = W.gc.push(gc);
   W.gc.setCanvas(gc, canvas);
@@ -443,19 +458,14 @@ export function paintWindows(W, root, canvas) {
   W.gc.enableDrawing(gc, 1);
   W.gc.setCanvas(gc, canvas);
   W.gc.setMultipliers(gc, W.i32(root, ROOT.hMultiplier), W.i32(root, ROOT.vMultiplier));
-  if (W.i32(root, ROOT.handleMouseRef) && (W.u8(root, ROOT.mouseFlags) & 8))
-    W.boundary('XRootWindow::PaintWindows cursor drawing (QueryCursor 0x1004f910)');
+  if (W.i32(root, ROOT.handleMouseRef) && (W.u8(root, ROOT.mouseFlags) & 8)) {
+    if (!W.native.paintCursor) W.boundary('XRootWindow::PaintWindows cursor drawing requires QueryCursor 0x1004f910');
+    W.native.paintCursor(root, gc, mouse);
+  }
   if (W.u8(root, ROOT.debugFlags) & 1) W.boundary('XRootWindow::PaintWindows statistics overlay (bShowStats)');
   W.gc.pop(gc, saved2);
   W.gc.cleanUp();
 }
-
-/**
- * 0x1003b0d0 GetMouseWindow(modal, &x, &y): the mouse window only feeds the
- * cursor branch of PaintWindows. Its hit test is reached only when that
- * branch draws, so it is evaluated lazily there (see paintWindows).
- */
-function getMouseWindow() { return null; }
 
 /**
  * 0x1003c720 DrawRawBackground: raw backgrounds fill the unrendered area

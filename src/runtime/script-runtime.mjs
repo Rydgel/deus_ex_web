@@ -66,7 +66,9 @@ import { execScriptSpawn, inventoryConstructorChain, spawnActorRejectedByGates, 
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
-import { releaseScriptCameraPoint } from './script-object-release.mjs';
+import { destructScriptObject, freeScriptObject, releaseScriptCameraPoint } from './script-object-release.mjs';
+import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
+import { constructTextParserObject, dispatchTextParserNative, releaseTextParserObject } from './script-text-parser-natives.mjs';
 import { serializeScriptReferences } from './script-reference-serialization.mjs';
 import { serializeRuntimeActor } from './script-runtime-serialization.mjs';
 import { readScriptStructValue } from './script-struct-values.mjs';
@@ -119,9 +121,9 @@ import { setBackgroundStyleNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
 import { lowerWindowNative } from './script-window-lower.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
-import { safeDestroyWindowNative } from './script-window-destroy.mjs';
+import { killAllChildrenNative, safeDestroyWindowNative } from './script-window-destroy.mjs';
 import {
-  setWindowFontNative, setWindowTextColorNative, setTextNative,
+  appendTextNative, convertScriptString, setWindowFontNative, setWindowTextColorNative, setTextNative,
   setTextAlignmentsNative, setTextMarginsNative,
 } from './script-window-text.mjs';
 import {
@@ -488,28 +490,76 @@ export class ScriptRuntime {
   /** Construct fresh script storage using the class-default/template values,
    * followed by registry insertion and a verified class-native constructor.
    * This deliberately does not run the separate SpawnActor startup sequence. */
-  /** Opcode 0x11 for CreateNanoKeyInfo: `new(Self) class'NanoKeyInfo'`.
-   * Optional name/flags stay NAME_None and 0. Other classes stay unsupported.
-   * The object uses the recovered fresh-construction host and the UObject
-   * vtable store already performed first by the actor constructor. */
+  /** Opcode 0x11, Core execNew (0x1013d9f0): evaluate Outer, Name, Flags and
+   * Class; a None Outer becomes GetTransientPackage(); flags outside
+   * RF_ScriptMask 0x704005 are logged and masked; then
+   * StaticConstructObject(Class, Outer, Name, Flags, NULL). Name and flags are
+   * only recovered as None and 0, an omitted Outer (default Self unless Self
+   * is INDEX_NONE) is not recovered, and only classes with a recovered
+   * constructor are admitted: `new(Self) class'NanoKeyInfo'` for
+   * CreateNanoKeyInfo and `new(None) class'DeusExTextParser'` for
+   * InformationDevices.CreateInfoWindow. */
   newObject({outer, name, flags, classRef}) {
     if (String(name ?? 'None').toLowerCase() !== 'none' || (flags ?? 0) !== 0)
       throw new Error('new optional name and flags are only recovered as None and 0');
+    if (outer === undefined) throw new Error('new with an omitted Outer (default Self) is not recovered');
     const cls = classRef?.linkedClass;
-    if (!cls || cls.record.key !== 'deusex.nanokeyinfo')
-      throw new Error(`new is only recovered for NanoKeyInfo, got ${classRef?.key ?? 'None'}`);
-    if (!outer) throw new Error('new(Self) requires the player outer');
+    if (!cls) throw new Error('new requires a linked class');
     if (!Number.isInteger(cls.nameCounter)) cls.nameCounter = 0;
-    const playerNative = this.playerNativeObject(outer);
     const base = this.actorLifecycle?.construction;
     if (!base?.registry || typeof base.findObject !== 'function' || typeof base.internName !== 'function')
       throw new Error('new requires the live object registry');
-    return this.constructObject(cls, {outer: playerNative, name: 'None', flags: 0, template: null}, {
-      ...base,
-      validate: args => args.cls === cls && args.outer === playerNative && args.template === null &&
-        args.flags === 0 && String(args.name).toLowerCase() === 'none',
-      nativeConstructor(object) { object.nativeVtable = 0x10179dfc; },
-    });
+    const construct = (nativeOuter, nativeConstructor, initNativeProperties = base.initNativeProperties) =>
+      this.constructObject(cls, {outer: nativeOuter, name: 'None', flags: 0, template: null}, {
+        ...base, initNativeProperties, nativeConstructor,
+        validate: args => args.cls === cls && args.outer === nativeOuter && args.template === null &&
+          args.flags === 0 && String(args.name).toLowerCase() === 'none',
+      });
+    // UClass::Bind copies the nearest native ancestor's ClassConstructor into
+    // a script-only class; RF_Native (0x04000000) marks that ancestor.
+    let nativeRoot = cls;
+    while (nativeRoot && !((nativeRoot.metadata?.entry?.flags ?? 0) & 0x04000000)) nativeRoot = nativeRoot.base;
+    if (nativeRoot?.record.key === 'core.object' && cls !== nativeRoot) {
+      // UObject::InternalConstructor: the UObject vtable, whose Destroy slot
+      // is UObject::Destroy. Outers: the player (new(Self) from DeusExPlayer,
+      // e.g. CreateNanoKeyInfo and AddNote) or the transient package.
+      const nativeOuter = outer ? this.playerNativeObject(outer) : base.transientPackage;
+      if (!nativeOuter) throw new Error('new(None) requires the GetTransientPackage() object');
+      return construct(nativeOuter, object => {
+        object.nativeVtable = 0x10179dfc;
+        object.destroy = receiver => this.destroyObjectBase(receiver);
+      });
+    }
+    if (cls.record.key === TEXT_PARSER_NATIVE.classKey) {
+      if (outer !== null) throw new Error('new DeusExTextParser is only recovered with a None Outer');
+      if (!base.transientPackage) throw new Error('new(None) requires the GetTransientPackage() object');
+      // The parser's reflected fields are all `const native`; its constructor
+      // owns them, so InitProperties leaves no actor-native storage.
+      return construct(base.transientPackage, object => constructTextParserObject(object, {
+        state: (identity, parser) => { this.instance(identity).textParser = parser; },
+        destroyObjectBase: receiver => this.destroyObjectBase(receiver),
+      }), () => {});
+    }
+    throw new Error(`new is only recovered for script-only Object subclasses and DeusExTextParser, got ${classRef?.key ?? 'None'}`);
+  }
+  /** Core execCriticalDelete (native 751, body 0x1013db50): evaluate the
+   * object, P_FINISH, then call its scalar deleting destructor (vtable +0xc,
+   * flag 1) when it is not None. The int result is never written. Only
+   * deleting destructors that are recovered are dispatched. */
+  criticalDelete(call) {
+    if (call.argumentCount !== 1) throw new Error('CriticalDelete requires one object argument');
+    const target = refValue(call.evaluateArgument(0));
+    if (target === null || target === undefined) return undefined;
+    const object = this.instance(target).nativeObject, services = this.actorLifecycle?.objectRelease;
+    if (!object || !services) throw new Error('CriticalDelete requires native object and release bindings');
+    const release = {...services, conditionalDestroy: item => this.conditionalDestroy(item.identity), warning: this.warning};
+    if (object.nativeVtable === TEXT_PARSER_NATIVE.vtable) releaseTextParserObject(object, 1, release);
+    else if (object.nativeVtable === 0x10179dfc) {
+      // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete.
+      destructScriptObject(object, release);
+      freeScriptObject(object, release);
+    } else throw new Error(`CriticalDelete deleting destructor is not recovered for native vtable 0x${(object.nativeVtable >>> 0).toString(16)}`);
+    return undefined;
   }
   playerNativeObject(player) {
     const instance = this.instance(player);
@@ -1657,6 +1707,21 @@ export class ScriptRuntime {
     const result=state.transition(node,instance.cls.metadata);
     return result===1?state.gotoLabel(label):false;
   }
+  /** An enum object's native Names table (UEnum +0x34) from its loaded record. */
+  enumNames(identity){
+    const cached=this.enumNameTables?.get(identity);
+    if(cached)return cached;
+    const graph=this.classLoader?.graph;
+    if(!graph)throw new Error('GetEnum requires the original native enum loader');
+    let record=identity.loadRecord;
+    if(!record){
+      if(!graph.packageAssets.has(lower(identity.asset.name)))throw new Error(`GetEnum requires the prepared package of ${identity.key}`);
+      record=graph.loadExport(identity.asset.name,identity.index);
+    }
+    const names=graph.slotOf(record,0x34).data.map(name=>graph.nameText(name));
+    (this.enumNameTables??=new Map()).set(identity,names);
+    return names;
+  }
   invoke(call) {
     const record=call.kind==='final'?this.objects.operand(call.script,call.node):this.lookup(call.receiver,call.name,call.kind==='global');
     if(!record)throw new Error(`Original function was not found: ${call.name}`);
@@ -1695,7 +1760,32 @@ export class ScriptRuntime {
     }
     if(call.index===0&&call.record?.key==='core.object.dynamicloadobject')
       return execDynamicLoadObject(call,{staticLoadObject:request=>this.loadPreparedDynamicObject(request)});
+    // Core UObject::execGetEnum 0x1013e9a0: (object E, int i) is NAME_None
+    // unless E casts to UEnum and 0 <= i < Names.Num (+0x38); then Names(i) (+0x34).
+    if(call.index===0&&call.record?.key==='core.object.getenum'){
+      const object=refValue(call.evaluateArgument(0)),index=refValue(call.evaluateArgument(1))|0;
+      if(!object||object.kind!=='Enum'||index<0)return 'None';
+      const names=this.enumNames(object);
+      return index<names.length?names[index]:'None';
+    }
     if(call.index===231)return execObjectLog(call,{logDevice:this.logDevice});
+    if(call.index===751)return this.criticalDelete(call);
+    if(call.index>=TEXT_PARSER_NATIVE.indices.openText&&call.index<=TEXT_PARSER_NATIVE.indices.setPlayerName){
+      const result=dispatchTextParserNative(call,{
+        state:receiver=>this.instance(receiver).textParser,
+        loadText:path=>{
+          if(typeof this.textSource?.loadText!=='function')
+            throw new Error('DeusExTextParser.OpenText requires the XExtString source');
+          return this.textSource.loadText(path);
+        },
+        name:text=>{
+          if(typeof this.nameServices?.internName!=='function')
+            throw new Error('DeusExTextParser tag names require the shared FName service');
+          return this.nameServices.internName(text);
+        },
+      });
+      if(result.handled)return result.value;
+    }
     if(call.index===1024){
       if(call.argumentCount!==1)throw new Error('StringToName requires one string argument');
       const name=extensionStringToName(refValue(call.evaluateArgument(0)),this.nameServices);
@@ -1734,6 +1824,12 @@ export class ScriptRuntime {
     if(call.index===1409){
       if(call.argumentCount!==0)throw new Error('Window.Destroy accepts no arguments');
       return safeDestroyWindowNative(call.receiver,this.windowLifecycle?.destroy??{});
+    }
+    if(call.index===1459){
+      // execDestroyAllChildren (0x10052f00): P_FINISH, then XWindow::KillAllChildren.
+      if(call.argumentCount!==0)throw new Error('Window.DestroyAllChildren accepts no arguments');
+      killAllChildrenNative(call.receiver,this.windowLifecycle?.destroy??{});
+      return undefined;
     }
     if(call.index===1413){
       if(call.argumentCount>1)throw new Error('Window.Show accepts one optional boolean argument');
@@ -1921,14 +2017,20 @@ export class ScriptRuntime {
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       });
     }
-    if(call.index===1550){
-      if(call.argumentCount!==1)throw new Error('TextWindow.SetText requires one string argument');
+    if(call.index===1550||call.index===1551){
+      // execSetText 0x10046a30 / execAppendText 0x10046b80: evaluate the
+      // string, ConvertScriptString it, then call the virtual method.
+      if(call.argumentCount!==1)throw new Error(`TextWindow.${call.index===1550?'SetText':'AppendText'} requires one string argument`);
       const value=refValue(call.evaluateArgument(0));
+      if(typeof value!=='string')throw new Error('TextWindow text natives require an initialized string');
       const text=this.windowLifecycle?.text??{};
-      return setTextNative(call.receiver,value,{...text,
+      const services={...text,
         askParentForReconfigure:text.askParentForReconfigure??
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
-      });
+      };
+      const converted=convertScriptString(value);
+      if(call.index===1551){appendTextNative(call.receiver,converted,services);return undefined;}
+      return setTextNative(call.receiver,converted,services);
     }
     if(call.index===1556){
       if(call.argumentCount!==2)throw new Error('TextWindow.SetTextAlignments requires two byte arguments');

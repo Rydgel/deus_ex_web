@@ -1,7 +1,7 @@
 import { decodeScript } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator, rotatorToVector } from './script-decoration-primitives.mjs';
-import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString } from './script-string-operations.mjs';
+import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString, scriptFloatToString } from './script-string-operations.mjs';
 import { getAxes } from './camera.mjs';
 import { rotatorSin } from './coords.mjs';
 
@@ -298,6 +298,21 @@ function x87Transcendental(name, operand) {
     throw new Error(`Core ${name} operand ${x} is above the measured 2^26 bound `
       + "where the x87's 66-bit pi argument reduction diverges from Math." + name);
   return f(fn(x));
+}
+
+/** execSwitch's comparison: appMemcmp over the switch value's size, or
+ * appStricmp of the two FStrings when that size is 0. Names are FName
+ * indices, so equal names are the ASCII-folded equal spellings. */
+function switchCaseEqual(key, value, size) {
+  if (size === 0) return scriptStringComplementEqual(key, value);
+  if (typeof key === 'number' && typeof value === 'number') return Object.is(key, value);
+  if (typeof key === 'string' && typeof value === 'string') return scriptStringComplementEqual(key, value);
+  if (typeof key === 'boolean' || typeof value === 'boolean') return Boolean(key) === Boolean(value);
+  if (key === value) return true;
+  if (key && value && typeof key === 'object' && typeof value === 'object' && !key.reference && !value.reference &&
+      (Array.isArray(key) || Object.getPrototypeOf(key) === Object.prototype))
+    throw new Error('EX_Switch over a struct value is not recovered');
+  return false;
 }
 
 export function compileFunction(fn) {
@@ -839,6 +854,8 @@ export function compileFunction(fn) {
           // Core execIntToString 10131600: evaluate one signed DWORD,
           // FString::Printf with the UTF-16 "%i" constant at 101aaf70.
           case 0x53: return String(refValue(evaluate(n.value,instance)) | 0);
+          // Core execFloatToString 10131ca0: Printf("%f", (double)F).
+          case 0x55: return scriptFloatToString(refValue(evaluate(n.value,instance)));
           case 0x56: return scriptObjectToString(refValue(evaluate(n.value,instance)));
           case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
           case 0x36: {
@@ -922,19 +939,23 @@ export function compileFunction(fn) {
             if(!frame.state)throw new Error('Stop requires a state frame');
             frame.cursor=null;
           } else if (n.op === 0x05) {
-            // EX_Switch: evaluate the switch value once; the following EX_Case
-            // statements compare against it. Non-nested storage suffices because
-            // all cases of a switch are evaluated before its matched body runs.
-            frame.switchValue = refValue(evaluate(n.value));
-          } else if (n.op === 0x0a) {
-            // EX_Case: default (0xffff) always falls through; otherwise compare the
-            // case value to the stored switch value — match falls into the body,
-            // mismatch jumps to the next case (n.target).
-            if (n.target !== 0xffff) {
-              const value = refValue(evaluate(n.value)), key = frame.switchValue;
-              const equal = key === value || (typeof key === 'string' && typeof value === 'string' && key.toLowerCase() === value.toLowerCase());
-              if (!equal) frame.cursor = n.target;
+            // Core execSwitch (0x1012f850) owns the case scan: evaluate the
+            // switch value, then walk the EX_Case chain. A 0xffff case (default
+            // or the terminator) or a matching value enters the code after that
+            // case; a mismatch continues at the case's next-case offset.
+            const key = refValue(evaluate(n.value));
+            for (let at = entry.next;;) {
+              const header = statements.get(at);
+              if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
+              if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
+              if (switchCaseEqual(key, refValue(evaluate(header.node.value)), n.valueSize)) { frame.cursor = header.next; break; }
+              at = header.node.target;
             }
+          } else if (n.op === 0x0a) {
+            // Core execCase (0x1012fa20) is reached only by falling into a
+            // case: it steps over its expression, so stacked labels and case
+            // bodies without a break fall through.
+            if (n.target !== 0xffff) evaluate(n.value);
           } else if (n.op === 0x06 || n.op === 0x07 && !refValue(evaluate(n.value))) frame.cursor = n.target;
           else if (n.op !== 0x07) evaluate(n);
         }

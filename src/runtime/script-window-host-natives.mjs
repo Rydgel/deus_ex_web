@@ -5,7 +5,11 @@ import {refValue} from './script-vm.mjs';
 import * as T from './script-window-tree-natives.mjs';
 import {addLog,clearLog} from './script-window-text-log.mjs';
 import {gcEnableTranslucentText} from './script-gc-enable-translucent-text.mjs';
-import {enableTextAsAcceleratorNative} from './script-window-text.mjs';
+import {convertScriptString,enableTextAsAcceleratorNative} from './script-window-text.mjs';
+import {addTimer,removeTimer} from './script-window-timers.mjs';
+import {setCursorPos} from './script-window-mouse.mjs';
+import {pressButtonNative} from './script-window-press-button.mjs';
+import {isKeyDownNative} from './script-window-is-key-down.mjs';
 
 const packed = c => ['r','g','b','a'].reduce((word,k,i)=>word|((c?.[`core.object.color.${k}`]??0)&255)<<(8*i),0)>>>0;
 export function dispatchWindowHostNative(W, call) {
@@ -14,6 +18,8 @@ export function dispatchWindowHostNative(W, call) {
   const out=(i,v)=>{const a=call.evaluateArgument(i);if(a?.reference)a.set(v);};
   // One-bit field update: dword = (dword & ~mask) | (flag & 1 ? mask : 0).
   const bits=(offset,mask,flag)=>W.setU32(win,offset,(W.u32(win,offset)&~mask)|(flag?mask:0));
+  // The +0x00 vtable word holds the original Extension.dll table address.
+  const vtableRead=(object,offset,kind)=>W.heap.read(object,offset,offset===0&&kind==='ptr'?'u32':kind);
   let value;
   switch(call.index){
     case 1420: T.setSelectability(W,win,arg(0,false));break;
@@ -25,10 +31,8 @@ export function dispatchWindowHostNative(W, call) {
       W.setF32(win,0xf8,arg(2,-1));W.setF32(win,0xfc,arg(3,-1));
       const color=arg(4,null);W.setU32(win,0x100,color?packed(color):0x00ffffff);break;
     }
-    case 1469: { // 10050710 scans pairs: |n becomes LF; other | pairs stay literal.
-      const text=String(arg(0,'')).split('\0',1)[0];value='';
-      for(let i=0;i<text.length;i++){const c=text[i];if(c!=='|'){value+=c;continue;}const next=text[++i];value+=next==='n'?'\n':('|'+(next??''));}break;
-    }
+    case 1469: value=convertScriptString(arg(0,''));break; // 10050710
+    case 1482: value='\n';break; // CarriageReturn exec 0x10053e70 assigns L"\n" (0x10098e58)
     case 1462: T.resizeChild(W,win);break;
     case 1463: value=T.queryPreferredWidth(W,win,arg(0,0));break;
     case 1464: value=T.queryPreferredHeight(W,win,arg(0,0));break;
@@ -42,6 +46,18 @@ export function dispatchWindowHostNative(W, call) {
     case 1486: W.gc.release(win,arg(0,null));break;
     case 1487: W.setPtr(win,0x118,arg(0,null));break; // XWindow::SetClientObject 0x10003390
     case 1489: {const vector=arg(0,null),r=W.v.convertVectorToCoordinates(win,Array.isArray(vector)?vector:['x','y','z'].map(k=>vector[`core.object.vector.${k}`]));out(1,r.x);out(2,r.y);value=r.visible;break;}
+    // execAddTimer 0x10054130: four zero-initialized parameters (timeout,
+    // bLoop, clientData, timer function name); returns the node address.
+    case 1490: value=addTimer(W,win,arg(0,0),arg(1,false)?1:0,arg(2,0),arg(3,'None')||'None');break;
+    case 1491: removeTimer(W,win,arg(0,0));break; // execRemoveTimer 0x10054220
+    case 1453: setCursorPos(W,win,arg(0,0),arg(1,0));break; // execSetCursorPos 0x10052b90 -> 0x1004cca0
+    // ButtonWindow.PressButton (exec 0x10008c90, byte default IK_Space) and
+    // ActivateButton (exec 0x100085b0, byte default 0).
+    case 1598: pressButtonNative(win,arg(0,0x20)&0xff,{read:vtableRead,
+      buttonPressed:({object,key})=>W.v.pressButton(object,key)});break;
+    case 1590: W.native.activateButton(win,arg(0,0)&0xff);break;
+    // Window.IsKeyDown (exec 0x100535f0): the root's +0x630+key byte as the bool result.
+    case 1470: value=Boolean(isKeyDownNative(win,arg(0,0)&0xff,{read:(object,offset,kind)=>W.heap.read(object,offset,kind)}));break;
     case 1492: value=W.tickOffset();break;
     case 1510: W.setPtr(win,0x5a8,arg(0,null));break; // 0x10039390
     case 1511: for(let i=0;i<5;i++)W.setPtr(win,0x5ac+4*i,arg(i,null));break; // 0x100393a0
@@ -49,6 +65,28 @@ export function dispatchWindowHostNative(W, call) {
       let min=Math.max(0,arg(0,0)|0),max=Math.max(0,arg(1,0)|0);if(min>max)min=max;
       if(W.i32(win,0x15c)!==min||W.i32(win,0x160)!==max){W.setI32(win,0x15c,min);W.setI32(win,0x160,max);W.native.askParentForReconfigure(win);}break;
     }
+    // XTextWindow line/width/word-wrap leaves; each changed value asks the
+    // parent to reconfigure. Verified with scripts/validate-window-native-diff.mjs.
+    case 1555: { // SetWordWrap 0x10045fb0 compares bit0 with the raw UBOOL
+      const flags=W.u32(win,0x150),wrap=arg(0,false)?1:0;
+      if((flags&1)!==wrap){W.setU32(win,0x150,(((flags^wrap)&1)^flags)>>>0);W.native.askParentForReconfigure(win);}break;
+    }
+    case 1559: { // SetMinLines 0x100461d0: clamp to [0, maxLines]
+      let lines=arg(0,0)|0;if(lines<0)lines=0;const max=W.i32(win,0x160);if(lines>max)lines=max;
+      if(W.i32(win,0x15c)!==lines){W.setI32(win,0x15c,lines);W.native.askParentForReconfigure(win);}break;
+    }
+    case 1560: { // SetMaxLines 0x10046270: clamp to [max(0), minLines..]
+      let lines=arg(0,0)|0;if(lines<0)lines=0;const min=W.i32(win,0x15c);if(lines<min)lines=min;
+      if(W.i32(win,0x160)!==lines){W.setI32(win,0x160,lines);W.native.askParentForReconfigure(win);}break;
+    }
+    case 1561: // ResetLines 0x10046310: both -1 unless both are already negative
+      if(W.i32(win,0x15c)>=0||W.i32(win,0x160)>=0){W.setI32(win,0x15c,-1);W.setI32(win,0x160,-1);W.native.askParentForReconfigure(win);}break;
+    case 1562: { // SetMinWidth 0x100463b0: fcomp 0.0 C0 (less or NaN) -> +0; C3 skips the store
+      let width=Math.fround(arg(0,0));if(!(width>=0))width=0;const old=W.f32(win,0x164);
+      if(!(old===width||Number.isNaN(old))){W.setF32(win,0x164,width);W.native.askParentForReconfigure(win);}break;
+    }
+    case 1563: // ResetMinWidth 0x10046450: only a width above 0.0 is reset
+      if(W.f32(win,0x164)>0){W.setU32(win,0x164,0);W.native.askParentForReconfigure(win);}break;
     case 1572: W.setF32(win,0x174,arg(0,0));break; // 0x100478e0
     case 1570: addLog(W,win,arg(0,''),packed(arg(1,null)));break;
     case 1571: clearLog(W,win);break;

@@ -64,6 +64,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   return {runtime,player,shell,host,root,hud,hit,compass,cross,read,invoke,scoped,rect,tile,visible,images,imageFor,decorationCommands,snapshot,
     commands(width,height,view){return scoped(()=>host.draw(root,width,height,view));},
     tick(delta){scoped(()=>host.tick(root,delta));},
+    key(key,action){return scoped(()=>host.key(root,key,action));},
     reset(){scoped(()=>invoke(read(read(hud,'msgLog'),'winLog'),'ClearLog'));},
   };
 }

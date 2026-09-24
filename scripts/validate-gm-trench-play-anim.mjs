@@ -83,12 +83,15 @@ const jaimeMesh=runtime.namedReference(jaime,'Mesh').get();
 const originalRecord=jaimeMesh.loadRecord;
 assert.ok(originalRecord);
 // The live NPC preview decoded Jaime's LodMesh during scene setup, so this
-// record's payload is already resident; a mesh the preview never touched keeps
-// the original lazy-payload slot until its own prepareMesh runs.
+// record's payload is already resident. Play draws every visible Training prop
+// (ff237e1), so a prop mesh such as plant2's is resident too, in its own
+// VM-visible load record. Compare scalars only: a failing assertion on a payload
+// view makes Node's assert diff walk the whole object graph (tens of GiB).
 const plantIndex=mapAsset.exportsByPath.get('plant2');
 assert.ok(plantIndex);
 const plantMesh=runtime.namedReference(await runtime.objects.resolve(mapAsset,plantIndex),'Mesh').get();
-assert.equal(plantMesh.loadRecord.meshPayload,undefined,'unviewed map meshes keep the lazy payload slot');
+assert.equal(plantMesh.loadRecord.meshPayload?.payloadStatus,'decoded-lodmesh','Play decodes visible prop meshes at scene setup');
+assert.equal(loader.identity(plantMesh.loadRecord)===plantMesh,true,'the prop payload fills the mesh reference\'s own load record');
 const [jaimePayload,repeated]=await Promise.all([runtime.prepareMesh(jaime),runtime.prepareMesh(jaime)]);
 assert.equal(jaimePayload,repeated);
 assert.equal(jaimeMesh.loadRecord,originalRecord);
@@ -454,10 +457,13 @@ try {
   assert.equal(get('SightCounter'),Math.fround(Math.fround(0.01)-Math.fround(0.02)));
 
   // Reach default ShowSelf through the original RemoteRole=AutonomousProxy
-  // branch, with its prepared empty state. Viewport input/player physics remain
+  // branch, with its prepared empty state. That branch needs a PlayerPawn with
+  // no local Player; Play binds JC's viewport, so the fixture detaches it and
+  // the finally block restores it. Viewport input/player physics remain
   // outside this explicit tick fixture (the Play host owns those separately).
   assert.equal(runtime.instance(player).state.execution,null);
-  assert.equal(runtime.namedReference(player,'Player').get(),null);
+  assert.equal(savedViewport!==null,true,'Play binds the player viewport');
+  playerViewport.set(null);
   for(const [name,value] of Object.entries({RemoteRole:3,bStasis:false,bIsPlayer:true,bHidden:false,
     bViewTarget:false,bAdvancedTactics:false,AnimSequence:'None',SightCounter:0.5,PainTime:0,
     SpeechTime:0,LifeSpan:0,TimerRate:0,Weapon:null,Owner:null}))runtime.namedReference(player,name).set(value);
@@ -482,7 +488,7 @@ try {
   assert.equal(runtime.namedReference(player,'VisUpdateTime').get(),100);
   assert.equal(runtime.namedReference(player,'LastVisibility').get(),runtime.namedReference(player,'CurrentVisibility').get());
 } finally {
-  jaime.nextPawn=originalNextPawn;runtime.processEvent=actualProcessEvent;
+  jaime.nextPawn=originalNextPawn;runtime.processEvent=actualProcessEvent;playerViewport.set(savedViewport);
 }
 
 console.log(`Play mesh bridge passed: GM_Trench's 71 sequences, shared deferred vertices, `+

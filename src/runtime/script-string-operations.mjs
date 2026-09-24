@@ -134,3 +134,44 @@ export function scriptObjectToString(value) {
   if(typeof name==='string'&&name)return name;
   throw new TypeError('ObjectToString requires an object with a logical name');
 }
+
+/** Core execFloatToString 0x10131ca0: FString::Printf(L"%f", (double)F) (format
+ * constant 0x101aaf78). The float32 widens exactly to a double; MSVCRT prints
+ * six decimals. Produced here from the exact decimal expansion, rounding the
+ * sixth decimal half away from zero, and only where a 17-significant-digit
+ * intermediate would give the same text. NaN/Inf, -0, more than 17 integer
+ * digits and such double-rounding cases are not measured and stay explicit. */
+export function scriptFloatToString(value) {
+  const x = Math.fround(value);
+  if (!Number.isFinite(x)) throw new Error('FloatToString of NaN/Inf (MSVCRT %f spelling) is not measured');
+  if (Object.is(x, -0)) throw new Error('FloatToString of -0 (MSVCRT %f sign) is not measured');
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, Math.abs(x), true);
+  const bits = view.getBigUint64(0, true), biased = Number((bits >> 52n) & 0x7ffn);
+  let mantissa = bits & 0xfffffffffffffn, exponent = biased ? biased - 1075 : -1074;
+  if (biased) mantissa |= 1n << 52n;
+  let digits, point;                                   // value = digits * 10^-point
+  if (exponent >= 0) { digits = (mantissa << BigInt(exponent)).toString(); point = 0; }
+  else { digits = (mantissa * 5n ** BigInt(-exponent)).toString(); point = -exponent; }
+  const exact = digits.padStart(point + 1, '0');
+  const intDigits = exact.length - point;
+  if (intDigits > 17) throw new Error('FloatToString beyond 17 integer digits (MSVCRT zero fill) is not measured');
+  // Round the digit string `s` (with `p` fractional digits) half up to `keep` digits after the point.
+  const round = (s, p, keep) => {
+    if (p <= keep) return {s: s + '0'.repeat(keep - p), p: keep};
+    const cut = s.length - (p - keep);
+    let head = BigInt(s.slice(0, cut) || '0');
+    if (s[cut] >= '5') head += 1n;
+    return {s: head.toString().padStart(keep + 1, '0'), p: keep};
+  };
+  const direct = round(exact, point, 6);
+  const significant = exact.replace(/^0+/, '').length;
+  if (significant > 17) {
+    const drop = significant - 17;
+    const via = round(round(exact, point, point - drop).s, point - drop, 6);
+    if (via.s.replace(/^0+/, '') !== direct.s.replace(/^0+/, ''))
+      throw new Error('FloatToString 17-digit MSVCRT rounding case is not measured');
+  }
+  const text = direct.s.padStart(7, '0');
+  return `${x < 0 ? '-' : ''}${text.slice(0, -6)}.${text.slice(-6)}`;
+}

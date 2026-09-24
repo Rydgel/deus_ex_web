@@ -16,7 +16,7 @@ class NativeZone(c.NativeCollision):
  def state(self):return {'region':self.region(0xc8),'footRegion':self.region(0x330),'headRegion':self.region(0x33c)}
  def event(self,name):
   self.events.append({'event':name,**self.state()})
-  for field,offset,fmt in [('position',0x114,'3f'),('height',0x1d8,'f'),('baseEyeHeight',0x3f8,'f')]:
+  for field,offset,fmt in [('position',0x114,'3f'),('height',0x1d8,'f'),('eyeHeight',0x3f8,'f')]:
    value=self.case.get('mutations',{}).get(name,{}).get(field)
    if value is not None:self.write(self.actor+offset,fmt,*(value if isinstance(value,list)else[value]))
  def on_instruction(self,cpu,address,size,data):
@@ -39,7 +39,7 @@ class NativeZone(c.NativeCollision):
    out=self.alloc(12);self.call(0x103f5db0,model,struct.pack('<II3f',out,self.zones['world'],*case['position']));z,l,n=self.read(out,'IiI');return {'zone':self.ids[z],'leaf':l,'zoneNumber':n&255}
   self.events=[];self.queryIndex=0
   self.write(self.actor+0x24,'I',0 if case.get('isPawn') is False else 0x1058c660)
-  self.write(self.actor+0x28,'I',128 if case.get('deleted')else 0);self.write(self.actor+0x114,'3f',*case.get('position',[10,20,30]));self.write(self.actor+0x1d8,'f',case.get('height',43));self.write(self.actor+0x3f8,'f',case.get('baseEyeHeight',40))
+  self.write(self.actor+0x28,'I',128 if case.get('deleted')else 0);self.write(self.actor+0x114,'3f',*case.get('position',[10,20,30]));self.write(self.actor+0x1d8,'f',case.get('height',43));self.write(self.actor+0x3f8,'f',case.get('eyeHeight',40))
   for field,offset in [('region',0xc8),('footRegion',0x330),('headRegion',0x33c)]:
    r=case.get(field,{'zone':'world','leaf':-1,'zoneNumber':0});self.write(self.actor+offset,'IiI',self.zones[r['zone']],r['leaf'],r['zoneNumber'])
   self.write(self.actor+0x558,'I',self.pri if case.get('pri')else 0);self.write(self.pri+0x368,'I',self.zones['world']);self.write(self.zones['world']+0x518,'B',case.get('netMode',0))

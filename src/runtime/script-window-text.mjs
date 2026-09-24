@@ -15,6 +15,9 @@ export const WINDOW_TEXT_NATIVE=freeze({
   setText:functionEvidence(1146,1550,30,0x10046a30,0x10046b52,
     '3c1f02b64713f96f82539033b58ca16a7125974d12964ad16cb8c065c156da64',
     0x10045d50,0x10045e2a,'a84bc56acde8c1e4848a77d3cde089eac8dd0aa624ac77121f15e7a41f2fca4d'),
+  appendText:functionEvidence(1145,1551,30,0x10046b80,0x10046ca2,
+    '15af77095711e7413be90b522f8cf7c27f504c09e8807847c8761a456047cc1d',
+    0x10045e60,0x10045f74,'075f6ec2309035b4a3323f9b2695e92055e9f71279fc3e912617d4fbeec11bbd'),
   setTextAlignments:functionEvidence(1125,1556,34,0x10047000,0x10047075,
     '368e31dc383ea33d54616cd3a0a8e675651408880f46a7dae611b44bb807480b',
     0x10046050,0x10046067,'c90f05e91d2fa5a45dbe4e0ebc70888d109670ff89245345c6b6d2d3c3d29a71'),
@@ -204,6 +207,35 @@ export function initTextWindowNative(window,parent,services={}){
   writeRaw(object,WINDOW_TEXT_OFFSETS.text,'string','',services,phase);
   enableTextAsAcceleratorNative(object,1,services);
   return object;
+}
+
+/** XWindow::ConvertScriptString (0x10050710), applied by the SetText and
+ * AppendText execs before their virtual call: the C string is scanned in
+ * UTF-16 pairs; "|n" becomes LF and any other "|" pair stays literal, as does
+ * a final "|". */
+export function convertScriptString(value){
+  const text=String(value).split('\0',1)[0];let result='';
+  for(let index=0;index<text.length;index++){
+    const unit=text[index];
+    if(unit!=='|'){result+=unit;continue;}
+    const next=text[++index];result+=next==='n'?'\n':('|'+(next??''));
+  }
+  return result;
+}
+
+/** XTextWindow::AppendText (0x10045e60): append the C string to the text
+ * FString, re-derive the accelerator from the whole text when the text is an
+ * accelerator, and always ask the parent to reconfigure. */
+export function appendTextNative(window,newText,services={}){
+  const object=canonical(window,'TextWindow'),value=textValue(newText,'TextWindow.AppendText').split('\0',1)[0];
+  const phase={native:WINDOW_TEXT_NATIVE.appendText.body,name:'XTextWindow::AppendText'};
+  const current=readRaw(object,WINDOW_TEXT_OFFSETS.text,'string',services,phase);
+  const text=textValue(current,'TextWindow text')+value;
+  if(text!==current)writeRaw(object,WINDOW_TEXT_OFFSETS.text,'string',text,services,phase);
+  const flags=readRaw(object,WINDOW_TEXT_OFFSETS.textFlags,'u32',services,phase)>>>0;
+  if(flags&TEXT_WINDOW_FLAGS.textIsAccelerator)setAcceleratorTextNative(object,text.split('\0',1)[0],services);
+  askParent(object,services,phase.native);
+  return true;
 }
 
 /** XTextWindow::SetText's case-insensitive unchanged guard and callbacks. */

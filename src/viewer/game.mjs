@@ -17,6 +17,7 @@ import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
+import { inputKeyForCode } from './input-key-names.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
@@ -234,6 +235,14 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     get subtitles(){ return Boolean(subtitlesRef.get()); },
     set subtitles(value){ subtitlePreference=Boolean(value); applySubtitles(); },
     target() { return isHighlighted(interaction,interaction.frobTarget) ? describeTarget(interaction.frobTarget) : null; },
+    // XInputExt::Process 0x1002d0b0 offers every key to the player's root window
+    // (XRootWindow::Process) before any binding; true means the root consumed it.
+    windowKey(code, pressed) {
+      if (!hud) return false;
+      const key = inputKeyForCode(hud.host.inputKeyNames, code);
+      if (key < 0) return false;
+      return Boolean(hud.key(key, pressed ? 1 : 3));
+    },
     use() {
       const actor = interaction.frobTarget;
       if (!actor) return { ok: false, message: 'Nothing selected' };
@@ -266,12 +275,18 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
           || runtime.namedReference(actor, 'bDeleteMe').get();
         return { ok: Boolean(taken), message: taken ? `Picked up ${itemLabel(actor)}` : '' };
       }
-      // Non-mover frob: run the actor's real Frob bytecode through the general VM
-      // router (docs/scene-events.md). A handled Frob ran the real body; an
-      // unhandled one has no Frob override (the empty-event no-op).
+      // Any other target takes the same original right-click path:
+      // ParseRightClick -> RestrictInput, GrabDecoration for a pushable
+      // decoration, else DoFrob -> the actor's Frob, the owned-object 'Futz'
+      // AI event and PlayPickupAnim.
       try {
-        const outcome = doors.scriptRuntime.dispatchEvent(actor, 'Frob', [player.collisionActor, null]);
-        return { ok: outcome.handled, message: '' };
+        const pawn = player.collisionActor;
+        runtime.namedReference(pawn, 'FrobTarget').set(actor);
+        // The scene router supplies the conversation presenter's lifecycle
+        // that a pawn's Frob -> StartConversation needs.
+        doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
+        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
+        return { ok: true, message: '' };
       } catch (error) {
         // A conversation pawn's Frob still pauses honestly on an unbuilt boundary
         // (that path is covered by the instructor checks). A decoration or item
