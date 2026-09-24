@@ -245,11 +245,20 @@ pressed/held bits and update appearance. Non-auto-repeat press plays
 `pressSound`; release inside plays `clickSound` and activates the button.
 Auto-repeat instead sets `repeatAt`, plays/activates immediately, and suppresses
 release activation. Key and repeat fields retain their original byte/float32
-writes. ToggleWindow's distinct overrides remain explicitly unsupported.
+writes.
 
-The unchanged DLL oracle now compares 15 cases / 85 steps, including mouse
+`XToggleWindow` keeps its distinct overrides (`0x10049a80`, `0x10049b30`,
+`0x10049c30`). Mouse press dispatches the script event but does not enter the
+Button held state; left press is consumed. Left release is always consumed and,
+only when still inside, plays the enable/disable sound selected from the old
+toggle bit before calling `SetToggle(!old)`. Other buttons return the script
+result. Programmatic `PressButton` flips through `SetToggle` first and then
+plays the sound selected from the new state; its key argument is unused.
+
+The unchanged DLL oracle now compares 18 cases / 94 steps, including mouse
 suppression, capture/focus, press/release, continued multi-click counts and
-unhandled parent bubbling, in addition to all earlier cursor/focus cases.
+unhandled parent bubbling, Toggle mouse inside/outside and non-left paths, and
+programmatic toggle presses, in addition to all earlier cursor/focus cases.
 Complete window state, event order, coordinates, float bits and sounds match.
 The live Training medical screen routes root press/release through its actual
 scrollbar buttons and observes the original manager → scale → clip feedback.
@@ -359,8 +368,8 @@ timer.
 
 Translation: `buttonPressButton` in `script-window-input.mjs` and the existing
 `script-window-press-button.mjs` / `script-window-activate-button.mjs` exec
-translations, now wired as natives 1598 and 1590. `XToggleWindow::PressButton`
-(`0x10049c30`) is an explicit boundary.
+translations, now wired as natives 1598 and 1590. ToggleWindow's distinct
+PressButton behavior is recorded with the mouse route above.
 
 ## Destruction of the keypad window
 

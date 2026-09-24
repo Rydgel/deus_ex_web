@@ -3,7 +3,8 @@
  * scripts/native-window-mouse-focus-oracle.py runs the unchanged SetCursorPos,
  * SetRootCursorPos (with ClampMousePosition), ProcessMouseMove, GetMouseWindow,
  * FindWindowByPoint, IsPointInWindow, SetFocusWindow, AskParentToShowArea,
- * XClipRect::Intersect and ConvertCoordinates over window images with their
+ * XClipRect::Intersect, ConvertCoordinates and the ToggleWindow button
+ * overrides over window images with their
  * real vtables. The same cases run through src/runtime/script-window-mouse.mjs
  * (with the existing SetFocusWindow translation) and the shared family
  * virtuals; every step's result, events and window state compare exactly,
@@ -16,6 +17,7 @@ import * as Input from '../src/runtime/script-window-input.mjs';
 import * as T from '../src/runtime/script-window-tree-natives.mjs';
 import * as F from '../src/runtime/script-window-families.mjs';
 import {moveTabGroupNative} from '../src/runtime/script-window-root-tick.mjs';
+import {setToggleNative} from '../src/runtime/script-window-toggle-set.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const f = Math.fround;
@@ -34,7 +36,7 @@ const tree = (extra = {}) => [
   {id: 'b2', family: 'button', parent: 'keypad', x: 60.5, y: 10, width: 40, height: 30,
     clip: [260.5, 110, 0, 0, 40, 30], focusSound: 21, unfocusSound: 22},
   {id: 'b3', family: 'toggle', parent: 'keypad', x: 180, y: 200, width: 40, height: 30,
-    clip: [380, 300, 0, 0, 20, 30], focusSound: 31, unfocusSound: 32},
+    clip: [380, 300, 0, 0, 20, 30], focusSound: 31, unfocusSound: 32, ...extra.b3},
   {id: 'label', family: 'text', parent: 'keypad', x: 10, y: 60, width: 150, height: 20,
     clip: [210, 160, 0, 0, 150, 20], flags: 3},
 ];
@@ -115,6 +117,18 @@ const cases = [
   {name: 'HandleButtons bubbles unhandled raw and pressed events through cached parents',
     now:1,lastTick:0,windows:tree({root:{mouseX:215,mouseY:165,clickDeadline:2,lastWindow:'label',lastKey:1,
       clickX:215,clickY:165}}),steps:[{op:'handleButtons',root:'root',key:1,action:1}]},
+  {name:'HandleButtons uses ToggleWindow release semantics and old-state sounds',
+    now:1,lastTick:0,windows:tree({root:{mouseX:390,mouseY:315,clickDeadline:2,lastWindow:'b3',lastKey:1,
+      clickX:390,clickY:315},b3:{enableSound:51,disableSound:52}}),steps:[
+      {op:'handleButtons',root:'root',key:1,action:1},{op:'handleButtons',root:'root',key:1,action:3},
+      {op:'handleButtons',root:'root',key:1,action:1},{op:'handleButtons',root:'root',key:1,action:3}]},
+  {name:'ToggleWindow ignores non-left buttons and an outside left release',windows:tree(),steps:[
+    {op:'toggleMousePressed',win:'b3',x:10,y:10,key:2,count:1},
+    {op:'toggleMouseReleased',win:'b3',x:10,y:10,key:2,count:1},
+    {op:'toggleMouseReleased',win:'b3',x:50,y:10,key:1,count:1}]},
+  {name:'ToggleWindow PressButton flips first and selects the new-state sound',
+    windows:tree({b3:{enableSound:61,disableSound:62}}),steps:[
+      {op:'togglePressButton',win:'b3',key:32},{op:'togglePressButton',win:'b3',key:2}]},
 ];
 
 // ---- original ------------------------------------------------------------
@@ -162,6 +176,7 @@ function translate(c) {
     const params = ['MouseMoved'].includes(name) ? args.map(bits)
       : name === 'RawMouseButtonPressed' ? [bits(args[0]),bits(args[1]),args[2],args[3]]
       : ['MouseButtonPressed','MouseButtonReleased'].includes(name) ? [bits(args[0]),bits(args[1]),args[2],args[3]]
+      : name==='ToggleChanged'?[ref(args[0]),args[1]]
       : name.endsWith('Descendant')||name.startsWith('ButtonActivated') ? [ref(args[0])]
       : name === 'ChildRequestedShowArea' ? [ref(args[0]), ...args.slice(1).map(bits)] : [];
     events.push({op: 'ProcessScript', window: ref(win), name, params, third: 0});
@@ -173,13 +188,23 @@ function translate(c) {
   W.v.mouseGrabLost=()=>undefined;
   W.v.buttonActivated=(win,source)=>processScript(win,'ButtonActivated',[source],{result:false})?1:0;
   W.v.buttonActivatedRight=(win,source)=>processScript(win,'ButtonActivatedRight',[source],{result:false})?1:0;
+  W.v.toggleChanged=(win,source,toggle)=>processScript(win,'ToggleChanged',[source,toggle],{result:false})?1:0;
   const activateButton=(win,key)=>{for(let current=win;current;current=W.ptr(current,0x138))
     if((key===2?W.v.buttonActivatedRight(current,win):W.v.buttonActivated(current,win)))break;};
   const basePressed=W.v.mouseButtonPressed,baseReleased=W.v.mouseButtonReleased;
-  W.v.mouseButtonPressed=(win,...args)=>families.get(win)==='extension.buttonwindow'
+  let toggleServices;
+  const setToggle=(win,value)=>{
+    if((W.u8(win,0x174)&1)!==(value?1:0))events.push({op:'ChangeButtonAppearance',window:ref(win)});
+    return setToggleNative(win,value,toggleServices);
+  };
+  W.v.mouseButtonPressed=(win,...args)=>families.get(win)==='extension.togglewindow'
+    ?Input.toggleMousePressed(W,win,...args,{processScript})
+    :families.get(win)==='extension.buttonwindow'
     ?Input.buttonMousePressed(W,win,...args,{processScript,changeButtonAppearance:w=>events.push({op:'ChangeButtonAppearance',window:ref(w)}),tickOffset:W.tickOffset,activateButton})
     :basePressed(win,...args);
-  W.v.mouseButtonReleased=(win,...args)=>families.get(win)==='extension.buttonwindow'
+  W.v.mouseButtonReleased=(win,...args)=>families.get(win)==='extension.togglewindow'
+    ?Input.toggleMouseReleased(W,win,...args,{processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle})
+    :families.get(win)==='extension.buttonwindow'
     ?Input.buttonMouseReleased(W,win,...args,{processScript,changeButtonAppearance:w=>events.push({op:'ChangeButtonAppearance',window:ref(w)}),activateButton,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)})
     :baseReleased(win,...args);
   for (const spec of c.windows) {
@@ -207,6 +232,7 @@ function translate(c) {
       W.setU32(win,0x174,spec.buttonFlags??0);W.setF32(win,0x17c,spec.repeatDelay??0);W.setF32(win,0x19c,spec.repeatAt??0);
       W.setPtr(win,0x190,soundFor(spec.pressSound));W.setPtr(win,0x194,soundFor(spec.clickSound));W.setU8(win,0x1a0,spec.inputKey??0);
     }
+    if(family==='toggle'){W.setPtr(win,0x1ec,soundFor(spec.enableSound));W.setPtr(win,0x1f0,soundFor(spec.disableSound));}
     if (family === 'root') {
       [['mouseX', 0x590], ['mouseY', 0x594], ['lastX', 0x598], ['lastY', 0x59c]].forEach(([key, offset]) => W.setF32(win, offset, spec[key] ?? 0));
       W.setU32(win, 0x5a4, spec.mouseFlags ?? 0);
@@ -227,6 +253,11 @@ function translate(c) {
     [['mouseWindow', 0x5a0], ['grabbed', 0x5c4], ['focus', 0x5c8]].forEach(([key, offset]) => W.setPtr(win, offset, windows.get(spec[key]) ?? null));
     W.setPtr(win,0x624,windows.get(spec.lastWindow)??null);
   }
+  toggleServices={
+    read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
+    write:(object,offset,kind,value)=>heap.write(object,offset,kind,value),
+    toggleChanged:({object,source,toggle})=>W.v.toggleChanged(object,source,toggle),
+  };
   const snapshot = () => Object.fromEntries(c.windows.map(spec => {
     const win = windows.get(spec.id), family = spec.family ?? 'window', entry = {flags: W.u32(win, 0x30)};
     if (family === 'modal' || family === 'root') { entry.preferredFocus = ref(W.ptr(win, 0x178)); entry.groupLocation = [W.u32(win, 0x16c), W.u32(win, 0x170)]; }
@@ -260,6 +291,10 @@ function translate(c) {
       case 'handleButtons': result=Input.handleButtons(W,at(step.root),step.key,step.action,{topChild:T.topChild,lowerSibling:T.lowerSibling,
         getMouseWindow:(root,modal)=>Mouse.getMouseWindow(W,root,modal),convertCoordinates:(...args)=>Mouse.convertCoordinates(W,...args),
         setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target),getRootWindow:T.getRootWindow,tickOffset:W.tickOffset});break;
+      case 'toggleMousePressed':result=Input.toggleMousePressed(W,at(step.win),f(step.x),f(step.y),step.key,step.count,{processScript});break;
+      case 'toggleMouseReleased':result=Input.toggleMouseReleased(W,at(step.win),f(step.x),f(step.y),step.key,step.count,
+        {processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle});break;
+      case 'togglePressButton':Input.togglePressButton(W,at(step.win),step.key,{setToggle});break;
       case 'set': if (step.windowValue) W.setPtr(at(step.win), step.offset, at(step.windowValue)); else W.setU32(at(step.win), step.offset, step.value); break;
       default: throw new Error(`unknown op ${step.op}`);
     }

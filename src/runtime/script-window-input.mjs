@@ -213,6 +213,30 @@ export function buttonMouseReleased(W,win,x,y,key,count,{processScript,changeBut
   return 1;
 }
 
+// XToggleWindow's button virtuals deliberately do not use the Button pressed
+// state. A left release toggles only when it remains inside the window.
+export function toggleMousePressed(_W,win,x,y,key,count,{processScript}){
+  const result=processScript(win,'MouseButtonPressed',[x,y,key&0xff,count],{result:false})?1:0;
+  return (key|0)===1?1:result;
+}
+
+export function toggleMouseReleased(W,win,x,y,key,count,{processScript,isPointInWindow,setToggle}){
+  const result=processScript(win,'MouseButtonReleased',[x,y,key&0xff,count],{result:false})?1:0;
+  if((key|0)!==1)return result;
+  if(isPointInWindow(win,x,y)){
+    const old=W.u8(win,B.buttonFlags)&1;
+    W.native.playSound(win,W.ptr(win,old?0x1ec:0x1f0),-1,1);
+    setToggle(win,old?0:1);
+  }
+  return 1;
+}
+
+export function togglePressButton(W,win,_key,{setToggle}){
+  const next=(W.u8(win,B.buttonFlags)&1)?0:1;
+  setToggle(win,next);
+  W.native.playSound(win,W.ptr(win,next?0x1ec:0x1f0),-1,1);
+}
+
 /** XButtonWindow::PressButton 0x10007b20(key), the Button family's +0x124. */
 export function buttonPressButton(W, win, key, {changeButtonAppearance, addActivateTimer, activateButton}) {
   W.setU32(win, 0x174, W.u32(win, 0x174) | 1);

@@ -1,5 +1,17 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (ToggleWindow button overrides):**
+>
+> * ToggleWindow's mouse press/release and programmatic PressButton now retain
+>   their original event, inside-test, state-change and enable/disable-sound
+>   order instead of inheriting ButtonWindow behavior.
+> * The unchanged-DLL window oracle now matches 18 cases / 94 steps, adding
+>   toggle inside/outside, non-left, repeated mouse, and programmatic press
+>   paths with complete event/state comparison.
+> * Scale drawing/value formatting and full bot-screen interaction remain open;
+>   exact WinDrv capture/wheel delivery remains unverified. Stage 3 is
+>   unfinished. See [window input evidence](script-window-input.md).
+
 > **Checkpoint update, 2026-09-24 (Play pointer-to-root adapter):**
 >
 > * Play now offers absolute and pointer-lock-relative mouse samples to the

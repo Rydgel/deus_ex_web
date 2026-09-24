@@ -5,7 +5,8 @@ SetRootCursorPos (0x10039d80, with the original ClampMousePosition),
 ProcessMouseMove (0x1003af50), GetMouseWindow (0x1003b0d0), XWindow::
 FindWindowByPoint (0x1004f740), IsPointInWindow (0x1004f830), SetFocusWindow
 (0x1004f0e0), AskParentToShowArea (0x1004e230), XClipRect::Intersect
-(0x10002b10) and ConvertCoordinates (0x1004fbe0) over window images whose
+(0x10002b10), ConvertCoordinates (0x1004fbe0), and the ToggleWindow mouse and
+PressButton overrides (0x10049a80/0x10049b30/0x10049c30) over window images whose
 vtables are the real rebased XWindow / XButtonWindow / XToggleWindow /
 XModalWindow / XRootWindow tables, so every virtual (QueryPointInWindow,
 Mouse*/Focus* events, ChildRequestedShowArea) runs its original body.
@@ -40,7 +41,8 @@ BODY = {name: rebase(address) for name, address in {
     'getMouseWindow': 0x1003b0d0, 'findWindowByPoint': 0x1004f740, 'isPointInWindow': 0x1004f830,
     'setFocusWindow': 0x1004f0e0, 'askParentToShowArea': 0x1004e230, 'intersect': 0x10002b10,
     'convertCoordinates': 0x1004fbe0, 'moveFocus': 0x1004ef30, 'checkFocusWindow': 0x10050b80,
-    'handleButtons': 0x1003b960}.items()}
+    'handleButtons': 0x1003b960, 'toggleMousePressed': 0x10049a80,
+    'toggleMouseReleased': 0x10049b30, 'togglePressButton': 0x10049c30}.items()}
 PROCESS_SCRIPT = rebase(0x1004ded0)
 CHANGE_BUTTON_APPEARANCE = rebase(0x10008380)
 PLAY_SOUND = rebase(0x1004ffb0)
@@ -50,7 +52,8 @@ EVENT_NAMES = {0x1009b3e0: 'MouseMoved', 0x1009b3c8: 'MouseEnteredWindow', 0x100
                0x1009b344: 'FocusEnteredDescendant', 0x1009b3dc: 'FocusLeftDescendant',
                0x1009b334: 'ChildRequestedShowArea', 0x1009b360: 'RawMouseButtonPressed',
                0x1009b340: 'MouseButtonPressed', 0x1009b394: 'MouseButtonReleased',
-               0x1009b32c: 'ButtonActivated', 0x1009b3bc: 'ButtonActivatedRight'}
+               0x1009b32c: 'ButtonActivated', 0x1009b3bc: 'ButtonActivatedRight',
+               0x1009b368: 'ToggleChanged'}
 FAMILIES = {'window': (0x10059930, 0x160), 'text': (0x1005a458, 0x174), 'button': (0x1005a324, 0x1ec),
             'toggle': (0x1005a7c8, 0x1f4), 'modal': (0x10059ba8, 0x588), 'root': (0x10059cc4, 0x744)}
 
@@ -96,6 +99,9 @@ class FocusOracle(_TIMER.TimerOracle):
                 values = [x, y, key & 0xff, count]
             elif name in ('ButtonActivated', 'ButtonActivatedRight'):
                 values = [self.ref(self.read(params, 'I')[0])]
+            elif name == 'ToggleChanged':
+                source, toggle = self.read(params, '2I')
+                values = [self.ref(source), toggle]
             elif name in ('FocusEnteredDescendant', 'FocusLeftDescendant'):
                 values = [self.ref(self.read(params, 'I')[0])]
             elif name == 'ChildRequestedShowArea':
@@ -167,6 +173,9 @@ class FocusOracle(_TIMER.TimerOracle):
                 for offset, key in [(0x190, 'pressSound'), (0x194, 'clickSound')]:
                     self.write(win + offset, 'I', spec.get(key, 0))
                 self.write(win + 0x1a0, 'B', spec.get('inputKey', 0))
+            if family == 'toggle':
+                self.write(win + 0x1ec, 'I', spec.get('enableSound', 0))
+                self.write(win + 0x1f0, 'I', spec.get('disableSound', 0))
             if family == 'root':
                 for offset, key in [(0x590, 'mouseX'), (0x594, 'mouseY'), (0x598, 'lastX'), (0x59c, 'lastY')]:
                     self.write(win + offset, 'f', F(spec.get(key, 0)))
@@ -261,6 +270,11 @@ class FocusOracle(_TIMER.TimerOracle):
             return None
         if op == 'handleButtons':
             return self.call(BODY[op], W[step['root']], struct.pack('<II', step['key'], step['action']))
+        if op in ('toggleMousePressed', 'toggleMouseReleased'):
+            return self.call(BODY[op], W[step['win']], struct.pack('<ffII', F(step['x']), F(step['y']), step['key'], step['count']))
+        if op == 'togglePressButton':
+            self.call(BODY[op], W[step['win']], struct.pack('<I', step.get('key', 0x20)))
+            return None
         if op == 'set':
             self.write(W[step['win']] + step['offset'], step.get('fmt', 'I'), step['value'])
             return None

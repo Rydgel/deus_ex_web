@@ -689,7 +689,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     // Button-family vtable +0x124.
     pressButton(win, key) {
-      if (is(win, 'extension.togglewindow')) boundary('XToggleWindow::PressButton 0x10049c30 is not recovered');
+      if (is(win, 'extension.togglewindow')) return Input.togglePressButton(W,win,key,
+        {setToggle:(w,value)=>setToggleNative(w,value,lifecycle.toggle)});
       if (!is(win, 'extension.buttonwindow')) boundary('PressButton reached a non-button window');
       return Input.buttonPressButton(W, win, key, {changeButtonAppearance: w => changeButtonAppearance(w),
         addActivateTimer: Timers.addActivateTimer, activateButton: (w, k) => W.native.activateButton(w, k)});
@@ -699,15 +700,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
   const inheritedMousePressed=V.mouseButtonPressed;
-  V.mouseButtonPressed=(win,...args)=>is(win,'extension.buttonwindow')?Input.buttonMousePressed(W,win,...args,
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.togglewindow')?Input.toggleMousePressed(W,win,...args,{processScript}):
+    is(win,'extension.buttonwindow')?Input.buttonMousePressed(W,win,...args,
     {processScript,changeButtonAppearance,tickOffset:W.tickOffset,activateButton:(w,key)=>W.native.activateButton(w,key)}):
-    is(win,'extension.togglewindow')?boundary('XToggleWindow::MouseButtonPressed 0x10049a80 is not recovered'):
     is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
   const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
   V.mouseMoved=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
-  V.mouseButtonReleased=(win,...args)=>is(win,'extension.buttonwindow')?Input.buttonMouseReleased(W,win,...args,
+  V.mouseButtonReleased=(win,...args)=>is(win,'extension.togglewindow')?Input.toggleMouseReleased(W,win,...args,
+    {processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle:(w,value)=>setToggleNative(w,value,lifecycle.toggle)}):
+    is(win,'extension.buttonwindow')?Input.buttonMouseReleased(W,win,...args,
     {processScript,changeButtonAppearance,activateButton:(w,key)=>W.native.activateButton(w,key),isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)}):
-    is(win,'extension.togglewindow')?boundary('XToggleWindow::MouseButtonReleased 0x10049b30 is not recovered'):
     is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
   const inheritedShowArea=V.childRequestedShowArea;
   V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
