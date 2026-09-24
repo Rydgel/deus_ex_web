@@ -785,6 +785,11 @@ export function compileFunction(fn) {
           case 0x02:
             if(!services.defaultReference)throw new Error('Default property is not linked');
             return services.defaultReference(receiver,fn,n);
+          case 0x0e:
+            // Core execEatString 1013a920: Step one expression against the
+            // current object into a zeroed local FString, then destroy it.
+            evaluate(n.value,receiver);
+            return undefined;
           case 0x09:
             // Core execAssert 1012fcc0 reads a uint16 source line, evaluates
             // one bool, then reports NAME_Critical on zero (1012fcf9).

@@ -107,8 +107,61 @@ When that validator is green and the (4) lifecycle items run generally for
 Training's objects, Stage 3 is done — with a printed, finite list of exactly what
 was exercised.
 
-## First step
+## First step — reach census (2026-09-24)
 
-Add the conformance validator in report-only mode (no assertions) to print the
-reachable native tail and the live boundary list. That converts the remaining 93
-static indices into the true reachable set and turns items 1–4 into a countdown.
+`node scripts/census-training-reach.mjs --continue` is the report-only first
+step. It boots `00_Training`, ticks 10 s, then probes through Play's public
+entries:
+
+- `game.use()` on one actor per class with an overriding `Frob` (32 classes);
+- decoration `Bump` (13) and non-pawn `Touch` (6);
+- every `User.ini` exec binding except axis/button aliases and Fire (36).
+
+Each probe runs 30 painted ticks. A screen it opened is closed with Escape
+through `XRootWindow::Process`. A probe that throws or leaves a screen open
+gets a fresh boot, so later probes are not charged for it. The full run takes
+about 220 s and peaks at 2.3 GB. It writes `.cache/training-reach-census.json`.
+
+`--continue` returns the declared zero value from an unsupported native and
+records it. One probe then lists every native on its path, not just the first.
+Values after such a return are not original behavior. This is planning data,
+never evidence.
+
+Result: 88 probes, 74 complete and 14 end on a boundary. The whole reached
+frontier:
+
+| Family | Boundary | First probe |
+| --- | --- | --- |
+| Persona screen layout/admission | `TextWindow` `ParentRequestedGranularity` override | ShowInventoryWindow |
+| | `CheckboxWindow` family not admitted | ShowGoalsWindow |
+| Persona screen teardown | native 3016 `UnloadTexture`; 264 `PlaySound` in `DestroyWindow` | MedicalBot, RepairBot close |
+| Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) | Plant2, two crates, FlagTrigger0 |
+| | `MoveActor` for a non-spawned rider (pickup) | CombatKnife, Candybar, HazMatSuit |
+| Exec invocation | exec with omitted optional parameters | PutInHand, DropItem |
+| | null-Context result shape | SwitchAmmo |
+| Spawn admission | `Beam` subclass | ActivateAugmentation 9 (AugLight) |
+| Resource graph | `DynamicLoadObject` of `DXFonts` | ShowMainMenu |
+| Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (Lamp.Frob, AugLight) | QuickSave, Teleporter0 |
+
+Choose work by family, not by site. The two movement rows use the
+already-recovered `MoveActor`/`FarMoveActor` bodies, which Play admits only
+for the player, spawned views and held items. Admitting map actors closes all
+seven probes in one change. `PlaySound` is admitted one exact caller at a time
+([bot activation](script-window-bot-activation.md)). A static bytecode check
+that each call discards the channel id could admit every such caller in one
+change.
+
+The first census found two items with existing evidence; both are now closed:
+
+- **`Window.IsFocusWindow` (1448)** was on every persona button's
+  `SetButtonMetrics`. Its exec (`0x100528c0`) consumes `EX_EndFunctionParms`,
+  calls `XWindow::IsFocusWindow` (`0x1004ca20`) and stores the 32-bit result.
+  `scripts/native-window-toggle-set-oracle.py` already runs that callee
+  unchanged, so the dispatcher reuses the translated `getRootWindow` and root
+  `+0x5c8` focus test. The MedicalBot and RepairBot screens now open and close
+  on original code. `native-exec-diff` does not compare 1448: its case needs a
+  receiver self-pointer that the harness cannot express.
+- **VM opcode `0x0e` `EX_EatString`** blocked `ShowMainMenu`. Core
+  `execEatString` (`0x1013a920`) zeroes a local `FString`, steps one
+  expression against the current object into it, then destroys it. The VM now
+  evaluates and discards the expression.

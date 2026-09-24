@@ -31,6 +31,9 @@ export function dispatchWindowHostNative(W, call) {
     case 1426: value=T.getModalWindow(W,win);break;
     case 1427: value=T.getTabGroupWindow(W,win);break;
     case 1429: {const root=T.getRootWindow(W,win);value=root?W.ptr(root,T.ROOT.parentPawn):null;break;}
+    // execIsFocusWindow 0x100528c0 -> XWindow::IsFocusWindow 0x1004ca20: the
+    // root's +0x5c8 focus window is the receiver; a null root is false.
+    case 1448: {const root=T.getRootWindow(W,win);value=Boolean(root&&W.ptr(root,T.ROOT.focus)===win);break;}
     case 1439: // exec 0x100524a0 passes the FString directly, without pipe conversion.
       setAcceleratorTextNative(win,arg(0,''),{
         read:(object,offset,kind)=>W.heap.read(object,offset,kind),
