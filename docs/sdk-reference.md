@@ -97,7 +97,8 @@ retail DLL, and an unexported class's vftable needs its own retail read.
     `Draw` `0x1000aad0` to the recovered Toggle, Button and Text chain.
   - The Inventory screen's missing override is
     `XTextWindow::ParentRequestedGranularity` `0x10046880`.
-  None of these five is translated yet.
+  All five are now translated and checked against the original bodies
+  ([checkbox](script-window-checkbox.md)).
 - **Virtual calls in exec bodies.** A `call [reg+N]` in a native body is slot
   `N/4` of the receiver's class, and `--retail` gives the function. The
   exec-diff harness can use this to run the virtual-calling natives against
