@@ -76,8 +76,12 @@ retail DLLs (1112fm):
   share `XTabGroupWindow`'s `xor eax,eax; ret 4` at `0x100421d0`. The linker
   folded the identical bodies.
 
-For this build, the SDK layouts and vftable slot assignments are therefore
-checked facts, not header assumptions. Function bodies still come from the
+For this build, the SDK window layouts and vftable slot assignments are
+therefore checked facts, not header assumptions. Engine records still need
+their own retail check. The GOTY `DeusEx.dll` `UnloadTexture` (`0x10014c90`)
+reads `UTexture.Mips` data at `+0xa4` and its count at `+0xa8`. The SDK header
+has them at `+0xa8`/`+0xac`, so the retail `UTexture` differs by 4 bytes
+before `Mips`. Function bodies still come from the
 retail DLL, and an unexported class's vftable needs its own retail read.
 
 ## Uses

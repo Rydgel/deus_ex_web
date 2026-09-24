@@ -2534,6 +2534,17 @@ export class ScriptRuntime {
       const rate=refValue(call.evaluateArgument(0)),loop=refValue(call.evaluateArgument(1));
       return setActorTimer(this.timerState(call.receiver),rate,loop);
     }
+    if(call.index===3016){
+      // DeusExPlayer.UnloadTexture (DeusEx.dll exec 0x10014c90): for a
+      // non-null texture, Unload() the lazy DataArray (+0x10) of each 0x28-byte
+      // FMipmap in Mips (GOTY UTexture +0xa4 data, +0xa8 count; the SDK
+      // header's +0xa8 is 4 bytes off). The runtime keeps no loaded mip data on
+      // texture objects: pixels are decoded from the package bytes at each use,
+      // so no resident array exists to release (docs/script-window-checkbox.md).
+      if(call.argumentCount!==1)throw new Error('UnloadTexture requires one texture argument');
+      refValue(call.evaluateArgument(0));
+      return undefined;
+    }
     // Extension window/GC natives owned by the installed window host
     // (src/runtime/script-window-host.mjs); unhandled indices fall through.
     const windowNative=this.windowLifecycle?.handleNative?.(call);

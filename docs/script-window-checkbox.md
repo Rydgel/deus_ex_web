@@ -119,3 +119,39 @@ With these, the census shows the **Goals screen opening and closing through
 Escape** on original code. Closing it still reaches `SaveConfig` (536) and
 `DeusExPlayer.UnloadTexture` (3016). The **Inventory screen opens**. Closing
 it stops at `XRadioBoxWindow::DescendantRemoved` `0x10038cb0`.
+
+## Screen teardown
+
+Two changes let the Inventory screen close.
+
+**`XRadioBoxWindow::DescendantRemoved` `0x10038cb0`:**
+
+1. It finds the removed child in the `+0x178` toggle array.
+2. A found entry clears the `+0x184` selection when it is that entry, and is
+   then removed with `FArray::Remove(i, 1, 4)`.
+3. The script `DescendantRemoved` bridge follows. The order is the reverse of
+   `DescendantAdded`, which runs the bridge first.
+
+**Destroy entries for Radio box and TextLog:**
+
+- `XRadioBoxWindow::CleanUp` `0x10038710` empties `+0x178`, clears `+0x184`,
+  then runs `XTabGroupWindow::CleanUp`.
+- `~XRadioBoxWindow` `0x10015680` frees `+0x178`, then runs
+  `~XTabGroupWindow`.
+- `XTextLogWindow::CleanUp` `0x100475b0` is `XTextWindow::CleanUp`.
+- `~XTextLogWindow` `0x100145c0` frees the 20-byte log rows at `+0x178`.
+
+**`DeusExPlayer.UnloadTexture` (3016, `DeusEx.dll` exec `0x10014c90`).** For
+a non-null texture it calls `Unload()` on the lazy `DataArray` (`+0x10`) of
+each 0x28-byte `FMipmap` in `Mips`. In the GOTY `UTexture`, `Mips` data is at
+`+0xa4` and the count at `+0xa8`, 4 bytes before the SDK header's offset. The
+runtime keeps no loaded mip data on texture objects; pixels are decoded from
+the package bytes at each use. The native therefore evaluates its argument and
+releases nothing. This equivalence depends on that model, and a resident
+texture cache would need its own release.
+
+In strict mode, which is what Play runs, the census now shows the
+**Inventory screen opening and closing with no boundary**. The Goals screen
+opens and pauses on close at `SaveConfig` (536). That needs a real config
+store: `LoadConfig` at class load and `SaveConfig` into it. It is listed with
+the class-default/config work in the completion audit.

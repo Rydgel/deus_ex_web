@@ -835,7 +835,19 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const index = W.farray.add(win, 0x178, 1, 4);
     W.farray.setPtr(win, 0x178, index, child);
   }
-  function radioBoxDescendantRemoved() { return boundary('XRadioBoxWindow::DescendantRemoved (0x10038cb0) is not recovered'); }
+  // XRadioBoxWindow::DescendantRemoved 0x10038cb0: FindItem in the +0x178
+  // toggle array; a found entry clears the +0x184 selection when it is that
+  // entry and is removed (FArray::Remove(i, 1, 4)). The script bridge follows.
+  function radioBoxDescendantRemoved(win, child) {
+    const count = W.farray.num(win, 0x178);
+    let index = 0;
+    while (index < count && W.farray.ptr(win, 0x178, index) !== child) index++;
+    if (index < count) {
+      if (W.ptr(win, 0x184) === W.farray.ptr(win, 0x178, index)) W.setPtr(win, 0x184, null);
+      W.farray.remove(win, 0x178, index, 1, 4);
+    }
+    processScript(win, 'DescendantRemoved', [child]);
+  }
   // XRootWindow::DescendantRemoved 0x1003b5c0: forget +0x624 (the last
   // button window) with its GLog line, then XModalWindow's body.
   function rootDescendantRemoved(win, child) {
@@ -900,6 +912,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XTabGroupWindow::CleanUp 0x10044ea0: leave an enclosing modal's table,
     // then empty the row/column tables; ~XTabGroupWindow destroys them.
     'extension.tabgroupwindow': {members: win => tabGroupCleanUp(win), destructor: win => tabGroupTables(win)},
+    // XRadioBoxWindow::CleanUp 0x10038710 empties the +0x178 toggle array,
+    // clears the +0x184 selection, then XTabGroupWindow::CleanUp;
+    // ~XRadioBoxWindow 0x10015680 frees +0x178, then ~XTabGroupWindow.
+    'extension.radioboxwindow': {
+      members: win => { W.farray.empty(win, 0x178, 4); W.setPtr(win, 0x184, null); tabGroupCleanUp(win); },
+      destructor: win => { W.farray.empty(win, 0x178, 4); tabGroupTables(win); },
+    },
+    // XTextLogWindow::CleanUp 0x100475b0 is XTextWindow::CleanUp;
+    // ~XTextLogWindow 0x100145c0 frees the 20-byte log rows at +0x178.
+    'extension.textlogwindow': {members: win => W.heap.write(win, 0x168, 'string', ''), destructor: win => W.farray.empty(win, 0x178, 20)},
     // XModalWindow::CleanUp 0x10036cf0: RemoveTabGroupFromTable(self), empty the
     // +0x17c tab-group table, ClearAcceleratorTable, then XTabGroupWindow::CleanUp.
     // ~XModalWindow 0x10005110 destroys +0x17c, then ~XTabGroupWindow's tables.

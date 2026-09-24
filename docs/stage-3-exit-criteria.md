@@ -134,8 +134,8 @@ frontier:
 | --- | --- | --- |
 | Persona screen layout/admission | `TextWindow` `ParentRequestedGranularity` override — **closed** ([checkbox](script-window-checkbox.md)) | ShowInventoryWindow |
 | | `CheckboxWindow` family not admitted — **closed**; Goals opens and closes | ShowGoalsWindow |
-| | `XRadioBoxWindow::DescendantRemoved` `0x10038cb0` on close | ShowInventoryWindow |
-| Persona screen teardown | native 3016 `UnloadTexture`; 536 `SaveConfig`; 264 `PlaySound` in `DestroyWindow` | MedicalBot, RepairBot, Goals close |
+| | `XRadioBoxWindow::DescendantRemoved` `0x10038cb0` on close — **closed**; Inventory opens and closes | ShowInventoryWindow |
+| Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` (config store); 264 `PlaySound` in `DestroyWindow` | Goals, MedicalBot, RepairBot close |
 | Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) | Plant2, two crates, FlagTrigger0 |
 | | `MoveActor` for a non-spawned rider (pickup) | CombatKnife, Candybar, HazMatSuit |
 | Exec invocation | exec with omitted optional parameters | PutInHand, DropItem |
