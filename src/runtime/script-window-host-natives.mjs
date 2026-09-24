@@ -15,6 +15,7 @@ import {addTimer,removeTimer} from './script-window-timers.mjs';
 import {setCursorPos} from './script-window-mouse.mjs';
 import {pressButtonNative} from './script-window-press-button.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
+import {setTextColorsNative} from './script-window-set-text-colors.mjs';
 
 const packed = c => ['r','g','b','a'].reduce((word,k,i)=>word|((c?.[`core.object.color.${k}`]??0)&255)<<(8*i),0)>>>0;
 export function dispatchWindowHostNative(W, call) {
@@ -139,6 +140,26 @@ export function dispatchWindowHostNative(W, call) {
       setButtonColorsNative(win,...colors.map(packed),{
         read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
     }
+    case 1594: { // ButtonWindow.SetTextColors exec 0x10008940: omitted colours are {0,0xff,0,stale alpha}, as in 1593.
+      const colors=Array.from({length:6},(_,i)=>arg(i,null));
+      if(colors.some(v=>v===null))W.boundary('SetTextColors omitted-color stack alpha is not modeled');
+      setTextColorsNative(win,...colors.map(packed),{
+        read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
+    }
+    case 1840: { // CheckboxWindow.SetCheckboxTextures exec 0x1000afb0 -> 0x1000a840
+      // Unchanged textures and equal-or-unordered sizes return; otherwise
+      // toggleOff, textureWidth, toggleOn, textureHeight, then AskParentForReconfigure.
+      const off=arg(0,null),on=arg(1,null),w=Math.fround(arg(2,0)),h=Math.fround(arg(3,0));
+      if(W.ptr(win,0x1f4)===off&&W.ptr(win,0x1f8)===on&&T.c3(W.f32(win,0x1fc),w)&&T.c3(W.f32(win,0x200),h))break;
+      W.setPtr(win,0x1f4,off);W.setF32(win,0x1fc,w);W.setPtr(win,0x1f8,on);W.setF32(win,0x200,h);
+      W.native.askParentForReconfigure(win);break;
+    }
+    case 1841: { // CheckboxWindow.SetCheckboxSpacing exec 0x1000b0a0 -> 0x1000a910
+      const spacing=Math.fround(arg(0,0));
+      if(T.c3(W.f32(win,0x204),spacing))break;
+      W.setF32(win,0x204,spacing);W.native.askParentForReconfigure(win);break;
+    }
+    case 1842: bits(0x208,1,arg(0,true));break; // CheckboxWindow.ShowCheckboxOnRightSide exec 0x1000b110 (default TRUE)
     case 1595: // ButtonWindow.EnableAutoRepeat 0x10007aa0; float defaults at 0x10059df8/0x10059dfc
       bits(0x174,4,arg(0,true));W.setF32(win,0x17c,arg(1,0.5));W.setF32(win,0x180,arg(2,Math.fround(0.1)));break;
     case 1596: bits(0x174,8,arg(0,true));break;                   // EnableRightMouseClick 0x10007ae0

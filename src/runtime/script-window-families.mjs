@@ -18,6 +18,7 @@ const f = Math.fround;
 export const FAMILY_ADDRESSES = Object.freeze({
   textCtor: 0x10008e70, buttonCtor: 0x10009300, toggleCtor: 0x10009980, tabGroupCtor: 0x10004cc0,
   radioBoxCtor: 0x10015910, textLogCtor: 0x10014840, modalCtor: 0x100053a0, rootCtor: 0x10005c10,
+  checkboxCtor: 0x1000a040, checkboxInit: 0x1000a710,
   buttonInit: 0x10007640, toggleInit: 0x10049820, tabGroupInit: 0x10044d90, radioBoxInit: 0x10038660,
   textLogInit: 0x100474b0, modalInit: 0x10036c00, rootInit: 0x10039050,
   addWindowToTables: 0x10045350, removeWindowFromTables: 0x10045450, resortWindowTables: 0x10045140,
@@ -27,6 +28,7 @@ export const FAMILY_ADDRESSES = Object.freeze({
 });
 export const VTABLES = Object.freeze({
   window: 0x10059930, textwindow: 0x1005a458, buttonwindow: 0x1005a324, togglewindow: 0x1005a7c8,
+  checkboxwindow: 0x1005a8f0,
   tilewindow: 0x1005b760, tabgroupwindow: 0x10059a8c, radioboxwindow: 0x1005b87c, textlogwindow: 0x1005b63c,
   modalwindow: 0x10059ba8, rootwindow: 0x10059cc4, computerwindow: 0x1005b2c8, extensionobject: 0x10059888,
 });
@@ -47,6 +49,12 @@ export function constructButtonWindow(W, win) {         // 0x10009300
 export function constructToggleWindow(W, win) {         // 0x10009980 (XExtensionObject ctor 0x10002780 first)
   W.uobjectConstructor(win); W.setU32(win, 0, VTABLES.extensionobject);
   zeroClip(W, win); W.setU32(win, 0, VTABLES.window); W.setU32(win, 0, VTABLES.togglewindow);
+}
+/** 0x1000a040: the XWindow::XWindow body 0x10003130 (UObject, ExtensionObject
+ * vtable, clip, Window vtable), FString(ENoInit) at +0x168, then its vtable. */
+export function constructCheckboxWindow(W, win) {
+  W.uobjectConstructor(win); W.setU32(win, 0, VTABLES.extensionobject);
+  zeroClip(W, win); W.setU32(win, 0, VTABLES.window); W.setU32(win, 0, VTABLES.checkboxwindow);
 }
 export function constructTabGroupWindow(W, win) {       // 0x10004cc0
   W.uobjectConstructor(win); zeroClip(W, win);
@@ -115,6 +123,21 @@ export function initToggleWindow(W, win, parent) {
   initButtonWindow(W, win, parent);
   W.setU32(win, 0x1ec, 0);
   W.setU32(win, 0x1f0, 0);
+}
+/** XCheckboxWindow::Init 0x1000a710: XToggleWindow::Init, then textureWidth
+ * and textureHeight 0, bRightSide cleared in its dword, checkboxColor
+ * (unaligned +0x20d) = 0xff,0xff,0xff over the parent argument word (whose
+ * high byte survives as alpha, as in XButtonWindow::Init), checkboxSpacing
+ * 3.0f and checkboxStyle 2, in that store order. */
+export function initCheckboxWindow(W, win, parent, toggleInit = initToggleWindow) {
+  toggleInit(W, win, parent);
+  W.setU32(win, 0x1fc, 0);
+  W.setU32(win, 0x200, 0);
+  W.setU32(win, 0x208, (W.u32(win, 0x208) & 0xfffffffe) >>> 0);
+  const high = (W.addressOf(parent) >>> 24) & 0xff;
+  for (const [offset, byte] of [[0x20d, 0xff], [0x20e, 0xff], [0x20f, 0xff], [0x210, high]]) W.setU8(win, offset, byte);
+  W.setU32(win, 0x204, 0x40400000);                         // 3.0f
+  W.setU8(win, 0x20c, 2);
 }
 /** XTabGroupWindow::Init 0x10044d90. */
 export function initTabGroupWindow(W, win, parent) {

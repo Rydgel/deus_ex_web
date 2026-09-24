@@ -14,7 +14,7 @@
  * the first. Values after such a return are not original behavior: this is
  * planning data for choosing families, never evidence for a translation.
  *
- *   node scripts/census-training-reach.mjs [--continue] [--all] [--groups idle,frob,bump,touch,exec]
+ *   node scripts/census-training-reach.mjs [--continue] [--all] [--groups idle,frob,bump,touch,exec] [--only regex]
  *        [--json .cache/training-reach-census.json] [--mem-cap MiB]
  *
  * The census runs in a child process whose RSS the parent samples, and kills it
@@ -40,7 +40,8 @@ async function parent() {
   mkdirSync(path.dirname(out), {recursive: true});
   const partial = `${out}.partial`;
   const args = ['--max-old-space-size=6144', fileURLToPath(import.meta.url), '--child', '--out', partial,
-    '--groups', groups.join(','), ...(continueMode ? ['--continue'] : []), ...(argv.includes('--all') ? ['--all'] : [])];
+    '--groups', groups.join(','), ...(continueMode ? ['--continue'] : []), ...(argv.includes('--all') ? ['--all'] : []),
+    ...(flag('--only') ? ['--only', flag('--only')] : [])];
   const started = Date.now();
   const proc = spawn(process.execPath, args, {stdio: ['ignore', 'inherit', 'inherit']});
   let peak = 0, killed = false;
@@ -250,7 +251,8 @@ async function child() {
       plan.push({group: 'exec', label: command, body: () => game.hud.scoped(() => runtime.dispatchSpawnedEvent(player, name, args))});
     }
   }
-  for (const entry of plan) await run(entry);
+  const only = flag('--only') ? new RegExp(flag('--only'), 'i') : null;
+  for (const entry of plan) if (!only || only.test(`${entry.group}:${entry.label}`)) await run(entry);
   writeFileSync(out, JSON.stringify({meta: {continue: continueMode, groups, boots}, probes, records}));
   process.exit(0);
 }

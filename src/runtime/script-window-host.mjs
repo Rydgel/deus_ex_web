@@ -88,6 +88,12 @@ const FAMILIES = Object.freeze({
   'extension.textwindow': {vtable: F.VTABLES.textwindow},
   'extension.buttonwindow': {vtable: F.VTABLES.buttonwindow},
   'extension.togglewindow': {vtable: F.VTABLES.togglewindow},
+  // Extension.dll's exported ??_7XCheckboxWindow@@6B@ differs from the toggle
+  // vftable only in the destructor, Init +0x54, CleanUp +0x58 (a call to
+  // XToggleWindow::CleanUp), ParentRequestedPreferredSize +0x7c and Draw
+  // +0xd8 (scripts/sdk-layouts.mjs --retail). Every other slot dispatches as
+  // toggle.
+  'extension.checkboxwindow': {vtable: F.VTABLES.checkboxwindow, dispatch: 'extension.togglewindow'},
   'extension.tilewindow': {vtable: F.VTABLES.tilewindow},
   'extension.tabgroupwindow': {vtable: F.VTABLES.tabgroupwindow},
   'extension.radioboxwindow': {vtable: F.VTABLES.radioboxwindow},
@@ -412,7 +418,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // Object creation: StaticConstructObject + family constructor.
   // ------------------------------------------------------------------
   let nameCounter = 0;
-  const families = new WeakMap();
+  const families = new WeakMap(), checkboxes = new WeakSet();
+  const isCheckbox = win => checkboxes.has(win);
   const externalSubtrees = new WeakSet();
   W.externalSubtree=win=>externalSubtrees.has(win);
   const destroyed = new WeakSet();
@@ -431,7 +438,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     const object = {name: `${cls.record.name}${nameCounter++}`, outer};
     heap.allocate(object, NATIVE_WINDOW_CLASS_SIZES[family] + 0x80);
     runtime.attach(object, cls);
-    families.set(object, family);
+    families.set(object, FAMILIES[family].dispatch ?? family);
+    if (family === 'extension.checkboxwindow') checkboxes.add(object);
     bindNativeFields(object, cls);
     constructFamily(object, family);
     return object;
@@ -446,6 +454,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.textwindow': return F.constructTextWindow(W, win);
       case 'extension.buttonwindow': return F.constructButtonWindow(W, win);
       case 'extension.togglewindow': return F.constructToggleWindow(W, win);
+      case 'extension.checkboxwindow': return F.constructCheckboxWindow(W, win);
       case 'extension.tilewindow': return constructTileWindow(win, {...rawServices, coreObjectConstructor: () => {}});
       case 'extension.tabgroupwindow': return F.constructTabGroupWindow(W, win);
       case 'extension.radioboxwindow': return F.constructRadioBoxWindow(W, win);
@@ -483,6 +492,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   W.initTabGroup=(win,parent)=>F.initTabGroupWindow(W,win,parent);
   W.createNewWindow=(name,parent,flag)=>createNewWindowNative({newClass:classes.get(`extension.${name.toLowerCase()}`).record,parent,bShow:Boolean(flag),errorDevice:lifecycle.errorDevice},lifecycle);
   function initFamily(win, parent) {
+    if (isCheckbox(win)) return F.initCheckboxWindow(W, win, parent);
     switch (familyOf(win)) {
       case 'extension.scalewindow': return S.initScale(W,win,parent);
       case 'extension.scalemanagerwindow': return S.initScaleManager(W,win,parent);
@@ -548,6 +558,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         W.setPtr(win, 0x178, null);                                                     // 0x10037444
     },
     parentRequestedPreferredSize(win, bW, w, bH, h) {
+      if (isCheckbox(win)) return L.checkboxPreferredSize(W, win, bW, w, bH, h);
       switch (familyOf(win)) {
         case 'extension.scalewindow': return SL.scalePreferredSize(W,win);
         case 'extension.scalemanagerwindow': return SL.managerPreferredSize(W,win);
@@ -569,6 +580,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         processScript(win, 'ParentRequestedGranularity', args);
         return {h: f(args[0]), v: f(args[1])};
       }
+      if (is(win, 'extension.textwindow', 'extension.buttonwindow', 'extension.togglewindow', 'extension.textlogwindow'))
+        return L.textGranularity(W, win, hg, vg, (w, h1, v1) => {                     // 0x10046880 -> 0x10050450
+          const args = [f(h1), f(v1)];
+          processScript(w, 'ParentRequestedGranularity', args);
+          return {h: f(args[0]), v: f(args[1])};
+        });
       return boundary(`ParentRequestedGranularity override of ${familyOf(win)} is not recovered`);
     },
     childRequestedVisibilityChange(win, child, visible) {
@@ -638,6 +655,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
     },
     draw(win, gc) {
+      if (isCheckbox(win)) return D.checkboxDraw(W, win, gc);
       switch (familyOf(win)) {
         case 'extension.textwindow': return textDraw(win, gc);
         case 'extension.buttonwindow': case 'extension.togglewindow': return buttonDraw(win, gc);
@@ -875,6 +893,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XButtonWindow::CleanUp 0x10007770 is XTextWindow::CleanUp; ~XButtonWindow
     // 0x100091d0 reaches ~XTextWindow's FString finalization.
     'extension.buttonwindow': {members: win => W.heap.write(win, 0x168, 'string', '')},
+    // XToggleWindow::CleanUp 0x100498a0 (also XCheckboxWindow's, 0x1000a7d0)
+    // only calls XButtonWindow::CleanUp; ~XToggleWindow/~XCheckboxWindow
+    // 0x10009f00 chain down to ~XTextWindow's FString finalization.
+    'extension.togglewindow': {members: win => W.heap.write(win, 0x168, 'string', '')},
     // XTabGroupWindow::CleanUp 0x10044ea0: leave an enclosing modal's table,
     // then empty the row/column tables; ~XTabGroupWindow destroys them.
     'extension.tabgroupwindow': {members: win => tabGroupCleanUp(win), destructor: win => tabGroupTables(win)},
@@ -985,7 +1007,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       checkGrabbedWindow: ({object})=>T.checkGrabbedWindow(W,object),
       makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object),
       notifySensitivityChanged: ({object,sensitive})=>T.invokeSensitivityChange(W,object,sensitive)},
-    size: rawServices, position: rawServices, text: rawServices,
+    size: rawServices, position: rawServices,
+    // TextWindow.SetText reaches XWindow::SetAcceleratorKey when the text is
+    // the accelerator (+0x150 textIsAccelerator), which dirties the modal's table.
+    text: {...rawServices, makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object)},
     toggle: {...rawServices,
       read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
       toggleChanged:({object,source,toggle})=>V.toggleChanged(object,source,toggle)},

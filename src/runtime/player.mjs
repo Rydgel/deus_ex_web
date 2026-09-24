@@ -45,7 +45,10 @@ export class Player {
       // is not run), so the script-visible view fields read the live player.
       get viewRotation() { return player.viewRotation; }, set viewRotation(value) { player.viewRotation = value; },
       get eyeHeight() { return player.eyeHeight; }, set eyeHeight(value) { player.eyeHeight = value; },
+      // PlayerPawn.WalkBob is the CheckBob state vector; a script write
+      // (PlayerPawn.ShowMenu's `WalkBob = vect(0,0,0)`) lands there too.
       get walkBob() { return player.walkBob; },
+      set walkBob(value) { player.walkBob = [...value]; if (player.bobState) player.bobState.WalkBob = [...value]; },
       get physics() { return player.physicsPawn?.physics ?? (player.grounded ? 1 : 2); },
       get isCrouching() { return Boolean(player.controls?.isCrouching); },
       get oldLocation() { return player.physicsPawn?.oldLocation ?? player.spawnOldLocation; },

@@ -240,3 +240,90 @@ export function textPreferredSize(W, win, bW, w, bH, h) {
   W.gc.release(win, gc);
   return {width: w, height: h};
 }
+
+/** XTextWindow::ParentRequestedGranularity 0x10046880, the slot of the Text,
+ * Button, Toggle, Checkbox and TextLog vftables: with a GC, the vertical unit
+ * is GetFontHeight(1) (fst/fstp) and the horizontal unit 1.0f; the GC is
+ * released and XWindow's script bridge 0x10050450 always follows. */
+export function textGranularity(W, win, hg, vg, bridge) {
+  const gc = W.gc.get(win);
+  if (gc) {
+    vg = f(W.gc.fontHeight(gc, true));
+    hg = 1;
+    W.gc.release(win, gc);
+  }
+  return bridge(win, hg, vg);
+}
+
+/** XCheckboxWindow checkbox extent 0x1000a9c0. Each axis keeps a positive
+ * textureWidth/Height (+0x1fc/+0x200); otherwise it starts at 0, takes a
+ * positive toggleOn (+0x1f8) USize/VSize (+0x34/+0x38) and then a larger
+ * toggleOff (+0x1f4) one. The horizontal extent adds checkboxSpacing (+0x204)
+ * only when the width is positive. */
+export function checkboxSize(W, win) {
+  const axis = (fixed, size) => {
+    if (above(X(W.f32(win, fixed)), X(0))) return W.f32(win, fixed);
+    let value = 0;
+    const on = W.ptr(win, 0x1f8), off = W.ptr(win, 0x1f4);
+    if (on) { const t = I(W.i32(on, size)); if (below(X(0), t)) value = S(t); }
+    if (off) { const t = I(W.i32(off, size)); if (above(t, X(value))) value = S(t); }
+    return value;
+  };
+  const width = axis(0x1fc, 0x34), height = axis(0x200, 0x38);
+  const extra = above(X(width), X(0)) ? S(A(X(W.f32(win, 0x204)), X(width))) : 0;
+  return {width, height, extra};
+}
+
+/** XCheckboxWindow::ParentRequestedPreferredSize 0x1000acb0: the text
+ * measurement of XTextWindow with the checkbox extent beside it. Nonempty
+ * text with a line limit and no specified height measures at width 0 (or at
+ * the specified width, keeping that width) and applies the font-height line
+ * limits; otherwise it measures at the specified width less both margins and
+ * the checkbox extent when word-wrapping. Both paths then add the margins and
+ * the extent. Empty text uses the background texture or, without one,
+ * XTextWindow's own body 0x100465a0. Finally each axis is raised to the
+ * checkbox size plus both margins. Without a GC nothing is written. */
+export function checkboxPreferredSize(W, win, bW, w, bH, h) {
+  w = f(w); h = f(h);
+  const gc = W.gc.get(win);
+  if (!gc) return {width: w, height: h};
+  const box = checkboxSize(W, win);
+  const hm = () => W.f32(win, 0x154), vm = () => W.f32(win, 0x158);
+  const text = W.heap.read(win, 0x168, 'string');
+  const minLines = W.i32(win, 0x15c), maxLines = W.i32(win, 0x160);
+  if (text.length) {
+    if (!bH && (minLines >= 0 || maxLines >= 0)) {
+      // A specified width is measured through a temporary x-extent slot.
+      const size = W.gc.textExtent(gc, bW ? w : 0, text);
+      if (!bW) w = f(size.width);
+      h = f(size.height);
+      const fontHeight = f(W.gc.fontHeight(gc, true));
+      let height = X(h);
+      if (minLines >= 0) {
+        const min = M(I(minLines), X(fontHeight)); if (above(min, X(h))) height = X(S(min));
+      }
+      if (maxLines >= 0) {
+        const max = S(M(I(maxLines), X(fontHeight))); if (above(X(h), X(max))) height = X(max);
+      }
+      h = S(height);
+    } else {
+      const clip = bW && (W.u8(win, 0x150) & 1) ? S(diff(X(w), A(sum(hm(), hm()), X(box.extra)))) : 0;
+      const size = W.gc.textExtent(gc, clip, text);
+      w = f(size.width); h = f(size.height);
+    }
+    w = S(A(sum(hm(), hm(), w), X(box.extra)));
+    h = S(sum(vm(), vm(), h));
+  } else {
+    const background = W.ptr(win, O.background);
+    if (background) {
+      h = S(I(W.i32(background, 0x38)));
+      if (!bH && minLines >= 0) h = S(M(I(minLines), X(f(W.gc.fontHeight(gc, true)))));
+      else if (!bH && maxLines >= 0) h = S(M(I(maxLines), X(f(W.gc.fontHeight(gc, true)))));
+      w = S(I(W.i32(background, 0x34)));
+    } else ({width: w, height: h} = textPreferredSize(W, win, bW, w, bH, h));
+  }
+  const minH = sum(vm(), vm(), box.height); if (above(minH, X(h))) h = S(minH);
+  const minW = sum(hm(), hm(), box.width); if (above(minW, X(w))) w = S(minW);
+  W.gc.release(win, gc);
+  return {width: w, height: h};
+}

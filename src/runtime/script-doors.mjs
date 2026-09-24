@@ -336,7 +336,7 @@ function makeBinding(record, field) {
       },
       walkbob: {
         get: () => vector(host.walkBob ?? ZERO_VECTOR),
-        set: () => { throw new Error('Player WalkBob is owned by the recovered CheckBob port'); },
+        set: value => { host.walkBob = vector(value); },
       },
       biscrouching: {
         get: () => Boolean(host.isCrouching),
