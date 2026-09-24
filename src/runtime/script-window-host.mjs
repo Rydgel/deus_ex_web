@@ -258,6 +258,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     setPawnRootWindow: (pawn, root) => runtime.namedReference(pawn, 'rootWindow').set(root),
     setPawnField: (pawn, name, value) => runtime.namedReference(pawn, name).set(value),
     processScript: (win, event, args, options) => processScript(win, event, args, options),
+    mouseClickLog: win => boundaryLog.push({log:'GLog',text:`Assigning Last Button Window to ${objectFullName(win)}`}),
     canvasComputeRenderSize: () => {},
     // XRootWindow::GetWindowsTickOffset(0) 0x1003a3b0 over the host clock.
     tickOffset:()=>Timers.windowsTickOffset(performance.now()/1000,lastTickTime),
@@ -680,7 +681,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if (!is(root, 'extension.rootwindow')) boundary('HandleVirtualKeyboard reached a non-root window');
       return Input.handleVirtualKeyboard(W, root, key, action, repeat, {topChild: T.topChild, lowerSibling: T.lowerSibling});
     },
-    handleButtons: () => boundary('XRootWindow::HandleButtons 0x1003b960 (mouse buttons) is not recovered'),
+    handleButtons(root,key,action) {
+      if(!is(root,'extension.rootwindow'))boundary('HandleButtons reached a non-root window');
+      return Input.handleButtons(W,root,key,action,{topChild:T.topChild,lowerSibling:T.lowerSibling,
+        getMouseWindow:(r,modal)=>Mouse.getMouseWindow(W,r,modal),convertCoordinates:(...args)=>Mouse.convertCoordinates(W,...args),
+        setFocusWindow:(r,target)=>Mouse.setFocusWindow(W,r,target),getRootWindow:T.getRootWindow,tickOffset:W.tickOffset});
+    },
     // Button-family vtable +0x124.
     pressButton(win, key) {
       if (is(win, 'extension.togglewindow')) boundary('XToggleWindow::PressButton 0x10049c30 is not recovered');
@@ -693,10 +699,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
   const inheritedMousePressed=V.mouseButtonPressed;
-  V.mouseButtonPressed=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.buttonwindow')?Input.buttonMousePressed(W,win,...args,
+    {processScript,changeButtonAppearance,tickOffset:W.tickOffset,activateButton:(w,key)=>W.native.activateButton(w,key)}):
+    is(win,'extension.togglewindow')?boundary('XToggleWindow::MouseButtonPressed 0x10049a80 is not recovered'):
+    is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
   const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
   V.mouseMoved=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
-  V.mouseButtonReleased=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
+  V.mouseButtonReleased=(win,...args)=>is(win,'extension.buttonwindow')?Input.buttonMouseReleased(W,win,...args,
+    {processScript,changeButtonAppearance,activateButton:(w,key)=>W.native.activateButton(w,key),isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)}):
+    is(win,'extension.togglewindow')?boundary('XToggleWindow::MouseButtonReleased 0x10049b30 is not recovered'):
+    is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
   const inheritedShowArea=V.childRequestedShowArea;
   V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
   // The four new families override these native slots. Until translated,

@@ -39,7 +39,8 @@ BODY = {name: rebase(address) for name, address in {
     'setCursorPos': 0x1004cca0, 'setRootCursorPos': 0x10039d80, 'processMouseMove': 0x1003af50,
     'getMouseWindow': 0x1003b0d0, 'findWindowByPoint': 0x1004f740, 'isPointInWindow': 0x1004f830,
     'setFocusWindow': 0x1004f0e0, 'askParentToShowArea': 0x1004e230, 'intersect': 0x10002b10,
-    'convertCoordinates': 0x1004fbe0, 'moveFocus': 0x1004ef30, 'checkFocusWindow': 0x10050b80}.items()}
+    'convertCoordinates': 0x1004fbe0, 'moveFocus': 0x1004ef30, 'checkFocusWindow': 0x10050b80,
+    'handleButtons': 0x1003b960}.items()}
 PROCESS_SCRIPT = rebase(0x1004ded0)
 CHANGE_BUTTON_APPEARANCE = rebase(0x10008380)
 PLAY_SOUND = rebase(0x1004ffb0)
@@ -47,7 +48,9 @@ PLAY_SOUND = rebase(0x1004ffb0)
 EVENT_NAMES = {0x1009b3e0: 'MouseMoved', 0x1009b3c8: 'MouseEnteredWindow', 0x1009b3d0: 'MouseLeftWindow',
                0x1009b3a8: 'FocusEnteredWindow', 0x1009b3d4: 'FocusLeftWindow',
                0x1009b344: 'FocusEnteredDescendant', 0x1009b3dc: 'FocusLeftDescendant',
-               0x1009b334: 'ChildRequestedShowArea'}
+               0x1009b334: 'ChildRequestedShowArea', 0x1009b360: 'RawMouseButtonPressed',
+               0x1009b340: 'MouseButtonPressed', 0x1009b394: 'MouseButtonReleased',
+               0x1009b32c: 'ButtonActivated', 0x1009b3bc: 'ButtonActivatedRight'}
 FAMILIES = {'window': (0x10059930, 0x160), 'text': (0x1005a458, 0x174), 'button': (0x1005a324, 0x1ec),
             'toggle': (0x1005a7c8, 0x1f4), 'modal': (0x10059ba8, 0x588), 'root': (0x10059cc4, 0x744)}
 
@@ -85,6 +88,14 @@ class FocusOracle(_TIMER.TimerOracle):
             name = self.event_ids.get(name_id, name_id)
             if name == 'MouseMoved':
                 values = list(self.read(params, '2I'))
+            elif name == 'RawMouseButtonPressed':
+                x, y, key_action = self.read(params, '3I')
+                values = [x, y, key_action & 0xff, (key_action >> 8) & 0xff]
+            elif name in ('MouseButtonPressed', 'MouseButtonReleased'):
+                x, y, key, count = self.read(params, '4I')
+                values = [x, y, key & 0xff, count]
+            elif name in ('ButtonActivated', 'ButtonActivatedRight'):
+                values = [self.ref(self.read(params, 'I')[0])]
             elif name in ('FocusEnteredDescendant', 'FocusLeftDescendant'):
                 values = [self.ref(self.read(params, 'I')[0])]
             elif name == 'ChildRequestedShowArea':
@@ -151,10 +162,21 @@ class FocusOracle(_TIMER.TimerOracle):
                 self.write(win + 0x178, 'I', self.windows.get(spec.get('preferredFocus'), 0))
             if family in ('button', 'toggle'):
                 self.write(win + 0x174, 'I', spec.get('buttonFlags', 0))
+                for offset, key in [(0x17c, 'repeatDelay'), (0x19c, 'repeatAt')]:
+                    self.write(win + offset, 'f', F(spec.get(key, 0)))
+                for offset, key in [(0x190, 'pressSound'), (0x194, 'clickSound')]:
+                    self.write(win + offset, 'I', spec.get(key, 0))
+                self.write(win + 0x1a0, 'B', spec.get('inputKey', 0))
             if family == 'root':
                 for offset, key in [(0x590, 'mouseX'), (0x594, 'mouseY'), (0x598, 'lastX'), (0x59c, 'lastY')]:
                     self.write(win + offset, 'f', F(spec.get(key, 0)))
                 self.write(win + 0x5a4, 'I', spec.get('mouseFlags', 0))
+                for offset, key, default in [(0x610, 'multiClickTime', .5), (0x614, 'multiClickDistance', 10),
+                                             (0x620, 'clickDeadline', 0), (0x628, 'clickX', -1), (0x62c, 'clickY', -1)]:
+                    self.write(win + offset, 'f', F(spec.get(key, default)))
+                self.write(win + 0x618, 'i', spec.get('clickIndex', 0))
+                self.write(win + 0x61c, 'i', spec.get('lastKey', 0))
+                self.write(win + 0x624, 'I', self.windows.get(spec.get('lastWindow'), 0))
         # Tab tables: FArray {Data, Num, Max} of window pointers.
         for spec in case.get('windows', []):
             for offset, key in [(0x14c, 'rowTable'), (0x158, 'colTable'), (0x17c, 'groupTable')]:
@@ -179,13 +201,21 @@ class FocusOracle(_TIMER.TimerOracle):
                 entry['preferredFocus'] = self.ref(self.read(win + 0x178, 'I')[0])
                 entry['groupLocation'] = list(self.read(win + 0x16c, '2I'))
             if family in ('button', 'toggle'):
-                entry['buttonFlags'] = self.read(win + 0x174, 'I')[0]
+                entry.update({'buttonFlags': self.read(win + 0x174, 'I')[0],
+                              'repeatAt': self.read(win + 0x19c, 'I')[0],
+                              'inputKey': self.read(win + 0x1a0, 'B')[0]})
             if family == 'root':
                 entry.update({'mouseX': self.read(win + 0x590, 'I')[0], 'mouseY': self.read(win + 0x594, 'I')[0],
                               'lastX': self.read(win + 0x598, 'I')[0], 'lastY': self.read(win + 0x59c, 'I')[0],
                               'mouseWindow': self.ref(self.read(win + 0x5a0, 'I')[0]),
                               'mouseFlags': self.read(win + 0x5a4, 'I')[0],
-                              'focus': self.ref(self.read(win + 0x5c8, 'I')[0])})
+                              'focus': self.ref(self.read(win + 0x5c8, 'I')[0]),
+                              'grabbed': self.ref(self.read(win + 0x5c4, 'I')[0]),
+                              'clickIndex': self.read(win + 0x618, 'i')[0],
+                              'lastKey': self.read(win + 0x61c, 'i')[0],
+                              'clickDeadline': self.read(win + 0x620, 'I')[0],
+                              'lastWindow': self.ref(self.read(win + 0x624, 'I')[0]),
+                              'clickX': self.read(win + 0x628, 'I')[0], 'clickY': self.read(win + 0x62c, 'I')[0]})
             state[key] = entry
         return state
 
@@ -229,6 +259,8 @@ class FocusOracle(_TIMER.TimerOracle):
         if op == 'askParentToShowArea':
             self.call(BODY[op], W[step['win']], struct.pack('<4f', *map(F, (step['x'], step['y'], step['w'], step['h']))))
             return None
+        if op == 'handleButtons':
+            return self.call(BODY[op], W[step['root']], struct.pack('<II', step['key'], step['action']))
         if op == 'set':
             self.write(W[step['win']] + step['offset'], step.get('fmt', 'I'), step['value'])
             return None
@@ -239,6 +271,8 @@ class FocusOracle(_TIMER.TimerOracle):
 
     def run(self, case):
         self.case, self.events = case, []
+        self.write(self.now, 'd', case.get('now', 1.0))
+        self.write(_TIMER.LAST_TICK, 'd', case.get('lastTick', 0.0))
         self.build(case)
         steps = []
         for step in case['steps']:

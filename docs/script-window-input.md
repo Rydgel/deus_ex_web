@@ -206,14 +206,57 @@ steps exactly. They cover:
 
 Translation: `rootProcess` and `handleVirtualKeyboard` in
 `script-window-input.mjs`, with the bridges as host virtuals. The ComputerWindow
-and EditWindow VirtualKeyPressed overrides and `HandleButtons` (`0x1003b960`)
-are explicit boundaries. The Play input layer stands in for XInputExt:
+and EditWindow VirtualKeyPressed overrides remain explicit boundaries. The Play
+input layer stands in for XInputExt:
 `src/viewer/input-key-names.mjs` names the browser key and resolves it in the
 original EInputKey table, then `game.windowKey` offers it to the root. A
 consumed key clears Play's held keys and goes no further. `IsKeyDown` (1470)
 uses the existing `script-window-is-key-down.mjs`. Core `execGetEnum`
 (`0x1013e9a0`) returns NAME_None unless the object is a UEnum and
 0 ≤ i < `Names.Num` (`+0x38`), then `Names(i)` (`+0x34`).
+
+## Root mouse-button routing — 2026-09-24
+
+`XRootWindow::HandleButtons` (`0x1003b960`) now supplies the mouse half of the
+root input path. Contract recorded from the installed Extension.dll before the
+translation:
+
+* root mouse flag bit 2 consumes the input immediately. Otherwise the body
+  finds the top modal and current mouse window; press grabs that window and
+  focus mode at least 1 focuses it, while release ungrabs it;
+* press/release sample `GetTickOffset`, absolute distance from the first click,
+  last window and full integer key. A sequence continues only while the
+  remaining 0.5-second deadline is positive and both distances are at most 10.
+  A reset emits `Assigning Last Button Window to %s` to GLog, then installs the
+  new window/key/origin. Press advances the click index only for a continued
+  sequence and sets the next deadline;
+* each target receives `RawMouseButtonPressed(x,y,key,action)` first. If it does
+  not consume the input, press calls `MouseButtonPressed` and release calls
+  `MouseButtonReleased` with `(clickIndex % MaxClickCount)+1` when the window's
+  signed `MaxClickCount` is positive, otherwise `clickIndex+1`. Coordinates are
+  converted afresh for each cached parent. Destruction after either virtual is
+  an assertion, not a silent stop;
+* `GrabMouse` notifies an old grabbed window through `MouseGrabLost(new)` before
+  replacing it; `UngrabMouse` clears only a matching grab.
+
+The reached `XButtonWindow` press/release overrides are included. Their script
+events run first. Left-click, and right-click only with flag 3 enabled, set the
+pressed/held bits and update appearance. Non-auto-repeat press plays
+`pressSound`; release inside plays `clickSound` and activates the button.
+Auto-repeat instead sets `repeatAt`, plays/activates immediately, and suppresses
+release activation. Key and repeat fields retain their original byte/float32
+writes. ToggleWindow's distinct overrides remain explicitly unsupported.
+
+The unchanged DLL oracle now compares 15 cases / 85 steps, including mouse
+suppression, capture/focus, press/release, continued multi-click counts and
+unhandled parent bubbling, in addition to all earlier cursor/focus cases.
+Complete window state, event order, coordinates, float bits and sounds match.
+The live Training medical screen routes root press/release through its actual
+scrollbar buttons and observes the original manager → scale → clip feedback.
+
+Reproduce with
+`NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-window-mouse-focus-diff.mjs`,
+`node scripts/validate-window-baseline-play.mjs`, and `npm run build`.
 
 ## Window timers
 
@@ -363,9 +406,9 @@ GRANTED, closed keypad, restored HUD, open doorway, no browser errors.
 
 * Full platform Viewport construction and paused Level.Tick scheduling remain
   outside the attached script prefix; see the viewport contract above.
-* Mouse input: `HandleButtons` (mouse clicks), and Play's pointer look while a
-  modal holds the mouse grab (the original routes mouse axes to the root
-  instead of the view).
+* Play's browser pointer adapter still treats movement as camera look; while a
+  modal holds the mouse grab it must map browser coordinates/edges to the now
+  recovered root route instead.
 * Play's input is a JavaScript key-to-action map, not the User.ini bindings that
   `XInputExt::Process` executes. The consumed-key rule maps to clearing Play's
   held keys.

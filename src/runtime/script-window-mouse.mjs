@@ -236,6 +236,12 @@ export function mouseFocusVirtuals(W, {familyOf, processScript, changeButtonAppe
     focusEnteredDescendant: (win, child) => script(win, 'FocusEnteredDescendant', [child]),
     focusLeftDescendant: (win, child) => script(win, 'FocusLeftDescendant', [child]),
     childRequestedShowArea: (win, child, x, y, w, h) => script(win, 'ChildRequestedShowArea', [child, x, y, w, h]),
+    rawMouseButtonPressed: (win,x,y,key,action)=>script(win,'RawMouseButtonPressed',
+      [x,y,key&0xff,action&0xff],{result:false})?1:0,
+    mouseButtonPressed: (win,x,y,key,count)=>script(win,'MouseButtonPressed',
+      [x,y,key&0xff,count],{result:false})?1:0,
+    mouseButtonReleased: (win,x,y,key,count)=>script(win,'MouseButtonReleased',
+      [x,y,key&0xff,count],{result:false})?1:0,
     // vtable +0x64: XWindow::CursorRequested 0x10003440 copies hotX, hotY and
     // newColor back. It seeds shadowTexture with the caller's pointer value and
     // never copies it back, so a script's shadow is discarded (passed as None here).

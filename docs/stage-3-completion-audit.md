@@ -1,5 +1,17 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (root mouse-button routing):**
+>
+> * Original `HandleButtons`, mouse capture/release, focus-on-press,
+>   multi-click timing/counts, coordinate conversion, raw/press/release parent
+>   propagation and the reached Button-family overrides are translated.
+> * Fifteen unchanged-DLL cases / 85 steps match complete state and event
+>   order. The live medical screen now activates both scrollbar buttons through
+>   root press/release and retains scale/clip feedback.
+> * Browser pointer-to-root coordinate delivery and ToggleWindow's distinct
+>   overrides remain open. See [window input evidence](script-window-input.md).
+>   Focused original/runtime and bot integration pass; Stage 3 is unfinished.
+
 > **Checkpoint update, 2026-09-24 (Training bot activation):**
 >
 > * Both Training bot Frobs now complete their original `SetMedicalBot` /

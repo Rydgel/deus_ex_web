@@ -105,6 +105,7 @@ if(target==='MedicalBot'){
   const areas=completed.filter(row=>row.key==='deusex.personascrollareawindow.initwindow');
   assert.equal(areas.length,1,'original PersonaScrollAreaWindow.InitWindow returns');
   const area=areas[0].receiver,child=off=>W.ptr(area,off);
+  const invoke=(receiver,index,args)=>runtime.invokeNative({receiver,index,argumentCount:args.length,evaluateArgument:i=>args[i]});
   assert.ok(sizing.some(row=>row.receiver===area&&row.width>0&&row.height>0),
     'original medical script returns from QueryPreferredSize with a nonempty clip rectangle');
   const expected=['ScaleManagerWindow','ScaleManagerWindow','ScaleWindow','ScaleWindow','ButtonWindow','ButtonWindow','ButtonWindow','ButtonWindow','ClipWindow'];
@@ -143,6 +144,18 @@ if(target==='MedicalBot'){
   assert.equal(W.v.buttonActivated(manager,first),true,'original scrollbar up-button route is consumed');
   assert.equal(W.i32(scale,0x1c8),0,'up button returns to the first row');
   assert.equal(W.i32(clip,0x178),0,'clip feedback agrees at the first row');
+  const rootWindow=host.root;
+  const click=win=>{
+    invoke(win,1453,[W.f32(win,0x80)*.5,W.f32(win,0x84)*.5]);
+    assert.equal(host.key(rootWindow,1,1),1,'root consumes a grabbed left-button press');
+    assert.equal(host.key(rootWindow,1,3),1,'root consumes a grabbed left-button release');
+  };
+  click(last);
+  assert.equal(W.i32(scale,0x1c8),Math.min(limit,W.i32(scale,0x1d0)),'root mouse routing activates the down button');
+  assert.equal(W.i32(clip,0x178),W.i32(scale,0x1c8),'mouse activation retains scale/clip feedback');
+  click(first);
+  assert.equal(W.i32(scale,0x1c8),0,'root mouse routing activates the up button');
+  assert.equal(W.ptr(rootWindow,0x5c4),null,'release clears the temporary mouse grab');
   const thumbX=W.f32(scale,0x210)+0.5,thumbY=W.f32(scale,0x214)+0.5;
   assert.equal(W.v.mouseButtonPressed(scale,thumbX,thumbY,1,1),true);
   assert.equal(W.u8(scale,0x258)&1,1,'press inside the original thumb starts dragging');
@@ -154,7 +167,6 @@ if(target==='MedicalBot'){
   W.v.childRequestedShowArea(clip,W.ptr(clip,0x140),0,0,1,1);
   assert.equal(W.i32(clip,0x178),0,'show-area brings the content origin back into view');
   assert.equal(W.i32(scale,0x1c8),0,'show-area synchronizes the scrollbar');
-  const invoke=(receiver,index,args)=>runtime.invokeNative({receiver,index,argumentCount:args.length,evaluateArgument:i=>args[i]});
   invoke(scale,1640,[7]);
   assert.equal(W.i32(clip,0x178),W.i32(scale,0x1c8),'SetTickPosition script native reaches clip feedback');
   invoke(scale,1650,[0]);

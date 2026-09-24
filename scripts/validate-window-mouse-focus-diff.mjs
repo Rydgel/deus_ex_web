@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createNativeHeap} from '../src/runtime/script-native-heap.mjs';
 import * as Mouse from '../src/runtime/script-window-mouse.mjs';
+import * as Input from '../src/runtime/script-window-input.mjs';
 import * as T from '../src/runtime/script-window-tree-natives.mjs';
 import * as F from '../src/runtime/script-window-families.mjs';
 import {moveTabGroupNative} from '../src/runtime/script-window-root-tick.mjs';
@@ -104,11 +105,22 @@ const cases = [
       {op: 'convertCoordinates', from: 'b2', x: 0.3, y: 0.7, to: 'root'},
       {op: 'convertCoordinates', from: 'root', x: 1e8, y: -3.3, to: 'b2'},
       {op: 'convertCoordinates', from: 'b3', x: 16777215, y: 0.1, to: 'label'}]},
+  {name: 'HandleButtons obeys the root mouse-input suppression bit',
+    windows: tree({root:{mouseFlags:4}}),steps:[{op:'handleButtons',root:'root',key:1,action:1}]},
+  {name: 'HandleButtons captures, focuses and dispatches button press/release with multi-click counts',
+    now:1,lastTick:0,windows:tree({root:{mouseX:215,mouseY:115,clickDeadline:2,lastWindow:'b1',lastKey:1,
+      clickX:215,clickY:115,clickIndex:0},b1:{pressSound:41,clickSound:42}}),steps:[
+      {op:'handleButtons',root:'root',key:1,action:1},{op:'handleButtons',root:'root',key:1,action:3},
+      {op:'handleButtons',root:'root',key:1,action:1}]},
+  {name: 'HandleButtons bubbles unhandled raw and pressed events through cached parents',
+    now:1,lastTick:0,windows:tree({root:{mouseX:215,mouseY:165,clickDeadline:2,lastWindow:'label',lastKey:1,
+      clickX:215,clickY:165}}),steps:[{op:'handleButtons',root:'root',key:1,action:1}]},
 ];
 
 // ---- original ------------------------------------------------------------
 // Floats travel as bits (JSON has no NaN or -0); a window-valued write names its target.
-const FLOAT_KEYS = new Set(['x', 'y', 'w', 'h', 'width', 'height', 'mouseX', 'mouseY', 'lastX', 'lastY']);
+const FLOAT_KEYS = new Set(['x', 'y', 'w', 'h', 'width', 'height', 'mouseX', 'mouseY', 'lastX', 'lastY',
+  'multiClickTime','multiClickDistance','clickDeadline','clickX','clickY','repeatDelay','repeatAt']);
 const encode = object => Object.fromEntries(Object.entries(object).map(([key, value]) =>
   [key, FLOAT_KEYS.has(key) && typeof value === 'number' ? {bits: bits(value)}
     : ['clip', 'a', 'b'].includes(key) ? value.map(v => ({bits: bits(v)})) : value]));
@@ -138,6 +150,7 @@ function translate(c) {
     native: {playSound: (win, sound, volume, pitch) => events.push({op: 'PlaySound', window: ref(win),
       sound: sound?.sound ?? 0, volume: bits(volume), pitch: bits(pitch)})},
     farray: {num: (o, off) => heap.read(o, off + 4, 'i32'), ptr: (o, off, i) => heap.mem.read(heap.read(o, off, 'u32') + 4 * i, 'ptr')},
+    tickOffset:()=>f((c.now??1)-(c.lastTick??0)),
   };
   // The host's W.native focus services (script-window-host.mjs).
   Object.assign(W.native, {
@@ -146,13 +159,29 @@ function translate(c) {
     moveFocus: (win, direction, wrap) => Mouse.moveFocus(W, win, direction, wrap, {getTabGroupWindow: T.getTabGroupWindow, moveTabGroup: (root, move) => W.native.moveTabGroup(root, move)}),
   });
   const processScript = (win, name, args) => {
-    const params = name === 'MouseMoved' ? args.map(bits) : name.endsWith('Descendant') ? [ref(args[0])]
+    const params = ['MouseMoved'].includes(name) ? args.map(bits)
+      : name === 'RawMouseButtonPressed' ? [bits(args[0]),bits(args[1]),args[2],args[3]]
+      : ['MouseButtonPressed','MouseButtonReleased'].includes(name) ? [bits(args[0]),bits(args[1]),args[2],args[3]]
+      : name.endsWith('Descendant')||name.startsWith('ButtonActivated') ? [ref(args[0])]
       : name === 'ChildRequestedShowArea' ? [ref(args[0]), ...args.slice(1).map(bits)] : [];
     events.push({op: 'ProcessScript', window: ref(win), name, params, third: 0});
+    return false;
   };
   W.v = Mouse.mouseFocusVirtuals(W, {familyOf: win => families.get(win), processScript,
     changeButtonAppearance: win => events.push({op: 'ChangeButtonAppearance', window: ref(win)}),
     boundary: message => { throw new Error(message); }});
+  W.v.mouseGrabLost=()=>undefined;
+  W.v.buttonActivated=(win,source)=>processScript(win,'ButtonActivated',[source],{result:false})?1:0;
+  W.v.buttonActivatedRight=(win,source)=>processScript(win,'ButtonActivatedRight',[source],{result:false})?1:0;
+  const activateButton=(win,key)=>{for(let current=win;current;current=W.ptr(current,0x138))
+    if((key===2?W.v.buttonActivatedRight(current,win):W.v.buttonActivated(current,win)))break;};
+  const basePressed=W.v.mouseButtonPressed,baseReleased=W.v.mouseButtonReleased;
+  W.v.mouseButtonPressed=(win,...args)=>families.get(win)==='extension.buttonwindow'
+    ?Input.buttonMousePressed(W,win,...args,{processScript,changeButtonAppearance:w=>events.push({op:'ChangeButtonAppearance',window:ref(w)}),tickOffset:W.tickOffset,activateButton})
+    :basePressed(win,...args);
+  W.v.mouseButtonReleased=(win,...args)=>families.get(win)==='extension.buttonwindow'
+    ?Input.buttonMouseReleased(W,win,...args,{processScript,changeButtonAppearance:w=>events.push({op:'ChangeButtonAppearance',window:ref(w)}),activateButton,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)})
+    :baseReleased(win,...args);
   for (const spec of c.windows) {
     const family = spec.family ?? 'window', win = {id: spec.id};
     heap.allocate(win, SIZE[family]);
@@ -174,10 +203,16 @@ function translate(c) {
     if ('tabIndex' in spec) W.setI32(win, 0x168, spec.tabIndex);
     if ('tabFlags' in spec) W.setU32(win, 0x164, spec.tabFlags);
     if (family === 'modal' || family === 'root') { W.setU8(win, 0x174, spec.focusMode ?? 0); W.setPtr(win, 0x178, windows.get(spec.preferredFocus) ?? null); }
-    if (family === 'button' || family === 'toggle') W.setU32(win, 0x174, spec.buttonFlags ?? 0);
+    if (family === 'button' || family === 'toggle') {
+      W.setU32(win,0x174,spec.buttonFlags??0);W.setF32(win,0x17c,spec.repeatDelay??0);W.setF32(win,0x19c,spec.repeatAt??0);
+      W.setPtr(win,0x190,soundFor(spec.pressSound));W.setPtr(win,0x194,soundFor(spec.clickSound));W.setU8(win,0x1a0,spec.inputKey??0);
+    }
     if (family === 'root') {
       [['mouseX', 0x590], ['mouseY', 0x594], ['lastX', 0x598], ['lastY', 0x59c]].forEach(([key, offset]) => W.setF32(win, offset, spec[key] ?? 0));
       W.setU32(win, 0x5a4, spec.mouseFlags ?? 0);
+      W.setF32(win,0x610,spec.multiClickTime??.5);W.setF32(win,0x614,spec.multiClickDistance??10);
+      W.setI32(win,0x618,spec.clickIndex??0);W.setI32(win,0x61c,spec.lastKey??0);W.setF32(win,0x620,spec.clickDeadline??0);
+      W.setF32(win,0x628,spec.clickX??-1);W.setF32(win,0x62c,spec.clickY??-1);
     }
   }
   for (const spec of c.windows) for (const [offset, key] of [[0x14c, 'rowTable'], [0x158, 'colTable'], [0x17c, 'groupTable']]) {
@@ -190,14 +225,16 @@ function translate(c) {
   for (const spec of c.windows) if ((spec.family ?? 'window') === 'root') {
     const win = windows.get(spec.id);
     [['mouseWindow', 0x5a0], ['grabbed', 0x5c4], ['focus', 0x5c8]].forEach(([key, offset]) => W.setPtr(win, offset, windows.get(spec[key]) ?? null));
+    W.setPtr(win,0x624,windows.get(spec.lastWindow)??null);
   }
   const snapshot = () => Object.fromEntries(c.windows.map(spec => {
     const win = windows.get(spec.id), family = spec.family ?? 'window', entry = {flags: W.u32(win, 0x30)};
     if (family === 'modal' || family === 'root') { entry.preferredFocus = ref(W.ptr(win, 0x178)); entry.groupLocation = [W.u32(win, 0x16c), W.u32(win, 0x170)]; }
-    if (family === 'button' || family === 'toggle') entry.buttonFlags = W.u32(win, 0x174);
+    if (family === 'button' || family === 'toggle') Object.assign(entry,{buttonFlags:W.u32(win,0x174),repeatAt:W.u32(win,0x19c),inputKey:W.u8(win,0x1a0)});
     if (family === 'root') Object.assign(entry, {mouseX: W.u32(win, 0x590), mouseY: W.u32(win, 0x594),
       lastX: W.u32(win, 0x598), lastY: W.u32(win, 0x59c), mouseWindow: ref(W.ptr(win, 0x5a0)),
-      mouseFlags: W.u32(win, 0x5a4), focus: ref(W.ptr(win, 0x5c8))});
+      mouseFlags: W.u32(win, 0x5a4), focus: ref(W.ptr(win, 0x5c8)),grabbed:ref(W.ptr(win,0x5c4)),clickIndex:W.i32(win,0x618),
+      lastKey:W.i32(win,0x61c),clickDeadline:W.u32(win,0x620),lastWindow:ref(W.ptr(win,0x624)),clickX:W.u32(win,0x628),clickY:W.u32(win,0x62c)});
     return [spec.id, entry];
   }));
   const at = id => windows.get(id);
@@ -220,6 +257,9 @@ function translate(c) {
         {getTabGroupWindow: T.getTabGroupWindow, moveTabGroup: (root, move) => W.native.moveTabGroup(root, move)})); break;
       case 'checkFocusWindow': T.checkFocusWindow(W, at(step.win)); break;
       case 'askParentToShowArea': Mouse.askParentToShowArea(W, at(step.win), f(step.x), f(step.y), f(step.w), f(step.h)); break;
+      case 'handleButtons': result=Input.handleButtons(W,at(step.root),step.key,step.action,{topChild:T.topChild,lowerSibling:T.lowerSibling,
+        getMouseWindow:(root,modal)=>Mouse.getMouseWindow(W,root,modal),convertCoordinates:(...args)=>Mouse.convertCoordinates(W,...args),
+        setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target),getRootWindow:T.getRootWindow,tickOffset:W.tickOffset});break;
       case 'set': if (step.windowValue) W.setPtr(at(step.win), step.offset, at(step.windowValue)); else W.setU32(at(step.win), step.offset, step.value); break;
       default: throw new Error(`unknown op ${step.op}`);
     }
