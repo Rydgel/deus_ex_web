@@ -1,10 +1,12 @@
-/** Bounded Stage 3 integration: both Training bot Frobs cross native1484 and native1439.
- * Full screen completion retains explicit bot sound and scroll draw/input boundaries.
- * See docs/script-window-baseline.md and docs/script-window-accelerator-text.md. */
+/** Bounded Stage 3 integration: both Training bot Frobs complete Set*Bot.
+ * The raise-arm PlaySound is retained as deferred audio; full rendering and
+ * interaction remain open. See docs/script-window-bot-activation.md. */
 import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
+import {readClass} from '../src/unreal/classes.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
+import {readObject} from '../src/unreal/objects.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
@@ -20,11 +22,21 @@ for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${root}/${dir}`))
     files.push({path: `${dir}/${name}`, read: () => readFile(`${root}/${dir}/${name}`)});
 const assets = new AssetStore(files), asset = await assets.get('00_Training');
+const deusEx=await assets.get('DeusEx');
+const embeddedSource=path=>{
+  const cls=readClass(deusEx,deusEx.exportsByPath.get(path));
+  const reader=readObject(deusEx.pkg,deusEx.bytes,cls.scriptText).reader;
+  reader.u32();reader.u32();return reader.string(deusEx.pkg.version);
+};
+assert.match(embeddedSource('hudmedbothealthscreen'),
+  /function\s+SetMedicalBot[\s\S]*?StandStill\(\)[\s\S]*?PlayAnim\('Start'\)[\s\S]*?PlaySound\(sound'MedicalBotRaiseArm',\s*SLOT_None\)/i);
+assert.match(embeddedSource('hudrechargewindow'),
+  /function\s+SetRepairBot[\s\S]*?StandStill\(\)[\s\S]*?PlayAnim\('Start'\)[\s\S]*?PlaySound\(sound'RepairBotRaiseArm',\s*SLOT_None\)[\s\S]*?UpdateInfoText\(\)[\s\S]*?UpdateRepairBotWindows\(\)[\s\S]*?EnableButtons\(\)/i);
 const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
 const runtime = game.doors.scriptRuntime.runtime, host = game.hud.host, W = host.W;
 
 const player=game.player.collisionActor,level=runtime.levelFor(player);
-const native=runtime.invokeNative.bind(runtime),calls=[],completed=[],accelerators=[],sizing=[],configured=[];
+const native=runtime.invokeNative.bind(runtime),calls=[],completed=[],accelerators=[],sizing=[],configured=[],botSounds=[];
 const originalConfiguration=W.v.configurationChanged;
 W.v.configurationChanged=(win)=>{const result=originalConfiguration(win);configured.push(win);return result;};
 const keys=new Map([...runtime.functions.values()].map(record=>[record.function,record.key]));
@@ -36,6 +48,8 @@ runtime.executeScript=(fn,receiver,...rest)=>{
 };
 runtime.invokeNative=call=>{
   const value=native(call);
+  if(call.index===264)botSounds.push({receiver:call.receiver,
+    path:call.script?.entry?.path?.toLowerCase(),value});
   if(call.index===1465&&runtime.instance(call.receiver).cls.record.key==='deusex.personascrollareawindow'){
     const clip=W.ptr(call.receiver,0x16c);
     sizing.push({receiver:call.receiver,width:W.f32(clip,0xac),height:W.f32(clip,0xb0)});
@@ -53,11 +67,21 @@ runtime.invokeNative=call=>{
 const target=process.argv[2]??'MedicalBot';
 const bot=level.actors.find(actor=>actor&&runtime.instance(actor).cls.record.name===target);
 assert.ok(bot,`Training contains ${target}`);
-// Run the original Frob, without suppressing a later native boundary.
-assert.throws(()=>runtime.processEvent(bot,'Frob',[player,null]),
-  target==='MedicalBot'
-    ? /Unsupported original door native 264 PlaySound from hudmedbothealthscreen.setmedicalbot/
-    : /Unsupported original door native 264 PlaySound from hudrechargewindow.setrepairbot/);
+const effectsBefore=new Set(game.player.unimplementedPhysicsEffects);
+// Run the original Frob. SetMedicalBot/SetRepairBot discard PlaySound's channel
+// id, so the live host records the one-shot effect and continues the script.
+assert.doesNotThrow(()=>runtime.processEvent(bot,'Frob',[player,null]));
+assert.deepEqual(botSounds,[{receiver:bot,
+  path:target==='MedicalBot'?'hudmedbothealthscreen.setmedicalbot':'hudrechargewindow.setrepairbot',value:0}]);
+assert.deepEqual([...game.player.unimplementedPhysicsEffects].filter(effect=>!effectsBefore.has(effect)),
+  [`${bot.name}.BotRaiseArmSound audio`]);
+assert.deepEqual(runtime.namedReference(bot,'Acceleration').get(),[0,0,0],
+  'original StandStill clears bot acceleration before raising the arm');
+assert.equal(String(runtime.namedReference(bot,'AnimSequence').get()).toLowerCase(),'start',
+  'original Set*Bot selects the authored Start animation before its sound');
+assert.ok(completed.some(row=>row.receiver!==bot&&row.key===
+  (target==='MedicalBot'?'deusex.hudmedbothealthscreen.setmedicalbot':'deusex.hudrechargewindow.setrepairbot')),
+  'original bot-window setter returns after the deferred one-shot sound');
 assert.equal(calls.length,target==='MedicalBot'?16:2);
 const initialCalls=calls.slice(0,target==='MedicalBot'?3:2);
 for(const call of calls){
@@ -166,4 +190,4 @@ if(target==='MedicalBot'){
   assert.equal(W.i32(scale,0x26c),0,'scale label array is empty');
   assert.equal(W.heap.read(scale,0x1dc,'string'),'','scale format string is destroyed');
 }
-console.log(`window-baseline-play: ${target} completes button baseline and accelerator initialization; next explicit boundary is ${target==='MedicalBot'?'MedicalBot PlaySound (scroll-area layout complete)':'RepairBot PlaySound'}`);
+console.log(`window-baseline-play: ${target} completes its original Set*Bot path; the raise-arm sound is retained as a deferred Stage-4 effect`);

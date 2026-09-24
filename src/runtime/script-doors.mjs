@@ -622,6 +622,13 @@ export async function createScriptDoors({
       // sounds are one-shot UI audio whose returns the script discards
       // (docs/script-window-input.md, Sounds): the same deferred contract.
       if (path === 'hudkeypadwindow.pressbutton' || path === 'hudkeypadwindow.validatecode') { decorationEffect(call, 'KeypadSound'); return 0; }
+      // The Training medical/repair screens raise their bot arm with a one-shot
+      // actor sound and discard PlaySound's channel id. Audible ClientHearSound
+      // remains the existing Stage-4 boundary; retain the reached call and let
+      // the original Set*Bot script continue to its following statements.
+      if (path === 'hudmedbothealthscreen.setmedicalbot' || path === 'hudrechargewindow.setrepairbot') {
+        decorationEffect(call, 'BotRaiseArmSound'); return 0;
+      }
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }

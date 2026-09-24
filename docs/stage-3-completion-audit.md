@@ -1,5 +1,20 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (Training bot activation):**
+>
+> * Both Training bot Frobs now complete their original `SetMedicalBot` /
+>   `SetRepairBot` path. Embedded source establishes the exact StandStill,
+>   `PlayAnim('Start')`, raise-arm PlaySound and following-call order; neither
+>   caller observes native 264's return.
+> * Play retains each raise-arm call as one named deferred audio effect and
+>   continues the original script. Both fresh-host integration routes verify
+>   zero acceleration, `Start` animation selection, exact caller identity and
+>   return from the setter. Audible `ClientHearSound` remains Stage 4.
+> * Scale drawing, full root input routing, value-field formatting, complete
+>   bot interaction and visual equivalence remain open. Stage 3 is unfinished.
+>   See [bot activation evidence](script-window-bot-activation.md). Focused
+>   integration and build pass; no full sweep was needed.
+
 > **Checkpoint update, 2026-09-24 (scroll movement native dispatch):**
 >
 > * SetTickPosition1640, MoveThumb1650, SetChildPosition1680 and

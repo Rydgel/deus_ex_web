@@ -88,5 +88,8 @@ Setters' worker calls are explicit leaves in this wrapper oracle; their full
 bodies are verified by the movement comparisons. The live Training integration
 invokes all four through ScriptRuntime native dispatch, verifies clip/scale
 feedback and out-parameter readback, then destroys the subtree. Both bot routes
-and build pass. Drawing, root mouse-button routing, value-string formatting and
-bot Actor.PlaySound remain explicit boundaries. Stage 3 is unfinished.
+and build pass. Drawing, root mouse-button routing and value-string formatting
+remain explicit boundaries. The subsequent
+[bot activation milestone](script-window-bot-activation.md) admits the two
+discarded raise-arm PlaySound calls as deferred Stage-4 effects. Stage 3 is
+unfinished.
