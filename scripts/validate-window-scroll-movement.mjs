@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {gameDirectory} from './game-directory.mjs';
 import * as M from '../src/runtime/script-window-scroll-movement.mjs';
+import {clipShowArea} from '../src/runtime/script-window-scroll-show-area.mjs';
 import * as Input from '../src/runtime/script-window-scroll-input.mjs';
 import * as C from '../src/runtime/script-window-scroll-configuration.mjs';
 const cases=JSON.parse(execFileSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',['scripts/native-window-scroll-movement-oracle.py',gameDirectory()],{encoding:'utf8',maxBuffer:1<<25}));
@@ -21,6 +22,7 @@ for(const c of cases){
   return Boolean(nodes.get(object).handled);
  };
  const kind=o=>nodes.get(o).kind;
+ W.v.parentRequestedGranularity=object=>{events.push({op:'granularity',object,args:[]});const [h,v]=nodes.get(object).units??[2,3];return {h,v};};
  W.v.scaleRangeChanged=(o,...args)=>kind(o)==='scroll'?M.scrollScaleRange(W,o,...args):W.processScript(o,'ScaleRangeChanged',args);
  W.v.scalePositionChanged=(o,...args)=>kind(o)==='manager'?M.managerScalePosition(W,o,...args):W.processScript(o,'ScalePositionChanged',args);
  W.v.clipPositionChanged=(o,...args)=>kind(o)==='scroll'?M.scrollClipPosition(W,o,...args):W.processScript(o,'ClipPositionChanged',args);
@@ -32,7 +34,7 @@ for(const c of cases){
  W.native.playSound=(object,...args)=>events.push({op:'sound',object,args:args.map(v=>v??0)});
  W.native.getCursorPos=object=>{if(nodes.get(object).nativeCursor)return Input.getCursorPos(W,object);events.push({op:'cursor',object,args:[]});const [x,y]=nodes.get(object).cursor??[75,5];return {x,y};};
  W.native.getScaleValueString=()=>{throw Error('Unrecovered value-string boundary');};
- const fn={press:Input.scaleMousePressed,drag:Input.scaleMouseMoved,release:Input.scaleMouseReleased,repeat:Input.scaleTick,pixel:Input.pixelToTick,move:M.moveThumb,tickPosition:M.setTickPosition,change:M.changeScalePosition,clipPosition:M.setClipPosition,button:M.managerButtonActivated,wheel:M.scrollMousePressed,range:M.scrollScaleRange,clipEvent:M.scrollClipPosition,managerPosition:M.managerScalePosition}[c.mode];
+ const fn={show:clipShowArea,press:Input.scaleMousePressed,drag:Input.scaleMouseMoved,release:Input.scaleMouseReleased,repeat:Input.scaleTick,pixel:Input.pixelToTick,move:M.moveThumb,tickPosition:M.setTickPosition,change:M.changeScalePosition,clipPosition:M.setClipPosition,button:M.managerButtonActivated,wheel:M.scrollMousePressed,range:M.scrollScaleRange,clipEvent:M.scrollClipPosition,managerPosition:M.managerScalePosition}[c.mode];
  const result=fn(W,c.root,...c.args);
  if(['button','wheel','range','clipEvent','managerPosition','press','release','pixel'].includes(c.mode))assert.equal(Number(result),c.result,c.name+' result');
  assert.deepEqual(events,c.events,c.name+' events');assert.equal(context,c.context,c.name+' context');

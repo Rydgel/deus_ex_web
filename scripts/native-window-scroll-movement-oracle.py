@@ -11,8 +11,16 @@ EVENTS[0x9b3e0]=('MouseMoved','ff')
 EVENTS[0x9b394]=('MouseButtonReleased','ffIi')
 EVENTS[0x9b36c]=('ScaleAttributesChanged','Iiii')
 ENTRY={'move':(0x3e860,'i'),'tickPosition':(0x3dff0,'i'),'change':(0x3f5a0,'i'),'clipPosition':(0xb470,'ii'),'button':(0x42720,'I'),'wheel':(0x43d10,'ffii'),'range':(0x43a50,'Iiiffi'),'clipEvent':(0x43c40,'Iii'),'managerPosition':(0x42580,'Iifi')}
-ENTRY.update({'press':(0x3fdc0,'ffii'),'drag':(0x40030,'ff'),'release':(0x40150,'ffii'),'repeat':(0x40250,'f'),'pixel':(0x3eb10,'f')})
+ENTRY.update({'press':(0x3fdc0,'ffii'),'drag':(0x40030,'ff'),'release':(0x40150,'ffii'),'repeat':(0x40250,'f'),'pixel':(0x3eb10,'f'),'show':(0xc360,'Iffff')})
 class Probe(l.Probe):
+ def __init__(self,root):
+  super().__init__(root)
+  for address,(_,symbol) in list(self.thunks.items()):
+   if symbol=='ceil':
+    bridge=self.alloc(64)
+    self.cpu.mem_write(address,b'\xe9'+struct.pack('<i',bridge-address-5))
+    self.cpu.mem_write(bridge,bytes.fromhex('dd44240483ec04d93c248b042425fff3ffff0d000800006689442402d96c2402d9fcd92c2483c404c3'))
+    self.thunks.pop(address)
  def on_instruction(self,cpu,address,size,data):
   o=cpu.reg_read(UC_X86_REG_ECX);sp=cpu.reg_read(UC_X86_REG_ESP)
   if address==EXT+0x4ded0:
@@ -127,5 +135,8 @@ for delay,interval in [(-1,0.1),(-1,0),(-1,-0.1)]:
 node=inputScale();node['i'][0x164]=0
 input_cases.append({'name':'value-mode-press','mode':'press','args':[80,5,1,1],'nodes':{'root':node}})
 cases+=input_cases
+for x,y,w,h in [(0,0,10,10),(80,100,20,30),(-20,-15,10,10),(0,0,200,250),(-70,-90,200,250),(20,30,200,250),(20,30,0,0),(20.005,30.005,10.01,20.01)]:
+ nodes={'root':{'kind':'clip','i':{0x184:4,0x174:5,0x178:7,0x188:20,0x18c:20},'f':{0x80:50,0x84:60},'p':{0x140:'content'}},'content':{'units':[2.5,3],'f':{0x80:250,0x84:300}}}
+ cases.append({'name':'show-'+str((x,y,w,h)),'mode':'show','args':['content',x,y,w,h],'nodes':nodes})
 if __name__=='__main__':
  probe=Probe(sys.argv[1]);print(json.dumps([probe.run(case) for case in cases]))

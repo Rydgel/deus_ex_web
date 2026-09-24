@@ -1,5 +1,14 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (clip show-area):**
+>
+> * Clip requests now scroll a supplied child rectangle into view through the
+>   native unit/rounding and oversized-region rules, then synchronize the scales.
+>   Eight original cases bring the movement-family total to 87. Live Training
+>   origin restoration, both bot checks and build pass. See
+>   [show-area evidence](script-window-scroll-show-area.md).
+> * Drawing, full root button routing, cleanup and bot audio remain open.
+
 > **Checkpoint update, 2026-09-24 (scrollbar drag and repeat):**
 >
 > * Scale press/move/release/Tick now execute the original drag, paging, repeat

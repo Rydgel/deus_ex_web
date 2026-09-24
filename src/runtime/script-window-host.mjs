@@ -29,6 +29,7 @@ import * as SL from './script-window-scroll-layout.mjs';
 import * as SC from './script-window-scroll-configuration.mjs';
 import * as SM from './script-window-scroll-movement.mjs';
 import * as SI from './script-window-scroll-input.mjs';
+import {clipShowArea} from './script-window-scroll-show-area.mjs';
 import {setSensitivityNative} from './script-window-sensitivity.mjs';
 import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
@@ -695,11 +696,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
   V.mouseMoved=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
   V.mouseButtonReleased=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
+  const inheritedShowArea=V.childRequestedShowArea;
+  V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
   // The four new families override these native slots. Until translated,
   // reject them explicitly instead of silently using Window/TabGroup behavior.
   for(const [family,methods] of Object.entries({
     'extension.scalewindow':['draw'],
-    'extension.clipwindow':['childRequestedShowArea'],
   }))for(const method of methods){
     const inherited=V[method];V[method]=(win,...args)=>{
       if(is(win,family))return boundary(`${family}.${method} native override is not recovered`);

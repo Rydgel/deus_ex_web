@@ -109,7 +109,6 @@ if(target==='MedicalBot'){
   // Native vtable slots are guarded instead of inheriting a base implementation.
   assert.throws(()=>W.v.draw(scale,null),/scalewindow.draw native override/);
   W.v.tick(scale,0); // No repeat active: original native returns without script Tick.
-  assert.throws(()=>W.v.childRequestedShowArea(clip,null,0,0,1,1),/clipwindow.childRequestedShowArea native override/);
   // Exercise the recovered removal virtual on the real constructed manager.
   // This isolates notification dispatch; full recursive screen cleanup remains guarded.
   const manager=child(0x150),first=W.ptr(manager,0x14c),last=W.ptr(manager,0x150);
@@ -128,6 +127,9 @@ if(target==='MedicalBot'){
   assert.equal(W.v.mouseButtonReleased(scale,thumbX,thumbY+40,1,1),true);
   assert.equal(W.u8(scale,0x258)&1,0,'release clears drag state');
   assert.equal(W.u8(scale,0x260),0,'release clears repeat state');
+  W.v.childRequestedShowArea(clip,W.ptr(clip,0x140),0,0,1,1);
+  assert.equal(W.i32(clip,0x178),0,'show-area brings the content origin back into view');
+  assert.equal(W.i32(scale,0x1c8),0,'show-area synchronizes the scrollbar');
   W.v.childRemoved(manager,first);
   assert.equal(W.ptr(manager,0x14c),null,'manager clears the removed first button');
   assert.equal(W.ptr(manager,0x150),last,'unrelated second button is preserved');
