@@ -28,6 +28,7 @@ import * as A from './script-window-scroll-area.mjs';
 import * as SL from './script-window-scroll-layout.mjs';
 import * as SC from './script-window-scroll-configuration.mjs';
 import * as SM from './script-window-scroll-movement.mjs';
+import * as SI from './script-window-scroll-input.mjs';
 import {setSensitivityNative} from './script-window-sensitivity.mjs';
 import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
@@ -623,6 +624,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
     },
     tick(win, delta) {
+      if(is(win,'extension.scalewindow'))return SI.scaleTick(W,win,delta);
       switch (familyOf(win)) {
         case 'extension.buttonwindow': case 'extension.togglewindow': return buttonTick(win, delta);
         case 'extension.textlogwindow': return textLogTick(win, delta);
@@ -689,11 +691,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
   const inheritedMousePressed=V.mouseButtonPressed;
-  V.mouseButtonPressed=(win,...args)=>is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
+  const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
+  V.mouseMoved=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
+  V.mouseButtonReleased=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
   // The four new families override these native slots. Until translated,
   // reject them explicitly instead of silently using Window/TabGroup behavior.
   for(const [family,methods] of Object.entries({
-    'extension.scalewindow':['mouseMoved','mouseButtonPressed','mouseButtonReleased','tick','draw'],
+    'extension.scalewindow':['draw'],
     'extension.clipwindow':['childRequestedShowArea'],
   }))for(const method of methods){
     const inherited=V[method];V[method]=(win,...args)=>{
@@ -750,6 +755,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     enableAutoRepeat:(win,...args)=>dispatchWindowHostNative(W,{index:1595,receiver:win,argumentCount:args.length,evaluateArgument:i=>args[i]}),
     changeScalePosition:(...args)=>SM.changeScalePosition(W,...args),
     getScaleValueString:()=>boundary('Scale.GetValueString 0x1003e460 formatting is not recovered'),
+    getCursorPos:(win)=>SI.getCursorPos(W,win),
     setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
     makeAcceleratorTableDirty: win => T.makeAcceleratorTableDirty(W, win),
     addWindowToTables: (tabGroup, win) => F.addWindowToTables(W, tabGroup, win),

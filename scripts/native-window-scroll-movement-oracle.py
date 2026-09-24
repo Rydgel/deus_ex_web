@@ -7,20 +7,33 @@ l=importlib.util.module_from_spec(spec);spec.loader.exec_module(l)
 EXT=l.EXT
 EVENTS={0x9b378:('ScalePositionChanged','Iifi'),0x9b3b8:('ScaleRangeChanged','Iiiffi'),0x9b358:('ClipPositionChanged','Iii'),0x9b32c:('ButtonActivated','I'),0x9b340:('MouseButtonPressed','ffIi'),0x9b374:('unused','I')}
 # Attribute event token is installed through its exported FName address below.
+EVENTS[0x9b3e0]=('MouseMoved','ff')
+EVENTS[0x9b394]=('MouseButtonReleased','ffIi')
 EVENTS[0x9b36c]=('ScaleAttributesChanged','Iiii')
 ENTRY={'move':(0x3e860,'i'),'tickPosition':(0x3dff0,'i'),'change':(0x3f5a0,'i'),'clipPosition':(0xb470,'ii'),'button':(0x42720,'I'),'wheel':(0x43d10,'ffii'),'range':(0x43a50,'Iiiffi'),'clipEvent':(0x43c40,'Iii'),'managerPosition':(0x42580,'Iifi')}
+ENTRY.update({'press':(0x3fdc0,'ffii'),'drag':(0x40030,'ff'),'release':(0x40150,'ffii'),'repeat':(0x40250,'f'),'pixel':(0x3eb10,'f')})
 class Probe(l.Probe):
  def on_instruction(self,cpu,address,size,data):
   o=cpu.reg_read(UC_X86_REG_ECX);sp=cpu.reg_read(UC_X86_REG_ESP)
   if address==EXT+0x4ded0:
    event,params,third=self.read(sp+4,'3I');name,fmt=self.event_ids[event]
    args=list(self.read(params,fmt))
-   if name=='MouseButtonPressed':args[2]&=255
+   if name in ['MouseButtonPressed','MouseButtonReleased']:args[2]&=255
    self.events.append({'op':name,'object':o,'args':args})
    node=self.objects[o]
    for off,val in node.get('mutate',{}).items():self.write(o+int(off),'I',self.addresses.get(val,val) if isinstance(val,str) else val)
-   self.write(params+struct.calcsize('<'+fmt),'I',int(node.get('handled',False)))
+   if name!='MouseMoved':self.write(params+struct.calcsize('<'+fmt),'I',int(node.get('handled',False)))
    self.ret(3);return
+  if address==EXT+0x50050:
+   self.events.append({'op':'sound','object':o,'args':list(self.read(sp+4,'I4f'))});self.ret(5);return
+  if address==EXT+0x4fda0:
+   self.events.append({'op':'tickOffset','object':o,'args':[]})
+   bridge=self.alloc(16);self.cpu.mem_write(bridge,b'\x68'+struct.pack('<f',self.objects[o].get('tickOffset',0.125))+bytes.fromhex('d9042483c404c3'))
+   from unicorn.x86_const import UC_X86_REG_EIP
+   cpu.reg_write(UC_X86_REG_EIP,bridge);return
+  if address==EXT+0x4cbf0 and not self.objects[o].get('nativeCursor'):
+   self.events.append({'op':'cursor','object':o,'args':[]});x,y=self.read(sp+4,'2I');cursor=self.objects[o].get('cursor',[75,5])
+   self.write(x,'f',cursor[0]);self.write(y,'f',cursor[1]);self.ret(2);return
   if address==EXT+0x4ec50:
    args=list(self.read(sp+4,'4f'));self.events.append({'op':'configure','object':o,'args':args,'context':self.read(EXT+0xaeafc,'I')[0]})
    self.write(o+0x78,'4f',*args);self.ret(4);return
@@ -30,19 +43,19 @@ class Probe(l.Probe):
    self.events.append({'op':'valueString','object':o,'args':[]});cpu.reg_write(UC_X86_REG_EAX,0);self.ret(0);return
   super().on_instruction(cpu,address,size,data)
  def run(self,case):
-  self.events=[];self.objects={};nodes=case['nodes'];self.addresses={key:self.alloc(0x300) for key in nodes};a=self.addresses
+  self.events=[];self.objects={};nodes=case['nodes'];self.addresses={key:self.alloc(0x600) for key in nodes};a=self.addresses
   for key,node in nodes.items():
-   o=a[key];self.objects[o]=node;self.cpu.mem_write(o,bytes(0x300));self.write(o,'I',EXT+l.VT[node.get('kind','window')]);self.write(o+0x30,'I',1)
+   o=a[key];self.objects[o]=node;self.cpu.mem_write(o,bytes(0x600));self.write(o,'I',EXT+l.VT[node.get('kind','window')]);self.write(o+0x30,'I',1)
    for off,value in node.get('f',{}).items():self.write(o+off,'f',value)
    for off,value in node.get('i',{}).items():self.write(o+off,'I',value&0xffffffff)
    for off,key2 in node.get('p',{}).items():self.write(o+off,'I',a[key2])
   self.event_ids={}
   for token,(off,desc) in enumerate(EVENTS.items(),1):self.write(EXT+off,'I',token);self.event_ids[token]=desc
   self.write(EXT+0xaeafc,'I',0x13572468)
-  images=[{'address':a[key],'node':node,'before':bytes(self.cpu.mem_read(a[key],0x300)).hex()} for key,node in nodes.items()]
+  images=[{'address':a[key],'node':node,'before':bytes(self.cpu.mem_read(a[key],0x600)).hex()} for key,node in nodes.items()]
   entry,fmt=ENTRY[case['mode']];args=[a.get(v,v) if isinstance(v,str) else v for v in case['args']]
   self.call(EXT+entry,a['root'],struct.pack('<'+fmt,*args));result=self.cpu.reg_read(UC_X86_REG_EAX)
-  for image in images:image['after']=bytes(self.cpu.mem_read(image['address'],0x300)).hex()
+  for image in images:image['after']=bytes(self.cpu.mem_read(image['address'],0x600)).hex()
   return {'name':case['name'],'mode':case['mode'],'args':args,'root':a['root'],'addresses':a,'images':images,'events':self.events,'result':result,'context':self.read(EXT+0xaeafc,'I')[0]}
 
 def scale():return {'kind':'scale','i':{0x164:16,0x1c4:100,0x1cc:20,0x1c8:30,0x1d0:7},'f':{0x1d4:-2.5,0x1d8:8.25,0x250:2,0x254:102,0x194:7,0x198:3,0x80:110,0x84:15}}
@@ -87,5 +100,32 @@ for source in ['scale','other']:
 for flags,position in [(0,30),(16,2147483647)]:
  node=scale();node['i'].update({0x164:flags,0x1c8:position})
  cases.append({'name':'move-extra-'+str(flags),'mode':'move','args':[7],'nodes':{'root':node}})
+input_cases=[]
+def inputScale(vertical=0):
+ node=scale();node['i'].update({0x14c:vertical});node['f'].update({0x210:30,0x214:2,0x218:20,0x21c:9,0x1e8:0.5,0x1ec:0.1});return node
+for orientation in [0,1]:
+ for x,y,key in [(35,5,1),(30,2,1),(50,5,1),(5,1,1),(90,12,1),(35,5,2),(35,5,257)]:
+  input_cases.append({'name':f'press-{orientation}-{x}-{y}-{key}','mode':'press','args':[x,y,key,1],'nodes':{'root':inputScale(orientation)}})
+ for dragging,rangeMode in [(0,16),(1,16),(1,0)]:
+  node=inputScale(orientation);node['i'].update({0x258:dragging,0x164:rangeMode});node['f'][0x25c]=2.25
+  input_cases.append({'name':f'drag-{orientation}-{dragging}-{rangeMode}','mode':'drag','args':[60.25,12.5],'nodes':{'root':node}})
+for changed,key in [(False,1),(True,1),(True,2)]:
+ node=inputScale();node['i'].update({0x258:0xabc1,0x260:2,0x1f0:10 if changed else 30})
+ input_cases.append({'name':f'release-{changed}-{key}','mode':'release','args':[3,4,key,1],'nodes':{'root':node}})
+for direction,delta,cursor in [(0,1,[75,5]),(1,0.1,[75,5]),(1,0.5,[75,5]),(1,0.5,[40,5]),(2,0.5,[10,5]),(1,0.5,[110,5]),(1,2,[75,5])]:
+ node=inputScale();node['i'][0x260]=direction;node['f'][0x264]=0.1;node['cursor']=cursor
+ input_cases.append({'name':f'repeat-{direction}-{delta}-{cursor}','mode':'repeat','args':[delta],'nodes':{'root':node}})
+for mode in [0,16]:
+ node=inputScale();node['i'][0x164]=mode
+ input_cases.append({'name':'pixel-'+str(mode),'mode':'pixel','args':[52.5],'nodes':{'root':node}})
+for cursor in [[75.5,5.25],[20.25,10.5]]:
+ node=inputScale();node['i'][0x260]=1;node['f'].update({0x264:0.1,0xd4:3.25,0xd8:2.5});node['p']={0x138:'screen'};node['nativeCursor']=True
+ input_cases.append({'name':'repeat-native-cursor-'+str(cursor),'mode':'repeat','args':[0.5],'nodes':{'root':node,'screen':{'i':{0x28:3},'f':{0x590:cursor[0],0x594:cursor[1]}}}})
+for delay,interval in [(-1,0.1),(-1,0),(-1,-0.1)]:
+ node=inputScale();node['f'].update({0x1e8:delay,0x1ec:interval})
+ input_cases.append({'name':'repeat-delay-'+str(interval),'mode':'press','args':[80,5,1,1],'nodes':{'root':node}})
+node=inputScale();node['i'][0x164]=0
+input_cases.append({'name':'value-mode-press','mode':'press','args':[80,5,1,1],'nodes':{'root':node}})
+cases+=input_cases
 if __name__=='__main__':
  probe=Probe(sys.argv[1]);print(json.dumps([probe.run(case) for case in cases]))

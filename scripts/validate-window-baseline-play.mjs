@@ -108,7 +108,7 @@ if(target==='MedicalBot'){
     'both authored sets of six health-region controls initialize');
   // Native vtable slots are guarded instead of inheriting a base implementation.
   assert.throws(()=>W.v.draw(scale,null),/scalewindow.draw native override/);
-  assert.throws(()=>W.v.tick(scale,0),/scalewindow.tick native override/);
+  W.v.tick(scale,0); // No repeat active: original native returns without script Tick.
   assert.throws(()=>W.v.childRequestedShowArea(clip,null,0,0,1,1),/clipwindow.childRequestedShowArea native override/);
   // Exercise the recovered removal virtual on the real constructed manager.
   // This isolates notification dispatch; full recursive screen cleanup remains guarded.
@@ -120,6 +120,14 @@ if(target==='MedicalBot'){
   assert.equal(W.v.buttonActivated(manager,first),true,'original scrollbar up-button route is consumed');
   assert.equal(W.i32(scale,0x1c8),0,'up button returns to the first row');
   assert.equal(W.i32(clip,0x178),0,'clip feedback agrees at the first row');
+  const thumbX=W.f32(scale,0x210)+0.5,thumbY=W.f32(scale,0x214)+0.5;
+  assert.equal(W.v.mouseButtonPressed(scale,thumbX,thumbY,1,1),true);
+  assert.equal(W.u8(scale,0x258)&1,1,'press inside the original thumb starts dragging');
+  W.v.mouseMoved(scale,thumbX,thumbY+40);
+  assert.equal(W.i32(clip,0x178),W.i32(scale,0x1c8),'drag keeps actual clip and scale synchronized');
+  assert.equal(W.v.mouseButtonReleased(scale,thumbX,thumbY+40,1,1),true);
+  assert.equal(W.u8(scale,0x258)&1,0,'release clears drag state');
+  assert.equal(W.u8(scale,0x260),0,'release clears repeat state');
   W.v.childRemoved(manager,first);
   assert.equal(W.ptr(manager,0x14c),null,'manager clears the removed first button');
   assert.equal(W.ptr(manager,0x150),last,'unrelated second button is preserved');

@@ -1,5 +1,15 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scrollbar drag and repeat):**
+>
+> * Scale press/move/release/Tick now execute the original drag, paging, repeat
+>   countdown and final-notification behavior. Pixel conversion and thumb-centered
+>   sound calls preserve native arithmetic and the horizontal height-test quirk.
+> * 38 new cases raise the movement/input comparison total to 79. Live thumb
+>   dragging and both bot integration routes pass, as does build. See
+>   [input evidence](script-window-scroll-input.md). Drawing, root mouse-button
+>   dispatch, cleanup and bot audio remain open.
+
 > **Checkpoint update, 2026-09-24 (scroll movement chain):**
 >
 > * Scrollbar buttons and wheel callbacks now run MoveThumb, position/range
