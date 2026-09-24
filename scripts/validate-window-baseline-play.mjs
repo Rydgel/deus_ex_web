@@ -145,5 +145,17 @@ if(target==='MedicalBot'){
   assert.equal(child(0x150),manager,'area preserves the vertical manager');
   assert.equal(child(0x16c),clip,'area preserves the clip');
   assert.equal(completed.length,beforeRemovalEvents,'area removal emits no script event');
+  // Restore the isolated notification fixtures before exercising actual recursive cleanup.
+  W.setPtr(manager,0x14c,first);W.setPtr(manager,0x158,scale);
+  W.setPtr(area,0x164,first);W.setPtr(area,0x158,scale);
+  const subtree=[];
+  const collect=win=>{subtree.push(win);for(let child=W.ptr(win,0x140);child;child=W.ptr(child,0x144))collect(child);};
+  collect(area);
+  W.native.safeDestroy(area);
+  assert.ok(subtree.length>=10,'real scroll subtree includes all native families');
+  for(const win of subtree)assert.equal(host.isDestroyed(win),true,'recursive cleanup destroys every descendant');
+  assert.equal(W.ptr(area,0x138),null,'destroyed area is unlinked from its parent');
+  assert.equal(W.i32(scale,0x26c),0,'scale label array is empty');
+  assert.equal(W.heap.read(scale,0x1dc,'string'),'','scale format string is destroyed');
 }
 console.log(`window-baseline-play: ${target} completes button baseline and accelerator initialization; next explicit boundary is ${target==='MedicalBot'?'MedicalBot PlaySound (scroll-area layout complete)':'RepairBot PlaySound'}`);

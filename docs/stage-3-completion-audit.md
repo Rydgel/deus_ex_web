@@ -1,5 +1,16 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Checkpoint update, 2026-09-24 (scroll subtree cleanup):**
+>
+> * Scale/Manager/Clip/ScrollArea now join the recovered host destruction path.
+>   Ten original cases establish owning-member release and inherited lifecycle
+>   routes, including nonempty label arrays and format-string lifetime.
+> * The Training medical scroll subtree now destroys recursively through
+>   SafeDestroy, leaving every descendant destroyed and the area unlinked.
+>   Both bot integration routes pass. Native heap release, retained empty
+>   label allocations and full bot setup remain bounded. See
+>   [cleanup evidence](script-window-scroll-cleanup.md).
+
 > **Checkpoint update, 2026-09-24 (clip show-area):**
 >
 > * Clip requests now scroll a supplied child rectangle into view through the

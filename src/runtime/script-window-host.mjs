@@ -30,6 +30,7 @@ import * as SC from './script-window-scroll-configuration.mjs';
 import * as SM from './script-window-scroll-movement.mjs';
 import * as SI from './script-window-scroll-input.mjs';
 import {clipShowArea} from './script-window-scroll-show-area.mjs';
+import {cleanScaleMembers,destroyScaleMembers} from './script-window-scroll-cleanup.mjs';
 import {setSensitivityNative} from './script-window-sensitivity.mjs';
 import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
@@ -840,6 +841,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const UOBJECT_FLAGS = 0x1c, RF_DESTROYED = 0x00800000, RF_BASE_DESTROYED = 0x80000000;
   const DESTROY_FAMILIES = {
+    // Recovered scroll-family owning members and inherited cleanup routes.
+    // docs/script-window-scroll-cleanup.md; native allocator ownership remains external.
+    'extension.scalemanagerwindow': {},
+    'extension.scrollareawindow': {},
+    'extension.scalewindow': {members:win=>cleanScaleMembers(W,win),destructor:win=>destroyScaleMembers(W,win)},
+    'extension.clipwindow': {members:win=>tabGroupCleanUp(win),destructor:win=>{W.farray.empty(win,0x158,4);W.farray.empty(win,0x14c,4);}},
     // XWindow::CleanUp 0x1004bec0 and deleting destructor 0x10004860.
     'extension.window': {},
     // XTextWindow::CleanUp 0x10045c30 empties the text FString (+0x168)
