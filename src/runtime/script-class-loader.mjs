@@ -124,9 +124,10 @@ export class ScriptClassLoader {
     const {slotOf, propertyKindOf, nameText, intern, structFieldChain, fullName} = this.graph;
     switch (propertyKindOf(property)) {
       case 'BoolProperty':
-        // SerializeBin bool loading is not established by the seven-class
-        // references. Refuse that branch instead of guessing its packed form.
-        if (member) throw new Error(`Struct bool default is not verified: ${fullName(property)}`);
+        // SerializeBin's keyed member cells contain the serialized byte, not
+        // the native packed DWORD. Core 10166575 tests that byte for nonzero;
+        // encoding the VM's logical cell therefore emits canonical 0/1.
+        if (member) return encode ? Number(Boolean(raw)) : raw !== 0;
         return Boolean((raw | 0) & slotOf(property, 0x5c));
       case 'IntProperty': return raw | 0;
       case 'ByteProperty': return Number(raw) & 255;

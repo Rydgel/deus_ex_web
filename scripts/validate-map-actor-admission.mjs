@@ -84,6 +84,9 @@ function assertAdmission(label) {
     if (ref === 0 || !mapExportAdmitted(map.pkg, ref)) {
       assert.equal(byIndex.has(ref), false,
         `${label}: slot ${slot} (${map.pkg.exports[ref - 1]?.name ?? 'zero'}) never joins the live array`);
+    } else if (map.pkg.exports[ref - 1].className === 'PickupDistributor') {
+      // Original PickupDistributor.PostPostBeginPlay distributes keys then Destroy().
+      assert.equal(byIndex.has(ref),false,`${label}: distributor destroyed after startup`);
     } else {
       assert.equal(byIndex.get(ref)?.index, ref, `${label}: slot ${slot} (${map.pkg.exports[ref - 1].name}) keeps its actor`);
     }

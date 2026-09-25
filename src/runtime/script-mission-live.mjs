@@ -22,16 +22,7 @@
  */
 const MISSION00_PROPERTIES_SIZE = 0x334; // Actor 0x318 + Mission00 script fields
 
-function isDeusExLevelInfo(runtime, actor) {
-  if (!actor) return false;
-  if (String(actor.className ?? '').toLowerCase() === 'deusexlevelinfo') return true;
-  let cls = null; try { cls = runtime.instance(actor).cls; } catch { return false; }
-  for (let c = cls; c; c = c.base) if (c.record.key === 'deusex.deusexlevelinfo') return true;
-  return false;
-}
-
-export async function createLiveMissionRuntime({runtime, assets, level, player}) {
-  const get = (o, k) => runtime.namedReference(o, k).get();
+export async function createLiveMissionRuntime({runtime, assets, level}) {
   const dx = await assets.get('DeusEx');
   const load = (asset, path) => runtime.loadClass(asset, asset.exportsByPath.get(path));
   const missionClass = await load(dx, 'mission00');
@@ -48,44 +39,26 @@ export async function createLiveMissionRuntime({runtime, assets, level, player})
       else await runtime.prepareFunction(dx, index);
     }
   }
-  const spawnScript = runtime.lookup(
-    level.actors.find(a => isDeusExLevelInfo(runtime, a)) ?? player, 'SpawnScript');
 
   const graphSize = runtime.classLoader.graph.slotOf(missionClass.loadRecord, 0x3c);
   if (graphSize !== MISSION00_PROPERTIES_SIZE)
     throw new Error(`Mission00 layout changed: PropertiesSize ${graphSize?.toString?.(16)}`);
-  const levelInfoActor = () => level.actors.find(a => isDeusExLevelInfo(runtime, a));
-  let missionActor = null;
-
-  function spawn() {
-    const dli = levelInfoActor();
-    // Only Training carries Script = Mission00; another map's level info leaves
-    // Script None and SpawnScript is a no-op, exactly as the original.
-    if (!dli || !get(dli, 'Script')) return;
-    const before = new Set(level.actors);
-    runtime.callFunction(spawnScript, dli, 0);
-    missionActor = level.actors.find(a => a && !before.has(a) && runtime.instance(a).cls === missionClass) ?? null;
-    // LoadMap's PostPostBeginPlay pass reaches the freshly spawned mission actor
-    // (the pass re-reads the actor array); run that startup so SetTimer enrols.
-    if (missionActor) runtime.processEvent(missionActor, 'PostPostBeginPlay', []);
-  }
-
+  const active = () => level.actors.find(a => a && runtime.instance(a).cls === missionClass
+    && !runtime.instance(a).pendingKill) ?? null;
   function destroy() {
-    if (!missionActor) return;
-    if (!runtime.instance(missionActor).pendingKill) runtime.destroyActor(missionActor, true);
-    missionActor = null;
+    const actor = active();
+    if (actor) runtime.destroyActor(actor, true);
   }
 
   return {
     class: missionClass, levelInfoClass,
-    active: () => missionActor,
-    has: candidate => candidate != null && candidate === missionActor,
+    active,
+    has: candidate => candidate != null && runtime.instance(candidate).cls === missionClass
+      && !runtime.instance(candidate).pendingKill,
     tick: (seconds, options) => {
-      if (missionActor && !runtime.instance(missionActor).pendingKill)
-        runtime.processActorTick(missionActor, seconds, options);
+      const actor = active();
+      if (actor) runtime.processActorTick(actor, seconds, options);
     },
-    spawn,
     destroy,
-    reset: () => { destroy(); spawn(); },
   };
 }

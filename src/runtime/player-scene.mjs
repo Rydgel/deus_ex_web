@@ -130,6 +130,15 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     return result;
   };
   collision.moveMover=moveMover;
+  // execMove forwards the live ULevel::MoveActor slot. The recovered brush
+  // entry handles translations; rotation-changing/flagged branches stay explicit.
+  level.moveActor=(actor,delta,rotation,hit,test,ignorePawns,ignoreBases,noFail)=>{
+    if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail
+        || !actor.rotation.every((value,index)=>value===rotation[index]))
+      throw new Error('MoveActor scene branch is not linked');
+    return moveMover(actor,delta);
+  };
+
   const prepareActor=actor=>{
     const v=actor.values;
     actor.worldActor=worldActor;actor.touching=[0,1,2,3].map(i=>actors.find(a=>a.index===v[i?`Touching[${i}]`:'Touching'])??null);

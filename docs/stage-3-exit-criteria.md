@@ -249,3 +249,19 @@ The first census found two items with existing evidence; both are now closed:
   `execEatString` (`0x1013a920`) zeroes a local `FString`, steps one
   expression against the current object into it, then destroys it. The VM now
   evaluates and discards the expression.
+
+After batch 3 milestone A (2026-09-25, 90 probes, 4 boots, 269 s, peak
+1,921 MiB):
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | pass: 0 excluded actors, 0 preparation/startup/reset failures. All 312 admitted serialized actors receive the original passes; PickupDistributor destroys itself after distributing keys in PostPostBeginPlay. |
+| 2. tick | pass: both 10 s legs, no boundary |
+| 3. interactions | open: LargeTextWindow XTextParams and unprobed Fire/AltFire (batch 4); only ClientTravel/SaveGame tolerated as Stage 6 |
+| 4. lifecycle | 102 classes, 3,063 actors spawned, 273 original null returns, 0 spawn throws; destroy/resource measurement remains open |
+| 5. substitutes | GameInfo stand-in and player-startup adapter remain for milestones B/C |
+
+Focused checks include original null-Code ProcessState guard, original struct
+bool payloads, exact once-per-pass load/reset for all 312 serialized actors,
+doors, lights, DataLinks, mission timer and instructor conversation. `npm test`:
+534/534. No full sweep at this checkpoint; one is reserved for the batch end.

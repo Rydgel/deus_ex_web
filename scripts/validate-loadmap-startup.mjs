@@ -53,6 +53,15 @@ try{
   const expected=['InitExecution',...events].flatMap(event=>ordered.map(actor=>({actor:actor.name,event})));
   const admittedTrace=()=>trace.filter(({actor})=>admitted.has(actor)).map(({actor,event})=>({actor:actor.name,event}));
   check('fresh startup follows original shared passes and authored slot order',()=>assert.deepEqual(admittedTrace(),expected));
+  const allMap = new Set(trace.filter(({actor,event})=>event==='InitExecution'
+    && actor!==game.player.collisionActor && mapOrder.has(actor.index)).map(({actor})=>actor));
+  assert.equal(allMap.size,312,'all original admitted exports, including the self-destroying PickupDistributor');
+  const allOrdered=[...allMap].sort((a,b)=>mapOrder.get(a.index)-mapOrder.get(b.index));
+  const allExpected=['InitExecution',...events].flatMap(event=>allOrdered.map(actor=>({actor:actor.name,event})));
+  const allTrace=()=>trace.filter(({actor})=>allMap.has(actor)).map(({actor,event})=>({actor:actor.name,event}));
+  check('every serialized actor receives each shared pass exactly once',()=>assert.deepEqual(allTrace(),allExpected));
+  assert.equal(game.doors.scriptRuntime.loadMapStartupExclusions().length,0);
+
 
   const hidden=level.actors.filter(actor=>actor&&read(actor,'bHidden'));
   const oldHidden=hidden.map(actor=>read(actor,'LastRenderTime'));
@@ -85,6 +94,7 @@ try{
   check('all four restored Touching slots clear before InitExecution',()=>
     assert.deepEqual(touching.map(slots=>slots.map(actor=>actor?.name??null)),[oracle.touching.map(()=>null)]));
   check('public reset replays the complete authored startup sequence',()=>assert.deepEqual(admittedTrace(),expected));
+  check('reset reaches every serialized actor exactly once per pass',()=>assert.deepEqual(allTrace(),allExpected));
   check('startup creates no failures',()=>assert.deepEqual([...npcFailures].map(([a,e])=>[a.name,e]),[]));
   check('public reset restores transient zone stamps independently',()=>assert.ok(level.zoneLastRenderTimes.every(time=>time===0)));
 }finally{

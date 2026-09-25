@@ -25,6 +25,7 @@ class Native(n.NativeCollision):
   self.events=[];self.write(self.frame+0xc,'I',0);self.write(self.frame+0x24,'I',0);self.write(self.actor+0x1ec,'I',0);out=[]
   for op in operations:
    if op in ['open','close']:self.call(0x1012eb10,self.actor,struct.pack('<I',1 if op=='open' else 2))
+   elif op=='poisonEmpty':self.write(self.frame+0xc,'I',0);self.write(self.frame+0x24,'I',0xdeadbeef)
    elif op=='process':self.call(0x103e5b60,self.actor,struct.pack('<f',1/60))
    elif op=='physicsEnd':self.write(self.actor+0x1ec,'I',0)
    else:raise Exception(op)

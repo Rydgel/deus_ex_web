@@ -68,18 +68,25 @@ LastRenderTime → PostBeginPlay → SetInitialState → base fixup →
 `bStartup` clear → PostPostBeginPlay → partition → the player's
 `AddPawn` head-insert (SpawnPlayActor runs after LoadMap in the original).
 
-Admission stays explicit: the event passes dispatch only to map
-pawn-ancestry and map `PatrolPoint`-ancestry actors (`startupAdmitted`),
-while the native passes apply to every map actor plus actors the startup
-passes themselves spawn (`startupNative`) — the set the original would
-have had in the array. Other classes remain unadmitted, not approximated.
+Every admitted serialized actor now receives every event pass. Actors appended
+by startup callbacks receive the remaining passes too, including the pass that
+appended them. The existing player and its post-load subsystem identities are
+kept outside this map pass until real SpawnPlayActor integration is complete.
+`InitExecution` and native passes use the same set.
 
 ### Spawned actors during a pass
 
-Pawn startup spawns (each NPC's `Shadow`) append to the live array inside
-`PreBeginPlay`; `collectSpawned` tracks the tail after each dispatch so the
-same pass reaches them (they are unadmitted for the event chain — their
-`SpawnActor` chain already ran — but the native passes do visit them).
+`collectSpawned` tracks actors appended during each dispatch. `DeusExLevelInfo`
+now creates Mission00 through its original PostBeginPlay/SpawnScript; the host
+only prepares and locates it. TriggerLights and movers enter their initial
+states through the shared SetInitialState, with no separate host startup.
+LevelInfo.PreBeginPlay now owns InitEventManager too.
+
+Training's PickupDistributor0 runs its original PostPostBeginPlay: distribute
+NanoKeys to tagged ScriptedPawns, then Destroy(). It receives every pass before
+its final self-destruction; the array partition correctly retains 311 of the
+312 admitted serialized actors. Validators must not equate export admission
+with survival after original startup.
 
 ### Base fixup dispatches
 
@@ -147,9 +154,6 @@ camera visibility. The original Actor.Tick stasis conditions stay enabled.
   spawned inside LoadMap before this call. This host's `LevelInfo.Game`
   holds the live DataLink fixture object, not an original GameInfo, so the
   branch is documented and skipped rather than dispatched on the stub.
-* Non-pawn/non-PatrolPoint event admission — the original dispatches to
-  every slot; expanding admission requires each class's startup bodies to
-  be prepared and verified.
 * The `IsServer` client-only pass and all net-mode branches are unwired by
   design (standalone only).
 * The browser's draw submissions supply actor render timestamps, but original
@@ -171,3 +175,23 @@ original Touching clear loop and actor timestamp store through
 the fourth contact slot, hidden headless actors, stasis, draw feedback and
 zone-storage reset. `browser-tests/render-feedback.spec.mjs` exercises actual
 WebGL submissions, hidden actors/parents and frustum rejection.
+
+## Batch 3 startup boundary research (2026-09-25)
+
+Before widening the shared passes, the installed `Engine.Mover.BeginPlay`
+body establishes KeyNum/PhysAlpha, calls `Move(BasePos + KeyPos[KeyNum] -
+Location)`, then `SetRotation(BaseRot + KeyRot[KeyNum])`. The missing Move
+service is an integration boundary to the already recovered scene brush move,
+not a reason to omit movers. Nontranslation brush branches remain unsupported.
+`DeusExLevelInfo.PostBeginPlay` calls `SpawnScript`; its original
+`AllActors(MissionScript)` dedup and Spawn own mission creation. The shared
+live-array passes must reach that new actor, including PostPostBeginPlay, so
+the host must cease spawning it and dispatching that event separately.
+TriggerLight BeginPlay/SetInitialState likewise belong to the shared passes.
+
+`AActor::ProcessState` checks the frame pointer at `0x103e5b85-0x103e5b8d`
+and frame.Code (+0x0c) at `0x103e5b93-0x103e5b96`, returning at
+`0x103e5cfe` if either is null, **before** reading frame.LatentAction at
+`0x103e5bfb-0x103e5c03`. InitExecution's untouched +0x24 therefore must
+not be read when no state code exists. This is an original control-flow
+condition; zero-initializing the latent slot would hide the missing guard.

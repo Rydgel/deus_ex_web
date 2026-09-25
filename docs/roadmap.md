@@ -136,6 +136,13 @@ ticking and every probed interaction on original bytecode with no boundary
 outside the named Stage 6 ones. See [Stage 3 exit criteria](stage-3-exit-criteria.md)
 for the criteria and the current scoreboard.
 
+Batch 3 A admits all 312 original map exports to LoadMap startup, including
+Mission00 spawning and PickupDistributor's key distribution/self-destruction.
+Movers reuse the recovered brush move service; TriggerLight startup is shared.
+The struct-bool preparation boundary is closed. Real GameInfo and player login
+remain the next batch-3 milestones; Stage 3 remains incomplete.
+
+
 **In progress.** Extend the existing bounded VM to execute original functions
 and state bytecode, starting with class/property metadata and the selected
 mover's script path. Use focused source/native and integration checks; visual

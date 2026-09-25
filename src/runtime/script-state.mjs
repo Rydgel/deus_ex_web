@@ -64,6 +64,9 @@ export class ScriptState {
   /** Poll a pre-existing latent action before running statements. A native call
    * may install another latent action and must suspend until the next phase. */
   process(seconds) {
+    // Engine 0x103e5b93-0x103e5b96 returns on null frame.Code before
+    // inspecting LatentAction (+0x24), which InitExecution leaves untouched.
+    if (!this.execution || this.execution.cursor === null) return;
     if(this.latent===undefined)throw new Error('Original state latent slot is uninitialized before state entry');
     if(this.latent){
       if(!this.services.pollLatent)throw new Error(`Latent action ${this.latent} is not linked`);

@@ -71,7 +71,7 @@ function cloneSnapshotValue(value) {
  *   tick(dt)                         tickActor for each supplied light order
  *   snapshot(light)                 typed fields through namedReference()
  */
-export async function createScriptLights({ runtime, assets, lights = [] } = {}) {
+export async function createScriptLights({ runtime, assets, lights = [], sharedStartup = false } = {}) {
   requireMethod(runtime, 'loadClass');
   requireMethod(runtime, 'prepareFunction');
   requireMethod(runtime, 'prepareState');
@@ -227,6 +227,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
     // This is the native startup order for this actor: BeginPlay first, then
     // Actor.SetInitialState.  SetInitialState itself executes the original
     // GotoState(InitialState), rather than selecting TriggerToggle here.
+    if (sharedStartup) return null;
     runtime.callFunction(functions.beginPlay, light, 0);
     runtime.callFunction(functions.setInitialState, light, 0);
     previousBrightness.set(light, runtime.namedReference(light, 'LightBrightness').get());
@@ -277,7 +278,7 @@ export async function createScriptLights({ runtime, assets, lights = [] } = {}) 
   void functions.beginEvent;
   void functions.endEvent;
 
-  reset();
+  if (!sharedStartup) reset();
   return {
     runtime,
     lights: identities.slice(),

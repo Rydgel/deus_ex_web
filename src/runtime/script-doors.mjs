@@ -820,13 +820,6 @@ export async function createScriptDoors({
   }
 
   await attach(levelInfo, levelClass, 'level');
-  // LevelInfo.PreBeginPlay's InitEventManager (native 650) lazily creates the
-  // +0x550 UEventManager during the original LoadMap startup pass; once it
-  // exists the AI event natives (713-716) reach their propagation boundary
-  // instead of silently returning. Run that real init here so decoration
-  // AIStartEvent/AISendEvent reach the recorded deferred boundary until the
-  // full actor-startup pass owns this call.
-  runtime.callFunction(functions.initEventManager, levelInfo, 0);
   await attach(playerActor, playerClass, 'player');
   // The browser creates JCDentonMale before the script level is attached.
   // ULevel::SpawnActor would have written this inherited Actor.Level slot
@@ -1089,19 +1082,13 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
-    // The LoadMap base-fixup pass (0x1038daad-0x1038dbe0) runs AttachTag
-    // SetBase and FindBase on Decoration/Inventory/Pawn ancestry actors; the
-    // SupportActor/Attach/Detach/BaseChange dispatches resolve through each
-    // hit actor's own chain — e.g. DeusExDecoration overrides BaseChange — so
-    // those class chains link at load like the admitted event classes.
+    // Every serialized actor receives the LoadMap events. Link its full class
+    // chain before synchronous dispatch, including base-fixup callbacks.
     for (const actor of level.actors ?? []) {
       if (!actor || actor === playerActor) continue;
       const record = identities.get(actor);
       if (!record || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)) continue;
-      let gated = false;
-      for (let cls = record.cls; cls; cls = cls.base)
-        if (cls.record.key === 'engine.decoration' || cls.record.key === 'engine.inventory') { gated = true; break; }
-      if (!gated) continue;
+
       // A class whose methods cannot link is a load-time boundary, not a
       // per-actor startup failure: the dispatch would throw later anyway.
       await prepareNpcClass(record.cls);
@@ -1200,12 +1187,9 @@ export async function createScriptDoors({
   // native operations between the event passes. Each pass loop rereads the
   // array data pointer and Num per iteration and skips null slots, so actors
   // appended during a pass are reached by it and destroyed actors drop out.
-  // Admission stays the supported class scope — map pawns and map PatrolPoints
-  // plus nothing else; the original dispatches to every non-null slot, so an
-  // actor appended mid-startup of a class outside that scope would be
-  // re-dispatched there while this host leaves it to its SpawnActor chain.
-  const startupAdmitted = actor => npcPawnSet.has(actor) || npcPatrolPointSet.has(actor) || npcPickupSet.has(actor)
-    || npcDecorationSet.has(actor);
+  // Every original map slot and every actor appended by a startup callback
+  // participates. The player is created after LoadMap in the original.
+  const startupAdmitted = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor));
   // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
   // apply to every actor the original would have had in the array at LoadMap:
   // the serialized map actors and actors these same passes spawn. The player
@@ -1506,6 +1490,15 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
+    for (const actor of initialActorArray) {
+      if (!actor || actor === playerActor || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)
+          || npcPickupSet.has(actor) || npcDecorationSet.has(actor) || moversByObject.has(actor)) continue;
+      // The temporary GameInfo adapter is host-owned until the real LoadMap
+      // Game spawn is wired; preserve its binding across serialized reload.
+      const game = actor === levelInfo ? startupRead(actor, 'Game') : null;
+      identities.get(actor)?.store.clear();
+      if (game) startupField(actor, 'Game').set(game);
+    }
     // The original Player start reloads the level, giving a fresh player with an
     // empty hand and no drawn weapon; this host reuses the player identity, so
     // clear the in-hand / weapon selection and carried decoration it may have
@@ -1552,9 +1545,8 @@ export async function createScriptDoors({
     addPawn(level, playerActor);
   }
 
-  // Live TriggerLights (base Engine.TriggerLight). createScriptLights shares this
-  // runtime, runs their native startup (BeginPlay -> SetInitialState) so they enter
-  // TriggerToggle, and drives their Trigger/Tick bodies. This is what makes a
+  // Live TriggerLights share the LoadMap startup passes. This adapter prepares
+  // their bodies and drives Trigger/Tick and renderer feedback. This is what makes a
   // LightSwitch.Frob's AllActors(Event) fanout (Actor.Trigger on each tagged light)
   // dispatch to the real state Trigger instead of the empty base. Subclasses are
   // outside this selected subset and are left inert (docs/script-light-switch.md).
@@ -1562,7 +1554,7 @@ export async function createScriptDoors({
   const triggerLights = (level.actors ?? []).filter(actor => {
     try { return runtime.instance(actor).cls.record === triggerLightClass.record; } catch { return false; }
   });
-  const lights = await createScriptLights({ runtime, assets, lights: triggerLights });
+  const lights = await createScriptLights({ runtime, assets, lights: triggerLights, sharedStartup: true });
   const missionTriggers=(level.actors??[]).filter(actor=>actor?.lineage?.includes('engine.trigger'));
 
   const records = [];
@@ -1596,7 +1588,7 @@ export async function createScriptDoors({
       runtime.processEvent(mover, 'InterpolateEnd', [null]);
     };
     record.store.clear();
-    record.state.transition(triggerState, deusExMoverClass.metadata);
+
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
     mover.ambientSound = values.AmbientSound ?? null;
@@ -1612,7 +1604,7 @@ export async function createScriptDoors({
 
   function updateDisplay(record) {
     const mover = record.mover, state = mover.interpolation;
-    const scriptState = record.state;
+    const scriptState = runtime.instance(record.mover).state;
     mover.active = Boolean(state.interpolating || scriptState.latent ||
       scriptState.execution && scriptState.execution.cursor !== null);
     mover.alpha = state.interpolating ? state.key === 1 ? f(state.alpha) : f(1 - state.alpha) : state.key;
@@ -1645,16 +1637,15 @@ export async function createScriptDoors({
     liveConPlay?.reset();
     // Destroy the mission actor before the map reload so its reset-time
     // destruction precedes the NPC startup's shadow destroys (it is re-spawned
-    // into the restored world after resetNpcs, below).
+    // by DeusExLevelInfo.PostBeginPlay in the shared passes).
     liveMission?.destroy();
     liveDataLink?.reset();
     faceConversations?.reset?.();
     triggerActions.flagBase.entries.clear();
     for (const [key, value] of initialFlags) triggerActions.flagBase.entries.set(key, {...value});
     for (const record of records) resetMover(record);
-    // Re-run the TriggerLights' native startup so they return to TriggerToggle.
+    // Restore fields; the shared passes below own all startup events.
     lights.reset();
-    if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
     // player-scene.reset() relinks Level.PawnList. Attach any newly linked
     // identity before a later FinishNotify can traverse it. Bindings themselves
     // read the list dynamically on every script field access.
@@ -1662,6 +1653,7 @@ export async function createScriptDoors({
     // chain (the original reloads the level on "Player start"). This must run
     // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
     resetNpcs();
+    if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
     // Rebind the attached local viewport onto PlayerPawn.Player. The engine sets
     // this to the possessing viewport for the local player; here it is the same
     // Client.Viewports[0] listener GetPlayerPawn (720) already follows. Original
@@ -1676,9 +1668,6 @@ export async function createScriptDoors({
     // Render's overlay gate reads SHOW_Actors. RendMap (+0x600, stored next
     // from ebx) is not modeled here.
     runtime.namedReference(playerActor, 'ShowFlags').set(0x480c);
-    // Re-spawn the mission actor into the freshly restored world so its timer
-    // and state machine start over (the original reloads the level on reset).
-    liveMission?.spawn();
     playerStartup?.spawnKeyRing?.();
     // The reloaded player is a fresh SpawnActor product: bTicked = !Level tick
     // parity (script-spawn.mjs), so the first frame defers what it owns.
@@ -1733,7 +1722,7 @@ export async function createScriptDoors({
    * selects a state label, which moves the FStateFrame cursor before any
    * interpolation runs, so both halves are part of the signature. */
   function frobSignature(record) {
-    const state = record.mover.interpolation, script = record.state;
+    const state = record.mover.interpolation, script = runtime.instance(record.mover).state;
     return `${state.key}/${state.previousKey}/${state.interpolating ? 1 : 0}/${f(state.alpha ?? 0)}` +
       `|${script.latent}/${script.execution ? script.execution.cursor : 'none'}`;
   }
@@ -1917,7 +1906,7 @@ export async function createScriptDoors({
         try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
-      } else if (npcSpawned.has(actor)) {
+      } else if (npcSpawned.has(actor) && !liveMission?.has(actor)) {
         // Inventory, Projectile and TraceHitSpawner actors share Actor.Tick.
         // Decal-ancestry spawned Shadows remain the recorded non-ticked case.
         let lineage = null;
@@ -2035,8 +2024,8 @@ export async function createScriptDoors({
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
   // Mission00's timer: DeusExLevelInfo.SpawnScript spawns the mission actor,
   // whose PostPostBeginPlay SetTimer runs Mission00.Timer through the shared
-  // scheduler. Created after liveConPlay so its one-shot spawn route wraps the
-  // conversation lifecycle (docs/script-mission-timer.md).
+  // scheduler. The helper only prepares and locates it; the shared LoadMap
+  // passes own creation (docs/script-mission-timer.md).
   liveMission=await createLiveMissionRuntime({runtime,assets,level,player:playerActor});
   const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
   runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);

@@ -91,8 +91,17 @@ player augmentation startup, all 18 admitted DataLink routes and all nine image
 transfers. The darkdoor check explicitly requires a class loaded by this graph,
 so reverting Play to the decoded-default adapter cannot silently pass it.
 
-Still unverified: bool members inside SerializeBin struct defaults (the bridge
-rejects that branch), arbitrary native-only class VM operations, native defaults
+Struct bool defaults are now covered by the focused original-package comparison
+in `validate-class-loader-struct-bools.mjs`: the two authored Greasel/Karkian
+InitialAlliances tags and ScriptedPawn's zero/default member. Core.dll
+`1012668d–1012669c` calls each member serializer; `10166560–10166572` serializes
+one byte and `10166575–1016658c` sets/clears the native bit based on nonzero.
+The graph's keyed struct member stores that archive byte directly, so the VM
+bridge decodes nonzero (independent of the native mask) and writes canonical
+0/1. This differs from the graph's top-level packed DWORD storage. The focused
+check also verifies mutable default roundtrips for both logical values.
+
+Still unverified: arbitrary native-only class VM operations, native defaults
 without serialized tags, config/localization, the prepared DynamicLoadObject
 routes that still return prebound identities (the shared-graph route is in
 [`script-font-load.md`](script-font-load.md)), the remaining native resource tails and complete

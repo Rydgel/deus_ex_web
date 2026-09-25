@@ -45,8 +45,11 @@ const player = game.player.collisionActor, level = runtime.levelFor(player);
 for (const [index, ref] of map.level.actors.entries()) {
   const expected = ref && mapExportAdmitted(map.pkg, ref)
     ? await runtime.objects.resolve(mapAsset, ref) : null;
-  assert.equal(expected === null ? level.actors.every(actor => actor?.index !== ref) : level.actors.includes(expected),
-    true, `serialized slot ${index} keeps its admission identity`);
+  const destroyed = expected && runtime.instance(expected).pendingKill;
+  if (destroyed) assert.equal(expected.className, 'PickupDistributor', 'original PostPostBeginPlay self-destruction');
+  assert.equal(expected === null ? level.actors.every(actor => actor?.index !== ref)
+    : destroyed ? !level.actors.includes(expected) : level.actors.includes(expected),
+    true, `serialized slot ${index} (${expected?.name ?? ref}) keeps its admission identity`);
 }
 assert.ok(level.actors.includes(player));
 const mapLightActors = map.actors.filter(actor => /^TriggerLight[0-3]$/i.test(actor.name));

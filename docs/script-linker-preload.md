@@ -207,10 +207,11 @@ zero-warning startup confirms the record exists.
 - **`ArrayProperty` (type 9) defaults, type-8 tags, and the multi-byte
   arrayIndex encodings** do not occur in any shipped package, so those branches
   of the tag reader and `serializeArrayItem` remain read off the encoding only.
-- **Struct members of kind Bool** (`InitialAllianceInfo.bPermanent` in
-  `Karkian`/`Greasel`, 3 tags) are not oracle-decoded by the comparator, so
-  those two classes are outside the set; the `SerializeBin` bool element form
-  is exercised by the runtime translation but not value-compared here.
+- **Struct members of kind Bool** are outside this seven-class comparator.
+  The separate `validate-class-loader-struct-bools.mjs` now compares the two
+  authored `Karkian`/`Greasel` InitialAlliances tags, including
+  `InitialAllianceInfo.bPermanent`, with the original member byte streams.
+  See [the VM bridge evidence](script-load-graph.md).
 - The comparator's placement check uses the linked `ElementSize` the runtime
   itself produced; `ElementSize` is independently asserted only for
   `DataVaultImage` (recorded layout).
