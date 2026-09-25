@@ -209,14 +209,15 @@ async function loadMap(name) {
       $('gate-message').textContent='Preparing original actor meshes…';
       try{
         nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{
-          player:nextGame.player.collisionActor,
+          // Player start logs in a new player; follow the current one.
+          player:()=>nextGame.player.collisionActor,
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
         nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses in Play. Original mesh lighting, distance LOD and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
-    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,nextGame.player.collisionActor);
+    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor);
     hudRenderer?.dispose();hudRenderer=nextHud;
     weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}

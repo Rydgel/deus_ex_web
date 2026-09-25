@@ -21,7 +21,9 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
   files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training'),map=decodeMap(asset.bytes);
 const game=await createGame(map,asset,assets,{randomSeed:1,presentation:true});
-const host=game.doors.scriptRuntime,runtime=host.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const host=game.doors.scriptRuntime,runtime=host.runtime;
+// Player start logs in a new player; re-read it after every reset.
+let player=game.player.collisionActor;const level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get(),live=n=>level.actors.find(a=>a?.name===n);
 const idle={forward:0,right:0,yaw:0,pitch:-.3,jump:false,crouch:false,walk:false};
 const tick=(n=1,input=idle)=>{for(let i=0;i<n;i++)game.tick(1/60,input);};
@@ -72,7 +74,7 @@ assert.equal(get(item,'Owner'),null,'the destroyed item is no longer owned by th
 assert.equal(host.npcFailures.size,0,'no actor tick failures');
 
 // Player start re-spawns a single fresh mission actor and clears Ready.
-game.reset();tick(60);
+game.reset();player=game.player.collisionActor;tick(60);
 const fresh=host.liveMission.active();
 assert.ok(fresh&&fresh!==mission,'reset re-spawned a fresh mission actor');
 assert.equal(missionActors().length,1,'reset leaves exactly one MissionScript actor (SpawnScript dedup)');

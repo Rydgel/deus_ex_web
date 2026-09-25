@@ -14,7 +14,9 @@ for(const directory of ['Maps','System','Textures','Sounds','Music'])
     files.push({path:`${directory}/${name}`,read:()=>readFile(`${root}/${directory}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1});
-const runtime=game.doors.scriptRuntime.runtime,pawn=game.player.collisionActor;
+const runtime=game.doors.scriptRuntime.runtime;
+// Player start logs in a new player; re-read it after every reset.
+let pawn=game.player.collisionActor;
 const get=(object,key)=>runtime.namedReference(object,key).get();
 const level=()=>runtime.levelFor(pawn);
 const idle={forward:0,right:0,yaw:0,pitch:0,jump:false,crouch:false,walk:false};
@@ -108,7 +110,7 @@ for(const name of ['DeusExMover47','DeusExMover48'])
   assert.equal(game.collision.movers.find(mover=>mover.name===name).interpolation.key,1);
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0);
 
-game.reset();
+game.reset();pawn=game.player.collisionActor;
 assert.equal(get(pawn,'KeyList'),null);
 assert.notEqual(get(pawn,'KeyRing'),ring);
 assert.equal(get(get(pawn,'KeyRing'),'Owner'),pawn);

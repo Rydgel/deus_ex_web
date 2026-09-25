@@ -9,7 +9,10 @@ import {createActorMeshPreview} from './npc-mesh-preview.mjs';
  * animation; this adapter owns only the Canvas draw submission and decoded GPU
  * resources. No fire/state scheduler entry is made here. Evidence:
  * docs/script-weapon-rendering.md. */
-export async function createWeaponViewModel(runtime,assets,player,{kernel=null}={}) {
+/** `playerSource` is the player actor or a getter for it: Player start logs
+ * a new player in, so the viewer passes a getter. */
+export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=null}={}) {
+  const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource;
   const engine=await assets.get('Engine');
   const canvasClass=await runtime.loadClass(engine,engine.exportsByPath.get('canvas'));
   // A typed external Canvas boundary, not a fabricated native UCanvas instance.
@@ -40,6 +43,7 @@ export async function createWeaponViewModel(runtime,assets,player,{kernel=null}=
   // DeusExPlayer.RenderOverlays reaches Weapon.RenderOverlays through Super and
   // then a non-Weapon inHand's Inventory.RenderOverlays.
   const overlayTarget=()=>{
+    const player=currentPlayer();
     if(read(player,'bBehindView'))return null;
     const target=read(player,'ViewTarget')??player;
     return read(player,'ShowFlags')&8?target:null;
@@ -65,14 +69,14 @@ export async function createWeaponViewModel(runtime,assets,player,{kernel=null}=
     // The asynchronous phase only decodes resources. It does not dispatch the
     // script event or advance an actor; render() is the sole draw event source.
     async ready(){
-      for(const name of ['Weapon','inHand']){const actor=read(player,name);if(actor)prepare(actor);}
+      for(const name of ['Weapon','inHand']){const actor=read(currentPlayer(),name);if(actor)prepare(actor);}
       await Promise.all(pending.values());if(error)throw error;
     },
     render(renderer,camera){
       if(disposed)return;
       if(error)throw error;
       for(const {preview} of entries.values())preview.root.visible=false;
-      for(const [actor,entry] of entries)if(read(actor,'bDeleteMe')||!runtime.levelFor(player).actors.includes(actor)){
+      for(const [actor,entry] of entries)if(read(actor,'bDeleteMe')||!runtime.levelFor(currentPlayer()).actors.includes(actor)){
         scene.remove(entry.preview.root);entry.preview.dispose();entries.delete(actor);
       }
       summary.draws=0;summary.actor=null;summary.mesh=null;

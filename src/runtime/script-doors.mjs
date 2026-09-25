@@ -25,7 +25,6 @@ import { setBase } from './walking-callbacks.mjs';
 import { setActorZone } from './zone.mjs';
 import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
-import { addPawn, removePawn } from './pawn-list.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
@@ -421,6 +420,17 @@ export async function createScriptDoors({
   let liveMission=null;
   let loadMapGame=null;
   let playerLogin=null, preparedPlayerStartup=null, loggingIn=false;
+  // Actors the current player's Login spawned (the player, its PRI, Shadow and
+  // PostBeginPlay subsystem graph); a reload retires them with the old level.
+  const loginSpawned=new Set();
+  // ULevel::SpawnPlayActor -> DeusExGameInfo.Login (docs/script-player-login.md).
+  function loginPlayer(){
+    const from=level.actors.length;
+    loggingIn=true;
+    try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
+    finally{loggingIn=false;for(const actor of level.actors.slice(from))if(actor)loginSpawned.add(actor);}
+    playerStartup=preparedPlayerStartup.complete(playerActor);
+  }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
   // line, so supply the host sink the original always has, recording a bounded
@@ -1392,7 +1402,7 @@ export async function createScriptDoors({
   // An actor whose startup reaches an explicit boundary — e.g. the armed NPCs'
   // Inventory SpawnActor inside InitializeInventory — is recorded and left out
   // of ticking instead of resuming a half-advanced state.
-  function resetNpcs() {
+  function resetNpcs(retired = new Set()) {
     // Destroy every runtime-spawned actor first, in reverse spawn order, so
     // Inventory.Destroyed -> Pawn.DeleteInventory / Weapon.Destroyed ->
     // Owner.Weapon clear / SetBase(NULL) StandingCount-1 / SetOwner(NULL)
@@ -1411,8 +1421,10 @@ export async function createScriptDoors({
     npcSpawnedOwner.clear();
     npcFailures.clear();
     // Destruction must see the old world first. Now reload the authored map
-    // prefix, preserving the surviving player/subsystem tail exactly once.
-    const persistentTail = level.actors.filter(actor => actor && !initialActorSet.has(actor));
+    // prefix. The previous player's graph does not survive the reload; the
+    // LoadMap GameInfo/Mutator/GameReplicationInfo stay only until the
+    // reload below tears them down.
+    const persistentTail = level.actors.filter(actor => actor && !initialActorSet.has(actor) && !retired.has(actor));
     level.actors = [...initialActorArray, ...persistentTail];
     level.zoneLastRenderTimes?.fill(0);
     // Restore the serialized map state before any startup callback can observe
@@ -1457,21 +1469,6 @@ export async function createScriptDoors({
         npcFailures.set(actor, String(error?.message ?? error));
       }
     }
-    // The map reload returns picked-up items to the world. discardKeyRing above
-    // already removed the ring; detach everything JC acquired during play from
-    // the Inventory list — the serialized pickups (returned to the world by the
-    // store.clear below) and the ammo their GiveTo spawned (a play spawn, so it
-    // is not in the serialized map set and is left orphaned, holding no
-    // Location). spawnKeyRing re-adds the ring after resetNpcs.
-    let prevInv = null, invItem = runtime.namedReference(playerActor, 'Inventory').get();
-    while (invItem && typeof invItem === 'object') {
-      const nextInv = runtime.namedReference(invItem, 'Inventory').get();
-      if (npcPickupSet.has(invItem) || !initialActorSet.has(invItem)) {
-        if (prevInv) runtime.namedReference(prevInv, 'Inventory').set(nextInv);
-        else runtime.namedReference(playerActor, 'Inventory').set(nextInv);
-      } else prevInv = invItem;
-      invItem = nextInv;
-    }
     // A picked-up item rode its owner (Base) with a live collision cylinder
     // (map-actor-native.mjs linkLiveCollision); it returns to its serialized
     // Location and Base inside the rebuilt hash's remove/re-add, like a
@@ -1512,17 +1509,6 @@ export async function createScriptDoors({
           || npcPickupSet.has(actor) || npcDecorationSet.has(actor) || moversByObject.has(actor)) continue;
       identities.get(actor)?.store.clear();
     }
-    // The original Player start reloads the level, giving a fresh player with an
-    // empty hand and no drawn weapon; this host reuses the player identity, so
-    // clear the in-hand / weapon selection and carried decoration it may have
-    // made in Play. The selected item or decoration is a serialized actor
-    // already returned to the world above; at map start these player fields
-    // are None/false (their class defaults).
-    for (const field of ['inHand', 'inHandPending', 'ClientInHandPending', 'SelectedItem', 'Weapon', 'PendingWeapon', 'CarriedDecoration'])
-      runtime.namedReference(playerActor, field).set(null);
-    runtime.namedReference(playerActor, 'bInHandTransition').set(false);
-    // A held fire button does not survive the reload either (input byte 0).
-    runtime.namedReference(playerActor, 'bFire').set(0);
     clearStartupPawnList();
     loadMapGame.reload();
     // Everything destroyed so far — the previous run's spawned actors and its
@@ -1635,15 +1621,23 @@ export async function createScriptDoors({
     }});
 
   function reset() {
-    playerLogs?.reset();
-    // Player start reloads the map and its inventory. Reuse the native window
-    // tree, but clear its belt through the original helper before the new
-    // KeyRing GiveTo/AddInventory path publishes the replacement in slot 0.
-    if(windowHost?.hud){
-      const belt=runtime.namedReference(windowHost.hud,'belt').get();
-      runtime.callFunction(runtime.lookup(belt,'ClearBelt'),belt,0);
-    }
-    playerStartup?.discardKeyRing?.();
+    // Player start is a cold reload of this map, then SpawnPlayActor. The old
+    // player's Login graph (player, PRI, Shadow, subsystems) and everything it
+    // came to own belong to the unloaded level: LoadMap's CollectGarbage
+    // purges them. PlayerPawnExt::Destroy runs its GObjInGarbageCollection
+    // branch then, with no script Destroyed events, and nothing in the new
+    // level observes it (docs/script-player-login.md, "Reset").
+    const retired = new Set(loginSpawned);
+    loginSpawned.clear();
+    const ownedByRetired = actor => {
+      const seen = new Set();
+      for (let owner = actor; owner && !seen.has(owner); owner = safeOwner(owner)) {
+        if (retired.has(owner)) return true;
+        seen.add(owner);
+      }
+      return false;
+    };
+    for (const actor of level.actors) if (actor && !initialActorSet.has(actor) && ownedByRetired(actor)) retired.add(actor);
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveConPlay?.reset();
     // Destroy the mission actor before the map reload so its reset-time
@@ -1652,27 +1646,28 @@ export async function createScriptDoors({
     liveMission?.destroy();
     liveDataLink?.reset();
     faceConversations?.reset?.();
-    triggerActions.flagBase.entries.clear();
-    for (const [key, value] of initialFlags) triggerActions.flagBase.entries.set(key, {...value});
     for (const record of records) resetMover(record);
     // Restore fields; the shared passes below own all startup events.
     lights.reset();
-    // player-scene.reset() relinks Level.PawnList. Attach any newly linked
-    // identity before a later FinishNotify can traverse it. Bindings themselves
-    // read the list dynamically on every script field access.
+    // As at cold boot, the reloaded level's startup runs with no player: the
+    // old one leaves the collision hash, PawnList and Viewport.Actor first.
+    playerScene.detachPlayerIdentity();
     // Map pawns restore their serialized state and re-run the LoadMap startup
-    // chain (the original reloads the level on "Player start"). This must run
-    // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
-    resetNpcs();
-    // Reset keeps the logged-in player instead of reloading the level and
-    // logging in again (docs/script-player-login.md, "Reset"). As before
-    // real Login, its discarded key ring returns through the original
-    // CreateKeyRing and it rejoins the tick as a fresh SpawnActor product.
-    // Login follows LoadMap, so its Pawn.PreBeginPlay AddPawn owns the head.
-    addPawn(level, playerActor);
-    playerStartup?.spawnKeyRing?.();
-    runtime.namedReference(playerActor, 'bTicked').set(!Boolean(npcTickLevel.tickTag));
+    // chain. This must run after playerScene.reset rebuilt the pawn list;
+    // game.reset orders it so.
+    resetNpcs(retired);
+    for (const actor of retired) identities.delete(actor);
+    loginPlayer();
+    // The Play services follow the new player; the old HUD tree stays with
+    // the purged graph, and the new Possess built the new one.
+    infoLinkShellValue.bindPlayer(playerActor);
+    liveConPlay.bindPlayer(playerActor);
+    liveDataLink.bindPlayer(playerActor);
     finishPlayerStartup();
+  }
+
+  function safeOwner(actor) {
+    try { return runtime.namedReference(actor, 'Owner').get() ?? null; } catch { return null; }
   }
 
   function finishPlayerStartup() {
@@ -2083,7 +2078,6 @@ export async function createScriptDoors({
   await prepareShadowStartup(runtime,assets,level);
   await prepareConversationBinding(runtime,level);
   liveMission=await createLiveMissionRuntime({runtime,assets,level});
-  const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
   await prepareNpcs();
   await prepareCrateLifecycle({runtime,assets,decorations:npcDecorations,
     prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
@@ -2105,10 +2099,7 @@ export async function createScriptDoors({
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
   playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
-  loggingIn=true;
-  try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
-  finally{loggingIn=false;}
-  playerStartup=preparedPlayerStartup.complete(playerActor);
+  loginPlayer();
   playerLogs.enableMessages();
   // Deferred: DataLinkPlay.StartConversation constructs each display through
   // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
@@ -2144,7 +2135,7 @@ export async function createScriptDoors({
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
-    infoLinkShell,playerStartup,windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
+    infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
 

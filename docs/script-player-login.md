@@ -407,20 +407,59 @@ session whose DX.dxm player took suffix 0.
 graph Login built. The isolated InitializeSubSystems path and its forced name
 counters are removed.
 
-### Reset: open
+### Reset: reload and a second Login
 
-"Player start" still keeps the logged-in player. It does not unload the level
-and log in again. It restores the key ring through CreateKeyRing, relinks the
-player at the PawnList head (the reload's PreBeginPlay AddPawn), and replays
-the map startup. The reloaded LoadMap spawns a new GameInfo and
-GameReplicationInfo. The retained player keeps its old GameReplicationInfo
-and PlayerReplicationInfo, and the new game counts `NumPlayers` 0.
+"Player start" is a cold reload of the map followed by SpawnPlayActor, the
+same sequence as boot. UGameEngine::LoadMap draws no DestroyActor on the old
+level's viewport player; it only clears a flag bit at its `+0x69c`
+(`0x1038c51d`). The new level's actors are kept
+(`0x1038d14a..0x1038d1dc`), and `CollectGarbage(RF_Native)` (`0x1038d1e1`)
+purges what is unreachable.
 
-This is the host reset policy this page already rejects as an original
-contract. The original reload purges the old level by garbage collection.
-There, PlayerPawnExt::Destroy takes its GObjInGarbageCollection branch and
-nulls flagBase, SafeDestroys rootWindow and runs AActor::Destroy. No script
-Destroyed events run. The new level's SpawnPlayActor then logs in a new
-player. Replacing the policy needs that teardown for the player graph (and
-the other purged objects), a second Login into rebound Play services, and
-the FlagBase ownership work described above.
+That purge does not reach the old player yet. `Engine.Player.Actor` (+0x30)
+is a script property with flags `0x2002` (const, transient, not native).
+UProperty::ShouldSerializeValue (Core `0x10112810`) skips only native
+properties, and transient ones only for a persistent archive (`Ar+0x18`).
+UPlayer::Serialize (`0x103d7d60`) is UObject::Serialize. So the collector
+follows Viewport.Actor to the old player and, through its references, to
+the old level. The retired generation stays alive until the new Login's
+SetPlayer detaches it and a later collection runs. Only then does
+PlayerPawnExt::Destroy take its GObjInGarbageCollection branch: it nulls
+flagBase, SafeDestroys rootWindow and runs AActor::Destroy. No script
+Destroyed events run at any point.
+
+`script-doors.mjs` records every actor the current Login spawned. Reset then
+does the following:
+
+1. It adds every non-serialized actor the retired Login graph owns (its
+   Owner chain). This covers the player, PRI, Shadow, PostBeginPlay
+   subsystems, key ring and acquired spawns.
+2. It removes that graph from the reloaded `Level.Actors`. The player
+   leaves the collision hash, PawnList and Viewport.Actor, so the reloaded
+   level's startup runs with no player, as at boot. This follows the cold
+   path on purpose. In an in-game travel, Viewport.Actor would still name the
+   old player during the new level's startup, until the new Login's
+   SetPlayer.
+3. It runs the LoadMap passes, then `loginPlayer()` again.
+4. It rebinds the InfoLink shell, live ConPlay, live DataLink and HUD to the
+   new player. The window host, player logs and FlagBase rebind inside
+   Login's spawn.
+
+Each reset therefore produces `JCDentonMale<n+1>`, `PlayerReplicationInfo<n+1>`,
+new subsystems, a fresh FlagBase and a new root window. The player's GRI is
+the reloaded game's, and `NumPlayers` is 1. Login's ResetPlayerToDefaults
+ring destruction reappears in the deferred-deletion chain, as at boot.
+
+Not modeled: that later collection. The original keeps at most the one
+retired generation that the viewport held. Play keeps every retired
+generation in its object registry and window heap. Nothing in the new level
+references them, but each Player start grows memory by about 5 MiB of heap.
+The same is true of the actors reset destroys without CleanupDestroyed
+releasing them. The purge itself also has missing parts:
+
+- the object-index model's reachability walk;
+- the root window's SafeDestroy (XRootWindow has no recovered destroy family
+  yet, and the host heap never frees);
+- the GC-order Destroy/destructor passes.
+
+All three are needed before generations can be released faithfully.

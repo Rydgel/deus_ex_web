@@ -12,7 +12,9 @@ for(const d of ['System','Textures','Maps','Sounds','Music'])for(const n of awai
  files.push({path:`${d}/${n}`,read:()=>readFile(path.join(root,d,n))});
 const assets=new AssetStore(files),a=await assets.get('00_Training');
 const game=await createGame(decodeMap(a.bytes),a,assets,{randomSeed:1,presentation:true});
-const {hud}=game,runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor;
+const {hud}=game,runtime=game.doors.scriptRuntime.runtime;
+// Player start logs in a new player; re-read it after every reset.
+let player=game.player.collisionActor;
 const commands=hud.commands(960,600,{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
 assert.ok(commands.length>50,'Original native tree emits HUD tiles and glyphs');
 assert.equal(hud.root,runtime.namedReference(player,'rootWindow').get());
@@ -69,7 +71,7 @@ console.log('HUD integration: log');
 runtime.dispatchSpawnedEvent(player,'ClientMessage',['Native HUD log check','',false]);
 const log=hud.read(hud.read(hud.hud,'msgLog'),'winLog');
 assert.ok(hud.host.raw.read(log,0x17c,'i32')>0,'Original ClientMessage enters native TextLog rows');
-game.reset();hud.tick(1/120);assert.equal(hud.snapshot().health.legLeft.health,100);assert.equal(hud.snapshot().energy,100);
+game.reset();player=game.player.collisionActor;hud.tick(1/120);assert.equal(hud.snapshot().health.legLeft.health,100);assert.equal(hud.snapshot().energy,100);
 const text=await createHudText(assets,['DeusExUI.FontTiny','DeusExUI.FontMenuHeaders_DS','DeusExUI.FontFixedWidthSmall_DS']);
 const glyphs=[];text.draw(c=>glyphs.push(c),{font:'DeusExUI.FontMenuHeaders_DS',text:'Jaime Reyes',x:94,y:15,width:293,height:15,vAlign:1});
 assert.equal(glyphs.length,11);assert.equal(glyphs[0].image.key,'DeusExUI.FontMenuHeaders_DS.Texture17');

@@ -16,7 +16,9 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
   files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training'),map=decodeMap(asset.bytes),audio=[];
 const game=await createGame(map,asset,assets,{randomSeed:1,presentation:true,onConversationSpeech:e=>audio.push(e)});
-const host=game.doors.scriptRuntime,runtime=host.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const host=game.doors.scriptRuntime,runtime=host.runtime;
+// Player start logs in a new player; re-read it after every reset.
+let player=game.player.collisionActor;const level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get(),live=name=>level.actors.find(a=>a?.name===name);
 const idle={forward:0,right:0,yaw:0,pitch:-.3,jump:false,crouch:false,walk:false};
 const tick=(n=1,input=idle)=>{for(let i=0;i<n;i++)game.tick(1/60,input);};
@@ -62,7 +64,7 @@ for(const name of ['UNATCOTroop3','UNATCOTroop0']){
  finish(flow);
 }
 // Fresh reset is directly observable, with no post-reset mutation.
-game.reset();assert.equal(ready(),false);assert.equal(get(player,'conHistory'),null);
+game.reset();player=game.player.collisionActor;assert.equal(ready(),false);assert.equal(get(player,'conHistory'),null);
 const frob=host.faceConversations.conversations.find(c=>c.conName==='MunitionsTrooperFrob').conversation;
 assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);tick(200);
 const troop=live('UNATCOTroop3'),position=get(troop,'Location');
@@ -91,7 +93,7 @@ tick(70);
 const fresh=start(troop,'MunitionsTrooperFrob');
 assert.equal(audio.filter(e=>e.kind==='speech').at(-1).audio.soundId,19);
 const activeAudio=audio.at(-1);assert.equal(activeAudio.kind,'speech');
-game.reset();assert.equal(get(player,'conPlay'),null);assert.equal(get(player,'conHistory'),null);
+game.reset();player=game.player.collisionActor;assert.equal(get(player,'conPlay'),null);assert.equal(get(player,'conHistory'),null);
 assert.equal(shell.isDestroyed(fresh.window),true);assert.equal(audio.at(-1).kind,'stop');
 assert.equal(ready(),false);assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);
 tick(200);finish(start(live('UNATCOTroop3'),'MunitionsTrooperFrob'));
@@ -111,7 +113,7 @@ function panel(){
  return {visible:Boolean(shell.readNative(win,Wo.windowFlags,'u32')&1),texts};
 }
 function greet(subtitlesOn){ // fresh reset, set preference, drive one greeting; snapshot at first speech
- game.reset();assert.equal(ready(),false);
+ game.reset();player=game.player.collisionActor;assert.equal(ready(),false);
  game.subtitles=subtitlesOn;assert.equal(game.subtitles,subtitlesOn);
  tick(200); // let the instructor reach its idle/standing state (bCanConverse)
  const before=audio.length; // before the first tick so start()'s own tick is covered

@@ -1,18 +1,21 @@
-# Stage 3 batch 3: A, B and boot-time C complete
+# Stage 3 batch 3: milestones A, B and C complete
 
 Milestone A is `ea93916`: every Training map actor receives the original
 LoadMap passes. Milestone B spawns the real configured DeusExGameInfo and
 runs original InitGame, which spawns its Mutator. Milestone C (2026-09-25)
 boots Play through the original SpawnPlayActor -> DeusExGameInfo.Login. The
-player has a real PlayerReplicationInfo, and Esc pauses the level. The
-remaining C item is reset: it still keeps the logged-in player instead of
-purging the old level and logging in again. See
-[player login](script-player-login.md) and the measured
-[scoreboard](stage-3-exit-criteria.md).
+player has a real PlayerReplicationInfo, and Esc pauses the level. Player
+start reloads the map and logs a new player in; the old player's graph is
+retired with the old level. See [player login](script-player-login.md) and
+the measured [scoreboard](stage-3-exit-criteria.md).
 
 The sections below record why the first C attempt stopped. Their boundaries
-are now closed: dynamic string arrays, InputExt/ResetConfig, InitRootWindow
-and CheckFlag. Player-owned destruction is still the reset prerequisite.
+are closed: dynamic string arrays, InputExt/ResetConfig, InitRootWindow and
+CheckFlag. The player-owned native Destroy chain belongs to a garbage
+collection after the reload: Viewport.Actor keeps the old player reachable
+through LoadMap's own collection. Play retires the graph without modeling
+that collection, so retired generations accumulate in memory. The login
+page records this.
 
 ## Why the first C attempt stopped
 

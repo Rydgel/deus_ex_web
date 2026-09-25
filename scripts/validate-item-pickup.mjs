@@ -17,7 +17,9 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
   files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
-const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const runtime=game.doors.scriptRuntime.runtime;
+// Player start logs in a new player; re-read it after every reset.
+let player=game.player.collisionActor;const level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get();
 const live=name=>level.actors.find(a=>a?.name===name);
 const invNames=()=>{const a=[];let it=get(player,'Inventory');for(let n=0;it&&n<64;it=get(it,'Inventory'),n++)a.push(it.name);return a;};
@@ -114,7 +116,7 @@ scene.dispose();
 // spawned key ring alone. The reload then supports picking the item up again.
 const carried=invNames().length;
 assert.ok(carried>1,'JC carries the picked-up items before reset');
-game.reset();
+game.reset();player=game.player.collisionActor;
 const crowbar=live('WeaponCrowbar1');
 assert.equal(get(crowbar,'Owner'),null,'reset returns the crowbar to the world un-owned');
 assert.equal(get(crowbar,'bHidden'),false,'reset makes the crowbar visible again');

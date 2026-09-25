@@ -48,7 +48,10 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
  * props carry AnimSequence None, so a synthetic key is exact. The measured NPC
  * identities keep their captured index for animation-history fidelity. Shading
  * stays texture-only, as documented for the NPC layer. */
-export async function createActorMeshScene(runtime,assets,asset,{kernel,player}={}) {
+/** `player` is the player actor or a getter for it: Player start logs a new
+ * player in, so the viewer passes a getter. */
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource}={}) {
+  const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
     try{kernel=await loadLodMeshKernel();}
@@ -64,7 +67,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
       npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
   }
-  const level=player?runtime.levelFor(player):null;
+  const level=currentPlayer()?runtime.levelFor(currentPlayer()):null;
   const read=(actor,name)=>{try{return runtime.namedReference(actor,name).get();}catch{return undefined;}};
   // Render.dll's level-actor pass (0x10b22e27-0x10b22ef8), for the player's
   // first-person frame: skip the view actor's ViewTarget (+0x60c) unless
@@ -74,6 +77,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   // SkilledTool's DownItem unhides the held tool, so it is drawn here too.
   const drawnInWorld=actor=>{
     if(read(actor,'bHidden')||read(actor,'bDeleteMe'))return false;
+    const player=currentPlayer();
     if(!player)return true;
     const behind=Boolean(read(player,'bBehindView'));
     if(!behind&&read(player,'ViewTarget')===actor)return false;
@@ -95,7 +99,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   };
   const admit=actor=>{
     const mesh=read(actor,'Mesh');
-    if(disposed||!actor||actor===player||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
+    if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld})

@@ -179,13 +179,16 @@ for (let run = 0; run < 3; run++) {
       `${label}: reset shadow count is identical across repeated runs (no leaked respawn)`);
     console.log(`run ${run} (${label}): ${items.length} spawned inventory actors, ${shadows} shadows, level.actors=${level.actors.length}`);
   }
-  // The previous run's spawned items were destroyed by the recovered
-  // ULevel::DestroyActor path during reset: their Level.Actors slots are
-  // clear and the objects are pending kill — never reintroduced.
+  // The previous run's NPC and distributor items were destroyed by the
+  // recovered ULevel::DestroyActor path during reset: their Level.Actors slots
+  // are clear and the objects are pending kill — never reintroduced. The old
+  // player's key ring leaves with its retired Login graph instead (the
+  // reload's garbage collection, not DestroyActor).
   if (previousItems) {
     for (const item of previousItems) {
       assert.equal(level.actors.includes(item), false,
         `${item.name}: previous-run item left the live Level.Actors set`);
+      if (instance(item).cls.record.key === 'deusex.nanokeyring') continue;
       assert.equal(instance(item).pendingKill, true,
         `${item.name}: previous-run item is pending kill`);
     }

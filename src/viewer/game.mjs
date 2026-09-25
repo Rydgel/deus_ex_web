@@ -129,20 +129,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   const levelDilation=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeDilation');
-  // Player start is the viewer's scene reset. Restore the actual startup
-  // vitals, so damage/energy script writes cannot survive that reset.
-  const playerVitals=['Health','HealthHead','HealthTorso','HealthArmLeft','HealthArmRight',
-    'HealthLegLeft','HealthLegRight','Energy','EnergyMax'].map(name=>{
-    const ref=doors.scriptRuntime.runtime.namedReference(player.collisionActor,name);
-    return {ref,initial:ref.get()};
-  });
   // Conversation subtitles are DeusExPlayer.bSubtitles (globalconfig). The
   // original ConPlay.SetupEventSpeechPost shows the first-person panel when the
   // flag is on and hides it when off with speech audio; the class default is
   // off and the shipped install sets it on in User.ini. The caller passes the
   // installed preference; the viewer exposes a discoverable toggle. Re-applied
   // on reset so Player start keeps the chosen preference.
-  const subtitlesRef=doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles');
+  // Player start logs in a new player, so resolve the field on the current one.
+  const subtitlesRef={get:()=>doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles').get(),
+    set:value=>doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles').set(value)};
   let subtitlePreference=typeof subtitles==='boolean'?subtitles:null;
   const applySubtitles=()=>{ if(subtitlePreference!==null)subtitlesRef.set(subtitlePreference); };
   applySubtitles();
@@ -229,9 +224,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // just rebuilt from the collidable set, so it must run after it.
       doors.reset();
       levelTime.set(0);
-      for(const {ref,initial} of playerVitals)ref.set(initial);
+      // The reload's Login spawned a fresh player (its own vitals and HUD).
       applySubtitles();
-      hud?.reset();
+      hud?.bindPlayer(player.collisionActor);
       interaction.frobTime=0;interaction.frobTarget=null;
     },
     get subtitles(){ return Boolean(subtitlesRef.get()); },

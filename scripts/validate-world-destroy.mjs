@@ -171,10 +171,10 @@ assert.equal(ref(trigger, 'bDeleteMe').get(), false);
 assert.equal(nativeObject.flags >>> 0, exportEntry.flags >>> 0);
 // The ledger clears session-one destruction. Original startup then recreates
 // the shadow failures and PickupDistributor0's PostPostBeginPlay destruction.
-// Reset still keeps the logged-in player, so Login's ring destruction is not
-// repeated (docs/script-player-login.md, "Reset: open").
-assert.deepEqual(startupDeletedChain({login: false}), freshStartupDeletedChain.slice(1),
-  'reset reproduces the fresh LoadMap deferred class/owner sequence');
+// Player start reloads the map and logs a new player in, so the new Login's
+// ResetPlayerToDefaults repeats the ring destruction too.
+assert.deepEqual(startupDeletedChain({login: true}), freshStartupDeletedChain,
+  'reset reproduces the exact fresh-startup deferred class/owner sequence');
 assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collision hash registration');
 
 let second = 0, reopened = false;

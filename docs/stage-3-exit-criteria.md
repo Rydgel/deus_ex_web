@@ -287,7 +287,7 @@ See [GameInfo evidence](script-loadmap-gameinfo.md).
 
 ## Batch 3 milestone C: original player Login
 
-Measured 2026-09-25: 90 probes, 4 boots, 178 s, peak 2427 MiB.
+Measured 2026-09-25: 90 probes, 4 boots, 203 s, peak 2745 MiB.
 
 | Criterion | Result |
 | --- | --- |
@@ -295,13 +295,17 @@ Measured 2026-09-25: 90 probes, 4 boots, 178 s, peak 2427 MiB.
 | 2. tick | PASS, including reset |
 | 3. interactions | OPEN: LargeTextWindow layout and unprobed Fire/AltFire (batch 4). The real player now reaches Teleporter0's `GameInfo.SendPlayer`, whose `ClientTravel` is the tolerated Stage 6 native. |
 | 4. lifecycle | OPEN: DestroyActor/CleanupDestroyed and resource loading not measured |
-| 5. substitutes | OPEN: reset keeps the logged-in player. The player-startup adapter is gone: the player, PRI and subsystems come from the original Login. |
+| 5. substitutes | Not audited by the run. The GameInfo, the player (PRI and subsystems) and Player start now come from the original LoadMap/SpawnPlayActor/Login. The player-startup adapter and the reset that kept the player are gone. |
 
-General SpawnActor: 107 classes, 3336 accepted actors, 273 original-gate
-rejections, zero throws. The 203 distinct natives reached include the newly
-recovered InitRootWindow, ResetKeyboard (through the InputExt
-ResetConfig), CheckFlag and CreateDumpLocationObject. Esc pauses the level
-through the PRI's PlayerName and ULevel::Tick's paused branch. See
-[player login](script-player-login.md). Reset still retains the player
-rather than purging it and logging in again; that section of the same page
-records it as open.
+General SpawnActor: 107 classes, 11514 accepted actors, 273 original-gate
+rejections, zero throws. The count grew because every reset now logs in a
+full player graph. The 201 distinct natives reached include the newly
+recovered InitRootWindow, ResetKeyboard (through the InputExt ResetConfig),
+CheckFlag, CreateDumpLocationObject and GETPING/StringToInt. Esc pauses the
+level through the PRI's PlayerName and ULevel::Tick's paused branch. Player
+start reloads the map and logs in `JCDentonMale<n+1>`. The original keeps
+the retired player alive through Viewport.Actor until a later garbage
+collection. Play never runs that collection: every retired generation stays
+in memory, about 5 MiB per reset. In the parallel sweep this pushed the gate
+past the runner's 6144 MiB cap (6191 MiB); it is red either way. See
+[player login](script-player-login.md).

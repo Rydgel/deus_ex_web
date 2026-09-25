@@ -276,7 +276,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
   await prepareFunction(runtime, extension, 'PlayerPawnExt.ClientMessage');
   const createThemes = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateColorThemeManager');
   await prepareFunction(runtime, deusEx, 'DeusExPlayer.InitializeSubSystems');
-  const createKeyRing = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateKeyRing');
+  await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateKeyRing');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.CreateAugmentations');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.AddDefaultAugmentations');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.GivePlayerAugmentation');
@@ -379,8 +379,6 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       manager,
       augmentations: freeze(augmentations),
       classKeys: freeze(augmentations.map(item => classKey(runtime.instance(item).cls))),
-      discardKeyRing,
-      spawnKeyRing,
       supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls))),
       locationSlots: freeze(locationDefaults.map(slot => freeze({
         numSlots: readStructMember(slot, 'NumSlots'),
@@ -389,20 +387,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       }))),
     });
   };
-  const discardKeyRing = () => {
-    const ring = runtime.namedReference(player, 'KeyRing').get();
-    if (ring) runtime.destroyActor(ring, false);
-    runtime.namedReference(player, 'KeyRing').set(null);
-    runtime.namedReference(player, 'KeyList').set(null);
-    if (runtime.namedReference(player, 'inHand').get() === ring) {
-      runtime.namedReference(player, 'inHand').set(null);
-      runtime.namedReference(player, 'inHandPending').set(null);
-    }
-  };
-  const spawnKeyRing = () => {
-    if (!runtime.namedReference(player, 'KeyRing').get()) runtime.callFunction(createKeyRing, player, 0);
-  };
-  return freeze({complete, bindPlayer, discardKeyRing, spawnKeyRing,
+  return freeze({complete, bindPlayer,
     supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls)))});
 }
 

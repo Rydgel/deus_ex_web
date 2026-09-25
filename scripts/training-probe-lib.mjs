@@ -212,7 +212,8 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     if (entry.error || entry.stillOpen) { probe = 'reboot'; await boot(); entry.rebooted = true; }
     else {
       probe = `reset:${group}:${label}`;
-      try { game.reset(); collectSwallowed(probe, {fresh: true}); }
+      // Player start logs a new player in; later probes act on that one.
+      try { game.reset(); player = game.player.collisionActor; collectSwallowed(probe, {fresh: true}); }
       catch (error) { recordError(error); entry.resetError = String(error.message).split('\n')[0]; probe = 'reboot'; await boot(); }
     }
     entry.ms = Math.round(performance.now() - started);

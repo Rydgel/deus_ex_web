@@ -65,12 +65,12 @@ rasterizer identity remain separate rendering work.
 
 ## Reset lifecycle
 
-Original player start reloads the level. The host's local reset reuses the
-player identity and clears `inHand`, `inHandPending`, `ClientInHandPending`,
-`SelectedItem`, `Weapon`, `PendingWeapon`, and `bInHandTransition` to their
-map-start values after returning pickups to the world. With native HUD active,
-original `belt.ClearBelt` runs before key-ring recreation; the recreated ring's
-`GiveTo`/`AddInventory` route restores slot zero.
+Player start reloads the level and logs a new player in
+([player login](script-player-login.md#reset-reload-and-a-second-login)).
+The previous player, its hand/weapon state, belt and HUD are retired with the
+old level. Picked-up map items return to the world with their serialized
+state. The new player's Login builds a fresh root window, belt and key ring,
+and the ring's `GiveTo`/`AddInventory` route fills slot zero.
 
 ## Focused checks
 

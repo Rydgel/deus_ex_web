@@ -26,7 +26,8 @@ const game = await createGame(decodeMap(mapAsset.bytes), mapAsset, assets, {
   onDataLinkTransmission: event => events.push(event),
 });
 const runtime = game.doors.scriptRuntime.runtime;
-const player = game.player.collisionActor;
+// Player start logs in a new player; re-read it after every reset.
+let player = game.player.collisionActor;
 const portraitAsset = await assets.get(catalog.speaker.portrait.packageName);
 const portraitObject = await runtime.objects.resolve(portraitAsset, catalog.speaker.portrait.exportIndex);
 const dynamicGraph = runtime.dynamicLoadGraph;
@@ -47,7 +48,7 @@ const tickUntil = (predicate, limit = 420) => {
 // Every map trigger must enter through its exact catalog tag and expose the
 // resolved original package objects plus its route-specific content/audio.
 for (const route of catalog.routes) {
-  game.reset();
+  game.reset();player=game.player.collisionActor;
   events.length = 0;
   const trigger = triggerFor(route);
   assert.ok(trigger, `missing live ${route.trigger.name}`);
@@ -134,7 +135,7 @@ for (const route of catalog.routes) {
 
 // The boundary remains explicit for a name that is outside the 18 authored
 // map routes; it must not fabricate a conversation or presentation.
-game.reset();
+game.reset();player=game.player.collisionActor;
 events.length = 0;
 const startRecord = runtime.lookup(player, 'StartDataLinkTransmission');
 assert.equal(runtime.callFunction(startRecord, player, 1, () => 'dl_not_authored'), false);
