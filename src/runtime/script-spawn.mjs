@@ -1,7 +1,7 @@
-import {projectileConstructorChain, projectileSelection} from './script-projectile-construction.mjs';
 import {refValue} from './script-vm.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
 import {INVENTORY_CONSTRUCTION, resolveInheritedInventoryConstructorChain} from './script-inventory-construction.mjs';
+import {NATIVE_ACTOR_CONSTRUCTORS} from './script-native-actor-constructors.mjs';
 
 /** Engine execSpawn103e36d0. Defaults are sampled between argument
  * evaluations, not together at entry. SpawnActor receives NAME_None; the
@@ -35,60 +35,57 @@ export function execScriptSpawn(call,{read,write,levelFor,spawnActor}) {
   return actor;
 }
 
-const collisionDefaults=Object.freeze([
-  'bCollideWorld','bCollideWhenPlacing','bCollideActors','bBlockActors','bBlockPlayers',
-]);
+const RF_NATIVE=0x04000000;
+const ENGINE_PAWN='engine.pawn';
+// 0x10395629-0x1039568d: FindBase considers Decoration, Inventory and Pawn
+// ancestry, in that order; 0x1039568f: Physics byte 0 or 5.
+const FIND_BASE_ANCESTRY=Object.freeze(['engine.decoration','engine.inventory',ENGINE_PAWN]);
+const FIND_BASE_PHYSICS=Object.freeze([0,5]);
 
 function classKey(cls) {
   return String(cls?.record?.key??'').toLowerCase();
 }
 
-/**
- * The script-only DataLinkPlay class must arrive here with the constructor
- * selected by Core UClass::Bind.  The callback is deliberately host-owned:
- * the class registry contains the live ClassConstructor slots, while this
- * module only checks the recovered chain/result before any level mutation.
- */
-function selectDataLinkPlayConstructor(cls,services) {
-  if(classKey(cls)!==SCRIPTED_ACTOR_CONSTRUCTION.dataLinkPlay.key)
-    throw new Error('DataLinkPlay constructor selection received the wrong class');
-  const base=cls.base,actor=base?.base;
-  if(classKey(base)!==SCRIPTED_ACTOR_CONSTRUCTION.conPlayBase.key||
-      classKey(actor)!==SCRIPTED_ACTOR_CONSTRUCTION.engineActor.key||
-      classKey(actor.base)!=='core.object')
-    throw new Error('DataLinkPlay requires the exact ConPlayBase -> Engine.Actor -> Core.Object chain');
-  if(typeof services.resolveConstructor!=='function')
-    throw new Error('DataLinkPlay Spawn requires the original UClass::Bind constructor service');
-  const selection=services.resolveConstructor(cls);
-  const expected=SCRIPTED_ACTOR_CONSTRUCTION.engineActor;
-  if(!selection||selection.classKey!==SCRIPTED_ACTOR_CONSTRUCTION.dataLinkPlay.key||
-      selection.inherited!==true||selection.constructor!==expected.internalConstructor||
-      selection.nativeVtable!==expected.vtable||
-      selection.propertiesSize!==SCRIPTED_ACTOR_CONSTRUCTION.layout.dataLinkPlayPropertiesSize)
-    throw new Error('DataLinkPlay Spawn requires the inherited Engine.Actor constructor binding');
-  return selection;
+function lineageOf(cls) {
+  const keys=[];
+  for(let node=cls;node;node=node.base)keys.push(classKey(node));
+  return keys;
 }
 
-/** Shared bounded ULevel::SpawnActor sequence for the two source-backed
- * classes. `kind` is an exact class gate; it is never a generic subclass
- * fallback. DataLinkPlay supplies the inherited constructor report to the
- * host construction boundary, then runs inherited Actor bytecode through
- * ProcessEvent just like CameraPoint.
- */
 /**
- * Shared bounded ULevel::SpawnActor sequence. The exact class key remains a
- * caller supplied admission gate: this helper is reusable for an additional
- * source-backed script Actor only when its lifecycle host explicitly admits
- * that key. It never becomes a generic Actor fallback.
+ * The native construction StaticConstructObject runs for a SpawnActor product:
+ * the class's ClassConstructor (Class+0x4e0), which the recovered UClass::Bind
+ * (script-class-bind.mjs) stored on the loaded class record by copying the
+ * nearest registered native ancestor's InternalConstructor down the chain. The
+ * row for that constructor comes from the family table the original DLLs
+ * generate (script-native-actor-constructors.mjs): its final vtable, and any
+ * member bytes the body writes besides it. Returns the selection the host's
+ * `construct` service turns into the native body.
  */
+export function nativeActorConstruction(cls,{classConstructor=node=>node?.loadRecord?.nativeConstructor}={}) {
+  const bound=classConstructor(cls);
+  if(!Number.isInteger(bound))
+    throw new Error(`SpawnActor ${classKey(cls)} has no bound ClassConstructor`);
+  for(let node=cls;node;node=node.base){
+    if(((node.metadata?.entry?.flags??0)&RF_NATIVE)===0)continue;
+    const row=NATIVE_ACTOR_CONSTRUCTORS[classKey(node)];
+    // A registered native class without an own constructor inherits its
+    // super's through Bind, so keep walking until the bound pointer's row.
+    if(!row||row.internalCtor!==bound)continue;
+    if(row.unresolved)
+      throw new Error(`SpawnActor ${classKey(cls)} native constructor ${classKey(node)} is not recovered: ${row.unresolved.split(';')[0]}`);
+    return {classKey:classKey(cls),nativeClass:classKey(node),inherited:node!==cls,constructor:bound,
+      nativeVtable:row.vtable,memberBytes:row.memberBytes??null};
+  }
+  throw new Error(`SpawnActor ${classKey(cls)} ClassConstructor 0x${bound.toString(16)} is outside the native Actor constructor family`);
+}
+
 /**
  * The recovered `ULevel::SpawnActor` prologue gates at
- * `0x10394f81`-`0x103950b0`, before any actor-array mutation and before any
- * class-specific behaviour: null class, the `Class+0x484` bit 0 abstract test
- * (`0x10394fc2`), the `AActor::PrivateStaticClass` ancestry walk, and the
- * non-editor `bStatic`/`bNoDelete` class-default test. Each logs and returns
- * null. They are ordinary reads, so a caller may run them before dispatching
- * to a subclass startup and the startup may run them again.
+ * `0x10394f81`-`0x103950b0`, before any actor-array mutation: null class, the
+ * `Class+0x484` bit 0 abstract test (`0x10394fc2`), the
+ * `AActor::PrivateStaticClass` ancestry walk, and the non-editor
+ * `bStatic`/`bNoDelete` class-default test. Each logs and returns null.
  * Returns `true` when the spawn is rejected here.
  */
 export function spawnActorRejectedByGates(args,services) {
@@ -103,97 +100,135 @@ export function spawnActorRejectedByGates(args,services) {
   return false;
 }
 
-export function spawnScriptActor(args,services,{kind,key,constructorSelection=false,nativeConstructorSelection=null}) {
-  const {cls,level,name,owner,instigator,location,rotation}=args;
+/**
+ * `ULevel::SpawnActor` (Engine.dll `0x10394f60`) for any concrete Actor class,
+ * in the recovered instruction order (docs/script-spawn.md). No class is
+ * named: construction is the class's bound ClassConstructor, and every branch
+ * — FindSpot placement, collision-hash registration, the Pawn head/foot
+ * regions, CheckEncroachment, the FindBase tail and SpawnNotify — is the
+ * original gate evaluated on the spawned actor. Editor/undo, spawn tracking,
+ * remote-owned role swapping and brush/network paths stay explicit errors.
+ */
+export function spawnActor(args,services) {
+  const {cls,level,name,owner,instigator,rotation}=args;
+  const noCollisionFail=Boolean(args.noCollisionFail);
+  const location=args.location.slice();
   const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
-    processEvent,setActorZone,validate}=services;
+    processEvent,setActorZone}=services;
   if(spawnActorRejectedByGates(args,services))return null;
-  if(classKey(cls)!==key)throw new Error(`SpawnActor ${kind} subclass startup is not implemented`);
-  if(typeof validate!=='function'||validate(args)!==true)
+  const selection=nativeActorConstruction(cls,services);
+  if(typeof services.validate!=='function'||services.validate(args)!==true)
     throw new Error('SpawnActor requires verified native defaults and complete world bindings');
-  const selected=nativeConstructorSelection??(constructorSelection?selectDataLinkPlayConstructor(cls,services):null);
-  if(selected&&selected.classKey!==key)throw new Error('SpawnActor constructor selection has a different class identity');
   if(!Array.isArray(level.actors)||!level.actors[0]||!level.nativeObject?.outer)
     throw new Error('SpawnActor requires LevelInfo and the native level Outer package');
   if(level.editor||level.undo!==null||level.spawnTracking!==false)
     throw new Error('SpawnActor editor, transaction and spawn-tracking paths are not implemented');
   if(typeof level.tickParity!=='boolean'||typeof level.spawnNotifyGuard?.active!=='boolean')
     throw new Error('SpawnActor requires level tick parity and the global notification guard');
-  if(collisionDefaults.some(field=>defaultRead(cls,field)))
-    throw new Error(`SpawnActor collision placement is outside the accepted ${kind} defaults`);
+  const levelInfo=level.actors[0];
+  // 0x103950fb-0x103951ae: a bCollideWorld template goes straight to the
+  // bNoCollisionFail test; bCollideWhenPlacing first requires LevelInfo+0x518
+  // (NetMode) != 3. FindSpot (level vtable +0xb0) gets the template's
+  // (radius, radius, height), the mutable Location, checkActors=0 and
+  // checkFirst=1; a zero return fails the spawn before any array mutation.
+  if((defaultRead(cls,'bCollideWorld')||(defaultRead(cls,'bCollideWhenPlacing')&&read(levelInfo,'NetMode')!==3))
+      &&!noCollisionFail){
+    if(typeof level.findSpot!=='function')throw new Error('SpawnActor placement requires ULevel::FindSpot');
+    const radius=defaultRead(cls,'CollisionRadius'),height=defaultRead(cls,'CollisionHeight');
+    if(!level.findSpot([radius,radius,height],location,0,1))return null;
+  }
+  // 0x103951bc-0x10395236: append, construct through the ClassConstructor,
+  // RF_Transactional, Tag = the class name.
   const index=level.actors.length;
   level.actors.push(null);
-  const options={outer:level.nativeObject.outer,name,flags:0,template:null};
-  const actor=selected
-    ?construct(cls,options,{constructorSelection:selected})
-    :construct(cls,options);
+  const actor=construct(cls,{outer:level.nativeObject.outer,name,flags:0,template:null},{constructorSelection:selection});
   level.actors[index]=actor;
   write(actor,'ObjectFlags',read(actor,'ObjectFlags')|1);
   write(actor,'Tag',cls.record.name);
-  setRegion(actor,level.actors[0],-1,0);
-  write(actor,'Level',level.actors[0]);
+  // 0x10395286-0x1039531c: Level/XLevel, Region, bTicked parity, Role warning, Brush.
+  setRegion(actor,levelInfo,-1,0);
+  write(actor,'Level',levelInfo);
   services.setNativeLevel(actor,level);
   write(actor,'bTicked',!level.tickParity);
   if(read(actor,'Role')!==4)services.warning?.({type:'SpawnRole',actor,role:read(actor,'Role')});
   if(read(actor,'Brush')!==null)write(actor,'Brush',null);
+  // 0x10395366-0x103953b4: the transform, before hash registration.
   write(actor,'Location',location);
   write(actor,'OldLocation',location);
   write(actor,'Rotation',rotation);
-  // The accepted class has no collision hash registration and no Pawn regions.
-  setRegion(actor,level.actors[0],-1,0);
+  // The collision view carries the +0x1dc bitfield the native hash and
+  // encroachment code read; it must exist before the registration gate.
+  services.installCollisionView?.(actor);
+  // 0x103953b7-0x103953cf: bCollideActors with a level hash joins it now.
+  if(read(actor,'bCollideActors')&&level.hash){
+    if(typeof services.installCollisionView!=='function')
+      throw new Error('SpawnActor hash registration requires the native collision view');
+    level.hash.addActor(actor);
+  }
+  // 0x1039541c-0x103954db: Region again; an APawn chain also resets
+  // HeadRegion (+0x33c) and then FootRegion (+0x330).
+  setRegion(actor,levelInfo,-1,0);
+  const lineage=lineageOf(cls);
+  if(lineage.includes(ENGINE_PAWN)){
+    const region={'engine.actor.pointregion.zone':levelInfo,'engine.actor.pointregion.ileaf':-1,
+      'engine.actor.pointregion.zonenumber':0};
+    write(actor,'HeadRegion',{...region});
+    write(actor,'FootRegion',{...region});
+  }
   setOwner(actor,owner);
   write(actor,'Instigator',instigator);
+  // Native vtable +0x38 InitExecution and +0x74 Spawned (the AActor bodies
+  // for every row of the constructor family), then the script events.
   initExecution(actor);
-  // Both accepted classes inherit Actor.Spawned; the host's ProcessEvent
-  // binding owns the native/script distinction at this boundary.
   processEvent(actor,'Spawned');
   processEvent(actor,'PreBeginPlay');
   processEvent(actor,'BeginPlay');
+  // 0x1039554f: the only pending-delete test in the body.
   if(read(actor,'bDeleteMe'))return null;
-  // +0x30 is reused for the appended actor index before this call.
+  // 0x10395559-0x10395572: SetActorZone(test = index==0, force=1), LastRenderTime.
   setActorZone(actor,index===0,true);
   write(actor,'LastRenderTime',-10);
   processEvent(actor,'PostBeginPlay');
-  // CheckEncroachment is called even for noncolliding actors. Its recovered
-  // early return has no effects when all three collision/block flags are clear.
-  if(read(actor,'Brush')!==null||['bCollideActors','bBlockActors','bBlockPlayers'].some(field=>read(actor,field)))
-    throw new Error('SpawnActor requires full CheckEncroachment after startup changed collision flags');
+  // 0x10395591-0x103955e8: CheckEncroachment (level vtable +0xb8) with the
+  // actor's current Location/Rotation. Its early gate (0x1039a39a-0x1039a3a9)
+  // returns false for +0x1dc & 0x0d == 0 and a null Brush without a query.
+  if(!noCollisionFail&&(read(actor,'Brush')!==null||
+      ['bCollideActors','bBlockActors','bBlockPlayers'].some(field=>read(actor,field)))){
+    if(typeof services.checkEncroachment!=='function'||typeof services.destroyActor!=='function')
+      throw new Error('SpawnActor requires the recovered CheckEncroachment and DestroyActor services');
+    if(services.checkEncroachment(actor,read(actor,'Location').map(Math.fround),read(actor,'Rotation').map(v=>v|0),0)){
+      services.destroyActor(actor);
+      return null;
+    }
+  }
   processEvent(actor,'SetInitialState');
-  // CameraPoint has no Decoration/Inventory/Pawn ancestry, so FindBase skips.
+  // 0x10395612-0x1039569c: FindBase for a null Base, bCollideWorld, one of the
+  // three ancestries and Physics 0 or 5.
+  if(read(actor,'Base')==null&&read(actor,'bCollideWorld')&&
+      FIND_BASE_ANCESTRY.some(key=>lineage.includes(key))&&
+      FIND_BASE_PHYSICS.includes(Number(read(actor,'Physics')??0))){
+    if(typeof services.findBase!=='function')throw new Error('SpawnActor FindBase requires the recovered level service');
+    services.findBase(actor);
+  }
   processEvent(actor,'PostPostBeginPlay');
+  // 0x103956b9-0x103957d1: spawn tracking, then the SpawnNotify list under
+  // the global reentrancy word. Each notifier whose ActorClass is in the
+  // spawned actor's class chain receives SpawnNotification(actor); the native
+  // passes a null result pointer, so the returned actor is discarded.
   if(level.spawnTracking!==false)throw new Error('SpawnActor tracking allocation is not implemented');
   if(!level.spawnNotifyGuard.active){
     level.spawnNotifyGuard.active=true;
-    const notify=read(level.actors[0],'SpawnNotify');
-    level.spawnNotifyGuard.active=false;
-    if(notify!==null)
-      throw new Error('SpawnNotify event return/parameter handling is not implemented');
+    try{
+      const seen=new Set();
+      for(let notify=read(levelInfo,'SpawnNotify');notify;notify=read(notify,'Next')){
+        if(seen.has(notify))throw new Error('SpawnNotify list is cyclic');
+        seen.add(notify);
+        const actorClass=read(notify,'ActorClass');
+        if(actorClass&&services.isChildOf(cls,actorClass))processEvent(notify,'SpawnNotification',[actor]);
+      }
+    }finally{level.spawnNotifyGuard.active=false;}
   }
-  // Original SpawnActor has no further pending-delete check after BeginPlay.
   return actor;
-}
-
-/** Accepted Engine SpawnActor path for the verified native CameraPoint class.
- * The world adapter must establish the native class/default/registry context
- * before mutation. Complete collision, network, undo and SpawnNotify paths
- * remain explicit boundaries. See docs/script-spawn.md for instruction order.
- */
-export function spawnScriptCameraPoint(args,services) {
-  return spawnScriptActor(args,services,{
-    kind:'CameraPoint',key:'engine.camerapoint',constructorSelection:false,
-  });
-}
-
-/** Accepted SpawnActor path for the exact script-only DataLinkPlay chain.
- * Core UClass::Bind copies Engine.Actor's ClassConstructor through
- * ConPlayBase into DataLinkPlay; the host must expose that recovered result
- * through `resolveConstructor` before this function mutates the level.
- */
-export function spawnScriptDataLinkPlay(args,services) {
-  return spawnScriptActor(args,services,{
-    kind:'DataLinkPlay',key:SCRIPTED_ACTOR_CONSTRUCTION.dataLinkPlay.key,
-    constructorSelection:true,
-  });
 }
 
 /**
@@ -298,154 +333,4 @@ export function inventorySelection(cls) {
  * evidence: DataVaultImage-admitted chains only. */
 export function inventoryImageSelection(cls) {
   return inventoryImageChain(cls)?inventorySelection(cls):null;
-}
-
-function selectInventoryConstructor(cls,chain,services) {
-  const evidence=INVENTORY_CONSTRUCTION;
-  const root=evidence.nativeRoots[chain.root];
-  if(typeof services.resolveConstructor!=='function')
-    throw new Error('Inventory Spawn requires the original UClass::Bind constructor service');
-  const selection=services.resolveConstructor(cls);
-  if(!selection||selection.classKey!==classKey(cls)||
-      selection.inherited!==true||selection.constructor!==root.internalConstructor||
-      selection.nativeVtable!==root.vtable||
-      !Number.isInteger(selection.propertiesSize)||
-      selection.propertiesSize<root.instanceSize)
-    throw new Error(`SpawnActor ${classKey(cls)} requires the inherited ${root.package}.${root.className} constructor binding`);
-  return selection;
-}
-
-/**
- * Accepted ULevel::SpawnActor path for a concrete script-only subclass of
- * `Engine.Weapon`/`Engine.Inventory` — the DataVaultImage route that pinned
- * the evidence plus the armed-NPC weapon/ammo route.  Classes are admitted by
- * their linked native-root ancestry rather than by class name. Unlike the
- * DataLinkPlay/CameraPoint path these classes carry authored
- * collision defaults (bBlockActors), so the bounded collision-default gate
- * is replaced by the original sequence actually recovered for it:
- * the pre-startup hash registration (0x103953b7-0x103953cf, before
- * SetOwner/InitExecution), the post-PostBeginPlay CheckEncroachment through
- * level vtable +0xb8 with the +0x94 DestroyActor failure edge, and the
- * FindBase tail gate (Base null + bCollideWorld + Inventory ancestry +
- * Physics in {0,5}) between SetInitialState and PostPostBeginPlay.
- */
-export function spawnScriptInventoryActor(args,services) {
-  const {cls}=args;
-  const {validate}=services;
-  if(spawnActorRejectedByGates(args,services))return null;
-  const chain=inventoryConstructorChain(cls);
-  if(!chain)
-    throw new Error(`SpawnActor ${classKey(cls)} subclass startup is not implemented`);
-  if(typeof validate!=='function'||validate(args)!==true)
-    throw new Error('SpawnActor requires verified native defaults and complete world bindings');
-  const selected=selectInventoryConstructor(cls,chain,services);
-  return spawnCollisionActor(args,services,selected,false);
-}
-
-/** AProjectile inherits Actor startup; its placement branch is recovered at
- * 0x103950fb–0x103951b6 (docs/script-crate-destruction.md). */
-export function spawnScriptProjectileActor(args,services) {
-  if(spawnActorRejectedByGates(args,services))return null;
-  if(!projectileConstructorChain(args.cls))throw new Error('Unverified Projectile constructor chain');
-  if(services.validate?.(args)!==true)throw new Error('Projectile spawn world is not verified');
-  const expected=projectileSelection(args.cls,linkedPropertiesSize(args.cls));
-  const selected=services.resolveConstructor(args.cls);
-  for(const key of ['classKey','inherited','constructor','nativeVtable','propertiesSize'])
-    if(selected?.[key]!==expected[key])throw new Error('Projectile constructor binding differs from original');
-  return spawnCollisionActor(args,services,selected,true);
-}
-
-function spawnCollisionActor(args,services,selected,projectile) {
-  const {cls,level,name,owner,instigator,rotation}=args;
-  const location=args.location.slice();
-  const {read,write,defaultRead,construct,setRegion,setOwner,initExecution,
-    processEvent,setActorZone}=services;
-  if(!Array.isArray(level.actors)||!level.actors[0]||!level.nativeObject?.outer)
-    throw new Error('SpawnActor requires LevelInfo and the native level Outer package');
-  if(level.editor||level.undo!==null||level.spawnTracking!==false)
-    throw new Error('SpawnActor editor, transaction and spawn-tracking paths are not implemented');
-  if(typeof level.tickParity!=='boolean'||typeof level.spawnNotifyGuard?.active!=='boolean')
-    throw new Error('SpawnActor requires level tick parity and the global notification guard');
-  // 0x103950fb-0x103951ae: bCollideWorld or bCollideWhenPlacing class defaults
-  // route through ULevel::FindSpot (+0xb0). Admitted Inventory defaults
-  // keep these clear; Projectile defaults exercise the recovered branch.
-  if(projectile){
-    if(defaultRead(cls,'bCollideWorld')||(defaultRead(cls,'bCollideWhenPlacing')&&read(level.actors[0],'NetMode')!==3)){
-      if(typeof level.findSpot!=='function')throw new Error('Projectile placement requires FindSpot');
-      const radius=defaultRead(cls,'CollisionRadius'),height=defaultRead(cls,'CollisionHeight');
-      if(!level.findSpot([radius,radius,height],location,0,1))return null;
-    }
-  }else if(defaultRead(cls,'bCollideWorld')||defaultRead(cls,'bCollideWhenPlacing'))
-    throw new Error('SpawnActor Inventory FindSpot placement is not implemented');
-  const index=level.actors.length;
-  level.actors.push(null);
-  const options={outer:level.nativeObject.outer,name,flags:0,template:null};
-  const actor=construct(cls,options,{constructorSelection:selected});
-  level.actors[index]=actor;
-  write(actor,'ObjectFlags',read(actor,'ObjectFlags')|1);
-  write(actor,'Tag',cls.record.name);
-  setRegion(actor,level.actors[0],-1,0);
-  write(actor,'Level',level.actors[0]);
-  services.setNativeLevel(actor,level);
-  write(actor,'bTicked',!level.tickParity);
-  if(read(actor,'Role')!==4)services.warning?.({type:'SpawnRole',actor,role:read(actor,'Role')});
-  if(read(actor,'Brush')!==null)write(actor,'Brush',null);
-  write(actor,'Location',location);
-  write(actor,'OldLocation',location);
-  write(actor,'Rotation',rotation);
-  // The collision view must exist before the original pre-startup hash gate:
-  // the native registration reads the +0x1dc bitfield the view derives.
-  if(typeof services.installCollisionView!=='function'||
-      typeof services.checkEncroachment!=='function'||
-      typeof services.findBase!=='function'||typeof services.destroyActor!=='function')
-    throw new Error('SpawnActor Inventory requires the recovered collision, encroachment, FindBase and DestroyActor services');
-  services.installCollisionView(actor);
-  // 0x103953b7-0x103953cf: the spawned actor joins the XLevel hash before
-  // SetOwner/InitExecution when +0x1dc bit 0 is set. The shipped image classes
-  // keep it clear, so the gate evaluates per class and adds nothing for them.
-  if((actor.flags??0)&INVENTORY_CONSTRUCTION.startup.preStartupHashMask&&level.hash)
-    level.hash.addActor(actor);
-  // 0x1039541c-0x10395432: the default Region re-init runs after the hash gate.
-  setRegion(actor,level.actors[0],-1,0);
-  setOwner(actor,owner);
-  write(actor,'Instigator',instigator);
-  initExecution(actor);
-  // AInventory inherits AActor's Spawned slot (vtable +0x74 -> 0x10303373).
-  processEvent(actor,'Spawned');
-  processEvent(actor,'PreBeginPlay');
-  processEvent(actor,'BeginPlay');
-  if(read(actor,'bDeleteMe'))return null;
-  setActorZone(actor,index===0,true);
-  write(actor,'LastRenderTime',-10);
-  processEvent(actor,'PostBeginPlay');
-  // 0x103955d6: CheckEncroachment is called even for noncolliding actors,
-  // with the +0x94 ULevel::DestroyActor edge on failure. The authored
-  // bBlockActors on this chain makes the general IsBlockedBy path live rather
-  // than the bounded early-return-only case.
-  // 0x103955bd/0x1039559a: the native pushes the actor's current +0x114
-  // Location and +0x120 Rotation by value, not the spawn arguments.
-  if(services.checkEncroachment(actor,read(actor,'Location').map(Math.fround),read(actor,'Rotation').map(v=>v|0),0)){
-    services.destroyActor(actor);
-    return null;
-  }
-  processEvent(actor,'SetInitialState');
-  // 0x10395612-0x1039569c: the FindBase tail. Inventory ancestry is fixed by
-  // the admission chain; the remaining gates are a null Base, the bCollideWorld
-  // flag Pickup's BeginState has just set, and Physics in {0,5}. The shipped
-  // image classes spawn Falling (2), so the gate evaluates to false here and
-  // Inventory.BecomeItem's SetPhysics(PHYS_None) reaches it later.
-  if(actor.base==null&&(actor.flags&2)&&
-      INVENTORY_CONSTRUCTION.startup.findBaseAncestry.some(key=>actor.lineage.includes(key))&&
-      INVENTORY_CONSTRUCTION.startup.findBasePhysicsValues.includes(actor.physics))
-    services.findBase(actor);
-  processEvent(actor,'PostPostBeginPlay');
-  if(level.spawnTracking!==false)throw new Error('SpawnActor tracking allocation is not implemented');
-  if(!level.spawnNotifyGuard.active){
-    level.spawnNotifyGuard.active=true;
-    const notify=read(level.actors[0],'SpawnNotify');
-    level.spawnNotifyGuard.active=false;
-    if(notify!==null)
-      throw new Error('SpawnNotify event return/parameter handling is not implemented');
-  }
-  return actor;
 }

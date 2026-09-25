@@ -20,9 +20,8 @@ import {createScriptNames} from './script-names.mjs';
 import {createScriptObjectLookup} from './script-object-lookup.mjs';
 import {prepareDataLinkFunctions} from './script-datalink-transmission.mjs';
 import {
-  SCRIPTED_ACTOR_CONSTRUCTION,resolveInheritedActorConstructor,verifyDataLinkPlayDefaults,
+  SCRIPTED_ACTOR_CONSTRUCTION,verifyDataLinkPlayDefaults,
 } from './script-scripted-actor-construction.mjs';
-import {inventoryConstructorChain,inventorySelection} from './script-spawn.mjs';
 import {refValue} from './script-vm.mjs';
 import {setActorTimer,updateActorTimer} from './script-timers.mjs';
 import {createInfoLinkTimeline,infoLinkTimelineState} from './script-infolink-timeline.mjs';
@@ -119,22 +118,12 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
   level.pendingDeleted=null;level.collisionHash=null;
   level.engine.audio=null;
 
-  const selection=resolveInheritedActorConstructor({
-    dataLinkPlay:{key:dataLinkClass.record.key,nativeConstructor:null},
-    conPlayBase:{key:dataLinkClass.base.record.key,nativeConstructor:null},
-    actor:{key:dataLinkClass.base.base.record.key,
-      nativeConstructor:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.internalConstructor,
-      nativeVtable:SCRIPTED_ACTOR_CONSTRUCTION.engineActor.vtable},
-  });
-  // Every concrete script-only Engine.Weapon/Engine.Inventory subclass is
-  // admitted by its linked native-root ancestry, so the shipped DataLink image
-  // classes and the armed-NPC weapon/ammo classes share one route instead of
-  // one class key each.
-  const admitted=cls=>cls===dataLinkClass||inventoryConstructorChain(cls)!==null;
+  // World bindings only: SpawnActor itself selects each class's bound
+  // ClassConstructor (script-spawn.mjs), so no class is admitted here.
   runtime.actorLifecycle={
-    validateSpawn:args=>admitted(args.cls)&&args.level===level,
+    validateSpawn:args=>args.level===level,
     construction:{
-      validate:args=>admitted(args.cls)&&args.outer===outer&&args.template===null,
+      validate:args=>args.outer===outer&&args.template===null,
       registry,findObject:lookup.findObject,internName:name=>names.intern(name),
       initNativeProperties:object=>{
         object.auxiliary=null;
@@ -150,12 +139,6 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
       registry,isValid:object=>registry.objects[object.index]===object,
       freeStateFrame:()=>{throw new Error('CriticalDelete reached an object with a state frame');},
       freeObject:object=>{object.released=true;},
-    },
-    resolveConstructor:cls=>{
-      if(cls===dataLinkClass)return selection;
-      const selected=inventorySelection(cls);
-      if(selected)return selected;
-      throw new Error('Live DataLink constructor received another class');
     },
   };
   runtime.nameServices={internName:text=>names.intern(text).name};

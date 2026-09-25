@@ -14,14 +14,12 @@
  * MunitionsTrooperTake conversation confiscation.
  *
  * The mission actor is spawned through the original SpawnScript bytecode
- * (a prepared Spawn route for the Info-derived, script-only Mission00), runs its
+ * and the general SpawnActor (Mission00 inherits AInfo's ClassConstructor
+ * through UClass::Bind), runs its
  * PostPostBeginPlay startup, and ticks through the same processActorTick path as
  * the map pawns — no substitute timer loop. Evidence:
  * docs/script-mission-timer.md.
  */
-import {spawnScriptActor} from './script-spawn.mjs';
-import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
-
 const MISSION00_PROPERTIES_SIZE = 0x334; // Actor 0x318 + Mission00 script fields
 
 function isDeusExLevelInfo(runtime, actor) {
@@ -56,11 +54,6 @@ export async function createLiveMissionRuntime({runtime, assets, level, player})
   const graphSize = runtime.classLoader.graph.slotOf(missionClass.loadRecord, 0x3c);
   if (graphSize !== MISSION00_PROPERTIES_SIZE)
     throw new Error(`Mission00 layout changed: PropertiesSize ${graphSize?.toString?.(16)}`);
-  const actor = SCRIPTED_ACTOR_CONSTRUCTION.engineActor;
-  const selection = {classKey: missionClass.record.key, inherited: true,
-    constructor: actor.internalConstructor, constructorBody: actor.constructorBody,
-    nativeVtable: actor.vtable, propertiesSize: MISSION00_PROPERTIES_SIZE};
-
   const levelInfoActor = () => level.actors.find(a => isDeusExLevelInfo(runtime, a));
   let missionActor = null;
 
@@ -69,22 +62,9 @@ export async function createLiveMissionRuntime({runtime, assets, level, player})
     // Only Training carries Script = Mission00; another map's level info leaves
     // Script None and SpawnScript is a no-op, exactly as the original.
     if (!dli || !get(dli, 'Script')) return;
-    const previous = runtime.actorLifecycle;
-    runtime.actorLifecycle = {...previous,
-      validateSpawn: args => args.cls === missionClass ? args.level === level : previous.validateSpawn(args),
-      construction: {...previous.construction,
-        validate: args => args.cls === missionClass
-          ? args.template === null : previous.construction.validate(args)},
-      resolveConstructor: cls => cls === missionClass ? selection : previous.resolveConstructor(cls),
-      spawnActor: (args, services) => {
-        if (args.cls !== missionClass) return previous.spawnActor(args, services);
-        const spawned = spawnScriptActor(args, services,
-          {kind: 'MissionScript', key: missionClass.record.key, nativeConstructorSelection: selection});
-        if (spawned) missionActor = spawned;
-        return spawned;
-      }};
-    try { runtime.callFunction(spawnScript, dli, 0); }
-    finally { runtime.actorLifecycle = previous; }
+    const before = new Set(level.actors);
+    runtime.callFunction(spawnScript, dli, 0);
+    missionActor = level.actors.find(a => a && !before.has(a) && runtime.instance(a).cls === missionClass) ?? null;
     // LoadMap's PostPostBeginPlay pass reaches the freshly spawned mission actor
     // (the pass re-reads the actor array); run that startup so SetTimer enrols.
     if (missionActor) runtime.processEvent(missionActor, 'PostPostBeginPlay', []);

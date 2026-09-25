@@ -174,17 +174,18 @@ export function constructDecal(object) {
   object.nativeVtable=0x10426f74;
 }
 
-/** Map a verified UClass::Bind constructor selection to this host's native
- * body. Only the recovered registrations are admitted: AActor's own
- * constructor (inherited by the scripted ConPlayBase/DataLinkPlay chain),
- * AInventory's (inherited by the DataVaultImage/Image02 chain), AWeapon's
- * (inherited by the DeusExWeapon chain), and ADecal's (inherited by Shadow). */
+/** Map a SpawnActor constructor selection (script-spawn.mjs
+ * nativeActorConstruction) to this host's native body. The selection carries
+ * the oracle-generated row of the bound ClassConstructor
+ * (script-native-actor-constructors.mjs): a body that writes nothing but its
+ * vtable runs the AActor base and installs that final vtable; the only body
+ * with member writes, ADecal's SurfList header clear, has its translation. */
 export function nativeConstructorFor(selection){
-  const constructor=selection?.constructor;
-  if(constructor===0x10302dab)return constructActorBase;
-  if(constructor===0x1030299b)return constructInventory;
-  if(constructor===0x10302ef5)return constructWeapon;
-  if(constructor===0x103014e7)return constructProjectile;
-  if(constructor===0x10303a26)return constructDecal;
-  throw new Error('Original constructor selection is not implemented');
+  if(!Number.isInteger(selection?.nativeVtable))throw new Error('Original constructor selection is not implemented');
+  if(selection.memberBytes){
+    if(selection.nativeClass==='engine.decal'&&selection.nativeVtable===0x10426f74)return constructDecal;
+    throw new Error(`Native constructor member writes are not translated for ${selection.nativeClass}`);
+  }
+  const vtable=selection.nativeVtable;
+  return object=>{constructActorBase(object);object.nativeVtable=vtable;};
 }

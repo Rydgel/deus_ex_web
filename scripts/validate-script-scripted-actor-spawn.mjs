@@ -130,9 +130,8 @@ const construction={
 const lifecycle={
   validateSpawn:args=>args.cls===dataLinkClass&&args.level===level,
   construction,
-  resolveConstructor:cls=>{assert.equal(cls,dataLinkClass);return {
-    ...constructorSelection,constructor:classRecords.get(cls).nativeConstructor,
-  };},
+  // Class+0x4e0 for this standalone world: the fixture's recovered Bind chain.
+  classConstructor:cls=>{assert.equal(cls,dataLinkClass);return classRecords.get(cls).nativeConstructor;},
 };
 runtime.actorLifecycle=lifecycle;
 

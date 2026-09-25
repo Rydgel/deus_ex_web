@@ -111,6 +111,8 @@ without `--continue`, so an unsupported native throws exactly as in Play. It:
 - tolerates only named out-of-Stage-3 boundaries (`ClientTravel` and
   `SaveGame` 3011, both Stage 6) and keeps unprobed families (Fire/AltFire)
   and unmeasured criteria (4, 5) open;
+- lists every class `ULevel::SpawnActor` was asked for, with its spawned,
+  gate-rejected and thrown counts (criterion 4's spawn part);
 - prints every non-primitive native reached through `invokeNative` and which
   of them are unsupported.
 
@@ -130,6 +132,17 @@ First scoreboard (2026-09-25, 89 probes, 4 boots, 233 s, peak 2,169 MiB):
 
 195 distinct non-primitive natives were reached; the only unsupported ones are
 the two tolerated Stage 6 natives.
+
+After the general SpawnActor (2026-09-25, 90 probes, 4 boots, 167 s, peak
+2,826 MiB; [spawn](script-spawn.md)):
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | unchanged: 240 excluded map actors, the struct-bool preparation failure |
+| 2. tick | pass |
+| 3. interactions | open: `LargeTextWindow` `XTextParams`, Fire/AltFire not probed. `Beam` is closed: AugLight's `ActivateAugmentation 9` spawns its Beams through the ALight ClassConstructor. |
+| 4. lifecycle | SpawnActor measured: 101 classes, 3,051 actors through the one general body, 0 threw; 194 null returns, all `Shadow` from the original post-BeginPlay pending-delete test, as before. DestroyActor/CleanupDestroyed and resource loading are not measured yet. |
+| 5. substitutes | per-class spawn routes removed; the GameInfo stand-in and the player-startup adapter remain |
 
 A sizing experiment that admitted every map actor to the LoadMap passes (then
 reverted) found only three failure families: the 25 movers' startup reaches

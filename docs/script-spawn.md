@@ -1,12 +1,12 @@
 # Original script `Actor.Spawn` contract
 
 This is the source-first contract for the ordinary dynamic spawn path: an
-`Actor.Spawn` call requesting a concrete, non-colliding script subclass whose
-native base is `Actor`. The accepted concrete fixture is `CameraPoint`; its
-native vtable and inherited Actor startup slots are verified below. Pawn
-startup and the special brush, network, and collision-placement branches are
-outside this bounded path; the notifier tail is included because its guards
-are part of this `SpawnActor` body. The authority is the local GOTY
+`Actor.Spawn` call requesting any concrete Actor class. The body was first
+traced for `CameraPoint`, whose native vtable and inherited Actor startup
+slots are verified below; the collision-placement, hash, encroachment,
+FindBase and notifier branches were traced with it and are implemented for
+every class (see "Implemented runtime boundary"). Pawn world binding and the
+brush and network branches remain outside the implemented path. The authority is the local GOTY
 `System/Engine.dll` (`sha256
 0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4`) and the
 embedded original `Actor.uc` declarations. Public engine headers are research
@@ -103,19 +103,24 @@ selected template/default, so default/property initialization occurs inside
 that helper before SpawnActor's post-construction stores. No separate property
 copy loop appears in SpawnActor.
 
-For a non-colliding class, the placement probe is skipped. The exact gate is
-still recorded here because the wrapper passes `bNoCollisionFail = 0`:
+The placement probe tests the selected template (the wrapper passes
+`bNoCollisionFail = 0`):
 
-* If the selected object has neither the packed `+0x1dc` bit `0x2`
+* If the template has neither the packed `+0x1dc` bit `0x2`
   (`bCollideWorld`) nor object flag `+0x28` mask `0x20000`
   (`bCollideWhenPlacing`), control goes directly to actor-array insertion
   (`0x103950fb`–`0x1039510b`).
-* Otherwise, when level mode byte `LevelInfo+0x518` is not `3` and
-  `bNoCollisionFail == 0`, the routine calls `FindSpot` through level vtable
-  `+0xb0` at `0x10395170`–`0x103951ae`. It passes the selected
-  `CollisionRadius`/`CollisionHeight` (`+0x1d4`/`+0x1d8`), the requested
-  location, and options `(checkActors=0, checkFirst=1)`. A zero return fails
-  the spawn. A nonzero `bNoCollisionFail` bypasses this probe.
+* A set `bCollideWorld` jumps straight to the `bNoCollisionFail` test at
+  `0x10395169` (`0x10395102`). Only the `bCollideWhenPlacing` path first
+  warns (non-fatally) about a missing or non-LevelInfo `Actors[0]` and
+  requires level mode byte `LevelInfo+0x518` (`NetMode`) to differ from `3`
+  (`0x10395111`–`0x10395167`).
+* With `bNoCollisionFail == 0`, the routine calls `FindSpot` through level
+  vtable `+0xb0` at `0x10395170`–`0x103951ae`. It passes the template's
+  `(CollisionRadius, CollisionRadius, CollisionHeight)` from `+0x1d4`/`+0x1d8`,
+  a pointer to the mutable spawn location, and options
+  `(checkActors=0, checkFirst=1)`. A zero return fails the spawn before any
+  array mutation. A nonzero `bNoCollisionFail` bypasses this probe.
 
 ## Native execution-frame initialization
 
@@ -419,34 +424,73 @@ Related source-backed notes: [zone.md](zone.md), [collision-hash.md](collision-h
 `.cache/reference/Actor.uc`, and `.cache/reference/UActor.h`.
 
 
+## Native constructor family
+
+`StaticConstructObject` runs the class's ClassConstructor (`Class+0x4e0`).
+Core `UClass::Bind` (`0x10127a20`, `script-class-bind.mjs`) sets it at load
+from the registered native record, or copies the nearest native ancestor's
+constructor down to a script-only class; every Play class record carries that
+bound pointer (`loadRecord.nativeConstructor`). For example, Beam binds
+ALight's `0x10302a54`, Mission00 AInfo's `0x1030348b`, AugmentationManager
+DeusEx.dll's `0x1000bf40`, and DataLinkPlay/ConPlay/BarkManager AActor's
+`0x10302dab`.
+
+`scripts/validate-native-actor-constructors.mjs` enumerates every RF_Native
+class in Engine, DeusEx, Extension and ConSys whose ancestry reaches
+`Engine.Actor` (56 classes), joins its registration row, and runs each
+registered InternalConstructor through `scripts/native-actor-constructor-oracle.py`
+on a patterned instance with Core, Engine, DeusEx, Extension and ConSys
+loaded. It records the final vtable, every byte written besides the vtable,
+the exported functions entered, and the body that the vtable's `+0x2c`
+`IsPendingKill` slot reaches through jump thunks. `--write` generates
+`src/runtime/script-native-actor-constructors.mjs`; the default mode fails
+when the committed table differs from the original DLLs.
+
+Result: 53 constructors write nothing but their vtable, so every
+template-copied member survives construction (their member constructors are
+the `ENoInit` `FName`/`FPlane`/`FString` forms). `ADecal` is the only one with
+a member write — it zeroes its 12-byte native `SurfList` header at
+`+0x320`–`+0x32b`, the existing `constructDecal` translation. The table
+reproduces the six earlier hand-recovered vtables (Actor `0x104268dc`,
+CameraPoint `0x10427178`, Inventory `0x104286f8`, Weapon `0x104287a4`,
+Projectile `0x10428850`, Decal `0x10426f74`). Every resolved vtable's
+`IsPendingKill` slot reaches `AActor::IsPendingKill` (`0x1030df80`), so
+`script-pending-kill.mjs` derives its Actor predicate from the table.
+`DeusExPlayer` and `PlayerPawnExt` stay unresolved: their constructors reach
+MSVCRT `_vsnwprintf`, which the probe does not supply, so spawning a class
+bound to them is refused.
+
 ## Implemented runtime boundary
 
-`src/runtime/script-spawn.mjs` translates the script wrapper and the accepted
-CameraPoint level sequence. `ScriptRuntime` supplies typed fields, the fresh
-construction helper, native frame initialization, original script dispatch and
-an adapter to the recovered `setActorZone`/`pointRegion` helpers. Unsupported
-classes, colliding paths, editor/undo handling and spawn-tracking allocation
-remain explicit errors; abstract and non-Actor classes follow native null
-rejection. The common script dispatcher binds native 278 to this path.
+`src/runtime/script-spawn.mjs` translates the script wrapper and
+`ULevel::SpawnActor` as one body (`spawnActor`) for every concrete Actor
+class, in the order above: prologue gates, the bound ClassConstructor's row,
+FindSpot placement, append/construct, the level/region/tick-parity/role/brush
+stores, the transform, the native collision view and `bCollideActors` hash
+registration, the Region and APawn head/foot region resets, owner and
+instigator, native InitExecution/Spawned, the script events with the one
+pending-delete test, SetActorZone and LastRenderTime, PostBeginPlay,
+CheckEncroachment (called when its early gate would query) with the
+DestroyActor failure edge, SetInitialState, the FindBase tail and the
+SpawnNotify list. No class is named and no host installs a per-class route:
+the Play lifecycle supplies only the live level, its Outer and the construction
+registry. `ScriptRuntime` supplies typed fields, fresh construction through the
+table-driven native body, frame initialization, script dispatch, the zone
+helper, the collision view, CheckEncroachment, FindBase and DestroyActor.
 
-The explicit host `level.tickParity` boolean represents the known zero/one
-value at raw `ULevel+0x10c`; it does not assert a recovered C++ member name.
-`level.spawnTracking=false` selects the zero `+0x108` branch, `level.undo=null`
-selects the null GUndo branch, and `level.spawnNotifyGuard` is the shared native
-guard representation. A nonempty notification list requires its separate
-ProcessEvent return/parameter implementation and is rejected when reached.
+Explicit errors remain for editor/undo handling, spawn-tracking allocation,
+remote-owned role swapping and the brush/network branches. A Pawn-ancestry
+class is refused before any mutation: Play binds the pawn collision view and
+the Foot/Head-region SetActorZone only for map and player pawns. A class bound
+to an unresolved constructor is refused the same way.
 
 `node scripts/validate-script-spawn.mjs` uses actual CameraPoint class defaults,
 constructor, original startup event bodies and the actual GameInfo/Mutator
-relevance chain. It supplies an explicit standalone world, name/object registry,
-native template tail and empty BSP. Checks cover append despite an earlier
-actor-array hole, unique object name versus post-startup Tag, ownership/world
-stores, LastRenderTime, bTicked, zone assignment, single shared FRand transition,
-automatic Idle-state selection and abstract-class rejection before insertion.
-The installed Idle continuation is not executed until a later actor script
-phase. This fixture establishes the scoped runtime integration; it does not
-bootstrap the map, fill the native class/resource registry, or enable arbitrary
-spawning in Play.
+relevance chain in an explicit standalone world. The Training conformance gate
+(`scripts/validate-stage3-training-conformance.mjs`) exercises the general
+route in Play: player subsystems, NanoKeyRing, NPC weapons and ammo, Shadows,
+crate fragments and contents, DataLinkPlay, ConPlay, DataVault images,
+Mission00 and AugLight's Beams.
 
 Two focused wrapper checks retain native evaluation-order edge cases: argument
 side effects change the transforms sampled by later default arguments, and a

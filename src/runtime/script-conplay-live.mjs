@@ -3,8 +3,6 @@ import {staticLoadObject} from './script-static-load-object.mjs';
 import {resolveNameNative} from './script-resolve-name.mjs';
 /** Live ConPlay services; gameplay and scheduling execute the original bytecode.
  * Evidence and explicit rendering limits: docs/script-instructor-conversation.md. */
-import {spawnScriptActor} from './script-spawn.mjs';
-import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
 import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
@@ -28,24 +26,12 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   if(playClass.base?.record.key!=='deusex.conplaybase'||playClass.base.base?.record.key!=='engine.actor'||
     playClass.metadata.classFlags!==0x32||runtime.classLoader.graph.slotOf(playClass.loadRecord,0x3c)!==0x404)
     throw new Error('ConPlay original script-only construction layout changed');
-  const actor=SCRIPTED_ACTOR_CONSTRUCTION.engineActor;
-  const selection={classKey:playClass.record.key,inherited:true,constructor:actor.internalConstructor,
-    constructorBody:actor.constructorBody,nativeVtable:actor.vtable,propertiesSize:0x404};
-  const previous=runtime.actorLifecycle;
-  const spawned=new Set();
-  runtime.actorLifecycle={...previous,
-    validateSpawn:args=>args.cls===playClass?args.level===level:previous.validateSpawn(args),
-    construction:{...previous.construction,validate:args=>args.cls===playClass
-      ?args.outer===level.nativeObject.outer&&args.template===null:previous.construction.validate(args)},
-    resolveConstructor:cls=>cls===playClass?selection:previous.resolveConstructor(cls),
-    spawnActor:(args,services)=>{
-      if(args.cls!==playClass){
-        if(!previous.spawnActor)throw new Error(`SpawnActor unprepared Actor subclass: ${args.cls.record.key}`);
-        return previous.spawnActor(args,services);
-      }
-      const play=spawnScriptActor(args,services,{kind:'ConPlay',key:playClass.record.key,nativeConstructorSelection:selection});
-      if(play)spawned.add(play);return play;
-    },
+  // ConPlay actors are whatever the original Spawn(class'ConPlay') placed in
+  // Level.Actors through the general SpawnActor; this view lists them there.
+  const isPlay=actor=>{try{return Boolean(actor)&&runtime.instance(actor).cls===playClass;}catch{return false;}};
+  const spawned={
+    has:isPlay,
+    *[Symbol.iterator](){for(const actor of [...level.actors])if(isPlay(actor))yield actor;},
   };
   // Reuse the original Training object-index capture already used by GetFrame.
   // Channel IDs are computed by execPlaySound from the same captured indices.
@@ -153,7 +139,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     // Preplaced player belongs to the loaded level's package, as in the map.
     const outer=level.nativeObject.outer;
     const object=runtime.allocateObject(cls,{outer,name:'None',flags:0,template:null},{
-      ...previous.construction,validate:args=>args.cls===cls&&args.outer===outer&&args.template===null,
+      ...runtime.actorLifecycle.construction,validate:args=>args.cls===cls&&args.outer===outer&&args.template===null,
       initNativeProperties:()=>{},
     });
     const native=runtime.instance(object).nativeObject;
@@ -195,7 +181,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       if(win&&!shell.isDestroyed(win))shell.withLifecycle(()=>runtime.callFunction(runtime.lookup(win,'Destroy'),win));
       runtime.destroyActor(play,true);
     }
-    spawned.clear();set(player,'conPlay',null);set(player,'conHistory',null);
+    set(player,'conPlay',null);set(player,'conHistory',null);
     // Match the runtime's deferred collection boundary: release script-owned
     // fields and linker ownership now; final native GC is not implemented.
     for(const object of histories)runtime.conditionalDestroy(object);

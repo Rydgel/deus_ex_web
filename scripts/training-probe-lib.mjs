@@ -124,6 +124,20 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     }
   };
 
+  // Every ULevel::SpawnActor request, by class and outcome.
+  const spawns = new Map();
+  const spawnActor = proto.spawnActor;
+  proto.spawnActor = function (args) {
+    const key = args?.cls?.linkedClass?.record?.key ?? '?';
+    const entry = spawns.get(key) ?? {key, spawned: 0, rejected: 0, failed: 0, first: probe};
+    spawns.set(key, entry);
+    try {
+      const actor = spawnActor.call(this, args);
+      if (actor) entry.spawned++; else entry.rejected++;
+      return actor;
+    } catch (error) { entry.failed++; throw error; }
+  };
+
   // Swallowed failures: Play's startup/tick loops catch into npcFailures and
   // skip the actor afterwards. `known` holds the entries already recorded.
   let known = new Map();
@@ -285,7 +299,7 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   for (const entry of plan) if (!filter || filter.test(`${entry.group}:${entry.label}`)) await run(entry);
   return {
     meta: {continue: continueMode, groups, boots},
-    probes, records, startup,
+    probes, records, startup, spawns: [...spawns.values()],
     reached: [...reached.values()].map(({probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value})),
   };
 }

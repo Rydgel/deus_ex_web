@@ -1,7 +1,6 @@
 /** Original native Decal construction and admission gates.
  * Evidence and explicit surface-attachment boundary: docs/script-decal-startup.md. */
 import {refValue} from './script-vm.mjs';
-import {spawnScriptActor} from './script-spawn.mjs';
 import {traceRay} from './ray.mjs';
 import {getAxes} from './camera.mjs';
 
@@ -174,14 +173,16 @@ export async function prepareShadowStartup(runtime,assets,level){
   }
   for(const path of ['decal.attachdecal','decal.detachdecal','actor.destroyed'])
     await runtime.prepareFunction(engine,engine.exportsByPath.get(path));
-  const lifecycle=runtime.actorLifecycle,prior={...lifecycle},construction=lifecycle?.construction;
+  const lifecycle=runtime.actorLifecycle,construction=lifecycle?.construction;
   if(!construction)throw new Error('Decal startup requires the original world construction services');
-  const outer=level.nativeObject.outer;
+  const isDecal=objectClass=>{for(let node=objectClass;node;node=node.base)if(node.record.key==='engine.decal')return true;return false;};
   lifecycle.construction={...construction,
-    validate:args=>args.cls===cls?args.outer===outer&&args.template===null:construction.validate(args),
     initNativeProperties:(object,template)=>{
       construction.initNativeProperties(object,template);
-      if(object.objectClass!==cls)return;
+      // ADecal's constructor clears its native SurfList header (the one
+      // member write in the Actor constructor family); every Decal-ancestry
+      // product binds the reflected SurfList to that native list.
+      if(!isDecal(object.objectClass))return;
       // ADecal inherits AActor's native Destroy slot (+0x24 = 10301f8c).
       // This is ConditionalDestroy, not the distinct C++ final destructor.
       object.destroy=receiver=>runtime.destroyActorBase(receiver);
@@ -191,10 +192,5 @@ export async function prepareShadowStartup(runtime,assets,level){
       });
     },
   };
-  lifecycle.validateSpawn=args=>args.cls===cls?args.level===level:prior.validateSpawn(args);
-  lifecycle.spawnActor=(args,services)=>args.cls===cls?spawnScriptActor(args,services,{
-    kind:'Shadow',key:cls.record.key,
-    nativeConstructorSelection:{classKey:cls.record.key,constructor:0x10303a26,nativeVtable:0x10426f74},
-  }):prior.spawnActor(args,services);
   return cls;
 }

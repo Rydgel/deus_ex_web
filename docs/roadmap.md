@@ -277,9 +277,9 @@ loading: a null `ClassIndex` selects the hard-coded `Core.Class` identity, so a
 class export is constructed through the metaclass, `SuperField` is installed
 from the export's `SuperIndex`, and `UClass::Bind` copies the nearest native
 `ClassConstructor` down the chain. All nine shipped DataLink image classes are
-built from the real `DeusEx.u` export table through that branch, and
-`spawnScriptInventoryActor` admits them by their linked
-`DataVaultImage -> Engine.Inventory` ancestry, so the eight beyond
+built from the real `DeusEx.u` export table through that branch, and the
+general `ULevel::SpawnActor` constructs them through the AInventory
+ClassConstructor `UClass::Bind` copied down, so the eight beyond
 `Image02_NYC_Warehouse` run the same live transfer route without being named in
 the runtime. See [the CreateExport body](script-create-export.md). The body ends
 at `Bind` and leaves `RF_NeedLoad` set, as the original does: serializing a

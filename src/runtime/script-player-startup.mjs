@@ -4,17 +4,16 @@
  * DeusExGameInfo.Login spawns JCDentonMale and then the player's
  * PostBeginPlay -> InitializeSubSystems path creates the manager objects. The
  * browser scene already owns the player identity, so this adapter links that
- * identity to the prepared bytecode and supplies only the verified generic
- * script-Actor Spawn path needed by the subsystem classes. It deliberately
+ * identity to the prepared bytecode; the subsystem classes spawn through the
+ * general SpawnActor with their bound ClassConstructors. It deliberately
  * continues through CreateKeyRing. NanoKeyRing is a script-only Inventory
- * subclass and uses that spawn path; see docs/script-nanokey.md.
+ * subclass; see docs/script-nanokey.md.
  *
  * Evidence: .cache/reference/DeusExPlayer.uc:424-550, 1249-1261;
  * AugmentationManager/CreateAugmentations and AddDefaultAugmentations in the
  * installed DeusEx.u; and .cache/original-gobjects-20260912-training-start.txt
  * slots 41705-41726.
  */
-import { spawnScriptActor } from './script-spawn.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 const freeze = value => Object.freeze(value);
@@ -163,46 +162,6 @@ async function prepareActorLineage(runtime, cls) {
     if (classKey(current) === 'engine.actor') break;
   }
   for (const current of lineage.reverse()) await prepareClassLifecycle(runtime, current);
-}
-
-function installSubsystemSpawn(runtime, level, supportedClasses) {
-  const lifecycle = runtime.actorLifecycle;
-  if (!lifecycle?.construction) {
-    throw new PlayerStartupBoundaryError(
-      'Player subsystem startup requires the linked native Actor construction host',
-      { boundary: 'Actor.StaticConstructObject' },
-    );
-  }
-  const priorValidate = lifecycle.validateSpawn;
-  const priorConstruction = lifecycle.construction;
-  const outer = level.nativeObject?.outer;
-  if (!outer) throw new Error('Player subsystem startup requires the original level Outer');
-
-  lifecycle.construction = {
-    ...priorConstruction,
-    validate: args => {
-      if (supportedClasses.has(args.cls))
-        return args.outer === outer && args.template === null;
-      return typeof priorConstruction.validate === 'function' && priorConstruction.validate(args) === true;
-    },
-  };
-  lifecycle.validateSpawn = args => {
-    if (supportedClasses.has(args.cls)) return args.level === level;
-    return typeof priorValidate === 'function' ? priorValidate(args) : false;
-  };
-  lifecycle.spawnActor = (args, services) => {
-    if (!supportedClasses.has(args.cls)) {
-      throw new PlayerStartupBoundaryError(
-        `Player startup requested an unprepared Actor subclass: ${classKey(args.cls)}`,
-        { boundary: 'Actor.Spawn', classKey: classKey(args.cls) },
-      );
-    }
-    return spawnScriptActor(args, services, {
-      kind: `Player subsystem ${args.cls.record.name}`,
-      key: args.cls.record.key,
-      constructorSelection: false,
-    });
-  };
 }
 
 function readStructMember(value, name) {
@@ -370,7 +329,12 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     await prepareActorLineage(runtime, cls);
     if (cls.nameCounter === 0) cls.nameCounter = 1;
   }
-  installSubsystemSpawn(runtime, level, supportedClasses);
+  if (!runtime.actorLifecycle?.construction || !level.nativeObject?.outer) {
+    throw new PlayerStartupBoundaryError(
+      'Player subsystem startup requires the linked native Actor construction host',
+      { boundary: 'Actor.StaticConstructObject' },
+    );
+  }
   runtime.boundaryFunctions.set(playerClientMessage.key, ({ warning: ignoredWarning } = {}) => {
     // The original event's only effect in this startup path is UI delivery;
     // do not evaluate its Sprintf argument or fabricate a viewport message.

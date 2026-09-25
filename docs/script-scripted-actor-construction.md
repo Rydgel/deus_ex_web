@@ -233,6 +233,13 @@ level callbacks. The class-specific constructor cannot be copied:
 
 ## Implemented DataLinkPlay spawn boundary
 
+> **2026-09-25:** the per-class spawn entry points named below
+> (`spawnScriptDataLinkPlay`, `spawnScriptInventoryActor` and the host
+> `resolveConstructor` service) were replaced by the one general
+> `ULevel::SpawnActor` body, which reads each class's bound ClassConstructor;
+> see [spawn](script-spawn.md) "Native constructor family". The recovered
+> sequence recorded here is unchanged.
+
 `spawnScriptDataLinkPlay` in [`src/runtime/script-spawn.mjs`](../src/runtime/script-spawn.mjs)
 accepts exactly `deusex.datalinkplay`. It checks the linked
 `DataLinkPlay -> ConPlayBase -> Engine.Actor -> Core.Object` identity chain,

@@ -196,6 +196,13 @@ is an explicit unimplemented constructor family, not an inherited body.
 
 ## SpawnActor sequence differences from the image route
 
+> **2026-09-25:** the per-class spawn entry points named below
+> (`spawnScriptDataLinkPlay`, `spawnScriptInventoryActor` and the host
+> `resolveConstructor` service) were replaced by the one general
+> `ULevel::SpawnActor` body, which reads each class's bound ClassConstructor;
+> see [spawn](script-spawn.md) "Native constructor family". The recovered
+> sequence recorded here is unchanged.
+
 `spawnScriptInventoryActor` (`docs/script-datavault-image.md`) already runs
 the recovered `ULevel::SpawnActor` order for `Engine.Inventory` ancestry. The
 weapon/ammo classes exercise the branches the image kept dormant:

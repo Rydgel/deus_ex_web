@@ -64,7 +64,7 @@ import { bindActorConversations } from './script-conversation-wrapper.mjs';
 import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
 import { RANDOM_LABEL_NATIVE, decodeRandomLabelLabels, getLabelCount, getLabel, getRandomLabel } from './script-conversation-random-label.mjs';
-import { execScriptSpawn, inventoryConstructorChain, spawnActorRejectedByGates, spawnScriptCameraPoint, spawnScriptDataLinkPlay, spawnScriptInventoryActor } from './script-spawn.mjs';
+import { execScriptSpawn, spawnActor } from './script-spawn.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -1697,12 +1697,14 @@ export class ScriptRuntime {
       ?this.relocateSpawnedActor(actor,destination,test,noCheck)
       :this.relocateMapActor(actor,destination,test,noCheck);
   }
+  /** ULevel::SpawnActor for any linked Actor class (script-spawn.mjs). The
+   * lifecycle host supplies only world bindings — the live level, its Outer
+   * and construction registry — never a per-class route. */
   spawnActor(args) {
     const cls=args.cls?.linkedClass;
     if(!cls)throw new Error('Spawn class is not linked');
     const lifecycle=this.actorLifecycle;
     const level=args.level;
-    const key=cls.record.key;
     // BSP world hits arrive as the collision query's $world sentinel; the
     // script-visible Level actor is the attached LevelInfo at actors[0], the
     // identity the original dispatch would target (Actor.SupportActor runs
@@ -1713,13 +1715,26 @@ export class ScriptRuntime {
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
       defaultRead:(cls,name)=>this.defaultValue(cls,this.lookupMember(cls,'fields',name)),
       isActorClass:cls=>{for(;cls;cls=cls.base)if(cls===this.actorClass)return true;return false;},
-      validate:input=>lifecycle?.validateSpawn?.(input),
-      resolveConstructor:cls=>lifecycle?.resolveConstructor?.(cls),
+      validate:input=>{
+        // A Pawn needs the pawn collision view and the Foot/Head-region
+        // SetActorZone this host binds only for map and player pawns.
+        for(let entry=input.cls;entry;entry=entry.base)if(entry.record.key==='engine.pawn')
+          throw new Error(`SpawnActor ${input.cls.record.key}: the Pawn spawn world binding (pawn collision view, Foot/Head SetActorZone) is not linked`);
+        return lifecycle?.validateSpawn?.(input);
+      },
+      // Class+0x4e0: the ClassConstructor UClass::Bind stored. Classes
+      // loaded through the shared graph carry it on their load record; a
+      // standalone world binds its own registry through the lifecycle.
+      classConstructor:cls=>typeof lifecycle?.classConstructor==='function'
+        ?lifecycle.classConstructor(cls):cls?.loadRecord?.nativeConstructor,
+      isChildOf:(child,classRef)=>{
+        const record=classRef?.linkedClass?.record??classRef?.record??classRef;
+        for(let entry=child;entry;entry=entry.base)if(entry.record===record)return true;
+        return false;
+      },
       construct:(cls,options,context)=>{
         const identity=this.constructObject(cls,options,
-          context?.constructorSelection
-            ?{...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)}
-            :lifecycle.construction);
+          {...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)});
         // Every SpawnActor product is an actor: bind the same native
         // destructor chain mapActorNativeObject installs on map exports —
         // ConditionalDestroy -> AActor::Destroy (auxiliary object slot empty)
@@ -1736,13 +1751,12 @@ export class ScriptRuntime {
         if(!state||!level?.actors||level.actors[0]!==this.namedReference(actor,'Level').get())
           this.warning?.({type:'ActorInitExecution',actor});
       },
-      processEvent:(actor,name)=>this.processEvent(actor,name),
+      processEvent:(actor,name,eventArgs)=>this.processEvent(actor,name,eventArgs),
       setActorZone:(actor,test,force)=>this.setSpawnActorZone(actor,test,force),
-      // The collision-carrying subclasses (currently the admitted Inventory
-      // chain) run the recovered pre-startup hash gate, the real
-      // CheckEncroachment and the FindBase tail instead of the bounded
-      // no-collision path. The view reads and writes the object's own field
-      // storage, so natives dispatched later see the same state.
+      // Every spawned (non-Pawn) actor carries the native collision view: the
+      // hash gate, CheckEncroachment, FindBase and later natives read the
+      // +0x1dc bitfield through it. It reads and writes the object's own
+      // field storage, so natives dispatched later see the same state.
       installCollisionView:actor=>{
         const lineage=[];
         for(let entry=cls;entry;entry=entry.base)lineage.push(entry.record.key);
@@ -1762,21 +1776,7 @@ export class ScriptRuntime {
       destroyActor:actor=>this.destroyActor(actor,false),
       warning:this.warning,
     };
-    // The original prologue gates reject null/abstract/non-Actor/static
-    // classes before any class-specific behaviour, so they precede this
-    // runtime's subclass-startup admission gate.
-    if(spawnActorRejectedByGates({...args,cls},services))return null;
-    const spawn=key==='deusex.datalinkplay'?spawnScriptDataLinkPlay
-      // Admitted by linked script-only ancestry down to the native
-      // Engine.Weapon/Engine.Inventory root, which is what UClass::Bind's
-      // constructor copy-down actually depends on, rather than by class name.
-      :inventoryConstructorChain(cls)?spawnScriptInventoryActor
-      :key==='engine.camerapoint'?spawnScriptCameraPoint
-      :typeof lifecycle?.spawnActor==='function'
-        ?(spawnArgs,spawnServices)=>lifecycle.spawnActor(spawnArgs,spawnServices)
-        :null;
-    if(!spawn)throw new Error(`SpawnActor ${key} subclass startup is not implemented`);
-    return spawn({...args,cls},services);
+    return spawnActor({...args,cls},services);
   }
   destroyActor(receiver,netForce=false) {
     if(!this.actorLifecycle)throw new Error('Actor.Destroy requires linked world lifecycle services');

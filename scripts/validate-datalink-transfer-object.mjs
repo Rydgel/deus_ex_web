@@ -10,9 +10,9 @@
  *      pins (ConSys.dll ConEventTransferObject::BindActor 0x1000bc40: toName
  *      'JCDenton' -> toActor, fromName 'AlexJacobson' unmatched in an InfoLink,
  *      StaticLoadObject('DeusEx','Image02_NYC_Warehouse') -> giveObject).
- *   2. A real DataLinkPlay is created through the admitted original
- *      ULevel::SpawnActor subclass startup (script-spawn.mjs
- *      spawnScriptDataLinkPlay), not runtime.attach, and its ConPlayBase
+ *   2. A real DataLinkPlay is created through the general original
+ *      ULevel::SpawnActor (script-spawn.mjs spawnActor), not
+ *      runtime.attach, and its ConPlayBase
  *      fields are populated the way the live lifecycle leaves them.
  *   3. The prepared ConPlayBase.SetupEventTransferObject body runs under
  *      runtime.callFunction with an out-param nextLabel cell.  Its DataLink

@@ -165,6 +165,13 @@ selection through `nativeConstructorFor`, which maps `0x1030299b` to
 
 ## SpawnActor startup sequence
 
+> **2026-09-25:** the per-class spawn entry points named below
+> (`spawnScriptDataLinkPlay`, `spawnScriptInventoryActor` and the host
+> `resolveConstructor` service) were replaced by the one general
+> `ULevel::SpawnActor` body, which reads each class's bound ClassConstructor;
+> see [spawn](script-spawn.md) "Native constructor family". The recovered
+> sequence recorded here is unchanged.
+
 `spawnScriptInventoryActor` (`src/runtime/script-spawn.mjs:238-321`) runs the
 recovered `ULevel::SpawnActor` (`0x10394f60`) order for the single admitted
 class key `deusex.image02_nyc_warehouse` (`:243-244`; runtime dispatch at

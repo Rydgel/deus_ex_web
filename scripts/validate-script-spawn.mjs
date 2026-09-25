@@ -8,6 +8,7 @@ import {createScriptNames} from '../src/runtime/script-names.mjs';
 import {createScriptObjectLookup} from '../src/runtime/script-object-lookup.mjs';
 import {pointRegion} from '../src/runtime/zone.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
+import {findNativeClassConstructor} from '../src/runtime/script-native-class-registry.mjs';
 
 const {runtime,engine,levelInfo,game,mutator,cameraClass,rng}=await createStartupFixture();
 const ref=(actor,name)=>runtime.namedReference(actor,name);
@@ -45,6 +46,9 @@ runtime.actorLifecycle={
     initNativeProperties:object=>{object.auxiliary=null;runtime.instance(object.identity).sleepTimeLeft=0;},
     nativeConstructor:constructCameraPoint,
   },
+  // Class+0x4e0 for this standalone world: UClass::Bind's autoclass lookup
+  // finds CameraPoint's own Engine.dll registration.
+  classConstructor:cls=>{assert.equal(cls,cameraClass);return findNativeClassConstructor('Engine','CameraPoint');},
 };
 const priorLevelFor=runtime.levelFor;
 runtime.levelFor=actor=>actor===caller?level:priorLevelFor(actor);

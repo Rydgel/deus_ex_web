@@ -19,11 +19,13 @@ check `scripts/validate-mission-timer.mjs`.
 (`mapName = 00_Training`, `missionNumber = 0`); no mission actor is pre-placed.
 `DeusExLevelInfo.PostBeginPlay → SpawnScript` runs an
 `AllActors(class'MissionScript')` dedup check and then `Spawn(Script)`. The
-runtime spawns the actor through that original `SpawnScript` bytecode with a
-prepared `Spawn` route for the Info-derived, script-only `Mission00`
-(`PropertiesSize 0x334` = Actor `0x318` + the mission's script fields;
-constructed through the shared `Engine.Actor` constructor like ConPlay /
-DataLinkPlay). The dedup means a second `SpawnScript` never adds a second actor.
+runtime spawns the actor through that original `SpawnScript` bytecode and the
+general `SpawnActor` ([spawn](script-spawn.md)). The Info-derived, script-only
+`Mission00` (`PropertiesSize 0x334` = Actor `0x318` + the mission's script
+fields) is constructed through the ClassConstructor `UClass::Bind` copied from
+its nearest native ancestor, `Engine.Info` (`0x1030348b`, vtable
+`0x104272d0`). An earlier route constructed it through AActor's constructor,
+which gave it the wrong native vtable. The dedup means a second `SpawnScript` never adds a second actor.
 
 `MissionScript.PostPostBeginPlay` runs `SetTimer(checkTime, True)` with
 `checkTime = 1.0`, so the actor's `TimerRate/bTimerLoop` enrol a one-second

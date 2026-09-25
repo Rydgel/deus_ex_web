@@ -2071,7 +2071,7 @@ export async function createScriptDoors({
   // Eagerly link every pawn class's script surface and decode its mesh before
   // the initial reset() runs the NPC startup chain synchronously.
   await prepareNpcs();
-  await prepareCrateLifecycle({runtime,assets,level,decorations:npcDecorations,
+  await prepareCrateLifecycle({runtime,assets,decorations:npcDecorations,
     prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
   // The original has every function and state of its loaded script packages in
   // memory before LoadMap runs BeginPlay. The VM links/compiles bodies

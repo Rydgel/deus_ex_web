@@ -26,7 +26,7 @@
  *   .cache/reference/Inventory.uc:282-293 BecomePickup
  *   .cache/reference/Inventory.uc:604-760 auto state Pickup
  *   src/runtime/script-inventory-construction.mjs  recorded construction contract
- *   src/runtime/script-spawn.mjs:238-321           spawnScriptInventoryActor
+ *   src/runtime/script-spawn.mjs                   spawnActor (general SpawnActor)
  *   docs/script-datavault-image.md                 the written route
  */
 import assert from 'node:assert/strict';

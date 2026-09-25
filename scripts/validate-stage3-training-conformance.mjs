@@ -15,8 +15,11 @@
  *   3. interactions — every probe completes and closes its screen, with only
  *      the explicit out-of-Stage-3 boundaries below; families not yet probed
  *      keep the criterion open;
- *   4/5. lifecycle generality and host substitutes are not measured by this run
- *      and keep the gate open until they are.
+ *   4. lifecycle — every SpawnActor request goes through the one general body
+ *      (script-spawn.mjs); the run lists each class it spawned and fails on a
+ *      spawn that threw. Destroy/CleanupDestroyed and resource loading are not
+ *      measured yet and keep the criterion open;
+ *   5. host substitutes are not measured by this run and keep the gate open.
  *
  * It also prints every non-primitive native the run reached, so the reachable
  * native tail is a measured number rather than an estimate.
@@ -46,8 +49,8 @@ const UNPROBED = Object.freeze([
 ]);
 // Exit criteria this run does not measure.
 const UNMEASURED = Object.freeze([
-  {criterion: 4, text: 'lifecycle generality: SpawnActor (incl. FindSpot), DestroyActor/CleanupDestroyed and resource load on the general route'},
-  {criterion: 5, text: 'no host substitutes (the GameInfo stand-in, the player-startup adapter, per-class spawn routes)'},
+  {criterion: 4, text: 'lifecycle generality: DestroyActor/CleanupDestroyed and resource load on the general route (SpawnActor is measured below)'},
+  {criterion: 5, text: 'no host substitutes (the GameInfo stand-in, the player-startup adapter)'},
 ]);
 
 if (!argv.includes('--child')) await parent();
@@ -126,8 +129,13 @@ async function parent() {
     criteria.push({id: 3, name: 'interactions', failures,
       tolerated: distinct(tolerated).map(({key, count}) => `${key} (x${count}; stage ${allowed(tolerated.find(record => describe(record) === key)).stage})`)});
   }
-  for (const {criterion, text} of UNMEASURED)
-    criteria.push({id: criterion, name: criterion === 4 ? 'lifecycle' : 'substitutes', failures: [`not measured: ${text}`]});
+  const spawns = data.spawns ?? [];
+  for (const {criterion, text} of UNMEASURED) {
+    const failures = [`not measured: ${text}`];
+    if (criterion === 4) for (const entry of spawns.filter(entry => entry.failed))
+      failures.push(`SpawnActor ${entry.key} threw ${entry.failed}x (first ${entry.first})`);
+    criteria.push({id: criterion, name: criterion === 4 ? 'lifecycle' : 'substitutes', failures});
+  }
 
   const nonPrimitive = reached.filter(entry => entry.index !== 0 || entry.name);
   const unsupported = nonPrimitive.filter(entry => entry.unsupported);
@@ -142,6 +150,11 @@ async function parent() {
     if (criterion.failures.length > 25) console.log(`    … ${criterion.failures.length - 25} more in ${path.relative(root, out)}`);
     for (const entry of criterion.tolerated ?? []) console.log(`    tolerated: ${entry.slice(0, 200)}`);
   }
+  console.log(`\nSpawnActor (general route): ${spawns.length} classes, ` +
+    `${spawns.reduce((sum, entry) => sum + entry.spawned, 0)} actors spawned, ` +
+    `${spawns.reduce((sum, entry) => sum + entry.rejected, 0)} rejected by original gates, ` +
+    `${spawns.reduce((sum, entry) => sum + entry.failed, 0)} threw`);
+  console.log(`    ${spawns.map(entry => `${entry.key}${entry.failed ? '!' : ''}`).sort().join(' ')}`);
   console.log(`\nNatives reached through invokeNative: ${nonPrimitive.length} distinct, ${unsupported.length} unsupported` +
     ' (VM primitive-switch natives are not counted)');
   for (const entry of unsupported.sort((a, b) => b.probes - a.probes))
