@@ -344,12 +344,11 @@ back into `Level.Actors`.
 * `InitializeInventory`'s ownerless `spawn(AmmoName)` branch: not reached by
   the Training data (ammo already present from the slot loop).
 * `MoveActor` rider recursion for a rider that is a map actor (host identity)
-  is now handled for the **held-item** case: a based Inventory-ancestry rider
-  with no collision and `PHYS_None` runs the recovered light body through
-  `ScriptRuntime.moveHeldRider` (the player's picked-up items —
-  [item pickup](script-item-pickup.md#carrying-a-picked-up-item-while-walking)).
-  A non-view rider that itself collides or carries riders still raises the
-  explicit error; only spawned collision-view riders take the full `playerMove`
+  runs the same `playerMove` body on the map actor's native surface
+  (`ScriptRuntime.moveMapRider`, [map-actor move](script-map-actor-move.md)):
+  the player's picked-up items and a carried decoration. A pawn or brush
+  rider still raises the explicit error; spawned collision-view riders take
+  the full `playerMove`
   body.
 * Non-pawn source `CheckEncroachment` inside `MoveActor` (`0x10399bf5`) is
   now part of the shared move for callers that supply the service; the
@@ -413,8 +412,9 @@ Implemented 2026-09-20. What landed:
   `playerMove` calls it between the move resolution and the hash
   remove/commit, and the non-pawn `CheckEncroachment` tail
   (`0x10399bb5`–`0x10399c8e`) runs for callers that supply the service.
-  `ScriptRuntime.moveSpawnedActor` is the recursive rider entry; it admits
-  only spawned collision views and passes the authored `bIgnoreBases=1`, so a
+  `ScriptRuntime.moveSpawnedActor` is the recursive rider entry; it runs
+  spawned collision views directly and map actors through `moveMapRider`,
+  both with the authored `bIgnoreBases=1`, so a
   colliding item is not blocked by the base carrying it.
 * **Attachment.** `GiveTo`/`AddInventory`/`SetBase`/`SetPhysics` run through
   the existing recovered bindings; the items land in the pawn's inventory
@@ -423,7 +423,7 @@ Implemented 2026-09-20. What landed:
 * **Ticking.** The host iterates `Level.Actors` in array order: serialized
   pawns plus every runtime-spawned `Engine.Inventory` actor (Shadows stay
   unticked per the recorded Decal boundary). `Actor.Tick`'s pawn tail
-  `FarMoveActor` slot is now linked to `relocateSpawnedActor` (the recovered
+  `FarMoveActor` slot is now linked to `ScriptRuntime.farMoveActor` (the recovered
   `0x10398ba0` body incl. the `child.Base` detach through `SetBase`); the
   Training NPCs' `Weapon = None` leaves it unexercised.
 * **Reset lifecycle.** `resetNpcs` destroys every tracked runtime-spawned

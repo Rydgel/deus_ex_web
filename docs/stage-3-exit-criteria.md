@@ -136,12 +136,12 @@ frontier:
 | | `CheckboxWindow` family not admitted — **closed**; Goals opens and closes | ShowGoalsWindow |
 | | `XRadioBoxWindow::DescendantRemoved` `0x10038cb0` on close — **closed**; Inventory opens and closes | ShowInventoryWindow |
 | Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` (config store); 264 `PlaySound` in `DestroyWindow` | Goals, MedicalBot, RepairBot close |
-| Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) | Plant2, two crates, FlagTrigger0 |
-| | `MoveActor` for a non-spawned rider (pickup) | CombatKnife, Candybar, HazMatSuit |
-| Exec invocation | exec with omitted optional parameters | PutInHand, DropItem |
-| | null-Context result shape | SwitchAmmo |
-| Spawn admission | `Beam` subclass | ActivateAugmentation 9 (AugLight) |
-| Resource graph | `DynamicLoadObject` of `DXFonts` | ShowMainMenu |
+| Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) — **closed** ([map-actor move](script-map-actor-move.md)); lift, carry, throw and Player start | Plant2, two crates, FlagTrigger0 |
+| | `MoveActor` for a non-spawned rider (pickup) — **closed**; Candybar and HazMatSuit were a reset leak | CombatKnife, Candybar, HazMatSuit |
+| Exec invocation | exec with omitted optional parameters — **closed** ([console exec](script-console-exec.md)) | PutInHand, DropItem |
+| | null-Context result of a native token — **closed** ([null context](script-null-context.md)) | SwitchAmmo |
+| Spawn admission | `Beam` subclass: needs the collision view, `MakeNoise`/`AIStartEvent`, and a light that renders only in Stage 4 | ActivateAugmentation 9 (AugLight) |
+| Resource graph | `DynamicLoadObject` of `DXFonts`: `Engine.Font` is a native-only class whose registration and `UFont::Serialize` are unrecovered, and the prepared graph models first-load for one path only | ShowMainMenu |
 | Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (Lamp.Frob, AugLight) | QuickSave, Teleporter0 |
 
 The SDK headers ([SDK reference](sdk-reference.md)) name each screen row's exact
@@ -149,10 +149,14 @@ retail functions. `CheckboxWindow` adds `Init`, `CleanUp`,
 `ParentRequestedPreferredSize` and `Draw` to the recovered toggle chain. The
 Inventory row is `XTextWindow::ParentRequestedGranularity` `0x10046880`.
 
-Choose work by family, not by site. The two movement rows use the
-already-recovered `MoveActor`/`FarMoveActor` bodies, which Play admits only
-for the player, spawned views and held items. Admitting map actors closes all
-seven probes in one change. `PlaySound` is admitted one exact caller at a time
+Choose work by family, not by site. The two movement rows used the
+already-recovered `MoveActor`/`FarMoveActor` bodies, which Play admitted only
+for the player, spawned views and held items. Admitting map actors closed all
+seven probes in one change. After that batch and the console-exec and
+native-token Context changes, the census reads 88 probes and 2 ending on a
+boundary (Beam, DXFonts). The remaining unsupported natives are
+`SaveConfig` 536, `PlaySound` 264 (screen close, `Lamp.Frob`), and the
+Stage 4/5 `SaveGame`/`ClientTravel`. `PlaySound` is admitted one exact caller at a time
 ([bot activation](script-window-bot-activation.md)). A static bytecode check
 that each call discards the channel id could admit every such caller in one
 change.

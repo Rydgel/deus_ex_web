@@ -16,7 +16,8 @@ import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
-import { setActorCollisionSize, findActorBase } from './script-actor-collision.mjs';
+import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionArguments } from './script-actor-collision.mjs';
+import { COLLISION_FIELD_BITS, writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
 import { setBase } from './walking-callbacks.mjs';
 import { setActorZone } from './zone.mjs';
 import { pawnPhysicsView } from './script-pawn-physics.mjs';
@@ -299,6 +300,31 @@ function makeBinding(record, field) {
     },
   };
   if (dynamic[key]) return dynamic[key];
+  // The AActor +0x1dc collision bools are bits of the native word the
+  // collision hash, line filter and move bodies read (map-actor-native.mjs),
+  // so a script write such as DeusExPlayer's `bCollideWorld = False` on a
+  // carried decoration changes that word, as it does in the original. Every
+  // collidable map export has the word from level load; the controlled player
+  // keeps its own movement port.
+  const collisionBit = COLLISION_FIELD_BITS[key];
+  if (collisionBit && !host.controlledPlayer && Number.isInteger(host.flags)) return {
+    get: () => Boolean(host.flags & collisionBit),
+    set: value => writeCollisionFlags(host, value ? host.flags | collisionBit : host.flags & ~collisionBit),
+  };
+  // FarMoveActor writes bJustTeleported (+0x1ed bit0, the +0x1ec word's 0x100)
+  // and OldLocation (+0x12c) on the native actor. A non-pawn map actor's move
+  // bodies run on this host, so those fields are its members once written.
+  if ((key === 'bjustteleported' || key === 'oldlocation') && isMapMoveHost(host)) {
+    const initial = () => record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field);
+    if (key === 'bjustteleported') return {
+      get: () => host.motionFlags === undefined ? initial() : Boolean(host.motionFlags & 0x100),
+      set: value => { host.motionFlags = (((host.motionFlags ?? (initial() ? 0x100 : 0)) & ~0x100) | (value ? 0x100 : 0)) >>> 0; },
+    };
+    return {
+      get: () => host.oldLocation === undefined ? initial() : vector(host.oldLocation),
+      set: value => { host.oldLocation = vector(value); },
+    };
+  }
   // ULevel::SetActorZone (0x1039b940) stores straight into the linked
   // Region (+0xc8), FootRegion (+0x330) and HeadRegion (+0x33c) properties.
   // The player scene runs that translated body on the controlled player and
@@ -694,6 +720,20 @@ export async function createScriptDoors({
       minimum.set(vector(bounds.min)); maximum.set(vector(bounds.max));
       return undefined;
     }
+    if (call.index === 262 && !call.receiver?.controlledPlayer && Number.isInteger(call.receiver?.flags)) {
+      // execSetCollision 0x103e1900 -> AActor::SetCollision 0x10369200 on the
+      // map actor's native word: skipped arguments keep the current bits, the
+      // hash registration is removed while colliding and re-added when the
+      // new word collides (script-actor-collision.mjs).
+      if(call.argumentCount>3)throw new Error('SetCollision accepts at most three boolean arguments');
+      const receiver=call.receiver,hash=runtime.levelFor(receiver)?.hash;
+      if(!hash)throw new Error('Map actor SetCollision requires the level collision hash');
+      const [collide,blockActors,blockPlayers]=setCollisionArguments(receiver,call.argumentCount,
+        index=>refValue(call.evaluateArgument(index)));
+      setActorCollision(receiver,collide,blockActors,blockPlayers,{level:{hash}});
+      writeCollisionFlags(receiver,receiver.flags);
+      return undefined;
+    }
     if (call.index === 262) {
       if(call.argumentCount>3)throw new Error('SetCollision accepts at most three boolean arguments');
       const collide=call.argumentCount>0?Boolean(refValue(call.evaluateArgument(0))):false;
@@ -1085,7 +1125,7 @@ export async function createScriptDoors({
     // a pawn carries a weapon. Training's NPCs keep Weapon = None, so this is
     // linked but unexercised by them (docs/script-npc-weapon-startup.md).
     farMoveActor: (actor, destination, test, noCheck) =>
-      runtime.relocateSpawnedActor(actor, destination, test, noCheck),
+      runtime.farMoveActor(actor, destination, test, noCheck),
   };
 
   // Non-Pawn AActor::performPhysics (actor-physics.mjs), reached from the
@@ -1131,9 +1171,7 @@ export async function createScriptDoors({
   });
 
   runtime.relocation={actorFor:actor=>actor,
-    farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.collisionViewActors.has(actor)
-      ?runtime.relocateSpawnedActor(actor,destination,test,noCheck)
-      :runtime.relocateHeldItem(actor,destination)};
+    farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.farMoveActor(actor,destination,test,noCheck)};
 
   // Runtime-spawned actors (NPC inventory items, spawned Shadows) live at the
   // tail of Level.Actors. Track them separately from the serialized map set:
@@ -1418,10 +1456,19 @@ export async function createScriptDoors({
       } else prevInv = invItem;
       invItem = nextInv;
     }
+    // A picked-up item rode its owner (Base) with a live collision cylinder
+    // (map-actor-native.mjs linkLiveCollision); it returns to its serialized
+    // Location and Base inside the rebuilt hash's remove/re-add, like a
+    // decoration below. prepareActor already restored its collision word.
     for (const actor of npcPickups) {
       try {
         identities.get(actor).store.clear();
-        if (actor.values?.Location) actor.position = [...actor.values.Location];
+        const restore = () => {
+          if (actor.values?.Location) actor.position = [...actor.values.Location];
+          actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+        };
+        if (level.hash && actor.collisionValues && actor.collideActors !== false) level.hash.changeActor(actor, restore);
+        else restore();
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
@@ -1446,10 +1493,11 @@ export async function createScriptDoors({
     }
     // The original Player start reloads the level, giving a fresh player with an
     // empty hand and no drawn weapon; this host reuses the player identity, so
-    // clear the in-hand / weapon selection it may have made in Play. The selected
-    // item itself is a serialized pickup already returned to the world above; at
-    // map start these player fields are None/false (their class defaults).
-    for (const field of ['inHand', 'inHandPending', 'ClientInHandPending', 'SelectedItem', 'Weapon', 'PendingWeapon'])
+    // clear the in-hand / weapon selection and carried decoration it may have
+    // made in Play. The selected item or decoration is a serialized actor
+    // already returned to the world above; at map start these player fields
+    // are None/false (their class defaults).
+    for (const field of ['inHand', 'inHandPending', 'ClientInHandPending', 'SelectedItem', 'Weapon', 'PendingWeapon', 'CarriedDecoration'])
       runtime.namedReference(playerActor, field).set(null);
     runtime.namedReference(playerActor, 'bInHandTransition').set(false);
     // A held fire button does not survive the reload either (input byte 0).

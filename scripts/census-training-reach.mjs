@@ -181,7 +181,7 @@ async function child() {
   const run = async ({group, label, body, frames = 30}) => {
     const started = performance.now();
     probe = `${group}:${label}`;
-    const entry = {group, label};
+    const entry = {group, label}, recordedFrom = records.length;
     try {
       body(); tick(frames);
       for (let attempt = 0, open; attempt < 3 && (open = topModal()); attempt++) {
@@ -190,6 +190,9 @@ async function child() {
       }
       if (topModal()) entry.stillOpen = classKey(topModal()) ?? '?';
     } catch (error) { recordError(error); entry.error = String(error.message).split('\n')[0]; }
+    // game.use() turns some failures into a message; the recorded throw still
+    // leaves partial state (a half-lifted decoration), so it dirties the game.
+    entry.error ??= records.slice(recordedFrom).find(record => record.kind === 'error')?.message;
     if (entry.error || entry.stillOpen) { probe = 'reboot'; await boot(); entry.rebooted = true; }
     else try { game.reset(); } catch (error) { recordError(error); entry.resetError = String(error.message).split('\n')[0]; probe = 'reboot'; await boot(); }
     entry.ms = Math.round(performance.now() - started);
@@ -245,10 +248,13 @@ async function child() {
     const skip = /^(Axis|Button|Toggle |Fire|AltFire|Jump|Duck|Walking|Strafe|Look|Turn|Move|CenterView|QuickLoad|Shot)\b/i;
     // An [Engine.Input] alias (MoveForward, LookUp, ...) expands to input axes/buttons.
     for (const command of [...commands].filter(command => command && !skip.test(command) && !aliases.has(command.split(/\s+/)[0].toLowerCase()))) {
-      const [name, ...rest] = command.split(/\s+/);
+      const [name] = command.split(/\s+/);
       if (!has(player, name)) { probes.push({group: 'exec', label: command, error: `no player exec function ${name}`}); continue; }
-      const args = rest.map(Number);
-      plan.push({group: 'exec', label: command, body: () => game.hud.scoped(() => runtime.dispatchSpawnedEvent(player, name, args))});
+      // The command line itself goes through the translated
+      // UObject::ScriptConsoleExec, which parses its arguments.
+      plan.push({group: 'exec', label: command, body: () => game.hud.scoped(() => {
+        if (!runtime.scriptConsoleExec(player, command)) throw new Error(`ScriptConsoleExec did not consume ${command}`);
+      })});
     }
   }
   const only = flag('--only') ? new RegExp(flag('--only'), 'i') : null;

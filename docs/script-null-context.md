@@ -261,3 +261,15 @@ Against the installed `Engine.u`, the helper prepared all three Contexts in
 and `Mutator.IsRelevant` bool returns. These checks used `ScriptRuntime`'s
 full object identities and class loader; no function body was prepared by the
 context-result helper itself.
+
+### Native tokens (2026-09-24)
+
+A final native call is compiled as its `GNatives` token (`op: 'native'`,
+e.g. `inHand.IsA('DeusExWeapon')` → 303) and carries no function reference.
+The compiler resolved it through the Context object's class, so preparation
+follows the same `ObjectProperty` class link. Then, in that class chain, it
+selects the serialized function whose `iNative` equals the token, and reads
+its `ReturnParm` as for a final call. The encoded width check is unchanged.
+`DeusExPlayer.SwitchAmmo` with `inHand` None now logs `Accessed None` and
+skips `CycleAmmo`, as in the original. Before this change it stopped on
+`Unsupported null Context result at offset 12`.

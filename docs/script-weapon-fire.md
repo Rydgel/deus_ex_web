@@ -89,9 +89,10 @@ the weapon-equip doc. The fix is to tick the weapon exactly as
   `!TickTag`, the `SpawnActor` value (`script-spawn.mjs`).
 - **The pawn tail.** After the player route, `Actor.Tick`'s pawn tail
   `FarMoveActor(Weapon, Location, 0, 0)` runs on the drawn weapon
-  (`ScriptRuntime.relocateHeldItem`). It is the recovered `FarMoveActor` body
-  for a non-colliding held item: set `bJustTeleported`, write
-  `Location = OldLocation = destination`, then `SetActorZone(item, 0, 0)`. The
+  (`ScriptRuntime.farMoveActor`, [map-actor move](script-map-actor-move.md)).
+  It is the recovered `FarMoveActor` body. For a non-colliding held item it
+  sets `bJustTeleported`, writes
+  `Location = OldLocation = destination` and runs `SetActorZone(item, 0, 0)`. The
   weapon therefore sits at JC's Location every frame instead of keeping its
   pickup offset.
 - **Class chains at load.** A ticked `DeusExWeapon.Tick` (`CalculateAccuracy`,

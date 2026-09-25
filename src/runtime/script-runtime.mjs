@@ -24,6 +24,7 @@ import { setBase } from './walking-callbacks.mjs';
 import { playerMove } from './player-move.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { farMoveActor } from './relocation.mjs';
+import { isMapMoveHost, linkLiveCollision } from './map-actor-native.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
@@ -1331,6 +1332,79 @@ export class ScriptRuntime {
     this.processEvent(actor,name,args);
     return undefined;
   }
+  /** UObject::ScriptConsoleExec (Core 0x10150860, thunk 0x10101870): run an
+   * exec command line such as a User.ini binding's `ActivateBelt 3` on
+   * `receiver`. Returns false when the command names no exec function, true
+   * once it was consumed. docs/script-console-exec.md.
+   *
+   * GIsScriptable gates it. ParseToken(64, escapes) reads the name, an FName
+   * find plus FindFunction (state first) selects it, and FUNC_Exec (0x200) is
+   * required. The parameter block is zeroed. For each CPF_Parm (not
+   * ReturnParm), ParseNext skips blanks and ';' comments, then the property's
+   * ImportText parses in place. A NULL ImportText ends the parse: an
+   * optional parameter still runs ProcessEvent with the zeros left; a
+   * required one logs BadProperty and skips it. `executor` fills a first
+   * object parameter of its own class. */
+  scriptConsoleExec(receiver,command,executor=null) {
+    if(!this.scriptability())return false;
+    let text=String(command??''),at=0;
+    // ParseToken 0x10147ba0: blanks are space/tab; a quoted token honours
+    // backslash escapes; at most 63 characters are kept.
+    while(text[at]===' '||text[at]==='\t')at++;
+    let token='';
+    if(text[at]==='"'){
+      at++;
+      while(at<text.length&&text[at]!=='"'&&token.length<63){
+        let ch=text[at++];
+        if(ch==='\\'){if(at>=text.length)break;ch=text[at++];}
+        token+=ch;
+      }
+      if(text[at]==='"')at++;
+    }else while(at<text.length&&text[at]!==' '&&text[at]!=='\t'){if(token.length<63)token+=text[at];at++;}
+    if(!token||lower(token)==='none')return false;
+    const record=this.lookup(receiver,token),fn=record?.function;
+    if(!fn||!(fn.script.functionFlags&0x200))return false;
+    const args=fn.parameters.map(field=>zeroValue(field));
+    let failed=false;
+    for(const [index,field] of fn.parameters.entries()){
+      if(index===0&&executor&&field.metadata.type==='object')
+        throw new Error(`ScriptConsoleExec executor parameter is not linked: ${record.key}`);
+      // ParseNext 0x10147b50.
+      for(;;){
+        while(' \t\r\n'.includes(text[at]??'\0')&&at<text.length)at++;
+        if(text[at]!==';')break;
+        while(at<text.length&&text[at]!=='\n'&&text[at]!=='\r')at++;
+      }
+      const rest=text.slice(at);
+      let imported=true;
+      if(field.metadata.type==='int'&&(field.metadata.arrayDim??1)<=1){
+        // UIntProperty::ImportText 0x10165f00: appAtoi only when the text
+        // starts with '-' or a digit, then skip every '-'/digit; never NULL.
+        if(/^[-0-9]/.test(rest)){
+          const number=/^[\t\n\v\f\r ]*([+-]?\d+)/.exec(rest);
+          const value=number?Number(number[1]):0;
+          if(!Number.isInteger(value)||value< -0x80000000||value>0x7fffffff)
+            throw new Error('ScriptConsoleExec int overflow is not recovered');
+          args[index]=value;
+        }
+        while(text[at]==='-'||/[0-9]/.test(text[at]??''))at++;
+      }else if(field.metadata.type==='object'&&rest===''){
+        // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
+        // token, which is not "None", and StaticFindObject finds nothing, so
+        // the value is None and ImportText returns NULL.
+        args[index]=null;imported=false;
+      }else throw new Error(`ScriptConsoleExec ImportText is not linked for ${field.metadata.type} ${field.key}`);
+      if(!imported){
+        if(!field.metadata.optional){failed=true;this.warning?.({type:'ScriptConsoleExec',kind:'BadProperty',function:record.key,parameter:field.key});}
+        break;
+      }
+    }
+    if(!failed){
+      const cell=fn.result?{reference:{},value:zeroValue(fn.result),get(){return this.value},set(v){this.value=v}}:null;
+      this.processEvent(receiver,token,args,cell,record);
+    }
+    return true;
+  }
   /** Window's native wrapper preserves the UFunction selected by its original
    * checked/state-aware lookup. Only a null native parameter block (InitWindow)
    * is bridged here; arbitrary raw event blocks require their own typed layout. */
@@ -1428,11 +1502,11 @@ export class ScriptRuntime {
   }
   /** ULevel::MoveActor for a spawned collision-view actor — the recursive
    * rider entry the based-rider section calls (test=0, ignorePawns=0,
-   * ignoreBases=1, noFail=0). Map/host actors are not admitted: their own
-   * recovered entries are the pawn/decoration routes. */
+   * ignoreBases=1, noFail=0). A map actor takes the same body on its own
+   * native surface (moveMapRider). */
   moveSpawnedActor(view,delta,rotation) {
     if(!this.collisionViewActors.has(view))
-      return this.moveHeldRider(view,delta,rotation);
+      return this.moveMapRider(view,delta,rotation);
     const level=this.levelFor(view);
     if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
     // The only caller is the recovered based-rider MoveActor (vtable +0x88)
@@ -1440,61 +1514,36 @@ export class ScriptRuntime {
     // base carrying it.
     return playerMove(view,delta,{...this.spawnedMoveServices(view,level),ignoreBases:true},rotation);
   }
-  /** The based-rider MoveActor for a HELD item — a serialized (map) or spawned
-   * Inventory actor a pawn carries after GiveTo's BecomeItem
-   * (bCollideActors = bCollideWorld = false, Physics None, StandingCount 0),
-   * not a spawned collision view. The recovered recursive body
-   * (docs/script-npc-weapon-startup.md, 0x103998a0-0x10399c8e) skips the
-   * MultiLineCheck query for the null cylinder, and the non-pawn
-   * CheckEncroachment tail (0x10399bf5) early-returns false for it
-   * (+0x1dc & 0x0d == 0, null Brush), so the move commits unconditionally:
-   * Location += FinalDelta / Rotation = NewRotation with no hash work, no
-   * bump/touch dispatch, then SetActorZone(item, 0, 0). Any other non-view
-   * rider (a colliding map actor, a moving brush) keeps the explicit boundary. */
-  moveHeldRider(view,delta,rotation) {
-    const read=name=>this.namedReference(view,name).get();
-    const collides=read('bCollideActors')||read('bCollideWorld');
-    const held=Boolean(view?.lineage?.includes('engine.inventory'))&&!collides&&(read('Physics')|0)===0;
-    if(!held)throw new Error('MoveActor for a non-spawned rider is not linked');
-    const f=Math.fround;
-    const location=read('Location');
-    this.namedReference(view,'Location').set(location.map((v,i)=>f(f(v)+delta[i])));
-    this.namedReference(view,'Rotation').set([rotation[0]|0,rotation[1]|0,rotation[2]|0]);
-    this.setSpawnActorZone(view,0,0);
-    return {success:true,delta:[...delta],position:read('Location'),time:1,hit:null};
+  /** Admit a serialized map actor to the recovered ULevel move entries. The
+   * level-load host is the native actor (map-actor-native.mjs): its +0x1dc
+   * word, cylinder, rotation, Base, StandingCount and Touching are the
+   * members the bodies read, and script fields are bound onto them. Before a
+   * move its hash cylinder is made to follow Location. Pawns, brushes and
+   * map exports without a collision surface keep the explicit boundary. */
+  mapMoveLevel(actor,what) {
+    if(!isMapMoveHost(actor))throw new Error(`${what} for a pawn, brush or non-colliding map actor is not linked`);
+    const level=this.levelFor(actor);
+    if(!level?.hash)throw new Error(`Map actor ${what} requires the level collision hash`);
+    linkLiveCollision(level.hash,actor);
+    // moveQuery's source-type gate: the query keys on the source's +0x1dc bits
+    // and each candidate's type, not on the source class (docs/move-query.md).
+    actor.mapActor=true;
+    return level;
   }
-  /** ULevel::FarMoveActor (0x10398ba0, relocation.mjs farMoveActor) for a HELD
-   * item — the Actor.Tick pawn tail's FarMoveActor(Weapon, Location, 0, 0)
-   * (actor-tick.mjs) on the player's drawn weapon. Same held gate as
-   * moveHeldRider: an Inventory actor with no collision and Physics None. The
-   * recovered body then takes no hash work (collides() false), skips FindSpot
-   * (bCollideWorld/bCollideWhenPlacing clear), and CheckEncroachment's
-   * non-colliding early return (+0x1dc & 0x0d == 0, null Brush) admits it; with
-   * StandingCount 0 it sets bJustTeleported (motion flag 0x100), writes
-   * Location = OldLocation = destination and runs SetActorZone(item, 0, 0). */
-  relocateHeldItem(view,destination) {
-    const read=name=>this.namedReference(view,name).get();
-    const collides=read('bCollideActors')||read('bCollideWorld')||read('bCollideWhenPlacing');
-    const held=Boolean(view?.lineage?.includes('engine.inventory'))&&!collides&&(read('Physics')|0)===0;
-    if(!held)throw new Error('FarMoveActor for a non-held map actor is not linked');
-    if(read('bStatic')||!read('bMovable'))return false;
-    if((read('StandingCount')|0)!==0)throw new Error('Held-item FarMoveActor with based children is not linked');
-    const f=Math.fround,position=destination.map(v=>f(v));
-    this.namedReference(view,'bJustTeleported').set(true);
-    this.namedReference(view,'Location').set(position);
-    this.namedReference(view,'OldLocation').set(position.slice());
-    this.setSpawnActorZone(view,0,0);
-    return true;
+  /** The recursive based-rider MoveActor (0x103998a0-0x10399c8e: test=0,
+   * ignorePawns=0, ignoreBases=1, noFail=0) for a map actor riding a moving
+   * base: a picked-up item on JC after DoFrob's SetBase, or a carried
+   * decoration after PutCarriedDecorationInHand. The same recovered body as a
+   * spawned rider: a rider without collision skips the MultiLineCheck and the
+   * hash, and the non-pawn CheckEncroachment early-returns for +0x1dc & 0x0d
+   * == 0. docs/script-map-actor-move.md. */
+  moveMapRider(actor,delta,rotation) {
+    const level=this.mapMoveLevel(actor,'Rider MoveActor');
+    return playerMove(actor,delta,{...this.spawnedMoveServices(actor,level),ignoreBases:true},rotation);
   }
-  /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
-   * the recovered relocation (hash remove, FindSpot/encroachment gates,
-   * based-child detach through SetBase, Location/OldLocation write,
-   * SetActorZone) with the level's services bound for this host. */
-  relocateSpawnedActor(view,destination,test,noCheck) {
-    if(!this.collisionViewActors.has(view))
-      throw new Error('FarMoveActor for a non-spawned actor is not linked');
-    const level=this.levelFor(view);
-    if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
+  /** The level view the recovered FarMoveActor (relocation.mjs) takes: this
+   * host's hash, FindSpot, CheckEncroachment, SetBase and SetActorZone. */
+  relocationLevel(view,level) {
     const move=this.spawnedMoveServices(view,level);
     const adapter=Object.create(level);
     // Play's level exposes these as accessors; shadow them with own properties.
@@ -1505,7 +1554,32 @@ export class ScriptRuntime {
     adapter.checkEncroachment=move.checkEncroachment;
     adapter.setBase=(child,target,notify)=>setBase(child,target,move.dispatch,notify);
     adapter.setActorZone=(a,t,force)=>this.setSpawnActorZone(a,t,force);
-    return farMoveActor(adapter,view,destination,test,noCheck);
+    return adapter;
+  }
+  /** ULevel::FarMoveActor (0x10398ba0) for a spawned collision-view actor —
+   * the recovered relocation (hash remove, FindSpot/encroachment gates,
+   * based-child detach through SetBase, Location/OldLocation write,
+   * SetActorZone) with the level's services bound for this host. */
+  relocateSpawnedActor(view,destination,test,noCheck) {
+    if(!this.collisionViewActors.has(view))
+      throw new Error('FarMoveActor for a non-spawned actor is not linked');
+    const level=this.levelFor(view);
+    if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
+    return farMoveActor(this.relocationLevel(view,level),view,destination,test,noCheck);
+  }
+  /** The same FarMoveActor for a map actor: SetLocation on a decoration JC
+   * lifts, drops or throws (DeusExPlayer.PutCarriedDecorationInHand /
+   * DropDecoration), and the Actor.Tick pawn tail's FarMoveActor(Weapon,
+   * Location, 0, 0) on a drawn map weapon. */
+  relocateMapActor(actor,destination,test,noCheck) {
+    const level=this.mapMoveLevel(actor,'FarMoveActor');
+    return farMoveActor(this.relocationLevel(actor,level),actor,destination,test,noCheck);
+  }
+  /** XLevel vtable +0x8c FarMoveActor for any admitted actor. */
+  farMoveActor(actor,destination,test=0,noCheck=0) {
+    return this.collisionViewActors.has(actor)
+      ?this.relocateSpawnedActor(actor,destination,test,noCheck)
+      :this.relocateMapActor(actor,destination,test,noCheck);
   }
   spawnActor(args) {
     const cls=args.cls?.linkedClass;

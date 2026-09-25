@@ -11,6 +11,7 @@ import { addPawn } from './pawn-list.mjs';
 import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { setBase as setActorBase } from './walking-callbacks.mjs';
+import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
@@ -136,8 +137,12 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     actor.radius=v.CollisionRadius??0;actor.height=v.CollisionHeight??0;actor.rotation=v.Rotation??[0,0,0];
     actor.physics=v.Physics??0;actor.pawnFlags=v.bIsPlayer?2:0;actor.standingCount=v.StandingCount??0;
     actor.static=Boolean(v.bStatic);actor.movable=Boolean(v.bMovable);
-    actor.collideWorld=Boolean(v.bCollideWorld);actor.collideActors=Boolean(v.bCollideActors);
-    actor.blockPlayers=Boolean(v.bBlockPlayers);actor.blockActors=Boolean(v.bBlockActors);
+    // The +0x1dc word and its per-bit copies (map-actor-native.mjs). The
+    // rebuilt hash registers every serialized collider, so the restored word
+    // matches it; FarMoveActor's bJustTeleported/OldLocation return to the
+    // serialized fields.
+    writeCollisionFlags(actor,collisionFlagsFrom(v));
+    if(!actor.isPawn&&!actor.movingBrush){delete actor.motionFlags;delete actor.oldLocation;}
     actor.waitingPawn=actors.find(a=>a.index===v.WaitingPawn)??null;
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
     if(actor.movingBrush)updateZone(actor,false,true);

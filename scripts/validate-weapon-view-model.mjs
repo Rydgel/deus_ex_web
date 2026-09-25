@@ -27,7 +27,7 @@ assert.equal((await game.selectWeaponGroup(10)).ok,true);
 // Standalone display harness may supply the already recovered held-item native
 // adapter; Play installs the same relocation service at its host boundary.
 runtime.relocation??={actorFor:actor=>actor,
-  farMoveActor:(_level,actor,destination)=>runtime.relocateHeldItem(actor,destination)};
+  farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.farMoveActor(actor,destination,test,noCheck)};
 const view=await createWeaponViewModel(runtime,assets,player);
 await view.ready();
 const camera=new THREE.PerspectiveCamera(75,4/3,1,65536),draws=[];let clears=0;

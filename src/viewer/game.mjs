@@ -214,7 +214,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         player.tick(dt, input);
         // Actor.Tick's pawn tail: FarMoveActor(Weapon, Location, 0, 0).
         const weapon = runtime?.namedReference(player.collisionActor, 'Weapon').get();
-        if (weapon) runtime.relocateHeldItem(weapon, player.position);
+        if (weapon) runtime.farMoveActor(weapon, player.position, 0, 0);
       } });
       hud?.tick(dt);
     },
@@ -251,8 +251,18 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
     use() {
       const actor = interaction.frobTarget;
-      if (!actor) return { ok: false, message: 'Nothing selected' };
       const runtime = doors.scriptRuntime.runtime;
+      // The installed RightMouse binding runs ParseRightClick with or without
+      // a highlighted object. With FrobTarget None it calls PutInHand(None):
+      // the item in hand is put away and a carried decoration is dropped or
+      // thrown (DeusExPlayer.DropDecoration).
+      if (!actor) {
+        const pawn = player.collisionActor;
+        runtime.namedReference(pawn, 'FrobTarget').set(null);
+        doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
+        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
+        return { ok: true, message: '' };
+      }
       // HighlightCenterObject's cache is the host stand-in for DeusExPlayer.FrobTarget.
       // ParseRightClick reads that property. A NanoKey is picked up there, not via Frob.
       if (actor.lineage?.includes('deusex.nanokey')) {

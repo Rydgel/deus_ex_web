@@ -222,6 +222,27 @@ async function functionNode(runtime, script, node, targetDescriptor) {
   return functionReturn(runtime, script, functionRecord);
 }
 
+/**
+ * A native token (`op: 'native'`) names only its GNatives index. The
+ * compiler resolved it through the Context object's class, so the declaring
+ * UFunction is the one in that class chain with the same iNative. Its
+ * return property gives the typed zero; execContext still zeroes only the
+ * encoded width.
+ */
+async function nativeNode(runtime, script, node, targetDescriptor) {
+  const target = await staticObjectClass(runtime, targetDescriptor);
+  if (!target) return null;
+  for (let cls = target.loaded; cls; cls = cls.base) {
+    for (const record of cls.methods?.values?.() ?? []) {
+      if (record?.kind !== 'Function' || !record.asset || !Number.isInteger(record.index)) continue;
+      let metadata;
+      try { metadata = readFunctionMetadata(record.asset, record.index); } catch { continue; }
+      if (metadata.hasNativeIndex && metadata.nativeIndex === node.index) return functionReturn(runtime, script, record);
+    }
+  }
+  return null;
+}
+
 async function expressionNode(runtime, script, node, seen = new Set()) {
   if (!node || typeof node !== 'object' || seen.has(node)) return null;
   seen.add(node);
@@ -243,6 +264,9 @@ async function contextNode(runtime, script, node, seen) {
   const targetDescriptor = await expressionNode(runtime, script, node.context, seen);
   if (FUNCTION_OPS.has(node.value?.op)) {
     return functionNode(runtime, script, node.value, targetDescriptor);
+  }
+  if (node.value?.op === 'native' && Number.isInteger(node.value.index)) {
+    return nativeNode(runtime, script, node.value, targetDescriptor);
   }
   return expressionNode(runtime, script, node.value, seen);
 }

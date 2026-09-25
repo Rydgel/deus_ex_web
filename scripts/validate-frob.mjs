@@ -42,11 +42,24 @@ const outcome = game.doors.scriptRuntime.dispatchEvent(plant, 'Frob', [player, n
 assert.deepEqual(outcome, { handled: true, result: true }, 'the real DeusExDecoration.Frob ran through the general router (no scene-adapter pause)');
 
 // game.use() takes the original right-click route, DeusExPlayer.ParseRightClick.
-// A pushable decoration is grabbed there (GrabDecoration), not frobbed; its
-// carry relocation (SetLocation of a map decoration) is an explicit boundary.
+// A pushable decoration is grabbed there (GrabDecoration), not frobbed.
+// PutCarriedDecorationInHand's SetLocation runs the recovered FarMoveActor on
+// the map decoration (docs/script-map-actor-move.md), then bases it on JC with
+// its collision word cleared and bCollideWorld written off.
 game.interaction.frobTarget = plant;
-assert.deepEqual(game.use(), { ok: false, message: 'Houseplant — interaction not yet supported' },
-  'ParseRightClick grabs the pushable plant and stops at the unsupported carry relocation');
+assert.deepEqual(game.use(), { ok: true, message: '' }, 'ParseRightClick grabs the pushable plant');
+assert.equal(ref(player, 'CarriedDecoration'), plant, 'GrabDecoration carries the plant');
+assert.equal(ref(plant, 'Base'), player, 'PutCarriedDecorationInHand bases the plant on JC');
+assert.equal(ref(plant, 'Physics'), 0, 'the carried plant is PHYS_None');
+assert.equal(plant.flags & 0x1f, 0, 'SetCollision(False,False,False) and bCollideWorld=False clear the +0x1dc word');
+assert.equal(ref(plant, 'bCollideWorld'), false, 'the script field reads the native word');
+// Right click with nothing highlighted is ParseRightClick -> PutInHand(None),
+// which drops the carried decoration (DeusExPlayer.DropDecoration).
+game.interaction.frobTarget = null;
+assert.deepEqual(game.use(), { ok: true, message: '' }, 'an empty right click runs ParseRightClick');
+assert.equal(ref(player, 'CarriedDecoration'), null, 'DropDecoration released the plant');
+assert.equal(ref(plant, 'Base'), null, 'the dropped plant leaves JC');
+assert.equal(plant.flags & 0xd, 0xd, 'the dropped plant collides and blocks again');
 
 // The mover Frob path is unchanged: a mover target still routes to doors.use().
 const mover = level.actors.find(a => a?.lineage?.includes('engine.mover') && game.collision.movers.includes(a));
@@ -91,6 +104,6 @@ assert.deepEqual(dirs(), before, 'the TriggerLights reversed back');
 
 console.log('General Frob validated in the Play host: a plain decoration (Plant7) runs the real ' +
   'DeusExDecoration.Frob through the general router, game.use() takes the original ParseRightClick route ' +
-  '(the pushable plant reaches the GrabDecoration carry boundary), and the mover path is intact. LightSwitch0.Frob runs end-to-end (roadmap item #3): the cratelight AllActors ' +
+  '(the pushable plant is lifted through GrabDecoration and dropped by an empty right click), and the mover path is intact. LightSwitch0.Frob runs end-to-end (roadmap item #3): the cratelight AllActors ' +
   'fanout toggles all four TriggerLights via their state Trigger, the real PlayAnim sets AnimSequence ' +
   "(On/Off), and the click is a recorded Stage-4 audio boundary; a second frob reverses everything.");

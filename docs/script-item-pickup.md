@@ -63,19 +63,20 @@ runtime-spawned collision views (the NPC-carried weapons, the spawned key ring),
 and a serialized (map) pickup raised `MoveActor for a non-spawned rider is not
 linked` — so the first step JC took after picking anything up paused Play.
 
-A held item is `bCollideActors = bCollideWorld = false`, `Physics = PHYS_None`,
-`StandingCount 0` after `GiveTo`'s `BecomeItem`. For that null cylinder the
-recovered recursive `MoveActor` (documented in
+A held item is `bCollideActors = bCollideWorld = false`, `Physics =
+PHYS_None`, `StandingCount 0` after `GiveTo`'s `BecomeItem`. The recursive
+`MoveActor` (documented in
 [npc-weapon-startup](script-npc-weapon-startup.md#ulevelmoveactor-based-rider-section-0x103998a00x10399bb0))
-skips the `MultiLineCheck` query, the non-pawn `CheckEncroachment` tail
-(`0x10399bf5`) early-returns false (`+0x1dc & 0x0d == 0`, null Brush), and the
-move commits unconditionally: `Location += FinalDelta` / `Rotation =
-NewRotation` with no hash work, no bump/touch, then `SetActorZone(item, 0, 0)`.
-`ScriptRuntime.moveHeldRider` implements exactly that light body for an
-Inventory-ancestry rider with no collision and `PHYS_None`; any other non-view
-rider (a colliding map actor, a moving brush) keeps the explicit boundary. The
-carried item then tracks the player's `Location` step for step (same f32
-`Location + delta` arithmetic), which is the observable the validator checks.
+now runs on the map actor itself (`ScriptRuntime.moveMapRider`,
+[map-actor move](script-map-actor-move.md)). For that null cylinder it skips
+the `MultiLineCheck` query and the hash. The non-pawn `CheckEncroachment`
+tail (`0x10399bf5`) early-returns false (`+0x1dc & 0x0d == 0`, null Brush).
+The move commits `Location += FinalDelta` / `Rotation = NewRotation`, then
+runs `SetActorZone(item, 0, 0)`. The carried item tracks the player's
+`Location` step for step (the same f32 `Location + delta` arithmetic), which
+is what the validator checks. The earlier `moveHeldRider` shortcut is gone;
+unlike it, a near-zero delta now changes only the rotation, as in the
+recovered body.
 
 `scripts/validate-item-pickup.mjs` covers the startup Pickup state, the grid
 give (a weapon takes a real slot; ammo/tool/food enter the list), the NanoKey key

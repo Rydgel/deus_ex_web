@@ -378,8 +378,9 @@
 > Training weapon/ammo/tool/food/key takes it into JC's inventory through the
 > original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give
 > ([item pickup](script-item-pickup.md)); a carried item is a based rider that
-> now follows JC while walking through the recovered held-item `MoveActor`
-> (`moveHeldRider`), where the first step used to pause Play. **Selecting** a
+> now follows JC while walking through the recovered rider `MoveActor`
+> (`moveMapRider`, [map-actor move](script-map-actor-move.md)), where the
+> first step used to pause Play. **Selecting** a
 > picked-up weapon draws it in hand through the original `PutInHand` ->
 > `UpdateInHand` -> `SwitchWeapon` -> `ChangedWeapon` -> `RaiseUp` -> `BringUp`
 > -> `PlaySelect` path: the crowbar reaches `DeusExWeapon.Active` with
