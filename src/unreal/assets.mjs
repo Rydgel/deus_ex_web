@@ -7,9 +7,13 @@ export class AssetStore {
     this.files = new Map();
     this.packages = new Map();
     this.configFiles = [];
+    // Installed native libraries by lowercase leaf name (System/*.dll), for
+    // UPackage::BindPackage's appGetDllHandle. Only names are needed.
+    this.libraries = new Set();
     for (const file of files) {
       const leaf = file.path.replaceAll('\\', '/').split('/').pop();
       if (/\.ini$/i.test(leaf)) this.configFiles.push(file);
+      if (/\.dll$/i.test(leaf)) this.libraries.add(leaf.toLowerCase());
       if (!/\.(u|utx|dx|unr|uax|umx)$/i.test(leaf)) continue;
       const name = leaf.replace(/\.[^.]+$/, '');
       const key = name.toLowerCase();

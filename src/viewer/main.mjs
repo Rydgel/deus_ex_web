@@ -658,10 +658,12 @@ requestAnimationFrame(animate);
 if (import.meta.env.DEV) {
   try {
     const manifest = await fetch('/__game__/manifest').then(r => r.json());
-    if (manifest.files.length) await setFiles(manifest.files.map(path => ({ path, read: async () => {
+    if (manifest.files.length) await setFiles([...manifest.files.map(path => ({ path, read: async () => {
       const response = await fetch(`/__game__/file/${encodeURIComponent(path)}`);
       if (!response.ok) throw new Error(`Cannot read ${path}`); return response.arrayBuffer();
-    } })));
+    } })), ...(manifest.libraries ?? []).map(path => ({ path, read: async () => {
+      throw new Error(`Native library bytes are not served: ${path}`);
+    } }))]);
   } catch (error) { fail(error); }
 }
 

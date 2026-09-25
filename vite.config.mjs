@@ -13,6 +13,9 @@ export default defineConfig({
     name: 'local-deus-ex-data',
     async configureServer(server) {
       const files = new Map();
+      // System/*.dll names only (never served): UPackage::BindPackage asks
+      // whether a package has a native library (docs/script-font-load.md).
+      const libraries = [];
       try {
         const root = gameDirectory();
         for (const directory of ['Maps', 'Textures', 'System', 'Sounds', 'Music']) {
@@ -20,6 +23,8 @@ export default defineConfig({
             if (file.isFile() && /\.(u|utx|dx|unr|uax|umx|ini)$/i.test(file.name)) {
               const name = `${directory}/${file.name}`;
               files.set(name, path.join(root, name));
+            } else if (file.isFile() && directory === 'System' && /\.dll$/i.test(file.name)) {
+              libraries.push(`${directory}/${file.name}`);
             }
           }
         }
@@ -34,7 +39,7 @@ export default defineConfig({
         try {
           if (pathname === '/__game__/manifest') {
             res.setHeader('Content-Type', 'application/json');
-            return res.end(JSON.stringify({ files: [...files.keys()] }));
+            return res.end(JSON.stringify({ files: [...files.keys()], libraries }));
           }
           const file = files.get(decodeURIComponent(pathname.slice('/__game__/file/'.length)));
           if (!pathname.startsWith('/__game__/file/') || !file) {

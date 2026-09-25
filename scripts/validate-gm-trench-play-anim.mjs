@@ -115,10 +115,13 @@ const textureEdge=lightResource.payloadReferences[0];
 assert.equal(textureEdge.target.object,fresh.classLoader.identity(textureReference.object));
 assert.equal(textureEdge.target.object.loadRecord,textureReference.object);
 assert.equal(textureEdge.target.payloadStatus,'opaque','mesh admission does not invent Texture services');
+// Play supplies the recovered Texture services (docs/script-font-load.md), so
+// the mesh's Texture edge preloads through UTexture::Serialize itself.
 const freshGraph=fresh.classLoader.graph;
-const textureFlags=freshGraph.slotOf(textureReference.object,0x1c);
-assert.throws(()=>freshGraph.preload(textureReference.object),/no recovered Serialize body/);
-assert.equal(freshGraph.slotOf(textureReference.object,0x1c),textureFlags);
+assert.equal(textureReference.object.resourceConstructed,'Engine.Texture');
+freshGraph.preload(textureReference.object);
+assert.equal(freshGraph.slotOf(textureReference.object,0x1c)&0x200,0);
+assert.ok(textureReference.object.instanceValues.get(0xa4).num>0);
 
 // TakeDamage uses PlayAnim('Hit*',,0.1): EX_Nothing occupies Rate while the
 // later TweenTime is present. Native P_GET_FLOAT_OPTX retains Rate=1.

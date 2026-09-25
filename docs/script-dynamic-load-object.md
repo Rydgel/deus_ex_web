@@ -115,8 +115,13 @@ boundary. `test/script-dynamic-load-object.test.mjs` also exercises the grouped
 the deferred first-load constructor/archive identity, missing-linker and
 class-mismatch boundaries, and the complete successful event order.
 
-A null export requiring native object construction, native metaclass object
-loading, the nonempty post-load array, and nonzero linker cleanup remain
-explicit boundaries. The wrapper oracle does not claim those deeper branches;
+A package these focused routes do not own now runs StaticLoadObject over the
+shared class/resource graph instead: CreatePackage/BindPackage, the graph's
+linker and export hash, the recovered CreateExport, and EndLoad Preload/PostLoad
+over a scoped queue. DXFonts.MainMenuTrueType is its first user; see
+[`script-font-load.md`](script-font-load.md). On the prepared routes, a null
+export requiring native object construction, native metaclass object loading,
+the nonempty post-load array, and nonzero linker cleanup remain explicit
+boundaries. The wrapper oracle does not claim those deeper branches;
 other first-load package file/error routes remain outside the focused portrait
 adapter.

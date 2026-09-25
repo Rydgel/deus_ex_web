@@ -141,7 +141,7 @@ frontier:
 | Exec invocation | exec with omitted optional parameters — **closed** ([console exec](script-console-exec.md)) | PutInHand, DropItem |
 | | null-Context result of a native token — **closed** ([null context](script-null-context.md)) | SwitchAmmo |
 | Spawn admission | `Beam` subclass: needs the collision view, `MakeNoise`/`AIStartEvent`, and a light that renders only in Stage 4 | ActivateAugmentation 9 (AugLight) |
-| Resource graph | `DynamicLoadObject` of `DXFonts`: `Engine.Font` is a native-only class whose registration and `UFont::Serialize` are unrecovered, and the prepared graph models first-load for one path only | ShowMainMenu |
+| Resource graph | `DynamicLoadObject` of `DXFonts` — **closed**: Font registration, constructor, Serialize and PostLoad recovered, and the first load runs StaticLoadObject/CreateExport/EndLoad over the shared graph ([font load](script-font-load.md)); `GetDeusExVersion` 1099 closed on the same path | ShowMainMenu |
 | Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (discarded-result calls now recorded without stopping) | QuickSave, Teleporter0 |
 
 The SDK headers ([SDK reference](sdk-reference.md)) name each screen row's exact
@@ -172,6 +172,21 @@ DXFonts), three boots, 191 s, peak 2,339 MiB. Unsupported native-264 calls fell
 from four probes to zero; the two terminal boundaries are unchanged. This is
 reach coverage, not completion of the startup/tick, Fire, conversation or walking
 acceptance criteria above.
+
+Post-DXFonts census (2026-09-25, later): 88 probes, two terminal boundaries,
+three boots, 154 s, peak 1,787 MiB. `ShowMainMenu` now opens and closes the main
+menu through original code ([font load](script-font-load.md)). Because it no
+longer ends in a reboot, `ShowGoalsWindow` now runs after the DataCube read in
+the same boot, so its screen has a note. `PopulateNotes` then reaches
+`LargeTextWindow`, whose `XTextParams` struct has no native window layout yet.
+This is a newly reachable persona-screen path, not a regression. Beam
+(AugLight) is unchanged.
+
+The census groups by native index. Its index-0 row is labelled
+`PlayerPawn.ClientTravel`, but the `ShowMainMenu` hit counted in it is
+`PlayerPawn.ConsoleCommand("FLUSH")`, which is still unsupported. Without
+`--continue`, Play stops there before the menu. `SaveGame` 3011 is the other
+reported native.
 
 The first census found two items with existing evidence; both are now closed:
 

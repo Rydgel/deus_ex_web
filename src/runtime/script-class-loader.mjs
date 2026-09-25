@@ -6,11 +6,12 @@ import {createScriptLoadGraph} from './script-load-graph.mjs';
 import {loadConfigCache} from './config-cache.mjs';
 
 export class ScriptClassLoader {
-  constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null}) {
+  constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null,
+    resourceServices = null, lifecycle = {}}) {
     this.assets = assets;
     this.objects = objects;
     this.resources = resources;
-    this.graph = createScriptLoadGraph({captureEvents, meshLoadServices});
+    this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle});
     this.identities = new WeakMap();
     this.nativeRecords = new WeakMap();
     this.linking = new Set();

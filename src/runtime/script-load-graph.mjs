@@ -9,17 +9,20 @@ import {
   serializeLoadedFunction, serializeLoadedProperty, serializeLoadedEnum,
   serializeLoadedConst, serializeLoadedTextBuffer, serializeTaggedPropertiesLoad,
 } from './script-linker-preload.mjs';
-import {createLinkerExport} from './script-create-export.mjs';
+import {createLinkerExport, CREATE_EXPORT_CONTRACT} from './script-create-export.mjs';
 import {buildLinkerExportHash, verifyLinkerImports, linkerIndexToObject} from './script-linker-imports.mjs';
 import {bindScriptClassConstructor} from './script-class-bind.mjs';
 import {bindScriptFunction, getFieldOwnerClass, getScriptClassNameCPP} from './script-function-bind.mjs';
 import {conditionalPostLoad, postLoadObject, postLoadField, postLoadStruct,
   postLoadFunction, postLoadClass} from './script-post-load.mjs';
 import {beginScriptLoad, endScriptLoad} from './script-static-load-object.mjs';
+import {resolveNameNative} from './script-resolve-name.mjs';
+import {createScriptPackage} from './script-package-construction.mjs';
 import {attachLinkerLazyLoader, detachLinkerLazyLoader} from './script-linker-lazy-loader.mjs';
 import {constructTexture, constructPalette, serializeTexture, serializePalette,
   postLoadTexture, loadTextureLazyBytes, removeResourceArray} from './script-texture-load.mjs';
 import {constructSoundNative} from './script-sound-construction.mjs';
+import {FONT_NATIVE, constructFont, serializeFont} from './script-font-load.mjs';
 import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray} from './script-mesh-load.mjs';
 import {meshPayloadView} from './lodmesh-payload.mjs';
 import {serializeSoundLifecycle, serializeSoundByteArray} from './script-sound-lifecycle.mjs';
@@ -147,7 +150,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
 
   let syntheticAddress = 0x70000000;
   const objectHash = new Map(); // outerAddr:nameIndex:classAddr -> record
-  const loadedObjects = [];     // the GObjLoaded array (0x1029e638)
+  let loadedObjects = [];       // the GObjLoaded array (0x1029e638); see suspendLoadQueue
   const events = captureEvents ? [] : {length: 0, push() {}};
   const warnings = [];
   const assertions = [];
@@ -334,6 +337,19 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     soundClass.defaults = {data: new Map(), num: 0x54, max: 0x54};
     for (let offset = 0x28; offset < 0x54; offset += 4) soundClass.defaults.data.set(offset, 0);
     soundClass.defaultsSource = 'original-native-sound-registration';
+    // Font is native-only as well: initializer 0x103855b0 registers size
+    // 0x38, raw flags 0 (registered 0x12), Super/Within Core.Object, config
+    // System and UObject's static constructor; UClass::Register leaves a
+    // 16-byte zero default tail (scripts/native-font-load-oracle.py).
+    const fontClass = staticRecords.get('Engine.Font');
+    writeSlot(fontClass, 0x3c, FONT_NATIVE.instanceSize);
+    writeSlot(fontClass, 0x484, FONT_NATIVE.registeredClassFlags);
+    writeSlot(fontClass, 0x49c, objectStatic);
+    writeSlot(fontClass, 0x4a0, intern('System'));
+    writeSlot(fontClass, 0x4e4, FONT_NATIVE.staticConstructor);
+    fontClass.defaults = {data: new Map(), num: FONT_NATIVE.instanceSize, max: FONT_NATIVE.instanceSize};
+    for (let offset = 0x28; offset < FONT_NATIVE.instanceSize; offset += 4) fontClass.defaults.data.set(offset, 0);
+    fontClass.defaultsSource = 'original-native-font-registration';
   }
   if (meshLoadServices) {
     // Engine native-only initializers + original UClass::Register. Defaults
@@ -582,7 +598,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       writeSlot(object, 0x10, linker);
       writeSlot(object, 0x14, index);
     },
-    loadedObjects,
+    get loadedObjects() { return loadedObjects; },
     getFullName: object => fullName(object),
     log: detail => { events.push({op: 'Logf', ...detail}); },
     read(object, field) {
@@ -650,7 +666,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   function initializeResource(object) {
     const kind = fullName(classRecordOf(object));
     if (kind === 'Engine.LodMesh' ? !meshLoadServices :
-      !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound'].includes(kind)) return;
+      !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound', 'Engine.Font'].includes(kind)) return;
     const source = classRecordOf(object)?.defaults?.data;
     if (!(source instanceof Map)) throw new Error(`Resource construction requires loaded class defaults: ${kind}`);
     object.instanceValues = new Map([...source].filter(([offset]) => offset >= 0x28)
@@ -669,7 +685,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         });
       }
       constructSoundNative(object, soundServices);
-    } else (kind === 'Engine.Texture' ? constructTexture : constructPalette)(object, textureServices);
+    } else if (kind === 'Engine.Font') constructFont(object, fontServices);
+    else (kind === 'Engine.Texture' ? constructTexture : constructPalette)(object, textureServices);
     object.resourceConstructed = kind;
   }
 
@@ -709,6 +726,24 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     detach: (archive, lazy) => detachLinkerLazyLoader(archive, lazy, textureServices),
   };
 
+  const fontServices = {
+    read: textureServices.read, write: textureServices.write,
+    objectConstructor: textureServices.objectConstructor,
+    objectSerialize: textureServices.objectSerialize,
+    getLazyLoad: () => resourceServices.getLazyLoad(),
+    setLazyLoad: value => resourceServices.setLazyLoad(value),
+    // FArchive vtable +0x18: the linker's operator<<(UObject*&) -> IndexToObject.
+    serializeObject: archive => archive.readObject().object,
+    arrayRealloc: (a, size) => textureServices.arrayRealloc(a, size),
+    arrayRemove: textureServices.arrayRemove,
+    freeArray: textureServices.freeArray,
+    loadLazyArray(lazy) {
+      // Texture mips hold TLazyArray<BYTE>; its vtable slot 0 is Load 0x1030cbb0.
+      if (lazy?.vtable !== FONT_NATIVE.lazyArrayVtable) throw new Error('Font page mip is not a byte lazy array');
+      return loadTextureLazyBytes(lazy, textureServices);
+    },
+    failAssert: detail => { assertions.push({kind: 'UFont::Serialize', ...detail}); },
+  };
   const soundServices = {
     getSerializationFlag: () => resourceServices.getLazyLoad(),
     setSerializationFlag: value => resourceServices.setLazyLoad(value),
@@ -790,6 +825,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     if (object.resourceConstructed === 'Engine.Texture') return serializeTexture(object, archive, textureServices);
     if (object.resourceConstructed === 'Engine.Palette') return serializePalette(object, archive, textureServices);
     if (object.resourceConstructed === 'Engine.Sound') return serializeSoundLifecycle(object, archive, soundServices);
+    if (object.resourceConstructed === 'Engine.Font') return serializeFont(object, archive, fontServices);
     if (object.resourceConstructed === 'Engine.LodMesh') {
       serializeLodMesh(object, archive, meshServices);
       const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
@@ -1120,6 +1156,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     metadataPostLoad.set('Engine.Texture', object => postLoadTexture(object, textureServices));
     metadataPostLoad.set('Engine.Palette', postLoadObject);
     metadataPostLoad.set('Engine.Sound', postLoadObject); // Engine 0x1036fb20 forwards only to UObject
+    metadataPostLoad.set('Engine.Font', postLoadObject); // vtable +0x20 -> 0x1040c72e -> Core UObject::PostLoad
   }
   if (meshLoadServices)
     metadataPostLoad.set('Engine.LodMesh', postLoadObject); // original vtable +20 -> 0x1040c72e -> Core
@@ -1171,18 +1208,166 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   };
   const lifecycleServices = {
     ...postServices,
-    loadState, loadedObjects,
+    loadState,
+    get loadedObjects() { return loadedObjects; },
     get loaders() { return [...linkers.values()]; },
     logReceiver: lifecycle.logReceiver,
     logEndLoad: lifecycle.logEndLoad,
     reallocLoaded: lifecycle.reallocLoaded,
     preload: ({object}) => preload(object),
   };
+  /**
+   * Play's class loader creates and preloads exports lazily and never runs
+   * EndLoad, so its GObjLoaded and GImportCount hold entries the original
+   * flushed during startup. The original outermost BeginLoad asserts an empty
+   * queue. A dynamic load therefore holds that deferred state aside, runs the
+   * recovered Begin/EndLoad over exactly the objects it creates, and restores
+   * it. This is a host scheduling boundary, not a change to either body.
+   */
+  function suspendLoadQueue() {
+    if (loadState.nest !== 0) throw new Error('A scoped load cannot start inside another load');
+    const deferred = {queue: loadedObjects, imports: importState.importCount, max: loadState.loadedMax};
+    loadedObjects = [];
+    importState.importCount = 0;
+    loadState.loadedMax = 0;
+    // After a thrown load, objects it created stay pending in the deferred queue.
+    return ({failed = false} = {}) => {
+      if (failed) deferred.queue.push(...loadedObjects);
+      else if (loadState.nest !== 0 || loadedObjects.length !== 0)
+        throw new Error('Scoped load ended with GObjLoaded entries');
+      loadedObjects = deferred.queue;
+      importState.importCount = deferred.imports;
+      loadState.loadedMax = deferred.max;
+    };
+  }
+
+  // UObject::GObjNoRegister, cleared and set around BindPackage's DLL load.
+  let objNoRegister = 1;
+
+  /**
+   * UPackage::BindPackage 0x10152ff0: for an unbound top-level package that
+   * has not attempted a bind, appSprintf(Temp, "%s%s", appBaseDir(), Name),
+   * GObjNoRegister=0, AttemptedBind(+0x2c)=1, DllHandle(+0x28)=
+   * appGetDllHandle(Temp), GObjNoRegister=1. A bound DLL would then log
+   * "Bound to %s%s" and run ProcessRegistrants, which is not translated.
+   */
+  function bindPackage(object, getDllHandle) {
+    if (slotOf(object, 0x28) || slotOf(object, 0x18) || slotOf(object, 0x2c)) return;
+    const name = nameText(slotOf(object, 0x20));
+    objNoRegister = 0;
+    writeSlot(object, 0x2c, 1);
+    const handle = getDllHandle(name);
+    if (handle !== null) throw new Error(`BindPackage bound ${name}.dll; ProcessRegistrants is not translated`);
+    writeSlot(object, 0x28, null);
+    objNoRegister = 1;
+    events.push({op: 'BindPackage', package: object, name, dllHandle: null, objNoRegister});
+  }
+
+  /**
+   * Services for the recovered StaticLoadObject (script-static-load-object.mjs)
+   * over this graph's own linkers, FNames, CreateExport, Preload and PostLoad.
+   * `appGetDllHandle(name)` must answer from the installed System directory
+   * (null when <name>.dll is absent); `lifecycle` supplies Logf/Realloc.
+   */
+  function staticLoadServices({appGetDllHandle} = {}) {
+    if (typeof appGetDllHandle !== 'function') throw new Error('StaticLoadObject requires appGetDllHandle');
+    const packageClass = staticRecords.get('Core.Package');
+    const resolveServices = {
+      copyString: ({source}) => source,
+      createPackage: ({outer, name}) => createScriptPackage({
+        outer, name, packageClass,
+        lookup: {
+          resolveName: (outerRef, nameRef, options) =>
+            resolveNameNative(outerRef, nameRef, {...options, services: resolveServices}),
+          staticFindObject: ({classRef, outer: at, name: text, exactClass}) =>
+            importServices.staticFindObject(classRef, at, text, exactClass),
+        },
+        internName: (text, mode) => {
+          if (mode !== 1) throw new Error(`CreatePackage FName mode ${mode}`);
+          return {index: intern(text), name: text};
+        },
+        staticAllocateObject({classRef, outer: at, nameText: text, size, flags}) {
+          if (classRef !== packageClass || at !== null || size !== 0x34 || flags !== 4)
+            throw new Error('Only a top-level UPackage allocation is supported');
+          const record = packageRoot(text);
+          events.push({op: 'CreatePackage', object: record, name: text});
+          return record;
+        },
+        errorDevice: {address: 0x101a7c38},
+        bindPackage: object => bindPackage(object, appGetDllHandle),
+      }),
+    };
+    const exportView = (linker, index) => {
+      const record = linker.exports[index];
+      return {classIndex: record.classIndex, outerIndex: record.packageIndex,
+        nameIndex: record.objectName, nextHash: record.hashNext,
+        get object() { return linker.exports[index].object; }};
+    };
+    const createExport = ({linker, index}) => importServices.createExport(linker, index);
+    createExport.body = CREATE_EXPORT_CONTRACT.body;
+    return {
+      loadState,
+      get loadedObjects() { return loadedObjects; },
+      get loaders() { return [...linkers.values()]; },
+      read(object, field) {
+        if (object?.kind === 'ULinkerLoad') {
+          if (field === 'outer') return object.root;
+          if (field === 'reader') return object.reader;
+          if (field === 'imports') return object.imports;
+        }
+        if (field === 'object') return object.object ?? null;
+        const offset = {outer: 0x18, nameIndex: 0x20, objectFlags: 0x1c, linker: 0x10}[field];
+        if (offset === undefined) throw new Error(`StaticLoadObject field ${field} is unmapped`);
+        return slotOf(object, offset) ?? null;
+      },
+      write(record, field, value) {
+        if (field !== 'object') throw new Error(`StaticLoadObject write ${field} is unmapped`);
+        record.object = value;
+      },
+      resolveName: (outerRef, nameRef, options) =>
+        resolveNameNative(outerRef, nameRef, {...options, services: resolveServices}),
+      readPackageExtension: () => '',
+      copyString: ({source}) => source,
+      findName(text, mode) {
+        if (mode !== 1) throw new Error(`StaticLoadObject FName mode ${mode}`);
+        return intern(text);
+      },
+      readHashHead: (linker, bucket) => linker.exportHash[bucket],
+      readExport: exportView,
+      readImportWord(linker, offset) {
+        const record = linker.imports[Math.floor(offset / 0x1c)], field = offset % 0x1c;
+        if (!record) throw new Error(`StaticLoadObject import word +0x${offset.toString(16)} is absent`);
+        if (field === 8) return record.packageIndex;
+        if (field === 12) return record.objectName;
+        throw new Error(`StaticLoadObject import field +0x${field.toString(16)} is unmapped`);
+      },
+      createLinkerLoad({root}) {
+        const name = nameText(slotOf(root, 0x20));
+        if (!packageAssets.has(name.toLowerCase()))
+          throw new Error(`DynamicLoadObject package bytes were not prepared: ${name}`);
+        const linker = buildLinker(name);
+        if (linker.root !== root) throw new Error(`First-load linker root diverged for ${name}`);
+        events.push({op: 'CreateLinkerLoad', linker, name});
+        return linker;
+      },
+      createExport,
+      staticFindObject: ({classRef, outer, name, exactClass}) =>
+        importServices.staticFindObject(classRef, outer, name, exactClass),
+      preload: ({object}) => preload(object),
+      conditionalPostLoad: object => postServices.conditionalPostLoad(object),
+      logReceiver: lifecycle.logReceiver,
+      logEndLoad: lifecycle.logEndLoad,
+      reallocLoaded: lifecycle.reallocLoaded,
+    };
+  }
+
   return {
     setConfig(cache) { configCache = cache; },
     get config() { return configCache; },
     packageAssets, boundaries, linkers, packageRoots, staticRecords, importState,
-    events, warnings, assertions, linkOrder, loadedObjects,
+    events, warnings, assertions, linkOrder,
+    get loadedObjects() { return loadedObjects; },
+    suspendLoadQueue, staticLoadServices,
     buildLinker, indexToObject, preload, preloadServices,
     loadResourceBytes: lazy => loadTextureLazyBytes(lazy, textureServices),
     loadSoundResource,

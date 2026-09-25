@@ -138,6 +138,9 @@ import {
 import {
   execDynamicLoadObject,DynamicLoadObjectBoundaryError,PreparedDynamicLoadGraph,
 } from './script-dynamic-load-object.mjs';
+import {staticLoadObject as execStaticLoadObject} from './script-static-load-object.mjs';
+import {CLIENT_LAZY_LOAD,clientTextureLodSet} from './script-client-resource-settings.mjs';
+import {DEUSEX_VERSION_NATIVE,getDeusExVersion} from './script-deusex-version.mjs';
 import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
 import {execRotRand} from './script-rot-rand.mjs';
@@ -153,11 +156,29 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
     this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
+    // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
+    // archive keeps Play's separately documented deferred policy below.
+    this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
     this.classLoader=nativeClassLoading?new ScriptClassLoader({assets,objects:this.objects,
       resources:()=>this.resourceRegistry(),
       // Retain Play's explicit deferred mesh policy on the shared archive.
-      // Other native resources still require their own host services.
-      meshLoadServices:{getLazyLoad:()=>1}}):null;
+      meshLoadServices:{getLazyLoad:()=>1},
+      // Texture/Palette/Sound/Font constructors and serializers. The clock is
+      // the host's appSeconds; the mip bias is UBitmap::__Client's
+      // TextureLODSet from the installed WindowsClient config.
+      resourceServices:{
+        seconds:()=>globalThis.performance.now()/1000,
+        getLazyLoad:()=>this.lazyLoad,setLazyLoad:value=>{this.lazyLoad=value;},
+        mipBias:(texture,lodSet)=>{
+          const config=this.classLoader.graph.config;
+          if(!config)throw new Error('Texture mip bias requires the prepared GConfig');
+          return clientTextureLodSet(config)[lodSet]??0;
+        },
+      },
+      lifecycle:{logReceiver:{kind:'GWarn'},
+        logEndLoad:event=>this.loadLifecycle.push({op:'Logf',...event}),
+        reallocLoaded:event=>this.loadLifecycle.push({op:'FArrayRealloc',num:event.num,max:event.max})},
+    }):null;
     if(this.classLoader){
       const resolve=this.objects.resolve.bind(this.objects);
       this.objects.resolve=async(asset,index)=>{
@@ -434,6 +455,7 @@ export class ScriptRuntime {
     if(value==null)return null;
     if(kind!=='dynamic'&&kind!=='meta')throw new Error(`Unknown original cast kind: ${kind}`);
     if(target===null)return kind==='dynamic'?value:null;
+    if(target?.kind==='NativeClass'&&kind==='dynamic')return this.castToNativeClass(value,target);
     if(target?.kind!=='Class')throw new Error('Object cast target is not a linked class identity');
     let cls;
     if(kind==='meta'){
@@ -460,6 +482,7 @@ export class ScriptRuntime {
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
     this.contextResults.set(script,await prepareContextResults(this,script,compiled.decoded));
+    await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const fields=[];
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
     record.function={script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
@@ -475,6 +498,7 @@ export class ScriptRuntime {
     await this.prepareClassOperands(bindings);
     for(const field of bindings.values())if(field?.kind.endsWith('Property'))await this.field(field);
     this.contextResults.set(script,await prepareContextResults(this,script,compiled.decoded));
+    await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const labels=new Map();
     if(script.labelTableOffset!==0xffff){
       const table=[...compiled.decoded.statements.values()].find(({node})=>node.op===0x0c&&node.offset+1===script.labelTableOffset)?.node;
@@ -812,16 +836,77 @@ export class ScriptRuntime {
     await this.dynamicLoadGraph.prepare(object,resource);
     return object;
   }
-  /** Synchronous recovered StaticLoadObject linker/hash path reached by the wrapper. */
+  /** Synchronous recovered StaticLoadObject reached by the wrapper. Packages
+   * the focused prepared routes own keep that graph; any other package whose
+   * bytes were fetched ahead of the frame (prefetchDynamicLoadPackages) runs
+   * StaticLoadObject over the shared class/resource graph. */
   loadPreparedDynamicObject(request){
-    if(!this.dynamicLoadGraph)throw new DynamicLoadObjectBoundaryError(
+    const packageName=lower(String(request.name).split('.')[0]);
+    let object;
+    if(this.dynamicLoadGraph?.ownsPackage(packageName))object=this.dynamicLoadGraph.load(request);
+    else if(this.classLoader?.graph.packageAssets.has(packageName))object=this.loadGraphDynamicObject(request);
+    else throw new DynamicLoadObjectBoundaryError(
       `DynamicLoadObject package linker is not prepared: ${request.name}`,
       'DYNAMIC_LOAD_OBJECT_FIRST_LOAD',{path:request.name});
-    const object=this.dynamicLoadGraph.load(request);
     if(object!==null&&this.castObject(object,request.classRef,'dynamic')===null)
       throw new DynamicLoadObjectBoundaryError(`DynamicLoadObject class mismatch for ${request.name}`,
         'DYNAMIC_LOAD_OBJECT_CLASS_MISMATCH',{path:request.name,classRef:request.classRef});
     return object;
+  }
+  /** StaticLoadObject over the shared graph: its linkers, CreateExport,
+   * Preload/PostLoad and a load scope around Play's never-flushed queue.
+   * See docs/script-font-load.md ("DynamicLoadObject route"). */
+  loadGraphDynamicObject(request){
+    const loader=this.classLoader,graph=loader.graph;
+    const classRef=loader.nativeIdentity(request.classRef);
+    const restore=graph.suspendLoadQueue();
+    let result;
+    try{
+      result=execStaticLoadObject({...request,classRef},
+        graph.staticLoadServices({appGetDllHandle:name=>this.appGetDllHandle(name)}));
+    }catch(error){
+      restore({failed:true});
+      throw error;
+    }
+    restore();
+    for(const event of result.events)this.warning?.({type:'DynamicLoadObject',...event});
+    return result.object===null?null:loader.identity(result.object);
+  }
+  /** appGetDllHandle(appBaseDir()+Name): LoadLibrary of <Name>.dll in System. */
+  appGetDllHandle(name){
+    const libraries=this.objects.assets?.libraries;
+    if(!(libraries instanceof Set))throw new Error('appGetDllHandle requires the installed System file listing');
+    if(libraries.has(`${lower(name)}.dll`))
+      throw new Error(`Package DLL ${name}.dll exists; native package binding is not implemented`);
+    return null;
+  }
+  /** A literal DynamicLoadObject("Package.Object", ...) argument names a
+   * package whose bytes must be fetched before the synchronous native frame.
+   * Only the bytes are fetched: no linker or object is created, so the call
+   * still reaches GetPackageLinker's first-load branch. */
+  async prefetchDynamicLoadPackages(decoded,bindings){
+    if(!this.classLoader||!decoded?.expressions)return;
+    for(const node of decoded.expressions.values()){
+      if(node?.op!==0x1c||bindings.get(node.functionIndex)?.key!=='core.object.dynamicloadobject')continue;
+      const name=node.args?.[0];
+      if(name?.op!=='literal'||typeof name.value!=='string'||!name.value.includes('.'))continue;
+      const packageName=name.value.split('.')[0];
+      if(this.classLoader.graph.packageAssets.has(lower(packageName)))continue;
+      let asset;
+      try{asset=await this.objects.assets.get(packageName);}catch{continue;} // absent: the call reaches file lookup
+      await this.classLoader.prepare(asset);
+    }
+  }
+  /** Engine's inlined IsA over a natively loaded object's Class/SuperField
+   * chain, for a native-only class target (Font, Sound...). */
+  castToNativeClass(value,target){
+    const loader=this.classLoader;
+    if(!loader)throw new Error('Native-only class casts require the native class loader');
+    const record=loader.nativeRecords.get(value)??value.loadRecord;
+    if(!record)throw new Error(`Native-only class cast needs a natively loaded object: ${value.key??'<object>'}`);
+    const graph=loader.graph;
+    for(let cls=graph.classRecordOf(record);cls;cls=graph.superOf(cls))if(loader.identity(cls)===target)return value;
+    return null;
   }
   /** Prepare only the tagged logical values of an existing non-Actor export.
    * Native payloads, constructors and saved state require separate services.
@@ -1888,6 +1973,10 @@ export class ScriptRuntime {
         },
       });
       if(result.handled)return result.value;
+    }
+    if(call.index===DEUSEX_VERSION_NATIVE.index){
+      if(call.argumentCount!==0)throw new Error('GetDeusExVersion takes no arguments');
+      return getDeusExVersion();
     }
     if(call.index===1024){
       if(call.argumentCount!==1)throw new Error('StringToName requires one string argument');

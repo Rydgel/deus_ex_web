@@ -94,7 +94,8 @@ so reverting Play to the decoded-default adapter cannot silently pass it.
 Still unverified: bool members inside SerializeBin struct defaults (the bridge
 rejects that branch), arbitrary native-only class VM operations, native defaults
 without serialized tags, config/localization, the prepared DynamicLoadObject
-resource graph's broader first-load routes, the remaining native resource tails and complete
+routes that still return prebound identities (the shared-graph route is in
+[`script-font-load.md`](script-font-load.md)), the remaining native resource tails and complete
 EndLoad/PostLoad/GC ownership. These are separate from the proven class-load
 and representation boundaries above.
 
@@ -120,7 +121,7 @@ and serializes exact Engine.Texture/Palette resources. Two real Engine textures
 and their palettes match original DLL execution over nine mip levels, including
 deferred reads through the same canonical archive and conditional PostLoad.
 Other resource tails and subclasses still prevent a complete Play EndLoad;
-these services are not yet enabled by Play. See
+Play now enables these services (see [Font loading](script-font-load.md)). See
 [`script-texture-loading.md`](script-texture-loading.md) for evidence and limits.
 
 Exact Engine.Sound instances now reuse the existing constructor, serializer,

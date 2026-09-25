@@ -137,10 +137,12 @@ assert.ok(graph.boundaries.has('native-constructor-defaults'), 'unimplemented C+
 // Real class defaults have queued native resources. The old broad UObject
 // fallback would clear RF_NeedLoad and consume only their tagged-property
 // prefix. Refuse both unimplemented virtuals before altering their flags.
+// Play now admits Engine.Texture (docs/script-font-load.md); the procedural
+// Fire.FireTexture serializer and PostLoad remain unrecovered.
 const pendingTexture = graph.loadedObjects.find(record =>
-  graph.fullName(graph.classRecordOf(record)) === 'Engine.Texture' &&
+  graph.fullName(graph.classRecordOf(record)) === 'Fire.FireTexture' &&
   (slotOf(record, 0x1c) & 0x01000200) === 0x01000200);
-assert.ok(pendingTexture, 'the real queue includes an unfinished texture');
+assert.ok(pendingTexture, 'the real queue includes an unfinished procedural texture');
 const textureFlags = slotOf(pendingTexture, 0x1c);
 const textureReader = slotOf(pendingTexture, 0x10).reader;
 const readerOffset = textureReader.offset;

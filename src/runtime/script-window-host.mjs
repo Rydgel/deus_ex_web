@@ -211,7 +211,34 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     textureInfo.set(ref, {address, width: mip.width, height: mip.height});
     return address;
   }
+  // A font loaded through the shared graph (DynamicLoadObject) carries the
+  // original UFont::Serialize result: use its CharactersPerPage, Pages and
+  // glyph arrays instead of re-decoding the export bytes.
+  function nativeFontImage(ref, record) {
+    const graph = runtime.classLoader.graph;
+    const pages = record.instanceValues.get(0x2c);
+    const decoded = {charsPerPage: record.instanceValues.get(0x28), pageCount: pages.num,
+      pages: pages.data.slice(0, pages.num).map(page => ({chars: page.characters.data
+        .slice(0, page.characters.num).map(c => [c.startU, c.startV, c.uSize, c.vSize])}))};
+    const font = writeFontImage(heap.mem, decoded), table = heap.mem.read(font + UFONT.pages, 'u32');
+    heap.mem.write(font + UFONT.pageMax, 'i32', pages.max);
+    for (let page = 0; page < pages.num; page++) {
+      const texture = pages.data[page].texture, at = table + page * FONT_PAGE.size;
+      heap.mem.write(at + FONT_PAGE.maxChars, 'i32', pages.data[page].characters.max);
+      if (!texture) { heap.mem.write(at + FONT_PAGE.texture, 'u32', 0); continue; }
+      const linker = graph.slotOf(texture, 0x10), index = graph.slotOf(texture, 0x14) + 1;
+      const pageRef = {key: `${ref.key}.page${page}`, asset: linker.asset, index, kind: 'Texture'};
+      heap.mem.write(at + FONT_PAGE.texture, 'u32', textureImage(linker.asset, index, pageRef));
+    }
+    resourceImages.set(font, {kind: 'font', ref});
+    return font;
+  }
   function fontImage(ref) {
+    // Class-default font references are constructed but not preloaded in
+    // Play (RF_NeedLoad/RF_NeedPostLoad still set); they keep the decoder.
+    const record = runtime.classLoader?.nativeRecords.get(ref);
+    if (record?.resourceConstructed === 'Engine.Font' &&
+        !(runtime.classLoader.graph.slotOf(record, 0x1c) & 0x01000200)) return nativeFontImage(ref, record);
     const asset = ref.asset, entry = asset.pkg.exports[ref.index - 1];
     const decoded = decodeFontExport(asset.bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize), ref.key);
     const font = writeFontImage(heap.mem, decoded), table = heap.mem.read(font + UFONT.pages, 'u32');

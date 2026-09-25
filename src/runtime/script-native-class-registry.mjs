@@ -152,7 +152,8 @@ export const ENGINE_CLASSES = freeze({
   AIEvent:              row({staticClass: 0x10585e88, internalCtor: 0x1030121c, instanceSize: 0x38}),
   AISenderEvent:        row({staticClass: 0x10585990, internalCtor: 0x1030250e, super: 0x10585e88, instanceSize: 0x14c}),
   AIReceiverEvent:      row({staticClass: 0x10585498, internalCtor: 0x10302ce3, super: 0x10585e88, instanceSize: 0x84}),
-  Font:                 row({staticClass: 0x10587348, internalCtor: 0x10303468, instanceSize: 0x38}),
+  // 0x103855e6/0x103855e7 push Within=Super=Core.Object (scripts/native-font-load-oracle.py).
+  Font:                 row({staticClass: 0x10587348, internalCtor: 0x10303468, super: 0x1029e0d0, instanceSize: 0x38}),
   Polys:                row({staticClass: 0x10587948, internalCtor: 0x10301834, instanceSize: 0x38}),
   GameEngine:           row({staticClass: 0x10587f50, internalCtor: 0x103029ff, super: 0x10583c40, instanceSize: 0xd0}),
   Input:                row({staticClass: 0x10588550, internalCtor: 0x10303d37, instanceSize: 0xfb0}),

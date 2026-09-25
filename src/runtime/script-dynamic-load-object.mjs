@@ -133,6 +133,12 @@ export class PreparedDynamicLoadGraph{
 
   preparedObject(path){return this.prepared.get(String(path).toLowerCase())??null;}
 
+  /** Whether a focused prepared route owns this package's linker. */
+  ownsPackage(name){
+    const key=String(name).toLowerCase();
+    return this.linkerByPackage.has(key)||this.firstLoadPackages.has(key);
+  }
+
   async linker(asset){
     const key=asset.name.toLowerCase();
     if(this.linkerByPackage.has(key))return this.linkerByPackage.get(key);

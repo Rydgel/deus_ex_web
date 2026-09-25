@@ -131,8 +131,11 @@ graph's bytes, dimensions, deferred state, palette identity and post-load fields
 match. These compare the resource boundary; they do not flush or filter the
 larger Engine metadata/resource queue through EndLoad.
 
-Play does not yet supply these resource services or finalize its whole load
-queue. Other resource classes and procedural subclasses remain rejected before
+Play now supplies these resource services (client GLazyLoad, the WindowsClient
+TextureLODSet mip bias and the host appSeconds clock; see
+[Font loading](script-font-load.md)) but does not finalize its whole load
+queue. The DXFonts page textures and palette are the first Play resources
+preloaded and post-loaded through them. Other resource classes and procedural subclasses remain rejected before
 their RF_NeedLoad/RF_NeedPostLoad flags are consumed. Native resource
 reconstruction is also explicitly refused because its destructor/allocation
 sequence is not integrated. Missing-palette object allocation is still a
