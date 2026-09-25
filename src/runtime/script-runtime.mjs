@@ -1550,12 +1550,14 @@ export class ScriptRuntime {
     });
   }
   regionValue(receiver) {
-    const value=this.namedReference(receiver,'Region').get();
+    const ref=this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'));
+    const value=ref.get();
     return {zone:value['engine.actor.pointregion.zone'],leaf:value['engine.actor.pointregion.ileaf'],
       zoneNumber:value['engine.actor.pointregion.zonenumber']};
   }
   setRegion(receiver,zone,leaf,zoneNumber) {
-    this.namedReference(receiver,'Region').set({'engine.actor.pointregion.zone':zone,
+    const ref=this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'));
+    ref.set({'engine.actor.pointregion.zone':zone,
       'engine.actor.pointregion.ileaf':leaf,'engine.actor.pointregion.zonenumber':zoneNumber});
   }
   /** Bridge the existing recovered ordinary Actor zone path to script fields.
@@ -3053,6 +3055,16 @@ export class ScriptRuntime {
     // The recovered table covers every reserved probe index. Any other valid
     // loaded function name is outside that interval and bypasses its mask gate.
     const instance=this.instance(receiver),ename=probeNames.get(lower(name))??-1;
+    // AActor::ProcessEvent 0x10369100 precedes Core's body on world actors:
+    // actor.Level (+0xa8), LevelInfo flags (+0x4f0), mask bBegunPlay (2).
+    // Standalone Core-event fixtures have no linked world/Actor.Level slot.
+    if(this.levelFor(receiver)) {
+      for(let cls=instance.cls;cls;cls=cls.base)if(cls.record.key==='engine.actor'){
+        const info=this.namedReference(receiver,'Level').get();
+        if(info && !this.namedReference(info,'bBegunPlay').get())return false;
+        break;
+      }
+    }
     if(instance.state&&!instance.state.isProbing(ename))return false;
     const record=selectedRecord??this.lookup(receiver,name),fn=record?.function;
     if(!fn)throw new Error(`Original event is not prepared: ${record?.key??name}`);

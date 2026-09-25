@@ -63,6 +63,9 @@ runtime.attach(mutator,mutatorClass);
 const ref=(receiver,name)=>runtime.namedReference(receiver,name);
 const set=(receiver,name,value)=>ref(receiver,name).set(value);
 set(levelInfo,'NetMode',0);
+// This fixture models spawning into the running level, after LoadMap's
+// bBegunPlay store; the original Actor.ProcessEvent gate must admit events.
+set(levelInfo,'bBegunPlay',true);
 set(levelInfo,'Game',game);
 set(game,'Level',levelInfo);
 set(game,'BaseMutator',mutator);

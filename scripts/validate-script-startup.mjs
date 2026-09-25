@@ -91,6 +91,9 @@ export async function createStartupFixture({seed=1,trace=false}={}) {
   // GameInfo.IsRelevant.  They are set explicitly so class-default changes
   // cannot silently turn this fixture into a different branch.
   set(levelInfo,'NetMode',0); // ENetMode.NM_Standalone.
+  // LoadMap sets this before its shared PreBeginPlay pass; Actor.ProcessEvent
+  // otherwise suppresses events (Engine.dll 0x10369100).
+  set(levelInfo,'bBegunPlay',true);
   set(levelInfo,'Game',game);
   set(game,'Level',levelInfo);
   set(game,'BaseMutator',mutator);

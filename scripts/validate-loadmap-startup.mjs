@@ -16,7 +16,8 @@ const {createGame}=await import(process.env.LOADMAP_GAME_MODULE
 const root=gameDirectory(),files=[];
 const oracle=JSON.parse(execFileSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',
   ['scripts/native-loadmap-state-oracle.py',root],{encoding:'utf8'}));
-assert.deepEqual(oracle,{touching:[0,0,0,0],neighbor:555,drawn:17.125,undrawn:-10});
+assert.deepEqual(oracle,{touching:[0,0,0,0],neighbor:555,drawn:17.125,undrawn:-10,
+  actorEventGate:[0,0x40,2,0x42].map(flags=>({flags,coreCalls:flags&2?1:0,forwarded:true,stackClean:true}))});
 for(const directory of ['Maps','System','Textures','Sounds','Music'])
   for(const name of await readdir(`${root}/${directory}`))
     files.push({path:`${directory}/${name}`,read:()=>readFile(`${root}/${directory}/${name}`)});
@@ -41,6 +42,17 @@ try{
   const {runtime,npcPawns,npcFailures}=game.doors.scriptRuntime;
   const level=runtime.levelFor(game.player.collisionActor);
   const read=(actor,name)=>runtime.namedReference(actor,name).get();
+  const gameInfo=read(level.actors[0],'Game');
+  assert.equal(runtime.instance(gameInfo).cls.record.key,'deusex.deusexgameinfo');
+  assert.ok(runtime.instance(gameInfo).nativeObject?.index>=0,'GameInfo was natively constructed');
+  const mutator=read(gameInfo,'BaseMutator');
+  assert.equal(runtime.instance(mutator).cls.record.key,'engine.mutator');
+  assert.ok(level.actors.includes(mutator),'original InitGame spawned BaseMutator');
+  const replication=read(gameInfo,'GameReplicationInfo');
+  assert.ok(level.actors.includes(replication),'original GameInfo.PreBeginPlay spawned replication info');
+  assert.equal(typeof read(replication,'Region'),'number','GRI server Region keeps its own int property');
+  assert.ok(runtime.regionValue(replication).zone,'native Actor.Region binds the inherited pointregion');
+
   const point=level.actors.find(actor=>actor?.name==='PatrolPoint4');
   const secretary=npcPawns.find(actor=>actor.name==='Secretary0');
   const admitted=new Set([...npcPawns,...level.actors.filter(actor=>{
@@ -91,6 +103,11 @@ try{
   secretary.values['Touching[3]']=point.index;
   trace=[];touching=[];
   game.reset();
+  const freshGame=read(level.actors[0],'Game');
+  assert.notEqual(freshGame,gameInfo,'reload spawns a fresh GameInfo');
+  assert.notEqual(read(freshGame,'BaseMutator'),mutator,'reload InitGame spawns a fresh BaseMutator');
+  assert.equal(level.actors.filter(a=>a&&runtime.instance(a).cls.record.key==='deusex.deusexgameinfo').length,1);
+
   check('all four restored Touching slots clear before InitExecution',()=>
     assert.deepEqual(touching.map(slots=>slots.map(actor=>actor?.name??null)),[oracle.touching.map(()=>null)]));
   check('public reset replays the complete authored startup sequence',()=>assert.deepEqual(admittedTrace(),expected));

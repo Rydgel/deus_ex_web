@@ -21,8 +21,8 @@ pass.
 | Order | Operation | Range | Notes |
 | ----- | --------- | ----- | ----- |
 | 0 | Touching[0..3] clear | `0x1038d7f7-0x1038d824` | Writes all four slots at `actor+0xe8..+0xf4`; EAX increments before each store. Inside the `bBegunPlay`-not-set branch (`0x1038d6f6`). |
-| 1 | `InitExecution` | `0x1038d869-0x1038d885` | UObject vtable +0x38 on each live actor. |
-| 2 | `ULevel::IsServer` client pass | vtable +0x84 | Standalone (netMode 0) is a server; the client-only Role swap/destroy loop never runs. |
+| 2 | `InitExecution` | `0x1038d869-0x1038d885` | UObject vtable +0x38 on each live actor. |
+| 1 | `ULevel::IsServer` client pass | vtable +0x84 | Standalone (netMode 0) is a server; the client-only Role swap/destroy loop never runs. |
 | 3 | `bBegunPlay \| bStartup` | `0x1038d885-0x1038d899` | `LevelInfo+0x4f0 |= 0x42`. Cold path also zeros `ULevel+0xdc/+0xe0` and `LevelInfo+0x478` (`TimeSeconds`). |
 | 4 | `Game->InitGame(Options, Error)` | `0x1038d897` region | Only when `LevelInfo.Game` is set; see gaps below. |
 | 5 | `PreBeginPlay` | `0x1038d99a-0x1038d9cc` | ProcessEvent name global `0x1058364c`. |
@@ -45,7 +45,10 @@ array. Within each group the original relative order is preserved; spawned
 `SpawnActor` runs its own unconditional event chain (`InitExecution` →
 `PreBeginPlay` → `BeginPlay` → zones/`LastRenderTime` → `PostBeginPlay` →
 `SetInitialState` → base/`PostPostBeginPlay` tail, `0x10395559` region); it
-has no `bBegunPlay`/`bStartup` gate. An actor spawned mid-pass therefore
+has no `bBegunPlay`/`bStartup` gate of its own. AActor::ProcessEvent
+(`0x10369100`) suppresses script events while LevelInfo.bBegunPlay is clear;
+therefore the cold GameInfo spawn makes native calls but runs no startup script.
+An actor spawned mid-pass, with bBegunPlay now set, therefore
 arrives already started and is re-dispatched by the still-open LoadMap pass
 — the original's real behavior, not a bug to suppress.
 
@@ -150,10 +153,6 @@ camera visibility. The original Actor.Tick stasis conditions stay enabled.
 
 ## Remaining gaps
 
-* `Game->InitGame(Options, Error)` — in the original the GameInfo is
-  spawned inside LoadMap before this call. This host's `LevelInfo.Game`
-  holds the live DataLink fixture object, not an original GameInfo, so the
-  branch is documented and skipped rather than dispatched on the stub.
 * The `IsServer` client-only pass and all net-mode branches are unwired by
   design (standalone only).
 * The browser's draw submissions supply actor render timestamps, but original
@@ -195,3 +194,21 @@ and frame.Code (+0x0c) at `0x103e5b93-0x103e5b96`, returning at
 `0x103e5bfb-0x103e5c03`. InitExecution's untouched +0x24 therefore must
 not be read when no state code exists. This is an original control-flow
 condition; zero-initializing the latent slot would hide the missing guard.
+
+
+## Batch 3 GameInfo integration
+
+Cold standalone direct map entry explicitly supplies URL.Op=[] (Options="").
+The selected class comes from LevelInfo.DefaultGameType or the installed
+Engine.Engine DefaultGame/DefaultServerGame configuration. GameInfo spawns
+before Touching/InitExecution, and its original InitGame runs after startup
+flags and before shared PreBeginPlay. Its original script spawns BaseMutator
+and GameReplicationInfo; all participate in the remaining live-array passes
+and ordinary tick scheduling. The DataLink fixture no longer creates a game
+or mutator. Player subsystem setup now follows the map passes.
+See [original instruction contract](script-loadmap-gameinfo.md).
+
+The GameReplicationInfo class declares its own globalconfig int `Region`.
+Native SetActorZone reads/writes Actor's PointRegion at +0xc8, not this
+same-named derived property. Native region bindings now resolve Actor.Region
+by original field identity; the script server-region integer stays independent.

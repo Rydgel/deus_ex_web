@@ -47,26 +47,14 @@ function get(runtime,object,name){return runtime.namedReference(object,name).get
 /** Build the exact script/native world prerequisites for DataLinkPlay Spawn
  * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */
 export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
-  const [dataLinkClass,imageClass,gameClass,mutatorClass]=await Promise.all([
+  const [dataLinkClass,imageClass]=await Promise.all([
     runtime.loadClass(deusEx,requiredExport(deusEx,'DataLinkPlay')),
     runtime.loadClass(deusEx,requiredExport(deusEx,'Image02_NYC_Warehouse')),
-    runtime.loadClass(deusEx,requiredExport(deusEx,'DeusExGameInfo')),
-    runtime.loadClass(engine,requiredExport(engine,'Mutator')),
   ]);
   const authored={};
   for(const name of Object.keys(SCRIPTED_ACTOR_CONSTRUCTION.dataLinkPlay.authoredDefaults))
     authored[name]=runtime.defaultValue(dataLinkClass,runtime.lookupMember(dataLinkClass,'fields',name));
   verifyDataLinkPlayDefaults(authored);
-
-  const game={name:'DeusExGameInfo DataLink runtime'};
-  const mutator={name:'Mutator DataLink runtime'};
-  runtime.attach(game,gameClass);runtime.attach(mutator,mutatorClass);
-  set(runtime,levelInfo,'Game',game);
-  set(runtime,game,'Level',levelInfo);set(runtime,game,'BaseMutator',mutator);
-  set(runtime,game,'Difficulty',0);set(runtime,game,'bNoMonsters',false);
-  set(runtime,game,'SecretGoals',0);set(runtime,game,'ItemGoals',0);set(runtime,game,'KillGoals',0);
-  set(runtime,mutator,'NextMutator',null);
-  level.actors.push(game,mutator);
 
   for(const path of ['Actor.Spawn','Actor.Spawned','Actor.PreBeginPlay','Actor.BeginPlay',
     'Actor.PostBeginPlay','Actor.PostPostBeginPlay','Actor.SetInitialState','Actor.GainedChild',
@@ -142,7 +130,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
     },
   };
   runtime.nameServices={internName:text=>names.intern(text).name};
-  return {dataLinkClass,imageClass,game,mutator,registry,names};
+  return {dataLinkClass,imageClass,registry,names};
 }
 
 /**

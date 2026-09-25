@@ -50,7 +50,7 @@ const UNPROBED = Object.freeze([
 // Exit criteria this run does not measure.
 const UNMEASURED = Object.freeze([
   {criterion: 4, text: 'lifecycle generality: DestroyActor/CleanupDestroyed and resource load on the general route (SpawnActor is measured below)'},
-  {criterion: 5, text: 'no host substitutes (the GameInfo stand-in, the player-startup adapter)'},
+  {criterion: 5, text: 'no host substitutes (the player-startup adapter; GameInfo now comes from LoadMap)'},
 ]);
 
 if (!argv.includes('--child')) await parent();

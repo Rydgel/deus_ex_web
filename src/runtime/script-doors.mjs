@@ -1,3 +1,4 @@
+import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
 import { refValue } from './script-vm.mjs';
 import { tickMoverInterpolation } from './mover-interpolation.mjs';
@@ -416,6 +417,7 @@ export async function createScriptDoors({
   // opts 264 back out to exercise the real native.
   let liveConPlay=null;
   let liveMission=null;
+  let loadMapGame=null;
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
   // line, so supply the host sink the original always has, recording a bounded
@@ -1189,13 +1191,13 @@ export async function createScriptDoors({
   // appended during a pass are reached by it and destroyed actors drop out.
   // Every original map slot and every actor appended by a startup callback
   // participates. The player is created after LoadMap in the original.
-  const startupAdmitted = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor));
+  const startupAdmitted = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor) || loadMapGame?.actors.has(actor));
   // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
   // apply to every actor the original would have had in the array at LoadMap:
   // the serialized map actors and actors these same passes spawn. The player
   // and its post-load subsystems are excluded exactly like the original, whose
   // SpawnPlayActor runs after LoadMap.
-  const startupNative = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor));
+  const startupNative = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor) || loadMapGame?.actors.has(actor));
   // Serialized map actors the event passes above skip. The original has no
   // such gate (docs/script-loadmap-startup.md "Remaining gaps"); the Stage 3
   // conformance gate counts them (scripts/validate-stage3-training-conformance.mjs).
@@ -1206,7 +1208,9 @@ export async function createScriptDoors({
     });
     return excluded;
   }
-  const startupField = (actor, name) => runtime.namedReference(actor, name);
+  const startupField = (actor, name) => name==='Region'
+    ?runtime.fieldReference(actor,runtime.lookupMember(runtime.actorClass,'fields','Region'))
+    :runtime.namedReference(actor, name);
   const startupRead = (actor, name) => { try { return startupField(actor, name).get(); } catch { return undefined; } };
   function runStartupEvent(event) {
     forEachLiveActor(level, actor => {
@@ -1493,11 +1497,7 @@ export async function createScriptDoors({
     for (const actor of initialActorArray) {
       if (!actor || actor === playerActor || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)
           || npcPickupSet.has(actor) || npcDecorationSet.has(actor) || moversByObject.has(actor)) continue;
-      // The temporary GameInfo adapter is host-owned until the real LoadMap
-      // Game spawn is wired; preserve its binding across serialized reload.
-      const game = actor === levelInfo ? startupRead(actor, 'Game') : null;
       identities.get(actor)?.store.clear();
-      if (game) startupField(actor, 'Game').set(game);
     }
     // The original Player start reloads the level, giving a fresh player with an
     // empty hand and no drawn weapon; this host reuses the player identity, so
@@ -1511,6 +1511,7 @@ export async function createScriptDoors({
     // A held fire button does not survive the reload either (input byte 0).
     runtime.namedReference(playerActor, 'bFire').set(0);
     clearStartupPawnList();
+    loadMapGame.reload();
     clearStartupTouching();
     // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
     // pass; standalone netMode 0 is a server, so that pass never runs here.
@@ -1521,13 +1522,8 @@ export async function createScriptDoors({
     startupField(levelInfo, 'bBegunPlay').set(true);
     startupField(levelInfo, 'bStartup').set(true);
     startupField(levelInfo, 'TimeSeconds').set(0);
-    // 0x1038d897: the original calls `Game->InitGame(Options, Error)` when
-    // LevelInfo.Game is set. In the original standalone LoadMap the GameInfo
-    // is spawned inside LoadMap itself before this point; this host has no
-    // original game spawn — the live DataLink fixture populates Game with a
-    // 'DataLink runtime' stub for the script reads that need it, so the
-    // InitGame dispatch remains an unimplemented LoadMap branch (documented
-    // in docs/script-loadmap-startup.md), not a runtime call on the stub.
+    // Original InitGame executes here, creating BaseMutator itself.
+    loadMapGame.init();
     runStartupEvent('PreBeginPlay');
     runStartupEvent('BeginPlay');
     setStartupActorZones();
@@ -1653,6 +1649,10 @@ export async function createScriptDoors({
     // chain (the original reloads the level on "Player start"). This must run
     // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
     resetNpcs();
+    finishPlayerStartup();
+  }
+
+  function finishPlayerStartup() {
     if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
     // Rebind the attached local viewport onto PlayerPawn.Player. The engine sets
     // this to the possessing viewport for the local player; here it is the same
@@ -1906,6 +1906,12 @@ export async function createScriptDoors({
         try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
         collectSpawned(spawnedFrom);
+      } else if (loadMapGame?.actors.has(actor)) {
+        if (runtime.instance(actor).pendingKill || npcFailures.has(actor)) continue;
+        const from=level.actors.length;
+        try { progress += runtime.processActorTick(actor,delta,npcTickOptions); }
+        catch(error){npcFailures.set(actor,String(error?.message??error));}
+        collectSpawned(from);
       } else if (npcSpawned.has(actor) && !liveMission?.has(actor)) {
         // Inventory, Projectile and TraceHitSpawner actors share Actor.Tick.
         // Decal-ancestry spawned Shadows remain the recorded non-ticked case.
@@ -1913,7 +1919,7 @@ export async function createScriptDoors({
         try { lineage = runtime.instance(actor).cls; } catch { continue; }
         let admitted = false;
         for (let cls = lineage; cls; cls = cls.base)
-          if (['engine.inventory','engine.projectile','deusex.tracehitspawner'].includes(cls.record.key)) { admitted = true; break; }
+          if (['engine.inventory','engine.projectile','engine.replicationinfo','deusex.tracehitspawner'].includes(cls.record.key)) { admitted = true; break; }
         if (!admitted || lineage === null) continue;
         const owner = npcSpawnedOwner.get(actor) ?? runtime.namedReference(actor, 'Owner').get();
         if (runtime.instance(actor).pendingKill) continue;
@@ -1977,60 +1983,8 @@ export async function createScriptDoors({
   if(level?.engine?.client?.viewports?.[0])
     await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:playerActor});
   let windowHost=null,playerLogs=null;
-  if(nativeHud){
-    // HUD.InitWindow reads the initialized augmentation/theme/inventory
-    // graph. Allocate that actor world before the native root is constructed.
-    await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
-    // DeusExTextParser.OpenText loads InformationDevices' XExtString texts
-    // from DeusExText (docs/script-text-parser.md).
-    runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
-    playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
-      player:playerActor,warning:message=>callbacks.warning?.(message)});
-    // The former presentation adapter was created after prepareNpcs. Its
-    // replacement calls the player's original HUD getters during root Init.
-    await prepareNpcClass(playerClass);
-    const {createWindowHost}=await import('./script-window-host.mjs');
-    windowHost=await createWindowHost({runtime,assets,player:playerActor});
-    windowHost.install();windowHost.constructRootWindow(playerActor);
-    playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
-    playerLogs.enableMessages();
-  }
-  // Deferred: DataLinkPlay.StartConversation constructs each display through
-  // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
-  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost,deferWindow:true});
-  liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
-    player:playerActor,shell:infoLinkShellValue,spawnWorldPrepared:nativeHud,
-    onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
-  // player.rootWindow is the shell's native-backed root window
-  // (script-datalink-live sets it). Window hierarchy natives reachable from
-  // NPC ticks — GetRootWindow(1425) via DeusExPlayer.CanStartConversation →
-  // DeusExRootWindow.CanStartConversation — read the same +0x138 parent and
-  // +0x28 type words the shell allocates, so publish those readers for the
-  // whole Play session rather than only inside the DataLink lifecycle.
-  runtime.windowLifecycle={...runtime.windowLifecycle,
-    hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
-      readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
-  if(!nativeHud)playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
-    player:playerActor,warning:message=>callbacks.warning?.(message)});
-  await prepareShadowStartup(runtime,assets,level);
-  await prepareConversationBinding(runtime,level);
-  // Prepare the live face-to-face (ConPlay) conversations the map's
-  // conversation-owning pawns can invoke, so a frobbed instructor runs the real
-  // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent
-  // graphs. docs/script-instructor-conversation.md.
-  const faceConversations=await prepareFaceConversations(runtime,{assets,level});
-  liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:infoLinkShellValue,
-    conversations:faceConversations.conversations,prepareClass:prepareNpcClass,
-    onSpeech:event=>callbacks.conversationSpeech?.(event)});
-  // Mission00's timer: DeusExLevelInfo.SpawnScript spawns the mission actor,
-  // whose PostPostBeginPlay SetTimer runs Mission00.Timer through the shared
-  // scheduler. The helper only prepares and locates it; the shared LoadMap
-  // passes own creation (docs/script-mission-timer.md).
-  liveMission=await createLiveMissionRuntime({runtime,assets,level,player:playerActor});
-  const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
-  runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
-  runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
-
+  // Cold LoadMap owns Game creation and startup before player subsystems.
+  await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
   // Live Actor.Destroy. The DataLink spawn world above installs the spawn-side
   // actorLifecycle and the minimal no-hash level fields; merge the world
   // destruction services onto them afterwards and publish the level's real
@@ -2057,11 +2011,6 @@ export async function createScriptDoors({
       destroyedActors.record(receiver,saved);
     return accepted;
   };
-  // Eagerly link every pawn class's script surface and decode its mesh before
-  // the initial reset() runs the NPC startup chain synchronously.
-  await prepareNpcs();
-  await prepareCrateLifecycle({runtime,assets,decorations:npcDecorations,
-    prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
   // The original has every function and state of its loaded script packages in
   // memory before LoadMap runs BeginPlay. The VM links/compiles bodies
   // asynchronously and cannot do so mid-execution, so a body nobody prepared
@@ -2079,7 +2028,67 @@ export async function createScriptDoors({
       }catch(error){scriptPreparationFailures.set(`${name}.${entry.path}`,String(error?.message??error));}
     }
   }
-  reset();
+  loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
+  loadMapGame.reload();
+  await prepareShadowStartup(runtime,assets,level);
+  await prepareConversationBinding(runtime,level);
+  liveMission=await createLiveMissionRuntime({runtime,assets,level});
+  const initialFlags = [...triggerActions.flagBase.entries].map(([key, value]) => [key, {...value}]);
+  await prepareNpcs();
+  await prepareCrateLifecycle({runtime,assets,decorations:npcDecorations,
+    prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
+  for(const record of records)resetMover(record);
+  lights.reset();
+  resetNpcs();
+  if(nativeHud){
+    // HUD.InitWindow reads the initialized augmentation/theme/inventory
+    // graph. Allocate that actor world before the native root is constructed.
+    // DeusExTextParser.OpenText loads InformationDevices' XExtString texts
+    // from DeusExText (docs/script-text-parser.md).
+    runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
+    playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
+      player:playerActor,warning:message=>callbacks.warning?.(message)});
+    // The former presentation adapter was created after prepareNpcs. Its
+    // replacement calls the player's original HUD getters during root Init.
+    await prepareNpcClass(playerClass);
+    const {createWindowHost}=await import('./script-window-host.mjs');
+    windowHost=await createWindowHost({runtime,assets,player:playerActor});
+    windowHost.install();windowHost.constructRootWindow(playerActor);
+    playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
+    playerLogs.enableMessages();
+  }
+  // Deferred: DataLinkPlay.StartConversation constructs each display through
+  // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
+  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost,deferWindow:true});
+  liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
+    player:playerActor,shell:infoLinkShellValue,spawnWorldPrepared:true,
+    onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
+  // player.rootWindow is the shell's native-backed root window
+  // (script-datalink-live sets it). Window hierarchy natives reachable from
+  // NPC ticks — GetRootWindow(1425) via DeusExPlayer.CanStartConversation →
+  // DeusExRootWindow.CanStartConversation — read the same +0x138 parent and
+  // +0x28 type words the shell allocates, so publish those readers for the
+  // whole Play session rather than only inside the DataLink lifecycle.
+  runtime.windowLifecycle={...runtime.windowLifecycle,
+    hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
+      readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
+  if(!nativeHud)playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
+    player:playerActor,warning:message=>callbacks.warning?.(message)});
+  // Prepare the live face-to-face (ConPlay) conversations the map's
+  // conversation-owning pawns can invoke, so a frobbed instructor runs the real
+  // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent
+  // graphs. docs/script-instructor-conversation.md.
+  const faceConversations=await prepareFaceConversations(runtime,{assets,level});
+  liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:infoLinkShellValue,
+    conversations:faceConversations.conversations,prepareClass:prepareNpcClass,
+    onSpeech:event=>callbacks.conversationSpeech?.(event)});
+  runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
+  runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
+
+  // Prepare the newly initialized player subsystem graph for subsequent ticks.
+  await prepareNpcs();
+
+  finishPlayerStartup();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,

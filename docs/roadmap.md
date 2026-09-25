@@ -470,3 +470,7 @@ the earlier stages; this milestone closes coverage gaps rather than postponing t
   The [GetFrame vertex kernel](lodmesh-wasm.md) is the first measured Rust/Wasm
   component. Gameplay and runtime control flow remain JavaScript; changes to
   the kernel's operations also require updating and validating its JS fallback.
+
+Stage 3 batch 3 B: original LoadMap GameInfo selection/spawn and InitGame now
+replace the DataLink GameInfo/Mutator stand-ins. Training startup/tick pass;
+real player Login remains the next substitute boundary.

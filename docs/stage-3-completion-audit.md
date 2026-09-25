@@ -1124,3 +1124,9 @@ See [surface/skin evidence](script-lodmesh-materials.md).
 Focused frame/material comparisons, the linked GM_Trench runtime check, syntax/
 diff checks and the production build pass. The build retains its existing chunk
 size warning. No full validator sweep or visible NPC rendering is claimed.
+
+2026-09-25 batch 3 B: LoadMap selects and spawns the configured DeusExGameInfo,
+then original InitGame spawns its Mutator; GameReplicationInfo is also a real
+spawn. Cold Actor.ProcessEvent dispatch is gated by original bBegunPlay.
+The event/lifecycle matrix now includes this measured route; real player Login
+remains open. See [original evidence](script-loadmap-gameinfo.md).

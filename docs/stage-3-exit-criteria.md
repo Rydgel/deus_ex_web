@@ -265,3 +265,20 @@ Focused checks include original null-Code ProcessState guard, original struct
 bool payloads, exact once-per-pass load/reset for all 312 serialized actors,
 doors, lights, DataLinks, mission timer and instructor conversation. `npm test`:
 534/534. No full sweep at this checkpoint; one is reserved for the batch end.
+
+## Batch 3 milestone B — original GameInfo
+
+Measured 2026-09-25: 90 probes, 4 boots, 258 s, peak 2482 MiB.
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | PASS: zero exclusions or preparation failures |
+| 2. tick | PASS, including reset |
+| 3. interactions | OPEN: LargeTextWindow layout and unprobed Fire/AltFire (batch 4) |
+| 4. lifecycle | OPEN: DestroyActor/CleanupDestroyed and resource loading not measured |
+| 5. substitutes | OPEN: player-startup adapter remains; GameInfo and its Mutator now come from original LoadMap/InitGame |
+
+General SpawnActor: 105 classes, 3332 accepted actors, 273 original-gate
+rejections, zero throws. Original Actor.ProcessEvent's cold-level gate and
+GameReplicationInfo's shadowed Region field are covered by focused checks.
+See [GameInfo evidence](script-loadmap-gameinfo.md).
