@@ -130,6 +130,12 @@ request; Stage 3 remains unfinished.
 See the [Stage 3 completion audit](stage-3-completion-audit.md) for the current
 requirement matrix, evidence locations and smallest remaining blocker set.
 
+**Gate (adopted 2026-09-25):** Stage 3 is done when
+`scripts/validate-stage3-training-conformance.mjs` passes — Training's startup,
+ticking and every probed interaction on original bytecode with no boundary
+outside the named Stage 6 ones. See [Stage 3 exit criteria](stage-3-exit-criteria.md)
+for the criteria and the current scoreboard.
+
 **In progress.** Extend the existing bounded VM to execute original functions
 and state bytecode, starting with class/property metadata and the selected
 mover's script path. Use focused source/native and integration checks; visual

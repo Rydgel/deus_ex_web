@@ -1,10 +1,11 @@
 # Stage 3 exit criteria — concrete, finite definition
 
-Status: proposal to replace the open-ended "general compatibility" gate with a
-finite, testable one. Numbers below are measured from
-`.cache/script-runtime-inventory.json`
-(`node scripts/inventory-script-runtime.mjs`) on the installed GOTY packages,
-2026-09-20.
+Status: adopted 2026-09-25 as the Stage 3 gate, replacing the open-ended
+"general compatibility" gate with a finite, testable one. The acceptance test is
+`scripts/validate-stage3-training-conformance.mjs` (see "Acceptance test"
+below). The native counts below are measured from
+`.cache/script-runtime-inventory.json` (`node scripts/inventory-script-runtime.mjs`)
+on the installed GOTY packages, 2026-09-20.
 
 ## Why the current gate never terminates
 
@@ -60,9 +61,12 @@ static 93 is the ceiling; the reachable count is expected to be well under half.
 
 ## Exit criteria (all must hold)
 
-1. **Training startup conformance.** Every pawn-ancestry map actor runs the full
+1. **Training startup conformance.** Every map actor runs the full
    `PreBeginPlay → … → PostPostBeginPlay` chain and Player-start reset re-runs it,
-   with **no unimplemented-boundary throw**. Currently-recorded startup boundaries
+   with **no unimplemented-boundary throw**. The original `LoadMap` passes
+   dispatch to every non-null slot ([LoadMap startup](script-loadmap-startup.md)),
+   so a class the host leaves out of those passes counts against this criterion,
+   as does a failure Play catches into `npcFailures`. Currently-recorded startup boundaries
    that must each be closed or reclassified as an allowed no-op:
    - weapon `SpawnActor` for armed NPCs
    - `PlayerReplicationInfo` startup for cameras
@@ -93,19 +97,46 @@ Explicitly **out of the Stage 3 gate**: mesh/HUD rendering, audio mixing,
 animation *playback* (Stage 4); AI navigation/perception, combat, inventory,
 skills, missions (Stage 5). Their natives may be called as recorded no-ops.
 
-## Acceptance test to build
+## Acceptance test
 
-A single `scripts/validate-stage3-training-conformance.mjs` that:
-- boots `00_Training`, runs startup, ticks N simulated seconds, fires each
-  interaction in (3), then Player-start reset and repeats;
-- asserts **zero** unimplemented-boundary throws for anything not on the
-  explicit Stage-4/5 no-op allowlist;
-- prints the set of native indices actually reached and which remain unbound, so
-  the reachable-tail denominator is a number this test reports, not an estimate.
+`scripts/validate-stage3-training-conformance.mjs` is the gate. It shares its
+boot and probe engine with the census (`scripts/training-probe-lib.mjs`) and runs
+without `--continue`, so an unsupported native throws exactly as in Play. It:
+- instruments the `ScriptRuntime` prototype before `createGame`, so the LoadMap
+  startup inside boot is observed, and records every failure Play catches into
+  `npcFailures` after each boot, probe and Player-start reset;
+- asks Play for the serialized map actors its LoadMap event passes exclude;
+- ticks 10 s after boot, runs every census probe with a reset after each, then
+  ticks 10 s after the last reset;
+- tolerates only named out-of-Stage-3 boundaries (`ClientTravel` and
+  `SaveGame` 3011, both Stage 6) and keeps unprobed families (Fire/AltFire)
+  and unmeasured criteria (4, 5) open;
+- prints every non-primitive native reached through `invokeNative` and which
+  of them are unsupported.
 
-When that validator is green and the (4) lifecycle items run generally for
-Training's objects, Stage 3 is done — with a printed, finite list of exactly what
-was exercised.
+It exits nonzero while any criterion is open (`--report` prints the same
+scoreboard and exits 0) and writes `.cache/stage3-training-conformance.json`.
+When it passes, Stage 3 is done, with a printed, finite list of exactly what was
+exercised.
+
+First scoreboard (2026-09-25, 89 probes, 4 boots, 233 s, peak 2,169 MiB):
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | open: 240 map actors excluded from the LoadMap passes (80 SpotLight, 66 Light, 25 DeusExMover, 19 AmbientSound, 18 DataLinkTrigger, 12 PathNode, …); one preparation failure (the `ScriptedPawn.InitialAllianceInfo.bPermanent` struct bool default). No swallowed startup or reset failure. |
+| 2. tick | pass for the admitted actors: both 10 s legs end on no boundary |
+| 3. interactions | open: `Beam` spawn (`ActivateAugmentation 9`), `LargeTextWindow` `XTextParams` layout (the `DataCube0 -> ShowGoalsWindow` sequence probe), Fire/AltFire not probed. `ClientTravel` and `SaveGame` tolerated as Stage 6. |
+| 4. lifecycle, 5. substitutes | not measured by the run yet |
+
+195 distinct non-primitive natives were reached; the only unsupported ones are
+the two tolerated Stage 6 natives.
+
+A sizing experiment that admitted every map actor to the LoadMap passes (then
+reverted) found only three failure families: the 25 movers' startup reaches
+`Original move service is not linked: moveActor`, `DeusExLevelInfo` spawns
+`Mission00` through the original route and meets the per-class spawn gate, and
+one tick throws `Original state latent slot is uninitialized before state entry`.
+Every other excluded class completed its original startup unchanged.
 
 ## First step — reach census (2026-09-24)
 

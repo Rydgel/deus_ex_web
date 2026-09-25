@@ -1212,6 +1212,16 @@ export async function createScriptDoors({
   // and its post-load subsystems are excluded exactly like the original, whose
   // SpawnPlayActor runs after LoadMap.
   const startupNative = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor));
+  // Serialized map actors the event passes above skip. The original has no
+  // such gate (docs/script-loadmap-startup.md "Remaining gaps"); the Stage 3
+  // conformance gate counts them (scripts/validate-stage3-training-conformance.mjs).
+  function loadMapStartupExclusions() {
+    const excluded = [];
+    forEachLiveActor(level, actor => {
+      if (actor !== playerActor && identities.has(actor) && !startupAdmitted(actor)) excluded.push(actor);
+    });
+    return excluded;
+  }
   const startupField = (actor, name) => runtime.namedReference(actor, name);
   const startupRead = (actor, name) => { try { return startupField(actor, name).get(); } catch { return undefined; } };
   function runStartupEvent(event) {
@@ -2083,7 +2093,7 @@ export async function createScriptDoors({
   reset();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
-    npcPawns, npcFailures, scriptPreparationFailures,
+    npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     infoLinkShell,playerStartup,windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }
