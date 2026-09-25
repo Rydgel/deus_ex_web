@@ -1512,6 +1512,11 @@ export async function createScriptDoors({
     runtime.namedReference(playerActor, 'bFire').set(0);
     clearStartupPawnList();
     loadMapGame.reload();
+    // Everything destroyed so far — the previous run's spawned actors and its
+    // LoadMap GameInfo/Mutator/GameReplicationInfo — belongs to the unloaded
+    // level. A freshly loaded ULevel starts with an empty deferred-deletion
+    // chain, so the startup below sees the same chain as the first load.
+    level.pendingDeleted = null;
     clearStartupTouching();
     // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
     // pass; standalone netMode 0 is a server, so that pass never runs here.

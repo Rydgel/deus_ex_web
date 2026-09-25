@@ -139,8 +139,10 @@ for the criteria and the current scoreboard.
 Batch 3 A admits all 312 original map exports to LoadMap startup, including
 Mission00 spawning and PickupDistributor's key distribution/self-destruction.
 Movers reuse the recovered brush move service; TriggerLight startup is shared.
-The struct-bool preparation boundary is closed. Real GameInfo and player login
-remain the next batch-3 milestones; Stage 3 remains incomplete.
+The struct-bool preparation boundary is closed. Batch 3 B now supplies real
+GameInfo/InitGame. Player Login remains incomplete at the native Input bootstrap
+and player-owned destruction boundaries; see the [batch 3 handoff](stage-3-batch3-handoff.md).
+Stage 3 remains incomplete.
 
 
 **In progress.** Extend the existing bounded VM to execute original functions
@@ -470,7 +472,3 @@ the earlier stages; this milestone closes coverage gaps rather than postponing t
   The [GetFrame vertex kernel](lodmesh-wasm.md) is the first measured Rust/Wasm
   component. Gameplay and runtime control flow remain JavaScript; changes to
   the kernel's operations also require updating and validating its JS fallback.
-
-Stage 3 batch 3 B: original LoadMap GameInfo selection/spawn and InitGame now
-replace the DataLink GameInfo/Mutator stand-ins. Training startup/tick pass;
-real player Login remains the next substitute boundary.

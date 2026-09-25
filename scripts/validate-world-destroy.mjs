@@ -31,6 +31,46 @@ const player = game.player.collisionActor;
 const level = runtime.levelFor(player);
 const ref = (actor, name) => runtime.namedReference(actor, name);
 
+
+// Original PickupDistributor.PostPostBeginPlay ends with Destroy(), after
+// the shadow startup pass. Compare the complete reset-time chain with fresh
+// startup. The only serialized map actor allowed in the chain is that
+// distributor. Every other entry must be a runtime-spawned actor already out
+// of Level.Actors: startup Shadows (KillShadow) and the host reload's teardown
+// of the previous run's spawns — Shadows, NPC inventory, the distributed key,
+// and the GameInfo/Mutator/GameReplicationInfo LoadMap and InitGame spawned
+// (script-loadmap-game.mjs reload). Boot runs the startup passes twice
+// (setup, then reset), so that teardown is in the boot chain too.
+const distributorExport = mapAsset.pkg.exports.findIndex(entry =>
+  entry.name === 'PickupDistributor0' && entry.className === 'PickupDistributor') + 1;
+assert.ok(distributorExport > 0, 'Training contains its original PickupDistributor0');
+const serializedMapActor = actor => Number.isInteger(actor.index) && mapAsset.pkg.exports[actor.index - 1]?.name === actor.name;
+function startupDeletedChain() {
+  const seen = new Set(), signature = [];
+  let distributors = 0;
+  for (let actor = level.pendingDeleted; actor; actor = ref(actor, 'Deleted').get()) {
+    assert.equal(seen.has(actor), false, 'the deferred chain must not cycle');
+    seen.add(actor);
+    const key = runtime.instance(actor).cls.record.key;
+    if (key === 'deusex.pickupdistributor') {
+      assert.equal(actor.index, distributorExport, 'only the authored distributor destroys itself at startup');
+      assert.equal(actor.name, 'PickupDistributor0');
+      distributors++;
+    } else {
+      assert.equal(serializedMapActor(actor), false, `serialized ${actor.name} must not join the startup chain`);
+      assert.notEqual(actor, ref(level.actors[0], 'Game').get(), 'the live LoadMap GameInfo is never torn down');
+    }
+    assert.equal(ref(actor, 'bDeleteMe').get(), true, 'every deferred entry is pending deletion');
+    assert.equal(level.actors.includes(actor), false, 'startup-deleted actors are absent after partition');
+    signature.push(`${key}:${ref(actor, 'Owner').get()?.name ?? 'None'}`);
+  }
+  assert.equal(distributors, 1, 'original PickupDistributor destroys itself exactly once per startup');
+  assert.equal(signature[0]?.split(':')[0], 'deusex.pickupdistributor',
+    'PostPostBeginPlay distributor destruction follows the shadow startup pass');
+  return signature;
+}
+const freshStartupDeletedChain = startupDeletedChain();
+
 // -- The authored one-shot trigger -------------------------------------------
 const trigger = level.actors.find(actor => actor?.name === 'OrdersTrigger2');
 assert.ok(trigger, '00_Training must contain OrdersTrigger2');
@@ -126,11 +166,10 @@ game.reset();
 assert.equal(level.actors[slot], trigger, 'reset returns the actor to its original slot');
 assert.equal(ref(trigger, 'bDeleteMe').get(), false);
 assert.equal(nativeObject.flags >>> 0, exportEntry.flags >>> 0);
-// The ledger cleared session-one destroys; a shadow whose reset-startup
-// AttachDecal fails is destroyed again and becomes the new chain head —
-// the only destruction NPC startup can produce.
-assert.ok(level.pendingDeleted === null || level.pendingDeleted.name?.startsWith('Shadow'),
-  'the deferred chain holds only reset-time shadow destroys after restore');
+// The ledger clears session-one destruction. Original startup then recreates
+// the shadow failures and PickupDistributor0's PostPostBeginPlay destruction.
+assert.deepEqual(startupDeletedChain(), freshStartupDeletedChain,
+  'reset reproduces the exact fresh-startup deferred class/owner sequence');
 assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collision hash registration');
 
 let second = 0, reopened = false;

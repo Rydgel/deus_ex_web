@@ -46,15 +46,14 @@ for(let run=0;run<2;run++) {
   const firstFrame=get('AnimFrame');
   assert.ok(firstFrame<0,'original startup selected a tween');
   const spawn=[...mib.position];
-  // Wander episodes pause ~6.5s between attempts on failure; seed 1 first
-  // succeeds around tick 559. 900 ticks covers two-plus episodes with margin.
-  // The startup tween finishing is observed DURING the loop: a completed
-  // walk episode legitimately starts a fresh BreatheLight tween, which leaves
-  // AnimFrame negative again at whatever tick the window happens to end on.
+  // Shared startup now consumes the original RNG for every map actor.
+  // The former partial-startup seed-1 success tick is not a reference case.
+  // Observe a bounded minute, stopping once this route has actually walked.
   let tweenFinished=false;
-  for(let i=0;i<900&&!npcFailures.has(mib);i++){
+  for(let i=0;i<3600&&!npcFailures.has(mib);i++){
     tick();
     if(get('AnimFrame')>=0)tweenFinished=true;
+    if(tweenFinished&&successes>0&&Math.hypot(...mib.position.map((v,j)=>v-spawn[j]))>0.5)break;
   }
   assert.equal(npcFailures.has(mib),false,'MIB ticked through startup and wandering without a boundary');
   assert.ok(enemyChecks>0,'real script dispatch completed the recovered enemy native');

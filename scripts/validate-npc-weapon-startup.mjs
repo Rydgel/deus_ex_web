@@ -7,7 +7,8 @@
  * spawned actors through the recovered ULevel::DestroyActor — no leaked
  * Level.Actors slots, no duplicates on the next run.
  *
- * UNATCOTroop2 is intentionally absent: the map overrides leave it unarmed.
+ * UNATCOTroop2 is unarmed but receives a NanoKey from the authored
+ * PickupDistributor's original PostPostBeginPlay before the first tick.
  *
  * Evidence: docs/script-npc-weapon-startup.md; the asserted values are the
  * original class defaults merged with the map overrides recorded there.
@@ -17,6 +18,8 @@ import {readdir, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
+import {Reader} from '../src/unreal/package.mjs';
+import {readObject,nameAt} from '../src/unreal/objects.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 import {gameDirectory} from './game-directory.mjs';
@@ -26,7 +29,22 @@ for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(path.join(root, directory)))
     files.push({path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name))});
 const assets = new AssetStore(files), asset = await assets.get('00_Training');
-const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
+const map = decodeMap(asset.bytes);
+// Original PickupDistributor0 export 1633 has exactly one authored struct
+// override. SerializeBin member order is ScriptedPawnTag, KeyID, Description,
+// SkinColor (PickupDistributor.uc). The SkinColor assignment is commented
+// out in the original PostPostBeginPlay; it is not an expected mutation.
+const distributor = map.actors.find(actor => actor.name === 'PickupDistributor0');
+assert.equal(distributor?.index,1633);
+const keyTags = readObject(asset.pkg,asset.bytes,distributor.index).properties.filter(tag=>tag.name==='NanoKeyData');
+assert.equal(keyTags.length,1);assert.equal(keyTags[0].arrayIndex,0);
+const keyReader = new Reader(keyTags[0].data);
+const distributedInput = {tag:nameAt(asset.pkg,keyReader.compact()),keyID:nameAt(asset.pkg,keyReader.compact()),
+  description:keyReader.string(asset.pkg.version),skinColor:keyReader.u8()};
+assert.equal(keyReader.offset,keyTags[0].data.length);
+assert.deepEqual(distributedInput,{tag:'Test_Subject',keyID:'Body_Search_Room',description:'Medical Room',skinColor:0});
+assert.deepEqual(map.actors.filter(actor=>actor.values.Tag===distributedInput.tag).map(actor=>actor.name),['UNATCOTroop2']);
+const game = await createGame(map, asset, assets, {randomSeed: 1, presentation: true});
 const {runtime, npcPawns, npcFailures} = game.doors.scriptRuntime;
 const level = runtime.levelFor(game.player.collisionActor);
 const get = (actor, name) => runtime.namedReference(actor, name).get();
@@ -92,6 +110,19 @@ for (const actor of npcPawns) {
   if (name in EXPECTED) targets.set(name, actor);
 }
 assert.equal(targets.size, 4, 'all four armed Training NPCs are scripted pawns');
+const keyPawn=npcPawns.find(pawn=>pawn.name==='UNATCOTroop2');
+assert.ok(keyPawn,'the authored distributor target is a linked pawn');
+const verifyDistributedKey = () => {
+  const keys=spawnedInventory().filter(item=>instance(item).cls.record.key==='deusex.nanokey');
+  assert.equal(keys.length,1,'PickupDistributor spawned exactly one authored NanoKey');
+  const key=keys[0];
+  assert.equal(get(key,'Owner'),keyPawn);assert.equal(get(key,'Instigator'),keyPawn);
+  assert.equal(get(key,'Base'),keyPawn);assert.equal(get(keyPawn,'Inventory'),key);
+  assert.equal(get(key,'Inventory'),null,'unarmed target carries only the distributor key');
+  assert.equal(get(key,'KeyID'),distributedInput.keyID);assert.equal(get(key,'Description'),distributedInput.description);
+  assert.equal(get(keyPawn,'StandingCount'),1,'original SetBase adds one key rider');
+  return key;
+};
 // This headless fixture continuously observes the four target pawns. Supply
 // that visibility input explicitly; the live renderer owns draw feedback.
 const rendered = [...targets.values()].map(pawn => actorRenderFeedback(runtime, pawn));
@@ -108,6 +139,7 @@ let previousItems = null, resetShadowCount = null;
 for (let run = 0; run < 3; run++) {
   if (run) game.reset();
   observeFailures();
+  verifyDistributedKey();
 
   // InitializeInventory runs on the first ProcessState tick, not at load —
   // the serialized Inventory field must still be empty before any tick.
@@ -126,10 +158,12 @@ for (let run = 0; run < 3; run++) {
   const items = spawnedInventory();
   const player = game.player.collisionActor;
   const rings = items.filter(item => instance(item).cls.record.key === 'deusex.nanokeyring');
-  const npcItems = items.filter(item => !rings.includes(item));
+  const distributedKey=verifyDistributedKey();
+  const npcItems = items.filter(item => !rings.includes(item)&&item!==distributedKey);
   assert.equal(rings.length, 1, `${label}: CreateKeyRing spawned one NanoKeyRing`);
   assert.equal(get(rings[0], 'Owner'), player, `${label}: the key ring is the player's`);
   assert.equal(npcItems.length, 12, `${label}: exactly the twelve NPC-spawned inventory actors`);
+  assert.equal(items.length,14,`${label}: twelve armed-NPC items, one distributor key and one player keyring`);
   assert.equal(new Set(items).size, items.length, `${label}: no duplicate inventory actors`);
   const shadows = shadowCount();
   if (run === 0) {

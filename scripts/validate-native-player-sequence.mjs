@@ -1,4 +1,4 @@
-import{createGame}from'../src/viewer/game.mjs';
+import{createPlayerSequenceFixture}from'./native-player-sequence-fixture.mjs';
 import{runPlayerPhysics}from'../src/runtime/player-physics.mjs';
 import assert from'node:assert/strict';
 import{createHash}from'node:crypto';
@@ -30,7 +30,7 @@ for(const [name,start]of [['00_Training',[-1149.2435302734375,825.8439331054688,
  const comparison=[];
  for(const [i,c]of cases.entries()){
   const original=reference.results[i];if(original.unsupported){comparison.push({name:c.name,unsupported:original.unsupported});continue;}
-  const game=await createGame(map,asset,assets),player=game.player,q=game.collision.queries;
+  const game=createPlayerSequenceFixture(scene),player=game.player,q=game.collision.queries;
   q.changeActor(player.collisionActor,()=>{player.position=c.position.map(Math.fround);player.radius=20;player.height=c.height??43;player.bodyRotation=[0,0,0];});
   player.velocity=(c.velocity??[0,0,0]).map(Math.fround);player.grounded=(c.physics??1)===1;player.physicsPawn={base:q.levelInfo,hitSlopedWall:false,moveTimer:0,pawnFlags:0,destination:[0,0,0]};
   const calls=[],line=q.lineCheck.bind(q);q.lineCheck=(start,end,extent,flags,extra=0,source)=>{const hit=line(start,end,extent,flags,extra,source);calls.push({start:[...start],end:[...end],extent:[...extent],flags,extra,time:hit.time,normal:hit.normal,actor:hit.actor===q.levelInfo?'$world':hit.actor?.id??hit.actor?.name??null});return hit;};

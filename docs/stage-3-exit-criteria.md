@@ -282,3 +282,8 @@ General SpawnActor: 105 classes, 3332 accepted actors, 273 original-gate
 rejections, zero throws. Original Actor.ProcessEvent's cold-level gate and
 GameReplicationInfo's shadowed Region field are covered by focused checks.
 See [GameInfo evidence](script-loadmap-gameinfo.md).
+
+Milestone C is incomplete: native Input bootstrap/config reload, player-owned
+destruction and DumpLocation FString-array storage need further recovery and
+integration. Play remains at B; PRI and Esc pausing are not claimed fixed.
+See the [batch 3 handoff](stage-3-batch3-handoff.md) and preserved local C work.
