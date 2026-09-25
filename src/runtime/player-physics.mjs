@@ -14,7 +14,7 @@ export function runPlayerPhysics(player,dt,{acceleration,groundSpeed,isWalking,z
  if(zone.bWaterZone)unsupported('water-zone physics');
  if(defaults.bBounce)unsupported('bouncing Pawn physics');
  player.motionFlags??=defaults.bJustTeleported?0x100:0;
- const pawn=player.physicsPawn??={base:null,hitSlopedWall:false,moveTimer:0,pawnFlags:0,destination:[0,0,0],
+ const pawn=player.physicsPawn??={base:player.spawnBase??null,hitSlopedWall:false,moveTimer:0,pawnFlags:0,destination:[0,0,0],
   // Actor+0x1ec is shared by physics and FarMoveActor; preserve every other bit.
   get justTeleported(){return Boolean(player.motionFlags&0x100);},
   set justTeleported(value){player.motionFlags=((player.motionFlags&~0x100)|(value?0x100:0))>>>0;}};

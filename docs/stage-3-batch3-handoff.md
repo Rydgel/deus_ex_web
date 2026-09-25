@@ -1,12 +1,20 @@
-# Stage 3 batch 3: A/B complete, C incomplete
+# Stage 3 batch 3: A, B and boot-time C complete
 
 Milestone A is `ea93916`: every Training map actor receives the original
 LoadMap passes. Milestone B spawns the real configured DeusExGameInfo and
-runs original InitGame, which spawns its Mutator. Neither milestone completes
-Stage 3: the interaction/lifecycle gates and the player-startup adapter remain
-open. See the measured [scoreboard](stage-3-exit-criteria.md).
+runs original InitGame, which spawns its Mutator. Milestone C (2026-09-25)
+boots Play through the original SpawnPlayActor -> DeusExGameInfo.Login. The
+player has a real PlayerReplicationInfo, and Esc pauses the level. The
+remaining C item is reset: it still keeps the logged-in player instead of
+purging the old level and logging in again. See
+[player login](script-player-login.md) and the measured
+[scoreboard](stage-3-exit-criteria.md).
 
-## Why C stops here
+The sections below record why the first C attempt stopped. Their boundaries
+are now closed: dynamic string arrays, InputExt/ResetConfig, InitRootWindow
+and CheckFlag. Player-owned destruction is still the reset prerequisite.
+
+## Why the first C attempt stopped
 
 Research and bounded reference probes closed the originally named player
 constructor and pawn-spawn prerequisites, but found additional required native

@@ -189,6 +189,8 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     if(activeAudio)onSpeech?.({kind:'stop',id:activeAudio.id});activeAudio=null;
   }
   return {handleNative,reset,spawned,sounds,histories,
+    // Call reset against the old player before adopting the next Login result.
+    bindPlayer(next){runtime.instance(next);player=next;},
     withLifecycle:fn=>shell.withLifecycle(fn),
     active:()=>get(player,'conPlay'),
     tick:(seconds,options)=>shell.withLifecycle(()=>{

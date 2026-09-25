@@ -91,6 +91,7 @@ export function findActorBase(actor,{lineCheck,dispatch}){
  * line filters. `values`/`collisionValues` expose only the enumerable fields
  * the original collision queries read. */
 export function installActorCollisionView(actor,{read,write,worldActor,lineage}){
+ const isPawn=lineage.includes('engine.pawn');
  const field=name=>()=>read(actor,name);
  const fieldWrite=name=>value=>write(actor,name,value);
  const bit=(mask,name)=>()=>Boolean(read(actor,name)?mask:0);
@@ -102,12 +103,11 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   worldActor:{value:worldActor},
   values:{value:values},collisionValues:{value:values},
   model:{value:null},movingBrush:{value:false},projectile:{value:lineage.includes('engine.projectile')},
-  controlledPlayer:{value:false},isPawn:{value:false},
+  controlledPlayer:{value:false,writable:true},isPawn:{value:isPawn},
   // moveQuery's source-type gate marker: a spawned script-actor collision
-  // view admitted to the recovered MoveActor translation. `pawn`/`decoration`
-  // stay false — the non-pawn MoveActor tail (CheckEncroachment at
-  // 0x10399bf5) is the original branch these actors take.
-  scriptView:{value:true},pawn:{value:false},decoration:{value:false},
+  // view admitted to the recovered MoveActor translation. Pawn ancestry
+  // selects its original MoveActor tail (skipping non-pawn encroachment).
+  scriptView:{value:true},pawn:{value:isPawn},decoration:{value:false},
   standingCount:{get:field('StandingCount'),set:fieldWrite('StandingCount')},
   touching:{value:[null,null,null,null]},
   actorFlags:{get:()=>(read(actor,'bStatic')?1:0)|(read(actor,'bDeleteMe')?0x80:0)|
@@ -136,6 +136,12 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   owner:{get:field('Owner')},
   static:{get(){return Boolean(this.actorFlags&1);}},
   movable:{get(){return Boolean(this.actorFlags&0x80000);}},
+ });
+ // APawn::execAddPawn/RemovePawn and native list consumers use this same
+ // +0x498 field. Map pawns already bind NextPawn onto their host property;
+ // fresh pawns expose the reverse view over their newly allocated storage.
+ if(isPawn)Object.defineProperty(actor,'nextPawn',{
+  get:field('NextPawn'),set:fieldWrite('NextPawn'),enumerable:true,
  });
  return actor;
 }

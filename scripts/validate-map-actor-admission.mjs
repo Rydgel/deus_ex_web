@@ -100,13 +100,15 @@ function assertAdmission(label) {
   const isStatic = actor => { try { return Boolean(runtime.namedReference(actor, 'bStatic').get()); } catch { return false; } };
   const firstNet = level.iFirstNetActor;
   assert.equal(Number.isInteger(firstNet), true, `${label}: iFirstNetActor recorded`);
-  const tail = level.actors.slice(2);
+  // ULevel::DestroyActor leaves a null slot; Login's ResetPlayerToDefaults
+  // destroys the first NanoKeyRing after the LoadMap tail ran.
+  const tail = level.actors.slice(2).filter(Boolean);
   const serializedTail = tail.filter(actor => mapRefs.has(actor.index));
   const expected = serializedTail.filter(isStatic).concat(serializedTail.filter(actor => !isStatic(actor)));
   assert.deepEqual(serializedTail, expected, `${label}: statics precede dynamics preserving serialized order`);
   // Dynamic-section tail order: map actors precede runtime spawns (which were
   // appended after the serialized entries pre-partition).
-  const dynamicTail = tail.slice(firstNet - 2);
+  const dynamicTail = level.actors.slice(firstNet).filter(Boolean);
   const lastMapIndex = dynamicTail.reduce((last, actor, i) => mapRefs.has(actor.index) ? i : last, -1);
   const firstSpawnIndex = dynamicTail.findIndex(actor => !mapRefs.has(actor.index));
   assert.ok(firstSpawnIndex === -1 || firstSpawnIndex > lastMapIndex,
@@ -121,10 +123,12 @@ function assertAdmission(label) {
   for (const actor of [...game.collision.actors, ...game.collision.movers])
     if (Number.isInteger(actor.index))
       assert.equal(mapExportAdmitted(map.pkg, actor.index), true, `${label}: collidable ${actor.name} is admitted`);
-  // The map's only PlayerPawns are the refused editor cameras, so the map
-  // itself contributes zero PlayerReplicationInfo objects — nothing spawned
-  // a PRI for an unadmitted actor.
-  assert.equal(priCount(), 0, `${label}: no PlayerReplicationInfo was spawned`);
+  // The map's only PlayerPawns are the refused editor cameras, so its one
+  // PlayerReplicationInfo is the Login player's — nothing spawned a PRI for an
+  // unadmitted actor.
+  assert.equal(priCount(), 1, `${label}: only the Login player's PlayerReplicationInfo exists`);
+  const pri = level.actors.find(a => a && clsKey(a) === 'engine.playerreplicationinfo');
+  assert.equal(runtime.namedReference(pri, 'Owner').get(), game.player.collisionActor, `${label}: the PRI is the player's`);
   // Every recorded startup/tick boundary belongs to an admitted actor; a
   // refused export can never reach startup to fail.
   for (const [actor] of npcFailures)
@@ -143,5 +147,5 @@ for (let run = 1; run <= 2; run++) {
 
 console.log('Map actor admission passed: the standalone CreateExport gates refuse Training\'s 992 Brush ' +
   'and 4 Camera exports; their Level.Actors slots resolve to null, they never join PawnList/collision/' +
-  'startup, no PlayerReplicationInfo is spawned, and two resets preserve the partition. ' +
+  'startup, the only PlayerReplicationInfo is the Login player\'s, and two resets preserve the partition. ' +
   `Boundaries recorded only for admitted actors (${npcFailures.size} total).`);

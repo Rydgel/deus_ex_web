@@ -11,7 +11,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const invoke=(object,name,args=[])=>runtime.callFunction(runtime.lookup(object,name),object,args.length,i=>args[i]);
   const scoped=callback=>shell.withLifecycle(callback);
-  const root=host.root,hud=host.hud,hit=read(hud,'hit'),compass=read(hud,'compass'),cross=read(hud,'cross');
+  let root=host.root,hud=host.hud,hit=read(hud,'hit'),compass=read(hud,'compass'),cross=read(hud,'cross');
   const images=new Map(),pending=new Map(),store=new TextureStore(assets);
   async function imageFor(ref){
     if(!ref)return null;if(images.has(ref.key))return images.get(ref.key);
@@ -61,7 +61,15 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   // Decode native resources already reached by construction; new inventory
   // textures are loaded when their original DrawWindow submits them.
   await Promise.all([...host.resourceImages.values()].filter(r=>r.kind==='texture').map(r=>imageFor(r.ref)));
-  return {runtime,player,shell,host,root,hud,hit,compass,cross,read,invoke,scoped,rect,tile,visible,images,imageFor,decorationCommands,snapshot,
+  return {runtime,shell,host,read,invoke,scoped,rect,tile,visible,images,imageFor,decorationCommands,snapshot,
+    get player(){return player;},get root(){return root;},get hud(){return hud;},
+    get hit(){return hit;},get compass(){return compass;},get cross(){return cross;},
+    bindPlayer(next){
+      runtime.instance(next);
+      if(!host.root||!host.hud)throw new Error('Play HUD requires the new initialized root and HUD');
+      player=next;root=host.root;hud=host.hud;
+      hit=read(hud,'hit');compass=read(hud,'compass');cross=read(hud,'cross');
+    },
     commands(width,height,view){return scoped(()=>host.draw(root,width,height,view));},
     tick(delta){scoped(()=>host.tick(root,delta));},
     key(key,action){return scoped(()=>host.key(root,key,action));},

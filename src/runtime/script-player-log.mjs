@@ -35,6 +35,8 @@ export async function preparePlayerLogStore({runtime,assets,player}){
     return create(call.receiver);
   };
   return {logs,create,
+    // Host identity routing only; Login/startup owns the new player's fields.
+    bindPlayer(next){runtime.instance(next);player=next;},
     enableMessages(){runtime.boundaryFunctions.delete('extension.playerpawnext.clientmessage');},
     reset(){
       runtime.namedReference(player,'FirstLog').set(null);

@@ -446,8 +446,8 @@ the exported functions entered, and the body that the vtable's `+0x2c`
 `src/runtime/script-native-actor-constructors.mjs`; the default mode fails
 when the committed table differs from the original DLLs.
 
-Result: 53 constructors write nothing but their vtable, so every
-template-copied member survives construction (their member constructors are
+Result: 55 constructors write nothing but their vtable in the patterned case,
+so the tested template-copied members survive construction (their member constructors are
 the `ENoInit` `FName`/`FPlane`/`FString` forms). `ADecal` is the only one with
 a member write — it zeroes its 12-byte native `SurfList` header at
 `+0x320`–`+0x32b`, the existing `constructDecal` translation. The table
@@ -456,9 +456,52 @@ CameraPoint `0x10427178`, Inventory `0x104286f8`, Weapon `0x104287a4`,
 Projectile `0x10428850`, Decal `0x10426f74`). Every resolved vtable's
 `IsPendingKill` slot reaches `AActor::IsPendingKill` (`0x1030df80`), so
 `script-pending-kill.mjs` derives its Actor predicate from the table.
-`DeusExPlayer` and `PlayerPawnExt` stay unresolved: their constructors reach
-MSVCRT `_vsnwprintf`, which the probe does not supply, so spawning a class
-bound to them is refused.
+`DeusExPlayer` and `PlayerPawnExt` now resolve; their conditional FlagBase
+allocation is a separate obligation below, not a vtable-only guarantee.
+
+### Player native constructors (batch 3)
+
+The original `APlayerPawnExt` constructor is Extension `0x10037ba0`.
+After its no-init members and vtable store, `0x10037cbb` calls
+`0x10022a80`, which interns Extension's global event names once and clears
+its guard at `0x10022eb4`. In a raw DLL without `FName::StaticInit`, this
+produces the diagnostic **FName constructed before FName::StaticInit**;
+that was the first unresolved `_vsnwprintf` call. The oracle explicitly
+starts after this name initialization (guard `0x10097cb0 = 0`). It does not
+claim to replay the name-table initialization, which touches no actor.
+
+At `0x10037cc0` the constructor reads the inherited `FlagBase` pointer at
+`+0x890`. Non-null survives unchanged. Null takes `0x10037cca..0x10037cf7`:
+`XFlagBase::operator new` `0x1001b500` calls `StaticAllocateObject` with
+class `0x1009dbe8` (Extension.FlagBase), Outer=this, Name=None, flags=0,
+template=null, GError and final null argument. Then the original
+`XFlagBase` constructor `0x100239a0` installs vtable `0x1005c20c`, zeroes
+`+0x128` (defaultExpiration), and the player receives its pointer.
+The oracle checks both pointer branches. Allocation/registration is an
+explicit symbolic call boundary returning a zeroed 0x12c-byte template;
+the original constructor executes. The generated `conditionalFlagBase`
+metadata records this obligation without encoding the oracle heap address.
+The existing FlagBase service's constructor behavior is documented in
+`script-trigger-actions.md`; callers must preserve an inherited non-null
+FlagBase and supply this service when the constructor creates one.
+
+The original `ADeusExPlayer` constructor is DeusEx `0x10013e70`.
+Its first-instance guard `0x10034a1c` is cleared at `0x10014127`, then
+`GetDeusExVersion` `0x10014270` formats `%s %s` from the ANSI build timestamp
+and wide version string. The oracle now loads the original hash-checked
+MSVCRT.dll (`e390b0529fb9ee1214bb68302a4658b578134d92ab76bc5eb48f3badd843d210`)
+and executes `_vsnwprintf` unchanged. Core's real `Logf` produces
+`*** DEUS EX VERSION Mon Mar 19 12:06:14 2001 v1.112fm ***` with event 762;
+only the final external `FOutputDevice::Serialize` sink is supplied by
+the probe. This formatting writes a static buffer, not a player field.
+
+At `0x10014152..0x100141a7` the constructor additionally checks command-line
+`hax0r`; when present and Level is null or its NetMode byte at `+0x518`
+is zero, it ORs `+0x6a0` with `0x2000` and emits the cheats-enabled log.
+The constructor validator covers the normal empty-command-line path only;
+the cheat command-line branch remains unvalidated and outside the browser
+startup contract. Both final player vtables still resolve IsPendingKill to
+`AActor::IsPendingKill` at `0x1030df80`.
 
 ## Implemented runtime boundary
 
@@ -479,10 +522,32 @@ table-driven native body, frame initialization, script dispatch, the zone
 helper, the collision view, CheckEncroachment, FindBase and DestroyActor.
 
 Explicit errors remain for editor/undo handling, spawn-tracking allocation,
-remote-owned role swapping and the brush/network branches. A Pawn-ancestry
-class is refused before any mutation: Play binds the pawn collision view and
-the Foot/Head-region SetActorZone only for map and player pawns. A class bound
-to an unresolved constructor is refused the same way.
+remote-owned role swapping and the brush/network branches. Pawn ancestry now
+selects the collision view's native Pawn gates and the existing recovered
+SetActorZone body, including FootRegion at Location.Z-CollisionHeight,
+HeadRegion at Location.Z+EyeHeight, both script zone callbacks, and the
+PlayerReplicationInfo.PlayerZone store except in NM_Client. Spawned pawns
+use the same field-backed physics services as map pawns; no additional
+physics modes are implied. A class bound to an unresolved constructor is
+still refused before mutation.
+
+The generated player constructor contract runs its conditional FlagBase
+allocation through the shared fresh-object registry, with Outer=the player
+native object and a separately linked Extension.FlagBase class. Its registered
+identity carries the existing `createFlagBase` native service. A non-null
+template FlagBase survives unchanged. The native callback host must use that
+identity when routing FlagBase methods; it must not replace it with another
+host-created singleton.
+FlagBase's native Destroy override (`0x100239f0`) remains an explicit teardown
+boundary; constructor support does not claim the flag-list destruction path.
+
+`node scripts/validate-script-pawn-spawn-binding.mjs` uses the installed
+JCDentonMale, FlagBase and PlayerReplicationInfo classes to check constructor
+registration/Outer, inherited FlagBase preservation, hash identity, the three
+zone query positions, callback order, and the PRI NM_Client gate. Script
+events and spatial queries are explicit fixture boundaries; this validator
+does not establish Login or pawn startup script fidelity. Its constructor
+expectations reuse the original-instruction cases above.
 
 `node scripts/validate-script-spawn.mjs` uses actual CameraPoint class defaults,
 constructor, original startup event bodies and the actual GameInfo/Mutator

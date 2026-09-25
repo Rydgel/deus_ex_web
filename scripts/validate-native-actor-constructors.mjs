@@ -91,12 +91,33 @@ const output = execFileSync(python, [path.join(root, 'scripts/native-actor-const
   maxBuffer: 1 << 28, encoding: 'utf8'});
 const results = new Map(JSON.parse(output).map(result => [result.key, result]));
 
+// Patterned memory alone takes PlayerPawnExt's already-present FlagBase
+// branch. Verify the null branch separately, retaining the allocation as a
+// semantic constructor obligation instead of embedding a probe heap pointer.
+for (const key of ['deusex.deusexplayer', 'extension.playerpawnext']) {
+  const result = results.get(key);
+  if (result?.error) continue;
+  const variant = result?.nullFlagBaseCase, allocation = variant?.allocations?.[0];
+  const pointerBytes = allocation && Array.from({length: 4}, (_, i) => [0x890 + i, (allocation.address >>> (8 * i)) & 255]);
+  if (!allocation || variant.allocations.length !== 1 || allocation.class !== 'Extension.FlagBase' ||
+      allocation.size !== 0x12c || allocation.vtable !== 0x1205c20c || allocation.tail !== 0 ||
+      variant.vtable !== result.vtable || JSON.stringify(variant.memberBytes) !== JSON.stringify(pointerBytes))
+    throw new Error(`${key}: original null FlagBase constructor branch changed`);
+  result.conditionalFlagBase = {offset: 0x890, className: allocation.class,
+    instanceSize: allocation.size, vtable: allocation.vtable, defaultExpiration: allocation.tail};
+}
+const playerResult = results.get('deusex.deusexplayer');
+if (!playerResult?.error && JSON.stringify(playerResult.logs) !== JSON.stringify([
+  {text: '*** DEUS EX VERSION Mon Mar 19 12:06:14 2001 v1.112fm ***', event: 762},
+])) throw new Error('Original first DeusExPlayer constructor version log changed');
+
 const table = {};
 for (const request of requests) {
   const result = results.get(request.key);
   table[request.key] = result && !result.error
     ? {dll: request.dll, internalCtor: request.internalCtor, vtable: result.vtable, pendingKillSlot: result.pendingKillSlot,
-      pendingKillBody: result.pendingKillBody, memberBytes: result.memberBytes, sizeDecoded: Boolean(request.row?.instanceSize)}
+      pendingKillBody: result.pendingKillBody, memberBytes: result.memberBytes, sizeDecoded: Boolean(request.row?.instanceSize),
+      ...(result.conditionalFlagBase ? {conditionalFlagBase: result.conditionalFlagBase} : {})}
     : {dll: request.dll, internalCtor: request.internalCtor ?? null, unresolved: result?.error ?? 'no registered InternalConstructor'};
 }
 await mkdir(path.join(root, '.cache'), {recursive: true});
@@ -108,7 +129,8 @@ const render = () => {
   const lines = Object.entries(table).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => {
     if (row.unresolved) return `  '${key}': row({dll: '${row.dll}', internalCtor: ${row.internalCtor == null ? 'null' : hex(row.internalCtor)}, unresolved: ${JSON.stringify(row.unresolved.slice(0, 160))}}),`;
     const members = row.memberBytes.length ? `, memberBytes: freeze([${row.memberBytes.map(([o, v]) => `[${hex(o)}, ${hex(v)}]`).join(', ')}])` : '';
-    return `  '${key}': row({dll: '${row.dll}', internalCtor: ${hex(row.internalCtor)}, vtable: ${hex(row.vtable)}, pendingKillBody: ${hex(row.pendingKillBody)}${members}}),`;
+    const conditional = row.conditionalFlagBase ? `, conditionalFlagBase: freeze(${JSON.stringify(row.conditionalFlagBase)})` : '';
+    return `  '${key}': row({dll: '${row.dll}', internalCtor: ${hex(row.internalCtor)}, vtable: ${hex(row.vtable)}, pendingKillBody: ${hex(row.pendingKillBody)}${members}${conditional}}),`;
   });
   return `/**
  * Every native Actor-class constructor, generated from the original DLLs by
@@ -121,7 +143,10 @@ const render = () => {
  * the body its +0x2c IsPendingKill entry reaches through jump thunks, and
  * \`memberBytes\` the bytes the body
  * writes besides the vtable ([offset, value]; absent when it writes none, which
- * leaves every template-copied member intact). \`unresolved\` rows name why the
+ * leaves template members intact in the patterned case). \`conditionalFlagBase\`
+ * records the original allocation required when the inherited FlagBase is null;
+ * it is verified in a separate null-pointer case. The command line is empty.
+ * \`unresolved\` rows name why the
  * body could not be run. Evidence: docs/script-spawn.md "Native constructor family".
  */
 const freeze = value => Object.freeze(value);
@@ -146,6 +171,8 @@ if (process.argv.includes('--write')) {
       if ((have[field] ?? null) !== (row[field] ?? null)) mismatches.push(`${key}.${field}: committed ${have[field]} oracle ${row[field]}`);
     if (JSON.stringify(have.memberBytes ?? []) !== JSON.stringify(row.memberBytes ?? []))
       mismatches.push(`${key}.memberBytes differ`);
+    if (JSON.stringify(have.conditionalFlagBase ?? null) !== JSON.stringify(row.conditionalFlagBase ?? null))
+      mismatches.push(`${key}.conditionalFlagBase differs`);
     if (Boolean(have.unresolved) !== Boolean(row.unresolved)) mismatches.push(`${key}: resolution differs`);
   }
   for (const key of Object.keys(committed)) if (!table[key]) mismatches.push(`${key}: not a native Actor class in the packages`);

@@ -1181,8 +1181,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const host = {
     runtime, heap, W, lifecycle, classes, globals, boundaryLog, soundRequests, resourceImages, textureInfo,
     root:null,hud:null,owns:object=>families.has(object),
+    // Rebind viewport/console routing; root construction remains the native
+    // ConstructRootWindow entry, invoked by its actual startup caller.
+    bindPlayer(next){runtime.instance(next);player=next;},
     // Original Engine Actor.EInputKey names (index = EInputKey value).
     inputKeyNames:inputConsole.names,
+    // The UInput object (Extension.InputExt) a UViewport holds at +0x60.
+    input:inputConsole,
     delegateLegacySubtree:object=>externalSubtrees.add(object),
     raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,

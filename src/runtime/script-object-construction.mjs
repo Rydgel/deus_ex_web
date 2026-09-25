@@ -180,12 +180,17 @@ export function constructDecal(object) {
  * (script-native-actor-constructors.mjs): a body that writes nothing but its
  * vtable runs the AActor base and installs that final vtable; the only body
  * with member writes, ADecal's SurfList header clear, has its translation. */
-export function nativeConstructorFor(selection){
+export function nativeConstructorFor(selection,{constructFlagBase}={}){
   if(!Number.isInteger(selection?.nativeVtable))throw new Error('Original constructor selection is not implemented');
   if(selection.memberBytes){
     if(selection.nativeClass==='engine.decal'&&selection.nativeVtable===0x10426f74)return constructDecal;
     throw new Error(`Native constructor member writes are not translated for ${selection.nativeClass}`);
   }
   const vtable=selection.nativeVtable;
-  return object=>{constructActorBase(object);object.nativeVtable=vtable;};
+  if(selection.conditionalFlagBase&&typeof constructFlagBase!=='function')
+    throw new Error('PlayerPawnExt constructor requires its conditional FlagBase allocation service');
+  return object=>{
+    constructActorBase(object);object.nativeVtable=vtable;
+    if(selection.conditionalFlagBase)constructFlagBase(object,selection.conditionalFlagBase);
+  };
 }

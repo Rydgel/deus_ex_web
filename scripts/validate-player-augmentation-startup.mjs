@@ -1,9 +1,9 @@
-/** Validate the source-backed standalone player subsystem startup used by Play.
+/** Validate the player subsystem graph Play's real Login builds.
  *
- * The fixture is the real 00_Training map and installed GOTY packages. The
- * browser player is attached to LevelInfo, then the original
- * DeusExPlayer.InitializeSubSystems bytecode runs through
- * CreateAugmentations/AddDefaultAugmentations/CreateSkills and CreateKeyRing.
+ * The fixture is the real 00_Training map and installed GOTY packages.
+ * DeusExGameInfo.Login spawns JCDentonMale, whose original PostBeginPlay ->
+ * InitializeSubSystems runs CreateAugmentations/AddDefaultAugmentations/
+ * CreateSkills and CreateKeyRing (docs/script-player-login.md).
  */
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -33,8 +33,8 @@ const manager = ref(player, 'AugmentationSystem');
 
 assert.ok(startup, 'Play must expose the player startup result');
 assert.ok(manager, 'InitializeSubSystems must create AugmentationSystem');
-assert.equal(manager.name, 'AugmentationManager1');
-assert.equal(ref(manager, 'Name'), 'AugmentationManager1');
+assert.equal(manager.name, 'AugmentationManager0');
+assert.equal(ref(manager, 'Name'), 'AugmentationManager0');
 assert.equal(ref(manager, 'Owner'), player);
 assert.equal(ref(manager, 'Player'), player);
 assert.deepEqual(startup.classKeys, PLAYER_AUGMENTATION_STARTUP.classes);
@@ -78,15 +78,14 @@ for (const [index, augmentation] of startup.augmentations.entries()) {
   assert.equal(ref(augmentation, 'bIsActive'), key === 'deusex.augiff' || key === 'deusex.augdatalink', `${key} active state`);
 }
 
-const enviro = startup.augmentations.find(object => object.name === 'AugEnviro1');
+const enviro = startup.augmentations.find(object => object.name === 'AugEnviro0');
 const getAugLevelValue = runtime.lookup(manager, 'GetAugLevelValue');
 assert.equal(runtime.callFunction(getAugLevelValue, manager, 1, () => runtime.instance(enviro).cls.record), -1,
   'unowned AugEnviro returns the original -1 sentinel');
 
-assert.equal(startup.boundary, null);
 const keyRing = ref(player, 'KeyRing');
 assert.equal(runtime.instance(keyRing).cls.record.key, 'deusex.nanokeyring');
 assert.equal(ref(keyRing, 'Owner'), player);
 assert.equal(ref(player, 'KeyList'), null, 'a fresh ring holds no keys');
 
-console.log('Player augmentation startup passed: 00_Training creates AugmentationManager1, preserves the capture-backed 21-class linked list and defaults, and spawns the NanoKeyRing.');
+console.log('Player augmentation startup passed: real Login on 00_Training creates AugmentationManager0, preserves the capture-backed 21-class linked list and defaults, and spawns the NanoKeyRing.');

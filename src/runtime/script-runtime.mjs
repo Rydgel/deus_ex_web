@@ -65,6 +65,8 @@ import { bindConversationsNative } from './script-native-conversation-list.mjs';
 import { constructConversationItem, releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
 import { RANDOM_LABEL_NATIVE, decodeRandomLabelLabels, getLabelCount, getLabel, getRandomLabel } from './script-conversation-random-label.mjs';
 import { execScriptSpawn, spawnActor } from './script-spawn.mjs';
+import { createFlagBase } from './script-triggers.mjs';
+import { addPawn, removePawn } from './pawn-list.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -326,7 +328,7 @@ export class ScriptRuntime {
         const inner=await this.objects.resolve(record.asset,record.metadata.innerRef);
         // Dynamic container cycles need their own VM/value contract. Linking
         // the scalar inner here suffices for native integer-array storage.
-        if(inner?.kind==='IntProperty')record.metadata.innerMetadata=(await this.field(inner)).metadata;
+        if(inner?.kind==='IntProperty'||inner?.kind==='StrProperty')record.metadata.innerMetadata=(await this.field(inner)).metadata;
       }
       if(struct){
         record.metadata.structKey=struct.key;
@@ -1549,33 +1551,81 @@ export class ScriptRuntime {
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
     });
   }
-  regionValue(receiver) {
-    const ref=this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'));
+  regionValue(receiver,name='Region') {
+    const ref=name==='Region'?this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'))
+      :this.namedReference(receiver,name);
     const value=ref.get();
     return {zone:value['engine.actor.pointregion.zone'],leaf:value['engine.actor.pointregion.ileaf'],
       zoneNumber:value['engine.actor.pointregion.zonenumber']};
   }
-  setRegion(receiver,zone,leaf,zoneNumber) {
-    const ref=this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'));
+  setRegion(receiver,zone,leaf,zoneNumber,name='Region') {
+    const ref=name==='Region'?this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields','Region'))
+      :this.namedReference(receiver,name);
     ref.set({'engine.actor.pointregion.zone':zone,
       'engine.actor.pointregion.ileaf':leaf,'engine.actor.pointregion.zonenumber':zoneNumber});
   }
-  /** Bridge the existing recovered ordinary Actor zone path to script fields.
-   * Spawn's accepted CameraPoint path has no Pawn head/foot regions. */
+  /** Bridge the recovered Actor/APawn SetActorZone body to script fields.
+   * APawn adds the foot cylinder-bottom query, EyeHeight head query, and
+   * PlayerReplicationInfo.PlayerZone store (Engine 0x1039b940). */
   setSpawnActorZone(receiver,test,force) {
     const level=this.levelFor(receiver);
     if(typeof level?.pointRegion!=='function')throw new Error('SpawnActor requires the original BSP PointRegion service');
-    const actor={isPawn:false};
+    let isPawn=false;
+    for(let cls=this.instance(receiver).cls;cls;cls=cls.base)
+      if(cls.record.key==='engine.pawn'){isPawn=true;break;}
+    const actor={isPawn};
     Object.defineProperties(actor,{
       deleted:{get:()=>this.namedReference(receiver,'bDeleteMe').get()},
       position:{get:()=>this.namedReference(receiver,'Location').get()},
       region:{get:()=>this.regionValue(receiver),set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber)},
     });
-    setActorZone(actor,{levelInfo:level.actors[0],pointRegion:position=>level.pointRegion(position),
+    if(isPawn){
+      for(const [prop,name] of [['footRegion','FootRegion'],['headRegion','HeadRegion']])
+        Object.defineProperty(actor,prop,{get:()=>this.regionValue(receiver,name),
+          set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber,name)});
+      Object.defineProperties(actor,{
+        height:{get:()=>this.namedReference(receiver,'CollisionHeight').get()},
+        eyeHeight:{get:()=>this.namedReference(receiver,'EyeHeight').get()},
+        playerReplicationInfo:{get:()=>{
+          const info=this.namedReference(receiver,'PlayerReplicationInfo').get();
+          if(!info)return null;
+          const field=this.namedReference(info,'PlayerZone');
+          return {get playerZone(){return field.get();},set playerZone(value){field.set(value);}};
+        }},
+      });
+    }
+    setActorZone(actor,{levelInfo:level.actors[0],netMode:level.netMode??0,pointRegion:position=>level.pointRegion(position),
       actorLeaving:zone=>this.processEvent(zone,'ActorLeaving',[receiver]),
       zoneChange:(_,zone)=>this.processEvent(receiver,'ZoneChange',[zone]),
       actorEntered:zone=>this.processEvent(zone,'ActorEntered',[receiver]),
+      footZoneChange:(_,zone)=>this.processEvent(receiver,'FootZoneChange',[zone]),
+      headZoneChange:(_,zone)=>this.processEvent(receiver,'HeadZoneChange',[zone]),
     },test,force);
+  }
+  /** APlayerPawnExt 0x10037cc0..0x10037cf7: preserve the template's FlagBase,
+   * or allocate Extension.FlagBase with Outer=this and run XFlagBase's
+   * constructor. The existing FlagBase service supplies its recovered native
+   * fields/methods on the actual registered UObject identity. */
+  constructPlayerFlagBase(object,contract) {
+    const ref=this.namedReference(object.identity,'FlagBase');
+    if(ref.get())return;
+    const cls=[...this.linkedClasses].find(cls=>cls.record.key==='extension.flagbase');
+    if(!cls)throw new Error('PlayerPawnExt constructor requires linked Extension.FlagBase');
+    const base=this.actorLifecycle?.construction;
+    const identity=this.constructObject(cls,{outer:object,name:'None',flags:0,template:null},{
+      ...base,
+      validate:args=>args.cls===cls&&args.outer===object&&args.template===null&&args.flags===0&&args.name==='None',
+      initNativeProperties:()=>{},
+      nativeConstructor:flag=>{
+        flag.nativeVtable=contract.vtable;
+        // XFlagBase overrides Destroy (Extension 0x100239f0). Its native
+        // flag-list teardown is separate from the recovered constructor.
+        flag.destroy=()=>{throw new Error('XFlagBase::Destroy native flag-list teardown is not linked');};
+        Object.defineProperties(flag.identity,Object.getOwnPropertyDescriptors(
+          createFlagBase({defaultExpiration:contract.defaultExpiration})));
+      },
+    });
+    ref.set(identity);
   }
   /** The shared collision/dispatch service table for a spawned collision-view
    * actor's recovered ULevel move/relocation entries. The hash's `$world`
@@ -1717,13 +1767,7 @@ export class ScriptRuntime {
       write:(actor,name,value)=>this.namedReference(actor,name).set(value),
       defaultRead:(cls,name)=>this.defaultValue(cls,this.lookupMember(cls,'fields',name)),
       isActorClass:cls=>{for(;cls;cls=cls.base)if(cls===this.actorClass)return true;return false;},
-      validate:input=>{
-        // A Pawn needs the pawn collision view and the Foot/Head-region
-        // SetActorZone this host binds only for map and player pawns.
-        for(let entry=input.cls;entry;entry=entry.base)if(entry.record.key==='engine.pawn')
-          throw new Error(`SpawnActor ${input.cls.record.key}: the Pawn spawn world binding (pawn collision view, Foot/Head SetActorZone) is not linked`);
-        return lifecycle?.validateSpawn?.(input);
-      },
+      validate:input=>lifecycle?.validateSpawn?.(input),
       // Class+0x4e0: the ClassConstructor UClass::Bind stored. Classes
       // loaded through the shared graph carry it on their load record; a
       // standalone world binds its own registry through the lifecycle.
@@ -1736,7 +1780,8 @@ export class ScriptRuntime {
       },
       construct:(cls,options,context)=>{
         const identity=this.constructObject(cls,options,
-          {...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection)});
+          {...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection,{
+            constructFlagBase:(object,contract)=>this.constructPlayerFlagBase(object,contract)})});
         // Every SpawnActor product is an actor: bind the same native
         // destructor chain mapActorNativeObject installs on map exports —
         // ConditionalDestroy -> AActor::Destroy (auxiliary object slot empty)
@@ -1755,13 +1800,17 @@ export class ScriptRuntime {
       },
       processEvent:(actor,name,eventArgs)=>this.processEvent(actor,name,eventArgs),
       setActorZone:(actor,test,force)=>this.setSpawnActorZone(actor,test,force),
-      // Every spawned (non-Pawn) actor carries the native collision view: the
+      // Every spawned actor carries the native collision view: the
       // hash gate, CheckEncroachment, FindBase and later natives read the
       // +0x1dc bitfield through it. It reads and writes the object's own
       // field storage, so natives dispatched later see the same state.
       installCollisionView:actor=>{
         const lineage=[];
         for(let entry=cls;entry;entry=entry.base)lineage.push(entry.record.key);
+        if(lifecycle.bindCollisionView?.(actor,cls,lineage)){
+          this.collisionViewActors.add(actor);
+          return actor;
+        }
         installActorCollisionView(actor,{
           read:(a,name)=>this.namedReference(a,name).get(),
           write:(a,name,value)=>this.namedReference(a,name).set(value),
@@ -1949,6 +1998,20 @@ export class ScriptRuntime {
     if(this.boundaryNatives.has(call.index)){
       if(!this.native)throw new Error(`Original native ${call.index} is declared a host boundary but no native handler is set`);
       return this.native({...call,runtime:this});
+    }
+    if(call.index===529||call.index===530){
+      if(call.argumentCount!==0)throw new Error('AddPawn/RemovePawn accept no arguments');
+      let isPawn=false;
+      for(let cls=this.instance(call.receiver).cls;cls;cls=cls.base)
+        if(cls.record.key==='engine.pawn'){isPawn=true;break;}
+      if(!isPawn)throw new Error('AddPawn/RemovePawn require an original Pawn class');
+      const level=this.levelFor(call.receiver);
+      if(!level)throw new Error('AddPawn/RemovePawn require the live level');
+      // APawn +0x498 and LevelInfo +0x54c share these field-backed host
+      // slots for loaded and spawned actors. Original AddPawn never checks
+      // membership; RemovePawn keeps the detached pawn's stale NextPawn.
+      (call.index===529?addPawn:removePawn)(level,call.receiver);
+      return undefined;
     }
     if(call.index===0&&call.record?.key==='core.object.dynamicloadobject')
       return execDynamicLoadObject(call,{staticLoadObject:request=>this.loadPreparedDynamicObject(request)});

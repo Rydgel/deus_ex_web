@@ -38,12 +38,16 @@ Evidence recovered before the translation:
   nothing without Player(+0x5d4), otherwise executes through Player's Exec
   interface into a string output device and copies its text back.
 
-Configuration is read from the supplied installation files using the existing
-case-insensitive scalar INI reader: User.ini, then DefUser.ini for absent keys.
-AssetStore retains .ini file handles separately from package handles. The
-input adapter reads Engine.Input bindings once at preparation; console writes,
-runtime rebinds, array config and a complete native config cache remain outside
-this read-only slice.
+The input object is the selected Extension.InputExt. Its bindings and
+`Aliases` load through the recovered constructor order: LoadConfig(1) on the
+class defaults, then on the object. Each LoadConfig runs an Engine.Input pass
+followed by an InputExt pass, reading GConfig's User file. ResetKeyboard's
+ResetConfig re-runs both loads in place. Registration and ResetConfig
+evidence is in [script-player-login.md](script-player-login.md#resetkeyboard-and-the-native-input-object).
+Across all 255 keys, the installed bindings equal the earlier User.ini-then-
+DefUser.ini scalar reader. A caller-supplied `config` replaces only the
+Engine.Input binding reads; that is the RefreshKey fixture below. Console
+writes and runtime rebinds remain outside this slice.
 
 The string output device at Engine 0x10374500 appends each logged text directly
 to its FString, without adding a newline. The adapter returns that text.

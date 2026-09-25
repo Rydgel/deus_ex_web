@@ -2,12 +2,12 @@
  * Source-backed standalone player subsystem startup.
  *
  * DeusExGameInfo.Login spawns JCDentonMale and then the player's
- * PostBeginPlay -> InitializeSubSystems path creates the manager objects. The
- * browser scene already owns the player identity, so this adapter links that
- * identity to the prepared bytecode; the subsystem classes spawn through the
- * general SpawnActor with their bound ClassConstructors. It deliberately
- * continues through CreateKeyRing. NanoKeyRing is a script-only Inventory
- * subclass; see docs/script-nanokey.md.
+ * PostBeginPlay -> InitializeSubSystems path creates the manager objects.
+ * This module links that bytecode before Login and verifies the resulting
+ * graph afterward; it runs none of it. The subsystem classes spawn through
+ * general SpawnActor with their bound ClassConstructors, including
+ * CreateKeyRing. NanoKeyRing is a script-only Inventory subclass; see
+ * docs/script-nanokey.md and docs/script-player-login.md.
  *
  * Evidence: .cache/reference/DeusExPlayer.uc:424-550, 1249-1261;
  * AugmentationManager/CreateAugmentations and AddDefaultAugmentations in the
@@ -40,14 +40,18 @@ export const PLAYER_AUGMENTATION_STARTUP = freeze({
     freeze({ numSlots: 2, augCount: 0, keyBase: 2 }),
     freeze({ numSlots: 3, augCount: 0, keyBase: 11 }),
   ]),
+  // MakeUniqueObjectName continues each class counter. Play's session starts
+  // at Training, so its Login creates the first of each (suffix 0). The
+  // 2026-09-12 capture was a menu session: DX.dxm's player took suffix 0 and
+  // Training's subsystems there are AugmentationManager1 ... AugPower1.
   defaultObjectNames: freeze([
-    'AugmentationManager1',
-    'AugSpeed1', 'AugTarget1', 'AugCloak1', 'AugBallistic1',
-    'AugRadarTrans1', 'AugShield1', 'AugEnviro1', 'AugEMP1',
-    'AugCombat1', 'AugHealing1', 'AugStealth1', 'AugIFF1',
-    'AugLight1', 'AugMuscle1', 'AugVision1', 'AugDrone1',
-    'AugDefense1', 'AugAqualung1', 'AugDatalink1', 'AugHeartLung1',
-    'AugPower1',
+    'AugmentationManager0',
+    'AugSpeed0', 'AugTarget0', 'AugCloak0', 'AugBallistic0',
+    'AugRadarTrans0', 'AugShield0', 'AugEnviro0', 'AugEMP0',
+    'AugCombat0', 'AugHealing0', 'AugStealth0', 'AugIFF0',
+    'AugLight0', 'AugMuscle0', 'AugVision0', 'AugDrone0',
+    'AugDefense0', 'AugAqualung0', 'AugDatalink0', 'AugHeartLung0',
+    'AugPower0',
   ]),
 });
 
@@ -226,15 +230,15 @@ function verifyAugmentationState(runtime, manager, augmentations) {
 }
 
 /**
- * Prepare and run the original standalone player subsystem path. The result
- * exposes the manager, exact linked augmentation identities, and the explicit
- * first unsupported boundary so validators can distinguish proven state from
- * the remaining inventory work.
+ * Prepare the original standalone subsystem graph before Login. The result's
+ * complete(player) verifies the graph real Login/PostBeginPlay built.
  */
-export async function createPlayerAugmentationStartup({runtime, assets, deusEx, level, player, warning} = {}) {
+export async function createPlayerAugmentationStartup({runtime, assets, deusEx, level, player} = {}) {
   if (!runtime || !assets?.get || !deusEx || !level || !player)
     throw new TypeError('Player augmentation startup requires runtime, packages, level, and player');
-  const playerClass = runtime.instance(player).cls;
+  // Login may reserve the host identity before StaticAllocateObject attaches
+  // script storage. Preparation needs the class, not an already-made pawn.
+  const playerClass = await loadClass(runtime, deusEx, 'JCDentonMale');
   if (classKey(playerClass) !== 'deusex.jcdentonmale')
     throw new Error(`Player augmentation startup is restricted to JCDentonMale, got ${classKey(playerClass)}`);
 
@@ -266,15 +270,12 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     [deusEx, 'DeusExPickup.BaseChange'],
   ]) await prepareFunction(runtime, packageAsset, path);
   // GivePlayerAugmentation reports a newly acquired level through the
-  // installed PlayerPawnExt.ClientMessage script event. The normal defaults
-  // reach this UI path while the manager is being built. Its localized Sprintf
-  // conversion (bytecode token 0x53) is outside this subsystem slice, so keep
-  // the message as an explicit host boundary and continue the state mutations.
+  // installed PlayerPawnExt.ClientMessage script event while the manager is
+  // being built.
   const extension = await assets.get('Extension');
-  const playerClientMessage = await runtime.objects.resolve(extension,
-    requiredExport(extension, 'PlayerPawnExt.ClientMessage'));
+  await prepareFunction(runtime, extension, 'PlayerPawnExt.ClientMessage');
   const createThemes = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateColorThemeManager');
-  const initialize = await prepareFunction(runtime, deusEx, 'DeusExPlayer.InitializeSubSystems');
+  await prepareFunction(runtime, deusEx, 'DeusExPlayer.InitializeSubSystems');
   const createKeyRing = await prepareFunction(runtime, deusEx, 'DeusExPlayer.CreateKeyRing');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.CreateAugmentations');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.AddDefaultAugmentations');
@@ -327,7 +328,6 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     // Spawn's inherited constructor needs every field's linked metadata for
     // InitProperties and its exact Actor lifecycle needs these event records.
     await prepareActorLineage(runtime, cls);
-    if (cls.nameCounter === 0) cls.nameCounter = 1;
   }
   if (!runtime.actorLifecycle?.construction || !level.nativeObject?.outer) {
     throw new PlayerStartupBoundaryError(
@@ -335,44 +335,60 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       { boundary: 'Actor.StaticConstructObject' },
     );
   }
-  runtime.boundaryFunctions.set(playerClientMessage.key, ({ warning: ignoredWarning } = {}) => {
-    // The original event's only effect in this startup path is UI delivery;
-    // do not evaluate its Sprintf argument or fabricate a viewport message.
-    ignoredWarning?.({ type: 'PlayerClientMessageBoundary', function: playerClientMessage.key });
-    warning?.({ type: 'PlayerClientMessageBoundary', function: playerClientMessage.key });
-    return undefined;
-  });
+  // DeusExPlayer.PostBeginPlay calls InitializeSubSystems after CreateShadow
+  // (original source lines 424-445), inside Login's Spawn; complete() only
+  // reads and verifies the resulting graph.
+  const bindPlayer = actualPlayer => {
+    if (!actualPlayer || classKey(runtime.instance(actualPlayer).cls) !== 'deusex.jcdentonmale')
+      throw new Error('Player subsystem completion requires the original JCDentonMale identity');
+    player = actualPlayer;
+    return player;
+  };
+  const complete = (actualPlayer = player) => {
+    bindPlayer(actualPlayer);
+    for (const [field, expected] of [['BarkManager', 'deusex.barkmanager'],
+      ['ThemeManager', 'deusex.colorthememanager'], ['SkillSystem', 'deusex.skillmanager']]) {
+      const subsystem = runtime.namedReference(player, field).get();
+      if (!subsystem || classKey(runtime.instance(subsystem).cls) !== expected)
+        throw new Error(`InitializeSubSystems did not create the original ${field}`);
+      if (runtime.namedReference(subsystem, 'Owner').get() !== player)
+        throw new Error(`${field} Owner is not JCDentonMale`);
+    }
+    const manager = runtime.namedReference(player, 'AugmentationSystem').get();
+    if (!manager) throw new Error('InitializeSubSystems did not create AugmentationManager');
+    if (classKey(runtime.instance(manager).cls) !== PLAYER_AUGMENTATION_STARTUP.manager)
+      throw new Error('Player AugmentationSystem has the wrong class');
+    if (runtime.namedReference(manager, 'Owner').get() !== player)
+      throw new Error('AugmentationManager Owner is not JCDentonMale');
+    if (runtime.namedReference(manager, 'Player').get() !== player)
+      throw new Error('AugmentationManager Player is not JCDentonMale');
 
-  let boundary = null;
-  try {
-    runtime.callFunction(initialize, player, 0);
-  } catch (error) {
-    if (!(error instanceof PlayerStartupBoundaryError)) throw error;
-    boundary = freeze({ ...error.details, message: error.message });
-    warning?.({ type: 'PlayerStartupBoundary', ...boundary });
-  }
-  const manager = runtime.namedReference(player, 'AugmentationSystem').get();
-  if (!manager) throw new Error('InitializeSubSystems did not create AugmentationManager');
-  if (classKey(runtime.instance(manager).cls) !== PLAYER_AUGMENTATION_STARTUP.manager)
-    throw new Error('Player AugmentationSystem has the wrong class');
-  if (runtime.namedReference(manager, 'Owner').get() !== player)
-    throw new Error('AugmentationManager Owner is not JCDentonMale');
-  if (runtime.namedReference(manager, 'Player').get() !== player)
-    throw new Error('AugmentationManager Player is not JCDentonMale');
-
-  const augmentations = [];
-  for (let current = runtime.namedReference(manager, 'FirstAug').get(); current;
-    current = runtime.namedReference(current, 'Next').get()) augmentations.push(current);
-  const linked = verifyAugmentationState(runtime, manager, augmentations);
-  const names = [manager, ...augmentations].map(item => runtime.namedReference(item, 'Name').get());
-  verifyExactList(names, PLAYER_AUGMENTATION_STARTUP.defaultObjectNames, 'Player subsystem object names');
-  void linked;
-  void locationDefaults;
-  const keyRing = runtime.namedReference(player, 'KeyRing').get();
-  if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
-    throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');
-  if (runtime.namedReference(keyRing, 'Owner').get() !== player)
-    throw new Error('NanoKeyRing Owner is not JCDentonMale');
+    const augmentations = [], seen = new Set();
+    for (let current = runtime.namedReference(manager, 'FirstAug').get(); current;
+      current = runtime.namedReference(current, 'Next').get()) {
+      if (seen.has(current)) throw new Error('AugmentationManager augmentation chain is cyclic');
+      seen.add(current); augmentations.push(current);
+    }
+    verifyAugmentationState(runtime, manager, augmentations);
+    const keyRing = runtime.namedReference(player, 'KeyRing').get();
+    if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
+      throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');
+    if (runtime.namedReference(keyRing, 'Owner').get() !== player)
+      throw new Error('NanoKeyRing Owner is not JCDentonMale');
+    return freeze({
+      manager,
+      augmentations: freeze(augmentations),
+      classKeys: freeze(augmentations.map(item => classKey(runtime.instance(item).cls))),
+      discardKeyRing,
+      spawnKeyRing,
+      supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls))),
+      locationSlots: freeze(locationDefaults.map(slot => freeze({
+        numSlots: readStructMember(slot, 'NumSlots'),
+        augCount: readStructMember(slot, 'AugCount'),
+        keyBase: readStructMember(slot, 'KeyBase'),
+      }))),
+    });
+  };
   const discardKeyRing = () => {
     const ring = runtime.namedReference(player, 'KeyRing').get();
     if (ring) runtime.destroyActor(ring, false);
@@ -386,20 +402,8 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
   const spawnKeyRing = () => {
     if (!runtime.namedReference(player, 'KeyRing').get()) runtime.callFunction(createKeyRing, player, 0);
   };
-  return freeze({
-    manager,
-    augmentations: freeze(augmentations),
-    classKeys: freeze(augmentations.map(item => classKey(runtime.instance(item).cls))),
-    boundary,
-    discardKeyRing,
-    spawnKeyRing,
-    supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls))),
-    locationSlots: freeze(locationDefaults.map(slot => freeze({
-      numSlots: readStructMember(slot, 'NumSlots'),
-      augCount: readStructMember(slot, 'AugCount'),
-      keyBase: readStructMember(slot, 'KeyBase'),
-    }))),
-  });
+  return freeze({complete, bindPlayer, discardKeyRing, spawnKeyRing,
+    supportedClasses: freeze([...supportedClasses].map(cls => classKey(cls)))});
 }
 
 export default createPlayerAugmentationStartup;

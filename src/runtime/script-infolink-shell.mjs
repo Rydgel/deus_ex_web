@@ -128,7 +128,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
       await runtime.prepareFunction(asset,asset.exportsByPath.get(path));
   }
   const conversationWindows=new WeakSet();
-  const root=windowHost?.root??{name:'InfoLinkPreviewRoot'},hud=windowHost?.hud??{name:'InfoLinkPreviewHUD'};
+  let root=windowHost?.root??{name:'InfoLinkPreviewRoot'},hud=windowHost?.hud??{name:'InfoLinkPreviewHUD'};
   if(windowHost&&(!windowHost.root||!windowHost.hud||!windowHost.raw))
     throw new Error('Shared InfoLink shell requires a constructed native root and HUD');
   const manager={name:'InfoLinkPreviewThemeManager'},theme={name:'ColorThemeHUD_Default'};
@@ -136,7 +136,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   runtime.attach(manager,managerClass);runtime.attach(theme,themeClass);
   runtime.namedReference(root,'parentPawn').set(player);
   runtime.namedReference(root,'hud').set(hud);
-  const playerTheme=runtime.namedReference(player,'ThemeManager');
+  let playerTheme=runtime.namedReference(player,'ThemeManager');
   runtime.namedReference(manager,'currentHUDTheme').set(theme);
 
   const owned=new WeakSet();
@@ -397,7 +397,11 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   // Services shared by every display the shell constructs. A deferred shell
   // (Play) has these without a display: the original HUD has no InfoLink
   // until a DataLink starts.
-  const services={root,hud,audio,content,
+  const services={audio,content,
+    bindPlayer(next,{root:nextRoot=windowHost?.root??root,hud:nextHud=windowHost?.hud??hud}={}){
+      runtime.instance(next);runtime.instance(nextRoot);runtime.instance(nextHud);
+      player=next;playerTheme=runtime.namedReference(next,'ThemeManager');root=nextRoot;hud=nextHud;
+    },
     withLifecycle(callback){const previous=runtime.windowLifecycle,themeBefore=playerTheme.get();
       runtime.windowLifecycle=sharedLifecycle;if(!windowHost)playerTheme.set(manager);
       try{return callback();}finally{runtime.windowLifecycle=previous;playerTheme.set(themeBefore);}},
@@ -545,7 +549,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
     boundary,events:Object.freeze(events.slice()),
     objects:Object.freeze({portrait,static:staticControl,name:nameControl,queued:queuedControl,
       text:textControl,line:lineControl,computerText:computerTextWindow,computerInput:computerInputWindow}),
-    ...services,
+    ...services,get root(){return root;},get hud(){return hud;},
     recreate(){
       if(!destroyedWindows.has(shellObject))
         throw new Error('InfoLink shell must follow Window.Destroy before recreation');
@@ -556,5 +560,5 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   });
   }
 
-  return deferWindow?Object.freeze({object:null,objects:Object.freeze({}),...services}):constructShell();
+  return deferWindow?Object.freeze({object:null,objects:Object.freeze({}),...services,get root(){return root;},get hud(){return hud;}}):constructShell();
 }

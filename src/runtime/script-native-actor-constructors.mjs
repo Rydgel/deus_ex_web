@@ -9,7 +9,10 @@
  * the body its +0x2c IsPendingKill entry reaches through jump thunks, and
  * `memberBytes` the bytes the body
  * writes besides the vtable ([offset, value]; absent when it writes none, which
- * leaves every template-copied member intact). `unresolved` rows name why the
+ * leaves template members intact in the patterned case). `conditionalFlagBase`
+ * records the original allocation required when the inherited FlagBase is null;
+ * it is verified in a separate null-pointer case. The command line is empty.
+ * `unresolved` rows name why the
  * body could not be run. Evidence: docs/script-spawn.md "Native constructor family".
  */
 const freeze = value => Object.freeze(value);
@@ -20,7 +23,7 @@ export const NATIVE_ACTOR_CONSTRUCTORS = freeze({
   'deusex.augmentationmanager': row({dll: 'DeusEx.dll', internalCtor: 0x1000bf40, vtable: 0x100278f4, pendingKillBody: 0x1030df80}),
   'deusex.deusexdecoration': row({dll: 'DeusEx.dll', internalCtor: 0x1000a5f0, vtable: 0x10027744, pendingKillBody: 0x1030df80}),
   'deusex.deusexlevelinfo': row({dll: 'DeusEx.dll', internalCtor: 0x10009e40, vtable: 0x100276b4, pendingKillBody: 0x1030df80}),
-  'deusex.deusexplayer': row({dll: 'DeusEx.dll', internalCtor: 0x100016b0, unresolved: "Unresolved import ('msvcrt.dll', '_vsnwprintf'); trace ['0x101453ea', '0x101453ef', '0x101453f1', '0x10145406', '0x1014540d', '0x10145411', '0x10145412', '0x101"}),
+  'deusex.deusexplayer': row({dll: 'DeusEx.dll', internalCtor: 0x100016b0, vtable: 0x10027568, pendingKillBody: 0x1030df80, conditionalFlagBase: freeze({"offset":2192,"className":"Extension.FlagBase","instanceSize":300,"vtable":302367244,"defaultExpiration":0})}),
   'deusex.scriptedpawn': row({dll: 'DeusEx.dll', internalCtor: 0x100044c0, vtable: 0x10027624, pendingKillBody: 0x1030df80}),
   'deusex.skill': row({dll: 'DeusEx.dll', internalCtor: 0x1000b6b0, vtable: 0x10027864, pendingKillBody: 0x1030df80}),
   'deusex.skillmanager': row({dll: 'DeusEx.dll', internalCtor: 0x1000af50, vtable: 0x100277d4, pendingKillBody: 0x1030df80}),
@@ -71,5 +74,5 @@ export const NATIVE_ACTOR_CONSTRUCTORS = freeze({
   'engine.warpzonemarker': row({dll: 'Engine.dll', internalCtor: 0x103038af, vtable: 0x10427e3c, pendingKillBody: 0x1030df80}),
   'engine.weapon': row({dll: 'Engine.dll', internalCtor: 0x10302ef5, vtable: 0x104287a4, pendingKillBody: 0x1030df80}),
   'engine.zoneinfo': row({dll: 'Engine.dll', internalCtor: 0x10302dc9, vtable: 0x10427830, pendingKillBody: 0x1030df80}),
-  'extension.playerpawnext': row({dll: 'Extension.dll', internalCtor: 0x1001c360, unresolved: "Unresolved import ('msvcrt.dll', '_vsnwprintf'); trace ['0x101453ea', '0x101453ef', '0x101453f1', '0x10145406', '0x1014540d', '0x10145411', '0x10145412', '0x101"}),
+  'extension.playerpawnext': row({dll: 'Extension.dll', internalCtor: 0x1001c360, vtable: 0x1205c32c, pendingKillBody: 0x1030df80, conditionalFlagBase: freeze({"offset":2192,"className":"Extension.FlagBase","instanceSize":300,"vtable":302367244,"defaultExpiration":0})}),
 });

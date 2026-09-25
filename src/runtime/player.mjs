@@ -38,9 +38,10 @@ export class Player {
       get position() { return player.position; }, set position(value) { player.position = value; },
       get radius() { return player.radius; }, set radius(value) { player.radius = value; },
       get height() { return player.height; }, set height(value) { player.height = value; },
-      get base() { return player.physicsPawn?.base ?? null; },
+      get base() { return player.physicsPawn ? player.physicsPawn.base : player.spawnBase ?? null; },
+      set base(value) { if (player.physicsPawn) player.physicsPawn.base = value; else player.spawnBase = value; },
       get rotation() { return player.bodyRotation; }, set rotation(value) { player.bodyRotation = value; },
-      get baseEyeHeight() { return player.baseEyeHeight; },
+      get baseEyeHeight() { return player.baseEyeHeight; }, set baseEyeHeight(value) { player.baseEyeHeight = value; },
       // The viewer's camera integrates look input (the original UpdateRotation
       // is not run), so the script-visible view fields read the live player.
       get viewRotation() { return player.viewRotation; }, set viewRotation(value) { player.viewRotation = value; },
@@ -49,11 +50,16 @@ export class Player {
       // (PlayerPawn.ShowMenu's `WalkBob = vect(0,0,0)`) lands there too.
       get walkBob() { return player.walkBob; },
       set walkBob(value) { player.walkBob = [...value]; if (player.bobState) player.bobState.WalkBob = [...value]; },
-      get physics() { return player.physicsPawn?.physics ?? (player.grounded ? 1 : 2); },
+      get physics() { return player.physicsPawn?.physics ?? player.spawnPhysics ?? (player.grounded ? 1 : 2); },
+      set physics(value) { if (player.physicsPawn) player.physicsPawn.physics = value; else player.spawnPhysics = value; player.grounded = value === 1; },
+      get velocity() { return player.velocity; }, set velocity(value) { player.velocity = value; },
       get isCrouching() { return Boolean(player.controls?.isCrouching); },
+      set isCrouching(value) { player.controls.isCrouching = Boolean(value); },
       get oldLocation() { return player.physicsPawn?.oldLocation ?? player.spawnOldLocation; },
       set oldLocation(value) { if (player.physicsPawn) player.physicsPawn.oldLocation = value; else player.spawnOldLocation = value; },
     };
+    // Preserve only the movement port descriptors, never a prior script identity.
+    this.movementDescriptors = Object.getOwnPropertyDescriptors(this.collisionActor);
     this.stancePawn = { defaultCollisionHeight: defaults.CollisionHeight, defaultBaseEyeHeight: defaults.BaseEyeHeight,
       defaultCollisionRadius: defaults.CollisionRadius, netMode: 0, carriedDecoration: null,
       get position() { return player.position; },
@@ -66,7 +72,33 @@ export class Player {
     };
     this.reset();
   }
+  /** Bind the native SpawnActor identity before placement/startup. This only
+   * supplies the browser movement storage; SpawnActor owns registration. */
+  bindCollisionIdentity(actor, values = this.defaults) {
+    Object.defineProperties(actor, this.movementDescriptors);
+    this.collisionActor = actor;
+    this.physicsPawn = null;
+    this.spawnBase = values.Base ?? null;
+    this.spawnPhysics = values.Physics ?? 0;
+    this.grounded = this.spawnPhysics === 1;
+    const fields = { Location:'position', Rotation:'rotation', CollisionRadius:'radius',
+      CollisionHeight:'height', OldLocation:'oldLocation', ViewRotation:'viewRotation',
+      EyeHeight:'eyeHeight', BaseEyeHeight:'baseEyeHeight', WalkBob:'walkBob', Velocity:'velocity',
+      bIsCrouching:'isCrouching' };
+    for (const [field, member] of Object.entries(fields)) if (values[field] !== undefined)
+      actor[member] = Array.isArray(values[field]) ? [...values[field]] : values[field];
+    this.motionFlags = values.bJustTeleported ? 0x100 : 0;
+    actor.static = Boolean(values.bStatic);
+    actor.movable = Boolean(values.bMovable);
+    actor.values = { ...values,
+      get Location() { return actor.position; }, get Rotation() { return actor.rotation; },
+      get CollisionRadius() { return actor.radius; }, get CollisionHeight() { return actor.height; },
+      get Velocity() { return actor.velocity; } };
+    actor.collisionValues = actor.values;
+    return actor;
+  }
   reset() {
+    this.spawnBase = null; this.spawnPhysics = undefined;
     this.physicsPawn = null; this.unimplementedPhysicsEffects = new Set();
     this.position = [...this.start]; this.velocity = [0, 0, 0]; this.height = this.standingHeight;
     this.spawnOldLocation = [...this.start]; this.crouchInput = false;

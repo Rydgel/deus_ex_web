@@ -3,9 +3,10 @@ const hasName = name => Boolean(name) && String(name).toLowerCase() !== 'none';
 
 /** Original bodies for the declared JC/TriggerToggle dry scene subset.
  * Native event ordering is owned by movement/touch/zone callers. */
-export function createSceneEvents(player,{deferMissionEvent,dispatchEvent}={}) {
+export function createSceneEvents(playerIdentity,{deferMissionEvent,dispatchEvent}={}) {
   const unsupported = (target,event) => { throw Error(`Unsupported original scene event: ${target?.name ?? 'actor'}.${event}`); };
   return function dispatch(target,event,args) {
+    const player = typeof playerIdentity === 'function' ? playerIdentity() : playerIdentity;
     if (isA(target,'engine.triggers') && ['Touch','UnTouch','Timer'].includes(event)) {
       // Run the trigger's real Touch/UnTouch bytecode through the VM router
       // (docs/scene-events.md, item #2 M3). A body that reaches a not-yet-built

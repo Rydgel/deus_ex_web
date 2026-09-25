@@ -1,10 +1,11 @@
 # Player augmentation startup
 
-The browser player now enters the original standalone subsystem path before
-Training interaction. This closes the earlier browser lifecycle gap that left
-`DeusExPlayer.AugmentationSystem` null. The implementation is limited to the
-source-backed startup slice; it does not claim the later inventory or UI
-branches.
+Play's player is spawned by the original DeusExGameInfo.Login
+([script-player-login.md](script-player-login.md)), so its own PostBeginPlay
+builds the subsystem graph. `script-player-startup.mjs` prepares that bytecode
+before Login and verifies the resulting graph afterwards. It calls none of it.
+The earlier isolated path is removed. That path attached the browser's player,
+called InitializeSubSystems directly and forced name counters.
 
 ## Original call chain
 
@@ -27,12 +28,10 @@ DeusExPlayer.PostBeginPlay
        -> CreateKeyRing() (standalone)
 ```
 
-The browser already owns the serialized player identity, so Play attaches that
-identity to the live `LevelInfo`, prepares its mesh contract, and calls the
-original `InitializeSubSystems` body. Subsystem actors are constructed through
-the verified inherited `Engine.Actor` script constructor and then run through
-the original VM lifecycle records. No replacement augmentation algorithm is
-used.
+The chain runs inside Login's `Spawn(JCDentonMale)`. Subsystem actors are
+constructed by the general SpawnActor with their bound ClassConstructors and
+run through the original VM lifecycle records. No replacement augmentation
+algorithm is used.
 
 ## Recovered reference state
 
@@ -40,7 +39,9 @@ The installed GOTY `DeusEx.u` class defaults and the
 `.cache/original-gobjects-20260912-training-start.txt` capture establish the
 following manager state:
 
-* `AugmentationManager1` owns the player and has `Player == JCDentonMale1`.
+* The AugmentationManager owns the player, and its `Player` is the player.
+  The capture names them `AugmentationManager1` and `JCDentonMale1`; see
+  below for the suffix.
 * `augClasses` is spawned in this exact order:
 
   ```text
@@ -59,10 +60,12 @@ following manager state:
 * `AugLocs` retains the seven original capacities and key bases
   `[(1,0,4),(1,0,7),(3,0,8),(1,0,5),(1,0,6),(2,0,2),(3,0,11)]`, with the
   final location count at `3` after the defaults.
-* Spawned identities use the captured canonical names `AugmentationManager1`
-  and `AugSpeed1` through `AugPower1`. The reflected Unreal `Name` property is
-  the authority; the host identity mirrors it so level scans and callbacks see
-  the same canonical FName.
+* Names come from MakeUniqueObjectName's live class counters. The reflected
+  Unreal `Name` property is the authority, and the host identity mirrors it.
+  The capture's session started at the DX.dxm menu, whose player took suffix
+  0, so Training's objects there are `AugmentationManager1`, `AugSpeed1` and
+  so on. Play's session starts at Training, so Login creates
+  `AugmentationManager0` and `AugSpeed0` through `AugPower0`.
 
 `AugEnviro` remains unowned, so the original `GetAugLevelValue` returns its
   `-1.0` sentinel. This is why the live Training Radiation10 reduction writes
@@ -74,10 +77,8 @@ following manager state:
 Inventory spawn path (`GiveTo`, `AddInventory`, `GotoState('Idle2')`,
 `SetBase`). The object belt UI is still absent; selecting the ring calls
 `PutInHand` and `UpdateInHand` directly. See [the nano key contract](script-nanokey.md).
-The default augmentation notification still reaches
-`PlayerPawnExt.ClientMessage`; its localized `Sprintf` conversion is kept as
-an explicit UI boundary while the original ownership, linked-list,
-active-state, and location-count writes are retained.
+The default augmentation notification reaches the original
+`PlayerPawnExt.ClientMessage` event during Login.
 
 The installed-map validator checks all of these assertions against the live
 Play host:
@@ -86,6 +87,6 @@ Play host:
 DEUS_EX_GAME_DIR='Deus Ex GOTY Edition' node scripts/validate-player-augmentation-startup.mjs
 ```
 
-The current output proves `AugmentationManager1`, the 21-class list and names,
+The current output proves `AugmentationManager0`, the 21-class list and names,
 ownership and active defaults, location capacities/counts, the unowned
 `AugEnviro` sentinel, and a spawned `NanoKeyRing` owned by JC.

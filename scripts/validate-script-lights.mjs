@@ -253,7 +253,7 @@ assert.equal(play.result, 547874); // (34242 << 4) + (1 << 1) + 0
 // The traversal walked the live PawnList; the player (JCDentonMale) sits at its
 // spawn, far from the switch, so the original distance gate leaves every listener
 // unheard here -- reaching ClientHearSound (audible playback) is Stage 4.
-const jc = play.listeners.find(entry => entry.listener?.name === 'JCDentonMale');
+const jc = play.listeners.find(entry => entry.listener === player);
 assert.ok(jc, 'the player pawn is traversed as a listener');
 assert.equal(jc.heard, false);
 assert.equal(jc.reason, 'distance');

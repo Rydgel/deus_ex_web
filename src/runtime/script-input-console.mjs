@@ -50,8 +50,39 @@ export function createInputBindingQueries(names,bindings){
   };
 }
 
+/** The selected Engine.Engine.Input class, Extension.InputExt: registered at
+ * Extension 0x1002cf10 with UInput's size 0xfb0, flags 0x04084004 (Config),
+ * config name "User" and UInput's empty StaticConstructor (0x10393570), so it
+ * declares no config property of its own. docs/script-input-console.md. */
+export const INPUT_EXT_CLASS=Object.freeze({path:'Extension.InputExt',superPath:'Engine.Input',
+  configName:'User',defaultIni:'DefUser.ini',staticClass:0x100a2e00,constructor:0x1002cfb0});
+
+/**
+ * UObject::LoadConfig(1) of an InputExt object (script-config.mjs order):
+ * the Engine.Input pass, then the InputExt pass over the same inherited
+ * properties. UInput::StaticInitInput 0x103930c0 declares them on
+ * Engine.Input, all CPF_Config (0x4000) without GlobalConfig: Aliases[40] and
+ * one string per EInputKey whose FName is not None, named past its first
+ * three characters. A missing key keeps the value; UStrProperty import keeps
+ * the whole text. `bindingRead` replaces only the Engine.Input binding reads
+ * (a supplied fixture); every other read is GConfig in User.ini.
+ */
+function loadInputConfig(target,names,gconfig,warn,bindingRead=null){
+  for(const section of [INPUT_EXT_CLASS.superPath,INPUT_EXT_CLASS.path]){
+    const read=key=>gconfig.getString(section,key,INPUT_EXT_CLASS.configName,0x400);
+    readInputAliases(read,warn,target.aliases);
+    for(let index=0;index<names.length;index++){
+      if(names[index]==='None')continue;
+      const key=names[index].slice(3);
+      const text=bindingRead&&section===INPUT_EXT_CLASS.superPath?bindingRead(key)??null:read(key);
+      if(text!==null)target.bindings[index]=text;
+    }
+  }
+}
+
 export async function createInputConsole(runtime,assets,{config}={}){
   if(!runtime.classLoader)throw new Error('Input console requires the original native enum loader');
+  const fixture=config!==undefined;
   config??=await readUserConfig(assets.configFiles??[]);
   if(!config.available)throw new Error('Input bindings require supplied User.ini or DefUser.ini');
   const engine=await assets.get('Engine');
@@ -59,14 +90,34 @@ export async function createInputConsole(runtime,assets,{config}={}){
   const record=await runtime.classLoader.load(identity);
   const table=runtime.classLoader.graph.slotOf(record,0x34);
   const names=table.data.map(name=>runtime.classLoader.graph.nameText(name));
-  const bindings=names.map(name=>config.get('Engine.Input',name.slice(3))??'');
-  const query=createInputBindingQueries(names,bindings);
-  // UInput::StaticInitInput's LoadConfig reads Aliases[i] through GConfig
-  // (script-console-command.mjs readInputAliases).
   const gconfig=await runtime.classLoader.prepareConfig();
-  const aliasWarnings=[];
-  const aliases=readInputAliases(key=>gconfig.getString('Engine.Input',key,'User',0x400),message=>aliasWarnings.push(message));
-  return {...query,bindings,config,aliases,aliasWarnings,
+  const aliasWarnings=[],warn=message=>aliasWarnings.push(message);
+  const bindingRead=fixture?key=>config.get(INPUT_EXT_CLASS.superPath,key):null;
+  const store=()=>({bindings:names.map(()=>''),aliases:readInputAliases(()=>null)});
+  // XInputExt::XInputExt 0x1002cfb0 (outside GIsEditor): LoadConfig(1) on the
+  // InputExt class defaults, then on the new object. The UViewport's Input
+  // (+0x60) is this object; console commands read its arrays in place.
+  const defaults=store(),instance=store();
+  loadInputConfig(defaults,names,gconfig,warn,bindingRead);
+  loadInputConfig(instance,names,gconfig,warn,bindingRead);
+  const {bindings,aliases}=instance;
+  const query=createInputBindingQueries(names,bindings);
+  /** UObject::ResetConfig(InputExt) Core 0x10151ac0 (docs/script-player-login.md). */
+  function resetConfig(){
+    // Config name "User" selects DefUser.ini: copy its class section into
+    // GConfig's User file. GetSection's buffer copy (+0x18) is not recovered;
+    // the installed DefUser.ini has no InputExt section.
+    if(gconfig.find(INPUT_EXT_CLASS.defaultIni,false)?.find(INPUT_EXT_CLASS.path))
+      throw new Error('ResetConfig of a DefUser.ini [Extension.InputExt] section is not recovered');
+    // Loaded classes under InputExt (only InputExt): LoadConfig(1) on defaults.
+    loadInputConfig(defaults,names,gconfig,warn,bindingRead);
+    // Objects that are an InputExt (the one Input): LoadConfig(1), then
+    // PostEditChange. UObject::PostEditChange 0x1014f9c0 only calls Modify
+    // 0x10150170, which records into GUndo; only Editor.dll sets GUndo, so the
+    // game's Modify returns.
+    loadInputConfig(instance,names,gconfig,warn,bindingRead);
+  }
+  return {...query,bindings,config,aliases,aliasWarnings,defaults,resetConfig,
     /** APlayerPawn::execConsoleCommand 0x103ba200 through `commands`
      * (createConsoleCommands). */
     playerConsoleCommand(call,commands){

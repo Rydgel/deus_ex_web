@@ -45,7 +45,7 @@ const distributorExport = mapAsset.pkg.exports.findIndex(entry =>
   entry.name === 'PickupDistributor0' && entry.className === 'PickupDistributor') + 1;
 assert.ok(distributorExport > 0, 'Training contains its original PickupDistributor0');
 const serializedMapActor = actor => Number.isInteger(actor.index) && mapAsset.pkg.exports[actor.index - 1]?.name === actor.name;
-function startupDeletedChain() {
+function startupDeletedChain({login}) {
   const seen = new Set(), signature = [];
   let distributors = 0;
   for (let actor = level.pendingDeleted; actor; actor = ref(actor, 'Deleted').get()) {
@@ -65,11 +65,14 @@ function startupDeletedChain() {
     signature.push(`${key}:${ref(actor, 'Owner').get()?.name ?? 'None'}`);
   }
   assert.equal(distributors, 1, 'original PickupDistributor destroys itself exactly once per startup');
-  assert.equal(signature[0]?.split(':')[0], 'deusex.pickupdistributor',
-    'PostPostBeginPlay distributor destruction follows the shadow startup pass');
+  // Newest first: Login's ResetPlayerToDefaults destroys the first NanoKeyRing
+  // after PostPostBeginPlay's distributor, which follows the shadow pass.
+  const head = login ? ['deusex.nanokeyring', 'deusex.pickupdistributor'] : ['deusex.pickupdistributor'];
+  assert.deepEqual(signature.slice(0, head.length).map(entry => entry.split(':')[0]), head,
+    'Login ring destruction, then PostPostBeginPlay distributor destruction, then the shadow startup pass');
   return signature;
 }
-const freshStartupDeletedChain = startupDeletedChain();
+const freshStartupDeletedChain = startupDeletedChain({login: true});
 
 // -- The authored one-shot trigger -------------------------------------------
 const trigger = level.actors.find(actor => actor?.name === 'OrdersTrigger2');
@@ -116,9 +119,9 @@ assert.ok(level.actors.includes(player));
 // -- Normal movement runs the original Touch -> Destroy chain ------------------
 const events = [];
 const processEvent = runtime.processEvent.bind(runtime);
-runtime.processEvent = (actor, event, args) => {
+runtime.processEvent = (actor, event, args, ...rest) => {
   if (actor === trigger || (event === 'UnTouch' && args?.[0] === trigger)) events.push(`${actor?.name}.${event}`);
-  return processEvent(actor, event, args);
+  return processEvent(actor, event, args, ...rest);
 };
 const input = { forward: 1, right: 0, yaw: game.player.yaw, pitch: 0, jump: false, crouch: false, walk: false };
 // Live map pawns tick now, and their script bodies can join the ULevel
@@ -168,8 +171,10 @@ assert.equal(ref(trigger, 'bDeleteMe').get(), false);
 assert.equal(nativeObject.flags >>> 0, exportEntry.flags >>> 0);
 // The ledger clears session-one destruction. Original startup then recreates
 // the shadow failures and PickupDistributor0's PostPostBeginPlay destruction.
-assert.deepEqual(startupDeletedChain(), freshStartupDeletedChain,
-  'reset reproduces the exact fresh-startup deferred class/owner sequence');
+// Reset still keeps the logged-in player, so Login's ring destruction is not
+// repeated (docs/script-player-login.md, "Reset: open").
+assert.deepEqual(startupDeletedChain({login: false}), freshStartupDeletedChain.slice(1),
+  'reset reproduces the fresh LoadMap deferred class/owner sequence');
 assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collision hash registration');
 
 let second = 0, reopened = false;

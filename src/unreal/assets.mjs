@@ -4,6 +4,9 @@ import { objectAt } from './objects.mjs';
 /** Lazy package loading shared by browser File objects and local Node tools. */
 export class AssetStore {
   constructor(files) {
+    // Preserve the supplied filesystem catalog for native file-enumeration
+    // services. Package lookup alone discards non-package files such as DMP.
+    this.sourceFiles = [];
     this.files = new Map();
     this.packages = new Map();
     this.configFiles = [];
@@ -11,6 +14,7 @@ export class AssetStore {
     // UPackage::BindPackage's appGetDllHandle. Only names are needed.
     this.libraries = new Set();
     for (const file of files) {
+      this.sourceFiles.push(file);
       const leaf = file.path.replaceAll('\\', '/').split('/').pop();
       if (/\.ini$/i.test(leaf)) this.configFiles.push(file);
       if (/\.dll$/i.test(leaf)) this.libraries.add(leaf.toLowerCase());

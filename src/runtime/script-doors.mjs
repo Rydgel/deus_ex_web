@@ -1,3 +1,5 @@
+import { preparePlayerLogin } from './script-player-login.mjs';
+import { preparePlayerDumpStore } from './script-player-dump.mjs';
 import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
 import { refValue } from './script-vm.mjs';
@@ -315,7 +317,7 @@ function makeBinding(record, field) {
   // FarMoveActor writes bJustTeleported (+0x1ed bit0, the +0x1ec word's 0x100)
   // and OldLocation (+0x12c) on the native actor. A non-pawn map actor's move
   // bodies run on this host, so those fields are its members once written.
-  if ((key === 'bjustteleported' || key === 'oldlocation') && isMapMoveHost(host)) {
+  if ((key === 'bjustteleported' || key === 'oldlocation') && (isMapMoveHost(host) || host.controlledPlayer)) {
     const initial = () => record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field);
     if (key === 'bjustteleported') return {
       get: () => host.motionFlags === undefined ? initial() : Boolean(host.motionFlags & 0x100),
@@ -359,7 +361,7 @@ function makeBinding(record, field) {
       eyeheight: { get: () => f(host.eyeHeight ?? 0), set: value => { host.eyeHeight = f(value); } },
       baseeyeheight: {
         get: () => f(host.baseEyeHeight ?? values.BaseEyeHeight ?? 0),
-        set: () => { throw new Error('Player BaseEyeHeight is owned by the viewer movement port'); },
+        set: value => { host.baseEyeHeight = f(value); },
       },
       walkbob: {
         get: () => vector(host.walkBob ?? ZERO_VECTOR),
@@ -367,7 +369,7 @@ function makeBinding(record, field) {
       },
       biscrouching: {
         get: () => Boolean(host.isCrouching),
-        set: () => { throw new Error('Player bIsCrouching is owned by the recovered stance port'); },
+        set: value => { host.isCrouching = Boolean(value); },
       },
     };
     if (view[key]) return view[key];
@@ -392,7 +394,7 @@ function stateLabelForTarget(mover) {
  * TriggerToggle state. This adapter never rewrites their script bodies.
  */
 export async function createScriptDoors({
-  assets, asset, movers = [], playerActor, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
+  assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
   nativeHud = false,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
@@ -402,7 +404,7 @@ export async function createScriptDoors({
 
   // Keep the authored slot order before player subsystems append or LoadMap
   // partitions the live array. Public reset emulates reloading that map.
-  const initialActorArray = [...level.actors];
+  const initialActorArray = level.actors.filter(actor => actor !== playerActor);
   const initialActorSet = new Set(initialActorArray.filter(Boolean));
 
   const engine = await assets.get('Engine');
@@ -418,6 +420,7 @@ export async function createScriptDoors({
   let liveConPlay=null;
   let liveMission=null;
   let loadMapGame=null;
+  let playerLogin=null, preparedPlayerStartup=null, loggingIn=false;
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
   // line, so supply the host sink the original always has, recording a bounded
@@ -684,15 +687,6 @@ export async function createScriptDoors({
       runtime.instance(call.receiver).state.latent = 0;
       return undefined;
     }
-    if (call.index === 529 || call.index === 530) {
-      if(call.argumentCount!==0)throw new Error('AddPawn/RemovePawn accept no arguments');
-      if(!identities.has(call.receiver)||!call.receiver.lineage?.includes('engine.pawn'))
-        throw new Error('AddPawn/RemovePawn require a linked scene Pawn');
-      // These recovered natives deliberately do not deduplicate the list.
-      // Reflected NextPawn/PawnList already bind to these same host slots.
-      (call.index===529?addPawn:removePawn)(level,call.receiver);
-      return undefined;
-    }
     // Existing map identities already expose position/radius/height and the
     // collision flags through the scene host. Use the same recovered native
     // as spawned actors: remove from the hash, write both f32 sizes, re-add.
@@ -772,6 +766,25 @@ export async function createScriptDoors({
         if (value?.reference && typeof value.set === 'function') value.set(0);
       }
       return 0;
+    }
+    if (call.index === 1052) {
+      // APlayerPawnExt::execInitRootWindow 0x10038560 -> InitRootWindow
+      // 0x10037df0: construct only while rootWindow (+0x894) is still None.
+      if (call.argumentCount !== 0) throw new Error('InitRootWindow accepts no arguments');
+      if (!windowHost) throw new Error('InitRootWindow requires the native window host');
+      if (!runtime.namedReference(call.receiver, 'rootWindow').get()) windowHost.constructRootWindow(call.receiver);
+      return undefined;
+    }
+    if (call.index === 544) {
+      // APlayerPawn::execResetKeyboard 0x103b96d0: Player (+0x5d4) must be a
+      // UViewport holding an Input (+0x60); then UObject::ResetConfig(Input.Class).
+      if (call.argumentCount !== 0) throw new Error('ResetKeyboard accepts no arguments');
+      const viewport = runtime.namedReference(call.receiver, 'Player').get();
+      let viewportClass = false;
+      for (let cls = viewport ? runtime.instance(viewport).cls : null; cls; cls = cls.base)
+        if (cls.record.key === 'engine.viewport') viewportClass = true;
+      if (viewportClass && viewport.input) viewport.input.resetConfig();
+      return undefined;
     }
     if (call.index === 256) throw new Error(`Unsupported Sleep in selected door script: ${path}`);
     if (path.endsWith('.stopwaiting')) return dispatch(call.receiver, 'StopWaiting', []);
@@ -1541,9 +1554,6 @@ export async function createScriptDoors({
     runStartupEvent('PostPostBeginPlay');
     // 0x1038dcd5 tail: static/dynamic partition with the net boundary recorded.
     partitionStartupActors();
-    // SpawnPlayActor's player construction runs after LoadMap and the player's
-    // own Pawn.PreBeginPlay -> AddPawn owns the list head.
-    addPawn(level, playerActor);
   }
 
   // Live TriggerLights share the LoadMap startup passes. This adapter prepares
@@ -1654,29 +1664,22 @@ export async function createScriptDoors({
     // chain (the original reloads the level on "Player start"). This must run
     // after playerScene.reset rebuilt the pawn list; game.reset orders it so.
     resetNpcs();
+    // Reset keeps the logged-in player instead of reloading the level and
+    // logging in again (docs/script-player-login.md, "Reset"). As before
+    // real Login, its discarded key ring returns through the original
+    // CreateKeyRing and it rejoins the tick as a fresh SpawnActor product.
+    // Login follows LoadMap, so its Pawn.PreBeginPlay AddPawn owns the head.
+    addPawn(level, playerActor);
+    playerStartup?.spawnKeyRing?.();
+    runtime.namedReference(playerActor, 'bTicked').set(!Boolean(npcTickLevel.tickTag));
     finishPlayerStartup();
   }
 
   function finishPlayerStartup() {
     if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
-    // Rebind the attached local viewport onto PlayerPawn.Player. The engine sets
-    // this to the possessing viewport for the local player; here it is the same
-    // Client.Viewports[0] listener GetPlayerPawn (720) already follows. Original
-    // reachable bytecode such as DeusExPlayer.GetDisplayName gates on
-    // (player == None) — an unset viewport made the conversation speaker name
-    // resolve to "" — while the native readInput path stays dormant because the
-    // viewer, not Level.Tick, drives this pawn (docs/script-instructor-conversation.md).
-    const viewport = level?.engine?.client?.viewports?.[0] ?? null;
-    if (viewport) runtime.namedReference(playerActor, 'Player').set(viewport);
-    // ULevel::SpawnPlayActor 0x1039719d, after SetPlayer/Role/RemoteRole:
-    // ShowFlags = SHOW_Backdrop|SHOW_Actors|SHOW_PlayerCtrl|SHOW_RealTime.
-    // Render's overlay gate reads SHOW_Actors. RendMap (+0x600, stored next
-    // from ebx) is not modeled here.
-    runtime.namedReference(playerActor, 'ShowFlags').set(0x480c);
-    playerStartup?.spawnKeyRing?.();
-    // The reloaded player is a fresh SpawnActor product: bTicked = !Level tick
-    // parity (script-spawn.mjs), so the first frame defers what it owns.
-    runtime.namedReference(playerActor, 'bTicked').set(!Boolean(npcTickLevel.tickTag));
+    playerController.actorRegistered=true;
+    playerController.yaw=runtime.namedReference(playerActor,'ViewRotation').get()[1]*Math.PI/32768;
+
   }
 
   // Pushable decorations that have been bumped: their SetTimer(0.2) push-sound
@@ -1827,6 +1830,22 @@ export async function createScriptDoors({
 
   function tick(seconds, { tickPlayer = null } = {}) {
     const delta = f(seconds);
+    // ULevel::Tick 0x103a5793-0x103a58cf (level-tick.mjs): a nonempty Pauser
+    // (UTF-16 C-string test) replaces the whole actor pass. Controlled
+    // PlayerPawns only read input and run PlayerInput — Play's viewer movement
+    // port stands in for that route and, like PlayerTick, does not run — and
+    // other actors tick only with bAlwaysTick. No distances, no deferred list.
+    const pauser = runtime.namedReference(levelInfo, 'Pauser').get();
+    if (pauser.length > 0 && pauser.charCodeAt(0) !== 0) {
+      for (const actor of level.actors) {
+        if (!actor || actor === playerActor || npcFailures.has(actor)) continue;
+        let alwaysTick = false;
+        try { alwaysTick = Boolean(runtime.namedReference(actor, 'bAlwaysTick').get()); } catch { continue; }
+        if (alwaysTick) npcFailures.set(actor, 'Paused bAlwaysTick Actor.Tick is not admitted in Play');
+      }
+      npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
+      return records.length;
+    }
     // ULevel::Tick 0x103a55c1-0x103a5698: with the first viewport's Actor a
     // PlayerPawn holding a Player, snapshot its Location and write
     // DistanceFromPlayer for every non-null slot from FirstDynamicActor (+0x110,
@@ -2033,6 +2052,32 @@ export async function createScriptDoors({
       }catch(error){scriptPreparationFailures.set(`${name}.${entry.path}`,String(error?.message??error));}
     }
   }
+  if(!playerScene||!playerController)throw new Error('Real player Login requires the existing scene movement port');
+  await prepareNpcClass(playerClass);
+  const extension=await assets.get('Extension');
+  await runtime.loadClass(extension,extension.exportsByPath.get('flagbase'));
+  preparedPlayerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,player:playerActor});
+  playerLogin=await preparePlayerLogin({runtime,assets,level,levelInfo,
+    viewport:level.engine.client.viewports[0],prepareClass:prepareNpcClass});
+  // DeusExGameInfo.Login unconditionally runs native 3015
+  // CreateDumpLocationObject on the logged-in player (docs/script-player-dump.md).
+  await preparePlayerDumpStore({runtime,assets});
+  runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
+    if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;
+    const fields=classFields(cls).filter(field=>!field.key.startsWith('core.object.')),snapshot=new Map(fields.map(field=>[field.key,runtime.fieldReference(actor,field).get()]));
+    const values=Object.fromEntries(fields.map(field=>[field.name,snapshot.get(field.key)]));
+    playerScene.bindPlayerIdentity(actor,values);
+    actor.lineage=Object.freeze(lineage);actor.pawn=true;actor.scriptView=true;
+    const record={object:actor,cls,state:runtime.instance(actor),role:'player',store:new Map(snapshot),level,levelInfo,
+      initialProperty:field=>snapshot.get(field.key)};
+    identities.set(actor,record);
+    for(const field of fields)if(!field.key.startsWith('core.object.'))runtime.bindProperty(actor,field,makeBinding(record,field));
+    playerActor=actor;
+    triggerActions.bindPlayerFlagBase(runtime,actor);
+    playerLogs?.bindPlayer(actor);windowHost?.bindPlayer(actor);
+    return true;
+  };
+  playerScene.detachPlayerIdentity();
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
   loadMapGame.reload();
   await prepareShadowStartup(runtime,assets,level);
@@ -2045,23 +2090,26 @@ export async function createScriptDoors({
   for(const record of records)resetMover(record);
   lights.reset();
   resetNpcs();
-  if(nativeHud){
-    // HUD.InitWindow reads the initialized augmentation/theme/inventory
-    // graph. Allocate that actor world before the native root is constructed.
-    // DeusExTextParser.OpenText loads InformationDevices' XExtString texts
-    // from DeusExText (docs/script-text-parser.md).
-    runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
-    playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
-      player:playerActor,warning:message=>callbacks.warning?.(message)});
-    // The former presentation adapter was created after prepareNpcs. Its
-    // replacement calls the player's original HUD getters during root Init.
-    await prepareNpcClass(playerClass);
-    const {createWindowHost}=await import('./script-window-host.mjs');
-    windowHost=await createWindowHost({runtime,assets,player:playerActor});
-    windowHost.install();windowHost.constructRootWindow(playerActor);
-    playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
-    playerLogs.enableMessages();
-  }
+  // The native window system exists before SpawnPlayActor: Login's
+  // SetPlayer -> PlayerPawnExt.Possess calls InitRootWindow (native 1052),
+  // whose ConstructRootWindow runs HUD.InitWindow over the player's already
+  // initialized augmentation/theme/inventory graph. DeusExTextParser.OpenText
+  // loads InformationDevices' XExtString texts from DeusExText
+  // (docs/script-text-parser.md).
+  runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
+  await prepareNpcClass(playerClass);
+  const {createWindowHost}=await import('./script-window-host.mjs');
+  windowHost=await createWindowHost({runtime,assets,player:playerActor});
+  windowHost.install();
+  // UViewport::Input (+0x60) exists before SpawnPlayActor; TravelPostAccept's
+  // ResetKeyboard reaches it through the new player's Player.
+  level.engine.client.viewports[0].input=windowHost.input;
+  playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
+  loggingIn=true;
+  try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
+  finally{loggingIn=false;}
+  playerStartup=preparedPlayerStartup.complete(playerActor);
+  playerLogs.enableMessages();
   // Deferred: DataLinkPlay.StartConversation constructs each display through
   // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
   const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost,deferWindow:true});
@@ -2077,8 +2125,7 @@ export async function createScriptDoors({
   runtime.windowLifecycle={...runtime.windowLifecycle,
     hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
       readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
-  if(!nativeHud)playerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,
-    player:playerActor,warning:message=>callbacks.warning?.(message)});
+
   // Prepare the live face-to-face (ConPlay) conversations the map's
   // conversation-owning pawns can invoke, so a frobbed instructor runs the real
   // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent

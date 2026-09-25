@@ -100,7 +100,12 @@ assert.deepEqual(instance.nativeObject.decalSurfaces,copied);
 runtime.destroyProperties([surfaceField],field=>runtime.fieldReference(shadow,field));
 assert.deepEqual(get(shadow,'SurfList'),[]);
 assert.throws(()=>arrayReference(0,propertyReference(surfaceField,()=>copied,()=>{})),/array/i);
-assert.throws(()=>zeroValue({type:'array',innerMetadata:{type:'string'}}),error=>error.code==='UNSUPPORTED_SCRIPT_VALUE');
+// Owning StrProperty inners (DumpLocation.dumpFileDirectory) copy element by
+// element; any other inner type stays an explicit boundary.
+const strings={type:'array',innerMetadata:{type:'string'}},names=zeroValue(strings);
+assert.deepEqual(names,[]);names.push('a','b');
+const namesCopy=copyValue(strings,names);names[0]='z';assert.deepEqual(namesCopy,['a','b']);
+assert.throws(()=>zeroValue({type:'array',innerMetadata:{type:'float'}}),error=>error.code==='UNSUPPORTED_SCRIPT_VALUE');
 assert.equal(level.pawnList,jaime);
 assert.equal(get(jaime,'NextPawn'),null);
 assert.equal(get(jaime,'CollisionHeight'),Math.fround(initialHeight-4.5));

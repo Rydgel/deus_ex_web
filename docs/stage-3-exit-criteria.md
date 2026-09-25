@@ -232,8 +232,10 @@ The census groups by native index. Its index-0 row was labelled
 recovered console-command chain. FLUSH reaches `UEngine::Exec`'s
 `Flush(1)`, and Escape opens and closes `MenuMain` in Play
 ([console commands](script-console-command.md)). `SaveGame` 3011 is the
-other reported native. The menu does not pause the level yet, because
-Play's player has no PlayerReplicationInfo (see that document).
+other reported native. Since batch 3 milestone C the menu pauses the level:
+the real Login gives the player a PlayerReplicationInfo, so GameInfo.SetPause
+sets Pauser. Play's tick then takes ULevel::Tick's paused branch
+([player login](script-player-login.md#other-natives-newly-reached-by-login)).
 
 The first census found two items with existing evidence; both are now closed:
 
@@ -283,7 +285,23 @@ rejections, zero throws. Original Actor.ProcessEvent's cold-level gate and
 GameReplicationInfo's shadowed Region field are covered by focused checks.
 See [GameInfo evidence](script-loadmap-gameinfo.md).
 
-Milestone C is incomplete: native Input bootstrap/config reload, player-owned
-destruction and DumpLocation FString-array storage need further recovery and
-integration. Play remains at B; PRI and Esc pausing are not claimed fixed.
-See the [batch 3 handoff](stage-3-batch3-handoff.md) and preserved local C work.
+## Batch 3 milestone C: original player Login
+
+Measured 2026-09-25: 90 probes, 4 boots, 178 s, peak 2427 MiB.
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | PASS |
+| 2. tick | PASS, including reset |
+| 3. interactions | OPEN: LargeTextWindow layout and unprobed Fire/AltFire (batch 4). The real player now reaches Teleporter0's `GameInfo.SendPlayer`, whose `ClientTravel` is the tolerated Stage 6 native. |
+| 4. lifecycle | OPEN: DestroyActor/CleanupDestroyed and resource loading not measured |
+| 5. substitutes | OPEN: reset keeps the logged-in player. The player-startup adapter is gone: the player, PRI and subsystems come from the original Login. |
+
+General SpawnActor: 107 classes, 3336 accepted actors, 273 original-gate
+rejections, zero throws. The 203 distinct natives reached include the newly
+recovered InitRootWindow, ResetKeyboard (through the InputExt
+ResetConfig), CheckFlag and CreateDumpLocationObject. Esc pauses the level
+through the PRI's PlayerName and ULevel::Tick's paused branch. See
+[player login](script-player-login.md). Reset still retains the player
+rather than purging it and logging in again; that section of the same page
+records it as open.

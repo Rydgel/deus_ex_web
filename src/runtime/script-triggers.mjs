@@ -77,6 +77,7 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   AllActors: 304,
   SetBool: 1100,
   GetBool: 1110,
+  CheckFlag: 1120,
   SetExpiration: 1122,
   SetDefaultExpiration: 1125,
 });
@@ -146,6 +147,16 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
         bAdd: entry.bAdd, expiration: entry.expiration, requestedExpiration,
         previous: previous?.value, added: !previous });
       return true;
+    },
+    /** XFlagBase::CheckFlag 0x100247d0 (exec 0x10025aa0): whether GetFlag
+     * finds `name` with that EFlagType. This store only ever holds bools
+     * (type 0); the other Set natives stay unsupported, so no other type can
+     * exist in it. */
+    checkFlag(name, type) {
+      if (!Number.isInteger(type) || type < 0 || type > 255) throw new TypeError('FlagBase.CheckFlag requires a byte flag type');
+      const found = type === 0 && Boolean(current(name));
+      calls.push({ method: 'CheckFlag', name: name ?? 'None', type, found });
+      return found;
     },
     /** Extension.FlagBase.GetBool(Name). */
     getBool(name) {
@@ -243,6 +254,11 @@ export function createScriptTriggers({
       flagBase.setDefaultExpiration(evaluateValue(call,0));
       return {handled:true,value:undefined};
     }
+    if (index === TRIGGER_NATIVE_INDICES.CheckFlag) {
+      if (call.receiver !== flagBase || call.argumentCount !== 2) throw new Error('FlagBase.CheckFlag receiver/arguments');
+      if (typeof flagBase.checkFlag !== 'function') throw new Error('FlagBase.CheckFlag is unsupported for this store');
+      return { handled: true, value: flagBase.checkFlag(evaluateValue(call, 0), evaluateValue(call, 1)) };
+    }
     if (index === TRIGGER_NATIVE_INDICES.GetBool) {
       if (call.receiver !== flagBase) throw new Error('FlagBase.GetBool reached with an unbound receiver');
       if (call.argumentCount !== 1) throw new Error('FlagBase.GetBool argument count');
@@ -256,6 +272,8 @@ export function createScriptTriggers({
     if (!runtime || !playerActor) throw new TypeError('FlagBase binding requires runtime and player actor');
     const instance = runtime.instance(playerActor);
     const field = runtime.lookupMember(instance.cls, 'fields', 'flagBase');
+    const constructed=runtime.fieldReference(playerActor,field).get();
+    if(constructed?.getBool && constructed?.setBool){flagBase=constructed;return flagBase;}
     if (!field) throw new Error('DeusExPlayer.FlagBase property is not linked');
     runtime.bindProperty(playerActor, field, {
       get: () => flagBase,
@@ -266,7 +284,7 @@ export function createScriptTriggers({
     return flagBase;
   }
 
-  return { flagBase, handleNative, bindPlayerFlagBase };
+  return { get flagBase(){return flagBase;}, handleNative, bindPlayerFlagBase };
 }
 
 /**

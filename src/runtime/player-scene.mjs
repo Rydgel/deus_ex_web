@@ -7,7 +7,7 @@ import { farMoveActor } from './relocation.mjs';
 import { pointRegion, setActorZone, dryPlayerZoneCallbacks } from './zone.mjs';
 import { scriptTrace } from './script-trace.mjs';
 import { createSceneEvents } from './scene-events.mjs';
-import { addPawn } from './pawn-list.mjs';
+import { addPawn, removePawn } from './pawn-list.mjs';
 import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { setBase as setActorBase } from './walking-callbacks.mjs';
@@ -16,14 +16,15 @@ import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs'
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
 export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelValues,timeSeconds,surfaceTextures}) {
-  const f=Math.fround,source=player.collisionActor;
+  const f=Math.fround;
+  let source=player.collisionActor;
   const worldActor=collision.queries.levelInfo;
   worldActor.values={...levelValues};
   // Late-bound so the scene can route an unhandled actor event into the door
   // runtime's VM (the general scene-event router), which is created after this
   // scene (game.mjs wires it). See docs/scene-events.md.
   const hooks={dispatchEvent:null};
-  const dispatch=createSceneEvents(source,{deferMissionEvent:(target,event)=>{
+  const dispatch=createSceneEvents(()=>source,{deferMissionEvent:(target,event)=>{
     player.unimplementedPhysicsEffects.add(`${target.name}.${event} mission script`);
   },dispatchEvent:(target,event,args)=>{
     if(!hooks.dispatchEvent)throw Error(`Scene event dispatch is not linked: ${target?.name??'actor'}.${event}`);
@@ -156,7 +157,29 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
     if(actor.movingBrush)updateZone(actor,false,true);
   };
-  return {dispatch,level,hooks,reset(){
+  return {dispatch,level,hooks,
+    // The LoadMap Login path retires the browser placeholder before original
+    // SpawnActor allocates its replacement. Preserve map-export array slots.
+    detachPlayerIdentity(){
+      const old=source;
+      collision.queries.removeActor(old);player.actorRegistered=false;
+      removePawn(level,old);
+      for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old)level.actors[i]=null;
+      for(const viewport of level.engine?.client?.viewports??[])if(viewport.actor===old)viewport.actor=null;
+      if(collision.playerActor===old)collision.playerActor=null;
+      return old;
+    },
+    bindPlayerIdentity(actor,values=player.defaults){
+      player.bindCollisionIdentity(actor,values);
+      source=actor;collision.playerActor=actor;
+      Object.assign(actor,{worldActor,standingCount:values.StandingCount??0,touching:[null,null,null,null],
+        isPawn:true,pawnFlags:values.bIsPlayer?2:0,
+        actorFlags:(values.bStatic?1:0)|(values.bMovable?0x80000:0)|(values.bCollideWhenPlacing?0x20000:0),
+        mass:values.Mass,warping:false,specialGoal:values.SpecialGoal??null});
+      writeCollisionFlags(actor,collisionFlagsFrom(values));
+      return actor;
+    },
+    reset(){
     worldActor.values={...levelValues};
     level.pawnList=null;
     // prepareActor restores serialized collision fields (radius/height) on

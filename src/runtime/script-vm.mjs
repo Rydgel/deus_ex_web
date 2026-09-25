@@ -3,6 +3,7 @@ import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-pri
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator, rotatorToVector } from './script-decoration-primitives.mjs';
 import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString, scriptFloatToString } from './script-string-operations.mjs';
 import { getAxes } from './camera.mjs';
+import { msvcrtWtoi } from './script-text-parser.mjs';
 import { rotatorSin } from './coords.mjs';
 
 const f = Math.fround;
@@ -857,6 +858,9 @@ export function compileFunction(fn) {
               throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
             return Math.trunc(value)|0;
           }
+          // Core execStringToInt 0x10132320: evaluate the FString, then
+          // appAtoi(*Str) (an empty FString reads as ""), store the DWORD.
+          case 0x4a: return msvcrtWtoi(scriptStringText(refValue(evaluate(n.value,instance)) ?? ''));
           case 0x50: return vectorToRotator(refValue(evaluate(n.value,instance)));
           // Core execIntToString 10131600: evaluate one signed DWORD,
           // FString::Printf with the UTF-16 "%i" constant at 101aaf70.

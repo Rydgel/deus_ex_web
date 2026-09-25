@@ -79,12 +79,16 @@ function scalarDescriptor(parts, metadata = parts.metadata) {
   if (!type) fail(`Unsupported property type for ${parts.key}`, parts, type);
   if (type === 'array') {
     const inner=innerMetadata(metadata);
-    // Core UArrayProperty::CopySingleValue's non-owning int path. Native
-    // Decal.SurfList needs whole-value storage, not dynamic indexing opcodes.
-    if(!inner||typeOf(inner)!=='int'||(inner.flags&0x400000)||
-      (inner.arrayDim??1)!==1)
-      fail(`Dynamic array values require a linked non-owning IntProperty for ${parts.key}`,parts,type);
-    return {key:parts.key,type,metadata,elementSize:12,inner};
+    // Whole-value storage for native-owned dynamic arrays whose script never
+    // indexes them: Decal.SurfList (non-owning int, Core UArrayProperty's
+    // CopySingleValue int path) and DumpLocation.dumpFileDirectory (owning
+    // FString elements, copied/destroyed per element by the recovered
+    // UStrProperty bodies). Dynamic indexing opcodes remain unsupported.
+    const innerType=inner?typeOf(inner):null;
+    if(!inner||(inner.arrayDim??1)!==1||
+      !(innerType==='int'&&!(inner.flags&0x400000)||innerType==='string'))
+      fail(`Dynamic array values require a linked IntProperty or StrProperty inner for ${parts.key}`,parts,type);
+    return {key:parts.key,type,metadata,elementSize:12,inner,innerType};
   }
   if (type === 'map') {
     fail(`Dynamic ${type} values are not implemented for ${parts.key}`, parts, type);
@@ -269,7 +273,7 @@ function copyScalar(value, descriptor, operation = 'copyValue') {
     case 'object': case 'class': return value ?? null;
     case 'array':
       if(!Array.isArray(value))throw new TypeError(`${operation} requires an Array for ${descriptor.key}`);
-      return value.map(item=>Number(item)|0);
+      return descriptor.innerType==='string'?value.map(item=>item==null?'':String(item)):value.map(item=>Number(item)|0);
     case 'struct': {
       const key = descriptor.structKey;
       if (!SUPPORTED_STRUCTS.has(key)) return copyGenericStruct(value, metadata, descriptor, operation);

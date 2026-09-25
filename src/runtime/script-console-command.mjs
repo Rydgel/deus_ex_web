@@ -208,13 +208,16 @@ export const ALIAS_MEMBERS = Object.freeze([
 ]);
 export const ALIAS_COUNT = 40;
 
-export function readInputAliases(read, warn = () => {}) {
-  return Array.from({length: ALIAS_COUNT}, (_, index) => {
-    const value = {Alias: 'None', Command: ''};
+/** One LoadConfig pass over `Aliases[i]`. A missing key keeps the element;
+ * a present one imports over it, leaving unnamed members as they were.
+ * `target` defaults to 40 fresh zero elements. */
+export function readInputAliases(read, warn = () => {},
+  target = Array.from({length: ALIAS_COUNT}, () => ({Alias: 'None', Command: ''}))) {
+  for (let index = 0; index < ALIAS_COUNT; index++) {
     const text = read(`Aliases[${index}]`);
-    if (text !== null && text !== undefined) importStructText(String(text), ALIAS_MEMBERS, value, warn);
-    return value;
-  });
+    if (text !== null && text !== undefined) importStructText(String(text), ALIAS_MEMBERS, target[index], warn);
+  }
+  return target;
 }
 
 /** FStringOutputDevice: Log/Logf append their text with no line break. */
@@ -296,6 +299,8 @@ export function createConsoleCommands({runtime, input, services}) {
     // URenderDevice::Exec first.
     claims('URenderDevice::Exec', cmd);
     claims('UGlideRenderDevice::Exec', cmd);
+    // 0x10373ae5-0x10373b0c: GETPING logs the literal "0" (0x1047c2b4).
+    if (parseCommand(cmd, 'GETPING') !== null) { ar.log('0'); return true; }
     claims('UViewport::Exec', cmd);
     const console = read(viewport, 'Console');
     if (console && scriptExec(console, cmd, actor)) return true;

@@ -249,7 +249,7 @@ export async function createLiveDataLinkRuntime({
   const receivedClass=await runtime.loadClass(deusEx,requiredExport(deusEx,'HUDReceivedDisplay'));
   const receivedItems=[];
   const originalReceivedDisplay=get(runtime,shell.hud,'receivedItems');
-  const receivedDisplay=originalReceivedDisplay??{name:'HUDReceivedDisplay DataLink runtime'};
+  let receivedDisplay=originalReceivedDisplay??{name:'HUDReceivedDisplay DataLink runtime'};
   if(!originalReceivedDisplay){
     runtime.attach(receivedDisplay,receivedClass);
     shell.adoptWindow?.(receivedDisplay,shell.hud);
@@ -630,5 +630,12 @@ export async function createLiveDataLinkRuntime({
 
   return {shell:()=>currentShell,conversation:startRoute.conversation,speech:startRoute.speech,endEvent:startRoute.endEvent,
     timeline:startRoute.timeline,tick,reset,presentation:()=>lastPresentation,active:()=>active,
-    catalog,handleStartConversation,startHandler,receivedItems,receivedDisplay};
+    // Reset active presentations against the old identity first. The real
+    // Login/window paths own ConListItems, rootWindow and HUD initialization.
+    bindPlayer(next){
+      runtime.instance(next);
+      if(active||queue.length)throw new Error('Reset live DataLink before rebinding its player');
+      player=next;receivedDisplay=get(runtime,currentShell.hud,'receivedItems');
+    },
+    catalog,handleStartConversation,startHandler,receivedItems,get receivedDisplay(){return receivedDisplay;}};
 }

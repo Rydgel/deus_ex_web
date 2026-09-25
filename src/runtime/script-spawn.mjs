@@ -75,7 +75,8 @@ export function nativeActorConstruction(cls,{classConstructor=node=>node?.loadRe
     if(row.unresolved)
       throw new Error(`SpawnActor ${classKey(cls)} native constructor ${classKey(node)} is not recovered: ${row.unresolved.split(';')[0]}`);
     return {classKey:classKey(cls),nativeClass:classKey(node),inherited:node!==cls,constructor:bound,
-      nativeVtable:row.vtable,memberBytes:row.memberBytes??null};
+      nativeVtable:row.vtable,memberBytes:row.memberBytes??null,
+      ...(row.conditionalFlagBase?{conditionalFlagBase:row.conditionalFlagBase}:{})};
   }
   throw new Error(`SpawnActor ${classKey(cls)} ClassConstructor 0x${bound.toString(16)} is outside the native Actor constructor family`);
 }

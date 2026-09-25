@@ -166,6 +166,13 @@ source. A null source record is dereferenced at `+0x4` and is invalid. The
 inherited complete body wraps this single-value operation over outer
 `ArrayDim` and `ElementSize` strides.
 
+The VM keeps a native-owned dynamic array whose script never indexes it as one
+logical value (`script-values.mjs`). A raw int inner (Decal.SurfList) copies as
+a fresh int array. An owning StrProperty inner (flag `0x400000`, e.g.
+DumpLocation.dumpFileDirectory) copies element by element into new strings, as
+the owning branch's per-element `+0x90` FString copy does. Other inner types
+and the dynamic-array indexing opcodes remain unsupported.
+
 ## Fixed array copy
 
 `UFixedArrayProperty::CopySingleValue` (`0x10168290`) reads the fixed count
