@@ -25,6 +25,7 @@ import { playerMove } from './player-move.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { isMapMoveHost, linkLiveCollision } from './map-actor-native.mjs';
+import { saveConfig, configRoot, loadConfig as loadObjectConfig, defaultsObject } from './script-config.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
@@ -169,6 +170,9 @@ export class ScriptRuntime {
           return this.classLoader.identity(record);
         }};
     }
+    // Linked classes in link order: the loaded UClass objects SaveConfig's
+    // GObjObjects walk reloads (script-config.mjs).
+    this.linkedClasses=new Set();
     this.states=new Map();this.structs=new Map();this.structLayouts=new Map();this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
     this.eventsEnabled=true;
     this.conversationLists=new Map();
@@ -402,6 +406,7 @@ export class ScriptRuntime {
           for(const name of ['Tag','TimerRate','TimerCounter','bTimerLoop'])await this.field(this.lookupMember(cls,'fields',name));
         }
         record.linkedClass=cls;
+        this.linkedClasses.add(cls);
         return cls;
       })();
       this.classes.set(record.key,pending);pending.catch(()=>this.classes.delete(record.key));
@@ -1404,6 +1409,30 @@ export class ScriptRuntime {
       this.processEvent(receiver,token,args,cell,record);
     }
     return true;
+  }
+  /** UObject::SaveConfig (Core 0x10151540) on a live object, then the
+   * defaults reload it ends with: LoadConfig(1) on the class default object of
+   * every loaded class under the topmost CLASS_Config ancestor
+   * (docs/script-config.md). Instances keep their own values. */
+  saveObjectConfig(receiver) {
+    const graph=this.classLoader?.graph,config=graph?.config;
+    if(!config)throw new Error('SaveConfig requires GConfig (the native class loader and installed .ini files)');
+    const cls=this.instance(receiver).cls,record=cls.loadRecord;
+    if(!record)throw new Error(`SaveConfig requires the native class record: ${cls.record.key}`);
+    saveConfig(graph,config,{cls:record,index:0,
+      read:(property,index)=>{
+        const value=this.fieldReference(receiver,this.classLoader.identity(property)).get();
+        return graph.slotOf(property,0x34)>1?value[index]:value;
+      }});
+    const root=configRoot(graph,record);
+    for(const loaded of this.linkedClasses){
+      let child=false;
+      for(let c=loaded.loadRecord;c;c=graph.superOf(c))if(c===root){child=true;break;}
+      if(!child||!loaded.loadRecord?.defaults?.data)continue;
+      loadObjectConfig(graph,config,defaultsObject(graph,loaded.loadRecord,loaded.loadRecord.defaults.data),{propagate:1});
+      this.classLoader.refreshConfigDefaults(loaded);
+    }
+    return undefined;
   }
   /** Window's native wrapper preserves the UFunction selected by its original
    * checked/state-aware lookup. Only a null native parameter block (InitWindow)
@@ -2607,6 +2636,11 @@ export class ScriptRuntime {
       if(call.argumentCount!==2)throw new Error('SetTimer requires rate and loop arguments');
       const rate=refValue(call.evaluateArgument(0)),loop=refValue(call.evaluateArgument(1));
       return setActorTimer(this.timerState(call.receiver),rate,loop);
+    }
+    if(call.index===536){
+      // execSaveConfig 0x1013e6e0: P_FINISH, then SaveConfig(CPF_Config, NULL).
+      if(call.argumentCount!==0)throw new Error('SaveConfig accepts no arguments');
+      return this.saveObjectConfig(call.receiver);
     }
     if(call.index===3016){
       // DeusExPlayer.UnloadTexture (DeusEx.dll exec 0x10014c90): for a

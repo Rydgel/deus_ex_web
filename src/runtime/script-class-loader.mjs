@@ -3,6 +3,7 @@
  */
 import {readClass} from '../unreal/classes.mjs';
 import {createScriptLoadGraph} from './script-load-graph.mjs';
+import {loadConfigCache} from './config-cache.mjs';
 
 export class ScriptClassLoader {
   constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null}) {
@@ -20,8 +21,17 @@ export class ScriptClassLoader {
   /** Fetch a dependency closure before any synchronous native load begins.
    * Serialize preparation requests so overlapping/cyclic closures cannot see
    * half-fetched tables. Native export creation remains lazy after fetching. */
+  /** GConfig from the installed System/*.ini files, bound to the graph
+   * before the first synchronous class load (UClass::Serialize reaches
+   * LoadConfig). An install without .ini files yields an empty cache. */
+  prepareConfig() {
+    return this.configReady ??= loadConfigCache(this.assets?.configFiles ?? [])
+      .then(cache => { this.graph.setConfig(cache); return cache; });
+  }
+
   prepare(asset) {
     const pending = this.prepareQueue.then(async () => {
+      await this.prepareConfig();
       const visited = new Set();
       const queue = [asset];
       while (queue.length) {
@@ -37,6 +47,23 @@ export class ScriptClassLoader {
     });
     this.prepareQueue = pending.catch(() => {});
     return pending;
+  }
+
+  /** Re-read the config properties of a linked class's VM defaults from its
+   * native Defaults block after a LoadConfig reload (SaveConfig). */
+  refreshConfigDefaults(cls) {
+    const data = cls.loadRecord?.defaults?.data, {slotOf} = this.graph;
+    if (!(data instanceof Map)) return;
+    for (const field of cls.propertyLink ?? []) {
+      const property = field.loadRecord;
+      if (!property || !(slotOf(property, 0x3c) & 0x4000)) continue;
+      const values = new Map();
+      for (let index = 0; index < slotOf(property, 0x34); index += 1) {
+        const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
+        if (data.has(offset)) values.set(index, this.value(property, data.get(offset)));
+      }
+      if (values.size) cls.defaults.set(field.key, values);
+    }
   }
 
   identity(record) {

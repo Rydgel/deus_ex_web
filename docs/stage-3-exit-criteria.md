@@ -135,7 +135,7 @@ frontier:
 | Persona screen layout/admission | `TextWindow` `ParentRequestedGranularity` override — **closed** ([checkbox](script-window-checkbox.md)) | ShowInventoryWindow |
 | | `CheckboxWindow` family not admitted — **closed**; Goals opens and closes | ShowGoalsWindow |
 | | `XRadioBoxWindow::DescendantRemoved` `0x10038cb0` on close — **closed**; Inventory opens and closes | ShowInventoryWindow |
-| Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` (config store); 264 `PlaySound` in `DestroyWindow` | Goals, MedicalBot, RepairBot close |
+| Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` — **closed** with GConfig and class-load `LoadConfig` ([config](script-config.md)); 264 `PlaySound` in `DestroyWindow` | Goals, MedicalBot, RepairBot close |
 | Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) — **closed** ([map-actor move](script-map-actor-move.md)); lift, carry, throw and Player start | Plant2, two crates, FlagTrigger0 |
 | | `MoveActor` for a non-spawned rider (pickup) — **closed**; Candybar and HazMatSuit were a reset leak | CombatKnife, Candybar, HazMatSuit |
 | Exec invocation | exec with omitted optional parameters — **closed** ([console exec](script-console-exec.md)) | PutInHand, DropItem |
@@ -154,9 +154,11 @@ already-recovered `MoveActor`/`FarMoveActor` bodies, which Play admitted only
 for the player, spawned views and held items. Admitting map actors closed all
 seven probes in one change. After that batch and the console-exec and
 native-token Context changes, the census reads 88 probes and 2 ending on a
-boundary (Beam, DXFonts). The remaining unsupported natives are
-`SaveConfig` 536, `PlaySound` 264 (screen close, `Lamp.Frob`), and the
-Stage 4/5 `SaveGame`/`ClientTravel`. `PlaySound` is admitted one exact caller at a time
+boundary (Beam, DXFonts). `SaveConfig` 536 is now closed as well
+([config](script-config.md)). It brought the installed `.ini` values into
+class defaults at load time. The remaining unsupported natives are
+`PlaySound` 264 (screen close, `Lamp.Frob`) and the Stage 4/5
+`SaveGame`/`ClientTravel`. `PlaySound` is admitted one exact caller at a time
 ([bot activation](script-window-bot-activation.md)). A static bytecode check
 that each call discards the channel id could admit every such caller in one
 change.

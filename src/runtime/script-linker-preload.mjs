@@ -839,7 +839,7 @@ export function serializeLoadedClass(object, archive, services = {}, context = {
   // zero args) and LoadLocalized (two); +0x488 is cleared last.
   assertCheck(defaults.num === getSize(), LINKER_PRELOAD.asserts.defaultsSize, services,
     { object, num: defaults.num });
-  required(services.loadConfig, 'LoadConfig (0x101023dd)')(defaults.data, 0, 0, 0);
+  required(services.loadConfig, 'LoadConfig (0x101023dd)')(defaults.data, 0, 0, 0, object);
   assertCheck(defaults.num === getSize(), LINKER_PRELOAD.asserts.defaultsSize, services,
     { object, num: defaults.num });
   required(services.loadLocalized, 'LoadLocalized (0x1010306c)')(defaults.data, 0, 0);

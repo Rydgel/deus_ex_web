@@ -12,6 +12,14 @@ UObject::LoadLocalized thunk  0x1010306c -> body 0x10151390
 Localize thunk                0x101015b4 -> body 0x10148430
 ```
 
+Play's LoadConfig is the complete translation in
+[script-config.md](script-config.md). That page corrects two points below:
+- the per-object class flag is `0x400`, not `0x00040000`;
+- the no-filename branch's class tests are UArrayProperty/UMapProperty
+  (dynamic-array config), and `+0x60` is `GetOwnerClass` for globalconfig.
+
+This module still supplies `UClass::Register`'s LoadLocalized adapter.
+
 The translation is [`src/runtime/script-object-config.mjs`](../src/runtime/script-object-config.mjs). It keeps the native call order and makes resource-manager and property-virtual calls explicit host services. It does not turn an absent config or localization manager into an invented value.
 
 ## LoadConfig
@@ -34,7 +42,7 @@ The body performs these operations in order:
    the same receiver is recursively called with `(first, Super, filename)`.
    The recursive call completes before the selected class's own Children walk.
 3. The body derives a local per-object condition from the receiver's Class
-   flags and Index: it is true when `ClassFlags & 0x00040000` is set **and**
+   flags and Index: it is true when `ClassFlags & 0x400` is set **and**
    `defaultObject+0x04 != -1`. With a null filename, that condition selects the
    receiver's Outer name (unless it is the transient package at `0x102a2660`);
    otherwise the selected class's `ClassConfigName` at `+0x4a0` supplies the

@@ -323,6 +323,10 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
   await prepareFunction(runtime, deusEx, 'AugmentationManager.FindAugmentation');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.AreSlotsFull');
   await prepareFunction(runtime, deusEx, 'AugmentationManager.GetAugLevelValue');
+  // GivePlayerAugmentation shows a new, not always-active augmentation on the
+  // HUD when the globalconfig bHUDShowAllAugs is set, which the installed
+  // User.ini does (docs/script-config.md).
+  await prepareFunction(runtime, deusEx, 'DeusExPlayer.AddAugmentationDisplay');
   // Radiation's first full player damage call recomputes Health from the six
   // body-part fields after DXReduceDamage. This small inherited player helper
   // is part of the now-live trigger integration, so prepare its exact body.

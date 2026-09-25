@@ -12,6 +12,7 @@ import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {readScriptStructValue} from '../src/runtime/script-struct-values.mjs';
 import {serializeTaggedProperty} from '../src/runtime/script-linker-preload.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {importText} from '../src/runtime/config-text.mjs';
 
 const root = gameDirectory();
 const files = [];
@@ -70,6 +71,20 @@ for (const name of names) {
     if ([5, 8].includes(tag.type)) expected = await runtime.objects.resolve(deusEx, tag.value);
     else if (tag.type === 10) expected = await readScriptStructValue(deusEx, field, tag.data,
       {resolveObject: (asset, ref) => runtime.objects.resolve(asset, ref)});
+    // UClass::Serialize ends with LoadConfig on the defaults: a config
+    // property with a value in the installed .ini takes that value instead
+    // (docs/script-config.md). Sections compare case-insensitively.
+    const flags = field.metadata.flags ?? 0;
+    if (flags & 0x4000) {
+      const section = flags & 0x40000 ? field.key.split('.').slice(0, 2).join('.') : `deusex.${name}`;
+      const key = field.metadata.arrayDim > 1 ? `${tag.name}[${tag.arrayIndex}]` : tag.name;
+      const text = graph.config.getString(section, key, oracle.configName ?? 'System');
+      const kind = {1: 'byte', 2: 'int', 3: 'bool', 4: 'float', 6: 'name', 13: 'string'}[tag.type];
+      if (text !== null && kind) {
+        assert.deepEqual(actual, importText(kind, text).value, `${name}.${tag.name}[${tag.arrayIndex}] takes its .ini value`);
+        continue;
+      }
+    }
     assert.deepEqual(actual, expected, `${name}.${tag.name}[${tag.arrayIndex}] matches package bytes`);
     compared += 1;
   }

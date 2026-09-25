@@ -31,7 +31,8 @@ export const SCRIPT_OBJECT_CONFIG = Object.freeze({
   flags: Object.freeze({
     classConfig: 0x00000004,
     classLocalized: 0x00000020,
-    classPerObjectConfig: 0x00040000,
+    // CLASS_PerObjectConfig: `test ah,4` on ClassFlags (+0x484), 0x400.
+    classPerObjectConfig: 0x00000400,
     propertyConfig: 0x00004000,
     propertyGlobalConfig: 0x00040000,
     propertyLocalized: 0x00008000,

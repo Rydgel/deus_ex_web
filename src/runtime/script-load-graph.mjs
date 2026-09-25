@@ -31,6 +31,7 @@ import {linkScriptState} from './script-state-link.mjs';
 import {linkScriptClass} from './script-class-link.mjs';
 import {linkScriptProperty} from './script-property-link.mjs';
 import {serializeScriptPropertyItem} from './script-property-serialize-item.mjs';
+import {loadConfig as loadObjectConfig, defaultsObject} from './script-config.mjs';
 import {CORE_CLASSES, ENGINE_CLASSES, DEUSEX_CLASSES, findNativeClassConstructor,
   isNativeClassRegisteredDynamic} from './script-native-class-registry.mjs';
 
@@ -47,6 +48,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     throw new Error('Native mesh loading requires getLazyLoad');
   const boundaries = new Set(['native-constructor-defaults', 'metaclass-bootstrap-defaults',
     'native-resource-payloads', 'postload-and-heap-ownership']);
+  // GConfig (config-cache.mjs), bound by the runtime once the installed .ini
+  // files are read; LoadConfig reads it synchronously inside the load.
+  let configCache = null;
   // Object vtables an *instance* of each metaclass carries at +0x00 — read by
   // the property-link bodies.  Scalar kinds come from the recovered link tables.
   const KIND_VTABLE = new Map(Object.entries({
@@ -286,6 +290,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const functionStatic = staticRecords.get('Core.Function');
   const propertyStatic = staticRecords.get('Core.Property');
   const boolPropertyStatic = staticRecords.get('Core.BoolProperty');
+  const graphView = {slotOf, superOf, isA, fullName, nameText, intern, propertyKindOf, classStatic};
   const fieldStatic = staticRecords.get('Core.Field');
   const enumStatic = staticRecords.get('Core.Enum');
   const constStatic = staticRecords.get('Core.Const');
@@ -972,7 +977,16 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       }
     },
     allocateDefaults: () => new Map(),
-    loadConfig: () => { boundaries.add('config'); events.push({op: 'LoadConfig', boundary: true}); },
+    // UClass::Serialize's LoadConfig(0,0,0) on the class default object
+    // (0x1012829a). With GConfig bound (setConfig), the recovered body imports
+    // the installed .ini values into the Defaults block; without it the call
+    // stays a recorded boundary. docs/script-config.md.
+    loadConfig: (data, propagate, classArgument, filename, cls) => {
+      if (!configCache || !cls) { boundaries.add('config'); events.push({op: 'LoadConfig', boundary: true}); return; }
+      events.push({op: 'LoadConfig', object: cls});
+      loadObjectConfig(graphView, configCache, defaultsObject(graphView, cls, data),
+        {propagate, cls: classArgument || null, filename: filename || null});
+    },
     loadLocalized: () => { boundaries.add('localization'); events.push({op: 'LoadLocalized', boundary: true}); },
     makeName: text => intern(text),
     nameText,
@@ -1165,6 +1179,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     preload: ({object}) => preload(object),
   };
   return {
+    setConfig(cache) { configCache = cache; },
+    get config() { return configCache; },
     packageAssets, boundaries, linkers, packageRoots, staticRecords, importState,
     events, warnings, assertions, linkOrder, loadedObjects,
     buildLinker, indexToObject, preload, preloadServices,
