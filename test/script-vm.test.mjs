@@ -78,3 +78,23 @@ test('radiation path Core primitives preserve float32 stores and out lvalues', (
     [Math.fround(0.3), Math.fround(2), Math.fround(-2)]);
   assert.deepEqual(add.Value, [Math.fround(0.3), Math.fround(2), Math.fround(-2)]);
 });
+
+test('native discard metadata follows statement Context values, not consumed operands', () => {
+  const cases = [
+    {bytes:[0x61,8,0x16,4,11],size:5,flags:[true]},
+    {bytes:[4,0x61,8,0x16],size:4,flags:[false]},
+    {bytes:[15,1,1,0x61,8,0x16,4,11],size:11,flags:[false]},
+    {bytes:[0x19,1,1,3,0,4,0x61,8,0x16,4,11],size:14,flags:[true]},
+    {bytes:[0x61,9,0x61,8,0x16,0x16,4,11],size:8,flags:[true,false]},
+    {bytes:[0x19,0x61,8,0x16,3,0,4,0x61,8,0x16,4,11],size:12,flags:[false,true]},
+  ];
+  for (const {bytes,size,flags} of cases) {
+    const seen=[];
+    compile(bytes,size).run({Value:{}},{},{invokeNative:call=>{
+      seen.push(call.resultDiscarded);
+      for(let i=0;i<call.argumentCount;i++)call.evaluateArgument(i);
+      return {};
+    }});
+    assert.deepEqual(seen,flags);
+  }
+});

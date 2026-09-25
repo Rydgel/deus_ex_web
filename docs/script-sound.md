@@ -186,3 +186,46 @@ up to that point.
 Float32 stores and native branch order are retained. JS number arithmetic is
 used for retained x87 intermediates, following the existing bounded scene math
 translation; this does not claim arbitrary extended-precision bit identity.
+
+### Discarded-result family admission — 2026-09-25
+
+Contract recorded before implementation: retail Core `ProcessInternal`
+`0x1013f763–0x1013f78e` dispatches each non-Return statement into its local
+scratch block (`ebp-0x408`). Only the Return operand uses the caller's result
+pointer (`0x1013f790–0x1013f7a6`). `execContext` forwards the outer result
+pointer to its value child (see [execution](script-execution.md)). Thus a
+standalone native-264 statement, including a chain of Context value children,
+discards the channel ID. A call in an argument, assignment, condition, Return,
+or the receiver child of a Context does not establish that property.
+
+An inspection of installed Engine.u and DeusEx.u decoded Function/State bodies
+found 37/37 and 224/232 native-264 sites respectively in that standalone form.
+The eight consumed-result sites are DeusExDecoration.Bump, DataLinkPlay.PlaySpeech,
+BarkManager.StartBark, four ConPlay.PlaySpeech calls and DeusExWeapon.PlaySimSound.
+Lamp.Frob offsets 43/89, HUDMedBotHealthScreen.DestroyWindow offset 48,
+HUDMedBotAddAugsScreen.DestroyWindow offset 48 and HUDRechargeWindow.DestroyWindow
+offset 37 are standalone discarded-result calls (expanded bytecode offsets).
+
+The VM can mark these exact decoded native nodes once at compilation. Play's
+existing deferred-audio seam may then admit every marked native-264 call,
+evaluate its original argument expressions in order, record the effect, and
+continue. Existing named effect labels and separately scoped channel-lifetime
+routes remain intact. Unmarked calls gain no new admission; host calls without
+bytecode metadata do not qualify. The returned zero is an unobserved boundary
+placeholder, **not** an original channel ID. This does not implement listener
+callbacks, demo recording, or audible playback; the full recovered native route
+and its checks remain separate. Stage 4 audio remains explicitly deferred.
+
+State bodies have the same scratch-result contract: retail Engine
+`AActor::ProcessState` dispatch at `0x103e5c39–0x103e5c50` passes `ebp-0x40`
+to each statement. The classification therefore covers Function and State
+bodies without substituting their execution paths.
+
+Verification: `npm test` passes 534 tests, including consumed argument/Return/
+assignment/Context-receiver exclusions. `validate-script-sound-admission`
+checks the installed bytecode census and exact consumed-result sites.
+`validate-window-baseline-play` preserves both bot activation routes and named
+raise-arm effects. `validate-trigger-actions` and `validate-triggers` now assert
+that Radiation10 returns after recording Human.PlayTakeHitSound; the existing
+health=98 and HitLegLeft animation assertions still hold. These establish the
+new translation/admission boundary, not audible output or full Stage-3 coverage.

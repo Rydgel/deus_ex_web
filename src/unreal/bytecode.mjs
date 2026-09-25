@@ -1,6 +1,19 @@
 import { Reader, PackageError } from './package.mjs';
 import { objectAt, nameAt } from './objects.mjs';
 
+/** Exact native nodes whose result goes only to statement scratch storage.
+ * Context forwards that storage through its value child, never its receiver.
+ * See docs/script-sound.md; do not descend into operands or arguments. */
+export function discardedNativeCalls(decoded) {
+  const calls = new Set();
+  for (const {node} of decoded.statements.values()) {
+    let value = node;
+    while (value.op === 0x19 || value.op === 0x12) value = value.value;
+    if (value.op === 'native') calls.add(value);
+  }
+  return calls;
+}
+
 /** Original SerializeExpr layout; offsets refer to expanded native script. */
 export function decodeScript(script) {
   const { pkg, bytes, size } = script;

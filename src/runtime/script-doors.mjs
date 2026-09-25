@@ -535,8 +535,8 @@ export async function createScriptDoors({
     // Training's standalone Radiation10 body reaches this exact inherited
     // chain after TakeDamage writes the body-part health fields.  Keep the
     // original script bodies intact: PlayDXTakeDamageHit calls the JC override
-    // PlayHit, which calls Human.PlayTakeHitSound.  The latter's first
-    // PlaySound(264) is the next intentionally unsupported audio boundary.
+    // PlayHit, which calls Human.PlayTakeHitSound. Its discarded PlaySound
+    // result qualifies for the recorded Stage-4 audio seam below.
     // Evidence: DeusExPlayer.uc:10011-10061 and Human.uc:336-377;
     // installed exports 17174, 17166, and 16845.
     playerPlayDXTakeDamageHit: await prepare(deusEx, 'deusexplayer.playdxtakedamagehit', 'DeusExPlayer.PlayDXTakeDamageHit'),
@@ -575,7 +575,12 @@ export async function createScriptDoors({
     // Scene-event dispatch recognizes this error as a recordable boundary;
     // retain the exact caller path so focused validators can name the first
     // unsupported operation after the recovered damage state writes.
-    if (!method) throw new Error(`Unsupported original door native 264 PlaySound from ${path}`);
+    if (!method) {
+      // The decoded call writes only to statement scratch storage. Retain
+      // argument effects and an audio record; see docs/script-sound.md.
+      if (call.resultDiscarded === true) { decorationEffect(call, 'PlaySound'); return 0; }
+      throw new Error(`Unsupported original door native 264 PlaySound from ${path}`);
+    }
     const args = Array.from({ length: call.argumentCount }, (_, index) => refValue(call.evaluateArgument(index)));
     const details = {
       sound: args[0] ?? null,

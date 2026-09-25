@@ -239,16 +239,18 @@ runtime.namedReference(damage, 'damagee').set(player);
 // LastPainSound far in the past to keep the boundary deterministic instead
 // of leaving it on an RNG draw.
 runtime.namedReference(player, 'LastPainSound').set(-100);
-let damageBoundary;
+const native = runtime.invokeNative.bind(runtime), painSounds = [];
+runtime.invokeNative = call => {
+  const result = native(call);
+  if (call.index === 264 && call.script?.entry?.path?.toLowerCase() === 'human.playtakehitsound')
+    painSounds.push({discarded: call.resultDiscarded, result});
+  return result;
+};
 try {
-  assert.throws(() => game.doors.scriptRuntime.dispatchEvent(damage, 'Timer', []), error => {
-    damageBoundary = error;
-    assert.match(error.message,
-      /Unsupported original door native 264 PlaySound from human\.playtakehitsound/i);
-    return true;
-  }, 'damage dispatch stops at Human.PlayTakeHitSound PlaySound(264)');
+  assert.doesNotThrow(() => game.doors.scriptRuntime.dispatchEvent(damage, 'Timer', []));
 } finally {
   runtime.callFunction = unwrappedCallFunction;
+  runtime.invokeNative = native;
 }
 assert.equal(liveAdjustedDamage, 10, 'live DXReduceDamage writes adjustedDamage=10 for unowned AugEnviro');
 assert.equal(liveDamageReduced, false, 'live DXReduceDamage reports no reduction for unowned AugEnviro');
@@ -262,10 +264,11 @@ assert.equal(runtime.namedReference(player, 'AnimFrame').get(), -0.25, 'PlayAnim
 assert.equal(runtime.namedReference(player, 'AnimRate').get(), 2.5, 'PlayAnim native applies the original HitLegLeft rate');
 assert.equal(runtime.namedReference(player, 'TweenRate').get(), 2.5, 'PlayAnim native applies the authored tween time');
 assert.equal(runtime.namedReference(player, 'AnimLast').get(), 0.75, 'PlayAnim native stores the authored last frame');
-assert.match(damageBoundary.message, /PlaySound/);
+assert.deepEqual(painSounds, [{discarded: true, result: 0}]);
+assert.ok(game.player.unimplementedPhysicsEffects.has(`${player.name}.PlaySound audio`));
 
 console.log('Trigger action evidence validated: original Orders/Flag/Damage TextBuffers, function sizes, ' +
   'Core string native 123, FlagBase 1100/1110 native bodies, Engine execGetPlayerPawn 720 viewport traversal, and live original VM ' +
   'execution for 00_Training OrdersTrigger0 -> JaimeReyes1 plus FlagTrigger0 set/inverse. DamageTrigger1.Timer runs the ' +
-  'source-backed Radiation10 chain through body health=98 and GM_Trench HitLegLeft PlayAnim state, then stops at ' +
-  'Human.PlayTakeHitSound -> Actor.PlaySound native 264.');
+  'source-backed Radiation10 chain through body health=98 and GM_Trench HitLegLeft PlayAnim state and returns; ' +
+  'Human.PlayTakeHitSound records deferred native-264 audio with a bytecode-proven discarded result.');

@@ -1,4 +1,4 @@
-import { decodeScript } from '../unreal/bytecode.mjs';
+import { decodeScript, discardedNativeCalls } from '../unreal/bytecode.mjs';
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 import { decorationPrimitiveIndices, decorationOutPrimitiveIndices, executeDecorationPrimitive, vectorToRotator, rotatorToVector } from './script-decoration-primitives.mjs';
 import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scriptStringCompare, scriptConcat, scriptAt, scriptLen, scriptInStr, scriptMid, scriptLeft, scriptRight, scriptCaps, scriptChr, scriptNameToString, scriptObjectToString, scriptFloatToString } from './script-string-operations.mjs';
@@ -317,6 +317,7 @@ function switchCaseEqual(key, value, size) {
 
 export function compileFunction(fn) {
   const decoded = decodeScript(fn), { statements } = decoded;
+  const discardedCalls = discardedNativeCalls(decoded);
   for (const { node } of statements.values()) if ([0x06, 0x07].includes(node.op) && !statements.has(node.target)) throw new Error('Script jump is not an instruction boundary');
   for(const {node} of statements.values())if(node.op===0x2f&&statements.get(node.target)?.node.op!==0x30){
     throw new Error('Iterator target is not an IteratorPop instruction');
@@ -772,6 +773,7 @@ export function compileFunction(fn) {
                 : first||Boolean(refValue(evaluate(second.value,instance)));
             }
             if(!primitiveNatives.has(n.index)&&services.invokeNative)return services.invokeNative({index:n.index,receiver,script:fn,frame,
+              resultDiscarded:discardedCalls.has(n),
               argumentCount:n.args.length,evaluateArgument:index=>evaluate(n.args[index],instance)});
             const args=n.args.map((arg,index)=>{
               const result=evaluate(arg,instance);

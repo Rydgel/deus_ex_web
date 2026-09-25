@@ -135,14 +135,14 @@ frontier:
 | Persona screen layout/admission | `TextWindow` `ParentRequestedGranularity` override — **closed** ([checkbox](script-window-checkbox.md)) | ShowInventoryWindow |
 | | `CheckboxWindow` family not admitted — **closed**; Goals opens and closes | ShowGoalsWindow |
 | | `XRadioBoxWindow::DescendantRemoved` `0x10038cb0` on close — **closed**; Inventory opens and closes | ShowInventoryWindow |
-| Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` — **closed** with GConfig and class-load `LoadConfig` ([config](script-config.md)); 264 `PlaySound` in `DestroyWindow` | Goals, MedicalBot, RepairBot close |
+| Persona screen teardown | 3016 `UnloadTexture` — **closed**; 536 `SaveConfig` — **closed** with GConfig and class-load `LoadConfig` ([config](script-config.md)); 264 `PlaySound` in `DestroyWindow` — **admitted as deferred Stage-4 audio** by the discarded-result bytecode check ([sound](script-sound.md)) | Goals, MedicalBot, RepairBot close |
 | Map-actor movement linking | `FarMoveActor` for a non-held map actor (carry: `GrabDecoration`) — **closed** ([map-actor move](script-map-actor-move.md)); lift, carry, throw and Player start | Plant2, two crates, FlagTrigger0 |
 | | `MoveActor` for a non-spawned rider (pickup) — **closed**; Candybar and HazMatSuit were a reset leak | CombatKnife, Candybar, HazMatSuit |
 | Exec invocation | exec with omitted optional parameters — **closed** ([console exec](script-console-exec.md)) | PutInHand, DropItem |
 | | null-Context result of a native token — **closed** ([null context](script-null-context.md)) | SwitchAmmo |
 | Spawn admission | `Beam` subclass: needs the collision view, `MakeNoise`/`AIStartEvent`, and a light that renders only in Stage 4 | ActivateAugmentation 9 (AugLight) |
 | Resource graph | `DynamicLoadObject` of `DXFonts`: `Engine.Font` is a native-only class whose registration and `UFont::Serialize` are unrecovered, and the prepared graph models first-load for one path only | ShowMainMenu |
-| Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (Lamp.Frob, AugLight) | QuickSave, Teleporter0 |
+| Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (discarded-result calls now recorded without stopping) | QuickSave, Teleporter0 |
 
 The SDK headers ([SDK reference](sdk-reference.md)) name each screen row's exact
 retail functions. `CheckboxWindow` adds `Init`, `CleanUp`,
@@ -156,12 +156,22 @@ seven probes in one change. After that batch and the console-exec and
 native-token Context changes, the census reads 88 probes and 2 ending on a
 boundary (Beam, DXFonts). `SaveConfig` 536 is now closed as well
 ([config](script-config.md)). It brought the installed `.ini` values into
-class defaults at load time. The remaining unsupported natives are
-`PlaySound` 264 (screen close, `Lamp.Frob`) and the Stage 4/5
-`SaveGame`/`ClientTravel`. `PlaySound` is admitted one exact caller at a time
-([bot activation](script-window-bot-activation.md)). A static bytecode check
-that each call discards the channel id could admit every such caller in one
-change.
+class defaults at load time.
+
+The discarded-result `PlaySound` family is now admitted at the deferred-audio
+seam ([sound](script-sound.md)): the VM marks only standalone native nodes,
+including Context value children. Installed Engine/DeusEx bytecode has 261
+such sites and eight consumed-result sites, which gain no new admission.
+Existing named effects and separately scoped channel lifetimes remain intact.
+This lets Lamp toggles, bot-screen close and Human pain-sound scripts continue;
+audible playback remains Stage 4. The remaining unsupported natives in the
+census are the Stage 4/5 `SaveGame`/`ClientTravel`.
+
+Post-batch census (2026-09-25): 88 probes, two terminal boundaries (Beam and
+DXFonts), three boots, 191 s, peak 2,339 MiB. Unsupported native-264 calls fell
+from four probes to zero; the two terminal boundaries are unchanged. This is
+reach coverage, not completion of the startup/tick, Fire, conversation or walking
+acceptance criteria above.
 
 The first census found two items with existing evidence; both are now closed:
 

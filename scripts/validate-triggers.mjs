@@ -133,11 +133,12 @@ assert.equal(ref(player,'AnimFrame'),-0.25,'PlayAnim native starts HitLegLeft at
 assert.equal(ref(player,'AnimRate'),2.5,'PlayAnim native applies the original HitLegLeft rate');
 assert.equal(ref(player,'TweenRate'),2.5,'PlayAnim native applies the authored tween time');
 assert.equal(ref(player,'AnimLast'),0.75,'PlayAnim native stores the authored last frame');
-assert.ok(game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
+assert.ok(!game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
+assert.ok(game.player.unimplementedPhysicsEffects.has(`${player.name}.PlaySound audio`));
 dispatch(damage,'UnTouch',[player]);
 assert.equal(ref(damage,'damagee'),null);
 
 console.log('Play Trigger dispatch passed: base relevance, OrdersTrigger -> original pawn order queue, ' +
   'FlagTrigger set/inverse through native FlagBase, and DamageTrigger scheduling/UnTouch cleanup. ' +
   'Damage Timer runs the Radiation10 chain through body health=98 and GM_Trench HitLegLeft PlayAnim state, then ' +
-  'records the Human.PlayTakeHitSound -> Actor.PlaySound native 264 boundary; DataLink enters the live Training lifecycle.');
+  'records deferred Human.PlayTakeHitSound audio and returns; DataLink enters the live Training lifecycle.');
