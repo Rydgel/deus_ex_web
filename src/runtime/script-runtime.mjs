@@ -144,6 +144,7 @@ import {DEUSEX_VERSION_NATIVE,getDeusExVersion} from './script-deusex-version.mj
 import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
 import {execRotRand} from './script-rot-rand.mjs';
+import {parseToken} from './script-console-command.mjs';
 
 const lower=name=>String(name).toLowerCase();
 /** exec bodies resolve each out expression to a raw address; a non-assignable
@@ -1437,28 +1438,29 @@ export class ScriptRuntime {
    * object parameter of its own class. */
   scriptConsoleExec(receiver,command,executor=null) {
     if(!this.scriptability())return false;
-    let text=String(command??''),at=0;
-    // ParseToken 0x10147ba0: blanks are space/tab; a quoted token honours
-    // backslash escapes; at most 63 characters are kept.
-    while(text[at]===' '||text[at]==='\t')at++;
-    let token='';
-    if(text[at]==='"'){
-      at++;
-      while(at<text.length&&text[at]!=='"'&&token.length<63){
-        let ch=text[at++];
-        if(ch==='\\'){if(at>=text.length)break;ch=text[at++];}
-        token+=ch;
-      }
-      if(text[at]==='"')at++;
-    }else while(at<text.length&&text[at]!==' '&&text[at]!=='\t'){if(token.length<63)token+=text[at];at++;}
+    const text=String(command??'');
+    // ParseToken 0x10147ba0 (MaxLen 64, escapes): at most 63 characters.
+    const parsed=parseToken(text,64,true),token=parsed.token;
+    let at=text.length-parsed.rest.length;
     if(!token||lower(token)==='none')return false;
     const record=this.lookup(receiver,token),fn=record?.function;
     if(!fn||!(fn.script.functionFlags&0x200))return false;
     const args=fn.parameters.map(field=>zeroValue(field));
     let failed=false;
+    // 0x10150978-0x101509df: only the first parameter, when it IsA
+    // UObjectProperty (Object or Class) whose PropertyClass (+0x5c) is null
+    // or an ancestor of the executor's class, takes the executor; parsing
+    // then continues with the next parameter.
+    const executorTakes=field=>{
+      if(!executor||(field.metadata.type!=='object'&&field.metadata.type!=='class'))return false;
+      const path=field.metadata.propertyClass?.path;
+      if(!path)return true;
+      const target=lower(path.includes('.')?path:`${record.key.split('.')[0]}.${path}`);
+      for(let cls=this.instance(executor).cls;cls;cls=cls.base)if(cls.record.key===target)return true;
+      return false;
+    };
     for(const [index,field] of fn.parameters.entries()){
-      if(index===0&&executor&&field.metadata.type==='object')
-        throw new Error(`ScriptConsoleExec executor parameter is not linked: ${record.key}`);
+      if(index===0&&executorTakes(field)){args[0]=executor;continue;}
       // ParseNext 0x10147b50.
       for(;;){
         while(' \t\r\n'.includes(text[at]??'\0')&&at<text.length)at++;

@@ -94,13 +94,15 @@ assert.ok(get(live('WeaponCrowbar1'),'invPosX')>=0&&get(live('WeaponCrowbar1'),'
   assert.ok(keys&&keys!==beforeKeys,'the NanoKey entered the key ring (KeyList)');
 }
 
-// The picked-up items stop drawing through the actor mesh scene's own
-// bHidden path — no separate host removal.
+// The picked-up items stop drawing through the actor mesh scene's own world
+// pass — no separate host removal. BecomeItem swapped each Mesh to its POV
+// mesh and hid the item, so the world-mesh resource is retired and a hidden
+// actor is not admitted again.
 scene.update([0,0,0]);
 for(const name of ['WeaponCrowbar1','Candybar0']){
-  const view=scene.propActors.find(p=>p.summary.actor===name);
-  assert.ok(view,`${name} mesh exists in the scene`);
-  assert.equal(view.root.visible,false,`${name} mesh hides once picked up`);
+  const item=live(name),view=scene.propActors.find(p=>p.actor===item);
+  assert.equal(get(item,'bHidden'),true,`${name} is hidden once picked up`);
+  assert.ok(!view||view.root.visible===false,`${name} mesh no longer draws once picked up`);
 }
 // An untouched prop still draws.
 assert.equal(scene.propActors.find(p=>p.summary.actor==='CrateBreakableMedGeneral1')?.root.visible,true,

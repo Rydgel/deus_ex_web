@@ -182,11 +182,14 @@ the same boot, so its screen has a note. `PopulateNotes` then reaches
 This is a newly reachable persona-screen path, not a regression. Beam
 (AugLight) is unchanged.
 
-The census groups by native index. Its index-0 row is labelled
-`PlayerPawn.ClientTravel`, but the `ShowMainMenu` hit counted in it is
-`PlayerPawn.ConsoleCommand("FLUSH")`, which is still unsupported. Without
-`--continue`, Play stops there before the menu. `SaveGame` 3011 is the other
-reported native.
+The census groups by native index. Its index-0 row was labelled
+`PlayerPawn.ClientTravel`, but the `ShowMainMenu` hit counted in it was
+`PlayerPawn.ConsoleCommand("FLUSH")`. That native now runs through the
+recovered console-command chain. FLUSH reaches `UEngine::Exec`'s
+`Flush(1)`, and Escape opens and closes `MenuMain` in Play
+([console commands](script-console-command.md)). `SaveGame` 3011 is the
+other reported native. The menu does not pause the level yet, because
+Play's player has no PlayerReplicationInfo (see that document).
 
 The first census found two items with existing evidence; both are now closed:
 

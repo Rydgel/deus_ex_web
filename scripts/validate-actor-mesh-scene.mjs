@@ -137,6 +137,51 @@ runtime.namedReference(crate,'bDeleteMe').set(deleted);restored.update();
 scene.dispose();
 assert.deepEqual(snapshot(),before,'disposing meshes must not mutate runtime actor fields');
 
+// A script-driven Mesh change. Picking Multitool0 up (Inventory.BecomeItem)
+// swaps its Mesh to the POV mesh and hides it. Putting it away from the hand
+// (SkilledTool.PutDown -> DownItem) unhides it for the Down animation. Render.dll's
+// world pass draws an owned bOnlyOwnerSee actor in first person, so the layer
+// rebuilds the actor for its new Mesh instead of refusing.
+const live=await createActorMeshScene(runtime,assets,asset,{player});
+const idle={forward:0,right:0,yaw:0,pitch:0,jump:false,crouch:false,walk:false};
+const frames=async count=>{for(let i=0;i<count;i++){game.tick(1/60,idle);live.update([0,0,0]);await live.ready();}};
+const tool=level.actors.find(a=>a?.name==='Multitool0');
+const worldMesh=get(tool,'Mesh');
+game.interaction.frobTarget=tool;
+assert.equal(game.use().ok,true,'Multitool0 is picked up');
+const belt=game.hud.read(game.hud.hud,'belt');
+const toolSlot=[...Array(10).keys()].find(i=>game.hud.invoke(belt,'GetObjectFromBelt',[i])===tool);
+assert.equal((await game.activateBelt(toolSlot)).name,'Multitool0');
+await frames(90);
+assert.notEqual(get(tool,'Mesh'),worldMesh,'BecomeItem selected the POV mesh');
+const emptySlot=[...Array(10).keys()].find(i=>i>0&&!game.hud.invoke(belt,'GetObjectFromBelt',[i]));
+await game.activateBelt(emptySlot);
+const states=[];
+for(let i=0;i<120;i++){
+  await frames(1);
+  const preview=live.actors.find(p=>p.actor===tool);
+  states.push(`${get(tool,'bHidden')?'hidden':'shown'}:${preview?(preview.root.visible?'drawn':'not drawn'):'none'}`);
+}
+assert.deepEqual([...new Set(states)],['shown:drawn','hidden:not drawn'],'DownItem draws the tool, then hides it');
+const rebuilt=live.actors.find(p=>p.actor===tool);
+assert.equal(rebuilt.mesh,get(tool,'Mesh'),'the drawn resource follows the new Mesh');
+assert.deepEqual(live.summary.errors,[]);
+// The same pass's owner rules, on the owned tool: a bOnlyOwnerSee actor is not
+// drawn from behind; an owned bOwnerNoSee actor is not drawn in first person.
+const saved=['bHidden','bOnlyOwnerSee','bOwnerNoSee'].map(name=>[name,get(tool,name)]),behind=get(player,'bBehindView');
+const drawn=()=>{rebuilt.update([0,0,0]);return rebuilt.root.visible;};
+runtime.namedReference(tool,'bHidden').set(false);
+runtime.namedReference(tool,'bOnlyOwnerSee').set(true);runtime.namedReference(tool,'bOwnerNoSee').set(false);
+assert.equal(drawn(),true);
+runtime.namedReference(player,'bBehindView').set(true);assert.equal(drawn(),false);
+runtime.namedReference(player,'bBehindView').set(false);
+runtime.namedReference(tool,'bOnlyOwnerSee').set(false);runtime.namedReference(tool,'bOwnerNoSee').set(true);
+assert.equal(drawn(),false);
+for(const [name,value] of saved)runtime.namedReference(tool,name).set(value);
+runtime.namedReference(player,'bBehindView').set(behind);
+live.dispose();
+
 console.log(`actor mesh scene: ${scene.summary.npcs} NPC + ${scene.summary.props} prop meshes, `+
   `${scene.summary.triangles} triangles (${propTriangles} prop), backend ${scene.summary.poseBackend}, `+
-  `${scene.summary.skipped.length} skipped face(s): ${scene.summary.skipped.map(s=>`${s.actor}/${s.texture}`).join(', ')||'none'}`);
+  `${scene.summary.skipped.length} skipped face(s): ${scene.summary.skipped.map(s=>`${s.actor}/${s.texture}`).join(', ')||'none'}; `+
+  'a put-away SkilledTool is rebuilt for its POV Mesh and drawn through DownItem');

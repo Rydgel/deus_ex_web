@@ -25,8 +25,9 @@ const isAlnum = c => /^[A-Za-z0-9]$/.test(c);
 const isDigit = c => c >= '0' && c <= '9';
 const lower = value => String(value).toLowerCase();
 
-/** ReadToken(Buffer, Result, MaxLen, DottedNames). */
-export function readToken(text, maxLength = 0x400, dotted = false) {
+/** ReadToken(Buffer, Result, MaxLen, DottedNames). `warn` receives its GLog
+ * warnings (0x10164e24, 0x10164e44, 0x10164ef5). */
+export function readToken(text, maxLength = 0x400, dotted = false, warn = null) {
   let at = 0, token = '';
   const c = text[at];
   if (c === '"') {
@@ -45,8 +46,8 @@ export function readToken(text, maxLength = 0x400, dotted = false) {
       }
       token += ch; at++;
     }
-    if (token.length === maxLength - 1) return null;   // quoted string too long
-    if (text[at++] !== '"') return null;               // bad quoted string
+    if (token.length === maxLength - 1) { warn?.('ReadToken: Quoted string too long'); return null; }
+    if (text[at++] !== '"') { warn?.('ReadToken: Bad quoted string'); return null; }
     return { token, rest: text.slice(at) };
   }
   if (c !== undefined && isAlnum(c)) {
@@ -56,7 +57,7 @@ export function readToken(text, maxLength = 0x400, dotted = false) {
       if (!part || token.length >= maxLength - 1) break;
       token += ch; at++;
     }
-    if (token.length === maxLength - 1) return null;   // alphanumeric overflow
+    if (token.length === maxLength - 1) { warn?.('ReadToken: Alphanumeric overflow'); return null; }
     return { token, rest: text.slice(at) };
   }
   // Any other first character is a one-character token that is not consumed.

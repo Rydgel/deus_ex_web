@@ -48,11 +48,18 @@ this read-only slice.
 The string output device at Engine 0x10374500 appends each logged text directly
 to its FString, without adding a newline. The adapter returns that text.
 
-`createInputConsole(runtime,assets,{config?})` prepares the original enum and
-read-only binding strings. Its `playerConsoleCommand(call)` returns
-`{handled,value}` for the Engine.PlayerPawn.ConsoleCommand native; the host
-continues normal native dispatch when `handled` is false. `execute(command)`
-exposes the same query leaf independently of the PlayerPawn wrapper.
+`createInputConsole(runtime,assets,{config?})` prepares the original enum,
+the read-only binding strings and the 40 `Aliases`. Its
+`playerConsoleCommand(call, commands)` returns `{handled,value}` for the
+Engine.PlayerPawn.ConsoleCommand native. The `Aliases` come from GConfig
+through the translated `UStructProperty::ImportText`.
+
+Play passes the console-command chain, so every command runs through
+`UWindowsViewport::Exec`, and KEYNAME/KEYBINDING are its `UInput::Exec`
+step ([script-console-command.md](script-console-command.md)). Without the
+chain, only these two queries are answered and anything else stays
+unhandled. `execute(command)` exposes the same query leaf independently of
+the PlayerPawn wrapper.
 
 `validate-input-console.mjs` checks original binary branch/literal fingerprints,
 the package enum's selected names and peculiar 0xef entry, parsed installation

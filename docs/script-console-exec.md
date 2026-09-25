@@ -46,8 +46,16 @@ The `ImportText` bodies the bound commands reach:
 
 So `PutInHand` runs `PutInHand(None)`, and `DropItem` runs `DropItem(None,
 False)`. Both parameters are optional, so the parse stops at the first one.
-Any other parameter type, and the executor match, stay explicit boundaries.
-An int past 32 bits is also unrecovered.
+Any other parameter type stays an explicit boundary. An int past 32 bits is
+also unrecovered.
+
+The executor rule (`0x10150978–0x101509df`) is translated. It applies only
+to the first parameter, and only when that parameter IsA `UObjectProperty`
+(object or class) and its `PropertyClass` (`+0x5c`) is null or an ancestor
+of the executor's class. The parameter then takes the executor and parsing
+continues with the next one. The name token is the shared `parseToken(64,
+escapes)` from [script-console-command.md](script-console-command.md),
+which is checked against Core.
 
 ## Callers
 
@@ -57,6 +65,9 @@ Training binding: `PutInHand` and `DropItem` take a first `Inventory`, and
 the other bound commands take an int or nothing. `PutInHand`, `DropItem`,
 `ActivateBelt N` and `ActivateAugmentation N` all run through it.
 
-Play's viewer still maps its keys to fixed calls (`ActivateBelt`, `use()`,
-`pressFire()`). Routing the whole `User.ini` binding table through
-`UInput::Exec` and this entry is separate input work.
+Play's keys and `PlayerPawn.ConsoleCommand` now reach this entry through
+the original chain, `UEngine::InputEvent` → `XInputExt::Process` →
+`ExecInputCommands` → `UWindowsViewport::Exec` → `UPlayer::Exec`. That
+chain passes the Actor as executor; see
+[script-console-command.md](script-console-command.md). The viewer keeps
+its own stand-ins only for the movement, use, fire and belt keys.

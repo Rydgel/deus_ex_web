@@ -547,17 +547,37 @@ $('scene').onpointerup = event => {
 $('scene').onpointercancel = () => { drag = false; };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
 document.addEventListener('pointermove', event => { if(windowPointer(event))return; if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
-// XInputExt::Process: a key the player's root window consumes (a grabbing modal
-// such as the keypad) releases every held binding and reaches nothing else.
-function windowKey(event, pressed) {
-  if (mode !== 'play' || !game || runtimeError || !world || loading) return false;
-  if (/INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return false;
-  try { return game.windowKey(event.code, pressed); }
-  catch (error) { pauseForRuntimeError(error); return true; }
+// Keys whose User.ini binding Play replaces with its own stand-in: movement
+// (UInput's axis/button system is not implemented), F use, Enter fire and the
+// 0-9 belt keys.
+const HOST_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'ShiftLeft', 'ShiftRight', 'Space', 'ControlLeft', 'ControlRight', 'KeyF', 'Enter',
+  ...Array.from({length: 10}, (_, digit) => `Digit${digit}`)];
+// UEngine::InputEvent (docs/script-console-command.md): Console.KeyEvent, then
+// XInputExt::Process. A key the player's root window consumes (a grabbing
+// modal such as the keypad or a menu) releases every held binding and reaches
+// nothing else; any other key runs its binding (Escape=ShowMainMenu).
+function inputKey(event, pressed) {
+  if (mode !== 'play' || !game || runtimeError || !world || loading) return null;
+  if (/INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return null;
+  try { return game.inputKey(event.code, pressed, {hostCodes: HOST_KEYS}); }
+  catch (error) {
+    // A console-command keyword claim throws before its handler does any
+    // work, so Play continues; a binding that already ran a line pauses.
+    if (error?.name === 'UnsupportedConsoleCommandError' && !error.partial) {
+      if (pressed) toast(`${event.code}: ${error.message}`);
+      return {handled: true};
+    }
+    pauseForRuntimeError(error);
+    return {handled: true, consumed: true};
+  }
 }
 document.addEventListener('keydown', event => {
-  if (windowKey(event, true)) { keys.clear(); event.preventDefault(); return; }
-  if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
+  const input = inputKey(event, true);
+  if (input) {
+    if (input.consumed) { keys.clear(); event.preventDefault(); return; }
+    if (!HOST_KEYS.includes(event.code)) { if (input.handled) event.preventDefault(); return; }
+  } else if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
   if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
   // Enter shares LeftMouse's `ParseLeftClick|Fire` binding.
@@ -578,9 +598,13 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
-document.addEventListener('keyup', event => { if (windowKey(event, false)) event.preventDefault(); keys.delete(event.code); if (event.code === 'Enter') releaseFire(); });
-window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; });
-document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) paused = true; });
+document.addEventListener('keyup', event => {
+  const input = inputKey(event, false);
+  if (input?.consumed || (input?.handled && !input.host)) event.preventDefault();
+  keys.delete(event.code); if (event.code === 'Enter') releaseFire();
+});
+window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; game?.resetInput(); });
+document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; game?.resetInput(); } });
 function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,

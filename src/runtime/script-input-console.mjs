@@ -1,6 +1,7 @@
 import {readUserConfig} from '../unreal/user-config.mjs';
 import {refValue} from './script-vm.mjs';
 import {scriptStringText,scriptStringComplementEqual} from './script-string-operations.mjs';
+import {parseCommand,readInputAliases} from './script-console-command.mjs';
 
 /** UInput::GetKeyName 0x10394b20; names come from original EInputKey data. */
 export function inputKeyName(names,index){
@@ -17,15 +18,8 @@ export function findInputKeyName(names,key){
   return names.findIndex(candidate=>scriptStringComplementEqual(candidate,name));
 }
 
-// Core ParseCommand 0x10147a20: only space/tab skip; an immediate letter/digit
-// rejects the match. This deliberately preserves trailing argument whitespace.
-function commandArgument(text,keyword){
-  const start=text.replace(/^[ \t]*/,'');
-  if(!scriptStringComplementEqual(start.slice(0,keyword.length),keyword))return null;
-  const rest=start.slice(keyword.length);
-  if(/^[a-zA-Z0-9]/.test(rest))return null;
-  return rest.replace(/^[ \t]*/,'');
-}
+// Core ParseCommand 0x10147a20 (script-console-command.mjs).
+const commandArgument=parseCommand;
 function inputKeyInteger(text){
   // appAtoi -> original CRT _wtoi. Overflow has no host-defined substitution.
   const number=/^[\t\n\v\f\r ]*([+-]?\d+)/.exec(text);
@@ -67,15 +61,23 @@ export async function createInputConsole(runtime,assets,{config}={}){
   const names=table.data.map(name=>runtime.classLoader.graph.nameText(name));
   const bindings=names.map(name=>config.get('Engine.Input',name.slice(3))??'');
   const query=createInputBindingQueries(names,bindings);
-  return {...query,config,
-    playerConsoleCommand(call){
+  // UInput::StaticInitInput's LoadConfig reads Aliases[i] through GConfig
+  // (script-console-command.mjs readInputAliases).
+  const gconfig=await runtime.classLoader.prepareConfig();
+  const aliasWarnings=[];
+  const aliases=readInputAliases(key=>gconfig.getString('Engine.Input',key,'User',0x400),message=>aliasWarnings.push(message));
+  return {...query,bindings,config,aliases,aliasWarnings,
+    /** APlayerPawn::execConsoleCommand 0x103ba200 through `commands`
+     * (createConsoleCommands). */
+    playerConsoleCommand(call,commands){
       if(call.record?.key!=='engine.playerpawn.consolecommand')return {handled:false};
       if(call.argumentCount!==1)throw new Error('PlayerPawn.ConsoleCommand requires one string argument');
       const command=refValue(call.evaluateArgument(0));
       // The native consumes its argument before testing Player, and returns an
       // empty string for a PlayerPawn without a UPlayer/viewport.
       if(!runtime.namedReference(call.receiver,'Player').get())return {handled:true,value:''};
-      return query.execute(command);
+      if(!commands)return query.execute(command);
+      return {handled:true,value:commands.consoleCommand(call.receiver,command)};
     },
   };
 }

@@ -65,6 +65,7 @@ import * as D from './script-window-family-draw.mjs';
 import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
+import {createConsoleCommands} from './script-console-command.mjs';
 import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
 import {createWindowActorRefDispatcher} from './script-window-actor-refs.mjs';
@@ -141,6 +142,26 @@ const HUD_CLASS_PATHS = Object.freeze([
 export async function createWindowHost({runtime, assets, player, gameConfig = null}) {
   if (!runtime?.attach || !assets?.get) throw new TypeError('Window host requires ScriptRuntime and AssetStore');
   const inputConsole=await createInputConsole(runtime,assets);
+  // UEngine::InputEvent -> XInputExt::Process -> bindings -> the viewport's
+  // Exec chain; also PlayerPawn.ConsoleCommand (docs/script-console-command.md).
+  const isA=(object,key)=>{for(let cls=runtime.instance(object).cls;cls;cls=cls.base)if(cls.record.key===key)return true;return false;};
+  const input={hostBinding:()=>false,flushRenderDevice:null};
+  const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
+    viewport(){
+      const viewport=runtime.namedReference(player,'Player').get();
+      if(!viewport)throw new Error('Console commands require the local UViewport');
+      return viewport;
+    },
+    // XInputExt::Process: a PlayerPawnExt viewport actor's root (+0x894) first.
+    rootProcess(key,action,delta){
+      const actor=runtime.namedReference(runtime.namedReference(player,'Player').get(),'Actor').get();
+      if(!actor||!isA(actor,'extension.playerpawnext'))return false;
+      const root=runtime.namedReference(actor,'rootWindow').get();
+      return Boolean(root&&Input.rootProcess(W,root,key,action,delta));
+    },
+    hostBinding:(key,action)=>input.hostBinding(key,action),
+    flushRenderDevice:allow=>input.flushRenderDevice?.(allow),
+  }});
   const packages = new Map();
   for (const name of ['Core', 'Engine', 'Extension', 'DeusEx', 'DeusExUI', 'ConSys']) packages.set(name, await assets.get(name));
   const extension = packages.get('Extension'), deusEx = packages.get('DeusEx');
@@ -1043,7 +1064,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     handleNative: call => {
       const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
       const reference=actorRefs(call);if(reference.handled)return reference;
-      const input=inputConsole.playerConsoleCommand(call);if(input.handled)return input;
+      const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
       const gc=dispatchGcNative(heap,gcServices,call);
       return gc.handled?gc:dispatchWindowHostNative(W,call);
     },
@@ -1171,6 +1192,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
+    consoleCommands,
+    /** UEngine::InputEvent for one browser key edge. `hostBinding(key,action)`
+     * claims the keys whose binding Play replaces with its own stand-in. */
+    inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){
+      const saved={...input};input.hostBinding=hostBinding;input.flushRenderDevice=flushRenderDevice;
+      try{return consoleCommands.inputEvent(key,action,delta);}
+      finally{Object.assign(input,saved);}
+    },
     // Browser/viewport adapter into the already recovered root mouse route.
     // Coordinates are drawing-buffer pixels, matching the root canvas size.
     pointer(root,{x=0,y=0,dx=0,dy=0,relative=false,key=null,action=null}){

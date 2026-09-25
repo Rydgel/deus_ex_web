@@ -66,6 +66,22 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   }
   const level=player?runtime.levelFor(player):null;
   const read=(actor,name)=>{try{return runtime.namedReference(actor,name).get();}catch{return undefined;}};
+  // Render.dll's level-actor pass (0x10b22e27-0x10b22ef8), for the player's
+  // first-person frame: skip the view actor's ViewTarget (+0x60c) unless
+  // bBehindView, a hidden actor, a bOnlyOwnerSee actor the view actor does not
+  // own (IsOwnedBy walks Owner +0x3c) or sees from behind, and a bOwnerNoSee
+  // actor it owns in first person. The view actor itself is never admitted.
+  // SkilledTool's DownItem unhides the held tool, so it is drawn here too.
+  const drawnInWorld=actor=>{
+    if(read(actor,'bHidden')||read(actor,'bDeleteMe'))return false;
+    if(!player)return true;
+    const behind=Boolean(read(player,'bBehindView'));
+    if(!behind&&read(player,'ViewTarget')===actor)return false;
+    let owned=false;
+    for(let owner=actor;owner;owner=read(owner,'Owner'))if(owner===player){owned=true;break;}
+    if(read(actor,'bOnlyOwnerSee')&&(!owned||behind))return false;
+    return !(owned&&read(actor,'bOwnerNoSee')&&!behind);
+  };
   let synthetic=0x40000000,disposed=false;
   const actors=[...npcActors],bindings=new Map(npcActors.map(preview=>[preview.actor,preview]));
   const pending=new Map(),failed=new WeakMap();
@@ -80,23 +96,32 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   const admit=actor=>{
     const mesh=read(actor,'Mesh');
     if(disposed||!actor||actor===player||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
-    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||read(actor,'bHidden')||read(actor,'bDeleteMe')||!read(actor,'Location'))return;
-    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel})
+    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
+    const npc=retired.get(actor)??false;retired.delete(actor);
+    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
-        preview.root.visible=!read(actor,'bHidden');root.add(preview.root);
-        bindings.set(actor,preview);actors.push(preview);propActors.push(preview);refreshSummary();
+        preview.root.visible=drawnInWorld(actor);root.add(preview.root);
+        bindings.set(actor,preview);actors.push(preview);(npc?npcActors:propActors).push(preview);refreshSummary();
       }).catch(error=>{failed.set(actor,mesh);errors.push({actor:actor.name??'?',message:error.message});})
       .finally(()=>pending.delete(actor));
     pending.set(actor,task);
   };
+  const retired=new Map();
+  const retire=(actor,preview)=>{
+    preview.root.removeFromParent();preview.dispose();bindings.delete(actor);
+    for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}
+    refreshSummary();
+  };
   const reconcile=()=>{
     if(disposed||!level)return;
     const live=new Set(level.actors);
-    for(const [actor,preview] of bindings)if(!live.has(actor)){
-      preview.root.removeFromParent();preview.dispose();bindings.delete(actor);
-      for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}
-      refreshSummary();
+    for(const [actor,preview] of bindings){
+      if(!live.has(actor))retire(actor,preview);
+      // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
+      // mesh is admitted like a newly visible actor; its resources decode
+      // asynchronously, so it appears once they are ready.
+      else if(read(actor,'Mesh')!==preview.mesh){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
     }
     for(const actor of live)admit(actor);
   };
@@ -110,7 +135,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player}=
   };
 }
 
-export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false}) {
+export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null}) {
   const read=(object,name)=>runtime.namedReference(object,name).get();
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
@@ -241,11 +266,11 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
         shading:'texture-only inspection',startup:'original'};
     lastPose=pose();
-    return {actor,root,dispose,
+    return {actor,root,dispose,mesh:meshReference,
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition){
         if(disposed)return false;
-        root.visible=(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
+        root.visible=visible?visible(actor):(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
         if(!root.visible)return false;
         if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         // Actor.uc declares ScaleGlow as the lighting multiplier. This applies

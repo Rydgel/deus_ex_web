@@ -207,10 +207,13 @@ steps exactly. They cover:
 Translation: `rootProcess` and `handleVirtualKeyboard` in
 `script-window-input.mjs`, with the bridges as host virtuals. The ComputerWindow
 and EditWindow VirtualKeyPressed overrides remain explicit boundaries. The Play
-input layer stands in for XInputExt:
-`src/viewer/input-key-names.mjs` names the browser key and resolves it in the
-original EInputKey table, then `game.windowKey` offers it to the root. A
-consumed key clears Play's held keys and goes no further. `IsKeyDown` (1470)
+input layer names the browser key with `src/viewer/input-key-names.mjs`, resolves it in the
+original EInputKey table, and runs it through `game.inputKey`:
+`UEngine::InputEvent`, then the translated `XInputExt::Process` with its key
+table and binding step ([script-console-command.md](script-console-command.md)).
+A consumed key clears Play's held keys and goes no further.
+`game.windowKey` remains the root-only entry the census uses to close a
+screen. `IsKeyDown` (1470)
 uses the existing `script-window-is-key-down.mjs`. Core `execGetEnum`
 (`0x1013e9a0`) returns NAME_None unless the object is a UEnum and
 0 ≤ i < `Names.Num` (`+0x38`), then `Names(i)` (`+0x34`).

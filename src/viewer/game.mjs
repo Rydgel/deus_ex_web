@@ -245,6 +245,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       if (key < 0) return false;
       return Boolean(hud.key(key, pressed ? 1 : 3));
     },
+    // One browser key edge through UEngine::InputEvent: Console.KeyEvent,
+    // then XInputExt::Process (root, key table, User.ini binding through the
+    // viewport's Exec chain). The keys in `hostCodes` keep Play's own
+    // stand-in instead of their binding (docs/script-console-command.md).
+    inputKey(code, pressed, {hostCodes = []} = {}) {
+      if (!hud) return {handled: false};
+      const names = hud.host.inputKeyNames, key = inputKeyForCode(names, code);
+      if (key < 0) return {handled: false};
+      const host = new Set(hostCodes.map(hostCode => inputKeyForCode(names, hostCode)).filter(index => index >= 0));
+      return hud.inputEvent(key, pressed ? 1 : 3, {hostBinding: index => host.has(index)});
+    },
+    // Browser focus loss: UInput::ResetInput's key-table clear.
+    resetInput() { hud?.host.consoleCommands.resetInput(); },
     // The browser supplies drawing-buffer coordinates (or scaled relative
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.

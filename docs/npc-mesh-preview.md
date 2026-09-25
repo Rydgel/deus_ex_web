@@ -95,6 +95,37 @@ while environment props (camera lenses, datacube screens, the reflective HazMat
 suit) track the camera, determinism, and that building the layer never moves,
 ticks or mutates the shared runtime actors.
 
+### World-pass visibility and Mesh changes — 2026-09-25
+
+Which actors this layer draws follows Render.dll's level-actor pass
+(`0x10b22e27`–`0x10b22ef8`) for the player's first-person frame. That pass
+skips:
+* the view actor and, unless `bBehindView` (`+0x318`), its `ViewTarget`
+  (`+0x60c`);
+* hidden actors (`bHidden`, `+0x28` bit 2);
+* a `bOnlyOwnerSee` actor (`+0x1a0` bit 4) that the view actor does not
+  own, or owns but sees from behind (IsOwnedBy walks `Owner`, `+0x3c`);
+* an owned `bOwnerNoSee` actor (`+0x1a0` bit 2) in first person.
+
+The same test gates admission and each frame's visibility. `bHighDetail`
+and the editor's `bHiddenEd` branch are not modelled.
+
+A script can change an actor's `Mesh`:
+* `Inventory.BecomeItem` selects `PlayerViewMesh` and hides the item.
+* `SkilledTool.PutDown` → `DownItem` unhides the owned tool while its
+  Down animation plays, so the original draws it in the world pass too.
+  `RenderOverlays` has placed it at the view offset.
+
+The layer used to refuse this ("changed Mesh; rebuilding the inspection
+resource is unsupported"), which paused Play whenever a lockpick or
+multitool was put away. It now retires the old resource and admits the
+actor again like a newly visible one. The new mesh decodes asynchronously
+and appears once it is ready; that is a presentation latency, not game
+state. `validate-actor-mesh-scene.mjs` picks up Multitool0, puts it in hand
+and switches away through the original belt scripts. The tool must be
+drawn with its POV mesh through `DownItem` and hidden afterwards, and the
+owner rules are checked on it.
+
 ### Partial-face rendering
 
 `createActorMeshPreview` builds each face group independently. An undecodable or
