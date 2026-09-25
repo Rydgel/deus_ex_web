@@ -1,20 +1,11 @@
 /*
- * The config/localized calls reached by Core's UClass::Register path.
- *
- * These routines are intentionally adapters around the resource managers and
- * property virtuals.  The original DLL's gates and walks are reproduced here;
- * a host must bind the actual config/localization manager when a flagged
- * property reaches that call.  In particular, a class with no matching flag,
- * or a class whose Children chain has no matching property, performs no I/O.
+ * UObject::LoadLocalized, reached by Core's UClass::Register path.
+ * The original DLL's gates and walks are reproduced here; a host binds
+ * localization and property virtuals at the reached calls. LoadConfig is
+ * translated in script-config.mjs (see docs/script-config.md).
  */
 
 export const SCRIPT_OBJECT_CONFIG = Object.freeze({
-  config: Object.freeze({
-    thunk: 0x101023dd,
-    body: 0x10150d60,
-    manager: Object.freeze({global: 0x101e3314, slot: 0x1c}),
-    arrayHelper: Object.freeze({thunk: 0x101023e2, body: 0x1010a2d0}),
-  }),
   localized: Object.freeze({
     thunk: 0x1010306c,
     body: 0x10151390,
@@ -22,19 +13,12 @@ export const SCRIPT_OBJECT_CONFIG = Object.freeze({
     linkGate: 0x101e5544,
   }),
   globals: Object.freeze({
-    configManager: 0x101e3314,
     localizationTable: 0x101e5554,
     localizedLinkGate: 0x101e5544,
-    transientPackage: 0x102a2660,
     names: 0x102961f0,
   }),
   flags: Object.freeze({
-    classConfig: 0x00000004,
     classLocalized: 0x00000020,
-    // CLASS_PerObjectConfig: `test ah,4` on ClassFlags (+0x484), 0x400.
-    classPerObjectConfig: 0x00000400,
-    propertyConfig: 0x00004000,
-    propertyGlobalConfig: 0x00040000,
     propertyLocalized: 0x00008000,
   }),
   offsets: Object.freeze({
@@ -45,14 +29,12 @@ export const SCRIPT_OBJECT_CONFIG = Object.freeze({
     classSuper: 0x28,
     classChildren: 0x38,
     classFlags: 0x484,
-    classConfigName: 0x4a0,
     propertyName: 0x20,
     propertyArrayDim: 0x34,
     propertyFlags: 0x3c,
     propertyElementSize: 0x38,
     propertyOffset: 0x48,
     propertyImport: 0x84,
-    propertyConfigName: 0x60,
     fieldNext: 0x2c,
   }),
   localizedArrayKeyFormat: '%s[%i]',
@@ -127,10 +109,6 @@ function callback(service, names) {
     if (typeof value === 'function') return value;
   }
   return null;
-}
-
-function call(callbackFunction, receiver, detail) {
-  return callbackFunction.call(receiver, detail, detail);
 }
 
 function mapSlot(record, offset) {
@@ -291,8 +269,7 @@ function fieldList(record, services, operation) {
   const walker = callback(services, ['walkProperties', 'walkFields', 'childrenOf']);
   let value;
   if (walker) value = walker(record, {
-    kind: 'field-walk', operation, body: operation === 'LoadConfig'
-      ? SCRIPT_OBJECT_CONFIG.config.body : SCRIPT_OBJECT_CONFIG.localized.body,
+    kind: 'field-walk', operation, body: SCRIPT_OBJECT_CONFIG.localized.body,
       offsets: {children: SCRIPT_OBJECT_CONFIG.offsets.classChildren, next: SCRIPT_OBJECT_CONFIG.offsets.fieldNext},
   });
   if (value && !Array.isArray(value) && typeof value[Symbol.iterator] === 'function') value = [...value];
@@ -430,30 +407,10 @@ function propertyNameValue(field, services, operation) {
   return resolveText(value, services, {operation, slot: '+0x20'}, 'UProperty Name');
 }
 
-function propertyConfigNameValue(field, propertyFlagsValue, services) {
-  if ((propertyFlagsValue & SCRIPT_OBJECT_CONFIG.flags.propertyGlobalConfig) === 0) return undefined;
-  const detail = {
-    kind: 'property-config-name', operation: 'LoadConfig',
-    body: SCRIPT_OBJECT_CONFIG.config.body, property: field,
-    slot: '+0x60', offset: SCRIPT_OBJECT_CONFIG.offsets.propertyConfigName,
-  };
-  const getter = callback(services, ['readPropertyConfigName', 'getPropertyConfigName', 'propertyConfigName']);
-  let value = getter?.(field, detail);
-  if (value === undefined) value = first(field, ['configName', 'propertyConfigName', 'ConfigName'],
-    first(field?.metadata, ['configName', 'propertyConfigName', 'ConfigName'], undefined));
-  if (value === undefined || value === null) {
-    fail('LoadConfig reached the property +0x60 config-name virtual without an adapter', {
-      operation: 'LoadConfig', slot: '+0x60', property: field,
-    });
-  }
-  return value;
-}
-
 function classNameValue(record, defaultObject, services, operation, perObject) {
-  const resolver = callback(services, operation === 'LoadConfig'
-    ? ['resolveConfigNames', 'configNames'] : ['resolveLocalizedNames', 'localizedNames']);
+  const resolver = callback(services, ['resolveLocalizedNames', 'localizedNames']);
   let value = resolver?.(record, {
-    kind: operation === 'LoadConfig' ? 'config-names' : 'localized-names', operation,
+    kind: 'localized-names', operation,
     record, defaultObject, perObject,
     offsets: SCRIPT_OBJECT_CONFIG.offsets,
   });
@@ -477,32 +434,6 @@ function className(record) {
   return first(record, ['nameText', 'Name', 'nameIndex', 'nameRef'], undefined);
 }
 
-function resolveConfigNames(defaultObject, record, defaultClass, filename, perObject, services) {
-  const supplied = classNameValue(record, defaultObject, services, 'LoadConfig', perObject);
-  const detail = {operation: 'LoadConfig', slot: '[0x102961f0]'};
-  const explicitFile = !isNullPointer(filename);
-  const fileValue = explicitFile ? filename
-    : first(supplied, ['fileName', 'filename', 'configName'], undefined) ??
-      first(record, ['classConfigName', 'configName', 'ClassConfigName'],
-        first(record?.metadata, ['classConfigName', 'configName'], undefined));
-  const fileName = resolveText(fileValue, services, detail, 'ClassConfigName/file name');
-
-  let sectionValue = first(supplied, ['sectionName', 'section', 'pathName', 'fullName', 'objectName'], undefined);
-  if (sectionValue === undefined) {
-    sectionValue = first(record, ['sectionName', 'section', 'pathName', 'fullName'], undefined);
-  }
-  if (sectionValue === undefined) {
-    sectionValue = perObject ? objectName(defaultObject) : undefined;
-  }
-  if (sectionValue === undefined) {
-    fail('LoadConfig requires an explicit section/path binding for the class name branch', {
-      operation: 'LoadConfig', slot: '[0x102961f0]', property: record,
-    });
-  }
-  const sectionName = resolveText(sectionValue, services, detail, 'LoadConfig section/path');
-  return {sectionName, fileName, explicitFile, supplied};
-}
-
 function resolveLocalizedNames(defaultObject, record, perObject, services) {
   const supplied = classNameValue(record, defaultObject, services, 'LoadLocalized', perObject);
   const detail = {operation: 'LoadLocalized', slot: '[0x102961f0]'};
@@ -517,57 +448,6 @@ function resolveLocalizedNames(defaultObject, record, perObject, services) {
     sectionName: resolveText(sectionValue, services, detail, 'localized object/class name'),
     supplied,
   };
-}
-
-function configBranch(field, detail, filename, propertyFlagsValue, services) {
-  const selector = callback(services, ['resolveConfigBranch', 'configBranch']);
-  let branch = selector?.(field, {
-    ...detail, filename, propertyFlags: propertyFlagsValue,
-    manager: SCRIPT_OBJECT_CONFIG.config.manager,
-    helper: SCRIPT_OBJECT_CONFIG.config.arrayHelper,
-  });
-  if (branch === undefined || branch === null) {
-    branch = first(field, ['configBranch', 'loadConfigBranch', 'configSource'],
-      first(field?.metadata, ['configBranch', 'loadConfigBranch', 'configSource'], undefined));
-  }
-  if (branch === undefined || branch === null) {
-    // An explicit filename takes the manager branch. The remaining
-    // no-filename branch depends on the property's class ancestry check at
-    // 0x10150ee7; require the host to identify it instead of guessing from a
-    // logical type name. PropertyFlags 0x40000 also reaches a property +0x60
-    // call, but that call alone does not select the manager branch.
-    if (!isNullPointer(filename)) {
-      branch = 'manager';
-    } else {
-      fail('LoadConfig needs an explicit property ancestry branch for the no-filename path', {
-        operation: 'LoadConfig', property: field, slot: '0x10150ee7',
-      });
-    }
-  }
-  const normalized = String(branch).toLowerCase();
-  if (normalized === 'manager' || normalized === 'config-manager' || normalized === 'manager-slot-1c') return 'manager';
-  if (normalized === 'array-helper' || normalized === 'helper' || normalized === 'loadconfig-helper') return 'array-helper';
-  fail(`Unsupported LoadConfig property branch ${String(branch)}`, {
-    operation: 'LoadConfig', property: field,
-  });
-}
-
-function valueResult(value, index, dimension) {
-  if (value === undefined || value === null || value === false) return {found: false};
-  if (value && typeof value === 'object' && own(value, 'found')) {
-    return {found: value.found === true, value: value.value, source: value};
-  }
-  if (Array.isArray(value)) {
-    const selected = value[index];
-    return selected === undefined || selected === null ? {found: false} : valueResult(selected, index, dimension);
-  }
-  if (value && typeof value === 'object' && Array.isArray(value.values)) {
-    return valueResult(value.values[index], index, dimension);
-  }
-  if (value && typeof value === 'object' && own(value, 'value')) {
-    return {found: true, value: value.value, source: value};
-  }
-  return {found: true, value};
 }
 
 function destination(defaultObject, field, index, detail, services) {
@@ -585,10 +465,8 @@ function destination(defaultObject, field, index, detail, services) {
   return value;
 }
 
-function callImporter(defaultObject, field, index, value, baseDetail, services, localized) {
-  const importer = callback(services, localized
-    ? ['importLocalizedProperty', 'importProperty']
-    : ['importConfigProperty', 'importProperty']);
+function callImporter(defaultObject, field, index, value, baseDetail, services) {
+  const importer = callback(services, ['importLocalizedProperty', 'importProperty']);
   if (!importer) {
     fail(`${baseDetail.operation} reached UProperty::Import (+0x84) without an adapter`, {
       operation: baseDetail.operation, slot: '+0x84', property: field,
@@ -597,7 +475,7 @@ function callImporter(defaultObject, field, index, value, baseDetail, services, 
   const target = destination(defaultObject, field, index, baseDetail, services);
   const detail = {
     ...baseDetail,
-    kind: localized ? 'uobject-import-localized-property' : 'uobject-import-config-property',
+    kind: 'uobject-import-localized-property',
     property: field,
     arrayIndex: index,
     destination: target,
@@ -611,8 +489,8 @@ function callImporter(defaultObject, field, index, value, baseDetail, services, 
 function operationResult(operation, defaultObject, classRecord, args) {
   return {
     operation,
-    body: operation === 'LoadConfig' ? SCRIPT_OBJECT_CONFIG.config.body : SCRIPT_OBJECT_CONFIG.localized.body,
-    thunk: operation === 'LoadConfig' ? SCRIPT_OBJECT_CONFIG.config.thunk : SCRIPT_OBJECT_CONFIG.localized.thunk,
+    body: SCRIPT_OBJECT_CONFIG.localized.body,
+    thunk: SCRIPT_OBJECT_CONFIG.localized.thunk,
     receiver: defaultObject,
     classRecord,
     arguments: args,
@@ -628,104 +506,6 @@ function operationResult(operation, defaultObject, classRecord, args) {
 function markSkip(result, reason, detail = {}) {
   result.skipped = {reason, ...detail};
   result.operations.push({operation: 'skip', reason, ...detail});
-  return result;
-}
-
-/**
- * Replay Core's UObject::LoadConfig body (0x10150d60).
- *
- * The positional form mirrors the native call: `(defaultObject, first,
- * classArgument, filename)`. `classArgument` and `filename` use zero as the
- * native null value. A config reader is required only after a property with
- * `PropertyFlags & 0x4000` is reached. It receives one descriptor per array
- * element and owns the manager slot `+0x1c` or the internal FArray helper.
- */
-export function loadScriptConfig(defaultObject, firstArgument = 0, classArgument = 0, filename = 0, services = {}) {
-  const classRecord = resolveClassRecord(defaultObject, classArgument, services, 'LoadConfig');
-  const result = operationResult('LoadConfig', defaultObject, classRecord,
-    [firstArgument, isNullPointer(classArgument) ? 0 : classArgument, isNullPointer(filename) ? 0 : filename]);
-  const flags = classFlags(classRecord, services, 'LoadConfig');
-  if ((flags & SCRIPT_OBJECT_CONFIG.flags.classConfig) === 0) return markSkip(result, 'class-flag', {mask: SCRIPT_OBJECT_CONFIG.flags.classConfig});
-
-  if (!isNullPointer(firstArgument)) {
-    const parent = classSuper(classRecord, services, 'LoadConfig');
-    if (!isNullPointer(parent)) {
-      const child = loadScriptConfig(defaultObject, firstArgument, parent, filename, services);
-      result.recursive.push(child);
-      result.operations.push({operation: 'load-config-super', receiver: defaultObject, classRecord: parent,
-        arguments: [firstArgument, parent, isNullPointer(filename) ? 0 : filename]});
-    }
-  }
-
-  const objectClass = resolveObjectClass(defaultObject, classRecord, services, 'LoadConfig');
-  const objectFlags = classFlags(objectClass, services, 'LoadConfig');
-  const needsIndex = (objectFlags & SCRIPT_OBJECT_CONFIG.flags.classPerObjectConfig) !== 0;
-  const index = objectIndex(defaultObject, services, 'LoadConfig', needsIndex);
-  const perObject = needsIndex && index !== -1;
-  const fields = fieldList(classRecord, services, 'LoadConfig');
-  let fieldCount = 0;
-  let matchingCount = 0;
-  let names = null;
-  let reader = null;
-  for (const field of fields) {
-    fieldCount += 1;
-    const flagsValue = propertyFlags(field, services, 'LoadConfig');
-    if (flagsValue === null || (flagsValue & SCRIPT_OBJECT_CONFIG.flags.propertyConfig) === 0) continue;
-    const entry = {field, flags: flagsValue, arrayDim: arrayDimension(field, services, 'LoadConfig'),
-      configName: propertyConfigNameValue(field, flagsValue, services)};
-    matchingCount += 1;
-    // Keep the native linked-list cursor live: names, manager access, and
-    // ImportText all happen before the generator reads this field's Next.
-    if (names === null) {
-      names = resolveConfigNames(defaultObject, classRecord, objectClass, filename, perObject, services);
-      reader = callback(services, ['readConfigProperty', 'readConfig', 'loadConfigProperty']);
-      if (!reader) {
-        fail('LoadConfig reached a config property without an explicit config reader', {
-          operation: 'LoadConfig', slot: '[0x101e3314]+0x1c', property: entry.field,
-        });
-      }
-    }
-    const propertyName = propertyNameValue(entry.field, services, 'LoadConfig');
-    const branch = configBranch(entry.field, {operation: 'LoadConfig', receiver: defaultObject,
-      classRecord, property: entry.field}, filename, entry.flags, services);
-    const detail = {
-      kind: 'uobject-load-config-property', operation: 'LoadConfig',
-      body: SCRIPT_OBJECT_CONFIG.config.body, thunk: SCRIPT_OBJECT_CONFIG.config.thunk,
-      receiver: defaultObject, defaultObject, classRecord, objectClass,
-      property: entry.field, propertyFlags: entry.flags, arrayDim: entry.arrayDim,
-      arrayIndices: Array.from({length: entry.arrayDim}, (_, value) => value),
-      arrayIndex: null, propertyName,
-      propertyConfigName: entry.configName,
-      sectionName: names.sectionName, fileName: names.fileName,
-      globalConfig: (entry.flags & SCRIPT_OBJECT_CONFIG.flags.propertyGlobalConfig) !== 0,
-      perObject, objectIndex: index,
-      branch,
-      manager: branch === 'manager' ? {
-        global: SCRIPT_OBJECT_CONFIG.config.manager.global,
-        slot: SCRIPT_OBJECT_CONFIG.config.manager.slot,
-        arguments: [names.sectionName, 0, 1, names.fileName],
-      } : null,
-      helper: branch === 'array-helper' ? {
-        ...SCRIPT_OBJECT_CONFIG.config.arrayHelper,
-        arguments: [0, classRecord, names.fileName],
-      } : null,
-    };
-    const value = reader(detail, detail);
-    result.resourceCalls.push(detail);
-    result.operations.push({operation: 'config-read', detail});
-    for (let indexValue = 0; indexValue < entry.arrayDim; indexValue++) {
-      const keyName = entry.arrayDim === 1 ? propertyName : `${propertyName}[${indexValue}]`;
-      const found = valueResult(value, indexValue, entry.arrayDim);
-      if (!found.found) continue;
-      const importDetail = {...detail, arrayIndex: indexValue, keyName};
-      const imported = callImporter(defaultObject, entry.field, indexValue, found.value, importDetail, services, false);
-      result.imports.push(imported.detail);
-      result.operations.push({operation: 'config-import', detail: imported.detail});
-      result.properties.push({property: entry.field, arrayIndex: indexValue, value: found.value,
-        read: detail, import: imported.detail});
-    }
-  }
-  if (matchingCount === 0) return markSkip(result, 'empty-config-properties', {fields: fieldCount});
   return result;
 }
 
@@ -800,7 +580,7 @@ export function loadScriptLocalized(defaultObject, firstArgument = 0, classArgum
       result.resourceCalls.push(detail);
       result.operations.push({operation: 'localized-read', detail});
       if (text === undefined || text === null || text === '') continue;
-      const imported = callImporter(defaultObject, entry.field, indexValue, text, detail, services, true);
+      const imported = callImporter(defaultObject, entry.field, indexValue, text, detail, services);
       result.imports.push(imported.detail);
       result.operations.push({operation: 'localized-import', detail: imported.detail});
       result.properties.push({property: entry.field, arrayIndex: indexValue, value: text,
@@ -811,5 +591,4 @@ export function loadScriptLocalized(defaultObject, firstArgument = 0, classArgum
   return result;
 }
 
-export const loadConfig = loadScriptConfig;
 export const loadLocalized = loadScriptLocalized;

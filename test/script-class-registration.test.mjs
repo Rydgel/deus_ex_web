@@ -98,6 +98,11 @@ test('UClass Register keeps native order and copies an inherited linked property
     () => initializeClassDefaultObject(record, { data: new Uint8Array(0x34), size: 0x34 }, withoutHeaderWriter),
     error => error.code === 'UNSUPPORTED_SCRIPT_CLASS_REGISTRATION' && /raw CDO header writer/.test(error.message),
   );
+  const { loadConfig, ...withoutLoadConfig } = services;
+  assert.throws(
+    () => registerScriptClass({ ...record, defaultBuffer: null }, withoutLoadConfig),
+    error => error.code === 'UNSUPPORTED_SCRIPT_CLASS_REGISTRATION' && /LoadConfig adapter/.test(error.message),
+  );
   const { internName, ...withoutNameIntern } = services;
   assert.throws(
     () => registerScriptClass({ ...record, defaultBuffer: null }, withoutNameIntern),

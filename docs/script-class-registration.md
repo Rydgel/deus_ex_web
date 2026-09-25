@@ -76,10 +76,13 @@ The callback sequence is source ordered:
    Defaults.Data.  The size is checked again.
 10. `LoadLocalized(0, 0)` is called on Defaults.Data.
 
-Steps 9–10 default to the recovered [config/localization adapters](script-object-config.md),
-configured through `services.objectConfig`. Explicit `loadConfig` and
-`loadLocalized` overrides remain supported. The class-flag gates are actual
-source branches: Core.Object's `ClassFlags=0x13` skips both before resource I/O.
+Step 9 requires `services.loadConfig`, binding the sole
+[LoadConfig translation](script-config.md) through the host's graph/GConfig
+storage view. Step 10 defaults to the recovered
+[LoadLocalized adapter](script-object-config.md), configured through
+`services.objectConfig`; an explicit `services.loadLocalized` remains supported.
+The class-flag gates are actual source branches: Core.Object's `ClassFlags=0x13`
+skips both before resource I/O.
 
 `registerBase` is intentionally the boundary before step 2.  Object queueing,
 registry insertion and the parameterized UClass constructor belong to the

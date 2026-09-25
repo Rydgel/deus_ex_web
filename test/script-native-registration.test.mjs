@@ -7,6 +7,7 @@ import {createScriptPackageFactory} from '../src/runtime/script-package-construc
 import {createScriptNativeRegistration, NATIVE_REGISTRATION, CORE_CLASS_CONSTRUCTORS} from '../src/runtime/script-native-registration.mjs';
 import {constructNativeScriptClass} from '../src/runtime/script-native-class-construction.mjs';
 import {registerScriptClass} from '../src/runtime/script-class-registration.mjs';
+import {loadConfig} from '../src/runtime/script-config.mjs';
 
 function fixture({objectGate = 0} = {}) {
   const none={index:0,flags:0,hashNext:null,text:'None'};
@@ -104,6 +105,19 @@ test('original Core.Object registration composes the native constructor, name lo
       registered = registerScriptClass(object, {
         registration,
         classLink: {globalLinkGate: 0},
+        loadConfig(data, propagate, cls, filename, {classRecord}) {
+          assert.strictEqual(data, classRecord.defaultBuffer.data);
+          // Original Core.Object flags 0x13 return at LoadConfig's 0x4 gate.
+          // Only that reached graph slot is bound; GConfig must not be touched.
+          const graph = {slotOf(record, offset) {
+            assert.strictEqual(record, classRecord);
+            assert.equal(offset, 0x484);
+            return record.classFlags;
+          }};
+          return loadConfig(graph, null, {cls: classRecord}, {
+            propagate, cls: cls || null, filename: filename || null,
+          });
+        },
         writeDefaultHeader(data, header) {
           const memory = new DataView(data.buffer, data.byteOffset, data.byteLength);
           memory.setUint32(0, header.vtable, true);

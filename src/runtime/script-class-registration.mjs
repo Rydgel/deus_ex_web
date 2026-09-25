@@ -1,6 +1,6 @@
 import {registerScriptStruct} from './script-struct-registration.mjs';
 import {linkScriptClass} from './script-class-link.mjs';
-import {loadScriptConfig, loadScriptLocalized} from './script-object-config.mjs';
+import {loadScriptLocalized} from './script-object-config.mjs';
 import {copyCompletePropertyValue} from './script-property-copy.mjs';
 
 /**
@@ -579,10 +579,10 @@ export function registerScriptClass(record, services = {}) {
   traceCall(trace, 'virtual-6c', { frame, secondArgument: 0, slot: 0x6c });
   checkPropertiesSize(record, buffer, services, trace, 'after-virtual-6c');
 
-  const objectConfig = Object.create(services.objectConfig ?? null);
-  objectConfig.classRecord = record;
-  const loadConfig = services.loadConfig ??
-    ((data, first, second, third) => loadScriptConfig(data, first, second, third, objectConfig));
+  // Core UClass::Register calls LoadConfig on Defaults.Data with (0, 0, 0).
+  // The host binds script-config.mjs through its graph/GConfig storage view;
+  // do not maintain a second translation for this raw-buffer boundary.
+  const loadConfig = required(services, ['loadConfig'], 'UClass::Register', 'LoadConfig');
   loadConfig(buffer.data, 0, 0, 0, {
     kind: 'uclass-load-config', body: SCRIPT_CLASS_REGISTRATION.loadConfig.body,
     classRecord: record,
@@ -590,6 +590,8 @@ export function registerScriptClass(record, services = {}) {
   traceCall(trace, 'load-config', { receiver: buffer.data, arguments: [0, 0, 0] });
   checkPropertiesSize(record, buffer, services, trace, 'after-load-config');
 
+  const objectConfig = Object.create(services.objectConfig ?? null);
+  objectConfig.classRecord = record;
   const loadLocalized = services.loadLocalized ??
     ((data, first, second) => loadScriptLocalized(data, first, second, objectConfig));
   loadLocalized(buffer.data, 0, 0, {
