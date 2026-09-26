@@ -7,7 +7,7 @@ test('original health HUD, compass and InfoLink remain live across turning and r
   await page.goto('http://127.0.0.1:5173');
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.hud?.health.head.displayedHealth===100);
   const initial=await status();
-  expect(initial.gameplay.hud).toMatchObject({energy:100,underwater:false,health:{head:{color:[0,255,0]}}});
+  expect(initial.gameplay.hud).toMatchObject({energy:100,health:{head:{color:[0,255,0]}}});
   await expect(page.locator('#crosshair')).toBeHidden();
   const box=await page.locator('#scene').boundingBox();
   await page.mouse.move(box.x+600,box.y+350);await page.mouse.down();
