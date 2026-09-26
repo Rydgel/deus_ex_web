@@ -167,6 +167,17 @@ separate outermost-depth driver that sets `0x101e559c` before invoking Purge;
 the JavaScript registry can represent that gate as `registrantsActive: true` or
 through `services.nativePurgeEnabled`.
 
+## LoadMap caller and Play integration
+
+`UGameEngine::LoadMap` calls `CollectGarbage(RF_Native)` at Engine
+`0x1038d1e1`, after it tags every actor of the loaded package that the new
+`Actors` array does not hold with `0x400`, this archive's exclusion bit.
+Every Player start in Play runs that collection over the modeled registry
+through `script-loadmap-gc.mjs`. The name pass runs over the host FName
+table. `runtime.garbageCollecting` is `GObjInGarbageCollection`, which
+`APlayerPawnExt::Destroy` reads. The roots, the Serialize projection and its
+limits are in [Player start collection](script-loadmap-gc.md).
+
 ## Validation and boundaries
 
 `test/script-gc.test.mjs` checks a reachable two-object cycle, an unreachable

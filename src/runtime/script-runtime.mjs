@@ -126,6 +126,7 @@ import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
 import { lowerWindowNative } from './script-window-lower.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
 import { killAllChildrenNative, safeDestroyWindowNative } from './script-window-destroy.mjs';
+import { PLAYER_DESTROY, destroyDeusExPlayerNative, destroyFlagBaseNative, destroyPlayerPawnExtNative } from './script-player-destroy.mjs';
 import {
   appendTextNative, convertScriptString, setWindowFontNative, setWindowTextColorNative, setTextNative,
   setTextAlignmentsNative, setTextMarginsNative,
@@ -739,12 +740,51 @@ export class ScriptRuntime {
     if(object.auxiliary){this.conditionalDestroy(object.auxiliary);object.auxiliary=null;}
     return this.destroyObjectBase(receiver);
   }
+  /** The Destroy virtual (+0x24) of a constructed actor's native vtable. */
+  actorDestroyHook(object) {
+    const vtable=object.nativeVtable;
+    if(vtable!==PLAYER_DESTROY.deusExPlayerVtable&&vtable!==PLAYER_DESTROY.playerPawnExtVtable)
+      return receiver=>this.destroyActorBase(receiver);
+    const services={
+      read:(actor,name)=>this.namedReference(actor,name).get(),
+      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      // Core GObjInGarbageCollection (0x102a264c), set only while PurgeGarbage runs.
+      inGarbageCollection:()=>this.garbageCollecting===true,
+      conditionalDestroy:target=>this.conditionalDestroy(target),
+      safeDestroyWindow:root=>{
+        const windows=this.windowLifecycle?.destroy;
+        if(!windows)throw new Error('PlayerPawnExt rootWindow SafeDestroy requires the window lifecycle');
+        return safeDestroyWindowNative(root,windows);
+      },
+      destroyActorBase:actor=>this.destroyActorBase(actor),
+    };
+    return vtable===PLAYER_DESTROY.deusExPlayerVtable
+      ?receiver=>destroyDeusExPlayerNative(receiver,services)
+      :receiver=>destroyPlayerPawnExtNative(receiver,services);
+  }
+  /** A class scalar deleting destructor (vtable +0x0c, flag 1) whose class
+   * member teardown only frees native storage the host does not have: the
+   * guarded ConditionalDestroy, ~UObject 0x10150040, then ??3UObject
+   * (docs/script-object-release.md). */
+  deleteObject(receiver) {
+    const object=this.instance(receiver).nativeObject,services=this.actorLifecycle?.objectRelease;
+    if(!object||!services)throw new Error('Object deletion requires native object and release bindings');
+    const release={...services,conditionalDestroy:item=>this.conditionalDestroy(item.identity),warning:this.warning};
+    release.conditionalDestroy(object);
+    destructScriptObject(object,release);
+    freeScriptObject(object,release);
+  }
   releaseObject(receiver,flags=1) {
     const object=this.instance(receiver).nativeObject,services=this.actorLifecycle?.finalRelease;
     if(!object||!services)throw new Error('Final release requires native object and allocator bindings');
     return releaseScriptCameraPoint(object,flags,{
       ...services,conditionalDestroy:object=>this.conditionalDestroy(object.identity),warning:this.warning,
     });
+  }
+  /** Whether a collection or a deleting destructor released the object: host
+   * caches drop such identities instead of reading them. */
+  isReleased(receiver) {
+    return this.instances.get(receiver)?.nativeObject?.released===true;
   }
   instance(receiver) {
     const instance=this.instances.get(receiver);
@@ -1618,9 +1658,8 @@ export class ScriptRuntime {
       initNativeProperties:()=>{},
       nativeConstructor:flag=>{
         flag.nativeVtable=contract.vtable;
-        // XFlagBase overrides Destroy (Extension 0x100239f0). Its native
-        // flag-list teardown is separate from the recovered constructor.
-        flag.destroy=()=>{throw new Error('XFlagBase::Destroy native flag-list teardown is not linked');};
+        // XFlagBase overrides Destroy (Extension 0x100239f0).
+        flag.destroy=receiver=>destroyFlagBaseNative(receiver,{destroyObjectBase:target=>this.destroyObjectBase(target)});
         Object.defineProperties(flag.identity,Object.getOwnPropertyDescriptors(
           createFlagBase({defaultExpiration:contract.defaultExpiration})));
       },
@@ -1782,12 +1821,12 @@ export class ScriptRuntime {
         const identity=this.constructObject(cls,options,
           {...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection,{
             constructFlagBase:(object,contract)=>this.constructPlayerFlagBase(object,contract)})});
-        // Every SpawnActor product is an actor: bind the same native
-        // destructor chain mapActorNativeObject installs on map exports —
-        // ConditionalDestroy -> AActor::Destroy (auxiliary object slot empty)
-        // -> UObject::Destroy — so ULevel::DestroyActor can run it later.
+        // Every SpawnActor product is an actor: ConditionalDestroy reaches its
+        // vtable's Destroy slot. That is AActor::Destroy (auxiliary object slot
+        // empty) -> UObject::Destroy, as on map exports, except for the player
+        // chain's own overrides (script-player-destroy.mjs).
         const object=this.instance(identity).nativeObject;
-        if(object){object.auxiliary=null;object.destroy=receiver=>this.destroyActorBase(receiver);}
+        if(object){object.auxiliary=null;object.destroy=this.actorDestroyHook(object);}
         return identity;
       },
       setRegion:(...values)=>this.setRegion(...values),

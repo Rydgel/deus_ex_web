@@ -29,14 +29,16 @@ DeusEx.dll SHA256
 
 The JS binding reuses the existing verified fresh allocation/registry/template
 path, followed by the two recovered vtable stores. It binds native3010 only for
-the live player. ClearLog's native751 CriticalDelete and the complete derived
-FString destruction remain outside this slice; the map-reset adapter clears
-player list references, with native final collection still an explicit gap.
+the live player. DeusExLog's Destroy (vtable `0x10027ad0` slot `+0x24`) is
+the `UObject::Destroy` thunk `0x1001aec0`. ClearLog's native751 CriticalDelete
+and the complete derived FString destruction remain outside this slice. On
+Player start, `ADeusExPlayer::Destroy` nulls `FirstLog`/`LastLog` on the
+retired player, and LoadMap's collection releases the detached logs
+([Player start collection](script-loadmap-gc.md)).
 
 `validate-player-log.mjs` runs the hash-verified unchanged native exec/operator
 new/constructor with explicit FName, Outer and StaticAllocateObject leaves.
 Both nonnull/null allocation branches match; the two vtable writes and untouched
 text/next bytes are checked. The integration then executes original AddLog twice
-and checks text, linked-list identities, package Outer, class/vtable, and reset
-references. Native allocator failure behavior remains supplied by the existing
+and checks text, linked-list identities, package Outer and class/vtable. Native allocator failure behavior remains supplied by the existing
 fresh-allocation host; the oracle's null branch does not imply browser OOM parity.

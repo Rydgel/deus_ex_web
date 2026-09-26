@@ -184,111 +184,34 @@ passes. These checks validate the translation against the recovered contract;
 they do not establish full original-player integration or replace the pending
 Training integration validators.
 
-## Reset teardown research boundary
+## Player teardown on reset
 
-A second fresh Login in the same world cannot safely be implemented by
-merely dropping the old player or clearing its FlagBase map. The current
-public reset retains the scene player identity (`src/viewer/game.mjs`),
-restores its host transform/vitals and replays doors/map startup. That is a
-host reset policy, not evidence that original LoadMap destroys/reconstructs
-a player with those same operations. A fresh-world restart or an explicit
-translation of original player teardown must replace that policy before
-claiming a repeated cold Login is faithful.
+The research boundary recorded here on 2026-09-25 is closed. The retail
+native facts it collected are now implemented in
+`src/runtime/script-player-destroy.mjs` and documented, with the LoadMap
+caller that reaches them, in [Player start collection](script-loadmap-gc.md):
 
-Retail native ownership recovered on 2026-09-25:
+* `ADeusExPlayer::Destroy` (`0x100141f0`, vtable `0x10027568` slot `+0x24`)
+  makes three stores and then calls `APlayerPawnExt::Destroy`. By the retail
+  property offsets they null `conHistory` (`+0x9fc`), `FirstLog` (`+0xa50`)
+  and `LastLog` (`+0xa54`).
+* `APlayerPawnExt::Destroy` (`0x10037d40`) takes one of two
+  `GObjInGarbageCollection` branches for the FlagBase (`+0x890`). It then
+  SafeDestroys `rootWindow` (`+0x894`), nulls it and runs `AActor::Destroy`.
+  The reset reaches it outside a collection: LoadMap destroys the old player
+  through `DestroyActor` before the load.
+* `XFlagBase::Destroy` (`0x100239f0`) runs `UObject::Destroy`, then drains
+  the 64 buckets with `RemoveFlag` (`0x10023a80`). The host FlagBase stores
+  flags without flag-object identities, so the drained store is its
+  observable result. The detached XFlag objects have no host records (see the
+  limits in the collection note).
+* The root window's `SafeDestroy` uses the recovered XRootWindow family
+  (CleanUp `0x10039240`, destructor `0x100059c0`).
 
-* DeusEx.dll vtable `0x10027568`, slot `+0x24` (Destroy), points to
-  `ADeusExPlayer::Destroy` `0x100141f0`. It clears the dwords at `+0x9fc`,
-  `+0xa50`, `+0xa54` (`0x10014216..0x10014222`) and calls imported
-  APlayerPawnExt::Destroy at `0x10014228`. These are three explicit stores,
-  not a general array clear or recursive destruction of their referents.
-* Extension.dll PlayerPawnExt vtable `0x1005c32c`, slot `+0x24`, points to
-  `0x10037d40`. It reads imported GObjInGarbageCollection (`0x1005914c`).
-  Outside GC, a non-null flagBase at `+0x890` is passed to Core
-  ConditionalDestroy (`0x10037d7d`). This branch does **not** explicitly zero
-  the pointer afterwards. Inside GC (or if it was null), the alternative
-  branch writes null at `0x10037d85`.
-* Next it reads rootWindow `+0x894`. A non-null window is passed to existing
-  XWindow::SafeDestroy (`0x1004c0b0`) at `0x10037d95`. It then unconditionally
-  clears rootWindow (`0x10037d9c`) and calls imported AActor::Destroy
-  (`0x10037da2`). SafeDestroy may defer deleting a locked window; treating it
-  as unconditional immediate release would violate the existing window
-  contract. See [window destruction](script-window-destroy.md).
-* FlagBase vtable `0x1005c20c`, slot `+0x24`, selects XFlagBase::Destroy
-  `0x100239f0`. It first calls UObject::Destroy (`0x10023a1a`), then scans
-  exactly 64 hash buckets at `+0x28 + 4*i` (`0x10023a22..0x10023a3a`).
-  It repeatedly calls RemoveFlag on the current head until each bucket is
-  empty. This routine does **not** invoke a flag deleting destructor.
-* RemoveFlag `0x10023a80` accepts only a non-null node whose flagBase `+0x30`
-  equals this. FindFlag `0x10024f50` selects bucket `(node[+0x2c] & 63)` and
-  finds that exact node by following next `+0x34`, returning the address of
-  its predecessor link. On success RemoveFlag rewrites that link to next,
-  then zeros node.next and node.flagBase (`0x10023ac0..0x10023acb`). The
-  detached flag object remains an object until its separate lifetime ends.
-
-These facts use the same hash-pinned Extension.dll as the constructor and
-window evidence; DeusEx.dll SHA-256 is
-`b91002f3e7658c0562d28bccc887cf9db79a47a19f5e09e8be460c9d0c0bee04`.
-They are static original-instruction evidence, not yet an executable reset
-comparison. All addresses here are preferred DLL addresses, before the
-oracle's Extension rebase.
-
-Core ConditionalDestroy/UObject.Destroy and Window.SafeDestroy already have
-recovered family implementations. Consequently the player Destroy wrappers
-and FlagBase unlink loop are bounded new translations, not evidence of a
-large unknown native subsystem. However `createFlagBase` currently projects
-entries into a JavaScript Map with no original flag-node UObject identities,
-bucket links or backreferences. A faithful general teardown must either add
-that ownership projection or establish a rigorously bounded observable
-projection with original cases (including multiple buckets and retained node
-references). Replacing its explicit Destroy error with `entries.clear()`
-would not establish node unlinking, property cleanup or callback order.
-
-In addition, the player actor's registered Destroy hook must select its real
-DeusExPlayer/PlayerPawnExt overrides, and rootWindow must use the existing
-window lifecycle implementation rather than a guessed teardown. Native
-Destroy is reached synchronously by ConditionalDestroy in accepted
-ULevel::DestroyActor; deferred allocation cleanup is a separate later stage.
-Neither generic Core destruction alone nor waiting for deferred cleanup
-bypasses these overrides. An original family oracle should measure the empty
-and populated FlagBase cases and both GC branches before wiring reset. No
-teardown implementation or claim that repeated Login/reset is complete was
-made by this research.
-
-The current `ScriptRuntime.spawnActor` construction adapter unconditionally
-installs `object.destroy = receiver => destroyActorBase(receiver)` after every
-native actor constructor. This is valid only for classes inheriting that
-Destroy slot unchanged. It is **incorrect for PlayerPawnExt and DeusExPlayer**:
-the measured vtables above override slot +0x24. Their generated constructor
-rows prove construction effects and IsPendingKill selection, not that the
-base Actor Destroy virtual can replace every subclass. Leaving that base-only
-hook would silently skip player-owned FlagBase ConditionalDestroy and window
-SafeDestroy, so the explicit FlagBase teardown error might never be reached
-by destroying the player. That absence of an error cannot establish fidelity.
-
-The next bounded recovery targets are known rather than unidentified:
-XFlag constructor `0x10023750`, XFlag::Destroy `0x10023870`,
-XFlagBase::AddFlag `0x10023b20`, SetBool `0x10023c60`, SetByte `0x10023d80`,
-SetInt `0x10023e80`, SetFloat `0x10023f80`, and SetName `0x10024080`.
-Only the types actually reached by the cold/reset path need admission now.
-The missing native-node projection includes flagName (SDK candidate +0x28),
-flagHash (+0x2c, used by recovered FindFlag), flagBase (+0x30), nextFlag
-(+0x34), flagType (SDK candidate +0x38), expiration (SDK candidate +0x3c),
-and each subtype's value storage; candidate fields still need retail checks
-before implementation. Outer/name/registry ownership must be recovered from
-the actual allocating setters/constructors, not assigned from the SDK alone.
-
-Complexity assessment: this is a real fidelity gap, but static evidence does
-**not** justify asserting that it necessarily requires more than a day of new
-reverse engineering. The teardown loop and wrappers are small and their
-service targets already exist. General typed flag construction/list ownership
-could broaden the work, especially if retained flag objects or non-bool types
-are reached, but that reach has not been demonstrated by this task. A decision
-to stop at the last green milestone should state the confirmed missing
-ownership/destruction behavior and current integration scope; it should not
-present a speculative day-scale estimate as a discovered blocker. No original
-executable reset oracle has yet measured the combined player/flag/window
-teardown chain.
+`ScriptRuntime.spawnActor` now installs the Destroy virtual of the
+constructed actor's native vtable. That is these overrides for the player
+chain and `AActor::Destroy` otherwise; among the admitted native Actor
+classes, only this chain overrides slot `+0x24`.
 
 ## ResetKeyboard and the native Input object
 
@@ -409,57 +332,36 @@ counters are removed.
 
 ### Reset: reload and a second Login
 
-"Player start" is a cold reload of the map followed by SpawnPlayActor, the
-same sequence as boot. UGameEngine::LoadMap draws no DestroyActor on the old
-level's viewport player; it only clears a flag bit at its `+0x69c`
-(`0x1038c51d`). The new level's actors are kept
-(`0x1038d14a..0x1038d1dc`), and `CollectGarbage(RF_Native)` (`0x1038d1e1`)
-purges what is unreachable.
+"Player start" is a reload of the loaded map, then SpawnPlayActor, as at
+boot. The full original sequence, its evidence and the host projection are in
+[Player start collection](script-loadmap-gc.md). In order:
 
-That purge does not reach the old player yet. `Engine.Player.Actor` (+0x30)
-is a script property with flags `0x2002` (const, transient, not native).
-UProperty::ShouldSerializeValue (Core `0x10112810`) skips only native
-properties, and transient ones only for a persistent archive (`Ar+0x18`).
-UPlayer::Serialize (`0x103d7d60`) is UObject::Serialize. So the collector
-follows Viewport.Actor to the old player and, through its references, to
-the old level. The retired generation stays alive until the new Login's
-SetPlayer detaches it and a later collection runs. Only then does
-PlayerPawnExt::Destroy take its GObjInGarbageCollection branch: it nulls
-flagBase, SafeDestroys rootWindow and runs AActor::Destroy. No script
-Destroyed events run at any point.
-
-`script-doors.mjs` records every actor the current Login spawned. Reset then
-does the following:
-
-1. It adds every non-serialized actor the retired Login graph owns (its
-   Owner chain). This covers the player, PRI, Shadow, PostBeginPlay
-   subsystems, key ring and acquired spawns.
-2. It removes that graph from the reloaded `Level.Actors`. The player
-   leaves the collision hash, PawnList and Viewport.Actor, so the reloaded
-   level's startup runs with no player, as at boot. This follows the cold
-   path on purpose. In an in-game travel, Viewport.Actor would still name the
-   old player during the new level's startup, until the new Login's
-   SetPlayer.
-3. It runs the LoadMap passes, then `loginPlayer()` again.
-4. It rebinds the InfoLink shell, live ConPlay, live DataLink and HUD to the
-   new player. The window host, player logs and FlagBase rebind inside
-   Login's spawn.
+1. `game.reset()` first runs `retirePlayer()`, which is LoadMap before it
+   loads anything (`0x1038c6c4..0x1038c731`). It sends `NotifyLevelChange`
+   to the viewport console, clears `Player.Player` and `Viewport.Actor`, and
+   runs `DestroyActor(oldPlayer)`. The old player's script `Destroyed` chain
+   runs, then `ADeusExPlayer::Destroy` outside a collection. That destroys
+   the FlagBase and SafeDestroys the root window tree.
+2. The host restores the map exports in place and makes the reloaded
+   `Level.Actors` the exports only. This corresponds to ResetLoaders plus
+   StaticAllocateObject's same-index replacement. Spawned actors (NPC
+   inventory and Shadows, the GameInfo graph, the Mission script, ConPlay
+   actors) are no longer `DestroyActor`ed by the host.
+3. LoadMap's `CollectGarbage(RF_Native)` purges everything the old level
+   spawned: every old-package actor is tagged `0x400`, and the non-actors
+   only those actors reached become unreachable. The purge releases their
+   registry slots in index order and deletes their FNames.
+4. The GameInfo spawn, the LoadMap passes and `loginPlayer()` run as at boot.
+   The new objects reuse the freed slots, highest first.
 
 Each reset therefore produces `JCDentonMale<n+1>`, `PlayerReplicationInfo<n+1>`,
-new subsystems, a fresh FlagBase and a new root window. The player's GRI is
-the reloaded game's, and `NumPlayers` is 1. Login's ResetPlayerToDefaults
-ring destruction reappears in the deferred-deletion chain, as at boot.
+new subsystems, a fresh FlagBase and a new root window, and releases the
+previous generation. The InfoLink shell, live ConPlay and DataLink, and the
+HUD rebind to the new player.
 
-Not modeled: that later collection. The original keeps at most the one
-retired generation that the viewport held. Play keeps every retired
-generation in its object registry and window heap. Nothing in the new level
-references them, but each Player start grows memory by about 5 MiB of heap.
-The same is true of the actors reset destroys without CleanupDestroyed
-releasing them. The purge itself also has missing parts:
+This replaces the 2026-09-25 model, which assumed that `Viewport.Actor`
+kept the retired player alive through LoadMap's collection. LoadMap nulls
+`Viewport.Actor` and destroys that player before the collection, and its
+`0x400` tag excludes every old-package actor. No retired generation survives
+the reset that retired it.
 
-- the object-index model's reachability walk;
-- the root window's SafeDestroy (XRootWindow has no recovered destroy family
-  yet, and the host heap never frees);
-- the GC-order Destroy/destructor passes.
-
-All three are needed before generations can be released faithfully.

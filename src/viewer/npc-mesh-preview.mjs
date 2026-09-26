@@ -111,7 +111,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
       .finally(()=>pending.delete(actor));
     pending.set(actor,task);
   };
-  const retired=new Map();
+  const retired=new WeakMap();
   const retire=(actor,preview)=>{
     preview.root.removeFromParent();preview.dispose();bindings.delete(actor);
     for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}

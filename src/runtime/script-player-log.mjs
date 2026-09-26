@@ -1,8 +1,11 @@
 /** Original CreateLogObject allocation/constructor; the installed AddLog and
  * SetLogText bytecode own list/text mutations. docs/script-player-log.md. */
-export function constructPlayerLog(object){
+export function constructPlayerLog(object,{destroyObjectBase}={}){
+  if(typeof destroyObjectBase!=='function')throw new Error('DeusExLog construction requires UObject::Destroy');
   object.nativeVtable=0x10179dfc;
   object.nativeVtable=0x10027ad0;
+  // Vtable 0x10027ad0 slot +0x24 is the UObject::Destroy thunk 0x1001aec0.
+  object.destroy=receiver=>destroyObjectBase(receiver);
   return object;
 }
 
@@ -14,7 +17,6 @@ export async function preparePlayerLogStore({runtime,assets,player}){
     'deusexrootwindow.clientmessage','hudlogdisplay.addlog']],
     [extension,['playerpawnext.clientmessage']],[core,['object.sprintf']]])for(const path of paths)
       await runtime.prepareFunction(asset,asset.exportsByPath.get(path));
-  const logs=new Set();
   const create=receiver=>{
     if(receiver!==player)throw new Error('CreateLogObject is bound only to the live player');
     const outer=runtime.playerNativeObject(player).outer;
@@ -24,8 +26,8 @@ export async function preparePlayerLogStore({runtime,assets,player}){
       validate:args=>args.cls===cls&&args.outer===outer&&args.template===null&&args.flags===0&&args.name==='None',
       initNativeProperties:()=>{},
     });
-    constructPlayerLog(runtime.instance(object).nativeObject);
-    logs.add(object);return object;
+    constructPlayerLog(runtime.instance(object).nativeObject,{destroyObjectBase:receiver=>runtime.destroyObjectBase(receiver)});
+    return object;
   };
   const previous=runtime.native;
   runtime.boundaryNatives.add(3010);
@@ -34,16 +36,9 @@ export async function preparePlayerLogStore({runtime,assets,player}){
     if(call.argumentCount!==0)throw new Error('CreateLogObject accepts no arguments');
     return create(call.receiver);
   };
-  return {logs,create,
+  return {create,
     // Host identity routing only; Login/startup owns the new player's fields.
     bindPlayer(next){runtime.instance(next);player=next;},
     enableMessages(){runtime.boundaryFunctions.delete('extension.playerpawnext.clientmessage');},
-    reset(){
-      runtime.namedReference(player,'FirstLog').set(null);
-      runtime.namedReference(player,'LastLog').set(null);
-      // No invented CriticalDelete implementation. Final native collection of
-      // these detached script log objects remains the documented boundary.
-      logs.clear();
-    },
   };
 }

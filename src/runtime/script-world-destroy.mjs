@@ -72,12 +72,21 @@ export function createWorldDestroyServices({ runtime, level, hash = null, dispat
     if (destroyLevel !== level) return false;
     if (!attached(receiver)) return false;
     if (level.editor) return false;
-    // The unresolved class/network decision at 0x10395c59-0x10395cd8 keys off
-    // APlayerPawn and UNetConnection, and the two unresolved level-owned hooks
-    // at ULevel+0x3c/+0x88 are driver objects. Standalone play with no demo
-    // recorder is the only state this wiring admits.
+    // The two unresolved level-owned hooks at ULevel+0x3c/+0x88 are driver
+    // objects. Standalone play with no demo recorder is the only state this
+    // wiring admits.
     if (level.netMode !== 0 || level.demoRecDriver !== null) return false;
-    if (isA(receiver, 'engine.pawn')) return false;
+    // 0x10395c59-0x10395cd8: an APlayerPawn whose Player (+0x5d4) IsA
+    // UNetConnection, with channel 0 (+0xe64) open and State (+0x60) not
+    // USOCK_Closed, closes that channel and returns false. A None Player (as
+    // LoadMap leaves the actor it dissociates) or a local viewport takes the
+    // normal path; other Pawns skip the test. Play admits only the player
+    // LoadMap retires: its NPC tick lists do not yet drop a destroyed pawn,
+    // and a live player's host scene is rebuilt only by that reload.
+    if (isA(receiver, 'engine.pawn')) {
+      if (receiver !== level.retiringPlayer) return false;
+      if (runtime.namedReference(receiver, 'Player').get() !== null) return false;
+    }
     // A Mover owns a brush model plus its own encroachment and base contract;
     // that destruction path is not recovered here.
     if (receiver.movingBrush || isA(receiver, 'engine.mover')) return false;

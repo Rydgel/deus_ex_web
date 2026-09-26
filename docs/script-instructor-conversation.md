@@ -239,12 +239,22 @@ The layout/material comparisons below establish specific native calculations,
 not whole-renderer fidelity (lighting, LOD and adaptive reflection subdivision
 remain open).
 
-Reset destroys active windows through Window.Destroy, destroys the ConPlay actor,
-clears player ownership, stops pending or playing browser speech, destroys history
-script properties/linker ownership, and restores authored conversation fields
-and flags. Native final GC remains the existing runtime boundary: destroyed
-objects can retain deferred registry slots. This is not save/load or map-travel
-flag/history persistence.
+A Player start follows the original reload
+([Player start collection](script-loadmap-gc.md)):
+
+* Active conversation windows go with the retired player's root window
+  tree, which `APlayerPawnExt::Destroy` SafeDestroys.
+* `ADeusExPlayer::Destroy` nulls `conHistory`.
+* LoadMap's collection releases the ConPlay actor and the history objects.
+  A ConHistory's Destroy is ConSys `DConHistory::Destroy` (`0x1000ca20`,
+  imported by DeusEx vtable `0x10027fe8`). It deletes each event from
+  `firstEvent` through its scalar deleting destructor, reading `next`
+  first, and then runs `UObject::Destroy`. The events' Destroy is
+  `UObject::Destroy`.
+* The host stops pending or playing browser speech and restores the authored
+  conversation fields and flags.
+
+This is not save/load or map-travel flag/history persistence.
 
 ### Host service inputs vs original evidence
 

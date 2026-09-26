@@ -53,11 +53,14 @@ level, and a `false` result makes the adapter raise its explicit
 unsupported-branch error. It refuses:
 
 * a different level container, an unattached identity, or an editor level;
-* `netMode != 0` or a non-null `demoRecDriver` — the unresolved class/network
-  decision at `0x10395c59-0x10395cd8` keys off `APlayerPawn` and
-  `UNetConnection`, and the two unresolved level-owned hooks at `ULevel+0x3c`
-  and `+0x88` are driver objects;
-* any `Engine.Pawn` subclass, for the same unresolved decision;
+* `netMode != 0` or a non-null `demoRecDriver` — the two unresolved
+  level-owned hooks at `ULevel+0x3c` and `+0x88` are driver objects;
+* any `Engine.Pawn` subclass except the player that LoadMap is retiring
+  (`level.retiringPlayer`, with its `Player` already None). The class/network
+  test at `0x10395c59-0x10395cd8` is resolved
+  ([Actor.Destroy](script-destroy.md)): a None `Player` takes the normal path.
+  Other pawns stay refused, because Play's NPC tick lists do not yet drop a
+  destroyed pawn, and only the reload rebuilds a live player's host scene;
 * any `Engine.Mover` or moving brush, whose brush model, encroachment and base
   contract are not recovered here.
 
@@ -124,6 +127,12 @@ the serialized `Touching[i]` fields, which is the reload-equivalent state. The
 live collision hash is rebuilt wholesale by the scene reset and is not touched
 by the ledger.
 
+The ledger records only serialized map exports, which the original reload
+replaces in place at the same index. Spawned actors, including the retired
+player that LoadMap destroys, are never ledgered: the reloaded `Level.Actors`
+leaves them out, and LoadMap's collection releases them
+([Player start collection](script-loadmap-gc.md)).
+
 ## Focused check
 
     node scripts/validate-world-destroy.mjs
@@ -132,7 +141,7 @@ It proves the authored route reaches `OrdersTrigger2`, that the only destruction
 callback its body reaches is `Destroyed`, that `EndTouch(other, 1)` clears the
 player side, that the actor leaves the collision hash and its `Level.Actors`
 slot, the `bDeleteMe` and `ObjectFlags` transitions, the deferred-chain head and
-`Deleted` link, that a repeated request is idempotent, that a Pawn is refused
-with the explicit unsupported-branch error, that Play continues past the old
+`Deleted` link, that a repeated request is idempotent, that a Pawn other
+than the retiring player is refused with the explicit unsupported-branch error, that Play continues past the old
 pause point, and that reset restores the map state so the next session
 reproduces the same destruction frame.

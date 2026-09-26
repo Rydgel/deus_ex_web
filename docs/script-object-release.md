@@ -260,8 +260,24 @@ free. It must not introduce an early pending-kill or pending-chain removal.
 
 The two final-destructor globals at `0x102a2644` and `0x101e5550` are still
 unnamed, and the complete destructor's reflected field cleanup is class
-specific. `UStruct::CleanupDestroyed`, reflected reference serialization,
-and the `CollectGarbage`/`PurgeGarbage` driver remain separate contracts. A
-host that cannot prove those gates and class cleanup hooks should stop before
-mutating the registry or freeing memory instead of silently emulating a
-partial release.
+specific. `UStruct::CleanupDestroyed` and reflected reference serialization
+remain separate contracts. A host that cannot prove those gates and class
+cleanup hooks should stop before mutating the registry or freeing memory
+instead of silently emulating a partial release.
+
+## Release on a Player start
+
+LoadMap's `CollectGarbage(RF_Native)` releases the retired level's objects
+through this destructor ([Player start collection](script-loadmap-gc.md)).
+It uses the live-game gate values (`0x102a2644` = 1, `0x101e5550` = 0).
+ConListItem (`0x10002ed0`) and DeusExTextParser (`0x10004820`) run their
+recovered deleting destructors. For every other class the purge runs the
+observable tail: `ConditionalDestroy` (a no-op after the purge's first pass),
+`destructScriptObject` and `freeScriptObject`. The class's native member
+teardown between them frees allocator storage the host does not model and
+touches no other UObject in the classes checked (`~XFlagBase` `0x1001b530`,
+`~APlayerPawnExt` `0x1001c150`, `~XRootWindow` `0x100059c0`).
+`ScriptRuntime.deleteObject` exposes the same tail for a Destroy override
+that deletes other objects, as `DConHistory::Destroy` does for its events. The
+freed slots reach GObjAvailable in purge order, and the next AddObject reuses
+the last one.

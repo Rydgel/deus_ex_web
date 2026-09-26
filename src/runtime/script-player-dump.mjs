@@ -1,7 +1,7 @@
 /** Original cold CreateDumpLocationObject/UDumpLocation construction.
  * Evidence and external config/file-manager leaves: docs/script-player-dump.md.
- * Saved-location file operations and native destruction remain unsupported. */
-export function constructPlayerDump(object,{read,write,getCurrentUser,findFiles}) {
+ * Saved-location file operations remain unsupported. */
+export function constructPlayerDump(object,{read,write,getCurrentUser,findFiles,destroyObjectBase,released}) {
   object.nativeVtable=0x10179dfc;
   const current={...read('currentDumpLocation')};
   for(const key of Object.keys(current))if(['mapname','gameversion','title','desc'].includes(key.split('.').at(-1).toLowerCase()))current[key]='';
@@ -17,8 +17,26 @@ export function constructPlayerDump(object,{read,write,getCurrentUser,findFiles}
   // fabricated initial scratch bytes are exposed by this host.
   object.dumpScratch={size:0x1220,initialized:false};
   write('dumpFileDirectory',[...findFiles('*.DMP',true,false)]);
-  object.destroy=()=>{throw new Error('UDumpLocation native file/scratch destruction is not linked');};
+  object.destroy=()=>destroyPlayerDump(object,{read,write,destroyObjectBase,released});
   return object;
+}
+
+/** UDumpLocation::Destroy 0x10015120 (vtable 0x10027f94 slot +0x24).
+ * CloseDumpFile 0x100159d0 closes a non-zero dumpFile (+0x9c) and then
+ * zeroes it, sets currentDumpLocationIndex (+0x8c) to -1 and zeroes
+ * dumpLocationCount (+0xa0). Each dumpFileDirectory (+0x7c) FString is
+ * emptied and destroyed before the array's count and capacity are zeroed
+ * (Realloc 12). player (+0xa4) is zeroed, GMalloc frees the scratch block
+ * held in currentDumpFileLocation (+0x28), which is zeroed, and
+ * UObject::Destroy runs last. */
+export function destroyPlayerDump(object,{read,write,destroyObjectBase,released}) {
+  if(typeof destroyObjectBase!=='function')throw new Error('UDumpLocation::Destroy requires UObject::Destroy');
+  if(read('dumpFile')!==0)throw new Error('UDumpLocation::CloseDumpFile of an open dump file is not linked');
+  write('dumpFileDirectory',[]);
+  write('player',null);
+  object.dumpScratch=null;
+  released?.(object.identity);
+  destroyObjectBase(object.identity);
 }
 
 export function hasSavedDumpLocation(state){return state.savedLocationFlag&255;}
@@ -62,6 +80,7 @@ export async function preparePlayerDumpStore({runtime,assets,player,findFiles,co
     constructPlayerDump(native,{
       read:name=>runtime.namedReference(object,name).get(),write:(name,value)=>runtime.namedReference(object,name).set(value),
       getCurrentUser:()=>config.getString('DeusEx.DumpLocation','CurrentUser','User.ini',64),findFiles,
+      destroyObjectBase:receiver=>runtime.destroyObjectBase(receiver),released:receiver=>objects.delete(receiver),
     });
     runtime.bindProperty(object,runtime.lookupMember(cls,'fields','currentDumpFileLocation'),{
       get(){throw new Error('DumpLocation scratch allocation has no script integer pointer representation');},

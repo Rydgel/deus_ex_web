@@ -88,7 +88,8 @@ Current explicit boundaries, all recorded rather than substituted:
   `GiveTo`/`AddInventory`/`SetBase` attachment, `AmmoName` ammo wiring and
   `SetupWeapon(false)`'s `Weapon = None` outcome, the `MoveActor` based-rider
   section as the items ride the landing pawn (`StandingCount` 3), per-item
-  ticking, and `ULevel::DestroyActor` cleanup on Player reset. See
+  ticking, and their release by the Player start collection
+  ([Player start collection](script-loadmap-gc.md)). See
   [NPC weapon startup](script-npc-weapon-startup.md) and
   `validate-npc-weapon-startup.mjs` / `validate-weapon-construction.mjs`.
 * ~~`engine.PlayerReplicationInfo` startup is unprepared; reached by

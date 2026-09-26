@@ -220,9 +220,10 @@ native records while preserving mutable typed slots. [FName allocation and
 deletion](script-names.md) now implement the recovered hash, lookup, flag and
 free-index behavior; a focused bridge check connects actual name marking,
 deletion and index reuse. Native object serializers and class destructors remain
-explicit services. A registry of fully loaded game/resource objects and the
-original native name-table initialization are still needed before this collector
-can run over the live game world. The [native class registration
+explicit services. Every Player start runs this collector as LoadMap's
+`CollectGarbage(RF_Native)` over Play's modeled registry and name table. That
+is a projection: loaded game/resource objects have no registry records, and
+the limits are recorded in [Player start collection](script-loadmap-gc.md). The [native class registration
 trace](script-native-class-registration.md) records the DLL-defined metaclass
 identities and inheritance needed for that loader. Its constructor translation
 now composes the recovered UObject queue insertion with UStruct/UClass's exact

@@ -45,11 +45,6 @@ export async function createLiveMissionRuntime({runtime, assets, level}) {
     throw new Error(`Mission00 layout changed: PropertiesSize ${graphSize?.toString?.(16)}`);
   const active = () => level.actors.find(a => a && runtime.instance(a).cls === missionClass
     && !runtime.instance(a).pendingKill) ?? null;
-  function destroy() {
-    const actor = active();
-    if (actor) runtime.destroyActor(actor, true);
-  }
-
   return {
     class: missionClass, levelInfoClass,
     active,
@@ -59,6 +54,5 @@ export async function createLiveMissionRuntime({runtime, assets, level}) {
       const actor = active();
       if (actor) runtime.processActorTick(actor, seconds, options);
     },
-    destroy,
   };
 }

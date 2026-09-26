@@ -45,11 +45,12 @@ The give itself is entirely original bytecode:
   `ParseRightClick` (the same path the nanokey ring uses), so the grid slot is
   assigned; the item's world mesh then hides through the actor mesh scene's own
   `bHidden` path.
-- **Reset lifecycle.** `resetNpcs` detaches items JC acquired in Play from the
-  Inventory list and restores the serialized pickups to the world un-owned (via
-  `store.clear`), so **Player start** returns the items and leaves only the
-  re-spawned key ring. The ammo a weapon pickup spawns is a play-time spawn and
-  is left orphaned (no Location, unlinked).
+- **Reset lifecycle.** The retired player's `Pawn.Destroyed` destroys the
+  items JC carried. The reload then restores the serialized pickups in place,
+  un-owned (via `store.clear`), so **Player start** returns the items and
+  leaves only the new player's key ring. The ammo a weapon pickup spawns is a
+  play-time spawn; LoadMap's collection releases it with the rest of the old
+  level ([Player start collection](script-loadmap-gc.md)).
 
 ## Carrying a picked-up item while walking
 

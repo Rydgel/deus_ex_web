@@ -30,7 +30,7 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
     if(pending.has(actor))return null;
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:index++,kernel,drawActor:true})
       .then(preview=>{
-        if(disposed||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){preview.dispose();return;}
+        if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){preview.dispose();return;}
         entries.set(actor,{mesh,preview});scene.add(preview.root);
       }).catch(cause=>{error=cause;}).finally(()=>pending.delete(actor));
     pending.set(actor,task);return null;
@@ -76,7 +76,8 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
       if(disposed)return;
       if(error)throw error;
       for(const {preview} of entries.values())preview.root.visible=false;
-      for(const [actor,entry] of entries)if(read(actor,'bDeleteMe')||!runtime.levelFor(currentPlayer()).actors.includes(actor)){
+      // A reload's collection releases the old generation's weapons.
+      for(const [actor,entry] of entries)if(runtime.isReleased(actor)||read(actor,'bDeleteMe')||!runtime.levelFor(currentPlayer()).actors.includes(actor)){
         scene.remove(entry.preview.root);entry.preview.dispose();entries.delete(actor);
       }
       summary.draws=0;summary.actor=null;summary.mesh=null;

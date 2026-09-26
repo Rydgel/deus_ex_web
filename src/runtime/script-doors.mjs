@@ -34,6 +34,7 @@ import { performActorPhysics } from './actor-physics.mjs';
 import { playerDistance } from './level-tick.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRotation } from './script-actor-physics.mjs';
+import { createLevelCollection } from './script-level-collection.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -418,17 +419,14 @@ export async function createScriptDoors({
   // opts 264 back out to exercise the real native.
   let liveConPlay=null;
   let liveMission=null;
+  let levelCollection=null,lastCollection=null;
   let loadMapGame=null;
   let playerLogin=null, preparedPlayerStartup=null, loggingIn=false;
-  // Actors the current player's Login spawned (the player, its PRI, Shadow and
-  // PostBeginPlay subsystem graph); a reload retires them with the old level.
-  const loginSpawned=new Set();
   // ULevel::SpawnPlayActor -> DeusExGameInfo.Login (docs/script-player-login.md).
   function loginPlayer(){
-    const from=level.actors.length;
     loggingIn=true;
     try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
-    finally{loggingIn=false;for(const actor of level.actors.slice(from))if(actor)loginSpawned.add(actor);}
+    finally{loggingIn=false;}
     playerStartup=preparedPlayerStartup.complete(playerActor);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
@@ -1402,30 +1400,20 @@ export async function createScriptDoors({
   // An actor whose startup reaches an explicit boundary — e.g. the armed NPCs'
   // Inventory SpawnActor inside InitializeInventory — is recorded and left out
   // of ticking instead of resuming a half-advanced state.
-  function resetNpcs(retired = new Set()) {
-    // Destroy every runtime-spawned actor first, in reverse spawn order, so
-    // Inventory.Destroyed -> Pawn.DeleteInventory / Weapon.Destroyed ->
-    // Owner.Weapon clear / SetBase(NULL) StandingCount-1 / SetOwner(NULL)
-    // LostChild all run while the owner pawns still hold their live state —
-    // exactly the recovered ULevel::DestroyActor order the original's level
-    // reload implies (docs/script-npc-weapon-startup.md "Reset lifecycle").
-    // This is also what fixes the measured spawned-Shadow leak (15->29->52).
-    for (const actor of [...npcSpawned].reverse()) {
-      if (!level.actors.includes(actor)) continue;
-      let instance = null;
-      try { instance = runtime.instance(actor); } catch { instance = null; }
-      if (!instance || instance.pendingKill) continue;
-      runtime.destroyActor(actor, false);
-    }
+  function resetNpcs({ reload = false } = {}) {
+    // A reload destroys no spawned actor: ResetLoaders(GLevel.Outer, 1, 0)
+    // detaches the map's exports and the new load replaces each one in place
+    // (StaticAllocateObject keeps its address and GObjObjects index), so the
+    // reloaded GLevel->Actors holds the map exports only. Everything the old
+    // level spawned — NPC inventory and Shadows, the GameInfo graph, the old
+    // player's graph — is purged by LoadMap's collection below, with no script
+    // event (docs/script-loadmap-gc.md). The cold load keeps the GameInfo its
+    // LoadMap already spawned.
     npcSpawned.clear();
     npcSpawnedOwner.clear();
     npcFailures.clear();
-    // Destruction must see the old world first. Now reload the authored map
-    // prefix. The previous player's graph does not survive the reload; the
-    // LoadMap GameInfo/Mutator/GameReplicationInfo stay only until the
-    // reload below tears them down.
-    const persistentTail = level.actors.filter(actor => actor && !initialActorSet.has(actor) && !retired.has(actor));
-    level.actors = [...initialActorArray, ...persistentTail];
+    level.actors = reload ? [...initialActorArray]
+      : [...initialActorArray, ...level.actors.filter(actor => actor && !initialActorSet.has(actor))];
     level.zoneLastRenderTimes?.fill(0);
     // Restore the serialized map state before any startup callback can observe
     // another actor — the same reload state the original reaches by loading
@@ -1510,12 +1498,11 @@ export async function createScriptDoors({
       identities.get(actor)?.store.clear();
     }
     clearStartupPawnList();
-    loadMapGame.reload();
-    // Everything destroyed so far — the previous run's spawned actors and its
-    // LoadMap GameInfo/Mutator/GameReplicationInfo — belongs to the unloaded
-    // level. A freshly loaded ULevel starts with an empty deferred-deletion
-    // chain, so the startup below sees the same chain as the first load.
+    // A freshly loaded ULevel starts with an empty deferred-deletion chain;
+    // what the old chain held belongs to the unloaded level.
     level.pendingDeleted = null;
+    if (reload) lastCollection = levelCollection.collect();
+    loadMapGame.reload();
     clearStartupTouching();
     // ULevel::IsServer (vtable +0x84) gates a client-only Role swap/destroy
     // pass; standalone netMode 0 is a server, so that pass never runs here.
@@ -1620,54 +1607,57 @@ export async function createScriptDoors({
       return level.hash;
     }});
 
+  // UGameEngine::LoadMap, before it loads anything (Engine 0x1038c6c4..
+  // 0x1038c731): NotifyLevelChange (vtable +0xc4, 0x1038c110) sends the first
+  // viewport's Console its NotifyLevelChange event; then for every client
+  // viewport, Actor.Player (+0x5d4) = None, Viewport.Actor (+0x30) = None and
+  // Actor.XLevel.DestroyActor(Actor, 0) (ULevel vtable +0x94). The old player's
+  // Destroyed chain runs in the old world, and its ConditionalDestroy reaches
+  // ADeusExPlayer::Destroy outside a collection. game.reset calls this before
+  // any host restore (docs/script-player-login.md, "Reset").
+  function retirePlayer() {
+    const viewports = level.engine.client.viewports;
+    const console = viewports[0] && runtime.namedReference(viewports[0], 'Console').get();
+    if (console) runtime.processEvent(console, 'NotifyLevelChange', []);
+    for (const viewport of viewports) {
+      const actor = runtime.namedReference(viewport, 'Actor').get();
+      // The original dereferences Actor (+0xac XLevel) without a test.
+      if (!actor) throw new Error('LoadMap viewport dissociation requires a viewport Actor');
+      runtime.namedReference(actor, 'Player').set(null);
+      runtime.namedReference(viewport, 'Actor').set(null);
+      level.retiringPlayer = actor;
+      // The InfoLink shell stores the windows it constructed; its merged
+      // lifecycle routes each destroy service by the window's storage owner.
+      try { infoLinkShellValue.withLifecycle(() => runtime.destroyActor(actor, false)); }
+      finally { level.retiringPlayer = null; }
+    }
+  }
+
   function reset() {
-    // Player start is a cold reload of this map, then SpawnPlayActor. The old
-    // player's Login graph (player, PRI, Shadow, subsystems) and everything it
-    // came to own belong to the unloaded level: LoadMap's CollectGarbage
-    // purges them. PlayerPawnExt::Destroy runs its GObjInGarbageCollection
-    // branch then, with no script Destroyed events, and nothing in the new
-    // level observes it (docs/script-player-login.md, "Reset").
-    const retired = new Set(loginSpawned);
-    loginSpawned.clear();
-    const ownedByRetired = actor => {
-      const seen = new Set();
-      for (let owner = actor; owner && !seen.has(owner); owner = safeOwner(owner)) {
-        if (retired.has(owner)) return true;
-        seen.add(owner);
-      }
-      return false;
-    };
-    for (const actor of level.actors) if (actor && !initialActorSet.has(actor) && ownedByRetired(actor)) retired.add(actor);
+    // Player start is a cold reload of this map, then SpawnPlayActor. The
+    // retired player was destroyed by retirePlayer; the reload below replaces
+    // the map's exports in place and LoadMap's collection purges everything
+    // the old level spawned (docs/script-player-login.md, "Reset").
     destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
     liveConPlay?.reset();
-    // Destroy the mission actor before the map reload so its reset-time
-    // destruction precedes the NPC startup's shadow destroys (it is re-spawned
-    // by DeusExLevelInfo.PostBeginPlay in the shared passes).
-    liveMission?.destroy();
     liveDataLink?.reset();
     faceConversations?.reset?.();
     for (const record of records) resetMover(record);
     // Restore fields; the shared passes below own all startup events.
     lights.reset();
-    // As at cold boot, the reloaded level's startup runs with no player: the
-    // old one leaves the collision hash, PawnList and Viewport.Actor first.
+    // As at cold boot, the reloaded level's startup runs with no player.
     playerScene.detachPlayerIdentity();
     // Map pawns restore their serialized state and re-run the LoadMap startup
     // chain. This must run after playerScene.reset rebuilt the pawn list;
     // game.reset orders it so.
-    resetNpcs(retired);
-    for (const actor of retired) identities.delete(actor);
+    resetNpcs({ reload: true });
     loginPlayer();
-    // The Play services follow the new player; the old HUD tree stays with
-    // the purged graph, and the new Possess built the new one.
+    // The Play services follow the new player; the old HUD tree went with the
+    // retired player's root window, and the new Possess built the new one.
     infoLinkShellValue.bindPlayer(playerActor);
     liveConPlay.bindPlayer(playerActor);
     liveDataLink.bindPlayer(playerActor);
     finishPlayerStartup();
-  }
-
-  function safeOwner(actor) {
-    try { return runtime.namedReference(actor, 'Owner').get() ?? null; } catch { return null; }
   }
 
   function finishPlayerStartup() {
@@ -2024,9 +2014,9 @@ export async function createScriptDoors({
     const accepted=baseDestroyActor(receiver,netForce);
     // Record only a request that actually cleared the saved Level.Actors slot;
     // the recovered gates can accept an already-deleting actor without one.
-    // Runtime-spawned actors (NPC inventory, Shadows) are never ledgered —
-    // reset must not reintroduce them as serialized map actors.
-    if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null&&identities.has(receiver))
+    // Only map exports are reloaded in place: spawned actors (NPC inventory,
+    // Shadows, the retired player) are never ledgered.
+    if(accepted&&saved.slot>=0&&level.actors[saved.slot]===null&&initialActorSet.has(receiver))
       destroyedActors.record(receiver,saved);
     return accepted;
   };
@@ -2095,6 +2085,12 @@ export async function createScriptDoors({
   const {createWindowHost}=await import('./script-window-host.mjs');
   windowHost=await createWindowHost({runtime,assets,player:playerActor});
   windowHost.install();
+  // LoadMap's collection of the unloaded level, run by every reload
+  // (docs/script-loadmap-gc.md). A released object leaves the host's maps.
+  levelCollection=createLevelCollection({runtime,level,viewports:level.engine.client.viewports,
+    transientPackage:runtime.actorLifecycle.construction.transientPackage,
+    packages:[runtime.conversationLifecycle?.packageRecord].filter(Boolean),
+    onReleased:identity=>{identities.delete(identity);windowHost.heap.forget(identity);}});
   // UViewport::Input (+0x60) exists before SpawnPlayActor; TravelPostAccept's
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
@@ -2133,7 +2129,7 @@ export async function createScriptDoors({
 
   finishPlayerStartup();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
-  return { reset, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
+  return { reset, retirePlayer, get lastCollection(){return lastCollection;}, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };

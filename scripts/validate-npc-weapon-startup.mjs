@@ -3,9 +3,10 @@
  * ScriptedPawn.InitializeInventory through original bytecode on their first
  * ProcessState tick, spawn their weapon/ammo/knife through the recovered
  * ULevel::SpawnActor, attach them (GiveTo -> AddInventory -> SetBase), fall,
- * land with StandingCount 3 and tick their items.  Player reset destroys the
- * spawned actors through the recovered ULevel::DestroyActor — no leaked
- * Level.Actors slots, no duplicates on the next run.
+ * land with StandingCount 3 and tick their items.  A Player start reload
+ * leaves the spawned actors out of the reloaded Level.Actors and LoadMap's
+ * collection releases them without script events — no leaked Level.Actors
+ * slots or objects, no duplicates on the next run (docs/script-loadmap-gc.md).
  *
  * UNATCOTroop2 is unarmed but receives a NanoKey from the authored
  * PickupDistributor's original PostPostBeginPlay before the first tick.
@@ -179,18 +180,16 @@ for (let run = 0; run < 3; run++) {
       `${label}: reset shadow count is identical across repeated runs (no leaked respawn)`);
     console.log(`run ${run} (${label}): ${items.length} spawned inventory actors, ${shadows} shadows, level.actors=${level.actors.length}`);
   }
-  // The previous run's NPC and distributor items were destroyed by the
-  // recovered ULevel::DestroyActor path during reset: their Level.Actors slots
-  // are clear and the objects are pending kill — never reintroduced. The old
-  // player's key ring leaves with its retired Login graph instead (the
-  // reload's garbage collection, not DestroyActor).
+  // The previous run's items belong to the unloaded level: the reloaded
+  // Level.Actors holds the map exports only, and LoadMap's collection purged
+  // and released them (the old player's key ring with the old player's graph)
+  // — never reintroduced, never destroyed through DestroyActor.
   if (previousItems) {
     for (const item of previousItems) {
       assert.equal(level.actors.includes(item), false,
         `${item.name}: previous-run item left the live Level.Actors set`);
-      if (instance(item).cls.record.key === 'deusex.nanokeyring') continue;
-      assert.equal(instance(item).pendingKill, true,
-        `${item.name}: previous-run item is pending kill`);
+      assert.throws(() => instance(item), /released/,
+        `${item.name}: previous-run item was released by the reload's collection`);
     }
   }
   previousItems = items;

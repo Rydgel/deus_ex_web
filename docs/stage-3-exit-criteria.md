@@ -303,9 +303,13 @@ full player graph. The 201 distinct natives reached include the newly
 recovered InitRootWindow, ResetKeyboard (through the InputExt ResetConfig),
 CheckFlag, CreateDumpLocationObject and GETPING/StringToInt. Esc pauses the
 level through the PRI's PlayerName and ULevel::Tick's paused branch. Player
-start reloads the map and logs in `JCDentonMale<n+1>`. The original keeps
-the retired player alive through Viewport.Actor until a later garbage
-collection. Play never runs that collection: every retired generation stays
-in memory, about 5 MiB per reset. In the parallel sweep this pushed the gate
-past the runner's 6144 MiB cap (6191 MiB); it is red either way. See
-[player login](script-player-login.md).
+start reloads the map and logs in `JCDentonMale<n+1>`.
+
+Update 2026-09-26: LoadMap destroys the old player before the load, and its
+own collection purges the whole retired generation
+([Player start collection](script-loadmap-gc.md)). Play now runs that
+retirement and collection. The registry, FName table and window heap stay
+constant across resets. The gate keeps the same results. Its standalone
+peak fell from 2832 MiB to about 2.0–2.5 GiB, and in the 4-job sweep it
+completes at a 5.4 GiB runner footprint instead of being killed at the cap.
+It stays red for the other open items.

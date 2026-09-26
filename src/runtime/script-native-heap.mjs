@@ -14,10 +14,14 @@
  * back. FString / FName slots keep the script value in a side table keyed by
  * the slot address (their raw Data/Num/Max words are not modelled).
  *
- * This is storage, not behavior: allocation policy (a bump allocator that
- * never frees) and handle numbering are host choices with no original
- * counterpart, and no native body depends on the numeric addresses except
- * through identity. See docs/script-window-host.md.
+ * This is storage, not behavior: allocation policy and handle numbering are
+ * host choices with no original counterpart, and no native body depends on
+ * the numeric addresses except through identity. The original frees through
+ * GMalloc (a window's deleting destructor, FArray::Realloc); `free`/`freeRaw`
+ * return a range to a first-fit list, zeroed, so later allocations reuse it.
+ * A stale pointer into a freed range then fails at the boundary, or resolves
+ * to whatever the range holds now, as a dangling native pointer would.
+ * See docs/script-window-host.md.
  */
 
 const HEAP_BASE = 0x21000000;
@@ -47,25 +51,54 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   const bytes = new Uint8Array(capacity), view = new DataView(bytes.buffer);
   let next = 16;
   const objects = new Map();          // object -> {address, size}
-  const starts = [];                  // sorted [address, size, object]
   const handles = new Map();          // opaque value -> address
   const byAddress = new Map();        // address -> object (objects and handles)
   const side = new Map();             // absolute slot address -> string/name value
+  const blocks = new Map();           // live allocation address -> byte count
+  const freeRanges = [];              // address-sorted [offset, size], zero-filled
+  const released = new WeakSet();     // freed object images
   let nextHandle = HANDLE_BASE;
 
   function allocRaw(size, alignTo = 16) {
     if (!Number.isInteger(size) || size < 0) fail('Native heap allocation requires a byte size', {size});
+    const length = Math.max(size, 1);
+    for (let i = 0; i < freeRanges.length; i++) {
+      const [start, available] = freeRanges[i];
+      const offset = (start + alignTo - 1) & ~(alignTo - 1);
+      if (offset + length > start + available) continue;
+      const tail = start + available - (offset + length);
+      const pieces = [];
+      if (offset > start) pieces.push([start, offset - start]);
+      if (tail > 0) pieces.push([offset + length, tail]);
+      freeRanges.splice(i, 1, ...pieces);
+      blocks.set(HEAP_BASE + offset, length);
+      return HEAP_BASE + offset;
+    }
     next = (next + alignTo - 1) & ~(alignTo - 1);
     const offset = next;
-    next += Math.max(size, 1);
+    next += length;
     if (next > capacity) fail('Native heap exhausted', {size, capacity});
+    blocks.set(HEAP_BASE + offset, length);
     return HEAP_BASE + offset;
   }
 
-  function insertStart(address, size, object) {
-    let lo = 0, hi = starts.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid][0] < address) lo = mid + 1; else hi = mid; }
-    starts.splice(lo, 0, [address, size, object]);
+  /** Release an allocRaw block: zero it, drop its string slots and merge the
+   * range into the free list. */
+  function freeRaw(address) {
+    const length = blocks.get(address >>> 0);
+    if (length === undefined) fail(`Native heap has no allocation at 0x${(address >>> 0).toString(16)}`, {address});
+    blocks.delete(address >>> 0);
+    const offset = (address >>> 0) - HEAP_BASE;
+    bytes.fill(0, offset, offset + length);
+    for (const at of side.keys()) if (at >= address && at < address + length) side.delete(at);
+    let lo = 0, hi = freeRanges.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (freeRanges[mid][0] < offset) lo = mid + 1; else hi = mid; }
+    const range = [offset, length];
+    freeRanges.splice(lo, 0, range);
+    const after = freeRanges[lo + 1];
+    if (after && range[0] + range[1] === after[0]) { range[1] += after[1]; freeRanges.splice(lo + 1, 1); }
+    const before = freeRanges[lo - 1];
+    if (before && before[0] + before[1] === range[0]) { before[1] += range[1]; freeRanges.splice(lo, 1); }
   }
 
   /** Register `object` as a native byte image of `size` bytes (zero-filled). */
@@ -81,8 +114,28 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
     const address = allocRaw(size);
     objects.set(object, {address, size});
     byAddress.set(address, object);
-    insertStart(address, size, object);
     return object;
+  }
+
+  /** Release a native object image; its address no longer resolves, and the
+   * identity cannot come back as an opaque handle. */
+  function free(object) {
+    const record = objects.get(object);
+    if (!record) fail('Native heap free requires an allocated object', {object});
+    objects.delete(object);
+    byAddress.delete(record.address);
+    released.add(object);
+    freeRaw(record.address);
+  }
+
+  /** Drop the opaque handle of an identity that no longer exists (a purged
+   * UObject), so the heap stops retaining it. A slot that still holds the
+   * handle address then fails at the boundary instead of reviving it. */
+  function forget(value) {
+    const address = handles.get(value);
+    if (address === undefined) return;
+    handles.delete(value);
+    byAddress.delete(address);
   }
 
   function isAllocated(object) { return objects.has(object); }
@@ -90,6 +143,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   function handleFor(value) {
     let address = handles.get(value);
     if (address === undefined) {
+      if (released.has(value)) fail('Native heap object was freed', {object: value});
       if (typeof external === 'function') {
         const supplied = external(value, api);
         if (supplied !== undefined) {
@@ -194,7 +248,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   };
 
   const api = {
-    bytes, allocRaw, allocate, isAllocated, addressOf, objectAt, read, write, mem, copyBytes,
+    bytes, allocRaw, freeRaw, allocate, free, forget, isAllocated, addressOf, objectAt, read, write, mem, copyBytes,
     objectAddress: object => {
       const record = objects.get(object);
       if (!record) fail('Native heap object has no address', {object});

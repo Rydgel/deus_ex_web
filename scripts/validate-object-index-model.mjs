@@ -6,7 +6,7 @@
  * from the measured registry state. Model and evidence: docs/boot-replay.md,
  * docs/script-object-release.md, docs/script-sound.md.
  *
- * This checks three things purely from the capture (no game install needed):
+ * This checks four things purely from the capture (no game install needed):
  *  1. the capture is a valid AddObject state (dense from 0 with exactly the
  *     freed holes, nothing at or above the high-water count);
  *  2. seeding a ScriptObjectRegistry at that measured state and allocating
@@ -14,7 +14,10 @@
  *     slots the capture left free;
  *  3. the capture's own tail is runtime spawns (the highest slots because they
  *     were appended last), while pre-placed map actors sit far below -- the
- *     construction-order evidence that disproves N0 + exportIndex.
+ *     construction-order evidence that disproves N0 + exportIndex;
+ *  4. a Player start reload's LoadMap collection releases runtime spawns in
+ *     index order and AddObject reuses the highest slot first, never a
+ *     captured one (docs/script-loadmap-gc.md).
  */
 import assert from 'node:assert/strict';
 import { loadOriginalGObjects } from './original-gobjects.mjs';
@@ -67,6 +70,51 @@ assert.ok(switchIndex < capture.count - 100, 'the pre-placed switch sits below t
 // per class) resolves to null so a spawn falls through to its modeled slot.
 assert.equal(capture.indexFor('Function', 'Tick'), null);
 
+// -- 4. A Player start reload releases runtime spawns and reuses their slots --
+// LoadMap's collection (docs/script-loadmap-gc.md) runs PurgeGarbage over the
+// measured registry state: the second pass appends each freed index to
+// GObjAvailable in index order, so the next AddObject takes the highest one.
+// Captured (pre-placed) slots are never candidates.
+{
+  const {collectLoadMapGarbage} = await import('../src/runtime/script-loadmap-gc.mjs');
+  const {destructScriptObject, freeScriptObject} = await import('../src/runtime/script-object-release.mjs');
+  const reloaded = seedScriptObjectRegistry({count: capture.count, freeIndices: capture.freeIndices});
+  // The map package is measured (Package.00_Training) and outside the purge.
+  const pkg = {identity: {name: '00_Training'}, index: capture.indexFor('Package', '00_Training'), outer: null, flags: 0};
+  assert.equal(pkg.index, 34281);
+  const record = (nameIndex, outer, actor) => {
+    // linkerIndex is +0x14 as UObject::Destroy leaves it: the Outer's index,
+    // which UnhashObject needs to find the hash bucket.
+    const object = {identity: {}, index: -1, nameIndex, outer, hashNext: null, flags: 0,
+      linkerIndex: outer.index, stateFrame: null, actor};
+    object.identity.record = object;
+    reloaded.add(object);
+    return object;
+  };
+  const gameInfo = record(10, pkg, true), player = record(11, pkg, true), shadow = record(12, pkg, true);
+  const flagBase = record(13, player, false);
+  assert.deepEqual([gameInfo, player, shadow, flagBase].map(object => object.index), [42156, 42167, 42168, 42169]);
+  const unhashed = [];
+  const release = {gates: {[0x102a2644]: 1, [0x101e5550]: 0}, registry: reloaded,
+    isValid: object => reloaded.objects[object.index] === object, conditionalDestroy: () => {},
+    freeStateFrame: () => {}, freeObject: object => { object.released = true; },
+    warning: event => unhashed.push(event)};
+  const result = collectLoadMapGarbage({
+    registry: reloaded, levelPackage: pkg, levelActors: [], recordOf: identity => identity.record ?? null,
+    isActor: object => object.actor === true, rootArray: [], serialize: () => {},
+    conditionalDestroy: object => { object.flags |= 0x00800000; },
+    finalDelete: object => { destructScriptObject(object, release); freeScriptObject(object, release); },
+    setGarbageCollecting: () => {},
+  });
+  assert.deepEqual(result.eliminated.map(object => object.index), [42156, 42167, 42168]);
+  assert.deepEqual(result.available, [42156, 42167, 42168, 42169]);
+  assert.deepEqual(unhashed, [], 'each purged object left its own hash bucket');
+  for (const index of result.available) assert.equal(present.has(index), false);
+  const reuse = [0, 1].map(nameIndex => reloaded.add({index: -1, nameIndex, outer: null, hashNext: null}));
+  assert.deepEqual(reuse, [42169, 42168]);
+  assert.equal(reloaded.objects.length, capture.count + 3, 'the reload does not grow GObjObjects');
+}
+
 // -- Sound-path input: both index sources feed the same channel-id formula ----
 // PlaySound forms its channel id as (Index << 4) + (Slot << 1) + bNoOverride
 // (docs/script-sound.md; the formula itself is validated in
@@ -79,4 +127,5 @@ assert.equal(channelId(spawned[1], 1, 0), (42167 << 4) + 2); // a modeled spawn 
 console.log(`Global-index model validated against the live capture: count ${capture.count}, ` +
   `freed slots ${JSON.stringify(capture.freeIndices)}; the seeded registry reused ${spawned[0]} then ` +
   `appended ${spawned.slice(1).join(', ')} into free slots. Runtime-spawn tail: ${tail.slice(0, 4).join(', ')}...; ` +
-  `pre-placed LightSwitch0 measured at ${switchIndex}. Channel id from a measured index: 547874.`);
+  `pre-placed LightSwitch0 measured at ${switchIndex}. Channel id from a measured index: 547874. ` +
+  `A reload's LoadMap purge freed those four slots in index order and reused the highest first.`);

@@ -41,12 +41,10 @@ export async function prepareLoadMapGame({runtime, assets, level, levelInfo, pre
       return game;
     },
     reload(){
-      if (initialized) {
-        for (const actor of [...actors].reverse())
-          if(level.actors.includes(actor) && !runtime.instance(actor).pendingKill)
-            runtime.destroyActor(actor,true);
-        actors.clear(); game=null; initialized=false;
-      }
+      // A reload is not a DestroyActor: the previous GameInfo, Mutator and
+      // GameReplicationInfo belong to the unloaded level, which LoadMap's
+      // collection has already purged (docs/script-loadmap-gc.md).
+      if (initialized) { actors.clear(); game=null; initialized=false; }
       write(levelInfo,'bBegunPlay',false);write(levelInfo,'bStartup',false);
       const actor=this.spawn();write(levelInfo,'Game',actor);return actor;
     },

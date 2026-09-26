@@ -91,7 +91,11 @@ frames=0;
 while(events.length===firstEventCount&&frames++<240)game.tick(1/120,input);
 assert.equal(events.length,firstEventCount+1,'reset permits the authored one-shot trigger in the new session');
 assert.equal(events.at(-1).kind,'started');
-assert.notEqual(runtime.namedReference(player,'dataLinkPlay').get(),play,
+// The reload destroyed the old player (LoadMap's viewport dissociation) and
+// its collection released it; the new session belongs to the new Login.
+assert.notEqual(game.player.collisionActor,player,'Player start logs a new player in');
+assert.throws(()=>runtime.instance(player),/released/,'the retired player was released by the reload');
+assert.notEqual(runtime.namedReference(game.player.collisionActor,'dataLinkPlay').get(),play,
   'the new session spawns a fresh DataLinkPlay object');
 const sessionShell=await game.doors.scriptRuntime.infoLinkShell();
 assert.ok(sessionShell.object&&![firstShell.object,doorShell.object].includes(sessionShell.object),

@@ -59,13 +59,15 @@ export async function prepareConversationBinding(runtime, level) {
   const resolved = construction.internName(String(canonicalOuter.name ?? canonicalOuter.path));
   const nativeOuter = {
     identity: canonicalOuter, index: -1, hashNext: null, stateFrame: null,
-    linker: null, linkerIndex: -1, outer: null,
+    linker: null, linkerIndex: -1, outer: null, flags: 0,
     name: resolved.name, nameIndex: resolved.index,
     objectClass: runtime.resources.nativeClass('Core.Package'),
   };
   registry.add(nativeOuter);
 
   runtime.conversationLifecycle = {
+    // The package record ConListItems name as Outer; it outlives a reload.
+    packageRecord: nativeOuter,
     load: request => runtime.loadPreparedDynamicObject({
       classRef, outer: request.outer, name: request.path,
       filename: request.filename, flags: request.flags, sandbox: request.sandbox,

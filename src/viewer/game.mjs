@@ -214,6 +214,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       hud?.tick(dt);
     },
     reset() {
+      // LoadMap's first step, in the old world: the viewport's player is
+      // dissociated and destroyed before anything reloads.
+      doors.scriptRuntime?.retirePlayer();
       // Reseed before doors.reset() replays NPC startup: SpawnShadow/AttachDecal
       // and startup natives draw from the shared stream, so the seed must be
       // restored first for reset runs to replay one identical stream.

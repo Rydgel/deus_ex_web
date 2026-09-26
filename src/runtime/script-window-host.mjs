@@ -307,7 +307,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     setGlobal: (name, value) => globals.set(name, value),
     boundary: message => boundary(message),
     uobjectConstructor: () => {},
+    // Host windows are not GObjObjects records, so neither the collector's
+    // root array nor the root-window list membership reaches the Core GC.
     addToRoot: () => {},
+    removeFromRoot: () => {},
     isA: (win, key) => { for (let c = runtime.instance(win).cls; c; c = c.base) if (c.record.key === key) return true; return false; },
     setPawnRootWindow: (pawn, root) => runtime.namedReference(pawn, 'rootWindow').set(root),
     setPawnField: (pawn, name, value) => runtime.namedReference(pawn, name).set(value),
@@ -327,11 +330,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     construct: (o, off) => { W.setU32(o, off, 0); W.setU32(o, off + 4, 0); W.setU32(o, off + 8, 0); },
     num: (o, off) => W.i32(o, off + 4),
     data: (o, off) => W.u32(o, off),
+    // FArray::Realloc: GMalloc->Realloc moves the data and frees the old block
+    // (a zero capacity frees it outright).
     realloc(o, off, elementSize) {
       const max = W.i32(o, off + 8), num = W.i32(o, off + 4), old = W.u32(o, off);
-      if (max <= 0) { W.setU32(o, off, 0); return; }
+      if (max <= 0) { W.setU32(o, off, 0); if (old) heap.freeRaw(old); return; }
       const address = heap.allocRaw(max * elementSize);
-      if (old) heap.copyBytes(address,old,Math.min(num,max)*elementSize);
+      if (old) { heap.copyBytes(address,old,Math.min(num,max)*elementSize); heap.freeRaw(old); }
       W.setU32(o, off, address);
     },
     empty(o, off, elementSize, slack = 0) { W.setI32(o, off + 4, 0); W.setI32(o, off + 8, slack); W.farray.realloc(o, off, elementSize); },
@@ -982,6 +987,27 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       },
       destructor: win => { W.farray.empty(win, 0x17c, 4); tabGroupTables(win); },
     },
+    // XRootWindow::CleanUp 0x10039240: unlink this root from the root-window
+    // list (global 0x100aa8f8, next +0x58c; the removed root keeps its own
+    // next), clear the pawn's rootWindow (+0x894) only while it still names
+    // this root, RemoveFromRoot, then XModalWindow::CleanUp. ~XRootWindow
+    // 0x100059c0 has no root-only members: ~XModalWindow's +0x17c table, then
+    // ~XTabGroupWindow's (its Destroy 0x10039320 is XWindow::Destroy).
+    'extension.rootwindow': {
+      members: win => {
+        let previous = null, current = W.global('rootWindowList');
+        while (current && current !== win) { previous = current; current = W.ptr(current, T.ROOT.nextRoot); }
+        if (current) {
+          if (previous) W.setPtr(previous, T.ROOT.nextRoot, W.ptr(win, T.ROOT.nextRoot));
+          else W.setGlobal('rootWindowList', W.ptr(win, T.ROOT.nextRoot));
+        }
+        const pawn = W.ptr(win, T.ROOT.parentPawn);
+        if (pawn && runtime.namedReference(pawn, 'rootWindow').get() === win) W.setPawnRootWindow(pawn, null);
+        W.removeFromRoot(win);
+        DESTROY_FAMILIES['extension.modalwindow'].members(win);
+      },
+      destructor: win => DESTROY_FAMILIES['extension.modalwindow'].destructor(win),
+    },
   };
   function tabGroupTables(win) { W.farray.empty(win, 0x14c, 4); W.farray.empty(win, 0x158, 4); }
   function tabGroupCleanUp(win) {
@@ -1010,7 +1036,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // XGC deleting destructor -> ~XGC 0x10002c70 -> XGC::Destroy 0x10026d40 for
   // a window's own (unpushed) GC: PopGC(0), then every free-list node is
   // unlinked and deleted, with a GLog warning past 16. Host GCs have no
-  // registry slot and the host heap never frees.
+  // registry slot; operator delete returns each node and the GC image to the
+  // heap.
   function destroyGc(gc) {
     const Lg = gcMemory(gc, gcServices), base = Lg.base;
     if (Lg.read(base + GC.owner, 'u32') !== 0) boundary('Destroying a pushed XGC node is not recovered');
@@ -1018,12 +1045,17 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     let count = 0;
     for (let node = Lg.read(base + GC.freeList, 'u32'); node; node = Lg.read(base + GC.freeList, 'u32')) {
       Lg.write(base + GC.freeList, 'u32', Lg.read(node + GC.stackTop, 'u32'));
+      heap.freeRaw(node);
       count++;
     }
     if (count > 16) boundaryLog.push({log: 'GLog', text: `***WARNING: GC contains an abnormally large GC stack! (${count})`});
+    heap.free(gc);
   }
   const destroyServices = {
     ...rawServices,
+    // The adapter's trace hook; the InfoLink shell's merged lifecycle routes
+    // it by owner, so host windows must not fall through to the shell's log.
+    onEvent: () => {},
     setVisibility: ({object, visible}) => setVisibility(object, visible),
     setSelectability: ({object, selectable}) => T.setSelectability(W, object, selectable),
     processScript: ({object, event, parameters, thirdArgument}) => {
@@ -1036,6 +1068,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XWindow::CleanUp frees each timer node through GMalloc->Free.
     freeGc: ({object}) => {
       if (!timerNodes.delete(object)) boundary('Window timer list release reached a node the timer allocator did not create');
+      heap.free(object);
     },
     destroyGc: ({object}) => destroyGc(object),
     // The whole scalar deleting destructor: the family members after its own
@@ -1049,6 +1082,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       conditionalDestroyWindow(object);
       destroyed.add(object);
       families.delete(object);
+      heap.free(object);
     },
   };
   function safeDestroy(win) { return safeDestroyWindowNative(win, destroyServices); }

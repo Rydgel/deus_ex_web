@@ -133,7 +133,6 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     read:(o,k)=>sounds.has(o)?sounds.get(o)[k]:o[k],loadSpecial:data=>{
       if(!(data.array.data instanceof Uint8Array))throw new Error('Speech bytes are not prepared');
     },log:message=>{throw new Error(message);}}};
-  const histories=new Set();
   function history(isEvent){
     const cls=isEvent?historyEventClass:historyClass;
     // Preplaced player belongs to the loaded level's package, as in the map.
@@ -147,8 +146,20 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     native.nativeVtable=isEvent?0x100135bc:0x10013568;
     for(const field of isEvent?['next']:['firstEvent','lastEvent','next'])set(object,field,null);
     native.nativeVtable=isEvent?0x1002803c:0x10027fe8;
-    native.destroy=receiver=>runtime.destroyObjectBase(receiver);
-    histories.add(object);return object;
+    // ConHistoryEvent 0x1002803c slot +0x24 is UObject::Destroy (thunk
+    // 0x1001aec0). ConHistory 0x10027fe8 slot +0x24 imports ConSys
+    // DConHistory::Destroy 0x1000ca20: it deletes each event from firstEvent
+    // (+0x50) through its scalar deleting destructor, reading next (+0x44)
+    // first, leaves firstEvent set and then runs UObject::Destroy.
+    native.destroy=isEvent?receiver=>runtime.destroyObjectBase(receiver):receiver=>{
+      for(let event=get(receiver,'firstEvent');event;){
+        const next=get(event,'next');
+        runtime.deleteObject(event);
+        event=next;
+      }
+      runtime.destroyObjectBase(receiver);
+    };
+    return object;
   }
   let activeAudio=null;
   function handleNative(call){
@@ -174,21 +185,14 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     }
     return {handled:false};
   }
+  // A reload retires the whole conversation state with the old player: its
+  // windows went with the old root window (APlayerPawnExt::Destroy), and the
+  // ConPlay actors and ConHistory objects are purged by LoadMap's collection
+  // (docs/script-loadmap-gc.md). Only the host's own tracking is dropped here.
   function reset(){
-    for(const play of spawned){
-      if(runtime.instance(play).pendingKill)continue;
-      const win=get(play,'conWinFirst');
-      if(win&&!shell.isDestroyed(win))shell.withLifecycle(()=>runtime.callFunction(runtime.lookup(win,'Destroy'),win));
-      runtime.destroyActor(play,true);
-    }
-    set(player,'conPlay',null);set(player,'conHistory',null);
-    // Match the runtime's deferred collection boundary: release script-owned
-    // fields and linker ownership now; final native GC is not implemented.
-    for(const object of histories)runtime.conditionalDestroy(object);
-    histories.clear();
     if(activeAudio)onSpeech?.({kind:'stop',id:activeAudio.id});activeAudio=null;
   }
-  return {handleNative,reset,spawned,sounds,histories,
+  return {handleNative,reset,spawned,sounds,
     // Call reset against the old player before adopting the next Login result.
     bindPlayer(next){runtime.instance(next);player=next;},
     withLifecycle:fn=>shell.withLifecycle(fn),

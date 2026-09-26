@@ -199,11 +199,23 @@ if(target==='MedicalBot'){
   const subtree=[];
   const collect=win=>{subtree.push(win);for(let child=W.ptr(win,0x140);child;child=W.ptr(child,0x144))collect(child);};
   collect(area);
-  W.native.safeDestroy(area);
+  // Operator delete returns each image to the heap after its deleting
+  // destructor; read the destructed fields at that point.
+  const deleted=new Map(),free=W.heap.free;
+  W.heap.free=object=>{
+    if(subtree.includes(object))deleted.set(object,object===scale
+      ?{parent:W.ptr(object,0x138),labels:W.i32(object,0x26c),format:W.heap.read(object,0x1dc,'string')}
+      :{parent:W.ptr(object,0x138)});
+    return free(object);
+  };
+  try{W.native.safeDestroy(area);}finally{W.heap.free=free;}
   assert.ok(subtree.length>=10,'real scroll subtree includes all native families');
-  for(const win of subtree)assert.equal(host.isDestroyed(win),true,'recursive cleanup destroys every descendant');
-  assert.equal(W.ptr(area,0x138),null,'destroyed area is unlinked from its parent');
-  assert.equal(W.i32(scale,0x26c),0,'scale label array is empty');
-  assert.equal(W.heap.read(scale,0x1dc,'string'),'','scale format string is destroyed');
+  for(const win of subtree){
+    assert.equal(host.isDestroyed(win),true,'recursive cleanup destroys every descendant');
+    assert.ok(deleted.has(win)&&!W.heap.isAllocated(win),'operator delete released every descendant image');
+  }
+  assert.equal(deleted.get(area).parent,null,'destroyed area is unlinked from its parent');
+  assert.equal(deleted.get(scale).labels,0,'scale label array is empty');
+  assert.equal(deleted.get(scale).format,'','scale format string is destroyed');
 }
 console.log(`window-baseline-play: ${target} completes its original Set*Bot path; the raise-arm sound is retained as a deferred Stage-4 effect`);

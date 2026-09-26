@@ -88,15 +88,19 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
   await prepare(runtime,engine,'Inventory.Pickup.EndState');
 
   const registry=new ScriptObjectRegistry();
-  const none={index:0,flags:0,hashNext:null,text:'None'};
+  // FName::StaticInit hardcodes None as entry 0 with flags 0x04000400
+  // (Core 0x1014bc26..0x1014bc3d); the collector's name pass skips 0x04000000.
+  const none={index:0,flags:0x04000400,hashNext:null,text:'None'};
+  // FName::DeleteEntry frees the entry through GMalloc; the host entry record
+  // is released with its GNames slot.
   const names=createScriptNames({names:[none],freeIndices:[],buckets:Array(0x1000).fill(null),
-    allocator:{free:()=>{throw new Error('Live DataLink FName release is outside the selected lifecycle');}}});
+    allocator:{free:()=>{}}});
   names.buckets[names.hashBucket(none.text)]=none;
-  const outer={identity:{},index:-1,name:'TrainingRuntime',outer:null};
-  const nativeLevel={identity:{},index:-1,name:'MyLevel',outer};
+  const outer={identity:{},index:-1,name:'TrainingRuntime',outer:null,flags:0};
+  const nativeLevel={identity:{},index:-1,name:'MyLevel',outer,flags:0};
   // UObject::GetTransientPackage (Core 0x10102450): the outer execNew uses
   // for a None Outer. Its index is this host registry's, not a measured one.
-  const transientPackage={identity:{},index:-1,name:'Transient',outer:null};
+  const transientPackage={identity:{},index:-1,name:'Transient',outer:null,flags:0};
   for(const object of [outer,nativeLevel,transientPackage]){
     object.nameIndex=names.intern(object.name).index;registry.add(object);
   }
@@ -112,7 +116,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
     validateSpawn:args=>args.level===level,
     construction:{
       validate:args=>args.outer===outer&&args.template===null,
-      registry,findObject:lookup.findObject,internName:name=>names.intern(name),
+      registry,names,findObject:lookup.findObject,internName:name=>names.intern(name),
       initNativeProperties:object=>{
         object.auxiliary=null;
         runtime.instance(object.identity).sleepTimeLeft=0;

@@ -126,6 +126,15 @@ object-construction boundary retain both the resolved FName index and its
 canonical spelling. The GC should call `deleteEntry` only after its native
 flag gate has excluded `0x04000000` entries.
 
+`FName::StaticInit` (`0x1014bbc0`) hardcodes `None` as entry 0 with flags
+`0x04000400` (`0x1014bc26..0x1014bc3d`) and the following hardcoded entries
+with `0x04000000`. Play's live name table (`prepareLiveActorSpawnWorld`)
+seeds its `None` entry with those flags. Every Player start's LoadMap
+collection runs PurgeGarbage's name pass over the table, so the unique names
+of the released objects are deleted and their indices reused
+([Player start collection](script-loadmap-gc.md)). The table's GMalloc free is
+a host no-op, because the entry record is released with its GNames slot.
+
 ## Validation and boundaries
 
 `test/script-names.test.mjs` exercises the recovered hash bucket, unlink and

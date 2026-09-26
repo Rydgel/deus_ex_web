@@ -51,8 +51,19 @@ has not been established. The cold Login branch does not inspect those names.
 FFrame.Code and writes that result. The installed image's initial byte is
 zero. This is process state, not object state or a config-derived flag.
 SaveLocation/LoadLocation and persistence are outside this cold constructor
-slice. The original DumpLocation Destroy/file/scratch release path is also
-unimplemented and explicitly refused by the draft module.
+slice.
+
+`UDumpLocation::Destroy` (`0x10015120`, vtable `0x10027f94` slot `+0x24`) is
+implemented, because a Player start's collection reaches it for the retired
+player's DumpLocation ([Player start collection](script-loadmap-gc.md)).
+First `CloseDumpFile` (`0x100159d0`) closes a non-zero `dumpFile` (`+0x9c`),
+then zeroes it, sets `currentDumpLocationIndex` (`+0x8c`) to -1 and zeroes
+`dumpLocationCount` (`+0xa0`). Each `dumpFileDirectory` (`+0x7c`) FString is
+emptied and destroyed, and the array's count and capacity are zeroed.
+`player` (`+0xa4`) is zeroed, GMalloc frees the scratch block held in
+`currentDumpFileLocation` (`+0x28`) and that slot is zeroed. `UObject::Destroy`
+runs last. An open dump file stays an explicit boundary, because Play never
+opens one.
 
 `scripts/native-player-dump-oracle.py` loads hash-verified original Core,
 Engine, DeusEx and MSVCRT images. It executes the original exec/constructor,

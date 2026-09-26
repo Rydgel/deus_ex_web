@@ -47,6 +47,10 @@ Native leaves added during continuation:
 Heap allocation addresses are host storage. They are not original pointer
 values; pointer tie-breaking in otherwise equal focus ordering is therefore an
 unverified boundary. Uninitialized native alpha bytes are zeroed explicitly.
+Deleting destructors and `FArray::Realloc` return their blocks to the heap: a
+freed range is zeroed and reused first-fit, and a freed object's address stops
+resolving. A released UObject's opaque handle is forgotten, so the heap does
+not keep a collected actor alive ([Player start collection](script-loadmap-gc.md)).
 
 ## Continuation evidence
 

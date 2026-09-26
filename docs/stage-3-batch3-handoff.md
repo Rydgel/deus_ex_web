@@ -17,6 +17,11 @@ through LoadMap's own collection. Play retires the graph without modeling
 that collection, so retired generations accumulate in memory. The login
 page records this.
 
+Superseded 2026-09-26: LoadMap nulls Viewport.Actor and destroys the old
+player before the load, and its collection purges the retired generation in
+the same reset. Play implements both
+([Player start collection](script-loadmap-gc.md)).
+
 ## Why the first C attempt stopped
 
 Research and bounded reference probes closed the originally named player

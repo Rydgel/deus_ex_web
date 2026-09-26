@@ -14,7 +14,7 @@ const original=JSON.parse(execFileSync(process.env.NATIVE_PROBE_PYTHON||path.res
 assert.equal(original.hash,'b91002f3e7658c0562d28bccc887cf9db79a47a19f5e09e8be460c9d0c0bee04');
 const writes=[],nativeObject={text:'template',next:null};
 Object.defineProperty(nativeObject,'nativeVtable',{set:value=>writes.push(value)});
-constructPlayerLog(nativeObject);
+constructPlayerLog(nativeObject,{destroyObjectBase:()=>{}});
 assert.deepEqual(writes,original.cases[0].stores);
 for(const [i,c] of original.cases.entries()){
   assert.equal(c.null,!!i);assert.equal(c.code,0x22110001);
@@ -42,5 +42,7 @@ for(const object of [a,b]){
   assert.notEqual(native.outer,runtime.playerNativeObject(player));
   assert.equal(runtime.instance(object).cls.record.key,'deusex.deusexlog');
 }
-store.reset();assert.equal(get(player,'FirstLog'),null);assert.equal(get(player,'LastLog'),null);
-console.log('Player log passed: two original native branches, vtable/member writes, original AddLog linked list, package Outer and reset references');
+// The retired player's FirstLog/LastLog are nulled by ADeusExPlayer::Destroy,
+// not by a host reset; the reload's collection then releases the detached
+// logs (test/script-player-destroy.test.mjs, scripts/validate-loadmap-gc.mjs).
+console.log('Player log passed: two original native branches, vtable/member writes, original AddLog linked list and package Outer');

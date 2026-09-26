@@ -76,12 +76,13 @@ destroy the gear — both authored outcomes.
 
 ## Reset
 
-Player start re-spawns the mission actor. On reset the old mission actor is
-destroyed (recovered `ULevel::DestroyActor`) before the map reload — a
-runtime-spawned actor that is never re-introduced by the destroyed-actor ledger
-— and a fresh one is spawned into the restored world after the LoadMap startup
-passes, so the timer and state machine start over. The `SpawnScript` dedup keeps
-exactly one `MissionScript` actor across resets.
+Player start re-spawns the mission actor. The old one is not destroyed
+through `DestroyActor`. It belongs to the unloaded level: the reloaded
+`Level.Actors` does not hold it, and LoadMap's collection releases it with no
+script event ([Player start collection](script-loadmap-gc.md)). A fresh one is
+spawned into the restored world by the LoadMap startup passes, so the timer
+and state machine start over. The `SpawnScript` dedup keeps exactly one
+`MissionScript` actor across resets.
 
 ## Verified and remaining
 

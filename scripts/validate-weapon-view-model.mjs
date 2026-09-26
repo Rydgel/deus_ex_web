@@ -28,7 +28,8 @@ assert.equal((await game.selectWeaponGroup(10)).ok,true);
 // adapter; Play installs the same relocation service at its host boundary.
 runtime.relocation??={actorFor:actor=>actor,
   farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.farMoveActor(actor,destination,test,noCheck)};
-const view=await createWeaponViewModel(runtime,assets,player);
+// Player start logs a new player in, so the view follows the current one.
+const view=await createWeaponViewModel(runtime,assets,()=>game.player.collisionActor);
 await view.ready();
 const camera=new THREE.PerspectiveCamera(75,4/3,1,65536),draws=[];let clears=0;
 // Render.dll clears Z once before the viewing actor's RenderOverlays; the

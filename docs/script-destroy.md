@@ -81,15 +81,22 @@ is tested as follows:
   `0x01000000` (`0x10395c32–0x10395c44`). The script wrapper always passes
   `bNetForce == false`.
 
-`GIsEditor != 0` jumps over these play gates and enters the cleanup path. A
-separate class/network/editor test walks the target class ancestry and may
-call an opaque virtual helper (`0x10395c59–0x10395cd8`). The first sentinel is
-`APlayerPawn::PrivateStaticClass` at `0x1058c160`; the secondary object at
-`Actor+0x5d4` is compared through its class ancestry with
-`UNetConnection::PrivateStaticClass` at `0x10590c40`. These identities are
-confirmed by the Engine export map, but the meaning of the secondary object
-and the final virtual `+0x5c` decision remain unresolved and are outside the
-ordinary Actor contract.
+`GIsEditor != 0` jumps over these play gates and enters the cleanup path.
+A separate class/network test follows (`0x10395c59–0x10395cd8`, resolved
+2026-09-26):
+
+* A receiver that is not an `APlayerPawn` (`0x1058c160`) skips the test.
+* For an `APlayerPawn`, a null `Player` (`+0x5d4`) or a `Player` that is not
+  a `UNetConnection` (`0x10590c40`) continues on the normal path. The test
+  reuses the `bNetForce` argument slot for its result, which nothing reads
+  afterwards.
+* Only a `UNetConnection` with channel 0 (`+0xe64`) non-null and `State`
+  (`+0x60`) other than `USOCK_Closed` (1) is diverted. It calls that
+  channel's `Close` (vtable `+0x5c`) and returns `false`.
+
+LoadMap nulls `Player` before destroying the viewport actor, so that
+destruction always takes the normal path
+([Player start collection](script-loadmap-gc.md)).
 
 ## Accepted request: exact observed order
 
@@ -234,7 +241,7 @@ editor, Pawn, or queued-event branches, a faithful minimal adapter can model:
    separately recovered final cleanup path.
 
 Do not silently fold the following into that adapter: editor transactions or
-`GIsEditor` gates; the unresolved class/network `+0x5c` decision; non-null collision-hash
+`GIsEditor` gates; the `UNetConnection` channel close; non-null collision-hash
 wiring beyond the recovered `RemoveActor` and `CheckActorNotReferenced`
 calls; the concrete audio-driver implementation beyond the optional
 `NoteDestroy` boundary; the unresolved level `+0x3c` and `+0x88` hooks; Pawn

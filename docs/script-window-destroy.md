@@ -146,6 +146,7 @@ family supplies its own virtuals, read from the Extension vtables:
 | Window | `XWindow::CleanUp` `0x1004bec0` | `0x10004860` → `~XWindow` |
 | TextWindow | `0x10045c30`: empty the text FString `+0x168`, then XWindow's | `0x10009120` → `~XTextWindow` `0x10008d40` |
 | TileWindow | `0x10048430`: empty the 12-byte-element FArray `+0x168`, then XWindow's | `0x100155d0` → `~XTileWindow` `0x10014ee0` |
+| RootWindow | `0x10039240`: unlink from the root-window list (global `0x100aa8f8`, next `+0x58c`; the removed root keeps its own next), clear `pawn+0x894` when it still names this root, `RemoveFromRoot`, then `XModalWindow::CleanUp` | `0x100067b0` (size `0x744`) → `~XRootWindow` `0x100059c0`: no root-only members, then `~XModalWindow`'s `+0x17c` table and the tab-group tables |
 
 * `ChildRemoved` (`+0x6c`) is `XWindow::ChildRemoved` `0x100034e0` for every
   family: `ProcessScript(ChildRemoved, &child, 0)`. `DescendantRemoved` (`+0x74`) is
@@ -160,9 +161,17 @@ family supplies its own virtuals, read from the Extension vtables:
   reaches the window's Destroy virtual, `XWindow::Destroy` `0x1004c010`: PreDestroy
   (a no-op, since `bBeingDestroyed` is set), the zero-lock assertion, then
   `UObject::Destroy` (`RF` flag `0x80000000` and ExitProperties). The flags live at
-  UObject `+0x1c`. Host windows have no registry slot, and the host heap never
-  frees; a destroyed window loses its family, so any later native on it is an
-  explicit boundary.
+  UObject `+0x1c`. Host windows have no registry slot. Operator delete returns
+  the window's image to the host heap, as it does the GC images, GC free-list
+  nodes, timer nodes and FArray blocks that `FArray::Realloc` replaces. A
+  destroyed window loses its family, so any later native on it is an explicit
+  boundary, and its freed address no longer resolves.
+* XRootWindow's own Destroy (`0x10039320`) is `XWindow::Destroy`. The root is
+  SafeDestroyed by `APlayerPawnExt::Destroy` when a Player start retires the
+  old player; KillAllChildren then tears down the whole HUD tree
+  ([Player start collection](script-loadmap-gc.md)). The host models
+  `AddToRoot`/`RemoveFromRoot` as no-ops, because host windows are not
+  GObjObjects records.
 * A window's GC contexts go through the XGC deleting destructor: `~XGC`
   `0x10002c70` → `XGC::Destroy` `0x10026d40`. For a window's own GC that is
   PopGC(0), then unlinking and deleting every free-list node (`+0xb0` through each

@@ -326,19 +326,24 @@ not ticked by the host.
 
 ## Reset lifecycle
 
-The original "Player start" reloads the level, so dynamically spawned actors
-do not survive it. The Play host restores serialized map state instead; the
-runtime-spawned actors it produced during NPC startup/ticks (Shadows, and now
-the inventory items) must therefore be removed through the recovered
-`ULevel::DestroyActor` (`docs/script-destroy.md`) before the pawns re-run
-startup: `Inventory.Destroyed` → `Pawn(Owner).DeleteInventory(Self)`,
-`Weapon.Destroyed` → clears `Pawn(Owner).Weapon` when it was held,
-`SetBase(NULL)` → pawn `StandingCount` −1 / `Detach`, `SetOwner(NULL)` →
-`LostChild`, hash removal, actor-slot clear, pending-delete link. Before this
-slice the host leaked one Shadow per pawn per reset (measured 15 → 29 → 52
-Shadow objects across two resets). The browser-side destroyed-actor ledger
-must not record these runtime-spawned actors, or the next reset would put them
-back into `Level.Actors`.
+The original "Player start" reloads the level, so the actors it spawned do
+not survive it. They are not destroyed through `DestroyActor` either. The
+reload replaces each map export in place, and LoadMap's
+`CollectGarbage(RF_Native)` tags every actor of the old package that the new
+`Actors` array does not hold with the collector's `0x400` exclusion bit and
+purges it, with no script event. The collection is documented in
+[Player start collection](script-loadmap-gc.md).
+
+Play reproduces that. `resetNpcs({reload: true})` leaves the Shadows and
+inventory items out of the reloaded `Level.Actors`, restores the pawns'
+serialized state and runs the collection before the GameInfo spawn. The
+collection releases the spawned actors, and the next startup's spawns reuse
+their slots. The earlier host policy destroyed them through
+`runtime.destroyActor` in reverse spawn order, which ran their
+`Destroyed`/`DeleteInventory`/`LostChild` events. That is not the original
+behavior and was removed. The browser-side destroyed-actor ledger records
+only serialized map exports, so spawned items are never reintroduced. The
+Shadow count stays constant across resets.
 
 ## Unresolved / deliberately unsupported branches
 
@@ -400,8 +405,9 @@ Implemented 2026-09-20. What landed:
   `GainedChild` on the pawn, and the general `CheckEncroachment` runs with
   the item's post-`SetCollisionSize` cylinder at the pawn's location.
   `level.tickParity` is the `npcTickLevel.tickTag` getter. Each product is
-  bound to the native destructor chain (`destroyActorBase`) so
-  `ULevel::DestroyActor` can run it at reset.
+  bound to its vtable's Destroy virtual (`AActor::Destroy` for these classes).
+  Script `Destroy()` and a Player start's collection reach it through
+  `ConditionalDestroy`.
 * **VM support.** `execClassContext` (`0x12`) shares `execContext`'s
   null/skip contract so `Class<Ammo>(...).default.AmmoAmount` and the
   `Default.mpPickupAmmoCount = PickupAmmoCount` class-default write run
@@ -433,14 +439,11 @@ Implemented 2026-09-20. What landed:
   `FarMoveActor` slot is now linked to `ScriptRuntime.farMoveActor` (the recovered
   `0x10398ba0` body incl. the `child.Base` detach through `SetBase`); the
   Training NPCs' `Weapon = None` leaves it unexercised.
-* **Reset lifecycle.** `resetNpcs` destroys every tracked runtime-spawned
-  actor in reverse spawn order through `runtime.destroyActor` before
-  restoring the pawns — `Inventory.Destroyed` → `DeleteInventory`,
-  `SetBase(NULL)` → `StandingCount`−1/`Detach`, `SetOwner(NULL)` →
-  `LostChild`, slot clear, pending kill. The destroyed-actor ledger now
-  records only serialized map actors (`identities.has(receiver)`), so
-  spawned items/Shadows are never reintroduced. This also fixed the measured
-  Shadow leak (15 → 29 → 52 objects over two resets → constant 14).
+* **Reset lifecycle.** A reload leaves the runtime-spawned actors out of the
+  reloaded `Level.Actors`, and LoadMap's collection releases them without
+  script events ([Player start collection](script-loadmap-gc.md)). The
+  destroyed-actor ledger records only serialized map exports, and the Shadow
+  count stays constant (it was 15 → 29 → 52 before the reset handled spawns).
 * **Preparation.** `prepareNpcs` links and prepares every
   `InitialInventory` slot's class plus each `AmmoName` class at load,
   before the synchronous first-tick `InitializeInventory`; the player's
