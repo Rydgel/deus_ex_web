@@ -10,13 +10,15 @@ import{walkingSurfaceTextures}from'../src/runtime/walking-surface.mjs';
 import{objectAt}from'../src/unreal/objects.mjs';
 import{ClassDefaults}from'../src/unreal/classes.mjs';
 import{gameDirectory}from'./game-directory.mjs';
+import{nativeLevelScene}from'./native-level-scene.mjs';
 const root=gameDirectory(),files=[];for(const dir of['System','Textures','Maps','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 let mismatches=0;
 const assets=new AssetStore(files),defaults=new ClassDefaults(assets),de=await assets.get('DeusEx');const jc=de.pkg.exports.findIndex((e,i)=>objectAt(de.pkg,i+1)?.name==='JCDentonMale');if(jc<0)throw Error('Missing JC class');const pawnValues=await defaults.get(de,jc+1);
 for(const [name,start]of [['00_Training',[-1149.2435302734375,825.8439331054688,-80.0999984741211]],['01_NYC_UNATCOIsland',[-4760.56982421875,10430.8115234375,-280.67498779296875]]]){
  if(process.argv.includes('--stairs-only')&&name!=='00_Training')continue;
  const dir=`reports/movement/player-sequence/${name}${process.argv.includes('--stairs-only')?'-stairs':''}`;await mkdir(dir,{recursive:true});
- const scene=JSON.parse(await readFile(`reports/movement/native-level/${name}/scene.json`,'utf8')),asset=await assets.get(name),map=decodeMap(asset.bytes);scene.textures=await walkingSurfaceTextures(assets,asset,map.model);scene.zones=map.model.zones.map(z=>z.actor?map.actors.find(a=>a.index===z.actor)?.name:null);scene.pawnValues=pawnValues;scene.zoneValues=await defaults.forActor(asset,map.actors.find(a=>a.className==='LevelInfo'));
+ // Build the scene here, not from native-level's report, which that validator may be rewriting; the JSON copy is the oracle's exact input.
+ const asset=await assets.get(name),map=decodeMap(asset.bytes),scene=JSON.parse(JSON.stringify(await nativeLevelScene(defaults,asset,map)));scene.textures=await walkingSurfaceTextures(assets,asset,map.model);scene.zones=map.model.zones.map(z=>z.actor?map.actors.find(a=>a.index===z.actor)?.name:null);scene.pawnValues=pawnValues;scene.zoneValues=await defaults.forActor(asset,map.actors.find(a=>a.className==='LevelInfo'));
  scene.actors.push({id:'$player',kind:'Pawn',collisionBits:15,values:{Location:start,CollisionRadius:20,CollisionHeight:43}});
  let cases=[{name:'walk',position:start,acceleration:[1024,0,0],frames:4,dt:.1},{name:'crouch-dimensions',position:start.map((x,i)=>i===2?x-27:x),height:16,acceleration:[1024,0,0],frames:4,dt:.1},{name:'drop',position:start.map((x,i)=>i===2?x+80:x),physics:2,frames:6,dt:.1},{name:'upward-launch',position:start,physics:2,velocity:[0,0,330],frames:9,dt:.1}];
  if(name==='00_Training')cases.push({name:'stairs-candidate',position:[0,832,-144.2],velocity:[-320,0,0],acceleration:[-1024,0,0],frames:5,dt:.1},{name:'walk-wall',position:[-300,start[1],start[2]],acceleration:[1024,0,0],frames:5,dt:.1});

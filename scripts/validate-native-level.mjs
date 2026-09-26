@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { ClassDefaults } from '../src/unreal/classes.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
-import { readModel } from '../src/unreal/model.mjs';
 import { brushCollisionBounds, primitiveCollisionBounds } from '../src/runtime/brush-bounds.mjs';
-import { nativeModel } from './native-model.mjs';
+import { nativeLevelScene } from './native-level-scene.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { createHash } from 'node:crypto';
 import { BspCollider } from '../src/runtime/collision.mjs';
@@ -17,25 +16,20 @@ import { findSpot } from '../src/runtime/fitting.mjs';
 import { traceExtent } from '../src/runtime/extent-trace.mjs';
 
 const root = gameDirectory(), f = Math.fround, files = [];
+// Other validators read these reports while the sweep runs, so a reader must
+// see either the previous file or the complete new one, never a partial write.
+const writeReport = async (file, data) => {
+  const temporary = `${file}.${process.pid}.tmp`;
+  await writeFile(temporary, data); await rename(temporary, file);
+};
 for (const folder of ['Maps', 'System']) for (const name of await readdir(path.join(root, folder))) {
   files.push({ path: `${folder}/${name}`, read: () => readFile(path.join(root, folder, name)) });
 }
 const assets = new AssetStore(files), defaults = new ClassDefaults(assets);
 let failureCount = 0;
 for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
-  const asset = await assets.get(name), map = decodeMap(asset.bytes), actors = [];
-  for (const actor of map.actors) {
-    const values = await defaults.forActor(asset, actor);
-    if (!values.bCollideActors) continue;
-    const lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
-    const kind = ['Pawn', 'Mover', 'ZoneInfo'].find(k => lineage.includes(`engine.${k.toLowerCase()}`)) ?? 'Actor';
-    const model = values.Brush > 0 ? readModel(asset.pkg, asset.bytes, values.Brush) : null;
-    actors.push({ id: actor.name, index: actor.index, kind, lineage, values,
-      collisionBits: 1 | (values.bBlockActors ? 4 : 0) | (values.bBlockPlayers ? 8 : 0) | (values.bProjTarget ? 16 : 0),
-      model: model && nativeModel(model) });
-  }
-  for (const actor of actors) actor.owner = actors.find(a => a.index === actor.values.Owner)?.id ?? null;
-  const scene = { model: nativeModel(map.model), actors }, cases = { rays: [], fitting: [] };
+  const asset = await assets.get(name), map = decodeMap(asset.bytes);
+  const scene = await nativeLevelScene(defaults, asset, map), actors = scene.actors, cases = { rays: [], fitting: [] };
   const start = map.actors.find(a => a.className === 'PlayerStart').values.Location;
   for (const actor of actors) {
     const bounds = actor.model ? brushCollisionBounds(actor.model, actor.values) : primitiveCollisionBounds(null, actor.values);
@@ -66,13 +60,13 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   const directory = path.resolve('reports/movement/native-level', name + (process.argv.includes('--extents') ? '-extents' : process.argv.includes('--surfaces') ? '-surfaces' : ''));
   await mkdir(directory, { recursive: true });
   const sceneFile = path.join(directory,'scene.json'), casesFile = path.join(directory,'cases.json');
-  await writeFile(sceneFile, JSON.stringify(scene)); await writeFile(casesFile, JSON.stringify(cases));
+  await writeReport(sceneFile, JSON.stringify(scene)); await writeReport(casesFile, JSON.stringify(cases));
   let stdout;
   if (process.argv.includes('--compare-captured')) stdout = await readFile(path.join(directory,'original.json'), 'utf8');
   else {
     ({ stdout } = await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON ?? 'python3',
       ['scripts/native-level-oracle.py', root, sceneFile, casesFile], { maxBuffer: 64*1024*1024, timeout: 180000 }));
-    await writeFile(path.join(directory,'original.json'), stdout);
+    await writeReport(path.join(directory,'original.json'), stdout);
   }
   const native = JSON.parse(stdout);
   assert.equal(native.sceneSha256, createHash('sha256').update(JSON.stringify(scene)).digest('hex'));
@@ -121,7 +115,7 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   }
   const summary = { name, actors: actors.length, rays: cases.rays.length, fitting: cases.fitting.length,
     lineChecks, pointChecks, mismatchCount: mismatches.length };
-  await writeFile(path.join(directory,'comparison.json'),JSON.stringify({summary,mismatches},null,2));
+  await writeReport(path.join(directory,'comparison.json'),JSON.stringify({summary,mismatches},null,2));
   console.log(JSON.stringify({ ...summary, examples:mismatches.slice(0,2).map(({kind,index})=>({kind,index})) }));
   failureCount += mismatches.length;
 }
