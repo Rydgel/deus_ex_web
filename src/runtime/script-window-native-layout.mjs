@@ -14,7 +14,7 @@
  * struct alignment (the script linker would align a Color to four bytes,
  * which puts Window.TextColor at +0x40; the native Init/SetTextColor bodies
  * store it at +0x3d). The derivation below reproduces every recovered
- * offset (scripts/validate-window-native-layout.mjs) and every registration
+ * offset (scripts/validate-object-layout.mjs) and every registration
  * size, and is used only for native Extension window classes.
  */
 

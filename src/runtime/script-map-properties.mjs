@@ -30,7 +30,7 @@ export function mapExportAdmitted(pkg, ref) {
  * keep their original package provenance; only map-authored refs use map indices.
  * See docs/script-map-actors.md. */
 export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
-  const authored = new Map();
+  const authored = new Map(), authoredFields = [];
   let rawProperties;
   // Map-authored object refs keep actor-slot identities; class records also
   // need their linked ancestry — the original package linker always builds it.
@@ -60,11 +60,13 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
       value=await runtime.authoredStructProperty(asset,field,raw,initial,resolveMapObject);
     } else if (!property.decoded) value = {unsupported: `Undecoded map property ${actor.name}.${property.name}`};
     else if ([5, 8].includes(property.type)) value=await resolveMapObject(asset,property.value);
-    if (!authored.has(field.key)) authored.set(field.key, new Map());
+    if (!authored.has(field.key)) { authored.set(field.key, new Map()); authoredFields.push(field); }
     authored.get(field.key).set(property.arrayIndex, value);
   }
   const snapshot = new Map(cls.defaults);
-  return field => {
+  // The initial value of one field: its authored elements over the class
+  // defaults. `authoredFields` lists the fields the map authors.
+  return Object.assign(field => {
     const overrides = authored.get(field.key);
     if (!overrides) return runtime.defaultValue(cls, field, snapshot);
     for (const value of overrides.values()) if (value?.unsupported) throw new Error(value.unsupported);
@@ -74,7 +76,7 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
       return value;
     }
     return overrides.has(0) ? overrides.get(0) : runtime.defaultValue(cls, field, snapshot);
-  };
+  }, {authoredFields});
 }
 
 /** Preserve the serialized Level.Actors order and null slots. The existing

@@ -124,8 +124,9 @@ export function createWorldDestroyServices({ runtime, level, hash = null, dispat
  * The original reaches the initial map state again by reloading the level; this
  * host reuses the same actor identities across "Player start", so the slots and
  * native-object fields a destruction cleared are recorded here and restored on
- * reset.  Script property storage is authored-backed, so clearing an actor's
- * property store is what returns the owning values `ExitProperties` released.
+ * reset.  Script property storage is authored-backed, so restoring an actor's
+ * initial properties is what returns the owning values `ExitProperties`
+ * released.
  * The live collision hash is rebuilt wholesale by the scene reset and is
  * therefore not touched here.
  */

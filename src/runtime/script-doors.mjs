@@ -107,12 +107,15 @@ function selectedMover(mover, level) {
  * binding is intentionally keyed by the runtime's field export key; same-name
  * properties from unrelated classes therefore cannot alias.
  */
-function makeBinding(record, field) {
+function makeBinding(runtime, record, field) {
   const host = record.object;
   const name = field.name;
   const key = lower(name);
   const values = host.values ?? {};
   const interpolation = () => host.interpolation;
+  // The object's own storage for this property (script-object-image.mjs): the
+  // map-authored or class-default value until a script or the host writes it.
+  const stored = () => runtime.readStoredField(host, field);
   if (field.key === 'core.object.class') return {
     get: () => record.cls.record,
     set: () => { throw new Error('Changing a native actor Class requires object reconstruction'); },
@@ -149,12 +152,11 @@ function makeBinding(record, field) {
     // live state. An actor the scene never prepared for contact has no live
     // slots, and its serialized startup value stays authoritative.
     touching: {
-      get: () => Array.isArray(host.touching) && host.touching.length === 4 ? [...host.touching]
-        : record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field),
+      get: () => Array.isArray(host.touching) && host.touching.length === 4 ? [...host.touching] : stored(),
       set: value => {
         if (!Array.isArray(value) || value.length !== 4) throw new Error('Original Touching requires four explicit slots');
         if (Array.isArray(host.touching) && host.touching.length === 4) host.touching = [...value];
-        else record.store.set(field.key, [...value]);
+        else runtime.writeStoredField(host, field, value);
       },
     },
     waitingpawn: {
@@ -294,8 +296,8 @@ function makeBinding(record, field) {
       set: value => { host.realRotation = vector(value, true); },
     },
     ambientsound: {
-      get: () => record.store.has(key) ? record.store.get(key) : record.initialProperty(field),
-      set: value => { host.ambientSound = value; record.store.set(key, value); },
+      get: stored,
+      set: value => { host.ambientSound = value; runtime.writeStoredField(host, field, value); },
     },
     netmode: {
       get: () => record.level?.netMode ?? 0,
@@ -318,13 +320,12 @@ function makeBinding(record, field) {
   // and OldLocation (+0x12c) on the native actor. A non-pawn map actor's move
   // bodies run on this host, so those fields are its members once written.
   if ((key === 'bjustteleported' || key === 'oldlocation') && (isMapMoveHost(host) || host.controlledPlayer)) {
-    const initial = () => record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field);
     if (key === 'bjustteleported') return {
-      get: () => host.motionFlags === undefined ? initial() : Boolean(host.motionFlags & 0x100),
-      set: value => { host.motionFlags = (((host.motionFlags ?? (initial() ? 0x100 : 0)) & ~0x100) | (value ? 0x100 : 0)) >>> 0; },
+      get: () => host.motionFlags === undefined ? stored() : Boolean(host.motionFlags & 0x100),
+      set: value => { host.motionFlags = (((host.motionFlags ?? (stored() ? 0x100 : 0)) & ~0x100) | (value ? 0x100 : 0)) >>> 0; },
     };
     return {
-      get: () => host.oldLocation === undefined ? initial() : vector(host.oldLocation),
+      get: () => host.oldLocation === undefined ? stored() : vector(host.oldLocation),
       set: value => { host.oldLocation = vector(value); },
     };
   }
@@ -337,7 +338,7 @@ function makeBinding(record, field) {
   if (regionProp && (host.controlledPlayer || host.movingBrush)) return {
     get: () => {
       const region = host[regionProp];
-      if (!region) return record.store.has(field.key) ? record.store.get(field.key) : record.initialProperty(field);
+      if (!region) return stored();
       return { 'engine.actor.pointregion.zone': region.zone ?? null,
         'engine.actor.pointregion.ileaf': region.leaf ?? -1,
         'engine.actor.pointregion.zonenumber': region.zoneNumber ?? 0 };
@@ -375,9 +376,11 @@ function makeBinding(record, field) {
     if (view[key]) return view[key];
   }
 
-  // InitProperties gives the native object its authored/default value once;
-  // keep it on first read instead of rebuilding the default on every read.
-  // A reset clears the store, so the next read starts from the initial value.
+  // Every other property lives in the object's image with no binding. A
+  // property without an image cell keeps its authored/default value in the
+  // record's store: InitProperties gives it once, kept on first read; a
+  // reset clears the store, so the next read starts from the initial value.
+  if (runtime.hasImageCell(host, field)) return null;
   return {
     get: () => {
       const stored = record.store.get(field.key);
@@ -810,6 +813,14 @@ export async function createScriptDoors({
     if (!receiver?.interpolation?.interpolating) state.latent = 0;
   };
 
+  /** Return a map actor's properties to their initial (map-authored or
+   * class-default) values: its object storage and the store of properties
+   * without an image cell. */
+  function resetProperties(record) {
+    record.store.clear();
+    runtime.restoreStorage(record.object, record.initialStorage);
+  }
+
   async function attach(identity, cls, role) {
     if (!identity || typeof identity !== 'object') return null;
     const existing = identities.get(identity);
@@ -822,7 +833,13 @@ export async function createScriptDoors({
     const fields = classFields(cls);
     await Promise.all(fields.map(field => runtime.field(field)));
     record.initialProperty = await prepareMapProperties(runtime, asset, identity, cls, actorByIndex);
-    for (const field of fields) runtime.bindProperty(identity, field, makeBinding(record, field));
+    runtime.applyInitialProperties(identity, record.initialProperty);
+    for (const field of fields) {
+      const binding = makeBinding(runtime, record, field);
+      if (binding) runtime.bindProperty(identity, field, binding);
+    }
+    // A reset returns the actor's properties to these initial values.
+    record.initialStorage = runtime.snapshotStorage(identity);
     // Core UObject identity for a pre-placed map export. Actor.Destroy's
     // ConditionalDestroy -> AActor::Destroy -> UObject::Destroy chain reads this
     // record, and the export table supplies its measured Name/ObjectFlags
@@ -1433,7 +1450,7 @@ export async function createScriptDoors({
         // then re-register at the restored location so no tick window leaves
         // the pawn unregistered.
         level.hash?.removeActor(actor);
-        identities.get(actor).store.clear();
+        resetProperties(identities.get(actor));
         for (const prop of NPC_HOST_PROPS) delete actor[prop];
         if (actor.values?.Location) actor.position = [...actor.values.Location];
         actor.isPawn = true; actor.pawnFlags = 0;
@@ -1457,7 +1474,7 @@ export async function createScriptDoors({
     // and Location.
     for (const actor of npcPatrolPoints) {
       try {
-        identities.get(actor).store.clear();
+        resetProperties(identities.get(actor));
         if (actor.values?.Location) actor.position = [...actor.values.Location];
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
@@ -1469,7 +1486,7 @@ export async function createScriptDoors({
     // decoration below. prepareActor already restored its collision word.
     for (const actor of npcPickups) {
       try {
-        identities.get(actor).store.clear();
+        resetProperties(identities.get(actor));
         const restore = () => {
           if (actor.values?.Location) actor.position = [...actor.values.Location];
           actor.base = actorByIndex.get(actor.values?.Base) ?? null;
@@ -1486,7 +1503,7 @@ export async function createScriptDoors({
     // moved inside the rebuilt hash's remove/re-add (level-queries contract).
     for (const actor of npcDecorations) {
       try {
-        identities.get(actor).store.clear();
+        resetProperties(identities.get(actor));
         const restore = () => {
           if (actor.values?.Location) actor.position = [...actor.values.Location];
           delete actor.velocity; delete actor.acceleration; delete actor.landingCounter;
@@ -1501,7 +1518,7 @@ export async function createScriptDoors({
     for (const actor of initialActorArray) {
       if (!actor || actor === playerActor || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)
           || npcPickupSet.has(actor) || npcDecorationSet.has(actor) || moversByObject.has(actor)) continue;
-      identities.get(actor)?.store.clear();
+      { const record = identities.get(actor); if (record) resetProperties(record); }
     }
     clearStartupPawnList();
     // A freshly loaded ULevel starts with an empty deferred-deletion chain;
@@ -1577,7 +1594,7 @@ export async function createScriptDoors({
     state.onInterpolateEnd = () => {
       runtime.processEvent(mover, 'InterpolateEnd', [null]);
     };
-    record.store.clear();
+    resetProperties(record);
 
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
@@ -1644,7 +1661,7 @@ export async function createScriptDoors({
     // retired player was destroyed by retirePlayer; the reload below replaces
     // the map's exports in place and LoadMap's collection purges everything
     // the old level spawned (docs/script-player-login.md, "Reset").
-    destroyedActors.restore(receiver=>identities.get(receiver)?.store.clear());
+    destroyedActors.restore(receiver=>{const record=identities.get(receiver);if(record)resetProperties(record);});
     liveConPlay?.reset();
     liveDataLink?.reset();
     faceConversations?.reset?.();
@@ -2059,10 +2076,16 @@ export async function createScriptDoors({
     const values=Object.fromEntries(fields.map(field=>[field.name,snapshot.get(field.key)]));
     playerScene.bindPlayerIdentity(actor,values);
     actor.lineage=Object.freeze(lineage);actor.pawn=true;actor.scriptView=true;
-    const record={object:actor,cls,state:runtime.instance(actor),role:'player',store:new Map(snapshot),level,levelInfo,
+    // Imaged properties keep their values in the player's object image; the
+    // store holds the snapshot only for properties without an image cell.
+    const record={object:actor,cls,state:runtime.instance(actor),role:'player',
+      store:new Map([...snapshot].filter(([key])=>!runtime.instance(actor).cells?.has(key))),level,levelInfo,
       initialProperty:field=>snapshot.get(field.key)};
     identities.set(actor,record);
-    for(const field of fields)if(!field.key.startsWith('core.object.'))runtime.bindProperty(actor,field,makeBinding(record,field));
+    for(const field of fields){
+      const binding=makeBinding(runtime,record,field);
+      if(binding)runtime.bindProperty(actor,field,binding);
+    }
     playerActor=actor;
     triggerActions.bindPlayerFlagBase(runtime,actor);
     playerLogs?.bindPlayer(actor);windowHost?.bindPlayer(actor);

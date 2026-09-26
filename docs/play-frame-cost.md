@@ -100,7 +100,7 @@ The costs are representation, not work, so the order is:
 
 1. **Object memory** ([contract and plan](object-memory.md)). Value access
    without references, then original-layout storage at the recovered UProperty
-   offsets. Stages 1a and 1b are below.
+   offsets. Stages 1a to 1d are below.
 2. **Exact x87 fast paths.** A single `+ − × ÷ √` on float32 operands stored to
    float32 is identical with 53- and 64-bit intermediates: double rounding is
    innocuous when the intermediate precision is at least twice the target's
@@ -272,6 +272,94 @@ frame, even where the value is only read. An rvalue path in the VM, or 1d's
 image addresses, removes it. The rest of the frame is now dominated by work
 outside the object model: line checks and their BigInt x87 arithmetic, GetFrame
 and normals, the HUD's native heap and three.js submission.
+
+## Stages 1c and 1d: layout tables and object images
+
+Stage 1c reads each class's property table from the linker and checks it
+against the recovered Link bodies and retail offsets. Stage 1d stores
+script-owned properties in a byte image per object at those offsets
+([object memory](object-memory.md) has the contract, the evidence and what
+remains). Before 1d, Training's 1,817 attached objects held 45,801 logical
+slot entries and 94,885 bindings. Most actor fields were bindings over a map
+of stored values. After 1d:
+
+* 1,816 objects hold images, 620 KB in total. The remaining object's class
+  has no linked record.
+* One slot entry remains.
+* Bindings number 18,975, only the host-owned fields and headers.
+
+Changes, all host representation:
+
+* `script-object-layout.mjs` reads each class's table from the linker's own
+  records. `script-object-image.mjs` turns it into cells: one hidden class,
+  scalar reads and writes small enough to inline, and composite values in a
+  separate path.
+* Each class has a default image, copied when an object attaches or is
+  constructed. It replaces a default rebuild for every property of every
+  spawned object and every first read of a map actor property.
+* A map actor writes its authored values over the copy, and resets restore a
+  snapshot.
+* Instance records are one class. The `pendingKill` accessor that
+  `bindNativeObject` defined on each actor record had left all 423 Training
+  actor records in dictionary mode, so every record property load was a
+  hash lookup. That dated from before 1d.
+* VM references over an image cell use a storage object with methods, not
+  two closures per reference.
+* A record copies its class defaults only when some property lacks an image
+  cell. That removes 55,010 retained map entries in Training. This change
+  came after the A/B below and is not in its numbers.
+
+In Node, per access on a Training pawn, compared with `be02895`:
+
+| Access | `be02895` | 1c + 1d |
+| --- | ---: | ---: |
+| Scalar read by name (byte, int, float, name, object, bool) | 50–65 ns | 30–39 ns |
+| Scalar write by name | 78–97 ns | 46–58 ns |
+| `BlendAnimSequence` (`FName[4]`) read | 135 ns | 61 ns |
+| `Region` (PointRegion struct) read | 300 ns | 91 ns |
+| VM `fieldReference(...).get()` | 125 ns | 108 ns |
+
+Paired A/B, alternating `be02895` (a worktree on port 5199) with the working
+tree (port 5173), three walking runs each, medians. This round ran faster
+overall than stage 1b's, where HEAD measured 21.2 ms, so compare within the
+table:
+
+| Per frame | `be02895` | Stages 1c + 1d |
+| --- | ---: | ---: |
+| Frame interval | 18.4 ms | 17.3 ms |
+| Frames missing vsync (of 300) | 33 | 13 |
+| Sampled main-thread CPU | 20.9 ms | 19.9 ms |
+| `game.tick` | 7.27 ms | 6.70 ms |
+| Mesh update | 4.71 ms | 4.36 ms |
+| HUD | 3.25 ms | 3.24 ms |
+| Garbage collector | 0.50 ms | 0.45 ms |
+| Allocation | 14.1 MB | 13.9 MB |
+| Retained heap | 326 MB | 319 MB |
+| Object-model self time (median of runs) | 2.06 ms | 1.83 ms |
+
+Verification:
+
+* Both new validators pass. `validate-object-layout` covers 1,474 classes: the
+  placement replay, the struct members, 153 retail offsets and 142 window
+  offsets. `validate-object-image` checks defaults, writes, byte placements,
+  bool words and the timing of unproducible-value errors for one object of
+  every class.
+* A headless Training run reads every property of every attached object after
+  startup (138,725 reads), after 600 idle and walking ticks, and after a
+  Player-start reset plus 300 ticks. It gives identical results on `be02895`
+  and here, including 2,643, 2,656 and 7,950 error messages.
+* All 541 unit tests pass. The full sweep passed 396 of 399:
+  * `validate-script-frame-ownership` assigned `pendingKill` on a fixture
+    record, which the first version of the record class refused. Records
+    other than actors accept the assignment again, and the validator passes.
+  * The Stage 3 gate (red by design) gives output identical to `be02895` for
+    all 90 probes, in 106 s instead of 153 s.
+  * `validate-npc-mesh-preview` fails with the assertion recorded at
+    `5978bf3`.
+
+The VM's per-operand references remain the largest object-model cost: about
+1,300 per frame, plus the whole-value copies `copyScalar` makes for each. An
+rvalue path in the VM would remove most of them.
 
 ## Reproduce
 

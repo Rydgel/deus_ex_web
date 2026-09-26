@@ -501,6 +501,18 @@ export function propertyReference(field, get, set) {
   return new PropertyReference(descriptor, field, { descriptor, get, set }, null, null);
 }
 
+/** propertyReference over a storage object whose own get()/set(value) methods
+ * are called with it as receiver, so the reference needs no accessor closures.
+ * The storage's `descriptor` is set here. */
+export function storageReference(field, storage) {
+  const descriptor = describe(field);
+  if (typeof storage?.get !== 'function' || typeof storage.set !== 'function') {
+    throw new TypeError(`storageReference requires get and set methods for ${descriptor.key}`);
+  }
+  storage.descriptor = descriptor;
+  return new PropertyReference(descriptor, field, storage, null, null);
+}
+
 /** A property's value operations, specialized once from its descriptor:
  * `read(raw)` is `propertyReference(field, get, set).get()` for a stored raw
  * value, `store(value, raw)` the raw value `.set(value)` stores over `raw`,

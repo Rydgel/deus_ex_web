@@ -66,8 +66,11 @@ Missing fields and unresolved member serializers fail explicitly. See
 The previous scalar-only `ClassDefaults` merge remains useful for collision
 construction, but it deliberately omits inherited resource references. Script
 property storage now uses the linked runtime defaults so, for example,
-LightSwitch.Mesh resolves to `DeusExDeco.LightSwitch` instead of None. Runtime
-writes are separate from authored values so reset can restore the original map.
+LightSwitch.Mesh resolves to `DeusExDeco.LightSwitch` instead of None. The
+authored values are written into the actor's object image over its class
+defaults when it attaches ([object memory](object-memory.md), stage 1d). The
+image is snapshotted then, so a reset restores the original map values and
+runtime writes do not survive it.
 
 The focused original-training composition checked all 1,337 serialized slots:
 the 29 authored nulls stay null, the 312 admitted exports keep their live

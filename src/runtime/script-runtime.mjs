@@ -9,8 +9,9 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
-  zeroValue, copyValue, propertyReference, arrayReference, propertyCodec,
+  zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec,
 } from './script-values.mjs';
+import { objectImageCells, createImage, copyImage, readCell, writeCell } from './script-object-image.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
@@ -162,6 +163,57 @@ const fieldTable=cls=>{
   return table;
 };
 const animationTickViews=new WeakMap();
+/** One attached object's VM record. Every record shares this hidden class:
+ * the fields later code fills in are declared here, and an actor's
+ * pendingKill (its bDeleteMe) is a prototype getter rather than a property
+ * redefined per record, which left actor records in dictionary mode. */
+class ScriptInstance {
+  constructor(runtime,cls,slots,state,storage,sleepTimeLeft){
+    // The slot fallback's defaults as of attachment. An object whose every
+    // property has an image cell never reads a slot, so it keeps no copy.
+    this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
+    this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
+    this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;this.sleepTimeLeft=sleepTimeLeft;
+    this.cells=storage.cells;this.image=storage.image;this.refs=storage.refs;
+    this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
+    this.nativeObject=undefined;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
+    this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
+  }
+  // An actor's pendingKill is its bDeleteMe and cannot be assigned; another
+  // object keeps whatever its host assigns (fixtures set it directly).
+  get pendingKill(){
+    return this.deleteMe!==null?Boolean(this.runtime.readField(this.receiver,this.deleteMe)):this.pendingKillValue;
+  }
+  set pendingKill(value){
+    if(this.deleteMe!==null)throw new TypeError('Cannot set property pendingKill of an actor, which has only a getter');
+    this.pendingKillValue=value;
+  }
+}
+/** An image cell as a reference's storage (storageReference): the VM builds
+ * one reference per variable operand, so its accessors are methods, not
+ * closures. A value that could not be produced is rethrown as before. */
+class CellStorage {
+  constructor(runtime,instance,field,cell){
+    this.descriptor=null;this.runtime=runtime;this.instance=instance;this.field=field;this.cell=cell;
+  }
+  get(){
+    const instance=this.instance,entry=instance.poison?.get(this.field.key);
+    return entry?entry.read():readCell(this.cell,instance.image,instance.refs);
+  }
+  set(value){
+    const instance=this.instance,entry=instance.poison?.get(this.field.key);
+    if(entry?.write)entry.read();
+    writeCell(this.cell,instance.image,instance.refs,value);
+    if(entry)this.runtime.clearPoison(instance,this.field.key);
+  }
+}
+// Stage 1d: each class's default image, rebuilt when a class default changes.
+const classImages=new WeakMap();
+const sameDefaults=(snapshot,defaults)=>{
+  if(snapshot.size!==defaults.size)return false;
+  for(const [key,values] of defaults)if(snapshot.get(key)!==values)return false;
+  return true;
+};
 /** exec bodies resolve each out expression to a raw address; a non-assignable
  * expression lands in a private temporary whose writes never escape. */
 const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{set(){}};
@@ -544,9 +596,55 @@ export class ScriptRuntime {
   attach(instance,cls,overrides=new Map()) {
     if(this.instances.has(instance))throw new Error('Script instance is already attached');
     const state=new ScriptState(instance,this.services);state.locals=new Map();
-    this.instances.set(instance,{cls,fieldTable:fieldTable(cls),defaultsSnapshot:new Map(cls.defaults),slots:new Map(overrides),bindings:new Map(),state,pendingKill:false,singular:false,sleepTimeLeft:0});
+    const storage=this.objectStorage(cls),slots=new Map();
+    for(const [key,value] of overrides){
+      const cell=storage.cells?.get(key);
+      if(!cell){slots.set(key,value);continue;}
+      const field=storage.source.layout.fields.get(key);
+      writeCell(cell,storage.image,storage.refs,copyValue(field,value));
+      storage.poison?.delete(key);
+    }
+    this.instances.set(instance,new ScriptInstance(this,cls,slots,state,storage,0));
     state.transition(null,cls.metadata);
     return state;
+  }
+  /** Stage 1d (docs/object-memory.md): the image cells of a class linked by
+   * the native class loader, or null for a class without linked offsets (the
+   * isolated decoded-metadata fixtures), whose objects keep logical slots. */
+  objectCells(cls) {
+    if(!this.classLoader||!cls?.loadRecord)return null;
+    const loader=this.classLoader;
+    return objectImageCells(cls,{graph:loader.graph,identity:record=>loader.identity(record)});
+  }
+  /** A class's default image: each imaged property's default value, the
+   * block InitProperties copies from Defaults. It is rebuilt when a class
+   * default changes, so a new object sees defaults as of its construction,
+   * as the per-object default snapshot did. A default that cannot be
+   * produced is recorded and rethrown by any access to that property. */
+  classImage(cls) {
+    const layout=this.objectCells(cls);
+    if(!layout)return null;
+    let image=classImages.get(cls);
+    if(image&&sameDefaults(image.defaults,cls.defaults))return image;
+    const defaults=new Map(cls.defaults),view=createImage(layout.size),refs=new Array(layout.refCount).fill(null);
+    let poison=null;
+    for(const [key,cell] of layout.cells){
+      const field=layout.fields.get(key);
+      let value;
+      try{value=this.defaultValue(cls,field,defaults);}
+      catch{(poison??=new Map()).set(key,{read:()=>this.defaultValue(cls,field,defaults),write:true,lazy:false});continue;}
+      writeCell(cell,view,refs,value);
+    }
+    image={layout,defaults,view,refs,poison};
+    classImages.set(cls,image);
+    return image;
+  }
+  /** Fresh storage for one object of `cls`: a copy of the class image. */
+  objectStorage(cls) {
+    const source=this.classImage(cls);
+    if(!source)return {cells:null,image:null,refs:null,poison:null,source:null,complete:false};
+    return {cells:source.layout.cells,image:copyImage(source.view),refs:source.refs.slice(),
+      poison:source.poison&&new Map(source.poison),source,complete:source.layout.cells.size===cls.propertyLink.length};
   }
   /** Construct fresh script storage using the class-default/template values,
    * followed by registry insertion and a verified class-native constructor.
@@ -657,14 +755,20 @@ export class ScriptRuntime {
       initProperties:(object,template)=>{
         if(template&&this.instance(template).cls!==cls)
           throw new Error('Cross-class construction templates are not implemented');
-        const slots=new Map();
+        const slots=new Map(),storage=this.objectStorage(cls);
         // Core.Object declares only the five native UObject header properties;
         // InitProperties starts after that header, at original offset +0x28.
+        // The image copy already holds each imaged default; a default that
+        // cannot be produced still fails construction, in link order.
         for(const field of cls.propertyLink)if(!field.key.startsWith('core.object.')){
+          const cell=storage.cells?.get(field.key);
+          if(cell&&!template){storage.poison?.get(field.key)?.read();continue;}
           const value=template?this.fieldReference(template,field).get():this.defaultValue(cls,field);
-          slots.set(field.key,copyValue(field,value));
+          if(!cell){slots.set(field.key,copyValue(field,value));continue;}
+          writeCell(cell,storage.image,storage.refs,copyValue(field,value));
+          storage.poison?.delete(field.key);
         }
-        this.instances.set(object.identity,{cls,fieldTable:fieldTable(cls),defaultsSnapshot:new Map(cls.defaults),slots,bindings:new Map(),state:null,pendingKill:false,singular:false});
+        this.instances.set(object.identity,new ScriptInstance(this,cls,slots,null,storage,undefined));
         this.bindNativeObject(object.identity,object);
         services.initNativeProperties(object,template);
       },
@@ -712,8 +816,7 @@ export class ScriptRuntime {
     bind('Class',()=>instance.cls.record,()=>{throw new Error('Changing native Class is unsupported');});
     bind('ObjectInternal',()=>{throw new Error('Raw native ObjectInternal pointers are not represented by the script host');},()=>{throw new Error('Writing native ObjectInternal is unsupported');});
     for(let cls=instance.cls;cls;cls=cls.base)if(cls===this.actorClass){
-      const deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
-      Object.defineProperty(instance,'pendingKill',{get:()=>Boolean(this.readField(receiver,deleteMe)),configurable:true});
+      instance.receiver=receiver;instance.deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
       break;
     }
   }
@@ -871,6 +974,12 @@ export class ScriptRuntime {
     const instance=this.instance(receiver);
     const binding=instance.bindings.get(field.key);
     if(binding)return propertyReference(field,binding.get,binding.set);
+    const cell=instance.cells?.get(field.key);
+    if(cell){
+      const poisoned=instance.poison?.get(field.key);
+      if(poisoned&&!poisoned.lazy)poisoned.read();
+      return storageReference(field,new CellStorage(this,instance,field,cell));
+    }
     if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
     return propertyReference(field,()=>instance.slots.get(field.key),value=>instance.slots.set(field.key,value));
   }
@@ -881,15 +990,16 @@ export class ScriptRuntime {
     return this.namedHandle(this.instance(receiver),name).field;
   }
   /** The attached instance's handle for a spelled property name: its linked
-   * field, resolved once per class, and the field's value codec. A class's
-   * member tables only hold fields whose linking finished before the class
-   * was returned, so the codec is built once, on first value access. */
+   * field, resolved once per class, the field's value codec and its image
+   * cell. A class's member tables only hold fields whose linking finished
+   * before the class was returned, so the codec is built once, on first value
+   * access; cells are per class. */
   namedHandle(instance,name) {
     const table=instance.fieldTable??=fieldTable(instance.cls);
     let handle=table.get(name);
     if(handle===undefined){
       const field=this.lookupMember(instance.cls,'fields',name);
-      table.set(name,handle=field?{field,codec:null}:null);
+      table.set(name,handle=field?{field,codec:null,cell:instance.cells?.get(field.key)??null}:null);
     }
     if(!handle)throw new Error(`Original property was not found: ${name}`);
     return handle;
@@ -900,9 +1010,19 @@ export class ScriptRuntime {
     if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).get();
     return this.readInstanceField(this.instance(receiver),field);
   }
-  readInstanceField(instance,field,codec=propertyCodec(field)) {
+  readInstanceField(instance,field,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
     const binding=instance.bindings.get(field.key);
     if(binding)return codec.read(binding.get());
+    return this.readStorage(instance,field,codec,cell);
+  }
+  /** The object's own storage for a property: its image cell, or the logical
+   * slot of a property without one. A cell read is the codec's copy of the
+   * stored value; a slot is filled with its default on first access. */
+  readStorage(instance,field,codec,cell) {
+    if(cell){
+      const poisoned=instance.poison?.get(field.key);
+      return poisoned?codec.read(poisoned.read()):readCell(cell,instance.image,instance.refs);
+    }
     let raw=instance.slots.get(field.key);
     if(raw===undefined&&!instance.slots.has(field.key))
       instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
@@ -914,26 +1034,99 @@ export class ScriptRuntime {
     if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).set(value);
     return this.writeInstanceField(this.instance(receiver),field,value);
   }
-  writeInstanceField(instance,field,value,codec=propertyCodec(field)) {
+  writeInstanceField(instance,field,value,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
     const binding=instance.bindings.get(field.key);
     if(binding)binding.set(codec.store(value,binding.get()));
-    else {
-      let raw=instance.slots.get(field.key);
-      if(raw===undefined&&!instance.slots.has(field.key))
-        instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
-      instance.slots.set(field.key,codec.store(value,raw));
-    }
+    else this.writeStorage(instance,field,value,codec,cell);
     return codec.copy(value);
+  }
+  writeStorage(instance,field,value,codec,cell) {
+    if(cell){
+      const poisoned=instance.poison?.get(field.key);
+      if(poisoned?.write)poisoned.read();
+      writeCell(cell,instance.image,instance.refs,codec.copy(value));
+      if(poisoned)this.clearPoison(instance,field.key);
+      return;
+    }
+    let raw=instance.slots.get(field.key);
+    if(raw===undefined&&!instance.slots.has(field.key))
+      instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+    instance.slots.set(field.key,codec.store(value,raw));
   }
   // A receiver attached as a script instance is never the unattached-class
   // case readField/writeField serve, so the name path goes straight to it.
   readNamed(receiver,name) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
-    return this.readInstanceField(instance,handle.field,handle.codec??=propertyCodec(handle.field));
+    return this.readInstanceField(instance,handle.field,handle.codec??=propertyCodec(handle.field),handle.cell);
   }
   writeNamed(receiver,name,value) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
-    return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field));
+    return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field),handle.cell);
+  }
+  /** A bound property's storage beneath its host binding. A binding whose
+   * host state is absent (an actor without live Touching slots, a player
+   * region not yet zoned) falls back to it, as it fell back to the map
+   * actor's stored initial value. */
+  readStoredField(receiver,field) {
+    const instance=this.instance(receiver);
+    return this.readStorage(instance,field,propertyCodec(field),instance.cells?.get(field.key));
+  }
+  writeStoredField(receiver,field,value) {
+    const instance=this.instance(receiver);
+    this.writeStorage(instance,field,value,propertyCodec(field),instance.cells?.get(field.key));
+  }
+  hasImageCell(receiver,field) {
+    return Boolean(this.instance(receiver).cells?.has(field.key));
+  }
+  /** Map-authored properties over the class defaults: the serialized tagged
+   * properties a loaded level actor gets after InitProperties
+   * (docs/script-map-actors.md). `initial(field)` is prepareMapProperties'
+   * value for one field, and `initial.authoredFields` lists the authored
+   * ones. A value the map adapter cannot produce, or that its property cannot
+   * copy, is rethrown by later accesses the way the map binding threw on
+   * first read; a property without an image cell stays with the host. */
+  applyInitialProperties(receiver,initial) {
+    const instance=this.instance(receiver);
+    if(!instance.cells)return;
+    const source=this.classImage(instance.cls);
+    if(source!==instance.imageSource)this.copyStorage(instance,{bytes:source.view.buffer,refs:source.refs,poison:source.poison});
+    instance.imageSource=source;
+    // A map actor's property reached its default through a binding, which
+    // threw on get and set, not when the reference was made.
+    if(instance.poison)for(const [key,entry] of instance.poison)instance.poison.set(key,{...entry,lazy:true});
+    for(const field of initial.authoredFields){
+      const cell=instance.cells.get(field.key);
+      if(!cell)continue;
+      let value,logical;
+      try{value=initial(field);}
+      catch{this.poisonField(instance,field.key,{read:()=>initial(field),write:true,lazy:true});continue;}
+      try{logical=copyValue(field,value);}
+      catch{this.poisonField(instance,field.key,{read:()=>value,write:false,lazy:true});continue;}
+      writeCell(cell,instance.image,instance.refs,logical);
+      if(instance.poison?.has(field.key))this.clearPoison(instance,field.key);
+    }
+  }
+  /** The object's storage, to restore with restoreStorage (a mover reset). */
+  snapshotStorage(receiver) {
+    const instance=this.instance(receiver);
+    if(!instance.image)return null;
+    return {bytes:instance.image.buffer.slice(0),refs:instance.refs.slice(),poison:instance.poison&&new Map(instance.poison)};
+  }
+  restoreStorage(receiver,snapshot) {
+    if(snapshot)this.copyStorage(this.instance(receiver),snapshot);
+  }
+  /** Overwrite in place: live references hold the image and refs arrays. */
+  copyStorage(instance,{bytes,refs,poison}) {
+    new Uint8Array(instance.image.buffer).set(new Uint8Array(bytes));
+    for(let index=0;index<refs.length;index++)instance.refs[index]=refs[index];
+    instance.poison=poison?.size?new Map(poison):null;
+  }
+  poisonField(instance,key,entry) {
+    (instance.poison??=new Map()).set(key,entry);
+  }
+  clearPoison(instance,key) {
+    instance.poison.delete(key);
+    if(!instance.poison.size)instance.poison=null;
   }
   async prepareResource(reference) {
     if(!reference)return null;
