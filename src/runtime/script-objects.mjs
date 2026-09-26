@@ -84,7 +84,12 @@ export class ScriptObjects {
       operands.set(node,value);
     }};
   }
-  operand(script,node) { return this.operandReference(script,node).get(); }
+  operand(script,node) {
+    // operandReference(...).get() without allocating the lvalue per access.
+    const operands=this.linkedOperands.get(script)?.objects;
+    if(!operands?.has(node))throw new Error(`Unlinked bytecode operand ${script.entry.path}:${node?.offset}`);
+    return operands.get(node);
+  }
   nameOperandReference(script,node) {
     if(!this.linkedOperands.get(script)?.names.has(node))
       throw new Error(`Unlinked bytecode name operand ${script.entry.path}`);

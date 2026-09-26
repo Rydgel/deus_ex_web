@@ -100,7 +100,7 @@ The costs are representation, not work, so the order is:
 
 1. **Object memory** ([contract and plan](object-memory.md)). Value access
    without references, then original-layout storage at the recovered UProperty
-   offsets. Stage 1a is below.
+   offsets. Stages 1a and 1b are below.
 2. **Exact x87 fast paths.** A single `+ − × ÷ √` on float32 operands stored to
    float32 is identical with 53- and 64-bit intermediates: double rounding is
    innocuous when the intermediate precision is at least twice the target's
@@ -197,6 +197,81 @@ A related finding, not caused by this work: every `createGame` on a shared
 `AssetStore` retains about 315 MB after forced GC, on HEAD and here alike
 (39 → 403 → 719 → 1,034 → 1,349 MB over four games). Validators that build
 many games pay for it in memory.
+
+## Stage 1b: resolved field handles
+
+After stage 1a, Play still made about 5,300 host reads and 260 writes per
+frame by name. Pawn physics made about 1,100 of them, NPC mesh admission and
+posing about 2,000 (`Mesh` for every level actor), actor tick about 1,000 and
+the animation views about 750. In Node, one scalar read cost about 145 ns:
+38 ns resolving the name, about 30 ns validating the cached descriptor and
+16 ns for an instance lookup that ran twice. The binding lookup and the copy
+itself took about 10 ns each.
+
+Changes, all host representation:
+
+* Each class has a table from spelled property name to a handle: the linked
+  field, found once through `lookupMember`, and its value codec. Handles for
+  a name that does not exist are cached as misses. `readNamed`/`writeNamed`
+  look up the instance once and go straight to its class table.
+* `propertyCodec` in `script-values.mjs` specializes a property's read, store
+  and copy operations once from its descriptor. It is cached with the
+  validated descriptor entry, and a linked field record reaches that entry
+  through one lookup keyed by the record. A single non-bool scalar reads
+  through the same per-type copy that `copyScalar` uses. Arrays and bools, whose
+  bit mask is read live, keep the general path.
+* A class-table handle keeps its codec without validating it again. A field
+  enters a class's member table only after `ScriptRuntime.field` and the class
+  loader have written the metadata slots the descriptor depends on. A
+  headless Training run (startup plus 900 ticks) checked 3,842 handle codecs
+  against the validated descriptor 29,373 times and found none stale.
+* The per-tick animation view is built once per attached instance. The tick
+  phase writes only through the view's accessors. The blend-starting natives
+  keep a fresh view per call, because `startAnimation` can add a plain
+  `animFlags` property to a blend object.
+* Allocations are gone from four paths:
+  * bytecode object operand reads;
+  * the level's `DistanceFromPlayer` pass;
+  * the `pendingKill` getter;
+  * the timer state accessors.
+
+  A map actor's generic binding now does one store lookup where it did two.
+
+Every read, write, default and error path is unchanged. In Node, a scalar
+`readNamed` now costs about 55 ns; a vector about 100 ns and an `FName[4]`
+about 127 ns, because both copy the whole value.
+
+Paired A/B, alternating `3ed84fe` (a worktree on port 5199) with the working
+tree (port 5173), three walking runs each, medians. The machine ran slower in
+this round than in stage 1a's (HEAD 23.5 ms against 20.8 ms in an earlier
+round), so compare within the table:
+
+| Per frame | `3ed84fe` | Stage 1b |
+| --- | ---: | ---: |
+| Frame interval | 23.5 ms | 21.2 ms |
+| Frames missing vsync (of 300) | 125 | 83 |
+| Sampled main-thread CPU | 26.6 ms | 23.9 ms |
+| `game.tick` | 9.6 ms | 8.4 ms |
+| Mesh update | 5.6 ms | 5.1 ms |
+| HUD | 4.2 ms | 3.9 ms |
+| Garbage collector | 0.74 ms | 0.55 ms |
+| Allocation | 14.6 MB | 14.0 MB |
+| Retained heap | 325 MB | 326 MB |
+| Object-model self time (mean of runs) | 3.9 ms | 2.3 ms |
+| `lookupMember` / `fieldReference` / `namedReference` calls | 6,290 / 1,834 / 288 | 782 / 1,438 / 60 |
+
+Verification: all 541 unit tests pass, and the full sweep passed 395 of 397.
+The Stage 3 gate (red by design) gives the same 90 probe outcomes as
+`3ed84fe`. `validate-npc-mesh-preview` fails with the same assertion recorded
+at `5978bf3` ("unchanged poses do not re-upload geometry").
+
+The largest object-model cost left is the VM's own property access. The VM
+evaluates every variable operand to an lvalue, so about 1,440
+`fieldReference` calls per frame still build a `PropertyReference`, 0.7 MB per
+frame, even where the value is only read. An rvalue path in the VM, or 1d's
+image addresses, removes it. The rest of the frame is now dominated by work
+outside the object model: line checks and their BigInt x87 arithmetic, GetFrame
+and normals, the HUD's native heap and three.js submission.
 
 ## Reproduce
 

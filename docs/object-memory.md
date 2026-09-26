@@ -4,8 +4,8 @@ Step 1 of the [frame-cost direction](play-frame-cost.md): script objects
 should hold their properties the way the original does, in one byte image per
 object at the linked UProperty offsets. This note records the original contract
 already established by recovered instructions, the storage it would replace, and
-the staged plan. Only stage 1a is implemented. Everything after it is design and
-stays unsupported until its own evidence and validation land.
+the staged plan. Stages 1a and 1b are implemented. Everything after them is
+design and stays unsupported until its own evidence and validation land.
 
 ## Original contract
 
@@ -76,11 +76,14 @@ values instead of allocating an lvalue per access. Details, including the
 rejected per-instance reference cache, are in
 [frame cost](play-frame-cost.md#stage-1a-value-access-without-references).
 
-**1b: resolved field handles.** Host views (pawn physics, animation, actor
-tick, mesh preview) resolve each field once per class. An access then does no
-name lookup and no binding search. Expected to remove most of the remaining
-~0.9 ms of `readField`/`readNamed`/`lookupMember` self time. Semantics stay
-those of stage 1a.
+**1b: resolved field handles (implemented).** Each class resolves a spelled
+property name once, to a handle holding the linked field and its value codec.
+Host views keep their names and reach the handle through the instance's class
+table, so an access does no member lookup and no descriptor validation. The
+binding search stays: bindings can be replaced after attach (the player's
+Login rebinding), and it costs one map lookup until 1d/1e remove the bindings
+themselves. Details are in
+[frame cost](play-frame-cost.md#stage-1b-resolved-field-handles).
 
 **1c: layout tables and the native cross-check.** Build each loaded class's
 table of (offset, element size, dimension, kind, bool mask) from the linker's

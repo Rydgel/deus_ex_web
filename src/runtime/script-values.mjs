@@ -142,23 +142,43 @@ function innerMetadata(metadata) {
 // (ScriptRuntime.field, the class loader, struct layout). Rebuilding it on
 // every property access dominated Play's allocation (docs/play-frame-cost.md).
 const descriptorCache = new WeakMap();
+// A linked field record ({key, metadata}) resolves straight to its entry,
+// without rebuilding the key string or a second map lookup per access.
+const fieldDescriptors = new WeakMap();
+
+const currentFor = (cached, metadata) =>
+  cached.arrayDim === metadata.arrayDim && cached.elementSize === metadata.elementSize &&
+  cached.structKey === metadata.structKey && cached.structFields === metadata.structFields &&
+  cached.innerMetadata === metadata.innerMetadata;
 
 function describe(field) {
+  return describeEntry(field)?.descriptor ?? describeUncached(field);
+}
+
+/** The cached entry for a property, or null when it has no metadata object
+ * to key on (such a caller gets an uncached descriptor). */
+function describeEntry(field) {
   const metadata = field?.metadata ?? field;
-  if (!metadata || typeof metadata !== 'object') return describeUncached(field);
+  if (!metadata || typeof metadata !== 'object') return null;
+  const linked = field !== metadata && typeof field.key === 'string';
+  if (linked) {
+    const direct = fieldDescriptors.get(field);
+    if (direct && direct.metadata === metadata && direct.key === field.key && currentFor(direct, metadata))
+      return direct;
+  }
   const key = String(field?.metadata
     ? field.key ?? metadata.path ?? metadata.name ?? '<property>'
     : metadata.key ?? metadata.path ?? metadata.name ?? '<property>');
   let byKey = descriptorCache.get(metadata);
-  const cached = byKey?.get(key);
-  if (cached && cached.arrayDim === metadata.arrayDim && cached.elementSize === metadata.elementSize &&
-      cached.structKey === metadata.structKey && cached.structFields === metadata.structFields &&
-      cached.innerMetadata === metadata.innerMetadata) return cached.descriptor;
-  const descriptor = describeUncached(field);
-  if (!byKey) descriptorCache.set(metadata, byKey = new Map());
-  byKey.set(key, { descriptor, arrayDim: metadata.arrayDim, elementSize: metadata.elementSize,
-    structKey: metadata.structKey, structFields: metadata.structFields, innerMetadata: metadata.innerMetadata });
-  return descriptor;
+  let cached = byKey?.get(key);
+  if (!cached || !currentFor(cached, metadata)) {
+    if (!byKey) descriptorCache.set(metadata, byKey = new Map());
+    byKey.set(key, cached = { descriptor: describeUncached(field), codec: null, metadata, key,
+      arrayDim: metadata.arrayDim, elementSize: metadata.elementSize, structKey: metadata.structKey,
+      structFields: metadata.structFields, innerMetadata: metadata.innerMetadata });
+  }
+  if (linked) fieldDescriptors.set(field, cached);
+  return cached;
 }
 
 function describeUncached(field) {
@@ -294,20 +314,33 @@ function arrayValue(value, descriptor, operation) {
   return value.map(item => copyScalar(item, descriptor.element, operation));
 }
 
+// Logical copies of the simple scalar types, shared by copyScalar and the
+// specialized readers of propertyCodec.
+const copyBool = value => Boolean(value);
+const copyByte = value => Number(value ?? 0) & 0xff;
+const copyInt = value => Number(value ?? 0) | 0;
+const copyFloat = value => Math.fround(Number(value ?? 0));
+const copyName = value => {
+  if (value == null) return 'None';
+  return typeof value === 'object' && value.name != null ? String(value.name) : String(value);
+};
+const copyString = value => value == null ? '' : String(value);
+// UObjectProperty/ClassProperty copies the pointer.  Object identity is
+// the value in the original VM; cloning a linked object would be wrong.
+const copyPointer = value => value ?? null;
+const simpleScalarCopies = new Map([['byte', copyByte], ['int', copyInt], ['float', copyFloat],
+  ['name', copyName], ['string', copyString], ['object', copyPointer], ['class', copyPointer]]);
+
 function copyScalar(value, descriptor, operation = 'copyValue') {
   const { type, metadata } = descriptor;
   switch (type) {
-    case 'bool': return Boolean(value);
-    case 'byte': return Number(value ?? 0) & 0xff;
-    case 'int': return Number(value ?? 0) | 0;
-    case 'float': return Math.fround(Number(value ?? 0));
-    case 'name':
-      if (value == null) return 'None';
-      return typeof value === 'object' && value.name != null ? String(value.name) : String(value);
-    case 'string': return value == null ? '' : String(value);
-    // UObjectProperty/ClassProperty copies the pointer.  Object identity is
-    // the value in the original VM; cloning a linked object would be wrong.
-    case 'object': case 'class': return value ?? null;
+    case 'bool': return copyBool(value);
+    case 'byte': return copyByte(value);
+    case 'int': return copyInt(value);
+    case 'float': return copyFloat(value);
+    case 'name': return copyName(value);
+    case 'string': return copyString(value);
+    case 'object': case 'class': return copyPointer(value);
     case 'array':
       if(!Array.isArray(value))throw new TypeError(`${operation} requires an Array for ${descriptor.key}`);
       return descriptor.innerType==='string'?value.map(item=>item==null?'':String(item)):value.map(item=>Number(item)|0);
@@ -468,16 +501,32 @@ export function propertyReference(field, get, set) {
   return new PropertyReference(descriptor, field, { descriptor, get, set }, null, null);
 }
 
-/** `propertyReference(field, get, set).get()` for a stored raw value,
- * without allocating the lvalue. */
-export function readPropertyValue(field, raw) {
-  return copyStored(raw, describe(field), 'propertyReference.get');
+/** A property's value operations, specialized once from its descriptor:
+ * `read(raw)` is `propertyReference(field, get, set).get()` for a stored raw
+ * value, `store(value, raw)` the raw value `.set(value)` stores over `raw`,
+ * and `copy(value)` is `copyValue(field, value)`. The codec is cached with the
+ * validated descriptor, so it follows a later metadata rewrite the same way. */
+export function propertyCodec(field) {
+  const entry = describeEntry(field);
+  if (!entry) return codecFor(describeUncached(field));
+  return entry.codec ??= codecFor(entry.descriptor);
 }
 
-/** The raw value `propertyReference(field, get, set).set(value)` stores over
- * `raw`, without allocating the lvalue. */
-export function storedPropertyValue(field, value, raw) {
-  return copyToStorage(value, describe(field), raw);
+function codecFor(descriptor) {
+  return {
+    read: readerFor(descriptor),
+    store: (value, raw) => copyToStorage(value, descriptor, raw),
+    copy: value => copyFromDescriptor(descriptor, value),
+  };
+}
+
+// copyStored without its per-access branches: a single non-bool element is
+// copyScalar of that element. Arrays and bools (a live bitMask) stay general.
+function readerFor(descriptor) {
+  if (descriptor.array || descriptor.type === 'bool')
+    return raw => copyStored(raw, descriptor, 'propertyReference.get');
+  const element = descriptor.element;
+  return simpleScalarCopies.get(element.type) ?? (raw => copyScalar(raw, element, 'propertyReference.get'));
 }
 
 /**

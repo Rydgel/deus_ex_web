@@ -380,7 +380,8 @@ function makeBinding(record, field) {
   // A reset clears the store, so the next read starts from the initial value.
   return {
     get: () => {
-      if (record.store.has(field.key)) return record.store.get(field.key);
+      const stored = record.store.get(field.key);
+      if (stored !== undefined || record.store.has(field.key)) return stored;
       const value = record.initialProperty(field);
       record.store.set(field.key, value);
       return value;
@@ -1848,9 +1849,9 @@ export async function createScriptDoors({
       for (let index = level.iFirstNetActor ?? 0; index < level.actors.length; index++) {
         const actor = level.actors[index];
         if (!actor) continue;
-        let reference;
-        try { reference = runtime.namedReference(actor, 'DistanceFromPlayer'); } catch { continue; }
-        reference.set(playerDistance(runtime.readNamed(actor, 'Location'), origin));
+        let field;
+        try { field = runtime.namedField(actor, 'DistanceFromPlayer'); } catch { continue; }
+        runtime.writeField(actor, field, playerDistance(runtime.readNamed(actor, 'Location'), origin));
       }
     }
     // ULevel::Tick clears the deferred-actor list before its actor loop.

@@ -9,7 +9,7 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
-  zeroValue, copyValue, propertyReference, arrayReference, readPropertyValue, storedPropertyValue,
+  zeroValue, copyValue, propertyReference, arrayReference, propertyCodec,
 } from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
@@ -153,6 +153,15 @@ import {parseToken} from './script-console-command.mjs';
 
 const lower=name=>String(name).toLowerCase();
 const memberCaches=new WeakMap();
+// Stage 1b (docs/object-memory.md): per class, each spelled property name
+// resolved once to a handle on its linked field (a miss included).
+const fieldTables=new WeakMap();
+const fieldTable=cls=>{
+  let table=fieldTables.get(cls);
+  if(!table)fieldTables.set(cls,table=new Map());
+  return table;
+};
+const animationTickViews=new WeakMap();
 /** exec bodies resolve each out expression to a raw address; a non-assignable
  * expression lands in a private temporary whose writes never escape. */
 const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{set(){}};
@@ -535,7 +544,7 @@ export class ScriptRuntime {
   attach(instance,cls,overrides=new Map()) {
     if(this.instances.has(instance))throw new Error('Script instance is already attached');
     const state=new ScriptState(instance,this.services);state.locals=new Map();
-    this.instances.set(instance,{cls,defaultsSnapshot:new Map(cls.defaults),slots:new Map(overrides),bindings:new Map(),state,pendingKill:false,singular:false,sleepTimeLeft:0});
+    this.instances.set(instance,{cls,fieldTable:fieldTable(cls),defaultsSnapshot:new Map(cls.defaults),slots:new Map(overrides),bindings:new Map(),state,pendingKill:false,singular:false,sleepTimeLeft:0});
     state.transition(null,cls.metadata);
     return state;
   }
@@ -655,7 +664,7 @@ export class ScriptRuntime {
           const value=template?this.fieldReference(template,field).get():this.defaultValue(cls,field);
           slots.set(field.key,copyValue(field,value));
         }
-        this.instances.set(object.identity,{cls,defaultsSnapshot:new Map(cls.defaults),slots,bindings:new Map(),state:null,pendingKill:false,singular:false});
+        this.instances.set(object.identity,{cls,fieldTable:fieldTable(cls),defaultsSnapshot:new Map(cls.defaults),slots,bindings:new Map(),state:null,pendingKill:false,singular:false});
         this.bindNativeObject(object.identity,object);
         services.initNativeProperties(object,template);
       },
@@ -703,7 +712,8 @@ export class ScriptRuntime {
     bind('Class',()=>instance.cls.record,()=>{throw new Error('Changing native Class is unsupported');});
     bind('ObjectInternal',()=>{throw new Error('Raw native ObjectInternal pointers are not represented by the script host');},()=>{throw new Error('Writing native ObjectInternal is unsupported');});
     for(let cls=instance.cls;cls;cls=cls.base)if(cls===this.actorClass){
-      Object.defineProperty(instance,'pendingKill',{get:()=>Boolean(this.fieldReference(receiver,this.lookupMember(cls,'fields','bDeleteMe')).get()),configurable:true});
+      const deleteMe=this.lookupMember(cls,'fields','bDeleteMe');
+      Object.defineProperty(instance,'pendingKill',{get:()=>Boolean(this.readField(receiver,deleteMe)),configurable:true});
       break;
     }
   }
@@ -868,33 +878,63 @@ export class ScriptRuntime {
     return this.fieldReference(receiver,this.namedField(receiver,name));
   }
   namedField(receiver,name) {
-    const field=this.lookupMember(this.instance(receiver).cls,'fields',name);
-    if(!field)throw new Error(`Original property was not found: ${name}`);
-    return field;
+    return this.namedHandle(this.instance(receiver),name).field;
+  }
+  /** The attached instance's handle for a spelled property name: its linked
+   * field, resolved once per class, and the field's value codec. A class's
+   * member tables only hold fields whose linking finished before the class
+   * was returned, so the codec is built once, on first value access. */
+  namedHandle(instance,name) {
+    const table=instance.fieldTable??=fieldTable(instance.cls);
+    let handle=table.get(name);
+    if(handle===undefined){
+      const field=this.lookupMember(instance.cls,'fields',name);
+      table.set(name,handle=field?{field,codec:null}:null);
+    }
+    if(!handle)throw new Error(`Original property was not found: ${name}`);
+    return handle;
   }
   /** fieldReference(receiver, field).get() without allocating the lvalue.
    * Host code reads values; only the VM needs assignable references. */
   readField(receiver,field) {
     if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).get();
-    const instance=this.instance(receiver),binding=instance.bindings.get(field.key);
-    if(binding)return readPropertyValue(field,binding.get());
-    if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
-    return readPropertyValue(field,instance.slots.get(field.key));
+    return this.readInstanceField(this.instance(receiver),field);
+  }
+  readInstanceField(instance,field,codec=propertyCodec(field)) {
+    const binding=instance.bindings.get(field.key);
+    if(binding)return codec.read(binding.get());
+    let raw=instance.slots.get(field.key);
+    if(raw===undefined&&!instance.slots.has(field.key))
+      instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+    return codec.read(raw);
   }
   /** fieldReference(receiver, field).set(value): same storage order and
    * returned logical copy, without allocating the lvalue. */
   writeField(receiver,field,value) {
     if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).set(value);
-    const instance=this.instance(receiver),binding=instance.bindings.get(field.key);
-    if(binding)binding.set(storedPropertyValue(field,value,binding.get()));
-    else {
-      if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
-      instance.slots.set(field.key,storedPropertyValue(field,value,instance.slots.get(field.key)));
-    }
-    return copyValue(field,value);
+    return this.writeInstanceField(this.instance(receiver),field,value);
   }
-  readNamed(receiver,name){return this.readField(receiver,this.namedField(receiver,name));}
-  writeNamed(receiver,name,value){return this.writeField(receiver,this.namedField(receiver,name),value);}
+  writeInstanceField(instance,field,value,codec=propertyCodec(field)) {
+    const binding=instance.bindings.get(field.key);
+    if(binding)binding.set(codec.store(value,binding.get()));
+    else {
+      let raw=instance.slots.get(field.key);
+      if(raw===undefined&&!instance.slots.has(field.key))
+        instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+      instance.slots.set(field.key,codec.store(value,raw));
+    }
+    return codec.copy(value);
+  }
+  // A receiver attached as a script instance is never the unattached-class
+  // case readField/writeField serve, so the name path goes straight to it.
+  readNamed(receiver,name) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
+    return this.readInstanceField(instance,handle.field,handle.codec??=propertyCodec(handle.field));
+  }
+  writeNamed(receiver,name,value) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
+    return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field));
+  }
   async prepareResource(reference) {
     if(!reference)return null;
     return this.resourceRegistry().materialize(reference.asset,reference.index);
@@ -2901,17 +2941,23 @@ export class ScriptRuntime {
   }
   timerState(receiver) {
     if(!this.actorClass)throw new Error('Actor timer fields are not linked');
-    const state={};
+    const state={};this.instance(receiver);
     for(const [key,name] of [['timerRate','TimerRate'],['timerCounter','TimerCounter'],['timerLoop','bTimerLoop']]){
-      const ref=this.fieldReference(receiver,this.lookupMember(this.actorClass,'fields',name));
-      Object.defineProperty(state,key,{get:ref.get,set:ref.set,enumerable:true});
+      const field=this.lookupMember(this.actorClass,'fields',name);
+      Object.defineProperty(state,key,{get:()=>this.readField(receiver,field),
+        set:value=>this.writeField(receiver,field,value),enumerable:true});
     }
     return state;
   }
   /** Original animation phase, before the script Tick/ProcessState phases.
    * Caller owns Actor.Tick admission/order and prepares reachable callbacks. */
   processActorAnimation(receiver,seconds) {
-    const animation=animationTickView(this,receiver);
+    // The tick view only forwards to the actor's fields, and this phase
+    // writes through its accessors alone, so one view serves every tick of
+    // an attached instance.
+    const instance=this.instance(receiver);
+    let animation=animationTickViews.get(instance);
+    if(!animation)animationTickViews.set(instance,animation=animationTickView(this,receiver));
     return tickActorAnimation(animation,seconds,{
       mesh:()=>this.meshPayload(receiver),simulatedPawn:animation.simulatedPawn,
       findFunction:(name,checked)=>{
