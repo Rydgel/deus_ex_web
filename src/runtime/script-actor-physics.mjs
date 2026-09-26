@@ -11,13 +11,13 @@ import {setScriptRotation} from './script-set-rotation.mjs';
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
 export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
   if(!runtime.collisionViewActors.has(actor))throw new Error('Falling actor lacks its native collision view');
-  const level=runtime.levelFor(actor),get=name=>runtime.namedReference(actor,name).get();
+  const level=runtime.levelFor(actor),get=name=>runtime.readNamed(actor,name);
   const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
   const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
   const host={};
   for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
-    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.namedReference(actor,name).set(value)});
+    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
   Object.assign(host,{gravity:zone.ZoneGravity??[0,0,-950],zoneVelocity:zone.ZoneVelocity??[0,0,0],
     terminalVelocity:zone.ZoneTerminalVelocity??2500,
     zoneNumber:runtime.regionValue(actor).zoneNumber,
@@ -36,8 +36,8 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
 }
 
 export function runActorRotation(runtime,actor,seconds) {
-  const read=(target,name)=>runtime.namedReference(target,name).get();
-  const write=(target,name,value)=>runtime.namedReference(target,name).set(value);
+  const read=(target,name)=>runtime.readNamed(target,name);
+  const write=(target,name,value)=>runtime.writeNamed(target,name,value);
   const view={};
   for(const [key,name] of Object.entries({rotation:'Rotation',rotationRate:'RotationRate',
     desiredRotation:'DesiredRotation',bRotateToDesired:'bRotateToDesired',bFixedRotationDir:'bFixedRotationDir'}))

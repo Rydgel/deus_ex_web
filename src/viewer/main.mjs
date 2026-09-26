@@ -355,7 +355,7 @@ previews.instructor=()=>{
     const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor;
     const instructor=runtime.levelFor(player).actors.find(actor=>actor?.name==='UNATCOTroop3');
     if(!instructor)throw new Error('Training instructor is unavailable');
-    const location=runtime.namedReference(instructor,'Location').get();
+    const location=runtime.readNamed(instructor,'Location');
     game.collision.queries.changeActor(player,()=>{
       game.player.position=[location[0]-80,location[1],location[2]];
       game.player.velocity=[0,0,0];
@@ -381,7 +381,7 @@ previews.weapon = async () => {
     const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
     const crowbar = runtime.levelFor(player).actors.find(actor => actor?.name === 'WeaponCrowbar1');
     if (!crowbar) throw new Error('Training crowbar is unavailable');
-    const location = runtime.namedReference(crowbar, 'Location').get();
+    const location = runtime.readNamed(crowbar, 'Location');
     game.collision.queries.changeActor(player, () => {
       game.player.position = [location[0] - 48, location[1], location[2]];
       game.player.velocity = [0, 0, 0];
@@ -395,7 +395,7 @@ previews.weapon = async () => {
     const position=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===crowbar);
     const equipped = await game.activateBelt(position);
     const crate=runtime.levelFor(player).actors.find(actor=>actor?.name==='CrateBreakableMedGeneral1');
-    const at=runtime.namedReference(crate,'Location').get();
+    const at=runtime.readNamed(crate,'Location');
     // This diagnostic placement matches validate-crowbar-crate's measured
     // reachable trace, while every swing still runs through public input/ticks.
     game.collision.queries.changeActor(player,()=>{
@@ -416,7 +416,7 @@ previews.datacube = () => {
     const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
     const cube = runtime.levelFor(player).actors.find(actor => actor?.name === 'DataCube0');
     if (!cube) throw new Error('Training DataCube0 is unavailable');
-    const at = runtime.namedReference(cube, 'Location').get();
+    const at = runtime.readNamed(cube, 'Location');
     game.collision.queries.changeActor(player, () => {
       game.player.position = [at[0] - 56, at[1], at[2] + 48];
       game.player.velocity = [0, 0, 0];
@@ -439,7 +439,7 @@ previews.keypad = () => {
     const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
     const keypad = runtime.levelFor(player).actors.find(actor => actor?.name === 'Keypad0');
     if (!keypad) throw new Error('Training Keypad0 is unavailable');
-    const at = runtime.namedReference(keypad, 'Location').get();
+    const at = runtime.readNamed(keypad, 'Location');
     game.collision.queries.changeActor(player, () => {
       game.player.position = [at[0] - 48, at[1], at[2]];
       game.player.velocity = [0, 0, 0];
@@ -461,13 +461,13 @@ previews.light = () => {
     const player=game.player.collisionActor;
     const lightSwitch=runtime.levelFor(player).actors.find(actor=>actor?.name==='LightSwitch0');
     if (!lightSwitch) throw new Error('Training light switch is unavailable');
-    const location=runtime.namedReference(lightSwitch,'Location').get();
+    const location=runtime.readNamed(lightSwitch,'Location');
     setCamera({position:[location[0]-178,location[1],location[2]+35],rotation:[-2000,0,0]});
     game.doors.scriptRuntime.dispatchEvent(lightSwitch,'Frob',[player,null]);
     game.tick(.4,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
     world.syncMovers(game.collision.movers);
     const lit=runtime.levelFor(player).actors.some(actor=>actor&&/^TriggerLight[0-3]$/.test(actor.name)&&
-      runtime.namedReference(actor,'LightBrightness').get()>0);
+      runtime.readNamed(actor,'LightBrightness')>0);
     toast(`Room lights ${lit?'on':'off'} · switch mesh is not rendered yet`);
   } catch(error) { pauseForRuntimeError(error); }
 };

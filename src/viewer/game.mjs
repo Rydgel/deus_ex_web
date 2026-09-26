@@ -136,8 +136,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // installed preference; the viewer exposes a discoverable toggle. Re-applied
   // on reset so Player start keeps the chosen preference.
   // Player start logs in a new player, so resolve the field on the current one.
-  const subtitlesRef={get:()=>doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles').get(),
-    set:value=>doors.scriptRuntime.runtime.namedReference(player.collisionActor,'bSubtitles').set(value)};
+  const subtitlesRef={get:()=>doors.scriptRuntime.runtime.readNamed(player.collisionActor,'bSubtitles'),
+    set:value=>doors.scriptRuntime.runtime.writeNamed(player.collisionActor,'bSubtitles',value)};
   let subtitlePreference=typeof subtitles==='boolean'?subtitles:null;
   const applySubtitles=()=>{ if(subtitlePreference!==null)subtitlesRef.set(subtitlePreference); };
   applySubtitles();
@@ -160,13 +160,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // their actor name. This is the name only, not a claim that every frob is
   // implemented — item pickup and weapon use remain unbuilt (see notes below).
   const itemLabel = actor => {
-    try { const name = doors.scriptRuntime.runtime.namedReference(actor, 'ItemName').get();
+    try { const name = doors.scriptRuntime.runtime.readNamed(actor, 'ItemName');
       if (name && String(name).toLowerCase() !== 'none') return name; } catch { /* not an item */ }
     return actor.name;
   };
   const describeTarget = actor => !actor ? null : actor.collider ? doors.describe(actor)
     : actor.lineage?.includes('deusex.scriptedpawn')
-      ? {actor,label:doors.scriptRuntime.runtime.namedReference(actor,'FamiliarName').get()}
+      ? {actor,label:doors.scriptRuntime.runtime.readNamed(actor,'FamiliarName')}
       : { actor, label: itemLabel(actor) };
   notes.push('Training Play supports movement, translating doors, decoration physics, frob interactions, item pickup and weapon use. Mission progression remains incomplete.');
   if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Original mesh lighting remains incomplete.`);
@@ -175,12 +175,12 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // user digits below call ActivateBelt without changing its argument.
   const putInHandToggle = item => {
     const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-    const hand = runtime.namedReference(pawn, 'inHand').get();
-    const pending = runtime.namedReference(pawn, 'inHandPending').get();
+    const hand = runtime.readNamed(pawn, 'inHand');
+    const pending = runtime.readNamed(pawn, 'inHandPending');
     const already = hand === item || pending === item;
     runtime.processEvent(pawn, 'PutInHand', [already ? null : item]);
     runtime.processEvent(pawn, 'UpdateInHand', []);
-    return runtime.namedReference(pawn, 'inHand').get();
+    return runtime.readNamed(pawn, 'inHand');
   };
   const game = {
     player, doors, collision, notes, start, interaction, random, hud,
@@ -200,15 +200,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         // original bodies (ParseLeftClick, the HUD frob display) read them.
         const runtime = doors.scriptRuntime?.runtime;
         if (runtime) {
-          runtime.namedReference(player.collisionActor, 'FrobTarget').set(interaction.frobTarget ?? null);
-          runtime.namedReference(player.collisionActor, 'FrobTime').set(Math.fround(interaction.frobTime));
+          runtime.writeNamed(player.collisionActor, 'FrobTarget',interaction.frobTarget ?? null);
+          runtime.writeNamed(player.collisionActor, 'FrobTime',Math.fround(interaction.frobTime));
           // PlayerWalking.PlayerTick -> MultiplayerTick (also single player),
           // before Super.PlayerTick/movement: original per-frame hand transition.
           runtime.processEvent(player.collisionActor,'UpdateInHand',[]);
         }
         player.tick(dt, input);
         // Actor.Tick's pawn tail: FarMoveActor(Weapon, Location, 0, 0).
-        const weapon = runtime?.namedReference(player.collisionActor, 'Weapon').get();
+        const weapon = runtime?.readNamed(player.collisionActor, 'Weapon');
         if (weapon) runtime.farMoveActor(weapon, player.position, 0, 0);
       } });
       hud?.tick(dt);
@@ -269,18 +269,18 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // thrown (DeusExPlayer.DropDecoration).
       if (!actor) {
         const pawn = player.collisionActor;
-        runtime.namedReference(pawn, 'FrobTarget').set(null);
+        runtime.writeNamed(pawn, 'FrobTarget',null);
         doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
+        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
         return { ok: true, message: '' };
       }
       // HighlightCenterObject's cache is the host stand-in for DeusExPlayer.FrobTarget.
       // ParseRightClick reads that property. A NanoKey is picked up there, not via Frob.
       if (actor.lineage?.includes('deusex.nanokey')) {
-        runtime.namedReference(player.collisionActor, 'FrobTarget').set(actor);
+        runtime.writeNamed(player.collisionActor, 'FrobTarget',actor);
         runtime.processEvent(player.collisionActor, 'ParseRightClick', []);
-        const picked = runtime.namedReference(player.collisionActor, 'KeyList').get();
-        interaction.frobTarget = runtime.namedReference(player.collisionActor, 'FrobTarget').get();
+        const picked = runtime.readNamed(player.collisionActor, 'KeyList');
+        interaction.frobTarget = runtime.readNamed(player.collisionActor, 'FrobTarget');
         return { ok: Boolean(picked), message: picked ? '' : 'Nothing selected' };
       }
       if (actor.lineage?.includes('engine.mover')) {
@@ -294,12 +294,12 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // uses above; startup put the item in its auto Pickup state.
       if (actor.lineage?.includes('engine.inventory')) {
         const pawn = player.collisionActor;
-        runtime.namedReference(pawn, 'FrobTarget').set(actor);
+        runtime.writeNamed(pawn, 'FrobTarget',actor);
         runtime.processEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
-        const taken = runtime.namedReference(actor, 'Owner').get() === pawn
-          || runtime.namedReference(actor, 'bHidden').get()
-          || runtime.namedReference(actor, 'bDeleteMe').get();
+        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
+        const taken = runtime.readNamed(actor, 'Owner') === pawn
+          || runtime.readNamed(actor, 'bHidden')
+          || runtime.readNamed(actor, 'bDeleteMe');
         return { ok: Boolean(taken), message: taken ? `Picked up ${itemLabel(actor)}` : '' };
       }
       // Any other target takes the same original right-click path:
@@ -308,11 +308,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // AI event and PlayPickupAnim.
       try {
         const pawn = player.collisionActor;
-        runtime.namedReference(pawn, 'FrobTarget').set(actor);
+        runtime.writeNamed(pawn, 'FrobTarget',actor);
         // The scene router supplies the conversation presenter's lifecycle
         // that a pawn's Frob -> StartConversation needs.
         doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.namedReference(pawn, 'FrobTarget').get();
+        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
         return { ok: true, message: '' };
       } catch (error) {
         // A conversation pawn's Frob still pauses honestly on an unbuilt boundary
@@ -328,7 +328,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     useHeld() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
       const actor = interaction.frobTarget;
-      const hand = runtime.namedReference(pawn, 'inHand').get();
+      const hand = runtime.readNamed(pawn, 'inHand');
       const key = hand ? runtime.instance(hand).cls.record.key : '';
       if (!actor?.lineage?.includes('engine.mover') || (key !== 'deusex.nanokeyring' && key !== 'deusex.lockpick'))
         return { ok: false, message: 'Nothing selected' };
@@ -346,23 +346,23 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     pressFire() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
       const actor = interaction.frobTarget;
-      const hand = runtime.namedReference(pawn, 'inHand').get();
+      const hand = runtime.readNamed(pawn, 'inHand');
       const key = hand ? runtime.instance(hand).cls.record.key : '';
       let result = { ok: false, message: '' };
       if (actor?.lineage?.includes('engine.mover') && (key === 'deusex.nanokeyring' || key === 'deusex.lockpick'))
         result = game.useHeld();
       else runtime.processEvent(pawn, 'ParseLeftClick', []);
-      runtime.namedReference(pawn, 'bFire').set(1);
+      runtime.writeNamed(pawn, 'bFire',1);
       runtime.processEvent(pawn, 'Fire', [0]);
       return result;
     },
     releaseFire() {
-      doors.scriptRuntime.runtime.namedReference(player.collisionActor, 'bFire').set(0);
+      doors.scriptRuntime.runtime.writeNamed(player.collisionActor, 'bFire',0);
     },
     // Legacy research helper for headless checks; Play uses ActivateBelt(0).
     selectNanoKeyRing() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-      const ring = runtime.namedReference(pawn, 'KeyRing').get();
+      const ring = runtime.readNamed(pawn, 'KeyRing');
       if (!ring) return false;
       return putInHandToggle(ring) === ring;
     },
@@ -374,25 +374,25 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     async selectItem(item) {
       if (!item) return { selected: false, name: null, label: null };
       const runtime = doors.scriptRuntime.runtime;
-      const meshRef = runtime.namedReference(item, 'Mesh').get();
+      const meshRef = runtime.readNamed(item, 'Mesh');
       if (meshRef && ['LodMesh', 'Mesh'].includes(meshRef.kind)) await runtime.prepareMesh(item);
       const now = putInHandToggle(item);
       const selected = now === item;
       return { selected, name: now?.name ?? null,
-        label: selected ? String(runtime.namedReference(item, 'ItemName').get() ?? item.name) : null };
+        label: selected ? String(runtime.readNamed(item, 'ItemName') ?? item.name) : null };
     },
     // User.ini binds each digit to original DeusExPlayer.ActivateBelt N.
     async activateBelt(position){
       if(!hud)throw new Error('ActivateBelt requires the original HUD object belt');
       const runtime=doors.scriptRuntime.runtime,pawn=player.collisionActor;
       const belt=hud.read(hud.hud,'belt'),item=hud.invoke(belt,'GetObjectFromBelt',[position]);
-      if(item){const mesh=runtime.namedReference(item,'Mesh').get();if(mesh&&['LodMesh','Mesh'].includes(mesh.kind))await runtime.prepareMesh(item);}
+      if(item){const mesh=runtime.readNamed(item,'Mesh');if(mesh&&['LodMesh','Mesh'].includes(mesh.kind))await runtime.prepareMesh(item);}
       hud.scoped(()=>runtime.dispatchSpawnedEvent(pawn,'ActivateBelt',[position]));
-      return {ok:Boolean(item),name:item?.name??null,label:item?runtime.namedReference(item,'ItemName').get():null};
+      return {ok:Boolean(item),name:item?.name??null,label:item?runtime.readNamed(item,'ItemName'):null};
     },
     async selectWeaponGroup(group) {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-      const head = runtime.namedReference(pawn, 'Inventory').get();
+      const head = runtime.readNamed(pawn, 'Inventory');
       if (!head) return { ok: false, name: null };
       const weapon = runtime.dispatchSpawnedEvent(head, 'WeaponChange', [group]);
       if (!weapon) return { ok: false, name: null, label: null };

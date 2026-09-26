@@ -26,7 +26,7 @@ export async function attachLocalViewportConsole({runtime,assets,engine,viewport
   runtime.bindProperty(viewport,actorField,{get:()=>viewport.actor,set:value=>{viewport.actor=value;}});
   const console={name:'Console',kind:'Console'};
   runtime.attach(console,consoleClass);
-  const set=(object,name,value)=>runtime.namedReference(object,name).set(value);
+  const set=(object,name,value)=>runtime.writeNamed(object,name,value);
   set(viewport,'Console',console);
   // UConsole::_Init, following class-default construction. attach initializes
   // the no-state script frame used by the original InitExecution virtual.

@@ -191,10 +191,10 @@ function verifyLocationDefaults(runtime, managerClass) {
 }
 
 function verifyAugmentationState(runtime, manager, augmentations) {
-  const first = runtime.namedReference(manager, 'FirstAug').get();
+  const first = runtime.readNamed(manager, 'FirstAug');
   if (first !== augmentations[0]) throw new Error('AugmentationManager.FirstAug does not point to AugSpeed1');
   const seen = new Set(), chain = [];
-  for (let current = first; current; current = runtime.namedReference(current, 'Next').get()) {
+  for (let current = first; current; current = runtime.readNamed(current, 'Next')) {
     if (seen.has(current)) throw new Error('AugmentationManager augmentation chain is cyclic');
     seen.add(current); chain.push(current);
   }
@@ -203,23 +203,23 @@ function verifyAugmentationState(runtime, manager, augmentations) {
   if (chain.length !== augmentations.length || chain.some((item, index) => item !== augmentations[index]))
     throw new Error('AugmentationManager linked list identities differ from Spawn order');
   for (const [index, augmentation] of augmentations.entries()) {
-    const owner = runtime.namedReference(augmentation, 'Owner').get();
-    const player = runtime.namedReference(augmentation, 'Player').get();
+    const owner = runtime.readNamed(augmentation, 'Owner');
+    const player = runtime.readNamed(augmentation, 'Player');
     if (owner !== manager) throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Owner`);
-    if (player !== runtime.namedReference(manager, 'Player').get())
+    if (player !== runtime.readNamed(manager, 'Player'))
       throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Player`);
   }
   const byClass = new Map(augmentations.map(item => [classKey(runtime.instance(item).cls), item]));
   for (const key of PLAYER_AUGMENTATION_STARTUP.classes) {
     const augmentation = byClass.get(key);
-    const owned = Boolean(runtime.namedReference(augmentation, 'bHasIt').get());
-    const active = Boolean(runtime.namedReference(augmentation, 'bIsActive').get());
+    const owned = Boolean(runtime.readNamed(augmentation, 'bHasIt'));
+    const active = Boolean(runtime.readNamed(augmentation, 'bIsActive'));
     const expectedOwned = PLAYER_AUGMENTATION_STARTUP.defaults.includes(key);
     const expectedActive = key === 'deusex.augiff' || key === 'deusex.augdatalink';
     if (owned !== expectedOwned || active !== expectedActive)
       throw new Error(`Augmentation ${key} default ownership/active state differs from the original`);
   }
-  const locations = runtime.namedReference(manager, 'AugLocs').get();
+  const locations = runtime.readNamed(manager, 'AugLocs');
   locations.forEach((slot, index) => {
     const expected = PLAYER_AUGMENTATION_STARTUP.locationSlots[index];
     if (readStructMember(slot, 'NumSlots') !== expected.numSlots ||
@@ -348,32 +348,32 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     bindPlayer(actualPlayer);
     for (const [field, expected] of [['BarkManager', 'deusex.barkmanager'],
       ['ThemeManager', 'deusex.colorthememanager'], ['SkillSystem', 'deusex.skillmanager']]) {
-      const subsystem = runtime.namedReference(player, field).get();
+      const subsystem = runtime.readNamed(player, field);
       if (!subsystem || classKey(runtime.instance(subsystem).cls) !== expected)
         throw new Error(`InitializeSubSystems did not create the original ${field}`);
-      if (runtime.namedReference(subsystem, 'Owner').get() !== player)
+      if (runtime.readNamed(subsystem, 'Owner') !== player)
         throw new Error(`${field} Owner is not JCDentonMale`);
     }
-    const manager = runtime.namedReference(player, 'AugmentationSystem').get();
+    const manager = runtime.readNamed(player, 'AugmentationSystem');
     if (!manager) throw new Error('InitializeSubSystems did not create AugmentationManager');
     if (classKey(runtime.instance(manager).cls) !== PLAYER_AUGMENTATION_STARTUP.manager)
       throw new Error('Player AugmentationSystem has the wrong class');
-    if (runtime.namedReference(manager, 'Owner').get() !== player)
+    if (runtime.readNamed(manager, 'Owner') !== player)
       throw new Error('AugmentationManager Owner is not JCDentonMale');
-    if (runtime.namedReference(manager, 'Player').get() !== player)
+    if (runtime.readNamed(manager, 'Player') !== player)
       throw new Error('AugmentationManager Player is not JCDentonMale');
 
     const augmentations = [], seen = new Set();
-    for (let current = runtime.namedReference(manager, 'FirstAug').get(); current;
-      current = runtime.namedReference(current, 'Next').get()) {
+    for (let current = runtime.readNamed(manager, 'FirstAug'); current;
+      current = runtime.readNamed(current, 'Next')) {
       if (seen.has(current)) throw new Error('AugmentationManager augmentation chain is cyclic');
       seen.add(current); augmentations.push(current);
     }
     verifyAugmentationState(runtime, manager, augmentations);
-    const keyRing = runtime.namedReference(player, 'KeyRing').get();
+    const keyRing = runtime.readNamed(player, 'KeyRing');
     if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
       throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');
-    if (runtime.namedReference(keyRing, 'Owner').get() !== player)
+    if (runtime.readNamed(keyRing, 'Owner') !== player)
       throw new Error('NanoKeyRing Owner is not JCDentonMale');
     return freeze({
       manager,

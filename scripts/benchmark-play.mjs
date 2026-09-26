@@ -1,4 +1,6 @@
-/** Local real-data CPU benchmark; excludes GPU draw/compositor time. */
+/** Local real-data CPU benchmark; excludes GPU draw/compositor time. It skips
+ * Play's Login, HUD and presentation path, so it underreports a real frame;
+ * use scripts/profile-play-browser.mjs (docs/play-frame-cost.md). */
 import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';

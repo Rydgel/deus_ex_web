@@ -1,5 +1,9 @@
 # Live NPC frame-time investigation
 
+The current account of a real Play frame, measured in the browser, is
+[frame cost](play-frame-cost.md) (September 26, 2026). The numbers below
+predate Login, the native HUD and the object-model work.
+
 The subsequent [measured Rust/Wasm vertex kernel](lodmesh-wasm.md) reduces
 Training mesh posing from 13.0 to 2.3 ms/frame while retaining the same 46
 original-DLL byte comparisons. The investigation below describes the earlier

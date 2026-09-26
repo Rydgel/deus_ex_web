@@ -35,7 +35,7 @@ export async function prepareConversationBinding(runtime, level) {
   if (levelInfo === null)
     throw new Error('Conversation binding requires a linked DeusExLevelInfo actor');
 
-  const read = (object, key) => runtime.namedReference(object, key).get();
+  const read = (object, key) => runtime.readNamed(object, key);
   const mission = read(levelInfo, 'missionNumber');
   if (!Number.isInteger(mission) || mission < 0)
     throw new Error(`Conversation binding requires a nonnegative DeusExLevelInfo.missionNumber, got ${mission}`);

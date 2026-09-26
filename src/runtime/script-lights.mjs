@@ -149,14 +149,14 @@ export async function createScriptLights({ runtime, assets, lights = [], sharedS
   // before running the original startup body again. Without this, BeginPlay
   // would sample a previous tick's LightBrightness as InitialBrightness.
   const initialFields = new Map(identities.map(light => [light, {
-    Alpha: runtime.namedReference(light, 'Alpha').get(),
-    Direction: runtime.namedReference(light, 'Direction').get(),
-    InitialBrightness: runtime.namedReference(light, 'InitialBrightness').get(),
-    LightBrightness: runtime.namedReference(light, 'LightBrightness').get(),
-    DrawType: runtime.namedReference(light, 'DrawType').get(),
-    SavedTrigger: runtime.namedReference(light, 'SavedTrigger').get(),
-    Skin: runtime.namedReference(light, 'Skin').get(),
-    MultiSkins: runtime.namedReference(light, 'MultiSkins').get().slice(),
+    Alpha: runtime.readNamed(light, 'Alpha'),
+    Direction: runtime.readNamed(light, 'Direction'),
+    InitialBrightness: runtime.readNamed(light, 'InitialBrightness'),
+    LightBrightness: runtime.readNamed(light, 'LightBrightness'),
+    DrawType: runtime.readNamed(light, 'DrawType'),
+    SavedTrigger: runtime.readNamed(light, 'SavedTrigger'),
+    Skin: runtime.readNamed(light, 'Skin'),
+    MultiSkins: runtime.readNamed(light, 'MultiSkins').slice(),
   }]));
   const previousBrightness = new Map();
 
@@ -175,7 +175,7 @@ export async function createScriptLights({ runtime, assets, lights = [], sharedS
   function snapshot(light) {
     const identity = assertSelected(light);
     const state = stateFor(identity);
-    const read = name => cloneSnapshotValue(runtime.namedReference(identity, name).get());
+    const read = name => cloneSnapshotValue(runtime.readNamed(identity, name));
     const node = state.stateNode?.record ?? null;
     return {
       light: identity,
@@ -197,14 +197,14 @@ export async function createScriptLights({ runtime, assets, lights = [], sharedS
 
   function lightingChange(light, force = false) {
     const identity = assertSelected(light);
-    const brightness = runtime.namedReference(identity, 'LightBrightness').get();
+    const brightness = runtime.readNamed(identity, 'LightBrightness');
     const previous = previousBrightness.get(identity);
     previousBrightness.set(identity, brightness);
     if (!force && Object.is(previous, brightness)) return null;
     // The recovered renderer contract covers the selected TriggerLight route's
     // steady surface-list lights. Animated/pulsed light types remain outside
     // this callback until their native renderer path is established.
-    const type = runtime.namedReference(identity, 'LightType').get();
+    const type = runtime.readNamed(identity, 'LightType');
     if (Number(type) !== 1) return null; // LT_Steady
     return { ref: identity.index, values: { LightBrightness: brightness } };
   }
@@ -221,16 +221,16 @@ export async function createScriptLights({ runtime, assets, lights = [], sharedS
     if (state.stateNode) runtime.gotoState(light, 'None');
     const initial = initialFields.get(light);
     for (const name of ['Alpha', 'Direction', 'InitialBrightness', 'LightBrightness', 'DrawType', 'SavedTrigger', 'Skin']) {
-      runtime.namedReference(light, name).set(initial[name]);
+      runtime.writeNamed(light, name,initial[name]);
     }
-    runtime.namedReference(light, 'MultiSkins').set(initial.MultiSkins.slice());
+    runtime.writeNamed(light, 'MultiSkins',initial.MultiSkins.slice());
     // This is the native startup order for this actor: BeginPlay first, then
     // Actor.SetInitialState.  SetInitialState itself executes the original
     // GotoState(InitialState), rather than selecting TriggerToggle here.
     if (sharedStartup) return null;
     runtime.callFunction(functions.beginPlay, light, 0);
     runtime.callFunction(functions.setInitialState, light, 0);
-    previousBrightness.set(light, runtime.namedReference(light, 'LightBrightness').get());
+    previousBrightness.set(light, runtime.readNamed(light, 'LightBrightness'));
     const active = stateFor(light).stateNode;
     if (active?.record !== triggerToggleState.record) {
       throw new Error(`TriggerLight InitialState did not select TriggerToggle: ${light.name ?? '<unnamed>'}`);

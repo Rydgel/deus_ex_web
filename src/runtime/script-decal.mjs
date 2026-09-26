@@ -186,7 +186,7 @@ export async function prepareShadowStartup(runtime,assets,level){
       // ADecal inherits AActor's native Destroy slot (+0x24 = 10301f8c).
       // This is ConditionalDestroy, not the distinct C++ final destructor.
       object.destroy=receiver=>runtime.destroyActorBase(receiver);
-      object.decalSurfaces=runtime.namedReference(object.identity,'SurfList').get();
+      object.decalSurfaces=runtime.readNamed(object.identity,'SurfList');
       runtime.bindProperty(object.identity,surfaceField,{
         get:()=>object.decalSurfaces,set:value=>{object.decalSurfaces=value;},
       });

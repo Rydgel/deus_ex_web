@@ -440,6 +440,7 @@ the original game; keep a per-mission compatibility checklist.
 ## 7. Make the browser runtime reliable
 
 Measure loading time, frame time, memory, and audio latency throughout development.
+The current real-Play frame account and plan is [frame cost](play-frame-cost.md).
 Add visibility/culling, batching, caching, and asset lifetime management where
 measurements justify them. Validate supported desktop browsers, graphics capability
 errors, resize/fullscreen, pointer-lock loss, pause/tab suspension, audio activation,

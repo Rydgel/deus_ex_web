@@ -5,8 +5,8 @@
  */
 export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewport,prepareClass}) {
   if(typeof prepareClass!=='function')throw new TypeError('Player login requires class preparation');
-  const read=(actor,name)=>runtime.namedReference(actor,name).get();
-  const write=(actor,name,value)=>runtime.namedReference(actor,name).set(value);
+  const read=(actor,name)=>runtime.readNamed(actor,name);
+  const write=(actor,name,value)=>runtime.writeNamed(actor,name,value);
   const config=await runtime.classLoader.prepareConfig();
   const candidates=[config.getString('DefaultPlayer','Class','User'),config.getString('URL','Class',null)];
   let spawnClass=null;

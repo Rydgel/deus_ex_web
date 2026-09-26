@@ -8,8 +8,8 @@ import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
 
 export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,onSpeech,prepareClass}){
-  const get=(o,k)=>runtime.namedReference(o,k).get();
-  const set=(o,k,v)=>runtime.namedReference(o,k).set(v);
+  const get=(o,k)=>runtime.readNamed(o,k);
+  const set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const [deus,conSys,engine]=await Promise.all(['DeusEx','ConSys','Engine'].map(x=>assets.get(x)));
   const load=(asset,path)=>runtime.loadClass(asset,asset.exportsByPath.get(path));
   const [playClass,historyClass,historyEventClass]=await Promise.all([

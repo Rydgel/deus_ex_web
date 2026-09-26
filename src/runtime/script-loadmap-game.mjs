@@ -3,8 +3,8 @@
  * Direct local map entry supplies URL.Op=[]; travel options remain unsupported.
  */
 export async function prepareLoadMapGame({runtime, assets, level, levelInfo, prepareClass}) {
-  const read=(actor,name)=>runtime.namedReference(actor,name).get();
-  const write=(actor,name,value)=>runtime.namedReference(actor,name).set(value);
+  const read=(actor,name)=>runtime.readNamed(actor,name);
+  const write=(actor,name,value)=>runtime.writeNamed(actor,name,value);
   const configured=await runtime.classLoader.prepareConfig();
   const defaultType=read(levelInfo,'DefaultGameType');
   const path=defaultType?.key ?? configured.getString('Engine.Engine',

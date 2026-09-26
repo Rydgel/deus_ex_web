@@ -8,7 +8,7 @@ export const hudColor=value=>['r','g','b'].map(key=>value[`core.object.color.${k
 const unpack=value=>[value&255,(value>>>8)&255,(value>>>16)&255];
 export async function createPlayHud({runtime,assets,player,shell,host}){
   if(!host?.root||!host?.hud)throw new Error('Play HUD requires the original initialized window host');
-  const read=(object,name)=>runtime.namedReference(object,name).get();
+  const read=(object,name)=>runtime.readNamed(object,name);
   const invoke=(object,name,args=[])=>runtime.callFunction(runtime.lookup(object,name),object,args.length,i=>args[i]);
   const scoped=callback=>shell.withLifecycle(callback);
   let root=host.root,hud=host.hud,hit=read(hud,'hit'),compass=read(hud,'compass'),cross=read(hud,'cross');

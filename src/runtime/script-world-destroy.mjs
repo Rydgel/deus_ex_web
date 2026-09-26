@@ -85,7 +85,7 @@ export function createWorldDestroyServices({ runtime, level, hash = null, dispat
     // and a live player's host scene is rebuilt only by that reload.
     if (isA(receiver, 'engine.pawn')) {
       if (receiver !== level.retiringPlayer) return false;
-      if (runtime.namedReference(receiver, 'Player').get() !== null) return false;
+      if (runtime.readNamed(receiver, 'Player') !== null) return false;
     }
     // A Mover owns a brush model plus its own encroachment and base contract;
     // that destruction path is not recovered here.

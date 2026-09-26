@@ -126,7 +126,7 @@ export async function createInputConsole(runtime,assets,{config}={}){
       const command=refValue(call.evaluateArgument(0));
       // The native consumes its argument before testing Player, and returns an
       // empty string for a PlayerPawn without a UPlayer/viewport.
-      if(!runtime.namedReference(call.receiver,'Player').get())return {handled:true,value:''};
+      if(!runtime.readNamed(call.receiver,'Player'))return {handled:true,value:''};
       if(!commands)return query.execute(command);
       return {handled:true,value:commands.consoleCommand(call.receiver,command)};
     },

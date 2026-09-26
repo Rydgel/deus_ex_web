@@ -44,25 +44,27 @@ function writeSim(reference,value) {
 
 /** Animation field view for execPlayAnim over the linked Actor fields. */
 export function animationView(runtime, actor) {
+  // Value reads/writes need no lvalue; SimAnim keeps its struct reference.
   const field = key => runtime.namedReference(actor, key);
+  const get = key => runtime.readNamed(actor, key), set = (key, value) => runtime.writeNamed(actor, key, value);
   return {
-    get AnimSequence() { return field('AnimSequence').get() ?? 'None'; },
-    set AnimSequence(value) { field('AnimSequence').set(value); },
-    get AnimFrame() { return field('AnimFrame').get() ?? 0; },
-    set AnimFrame(value) { field('AnimFrame').set(value); },
-    get AnimRate() { return field('AnimRate').get() ?? 0; },
-    set AnimRate(value) { field('AnimRate').set(value); },
-    get TweenRate() { return field('TweenRate').get() ?? 0; },
-    set TweenRate(value) { field('TweenRate').set(value); },
-    get AnimLast() { return field('AnimLast').get() ?? 0; },
-    set AnimLast(value) { field('AnimLast').set(value); },
-    get AnimMinRate() { return field('AnimMinRate').get() ?? 0; },
-    set AnimMinRate(value) { field('AnimMinRate').set(value); },
-    get OldAnimRate() { return field('OldAnimRate').get() ?? 0; },
-    set OldAnimRate(value) { field('OldAnimRate').set(value); },
-    get Velocity() { return field('Velocity').get() ?? [0, 0, 0]; },
-    get animFlags() { return animationFlags.reduce((bits,[key,mask])=>bits|(field(key).get()?mask:0),0); },
-    set animFlags(value) { for(const [key,mask] of animationFlags)field(key).set(Boolean(value&mask)); },
+    get AnimSequence() { return get('AnimSequence') ?? 'None'; },
+    set AnimSequence(value) { set('AnimSequence', value); },
+    get AnimFrame() { return get('AnimFrame') ?? 0; },
+    set AnimFrame(value) { set('AnimFrame', value); },
+    get AnimRate() { return get('AnimRate') ?? 0; },
+    set AnimRate(value) { set('AnimRate', value); },
+    get TweenRate() { return get('TweenRate') ?? 0; },
+    set TweenRate(value) { set('TweenRate', value); },
+    get AnimLast() { return get('AnimLast') ?? 0; },
+    set AnimLast(value) { set('AnimLast', value); },
+    get AnimMinRate() { return get('AnimMinRate') ?? 0; },
+    set AnimMinRate(value) { set('AnimMinRate', value); },
+    get OldAnimRate() { return get('OldAnimRate') ?? 0; },
+    set OldAnimRate(value) { set('OldAnimRate', value); },
+    get Velocity() { return get('Velocity') ?? [0, 0, 0]; },
+    get animFlags() { return animationFlags.reduce((bits,[key,mask])=>bits|(get(key)?mask:0),0); },
+    set animFlags(value) { for(const [key,mask] of animationFlags)set(key,Boolean(value&mask)); },
     get simAnim() { return readSim(field('SimAnim')); },
     set simAnim(value) { writeSim(field('SimAnim'),value); },
   };
@@ -76,20 +78,24 @@ export function animationTickView(runtime,actor) {
     for(let cls=instance.cls;cls;cls=cls.base)if(cls.record.key===key)return true;
     return false;
   };
+  const get=name=>runtime.readNamed(actor,name);
   Object.defineProperties(view,{
     latentAction:{get:()=>instance.state.latent},
-    RemoteRole:{get:()=>field('RemoteRole').get()},
+    RemoteRole:{get:()=>get('RemoteRole')},
     isWeapon:{get:()=>isA('engine.weapon')},
-    simulatedPawn:{get:()=>Boolean(field('bIsPawn').get())&&isA('engine.pawn')&&field('Role').get()===2},
+    simulatedPawn:{get:()=>Boolean(get('bIsPawn'))&&isA('engine.pawn')&&get('Role')===2},
   });
   view.blends=Array.from({length:4},(_,index)=>{
     const element=name=>arrayReference(index,field(name),runtime.warning);
+    // An in-range element read is that element of the copied whole value;
+    // anything else keeps arrayReference's clamp/warning and errors.
+    const read=name=>{const whole=get(name);return Array.isArray(whole)&&index<whole.length?whole[index]:element(name).get();};
     const blend={get simAnim(){return readSim(element('SimBlendAnim'));},
       set simAnim(value){writeSim(element('SimBlendAnim'),value);}};
     for(const [key,name] of Object.entries({AnimSequence:'BlendAnimSequence',AnimFrame:'BlendAnimFrame',
       AnimRate:'BlendAnimRate',TweenRate:'BlendTweenRate',AnimLast:'BlendAnimLast',AnimMinRate:'BlendAnimMinRate',
       OldAnimRate:'OldBlendAnimRate'}))
-      Object.defineProperty(blend,key,{get:()=>element(name).get(),set:value=>element(name).set(value)});
+      Object.defineProperty(blend,key,{get:()=>read(name),set:value=>element(name).set(value)});
     return blend;
   });
   return view;

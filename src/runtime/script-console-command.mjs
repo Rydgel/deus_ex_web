@@ -234,7 +234,7 @@ export function stringOutputDevice() {
  *   flushRenderDevice(p)     the browser render device's Flush(AllowPrecache)
  */
 export function createConsoleCommands({runtime, input, services}) {
-  const read = (object, name) => runtime.namedReference(object, name).get();
+  const read = (object, name) => runtime.readNamed(object, name);
   const state = {action: 0, delta: 0, inAlias: false, held: new Uint8Array(255), flushes: 0, lines: 0};
 
   function claims(body, cmd) {

@@ -107,6 +107,8 @@ test('ScriptRuntime dispatches native 261 and its 0x181 poll through one actor s
     assert.equal(receiver, actor);
     return {get: () => values.get(name), set: value => values.set(name, value)};
   };
+  runtime.readNamed = (receiver, name) => runtime.namedReference(receiver, name).get();
+  runtime.writeNamed = (receiver, name, value) => runtime.namedReference(receiver, name).set(value);
 
   assert.equal(runtime.invokeNative({
     index: 261, receiver: actor, argumentCount: 0,

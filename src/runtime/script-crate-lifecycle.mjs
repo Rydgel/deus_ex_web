@@ -29,7 +29,7 @@ export async function prepareCrateLifecycle({runtime,assets,decorations,prepareC
       // Engine.Decoration has contents, but fragType is introduced by
       // DeusExDecoration. Other original Decoration subclasses lack it.
       if(!runtime.lookupMember(cls,'fields',name))continue;
-      const reference=runtime.namedReference(actor,name).get();
+      const reference=runtime.readNamed(actor,name);
       if(reference)await prepare(await runtime.loadClass(reference.asset,reference.index));
     }
   }

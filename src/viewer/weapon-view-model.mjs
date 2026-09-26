@@ -18,7 +18,7 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
   // A typed external Canvas boundary, not a fabricated native UCanvas instance.
   const canvas={kind:'Canvas',key:'viewer.weapon.canvas',name:'WeaponCanvas'};
   runtime.attach(canvas,canvasClass);
-  const read=(actor,name)=>runtime.namedReference(actor,name).get();
+  const read=(actor,name)=>runtime.readNamed(actor,name);
   const scene=new THREE.Scene(),entries=new Map(),pending=new Map();
   const summary={actor:null,mesh:null,loading:false,draws:0,shading:'texture-only inspection'};
   let disposed=false,error=null,index=0x50000000;

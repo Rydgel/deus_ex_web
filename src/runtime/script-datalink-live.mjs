@@ -41,8 +41,8 @@ async function prepare(runtime,asset,path){
   return runtime.prepareFunction(asset,requiredExport(asset,path));
 }
 
-function set(runtime,object,name,value){runtime.namedReference(object,name).set(value);}
-function get(runtime,object,name){return runtime.namedReference(object,name).get();}
+function set(runtime,object,name,value){runtime.writeNamed(object,name,value);}
+function get(runtime,object,name){return runtime.readNamed(object,name);}
 
 /** Build the exact script/native world prerequisites for DataLinkPlay Spawn
  * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */

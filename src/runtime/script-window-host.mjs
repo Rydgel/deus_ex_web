@@ -148,15 +148,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const input={hostBinding:()=>false,flushRenderDevice:null};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     viewport(){
-      const viewport=runtime.namedReference(player,'Player').get();
+      const viewport=runtime.readNamed(player,'Player');
       if(!viewport)throw new Error('Console commands require the local UViewport');
       return viewport;
     },
     // XInputExt::Process: a PlayerPawnExt viewport actor's root (+0x894) first.
     rootProcess(key,action,delta){
-      const actor=runtime.namedReference(runtime.namedReference(player,'Player').get(),'Actor').get();
+      const actor=runtime.readNamed(runtime.readNamed(player,'Player'),'Actor');
       if(!actor||!isA(actor,'extension.playerpawnext'))return false;
-      const root=runtime.namedReference(actor,'rootWindow').get();
+      const root=runtime.readNamed(actor,'rootWindow');
       return Boolean(root&&Input.rootProcess(W,root,key,action,delta));
     },
     hostBinding:(key,action)=>input.hostBinding(key,action),
@@ -201,15 +201,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     'bAugDisplayVisible','bCompassVisible','bCrosshairVisible','bHUDShowAllAugs',
     'bHUDBordersVisible','bHUDBordersTranslucent','bHUDBackgroundTranslucent']){
     const value=config.get('DeusEx.DeusExPlayer',name);
-    if(value!==undefined)runtime.namedReference(player,name).set(/^(true|1)$/i.test(value));
+    if(value!==undefined)runtime.writeNamed(player,name,/^(true|1)$/i.test(value));
   }
   for(const [name,convert] of [['logTimeout',Math.fround],['maxLogLines',v=>Number(v)&255],
     ['translucencyLevel',v=>Number(v)&255],['MenuThemeName',String],['HUDThemeName',String]]){
     const value=config.get('DeusEx.DeusExPlayer',name);
-    if(value!==undefined)runtime.namedReference(player,name).set(convert(value));
+    if(value!==undefined)runtime.writeNamed(player,name,convert(value));
   }
-  const themeManager=runtime.namedReference(player,'ThemeManager').get();
-  if(themeManager)for(const prefix of ['Menu','HUD'])runtime.dispatchSpawnedEvent(themeManager,`Set${prefix}ThemeByName`,[runtime.namedReference(player,`${prefix}ThemeName`).get()]);
+  const themeManager=runtime.readNamed(player,'ThemeManager');
+  if(themeManager)for(const prefix of ['Menu','HUD'])runtime.dispatchSpawnedEvent(themeManager,`Set${prefix}ThemeByName`,[runtime.readNamed(player,`${prefix}ThemeName`)]);
   for(const path of ['deusexplayer.activatebelt','deusexplayer.restrictinput'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
 
 
@@ -312,8 +312,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     addToRoot: () => {},
     removeFromRoot: () => {},
     isA: (win, key) => { for (let c = runtime.instance(win).cls; c; c = c.base) if (c.record.key === key) return true; return false; },
-    setPawnRootWindow: (pawn, root) => runtime.namedReference(pawn, 'rootWindow').set(root),
-    setPawnField: (pawn, name, value) => runtime.namedReference(pawn, name).set(value),
+    setPawnRootWindow: (pawn, root) => runtime.writeNamed(pawn, 'rootWindow',root),
+    setPawnField: (pawn, name, value) => runtime.writeNamed(pawn, name,value),
     processScript: (win, event, args, options) => processScript(win, event, args, options),
     mouseClickLog: win => boundaryLog.push({log:'GLog',text:`Assigning Last Button Window to ${objectFullName(win)}`}),
     canvasComputeRenderSize: () => {},
@@ -322,7 +322,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XWindow::AddTimer's GMalloc(0x20): a registered node, so pointer walks
     // of the timer lists (XWindow::CleanUp) resolve it.
     allocTimerNode:()=>{const node={windowTimerNode:true};heap.allocate(node,Timers.WINDOW_TIMER.size);timerNodes.add(node);return node;},
-    soundPawnFields:pawn=>({location:runtime.namedReference(pawn,'Location').get(),viewRotation:runtime.namedReference(pawn,'ViewRotation').get()}),
+    soundPawnFields:pawn=>({location:runtime.readNamed(pawn,'Location'),viewRotation:runtime.readNamed(pawn,'ViewRotation')}),
     deferWindowSound:request=>soundRequests.push(request),
   };
   // FArray over heap storage ({Data, Num, Max} at the given offset).
@@ -1002,7 +1002,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
           else W.setGlobal('rootWindowList', W.ptr(win, T.ROOT.nextRoot));
         }
         const pawn = W.ptr(win, T.ROOT.parentPawn);
-        if (pawn && runtime.namedReference(pawn, 'rootWindow').get() === win) W.setPawnRootWindow(pawn, null);
+        if (pawn && runtime.readNamed(pawn, 'rootWindow') === win) W.setPawnRootWindow(pawn, null);
         W.removeFromRoot(win);
         DESTROY_FAMILIES['extension.modalwindow'].members(win);
       },
@@ -1090,7 +1090,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   // Lifecycle published to the shared runtime natives (windowLifecycle).
   // ------------------------------------------------------------------
-  const actorRefs=createWindowActorRefDispatcher(W,{isDeleted:actor=>runtime.namedReference(actor,'bDeleteMe').get()});
+  const actorRefs=createWindowActorRefDispatcher(W,{isDeleted:actor=>runtime.readNamed(actor,'bDeleteMe')});
   const lifecycle = {
     host: null,
     errorDevice: {name: 'GError'},
@@ -1206,8 +1206,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     F.initRootWindow(W, root, pawn);
     processScript(root, 'InitWindow', [], {checked: true});
     setVisibility(root, true);
-    host.root=root;host.hud=runtime.namedReference(root,'hud').get();
-    const augManager=runtime.namedReference(pawn,'AugmentationSystem').get();
+    host.root=root;host.hud=runtime.readNamed(root,'hud');
+    const augManager=runtime.readNamed(pawn,'AugmentationSystem');
     if(augManager)runtime.dispatchSpawnedEvent(augManager,'RefreshAugDisplay',[]);
     return root;
   }

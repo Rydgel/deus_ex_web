@@ -24,7 +24,6 @@ const TYPE_BY_CLASS = Object.freeze({
 });
 
 const SUPPORTED_STRUCTS = new Set(['core.object.vector', 'core.object.rotator']);
-const REF_STATE = Symbol('script-value-reference');
 
 /** A value/property branch whose original storage contract is not implemented. */
 export class UnsupportedScriptValueError extends Error {
@@ -137,7 +136,32 @@ function innerMetadata(metadata) {
   return candidate?.metadata ?? candidate;
 }
 
+// A descriptor is a pure function of the property key and linked metadata.
+// Linking completes the metadata before synchronous VM work; the cache still
+// rebuilds if the linker later rewrites one of the slots it fills in
+// (ScriptRuntime.field, the class loader, struct layout). Rebuilding it on
+// every property access dominated Play's allocation (docs/play-frame-cost.md).
+const descriptorCache = new WeakMap();
+
 function describe(field) {
+  const metadata = field?.metadata ?? field;
+  if (!metadata || typeof metadata !== 'object') return describeUncached(field);
+  const key = String(field?.metadata
+    ? field.key ?? metadata.path ?? metadata.name ?? '<property>'
+    : metadata.key ?? metadata.path ?? metadata.name ?? '<property>');
+  let byKey = descriptorCache.get(metadata);
+  const cached = byKey?.get(key);
+  if (cached && cached.arrayDim === metadata.arrayDim && cached.elementSize === metadata.elementSize &&
+      cached.structKey === metadata.structKey && cached.structFields === metadata.structFields &&
+      cached.innerMetadata === metadata.innerMetadata) return cached.descriptor;
+  const descriptor = describeUncached(field);
+  if (!byKey) descriptorCache.set(metadata, byKey = new Map());
+  byKey.set(key, { descriptor, arrayDim: metadata.arrayDim, elementSize: metadata.elementSize,
+    structKey: metadata.structKey, structFields: metadata.structFields, innerMetadata: metadata.innerMetadata });
+  return descriptor;
+}
+
+function describeUncached(field) {
   const parts = fieldParts(field);
   const metadata = parts.metadata;
   const type = typeOf(metadata);
@@ -160,7 +184,7 @@ function describe(field) {
     if (count == null) fail(`FixedArrayProperty size is unresolved for ${parts.key}`, parts, type);
     const dimension = integerDimension(count, parts, 'fixed array size');
     return {
-      ...parts, metadata, type, array: true, dimension,
+      key: parts.key, metadata, type, array: true, dimension,
       element, elementMetadata: inner, elementSize: element.elementSize,
     };
   }
@@ -173,7 +197,7 @@ function describe(field) {
   const elementParts = { field: elementMetadata, metadata: elementMetadata, key: `${parts.key}[]` };
   const element = scalarDescriptor(elementParts, elementMetadata);
   return {
-    ...parts, metadata, type, array: dimension > 1, dimension,
+    key: parts.key, metadata, type, array: dimension > 1, dimension,
     element, elementMetadata, elementSize: element.elementSize,
   };
 }
@@ -201,6 +225,10 @@ function elementSize(metadata, type, parts) {
   }
 }
 
+// Normalized members for one linked structFields array; each member also
+// serves as the field record for its own value copies.
+const structMemberCache = new WeakMap();
+
 function structFields(metadata, descriptor, operation) {
   if (!Array.isArray(metadata.structFields)) {
     throw new UnsupportedScriptValueError(
@@ -208,6 +236,15 @@ function structFields(metadata, descriptor, operation) {
       { key: descriptor.key, type: descriptor.type, operation },
     );
   }
+  let members = structMemberCache.get(metadata.structFields);
+  if (!members) {
+    members = normalizedStructFields(metadata, descriptor, operation);
+    structMemberCache.set(metadata.structFields, members);
+  }
+  return members;
+}
+
+function normalizedStructFields(metadata, descriptor, operation) {
   return metadata.structFields.map((member, index) => {
     const memberMetadata = member?.metadata ?? member;
     const memberKey = member?.key ?? memberMetadata?.key;
@@ -224,7 +261,7 @@ function structFields(metadata, descriptor, operation) {
 function zeroGenericStruct(metadata, descriptor) {
   const value = {};
   for (const member of structFields(metadata, descriptor, 'zeroValue')) {
-    value[member.key] = zeroValue({ key: member.key, metadata: member.metadata });
+    value[member.key] = zeroValue(member);
   }
   return value;
 }
@@ -242,7 +279,7 @@ function copyGenericStruct(value, metadata, descriptor, operation) {
         { key: descriptor.key, type: descriptor.type, operation },
       );
     }
-    copied[member.key] = copyValue({ key: member.key, metadata: member.metadata }, value[member.key]);
+    copied[member.key] = copyValue(member, value[member.key]);
   }
   return copied;
 }
@@ -372,50 +409,51 @@ export function copyValue(field, value) {
   return copyFromDescriptor(descriptor, value);
 }
 
-function makeReference(descriptor, parts, state, { index = null, container = null } = {}) {
-  const isElement = index !== null;
-  const addressOffset = isElement && descriptor.elementSize !== null
-    ? index * descriptor.elementSize : isElement ? null : 0;
-  const ref = {
-    reference: true,
-    key: parts.key,
-    field: parts.field,
-    metadata: parts.metadata,
-    property: parts.metadata,
-    arrayDimension: descriptor.array ? descriptor.dimension : 1,
-    elementSize: descriptor.elementSize,
-    arrayIndex: index,
-    addressOffset,
-    array: null,
-  };
-  if (descriptor.array) {
-    ref.array = {
+// Reference backing: the storage getter/setter and the field descriptor.
+const readWhole = state => copyStored(state.get(), state.descriptor, 'propertyReference.get');
+const writeLogical = (state, value) =>
+  state.set(copyToStorage(value, state.descriptor, state.get(), 'propertyReference.set'));
+
+class PropertyReference {
+  #state;
+  constructor(descriptor, field, state, index, container) {
+    const isElement = index !== null;
+    const addressOffset = isElement && descriptor.elementSize !== null
+      ? index * descriptor.elementSize : isElement ? null : 0;
+    this.reference = true;
+    this.key = descriptor.key;
+    this.field = field;
+    this.metadata = descriptor.metadata;
+    this.property = descriptor.metadata;
+    this.arrayDimension = descriptor.array ? descriptor.dimension : 1;
+    this.elementSize = descriptor.elementSize;
+    this.arrayIndex = index;
+    this.addressOffset = addressOffset;
+    this.array = descriptor.array ? {
       dimension: descriptor.dimension,
       elementSize: descriptor.elementSize,
       index,
       addressOffset,
-      container: container ?? ref,
-    };
-  }
-  ref.get = () => {
-    if (!isElement) return state.readWhole();
-    const whole = state.readWhole();
-    return copyScalar(whole[index], descriptor.element, 'arrayReference.get');
-  };
-  ref.set = value => {
-    if (!isElement) {
-      const raw = state.readRaw();
-      const stored = copyToStorage(value, descriptor, raw);
-      state.writeRaw(stored);
+      container: container ?? this,
+    } : null;
+    // Own functions: callers pass ref.get/ref.set on as detached accessors.
+    this.get = isElement
+      ? () => copyScalar(readWhole(state)[index], descriptor.element, 'arrayReference.get')
+      : () => readWhole(state);
+    this.set = isElement ? value => {
+      const whole = readWhole(state);
+      whole[index] = copyScalar(value, descriptor.element, 'arrayReference.set');
+      writeLogical(state, whole);
+      return copyScalar(whole[index], descriptor.element, 'arrayReference.set');
+    } : value => {
+      state.set(copyToStorage(value, descriptor, state.get()));
       return copyFromDescriptor(descriptor, value, 'arrayReference.set');
-    }
-    const whole = state.readWhole();
-    whole[index] = copyScalar(value, descriptor.element, 'arrayReference.set');
-    state.writeLogical(whole);
-    return copyScalar(whole[index], descriptor.element, 'arrayReference.set');
-  };
-  Object.defineProperty(ref, REF_STATE, { value: state });
-  return ref;
+    };
+    this.#state = state;
+  }
+  static stateOf(value) {
+    return value !== null && typeof value === 'object' && #state in value ? value.#state : undefined;
+  }
 }
 
 /**
@@ -427,15 +465,19 @@ export function propertyReference(field, get, set) {
   if (typeof get !== 'function' || typeof set !== 'function') {
     throw new TypeError(`propertyReference requires getter and setter for ${descriptor.key}`);
   }
-  const parts = fieldParts(field);
-  const state = {
-    descriptor,
-    readRaw: () => get(),
-    writeRaw: value => set(value),
-    readWhole: () => copyStored(get(), descriptor, 'propertyReference.get'),
-    writeLogical: value => set(copyToStorage(value, descriptor, get(), 'propertyReference.set')),
-  };
-  return makeReference(descriptor, parts, state);
+  return new PropertyReference(descriptor, field, { descriptor, get, set }, null, null);
+}
+
+/** `propertyReference(field, get, set).get()` for a stored raw value,
+ * without allocating the lvalue. */
+export function readPropertyValue(field, raw) {
+  return copyStored(raw, describe(field), 'propertyReference.get');
+}
+
+/** The raw value `propertyReference(field, get, set).set(value)` stores over
+ * `raw`, without allocating the lvalue. */
+export function storedPropertyValue(field, value, raw) {
+  return copyToStorage(value, describe(field), raw);
 }
 
 /**
@@ -450,12 +492,12 @@ export function arrayReference(index, ref, warning) {
   const signedIndex = numeric | 0;
 
   let base = ref;
-  let state = ref?.[REF_STATE];
+  let state = PropertyReference.stateOf(ref);
   if (!state && ref?.reference && typeof ref.get === 'function' && typeof ref.set === 'function') {
     // Accept an equivalent external lvalue while retaining its metadata.  A
     // plain reference without metadata cannot establish the native stride.
     base = propertyReference(ref.field ?? ref.metadata ?? ref, ref.get, ref.set);
-    state = base[REF_STATE];
+    state = PropertyReference.stateOf(base);
   }
   if (!state) throw new TypeError('arrayReference requires a propertyReference');
   const descriptor = state.descriptor;
@@ -485,7 +527,5 @@ export function arrayReference(index, ref, warning) {
     });
     selected = clampedIndex;
   }
-  return makeReference(descriptor, fieldParts(base.field ?? base.metadata), state, {
-    index: selected, container: base,
-  });
+  return new PropertyReference(descriptor, base.field ?? base.metadata, state, selected, base);
 }

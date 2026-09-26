@@ -173,6 +173,8 @@ for(const [index,c] of cases.entries()){
   for(const o of [emitter,ins,levelInfo,...pawns,ins?.fields.Enemy])attach(o);
   runtime.levelFor=()=>level;
   runtime.namedReference=(actor,name)=>({get:()=>actor.fields?.[name],set:v=>{actor.fields[name]=v;}});
+  runtime.readNamed=(actor,name)=>runtime.namedReference(actor,name).get();
+  runtime.writeNamed=(actor,name,value)=>runtime.namedReference(actor,name).set(value);
   runtime.warning=msg=>warns.push(msg.kind);
   runtime.isProbing=(actor,name)=>{probes.push(actor.id);return c.probing?.[actor.id]!==false;};
   runtime.processNativeEvent=(receiver,name,args)=>events.push({pawn:receiver.id,fn:name,

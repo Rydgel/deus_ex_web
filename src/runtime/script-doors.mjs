@@ -375,10 +375,15 @@ function makeBinding(record, field) {
     if (view[key]) return view[key];
   }
 
+  // InitProperties gives the native object its authored/default value once;
+  // keep it on first read instead of rebuilding the default on every read.
+  // A reset clears the store, so the next read starts from the initial value.
   return {
     get: () => {
       if (record.store.has(field.key)) return record.store.get(field.key);
-      return record.initialProperty(field);
+      const value = record.initialProperty(field);
+      record.store.set(field.key, value);
+      return value;
     },
     set: value => { record.store.set(field.key, value); },
   };
@@ -749,9 +754,9 @@ export async function createScriptDoors({
       const blockActors=call.argumentCount>1?Boolean(refValue(call.evaluateArgument(1))):false;
       const blockPlayers=call.argumentCount>2?Boolean(refValue(call.evaluateArgument(2))):false;
       if(call.receiver.collideActors&&!collide&&queries)queries.removeActor(call.receiver);
-      runtime.namedReference(call.receiver,'bCollideActors').set(collide);
-      runtime.namedReference(call.receiver,'bBlockActors').set(blockActors);
-      runtime.namedReference(call.receiver,'bBlockPlayers').set(blockPlayers);
+      runtime.writeNamed(call.receiver,'bCollideActors',collide);
+      runtime.writeNamed(call.receiver,'bBlockActors',blockActors);
+      runtime.writeNamed(call.receiver,'bBlockPlayers',blockPlayers);
       call.receiver.collideActors=collide;call.receiver.blockActors=blockActors;
       call.receiver.blockPlayers=blockPlayers;call.receiver.blocking=blockPlayers;
       call.receiver.collisionBits=((call.receiver.collisionBits??0)&~13)|
@@ -780,14 +785,14 @@ export async function createScriptDoors({
       // 0x10037df0: construct only while rootWindow (+0x894) is still None.
       if (call.argumentCount !== 0) throw new Error('InitRootWindow accepts no arguments');
       if (!windowHost) throw new Error('InitRootWindow requires the native window host');
-      if (!runtime.namedReference(call.receiver, 'rootWindow').get()) windowHost.constructRootWindow(call.receiver);
+      if (!runtime.readNamed(call.receiver, 'rootWindow')) windowHost.constructRootWindow(call.receiver);
       return undefined;
     }
     if (call.index === 544) {
       // APlayerPawn::execResetKeyboard 0x103b96d0: Player (+0x5d4) must be a
       // UViewport holding an Input (+0x60); then UObject::ResetConfig(Input.Class).
       if (call.argumentCount !== 0) throw new Error('ResetKeyboard accepts no arguments');
-      const viewport = runtime.namedReference(call.receiver, 'Player').get();
+      const viewport = runtime.readNamed(call.receiver, 'Player');
       let viewportClass = false;
       for (let cls = viewport ? runtime.instance(viewport).cls : null; cls; cls = cls.base)
         if (cls.record.key === 'engine.viewport') viewportClass = true;
@@ -848,7 +853,7 @@ export async function createScriptDoors({
   // ULevel::SpawnActor would have written this inherited Actor.Level slot
   // during construction; restore that source-required identity before any
   // PostBeginPlay subsystem code reads Player.Level.NetMode.
-  runtime.namedReference(playerActor, 'Level').set(levelInfo);
+  runtime.writeNamed(playerActor, 'Level',levelInfo);
   // Player startup may synchronously reach mesh-dependent inherited code after
   // the subsystem objects are constructed. Prepare the canonical player mesh
   // while the attached package identity is still in the setup phase, matching
@@ -942,8 +947,8 @@ export async function createScriptDoors({
   for (const actor of level.actors ?? []) {
     const record = actor && actor !== playerActor ? identities.get(actor) : null;
     if (!record) continue;
-    if (runtime.namedReference(actor, 'Owner').get() || runtime.namedReference(actor, 'bHidden').get()
-      || !runtime.namedReference(actor, 'Location').get()) continue;
+    if (runtime.readNamed(actor, 'Owner') || runtime.readNamed(actor, 'bHidden')
+      || !runtime.readNamed(actor, 'Location')) continue;
     for (let cls = record.cls; cls; cls = cls.base)
       if (cls.record.key === 'engine.inventory') { npcPickups.push(actor); npcPickupSet.add(actor); break; }
   }
@@ -973,7 +978,7 @@ export async function createScriptDoors({
     for (const name of ['Mesh', 'PlayerViewMesh', 'PickupViewMesh', 'ThirdPersonMesh']) {
       const field = runtime.lookupMember(cls, 'fields', name);
       if (!field) continue;
-      for (const reference of [actor ? runtime.namedReference(actor, name).get() : null, runtime.defaultValue(cls, field)]) {
+      for (const reference of [actor ? runtime.readNamed(actor, name) : null, runtime.defaultValue(cls, field)]) {
         if (!reference || !['LodMesh', 'Mesh'].includes(reference.kind)) continue;
         const resource = await runtime.prepareResource(reference);
         if (resource.payloadStatus !== 'decoded-lodmesh')
@@ -1031,8 +1036,8 @@ export async function createScriptDoors({
     for (const [manager, head] of [[skills, 'FirstSkill'], [augmentations, 'FirstAug']]) {
       if (!manager) continue;
       await prepareNpcClass(runtime.instance(manager).cls);
-      for (let node = runtime.namedReference(manager, head).get(), guard = 0; node && guard < 64;
-        node = runtime.namedReference(node, 'next').get(), guard++)
+      for (let node = runtime.readNamed(manager, head), guard = 0; node && guard < 64;
+        node = runtime.readNamed(node, 'next'), guard++)
         await prepareNpcClass(runtime.instance(node).cls);
     }
     for (const actor of npcPawns) {
@@ -1084,8 +1089,8 @@ export async function createScriptDoors({
     // Level.Game GameInfo (PickupQuery) and, for weapons, the default ammo class
     // their GiveTo spawns. The item class chains themselves link in the
     // Decoration/Inventory base-fixup pass below.
-    const gameInfo = runtime.namedReference(playerActor, 'Level').get();
-    const gameObject = gameInfo && runtime.namedReference(gameInfo, 'Game').get();
+    const gameInfo = runtime.readNamed(playerActor, 'Level');
+    const gameObject = gameInfo && runtime.readNamed(gameInfo, 'Game');
     if (gameObject) { try { await prepareNpcClass(runtime.instance(gameObject).cls); }
       catch (error) { npcFailures.set(gameObject, String(error?.message ?? error)); } }
     for (const actor of npcPickups) {
@@ -1127,7 +1132,7 @@ export async function createScriptDoors({
   // UModel.Zones[Actor.Region.ZoneNumber].LastRenderTime, reached only after
   // LastRenderTime and bStasis/bForceStasis admit the actor.
   npcTickLevel.zoneLastRenderTime = actor => {
-    const region = runtime.namedReference(actor, 'Region').get();
+    const region = runtime.readNamed(actor, 'Region');
     // InStasis reads UModel.Zones[Region.ZoneNumber], not ZoneInfo+0x34.
     const number = region?.['engine.actor.pointregion.zonenumber'];
     return level.zoneLastRenderTimes?.[number];
@@ -1172,8 +1177,8 @@ export async function createScriptDoors({
     });
   }
   runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
-    read: (target, name) => runtime.namedReference(target, name).get(),
-    write: (target, name, value) => runtime.namedReference(target, name).set(value),
+    read: (target, name) => runtime.readNamed(target, name),
+    write: (target, name, value) => runtime.writeNamed(target, name,value),
     physFalling: (actor,delta)=>runtime.collisionViewActors.has(actor)
       ?runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{})
       :decorationMovement(actor,delta),
@@ -1617,14 +1622,14 @@ export async function createScriptDoors({
   // any host restore (docs/script-player-login.md, "Reset").
   function retirePlayer() {
     const viewports = level.engine.client.viewports;
-    const console = viewports[0] && runtime.namedReference(viewports[0], 'Console').get();
+    const console = viewports[0] && runtime.readNamed(viewports[0], 'Console');
     if (console) runtime.processEvent(console, 'NotifyLevelChange', []);
     for (const viewport of viewports) {
-      const actor = runtime.namedReference(viewport, 'Actor').get();
+      const actor = runtime.readNamed(viewport, 'Actor');
       // The original dereferences Actor (+0xac XLevel) without a test.
       if (!actor) throw new Error('LoadMap viewport dissociation requires a viewport Actor');
-      runtime.namedReference(actor, 'Player').set(null);
-      runtime.namedReference(viewport, 'Actor').set(null);
+      runtime.writeNamed(actor, 'Player',null);
+      runtime.writeNamed(viewport, 'Actor',null);
       level.retiringPlayer = actor;
       // The InfoLink shell stores the windows it constructed; its merged
       // lifecycle routes each destroy service by the window's storage owner.
@@ -1663,7 +1668,7 @@ export async function createScriptDoors({
   function finishPlayerStartup() {
     if (onLightingChanged) onLightingChanged(lights.collectLightingChanges({ force: true }));
     playerController.actorRegistered=true;
-    playerController.yaw=runtime.namedReference(playerActor,'ViewRotation').get()[1]*Math.PI/32768;
+    playerController.yaw=runtime.readNamed(playerActor,'ViewRotation')[1]*Math.PI/32768;
 
   }
 
@@ -1793,8 +1798,8 @@ export async function createScriptDoors({
   // state stay unticked: their PHYS_Falling needs the non-Pawn performPhysics.
   function playerCarriedItems() {
     const carried = new Set();
-    for (let item = runtime.namedReference(playerActor, 'Inventory').get(), guard = 0;
-      item && typeof item === 'object' && guard < 256; item = runtime.namedReference(item, 'Inventory').get(), guard++)
+    for (let item = runtime.readNamed(playerActor, 'Inventory'), guard = 0;
+      item && typeof item === 'object' && guard < 256; item = runtime.readNamed(item, 'Inventory'), guard++)
       carried.add(item);
     return carried;
   }
@@ -1820,12 +1825,12 @@ export async function createScriptDoors({
     // PlayerPawns only read input and run PlayerInput — Play's viewer movement
     // port stands in for that route and, like PlayerTick, does not run — and
     // other actors tick only with bAlwaysTick. No distances, no deferred list.
-    const pauser = runtime.namedReference(levelInfo, 'Pauser').get();
+    const pauser = runtime.readNamed(levelInfo, 'Pauser');
     if (pauser.length > 0 && pauser.charCodeAt(0) !== 0) {
       for (const actor of level.actors) {
         if (!actor || actor === playerActor || npcFailures.has(actor)) continue;
         let alwaysTick = false;
-        try { alwaysTick = Boolean(runtime.namedReference(actor, 'bAlwaysTick').get()); } catch { continue; }
+        try { alwaysTick = Boolean(runtime.readNamed(actor, 'bAlwaysTick')); } catch { continue; }
         if (alwaysTick) npcFailures.set(actor, 'Paused bAlwaysTick Actor.Tick is not admitted in Play');
       }
       npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
@@ -1838,14 +1843,14 @@ export async function createScriptDoors({
     // stasis gate and ScriptedPawn.Tick read it; the map's serialized editor
     // value is never current (docs/script-level-tick.md).
     const viewer = level?.engine?.client?.viewports?.[0]?.actor ?? null;
-    if (viewer === playerActor && runtime.namedReference(playerActor, 'Player').get()) {
-      const origin = [...runtime.namedReference(playerActor, 'Location').get()];
+    if (viewer === playerActor && runtime.readNamed(playerActor, 'Player')) {
+      const origin = [...runtime.readNamed(playerActor, 'Location')];
       for (let index = level.iFirstNetActor ?? 0; index < level.actors.length; index++) {
         const actor = level.actors[index];
         if (!actor) continue;
         let reference;
         try { reference = runtime.namedReference(actor, 'DistanceFromPlayer'); } catch { continue; }
-        reference.set(playerDistance(runtime.namedReference(actor, 'Location').get(), origin));
+        reference.set(playerDistance(runtime.readNamed(actor, 'Location'), origin));
       }
     }
     // ULevel::Tick clears the deferred-actor list before its actor loop.
@@ -1930,14 +1935,14 @@ export async function createScriptDoors({
         for (let cls = lineage; cls; cls = cls.base)
           if (['engine.inventory','engine.projectile','engine.replicationinfo','deusex.tracehitspawner'].includes(cls.record.key)) { admitted = true; break; }
         if (!admitted || lineage === null) continue;
-        const owner = npcSpawnedOwner.get(actor) ?? runtime.namedReference(actor, 'Owner').get();
+        const owner = npcSpawnedOwner.get(actor) ?? runtime.readNamed(actor, 'Owner');
         if (runtime.instance(actor).pendingKill) continue;
         if (owner && npcFailures.has(owner)) continue;
         const spawnedFrom = level.actors.length;
         try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
         catch (error) {
           npcFailures.set(owner ?? actor,
-            `${actor.name ?? runtime.namedReference(actor, 'Name').get()}: ${String(error?.message ?? error)}`);
+            `${actor.name ?? runtime.readNamed(actor, 'Name')}: ${String(error?.message ?? error)}`);
         }
         collectSpawned(spawnedFrom);
       } else if (liveMission?.has(actor)) {
@@ -1957,7 +1962,7 @@ export async function createScriptDoors({
     // the scripted actors, as before; its Actor.Tick writes bTicked = TickTag&1
     // (actor-tick.mjs), which is what releases the actors it owns.
     if (typeof tickPlayer === 'function') { tickPlayer(delta); progress = (progress + 1) | 0; }
-    runtime.namedReference(playerActor, 'bTicked').set(Boolean(npcTickLevel.tickTag & 1));
+    runtime.writeNamed(playerActor, 'bTicked',Boolean(npcTickLevel.tickTag & 1));
     // ULevel::Tick's deferred list (level-tick.mjs): actors whose Owner had not
     // ticked yet when the loop reached them — the player's carried weapon —
     // tick now, once their owner's bTicked matches this frame's TickTag. Nodes
@@ -1966,7 +1971,7 @@ export async function createScriptDoors({
       let node = npcTickLevel.deferredHead;
       npcTickLevel.deferredHead = null; progress = 0;
       while (node) {
-        if (Number(Boolean(runtime.namedReference(node.actor, 'bTicked').get())) !== npcTickLevel.tickTag) {
+        if (Number(Boolean(runtime.readNamed(node.actor, 'bTicked'))) !== npcTickLevel.tickTag) {
           if (carried.has(node.actor)) progress = (progress + tickCarried(node.actor, delta)) | 0;
           else if (!npcFailures.has(node.actor) && !runtime.instance(node.actor).pendingKill) {
             // Any other owner-deferred actor keeps the NPC failure contract.

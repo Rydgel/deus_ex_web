@@ -78,7 +78,7 @@ export async function preparePlayerDumpStore({runtime,assets,player,findFiles,co
     });
     const native=runtime.instance(object).nativeObject;
     constructPlayerDump(native,{
-      read:name=>runtime.namedReference(object,name).get(),write:(name,value)=>runtime.namedReference(object,name).set(value),
+      read:name=>runtime.readNamed(object,name),write:(name,value)=>runtime.writeNamed(object,name,value),
       getCurrentUser:()=>config.getString('DeusEx.DumpLocation','CurrentUser','User.ini',64),findFiles,
       destroyObjectBase:receiver=>runtime.destroyObjectBase(receiver),released:receiver=>objects.delete(receiver),
     });

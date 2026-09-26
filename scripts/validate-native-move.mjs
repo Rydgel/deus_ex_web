@@ -48,6 +48,8 @@ for(const [index,c] of cases.entries()){
  runtime.boundaryNatives=new Set();runtime.levelFor=()=>boundLevel;
  runtime.collisionViewActors=new WeakSet();
  runtime.namedReference=(actor,name)=>({get:()=>actor.fields[name],set:v=>{actor.fields[name]=v;}});
+ runtime.readNamed=(actor,name)=>runtime.namedReference(actor,name).get();
+ runtime.writeNamed=(actor,name,value)=>runtime.namedReference(actor,name).set(value);
  const boundResult=runtime.invokeNative({index:266,argumentCount:1,receiver:boundReceiver,
   evaluateArgument:i=>c.delta});
  const boundActual={move:{actorIsReceiver:boundCalls[0].args[0]===boundReceiver,

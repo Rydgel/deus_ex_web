@@ -4,7 +4,7 @@ import {WINDOW_DESTROY_OFFSETS as W} from '../runtime/script-window-destroy.mjs'
 const color=v=>[v&255,(v>>>8)&255,(v>>>16)&255];
 /** Selected native layout driven by the live original Window tree. */
 export function conversationHudFrame(runtime,player,shell,width,height,measure){
-  const get=(o,k)=>runtime.namedReference(o,k).get(),read=shell.readNative;
+  const get=(o,k)=>runtime.readNamed(o,k),read=shell.readNative;
   const play=get(player,'conPlay');if(!play)return null;
   const window=get(play,'conWinFirst');if(!window||shell.isDestroyed(window))return null;
   if(!(read(window,W.windowFlags,'u32')&1))return null;

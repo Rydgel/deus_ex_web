@@ -28,7 +28,7 @@ const lower = value => String(value ?? '').toLowerCase();
 function readMaybe(runtime, object, key) {
   const instance=runtime.instances.get(object);
   if(!instance||!runtime.lookupMember(instance.cls,'fields',key))return undefined;
-  return runtime.namedReference(object,key).get();
+  return runtime.readNamed(object,key);
 }
 
 /** Prepare one conversation's authored object graph: its ConFlagRef chain, its
@@ -43,7 +43,7 @@ async function prepareConversationGraph(runtime, conversation, objects) {
     if (seenFlags.has(flagRef)) throw new Error('Conversation flag-ref chain is cyclic');
     seenFlags.add(flagRef);
     await runtime.prepareObject(flagRef); objects.add(flagRef); prepared++;
-    flagRef = runtime.namedReference(flagRef, 'nextFlagRef').get();
+    flagRef = runtime.readNamed(flagRef, 'nextFlagRef');
   }
   const seenEvents = new Set();
   for (let event = readMaybe(runtime, conversation, 'eventList'); event;) {
@@ -57,9 +57,9 @@ async function prepareConversationGraph(runtime, conversation, objects) {
     for (let eventFlag = readMaybe(runtime, event, 'flagRef'); eventFlag;) {
       if (eventFlags.has(eventFlag)) throw new Error('Conversation event flag-ref chain is cyclic');
       eventFlags.add(eventFlag);await runtime.prepareObject(eventFlag);objects.add(eventFlag);prepared++;
-      eventFlag=runtime.namedReference(eventFlag,'nextFlagRef').get();
+      eventFlag=runtime.readNamed(eventFlag,'nextFlagRef');
     }
-    event = runtime.namedReference(event, 'nextEvent').get();
+    event = runtime.readNamed(event, 'nextEvent');
   }
   return prepared;
 }

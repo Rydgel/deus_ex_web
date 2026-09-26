@@ -26,7 +26,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
   for(const [name,originalObjectIndex] of Object.entries(TRAINING_NPC_IDENTITIES)) {
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
-      if(runtime.namedReference(actor,'bHidden').get())continue;
+      if(runtime.readNamed(actor,'bHidden'))continue;
       const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
@@ -68,7 +68,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
   }
   const level=currentPlayer()?runtime.levelFor(currentPlayer()):null;
-  const read=(actor,name)=>{try{return runtime.namedReference(actor,name).get();}catch{return undefined;}};
+  const read=(actor,name)=>{try{return runtime.readNamed(actor,name);}catch{return undefined;}};
   // Render.dll's level-actor pass (0x10b22e27-0x10b22ef8), for the player's
   // first-person frame: skip the view actor's ViewTarget (+0x60c) unless
   // bBehindView, a hidden actor, a bOnlyOwnerSee actor the view actor does not
@@ -140,7 +140,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null}) {
-  const read=(object,name)=>runtime.namedReference(object,name).get();
+  const read=(object,name)=>runtime.readNamed(object,name);
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');

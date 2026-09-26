@@ -134,10 +134,10 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   const manager={name:'InfoLinkPreviewThemeManager'},theme={name:'ColorThemeHUD_Default'};
   if(!windowHost){runtime.attach(root,rootClass);runtime.attach(hud,hudClass);}
   runtime.attach(manager,managerClass);runtime.attach(theme,themeClass);
-  runtime.namedReference(root,'parentPawn').set(player);
-  runtime.namedReference(root,'hud').set(hud);
+  runtime.writeNamed(root,'parentPawn',player);
+  runtime.writeNamed(root,'hud',hud);
   let playerTheme=runtime.namedReference(player,'ThemeManager');
-  runtime.namedReference(manager,'currentHUDTheme').set(theme);
+  runtime.writeNamed(manager,'currentHUDTheme',theme);
 
   const owned=new WeakSet();
   const storage=windowHost?.raw??createRawMemory();
@@ -452,7 +452,7 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
   if(!lineControl)throw new Error('InfoLink shell did not allocate winLine');
   if(!computerTextWindow||!computerInputWindow)
     throw new Error('InfoLink shell did not allocate ComputerWindow internal children');
-  const get=name=>runtime.namedReference(child,name).get();
+  const get=name=>runtime.readNamed(child,name);
   const width=memory.read(child,WINDOW_SIZE_OFFSETS.width,'f32');
   const height=memory.read(child,WINDOW_SIZE_OFFSETS.height,'f32');
   if(width!==431||height!==114)throw new Error(`InfoLink shell has unexpected size ${width}x${height}`);
@@ -482,10 +482,10 @@ export async function createInfoLinkShellPreview({runtime,assets,player,windowHo
       height:memory.read(staticControl,WINDOW_SIZE_OFFSETS.height,'f32'),
       backgroundStyle:memory.read(staticControl,WINDOW_BACKGROUND_STYLE_OFFSETS.backgroundStyle,'u8'),
       visible:Boolean(memory.read(staticControl,O.flags,'u32')&1),
-      bLineVisible:Boolean(runtime.namedReference(staticControl,'bLineVisible').get()),
-      lineInterval:runtime.namedReference(staticControl,'lineInterval').get(),
-      linePauseDelay:runtime.namedReference(staticControl,'linePauseDelay').get(),
-      currentLinePosY:runtime.namedReference(staticControl,'currentLinePosY').get(),
+      bLineVisible:Boolean(runtime.readNamed(staticControl,'bLineVisible')),
+      lineInterval:runtime.readNamed(staticControl,'lineInterval'),
+      linePauseDelay:runtime.readNamed(staticControl,'linePauseDelay'),
+      currentLinePosY:runtime.readNamed(staticControl,'currentLinePosY'),
     }),Object.freeze({name:'winName',
       x:memory.read(nameControl,WINDOW_POSITION_OFFSETS.x,'f32'),
       y:memory.read(nameControl,WINDOW_POSITION_OFFSETS.y,'f32'),

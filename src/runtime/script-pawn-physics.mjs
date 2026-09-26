@@ -79,8 +79,11 @@ function regionBinding(field, actor, name) {
 export function pawnPhysicsView(actor, services) {
   if (actor._pawnPhysics) return actor._pawnPhysics;
   const { field, level, worldActor } = services;
-  const get = name => field(actor, name).get();
-  const set = (name, value) => field(actor, name).set(value);
+  // Value accessors when the runtime provides them: the view's getters run
+  // for every physics query, and an lvalue per read is pure host overhead.
+  const get = services.read ? name => services.read(actor, name) : name => field(actor, name).get();
+  const set = services.write ? (name, value) => services.write(actor, name, value)
+    : (name, value) => field(actor, name).set(value);
   const zone = () => services.zoneFields(pawn.region.zone ?? level.pointRegion(pawn.position).zone);
   const pawn = { self: actor, worldActor, isPawn: true, pawn: true,
     controlledPlayer: false, decoration: false, movingBrush: false,
@@ -247,6 +250,7 @@ export function pawnPhysicsView(actor, services) {
  * act on the registered host identity, not the field view. */
 function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
   const { level, worldActor } = services;
+  const readOther = (other, name) => services.read ? services.read(other, name) : services.field(other, name).get();
   return playerMove(pawn, delta, {
     worldActor,
     multiLineCheck: query => level.hash.multiLineCheck(query).map(h => (decorate(h.actor), h)),
@@ -266,9 +270,9 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
     // other identity).
     moveRiders: (src, finalDelta, rot) => moveActorRiders(pawn.self, finalDelta, rot, {
       actors: level.actors,
-      baseOf: other => other.base !== undefined ? other.base : services.field(other, 'Base').get(),
-      location: other => other.position ?? services.field(other, 'Location').get(),
-      rotation: other => other.rotation ?? services.field(other, 'Rotation').get(),
+      baseOf: other => other.base !== undefined ? other.base : readOther(other, 'Base'),
+      location: other => other.position ?? readOther(other, 'Location'),
+      rotation: other => other.rotation ?? readOther(other, 'Rotation'),
       isPawn: other => Boolean(other.lineage?.includes('engine.pawn')),
       addViewRotationYaw: (other, dyaw) => {
         const ref = services.field(other, 'ViewRotation');

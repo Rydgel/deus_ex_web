@@ -8,7 +8,9 @@ import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
-import { zeroValue, copyValue, propertyReference, arrayReference } from './script-values.mjs';
+import {
+  zeroValue, copyValue, propertyReference, arrayReference, readPropertyValue, storedPropertyValue,
+} from './script-values.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
@@ -150,6 +152,7 @@ import {execRotRand} from './script-rot-rand.mjs';
 import {parseToken} from './script-console-command.mjs';
 
 const lower=name=>String(name).toLowerCase();
+const memberCaches=new WeakMap();
 /** exec bodies resolve each out expression to a raw address; a non-assignable
  * expression lands in a private temporary whose writes never escape. */
 const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{set(){}};
@@ -205,8 +208,8 @@ export class ScriptRuntime {
     this.windowLifecycle=windowLifecycle;
     this.conversationEventNative=createConversationEventsNativeService({
       objects:conversationObjects,
-      read:(object,key)=>this.namedReference(object,key).get(),
-      write:(object,key,value)=>this.namedReference(object,key).set(value),
+      read:(object,key)=>this.readNamed(object,key),
+      write:(object,key,value)=>this.writeNamed(object,key,value),
       reference:object=>{this.instance(object);return object;},
       isA:(object,name)=>{
         for(let cls=this.instance(object).cls;cls;cls=cls.base)
@@ -216,19 +219,19 @@ export class ScriptRuntime {
       bindActor:args=>{
         const key=this.instance(args.event).cls.record.key;
         if(key==='consys.coneventspeech')return bindSpeechActor({...args,
-          read:(object,key)=>this.namedReference(object,key).get(),
-          write:(object,key,value)=>this.namedReference(object,key).set(value),
+          read:(object,key)=>this.readNamed(object,key),
+          write:(object,key,value)=>this.writeNamed(object,key,value),
         });
         if(key==='consys.coneventanimation'||key==='consys.coneventtrade')
           return bindConversationAction({...args,
-            read:(object,key)=>this.namedReference(object,key).get(),
-            write:(object,key,value)=>this.namedReference(object,key).set(value),
+            read:(object,key)=>this.readNamed(object,key),
+            write:(object,key,value)=>this.writeNamed(object,key,value),
           });
         if(isConversationCheckObjectBindClass(key)){
           const services=this.conversationLifecycle?.checkObject;
           return bindConversationCheckObjectActor({...args,
-            read:(object,key)=>this.namedReference(object,key).get(),
-            write:(object,key,value)=>this.namedReference(object,key).set(value),
+            read:(object,key)=>this.readNamed(object,key),
+            write:(object,key,value)=>this.writeNamed(object,key,value),
             classRef:services?.classRef,
             createPackage:typeof services?.createPackage==='function'
               ? details=>services.createPackage(details):null,
@@ -239,8 +242,8 @@ export class ScriptRuntime {
         if(isConversationTransferObjectBindClass(key)){
           const services=this.conversationLifecycle?.transferObject;
           return bindConversationTransferObjectActor({...args,
-            read:(object,key)=>this.namedReference(object,key).get(),
-            write:(object,key,value)=>this.namedReference(object,key).set(value),
+            read:(object,key)=>this.readNamed(object,key),
+            write:(object,key,value)=>this.writeNamed(object,key,value),
             classRef:services?.classRef,
             createPackage:typeof services?.createPackage==='function'
               ? details=>services.createPackage(details):null,
@@ -439,8 +442,23 @@ export class ScriptRuntime {
     return this.classes.get(record.key);
   }
   lookupMember(node,table,name) {
-    for(;node;node=node.base){const member=node[table]?.get(lower(name));if(member)return member;}
-    return null;
+    // A prepared node's member tables and base chain never change, so its
+    // resolution (a miss included) is memoized per node, table and spelling
+    // instead of lowercasing and walking the chain on every host property
+    // access (docs/play-frame-cost.md).
+    if(!node)return null;
+    let tables=memberCaches.get(node);
+    if(!tables)memberCaches.set(node,tables={});
+    const cache=tables[table]??=new Map();
+    let member=cache.get(name);
+    if(member===undefined){
+      const key=lower(name);member=null;
+      for(let current=node;current;current=current.base){
+        const found=current[table]?.get(key);if(found){member=found;break;}
+      }
+      cache.set(name,member);
+    }
+    return member;
   }
   async prepareClassOperands(bindings) {
     for(const record of bindings.values())if(record?.kind==='Class')
@@ -604,7 +622,7 @@ export class ScriptRuntime {
     if (!packageOuter || !Number.isInteger(packageOuter.index))
       throw new Error('new(Self) requires the level package outer');
     const construction = this.actorLifecycle?.construction;
-    const spelled = this.namedReference(player, 'Name').get();
+    const spelled = this.readNamed(player, 'Name');
     const fname = construction.internName(typeof spelled === 'string' && spelled ? spelled : 'JCDentonMale');
     if (!fname || !Number.isInteger(fname.index)) throw new Error('Player FName is not interned');
     const object = {
@@ -746,8 +764,8 @@ export class ScriptRuntime {
     if(vtable!==PLAYER_DESTROY.deusExPlayerVtable&&vtable!==PLAYER_DESTROY.playerPawnExtVtable)
       return receiver=>this.destroyActorBase(receiver);
     const services={
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       // Core GObjInGarbageCollection (0x102a264c), set only while PurgeGarbage runs.
       inGarbageCollection:()=>this.garbageCollecting===true,
       conditionalDestroy:target=>this.conditionalDestroy(target),
@@ -847,10 +865,36 @@ export class ScriptRuntime {
     return propertyReference(field,()=>instance.slots.get(field.key),value=>instance.slots.set(field.key,value));
   }
   namedReference(receiver,name) {
+    return this.fieldReference(receiver,this.namedField(receiver,name));
+  }
+  namedField(receiver,name) {
     const field=this.lookupMember(this.instance(receiver).cls,'fields',name);
     if(!field)throw new Error(`Original property was not found: ${name}`);
-    return this.fieldReference(receiver,field);
+    return field;
   }
+  /** fieldReference(receiver, field).get() without allocating the lvalue.
+   * Host code reads values; only the VM needs assignable references. */
+  readField(receiver,field) {
+    if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).get();
+    const instance=this.instance(receiver),binding=instance.bindings.get(field.key);
+    if(binding)return readPropertyValue(field,binding.get());
+    if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+    return readPropertyValue(field,instance.slots.get(field.key));
+  }
+  /** fieldReference(receiver, field).set(value): same storage order and
+   * returned logical copy, without allocating the lvalue. */
+  writeField(receiver,field,value) {
+    if(receiver?.kind==='Class'&&!this.instances.has(receiver))return this.fieldReference(receiver,field).set(value);
+    const instance=this.instance(receiver),binding=instance.bindings.get(field.key);
+    if(binding)binding.set(storedPropertyValue(field,value,binding.get()));
+    else {
+      if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+      instance.slots.set(field.key,storedPropertyValue(field,value,instance.slots.get(field.key)));
+    }
+    return copyValue(field,value);
+  }
+  readNamed(receiver,name){return this.readField(receiver,this.namedField(receiver,name));}
+  writeNamed(receiver,name,value){return this.writeField(receiver,this.namedField(receiver,name),value);}
   async prepareResource(reference) {
     if(!reference)return null;
     return this.resourceRegistry().materialize(reference.asset,reference.index);
@@ -1003,7 +1047,7 @@ export class ScriptRuntime {
     return pending;
   }
   async prepareMesh(receiver) {
-    const reference=this.namedReference(receiver,'Mesh').get();
+    const reference=this.readNamed(receiver,'Mesh');
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=await this.prepareResource(reference);
     if(resource.payloadStatus!=='decoded-lodmesh')
@@ -1014,7 +1058,7 @@ export class ScriptRuntime {
    * mesh's sequence lookup. Package/resource preparation must finish before
    * this synchronous script boundary. */
   meshPayload(receiver) {
-    return this.meshResource(this.namedReference(receiver,'Mesh').get())?.payload??null;
+    return this.meshResource(this.readNamed(receiver,'Mesh'))?.payload??null;
   }
   meshResource(reference) {
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
@@ -1032,12 +1076,12 @@ export class ScriptRuntime {
     if(!mesh)throw new Error('Original GetFrame requires a prepared LodMesh');
     return getLodMeshFrame(mesh,receiver,coords,{
       cache:this.meshFrameCache??=createLodMeshFrameCache(),
-      read:(actor,name)=>this.namedReference(actor,name).get(),
+      read:(actor,name)=>this.readNamed(actor,name),
       objectIndex:actor=>this.soundField(actor,'ObjectIndex'),
     },options);
   }
   meshTextureServices() {
-    const read=(actor,name)=>this.namedReference(actor,name).get();
+    const read=(actor,name)=>this.readNamed(actor,name);
     const resource=reference=>{
       const value=this.meshResource(reference);
       if(!value)throw new Error('Original mesh texture array requires a prepared mesh');
@@ -1051,7 +1095,7 @@ export class ScriptRuntime {
   }
   /** Renderer-side UMesh::GetTexture; native 1013 has separate bounds rules. */
   getActorMeshTexture(receiver,index) {
-    const reference=this.namedReference(receiver,'Mesh').get();
+    const reference=this.readNamed(receiver,'Mesh');
     if(!reference)throw new Error('Original GetTexture requires Actor.Mesh');
     return getMeshTexture(reference,receiver,index,this.meshTextureServices());
   }
@@ -1127,11 +1171,11 @@ export class ScriptRuntime {
     const zone=this.regionValue(actor).zone;
     if(!zone)return null;
     const cls=this.instance(zone)?.cls;
-    const gravity=this.namedReference(zone,'ZoneGravity').get();
+    const gravity=this.readNamed(zone,'ZoneGravity');
     const field=cls?this.lookupMember(cls,'fields','ZoneGravity'):null;
     const defaults=field?this.defaultValue(cls,field):null;
     return {gravityZ:gravity?.[2],defaultGravityZ:defaults?.[2],
-      waterZone:Boolean(this.namedReference(zone,'bWaterZone').get())};
+      waterZone:Boolean(this.readNamed(zone,'bWaterZone'))};
   }
   locomotionServices() {
     return {
@@ -1141,7 +1185,7 @@ export class ScriptRuntime {
           if(lower(cls.record.name)===tail)return true;
         return false;
       },
-      readField:(actor,name)=>this.namedReference(actor,name).get(),
+      readField:(actor,name)=>this.readNamed(actor,name),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       // FindFunctionChecked against the object's class chain: NULL when the
       // class never declares the name (e.g. SpawnNotification on pawns).
@@ -1171,7 +1215,7 @@ export class ScriptRuntime {
    * the bidirectional class test and appWarnf warnings (0xf1/0xf2). */
   noiseServices(call) {
     const services=this.soundServices(call);
-    services.write=(actor,name,value)=>this.namedReference(actor,name).set(value);
+    services.write=(actor,name,value)=>this.writeNamed(actor,name,value);
     services.warn=code=>this.warning?.({type:'MakeNoise',kind:code});
     services.isProbing=(actor,name)=>this.isProbing(actor,name);
     services.relatedClass=(a,b)=>{
@@ -1190,7 +1234,7 @@ export class ScriptRuntime {
    * consulted by any of these bodies. */
   perceptionServices(call) {
     const services=this.soundServices(call);
-    services.write=(actor,name,value)=>this.namedReference(actor,name).set(value);
+    services.write=(actor,name,value)=>this.writeNamed(actor,name,value);
     services.level=receiver=>this.levelFor(receiver);
     services.levelInfo=level=>level?.actors?.[0]??null;
     services.levelActors=level=>level?.actors??null;
@@ -1205,7 +1249,7 @@ export class ScriptRuntime {
     services.netPlayers=level=>{
       const out=[];
       for(let pawn=level?.pawnList;pawn;pawn=pawn.nextPawn)
-        if(this.namedReference(pawn,'bIsPlayer').get())out.push(pawn);
+        if(this.readNamed(pawn,'bIsPlayer'))out.push(pawn);
       return out;
     };
     services.rand=()=>{
@@ -1217,18 +1261,18 @@ export class ScriptRuntime {
      * bit 0x200 (bTeamGame) gates a PRI->+0x340 team-byte compare; missing PRIs
      * or a non-team game keep the candidate. */
     services.sameTeam=(viewer,cand,levelInfo)=>{
-      const game=this.namedReference(levelInfo,'Game').get();
+      const game=this.readNamed(levelInfo,'Game');
       if(!game)return false;
-      const viewerPri=this.namedReference(viewer,'PlayerReplicationInfo').get();
-      const candPri=this.namedReference(cand,'PlayerReplicationInfo').get();
+      const viewerPri=this.readNamed(viewer,'PlayerReplicationInfo');
+      const candPri=this.readNamed(cand,'PlayerReplicationInfo');
       if(!viewerPri||!candPri)return false;
-      if(!this.namedReference(game,'bTeamGame').get())return false;
-      return (Number(this.namedReference(viewerPri,'Team').get())&0xff)
-        ===(Number(this.namedReference(candPri,'Team').get())&0xff);
+      if(!this.readNamed(game,'bTeamGame'))return false;
+      return (Number(this.readNamed(viewerPri,'Team'))&0xff)
+        ===(Number(this.readNamed(candPri,'Team'))&0xff);
     };
     // AIVisibility reads the reflected LevelInfo float, unlike MakeNoise's
     // double ULevel clock. Full Level.Tick publishes this field before actors.
-    services.read=(actor,name)=>name==='TimeSeconds'?this.namedReference(actor,name).get():this.soundField(actor,name);
+    services.read=(actor,name)=>name==='TimeSeconds'?this.readNamed(actor,name):this.soundField(actor,name);
     services.zone=actor=>this.regionValue(actor).zone;
     services.lightLineCheck=(level,source,end,start)=>{
       if(typeof level?.hash?.lineCheck!=='function')
@@ -1248,11 +1292,11 @@ export class ScriptRuntime {
       const hits=level.hash.multiLineCheck({end,start,extent:[0,0,0],checkActors:1,worldActor,extra:4});
       const blocked=actor=>{
         if(!actor)return false;
-        for(let node=viewer;node;node=this.namedReference(node,'Owner').get())
+        for(let node=viewer;node;node=this.readNamed(node,'Owner'))
           if(actor===node)return false;
         if(actor===target)return false;
         if(actor===worldActor)return true;
-        const blocks=this.namedReference(actor,'bBlockSight').get(),hidden=this.namedReference(actor,'bHidden').get();
+        const blocks=this.readNamed(actor,'bBlockSight'),hidden=this.readNamed(actor,'bHidden');
         return Boolean(blocks)&&!Boolean(hidden);
       };
       for(const hit of hits)if(blocked(hit.actor))return false;
@@ -1318,7 +1362,7 @@ export class ScriptRuntime {
     const className=instance.cls?.record?.name;
     if(typeof className!=='string')return null;
     let objectName;
-    try{objectName=this.namedReference(receiver,'Name').get();}
+    try{objectName=this.readNamed(receiver,'Name');}
     catch(error){return null;}
     if(typeof objectName!=='string')return null;
     const index=provider.indexFor(className,objectName);
@@ -1337,10 +1381,10 @@ export class ScriptRuntime {
     const list=await this.prepareObject(await this.objects.resolve(asset,index));
     if(this.instance(list).cls.record.key!=='consys.conversationlist')throw new Error('Invalid ConversationList class');
     const seen=new Set();
-    for(let item=this.namedReference(list,'conversations').get();item!==null;item=this.namedReference(item,'Next').get()){
+    for(let item=this.readNamed(list,'conversations');item!==null;item=this.readNamed(item,'Next')){
       if(!item||seen.has(item))throw new Error('Invalid conversation source chain');
       seen.add(item);await this.prepareObject(item);
-      await this.prepareObject(this.namedReference(item,'ConObject').get());
+      await this.prepareObject(this.readNamed(item,'ConObject'));
     }
     const conSys=await this.objects.assets.get('ConSys');
     this.conversationItemClass=await this.loadClass(conSys,conSys.exportsByPath.get('conlistitem'));
@@ -1356,7 +1400,7 @@ export class ScriptRuntime {
           if(cls.record.key==='deusex.deusexlevelinfo')return true;
         return false;
       },
-      read:(object,key)=>this.namedReference(object,key).get(),
+      read:(object,key)=>this.readNamed(object,key),
       log:message=>this.warning?.({type:'ConBindEvents',message}),
       load:request=>{
         if(typeof this.conversationLifecycle?.load!=='function')
@@ -1368,8 +1412,8 @@ export class ScriptRuntime {
   }
   bindConversationList(list,actor) {
     const lifecycle=this.conversationLifecycle;
-    const read=(object,key)=>this.namedReference(object,key).get();
-    const write=(object,key,value)=>this.namedReference(object,key).set(value);
+    const read=(object,key)=>this.readNamed(object,key);
+    const write=(object,key,value)=>this.writeNamed(object,key,value);
     return bindConversationsNative({list,actor,read,write,
       reference:object=>object,
       allocate:details=>{
@@ -1407,7 +1451,7 @@ export class ScriptRuntime {
       return object?object.index:null;
     }
     const reflected=name=>{
-      try{return this.namedReference(actor,name).get();}
+      try{return this.readNamed(actor,name);}
       catch(error){return undefined;}
     };
     // The host keeps the level graph in one container (levelFor); the original
@@ -1586,8 +1630,8 @@ export class ScriptRuntime {
   }
   setOwner(receiver,owner) {
     return setScriptOwner(receiver,owner,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
     });
   }
@@ -1615,8 +1659,8 @@ export class ScriptRuntime {
       if(cls.record.key==='engine.pawn'){isPawn=true;break;}
     const actor={isPawn};
     Object.defineProperties(actor,{
-      deleted:{get:()=>this.namedReference(receiver,'bDeleteMe').get()},
-      position:{get:()=>this.namedReference(receiver,'Location').get()},
+      deleted:{get:()=>this.readNamed(receiver,'bDeleteMe')},
+      position:{get:()=>this.readNamed(receiver,'Location')},
       region:{get:()=>this.regionValue(receiver),set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber)},
     });
     if(isPawn){
@@ -1624,10 +1668,10 @@ export class ScriptRuntime {
         Object.defineProperty(actor,prop,{get:()=>this.regionValue(receiver,name),
           set:value=>this.setRegion(receiver,value.zone,value.leaf,value.zoneNumber,name)});
       Object.defineProperties(actor,{
-        height:{get:()=>this.namedReference(receiver,'CollisionHeight').get()},
-        eyeHeight:{get:()=>this.namedReference(receiver,'EyeHeight').get()},
+        height:{get:()=>this.readNamed(receiver,'CollisionHeight')},
+        eyeHeight:{get:()=>this.readNamed(receiver,'EyeHeight')},
         playerReplicationInfo:{get:()=>{
-          const info=this.namedReference(receiver,'PlayerReplicationInfo').get();
+          const info=this.readNamed(receiver,'PlayerReplicationInfo');
           if(!info)return null;
           const field=this.namedReference(info,'PlayerZone');
           return {get playerZone(){return field.get();},set playerZone(value){field.set(value);}};
@@ -1692,9 +1736,9 @@ export class ScriptRuntime {
       // the same recovered MoveActor entry for each based child.
       moveRiders:(src,finalDelta,rot)=>moveActorRiders(src,finalDelta,rot,{
         actors:level.actors,
-        baseOf:other=>other.base!==undefined?other.base:this.namedReference(other,'Base').get(),
-        location:other=>other.position??this.namedReference(other,'Location').get(),
-        rotation:other=>other.rotation??this.namedReference(other,'Rotation').get(),
+        baseOf:other=>other.base!==undefined?other.base:this.readNamed(other,'Base'),
+        location:other=>other.position??this.readNamed(other,'Location'),
+        rotation:other=>other.rotation??this.readNamed(other,'Rotation'),
         isPawn:other=>Boolean(other.lineage?.includes('engine.pawn')),
         addViewRotationYaw:(other,dyaw)=>{
           const ref=this.namedReference(other,'ViewRotation');
@@ -1802,8 +1846,8 @@ export class ScriptRuntime {
     // on LevelInfo). Map it before the script-event dispatch.
     const levelActor=target=>target===level?.hash?.levelInfo?level.actors[0]:target;
     const services={
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       defaultRead:(cls,name)=>this.defaultValue(cls,this.lookupMember(cls,'fields',name)),
       isActorClass:cls=>{for(;cls;cls=cls.base)if(cls===this.actorClass)return true;return false;},
       validate:input=>lifecycle?.validateSpawn?.(input),
@@ -1834,7 +1878,7 @@ export class ScriptRuntime {
       setOwner:(actor,owner)=>this.setOwner(actor,owner),
       initExecution:actor=>{
         const state=this.initExecution(actor),level=this.levelFor(actor);
-        if(!state||!level?.actors||level.actors[0]!==this.namedReference(actor,'Level').get())
+        if(!state||!level?.actors||level.actors[0]!==this.readNamed(actor,'Level'))
           this.warning?.({type:'ActorInitExecution',actor});
       },
       processEvent:(actor,name,eventArgs)=>this.processEvent(actor,name,eventArgs),
@@ -1851,8 +1895,8 @@ export class ScriptRuntime {
           return actor;
         }
         installActorCollisionView(actor,{
-          read:(a,name)=>this.namedReference(a,name).get(),
-          write:(a,name,value)=>this.namedReference(a,name).set(value),
+          read:(a,name)=>this.readNamed(a,name),
+          write:(a,name,value)=>this.writeNamed(a,name,value),
           worldActor:level.actors[0],lineage});
         this.collisionViewActors.add(actor);
         return actor;
@@ -1873,8 +1917,8 @@ export class ScriptRuntime {
     return destroyScriptActor(receiver,{
       ...this.actorLifecycle,
       levelFor:this.actorLifecycle.levelFor??this.levelFor,
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       isProbing:(actor,name)=>this.isProbing(actor,name),
       // ULevel::DestroyActor detaches the target's Base and every based child
@@ -1914,7 +1958,7 @@ export class ScriptRuntime {
     const lifecycle=this.actorLifecycle;
     if(!lifecycle)throw new Error('CleanupDestroyed requires linked native lifecycle services');
     return cleanupLevelDestroyed(level,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
+      read:(actor,name)=>this.readNamed(actor,name),
       cleanupReferences:(actor,options)=>this.cleanupReferences(actor,options),
       release:(actor,flags)=>{
         if(typeof lifecycle.release==='function')lifecycle.release(actor,flags);
@@ -2009,8 +2053,8 @@ export class ScriptRuntime {
   }
   invokeNative(call) {
     if(call.record?.key==='engine.decal.attachdecal')return execAttachDecal(call,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       clientFor:actor=>{
         const engine=this.levelFor(actor)?.engine;
         if(!engine||!Object.hasOwn(engine,'client'))
@@ -2019,17 +2063,17 @@ export class ScriptRuntime {
       },warning:this.warning,
       attachSurfaces:(actor,distance,direction)=>attachDecalSurfaces(actor,distance,direction,{
         model:this.levelFor(actor)?.model,
-        read:(a,n)=>this.namedReference(a,n).get(),
-        write:(a,n,v)=>this.namedReference(a,n).set(v),
+        read:(a,n)=>this.readNamed(a,n),
+        write:(a,n,v)=>this.writeNamed(a,n,v),
         frand:()=>{if(typeof this.rng?.frand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');return Math.fround(this.rng.frand());},
       }),
     });
     if(call.record?.key==='engine.decal.detachdecal')return execDetachDecal(call,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
+      read:(actor,name)=>this.readNamed(actor,name),
       detachSurfaces:actor=>detachDecalSurfaces(actor,{
         model:this.levelFor(actor)?.model,
-        read:(a,n)=>this.namedReference(a,n).get(),
-        write:(a,n,v)=>this.namedReference(a,n).set(v),
+        read:(a,n)=>this.readNamed(a,n),
+        write:(a,n,v)=>this.writeNamed(a,n,v),
       }),
     });
     // A host may claim specific natives as external boundaries (see constructor);
@@ -2405,9 +2449,9 @@ export class ScriptRuntime {
       // and, in the random branch, draws from the shared Core appRand stream.
       if(call.argumentCount!==0)throw new Error('GetRandomLabel accepts no arguments');
       const flags={
-        bCycleEvents:Boolean(this.namedReference(call.receiver,'bCycleEvents').get()),
-        bCycleOnce:Boolean(this.namedReference(call.receiver,'bCycleOnce').get()),
-        bCycleRandom:Boolean(this.namedReference(call.receiver,'bCycleRandom').get()),
+        bCycleEvents:Boolean(this.readNamed(call.receiver,'bCycleEvents')),
+        bCycleOnce:Boolean(this.readNamed(call.receiver,'bCycleOnce')),
+        bCycleRandom:Boolean(this.readNamed(call.receiver,'bCycleRandom')),
       };
       const cycleRef=this.namedReference(call.receiver,'cycleIndex');
       const cycledRef=this.namedReference(call.receiver,'bLabelsCycled');
@@ -2420,7 +2464,7 @@ export class ScriptRuntime {
     }
     if(call.index===2054){
       if(call.argumentCount!==0)throw new Error('ClearBindEvents accepts no arguments');
-      return clearConversationEvents(call.receiver,{read:(object,key)=>this.namedReference(object,key).get()});
+      return clearConversationEvents(call.receiver,{read:(object,key)=>this.readNamed(object,key)});
     }
     if(call.index>=1535&&call.index<=1545){
       const args=Array.from({length:call.argumentCount},(_,i)=>refValue(call.evaluateArgument(i)));
@@ -2503,8 +2547,8 @@ export class ScriptRuntime {
       return isOverlapping(call.receiver,other);
     }
     if(call.index===278)return execScriptSpawn(call,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       levelFor:this.levelFor,spawnActor:args=>this.spawnActor(args),
     });
     if(call.index===299){
@@ -2512,8 +2556,8 @@ export class ScriptRuntime {
       const rotation=refValue(call.evaluateArgument(0));
       return setScriptRotation(call.receiver,rotation,{
         levelFor:this.levelFor,
-        read:(actor,name)=>this.namedReference(actor,name).get(),
-        write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+        read:(actor,name)=>this.readNamed(actor,name),
+        write:(actor,name,value)=>this.writeNamed(actor,name,value),
       });
     }
     if(call.index===267){
@@ -2761,7 +2805,7 @@ export class ScriptRuntime {
       // C0 branch fires, so the f32 result is max(delta, 0) and NaN clamps
       // to 0 like any unordered compare.
       const clock=this.soundField(call.receiver,'TimeSeconds');
-      const last=Math.fround(this.namedReference(call.receiver,'LastRenderTime').get());
+      const last=Math.fround(this.readNamed(call.receiver,'LastRenderTime'));
       const delta=clock-last;
       return delta<0||Number.isNaN(delta)?0:Math.fround(delta);
     }
@@ -2770,7 +2814,7 @@ export class ScriptRuntime {
       return this.bindConversationEvents(call.receiver);
     }
     if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,{
-      read:(actor,name)=>this.namedReference(actor,name).get(),
+      read:(actor,name)=>this.readNamed(actor,name),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)
           if(cls.record.key===key)return true;
@@ -2886,8 +2930,8 @@ export class ScriptRuntime {
       showSelf:actor=>this.showPawnSelf(actor,nativeServices),
       checkEnemyVisible:actor=>this.checkPawnEnemyVisible(actor,nativeServices),
       ...nativeServices,
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
         return false;
@@ -2915,8 +2959,8 @@ export class ScriptRuntime {
   processLevelTick(level,seconds,{tickType=2,...nativeServices}) {
     return tickStandaloneLevel(level,seconds,tickType,{
       ...nativeServices,
-      read:(actor,name)=>this.namedReference(actor,name).get(),
-      write:(actor,name,value)=>this.namedReference(actor,name).set(value),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
         return false;
@@ -2949,6 +2993,8 @@ export class ScriptRuntime {
     if(!level?.hash)throw new Error('Pawn physics requires the level collision hash');
     return {
       field:(actor,name)=>this.namedReference(actor,name),
+      read:(actor,name)=>this.readNamed(actor,name),
+      write:(actor,name,value)=>this.writeNamed(actor,name,value),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
         return false;
@@ -2957,7 +3003,7 @@ export class ScriptRuntime {
       // ZoneInfo fields on an attached zone read through namedReference (live
       // store); the hash levelInfo's values carry the same serialized slots.
       zoneFields:zone=>{
-        const read=name=>{try{return this.namedReference(zone,name).get();}catch{return zone?.values?.[name];}};
+        const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
         return {get ZoneGravity(){return read('ZoneGravity');},get ZoneVelocity(){return read('ZoneVelocity');},
           get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');}};
       },
@@ -3001,11 +3047,11 @@ export class ScriptRuntime {
     const view=pawnPhysicsView(receiver,base);
     const navZone=zone=>{
       if(!zone)return {water:false,pain:false,damageType:'None',gravityZ:undefined};
-      const read=name=>{try{return this.namedReference(zone,name).get();}catch{return zone?.values?.[name];}};
+      const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
       return {water:Boolean(read('bWaterZone')),pain:Boolean(read('bPainZone')),
         damageType:read('DamageType')??'None',gravityZ:read('ZoneGravity')?.[2]};
     };
-    const zoneOf=(actor,name)=>this.namedReference(actor,name).get()?.['engine.actor.pointregion.zone']
+    const zoneOf=(actor,name)=>this.readNamed(actor,name)?.['engine.actor.pointregion.zone']
       ??level.pointRegion(view.position).zone;
     /* The native reach workers read packed bool words directly. Bind the
      * consumed masks at Actor +0x1dc, Pawn +0x318 and Mover +0x4ec to their
@@ -3031,12 +3077,12 @@ export class ScriptRuntime {
     };
     const flagRead=(actor,name)=>flagWords[name].reduce((w,[field,mask])=>{
       let set=false;
-      try{set=Boolean(this.namedReference(actor,field).get());}catch{set=false;}
+      try{set=Boolean(this.readNamed(actor,field));}catch{set=false;}
       return w|(set?mask:0);
     },0)>>>0;
     const flagWrite=(actor,name,v)=>{
       for(const [field,mask] of flagWords[name]){
-        try{this.namedReference(actor,field).set(Boolean(v&mask));}catch{/* field absent on this class */}
+        try{this.writeNamed(actor,field,Boolean(v&mask));}catch{/* field absent on this class */}
       }
     };
     const ref=(actor,name)=>this.namedReference(actor,name);
@@ -3076,11 +3122,11 @@ export class ScriptRuntime {
       specialCost:(nav,pawn)=>this.dispatchSpawnedEvent(nav,'SpecialCost',[pawn])|0,
       specialHandling:(node,pawn)=>this.dispatchSpawnedEvent(node,'SpecialHandling',[pawn])??null,
       isProbing:(actor,name)=>this.isProbing(actor,name),
-      location:actor=>this.namedReference(actor,'Location').get(),
+      location:actor=>this.readNamed(actor,'Location'),
       velocity:actor=>{
         // The workers restore Velocity by mutating the returned vector; bind
         // it to a live host array (the field binding's get copies).
-        if(!Array.isArray(actor.velocity))actor.velocity=this.namedReference(actor,'Velocity').get();
+        if(!Array.isArray(actor.velocity))actor.velocity=this.readNamed(actor,'Velocity');
         return actor.velocity;
       },
       regionZone:actor=>navZone(zoneOf(actor,'Region')),
@@ -3162,8 +3208,8 @@ export class ScriptRuntime {
     // Standalone Core-event fixtures have no linked world/Actor.Level slot.
     if(this.levelFor(receiver)) {
       for(let cls=instance.cls;cls;cls=cls.base)if(cls.record.key==='engine.actor'){
-        const info=this.namedReference(receiver,'Level').get();
-        if(info && !this.namedReference(info,'bBegunPlay').get())return false;
+        const info=this.readNamed(receiver,'Level');
+        if(info && !this.readNamed(info,'bBegunPlay'))return false;
         break;
       }
     }
