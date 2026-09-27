@@ -59,7 +59,7 @@ export async function runChildWithWatchdog({script, args, out, capMiB, label}) {
 const UNSUPPORTED_NATIVE = /^(?:Unsupported original door native|Unimplemented original native|VM does not support native) (\d+)/;
 
 export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = false, all = false, only = null,
-  finalIdle = false, log = message => process.stderr.write(`${message}\n`)} = {}) {
+  finalIdle = false, map = '00_Training', log = message => process.stderr.write(`${message}\n`)} = {}) {
   const {AssetStore} = await import('../src/unreal/assets.mjs');
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {createGame} = await import('../src/viewer/game.mjs');
@@ -79,7 +79,7 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
     for (const name of await readdir(`${gameRoot}/${dir}`))
       files.push({path: `${dir}/${name}`, read: () => readFile(`${gameRoot}/${dir}/${name}`)});
-  const assets = new AssetStore(files), asset = await assets.get('00_Training');
+  const assets = new AssetStore(files), asset = await assets.get(map);
 
   const records = [], probes = [], stack = [], seen = new WeakSet(), reached = new Map();
   let probe = 'startup', game, runtime, player, level, fixture, boots = 0;
@@ -265,7 +265,13 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
       startup.excluded = excluded ? excluded.map(actorLabel) : null;
     }
   };
-  await boot();
+  try { await boot(); } catch (error) {
+    // Another map's LoadMap/Login can stop before Play exists; report it as
+    // data (the map startup census) instead of losing the records so far.
+    recordError(error);
+    return {meta: {continue: continueMode, groups, boots, map}, bootError: String(error.message).split('\n')[0],
+      probes, records, startup, spawns: [], reached: [], lifecycle: null, host: null};
+  }
 
   const tick = frames => fixture.tick(frames);
   // The top modal (the keypad validator's walk): root +0x140 child list, +0x144
@@ -885,7 +891,7 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   const filter = only ? new RegExp(only, 'i') : null;
   for (const entry of plan) if (!filter || filter.test(`${entry.group}:${entry.label}`)) await run(entry);
   return {
-    meta: {continue: continueMode, groups, boots},
+    meta: {continue: continueMode, groups, boots, map},
     probes, records, startup, spawns: [...spawns.values()],
     reached: [...reached.values()].map(({probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value})),
     lifecycle: {destroys: [...destroys.values()], cleanups, loads: [...loads.values()], hostRemovals},
