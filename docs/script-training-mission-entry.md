@@ -75,6 +75,12 @@ the cadet's state, manufacture a key, or call FirstFrame directly. This
 bounded entry condition is not an implementation of menu-level travel,
 arbitrary incoming travel data or savegame restoration.
 
+The Stage 3 gate measures this input rather than trusting the comment: the
+probe library records every FlagBase.SetBool that the host issues with no
+script frame on the stack, and the gate prints `flag PlayerTraveling` as a
+Stage 6 (travel) host input. Any other host-written flag is an unclassified
+substitute and fails criterion 5.
+
 ## Carrying and dropping the body: ObjectToString
 
 The original `DeusExCarcass.Frob` assigns `String(Class)` to

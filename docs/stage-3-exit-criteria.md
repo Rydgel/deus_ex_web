@@ -7,9 +7,9 @@ below). The native counts below are measured from
 `.cache/script-runtime-inventory.json` (`node scripts/inventory-script-runtime.mjs`)
 on the installed GOTY packages, 2026-09-20.
 
-The [batch 6 scoreboard](#batch-6-original-controlled-player-tick-and-input)
-records the current work. Earlier batch counts and open-item lists are dated
-measurements, not the current blocker list.
+**Stage 3 is complete as of 2026-09-27.** See [Stage 3 close](#stage-3-close).
+The gate passes, and the fresh-entry marker is a measured, printed Stage 6 host
+input. Earlier batch counts and open-item lists are dated measurements.
 
 ## Why the current gate never terminates
 
@@ -623,3 +623,47 @@ inside the sweep (326 s, 5.6 GiB). Only the two known failures remain:
 `validate-player-tick-order`, killed at the 6144 MiB per-validator cap
 (6.2 GiB). Run alone, the latter passes at 5.4 GiB; it has measured
 4.5–6.4 GiB across checkpoints. Unit tests: 545/545.
+
+## Stage 3 close
+
+Closed 2026-09-27 on master after fast-forwarding the batch 6 branch.
+
+**Fresh-entry marker.** `freshMissionPlayerTraveling` is no longer an
+unmeasured host input. The probe library now records every
+`FlagBase.SetBool` that the host issues with no script frame on the stack
+(`host.inputs`). Criterion 5 classifies each one against `HOST_INPUTS`. The
+only entry is `flag PlayerTraveling`, a Stage 6 tolerance: original
+`DeusExPlayer.PreTravel` sets it before ClientTravel, and Play boots
+00_Training directly ([mission entry](script-training-mission-entry.md)). The
+gate prints it under criterion 5 as tolerated. Any other host-written flag
+fails the criterion.
+
+**Sweep blockers removed.** Both long-standing sweep reds are gone:
+- `validate-player-tick-order` was killed at the 6 GiB runner cap. The cause
+  was a real leak: AttachDecal stored its texture-keyed records on the decoded
+  map model, which every `createGame` and Player-start reload shares. That
+  kept every discarded game reachable, about 300 MB each. The records now
+  live on the live level, and a reload clears them
+  ([decal ownership](script-decal-startup.md#attachment-record-ownership)).
+- `validate-npc-mesh-preview` expected `update()` to report no re-upload for
+  unchanged poses. Environment-mapped troops reported one even when no camera
+  was supplied and no UV changed. `update()` now reports actual uploads, and
+  `validate-actor-mesh-scene` passes a camera to check environment tracking.
+
+Final sweep (`.cache/stage3-close-sweep.log`, four jobs, 872 s): 406 passed.
+The gate passed inside the sweep in 308 s. Two validators failed. The
+actor-mesh camera assertion was fixed and rerun green.
+`validate-native-mover-scene` failed after 0.2 s reading a report that
+`validate-native-mover-move` was rewriting at the same time. That is the
+known report race; it passes alone. Unit tests: 545/545.
+
+**Scope that remains outside Stage 3**, by the roadmap's stage definitions:
+- Training past `DL_part2`: ladders, swimming, water and damage zones. This is
+  Stage 5 movement, and the first slice is in [ladders and flying](ladder-flying.md).
+- Map travel, saved games and the fresh-entry marker's general travel form:
+  Stage 6.
+- Audio mixing and presentation fidelity: Stage 4.
+- Multiplayer: deferred.
+
+NYC remains unsupported. Its first map pawn stops at the explicit
+`ScriptedPawn.PutInWorld -> SetLocation` FarMoveActor boundary.

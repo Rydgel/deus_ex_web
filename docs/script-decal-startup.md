@@ -90,3 +90,17 @@ The live browser prepares this shared path but does not run NPC startup. Its
 Client.Decals binding, positive BSP attachment, nonempty detachment, Shadow.Tick,
 final release and the subsequent pawn initialization dependencies remain open.
 No production setting disables decals to bypass these requirements.
+
+## Attachment record ownership
+
+A successful attachment records its texture-keyed owner in the live level's
+`decalRecords` (DetachDecal releases it). The original keeps FDecal entries
+on the loaded level's own UModel surfaces (`FBspSurf.Decals`, SDK
+`UnObj.h:213,458-467`), and LoadMap loads that model fresh. The decoded map
+model is shared by every Play instance and by Player-start reloads, so the
+records live on the level object, and a reload clears them with the other
+per-load level fields. Before 2026-09-27 they were stored on the shared model.
+That carried Shadow owners across reloads and kept every discarded game
+reachable, about 300 MB each: a `createGame` loop grew 300 MB per boot, and
+`validate-player-tick-order` peaked at 5.4 GB. Now dropped games are
+collected, and that validator peaks at 2.8 GB.

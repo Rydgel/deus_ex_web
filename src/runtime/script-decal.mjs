@@ -72,7 +72,7 @@ function findCoplanarSurface(model,startNode,point){
  *    facet records themselves are renderer-internal (not generated here).
  *  - the span/facet vertex geometry for the software renderer
  *    (0x103e7c40-0x103e8964) is not produced; no renderer here consumes it. */
-export function attachDecalSurfaces(actor,distance,direction,{model,read,write,frand}){
+export function attachDecalSurfaces(actor,distance,direction,{model,level,read,write,frand}){
   if(!model?.nodes?.length||!model?.surfaces?.length)
     throw new DecalBoundaryError('AttachDecal.model','AttachDecal requires the original compiled BSP model');
   const rotation=read(actor,'Rotation'),location=read(actor,'Location').map(f);
@@ -108,7 +108,12 @@ export function attachDecalSurfaces(actor,distance,direction,{model,read,write,f
   if(Math.abs(dot3(sub3(selectedBase,probe),selectedNormal))>0.001)return false;
   if(selected.flags&0x600)return false;
   const texture=read(actor,'Texture');
-  const records=model.decalRecords??(model.decalRecords=new Map());
+  // The original's FDecal entries live in the loaded level's own UModel
+  // surfaces (FBspSurf.Decals), which LoadMap replaces. The decoded model is
+  // shared by every Play instance and reload, so the records live on the
+  // live level instead; a reload clears them (script-doors resetNpcs).
+  if(!level)throw new DecalBoundaryError('AttachDecal.level','AttachDecal requires the live level');
+  const records=level.decalRecords??(level.decalRecords=new Map());
   if(!records.has(texture))records.set(texture,actor);
   write(actor,'SurfList',[...read(actor,'SurfList'),iSurf]);
   return true;
@@ -118,9 +123,9 @@ export function attachDecalSurfaces(actor,distance,direction,{model,read,write,f
  * removing this decal's facet record per surface; the browser renderer does
  * not generate those records, so the script-visible result is the drained
  * SurfList and the released texture-keyed record. */
-export function detachDecalSurfaces(actor,{model,read,write}){
+export function detachDecalSurfaces(actor,{level,write}){
   write(actor,'SurfList',[]);
-  const records=model?.decalRecords;
+  const records=level?.decalRecords;
   if(records)for(const [key,owner] of records)if(owner===actor)records.delete(key);
 }
 

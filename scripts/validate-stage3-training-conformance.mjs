@@ -89,6 +89,14 @@ const HOST_NATIVES = Object.freeze({
 // (runtime.boundaryFunctions). None is allowed in single-player Training.
 const HOST_FUNCTION_REASONS = Object.freeze({
 });
+// State the host writes into original objects itself, standing in for state
+// the original would carry across a boundary outside Stage 3. Keyed as the
+// probe lib records them; anything unlisted is a substitute.
+const HOST_INPUTS = Object.freeze({
+  'flag PlayerTraveling': {allowed: 6, reason: 'fresh mission entry: DeusExPlayer.PreTravel sets PlayerTraveling=True, expiration 0, ' +
+    'before ClientTravel; Play boots 00_Training directly, so it supplies that one marker and original MissionScript.Timer ' +
+    'consumes it (docs/script-training-mission-entry.md; map travel is Stage 6)'},
+});
 // Host structures the call instrumentation cannot see. Each is a substitute
 // until Play runs the original route instead.
 const DECLARED_SUBSTITUTES = Object.freeze([
@@ -197,9 +205,9 @@ async function parent() {
     criteria.push({id: 4, name: 'lifecycle', failures});
   }
   // 5. Host substitutes.
-  const host = data.host ?? {natives: [], functions: []};
+  const host = {natives: [], functions: [], inputs: [], ...data.host};
   {
-    const failures = [];
+    const failures = [], tolerated = [];
     for (const entry of host.natives) {
       const rule = HOST_NATIVES[entry.index];
       const where = `${entry.index} ${entry.name ?? '?'} x${entry.calls} (first ${entry.first}; ${entry.callers.slice(0, 2).join(', ')})`;
@@ -208,8 +216,14 @@ async function parent() {
     }
     for (const entry of host.functions)
       failures.push(`host function ${entry.key} x${entry.calls} (first ${entry.first}): ${HOST_FUNCTION_REASONS[entry.key] ?? 'unclassified replacement of the original body'}`);
+    for (const entry of host.inputs) {
+      const rule = HOST_INPUTS[entry.key];
+      const where = `${entry.key} x${entry.calls} (first ${entry.first})`;
+      if (rule?.allowed) tolerated.push(`host input ${where}; stage ${rule.allowed} — ${rule.reason}`);
+      else failures.push(`unclassified host input ${where}`);
+    }
     for (const text of DECLARED_SUBSTITUTES) failures.push(`declared: ${text}`);
-    criteria.push({id: 5, name: 'substitutes', failures});
+    criteria.push({id: 5, name: 'substitutes', failures, tolerated});
   }
 
   const nonPrimitive = reached.filter(entry => entry.index !== 0 || entry.name);
@@ -223,7 +237,7 @@ async function parent() {
       (criterion.failures.length ? ` — ${criterion.failures.length} item(s)` : ''));
     for (const failure of criterion.failures.slice(0, 25)) console.log(`    ${failure.slice(0, 220)}`);
     if (criterion.failures.length > 25) console.log(`    … ${criterion.failures.length - 25} more in ${path.relative(root, out)}`);
-    for (const entry of criterion.tolerated ?? []) console.log(`    tolerated: ${entry.slice(0, 200)}`);
+    for (const entry of criterion.tolerated ?? []) console.log(`    tolerated: ${entry.slice(0, 360)}`);
   }
   console.log(`\nSpawnActor (general route): ${spawns.length} classes, ` +
     `${spawns.reduce((sum, entry) => sum + entry.spawned, 0)} actors spawned, ` +

@@ -122,10 +122,10 @@ described in Stage 3 to validate our runtime design against original behavior.
 
 ## 3. Execute game behavior
 
-**Current status:** use the [Stage 3 exit criteria](stage-3-exit-criteria.md)
-and its measured batch scoreboards. The September 10 handoff and September 20
-completion audit are historical checkpoints; their open-item lists have been
-superseded.
+**Complete (2026-09-27).** The adopted gate passes with only printed Stage 6
+tolerances; see [Stage 3 close](stage-3-exit-criteria.md#stage-3-close). The
+September 10 handoff and September 20 completion audit are historical
+checkpoints.
 
 **Gate (adopted 2026-09-25):** Stage 3 is done when
 `scripts/validate-stage3-training-conformance.mjs` passes — Training's startup,
@@ -140,12 +140,11 @@ The struct-bool preparation boundary is closed. Batch 3 B supplies real
 GameInfo/InitGame, and batch 3 C adds original player Login and startup.
 Batch 4 covers fire/lifecycle and window interaction; batch 5 runs the original
 world scheduler, actor cleanup and DataLinkPlay lifecycle. Batch 6 replaces the
-controlled-player port and host highlight; its native input/physics integration
-and authored route are still being verified. Stage 3 remains incomplete until
-the gate and required verification pass.
+controlled-player port and host highlight, and walks the authored route from
+PlayerStart1 to `DL_part2` on public input.
 
 
-**In progress.** Extend the existing bounded VM to execute original functions
+**Implementation history.** Extend the existing bounded VM to execute original functions
 and state bytecode, starting with class/property metadata and the selected
 mover's script path. Use focused source/native and integration checks; visual
 comparison is not an acceptance gate for nonvisual runtime logic.

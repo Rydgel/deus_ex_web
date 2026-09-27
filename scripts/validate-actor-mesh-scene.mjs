@@ -93,7 +93,8 @@ let staticReports=0;
 for(const prop of scene.propActors){
   const buffers=prop.root.children.map(mesh=>({position:mesh.geometry.getAttribute('position'),
     array:[...mesh.geometry.getAttribute('position').array]}));
-  const reuploaded=prop.update();
+  // A draw passes the camera; only environment UVs depend on it.
+  const reuploaded=prop.update([0,0,0]);
   if(environmentProps.has(prop.summary.actor))assert.equal(reuploaded,true,`${prop.summary.actor} should track the camera`);
   else{assert.equal(reuploaded,false,`${prop.summary.actor} static pose re-uploaded geometry`);staticReports++;}
   for(const [index,mesh] of prop.root.children.entries()){

@@ -302,7 +302,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
             group.geometry.computeBoundingBox();group.geometry.computeBoundingSphere();
           }
         }
-        if(hasEnvironment&&cameraPosition){
+        const environmentUpload=Boolean(hasEnvironment&&cameraPosition);
+        if(environmentUpload){
           for(const group of groups.values())if(group.flags&POLY.Environment){
             const uv=group.geometry.getAttribute('uv');
             for(let i=0;i<group.indices.length;i++){
@@ -313,7 +314,9 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           }
         }
         lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
-        return poseChanged||hasEnvironment;
+        // True when a buffer was re-uploaded: pose positions, or the
+        // camera-relative environment UVs, which change with the viewer.
+        return poseChanged||environmentUpload;
       },summary};
   } catch(error) {dispose();throw error;}
 }

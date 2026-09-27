@@ -188,7 +188,7 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   // scoped hosts that wrap the previous callback), so a prototype accessor
   // sees each layer; one call object is counted once. Scripted functions a
   // host replaces through boundaryFunctions are counted in callFunction.
-  const hostNatives = new Map(), hostFunctions = new Map(), hostCalls = new WeakSet();
+  const hostNatives = new Map(), hostFunctions = new Map(), hostInputs = new Map(), hostCalls = new WeakSet();
   const HOST = Symbol('probe host native'), WRAPPED = Symbol('probe wrapped');
   const countHost = (map, key, fields) => {
     const entry = map.get(key) ?? {...fields, calls: 0, callers: new Map(), probes: new Set()};
@@ -211,6 +211,14 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   const callFunction = proto.callFunction;
   proto.callFunction = function (record, ...rest) {
     if (record?.key && this.boundaryFunctions?.has(record.key)) countHost(hostFunctions, record.key, {key: record.key});
+    // A flag the host writes itself (no script frame on the stack) is state
+    // the original would carry in from elsewhere, e.g. PreTravel's
+    // PlayerTraveling marker on fresh mission entry. The gate classifies each.
+    if (!stack.length && /flagbase\.setbool$/.test(record?.key ?? '')) {
+      const [, argumentCount, evaluate] = rest;
+      const flag = argumentCount > 0 ? String(evaluate(0)) : '?';
+      countHost(hostInputs, `flag ${flag}`, {key: `flag ${flag}`});
+    }
     return callFunction.call(this, record, ...rest);
   };
 
@@ -881,7 +889,7 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     probes, records, startup, spawns: [...spawns.values()],
     reached: [...reached.values()].map(({probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value})),
     lifecycle: {destroys: [...destroys.values()], cleanups, loads: [...loads.values()], hostRemovals},
-    host: Object.fromEntries([['natives', hostNatives], ['functions', hostFunctions]].map(([kind, map]) => [kind,
+    host: Object.fromEntries([['natives', hostNatives], ['functions', hostFunctions], ['inputs', hostInputs]].map(([kind, map]) => [kind,
       [...map.values()].map(({callers, probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value,
         callers: [...callers].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([caller, n]) => `${caller} x${n}`)}))])),
   };

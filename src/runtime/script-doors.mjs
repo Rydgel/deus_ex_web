@@ -1430,6 +1430,9 @@ export async function createScriptDoors({
     level.actors = reload ? [...initialActorArray]
       : [...initialActorArray, ...level.actors.filter(actor => actor && !initialActorSet.has(actor))];
     level.zoneLastRenderTimes?.fill(0);
+    // The reloaded UModel starts with no surface decals; the purged Shadows
+    // run no DetachDecal (script-decal.mjs attachDecalSurfaces).
+    if (reload) level.decalRecords = null;
     // Restore the serialized map state before any startup callback can observe
     // another actor — the same reload state the original reaches by loading
     // the level. The passes below then run LoadMap's shared schedule.
