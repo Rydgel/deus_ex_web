@@ -74,6 +74,8 @@ const HOST_NATIVES = Object.freeze({
   1100: {recovered: 'FlagBase.SetBool: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
   1110: {recovered: 'FlagBase.GetBool: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
   1120: {recovered: 'FlagBase.CheckFlag 0x100247d0 (script-triggers.mjs createFlagBase)'},
+  1121: {recovered: 'FlagBase.DeleteFlag: exact Name/EFlagType lookup, deleting destructor on match (exec 0x10025b40 -> 0x10024860; script-triggers.mjs createFlagBase)'},
+  1124: {recovered: 'FlagBase.DeleteExpiredFlags: signed mission expiration <= criteria; zero never expires (exec 0x10025d40 -> 0x10024ac0; script-triggers.mjs createFlagBase)'},
   1125: {recovered: 'FlagBase.SetDefaultExpiration: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
   3010: {recovered: 'CreateLogObject (script-player-log.mjs)'},
   3002: {recovered: 'CreateHistoryObject exec 0x10014640, original UObject/ConHistory constructor chain (script-conplay-live.mjs; docs/script-instructor-conversation.md)'},
