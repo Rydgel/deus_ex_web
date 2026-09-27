@@ -101,11 +101,15 @@ body just retargeted without a message.
   `frob` installs this capture only for the duration of the call and restores the
   player-startup boundary afterwards
   ([script-player-augmentation-startup.md](script-player-augmentation-startup.md)).
-* **`frobWith` is always `None` in Play.** The Lockpick branch
-  (`AIStartEvent`, `SkillSystem.GetSkillLevelValue`, `LockPick.PlayUseAnim`,
-  `SetTimer` lock picking) and the NanoKeyRing branch (`HasKey`, the like-tagged
-  lock toggle) need Stage-5 inventory and are unreached, not implemented. A
-  future inventory must admit them before a door can be picked or unlocked.
+* **The earlier empty-hand fixture passes `frobWith=None`.** Batch 6 Play
+  instead enters through the installed public input binding and original
+  DeusExPlayer.ParseLeftClick/DoFrob, which can pass the item in hand. The
+  NanoKeyRing branch (`HasKey`, like-tagged lock toggle) is covered by the
+  Training key route. The continuous route now also exercises the timed
+  Lockpick branch (`AIStartEvent`, skill value, PlayUseAnim, timer and
+  StopPicking); its source contract and current verification status are in
+  [the Training route](script-training-route.md). This old empty-hand fixture
+  does not establish either item path on its own.
 * **`bSlave`/`Leader` and `bOneWay` are unexercised in Training.** Both branches
   are in the executed body, but no `00_Training` mover sets either flag, so this
   map does not establish them.

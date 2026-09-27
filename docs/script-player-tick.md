@@ -317,10 +317,10 @@ update, highlight or eye update afterward.
 The original actor fields remain authoritative across their existing storage
 bindings. ViewRotation is an unmodified signed-int rotator field: the Pitch
 mask belongs to UpdateRotation's bytecode, not every field read. The interaction
-display may read FrobTarget/FrobTime but must not write either. Public use/fire
-and belt helpers will emit their installed input bindings, preserving root-window
-consumption and original cached targeting. Renderer calls PlayerCalcView with
-out references and reads FOVAngle; it must not retain a second Play yaw/pitch.
+display reads FrobTarget/FrobTime without writing either. Public use/fire
+and belt helpers emit their installed input bindings, preserving root-window
+consumption and original cached targeting. The renderer calls PlayerCalcView
+with out references and reads FOVAngle; it retains no second Play yaw/pitch.
 
 For stance relocation and mover pushes, `playerScene` retains the already
 captured native MoveActor/FarMove/SetActorZone algorithms, while their callback

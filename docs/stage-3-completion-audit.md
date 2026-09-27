@@ -1,5 +1,14 @@
 # Stage 3 completion audit — 2026-09-20
 
+> **Historical audit, superseded:** use the measured
+> [Stage 3 gate and batch scoreboards](stage-3-exit-criteria.md) for current
+> completion status. The dated rows below describe their checkpoint, not the
+> current runtime. In particular, original Login, admitted Pawn spawning,
+> CleanupDestroyed/collection, world scheduling and DataLink lifecycle have
+> since been integrated. Batch 6 player integration is being verified in
+> [script-player-tick.md](script-player-tick.md); it is not yet a completion
+> claim.
+
 > **2026-09-25 batch 3 B:** real LoadMap GameInfo/InitGame replaces the
 > GameInfo/Mutator stand-ins. Startup and tick pass. C remains incomplete at
 > the native Input/config and player-owned destruction boundaries; see the

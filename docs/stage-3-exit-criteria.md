@@ -7,6 +7,10 @@ below). The native counts below are measured from
 `.cache/script-runtime-inventory.json` (`node scripts/inventory-script-runtime.mjs`)
 on the installed GOTY packages, 2026-09-20.
 
+The [batch 6 scoreboard](#batch-6-original-controlled-player-tick-and-input)
+records the current work. Earlier batch counts and open-item lists are dated
+measurements, not the current blocker list.
+
 ## Why the current gate never terminates
 
 The roadmap done-criterion is *general* original game-behavior execution, but the
@@ -345,7 +349,7 @@ found and fixed a MakeAreaDirty bug in the edit model.
 
 ## Batch 5: original world scheduler and DataLinkPlay
 
-Measured 2026-09-27. The gate passed criteria 1–4 and lists only the two
+Measured at the batch 5 checkpoint, 2026-09-27. The gate passed criteria 1–4 and listed the two
 batch-6 substitutes (94 probes, 3 boots; 281 s in the final four-job sweep,
 peak 1634 MiB in the gate's watchdog and 4.0 GiB runner group footprint).
 The census completed 93 probes in one boot, 232 s, peak 735 MiB,
@@ -424,8 +428,10 @@ unresolved. See [level integration](script-level-tick.md).
 Final full sweep:
 `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python npm run validate -- --jobs 4`
 completed with **400 passed, 0 skipped, 2 known failures** in 1198.6 seconds
-(four jobs). No new red remains. Stage 3 is still open solely for the two
-batch-6 substitutes above; `validate-npc-mesh-preview` retains its known
+(four jobs). No new red remained at that checkpoint. The two declared
+batch-6 substitutes were still open; the later mission-entry integration also
+made flag natives 1121/1124 visible to the classification audit (see batch 6).
+`validate-npc-mesh-preview` retains its known
 unchanged-pose geometry-upload assertion failure. The local sweep log is
 `.cache/batch5-sweep-final.log`.
 
@@ -433,3 +439,128 @@ Unit tests: 542/542. The final production build passes after correcting an
 existing reassigned `const` in list-number formatting. Final integration checks
 also cover the map acceleration binding and the explicitly scoped NYC fixture
 described above. Delivery remains local; no deployment or push was made.
+
+## Batch 6: original controlled-player tick and input
+
+Work in progress on 2026-09-27; this section is not a Stage 3 completion claim.
+The before measurement at the reconciled local baseline was **94 probes,
+3 boots, 133 s, peak 1550 MiB**. Criteria 1–4 passed; criterion 5 listed four
+items: player tick, host highlight, and unclassified flag natives 1121/1124.
+The two flags already ran the recovered bodies documented in
+[mission entry](script-training-mission-entry.md). Classifying their exact
+name/type deletion and signed mission-expiration semantics reduced criterion 5
+to two items: **94 probes, 3 boots, 138 s, peak 1780 MiB**, criteria 1–4 still
+passing. Local reports are `.cache/batch6-gate-before.json` and
+`.cache/batch6-gate-flags.json`.
+
+The implementation now enters the original local-player branch of Actor.Tick:
+viewport ReadInput, PlayerInput and state PlayerTick bytecode, input reset,
+ProcessState/timers, Pawn physics and eye update. Rendering invokes the original
+PlayerCalcView and shares its output with the world camera and HUD. Installed
+User.ini commands own movement, mouse input, fire/use and belt keys. Play reads
+the original FrobTarget/FrobTime cache; it no longer writes either field.
+Those structural replacements have been removed from DECLARED_SUBSTITUTES.
+
+Evidence and bounded comparisons:
+
+| Piece | Original contract and validation |
+| --- | --- |
+| Input collection | [Console/input contract](script-console-command.md): UViewport ReadInput `0x10374990`, UInput ReadInput `0x10394580`, UInput Exec `0x10393e10`, WinDrv UpdateInput `0x11109280`. Ten original instruction-slice cases cover the button/axis/scaling family; held-key order, property traversal and reset are also traced in assembly. Existing 132-case player-input checks remain in use. |
+| Script and native tick order | [Player tick](script-player-tick.md): Actor.Tick `0x103a1aa0`, installed PlayerPawn/DeusExPlayer bytecode, APawn::performPhysics `0x103c9a70`. Existing actor/level and 27-frame player-tick comparisons are reused. |
+| Field-backed movement | The existing 63-frame, 2547-query original physics sequence now also runs through copy-on-read field storage. It exposed and fixed discarded vector-component stores in walking/landing. All frames/queries and 506 original landing cases pass. Four original Pawn-tail values and one nonempty PendingTouch unlink establish the newly linked tail. |
+| SetRotation with based riders | [Rotation contract](script-set-rotation.md): full MoveActor `0x103990e0`, including zero-Delta changed-rotation rider path. Three original cases compare signed pitch wrap, quarter-turn yaw, and the stacked Training crate, including recursive movement and hash/zone call order. The crate case also checks encroachment call arguments and recorded clear results. |
+| Training integration | [One continuous route](script-training-route.md) starts at PlayerStart1 and uses public input through the first section ending at DL_part2. It retains every required door, pickup, crate, cadet/table and DataLink assertion; route verification is still in progress. |
+
+Probe placement is test setup only. The migrated class probes and browser
+previews aim from a physical location and wait for HighlightCenterObject's
+original cadence; none injects the target. The first 94-probe integration run
+found four target misses (Plant11, Candybar0, DataCube0 twice); its other probes,
+startup, tick and lifecycle passed. That run was **7 boots, 501 s, peak
+1879 MiB** (`.cache/batch6-gate-class-probes.json`); it began before the two
+declared strings were removed, so its saved criterion 5 still lists them.
+The misses came from probe starting positions clipped by authored BSP. Scoped
+poses verified by live world/actor traces now pass all four probes: **1 boot,
+22 s, peak 574 MiB**. The Multitool frob/fire probes also pass (**1 boot,
+27 s, peak 841 MiB**). Both filtered gates retain the unchanged lifecycle
+coverage assertion because those filters do not execute the separate
+StaticLoadObject probe; they record no load failure. The final unfiltered gate
+must establish that coverage. [Interaction](interaction.md) records these
+fixture changes and their limits.
+
+The public-input audit found no live movement/camera/target bypass in Play.
+The older nanokey and weapon-selection validators retain documented research
+helpers for some hand-selection setup; those calls do not independently verify
+digit bindings. The new route and browser belt checks exercise the installed
+bindings through InputEvent.
+
+`freshMissionPlayerTraveling` is still a host-supplied fresh-entry input, normally
+carried by original PreTravel. A printed, non-failing Stage 6 declaration has
+been proposed but has not been applied without approval. The existing
+ClientTravel/SaveGame tolerances and host-native rules are unchanged apart from
+the evidenced 1121/1124 classifications.
+
+Remaining scope is explicit in the linked contracts: browser device/OS sampling,
+joystick input, unrecovered movement/native branches, full non-ordinary camera
+and player states, and later Training swimming/ladder traversal are not proved
+by this first-section route.
+
+The current unit run is **545/545 passing**, and the production build passes.
+Focused Play frame, actor/level
+tick, player input, gameplay, input/console, crowbar/crate, cadet, walking
+InfoLink, window baseline, keypad, item pickup, DataCube and weapon-selection
+checks pass. Keypad's
+first failing identity assertion tried to print the entire runtime graph and
+hit the watchdog; scalar identity assertions exposed a target lost during its
+30-tick settle. Re-aiming before Frob preserves that assertion and its original
+DataLink/modal/code/close coverage. The corrected keypad run passed in 67.8 s,
+peak 1.0 GiB under the unchanged 6 GiB cap.
+
+The browser check has observed walking, look, jump, the crouch eye transition,
+the original pause menu, highlighted DataCube/right-click text, crowbar swings
+destroying a crate and starting DL_Lockpick, belt 0/1 switching the key ring
+and crowbar, and both dark-door panels opening, without a runtime boundary on
+those paths. The local capture `.cache/batch6-browser-datacube.png` shows the
+original code `0012` and note notification. After the decoration/rotation
+checkpoint, `.cache/batch6-browser-crate-final.png` records another browser
+crowbar destruction with the revealed lockpick and Jaime's `DL_Lockpick`
+message, runtimeError=null and no render errors. No original-game visual
+comparison is claimed.
+
+The continuous route exposed an additional stacked-crate SetRotation entry
+and the older map-decoration adapter's direct Base writes. The new field-backed
+decoration adapter preserves synchronous script changes and native support-base
+callbacks. Original Rolling **321/321**, Falling **1014/1014** and Landing
+**506/506** cases pass; the live settle/roll integration passes in **25 s,
+peak 772 MiB**. The malformed old crate StandingCount of 255 is now 1 on a
+fresh route without normalizing the field. The separate stacked-crate rotation
+comparison passes and the live route now crosses that runtime boundary.
+
+The longer route also exposed a live HUD log ownership error at the multitool
+pickup. Original Extension AddLog zeroes the full 20-byte appended row at
+`0x10047721..2f`; the live host had omitted that initialization when reusing
+capacity after timed-out entries. It now follows that contract. Tick's expired
+FString teardown (`0x10047d14..5b`) and Core FArray::Remove shrink behavior
+(`0x101454f0`) are also linked. The bounded live-host expired-prefix/survivor/
+reused-row regression passes, along with original native AddLog (5 cases),
+ClearLog (4), PauseLog (6) and SetTextTimeout (3). See
+[text model](script-text-model.md). The browser recheck after this fix rendered
+the original DataCube text, then opened the original pause menu, with no
+runtime or render error (`.cache/batch6-browser-textlog-final.png`).
+
+The second keypad exposed a headless fixture input gap, not a timer defect.
+Keypad2 has `bStasis=true`, Physics=None, LastRenderTime=-10 and a zero model
+zone render timestamp. In the bounded diagnostic, six seconds without a draw
+notification produced zero Timer calls and unchanged hack strength. Supplying
+the original actor draw callback then allowed one Timer call to consume the
+elapsed time and complete the hack. The continuous fixture supplies that
+callback only while the original trace selects the observed keypad; it records
+the supplied draw notifications. This controlled renderer input does not prove
+original visibility/occlusion or portal-zone feedback. The live stasis rules and
+browser draw callbacks are unchanged. See [route scope](script-training-route.md).
+
+Latest route-only result: **1 probe, 2 boots, 199 s, peak 1089 MiB**
+(`.cache/batch6-route-medical-table.json`). Original cadet retirement, body
+search/key, medical-door unlock, hand transition, carry/drop, table trigger and
+both exit doors passed. Movement then stalled at `[4715.41,544.07,-144.10]`
+while approaching the fixture waypoint `[4860,544]` before darkdoor2. The route
+and criterion 3 remain OPEN. No final full sweep has run for batch 6.

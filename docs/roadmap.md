@@ -122,13 +122,10 @@ described in Stage 3 to validate our runtime design against original behavior.
 
 ## 3. Execute game behavior
 
-**Resume here:** [Stage 3 handoff, 2026-09-10](stage-3-handoff.md) records
-implemented work, remaining integration, unsaved research findings and passing
-checks. Work was stopped and saved in a progress checkpoint at the user's
-request; Stage 3 remains unfinished.
-
-See the [Stage 3 completion audit](stage-3-completion-audit.md) for the current
-requirement matrix, evidence locations and smallest remaining blocker set.
+**Current status:** use the [Stage 3 exit criteria](stage-3-exit-criteria.md)
+and its measured batch scoreboards. The September 10 handoff and September 20
+completion audit are historical checkpoints; their open-item lists have been
+superseded.
 
 **Gate (adopted 2026-09-25):** Stage 3 is done when
 `scripts/validate-stage3-training-conformance.mjs` passes — Training's startup,
@@ -139,10 +136,13 @@ for the criteria and the current scoreboard.
 Batch 3 A admits all 312 original map exports to LoadMap startup, including
 Mission00 spawning and PickupDistributor's key distribution/self-destruction.
 Movers reuse the recovered brush move service; TriggerLight startup is shared.
-The struct-bool preparation boundary is closed. Batch 3 B now supplies real
-GameInfo/InitGame. Player Login remains incomplete at the native Input bootstrap
-and player-owned destruction boundaries; see the [batch 3 handoff](stage-3-batch3-handoff.md).
-Stage 3 remains incomplete.
+The struct-bool preparation boundary is closed. Batch 3 B supplies real
+GameInfo/InitGame, and batch 3 C adds original player Login and startup.
+Batch 4 covers fire/lifecycle and window interaction; batch 5 runs the original
+world scheduler, actor cleanup and DataLinkPlay lifecycle. Batch 6 replaces the
+controlled-player port and host highlight; its native input/physics integration
+and authored route are still being verified. Stage 3 remains incomplete until
+the gate and required verification pass.
 
 
 **In progress.** Extend the existing bounded VM to execute original functions

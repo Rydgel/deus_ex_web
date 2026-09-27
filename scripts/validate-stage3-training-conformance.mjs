@@ -92,8 +92,12 @@ const HOST_FUNCTION_REASONS = Object.freeze({
 // Host structures the call instrumentation cannot see. Each is a substitute
 // until Play runs the original route instead.
 const DECLARED_SUBSTITUTES = Object.freeze([
-  'Player tick: the viewer movement port plus UpdateInHand stand in for APlayerPawn::Tick -> PlayerTick/PlayerInput/PlayerMove (game.mjs tick, player.mjs)',
-  'Frob target: the host highlight trace writes FrobTarget/FrobTime instead of DeusExPlayer.HighlightCenterObject (game.mjs tickWalkingInteraction)',
+  // Batch 6: Actor.Tick runs viewport ReadInput, original PlayerInput and
+  // state PlayerTick bytecode, ProcessState/timers, Pawn physics and eye update.
+  // HighlightCenterObject owns FrobTarget/FrobTime; Play exposes read-only
+  // observations and probe fixtures aim/tick through the original trace.
+  // Evidence and focused comparisons: docs/script-player-tick.md and
+  // docs/script-console-command.md. Other criteria still fail on any boundary.
 ]);
 
 if (!argv.includes('--child')) await parent();

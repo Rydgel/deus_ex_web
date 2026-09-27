@@ -529,9 +529,9 @@ export async function createScriptDoors({
     // viewer's: bFrobbable/bDestroyed/bSlave, the bPicking and KeyNum/PrevKeyNum
     // tests, the bOneWay GetAxes dot product, the lock branches, the localized
     // ClientMessage and the Tag fanout through native AllActors all live here.
-    // Its Super.Frob is the empty Actor.Frob above. The lockpick and NanoKeyRing
-    // branches are only reached with a non-null frobWith, which needs Stage-5
-    // inventory; Play frobs with None and never enters them.
+    // Its Super.Frob is the empty Actor.Frob above. Original ParseLeftClick /
+    // DoFrob can pass the item in hand for the lockpick and NanoKeyRing paths;
+    // right-click's ordinary empty-hand Frob passes None.
     // docs/script-mover-frob.md.
     deusExMoverFrob: await prepare(deusEx, 'deusexmover.frob', 'DeusExMover.Frob'),
     // LightSwitch.Frob (roadmap item #3): Super.Frob's AllActors(Event) fanout calls
@@ -1744,10 +1744,10 @@ export async function createScriptDoors({
    * host lock/one-way/group substitute, so bFrobbable, bDestroyed, bSlave,
    * bPicking, the KeyNum/PrevKeyNum "already open" test, the bOneWay GetAxes
    * dot product, the lock branches and the Tag fanout through native AllActors
-   * are all the original's decisions. `frobWith` is the item in the player's
-   * hand; Play has no inventory yet and passes None, which is the branch the
-   * original takes for an empty hand. A non-null frobWith would reach the
-   * Lockpick/NanoKeyRing paths, which need Stage-5 inventory.
+   * are all the original's decisions. This retained door fixture helper passes
+   * None unless its caller supplies frobWith. Live Play now enters Frob through
+   * the original player input/DoFrob bytecode, including the item in hand for
+   * the Lockpick/NanoKeyRing paths.
    *
    * The body's own localized ClientMessage stays a recorded boundary: the
    * original delivers it through Player.Console, and that console/HUD
