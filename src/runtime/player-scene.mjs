@@ -54,12 +54,17 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
   };
   const updateZone=(actor,test,force)=>setActorZone(actor,zoneWorld,test,force);
   const touch=(a,b)=>beginTouch(a,b,dispatch),untouch=(a,b,suppress)=>endTouch(a,b,suppress,dispatch);
-  const move=(delta,rotation=null)=>playerMove(source,delta,{worldActor,
-    multiLineCheck:q=>collision.queries.multiLineCheck(q),removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
-    dispatch,isBlockedBy:playerBlockedBy,isOverlapping,beginTouch:touch,endTouch:untouch,setActorZone:updateZone,
-    // CreateKeyRing SetBase(Self) gives the player a based rider. The recovered
-    // MoveActor rider section must run once StandingCount is nonzero.
-    moveRiders:(src,finalDelta,rot)=>moveActorRiders(source,finalDelta,rot,{
+  // The recursive rider MoveActor (bIgnoreBases=1) for one based actor.
+  const riderMove=(other,riderDelta,riderRot)=>{
+    if(other===source)return move(riderDelta,riderRot,{ignoreBases:true});
+    if(other.isPawn){
+      if(typeof hooks.movePawn!=='function')throw Error('map pawn rider MoveActor is not linked');
+      return hooks.movePawn(other,riderDelta,riderRot,{ignoreBases:true});
+    }
+    if(typeof hooks.moveRider!=='function')throw Error('rider MoveActor is not linked');
+    return hooks.moveRider(other,riderDelta,riderRot);
+  };
+  const ridersFor=base=>({
       actors:level.actors,
       baseOf:other=>other.base!==undefined?other.base:null,
       location:other=>other.position,
@@ -69,13 +74,16 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
         if(!other.viewRotation)return;
         other.viewRotation=[other.viewRotation[0],(other.viewRotation[1]+dyaw)|0,other.viewRotation[2]];
       },
-      moveActor:(other,riderDelta,riderRot)=>{
-        if(typeof hooks.moveRider!=='function')throw Error('rider MoveActor is not linked');
-        return hooks.moveRider(other,riderDelta,riderRot);
-      },
-      actorLocation:()=>source.position,
-      actorRotation:()=>source.rotation,
-    }),
+      moveActor:riderMove,
+      actorLocation:()=>base.position,
+      actorRotation:()=>base.rotation,
+  });
+  const move=(delta,rotation=null,{ignoreBases=false}={})=>playerMove(source,delta,{worldActor,ignoreBases,
+    multiLineCheck:q=>collision.queries.multiLineCheck(q),removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
+    dispatch,isBlockedBy:playerBlockedBy,isOverlapping,beginTouch:touch,endTouch:untouch,setActorZone:updateZone,
+    // CreateKeyRing SetBase(Self) gives the player a based rider. The recovered
+    // MoveActor rider section must run once StandingCount is nonzero.
+    moveRiders:(src,finalDelta,rot)=>moveActorRiders(source,finalDelta,rot,ridersFor(source)),
   },rotation);
   player.nativeMove=move;
   const level={editor:false,netMode:0,actors:[worldActor,...actors,source],
@@ -119,10 +127,15 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     pawn.position=player.position.slice();pawn.justTeleported=Boolean(source.motionFlags&0x100);
     return success;
   };
-  const moveMover=(mover,delta)=>{
-    const result=moveTranslatingMover(mover,delta,{
+  const moveMover=(mover,delta,rotation=null)=>{
+    const result=moveTranslatingMover(mover,delta,{rotation,
+      moveRiders:(riderDelta,riderRotation)=>moveActorRiders(mover,riderDelta,riderRotation,ridersFor(mover)),
       encroachmentCheck:(actor,position,rotation,extra)=>collision.queries.actorEncroachmentCheck(actor,position,rotation,extra).map(h=>h.actor),
       moveSmooth(actor,requested){
+        if(actor!==source&&actor.isPawn){
+          if(typeof hooks.moveSmoothPawn!=='function')throw Error('map pawn moveSmooth is not linked');
+          return hooks.moveSmoothPawn(actor,requested);
+        }
         if(actor!==source)unsupported(`${actor.name}.moveSmooth`);
         return moveSmooth(actor,requested,{dispatch,moveActor:(target,movement)=>{
           const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
@@ -156,10 +169,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       if(typeof hooks.movePawn!=='function')throw Error('map pawn MoveActor is not linked');
       return hooks.movePawn(actor,delta,rotation);
     }
-    if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail
-        || !actor.rotation.every((value,index)=>value===rotation[index]))
+    if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail)
       throw new Error('MoveActor scene branch is not linked');
-    return moveMover(actor,delta);
+    return moveMover(actor,delta,rotation);
   };
 
   const prepareActor=actor=>{

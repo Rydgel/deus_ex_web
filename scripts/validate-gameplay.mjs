@@ -20,12 +20,11 @@ const fixture = game => { if (!fixtures.has(game)) fixtures.set(game, createPlay
 // Live Training now consumes installed input bindings. The legacy port remains
 // isolated below for the existing NYC scene-only reference.
 const run = (game, seconds, input = {}) => { fixture(game).driveLegacy(input); fixture(game).tick(Math.round(seconds*120)); };
-// The NYC case predates full-world scheduling and measures only the retained
-// player port against its loaded scene. Map pawns now relocate through the
-// recovered FarMoveActor (ScriptedPawn.PutInWorld's SetLocation); the world
-// then stops at the explicit AI reachability native 520 (actorReachable,
-// ScriptedPawn.GetNextWaypoint). Running this isolated port is not evidence
-// of NYC world-script support.
+// NYC's full world (map pawns' PutInWorld relocation, GetNextWaypoint's
+// actorReachable/pointReachable, the whole map's startup) now runs a second
+// of original scheduling without a boundary; census-map-startup.mjs covers its
+// longer startup/reload legs. The retained player port below keeps its
+// original isolated scene checks.
 const runPlayerPort = (game, seconds, input = {}) => {
   for (let i = 0; i < Math.round(seconds * 120); i++) game.player.tick(1 / 120, input);
 };
@@ -34,13 +33,11 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   let game = await createGame(map, asset, assets);
   let fullWorldBoundary = null;
   if (name === '01_NYC_UNATCOIsland') {
-    const message = 'Unsupported original door native 520 in scriptedpawn.getnextwaypoint';
-    assert.throws(() => run(game, 1), { message }, 'NYC world scheduling remains explicitly unsupported');
-    const failures = [...game.doors.scriptRuntime.npcFailures];
-    assert.ok(!failures.some(([actor]) => actor.name === 'UNATCOTroop3'), 'UNATCOTroop3 PutInWorld relocates through FarMoveActor');
-    const failure = failures.find(([, text]) => text === message);
-    assert.ok(failure, 'world scheduler records the pawn that reached native 520');
-    fullWorldBoundary = { actor: failure[0].name, caller: 'ScriptedPawn.GetNextWaypoint', native: 520, message };
+    run(game, 1);
+    assert.equal(game.runtimeError ?? null, null, 'NYC full-world scheduling runs without a runtime boundary');
+    assert.deepEqual([...game.doors.scriptRuntime.npcFailures].map(([actor, text]) => `${actor.name}: ${text}`), [],
+      'no NYC actor fails its original startup or tick');
+    fullWorldBoundary = { seconds: 1, boundary: null };
     // A separate fixture keeps the isolated player check independent of the
     // failed world.
     game = await createGame(map, asset, assets);

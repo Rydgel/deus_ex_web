@@ -36,7 +36,8 @@ class Native(m.NativeLevel):
     event={'query' if query else 'smooth':self.actor_ids.get(actor),'vector':self.read(sp+(12 if query else 4),'3f'),'moverPosition':self.read(self.moving+0x114,'3f')}
     self.calls.append({'return':self.read(sp,'I')[0],'index':len(self.mover_trace),'kind':'query' if query else 'smooth','actor':actor});self.mover_trace.append(event)
    if address in [0x103583a0,0x103580b0]:self.mover_trace.append({'hash':'remove' if address==0x103583a0 else 'add','actor':self.actor_ids.get(self.read(sp+4,'I')[0])})
-   if address==0x1039a350:self.mover_trace.append({'checkEncroachment':self.actor_ids.get(self.read(sp+4,'I')[0]),'position':self.read(sp+8,'3f')})
+   if address==0x1039a350:self.mover_trace.append({'checkEncroachment':self.actor_ids.get(self.read(sp+4,'I')[0]),'position':self.read(sp+8,'3f'),
+     'actors':{k:self.read(p+0x114,'3f') for k,p in self.actor_ptrs.items()}})
    if address==self.find:cpu.reg_write(UC_X86_REG_EAX,self.read(sp+4,'I')[0]);return
    if address==self.zone:self.mover_trace.append({'zoneBoundary':self.actor_ids.get(self.read(sp+4,'I')[0])});return
    if address==self.event:
@@ -48,8 +49,14 @@ class Native(m.NativeLevel):
   return super().on_instruction(cpu,address,size,data)
  def capture(self,c):
   self.calls=[];self.mover_trace=[];actor=self.actor_ptrs[c['actor']];self.moving=actor;self.encroach_reject=c.get('reject',0);hit=self.alloc(44)
-  result=self.call(0x103990e0,self.level,struct.pack('<I3f3iI4I',actor,*c['delta'],*self.read(actor+0x120,'3i'),hit,0,0,0,0))
-  return {'result':result,'position':self.read(actor+0x114,'3f'),'trace':self.mover_trace,'actors':{k:self.read(p+0x114,'3f') for k,p in self.actor_ptrs.items()}}
+  # Optional: bCollideWorld on the moving brush (+0x1dc bit 2); a based rider
+  # (+0xc4 Base, mover +0xd8 StandingCount); an explicit NewRotation.
+  if c.get('collideWorld'):self.write(actor+0x1dc,'I',self.read(actor+0x1dc,'I')[0]|2)
+  if c.get('rider'):self.write(self.actor_ptrs[c['rider']]+0xc4,'I',actor);self.write(actor+0xd8,'B',1)
+  rotation=c.get('rotation') or list(self.read(actor+0x120,'3i'))
+  result=self.call(0x103990e0,self.level,struct.pack('<I3f3iI4I',actor,*c['delta'],*rotation,hit,0,0,0,0))
+  return {'result':result,'position':self.read(actor+0x114,'3f'),'rotation':list(self.read(actor+0x120,'3i')),'trace':self.mover_trace,
+          'actors':{k:self.read(p+0x114,'3f') for k,p in self.actor_ptrs.items()},'rotations':{k:list(self.read(p+0x120,'3i')) for k,p in self.actor_ptrs.items()}}
 if __name__=='__main__':
  scene=json.loads(Path(sys.argv[2]).read_text());results=[]
  for case in json.loads(Path(sys.argv[3]).read_text()):

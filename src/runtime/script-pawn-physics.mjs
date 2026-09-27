@@ -200,8 +200,14 @@ export function pawnPhysicsView(actor, services) {
   pawn.setActorZone = (test, force) => setActorZone(pawn, zoneWorld, test, force);
   // The native MoveActor entry for script Move/SetBasedPawnSize: an equal
   // NewRotation takes the same path as none (0x1039915a).
-  pawn.moveActor = (delta, rotation) => Boolean(moveActor(pawn, delta,
-    rotation && !sameRotation(rotation, pawn.rotation) ? rotation : null, services, dispatch, decorate).success);
+  pawn.moveActorHit = (delta, rotation = null, ignoreBases = false) => {
+    const result = moveActor(pawn, delta, rotation && !sameRotation(rotation, pawn.rotation) ? rotation : null,
+      services, dispatch, decorate, ignoreBases);
+    return { result: Boolean(result.success), time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f),
+      actor: result.hit?.actor ?? null };
+  };
+  pawn.moveActor = (delta, rotation, ignoreBases = false) => pawn.moveActorHit(delta, rotation, ignoreBases).result;
+  Object.defineProperty(pawn, 'dispatchEvent', { value: dispatch });
   pawn.move = delta => {
     const result = moveActor(pawn, delta, null, services, dispatch, decorate);
     return { time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f), actor: result.hit?.actor ?? null };
@@ -226,6 +232,7 @@ export function pawnPhysicsView(actor, services) {
     [pawn.radius, pawn.radius, pawn.height], 6, 0).time < 1;
   pawn.landedEvent = normal => dispatch(actor, 'Landed', [normal]);
   pawn.fallingEvent = () => dispatch(actor, 'Falling', []);
+  pawn.fellOutOfWorld = () => dispatch(actor, 'FellOutOfWorld', []);
   pawn.mayFall = () => dispatch(actor, 'MayFall', []);
   pawn.walkTexture = (texture, location, normal) => dispatch(actor, 'WalkTexture', [texture, location, normal]);
   pawn.textureForHit = hit => {
@@ -271,7 +278,7 @@ export function pawnPhysicsView(actor, services) {
  * general non-player IsBlockedBy and an optional absolute NewRotation (the
  * rotation-update path physicsRotation reaches). Hash slots and Touch events
  * act on the registered host identity, not the field view. */
-function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn.decorate) {
+function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn.decorate, ignoreBases = false) {
   const { level, worldActor } = services;
   const readOther = (other, name) => services.read ? services.read(other, name) : services.field(other, name).get();
   return playerMove(pawn, delta, {
@@ -311,6 +318,7 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn
       actorLocation: () => pawn.position,
       actorRotation: () => pawn.rotation,
     }),
+    ignoreBases,
   }, newRotation);
 }
 

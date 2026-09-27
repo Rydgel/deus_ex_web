@@ -60,9 +60,16 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
   // Original Pawn branch 103d0a7d–103d0ac2 calls the same surface/ladder
   // prelude as walking, before reading acceleration or the current zone.
   if (!nonPawn && pawn.walkingPrelude?.(dt,iterations)) return;
-  // 0x103d0aca: Region.ZoneNumber == 0 logs (Inventory/Decoration/Pawn at
-  // ROLE_Authority), dispatches FellOutOfWorld and returns. Not translated.
-  if (pawn.zoneNumber === 0) throw new Error('physFalling outside the world (Region.ZoneNumber 0 -> FellOutOfWorld, 0x103d0aca) is not supported');
+  // 0x103d0aca-0x103d0b8c: Region.ZoneNumber == 0. At ROLE_Authority an
+  // Inventory/Decoration/Pawn source logs "%s fell out of the world!"
+  // (0x10481a34, a GLog side channel); every source then dispatches the
+  // FellOutOfWorld event (ProcessEvent, FName 0x10583608) and returns.
+  if (pawn.zoneNumber === 0) {
+    if (typeof pawn.fellOutOfWorld !== 'function')
+      throw new Error('physFalling outside the world requires the FellOutOfWorld event dispatch (0x103d0b89)');
+    pawn.fellOutOfWorld();
+    return;
+  }
   const savedAcceleration = pawn.acceleration.map(f);
   const gravity = pawn.gravity.map(f), zoneVelocity = pawn.zoneVelocity.map(f);
   let speedLimit = 0;

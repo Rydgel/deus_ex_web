@@ -75,10 +75,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const transformNormal = n => fromView(new Vector3(...toView(n)).applyMatrix3(normal).toArray());
       actor.model = readModel(asset.pkg, asset.bytes, v.Brush);
       const collider = new BspCollider(actor.model, transform, transformNormal, v);
-      if (!collider.hulls.length) throw new Error(`No collision hulls for ${actor.name}`);
+      // A NotSolid sheet brush (e.g. PF_NotSolid|PF_TwoSided|PF_Masked, one
+      // node) compiles no solid leaves, so it has no collision hulls: the
+      // original model checks never hit it. Hash bounds come from the model
+      // box (brushCollisionBounds), not from hulls.
       actor.collider = collider;
       actor.position = v.Location.map(Math.fround);
-      actor.collisionValues = { ...v, get Location() { return actor.position; } };
+      actor.collisionValues = { ...v, get Location() { return actor.position; }, get Rotation() { return actor.rotation ?? v.Rotation; } };
       collision.movers.push(actor);
     } else {
       Object.assign(actor, { position: [...v.Location], radius: v.CollisionRadius ?? 0, height: v.CollisionHeight ?? 0 });

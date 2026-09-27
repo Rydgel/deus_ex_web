@@ -109,6 +109,15 @@ export function sweepHull(hull, start, delta, extent, maxTime = 2) {
   return { time: enter, normal, penetrating: depth < 0 };
 }
 
+/** The host collider's hulls use the mover's load-time transform plus a
+ * translation offset. A mover rotated since load (a hinged door) is answered
+ * only by the original model queries (level-queries.mjs), never here. */
+function assertHostCollider(actor) {
+  const loaded = actor.collider.ownerValues?.Rotation ?? [0, 0, 0], now = actor.rotation ?? loaded;
+  if (now.some((v, i) => (v | 0) !== (loaded[i] | 0)))
+    throw new Error(`Host brush collider of rotated mover ${actor.name} is not rebuilt; use the original model queries`);
+}
+
 export class BspCollider {
   constructor(model, transformPoint, transformNormal, ownerValues = null) {
     this.ownedBrush = Boolean(transformPoint || ownerValues);
@@ -265,6 +274,7 @@ export class CollisionWorld {
     if (hit) hit.actor = null;
     for (const actor of [...this.movers, ...this.actors]) {
       if (actor === ignore || !actor.blocking) continue;
+      if (actor.collider) assertHostCollider(actor);
       const next = actor.collider ? actor.collider.sweep(start, delta, extent) : sweepCylinder(actor, start, delta, extent);
       if (next && (!hit || next.time < hit.time)) hit = { ...next, actor };
     }
@@ -272,7 +282,7 @@ export class CollisionWorld {
   }
   overlaps(p, e, ignore = null) {
     if (this.bsp.overlaps(p, e)) return true;
-    return [...this.movers, ...this.actors].some(a => a !== ignore && a.blocking && (a.collider ? a.collider.overlaps(p, e)
+    return [...this.movers, ...this.actors].some(a => a !== ignore && a.blocking && (a.collider ? (assertHostCollider(a), a.collider.overlaps(p, e))
       : !primitivePointCheck({location: a.position, radius: a.radius, height: a.height}, p, e).outside));
   }
   findSpot(position, extent, checkActors = 0, checkFirst = 1) {

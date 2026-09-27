@@ -1005,6 +1005,65 @@ export async function createScriptDoors({
       }
     }
   }
+  // Spawn closure: a live map actor's scripts can name further classes to
+  // SpawnActor, through class constants in its class chain's bytecode
+  // (TrashGenerator.Timer's Spawn(class'TrashPaper')) or its class-valued
+  // properties (RatGenerator's PawnClasses[i].PawnClass). SpawnActor and the
+  // spawned actor's first PlayAnim run synchronously, so each such Actor
+  // class's scripts and default Mesh are prepared here, at load, transitively.
+  // This is resource readiness only; no spawn happens here.
+  async function prepareSpawnClosure(actors) {
+    const seen = new Set(), queue = [];
+    const addClass = ref => {
+      if (!ref || ref.kind !== 'Class' || !ref.asset || !Number.isInteger(ref.index) || seen.has(ref.key)) return;
+      seen.add(ref.key); queue.push(ref);
+    };
+    const collectValue = (value, depth = 0) => {
+      if (value === null || value === undefined || depth > 4 || typeof value !== 'object') return;
+      if (Array.isArray(value)) { for (const item of value) collectValue(item, depth + 1); return; }
+      if (value.kind === 'Class') { addClass(value); return; }
+      if (value.kind || value.asset) return;
+      for (const item of Object.values(value)) collectValue(item, depth + 1);
+    };
+    const collectBytecode = fn => {
+      const expressions = fn?.compiled?.decoded?.expressions;
+      if (!expressions) return;
+      for (const node of expressions.values())
+        if (node.op === 0x20) addClass(runtime.objects.operand(fn.script, node));
+    };
+    const collectClass = (cls, read) => {
+      for (let node = cls; node && node.record.key !== 'core.object'; node = node.base) {
+        for (const field of node.fields?.values() ?? []) {
+          try { collectValue(read(field)); } catch { /* a field without a readable value names no class */ }
+        }
+        for (const member of node.methods?.values() ?? []) collectBytecode(member.function);
+        for (const state of node.states?.values() ?? []) {
+          collectBytecode(state.function);
+          for (const member of state.methods?.values() ?? []) collectBytecode(member.function);
+        }
+      }
+    };
+    const isActorClass = cls => { for (let node = cls; node; node = node.base) if (node.record.key === 'engine.actor') return true; return false; };
+    for (const actor of actors) {
+      if (!actor || !identities.has(actor)) continue;
+      const cls = runtime.instance(actor).cls;
+      // Bytecode is scanned from prepared functions (DeusExCarcass.Timer's
+      // Spawn(Class'FlyGenerator') lives in an ordinary method).
+      await prepareNpcClass(cls);
+      collectClass(cls, field => runtime.readNamed(actor, field.name ?? field.record?.name));
+    }
+    while (queue.length) {
+      const ref = queue.shift();
+      const cls = await runtime.loadClass(ref.asset, ref.index);
+      if (!isActorClass(cls)) continue;
+      await prepareNpcClass(cls);
+      const meshField = runtime.lookupMember(cls, 'fields', 'Mesh');
+      const mesh = meshField ? runtime.defaultValue(cls, meshField) : null;
+      if (mesh && ['LodMesh', 'Mesh'].includes(mesh.kind)) await runtime.prepareResource(mesh);
+      collectClass(cls, field => runtime.defaultValue(cls, field));
+    }
+    return seen.size;
+  }
   async function prepareNpcs() {
     // Pawn bodies also invoke virtuals on attached non-pawn objects — the
     // player's SeePlayer/CanStartConversation path and LevelInfo services —
@@ -1927,6 +1986,7 @@ export async function createScriptDoors({
   await prepareNpcs();
   await prepareCrateLifecycle({runtime,assets,decorations:npcDecorations,
     prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes});
+  await prepareSpawnClosure(level.actors);
   for(const record of records)resetMover(record);
   lights.reset();
   resetNpcs();
@@ -1958,7 +2018,8 @@ export async function createScriptDoors({
   playerScene.hooks.dispatchEvent=(target,event,args)=>dispatchEvent(target,event,args);
   playerScene.hooks.moveRider=(actor,delta,rotation)=>runtime.moveSpawnedActor(actor,delta,rotation);
   playerScene.hooks.rotateMapActor=(actor,rotation)=>runtime.rotateMapActor(actor,rotation);
-  playerScene.hooks.movePawn=(actor,delta,rotation)=>runtime.movePawn(actor,delta,rotation);
+  playerScene.hooks.movePawn=(actor,delta,rotation,flags)=>runtime.movePawn(actor,delta,rotation,flags);
+  playerScene.hooks.moveSmoothPawn=(actor,delta)=>runtime.moveSmoothPawn(actor,delta);
   loginPlayer();
   playerLogs.enableMessages();
   // Original DataLinkPlay constructs and owns its display in the native HUD.

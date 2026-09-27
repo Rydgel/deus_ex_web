@@ -52,7 +52,8 @@ import {
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
-import { execAiPickRandomDestination, execFindPathToward } from './script-pawn-nav.mjs';
+import { moveSmooth } from './move-smooth.mjs';
+import { execAiPickRandomDestination, execFindPathToward, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -2085,9 +2086,16 @@ export class ScriptRuntime {
   }
   /** XLevel vtable +0x88 MoveActor (zero flags) for a map pawn, on the
    * recovered pawn move body; returns the native success word. */
-  movePawn(actor,delta,rotation) {
+  movePawn(actor,delta,rotation,{ignoreBases=false}={}) {
     if(!this.isMapPawn(actor))throw new Error('Map pawn MoveActor requires a serialized map pawn');
-    return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).moveActor(delta,rotation);
+    return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).moveActor(delta,rotation,ignoreBases);
+  }
+  /** AActor::moveSmooth (0x103c9020, move-smooth.mjs) for a map pawn a moving
+   * brush pushes in CheckEncroachment, over the pawn's recovered MoveActor. */
+  moveSmoothPawn(actor,delta) {
+    if(!this.isMapPawn(actor))throw new Error('Map pawn moveSmooth requires a serialized map pawn');
+    const view=actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor));
+    return moveSmooth(view,delta,{moveActor:(_target,movement)=>view.moveActorHit(movement),dispatch:view.dispatchEvent});
   }
   /** A serialized map export in the Pawn class chain, other than the
    * controlled player (the player scene owns its moves). */
@@ -3020,6 +3028,32 @@ export class ScriptRuntime {
       for(let i=0;i<8;i++)args.push(refValue(call.evaluateArgument(i)));
       return execAiPickRandomDestination(call.receiver,args,call.evaluateArgument(8),
         this.pawnNavServices(call.receiver));
+    }
+    if(call.index===717){
+      // execRandomBiasedRotation 0x1036dc90 evaluates (int centralYaw, float
+      // yawDistribution, int centralPitch, float pitchDistribution) and calls
+      // AActor::RandomBiasedRotation 0x1036d030, the same direction helper
+      // native 709 uses (aiDirection, bit-exact in validate-pawn-nav).
+      if(call.argumentCount!==4)throw new Error('RandomBiasedRotation requires four arguments');
+      const [yaw,yawDist,pitch,pitchDist]=[0,1,2,3].map(i=>refValue(call.evaluateArgument(i)));
+      if(typeof this.rng?.frand!=='function')throw new Error('RandomBiasedRotation requires the shared original RNG stream');
+      return aiDirection(()=>Math.fround(this.rng.frand()),yaw|0,Math.fround(yawDist),pitch|0,Math.fround(pitchDist));
+    }
+    if(call.index===520){
+      // execActorReachable 0x103bc1a0 (docs/script-pawn-nav.md): one object
+      // slot; a None target writes 0; NavigationPoint fast path, then the
+      // actor worker 0x103c0630. Bit-exact ports; this is the VM dispatch.
+      if(call.argumentCount!==1)throw new Error('actorReachable requires one actor argument');
+      const target=refValue(call.evaluateArgument(0))??null;
+      return Boolean(actorReachable(call.receiver,target,this.pawnNavServices(call.receiver)));
+    }
+    if(call.index===521){
+      // execPointReachable 0x103bc710: reads the vector slot and calls the
+      // point worker 0x103c0d30 with arg14=0 (the eye FastLineCheck runs).
+      if(call.argumentCount!==1)throw new Error('pointReachable requires one vector argument');
+      const point=refValue(call.evaluateArgument(0));
+      if(!Array.isArray(point)||point.length!==3)throw new Error('pointReachable requires an FVector');
+      return Boolean(pointWorker(call.receiver,point.map(Math.fround),0,this.pawnNavServices(call.receiver)));
     }
     if(call.index===517){
       // execFindPathToward 0x103bc9c0: three evaluated slots (target,

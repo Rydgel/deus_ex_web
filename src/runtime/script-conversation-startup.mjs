@@ -31,14 +31,18 @@ export async function prepareConversationBinding(runtime, level) {
       if (cls.record.key === 'deusex.deusexlevelinfo') return true;
     return false;
   };
+  // The recovered ConBindEvents wrapper logs and returns without a
+  // DeusExLevelInfo (Entry) and returns before StaticLoadObject for a negative
+  // missionNumber (DX -2, DXOnly -1): such maps load no ConversationList, so
+  // there is nothing to prepare (script-conversation-wrapper.mjs).
   const levelInfo = (level?.actors ?? []).find(actor => actor && isLevelInfo(actor)) ?? null;
-  if (levelInfo === null)
-    throw new Error('Conversation binding requires a linked DeusExLevelInfo actor');
+  if (levelInfo === null) return null;
 
   const read = (object, key) => runtime.readNamed(object, key);
   const mission = read(levelInfo, 'missionNumber');
-  if (!Number.isInteger(mission) || mission < 0)
-    throw new Error(`Conversation binding requires a nonnegative DeusExLevelInfo.missionNumber, got ${mission}`);
+  if (!Number.isInteger(mission))
+    throw new Error(`Conversation binding requires an integer DeusExLevelInfo.missionNumber, got ${mission}`);
+  if (mission < 0) return null;
   // ConBindEvents resolves the package from DeusExLevelInfo.ConversationPackage:
   // 'DeusExConversations' maps to the 'DeusExCon' prefix + 'Text'.
   const rawPackage = read(levelInfo, 'ConversationPackage');
