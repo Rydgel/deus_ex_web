@@ -341,13 +341,46 @@ export function createConsoleCommands({runtime, input, services}) {
     if (game && scriptExec(game, cmd, null)) return true;
     // GSys, UObject::StaticExec, GCache, GExec (the launcher's FExecHook),
     // Client (UWindowsClient -> UClient), Render, Audio (Galaxy), in order.
-    for (const body of ['USystem::Exec', 'UObject::StaticExec', 'FMemCache::Exec', 'FExecHook::Exec',
+    claims('USystem::Exec', cmd);
+    if (staticExec(cmd, ar)) return true;
+    for (const body of ['FMemCache::Exec', 'FExecHook::Exec',
       'UClient::Exec', 'URender::Exec', 'UGalaxyAudioSubsystem::Exec', 'Galaxy 0x106019b0'])
       claims(body, cmd);
     if (parseCommand(cmd, 'FLUSH') !== null) { flush(1); return true; }
     if (parseCommand(cmd, 'CRACKURL') !== null)
       throw new UnsupportedConsoleCommandError(`UEngine::Exec CRACKURL is not implemented: ${cmd}`, {body: 'UEngine::Exec', keyword: 'CRACKURL'});
     return false;
+  }
+
+  /** UObject::StaticExec 0x10153110 in keyword order MEM, DUMPNATIVES, GET,
+   * SET, OBJ, GTIME. Only SET (0x101532da) is implemented, for the one class
+   * whose properties Play models natively: ParseToken(256, escapes) for the
+   * class, StaticFindObject(UClass, ANY_PACKAGE), ParseToken for the
+   * property, FindField, spaces skipped, then GlobalSetProperty(value, class,
+   * property, offset, 1). A missing class or property logs its
+   * NAME_ExecWarning line and still returns 1. */
+  function staticExec(cmd, ar) {
+    for (const keyword of ['MEM', 'DUMPNATIVES', 'GET'])
+      if (parseCommand(cmd, keyword) !== null)
+        throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+    const rest = parseCommand(cmd, 'SET');
+    if (rest === null) {
+      for (const keyword of ['OBJ', 'GTIME'])
+        if (parseCommand(cmd, keyword) !== null)
+          throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+      return false;
+    }
+    const className = parseToken(rest, 256, true);
+    if (className.ok && !scriptStringComplementEqual(className.token, 'InputExt'))
+      throw new UnsupportedConsoleCommandError(`UObject::StaticExec SET of class ${className.token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword: 'SET'});
+    if (!className.ok || typeof input.findField !== 'function') { ar.log(`Unrecognized class ${className.token}`); return true; }
+    const propertyName = parseToken(className.rest, 256, true);
+    const field = propertyName.ok ? input.findField(propertyName.token) : null;
+    if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+    let value = propertyName.rest;
+    while (value[0] === ' ') value = value.slice(1);
+    input.globalSetProperty(field, value);
+    return true;
   }
 
   /** UEngine::Flush 0x10380cf0: GCache.Flush(0,0,0), then Client->Flush

@@ -283,10 +283,6 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         interaction.frobTarget = runtime.readNamed(player.collisionActor, 'FrobTarget');
         return { ok: Boolean(picked), message: picked ? '' : 'Nothing selected' };
       }
-      if (actor.lineage?.includes('engine.mover')) {
-        const target = describeTarget(actor);
-        return target?.mover ? doors.use(target, player.position, null) : { ok: false, message: target?.label ?? 'Nothing selected' };
-      }
       // A world inventory pickup (weapon, ammo, tool, food) runs the original
       // right-click frob path: DeusExPlayer.ParseRightClick -> HandleItemPickup
       // (which assigns the inventory-grid slot) -> DoFrob -> the item's real
@@ -302,59 +298,32 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
           || runtime.readNamed(actor, 'bDeleteMe');
         return { ok: Boolean(taken), message: taken ? `Picked up ${itemLabel(actor)}` : '' };
       }
-      // Any other target takes the same original right-click path:
-      // ParseRightClick -> RestrictInput, GrabDecoration for a pushable
-      // decoration, else DoFrob -> the actor's Frob, the owned-object 'Futz'
-      // AI event and PlayPickupAnim.
-      try {
-        const pawn = player.collisionActor;
-        runtime.writeNamed(pawn, 'FrobTarget',actor);
-        // The scene router supplies the conversation presenter's lifecycle
-        // that a pawn's Frob -> StartConversation needs.
-        doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
-        return { ok: true, message: '' };
-      } catch (error) {
-        // A conversation pawn's Frob still pauses honestly on an unbuilt boundary
-        // (that path is covered by the instructor checks). A decoration or item
-        // whose real Frob reaches an unbuilt subsystem — e.g. a DataCube's text
-        // parser, or item pickup's actor iterator — surfaces the boundary as a
-        // message instead of halting the scene, so exploring visible props is safe.
-        if (actor.lineage?.includes('deusex.scriptedpawn')) throw error;
-        return { ok: false, message: `${describeTarget(actor)?.label ?? actor.name} — interaction not yet supported` };
-      }
-    },
-    // Enter is ParseLeftClick. With the nanokey ring in hand this is DoFrob(Self, inHand).
-    useHeld() {
-      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-      const actor = interaction.frobTarget;
-      const hand = runtime.readNamed(pawn, 'inHand');
-      const key = hand ? runtime.instance(hand).cls.record.key : '';
-      if (!actor?.lineage?.includes('engine.mover') || (key !== 'deusex.nanokeyring' && key !== 'deusex.lockpick'))
-        return { ok: false, message: 'Nothing selected' };
-      const target = describeTarget(actor);
-      return target?.mover ? doors.use(target, player.position, hand) : { ok: false, message: target?.label ?? 'Nothing selected' };
+      // Any other target — a door included — takes the same original
+      // right-click path: ParseRightClick -> RestrictInput, GrabDecoration for
+      // a pushable decoration, else DoFrob -> the actor's Frob (DeusExMover's
+      // lock, one-way and Tag fanout), the owned-object 'Futz' AI event and
+      // PlayPickupAnim. A boundary it reaches pauses Play.
+      const pawn = player.collisionActor;
+      runtime.writeNamed(pawn, 'FrobTarget',actor);
+      // The scene router supplies the conversation presenter's lifecycle
+      // that a pawn's Frob -> StartConversation needs.
+      doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
+      interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
+      return { ok: true, message: '' };
     },
     // LeftMouse and Enter are bound to `ParseLeftClick|Fire` in the installed
     // User.ini, and its Fire alias is `Button bFire | Fire`: a press runs the
     // ParseLeftClick exec, raises the bFire button byte, then runs the Fire
     // exec (DeusExPlayer.Fire -> PlayerPawn.Fire -> Weapon.Fire). Release
     // clears bFire, which DeusExWeapon.Finish reads to swing again while held.
-    // A key ring/lockpick used on a targeted door keeps the host door route
-    // (the same DoFrob(Self, inHand) branch of ParseLeftClick, plus its door
-    // display bookkeeping), then Fire runs as the binding does.
+    // A key ring or lockpick used on a targeted door is ParseLeftClick's own
+    // DoFrob(Self, inHand) branch.
     pressFire() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-      const actor = interaction.frobTarget;
-      const hand = runtime.readNamed(pawn, 'inHand');
-      const key = hand ? runtime.instance(hand).cls.record.key : '';
-      let result = { ok: false, message: '' };
-      if (actor?.lineage?.includes('engine.mover') && (key === 'deusex.nanokeyring' || key === 'deusex.lockpick'))
-        result = game.useHeld();
-      else runtime.processEvent(pawn, 'ParseLeftClick', []);
+      doors.scriptRuntime.dispatchEvent(pawn, 'ParseLeftClick', []);
       runtime.writeNamed(pawn, 'bFire',1);
       runtime.processEvent(pawn, 'Fire', [0]);
-      return result;
+      return { ok: true, message: '' };
     },
     releaseFire() {
       doors.scriptRuntime.runtime.writeNamed(player.collisionActor, 'bFire',0);

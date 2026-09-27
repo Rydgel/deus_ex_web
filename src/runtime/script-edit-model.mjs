@@ -35,7 +35,8 @@
 //   0x1001e7f0  ColumnFromX
 //   0x1004e060  AskParentForReconfigure
 //   vtable+0x114 TextChanged
-//   Core !UObject::FindFunction (script FilterChar override lookup)
+//   Core !UObject::FindFunction (script FilterChar override lookup) and the
+//   script FilterChar call (services.scriptFilterChar)
 
 import {
   growArrayMax,
@@ -431,6 +432,18 @@ export function clearUndo(L) {
   farrayRealloc(L, L.base + EDIT_WINDOW.undoData, EDIT_UNDO.size);
 }
 
+// XEditWindow::CleanUp 0x1001d0b0 (before XLargeTextWindow::CleanUp): each
+// undo record through the ClearUndo teardown, then Num = Max = 0 and
+// FArray::Realloc(0x1c). currentUndo and unchangedUndo are left as they are.
+export function cleanUpUndo(L) {
+  for (let i = 0; i < L.read(L.base + EDIT_WINDOW.undoNum, 'i32'); i += 1) {
+    destroyUndoRecordClear(L, L.read(L.base + EDIT_WINDOW.undoData, 'u32') + i * EDIT_UNDO.size);
+  }
+  L.write(L.base + EDIT_WINDOW.undoNum, 'i32', 0);
+  L.write(L.base + EDIT_WINDOW.undoMax, 'i32', 0);
+  farrayRealloc(L, L.base + EDIT_WINDOW.undoData, EDIT_UNDO.size);
+}
+
 // Per-record teardown used by trimUndo (0x10020328 sequence: Empty/Empty then
 // the B destructor chain then the A destructor chain).
 function destroyUndoRecordTrim(L, rec) {
@@ -671,16 +684,22 @@ export function enableWordWrap(L, bWrap) {
 }
 
 // 0x10021830 — FilterChar body: uppercase mapping then the script-override
-// lookup. A nonzero FindFunction result is an unsupported boundary.
+// lookup (FindFunction(FilterChar, 0)). A script FilterChar(out string chStr)
+// runs through ProcessEvent with chStr = the character (empty for NUL) and a
+// result slot preset to 1; a true result stores chStr's first unit (0 for an
+// empty string, the shared L"") back into the character. The parameter
+// FString is torn down afterwards (host-side string: no native blocks).
 export function filterCharVirtual(L, chAddr) {
   const flags = L.read(L.base + EDIT_WINDOW.flags, 'i32');
   if ((flags & EDIT_FLAGS.uppercase) !== 0) {
     const ch = L.read(chAddr, 'u16');
     if (ch >= 0x61 && ch <= 0x7a) L.write(chAddr, 'u16', ch - 0x20);
   }
-  if (findFilterChar(L) !== 0) {
-    throw new EditWindowModelBoundaryError('script FilterChar override is not supported');
-  }
+  if (findFilterChar(L) === 0) return 1;
+  const ch = L.read(chAddr, 'u16');
+  const call = rejectAsyncEdit(requireService(L, 'scriptFilterChar')(L.object, ch ? String.fromCharCode(ch) : ''), 'scriptFilterChar');
+  if (!call.result) return 0;
+  L.write(chAddr, 'u16', call.text.length ? call.text.charCodeAt(0) : 0);
   return 1;
 }
 
@@ -824,14 +843,14 @@ export function textChangedRange(L, ip, selLen, insLen) {
     if (insLen < 1) L.write(L.base + lenOff, 'i32', 1);
     const count = L.read(L.base + countOff, 'i32');
     const data = L.read(L.base + dataOff, 'u32');
+    // Only a row starting after ip moves (0x1002d90e `jle` skips the rest);
+    // a moved start that lands at or before ip becomes ip + 1.
     for (let i = 0; i < count; i += 1) {
       const rec = data + i * EDIT_LINE.size;
-      let start = L.read(rec + EDIT_LINE.start, 'i32');
-      if (start > ip) {
-        start += d;
-        L.write(rec + EDIT_LINE.start, 'i32', start);
-      }
-      if (start <= ip) L.write(rec + EDIT_LINE.start, 'i32', ip + 1);
+      const start = L.read(rec + EDIT_LINE.start, 'i32');
+      if (start <= ip) continue;
+      L.write(rec + EDIT_LINE.start, 'i32', start + d);
+      if (start + d <= ip) L.write(rec + EDIT_LINE.start, 'i32', ip + 1);
     }
   };
   fixLines(

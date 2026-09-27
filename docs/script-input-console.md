@@ -73,49 +73,41 @@ first original enum index must win. This caller requires the separately
 recovered VM opcode 0x53 IntToString (the HUD work's conversion addition).
 No native config writes or input command execution are claimed.
 
-## Deferred multiplayer startup research
+## ConditionalBindMultiplayerKeys and SET InputExt (2026-09-26)
 
-The single-player Training scope explicitly defers
-DeusExRootWindow.ConditionalBindMultiplayerKeys. No implementation of that
-routine, Core.Object.GetEnum, or SET InputExt is included in this query adapter.
-The following recovered native evidence is retained for that future work;
-it does not establish a complete SET contract.
+DeusExRootWindow.InitWindow runs the original ConditionalBindMultiplayerKeys
+(the host no-op is gone). It scans the 255 KEYNAME/KEYBINDING pairs, returns if
+any binding is Talk, TeamTalk, BuySkills, KillerProfile or ShowScores, tests
+that T, Y, B, K and Equals are free through IsKeyAssigned (Core.Object.GetEnum
+body 0x1013e9a0), and issues five `SET InputExt <key> <alias>` commands. With
+the installed User.ini all five keys are free, so Training starts with them
+bound, as the original does.
 
-- Original DeusExRootWindow.InitWindow calls ConditionalBindMultiplayerKeys.
-  The routine scans all 255 key indices and returns when any binding equals
-  Talk, TeamTalk, BuySkills, KillerProfile or ShowScores. Otherwise it tests
-  whether T, Y, B, K and Equals are empty and issues five SET InputExt commands
-  assigning those aliases. IsKeyAssigned obtains its key name with
-  mid(string(GetEnum(enum'EInputKey',key)),3).
-- Core.Object.GetEnum export thunk 0x10102194 leads to body 0x1013e9a0.
-  It evaluates the object and integer arguments in order and initializes the
-  result to FName index zero at 0x1013ea12. Null objects return that None name.
-  For a nonnull object, it walks Class(+0x24), then Super(+0x28), looking for
-  Core.Enum's static class 0x1029d6d0. A wrong class also returns None. Negative
-  indices and indices at or above UEnum.Names.Num(+0x38) return None; valid
-  indices read the FName DWORD at Names.Data(+0x34)+index*4
-  (0x1013eaa0–0x1013eaa6). This is generic enum access, not an input-specific
-  name table.
-- UObject.StaticExec thunk 0x101011a9 leads to body 0x10153110. Its SET branch
-  at 0x101532da–0x10153386 parses the class and property tokens with ParseToken
-  (maximum 256, escape handling enabled), resolves a UClass with
-  StaticFindObject and the property with FindField, skips spaces before the
-  remaining value, then invokes GlobalSetProperty with propagation enabled.
-  The SET literal at 0x101aea50 was verified in the original Core.dll.
-- GlobalSetProperty thunk 0x10102e64 leads to body 0x101523a0. With propagation
-  enabled it visits live objects whose class chain includes the target class,
-  calls the property's ImportText virtual(+0x84) with port flags 1 and the
-  object's property address (0x10152463), then invokes object virtual+0x40
-  (0x10152474; the exact callback behavior remains unresolved here). It also
-  imports the value into Class.Defaults.Data(+0x4d4) at the property's offset
-  (0x101524ca), then calls the defaults object's SaveConfig(0x4000,null) at
-  0x10152505. Native SET therefore has persistence and instance/default
-  propagation semantics beyond changing one query binding map.
+- `UObject::StaticExec` 0x10153110, SET branch 0x101532da-0x10153386:
+  ParseToken(256, escapes) for the class, StaticFindObject(UClass,
+  ANY_PACKAGE), ParseToken for the property, FindField 0x101011db, spaces (only
+  0x20) skipped, then GlobalSetProperty(value, class, property, offset, 1). A
+  missing class or property logs "Unrecognized class %s" / "Unrecognized
+  property %s" (NAME_ExecWarning) into the command's output and returns 1.
+  Only InputExt is implemented; SET of any other class is an explicit
+  UnsupportedConsoleCommandError (script-console-command.mjs staticExec).
+- `GlobalSetProperty` 0x101523a0: every live object whose class chain reaches
+  the class (the viewport's one InputExt) imports the text (UStrProperty: the
+  whole remaining text) and runs PostEditChange (Modify, a game no-op); then
+  the class defaults import it and `SaveConfig(0x4000, null)` runs on them.
+- `SaveConfig` on the InputExt defaults writes every config property to
+  `[Extension.InputExt]` of User.ini (the object's own class path) in
+  TFieldIterator order. StaticInitInput 0x103930c0 creates Aliases and then one
+  string per named key ascending, and UStruct::AddCppProperty 0x10125fd0
+  prepends, so the keys come first in descending order and Aliases[0..39]
+  last. Each Alias exports through UStructProperty::ExportTextItem 0x10169710:
+  every member (Data == Delta), `Command` first, the string quoted without
+  escaping (UStrProperty 0x101678a0), the name bare:
+  `(Command="Button bFire | Fire",Alias=Fire)`. Flush(0) keeps the text in the
+  config cache's `written` map (docs/script-config.md: no persistence across
+  page loads yet), and the reload re-reads the InputExt defaults.
+- SET of `Aliases` (a fixed-array struct import) remains a boundary.
 
-The selected unquoted FString ImportText behavior, inherited InputExt property
-schema, object callback effects, and config-save behavior still need recovery
-and validation before this branch can be implemented. A future browser config
-sink must state its persistence contract; it must not silently write the
-original installation's INI files or claim a transient map alone reproduces
-the native operation. This research uses the same original Core.dll fingerprint
-as the query validator; no original binaries or extracted source are committed.
+`scripts/validate-console-command.mjs` checks the five bindings in the live
+input and its defaults, the written section, the Alias round trip, the two
+warning lines and the unsupported-class boundary.

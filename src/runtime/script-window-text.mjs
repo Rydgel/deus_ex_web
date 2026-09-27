@@ -231,11 +231,32 @@ export function appendTextNative(window,newText,services={}){
   const phase={native:WINDOW_TEXT_NATIVE.appendText.body,name:'XTextWindow::AppendText'};
   const current=readRaw(object,WINDOW_TEXT_OFFSETS.text,'string',services,phase);
   const text=textValue(current,'TextWindow text')+value;
-  if(text!==current)writeRaw(object,WINDOW_TEXT_OFFSETS.text,'string',text,services,phase);
+  if(typeof services.realloc==='function')appendRaw(object,value,services,phase);
+  else if(text!==current)writeRaw(object,WINDOW_TEXT_OFFSETS.text,'string',text,services,phase);
   const flags=readRaw(object,WINDOW_TEXT_OFFSETS.textFlags,'u32',services,phase)>>>0;
   if(flags&TEXT_WINDOW_FLAGS.textIsAccelerator)setAcceleratorTextNative(object,text.split('\0',1)[0],services);
   askParent(object,services,phase.native);
   return true;
+}
+
+/** The FString operator+= of 0x10045e60 over the raw Data/Num/Max words when
+ * the host supplies GMalloc (`services.realloc`): Num grows by the length
+ * (the copy lands on the old NUL), or an empty FString takes length + 1 only
+ * for a non-empty text; Max becomes num + 3*num/8 + 32 when exceeded
+ * (FArray::Realloc). */
+function appendRaw(object,value,services,phase){
+  const at=WINDOW_TEXT_OFFSETS.text,num=readRaw(object,at+4,'i32',services,phase)|0,length=value.length;
+  if(!num&&!length)return;
+  const next=num?num+length:length+1,start=num?num-1:0;
+  writeRaw(object,at+4,'i32',next,services,phase);
+  if(next>(readRaw(object,at+8,'i32',services,phase)|0)){
+    const max=next+((next*3)>>3)+0x20;
+    writeRaw(object,at+8,'i32',max,services,phase);
+    writeRaw(object,at,'u32',services.realloc(readRaw(object,at,'u32',services,phase)>>>0,max*2),services,phase);
+  }
+  const data=readRaw(object,at,'u32',services,phase)>>>0;
+  for(let i=0;i<length;i++)services.write(data,2*(start+i),'u16',value.charCodeAt(i));
+  services.write(data,2*(start+length),'u16',0);
 }
 
 /** XTextWindow::SetText's case-insensitive unchanged guard and callbacks. */

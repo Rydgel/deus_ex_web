@@ -130,7 +130,7 @@ const input = { forward: 1, right: 0, yaw: game.player.yaw, pitch: 0, jump: fals
 // prepend — capture the head each tick so the assert names the real prior
 // entry instead of assuming this is the session's first destruction.
 let opened = false, frames = 0, headBefore = null;
-while (level.actors[slot] !== null && frames++ < 1200) {
+while (level.actors.includes(trigger) && frames++ < 1200) {
   headBefore = level.pendingDeleted;
   game.tick(1 / 120, input);
   if (!opened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); opened = true; }
@@ -141,7 +141,9 @@ assert.deepEqual(events, ['OrdersTrigger2.Touch', 'OrdersTrigger2.Destroyed'],
 runtime.processEvent = processEvent;
 
 // -- Recovered DestroyActor effects -------------------------------------------
-assert.equal(level.actors[slot], null, 'the saved Level.Actors slot is cleared');
+// DestroyActor clears the slot; the tick's closing CleanupDestroyed(0)
+// (ULevel::Tick tail) then compacts the array, so the actor is simply gone.
+assert.equal(level.actors.includes(trigger), false, 'the trigger left Level.Actors');
 assert.equal(ref(trigger, 'bDeleteMe').get(), true);
 assert.equal(inCollisionHash(trigger), false, 'FCollisionHash::RemoveActor ran before the array removal');
 assert.equal(player.touching.includes(trigger), false, 'EndTouch(other, 1) cleared the toucher side');
@@ -178,7 +180,7 @@ assert.deepEqual(startupDeletedChain({login: true}), freshStartupDeletedChain,
 assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collision hash registration');
 
 let second = 0, reopened = false;
-while (level.actors[slot] !== null && second++ < 1200) {
+while (level.actors.includes(trigger) && second++ < 1200) {
   game.tick(1 / 120, input);
   if (!reopened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); reopened = true; }
 }
@@ -186,6 +188,6 @@ assert.equal(second, frames, 'the new session reproduces the same destruction fr
 
 console.log(`Live Actor.Destroy validated: OrdersTrigger2.Touch destroyed its one-shot trigger after ${frames} ` +
   `fixed frames through the recovered ULevel::DestroyActor order (Destroyed, EndTouch(other,1), ` +
-  `FCollisionHash::RemoveActor, slot ${slot} cleared, bDeleteMe, ObjectFlags ` +
+  `FCollisionHash::RemoveActor, slot ${slot} cleared and compacted, bDeleteMe, ObjectFlags ` +
   `0x${(exportEntry.flags >>> 0).toString(16)} -> 0x${((exportEntry.flags | 0x00800000 | 0x80000000) >>> 0).toString(16)}, ` +
   `deferred chain head), refused the Pawn branch explicitly, stayed idempotent, and reset restored the map state.`);

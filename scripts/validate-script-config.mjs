@@ -44,8 +44,12 @@ let screen = W.ptr(rootWindow, 0x140);
 while (screen && W.u8(screen, 0x28) < 2) screen = W.ptr(screen, 0x144);
 assert.equal(runtime.instance(screen).cls.record.key, 'deusex.personascreengoals');
 runtime.namedReference(screen, 'bDisplayCompletedGoals').set(true);
+// Startup's DeusExRootWindow.ConditionalBindMultiplayerKeys already flushed
+// User.ini through SET InputExt's SaveConfig; the player's section then still
+// holds the installed value.
 const before = config.written.get('user.ini');
-assert.equal(before, undefined, 'nothing was written before SaveConfig');
+assert.match(before ?? '', /\[Extension\.InputExt\]\r\n/, 'startup SET InputExt wrote its section');
+assert.match(before, /\r\nbDisplayCompletedGoals=False\r\n/, 'the player section is unchanged before SaveConfig');
 game.windowKey('Escape', true); game.windowKey('Escape', false); tick(10);
 
 const text = config.written.get('user.ini');

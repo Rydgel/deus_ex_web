@@ -1,7 +1,7 @@
 import {readUserConfig} from '../unreal/user-config.mjs';
 import {refValue} from './script-vm.mjs';
 import {scriptStringText,scriptStringComplementEqual} from './script-string-operations.mjs';
-import {parseCommand,readInputAliases} from './script-console-command.mjs';
+import {parseCommand,readInputAliases,ALIAS_MEMBERS,ALIAS_COUNT} from './script-console-command.mjs';
 
 /** UInput::GetKeyName 0x10394b20; names come from original EInputKey data. */
 export function inputKeyName(names,index){
@@ -117,7 +117,46 @@ export async function createInputConsole(runtime,assets,{config}={}){
     // game's Modify returns.
     loadInputConfig(instance,names,gconfig,warn,bindingRead);
   }
-  return {...query,bindings,config,aliases,aliasWarnings,defaults,resetConfig,
+  // Engine.Input's native properties in TFieldIterator order: StaticInitInput
+  // creates Aliases, then one string per named key ascending, and
+  // UStruct::AddCppProperty 0x10125fd0 prepends each, so the keys come
+  // first in descending order and Aliases last.
+  const keyProperties=names.map((name,index)=>({name:name.slice(3),index})).filter((_,index)=>names[index]!=='None').reverse();
+  /** FindField 0x101011db over InputExt: FName compare, case-insensitive. */
+  function findField(name){
+    const wanted=scriptStringText(name);
+    if(scriptStringComplementEqual(wanted,'Aliases'))return {kind:'aliases'};
+    const key=keyProperties.find(property=>scriptStringComplementEqual(property.name,wanted));
+    return key?{kind:'binding',index:key.index,name:key.name}:null;
+  }
+  // UStructProperty::ExportTextItem 0x10169710 over the Alias struct: every
+  // member exports (Data == Delta), delimited: the string quoted with no
+  // escaping (UStrProperty 0x101678a0, "\"%s\""), the name bare.
+  const aliasText=alias=>'('+ALIAS_MEMBERS.map(member=>member.kind==='string'
+    ?`${member.name}="${alias[member.name]??''}"`:`${member.name}=${alias[member.name]??'None'}`).join(',')+')';
+  /** UObject::SaveConfig(CPF_Config, null) 0x10151540 on the InputExt class
+   * defaults: every config property into [Extension.InputExt] of User.ini,
+   * Flush(0), then the reload of the class defaults (LoadConfig(1)). */
+  function saveDefaults(){
+    for(const property of keyProperties)
+      gconfig.setString(INPUT_EXT_CLASS.path,property.name,defaults.bindings[property.index]??'',INPUT_EXT_CLASS.configName);
+    for(let index=0;index<ALIAS_COUNT;index++)
+      gconfig.setString(INPUT_EXT_CLASS.path,`Aliases[${index}]`,aliasText(defaults.aliases[index]),INPUT_EXT_CLASS.configName);
+    gconfig.flush(false,null);
+    loadInputConfig(defaults,names,gconfig,warn,bindingRead);
+  }
+  /** GlobalSetProperty 0x101523a0 (immediate) of one InputExt property: the
+   * live InputExt (the viewport's Input) imports the text, PostEditChange
+   * (Modify, which returns in the game), then the class defaults import it
+   * and SaveConfig(0x4000) runs on them. A key binding is a UStrProperty:
+   * the whole remaining text. */
+  function globalSetProperty(field,value){
+    if(field.kind!=='binding')throw new Error('SET of InputExt Aliases (UStructProperty import of a fixed array) is not recovered');
+    instance.bindings[field.index]=String(value);
+    defaults.bindings[field.index]=String(value);
+    saveDefaults();
+  }
+  return {...query,bindings,config,aliases,aliasWarnings,defaults,resetConfig,findField,globalSetProperty,
     /** APlayerPawn::execConsoleCommand 0x103ba200 through `commands`
      * (createConsoleCommands). */
     playerConsoleCommand(call,commands){

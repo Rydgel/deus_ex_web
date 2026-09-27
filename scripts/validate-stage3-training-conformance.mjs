@@ -16,10 +16,15 @@
  *      the explicit out-of-Stage-3 boundaries below; families not yet probed
  *      keep the criterion open;
  *   4. lifecycle — every SpawnActor request goes through the one general body
- *      (script-spawn.mjs); the run lists each class it spawned and fails on a
- *      spawn that threw. Destroy/CleanupDestroyed and resource loading are not
- *      measured yet and keep the criterion open;
- *   5. host substitutes are not measured by this run and keep the gate open.
+ *      (script-spawn.mjs) and none throws; DestroyActor requests are accepted
+ *      on the general route with none throwing; ULevel::CleanupDestroyed runs
+ *      in the level tick; no actor leaves Level.Actors without an accepted
+ *      DestroyActor; a DynamicLoadObject resource loads through the shared
+ *      graph's StaticLoadObject;
+ *   5. host substitutes — every native that ends in a Play host callback is
+ *      classified (allowed out-of-Stage-3 no-op, or a recovered body on host
+ *      state), no scripted function body is replaced by a host handler, and
+ *      the declared structural substitutes (DECLARED_SUBSTITUTES) are gone.
  *
  * It also prints every non-primitive native the run reached, so the reachable
  * native tail is a measured number rather than an estimate.
@@ -44,13 +49,56 @@ const ALLOWED = Object.freeze([
     test: record => record.kind === 'native' && record.index === 3011},
 ]);
 // Authored Training interactions the probe engine does not drive yet.
-const UNPROBED = Object.freeze([
-  'Fire/AltFire with each Training weapon under the real tick scheduler',
-]);
-// Exit criteria this run does not measure.
-const UNMEASURED = Object.freeze([
-  {criterion: 4, text: 'lifecycle generality: DestroyActor/CleanupDestroyed and resource load on the general route (SpawnActor is measured below)'},
-  {criterion: 5, text: 'no host substitutes (not audited by this run; GameInfo, the player and Player start now come from LoadMap/Login)'},
+const UNPROBED = Object.freeze([]);
+
+// Criterion 5: every native whose call ends in a Play host callback (the
+// runtime `native` callback chain) must be classified. `allowed` natives are
+// the named out-of-Stage-3 no-ops; `recovered` ones run a translated original
+// body on host-owned state (the evidence is named); anything else, including
+// an unlisted native, is a substitute that keeps the gate open.
+const HOST_NATIVES = Object.freeze({
+  264: {allowed: 4, reason: 'PlaySound: recorded audio, channel 0 (criterion 2 / Stage 4)'},
+  265: {allowed: 4, reason: 'StopSound: recorded audio (Stage 4)'},
+  713: {allowed: 5, reason: 'AISendEvent: UEventManager propagation (Stage 5 perception)'},
+  714: {allowed: 5, reason: 'AIStartEvent: UEventManager propagation (Stage 5 perception)'},
+  715: {allowed: 5, reason: 'AIEndEvent: UEventManager propagation (Stage 5 perception)'},
+  716: {allowed: 5, reason: 'AIClearEvent: UEventManager propagation (Stage 5 perception)'},
+  0: {allowed: 6, name: 'engine.playerpawn.clienttravel', reason: 'ClientTravel: map travel (Stage 6)'},
+  3011: {allowed: 6, reason: 'SaveGame: saved games (Stage 6)'},
+  283: {recovered: 'SetCollisionSize on map identities: script-actor-collision.mjs setActorCollisionSize'},
+  301: {recovered: 'FinishInterpolation: execFinishInterpolation latent 302 polled on the mover bInterpolating mirror (mover-interpolation.mjs)'},
+  544: {recovered: 'ResetKeyboard 0x103b96d0 -> ResetConfig(InputExt) (script-input-console.mjs)'},
+  720: {recovered: 'GetPlayerPawn: native 720 XLevel->Engine->Client->Viewports pointer walk (script-triggers.mjs)'},
+  724: {recovered: 'GetBoundingBox on movers: mover-finish bounds (docs/mover-finish.md); other receivers throw'},
+  1052: {recovered: 'InitRootWindow 0x10037df0 -> ConstructRootWindow 0x10037e70 (script-window-host.mjs)'},
+  1100: {recovered: 'FlagBase.SetBool: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
+  1110: {recovered: 'FlagBase.GetBool: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
+  1120: {recovered: 'FlagBase.CheckFlag 0x100247d0 (script-triggers.mjs createFlagBase)'},
+  1125: {recovered: 'FlagBase.SetDefaultExpiration: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
+  3010: {recovered: 'CreateLogObject (script-player-log.mjs)'},
+  3015: {recovered: 'CreateDumpLocationObject (script-player-dump.mjs)'},
+  3039: {recovered: 'DumpLocation.HasLocationBeenSaved (script-player-dump.mjs)'},
+  262: {recovered: 'SetCollision on map actors: execSetCollision 0x103e1900 -> AActor::SetCollision 0x10369200 on the native +0x1dc word (script-actor-collision.mjs setActorCollision); no other receiver representation'},
+  3970: {recovered: 'SetPhysics on movers: PHYS_MovingBrush while already moving-brush returns at AActor::setPhysics 0x103c9620 (equal Physics); every other attached actor runs the recovered body in script-runtime.mjs'},
+  1460: {substitute: 'AskParentForReconfigure answered as a no-op for windows outside the native window host (script-doors.mjs)'},
+  1461: {substitute: 'ConfigureChild answered as a no-op for windows outside the native window host (script-doors.mjs)'},
+  1463: {substitute: 'QueryPreferredWidth answered 0 for windows outside the native window host (script-doors.mjs)'},
+  1464: {substitute: 'QueryPreferredHeight answered 0 for windows outside the native window host (script-doors.mjs)'},
+  1465: {substitute: 'QueryPreferredSize answered 0 for windows outside the native window host (script-doors.mjs)'},
+  1466: {substitute: 'QueryGranularity answered 0 for windows outside the native window host (script-doors.mjs)'},
+});
+// Scripted functions whose original body a Play host replaces
+// (runtime.boundaryFunctions). None is allowed in single-player Training.
+const HOST_FUNCTION_REASONS = Object.freeze({
+  'deusex.deusexplayer.startdatalinktransmission': 'live DataLink host handler replaces the original body',
+  'deusex.datalinkplay.startconversation': 'live DataLink host handler replaces the original body',
+});
+// Host structures the call instrumentation cannot see. Each is a substitute
+// until Play runs the original route instead.
+const DECLARED_SUBSTITUTES = Object.freeze([
+  'Level tick: Play admits actor categories in host passes (movers, mission triggers, DataLink, TriggerLights via lights.tick, pawns, carried items) instead of ULevel::Tick running every Level.Actors entry through Actor.Tick; a failing actor is skipped forever (npcFailures) (script-doors.mjs tick)',
+  'Player tick: the viewer movement port plus UpdateInHand stand in for APlayerPawn::Tick -> PlayerTick/PlayerInput/PlayerMove (game.mjs tick, player.mjs)',
+  'Frob target: the host highlight trace writes FrobTarget/FrobTime instead of DeusExPlayer.HighlightCenterObject (game.mjs tickWalkingInteraction)',
 ]);
 
 if (!argv.includes('--child')) await parent();
@@ -130,11 +178,39 @@ async function parent() {
       tolerated: distinct(tolerated).map(({key, count}) => `${key} (x${count}; stage ${allowed(tolerated.find(record => describe(record) === key)).stage})`)});
   }
   const spawns = data.spawns ?? [];
-  for (const {criterion, text} of UNMEASURED) {
-    const failures = [`not measured: ${text}`];
-    if (criterion === 4) for (const entry of spawns.filter(entry => entry.failed))
+  const lifecycle = data.lifecycle ?? {destroys: [], cleanups: {calls: 0}, loads: [], hostRemovals: []};
+  // 4. Lifecycle generality on the general routes Training instantiates.
+  {
+    const failures = [];
+    for (const entry of spawns.filter(entry => entry.failed))
       failures.push(`SpawnActor ${entry.key} threw ${entry.failed}x (first ${entry.first})`);
-    criteria.push({id: criterion, name: criterion === 4 ? 'lifecycle' : 'substitutes', failures});
+    if (!lifecycle.destroys.some(entry => entry.accepted)) failures.push('no DestroyActor request was accepted');
+    for (const entry of lifecycle.destroys.filter(entry => entry.failed))
+      failures.push(`DestroyActor ${entry.key} threw ${entry.failed}x (first ${entry.first}): ${entry.error}`);
+    if (!lifecycle.cleanups.calls) failures.push('ULevel::CleanupDestroyed never ran in the level tick');
+    if (lifecycle.cleanups.failed) failures.push(`CleanupDestroyed threw ${lifecycle.cleanups.failed}x: ${lifecycle.cleanups.error}`);
+    for (const removal of lifecycle.hostRemovals)
+      failures.push(`${removal.actor} left Level.Actors without an accepted DestroyActor (${removal.probe})`);
+    if (!lifecycle.loads.some(entry => entry.key.includes('StaticLoadObject') && !entry.failed))
+      failures.push('no DynamicLoadObject resource loaded through the shared graph StaticLoadObject');
+    for (const entry of lifecycle.loads.filter(entry => entry.failed))
+      failures.push(`DynamicLoadObject ${entry.key} threw ${entry.failed}x: ${entry.error}`);
+    criteria.push({id: 4, name: 'lifecycle', failures});
+  }
+  // 5. Host substitutes.
+  const host = data.host ?? {natives: [], functions: []};
+  {
+    const failures = [];
+    for (const entry of host.natives) {
+      const rule = HOST_NATIVES[entry.index];
+      const where = `${entry.index} ${entry.name ?? '?'} x${entry.calls} (first ${entry.first}; ${entry.callers.slice(0, 2).join(', ')})`;
+      if (!rule || (rule.name && rule.name !== entry.name)) failures.push(`unclassified host native ${where}`);
+      else if (rule.substitute) failures.push(`host native ${where}: ${rule.substitute}`);
+    }
+    for (const entry of host.functions)
+      failures.push(`host function ${entry.key} x${entry.calls} (first ${entry.first}): ${HOST_FUNCTION_REASONS[entry.key] ?? 'unclassified replacement of the original body'}`);
+    for (const text of DECLARED_SUBSTITUTES) failures.push(`declared: ${text}`);
+    criteria.push({id: 5, name: 'substitutes', failures});
   }
 
   const nonPrimitive = reached.filter(entry => entry.index !== 0 || entry.name);
@@ -155,6 +231,18 @@ async function parent() {
     `${spawns.reduce((sum, entry) => sum + entry.rejected, 0)} rejected by original gates, ` +
     `${spawns.reduce((sum, entry) => sum + entry.failed, 0)} threw`);
   console.log(`    ${spawns.map(entry => `${entry.key}${entry.failed ? '!' : ''}`).sort().join(' ')}`);
+  console.log(`\nDestroyActor (general route): ${lifecycle.destroys.length} classes, ` +
+    `${lifecycle.destroys.reduce((sum, entry) => sum + entry.accepted, 0)} accepted, ` +
+    `${lifecycle.destroys.reduce((sum, entry) => sum + entry.refused, 0)} refused by original gates; ` +
+    `CleanupDestroyed ${lifecycle.cleanups.calls} passes, ${lifecycle.cleanups.compacted} slots compacted, ` +
+    `${lifecycle.cleanups.finalized} finalized (the 128-pending finalization is covered by validate-script-cleanup)`);
+  for (const entry of lifecycle.loads) console.log(`    DynamicLoadObject ${entry.key} -> ${entry.loaded} x${entry.calls}`);
+  const allowedHost = host.natives.filter(entry => HOST_NATIVES[entry.index]?.allowed || HOST_NATIVES[entry.index]?.recovered);
+  console.log(`\nHost-routed natives: ${host.natives.length} distinct; ${allowedHost.length} allowed or recovered on host state`);
+  for (const entry of allowedHost) {
+    const rule = HOST_NATIVES[entry.index];
+    console.log(`    ${String(entry.index).padStart(5)} ${entry.name ?? '?'}: ${rule.allowed ? `stage ${rule.allowed} — ${rule.reason}` : rule.recovered}`);
+  }
   console.log(`\nNatives reached through invokeNative: ${nonPrimitive.length} distinct, ${unsupported.length} unsupported` +
     ' (VM primitive-switch natives are not counted)');
   for (const entry of unsupported.sort((a, b) => b.probes - a.probes))

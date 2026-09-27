@@ -337,8 +337,9 @@ const WINDOW_RETAIL_COLORS = new Map([
   ['extension.scalewindow.thumbcolor', [0x183, 'native 1633 (script-window-host-natives.mjs)']],
   ['extension.scalewindow.tickcolor', [0x187, 'native 1634 (script-window-host-natives.mjs)']],
 ]);
-// Classes the C++ derivation does not cover: XTextParams has no recorded size.
-const UNDERIVED_WINDOWS = ['extension.editwindow', 'extension.largetextwindow'];
+// Every registered native window class derives (XTextParams is 24 bytes, so
+// LargeTextWindow ends at 0x1d0 and EditWindow at 0x28c).
+const UNDERIVED_WINDOWS = [];
 const windowDivergence = new Map(), underived = [];
 let windowMembers = 0;
 for (const classKey of Object.keys(NATIVE_WINDOW_CLASS_SIZES)) {

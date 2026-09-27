@@ -313,3 +313,32 @@ constant across resets. The gate keeps the same results. Its standalone
 peak fell from 2832 MiB to about 2.0–2.5 GiB, and in the 4-job sweep it
 completes at a 5.4 GiB runner footprint instead of being killed at the cap.
 It stays red for the other open items.
+
+## Batch 4: Fire, lifecycle and substitutes measured; LargeText/Edit windows
+
+Measured 2026-09-26: 94 probes, 3 boots, about 110 s, peak about 1.9 GiB.
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | PASS |
+| 2. tick | PASS, including reset |
+| 3. interactions | PASS. New Fire/AltFire probes (empty hand, combat knife, crowbar, multitool) run the original weapon bodies. The Goals screen's note editor runs the recovered LargeTextWindow/EditWindow family ([LargeText and Edit windows](script-large-text-window.md)). Tolerated: ClientTravel and SaveGame (Stage 6). |
+| 4. lifecycle | PASS. DestroyActor, CleanupDestroyed (now at the end of every Play tick, as in ULevel::Tick) and shared-graph DynamicLoadObject are measured with no failures or host removals. |
+| 5. substitutes | OPEN, 6 items (down from 11): the InfoLink display window still lives in the DataLink shell (QueryPreferredSize answered 0), the live DataLink host still replaces DeusExPlayer.StartDataLinkTransmission's dispatch and DataLinkPlay.StartConversation/Timer, the level tick admits actor categories, the player tick is Play's movement port, and FrobTarget comes from the host highlight trace. |
+
+Removed from criterion 5 in this batch:
+- SetCollision (262): every Training receiver runs the recovered
+  AActor::SetCollision; the host flag-write fallback is now a boundary.
+- SetPhysics (3970): DeusExDecorations run the recovered AActor::setPhysics
+  (0x103c95f0; Rolling runs FindBase like Walking) instead of only storing
+  Physics; a mover's equal-Physics call returns as the body does.
+- Door use: movers go through ParseRightClick/ParseLeftClick -> DoFrob ->
+  DeusExMover.Frob like every other target, and `use()` no longer turns a
+  thrown Frob into a message.
+- ConditionalBindMultiplayerKeys runs the original body; its SET InputExt
+  commands go through UObject::StaticExec's SET branch, GlobalSetProperty and
+  SaveConfig ([input console](script-input-console.md)).
+
+The LargeText/Edit bodies are checked against Extension.dll by
+`scripts/validate-text-layout-diff.mjs` (147 cases identical), which also
+found and fixed a MakeAreaDirty bug in the edit model.

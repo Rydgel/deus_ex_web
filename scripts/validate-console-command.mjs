@@ -181,6 +181,23 @@ for (const [command, body] of [['OPEN 00_Training', 'UGameEngine::Exec'], ['Move
   ['obj list', 'UObject::StaticExec'], ['stat fps', 'URender::Exec']])
   assert.throws(() => commands.consoleCommand(player, command),
     error => error instanceof UnsupportedConsoleCommandError && error.body === body, command);
+// DeusExRootWindow.InitWindow's ConditionalBindMultiplayerKeys ran at startup:
+// no key was bound to Talk/TeamTalk/BuySkills/KillerProfile/ShowScores and
+// T, Y, B, K, Equals were free in the installed User.ini, so its five
+// SET InputExt commands (UObject::StaticExec -> GlobalSetProperty) bound them,
+// and SaveConfig wrote the whole [Extension.InputExt] section.
+for (const [name, alias] of [['T', 'Talk'], ['Y', 'TeamTalk'], ['B', 'BuySkills'], ['K', 'KillerProfile'], ['Equals', 'ShowScores']]) {
+  assert.equal(commands.consoleCommand(player, `KEYBINDING ${name}`), alias, `ConditionalBindMultiplayerKeys bound ${name}`);
+  assert.equal(game.hud.host.input.defaults.bindings[game.hud.host.inputKeyNames.indexOf(`IK_${name}`)], alias);
+}
+const userIni = runtime.classLoader.graph.config.written.get('user.ini') ?? '';
+assert.match(userIni, /\[Extension\.InputExt\]\r\n/, 'SaveConfig wrote the InputExt section');
+assert.match(userIni, /\r\nT=Talk\r\n/);
+assert.match(userIni, /\r\nAliases\[0\]=\(Command="Button bFire \| Fire",Alias=Fire\)\r\n/, 'the Alias struct export round-trips');
+assert.equal(commands.consoleCommand(player, 'SET InputExt NoSuchKey 1'), 'Unrecognized property NoSuchKey');
+assert.equal(commands.consoleCommand(player, 'SET InputExt'), 'Unrecognized property ');
+assert.throws(() => commands.consoleCommand(player, 'SET DeusExPlayer bGodMode True'),
+  error => error instanceof UnsupportedConsoleCommandError && error.keyword === 'SET');
 // F1=ShowInventoryWindow opens the persona screen; Escape closes it.
 key('F1', true); key('F1', false); tick(5);
 assert.equal(classKey(topModal()), 'deusex.personascreeninventory');
@@ -197,5 +214,6 @@ key('Tab', false);
 console.log(`validate-console-command: ${Object.keys(trace).length} Exec bodies (${keywordCount} keywords) match their ` +
   `retail fall-through order; ${texts.struct.length} struct ImportText, ${texts.parseLine.length} ParseLine and ` +
   `${texts.parseToken.length} ParseToken cases match Core; in Play, Escape opens MenuMain through InputEvent, the ` +
-  'ShowMainMenu binding and FLUSH, draws it, and closes it; ConsoleCommand dispatch and keyword boundaries hold');
+  'ShowMainMenu binding and FLUSH, draws it, and closes it; ConsoleCommand dispatch and keyword boundaries hold; ' +
+  'ConditionalBindMultiplayerKeys SET the five free multiplayer keys and SaveConfig wrote [Extension.InputExt]');
 process.exit(0);

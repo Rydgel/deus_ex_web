@@ -41,7 +41,7 @@ const use=target=>{game.interaction.frobTarget=target;return game.use();};
 
 const closedHit=game.collision.sweep([4240,848,-144],[100,0,0],game.player.extent);
 assert.ok(pair.includes(closedHit?.actor),'closed pair blocks the player-sized route');
-assert.deepEqual(use(pair[0]).actors,pair.map(mover=>mover.name));
+assert.equal(use(pair[0]).ok,true,'right click runs ParseRightClick -> DoFrob -> DeusExMover.Frob');
 tick(2.1);
 assert.deepEqual(pair.map(mover=>mover.interpolation.key),[1,1]);
 assert.deepEqual(pair.map(mover=>mover.collider.offset),[[0,-56,0],[0,56,0]]);

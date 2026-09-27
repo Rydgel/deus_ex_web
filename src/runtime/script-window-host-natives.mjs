@@ -12,7 +12,7 @@ import {gcSetBaselineData} from './script-gc-set-baseline-data.mjs';
 import {gcEnableTranslucentText} from './script-gc-enable-translucent-text.mjs';
 import {convertScriptString,enableTextAsAcceleratorNative,setAcceleratorTextNative} from './script-window-text.mjs';
 import {addTimer,removeTimer} from './script-window-timers.mjs';
-import {setCursorPos} from './script-window-mouse.mjs';
+import {setCursorPos,askParentToShowArea} from './script-window-mouse.mjs';
 import {pressButtonNative} from './script-window-press-button.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
 import {setTextColorsNative} from './script-window-set-text-colors.mjs';
@@ -44,6 +44,12 @@ export function dispatchWindowHostNative(W, call) {
       W.setPtr(win,0xf0,arg(0,null));W.setPtr(win,0xf4,arg(1,null));
       W.setF32(win,0xf8,arg(2,-1));W.setF32(win,0xfc,arg(3,-1));
       const color=arg(4,null);W.setU32(win,0x100,color?packed(color):0x00ffffff);break;
+    }
+    case 1468: { // execAskParentToShowArea 0x10053350: float defaults 0; a zero (fcomp C3) width or height is the window's.
+      const x=arg(0,0),y=arg(1,0);let w=arg(2,0),h=arg(3,0);
+      if(T.c3(w,0))w=W.f32(win,0x80);
+      if(T.c3(h,0))h=W.f32(win,0x84);
+      askParentToShowArea(W,win,x,y,w,h);break;
     }
     case 1469: value=convertScriptString(arg(0,''));break; // 10050710
     case 1482: value='\n';break; // CarriageReturn exec 0x10053e70 assigns L"\n" (0x10098e58)

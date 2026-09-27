@@ -66,6 +66,41 @@ export const x87load = v => {
   if (e === 0xff) return m ? { nan: b } : { neg, inf: true };
   return { neg, sig: BigInt(e ? m | 0x800000 : m), exp: e ? e - 150 : -149 };
 };
+// FLD m64 / a returned double: the binary64 value as an exact 80-bit value.
+const f64io = new DataView(new ArrayBuffer(8));
+export const x87double = v => {
+  f64io.setFloat64(0, v, true);
+  const hi = f64io.getUint32(4, true), lo = f64io.getUint32(0, true);
+  const neg = hi >>> 31, e = (hi >>> 20) & 0x7ff, m = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+  if (e === 0x7ff) return m ? { nan: ((neg << 31) | 0x7fc00000 | Number(m >> 29n)) >>> 0 } : { neg, inf: true };
+  return { neg, sig: e ? m | (1n << 52n) : m, exp: e ? e - 1075 : -1074 };
+};
+// FCOM/FCOMP condition codes of st0 against an operand: 'lt' sets C0, 'eq'
+// C3, 'un' all three (NaN), 'gt' none. The exact difference keeps its sign
+// through the 64-bit rounding, so the sign of x87add decides.
+export const x87cmp = (a, b) => {
+  if (a.nan !== undefined || b.nan !== undefined) return 'un';
+  if (a.inf || b.inf) {
+    if (a.inf && b.inf && a.neg === b.neg) return 'eq';
+    if (a.inf) return a.neg ? 'lt' : 'gt';
+    return b.neg ? 'gt' : 'lt';
+  }
+  const d = x87add(a, x87neg(b));
+  return d.sig === 0n ? 'eq' : d.neg ? 'lt' : 'gt';
+};
+// FISTP with the default round-to-nearest-even control word: the int32
+// store, or the integer indefinite 0x80000000 outside int32 range.
+export const x87fistp = v => {
+  if (v.nan !== undefined || v.inf) return -0x80000000;
+  let n;
+  if (v.exp >= 0) n = v.sig << BigInt(v.exp);
+  else {
+    const sh = BigInt(-v.exp), q = v.sig >> sh, rem = v.sig - (q << sh), half = 1n << (sh - 1n);
+    n = rem > half || (rem === half && (q & 1n)) ? q + 1n : q;
+  }
+  if (v.neg) n = -n;
+  return n > 0x7fffffffn || n < -0x80000000n ? -0x80000000 : Number(n);
+};
 // NaN selection: the operand with the larger significand wins and stores
 // quieted; a lone NaN operand quiets the same way.  On equal significands
 // the positive payload propagates — pinned by the subeq/mulv/dot tie cases

@@ -30,7 +30,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const PROBE_GROUPS = Object.freeze(['idle', 'frob', 'bump', 'touch', 'exec', 'sequence']);
+export const PROBE_GROUPS = Object.freeze(['idle', 'frob', 'bump', 'touch', 'exec', 'fire', 'sequence']);
 
 /** Run `script --child ...args` in its own process and SIGKILL it past capMiB
  * RSS (the fire-path OOM note: heap caps alone do not bound native growth).
@@ -138,6 +138,79 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     } catch (error) { entry.failed++; throw error; }
   };
 
+  // Criterion 4: every ULevel::DestroyActor request by class and outcome, the
+  // ULevel::CleanupDestroyed passes and what they finalized, and every
+  // DynamicLoadObject by route. Play's instance destroyActor wraps the
+  // prototype method it binds at boot, so this sees Play's requests too.
+  const destroys = new Map(), cleanups = {calls: 0, compacted: 0, finalized: 0, failed: 0}, loads = new Map();
+  const destroyedInProbe = new Set(), hostRemovals = [];
+  const destroyActor = proto.destroyActor;
+  proto.destroyActor = function (receiver, netForce) {
+    const key = classKey(receiver) ?? '?';
+    const entry = destroys.get(key) ?? {key, accepted: 0, refused: 0, failed: 0, first: probe};
+    destroys.set(key, entry);
+    try {
+      const accepted = destroyActor.call(this, receiver, netForce);
+      if (accepted) { entry.accepted++; destroyedInProbe.add(receiver); } else entry.refused++;
+      return accepted;
+    } catch (error) { entry.failed++; entry.error ??= String(error.message).split('\n')[0]; throw error; }
+  };
+  const cleanupDestroyed = proto.cleanupDestroyed;
+  proto.cleanupDestroyed = function (world, force) {
+    const chain = () => { let n = 0; for (let a = world.pendingDeleted; a; a = this.readNamed(a, 'Deleted')) n++; return n; };
+    const length = world.actors.length, pending = chain();
+    cleanups.calls++;
+    try {
+      const result = cleanupDestroyed.call(this, world, force);
+      cleanups.compacted += length - world.actors.length; cleanups.finalized += pending - chain();
+      return result;
+    } catch (error) { cleanups.failed++; cleanups.error ??= String(error.message).split('\n')[0]; throw error; }
+  };
+  const loadPrepared = proto.loadPreparedDynamicObject;
+  proto.loadPreparedDynamicObject = function (request) {
+    const packageName = String(request.name).split('.')[0].toLowerCase();
+    const route = this.dynamicLoadGraph?.ownsPackage(packageName) ? 'prepared dynamic graph' : 'shared graph StaticLoadObject';
+    const key = `${request.name} (${route})`;
+    const entry = loads.get(key) ?? {key, calls: 0, failed: 0, loaded: null, first: probe};
+    loads.set(key, entry); entry.calls++;
+    try {
+      const object = loadPrepared.call(this, request);
+      entry.loaded ??= object === null ? 'None' : String(object?.kind ?? classKey(object) ?? typeof object);
+      return object;
+    } catch (error) { entry.failed++; entry.error ??= String(error.message).split('\n')[0]; throw error; }
+  };
+
+  // Criterion 5: every call that ends in a host callback rather than a
+  // runtime body. `runtime.native` is assigned plainly (the constructor, then
+  // scoped hosts that wrap the previous callback), so a prototype accessor
+  // sees each layer; one call object is counted once. Scripted functions a
+  // host replaces through boundaryFunctions are counted in callFunction.
+  const hostNatives = new Map(), hostFunctions = new Map(), hostCalls = new WeakSet();
+  const HOST = Symbol('probe host native'), WRAPPED = Symbol('probe wrapped');
+  const countHost = (map, key, fields) => {
+    const entry = map.get(key) ?? {...fields, calls: 0, callers: new Map(), probes: new Set()};
+    map.set(key, entry); entry.calls++; entry.probes.add(probe);
+    const caller = stack.at(-1) ?? '?';
+    entry.callers.set(caller, (entry.callers.get(caller) ?? 0) + 1);
+  };
+  Object.defineProperty(proto, 'native', {configurable: true,
+    get() { return this[HOST]; },
+    set(fn) {
+      this[HOST] = typeof fn !== 'function' || fn[WRAPPED] ? fn : Object.assign(function (call) {
+        if (call && typeof call === 'object' && !hostCalls.has(call)) {
+          hostCalls.add(call);
+          const name = call.record?.key ?? names.get(call.index) ?? null;
+          countHost(hostNatives, `${call.index}|${name}`, {index: call.index, name});
+        }
+        return fn.call(this, call);
+      }, {[WRAPPED]: true});
+    }});
+  const callFunction = proto.callFunction;
+  proto.callFunction = function (record, ...rest) {
+    if (record?.key && this.boundaryFunctions?.has(record.key)) countHost(hostFunctions, record.key, {key: record.key});
+    return callFunction.call(this, record, ...rest);
+  };
+
   // Swallowed failures: Play's startup/tick loops catch into npcFailures and
   // skip the actor afterwards. `known` holds the entries already recorded.
   let known = new Map();
@@ -199,15 +272,22 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     const started = performance.now();
     probe = `${group}:${label}`;
     const entry = {group, label}, recordedFrom = records.length;
+    // Criterion 4: an actor that leaves Level.Actors during the probe without
+    // an accepted DestroyActor was removed by a host path.
+    const liveLevel = runtime.levelFor(game.player.collisionActor), before = new Set(liveLevel.actors.filter(Boolean));
+    destroyedInProbe.clear();
     try {
-      body(entry); tick(frames);
+      await body(entry); tick(frames);
       closeScreens(entry);
       if (topModal()) entry.stillOpen = classKey(topModal()) ?? '?';
     } catch (error) { recordError(error); entry.error = String(error.message).split('\n')[0]; }
+    const remaining = new Set(runtime.levelFor(game.player.collisionActor).actors);
+    for (const actor of before)
+      if (!remaining.has(actor) && !destroyedInProbe.has(actor)) hostRemovals.push({probe, actor: actorLabel(actor)});
     const swallowed = collectSwallowed(probe);
     if (swallowed) entry.swallowed = swallowed;
-    // game.use() turns some failures into a message; the recorded throw still
-    // leaves partial state (a half-lifted decoration), so it dirties the game.
+    // A recorded throw leaves partial state (a half-lifted decoration), so it
+    // dirties the game.
     entry.error ??= records.slice(recordedFrom).find(record => record.kind === 'error')?.message;
     if (entry.error || entry.stillOpen) { probe = 'reboot'; await boot(); entry.rebooted = true; }
     else {
@@ -284,6 +364,42 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
   const exec = command => game.hud.scoped(() => {
     if (!runtime.scriptConsoleExec(player, command)) throw new Error(`ScriptConsoleExec did not consume ${command}`);
   });
+  // Fire through Play's public binding (LeftMouse/Enter = ParseLeftClick|Fire,
+  // Fire = Button bFire | Fire) under real ticks only: the latent NormalFire
+  // body must suspend in the tick scheduler (the fire-path OOM note). Each
+  // weapon or tool class placed in the map is walked to, frobbed into the
+  // inventory, selected through the original PutInHand, fired twice (one tap,
+  // one held press that Finish re-swings on) and AltFire'd. The installed
+  // User.ini binds no AltFire key, so AltFire is the console exec a player
+  // types. The empty-hand press is its own probe.
+  if (groups.includes('fire')) {
+    const place = item => {
+      const at = runtime.readNamed(item, 'Location');
+      game.collision.queries.changeActor(player, () => { game.player.position = [at[0] - 40, at[1], at[2]]; game.player.velocity = [0, 0, 0]; });
+    };
+    const fire = hold => { game.pressFire(); tick(hold); game.releaseFire(); tick(90); };
+    const altFire = () => exec('AltFire');
+    plan.push({group: 'fire', label: 'empty hand', body: () => { fire(5); fire(60); altFire(); }});
+    // Items lying in the map; the player's own key ring is already carried.
+    const heldTools = actors.filter(actor => ['deusex.deusexweapon', 'deusex.skilledtool'].some(key => lineage(actor).includes(key)) &&
+      !runtime.readNamed(actor, 'Owner'));
+    for (const item of perClass(heldTools)) {
+      const name = item.name;
+      plan.push({group: 'fire', label: `${classKey(item)}:${name}`, body: async entry => {
+        const target = actorNamed(name);
+        place(target); game.interaction.frobTarget = target;
+        if (!game.use().ok) throw new Error(`fire probe could not pick up ${name}`);
+        tick(10);
+        // The digit key User.ini binds to ActivateBelt at the item's belt slot.
+        const slot = runtime.readNamed(target, 'beltPos');
+        await game.activateBelt(slot);
+        tick(60);
+        if (runtime.readNamed(player, 'inHand') !== target) throw new Error(`fire probe: ActivateBelt ${slot} did not select ${name}`);
+        entry.inHand = classKey(runtime.readNamed(player, 'inHand'));
+        fire(5); fire(60); altFire(); tick(60);
+      }, frames: 60});
+    }
+  }
   if (groups.includes('sequence')) {
     const cube = actors.find(actor => classKey(actor) === 'deusex.datacube');
     if (cube) {
@@ -302,5 +418,9 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     meta: {continue: continueMode, groups, boots},
     probes, records, startup, spawns: [...spawns.values()],
     reached: [...reached.values()].map(({probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value})),
+    lifecycle: {destroys: [...destroys.values()], cleanups, loads: [...loads.values()], hostRemovals},
+    host: Object.fromEntries([['natives', hostNatives], ['functions', hostFunctions]].map(([kind, map]) => [kind,
+      [...map.values()].map(({callers, probes: seenIn, ...entry}) => ({...entry, probes: seenIn.size, first: seenIn.values().next().value,
+        callers: [...callers].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([caller, n]) => `${caller} x${n}`)}))])),
   };
 }

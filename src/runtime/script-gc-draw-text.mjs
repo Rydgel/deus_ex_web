@@ -220,7 +220,7 @@ function glyphCommand(L, canvas, sceneNode, record, wx, wy, w, h, u, v, color) {
  * ({v} cells — penX advances by the raw f32(uSize), glyphH takes the raw
  * f32(vSize), both written before any clipping).
  */
-function drawGlyph(L, font, ch, state, x, y, penX, glyphH) {
+export function drawGlyph(L, font, ch, state, x, y, penX, glyphH) {
   const base = L.base;
   const canvas = L.read(base + GC.canvas, 'u32');
   const sceneNode = L.read(canvas + TEXT_DRAW.canvasSceneNode, 'u32');

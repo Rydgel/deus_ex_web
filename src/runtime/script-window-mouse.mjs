@@ -222,7 +222,6 @@ export function mouseFocusVirtuals(W, {familyOf, processScript, changeButtonAppe
   return {
     queryPointInWindow: () => 1,
     mouseMoved(win, x, y) {
-      if (familyOf(win) === 'extension.editwindow') boundary('XEditWindow::MouseMoved 0x100216b0 is not recovered');
       script(win, 'MouseMoved', [x, y]);
       if (!button(win) || !(W.u8(win, M.buttonFlags) & 2)) return;
       const inside = (W.u8(win, M.flags) & 1) && isPointInWindow(W, win, x, y);
@@ -246,7 +245,6 @@ export function mouseFocusVirtuals(W, {familyOf, processScript, changeButtonAppe
     // newColor back. It seeds shadowTexture with the caller's pointer value and
     // never copies it back, so a script's shadow is discarded (passed as None here).
     cursorRequested(win, source, x, y, hotX, hotY, color) {
-      if (familyOf(win) === 'extension.editwindow') boundary('XEditWindow::CursorRequested 0x10020940 is not recovered');
       const args = [source, x, y, hotX, hotY, unpackColor(color), null];
       const texture = processScript(win, 'CursorRequested', args, {result: null}) ?? null;
       return {texture, hotX: f(args[3]), hotY: f(args[4]), color: packColor(args[5])};
@@ -293,6 +291,8 @@ export function queryCursor(W, win, x, y) {
     let hotX = -1, hotY = -1, color = 0x00ffffff, shadow = null;
     let cursor = null;
     const requested = W.v.cursorRequested(w, win, x, y, hotX, hotY, color);
+    // XEditWindow::CursorRequested also writes the shadow out parameter.
+    if (requested.shadow !== undefined) shadow = requested.shadow;
     if (requested.texture) ({texture: cursor, hotX, hotY, color} = requested);
     else {
       cursor = W.ptr(w, 0xf0);

@@ -61,12 +61,11 @@ assert.equal(ref(player, 'CarriedDecoration'), null, 'DropDecoration released th
 assert.equal(ref(plant, 'Base'), null, 'the dropped plant leaves JC');
 assert.equal(plant.flags & 0xd, 0xd, 'the dropped plant collides and blocks again');
 
-// The mover Frob path is unchanged: a mover target still routes to doors.use().
+// A mover target takes the same ParseRightClick -> DoFrob -> DeusExMover.Frob path.
 const mover = level.actors.find(a => a?.lineage?.includes('engine.mover') && game.collision.movers.includes(a));
 if (mover) {
   game.interaction.frobTarget = mover;
-  const result = game.use();
-  assert.ok(result && typeof result.message === 'string', 'a mover frob still returns a door result, not the Frob path');
+  assert.deepEqual(game.use(), { ok: true, message: '' }, 'a mover frob runs ParseRightClick');
 }
 
 // LightSwitch.Frob runs its full override in the live host (M2 step 2, roadmap

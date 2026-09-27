@@ -46,8 +46,7 @@ for(let index=1;index<samples.length;index++)
 assert.ok(game.player.position[0]-game.player.start[0]>800,'forward input reaches the spawn door');
 assert.equal(game.interaction.frobTarget?.name,'DeusExMover16');
 const opened=game.use();
-assert.equal(opened.ok,true);
-assert.deepEqual(opened.actors,['DeusExMover16','DeusExMover17']);
+assert.equal(opened.ok,true,'right click runs ParseRightClick -> DoFrob -> DeusExMover.Frob');
 for(let index=0;index<150;index++)tick(idle);
 for(const name of ['DeusExMover16','DeusExMover17'])
   assert.equal(game.collision.movers.find(mover=>mover.name===name).interpolation.key,1,`${name} finishes opening`);
@@ -96,15 +95,15 @@ const doorPitch=Math.atan2(doorLocation[2]-(stand[2]+game.player.baseEyeHeight),
 for(let index=0;index<12;index++)tick(move(doorYaw,0,doorPitch));
 assert.equal(game.interaction.frobTarget,trainer);
 assert.equal(get(trainer,'bLocked'),true);
-const unlock=game.useHeld();
-assert.match(unlock.message,/unlocked/i);
+// Enter/LeftMouse is `ParseLeftClick|Fire`: ParseLeftClick's DoFrob(Self,
+// inHand) branch sends the ring to DeusExMover.Frob.
+game.pressFire();game.releaseFire();
 assert.equal(get(trainer,'bLocked'),false);
 assert.equal(get(other,'bLocked'),false,'the original tag fanout unlocks both panels');
 assert.equal(get(pawn,'flagBase').getBool('MunitionsTrooperReady'),false);
 for(let index=0;index<8;index++)tick(move(doorYaw,0,doorPitch));
 const opening=game.use();
-assert.equal(opening.ok,true);
-assert.deepEqual(opening.actors,['DeusExMover47','DeusExMover48']);
+assert.equal(opening.ok,true,'right click runs ParseRightClick -> DoFrob -> DeusExMover.Frob');
 for(let index=0;index<150;index++)tick(idle);
 for(const name of ['DeusExMover47','DeusExMover48'])
   assert.equal(game.collision.movers.find(mover=>mover.name===name).interpolation.key,1);

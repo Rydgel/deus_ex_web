@@ -70,6 +70,7 @@ import { RANDOM_LABEL_NATIVE, decodeRandomLabelLabels, getLabelCount, getLabel, 
 import { execScriptSpawn, spawnActor } from './script-spawn.mjs';
 import { createFlagBase } from './script-triggers.mjs';
 import { addPawn, removePawn } from './pawn-list.mjs';
+import { importText } from './config-text.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
@@ -1799,6 +1800,12 @@ export class ScriptRuntime {
           args[index]=value;
         }
         while(text[at]==='-'||/[0-9]/.test(text[at]??''))at++;
+      }else if(field.metadata.type==='float'&&(field.metadata.arrayDim??1)<=1){
+        // UFloatProperty::ImportText 0x10166940 (config-text.mjs): appAtof,
+        // then skip to ',' ')' CR LF; never NULL, so an omitted optional
+        // float (the console's bare "AltFire") imports 0.
+        const parsed=importText('float',rest);
+        args[index]=parsed.value;at=text.length-parsed.rest.length;
       }else if(field.metadata.type==='object'&&rest===''){
         // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
         // token, which is not "None", and StaticFindObject finds nothing, so
@@ -2604,6 +2611,8 @@ export class ScriptRuntime {
           (request=>askParentForReconfigureNative(request.object,this.windowLifecycle?.reconfiguration)),
       };
       const converted=convertScriptString(value);
+      // A LargeTextWindow/EditWindow receiver overrides the virtual (vtable +0x11c/+0x120).
+      if(this.windowLifecycle?.textVirtual?.(call.receiver,call.index===1550?'setText':'appendText',converted))return undefined;
       if(call.index===1551){appendTextNative(call.receiver,converted,services);return undefined;}
       return setTextNative(call.receiver,converted,services);
     }
@@ -2835,14 +2844,13 @@ export class ScriptRuntime {
     // skipped optional arguments from the current +0x1dc bits, and
     // SetPhysics routes its Walking/None base transitions through the
     // recovered FindBase/SetSupportBase chain against the live level hash.
-    // Map-attached actors run the same SetBase/SetPhysics bodies on their
-    // bound host props; SetCollision/SetCollisionSize keep the host paths.
-    // Mover receivers and DeusExDecoration-script callers keep theirs.
+    // Map-attached actors (DeusExDecorations included) run the same
+    // SetBase/SetPhysics bodies on their bound host props;
+    // SetCollision/SetCollisionSize keep the host paths. Movers keep theirs.
     let collisionReceiver=this.collisionViewActors.has(call.receiver);
     if(!collisionReceiver&&(call.index===298||call.index===3970)){
-      const scriptPath=lower(String(call.script?.entry?.path??call.record?.entry?.path??''));
       const attached=this.instances.get(call.receiver);
-      collisionReceiver=attached&&!scriptPath.startsWith('deusexdecoration.')
+      collisionReceiver=attached
         &&(()=>{
           let actor=false;
           for(let c=attached.cls;c;c=c.base){

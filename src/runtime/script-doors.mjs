@@ -715,17 +715,13 @@ export async function createScriptDoors({
         refValue(call.evaluateArgument(1)),{level});
     }
     if (call.index === 3970) {
-      const value = refValue(call.evaluateArgument(0));
-      // DeusExDecoration.Bump calls SetPhysics(PHYS_Rolling) when a settled
-      // decoration is pushed. The recovered native (0x103c95f0) writes Physics
-      // and only touches Base/velocity for the Falling/Walking/None transitions;
-      // Rolling changes nothing else. The separately validated physRolling phase
-      // (src/runtime/rolling.mjs) then advances the decoration.
-      if (decoration) { call.receiver.physics = Number(value) & 0xff; return undefined; }
-      if ((Number(value) | 0) !== 9) throw new Error(`Unsupported mover SetPhysics value: ${value}`);
-      const current = Number(call.receiver.physics ?? call.receiver.values?.Physics ?? 0) | 0;
-      if (current !== 9) throw new Error(`Mover SetPhysics requires already-moving-brush physics: ${current}`);
-      call.receiver.physics = 9;
+      // Every attached non-mover actor runs the recovered AActor::setPhysics
+      // 0x103c95f0 in script-runtime.mjs. A mover (InterpolateTo) only asks for
+      // PHYS_MovingBrush while already moving-brush, where the body returns at
+      // its equal-Physics test (0x103c9620); anything else is unrecovered here.
+      const value = Number(refValue(call.evaluateArgument(0))) & 0xff;
+      const current = Number(call.receiver.physics ?? call.receiver.values?.Physics ?? 0) & 0xff;
+      if (value !== current) throw new Error(`SetPhysics(${value}) on ${runtime.instance(call.receiver).cls.record.key} with Physics ${current} is not routed to the recovered body`);
       return undefined;
     }
     if (call.index === 724) {
@@ -753,20 +749,10 @@ export async function createScriptDoors({
       return undefined;
     }
     if (call.index === 262) {
-      if(call.argumentCount>3)throw new Error('SetCollision accepts at most three boolean arguments');
-      const collide=call.argumentCount>0?Boolean(refValue(call.evaluateArgument(0))):false;
-      const blockActors=call.argumentCount>1?Boolean(refValue(call.evaluateArgument(1))):false;
-      const blockPlayers=call.argumentCount>2?Boolean(refValue(call.evaluateArgument(2))):false;
-      if(call.receiver.collideActors&&!collide&&queries)queries.removeActor(call.receiver);
-      runtime.writeNamed(call.receiver,'bCollideActors',collide);
-      runtime.writeNamed(call.receiver,'bBlockActors',blockActors);
-      runtime.writeNamed(call.receiver,'bBlockPlayers',blockPlayers);
-      call.receiver.collideActors=collide;call.receiver.blockActors=blockActors;
-      call.receiver.blockPlayers=blockPlayers;call.receiver.blocking=blockPlayers;
-      call.receiver.collisionBits=((call.receiver.collisionBits??0)&~13)|
-        (collide?1:0)|(blockActors?4:0)|(blockPlayers?8:0);
-      call.receiver.flags=((call.receiver.flags??0)&~13)|call.receiver.collisionBits;
-      return true;
+      // Map actors with the native +0x1dc word run AActor::SetCollision above
+      // and spawned actors their collision view in script-runtime.mjs; no
+      // Training receiver reaches a third representation.
+      throw new Error(`SetCollision on ${runtime.instance(call.receiver).cls.record.key} has no recovered collision representation`);
     }
     // Extension window-layout natives (Window.ConfigureChild 1461,
     // AskParentForReconfigure 1460, QueryPreferredSize/Width/Height
@@ -1612,6 +1598,12 @@ export async function createScriptDoors({
   function updateDisplay(record) {
     const mover = record.mover, state = mover.interpolation;
     const scriptState = runtime.instance(record.mover).state;
+    // The viewer's open/close label follows whatever moved the door (Frob
+    // through ParseRightClick/ParseLeftClick, a Trigger, the Tag fanout).
+    const signature = frobSignature(record);
+    if (record.displaySignature !== undefined && record.displaySignature !== signature)
+      mover.target = stateLabelForTarget(mover) === 'open' ? 1 : 0;
+    record.displaySignature = signature;
     mover.active = Boolean(state.interpolating || scriptState.latent ||
       scriptState.execution && scriptState.execution.cursor !== null);
     mover.alpha = state.interpolating ? state.key === 1 ? f(state.alpha) : f(1 - state.alpha) : state.key;
@@ -1852,6 +1844,8 @@ export async function createScriptDoors({
         if (alwaysTick) npcFailures.set(actor, 'Paused bAlwaysTick Actor.Tick is not admitted in Play');
       }
       npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
+      // The paused branch falls through to the same ULevel::Tick tail.
+      runtime.cleanupDestroyed(level, false);
       return records.length;
     }
     // ULevel::Tick 0x103a55c1-0x103a5698: with the first viewport's Actor a
@@ -2004,6 +1998,11 @@ export async function createScriptDoors({
       }
     }
     npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
+    // ULevel::Tick's tail (level-tick.mjs): after TickTag flips and the tick
+    // ends, ULevel::CleanupDestroyed(0) 0x103965a0 compacts Level.Actors past
+    // FirstDynamicActor and, once 128 deletions are pending, clears references
+    // to them and releases them (script-cleanup.mjs).
+    runtime.cleanupDestroyed(level, false);
     const lightingChanges = lightTicks.map(result => result.lightingChange).filter(Boolean);
     if (onLightingChanged && lightingChanges.length) onLightingChanged(lightingChanges);
     return records.length;
@@ -2025,6 +2024,12 @@ export async function createScriptDoors({
   // docs/script-destroy.md, docs/script-world-destroy.md.
   runtime.actorLifecycle={...runtime.actorLifecycle,...destroyServices};
   level.collisionHash=destroyServices.collisionHash;
+  // ULevel+0x110: the LoadMap partition stores it as iFirstNetActor; Level.Tick,
+  // CleanupDestroyed and CompactActors read it as FirstDynamicActor. Play never
+  // runs an editor level.
+  Object.defineProperty(level,'firstDynamicActor',{configurable:true,enumerable:true,
+    get:()=>level.iFirstNetActor,set:value=>{level.iFirstNetActor=value;}});
+  level.editor=false;
   // SpawnActor's bTicked write reads the original Level+0x10c tick parity —
   // the npcTickLevel tag the recovered actor-tick scheduler owns.
   Object.defineProperty(level,'tickParity',{

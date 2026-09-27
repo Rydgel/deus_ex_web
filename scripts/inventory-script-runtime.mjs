@@ -7,6 +7,8 @@ import {decodeScript} from '../src/unreal/bytecode.mjs';
 import {primitiveNativeIndices} from '../src/runtime/script-vm.mjs';
 import {TRIGGER_NATIVE_INDICES} from '../src/runtime/script-triggers.mjs';
 import {RANDOM_LABEL_NATIVE} from '../src/runtime/script-conversation-random-label.mjs';
+import {DEUSEX_VERSION_NATIVE} from '../src/runtime/script-deusex-version.mjs';
+import {TEXT_PARSER_NATIVE} from '../src/runtime/script-text-parser.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 // Inspect the engine/game/UI script packages, without loading unrelated audio
@@ -153,7 +155,13 @@ const bindings={
 // messages and module metadata cannot credit an index. A translated module
 // (`nativeIndex: N`) that only its validator imports has no dispatch path; it is
 // reported under translatedWithoutDispatch and not counted.
-const nativeConstants={TRIGGER_NATIVE_INDICES,RANDOM_LABEL_NATIVE};
+const nativeConstants={TRIGGER_NATIVE_INDICES,RANDOM_LABEL_NATIVE,DEUSEX_VERSION_NATIVE,TEXT_PARSER_NATIVE};
+const nativeConstant=dotted=>{
+  const [head,...rest]=dotted.split('.');
+  const index=rest.reduce((value,key)=>value?.[key],nativeConstants[head]);
+  if(!Number.isInteger(index))throw new Error(`Unresolved native index constant ${dotted}`);
+  return index;
+};
 const dispatchSites=[
   {site:'ScriptRuntime.invokeNative',file:'src/runtime/script-runtime.mjs',start:/\n {2}invokeNative\(call\) \{/},
   {site:'ScriptRuntime latent poll',file:'src/runtime/script-runtime.mjs',start:/pollLatent:call=>\{/},
@@ -212,15 +220,13 @@ function routedIndices(body){
   // A branch that only throws for its index refuses the native; it is no route.
   const code=body.replace(/if\s*\(\s*(?:call\.)?index\s*===\s*(?:0x[0-9a-fA-F]+|\d+)\s*\)\s*throw\b/g,'');
   for(const match of code.matchAll(/\bindex\s*[!=]==\s*(0x[0-9a-fA-F]+|\d+)\b/g))found.add(Number(match[1]));
-  for(const match of code.matchAll(/\bindex\s*[!=]==\s*([A-Z_]+)\.(\w+)/g)){
-    const index=nativeConstants[match[1]]?.[match[2]];
-    if(!Number.isInteger(index))throw new Error(`Unresolved native index constant ${match[1]}.${match[2]}`);
-    found.add(index);
-  }
+  for(const match of code.matchAll(/\bindex\s*[!=]==\s*([A-Z_]+(?:\.\w+)+)/g))found.add(nativeConstant(match[1]));
   for(const match of code.matchAll(/\[([\d,\s]+)\]\.includes\(\s*(?:call\.)?index\s*\)/g))
     for(const item of match[1].split(','))if(item.trim())found.add(Number(item));
-  for(const match of code.matchAll(/\bindex\s*>=\s*(\d+)\s*&&\s*(?:call\.)?index\s*<=\s*(\d+)/g))
-    for(let index=Number(match[1]);index<=Number(match[2]);index++)found.add(index);
+  for(const match of code.matchAll(/\bindex\s*>=\s*(\d+|[A-Z_]+(?:\.\w+)+)\s*&&\s*(?:call\.)?index\s*<=\s*(\d+|[A-Z_]+(?:\.\w+)+)/g)){
+    const bound=text=>/^\d+$/.test(text)?Number(text):nativeConstant(text);
+    for(let index=bound(match[1]);index<=bound(match[2]);index++)found.add(index);
+  }
   for(const match of code.matchAll(/\bcase\s+(\d+)\s*:/g))found.add(Number(match[1]));
   for(const match of code.matchAll(/\[\s*(\d+)\s*,\s*gc\w+\s*\]/g))found.add(Number(match[1]));
   return found;

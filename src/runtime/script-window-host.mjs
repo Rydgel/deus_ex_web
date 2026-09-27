@@ -76,6 +76,12 @@ import * as Input from './script-window-input.mjs';
 import * as Mouse from './script-window-mouse.mjs';
 import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
 import {activateButtonNative} from './script-window-activate-button.mjs';
+import * as LT from './script-window-large-text.mjs';
+import * as ED from './script-window-edit.mjs';
+import {editMemory, cleanUpUndo, setTextVirtual, textChangedRange} from './script-edit-model.mjs';
+import {dispatchEditWindowNative} from './script-window-edit-natives.mjs';
+import {isKeyDownNative} from './script-window-is-key-down.mjs';
+import {enableTextAsAcceleratorNative} from './script-window-text.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -106,7 +112,8 @@ const FAMILIES = Object.freeze({
   'extension.scalemanagerwindow': {vtable:S.CHILD_VTABLES.manager},
   'extension.clipwindow': {vtable:S.CHILD_VTABLES.clip},
   'extension.scrollareawindow': {vtable:A.SCROLL_AREA.vtable},
-  'extension.editwindow': {vtable: 0x1005b50c},
+  'extension.largetextwindow': {vtable: LT.LARGE_TEXT.vtable},
+  'extension.editwindow': {vtable: ED.EDIT.vtable},
 });
 
 export class WindowHostBoundaryError extends Error {
@@ -128,7 +135,7 @@ export function nativeWindowFamily(cls) {
 /** Classes whose every function/state the HUD tree may reach. */
 const HUD_CLASS_PATHS = Object.freeze([
   ['Extension', ['scalewindow','scalemanagerwindow','clipwindow','scrollareawindow','window', 'textwindow', 'buttonwindow', 'togglewindow', 'tilewindow', 'tabgroupwindow',
-    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'gc', 'extensionobject']],
+    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'largetextwindow', 'editwindow', 'gc', 'extensionobject']],
   ['DeusEx', ['deusexrootwindow', 'deusexhud', 'hudbasewindow', 'hudsharedborderwindow', 'hudammodisplay',
     'hudhitdisplay', 'crosshair', 'hudobjectbelt', 'hudobjectslot', 'hudactiveitemsdisplay',
     'hudactiveitemsborderbase', 'hudactiveaugsborder', 'hudactiveitemsborder', 'hudactiveitembase',
@@ -516,8 +523,18 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.rootwindow': return F.constructRootWindow(W, win);
       case 'extension.computerwindow': return constructComputerWindowNative(win, {...rawServices,
         constructWindow: ({object}) => constructWindowNative(object, {...rawServices, coreObjectConstructor: () => {}})});
+      case 'extension.largetextwindow': return LT.constructLargeTextWindow(W, win, constructWindowPart);
+      case 'extension.editwindow': return ED.constructEditWindow(W, win, constructWindowPart);
       default: return boundary(`Window family ${family} has no recovered constructor`);
     }
+  }
+  // The XWindow part both text-family constructors inline (0x10012a50) or
+  // call (XWindow::XWindow 0x10003130): UObject, the XExtensionObject vtable,
+  // the clip rectangle and the XWindow vtable. FString(ENoInit) stores nothing.
+  function constructWindowPart(win) {
+    W.uobjectConstructor(win); W.setU32(win, 0, F.VTABLES.extensionobject);
+    for (let o = 0xd4; o <= 0xe8; o += 4) W.setU32(win, o, 0);
+    W.setU32(win, 0, F.VTABLES.window);
   }
   // XWindow::Init XGC allocation leaves (operator new + XGC::XGC).
   function allocateGc(outer) {
@@ -561,6 +578,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.textlogwindow': return F.initTextLogWindow(W, win, parent);
       case 'extension.modalwindow': return F.initModalWindow(W, win, parent);
       case 'extension.rootwindow': return boundary('XRootWindow::Init(XWindow*) 0x10005ca0: "Root cannot have a parent window!"');
+      case 'extension.largetextwindow': return initLargeText(win, parent);
+      case 'extension.editwindow': return ED.initEditWindow(W, win, parent, editEnv);
       default: return boundary(`Window family ${familyOf(win)} has no recovered Init`);
     }
   }
@@ -623,6 +642,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.tabgroupwindow': case 'extension.modalwindow': case 'extension.rootwindow':
           return tabGroupPreferredSize(win, bW, w, bH, h);
         case 'extension.radioboxwindow': return radioBoxPreferredSize(win, bW, w, bH, h);
+        case 'extension.largetextwindow': return LT.largeTextPreferredSize(W, win, bW, w, bH, h);
+        case 'extension.editwindow': return ED.editPreferredSize(W, win, bW, w, bH, h);
         default: return windowPreferredSize(win, bW, w, bH, h);
       }
     },
@@ -635,6 +656,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       }
       if (is(win, 'extension.textwindow', 'extension.buttonwindow', 'extension.togglewindow', 'extension.textlogwindow'))
         return L.textGranularity(W, win, hg, vg, (w, h1, v1) => {                     // 0x10046880 -> 0x10050450
+          const args = [f(h1), f(v1)];
+          processScript(w, 'ParentRequestedGranularity', args);
+          return {h: f(args[0]), v: f(args[1])};
+        });
+      if (is(win, 'extension.largetextwindow', 'extension.editwindow'))                 // 0x1002e380 -> 0x10050450
+        return LT.largeTextGranularity(W, win, hg, vg, (w, h1, v1) => {
           const args = [f(h1), f(v1)];
           processScript(w, 'ParentRequestedGranularity', args);
           return {h: f(args[0]), v: f(args[1])};
@@ -672,6 +699,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
           return tabGroupConfigurationChanged(win);
         case 'extension.radioboxwindow': return radioBoxConfigurationChanged(win);
         case 'extension.textlogwindow': return textLogConfigurationChanged(win);
+        case 'extension.largetextwindow': return LT.largeTextConfigurationChanged(W, win);
+        case 'extension.editwindow': return ED.editConfigurationChanged(W, win, editEnv);
         default: return processScript(win, 'ConfigurationChanged', []);              // 0x10003600
       }
     },
@@ -679,6 +708,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // XModalWindow::VisibilityChanged 0x10037330: the script event, then the
       // root keyboard/mouse grab counters for a parented modal.
       if (is(win, 'extension.modalwindow')) return Input.modalVisibilityChanged(W, win, visible, T.getRootWindow);
+      if (is(win, 'extension.editwindow')) return ED.editVisibilityChanged(W, win, visible, editEnv);
       processScript(win, 'VisibilityChanged', [Boolean(visible)]);                     // 0x10003610
       if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VisibilityChanged is not recovered');
     },
@@ -704,6 +734,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.modalwindow': return F.buildAcceleratorTable(W, win);
         case 'extension.rootwindow': return rootTickVirtual(win, delta);
         case 'extension.computerwindow': return boundary('XComputerWindow::Tick is not recovered');
+        case 'extension.editwindow': return ED.editTick(W, win, delta, editEnv);
         default: return undefined;                                                     // 0x10003be0: ret 4
       }
     },
@@ -714,6 +745,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.buttonwindow': case 'extension.togglewindow': return buttonDraw(win, gc);
         case 'extension.textlogwindow': return textLogDraw(win, gc);
         case 'extension.computerwindow': return boundary('XComputerWindow::Draw 0x1000ed60 is not recovered');
+        case 'extension.largetextwindow': return LT.largeTextDraw(W, win, gc);
+        case 'extension.editwindow': return ED.editDraw(W, win, gc, editEnv);
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
       }
     },
@@ -728,6 +761,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       return processScript(win, 'ToggleChanged', [button, Boolean(toggle)], {result: false}) ? 1 : 0; // 0x10003d80
     },
     cleanUp: win => { destroyFamily(win).members?.(win); return cleanUpWindowNative(win, destroyServices); },
+    // vtable +0x114 / +0x118: XWindow::TextChanged 0x10004010 and
+    // EditActivated 0x10004050 are script bridges with a bool result.
+    textChanged: (win, edit, modified) => processScript(win, 'TextChanged', [edit, Boolean(modified)], {result: false}) ? 1 : 0,
+    editActivated: (win, edit, modified) => processScript(win, 'EditActivated', [edit, Boolean(modified)], {result: false}) ? 1 : 0,
+    // vtable +0xc8 KeyPressed: only XEditWindow's 0x10021290 is recovered; the
+    // root's typed-character route that reaches it is not.
+    keyPressed(win, key) {
+      if (is(win, 'extension.editwindow')) return ED.editKeyPressed(W, win, key, editEnv);
+      return boundary('XWindow::KeyPressed 0x10003830 is not recovered');
+    },
   };
   // Mouse position, hit-test and focus virtuals (vtable +0x60, +0x8c,
   // +0x9c..+0xb4) of the admitted families: script-window-mouse.mjs.
@@ -744,7 +787,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // vtable +0xcc: XWindow::VirtualKeyPressed 0x10003a40; Computer/Edit override it.
     virtualKeyPressed(win, key, repeat) {
       if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VirtualKeyPressed 0x1000f530 is not recovered');
-      if (is(win, 'extension.editwindow')) boundary('XEditWindow::VirtualKeyPressed 0x10021480 is not recovered');
+      if (is(win, 'extension.editwindow')) return ED.editVirtualKeyPressed(W, win, key, repeat, editEnv);
       return processScript(win, 'VirtualKeyPressed', [key & 0xff, Boolean(repeat)], {result: false});
     },
     // Root vtable +0x124 / +0x12c.
@@ -771,13 +814,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
   });
   const inheritedMousePressed=V.mouseButtonPressed;
-  V.mouseButtonPressed=(win,...args)=>is(win,'extension.togglewindow')?Input.toggleMousePressed(W,win,...args,{processScript}):
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseButtonPressed(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMousePressed(W,win,...args,{processScript}):
     is(win,'extension.buttonwindow')?Input.buttonMousePressed(W,win,...args,
     {processScript,changeButtonAppearance,tickOffset:W.tickOffset,activateButton:(w,key)=>W.native.activateButton(w,key)}):
     is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
   const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
-  V.mouseMoved=(win,...args)=>is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
-  V.mouseButtonReleased=(win,...args)=>is(win,'extension.togglewindow')?Input.toggleMouseReleased(W,win,...args,
+  V.mouseMoved=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseMoved(W,win,...args,editEnv):is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
+  const inheritedCursorRequested=V.cursorRequested;
+  V.cursorRequested=(win,...args)=>is(win,'extension.editwindow')?ED.editCursorRequested(W,win,...args,editEnv):inheritedCursorRequested(win,...args);
+  V.mouseButtonReleased=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseButtonReleased(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMouseReleased(W,win,...args,
     {processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle:(w,value)=>setToggleNative(w,value,lifecycle.toggle)}):
     is(win,'extension.buttonwindow')?Input.buttonMouseReleased(W,win,...args,
     {processScript,changeButtonAppearance,activateButton:(w,key)=>W.native.activateButton(w,key),isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)}):
@@ -865,6 +910,85 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     playSound: (...args)=>windowPlaySound(W,...args),
   };
   const soundRequests = [];
+
+  // ------------------------------------------------------------------
+  // LargeTextWindow / EditWindow (script-window-large-text.mjs,
+  // script-window-edit.mjs, script-edit-model.mjs). Process-global cells of
+  // the edit bodies: the shared L"" 0x10099ea8, the clipboard FString
+  // 0x1009ae00, ConvertScriptString's static FString 0x100aead0 with its
+  // init flag 0x100aeac8 and run scratch 0x100add98, the filterText
+  // character slot, the InsertText temp FString (a native stack temporary)
+  // and KeyPressed's static two-character buffer 0x1009b318.
+  // ------------------------------------------------------------------
+  const editGlobals = {emptyWString: heap.allocRaw(4), clipboard: heap.allocRaw(12), convertBuffer: heap.allocRaw(12),
+    convertFlag: heap.allocRaw(4), convertRun: heap.allocRaw(0x1000), charSlot: heap.allocRaw(8), scratchInsert: heap.allocRaw(12),
+    keyBuffer: heap.allocRaw(4)};
+  const editMem = {...heap.mem, ...editGlobals,
+    alloc: size => heap.allocRaw(size),
+    readString(address) { let text = ''; for (let at = address; ; at += 2) { const unit = heap.mem.read(at, 'u16'); if (!unit) return text; text += String.fromCharCode(unit); } },
+    allocString(text) {
+      const at = heap.allocRaw((text.length + 1) * 2);
+      for (let i = 0; i < text.length; i++) heap.mem.write(at + 2 * i, 'u16', text.charCodeAt(i));
+      heap.mem.write(at + 2 * text.length, 'u16', 0);
+      return at;
+    },
+  };
+  const editServices = {mem: editMem, objectAddress: win => heap.addressOf(win),
+    updateCaret: (win, _base, sticky) => ED.computeCursorConfig(W, win, sticky, editEnv),
+    resetBlink: win => ED.showCursor(W, win, editEnv),
+    columnFromX: (win, _base, row, xBits) => ED.xToCol(W, win, row, bitsToF32(xBits)),
+    askParentForReconfigure: win => askParentForReconfigure(win),
+    textChanged: (win, receiver, _base, changed) => V.textChanged(heap.objectAt(receiver), win, changed),
+    // Core UObject::FindFunction(FilterChar, 0) over the window's class chain.
+    findFilterChar: win => runtime.lookup(win, 'FilterChar', false) ? 1 : 0,
+    scriptFilterChar(win, text) {
+      const args = [text];
+      const result = processScript(win, 'FilterChar', args, {result: true});
+      return {result: Boolean(result), text: String(args[0] ?? '')};
+    },
+  };
+  const enableTextAccelerator = (win, flag) => enableTextAsAcceleratorNative(win, flag, {
+    read: (object, offset, kind) => heap.read(object, offset, kind), write: (object, offset, kind, raw) => heap.write(object, offset, kind, raw),
+    makeAcceleratorTableDirty: ({object}) => W.native.makeAcceleratorTableDirty(object)});
+  const initLargeText = (win, parent) => LT.initLargeTextWindow(W, win, parent, W.initText, enableTextAccelerator);
+  const textCleanUp = win => W.heap.write(win, 0x168, 'string', '');                   // XTextWindow::CleanUp 0x10045c30
+  const editEnv = {
+    editL: win => editMemory(win, editServices),
+    initLargeText,
+    askParentForReconfigure: win => askParentForReconfigure(win),
+    askParentToShowArea: (win, x, y, w, h) => Mouse.askParentToShowArea(W, win, x, y, w, h),
+    setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
+    getRootWindow: win => T.getRootWindow(W, win),
+    getCursorPos: win => W.native.getCursorPos(win),
+    playSound: (win, sound, volume, pitch, x, y) => windowPlaySound(W, win, sound, volume, pitch, x, y),
+    processScript: (win, event, args, options) => processScript(win, event, args, options),
+    isFocusWindow: win => { const root = T.getRootWindow(W, win); return Boolean(root && W.ptr(root, T.ROOT.focus) === win); },
+    isKeyDown: (win, key) => isKeyDownNative(win, key, {read: (object, offset, kind) => heap.read(object, offset, kind)}),
+    largeTextDraw: (win, gc) => LT.largeTextDraw(W, win, gc),
+    keyBuffer: () => editGlobals.keyBuffer,
+    get v() { return V; },
+  };
+  // XLargeTextWindow::SetText 0x1002d6b0 / AppendText 0x1002d730 and
+  // XEditWindow::SetText 0x1001e260 / AppendText 0x1001e310: the TextWindow
+  // exec bodies call these through vtable +0x11c / +0x120.
+  function textVirtual(win, method, text) {
+    const family = families.get(win);
+    if (family !== 'extension.largetextwindow' && family !== 'extension.editwindow') return false;
+    if (family === 'extension.largetextwindow') {
+      const services = {...lifecycle.text, askParentForReconfigure: ({object}) => askParentForReconfigure(object)};
+      if (method === 'setText') LT.largeTextSetText(W, win, text, services);
+      else LT.largeTextAppendText(W, win, text, services, makeAreaDirty);
+      return true;
+    }
+    const buffer = editMem.allocString(text.split('\0', 1)[0]), L = editMemory(win, editServices);
+    try {
+      if (method === 'setText') setTextVirtual(L, buffer);
+      else ED.editAppendText(W, win, buffer, editEnv);
+    } finally { editMem.free(buffer); }
+    return true;
+  }
+  // XLargeTextWindow::MakeAreaDirty 0x1002d8b0 (the edit model's textChangedRange).
+  const makeAreaDirty = (win, position, removed, inserted) => textChangedRange(editMemory(win, editServices), position, removed, inserted);
 
   // Placeholders filled by the layout/draw sections below (hoisted functions).
   function windowPreferredSize(win, bW, w, bH, h) {                                    // 0x10050390
@@ -975,6 +1099,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XTextLogWindow::CleanUp 0x100475b0 is XTextWindow::CleanUp;
     // ~XTextLogWindow 0x100145c0 frees the 20-byte log rows at +0x178.
     'extension.textlogwindow': {members: win => W.heap.write(win, 0x168, 'string', ''), destructor: win => W.farray.empty(win, 0x178, 20)},
+    // XLargeTextWindow::CleanUp 0x1002d560 / ~XLargeTextWindow 0x100127a0.
+    'extension.largetextwindow': {members: win => LT.cleanUpLargeTextWindow(W, win, textCleanUp), destructor: win => LT.destroyLargeTextMembers(W, win)},
+    // XEditWindow::CleanUp 0x1001d0b0 (undo records, then XLargeTextWindow's)
+    // / ~XEditWindow 0x10014510 (the undo TArray, then ~XLargeTextWindow).
+    'extension.editwindow': {
+      members: win => { cleanUpUndo(editMemory(win, editServices)); LT.cleanUpLargeTextWindow(W, win, textCleanUp); },
+      destructor: win => { const data = W.u32(win, ED.EDIT.bufferList); if (data) heap.freeRaw(data); for (let i = 0; i < 12; i += 4) W.setU32(win, ED.EDIT.bufferList + i, 0); LT.destroyLargeTextMembers(W, win); },
+    },
     // XModalWindow::CleanUp 0x10036cf0: RemoveTabGroupFromTable(self), empty the
     // +0x17c tab-group table, ClearAcceleratorTable, then XTabGroupWindow::CleanUp.
     // ~XModalWindow 0x10005110 destroys +0x17c, then ~XTabGroupWindow's tables.
@@ -1099,6 +1231,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
       const reference=actorRefs(call);if(reference.handled)return reference;
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
+      if(call.index===1860||(call.index>=1880&&call.index<=1921)){
+        const edit=dispatchEditWindowNative(W,call,{editServices,textServices:editServices,edit:editEnv});if(edit.handled)return edit;
+      }
       const gc=dispatchGcNative(heap,gcServices,call);
       return gc.handled?gc:dispatchWindowHostNative(W,call);
     },
@@ -1114,7 +1249,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     size: rawServices, position: rawServices,
     // TextWindow.SetText reaches XWindow::SetAcceleratorKey when the text is
     // the accelerator (+0x150 textIsAccelerator), which dirties the modal's table.
-    text: {...rawServices, makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object)},
+    // `realloc` (GMalloc) lets AppendText grow the raw FString like 0x10045e60.
+    text: {...rawServices, realloc: (address, size) => heap.realloc(address, size), makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object)},
+    // TextWindow.SetText/AppendText virtual overrides (vtable +0x11c/+0x120).
+    textVirtual: (object, method, text) => textVirtual(object, method, text),
     toggle: {...rawServices,
       read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
       toggleChanged:({object,source,toggle})=>V.toggleChanged(object,source,toggle)},
@@ -1257,11 +1395,6 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};
-      // Multiplayer is explicitly deferred. Original single-player InitWindow
-      // invokes this key-rebinding helper, but Training does not need it.
-      runtime.boundaryFunctions.set('deusex.deusexrootwindow.conditionalbindmultiplayerkeys',()=>{
-        boundaryLog.push({function:'DeusExRootWindow.ConditionalBindMultiplayerKeys',reason:'Multiplayer key initialization deferred'});
-      });
       return host;
     },
   };

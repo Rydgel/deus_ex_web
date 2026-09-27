@@ -57,7 +57,12 @@ function runScript(native,bytes,values,strings){
   const heap=createNativeHeap({capacity:1<<20}),win={name:'Receiver'};
   heap.allocate(win,RECEIVER_SIZE);
   bytes.forEach((byte,offset)=>heap.write(win,offset,'u8',byte));
-  for(const {offset,text} of strings)heap.write(win,offset,'string',text);
+  // Each string field starts as a constructed empty FString (the oracle builds
+  // its own at that offset), then takes the case text through FString::operator=.
+  for(const {offset,text} of strings){
+    for(let i=0;i<12;i++)heap.write(win,offset+i,'u8',0);
+    heap.write(win,offset,'string',text);
+  }
   const events=[],f=Math.fround,record=op=>object=>events.push({op,object:object===win?'this':'other'});
   const W={heap,
     u8:(o,off)=>heap.read(o,off,'u8'),u32:(o,off)=>heap.read(o,off,'u32'),i32:(o,off)=>heap.read(o,off,'i32'),

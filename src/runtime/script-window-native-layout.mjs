@@ -58,6 +58,13 @@ const STRUCTS = freeze({
   // XButtonWindow::Init writes the six entries with a 12-byte stride at
   // +0x1a4 (tx +0, tlColor +4, txColor +8).
   'extension.buttonwindow.buttondisplayinfo': {size: 12, align: 4},
+  // struct XTextParams {BITFIELD bDirty:1, bSpecialText:1; INT dirtyStart,
+  // dirtyCount; UFont *normalFont, *boldFont; FLOAT destWidth;} (SDK
+  // ExtLargeText.h): XLargeTextWindow::Init sets bit 0 of +0x17c and +0x1a0,
+  // the two instances; GenerateLines 0x1002da70 reads dirtyStart +4,
+  // dirtyCount +8, the fonts +0xc/+0x10 and destWidth +0x14, then copies the
+  // 24-byte struct back (rep movsd ecx=6); the class ends at 0x1d0.
+  'extension.largetextwindow.xtextparams': {size: 24, align: 4},
 });
 
 function scalarLayout(field) {

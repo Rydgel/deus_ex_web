@@ -36,8 +36,10 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
     const cachedTarget=game.interaction.frobTarget;
     assert.equal(cachedTarget.name,'DeusExMover16');
     assert.equal(game.target().mover,cachedTarget,'UI uses the cached original target');
-    const used = game.use(); assert.equal(used.ok, true); assert.deepEqual(used.actors, ['DeusExMover16', 'DeusExMover17']);
-    run(game, 2.1); assert.ok(game.player.walkBob.every(v => Math.abs(v) < .001));
+    const used = game.use(); assert.equal(used.ok, true);
+    run(game, 2.1);
+    for (const name of ['DeusExMover16', 'DeusExMover17'])
+      assert.equal(game.collision.movers.find(m => m.name === name).interpolation.key, 1, `ParseRightClick's DoFrob opened ${name}`); assert.ok(game.player.walkBob.every(v => Math.abs(v) < .001));
     run(game, 1.5, { forward: 1 }); assert.ok(game.player.position[0] > 0); assert.ok(game.player.position[2] < initial.position[2] - 40);
     result.lowerHall=game.player.status();
     for(let i=0;i<360;i++){
