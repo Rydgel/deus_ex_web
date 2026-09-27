@@ -90,9 +90,9 @@ const LATER_STAGES = Object.freeze([
   {stage: 5, reason: 'AI navigation/latent movement natives (docs/script-pawn-nav.md unported workers)',
     test: key => /^native (504|506|508|518|523|524|525|526|708|712) /.test(key)},
   {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
-    test: key => /performPhysics Physics=3\b/.test(key)},
+    test: key => /performPhysics Physics=Swimming\b/.test(key)},
   {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating; pawns on InterpolationPoint paths)',
-    test: key => /physProjectile|PHYS_Interpolating|performPhysics Physics=8\b/.test(key)},
+    test: key => /physProjectile|PHYS_Interpolating|performPhysics Physics=Interpolating\b/.test(key)},
   {stage: 5, reason: 'moving doors/elevators: rotating MovingBrush interpolation (roadmap Stage 5)',
     test: key => /MovingBrush interpolation outside the recovered translating subset/.test(key)},
   {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
@@ -120,7 +120,12 @@ const note = (key, map, detail) => {
   const entry = families.get(key) ?? {key, maps: new Set(), hits: 0, detail};
   entry.maps.add(map); entry.hits++; families.set(key, entry);
 };
-const normalize = text => String(text).replace(/\b\d+(\.\d+)?\b/g, 'N').replace(/[A-Za-z_]+\d+\b/g, m => m.replace(/\d+$/, '#')).slice(0, 160);
+// EPhysics values keep their names: the stage table tells swimming (3) and
+// interpolating (8) apart from other physics modes.
+const PHYSICS_NAMES = ['None', 'Walking', 'Falling', 'Swimming', 'Flying', 'Rotating', 'Projectile', 'Rolling',
+  'Interpolating', 'MovingBrush', 'Spider', 'Trailer'];
+const normalize = text => String(text).replace(/Physics=(\d+)\b/g, (_, n) => `Physics=${PHYSICS_NAMES[n] ?? n}`)
+  .replace(/\b\d+(\.\d+)?\b/g, 'N').replace(/[A-Za-z_]+\d+\b/g, m => m.replace(/\d+$/, '#')).slice(0, 160);
 const perMap = results.map(({map, seconds, peakMiB, crash, data}) => {
   if (crash) { note(`CRASH ${normalize(crash)}`, map); return {map, seconds, peakMiB, status: crash}; }
   const s = summarize(data);
