@@ -15,12 +15,15 @@ const f = Math.fround;
 export function linkDecorationCollision(queries, host) {
   if (host.collisionValues) return;
   const values = host.values ?? {};
-  queries.removeActor(host);
+  // Only a host whose +0x1dc word has bCollideActors is in the hash; a
+  // non-colliding export keeps its word and stays out until SetCollision.
+  const registered = Boolean(host.flags & 1);
+  if (registered) queries.removeActor(host);
   host.collisionValues = { ...values,
     get Location() { return host.position; },
     get CollisionRadius() { return host.radius ?? values.CollisionRadius ?? 0; },
     get CollisionHeight() { return host.height ?? values.CollisionHeight ?? 0; } };
-  queries.addActor(host);
+  if (registered) queries.addActor(host);
 }
 
 function moveDecoration(host, delta, queries) {

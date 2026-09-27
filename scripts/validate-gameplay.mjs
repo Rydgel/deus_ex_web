@@ -21,9 +21,11 @@ const fixture = game => { if (!fixtures.has(game)) fixtures.set(game, createPlay
 // isolated below for the existing NYC scene-only reference.
 const run = (game, seconds, input = {}) => { fixture(game).driveLegacy(input); fixture(game).tick(Math.round(seconds*120)); };
 // The NYC case predates full-world scheduling and measures only the retained
-// player port against its loaded scene. Its original UNATCOTroop3 reaches the
-// explicit map-pawn FarMoveActor boundary through ScriptedPawn.PutInWorld;
-// running this isolated port is not evidence of NYC world-script support.
+// player port against its loaded scene. Map pawns now relocate through the
+// recovered FarMoveActor (ScriptedPawn.PutInWorld's SetLocation); the world
+// then stops at the explicit AI reachability native 520 (actorReachable,
+// ScriptedPawn.GetNextWaypoint). Running this isolated port is not evidence
+// of NYC world-script support.
 const runPlayerPort = (game, seconds, input = {}) => {
   for (let i = 0; i < Math.round(seconds * 120); i++) game.player.tick(1 / 120, input);
 };
@@ -32,15 +34,15 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   let game = await createGame(map, asset, assets);
   let fullWorldBoundary = null;
   if (name === '01_NYC_UNATCOIsland') {
-    const message = 'FarMoveActor for a pawn, brush or non-colliding map actor is not linked';
+    const message = 'Unsupported original door native 520 in scriptedpawn.getnextwaypoint';
     assert.throws(() => run(game, 1), { message }, 'NYC world scheduling remains explicitly unsupported');
-    const failure = [...game.doors.scriptRuntime.npcFailures].find(([actor]) => actor.name === 'UNATCOTroop3');
-    assert.ok(failure, 'world scheduler records the original failing UNATCOTroop3 identity');
-    assert.equal(failure[1], message);
-    fullWorldBoundary = { actor: failure[0].name, caller: 'ScriptedPawn.PutInWorld', native: 267, message };
+    const failures = [...game.doors.scriptRuntime.npcFailures];
+    assert.ok(!failures.some(([actor]) => actor.name === 'UNATCOTroop3'), 'UNATCOTroop3 PutInWorld relocates through FarMoveActor');
+    const failure = failures.find(([, text]) => text === message);
+    assert.ok(failure, 'world scheduler records the pawn that reached native 520');
+    fullWorldBoundary = { actor: failure[0].name, caller: 'ScriptedPawn.GetNextWaypoint', native: 520, message };
     // A separate fixture keeps the isolated player check independent of the
-    // failed world. NYC reset/GC is outside this test's prior coverage and
-    // currently has its own measured stack-overflow boundary.
+    // failed world.
     game = await createGame(map, asset, assets);
     assert.equal(game.doors.scriptRuntime.npcFailures.size, 0, 'the isolated port starts with a fresh scene');
   }

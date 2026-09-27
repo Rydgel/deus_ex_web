@@ -2083,11 +2083,28 @@ export class ScriptRuntime {
     const level=this.mapMoveLevel(actor,'FarMoveActor');
     return farMoveActor(this.relocationLevel(actor,level),actor,destination,test,noCheck);
   }
-  /** XLevel vtable +0x8c FarMoveActor for any admitted actor. */
+  /** XLevel vtable +0x88 MoveActor (zero flags) for a map pawn, on the
+   * recovered pawn move body; returns the native success word. */
+  movePawn(actor,delta,rotation) {
+    if(!this.isMapPawn(actor))throw new Error('Map pawn MoveActor requires a serialized map pawn');
+    return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).moveActor(delta,rotation);
+  }
+  /** A serialized map export in the Pawn class chain, other than the
+   * controlled player (the player scene owns its moves). */
+  isMapPawn(actor) {
+    if(!actor||actor.controlledPlayer||this.collisionViewActors.has(actor))return false;
+    try{for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.pawn')return true;}catch{return false;}
+    return false;
+  }
+  /** XLevel vtable +0x8c FarMoveActor for any admitted actor. A map pawn
+   * (ScriptedPawn.PutInWorld's SetLocation, the pawn-nav fit tests) runs the
+   * same recovered relocation through its pawn physics view, whose hash,
+   * encroachment, SetBase and SetActorZone services act on the pawn itself. */
   farMoveActor(actor,destination,test=0,noCheck=0) {
-    return this.collisionViewActors.has(actor)
-      ?this.relocateSpawnedActor(actor,destination,test,noCheck)
-      :this.relocateMapActor(actor,destination,test,noCheck);
+    if(this.collisionViewActors.has(actor))return this.relocateSpawnedActor(actor,destination,test,noCheck);
+    if(this.isMapPawn(actor))
+      return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).farMove(destination,test,noCheck);
+    return this.relocateMapActor(actor,destination,test,noCheck);
   }
   /** ULevel::SpawnActor for any linked Actor class (script-spawn.mjs). The
    * lifecycle host supplies only world bindings — the live level, its Outer

@@ -30,7 +30,8 @@ test('VM follows expanded jump addresses and fails closed on invalid/unsupported
   assert.equal(vm.run({ Value: 3 }, { Amount: 2 }), 0);
   assert.throws(() => compile([0x03], 1), /opcode/);
   assert.throws(() => compile([6, 1, 0, 4, 11], 5), /boundary/);
-  assert.throws(() => compile([6, 0, 0], 3).run({}, {}), /budget/);
+  // Core's runaway limit (execJump 0x1012faf0), not a host budget.
+  assert.throws(() => compile([6, 0, 0], 3).run({}, {}), /Runaway loop detected \(over 10000000 iterations\)/);
   assert.throws(() => compile([127, 22, 4, 11], 4).run({}, {}), /typed string/);
 });
 

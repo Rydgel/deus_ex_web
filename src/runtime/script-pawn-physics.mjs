@@ -181,6 +181,8 @@ export function pawnPhysicsView(actor, services) {
   };
   const dispatch = (target, event, args = []) =>
     services.dispatch(target === pawn ? actor : target, event, args.map(a => a === pawn ? actor : a));
+  // physicsRotation's MoveActor reaches the same candidate normalization.
+  Object.defineProperty(pawn, 'decorate', { value: decorate });
   const lineCheck = (start, end, extent, flags, extra = 0) =>
     level.hash.lineCheck(start, end, extent, flags, extra, pawn);
   pawn.lineCheck = lineCheck;
@@ -196,6 +198,10 @@ export function pawnPhysicsView(actor, services) {
     footZoneChange: (a, z) => dispatch(a, 'FootZoneChange', [z]),
     headZoneChange: (a, z) => dispatch(a, 'HeadZoneChange', [z]) };
   pawn.setActorZone = (test, force) => setActorZone(pawn, zoneWorld, test, force);
+  // The native MoveActor entry for script Move/SetBasedPawnSize: an equal
+  // NewRotation takes the same path as none (0x1039915a).
+  pawn.moveActor = (delta, rotation) => Boolean(moveActor(pawn, delta,
+    rotation && !sameRotation(rotation, pawn.rotation) ? rotation : null, services, dispatch, decorate).success);
   pawn.move = delta => {
     const result = moveActor(pawn, delta, null, services, dispatch, decorate);
     return { time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f), actor: result.hit?.actor ?? null };
@@ -265,7 +271,7 @@ export function pawnPhysicsView(actor, services) {
  * general non-player IsBlockedBy and an optional absolute NewRotation (the
  * rotation-update path physicsRotation reaches). Hash slots and Touch events
  * act on the registered host identity, not the field view. */
-function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
+function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn.decorate) {
   const { level, worldActor } = services;
   const readOther = (other, name) => services.read ? services.read(other, name) : services.field(other, name).get();
   return playerMove(pawn, delta, {

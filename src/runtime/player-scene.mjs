@@ -15,7 +15,7 @@ import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs'
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
-export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelValues,timeSeconds,surfaceTextures}) {
+export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],zoneActors,levelValues,timeSeconds,surfaceTextures}) {
   const f=Math.fround;
   let source=player.collisionActor;
   const worldActor=collision.queries.levelInfo;
@@ -150,6 +150,12 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
       if(typeof hooks.rotateMapActor!=='function')throw Error('map SetRotation MoveActor is not linked');
       return hooks.rotateMapActor(actor,rotation).success;
     }
+    // A map pawn's zero-flag MoveActor (ScriptedPawn.SetBasedPawnSize's Move)
+    // runs the recovered body on its pawn physics view.
+    if (actor.isPawn && !test && !ignorePawns && !ignoreBases && !noFail) {
+      if(typeof hooks.movePawn!=='function')throw Error('map pawn MoveActor is not linked');
+      return hooks.movePawn(actor,delta,rotation);
+    }
     if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail
         || !actor.rotation.every((value,index)=>value===rotation[index]))
       throw new Error('MoveActor scene branch is not linked');
@@ -207,6 +213,9 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     // to still be live at removal, so each restore runs inside changeActor's
     // remove-mutate-re-add (level-queries.mjs).
     for(const actor of actors)collision.queries.changeActor(actor,()=>prepareActor(actor));
+    // Non-colliding exports reload outside the hash: drop a registration a
+    // script's SetCollision added, then restore the serialized word.
+    for(const actor of nonColliding){if(actor.flags&1)collision.queries.removeActor(actor);prepareActor(actor);}
     for(const actor of actors)if(actor.isPawn)addPawn(level,actor);
     Object.assign(source,{worldActor,standingCount:0,touching:[null,null,null,null],isPawn:true,pawnFlags:2,
       actorFlags:(player.defaults.bStatic?1:0)|(player.defaults.bMovable?0x80000:0)|(player.defaults.bCollideWhenPlacing?0x20000:0),

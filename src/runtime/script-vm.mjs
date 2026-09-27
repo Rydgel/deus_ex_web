@@ -61,6 +61,16 @@ const x87round = (sig, width) => {
   if (rem > half || (rem === half && (q & 1n))) q += 1n;
   return x87width(q) > width ? [q >> 1n, n - width + 1] : [q, n - width];
 };
+// Core's runaway loop guard, GRunaway (0x101f81bc): execJump (0x1012faf0) and
+// execJumpIfNot (0x1012fbc0) increment it on every execution, taken or not.
+// Past 10,000,000 (0x989680) Core logs a NAME_Critical "Runaway loop detected
+// (over 10000000 iterations)", which is fatal unless -norunaway is passed.
+// GInitRunaway (0x1012e7d0) zeroes it; ULevel::Tick calls it at 0x103a5265.
+// Like the original global, one counter spans every frame and runtime.
+export const SCRIPT_RUNAWAY_LIMIT = 10000000;
+let scriptRunaway = 0;
+export const initScriptRunaway = () => { scriptRunaway = 0; };
+export const scriptRunawayCount = () => scriptRunaway;
 export const x87load = v => {
   const b = f32bits(v), neg = b >>> 31, e = (b >>> 23) & 0xff, m = b & 0x7fffff;
   if (e === 0xff) return m ? { nan: b } : { neg, inf: true };
@@ -934,12 +944,15 @@ export function compileFunction(fn) {
         }
       };
       frame.resume = () => {
-        // Host runaway guard; HUDMultiSkills.RefreshKey visits all 255 input keys.
-        let budget = 16384;
+        // Host hang guard only. Loops through EX_Jump/EX_JumpIfNot meet the
+        // original 10M runaway limit first; this bound is reachable only by
+        // uncounted loops (state label gotos with no latent), which hang the
+        // original.
+        let budget = 200000000;
         // A native iterator owns its body loop until Next/Pop, including when
         // a body statement changes the actor's latent action.
         while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
-          if (!budget--) throw new Error(`VM instruction budget exceeded in ${fn.name??fn.objectName??'script'}`);
+          if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
           const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
           const n = entry.node;
           // Native state calls may replace Code. Advance before dispatch so a
@@ -1002,8 +1015,13 @@ export function compileFunction(fn) {
             // case: it steps over its expression, so stacked labels and case
             // bodies without a break fall through.
             if (n.target !== 0xffff) evaluate(n.value);
-          } else if (n.op === 0x06 || n.op === 0x07 && !refValue(evaluate(n.value))) frame.cursor = n.target;
-          else if (n.op !== 0x07) evaluate(n);
+          } else if (n.op === 0x06 || n.op === 0x07) {
+            if (++scriptRunaway > SCRIPT_RUNAWAY_LIMIT) {
+              scriptRunaway = 0;
+              throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${fn.name??fn.objectName??'script'}`);
+            }
+            if (n.op === 0x06 || !refValue(evaluate(n.value))) frame.cursor = n.target;
+          } else evaluate(n);
         }
         return frame.result;
       };

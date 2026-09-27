@@ -2,7 +2,7 @@ import { preparePlayerLogin } from './script-player-login.mjs';
 import { preparePlayerDumpStore } from './script-player-dump.mjs';
 import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
-import { refValue } from './script-vm.mjs';
+import { initScriptRunaway, refValue } from './script-vm.mjs';
 import { tickMoverInterpolation } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
@@ -1145,7 +1145,8 @@ export async function createScriptDoors({
     },
     farMoveActor: (actor, destination, test, noCheck) =>
       runtime.farMoveActor(actor, destination, test, noCheck),
-    beginTick: () => ({}),
+    // ULevel::Tick's GInitRunaway (0x103a5265) zeroes the script runaway count.
+    beginTick: () => { initScriptRunaway(); return {}; },
     endTick: () => {},
     updateTime: info => {
       const now = new Date();
@@ -1950,6 +1951,14 @@ export async function createScriptDoors({
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
   playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
+  // Login already moves the player (SpawnPlayActor/SetLocation, the key ring's
+  // SetBase rider) and crosses zones. Bind the scene's event, rider and map
+  // rotation entries to the original runtime first, so those moves never use
+  // the scene's pre-runtime fixture callbacks.
+  playerScene.hooks.dispatchEvent=(target,event,args)=>dispatchEvent(target,event,args);
+  playerScene.hooks.moveRider=(actor,delta,rotation)=>runtime.moveSpawnedActor(actor,delta,rotation);
+  playerScene.hooks.rotateMapActor=(actor,rotation)=>runtime.rotateMapActor(actor,rotation);
+  playerScene.hooks.movePawn=(actor,delta,rotation)=>runtime.movePawn(actor,delta,rotation);
   loginPlayer();
   playerLogs.enableMessages();
   // Original DataLinkPlay constructs and owns its display in the native HUD.

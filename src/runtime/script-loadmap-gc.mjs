@@ -82,10 +82,30 @@ export function collectLoadMapGarbage({
   // object whose Serialize held them.
   const excluded = [];
   let archive = null, holder = null;
-  const walk = (identity, body) => {
+  // Core's collector recurses on the native stack: each newly marked object is
+  // serialized before the holder's next reference. Long reference chains
+  // (NYC's navigation lists) exceed JavaScript's stack, so the same depth-first
+  // order runs on an explicit stack: an object's Serialize references are
+  // collected (a read-only pass), then visited in order, and a newly entered
+  // object's frame is completed before its holder resumes.
+  const frames = [];
+  const enter = identity => {
+    const items = [];
+    serialize(identity, lvalue => { items.push({ lvalue }); }, text => { items.push({ name: text }); });
+    frames.push({ identity, items, next: 0 });
+  };
+  const drain = () => {
     const saved = holder;
-    holder = identity;
-    try { body(); } finally { holder = saved; }
+    try {
+      while (frames.length) {
+        const frame = frames[frames.length - 1];
+        if (frame.next >= frame.items.length) { frames.pop(); continue; }
+        const item = frame.items[frame.next++];
+        holder = frame.identity;
+        if ('name' in item) visitName(item.name);
+        else visit(item.lvalue);
+      }
+    } finally { holder = saved; }
   };
   const visit = lvalue => {
     const value = lvalue.get();
@@ -94,7 +114,7 @@ export function collectLoadMapGarbage({
       // A persistent object outside the modeled registry: walk it once.
       if (typeof value === 'object' && !walked.has(value)) {
         walked.add(value);
-        walk(value, () => serialize(value, visit, visitName));
+        enter(value);
       }
       return;
     }
@@ -112,17 +132,19 @@ export function collectLoadMapGarbage({
     if (entry) archive.serializeName({ get: () => entry, set: () => { throw new Error('The collector does not rewrite FNames'); } });
   };
   archive = createGarbageArchive(view, {
-    serializeObject: object => walk(object.identity, () => serialize(object.identity, visit, visitName)),
+    serializeObject: object => enter(object.identity),
   });
   // SerializeRootSet(Ar, RF_Native, 0x40) Core 0x101580b0: the root array,
   // then each registry object with any keep flag and all of 0x40. A root the
   // registry does not model (the engine) is walked as a persistent object.
   for (let index = 0; index < view.rootSet.length; index++) {
     visit({ get: () => view.rootSet[index], set: value => { view.rootSet[index] = value; } });
+    drain();
   }
   for (const record of registry.objects) {
     if (!record || !(record.flags & LOADMAP_GC.keepFlags) || !(record.flags & GC_FLAGS.archiveSerialize)) continue;
     archive.serializeObject({ value: record });
+    drain();
   }
   const purgeable = registry.objects.filter(record => record && (record.flags & GC_FLAGS.unreachable));
   const result = purgeGarbage(view, {

@@ -38,11 +38,27 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     if (mapExportAdmitted(map.pkg, actor.index))
       actors.set(actor.index, { ...actor, values: await defaults.forActor(asset, actor) });
   const zones = map.model.zones.map(z => actors.get(z.actor)?.values ?? zoneDefault);
-  const collidable = [];
+  const collidable = [], nonColliding = [];
   for (const actor of actors.values()) {
     const v = actor.values;
     actor.owner = actors.get(v.Owner) ?? null;
-    if (!v.bCollideActors || !v.Location) continue;
+    if (!v.Location) continue;
+    if (!v.bCollideActors) {
+      // Every AActor has the +0x1dc collision word; bCollideActors only
+      // decides hash registration. A non-colliding export (a hidden pawn or
+      // button a script later reveals with SetCollision) gets the same native
+      // host surface, outside the hash. Brushes keep the mover route.
+      if (v.bIsMover && v.Brush > 0) continue;
+      actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+      actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
+        (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
+      actor.movingBrush = false;
+      actor.projectile = actor.lineage.includes('engine.projectile');
+      actor.base = actors.get(v.Base) ?? null;
+      Object.assign(actor, { position: [...v.Location], radius: v.CollisionRadius ?? 0, height: v.CollisionHeight ?? 0 });
+      nonColliding.push(actor);
+      continue;
+    }
     actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
     actor.collisionBits = 1 | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
     actor.flags = actor.collisionBits | (v.bCollideWorld ? 2 : 0);
@@ -101,7 +117,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const doors = new Doors(collision.movers, playerDefaults.MaxFrobDistance, collision,
     {eventHasRecipients});
   let timeSeconds=0;
-  const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,surfaceTextures,
+  const playerScene=bindPlayerScene(player,collision,{model:map.model,actors:collidable,nonColliding,surfaceTextures,
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
@@ -149,9 +165,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // or re-entrant from a VM body) into the door runtime's general VM router, so a
   // player bump runs the real DeusExDecoration.Bump — and other attached actors run
   // their real event bytecode — instead of pausing at the scene adapter.
-  playerScene.hooks.dispatchEvent=(target,event,args)=>doors.scriptRuntime.dispatchEvent(target,event,args);
-  playerScene.hooks.moveRider=(actor,delta,rotation)=>doors.scriptRuntime.runtime.moveSpawnedActor(actor,delta,rotation);
-  playerScene.hooks.rotateMapActor=(actor,rotation)=>doors.scriptRuntime.runtime.rotateMapActor(actor,rotation);
+  // createScriptDoors binds playerScene.hooks (event, rider, map rotation)
+  // before its original Login moves the player.
   const runtime = doors.scriptRuntime.runtime;
   player.scriptRuntime = runtime;
   const readPlayer = name => runtime.readNamed(player.collisionActor, name);
