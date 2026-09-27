@@ -4,8 +4,8 @@ Step 1 of the [frame-cost direction](play-frame-cost.md): script objects
 should hold their properties the way the original does, in one byte image per
 object at the linked UProperty offsets. This note records the original contract
 already established by recovered instructions, the storage it replaces, and
-the staged plan. Stages 1a to 1d are implemented. Stage 1e is design and stays
-unsupported until its own evidence and validation land.
+the staged plan. Stages 1a to 1d are implemented. Stage 1e is deferred: the
+work stopped at basic playability ([frame cost](play-frame-cost.md#direction)).
 
 ## Original contract
 
@@ -218,10 +218,12 @@ What 1d does not do: the images are per-object buffers, not addresses on the
 native heap. The Extension windows' native members stay in the native heap
 image the window natives address. Sharing one address space is part of 1e.
 
-**1e: host-owned fields move into the image.** Physics, collision and
-presentation read the original offsets directly, and the corresponding
+**1e: host-owned fields move into the image (deferred).** Physics, collision
+and presentation read the original offsets directly, and the corresponding
 bindings disappear. After this step a Rust kernel can share the image as
-`WebAssembly.Memory` with no marshaling.
+`WebAssembly.Memory` with no marshaling. Nothing measured needs this now: its
+main payoff is a WebAssembly kernel, and none is justified yet. It stays design
+until a measured playability problem calls for it.
 
 Each stage keeps the existing native oracle cases green, runs the full sweep
 and repeats the paired A/B profile.

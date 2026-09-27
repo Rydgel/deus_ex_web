@@ -116,6 +116,13 @@ The costs are representation, not work, so the order is:
    major GCs stay short.
 5. **Presentation.** Normals, bounds, the sky pass and the HUD tree.
 
+**Status: stopped after stage 1d (`74e37a3`).** Walking Training went from
+29.7 ms per frame (about 34 fps) to 17.3 ms (about 58 fps; the machine's speed
+varies between A/B rounds, so these come from different rounds). That meets the
+project's current goal of basic playability. Stage 1e, steps 2 to 5 and the VM
+rvalue path are deferred. Resume one only when a measurement shows a
+playability problem it addresses, and start with a fresh profile.
+
 WebAssembly follows the data. Porting the VM or the natives now would add
 marshaling on every native call, because actor state lives in JavaScript
 objects. Once objects live in one `ArrayBuffer`, that buffer can be a
@@ -359,7 +366,8 @@ Verification:
 
 The VM's per-operand references remain the largest object-model cost: about
 1,300 per frame, plus the whole-value copies `copyScalar` makes for each. An
-rvalue path in the VM would remove most of them.
+rvalue path in the VM would remove most of them. It is deferred with the rest
+of the direction (see [Direction](#direction)).
 
 ## Reproduce
 
