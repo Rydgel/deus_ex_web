@@ -263,8 +263,11 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate) {
     dispatch,
     isBlockedBy: (source, other) => actorBlockedBy(source, decorate(other), { worldActor }),
     isOverlapping: (a, b) => isOverlapping(a, decorate(b)),
-    beginTouch: (a, b) => beginTouch(a, decorate(b), dispatch),
-    endTouch: (a, b, suppress) => endTouch(a, decorate(b), suppress, dispatch),
+    // Touching slots hold actor identities: the reciprocal AddTouch writes the
+    // source into the other actor's slot, and DestroyActor/EndTouch later match
+    // that slot against the registered actor. Pass the host, never the view.
+    beginTouch: (a, b) => beginTouch(a === pawn ? pawn.self : a, decorate(b), dispatch),
+    endTouch: (a, b, suppress) => endTouch(a === pawn ? pawn.self : a, decorate(b), suppress, dispatch),
     setActorZone: (a, test, force) => a === pawn ? pawn.setActorZone(test, force)
       : unsupported('MoveActor zone update for a non-pawn source'),
     // 0x103998a0-0x10399bb0: based riders ride the committed move. The base

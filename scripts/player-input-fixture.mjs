@@ -133,13 +133,19 @@ export function createPlayerInputFixture(game, {tickSeconds = 1 / 60, paint = nu
    * HighlightCenterObject's real tick cadence populate FrobTarget. A miss is
    * an error: the fixture never writes FrobTarget or FrobTime.
    */
-  function aim(target, {position, distance = 48, maxFrames = 60, settleFrames = 0} = {}) {
+  /** `point` aims at a visible part of the target instead of its Location,
+   * for example the exposed edge of an opened sliding panel whose Location is
+   * inside the wall pocket. The original trace must still select `target`. */
+  function aim(target, {position, point = null, distance = 48, maxFrames = 60, settleFrames = 0} = {}) {
     if (!target) throw new TypeError('Geometry frob requires a target actor');
     if (!(distance > 0) || !Number.isFinite(distance)) throw new TypeError('Aim distance must be positive and finite');
     if (!Number.isInteger(maxFrames) || maxFrames < 1) throw new TypeError('Aim maxFrames must be a positive integer');
     if (settleFrames) tick(settleFrames);
 
-    const firstTargetLocation = currentLocation(target);
+    if (point && (!Array.isArray(point) || point.length !== 3 || point.some(value => !Number.isFinite(value))))
+      throw new TypeError('Aim point requires three finite coordinates');
+    const aimPoint = () => point ?? currentLocation(target);
+    const firstTargetLocation = aimPoint();
     let initialPosition = position;
     if (!initialPosition) {
       const playerPosition = game.player.position;
@@ -154,7 +160,7 @@ export function createPlayerInputFixture(game, {tickSeconds = 1 / 60, paint = nu
 
     for (let frame = 0; frame < maxFrames; frame++) {
       const playerPosition = [...game.player.position];
-      const angles = anglesFrom(playerPosition, currentLocation(target));
+      const angles = anglesFrom(playerPosition, aimPoint());
       // place() is the only fixture path allowed to set player angles. Passing
       // the live position keeps aim current when either target or pawn moves.
       place(playerPosition, {...angles, zeroVelocity: false});
@@ -183,12 +189,16 @@ export function createPlayerInputFixture(game, {tickSeconds = 1 / 60, paint = nu
     throw new Error(`View trace retained ${target.name ?? 'actor'} after moving ${distance} units and looking away`);
   }
 
-  function clearTarget({maxFrames = 60} = {}) {
+  /** Turn away (by default 180 degrees) until HighlightCenterObject clears
+   * FrobTarget. Original UpdateRotation copies the view yaw into Rotation, so
+   * a caller whose next action uses GetAxes(Rotation), such as DropDecoration,
+   * can keep its yaw (`yawOffset: 0`) and clear the target by pitch instead. */
+  function clearTarget({maxFrames = 60, yawOffset = Math.PI, pitch = null} = {}) {
     const currentYaw = game.interaction.viewRotation?.[1] ?? 0;
     const currentPitch = game.interaction.viewRotation?.[0] ?? 0;
     place([...game.player.position], {
-      yaw: currentYaw / ROTATOR_UNITS_PER_RADIAN + Math.PI,
-      pitch: currentPitch / ROTATOR_UNITS_PER_RADIAN,
+      yaw: currentYaw / ROTATOR_UNITS_PER_RADIAN + yawOffset,
+      pitch: pitch ?? currentPitch / ROTATOR_UNITS_PER_RADIAN,
       zeroVelocity: false,
     });
     for (let frame = 0; frame < maxFrames; frame++) {

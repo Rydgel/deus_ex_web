@@ -138,8 +138,14 @@ while (level.actors.includes(trigger) && frames++ < 1200) {
   if (!opened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); opened = true; }
 }
 assert.ok(frames < 1200, 'walking the authored route reaches OrdersTrigger2');
-assert.deepEqual(events, ['OrdersTrigger2.Touch', 'OrdersTrigger2.Destroyed'],
-  'the original Touch body destroys the trigger, and Destroyed is the only destruction callback it reaches');
+// BeginTouch 0x10369570 records the trigger in JC's slot (AddTouch, JC.Touch)
+// before the reciprocal AddTouch dispatches OrdersTrigger2.Touch. DestroyActor's
+// Touching scan then calls trigger.EndTouch(JC, 1) (0x10395f59-0x10395f79):
+// NoNotifySelf suppresses only the trigger's own UnTouch; EndTouch 0x10369970
+// still clears JC's reciprocal slot and dispatches JC.UnTouch(trigger)
+// (docs/check-encroachment.md, docs/script-destroy.md).
+assert.deepEqual(events, ['OrdersTrigger2.Touch', 'OrdersTrigger2.Destroyed', `${player.name}.UnTouch`],
+  'the original Touch body destroys the trigger; Destroyed is its only destruction callback, and EndTouch notifies JC');
 runtime.processEvent = processEvent;
 
 // -- Recovered DestroyActor effects -------------------------------------------

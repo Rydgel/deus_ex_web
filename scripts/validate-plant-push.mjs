@@ -69,11 +69,31 @@ assert.ok(newDeferred.some(effect => /Plant7\.PushSound/.test(effect)), `push so
 assert.ok(newDeferred.some(effect => /Plant7\.AIStartEvent/.test(effect)), `AI loud-noise recorded: ${newDeferred.join(', ')}`);
 
 // The SetTimer(0.2) push-sound lifetime clears bPushSoundPlaying once the
-// one-shot Timer fires (DeusExDecoration.Timer -> StopSound/AIEndEvent).
+// one-shot Timer fires (DeusExDecoration.Timer -> StopSound/AIEndEvent). The
+// falling plant's own MoveActor then hits the overlapping JC, and that Bump
+// runs DeusExDecoration.Bump again: SetTimer(0.2) restarts the lifetime. Live
+// decoration physics delivers these callbacks, so the Timer clears 0.2 s after
+// the last Bump rather than the manual one.
+const levelInfo = game.collision.queries.levelInfo;
+const seconds = () => runtime.readNamed(levelInfo, 'TimeSeconds');
+const bumpTimes = [], processEvent = runtime.processEvent;
+runtime.processEvent = function (actor, name, ...rest) {
+  if (actor === plant && String(name).toLowerCase() === 'bump') bumpTimes.push(seconds());
+  return processEvent.call(this, actor, name, ...rest);
+};
 game.tick(0.1, {});
 assert.equal(ref(plant, 'bPushSoundPlaying').get(), true, 'still playing before 0.2s');
-game.tick(0.15, {}); // total 0.25s > 0.2s
-assert.equal(ref(plant, 'bPushSoundPlaying').get(), false, 'Timer cleared the push sound after 0.2s');
+let clearedAt = null;
+for (let frame = 0; frame < 20 && clearedAt === null; frame++) {
+  game.tick(0.05, {});
+  if (!ref(plant, 'bPushSoundPlaying').get()) clearedAt = seconds();
+}
+runtime.processEvent = processEvent;
+assert.ok(bumpTimes.length > 0, 'the falling plant re-bumps the overlapping JC through live physics');
+assert.ok(clearedAt !== null, 'Timer cleared the push sound');
+const lifetime = clearedAt - bumpTimes.at(-1);
+assert.ok(lifetime >= 0.2 - 1e-6 && lifetime <= 0.25 + 1e-6,
+  `Timer cleared the push sound 0.2s after the last Bump (lifetime ${lifetime})`);
 const afterTimer = [...game.player.unimplementedPhysicsEffects].filter(effect => !deferredBefore.has(effect));
 assert.ok(afterTimer.some(effect => /Plant7\.StopSound/.test(effect)), 'StopSound recorded by Timer');
 

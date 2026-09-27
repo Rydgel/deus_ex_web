@@ -52,25 +52,34 @@ const level = runtime.levelFor(player), lightSwitch = level.actors.find(actor =>
 assert.ok(lightSwitch, 'Training map has LightSwitch0');
 const pixelObject = tracked.lightmap, initialPixels = [...pixelObject.pixels];
 
-await input.frob(lightSwitch); // On: authored steady brightness remains at its initial byte.
+// TriggerToggle's initial state transition re-enables Tick after BeginPlay's
+// Disable('Tick'). The Training lights have ChangeTime 0 and bInitiallyOn
+// false, so their first enabled Tick clamps Alpha to 0 and writes brightness
+// 0 (docs/script-lights.md). The switch then turns them on. Batch 6 aims
+// through real ticks, so this first Tick precedes any frob.
 input.tick(1);
-assert.equal(syncCalls, 1, 'unchanged steady brightness does not trigger a redundant upload');
-
-await input.frob(lightSwitch); // Off: the original Tick body writes brightness zero.
-input.tick(1);
-assert.equal(syncCalls, 2, 'script Tick callback reaches world.updateLighting after the off write');
+assert.equal(syncCalls, 2, 'the first TriggerLight Tick reaches world.updateLighting');
+assert.deepEqual(changes[1].lights.map(light => light.values.LightBrightness), [0, 0, 0, 0],
+  'bInitiallyOn=false lights write brightness zero on their first Tick');
 assert.equal(tracked.lightmap, pixelObject, 'the affected cached lightmap object is retained');
 const darkPixels = [...pixelObject.pixels];
-assert.ok(darkPixels.some((value, index) => value !== initialPixels[index]), 'off brightness changes cached pixels in place');
+assert.ok(darkPixels.some((value, index) => value !== initialPixels[index]), 'zero brightness changes cached pixels in place');
 
-await input.frob(lightSwitch); // On again: the original Tick body restores the authored brightness.
+await input.frob(lightSwitch); // On: the original Tick body restores the authored brightness.
 input.tick(1);
 assert.equal(syncCalls, 3, 'restored steady brightness reaches the world callback');
 const litPixels = [...pixelObject.pixels];
-assert.ok(litPixels.some((value, index) => value !== darkPixels[index]), 'restored brightness changes the same cached pixels');
+assert.deepEqual(litPixels, initialPixels, 'the authored brightness restores the initial cached pixels');
+input.tick(30);
+assert.equal(syncCalls, 3, 'unchanged steady brightness does not trigger a redundant upload');
+
+await input.frob(lightSwitch); // Off: the original Tick body writes brightness zero.
+input.tick(1);
+assert.equal(syncCalls, 4, 'script Tick callback reaches world.updateLighting after the off write');
+assert.deepEqual([...pixelObject.pixels], darkPixels, 'the off write returns the same cached pixels to dark');
 
 game.reset();
-assert.equal(syncCalls, 4, 'game reset performs one steady-light brightness resync');
-assert.ok([...pixelObject.pixels].some((value, index) => value !== darkPixels[index]), 'reset restores the authored brightness contribution');
+assert.equal(syncCalls, 5, 'game reset performs one steady-light brightness resync');
+assert.deepEqual([...pixelObject.pixels], initialPixels, 'reset restores the authored brightness contribution');
 world.dispose();
 console.log(`Play light-cache bridge validated: ${changes.length} atlas syncs, one cached object retained across off/on/reset.`);

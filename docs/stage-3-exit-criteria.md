@@ -591,3 +591,35 @@ run with every criterion passing:
 are the two tolerated Stage 6 natives. `freshMissionPlayerTraveling` (above)
 is still a host-supplied fresh-entry input awaiting a decision on its Stage 6
 declaration. The gate does not flag it, so a passing gate does not settle it.
+
+The first batch 6 full sweep (`.cache/batch6-sweep-first.log`) found eight
+validators that batch 6 commits had broken. Bisecting placed six at
+`afb85e2` (original player tick), `map-actor-admission` at `3ca5dda` (fresh
+mission entry) and `plant-push` at `7697143` (decoration callbacks). Seven
+still expected pre-batch behavior, or used a fixture pose the original bodies
+now refuse. Each was updated to the original contract:
+
+| Validator | Original behavior now asserted |
+| --- | --- |
+| frob | An empty right click drops through GetAxes(Rotation), and UpdateRotation now copies the view yaw into Rotation. Turning around aimed the drop at a wall, and DropDecoration answered "Can't drop that here". The fixture keeps its yaw and looks down. The scene router returns Frob's declared value (none); ProcessEvent's own result still proves the body ran. |
+| triggers | The same frame's PlayerWalking.ProcessMove (`PlayerPawn.uc:3571-3592`) replaces HitLegLeft with TweenToWaiting(0.2) → BreatheLight. |
+| trigger-actions | The live dispatcher returns the declared event value, which is none for Touch/UnTouch. |
+| world-destroy | EndTouch notifies JC with UnTouch(trigger) after the trigger's Destroyed. |
+| script-light-cache | `bInitiallyOn=false` TriggerLights go dark on their first enabled Tick, before the batch 6 aim finishes. The switch then restores them. |
+| stage3-dark-doors | The fixture aims at an opened panel's exposed edge, because its Location is inside the wall pocket. The new aim `point` option only steers; the trace still selects the panel. |
+| map-actor-admission | Mission00.FirstFrame retires Test_Subject and leaves one UNATCOTroopCarcass. |
+| plant-push | The falling plant re-bumps the overlapping JC and restarts SetTimer(0.2). The Timer clears 0.2 s after the last Bump. |
+
+`world-destroy` also exposed a runtime defect. The pawn move services passed
+their field view, not the host actor, to BeginTouch/EndTouch. The view was
+therefore left in other actors' Touching slots, where DestroyActor's EndTouch
+could not clear it ([map-actor move](script-map-actor-move.md)). This is now
+fixed.
+
+Final sweep with these changes (`.cache/batch6-sweep-final.log`):
+**406 passed, 0 skipped, 2 failed** in 900.5 s (four jobs). The gate passes
+inside the sweep (326 s, 5.6 GiB). Only the two known failures remain:
+`validate-npc-mesh-preview` (the unchanged-pose re-upload assertion) and
+`validate-player-tick-order`, killed at the 6144 MiB per-validator cap
+(6.2 GiB). Run alone, the latter passes at 5.4 GiB; it has measured
+4.5–6.4 GiB across checkpoints. Unit tests: 545/545.

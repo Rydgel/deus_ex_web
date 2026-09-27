@@ -109,10 +109,16 @@ let liveDamageReduced;
 let liveHitAnimationStart;
 const liveHitTweenSteps=[];
 const animationFields=['AnimSequence','AnimFrame','AnimRate','TweenRate','AnimLast'];
+let liveHitTime,liveWaitingTween;
+const levelInfo=game.collision.queries.levelInfo;
 runtime.invokeNative=function captureHitAnimationStart(call){
   const result=unwrappedInvokeNative.call(this,call);
-  if(call.index===259&&call.receiver===player&&ref(player,'AnimSequence')==='HitLegLeft')
+  if(call.index===259&&call.receiver===player&&ref(player,'AnimSequence')==='HitLegLeft'){
     liveHitAnimationStart=Object.fromEntries(animationFields.map(field=>[field,ref(player,field)]));
+    liveHitTime=ref(levelInfo,'TimeSeconds');
+  }
+  if(call.index===294&&call.receiver===player&&liveHitAnimationStart&&!liveWaitingTween)
+    liveWaitingTween={sequence:ref(player,'AnimSequence'),time:ref(levelInfo,'TimeSeconds'),caller:call.script?.entry?.path??null};
   return result;
 };
 runtime.processActorAnimation=function captureHitAnimationTick(actor,seconds){
@@ -148,8 +154,7 @@ assert.deepEqual(Object.fromEntries(bodyParts.map(field=>[field,ref(player,field
   HealthHead:100,HealthTorso:100,HealthArmLeft:100,HealthArmRight:100,
   HealthLegLeft:90,HealthLegRight:100,
 });
-assert.equal(ref(player,'AnimSequence'),'HitLegLeft','Radiation10 selects the left-leg hit animation');
-assert.ok(liveHitAnimationStart,'Radiation10 reaches native PlayAnim during the Timer event');
+assert.ok(liveHitAnimationStart,'Radiation10 selects the left-leg hit animation through native PlayAnim during the Timer event');
 assert.equal(liveHitAnimationStart.AnimFrame,-0.25,'PlayAnim native starts HitLegLeft at its original frame');
 assert.equal(liveHitAnimationStart.AnimRate,2.5,'PlayAnim native applies the original HitLegLeft rate');
 assert.equal(liveHitAnimationStart.TweenRate,2.5,'PlayAnim native applies the authored tween time');
@@ -165,8 +170,17 @@ for(const step of liveHitTweenSteps){
   assert.ok(expected<0,'this focused interval remains inside the initial tween');
   assert.equal(step.after,expected,'the live scheduler follows the original tween advancement');
 }
-assert.equal(ref(player,'AnimFrame'),liveHitTweenSteps.at(-1).after,'the final player frame retains ticked animation progress');
-assert.ok(ref(player,'AnimFrame')>liveHitAnimationStart.AnimFrame,'the player animation advances beyond the native start frame');
+// DamageTrigger1 precedes the spawned player in Level.Actors, so the player's
+// own tick in the same frame reaches original PlayerPawn.PlayerWalking
+// ProcessMove (PlayerPawn.uc:3571-3592): standing, not turning, a TakeHit
+// group and bAnimTransition false (AnimEnd cleared it) select
+// TweenToWaiting(0.2). The original body therefore replaces HitLegLeft with
+// the Waiting tween before the next frame.
+assert.ok(liveWaitingTween,'the same frame reaches the original Waiting tween after the hit');
+assert.equal(liveWaitingTween.time,liveHitTime,'PlayerTick tweens to Waiting in the Timer frame');
+assert.equal(liveWaitingTween.sequence,'BreatheLight','Human.TweenToWaiting selects BreatheLight');
+assert.equal(liveWaitingTween.caller,'Human.TweenToWaiting');
+assert.equal(ref(player,'AnimSequence'),'BreatheLight','the player ends the interval in the Waiting tween');
 assert.ok(!game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
 assert.ok(game.player.unimplementedPhysicsEffects.has(`${player.name}.PlaySound audio`));
 dispatch(damage,'UnTouch',[player]);

@@ -90,6 +90,17 @@ be removed and re-added at the load position.
 Pawns keep their own move entry (`script-pawn-physics.mjs`), and movers keep
 the brush entry. Neither is admitted here.
 
+The pawn entry moves a field view of the pawn, but Touching slots must hold
+actor identities. BeginTouch `0x10369570` writes the source into the other
+actor's slot through the reciprocal AddTouch. DestroyActor's Touching scan
+and EndTouch `0x10369970` later match that slot against the registered actor.
+The pawn move services therefore pass the host (`pawn.self`) to BeginTouch
+and EndTouch, as they already do for hash registration and riders. Batch 6
+first ran the controlled player through this entry, and it exposed the
+earlier view identity: after `OrdersTrigger2.Touch` destroyed the trigger,
+its slot kept the view, and EndTouch could not clear it
+(`validate-world-destroy.mjs`).
+
 ## Batch 6 stacked-decoration rotation contract
 
 The continuous Training route reaches `DeusExDecoration.Bump` on a breakable

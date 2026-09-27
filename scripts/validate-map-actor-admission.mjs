@@ -87,6 +87,14 @@ function assertAdmission(label) {
     } else if (map.pkg.exports[ref - 1].className === 'PickupDistributor') {
       // Original PickupDistributor.PostPostBeginPlay distributes keys then Destroy().
       assert.equal(byIndex.has(ref),false,`${label}: distributor destroyed after startup`);
+    } else if (map.pkg.exports[ref - 1].name === 'UNATCOTroop2' && !byIndex.has(ref)) {
+      // UNATCOTroop2 is Training's Test_Subject. On fresh mission entry the
+      // first Mission00 timer (about 1 s) runs FirstFrame, which knocks it
+      // out; ScriptedPawn.Dying then spawns its carcass and destroys the pawn
+      // (docs/script-training-mission-entry.md). Once retired, its original
+      // carcass must be present instead.
+      assert.equal(level.actors.filter(a => a && clsKey(a) === 'deusex.unatcotroopcarcass').length, 1,
+        `${label}: retired Test_Subject left exactly one original carcass`);
     } else {
       assert.equal(byIndex.get(ref)?.index, ref, `${label}: slot ${slot} (${map.pkg.exports[ref - 1].name}) keeps its actor`);
     }

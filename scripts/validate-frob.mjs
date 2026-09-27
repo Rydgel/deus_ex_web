@@ -40,8 +40,20 @@ const plant = find('Plant7');
 assert.equal(runtime.instance(plant).cls.record.name, 'Plant2');
 assert.equal(ref(plant, 'Event'), 'None', 'training plant has no Event tag (no trigger fanout)');
 assert.equal(ref(plant, 'ConListItems'), null, 'no bound conversation (StartConversation returns early-false)');
+// The router now returns a result-carrying event's declared value
+// (dispatchSpawnedEvent); Frob declares none. ProcessEvent's own true/false
+// still says whether the body ran rather than being probe-masked or gated.
+const ran = [];
+const processEvent = runtime.processEvent;
+runtime.processEvent = function (receiver, name, ...rest) {
+  const result = processEvent.call(this, receiver, name, ...rest);
+  if (receiver === plant && name === 'Frob') ran.push(result);
+  return result;
+};
 const outcome = game.doors.scriptRuntime.dispatchEvent(plant, 'Frob', [player, null]);
-assert.deepEqual(outcome, { handled: true, result: true }, 'the real DeusExDecoration.Frob ran through the general router (no scene-adapter pause)');
+runtime.processEvent = processEvent;
+assert.deepEqual(outcome, { handled: true, result: undefined }, 'Frob returns no declared value through the general router');
+assert.deepEqual(ran, [true], 'the real DeusExDecoration.Frob ran through the general router (no scene-adapter pause)');
 
 // game.use() takes the original right-click route, DeusExPlayer.ParseRightClick.
 // A pushable decoration is grabbed there (GrabDecoration), not frobbed.
@@ -56,8 +68,13 @@ assert.equal(ref(plant, 'Physics'), 0, 'the carried plant is PHYS_None');
 assert.equal(plant.flags & 0x1f, 0, 'SetCollision(False,False,False) and bCollideWorld=False clear the +0x1dc word');
 assert.equal(ref(plant, 'bCollideWorld'), false, 'the script field reads the native word');
 // Right click with nothing highlighted is ParseRightClick -> PutInHand(None),
-// which drops the carried decoration (DeusExPlayer.DropDecoration).
-input.clearTarget();
+// which drops the carried decoration (DeusExPlayer.DropDecoration). Its drop
+// point is Location + (radii + 4) * X from GetAxes(Rotation), and original
+// UpdateRotation copies the view yaw into Rotation. Turning around would aim
+// the drop at the wall behind JC, where SetLocation fails and the original
+// body says "Can't drop that here". Keep the yaw and look down to clear the
+// target, so the drop point is the plant's own former space.
+input.clearTarget({yawOffset: 0, pitch: -1.2});
 assert.deepEqual(game.use(), { ok: true, message: '' }, 'an empty right click runs ParseRightClick');
 assert.equal(ref(player, 'CarriedDecoration'), null, 'DropDecoration released the plant');
 assert.equal(ref(plant, 'Base'), null, 'the dropped plant leaves JC');

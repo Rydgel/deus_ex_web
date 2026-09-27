@@ -187,7 +187,9 @@ assert.ok(runtime.lookup(orders, 'Touch')?.function, 'integrated host must prepa
 assert.deepEqual(actions.handleNative({ index: 720, argumentCount: 0, receiver: orders }), {
   handled: true, value: player,
 });
-assert.equal(game.collision.doorCallbacks.dispatch(orders, 'Touch', [player]), true);
+// The live scene dispatcher returns the event's declared value (none for
+// Touch/UnTouch); the field and flag effects below show each body ran.
+assert.equal(game.collision.doorCallbacks.dispatch(orders, 'Touch', [player]), undefined);
 assert.equal(runtime.namedReference(pawn, 'Orders').get(), 'Patrolling');
 assert.equal(runtime.namedReference(pawn, 'OrderTag').get(), 'gunroom');
 // StartUp.BeginState set bInterruptState on the live pawn, so SetState is an
@@ -195,9 +197,9 @@ assert.equal(runtime.namedReference(pawn, 'OrderTag').get(), 'gunroom');
 assert.equal(runtime.instance(pawn).state?.stateNode?.record?.name, 'Patrolling');
 
 const flag = find('FlagTrigger0');
-assert.equal(game.collision.doorCallbacks.dispatch(flag, 'Touch', [player]), true);
+assert.equal(game.collision.doorCallbacks.dispatch(flag, 'Touch', [player]), undefined);
 assert.equal(actions.flagBase.getBool('MunitionsTrooperReady'), true);
-assert.equal(game.collision.doorCallbacks.dispatch(flag, 'UnTouch', [player]), true);
+assert.equal(game.collision.doorCallbacks.dispatch(flag, 'UnTouch', [player]), undefined);
 assert.equal(actions.flagBase.getBool('MunitionsTrooperReady'), false);
 
 // The selected DamageTrigger body runs the original Training radiation path.

@@ -58,7 +58,11 @@ input.driveLegacy({forward:0});
 assert.ok(game.player.position[0]>4320,'player walks through the opened doorway');
 
 const beforeClose=iterations.length;
-assert.equal((await use(pair[0])).ok,true);tick(2.1);
+// Opened, each panel's Location is inside its wall pocket; only its north edge
+// (Y 784-792) faces the doorway. Stand in the doorway and aim at that edge;
+// HighlightCenterObject's trace still has to select the panel.
+input.aim(pair[0],{position:[4328,836,-144],point:[4328,790,-128]});
+assert.equal(game.use().ok,true);tick(2.1);
 assert.deepEqual(pair.map(mover=>mover.interpolation.key),[0,0]);
 assert.deepEqual(pair.map(mover=>mover.collider.offset),[[0,0,0],[0,0,0]]);
 assert.deepEqual(iterations.slice(beforeClose),[{native:304,next:3,matches:2},{native:304,next:1,matches:0},{native:304,next:1,matches:0}],
