@@ -562,5 +562,32 @@ Latest route-only result: **1 probe, 2 boots, 199 s, peak 1089 MiB**
 (`.cache/batch6-route-medical-table.json`). Original cadet retirement, body
 search/key, medical-door unlock, hand transition, carry/drop, table trigger and
 both exit doors passed. Movement then stalled at `[4715.41,544.07,-144.10]`
-while approaching the fixture waypoint `[4860,544]` before darkdoor2. The route
-and criterion 3 remain OPEN. No final full sweep has run for batch 6.
+while approaching the fixture waypoint `[4860,544]` before darkdoor2.
+
+That stall was a fixture waypoint error, not a runtime defect. The dark room is
+a walled maze, and the straight leg met a compiled-BSP wall at X=4735.5, which
+is the pawn's 20-unit radius from the stall. The fixture now follows six maze
+points from a grid search over the compiled BSP. Each leg was confirmed clear
+by the swept world query ([route](script-training-route.md)). Route-only
+result: **1 probe, 1 boot, 183 s, peak 1158 MiB**
+(`.cache/batch6-route-darkdoor2.json`). The route crosses both dark-door pairs,
+plays `DL_repairbot`, and ends in `DL_part2` at `[5362,542,-144]` after 280.7
+game seconds (16144 route frames). Criteria 1, 2, 3 and 5 pass. Criterion 4
+reports only the StaticLoadObject probe, which this filter does not run.
+
+Full unfiltered gate, 2026-09-27: **95 probes, 3 boots, 313 s, peak
+1909 MiB**, exit 0 (`.cache/batch6-gate-final.json`). This is the first gate
+run with every criterion passing:
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | PASS |
+| 2. tick | PASS, both 10 s legs and reset |
+| 3. interactions | PASS: all class, bump, touch, exec, fire and sequence probes plus the continuous PlayerStart1 → `DL_part2` route (185 s). Tolerated: ClientTravel (Teleporter0 → GameInfo.SendPlayer) and SaveGame 3011 (QuickSave), both Stage 6. |
+| 4. lifecycle | PASS: 113 classes, 12182 accepted spawns, 288 original-gate rejections, 0 throws; 1102 accepted destroys across 24 classes; 22579 cleanup passes, 131 compacted slots; `DXFonts.MainMenuTrueType` through shared-graph StaticLoadObject. |
+| 5. substitutes | PASS: no declared substitute or unclassified host native remains. |
+
+230 distinct non-primitive natives were reached. The only unsupported ones
+are the two tolerated Stage 6 natives. `freshMissionPlayerTraveling` (above)
+is still a host-supplied fresh-entry input awaiting a decision on its Stage 6
+declaration. The gate does not flag it, so a passing gate does not settle it.

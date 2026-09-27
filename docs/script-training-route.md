@@ -18,7 +18,16 @@ collision dimensions. The fixture skirts it through physical route points
 `[1360,200]`, `[1760,200]`, and `[1760,850]`; every leg still uses the live game
 movement and collision path. The map's serialized ReachSpec chain starts at
 PathNode423/PatrolPoint2 and does not establish an ingress from the current
-player position. Wall-mounted door crossings use points on the map-derived
+player position. The dark room between the `darkdoor` and `darkdoor2` pairs is
+a walled maze: a direct leg from `[4360,848]` to the darkdoor2 approach meets a
+BSP wall at X=4735.5 (normal -X), where the earlier fixture stalled at
+`[4715.41,544.07]`. The fixture now follows `[4376,788]`, `[4520,788]`,
+`[4568,828]`, `[4696,828]`, `[4824,732]` and `[4848,564]`. They come from an
+8-unit grid search of free player positions over the compiled BSP at a 24-unit
+horizontal extent (the pawn's CollisionRadius is 20). The original swept world
+MultiLineCheck then confirmed each leg clear at both 20 and 24 units. Like the
+gundoor skirt, this is planning evidence, not the original player's path.
+Wall-mounted door crossings use points on the map-derived
 brush centerlines: `paddoor`/`hackdoor`/`Body_Room_Entry`/`bodydoorsopen`/
 `darkdoor` at Y=848, and `darkdoor2` at Y=544. The medical room's horizontal
 door plane is crossed at X=3688. These coordinates guide the fixture; actual

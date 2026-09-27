@@ -849,6 +849,12 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     must(game.collision.movers.find(mover => mover.name === darkDoor.name)?.interpolation.key === 1,
       'dark-door pair did not open through its original tag fanout');
     const darkDoor2 = actorNamed('DeusExMover29'); must(darkDoor2, 'authored darkdoor2 mover is missing');
+    // The dark room between the two door pairs is a walled maze; a straight
+    // leg to darkdoor2 meets the BSP wall at X=4735.5. These route points come
+    // from a compiled-BSP grid search at a 24-unit extent, each leg confirmed
+    // clear by the swept world query (docs/script-training-route.md).
+    for (const point of [[4376, 788], [4520, 788], [4568, 828], [4696, 828], [4824, 732], [4848, 564]])
+      await walkToPoint(point, 12);
     await walkToPoint([4860, 544], 12);
     await moveToActor(darkDoor2, 80); await openMover(darkDoor2);
     await walkToPoint([4920, 544], 12);
