@@ -298,12 +298,48 @@ Velocity. A serialized mover therefore needs no interpolation host storage
 while this original body returns early. An active mover without prepared
 storage remains explicitly unsupported.
 
-The audit also corrected `runDecorationPhysics` to pass `{nonPawn: true}` to
-its recovered falling body, as the original IsA(APawn) gate requires. The
-former default took the Pawn acceleration prelude (including clearing Z),
-which was invisible for Training's zero-acceleration initial decoration falls.
-The 11 focused Decoration/Falling checks and the 29-case original mover body
-differential pass after the integration change.
+The earlier decoration adapter passed `{nonPawn: true}` to its recovered
+falling body, as the original IsA(APawn) gate requires. Batch 6's live crate
+route then exposed a more important adapter boundary: its Falling/Rolling
+callbacks used detached snapshots, wrote `Base` directly, and could discard
+script vector writes or bypass SetBase's Attach/Detach/StandingCount events.
+`script-doors.mjs` now routes map Decoration Falling and Rolling through the
+field-backed `runSpawnedActorFalling`/`runActorRolling` adapters in
+`script-actor-physics.mjs`. These re-read VM fields after synchronous events,
+use the recovered MoveActor scene service, dispatch the original callbacks,
+and use native SetPhysics/SetSupportBase translations. The Falling adapter
+selects `decorationLanded` for ADecoration ancestry (including its live
+`numLandings` field) and `actorLanded` for other non-Pawn classes; the latter
+must not stand in for the Decoration-specific `+0x324` reset. Rolling's
+falling transition recursively enters the same field-backed Falling route,
+passing through the loop iteration value unchanged (`0x103d578e`–`0x103d5798`).
+The adapter passes the live `bBounce` field to physRolling; its branch is read
+at `0x103d4fd3`, after each synchronous HitWall event. The settled-floor path
+calls `SetSupportBase` at `0x103d54e2`–`0x103d54f6`, while the transition to
+Falling calls `SetPhysics(Falling, null)` at `0x103d56b4`–`0x103d56c0`.
+
+The original body evidence remains the 321-case exact Rolling oracle in
+`docs/rolling.md`, the Falling corpus in `scripts/validate-native-falling.mjs`,
+the 506-case Landing corpus in `docs/landing.md`, the 102-case callback
+corpus in `docs/walking-callbacks.md`, and the native map-actor MoveActor
+comparisons in `docs/script-map-actor-move.md`. These oracles control the
+world/query and event callbacks; they establish the bodies and callback
+contracts, while the live adapter is separately checked by the existing
+Training Decoration settle/roll and stacked-crate route fixtures. A captured
+route entry with `StandingCount=255` and `Base=LevelInfo` is known to be
+malformed host SetBase provenance, not a recovered valid map state; it is kept
+as diagnostic evidence and is not normalized by this adapter. General
+nonzero-delta rotation with riders and any unlinked collision source remain
+their existing explicit MoveActor boundaries.
+
+The bounded `PlayerStart -> DL_part2` route was replayed after this adapter
+change. At the captured zero-delta crate rotation request,
+`CrateBreakableMedGeneral1` retained `StandingCount=1` and `Base=LevelInfo0`,
+with `CrateBreakableMedGeneral2` still based on it; the older host-snapshot
+capture reported StandingCount 255 at the same point. The route then stopped
+at the separate `MoveActor scene branch is not linked` boundary, so this
+result checks the SetBase/field-storage integration only and does not verify
+the rider rotation pass.
 
 After the full scheduler was linked, `node scripts/measure-training-physics.mjs`
 completed the same 600 idle frames without an exception (54 seconds, 586 MiB

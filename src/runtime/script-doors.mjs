@@ -6,8 +6,7 @@ import { refValue } from './script-vm.mjs';
 import { tickMoverInterpolation } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
-import { runDecorationPhysics, linkDecorationCollision, PHYS_FALLING, PHYS_ROLLING, PHYS_NONE } from './decoration-physics.mjs';
-import { processDecorationHitWall } from './walking-callbacks.mjs';
+import { linkDecorationCollision } from './decoration-physics.mjs';
 import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
@@ -29,7 +28,7 @@ import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
-import { runSpawnedActorFalling, runActorRotation } from './script-actor-physics.mjs';
+import { runSpawnedActorFalling, runActorRolling, runActorRotation } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
 
 const f = Math.fround;
@@ -1167,40 +1166,19 @@ export async function createScriptDoors({
   };
 
   // Non-Pawn AActor::performPhysics (actor-physics.mjs), reached from the
-  // recovered Actor.Tick of every admitted non-Pawn actor. A linked map
-  // decoration's Falling/Rolling run the recovered, oracle-validated routines
-  // (runDecorationPhysics: physFalling/processLanded/physRolling and the
-  // non-Pawn processHitWall 0x103cecc0) against the LIVE level hash (the
-  // creation-time `queries` closure is replaced by a rebuilt hash on every
-  // reset). Spawned collision actors use live field-backed falling and landing;
-  // physicsRotation (0x103ca1e0) is shared by map and spawned actors.
-  const linkedDecorations = new Set(decorations);
-  function decorationMovement(actor, delta) {
-    if (!linkedDecorations.has(actor) || !level.hash)
-      throw new Error(`Non-Pawn physFalling/physRolling for ${runtime.instance(actor).cls.record.key} is not linked`);
-    runDecorationPhysics(actor, delta, {
-      queries: level.hash,
-      zone: zoneAt?.(actor.position ?? actor.values?.Location) ?? {},
-      landedEvent: normal => runtime.processEvent(actor, 'Landed', [normal]),
-      // Non-Pawn processHitWall (0x103cecc0), recovered and oracle-validated as
-      // processDecorationHitWall (docs/walking-callbacks.md): return for a Pawn
-      // wall, else dispatch the unmodified HitWall(normal,wall) only while the
-      // decoration probes HitWall. No Pawn direction/MinHitWall/MoveTimer path.
-      onHitWall: hit => processDecorationHitWall(actor, hit?.normal ?? [0, 0, 0], hit?.actor ?? null, {
-        isProbing: (source, name) => runtime.isProbing(source, name),
-        dispatch: (source, event, args) => runtime.processEvent(source, event, args),
-      }),
-      // physRolling calls eventHitWall directly for any hit (no processHitWall).
-      onHitWallEvent: (normal, wall) => runtime.processEvent(actor, 'HitWall', [normal, wall ?? null]),
-    });
-  }
+  // recovered Actor.Tick. Map decorations use the same live field-backed
+  // physics adapter as other map actors: it reaches the native MoveActor,
+  // SetPhysics/SetSupportBase callbacks and ProcessEvent synchronously, so
+  // script writes are never hidden by a detached host snapshot. Falling selects
+  // the recovered class-specific processLanded branch (Decoration or other
+  // non-Pawn); Rolling may recurse into that same live Falling adapter.
+  // linkDecorationCollision above remains the map-load hash linkage for
+  // decoration queries. Spawned actors and physicsRotation share these bodies.
   runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
     read: (target, name) => runtime.readNamed(target, name),
     write: (target, name, value) => runtime.writeNamed(target, name,value),
-    physFalling: (actor,delta)=>linkedDecorations.has(actor)
-      ?decorationMovement(actor,delta)
-      :runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
-    physRolling: decorationMovement,
+    physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
+    physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physMovingBrush: (actor,delta)=>{
       // AMover::physMovingBrush returns when bInterpolating is clear. All
       // map movers have native interpolation storage, including idle movers

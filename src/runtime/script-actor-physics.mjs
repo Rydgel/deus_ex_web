@@ -1,15 +1,16 @@
 import {falling} from './falling.mjs';
-import {actorLanded} from './landing.mjs';
+import {actorLanded,decorationLanded} from './landing.mjs';
 import {playerMove} from './player-move.mjs';
 import {setActorPhysics,findActorBase} from './script-actor-collision.mjs';
-import {processDecorationHitWall} from './walking-callbacks.mjs';
+import {processDecorationHitWall,setSupportBase} from './walking-callbacks.mjs';
 import {physicsRotation} from './actor-rotation.mjs';
 import {setScriptRotation} from './script-set-rotation.mjs';
+import {rolling} from './rolling.mjs';
 
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
-export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
+export function runSpawnedActorFalling(runtime,actor,seconds,zone,iterations=0) {
   // A serialized map actor already owns its collision/native surface; preserve
   // that identity and only link its hash cylinder to live Location. Spawned
   // actors expose the same members through installActorCollisionView.
@@ -19,10 +20,18 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
   const get=name=>runtime.readNamed(actor,name);
   const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
   const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
+  const isDecoration=(()=>{
+    for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)
+      if(cls.record.key==='engine.decoration')return true;
+    return false;
+  })();
   const host={};
   for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
     Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
+  if(isDecoration)Object.defineProperty(host,'landingCounter',{
+    get:()=>get('numLandings'),set:value=>runtime.writeNamed(actor,'numLandings',value),
+  });
   Object.assign(host,{gravity:zone.ZoneGravity??[0,0,-950],zoneVelocity:zone.ZoneVelocity??[0,0,0],
     terminalVelocity:zone.ZoneTerminalVelocity??2500,
     zoneNumber:runtime.regionValue(actor).zoneNumber,
@@ -35,9 +44,42 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
     landedEvent:normal=>dispatch(actor,'Landed',[normal]),
     setPhysics:(next,base)=>setActorPhysics(actor,next,world(base),{dispatch,
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
-    landed:hit=>actorLanded(host,hit,{zone}),
+    landed:hit=>isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}),
   });
-  falling(host,seconds,0,{nonPawn:true,hitWallEvent:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)])});
+  falling(host,seconds,iterations,{nonPawn:true,hitWallEvent:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)])});
+}
+
+/** Field-backed AActor::physRolling for a serialized map actor or spawned
+ * collision-view actor. The original Rolling body calls live ULevel
+ * MoveActor, ProcessEvent, SetPhysics/SetSupportBase and can recurse into the
+ * original Falling body; callbacks therefore read and write script fields at
+ * each access instead of copying a host snapshot. Evidence: docs/rolling.md,
+ * docs/script-map-actor-move.md and docs/walking-callbacks.md. */
+export function runActorRolling(runtime,actor,seconds,zone) {
+  const level=runtime.collisionViewActors.has(actor)?runtime.levelFor(actor)
+    :runtime.mapMoveLevel(actor,'physRolling');
+  if(!level?.hash)throw new Error('Rolling actor requires the level collision hash');
+  const get=name=>runtime.readNamed(actor,name);
+  const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
+  const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
+  const host={};
+  for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
+    physics:'Physics',justTeleported:'bJustTeleported',base:'Base',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
+    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
+  rolling(host,seconds,{
+    zone,
+    move:delta=>{
+      const result=playerMove(actor,delta,runtime.spawnedMoveServices(actor,level));
+      return {time:Math.fround(result.time),normal:result.hit?.normal??[0,0,0],actor:world(result.hit?.actor??null)};
+    },
+    eventHitWall:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)]),
+    eventFalling:()=>dispatch(actor,'Falling',[]),
+    setPhysics:(next,base)=>setActorPhysics(actor,next,world(base),{dispatch,
+      findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
+    physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,zone,iterations),
+    setBase:target=>setSupportBase(actor,world(target),dispatch),
+  });
+  return get('Physics');
 }
 
 export function runActorRotation(runtime,actor,seconds) {

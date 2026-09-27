@@ -72,6 +72,9 @@ export function rolling(host, seconds, { zone, move, eventHitWall, eventFalling,
   velocity = frictionVelocity.map((value, axis) => axis === 2
     ? f(dt * acceleration[2] + f(value * fluidFactor))
     : f(f(value * fluidFactor) + f(acceleration[axis] * dt)));
+  // The native stores both friction results on AActor::Velocity before it
+  // reaches MoveActor or a script event (0x103d4c97..0x103d4d09).
+  host.velocity = velocity.slice();
   const desiredMove = add(velocity, zoneVelocity);
   const oldLocation = host.position.map(f);
   host.justTeleported = false;
@@ -91,7 +94,12 @@ export function rolling(host, seconds, { zone, move, eventHitWall, eventFalling,
       let hit = move(delta);
       if (hit.time < 1) {
         eventHitWall(hit.normal, hit.actor);
-        if (bounce) {
+        // 0x103d4fd3 tests AActor::bBounce after the synchronous HitWall
+        // ProcessEvent. A script callback may change the flag during dispatch;
+        // field-backed hosts therefore take the current field value. Controlled
+        // native-reference fixtures without that field use the explicit option.
+        const isBouncing = host.bBounce === undefined ? Boolean(bounce) : Boolean(host.bBounce);
+        if (isBouncing) {
           // Original bBounce branch 0x103d4fdc-0x103d4ff7: eventHitWall (dispatched
           // above, unconditionally), then for the first two bounces refund the
           // unspent time and skip the slide entirely (jmp to the floor drop). The
@@ -165,9 +173,12 @@ export function rolling(host, seconds, { zone, move, eventHitWall, eventFalling,
           // multiplies reload, and each Location-OldLocation difference is stored
           // float32 first. Rounding the divisor to float32 first tipped the
           // reciprocal by one ULP on boundary cases; only the reciprocal is f32.
-          velocity = scale(sub(host.position, oldLocation), f(1 / (dt - remainingTime)));
-        velocity = [velocity[0], velocity[1], 0];
-        host.velocity = velocity.slice();
+          host.velocity = scale(sub(host.position, oldLocation), f(1 / (dt - remainingTime)));
+        // When the displacement store is skipped, preserve the live Velocity
+        // possibly written by Falling/SetPhysics callbacks, as the native does;
+        // it zeros only the Z component at 0x103d577d.
+        const currentVelocity = host.velocity.map(f);
+        host.velocity = [currentVelocity[0], currentVelocity[1], 0];
         if (remainingTime > .005) physFalling(remainingTime, iterations);
         return;
       }

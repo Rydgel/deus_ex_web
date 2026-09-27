@@ -83,6 +83,38 @@ test('wall contact dispatches HitWall and slides along the floor', () => {
   close(result.velocity[0], 29.94000244140625);
 });
 
+test('HitWall can enable bounce live; callback velocity and Falling writes remain visible', () => {
+  const host = { position: [0, 0, 100], velocity: [1000, 0, 0], acceleration: [0, 0, 0],
+    physics: 7, base: null, justTeleported: false, bBounce: false };
+  const moves = [], events = [];
+  rolling(host, .1, {
+    zone: zone(),
+    move(delta) {
+      moves.push(delta.map(f));
+      return moves.length === 1
+        ? { time: .5, normal: [-1, 0, 0], actor: null }
+        : { time: 1, normal: [0, 0, 0], actor: null };
+    },
+    eventHitWall() {
+      events.push({ hitWallVelocity: host.velocity.slice() });
+      host.bBounce = true;
+    },
+    eventFalling() {
+      host.velocity = [77, 88, 99];
+      host.justTeleported = true;
+    },
+    setPhysics(next) { host.physics = next; },
+    physFalling(remaining, iterations) { events.push({ physFalling: [remaining, iterations, host.velocity.slice()] }); },
+    setBase(actor) { host.base = actor; },
+  });
+  assert.deepEqual(events[0], { hitWallVelocity: [199.60000610351562, 0, 0] },
+    'HitWall observes the native friction/fluid Velocity store');
+  assert.deepEqual(moves[1], [0, 0, -16], 'the live bBounce store skips the wall-slide MoveActor');
+  assert.deepEqual(host.velocity, [77, 88, 0], 'the just-teleported Falling branch preserves callback X/Y');
+  assert.deepEqual(events[1], { physFalling: [f(.125), 1, [77, 88, 0]] },
+    'physFalling receives rolling iterations and the live callback velocity');
+});
+
 test('sloped floor reports DropHitZ<1 and enters the Falling transition', () => {
   const result = run({ position: [0, 0, 10], velocity: [60, 40, 0], acceleration: [0, 0, 0], dt: .2, floorNormal: [.6, 0, .8], zone: zone() });
   assert.equal(result.physics, 2);

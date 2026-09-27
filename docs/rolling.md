@@ -17,13 +17,18 @@ that executes those instructions.
    compiler actually emitted (see below):
    - `Velocity -= (Velocity.SafeNormal - Acceleration.SafeNormal) * Velocity.Size() * dt * ZoneGroundFriction`
    - `Velocity = Velocity*(1 - ZoneFluidFriction*dt) + Acceleration*dt`
+   Both computed velocity vectors are stored to `AActor::Velocity` at
+   `0x103d4c97`–`0x103d4ca8` and `0x103d4cf5`–`0x103d4d09`; callbacks later in
+   the body therefore observe the final friction/fluid result.
 2. `DesiredMove = Velocity + ZoneVelocity`; `OldLocation = Location`;
    `bJustTeleported = 0`. `Down = (ZoneGravity.Z > 0 ? +1 : -1) * 16`.
 3. Substep loop (at most 8 iterations), `timeTick = min(0.1, remaining*0.5)` when
    `remaining > 0.1` (the comparison is against the original double `0.1`, so a
    float32 `0.1` takes the halving branch), else `timeTick = remaining`:
    - horizontal `ULevel.MoveActor(this, timeTick*DesiredMove, Rotation, Hit)`;
-     a hit calls the script `HitWall` event and slides
+     a hit calls the script `HitWall` event and then re-reads `bBounce`
+     (`AActor+0x1ec bit 0x10`, test at `0x103d4fd3`), so the synchronous event
+     can enable or disable the bounce branch before it slides
      `Delta = (Delta - Normal*(Delta|Normal))*(1-Time)`, re-moving and running
      `TwoWallAdjust`/`eventHitWall` on a second hit. `bBounce` (actor+0x1ec bit
      0x10, tested at `0x103d4fd3`) is a separate branch: after the same
@@ -36,7 +41,8 @@ that executes those instructions.
      `timeTick*(1 - Min(1, ActualDist/DesiredDist))` of remaining time (a
      zero-length desired move is capped to 1), dispatch `Falling`, default
      `Physics==Rolling` to `Falling`, and recurse into `physFalling` for the
-     remaining time. Otherwise `SetSupportBase(Hit.Actor)` when it differs from
+     remaining time and the current loop-iteration argument. Otherwise call
+     `SetSupportBase(Hit.Actor)` (0x103d54f3–0x103d54f6) when it differs from
      `Base`.
 4. `Velocity = (Location - OldLocation) / dt` unless `bJustTeleported`.
 
@@ -99,7 +105,9 @@ refund accumulation); each now retains the original precision (see the list abov
 
 ## Boundaries
 
-- `bBounce` is a caller-selected branch (passed as `bounce`), now oracle-validated
+- `bBounce` is re-read from the live actor after each HitWall ProcessEvent; the
+  explicit `bounce` option is only a fallback for controlled fixtures without a
+  host field. Its branch is now oracle-validated
   bit-exact but not reached by any training decoration (plants do not set bBounce);
   it applies to thrown/bouncing objects. Its velocity is still the end-of-tick
   displacement store — physRolling itself performs no explicit velocity reflection.
