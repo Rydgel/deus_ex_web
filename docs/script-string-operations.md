@@ -171,3 +171,12 @@ when an invalid character is encountered. The runtime does not initialize a
 second name table or infer root-window readiness. A native comparison covers
 the scan and error/intern call order; an original GetActiveDataLink bytecode
 case covers the shared native call and its result flowing into FlagBase.
+
+## ObjectToString
+
+Core `execObjectToString` (`0x10131f00`) returns `None` for a null reference
+and otherwise calls `GetPathName(NULL,NULL)`, retaining the package/Outer
+chain and FName spelling. The former short-name conversion broke the original
+carried-body drop: `String(Class)` must produce
+`DeusEx.UNATCOTroopCarcass`. The instruction evidence, identity adapter and
+end-to-end case are in [Training mission entry](script-training-mission-entry.md).

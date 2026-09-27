@@ -48,6 +48,18 @@ export async function createLiveMissionRuntime({runtime, assets, level}) {
   return {
     class: missionClass, levelInfoClass,
     active,
+    // Play's "Player start" enters a fresh mission, whereas cold Login alone
+    // has no incoming travel state. Supply the marker carried from original
+    // DeusExPlayer.PreTravel (true, bAdd=true, expiration=0). Original Timer
+    // owns FirstFrame and consumes it; never run mission setup directly here.
+    // This is the bounded fresh-entry input, not general travel/save loading.
+    // Evidence: docs/script-training-mission-entry.md.
+    beginFreshMission(player) {
+      const flags=runtime.readNamed(player,'FlagBase');
+      if(!flags)throw new Error('Fresh mission entry requires the logged-in player FlagBase');
+      const args=['PlayerTraveling',true,true,0];
+      runtime.callFunction(runtime.lookup(flags,'SetBool'),flags,args.length,index=>args[index]);
+    },
     has: candidate => candidate != null && runtime.instance(candidate).cls === missionClass
       && !runtime.instance(candidate).pendingKill,
     tick: (seconds, options) => {

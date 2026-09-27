@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { scriptStringEqual, scriptLen, scriptInStr, scriptMid, scriptCaps, scriptLeft, scriptRight, scriptAt, scriptNameToString } from '../src/runtime/script-string-operations.mjs';
+import { scriptStringEqual, scriptLen, scriptInStr, scriptMid, scriptCaps, scriptLeft, scriptRight, scriptAt, scriptNameToString, scriptObjectToString } from '../src/runtime/script-string-operations.mjs';
 import { compileFunction } from '../src/runtime/script-vm.mjs';
+
+test('ObjectToString preserves the package and Outer path used to reload carried bodies',()=>{
+  const carcass={kind:'Class',name:'UNATCOTroopCarcass',asset:{name:'DeusEx'},entry:{path:'UNATCOTroopCarcass'}};
+  assert.equal(scriptObjectToString(carcass),'DeusEx.UNATCOTroopCarcass');
+  assert.equal(scriptObjectToString(null),'None');
+  assert.equal(scriptObjectToString({name:'Child',outer:{name:'Parent',outer:{name:'Package'}}}),
+    'Package.Parent.Child');
+  const identity={},record={name:'LiveChild',outer:{name:'Transient'}};
+  assert.equal(scriptObjectToString(identity,value=>value===identity?record:value),'Transient.LiveChild');
+});
 
 test('string comparisons use terminated UTF-16 text and Caps folds only ASCII',()=>{
   assert.equal(scriptStringEqual('A\0ignored','A'),true);

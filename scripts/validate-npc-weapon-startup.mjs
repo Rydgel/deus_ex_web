@@ -113,15 +113,27 @@ for (const actor of npcPawns) {
 assert.equal(targets.size, 4, 'all four armed Training NPCs are scripted pawns');
 const keyPawn=npcPawns.find(pawn=>pawn.name==='UNATCOTroop2');
 assert.ok(keyPawn,'the authored distributor target is a linked pawn');
-const verifyDistributedKey = () => {
+const verifyDistributedKey = ({knockedOut=false}={}) => {
   const keys=spawnedInventory().filter(item=>instance(item).cls.record.key==='deusex.nanokey');
   assert.equal(keys.length,1,'PickupDistributor spawned exactly one authored NanoKey');
   const key=keys[0];
-  assert.equal(get(key,'Owner'),keyPawn);assert.equal(get(key,'Instigator'),keyPawn);
-  assert.equal(get(key,'Base'),keyPawn);assert.equal(get(keyPawn,'Inventory'),key);
+  // Fresh mission entry now runs Mission00.FirstFrame. SpawnCarcass moves
+  // the same key from the cadet to his unconscious body; it creates no key.
+  const holder=knockedOut?level.actors.find(actor=>actor?.lineage?.includes('deusex.deusexcarcass')&&
+    get(actor,'CarcassName')===keyPawn.name):keyPawn;
+  assert.ok(holder,'the original distributor recipient or his body is live');
+  assert.ok(get(key,'Owner')===holder,'the key belongs to the original holder');
+  if(!knockedOut){
+    assert.ok(get(key,'Instigator')===keyPawn);
+    assert.ok(get(key,'Base')===keyPawn);
+    assert.equal(get(keyPawn,'StandingCount'),1,'original SetBase adds one key rider');
+  }else{
+    assert.equal(get(holder,'bNotDead'),true);
+    assert.ok(!level.actors.includes(keyPawn));
+  }
+  assert.ok(get(holder,'Inventory')===key);
   assert.equal(get(key,'Inventory'),null,'unarmed target carries only the distributor key');
   assert.equal(get(key,'KeyID'),distributedInput.keyID);assert.equal(get(key,'Description'),distributedInput.description);
-  assert.equal(get(keyPawn,'StandingCount'),1,'original SetBase adds one key rider');
   return key;
 };
 // This headless fixture continuously observes the four target pawns. Supply
@@ -159,7 +171,7 @@ for (let run = 0; run < 3; run++) {
   const items = spawnedInventory();
   const player = game.player.collisionActor;
   const rings = items.filter(item => instance(item).cls.record.key === 'deusex.nanokeyring');
-  const distributedKey=verifyDistributedKey();
+  const distributedKey=verifyDistributedKey({knockedOut:true});
   const npcItems = items.filter(item => !rings.includes(item)&&item!==distributedKey);
   assert.equal(rings.length, 1, `${label}: CreateKeyRing spawned one NanoKeyRing`);
   assert.equal(get(rings[0], 'Owner'), player, `${label}: the key ring is the player's`);

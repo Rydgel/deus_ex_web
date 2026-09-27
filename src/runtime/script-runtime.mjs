@@ -21,6 +21,7 @@ import { probeNames } from '../unreal/probe-names.mjs';
 import { conditionalDestroyScriptObject, destroyScriptObject } from './script-object-lifecycle.mjs';
 import { setScriptOwner } from './script-owner.mjs';
 import { destroyScriptActor } from './script-destroy.mjs';
+import { scriptObjectToString } from './script-string-operations.mjs';
 import { constructFreshScriptObject, allocateFreshScriptObject, constructActorBase, nativeConstructorFor } from './script-object-construction.mjs';
 import { checkActorEncroachment, actorBlockedBy } from './check-encroachment.mjs';
 import { setBase } from './walking-callbacks.mjs';
@@ -356,6 +357,7 @@ export class ScriptRuntime {
       iterator:call=>this.createIterator(call),
       objectReference:(script,index,node)=>this.objects.operand(script,node),
       castObject:(value,target,kind)=>this.castObject(value,target,kind),
+      objectToString:value=>scriptObjectToString(value,object=>this.instances.get(object)?.nativeObject??object),
       zeroContextResult:(script,node,size)=>zeroContextResult(this.contextResults.get(script),node,size),
       localReference:(locals,script,node)=>{
         const field=this.objects.operand(script,node);
@@ -1163,8 +1165,15 @@ export class ScriptRuntime {
    * StaticLoadObject over the shared class/resource graph. */
   loadPreparedDynamicObject(request){
     const packageName=lower(String(request.name).split('.')[0]);
+    const classKey=request.classRef?.key??request.classRef?.record?.key;
     let object;
-    if(this.dynamicLoadGraph?.ownsPackage(packageName))object=this.dynamicLoadGraph.load(request);
+    // UClass objects belong to the shared native class/linker graph. A
+    // prepared resource route may own textures/sounds from the same package,
+    // but it has no native Core.Class Outer/metadata for FindExportIndex.
+    if((classKey==='core.class'||classKey==='native:core.class')&&
+      this.classLoader?.graph.packageAssets.has(packageName))
+      object=this.loadGraphDynamicObject(request);
+    else if(this.dynamicLoadGraph?.ownsPackage(packageName))object=this.dynamicLoadGraph.load(request);
     else if(this.classLoader?.graph.packageAssets.has(packageName))object=this.loadGraphDynamicObject(request);
     else throw new DynamicLoadObjectBoundaryError(
       `DynamicLoadObject package linker is not prepared: ${request.name}`,

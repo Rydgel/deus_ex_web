@@ -307,6 +307,17 @@ function makeBinding(runtime, record, field) {
     },
   };
   if (dynamic[key]) return dynamic[key];
+  // Hash AddActor/RemoveActor read Actor+0x28 bit 0x80 on the registered
+  // map identity. Actor.Tick can finish physics after its state destroys
+  // the pawn, so this word must see the same bDeleteMe as the VM; otherwise
+  // that physics tail re-registers a destroyed pawn's collision cylinder.
+  if (key === 'bdeleteme' && !host.controlledPlayer && Number.isInteger(host.actorFlags)) return {
+    get: stored,
+    set: value => {
+      runtime.writeStoredField(host, field, value);
+      host.actorFlags = (value ? host.actorFlags | 0x80 : host.actorFlags & ~0x80) >>> 0;
+    },
+  };
   // The AActor +0x1dc collision bools are bits of the native word the
   // collision hash, line filter and move bodies read (map-actor-native.mjs),
   // so a script write such as DeusExPlayer's `bCollideWorld = False` on a
@@ -439,6 +450,7 @@ export async function createScriptDoors({
     try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
     finally{loggingIn=false;}
     playerStartup=preparedPlayerStartup.complete(playerActor);
+    liveMission.beginFreshMission(playerActor);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup

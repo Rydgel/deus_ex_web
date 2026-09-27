@@ -47,12 +47,15 @@ host loop. Each `Mission00.Timer`:
    None`, so `InitStateMachine` runs: `Player = DeusExPlayer(GetPlayerPawn())`
    (native 720), `foreach AllActors(class'DeusExLevelInfo', info)` sets
    `dxInfo`, `flags = Player.FlagBase`, `flags.GetBool('PlayerTraveling')`
-   (false in fresh Play, so `DeleteExpiredFlags` is skipped),
+   (true for fresh mission entry, so `DeleteExpiredFlags` runs),
    `flags.SetDefaultExpiration(dxInfo.MissionNumber + 1)` (native 1125, writes
    the raw int to the XFlagBase `+0x128` default-expiration field — recovered
    from exec `0x10025dc0`), `localURL = Caps(dxInfo.mapName)` = `00_TRAINING`,
-   and a `log` line (the GLog side channel). `FirstFrame` only runs when
-   `PlayerTraveling`, so it is not reached in fresh Play.
+   and a `log` line (the GLog side channel). `FirstFrame` runs once while
+   `PlayerTraveling` is true and deletes the marker. In Training it knocks
+   out the authored medical-room cadet through his original damage/state
+   chain. [Fresh mission entry](script-training-mission-entry.md) records
+   the original PreTravel input and the bounded browser entry projection.
 2. `if (localURL == "00_TRAINING")`: `if (flags.GetBool('MunitionsTrooperReady'))
    RemoveAllInventory();` then the crate-broken `AllActors(class'Containers')`
    count (both crates present ⇒ no `DL_Lockpick`) and the holo-Bob hide (not
@@ -91,7 +94,8 @@ the canonical `SpawnScript` actor, a nonempty inventory surviving while Ready is
 false, natural `FlagTrigger` entry, timer confiscation + destruction with
 ownership cleared, and a single fresh mission actor after reset;
 `scripts/validate-instructor-conversation.mjs` covers the Take transfer with the
-mission active. The `00_TRAININGCOMBAT`/`00_TRAININGFINAL` branches, `FirstFrame`
-(the traveling/knockout path), the crate `DL_Lockpick` trigger and holo-Bob/Jaime
-`LeaveWorld`/`EnterWorld` are the same body but are not reached by fresh Training
-Play and remain untested here. General inventory/belt presentation is Stage 5.
+mission active. `validate-training-cadet.mjs` covers fresh-entry FirstFrame,
+the unconscious cadet and the medical-room exercise; `validate-crowbar-crate.mjs`
+covers the crate `DL_Lockpick` trigger and departing Jaime destruction.
+The `00_TRAININGCOMBAT`/`00_TRAININGFINAL` branches and holo-Bob transitions
+remain untested here. General inventory/belt presentation is Stage 5.

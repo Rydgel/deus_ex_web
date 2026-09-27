@@ -902,7 +902,7 @@ export function compileFunction(fn) {
           case 0x53: return String(refValue(evaluate(n.value,instance)) | 0);
           // Core execFloatToString 10131ca0: Printf("%f", (double)F).
           case 0x55: return scriptFloatToString(refValue(evaluate(n.value,instance)));
-          case 0x56: return scriptObjectToString(refValue(evaluate(n.value,instance)));
+          case 0x56: return (services.objectToString??scriptObjectToString)(refValue(evaluate(n.value,instance)));
           case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
           case 0x36: {
             const field=evaluate(n.value,receiver);

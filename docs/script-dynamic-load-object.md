@@ -125,3 +125,9 @@ the nonempty post-load array, and nonzero linker cleanup remain explicit
 boundaries. The wrapper oracle does not claim those deeper branches;
 other first-load package file/error routes remain outside the focused portrait
 adapter.
+
+`DynamicLoadObject(...,class'Class')` selects the shared native class/linker
+graph even when a focused resource route owns the same package. The focused
+adapter does not hold Core.Class's native Outer/metadata. This is reached by
+the original `DeusExPlayer.DropItem` reloading a carried body's class; see
+[Training cadet](script-training-mission-entry.md).

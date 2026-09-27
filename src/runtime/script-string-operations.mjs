@@ -128,11 +128,26 @@ export function scriptNameToString(value) {
   return value;
 }
 
-export function scriptObjectToString(value) {
+/** Core execObjectToString 10131f00 calls GetPathName(NULL,NULL), not GetName.
+ * Canonical exports encode the package/Outer path; constructed objects walk
+ * their native records. See docs/script-training-mission-entry.md. */
+export function scriptObjectToString(value,recordFor=object=>object) {
   if(value==null)return 'None';
-  const name=value.name??value.record?.name;
-  if(typeof name==='string'&&name)return name;
-  throw new TypeError('ObjectToString requires an object with a logical name');
+  const parts=[],seen=new Set();
+  for(let object=value;object;){
+    if(seen.has(object))throw new Error('ObjectToString encountered a cyclic Outer chain');
+    seen.add(object);
+    const exported=object.record??object;
+    if(exported.asset?.name&&exported.entry?.path){
+      parts.unshift(`${exported.asset.name}.${exported.entry.path}`);break;
+    }
+    const nativeRecord=recordFor(object),record=nativeRecord?.record??nativeRecord;
+    if(typeof record?.name!=='string'||!record.name)
+      throw new TypeError('ObjectToString requires an object with a logical name');
+    parts.unshift(record.name);
+    object=record.outer??null;
+  }
+  return parts.join('.');
 }
 
 /** Core execFloatToString 0x10131ca0: FString::Printf(L"%f", (double)F) (format

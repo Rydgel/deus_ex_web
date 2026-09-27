@@ -31,6 +31,32 @@ test('FlagBase matches recovered SetBool/GetBool add, update, return, and expira
   assert.equal(flagBase.getBool('MissionFlag'), true);
 });
 
+test('mission flag deletion preserves zero expiration and compares signed mission criteria', () => {
+  // Original Extension.dll 10024b3b..10024b4d: zero is permanent; JG retains
+  // only expirations strictly greater than criteria. Native 1121 is typed.
+  const flags=createFlagBase({initialFlags:{
+    Negative:{value:true,expiration:-1},Permanent:{value:true,expiration:0},
+    Equal:{value:true,expiration:1},Future:{value:true,expiration:2},
+  }});
+  const actions=createScriptTriggers({flagBase:flags});
+  const call=(index,...args)=>actions.handleNative({index,receiver:flags,argumentCount:args.length,
+    evaluateArgument:i=>({reference:true,get:()=>args[i]})});
+  assert.deepEqual(call(1124,0),{handled:true,value:undefined});
+  assert.equal(flags.getEntry('Negative'),null);
+  assert.ok(flags.getEntry('Permanent'));
+  assert.ok(flags.getEntry('Equal'));
+  assert.ok(flags.getEntry('Future'));
+  call(1124,1);
+  assert.equal(flags.getEntry('Equal'),null);
+  assert.ok(flags.getEntry('Permanent'));
+  assert.ok(flags.getEntry('Future'));
+  assert.deepEqual(call(1121,'Future',2),{handled:true,value:false},'wrong type does not delete a bool');
+  assert.deepEqual(call(1121,'FUTURE',0),{handled:true,value:true});
+  assert.deepEqual(call(1121,'Future',0),{handled:true,value:false});
+  call(1124,0x7fffffff);
+  assert.ok(flags.getEntry('Permanent'),'zero survives every mission criterion');
+});
+
 test('native adapter unwraps VM references and leaves unrelated natives unclaimed', () => {
   const player = { name: 'JCDentonMale' };
   const viewport = { Actor: player };

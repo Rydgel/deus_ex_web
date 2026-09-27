@@ -78,7 +78,9 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   SetBool: 1100,
   GetBool: 1110,
   CheckFlag: 1120,
+  DeleteFlag: 1121,
   SetExpiration: 1122,
+  DeleteExpiredFlags: 1124,
   SetDefaultExpiration: 1125,
 });
 
@@ -90,8 +92,8 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
  * existing bool, creates a missing bool only
  * when bAdd is true, substitutes defaultExpiration for expiration -1, and
  * returns whether a bool object exists afterwards. XFlagBase::GetBool returns
- * false for a missing bool. Expiration storage is preserved, while the
- * separate DeleteExpiredFlags/clock path remains outside this slice.
+ * false for a missing bool. Expiration is compared with mission criteria,
+ * not a clock (docs/script-training-mission-entry.md).
  */
 export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
   const entries = new Map();
@@ -157,6 +159,22 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       const found = type === 0 && Boolean(current(name));
       calls.push({ method: 'CheckFlag', name: name ?? 'None', type, found });
       return found;
+    },
+    /** XFlagBase::DeleteFlag 0x10024860: exact name/type lookup, then delete. */
+    deleteFlag(name,type) {
+      if(!Number.isInteger(type)||type<0||type>255)throw new TypeError('FlagBase.DeleteFlag requires a byte flag type');
+      const found=type===0&&entries.delete(lower(name));
+      calls.push({method:'DeleteFlag',name:name??'None',type,found});
+      return found;
+    },
+    /** XFlagBase::DeleteExpiredFlags 0x10024ac0: zero never expires; other
+     * signed expirations <= criteria do. Live entries can only be bools. */
+    deleteExpiredFlags(criteria) {
+      if(!Number.isInteger(criteria))throw new TypeError('Flag expiration criteria requires a signed int');
+      criteria|=0;
+      for(const [key,entry] of entries)
+        if((entry.expiration|0)!==0&&(entry.expiration|0)<=criteria)entries.delete(key);
+      calls.push({method:'DeleteExpiredFlags',criteria});
     },
     /** Extension.FlagBase.GetBool(Name). */
     getBool(name) {
@@ -246,6 +264,15 @@ export function createScriptTriggers({
     if(index===TRIGGER_NATIVE_INDICES.SetExpiration){
       if(call.receiver!==flagBase||call.argumentCount!==3)throw new Error('FlagBase.SetExpiration receiver/arguments');
       flagBase.setExpiration(evaluateValue(call,0),evaluateValue(call,1)&255,evaluateValue(call,2));
+      return {handled:true,value:undefined};
+    }
+    if(index===TRIGGER_NATIVE_INDICES.DeleteFlag){
+      if(call.receiver!==flagBase||call.argumentCount!==2)throw new Error('FlagBase.DeleteFlag receiver/arguments');
+      return {handled:true,value:flagBase.deleteFlag(evaluateValue(call,0),evaluateValue(call,1)&255)};
+    }
+    if(index===TRIGGER_NATIVE_INDICES.DeleteExpiredFlags){
+      if(call.receiver!==flagBase||call.argumentCount!==1)throw new Error('FlagBase.DeleteExpiredFlags receiver/arguments');
+      flagBase.deleteExpiredFlags(evaluateValue(call,0));
       return {handled:true,value:undefined};
     }
     if(index===TRIGGER_NATIVE_INDICES.SetDefaultExpiration){

@@ -147,6 +147,9 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     actor.radius=v.CollisionRadius??0;actor.height=v.CollisionHeight??0;actor.rotation=v.Rotation??[0,0,0];
     actor.physics=v.Physics??0;actor.pawnFlags=v.bIsPlayer?2:0;actor.standingCount=v.StandingCount??0;
     actor.static=Boolean(v.bStatic);actor.movable=Boolean(v.bMovable);
+    // Reload restores bDeleteMe before changeActor re-adds this map export;
+    // AddActor otherwise correctly skips the previous session's dead actor.
+    actor.actorFlags=((actor.actorFlags&~0x80)|(v.bDeleteMe?0x80:0))>>>0;
     // The +0x1dc word and its per-bit copies (map-actor-native.mjs). The
     // rebuilt hash registers every serialized collider, so the restored word
     // matches it; FarMoveActor's bJustTeleported/OldLocation return to the

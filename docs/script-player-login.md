@@ -330,6 +330,13 @@ session whose DX.dxm player took suffix 0.
 graph Login built. The isolated InitializeSubSystems path and its forced name
 counters are removed.
 
+Fresh Play entry then supplies the `PlayerTraveling=True`, expiration-zero
+marker carried by original `PreTravel`; the first mission Timer consumes it.
+This is separate from the direct empty-travel-text Login contract above and
+also runs after Player start's new Login. See
+[Training mission entry](script-training-mission-entry.md) for evidence and
+the explicit limits of this fresh-entry projection.
+
 ### Reset: reload and a second Login
 
 "Player start" is a reload of the loaded map, then SpawnPlayActor, as at
@@ -364,4 +371,3 @@ kept the retired player alive through LoadMap's collection. LoadMap nulls
 `Viewport.Actor` and destroys that player before the collection, and its
 `0x400` tag excludes every old-package actor. No retired generation survives
 the reset that retired it.
-

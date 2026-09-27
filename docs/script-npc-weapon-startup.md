@@ -465,3 +465,9 @@ spawn/inventory/datalink/augmentation/NPC-boundary/play-frame/decal/
 plant-push/set-location/world-destroy/native-relocation validators, the
 497-test unit suite, the production build and the browser Training
 Play/reset spec all pass.
+
+Fresh mission entry now also runs `Mission00.FirstFrame`: the distributor's
+`Body_Search_Room` NanoKey starts on `UNATCOTroop2`, then the original knockout
+and SpawnCarcass transfer that same item to the unconscious body. The startup
+validator checks both owners at their respective stages across resets. See
+[Training cadet](script-training-mission-entry.md).
