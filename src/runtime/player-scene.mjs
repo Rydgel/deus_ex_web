@@ -145,6 +145,11 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
     // pass when picked-up inventory gives the player a StandingCount.
     if (actor === source && !test && !ignorePawns && !ignoreBases && !noFail)
       return move(delta,rotation).success;
+    if (!actor.movingBrush && delta.every(value=>value===0)
+        && !test && !ignorePawns && !ignoreBases && !noFail) {
+      if(typeof hooks.rotateMapActor!=='function')throw Error('map SetRotation MoveActor is not linked');
+      return hooks.rotateMapActor(actor,rotation).success;
+    }
     if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail
         || !actor.rotation.every((value,index)=>value===rotation[index]))
       throw new Error('MoveActor scene branch is not linked');

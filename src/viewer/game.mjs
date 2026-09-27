@@ -151,6 +151,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // their real event bytecode — instead of pausing at the scene adapter.
   playerScene.hooks.dispatchEvent=(target,event,args)=>doors.scriptRuntime.dispatchEvent(target,event,args);
   playerScene.hooks.moveRider=(actor,delta,rotation)=>doors.scriptRuntime.runtime.moveSpawnedActor(actor,delta,rotation);
+  playerScene.hooks.rotateMapActor=(actor,rotation)=>doors.scriptRuntime.runtime.rotateMapActor(actor,rotation);
   const runtime = doors.scriptRuntime.runtime;
   player.scriptRuntime = runtime;
   const readPlayer = name => runtime.readNamed(player.collisionActor, name);

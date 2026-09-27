@@ -115,6 +115,57 @@ and NewRotation `[0,16484,0]`; the real recursive move ends at
 the source hash remove/add and source `SetActorZone(source,0,0)`. The rider is
 noncolliding, so the hash operations are for the source pawn only.
 
+## Training stacked-crate rotation case
+
+The authored `PlayerStart1 -> DL_part2` probe reached
+`DeusExDecoration.Bump` on the original `CrateBreakableMedGeneral1` and
+captured the live arguments immediately before the route's then-unlinked
+MoveActor branch. `DeusExDecoration.uc:473–490` computes a yaw-only push
+rotation and calls `SetRotation(Rotation + rot)`. The observed top-level native
+entry has Delta `[0,0,0]`, requested Rotation `[0,-30,0]`, and four zero flags.
+Its source was at `[1022.109741,-275.102783,-103.899864]`, with Rotation
+`[0,0,0]`, `StandingCount=255`, radius `34`, height `23.25`, and collision
+bits `13` (`bCollideActors`, `bBlockActors`, `bBlockPlayers`). The attached
+`CrateBreakableMedGeneral2` rider was at
+`[1022.596252,-278.577301,-55.393246]`, Rotation `[0,1948,0]`, with
+`Base=CrateBreakableMedGeneral1`, `StandingCount=0`, and the same colliding
+bits. The nonzero count selects the full rider path; this is not the ordinary
+no-rider direct-rotation case.
+
+The captured route source count was `255`, but that byte is not claimed as a
+valid authored stacking count. Play had reached it through a host-side Base
+update that bypassed original `SetBase` count maintenance. The focused reference
+uses the same source/rider geometry with `StandingCount=1`, the valid one-rider
+case established after the field-backed Falling/Rolling path was corrected. The
+255 observation remains useful diagnostic provenance and is not normalized or
+used as the expected original state.
+
+The original DLL comparison uses the Training world model and runs the
+non-Pawn, colliding `$crate` and `$crate-rider` through `ULevel::MoveActor`. It
+returns true with source Location unchanged and Rotation `[0,-30,0]`; the rider
+ends at `[1022.5855713,-278.5787659,-55.3932457]`, Rotation `[0,1918,0]`. The
+recursive MoveActor call receives Delta `[-0.01066195965,-0.00147628784,0]`,
+Rotation `[0,1918,0]`, flags `[0,0,1,0]`, and a clear `FCheckResult`
+(`Time=1`, no actor). Native `CheckEncroachment` runs first for the moved rider
+with its final pose and then for the source with `[1022.1097412,-275.1027832,
+-103.8998642]`, Rotation `[0,-30,0]`; both return false (no rejection). Hash
+remove/add and zone order is rider first, then source. The validator compares
+these values against translated `playerMove`/`moveActorRiders`, including the
+CheckEncroachment call sequence.
+
+The native side uses the Training world queries and original
+CheckEncroachment. The translation comparison supplies controlled empty line
+hits and the captured clear encroachment result; it checks call arguments and
+ordering, not the query implementations again. Live Play uses the previously
+verified collision/encroachment bodies, and the continuous route checks that
+adapter separately. Script callbacks and zone-update effects remain explicit
+controlled leaves in this small arithmetic comparison.
+
+This establishes only zero source Delta, one based colliding map-identity rider,
+non-brush movable actors, and this clear movement result. Additional riders,
+nonzero source Delta, brushes, blocked movement, rejection, and callback
+mutation remain outside the case.
+
 Relevant instructions: changed integer rotation and `StandingCount` gate are
 at `0x103991c8`–`0x10399240`; the full zero-Delta route reaches `0x10399795`;
 the rider loop and `Base == source` filter are `0x103998a0`–`0x103998e7`;
@@ -123,10 +174,10 @@ changed-rotation detection and reduced-yaw mask (`& 0xfffc`) are
 `0x10399939`–`0x10399b57`; Pawn rider `ViewRotation` adjustment is
 `0x10399b5d`–`0x10399ba6`. Source pose/hash commit is
 `0x10399c9a`–`0x10399d17`; final source zone dispatch is
-`0x10399f03`–`0x10399f15`. The cases support this zero-Delta, non-brush,
-one-rider slice only. Translation, brushes, multiple or colliding riders,
-rejected movement, callback mutation, and actual zone updates remain
-unverified.
+`0x10399f03`–`0x10399f15`. The cases support this zero-Delta, non-brush, one-rider slice only.
+Translation, brushes, multiple riders, rejected movement, callback mutation,
+and actual zone updates remain unverified; the crate case does cover one
+colliding rider with clear encroachment.
 
 ## Runtime integration boundary
 
@@ -137,23 +188,25 @@ return. Equal rotations return before the StandingCount/Brush checks. Changed
 rotations with no riders keep the original short path; changed rotations with
 a nonzero `StandingCount` and no Brush now call the live level's zero-flag
 MoveActor adapter. `player-scene.mjs` routes the controlled pawn through
-`playerMove` and the recovered `moveActorRiders` arithmetic. The two
-pitch-wrap/yaw cases above match the original scalar pose, recursive call
-arguments, and hash/zone boundary order. Brush movement still raises an
-explicit unsupported error.
+`playerMove` and the recovered `moveActorRiders` arithmetic. The pitch-wrap/yaw
+player cases and the one-rider Training crate case above
+match the original scalar pose, recursive call arguments, CheckEncroachment
+results and hash/zone boundary order. Brush movement still raises an explicit
+unsupported error.
 
 `collision-hash.mjs` and `zone` services supply the existing movement bodies.
-`player-move.mjs` requires a controlled pawn and now admits the zero-Delta
-rotation/rider path described above; its ordinary translation path retains
+`player-move.mjs` admits controlled players and the documented zero-Delta
+map-actor rider path; its ordinary translation path retains
 the prior rotation constraints. `mover-move.mjs` is for translating brushes,
 and `relocation.mjs` implements different FarMoveActor semantics. Those
 separate adapters do not establish general native 299 support.
 
 The full MoveActor branches remain generally excluded from the SetRotation
-adapter: translation, brushes, complex or colliding rider scenes, and their
-complete collision/zone/network effects. The current verified adapter slice
-is zero Delta, a controlled player pawn, and one noncolliding based rider;
-these cases do not establish a general native 299 implementation.
+adapter: translation, brushes, multi-rider scenes, blocked movement, and their
+complete collision/zone/network effects. Verified slices are zero Delta for a
+controlled player pawn with one noncolliding rider, and the single Training map
+crate with one colliding rider and a clear encroachment result. These cases do
+not establish general native 299 support.
 The source's editor bypass of the static/movable guard is translated; it does
 not establish general editor movement support.
 
@@ -166,8 +219,9 @@ related movement and zone ordering is cross-referenced in
 `docs/move-query.md`, `docs/player-move.md`, `docs/move-smooth.md`, and
 `docs/zone.md`.  `scripts/validate-script-decoration.mjs` executes the original inherited Plant2
 Bump body through native 299 and checks its quantized yaw of 63 with unchanged
-Location. `scripts/validate-native-set-rotation-riders.mjs` executes both
-original cases and compares the live `setScriptRotation` → level MoveActor →
-`playerMove`/`moveActorRiders` route against their scalar pose and callback
-records. Both cases pass. No visual comparison or broad native corpus is
+Location. `scripts/validate-native-set-rotation-riders.mjs` executes the two player
+cases and the original Training crate case, then compares the translated
+`setScriptRotation` → level MoveActor → `playerMove`/`moveActorRiders` path,
+including recursive arguments, CheckEncroachment calls/results, and callback
+order. All three comparisons pass. No visual comparison or broad native corpus is
 required.

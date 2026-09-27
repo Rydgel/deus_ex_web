@@ -20,6 +20,18 @@ scene.actors.push(
   {id: '$rider', kind: 'Actor', collisionBits: 0, owner: '$player', values: {
     Location: [-280, 800, -64], Rotation: [0, 100, 0], CollisionRadius: 0, CollisionHeight: 0,
   }},
+  // Exact actor transforms and collision dimensions from the route's
+  // pre-MoveActor snapshot in .cache/batch6-route-report8.json. The native
+  // comparison uses one based rider (StandingCount=1); the captured 255 Play
+  // value is preserved in route diagnostics but is not treated as original state.
+  {id: '$crate', kind: 'Actor', collisionBits: 13, values: {
+    Location: [1022.1097412109375, -275.102783203125, -103.89986419677734],
+    Rotation: [0, 0, 0], CollisionRadius: 34, CollisionHeight: 23.25,
+  }},
+  {id: '$crate-rider', kind: 'Actor', collisionBits: 13, owner: '$crate', values: {
+    Location: [1022.5962524414062, -278.5773010253906, -55.393245697021484],
+    Rotation: [0, 1948, 0], CollisionRadius: 34, CollisionHeight: 23.25,
+  }},
 );
 const cases = [
   {name: 'pitch-int-wrap-same-yaw', playerLocation: [-300, 800, -64],
@@ -29,17 +41,23 @@ const cases = [
     oldRotation: [0, 0, 0], newRotation: [0, 16384, 0],
     riderLocation: [-280, 800, -64], riderRotation: [0, 100, 0]},
 ];
+const crateCase = {name: 'training-stacked-crate-captured-rotation', source: '$crate', rider: '$crate-rider',
+  sourceBase: '$world', playerLocation: [1022.1097412109375, -275.102783203125, -103.89986419677734],
+  oldRotation: [0, 0, 0], newRotation: [0, -30, 0], standingCount: 1,
+  riderLocation: [1022.5962524414062, -278.5773010253906, -55.393245697021484],
+  riderRotation: [0, 1948, 0], riderStandingCount: 0};
+const nativeCases = [...cases, crateCase];
 const dir = path.resolve('reports/movement/set-rotation-riders');
 await mkdir(dir, {recursive: true});
 const sceneFile = path.join(dir, 'scene.json'), caseFile = path.join(dir, 'cases.json');
 await writeFile(sceneFile, JSON.stringify(scene));
-await writeFile(caseFile, JSON.stringify(cases));
-const {stdout} = await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON ?? 'python3',
+await writeFile(caseFile, JSON.stringify(nativeCases));
+const {stdout} = await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python',
   ['scripts/native-set-rotation-riders-oracle.py', gameDirectory(), sceneFile, caseFile],
   {maxBuffer: 16 * 1024 * 1024, timeout: 120000});
 const native = JSON.parse(stdout);
 await writeFile(path.join(dir, 'original.json'), JSON.stringify(native, null, 2));
-const [pitchWrap, yaw] = native.results;
+const [pitchWrap, yaw, crate] = native.results;
 assert.equal(pitchWrap.success, true);
 assert.deepEqual(pitchWrap.playerRotation, [57759, -16384, 0]);
 assert.deepEqual(pitchWrap.playerLocation, [-300, 800, -64]);
@@ -54,18 +72,42 @@ assert.deepEqual(yaw.riderMoveCalls, [{actor: '$rider', delta: [-20, 20, 0],
   rotation: [0, 16484, 0], flags: [0, 0, 1, 0]}]);
 assert.deepEqual(yaw.events.map(event => event.hash ?? `zone:${event.zone}`),
   ['zone:$rider', 'remove', 'add', 'zone:$player']);
+assert.equal(crate.success, true);
+assert.deepEqual(crate.sourceLocation, crateCase.playerLocation);
+assert.deepEqual(crate.sourceRotation, crateCase.newRotation);
+assert.deepEqual(crate.riderLocation, [1022.5855712890625, -278.57876586914062, -55.393245697021484]);
+assert.deepEqual(crate.riderRotation, [0, 1918, 0]);
+assert.deepEqual(crate.riderMoveCalls, [{actor: '$crate-rider',
+  delta: [-0.010661959648132324, -0.001476287841796875, 0],
+  rotation: [0, 1918, 0], flags: [0, 0, 1, 0]}]);
+assert.deepEqual(crate.checkEncroachment, [
+  {source: '$crate-rider', position: crate.riderLocation, rotation: crate.riderRotation, notify: 0, rejected: false},
+  {source: '$crate', position: crateCase.playerLocation, rotation: crateCase.newRotation, notify: 0, rejected: false},
+]);
+assert.deepEqual(crate.checkEncroachmentDispatches.map(call => call.target), [0x1039a350, 0x1039a350]);
+assert.equal(crate.time, 1);
+assert.equal(crate.hitActor, null);
+assert.deepEqual(crate.events.map(event => event.hash ?? `zone:${event.zone}`),
+  ['remove', 'add', 'zone:$crate-rider', 'remove', 'add', 'zone:$crate']);
 const translated = [];
-for (const c of cases) {
-  const source = {id: '$player', position: [...c.playerLocation], rotation: [...c.oldRotation],
-    flags: 15, radius: 17, height: 42, pawn: true, standingCount: 1,
-    static: false, movable: true, base: null, touching: [null, null, null, null]};
-  const rider = {id: '$rider', position: [...c.riderLocation], rotation: [...c.riderRotation],
-    flags: 0, radius: 0, height: 0, pawn: false, scriptView: true, standingCount: 0,
+for (const c of [...cases, crateCase]) {
+  const isCrate = c === crateCase;
+  const source = {id: isCrate ? '$crate' : '$player', position: [...c.playerLocation], rotation: [...c.oldRotation],
+    flags: isCrate ? 13 : 15, radius: isCrate ? 34 : 17, height: isCrate ? 23.25 : 42,
+    pawn: !isCrate, mapActor: isCrate, standingCount: c.standingCount ?? 1,
+    static: false, movable: true, base: isCrate ? {id: '$world'} : null, touching: [null, null, null, null]};
+  const rider = {id: isCrate ? '$crate-rider' : '$rider', position: [...c.riderLocation], rotation: [...c.riderRotation],
+    flags: isCrate ? 13 : 0, radius: isCrate ? 34 : 0, height: isCrate ? 23.25 : 0, pawn: false,
+    scriptView: !isCrate, mapActor: isCrate, standingCount: c.riderStandingCount ?? 0,
     static: false, movable: true, base: source, touching: [null, null, null, null]};
   const actors = [source, rider], worldActor = {id: '$world'};
-  const events = [];
+  const events = [], encroachmentCalls = [], recursiveCalls = [];
   const services = {
     worldActor, multiLineCheck: () => [],
+    checkEncroachment: (actor, position, rotation, notify) => {
+      encroachmentCalls.push({source: actor.id, position: [...position], rotation: [...rotation], notify, rejected: false});
+      return false;
+    },
     removeActor: actor => events.push({hash: 'remove', actor: actor.id, position: [...source.position]}),
     addActor: actor => events.push({hash: 'add', actor: actor.id, position: [...source.position]}),
     dispatch: () => { throw new Error('Unexpected script event in these zero-delta cases'); },
@@ -80,7 +122,10 @@ for (const c of cases) {
       location: other => [...other.position], rotation: other => [...other.rotation],
       isPawn: other => other.pawn,
       addViewRotationYaw: (other, amount) => { other.viewRotationYaw = (other.viewRotationYaw + amount) | 0; },
-      moveActor: (other, delta, newRotation) => playerMove(other, delta, services, newRotation).success,
+      moveActor: (other, delta, newRotation) => {
+        recursiveCalls.push({actor: other.id, delta: [...delta], rotation: [...newRotation], flags: [0,0,1,0]});
+        return playerMove(other, delta, {...services, ignoreBases:true}, newRotation).success;
+      },
       actorLocation: () => [...base.position], actorRotation: () => [...base.rotation],
     }),
   };
@@ -96,19 +141,21 @@ for (const c of cases) {
     read: (actor, field) => ({Rotation: actor.rotation, StandingCount: actor.standingCount,
       Brush: null, bStatic: actor.static, bMovable: actor.movable})[field],
     write: (actor, field, value) => { if (field === 'Rotation') actor.rotation = [...value]; }});
-  const expected = native.results[cases.indexOf(c)];
+  const expected = native.results[nativeCases.indexOf(c)];
   assert.equal(result, expected.success, `${c.name}: SetRotation result`);
   assert.deepEqual(source.position, expected.playerLocation, `${c.name}: source position`);
   assert.deepEqual(source.rotation, expected.playerRotation, `${c.name}: source rotation`);
   assert.deepEqual(rider.position, expected.riderLocation, `${c.name}: rider position`);
   assert.deepEqual(rider.rotation, expected.riderRotation, `${c.name}: rider rotation`);
   assert.deepEqual(events, expected.events, `${c.name}: move/hash/zone order`);
+  assert.deepEqual(recursiveCalls, expected.riderMoveCalls, `${c.name}: recursive MoveActor args`);
+  assert.deepEqual(encroachmentCalls, expected.checkEncroachment, `${c.name}: CheckEncroachment calls`);
   translated.push({name: c.name, result, playerLocation: source.position,
     playerRotation: source.rotation, riderLocation: rider.position,
-    riderRotation: rider.rotation, events});
+    riderRotation: rider.rotation, events, recursiveCalls, checkEncroachment: encroachmentCalls});
 }
 await writeFile(path.join(dir, 'translation-comparison.json'), JSON.stringify({
   cases: translated, mismatches: [], scope: 'setScriptRotation -> live-level MoveActor -> playerMove/moveActorRiders',
 }, null, 2));
-console.log('Production SetRotation/playerMove/moveActorRiders matches both original zero-Delta rider records.');
-console.log(JSON.stringify({cases: cases.map((c, i) => ({name: c.name, result: native.results[i]})), hashes: native.hashes}, null, 2));
+console.log('Production SetRotation/playerMove/moveActorRiders matches both player rider records and the one-rider Training crate reference.');
+console.log(JSON.stringify({cases: nativeCases.map((c, i) => ({name: c.name, result: native.results[i]})), hashes: native.hashes}, null, 2));

@@ -64,7 +64,8 @@ spawned views already run:
   - The actor is re-added to the hash when the new word collides. The host
     path only removed it.
 
-  The controlled player keeps its movement port.
+  Batch 6 routes the controlled player through its original script tick and
+  field-backed Pawn physics; its collision entry remains the player scene.
 - **Rider MoveActor** (`0x103998a0`–`0x10399c8e`, test 0, ignoreBases 1):
   `ScriptRuntime.moveMapRider` runs the same `playerMove` body as a spawned
   rider. It replaces `moveHeldRider`, which was hand-derived for an
@@ -88,6 +89,47 @@ be removed and re-added at the load position.
 
 Pawns keep their own move entry (`script-pawn-physics.mjs`), and movers keep
 the brush entry. Neither is admitted here.
+
+## Batch 6 stacked-decoration rotation contract
+
+The continuous Training route reaches `DeusExDecoration.Bump` on a breakable
+crate. Installed `DeusExDecoration.uc:425–490` gates pushing by pawn mass,
+vertical overlap and the strength-derived maximum mass, writes Velocity,
+starts Rolling/timer/noise as applicable, then computes a small yaw change
+and calls `SetRotation(Rotation + rot)`. A crate with another actor based on
+it has nonzero StandingCount, so native MoveActor cannot use the no-rider
+rotation-only return. The local player's equivalent branch is documented in
+[SetRotation](script-set-rotation.md).
+
+The native entry is the same zero-Delta MoveActor with four zero flags.
+`0x103998a0–0x10399bb0` recurses over actors based on the source; the recursive
+calls use ignoreBases=1, but the top-level SetRotation call does not. The
+non-Pawn source then passes the recovered CheckEncroachment gate
+(`0x10399bb5–0x10399c8e`) before its pose/hash commit and zone/touch tail.
+Existing map actor fields, collision services, rider body and
+CheckEncroachment translation supply these operations. Calling `moveMapRider`
+as the top-level entry would incorrectly force ignoreBases=1.
+
+The focused original-DLL reference retains the actual crate/rider transforms
+and collision cylinders. The top-level call succeeds, changes crate1 yaw by
+-30 without translation, and recursively moves crate2 by
+`[-0.010661959648132324, -0.001476287841796875, 0]`, also subtracting 30 from
+its yaw. Recursive flags are `[0,0,1,0]`. Hash remove/add and zone update run
+for crate2 before crate1; CheckEncroachment receives crate1's unchanged
+Location, requested Rotation and notify=0, and returns false. The hit time is
+1 with no hit actor. The first diagnostic capture had StandingCount=255 due
+to the older decoration adapter's direct Base stores; the field-backed
+falling/rolling adapter restores the fresh route's count to 1. Both enter the
+native nonzero-count branch; the malformed count is not an original-world
+reference. See [SetRotation](script-set-rotation.md).
+
+`rotateMapActor` binds this zero-Delta entry to the same recovered MoveActor
+body and services. The scene admits only non-brush zero-flag rotation calls;
+`mapMoveLevel` further checks the full map collision surface. Canonical actor
+identities and original script callbacks remain intact, while other scene
+branches stay explicit. The native reference precedes this adapter; its
+translation comparison and continuous-route integration are recorded
+separately.
 
 ## Right click with nothing highlighted
 

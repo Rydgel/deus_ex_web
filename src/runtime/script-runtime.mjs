@@ -2041,6 +2041,14 @@ export class ScriptRuntime {
     const level=this.mapMoveLevel(actor,'Rider MoveActor');
     return playerMove(actor,delta,{...this.spawnedMoveServices(actor,level),ignoreBases:true},rotation);
   }
+  /** SetRotation's zero-Delta, zero-flag MoveActor on a map decoration.
+   * Unlike the recursive rider entry above, the top-level call must retain
+   * ignoreBases=0. The based-actor and encroachment passes precede commit.
+   * Original stacked-crate reference: docs/script-map-actor-move.md. */
+  rotateMapActor(actor,rotation) {
+    const level=this.mapMoveLevel(actor,'SetRotation MoveActor');
+    return playerMove(actor,[0,0,0],this.spawnedMoveServices(actor,level),rotation);
+  }
   /** The level view the recovered FarMoveActor (relocation.mjs) takes: this
    * host's hash, FindSpot, CheckEncroachment, SetBase and SetActorZone. */
   relocationLevel(view,level) {
