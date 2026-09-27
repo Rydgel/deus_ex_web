@@ -111,8 +111,21 @@ result-eat byte — the validators compare it as `args.length + 1`.
   stores when the other margin/field differs.
 * `EnableTextAsAccelerator`: guard compares `((flags>>1)&1)` to the raw dword;
   enabling scans current text, disabling scans NULL (key -> 0).
-* `AddLog`: `expire = f32(now_f64 + f32(+0x174 timeout))`; records join with
-  `L"\n"`, a trailing separator for an empty new line.
+* `AddLog`: native `0x1004770e..2f` zeroes all 20 bytes of the appended row
+  (`rep stosd` then `rep stosb`) before writing its expiry, FString and color.
+  Expiry is `f32(now_f64 + f32(+0x174 timeout))`; records join with `L"\n"`,
+  a trailing separator for an empty new line.
+* `Tick`: when not paused (bit 2 of `+0x184`), subtract delta from every
+  expiry, then remove only the leading rows whose expiry compares `<= 0`.
+  Each expired FString is emptied through Core `FArray::Realloc(2)`
+  (`0x10145440`) and its 12-byte descriptor is cleared before Core
+  `FArray::Remove(0,n,0x14)` (`0x101454f0`). Remove compacts the survivor
+  prefix and uses its original capacity-shrink conditions; `RegenerateText`
+  follows. Live-host AddLog/Tick mirrors are in
+  `script-window-text-log.mjs`; `scripts/validate-live-text-log-ownership.mjs`
+  exercises expired-prefix cleanup, survivor reuse, and zero-count shrink.
+  This live-host check is distinct from the lower-level `script-text-model`
+  AddLog oracle port.
 * `PauseLog`: `logFlags = (logFlags & ~4) | ((arg & 1) << 2)` inline.
 
 ## Unresolved / boundaries
