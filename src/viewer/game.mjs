@@ -11,7 +11,7 @@ import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
 import { brushMatrix } from './transforms.mjs';
 import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
-import { tickWalkingInteraction, traceActors, isHighlighted } from '../runtime/interaction.mjs';
+import { isHighlighted } from '../runtime/interaction.mjs';
 import { bindPlayerScene } from '../runtime/player-scene.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
@@ -151,15 +151,34 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // their real event bytecode — instead of pausing at the scene adapter.
   playerScene.hooks.dispatchEvent=(target,event,args)=>doors.scriptRuntime.dispatchEvent(target,event,args);
   playerScene.hooks.moveRider=(actor,delta,rotation)=>doors.scriptRuntime.runtime.moveSpawnedActor(actor,delta,rotation);
-  const interaction = { get position() { return player.position; }, get viewRotation() { return player.viewRotation; },
-    get baseEyeHeight() { return player.baseEyeHeight; }, maxFrobDistance: playerDefaults.MaxFrobDistance,
-    frobTime: 0, frobTarget: null, carriedDecoration: null, stateName: 'PlayerWalking',
-    behindView: Boolean(playerDefaults.bBehindView), npcHighlighting: Boolean(playerDefaults.bNPCHighlighting) };
-  const trace = (end,start,extent) => traceActors(collision.queries,player,end,start,extent);
+  const runtime = doors.scriptRuntime.runtime;
+  player.scriptRuntime = runtime;
+  const readPlayer = name => runtime.readNamed(player.collisionActor, name);
+  const inputHost = doors.scriptRuntime.windowHost;
+  // Rendering observes the original trace's cache; it cannot inject a target.
+  const interaction = Object.freeze({
+    get position() { return readPlayer('Location'); },
+    get viewRotation() { return readPlayer('ViewRotation'); },
+    get baseEyeHeight() { return readPlayer('BaseEyeHeight'); },
+    get maxFrobDistance() { return readPlayer('MaxFrobDistance'); },
+    get frobTime() { return readPlayer('FrobTime'); },
+    get frobTarget() { return readPlayer('FrobTarget'); },
+    get carriedDecoration() { return readPlayer('CarriedDecoration'); },
+    get stateName() { return runtime.instance(player.collisionActor).state.stateNode?.record.name ?? ''; },
+    get behindView() { return readPlayer('bBehindView'); },
+    get npcHighlighting() { return readPlayer('bNPCHighlighting'); },
+  });
+  const inputEvent = (key, action, delta = 0) => doors.scriptRuntime.liveConPlay.withLifecycle(
+    () => inputHost.inputEvent(key, action, {delta}));
+  const namedInput = (name, action, delta = 0) => {
+    const key = inputHost.inputKeyNames.findIndex(key => key?.toLowerCase() === `ik_${name}`.toLowerCase());
+    if (key < 0) throw new Error(`Original input key is unavailable: ${name}`);
+    return inputEvent(key, action, delta);
+  };
   // The frob label reads the object's own original name: inventory items and
   // weapons carry ItemName ("Crowbar", "10mm Ammo"), decorations fall back to
-  // their actor name. This is the name only, not a claim that every frob is
-  // implemented — item pickup and weapon use remain unbuilt (see notes below).
+  // their actor name. This label does not imply that every object
+  // interaction path is supported.
   const itemLabel = actor => {
     try { const name = doors.scriptRuntime.runtime.readNamed(actor, 'ItemName');
       if (name && String(name).toLowerCase() !== 'none') return name; } catch { /* not an item */ }
@@ -185,30 +204,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   };
   const game = {
     player, doors, collision, notes, start, interaction, random, hud,
-    tick(seconds, input) {
-      // One browser frame is one level tick, including on slow frames. The
-      // original physics routines own their remaining-time subdivisions.
-      player.timeDilation=levelDilation.get();
-      // ULevel.Tick owns the clock and clamped actor delta. The controlled
-      // player retains its declared movement port at its actual actor slot.
-      doors.tick(seconds, { tickPlayer: dt => {
-        tickWalkingInteraction(interaction,dt,trace);
-        // HighlightCenterObject's result is DeusExPlayer.FrobTarget/FrobTime;
-        // original bodies (ParseLeftClick, the HUD frob display) read them.
-        const runtime = doors.scriptRuntime?.runtime;
-        if (runtime) {
-          runtime.writeNamed(player.collisionActor, 'FrobTarget',interaction.frobTarget ?? null);
-          runtime.writeNamed(player.collisionActor, 'FrobTime',Math.fround(interaction.frobTime));
-          // PlayerWalking.PlayerTick -> MultiplayerTick (also single player),
-          // before Super.PlayerTick/movement: original per-frame hand transition.
-          runtime.processEvent(player.collisionActor,'UpdateInHand',[]);
-        }
-        player.tick(dt, input);
-        // Actor.Tick's pawn tail: FarMoveActor(Weapon, Location, 0, 0).
-        const weapon = runtime?.readNamed(player.collisionActor, 'Weapon');
-        if (weapon) runtime.farMoveActor(weapon, player.position, 0, 0);
-      } });
+    tick(seconds) {
+      // Actor.Tick owns ReadInput, PlayerInput/PlayerTick, ProcessState, timers,
+      // Pawn physics and UpdateEyeHeight. No host player simulation follows it.
+      player.timeDilation = levelDilation.get();
+      doors.tick(seconds);
       hud?.tick(doors.scriptRuntime.lastTickDelta);
+    },
+    view() {
+      // ProcessEvent copies its typed parameter block back to this array;
+      // script callFunction's lvalue references are a different interface.
+      const params = [player.collisionActor, readPlayer('Location'), readPlayer('ViewRotation')];
+      runtime.processEvent(player.collisionActor, 'PlayerCalcView', params);
+      return {actor: params[0], location: params[1], rotation: params[2], fov: readPlayer('FOVAngle')};
     },
     reset() {
       // LoadMap's first step, in the old world: the viewport's player is
@@ -227,7 +235,6 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // The reload's Login spawned a fresh player (its own vitals and HUD).
       applySubtitles();
       hud?.bindPlayer(player.collisionActor);
-      interaction.frobTime=0;interaction.frobTarget=null;
     },
     get subtitles(){ return Boolean(subtitlesRef.get()); },
     set subtitles(value){ subtitlePreference=Boolean(value); applySubtitles(); },
@@ -240,91 +247,31 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       if (key < 0) return false;
       return Boolean(hud.key(key, pressed ? 1 : 3));
     },
-    // One browser key edge through UEngine::InputEvent: Console.KeyEvent,
-    // then XInputExt::Process (root, key table, User.ini binding through the
-    // viewport's Exec chain). The keys in `hostCodes` keep Play's own
-    // stand-in instead of their binding (docs/script-console-command.md).
-    inputKey(code, pressed, {hostCodes = []} = {}) {
-      if (!hud) return {handled: false};
-      const names = hud.host.inputKeyNames, key = inputKeyForCode(names, code);
+    // Platform key/axis samples enter the installed binding through InputEvent.
+    inputKey(code, pressed) {
+      const key = inputKeyForCode(inputHost.inputKeyNames, code);
       if (key < 0) return {handled: false};
-      const host = new Set(hostCodes.map(hostCode => inputKeyForCode(names, hostCode)).filter(index => index >= 0));
-      return hud.inputEvent(key, pressed ? 1 : 3, {hostBinding: index => host.has(index)});
+      return inputEvent(key, pressed ? 1 : 3);
     },
-    // Browser focus loss: UInput::ResetInput's key-table clear.
-    resetInput() { hud?.host.consoleCommands.resetInput(); },
+    inputAxis(name, delta) { return namedInput(name, 4, delta); },
+    mouseMotion(dx, dy) { return inputHost.mouseMotion(dx, dy); },
+    inputButton(name, pressed) { return namedInput(name, pressed ? 1 : 3); },
+    resetInput(options) { inputHost.resetInput(options); },
     // The browser supplies drawing-buffer coordinates (or scaled relative
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
     use() {
-      const actor = interaction.frobTarget;
-      const runtime = doors.scriptRuntime.runtime;
-      // The installed RightMouse binding runs ParseRightClick with or without
-      // a highlighted object. With FrobTarget None it calls PutInHand(None):
-      // the item in hand is put away and a carried decoration is dropped or
-      // thrown (DeusExPlayer.DropDecoration).
-      if (!actor) {
-        const pawn = player.collisionActor;
-        runtime.writeNamed(pawn, 'FrobTarget',null);
-        doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
-        return { ok: true, message: '' };
-      }
-      // HighlightCenterObject's cache is the host stand-in for DeusExPlayer.FrobTarget.
-      // ParseRightClick reads that property. A NanoKey is picked up there, not via Frob.
-      if (actor.lineage?.includes('deusex.nanokey')) {
-        runtime.writeNamed(player.collisionActor, 'FrobTarget',actor);
-        runtime.processEvent(player.collisionActor, 'ParseRightClick', []);
-        const picked = runtime.readNamed(player.collisionActor, 'KeyList');
-        interaction.frobTarget = runtime.readNamed(player.collisionActor, 'FrobTarget');
-        return { ok: Boolean(picked), message: picked ? '' : 'Nothing selected' };
-      }
-      // A world inventory pickup (weapon, ammo, tool, food) runs the original
-      // right-click frob path: DeusExPlayer.ParseRightClick -> HandleItemPickup
-      // (which assigns the inventory-grid slot) -> DoFrob -> the item's real
-      // Pickup-state Frob give. This is the same public path the nanokey ring
-      // uses above; startup put the item in its auto Pickup state.
-      if (actor.lineage?.includes('engine.inventory')) {
-        const pawn = player.collisionActor;
-        runtime.writeNamed(pawn, 'FrobTarget',actor);
-        runtime.processEvent(pawn, 'ParseRightClick', []);
-        interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
-        const taken = runtime.readNamed(actor, 'Owner') === pawn
-          || runtime.readNamed(actor, 'bHidden')
-          || runtime.readNamed(actor, 'bDeleteMe');
-        return { ok: Boolean(taken), message: taken ? `Picked up ${itemLabel(actor)}` : '' };
-      }
-      // Any other target — a door included — takes the same original
-      // right-click path: ParseRightClick -> RestrictInput, GrabDecoration for
-      // a pushable decoration, else DoFrob -> the actor's Frob (DeusExMover's
-      // lock, one-way and Tag fanout), the owned-object 'Futz' AI event and
-      // PlayPickupAnim. A boundary it reaches pauses Play.
-      const pawn = player.collisionActor;
-      runtime.writeNamed(pawn, 'FrobTarget',actor);
-      // The scene router supplies the conversation presenter's lifecycle
-      // that a pawn's Frob -> StartConversation needs.
-      doors.scriptRuntime.dispatchEvent(pawn, 'ParseRightClick', []);
-      interaction.frobTarget = runtime.readNamed(pawn, 'FrobTarget');
-      return { ok: true, message: '' };
+      const actor = readPlayer('FrobTarget');
+      game.inputButton('RightMouse', true);
+      game.inputButton('RightMouse', false);
+      const taken = actor && actor.lineage?.includes('engine.inventory') &&
+        (runtime.readNamed(actor, 'Owner') === player.collisionActor ||
+         runtime.readNamed(actor, 'bHidden') || runtime.readNamed(actor, 'bDeleteMe'));
+      return {ok: true, message: taken ? `Picked up ${itemLabel(actor)}` : ''};
     },
-    // LeftMouse and Enter are bound to `ParseLeftClick|Fire` in the installed
-    // User.ini, and its Fire alias is `Button bFire | Fire`: a press runs the
-    // ParseLeftClick exec, raises the bFire button byte, then runs the Fire
-    // exec (DeusExPlayer.Fire -> PlayerPawn.Fire -> Weapon.Fire). Release
-    // clears bFire, which DeusExWeapon.Finish reads to swing again while held.
-    // A key ring or lockpick used on a targeted door is ParseLeftClick's own
-    // DoFrob(Self, inHand) branch.
-    pressFire() {
-      const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
-      doors.scriptRuntime.dispatchEvent(pawn, 'ParseLeftClick', []);
-      runtime.writeNamed(pawn, 'bFire',1);
-      runtime.processEvent(pawn, 'Fire', [0]);
-      return { ok: true, message: '' };
-    },
-    releaseFire() {
-      doors.scriptRuntime.runtime.writeNamed(player.collisionActor, 'bFire',0);
-    },
+    pressFire() { game.inputButton('LeftMouse', true); return {ok: true, message: ''}; },
+    releaseFire() { return game.inputButton('LeftMouse', false); },
     // Legacy research helper for headless checks; Play uses ActivateBelt(0).
     selectNanoKeyRing() {
       const runtime = doors.scriptRuntime.runtime, pawn = player.collisionActor;
@@ -353,7 +300,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const runtime=doors.scriptRuntime.runtime,pawn=player.collisionActor;
       const belt=hud.read(hud.hud,'belt'),item=hud.invoke(belt,'GetObjectFromBelt',[position]);
       if(item){const mesh=runtime.readNamed(item,'Mesh');if(mesh&&['LodMesh','Mesh'].includes(mesh.kind))await runtime.prepareMesh(item);}
-      hud.scoped(()=>runtime.dispatchSpawnedEvent(pawn,'ActivateBelt',[position]));
+      game.inputKey(`Digit${position}`, true);
+      game.inputKey(`Digit${position}`, false);
       return {ok:Boolean(item),name:item?.name??null,label:item?runtime.readNamed(item,'ItemName'):null};
     },
     async selectWeaponGroup(group) {

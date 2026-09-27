@@ -146,9 +146,19 @@ const topModal = () => {
   while (window && W.u8(window, 0x28) < 2) window = W.ptr(window, 0x144);
   return window;
 };
-const hostCodes = ['KeyW', 'KeyF', 'Enter'];
-const key = (code, pressed) => game.inputKey(code, pressed, {hostCodes});
+const key = (code, pressed) => game.inputKey(code, pressed);
 tick(30);
+
+// UViewport::ReadInput calls UpdateInput(0), then ReadInput(dt, *GLog).
+// Browser mouse deltas accumulate until that platform sampling boundary.
+const mouseXBefore=runtime.readNamed(player,'aMouseX'),mouseYBefore=runtime.readNamed(player,'aMouseY');
+game.mouseMotion(1,1);game.mouseMotion(2,1);
+assert.equal(runtime.readNamed(player,'aMouseX'),mouseXBefore,'mouse motion waits for UpdateInput');
+assert.equal(runtime.readNamed(player,'aMouseY'),mouseYBefore,'mouse motion waits for UpdateInput');
+game.doors.scriptRuntime.windowHost.viewportReadInput(.05);
+assert.ok(Math.abs(runtime.readNamed(player,'aMouseX')-72)<0.0001,'MouseX cumulative integer delta uses installed Speed=6');
+assert.ok(Math.abs(runtime.readNamed(player,'aMouseY')+48)<0.0001,'MouseY delivers the native negative vertical delta');
+game.resetInput({releasePhysical:true});
 
 // UInput::StaticInitInput's LoadConfig of Aliases[40] through GConfig.
 assert.deepEqual(commands.aliases.filter(alias => alias.Alias !== 'None').map(alias => alias.Alias),
@@ -168,8 +178,8 @@ assert.deepEqual(key('Escape', true), {handled: true, consumed: true, host: fals
 key('Escape', false);
 tick(10);
 assert.equal(topModal(), null, 'Escape closes MenuMain through the root');
-// A host-owned key reaches Play's stand-in, not its User.ini binding.
-assert.deepEqual(key('KeyW', true), {handled: true, consumed: false, host: true});
+// Movement uses the installed User.ini alias and the recovered input commands.
+assert.deepEqual(key('KeyW', true), {handled: true, consumed: false, host: false});
 key('KeyW', false);
 // PlayerPawn.ConsoleCommand through UWindowsViewport::Exec.
 assert.equal(commands.consoleCommand(player, 'FLUSH'), '');
@@ -177,7 +187,7 @@ assert.equal(commands.state.flushes, 2);
 assert.equal(commands.consoleCommand(player, 'KEYNAME 27'), 'Escape');
 assert.equal(commands.consoleCommand(player, 'KEYBINDING Escape'), 'ShowMainMenu');
 assert.equal(commands.consoleCommand(player, 'NoSuchCommand 1'), '');
-for (const [command, body] of [['OPEN 00_Training', 'UGameEngine::Exec'], ['MoveForward', 'UInput::Exec'],
+for (const [command, body] of [['OPEN 00_Training', 'UGameEngine::Exec'],
   ['obj list', 'UObject::StaticExec'], ['stat fps', 'URender::Exec']])
   assert.throws(() => commands.consoleCommand(player, command),
     error => error instanceof UnsupportedConsoleCommandError && error.body === body, command);
@@ -207,7 +217,7 @@ assert.equal(topModal(), null);
 // ignored, until ResetInput clears the table (Play: browser focus loss).
 assert.equal(key('Tab', true).handled, true);
 assert.equal(key('Tab', true).handled, false);
-game.resetInput();
+game.resetInput({releasePhysical:true});
 assert.equal(key('Tab', true).handled, true);
 key('Tab', false);
 
@@ -216,4 +226,3 @@ console.log(`validate-console-command: ${Object.keys(trace).length} Exec bodies 
   `${texts.parseToken.length} ParseToken cases match Core; in Play, Escape opens MenuMain through InputEvent, the ` +
   'ShowMainMenu binding and FLUSH, draws it, and closes it; ConsoleCommand dispatch and keyword boundaries hold; ' +
   'ConditionalBindMultiplayerKeys SET the five free multiplayer keys and SaveConfig wrote [Extension.InputExt]');
-process.exit(0);

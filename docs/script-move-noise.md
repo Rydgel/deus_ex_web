@@ -31,6 +31,23 @@ four trailing zeros and verbatim dword result propagation (0, 1, 2,
 when the scene provides no `moveActor` slot rather than approximating
 movement.
 
+### Batch 6 controlled-pawn integration
+
+The live crouch route reaches native 266 from the original
+`DeusExPlayer.SetBasedPawnSize` (`DeusExPlayer.uc:3187–3277`). Shrinking calls
+SetCollisionSize before Move(centerDelta), restoring the size on failure;
+growing calls Move before SetCollisionSize. The initial live check stopped
+because the level service admitted only moving brushes.
+
+The controlled pawn must take the same already-recovered `playerMove`
+ULevel::MoveActor translation used by its scene collision service
+([player-move.md](player-move.md)), with its canonical identity, current raw
+Rotation and all four flags zero, as proved by the exec oracle above. Its
+success result goes back to the unchanged script. Live Touch/UnTouch/Bump and
+zone callbacks dispatch original bytecode. This is an integration of existing
+native evidence, not a replacement stance calculation or a new collision
+algorithm. Other receivers/flags remain bounded by their existing adapters.
+
 ## 512 `MakeNoise`
 
 ### Exec `0x103bcd20`

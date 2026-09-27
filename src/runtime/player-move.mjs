@@ -2,7 +2,7 @@ import {moveQuery} from './move-query.mjs';
 const f=Math.fround;
 function basedOn(actor,base){const seen=new Set();for(let a=actor;a;a=a.base){if(a===base)return true;if(seen.has(a))throw Error('Cyclic actor Base chain');seen.add(a);}return false;}
 
-/** Ordinary original controlled-player MoveActor, unchanged rotation/no riders.
+/** Original cylinder MoveActor with the recovered based-rider pass.
  * `newRotation` is the ULevel::MoveActor absolute rotation argument; callers
  * that move without rotating pass null and keep the source rotation. The
  * original's nearly-zero-delta path still applies the new rotation before
@@ -12,7 +12,15 @@ export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,a
  const requested=delta.map(f),rotation=newRotation?[...newRotation]:[...source.rotation];let hits=[];
  const query=moveQuery({source,worldActor,start:source.position,delta:requested,extent:[source.radius,source.radius,source.height],multiLineCheck:q=>(hits=multiLineCheck(q)),ignoreBases});
  if(source.static || source.movable===false)return query;
- if(requested.every(v=>Math.abs(v)<.0001)){source.rotation=rotation;return query;}
+ const tiny=requested.every(v=>Math.abs(v)<.0001);
+ const sameRotation=rotation.every((v,i)=>v===source.rotation[i]);
+ // 0x103991c8..0x10399240: tiny Delta only takes the short path when the
+ // rotation is unchanged, or there are no riders/nonstatic brush. SetRotation
+ // on a player carrying inventory has Delta=0 but must run the rider/commit
+ // tail. Two original DLL cases are in docs/script-set-rotation.md.
+ if(tiny&&(sameRotation||!source.standingCount)){source.rotation=rotation;return query;}
+ if(tiny&&requested.some(v=>v!==0))
+  throw Error('MoveActor changed rotation with riders and nonzero sub-threshold Delta is not linked');
  const eligibleScanned=!!(source.flags&14)&&hits.some(h=>!basedOn(h.actor,source));
  // 0x103998a0-0x10399bb0: nonzero StandingCount walks Level.Actors and
  // recursively moves every based rider before this actor commits. bTest

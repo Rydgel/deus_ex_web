@@ -306,8 +306,10 @@ export class Player {
     this.walkBob = [...this.bobState.WalkBob]; this.bobTime = this.bobState.bobtime;
   }
   status() {
+    const read = name => this.scriptRuntime?.readNamed(this.collisionActor, name);
     return { position: [...this.position], velocity: [...this.velocity], eye: this.eye, grounded: this.grounded,
-      crouched: this.crouched, forceDuck: this.forceDuck, radius: this.radius, height: this.height,
+      crouched: this.scriptRuntime ? Boolean(read('bIsCrouching')) : this.crouched,
+      forceDuck: this.scriptRuntime ? Boolean(read('bForceDuck')) : this.forceDuck, radius: this.radius, height: this.height,
       steps: this.steps, jumps: this.jumps, lastHit: this.lastHit, eyeHeight: this.eyeHeight, walkBob: [...this.walkBob] };
   }
 }

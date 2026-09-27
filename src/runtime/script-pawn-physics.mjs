@@ -38,6 +38,7 @@ import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { setActorZone } from './zone.mjs';
 import { linkDecorationCollision } from './decoration-physics.mjs';
+import { x87add, x87double, x87load, x87mul, x87store } from './script-vm.mjs';
 
 const f = Math.fround;
 const unsupported = name => { throw new Error(`Original pawn physics boundary not linked: ${name}`); };
@@ -85,8 +86,10 @@ export function pawnPhysicsView(actor, services) {
   const set = services.write ? (name, value) => services.write(actor, name, value)
     : (name, value) => field(actor, name).set(value);
   const zone = () => services.zoneFields(pawn.region.zone ?? level.pointRegion(pawn.position).zone);
+  if (typeof services.isA !== 'function') unsupported('Pawn physics requires original class ancestry');
   const pawn = { self: actor, worldActor, isPawn: true, pawn: true,
-    controlledPlayer: false, decoration: false, movingBrush: false,
+    get controlledPlayer() { return Boolean(services.isA(actor, 'engine.playerpawn') && get('Player') != null); },
+    decoration: false, movingBrush: false,
     projectile: false, model: actor.model ?? null };
   const bind = (prop, name, read = v => v, write = v => v) =>
     Object.defineProperty(pawn, prop, { get: () => read(get(name)), set: v => set(name, write(v)), enumerable: true });
@@ -100,6 +103,7 @@ export function pawnPhysicsView(actor, services) {
   bind('baseEyeHeight', 'BaseEyeHeight'); bind('eyeHeight', 'EyeHeight');
   bind('desiredRotation', 'DesiredRotation');
   bind('rotationRate', 'RotationRate'); bind('owner', 'Owner');
+  bind('pendingTouch', 'PendingTouch');
   for (const [prop, name] of [['groundSpeed', 'GroundSpeed'], ['accelRate', 'AccelRate'],
     ['airControl', 'AirControl'], ['maxStepHeight', 'MaxStepHeight'], ['minHitWall', 'MinHitWall'],
     ['mass', 'Mass'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
@@ -386,5 +390,27 @@ export function runScriptPawnPhysics(actor, dt, services) {
       !sameRotation(pawn.rotation, pawn.desiredRotation) || pawn.rotationRate[2] > 0))
     physicsRotation(pawn, delta, services, dispatch);
   pawn.moveTimer = f(pawn.moveTimer - delta);
-  pawn.avgPhysicsTime = f(pawn.avgPhysicsTime * 0.8 + delta * 0.2);
+  // 0x103c9c37..0x103c9c4e keeps both products and their sum in x87 extended
+  // precision: old*double[0x10431418] + dt*double[0x1042b8e8], then FSTP m32.
+  // x87double models those exact binary64 constants; the field and timestep
+  // are float32 memory operands. Native 64-bit-significand rounding matters
+  // for rare halfway cases, so avoid JS binary64 intermediates here.
+  pawn.avgPhysicsTime = x87store(x87add(
+    x87mul(x87load(pawn.avgPhysicsTime), x87double(0.8)),
+    x87mul(x87load(delta), x87double(0.2))));
+  // APawn has the same deferred-touch tail ordering: call the current target's
+  // PostTouch with this pawn, then re-read PendingTouch and unlink one link.
+  // The callback can replace/clear PendingTouch, so unlink the post-callback
+  // value exactly as the native reads at 0x103c9c78.
+  const postTouchTarget = pawn.pendingTouch;
+  if (postTouchTarget) {
+    dispatch(postTouchTarget, 'PostTouch', [actor]);
+    const unlink = pawn.pendingTouch;
+    if (unlink) {
+      const next = services.read ? services.read(unlink, 'PendingTouch') : services.field(unlink, 'PendingTouch').get();
+      pawn.pendingTouch = next;
+      if (services.write) services.write(unlink, 'PendingTouch', null);
+      else services.field(unlink, 'PendingTouch').set(null);
+    }
+  }
 }

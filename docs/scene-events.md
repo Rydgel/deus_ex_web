@@ -1,5 +1,16 @@
 # Selected scene event bodies
 
+## Batch 6 live dispatch
+
+Live Play now bypasses the historical dry helper below and dispatches the
+attached actor's original event bytecode. In particular, closing-door contact
+calls `Mover.EncroachingOn` (`Mover.uc:584–651`) and consumes its bool result.
+The recovered native caller/result-block contract already implemented by
+`ScriptRuntime.dispatchSpawnedEvent` supplies the typed result slot and
+preserves probe suppression. The scene router must use that entry, rather
+than treating `processEvent`'s host dispatch-status bool as the script result.
+The Stage 2 standalone helper remains for its isolated reference fixtures.
+
 Source-first scope: ordinary JC PlayerWalking and Training's two TriggerToggle
 panels. Original Actor declares empty HitWall, BumpWall, Touch, UnTouch,
 BeginEvent and EndEvent. Pawn declares empty UnderLift and EncroachedByMover.

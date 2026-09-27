@@ -24,12 +24,17 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   // runtime's VM (the general scene-event router), which is created after this
   // scene (game.mjs wires it). See docs/scene-events.md.
   const hooks={dispatchEvent:null};
-  const dispatch=createSceneEvents(()=>source,{deferMissionEvent:(target,event)=>{
+  const fixtureDispatch=createSceneEvents(()=>source,{deferMissionEvent:(target,event)=>{
     player.unimplementedPhysicsEffects.add(`${target.name}.${event} mission script`);
   },dispatchEvent:(target,event,args)=>{
     if(!hooks.dispatchEvent)throw Error(`Scene event dispatch is not linked: ${target?.name??'actor'}.${event}`);
     return hooks.dispatchEvent(target,event,args);
   }});
+  // Live Play runs the original callback bodies, including player and trigger
+  // overrides. The bounded Stage-2 callback fixture is only used before a VM
+  // is linked; it must not catch/defer a failure on the live route.
+  const dispatch=(target,event,args)=>hooks.dispatchEvent
+    ? hooks.dispatchEvent(target,event,args)?.result : fixtureDispatch(target,event,args);
   const unsupported=name=>{throw Error(`Unsupported original scene callback: ${name}`);};
   const dry=dryPlayerZoneCallbacks({timeSeconds,
     makeNoise:()=>unsupported('MakeNoise on zone transition'),
@@ -41,14 +46,15 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   };
   const zoneWorld={levelInfo:worldActor,netMode:0,
     pointRegion:position=>pointRegion(model,position,worldActor,zoneActors),
-    actorLeaving(zone,actor){zoneSupported(zone);if(actor===source)dry.actorLeaving(zone,actor);else if(!actor.movingBrush)unsupported('non-mover ActorLeaving');},
-    actorEntered(zone,actor){zoneSupported(zone);if(actor===source)dry.actorEntered(zone,actor);else if(!actor.movingBrush)unsupported('non-mover ActorEntered');},
-    zoneChange(actor,zone){zoneSupported(zone);if(actor===source)dry.zoneChange(actor,zone);else if(!actor.movingBrush)unsupported('non-mover ZoneChange');},
-    footZoneChange:dry.footZoneChange,headZoneChange:dry.headZoneChange,
+    actorLeaving(zone,actor){if(hooks.dispatchEvent)return dispatch(zone,'ActorLeaving',[actor]);zoneSupported(zone);if(actor===source)dry.actorLeaving(zone,actor);else if(!actor.movingBrush)unsupported('non-mover ActorLeaving');},
+    actorEntered(zone,actor){if(hooks.dispatchEvent)return dispatch(zone,'ActorEntered',[actor]);zoneSupported(zone);if(actor===source)dry.actorEntered(zone,actor);else if(!actor.movingBrush)unsupported('non-mover ActorEntered');},
+    zoneChange(actor,zone){if(hooks.dispatchEvent)return dispatch(actor,'ZoneChange',[zone]);zoneSupported(zone);if(actor===source)dry.zoneChange(actor,zone);else if(!actor.movingBrush)unsupported('non-mover ZoneChange');},
+    footZoneChange:(actor,zone)=>hooks.dispatchEvent?dispatch(actor,'FootZoneChange',[zone]):dry.footZoneChange(actor,zone),
+    headZoneChange:(actor,zone)=>hooks.dispatchEvent?dispatch(actor,'HeadZoneChange',[zone]):dry.headZoneChange(actor,zone),
   };
   const updateZone=(actor,test,force)=>setActorZone(actor,zoneWorld,test,force);
   const touch=(a,b)=>beginTouch(a,b,dispatch),untouch=(a,b,suppress)=>endTouch(a,b,suppress,dispatch);
-  const move=delta=>playerMove(source,delta,{worldActor,
+  const move=(delta,rotation=null)=>playerMove(source,delta,{worldActor,
     multiLineCheck:q=>collision.queries.multiLineCheck(q),removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
     dispatch,isBlockedBy:playerBlockedBy,isOverlapping,beginTouch:touch,endTouch:untouch,setActorZone:updateZone,
     // CreateKeyRing SetBase(Self) gives the player a based rider. The recovered
@@ -70,7 +76,7 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
       actorLocation:()=>source.position,
       actorRotation:()=>source.rotation,
     }),
-  });
+  },rotation);
   player.nativeMove=move;
   const level={editor:false,netMode:0,actors:[worldActor,...actors,source],
     // Native graph slots read by native dispatch (Level.Model, null demo driver):
@@ -134,6 +140,11 @@ export function bindPlayerScene(player,collision,{model,actors,zoneActors,levelV
   // execMove forwards the live ULevel::MoveActor slot. The recovered brush
   // entry handles translations; rotation-changing/flagged branches stay explicit.
   level.moveActor=(actor,delta,rotation,hit,test,ignorePawns,ignoreBases,noFail)=>{
+    // SetBasedPawnSize's Move and UpdateRotation's SetRotation use the same
+    // zero-flag MoveActor entry. The latter's zero Delta still runs the rider
+    // pass when picked-up inventory gives the player a StandingCount.
+    if (actor === source && !test && !ignorePawns && !ignoreBases && !noFail)
+      return move(delta,rotation).success;
     if (!actor.movingBrush || test || ignorePawns || ignoreBases || noFail
         || !actor.rotation.every((value,index)=>value===rotation[index]))
       throw new Error('MoveActor scene branch is not linked');

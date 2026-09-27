@@ -1,5 +1,29 @@
 # Source-ordered dry walking controls
 
+## Batch 6 live route
+
+Play now runs original `PlayerInput`, `HandleWalking`, state `PlayerTick`,
+`PlayerMove`, `ProcessMove`, `UpdateRotation`, ProcessState/timers, Pawn physics
+and `UpdateEyeHeight` through the shared scheduler. The helpers and 27-frame
+comparison below are retained Stage 2 fixtures, not Play's execution path.
+The native input contract and comparisons are in
+[script-console-command.md](script-console-command.md), and the full tick
+integration is recorded in [script-player-tick.md](script-player-tick.md).
+
+Installed `User.ini` uses W/A/S/D or arrows for movement, X=Duck,
+Shift=Walking, Space=Jump, Q/E=LeanLeft/LeanRight, F=CenterView,
+RightMouse=ParseRightClick, and Enter/LeftMouse=ParseLeftClick|Fire.
+Play delivers those bindings. Native ReadInput scales held axes per admitted
+frame; Play no longer has a fixed 120 Hz player port.
+
+The original Dodge selection/animation code is prepared and executes as
+bytecode, but installed User.ini and DefUser.ini both set DodgeClickTime=0
+(line 249), so the `PlayerMove` `DodgeClickTime > 0` gate does not enter its
+double-tap path. Changing that config, non-world moving-base jumps, swimming
+and ladder traversal remain outside the bounded Training route's verification.
+Browser device sampling, OS acceleration and physical-device equivalence are
+also unverified. No visual comparison is claimed by the native/script checks.
+
 Original authority: embedded DeusExPlayer.HandleWalking3085–3121,
 PlayerWalking.ProcessMove3422–3662, DoJump3132–3175; inherited
 PlayerPawn.PlayerWalking.ProcessMove3534–3562. Actual local System/User.ini and

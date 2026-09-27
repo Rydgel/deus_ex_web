@@ -155,7 +155,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // UEngine::InputEvent -> XInputExt::Process -> bindings -> the viewport's
   // Exec chain; also PlayerPawn.ConsoleCommand (docs/script-console-command.md).
   const isA=(object,key)=>{for(let cls=runtime.instance(object).cls;cls;cls=cls.base)if(cls.record.key===key)return true;return false;};
-  const input={hostBinding:()=>false,flushRenderDevice:null};
+  const input={hostBinding:()=>false,flushRenderDevice:null,platformKeys:new Uint8Array(255),mouseDeltaX:0,mouseDeltaY:0};
+  let updatePlatformInput=()=>boundary('UWindowsViewport::UpdateInput has no browser key snapshot adapter');
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     viewport(){
       const viewport=runtime.readNamed(player,'Player');
@@ -171,7 +172,29 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     },
     hostBinding:(key,action)=>input.hostBinding(key,action),
     flushRenderDevice:allow=>input.flushRenderDevice?.(allow),
+    // ResetInput clears UInput's held table before WinDrv polls the platform.
+    // The browser's event-fed device snapshot is kept separately and replayed
+    // through InputEvent in native key order.
+    updateInput(viewport,immediate){
+      if(immediate!==0&&immediate!==1)boundary(`Unsupported UWindowsViewport::UpdateInput mode ${immediate}`);
+      if(viewport!==runtime.readNamed(player,'Player'))boundary('UWindowsViewport::UpdateInput requires the local viewport');
+      updatePlatformInput(viewport,immediate);
+    },
   }});
+  const nativeMouseKey=name=>inputConsole.names.findIndex(candidate=>candidate?.toLowerCase()===`ik_${name}`.toLowerCase());
+  updatePlatformInput=(_viewport,immediate)=>{
+    // UWindowsViewport::UpdateInput accumulates integer cursor movement and
+    // delivers MouseX/MouseY axis edges before its GetKeyState reconciliation.
+    const dx=input.mouseDeltaX,dy=input.mouseDeltaY;
+    input.mouseDeltaX=0;input.mouseDeltaY=0;
+    if(dx){const key=nativeMouseKey('MouseX');if(key<0)boundary('Engine EInputKey IK_MouseX is not linked');consoleCommands.inputEvent(key,4,Math.fround(dx));}
+    if(dy){const key=nativeMouseKey('MouseY');if(key<0)boundary('Engine EInputKey IK_MouseY is not linked');consoleCommands.inputEvent(key,4,Math.fround(-dy));}
+    for(let key=0;key<input.platformKeys.length;key++)
+      if(consoleCommands.state.held[key]&&!input.platformKeys[key])
+        consoleCommands.inputEvent(key,3,0);
+      else if(immediate===1&&input.platformKeys[key]&&!consoleCommands.state.held[key])
+        consoleCommands.inputEvent(key,1,0);
+  };
   const packages = new Map();
   for (const name of ['Core', 'Engine', 'Extension', 'DeusEx', 'DeusExUI', 'ConSys']) packages.set(name, await assets.get(name));
   const extension = packages.get('Extension'), deusEx = packages.get('DeusEx');
@@ -1404,13 +1427,29 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
     consoleCommands,
-    /** UEngine::InputEvent for one browser key edge. `hostBinding(key,action)`
-     * claims the keys whose binding Play replaces with its own stand-in. */
+    /** UEngine::InputEvent for one browser key edge. The optional
+     * hostBinding override remains only for isolated legacy fixtures. */
     inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){
       const saved={...input};input.hostBinding=hostBinding;input.flushRenderDevice=flushRenderDevice;
+      if(action===1&&key>=0&&key<input.platformKeys.length)input.platformKeys[key]=1;
+      else if(action===3&&key>=0&&key<input.platformKeys.length)input.platformKeys[key]=0;
       try{return consoleCommands.inputEvent(key,action,delta);}
       finally{Object.assign(input,saved);}
     },
+    /** Platform-side ResetInput. Blur/hidden handlers pass releasePhysical;
+     * other native reset sites preserve the event-fed physical snapshot. */
+    resetInput({releasePhysical=false}={}){
+      if(releasePhysical)input.platformKeys.fill(0);
+      consoleCommands.resetInput();
+    },
+    /** Raw browser relative motion is sampled at UpdateInput, not converted to
+     * actor axes per DOM event. Native cursor coordinates are signed int32. */
+    mouseMotion(dx,dy){
+      if(!Number.isFinite(dx)||!Number.isFinite(dy))boundary('Non-finite viewport mouse movement is unsupported');
+      input.mouseDeltaX=(input.mouseDeltaX+Math.trunc(dx))|0;
+      input.mouseDeltaY=(input.mouseDeltaY+Math.trunc(dy))|0;
+    },
+    viewportReadInput(delta){return consoleCommands.viewportReadInput(delta);},
     // Browser/viewport adapter into the already recovered root mouse route.
     // Coordinates are drawing-buffer pixels, matching the root canvas size.
     pointer(root,{x=0,y=0,dx=0,dy=0,relative=false,key=null,action=null}){

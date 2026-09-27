@@ -21,6 +21,7 @@
  */
 import {readToken} from './config-text.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
+import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
 
 export class UnsupportedConsoleCommandError extends Error {
   constructor(message, {body = null, keyword = null} = {}) {
@@ -31,7 +32,7 @@ export class UnsupportedConsoleCommandError extends Error {
   }
 }
 
-export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3;
+export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3, IST_AXIS = 4;
 
 // Each body's ParseCommand keywords, in the order its fall-through path tests
 // them. Keywords a body tests only after another keyword matched are not
@@ -244,12 +245,99 @@ export function createConsoleCommands({runtime, input, services}) {
   }
   const scriptExec = (object, cmd, executor) => runtime.scriptConsoleExec(object, cmd, executor);
 
+  function inputActor() {
+    const viewport = services.viewport(), actor = read(viewport, 'Actor');
+    if (!actor) throw new UnsupportedConsoleCommandError('UInput requires a linked viewport Actor');
+    return {viewport, actor};
+  }
+
+  function findActorField(actor, name, kind) {
+    const field = runtime.namedField(actor, name);
+    if (!field || field.metadata.type !== kind || !(field.metadata.flags & 0x4))
+      throw new UnsupportedConsoleCommandError(`UInput CPF_Input ${kind} property ${name} is not linked`);
+    return field;
+  }
+
+  function readInputField(actor, field) {
+    const value = runtime.readField(actor, field);
+    return field.metadata.arrayDim > 1 ? value[0] : value;
+  }
+
+  function writeInputField(actor, field, value) {
+    if (field.metadata.arrayDim > 1) {
+      const array = runtime.readField(actor, field);
+      array[0] = value;
+      runtime.writeField(actor, field, array);
+    } else runtime.writeField(actor, field, value);
+  }
+
+  function inputPropertyFields(instance) {
+    const fields = [];
+    for (let cls = instance.cls; cls; cls = cls.base) {
+      for (const field of cls.propertyOrder) {
+        if (field.metadata.flags & 0x4) fields.push(field);
+      }
+    }
+    return fields;
+  }
+
+  function inputCommand(cmd) {
+    const action = state.action;
+    let rest = parseCommand(cmd, 'BUTTON');
+    if (rest !== null) {
+      const token = parseToken(rest, 256, false);
+      if (!token.ok) throw new UnsupportedConsoleCommandError(`UInput BUTTON requires a property: ${cmd}`);
+      const {actor} = inputActor(), field = findActorField(actor, token.token, 'byte');
+      if (action === IST_PRESS) writeInputField(actor, field, 1);
+      else if (action === IST_RELEASE && readInputField(actor, field) !== 0) writeInputField(actor, field, 0);
+      return true;
+    }
+    rest = parseCommand(cmd, 'PULSE');
+    if (rest !== null) {
+      const token = parseToken(rest, 256, false);
+      if (!token.ok) throw new UnsupportedConsoleCommandError(`UInput PULSE requires a property: ${cmd}`);
+      const {actor} = inputActor(), field = findActorField(actor, token.token, 'byte');
+      if (action === IST_PRESS) writeInputField(actor, field, 1);
+      return true;
+    }
+    rest = parseCommand(cmd, 'TOGGLE');
+    if (rest !== null) {
+      const token = parseToken(rest, 256, false);
+      if (!token.ok) throw new UnsupportedConsoleCommandError(`UInput TOGGLE requires a property: ${cmd}`);
+      const {actor} = inputActor(), field = findActorField(actor, token.token, 'byte');
+      if (action === IST_PRESS) writeInputField(actor, field, (readInputField(actor, field) ^ 0x80) & 0xff);
+      return true;
+    }
+    rest = parseCommand(cmd, 'AXIS');
+    if (rest !== null) {
+      const property = parseToken(rest, 256, false);
+      if (!property.ok) throw new UnsupportedConsoleCommandError(`UInput AXIS requires a property: ${cmd}`);
+      const speedMatch = /(?:^|[\t ])Speed[\t ]*=[\t ]*([^\t ]+)/i.exec(property.rest);
+      let scalar = 1;
+      if (speedMatch) {
+        const value = speedMatch[1];
+        scalar = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)
+          ? Math.fround(Number(value)) : NaN;
+        if (!Number.isFinite(scalar))
+          throw new UnsupportedConsoleCommandError(`UInput AXIS Speed expression is not linked: ${cmd}`);
+      }
+      const {actor} = inputActor(), field = findActorField(actor, property.token, 'float');
+      if (action === IST_HOLD || action === IST_AXIS) {
+        const current = runtime.readField(actor, field), prior = x87load(field.metadata.arrayDim > 1 ? current[0] : current);
+        let product = x87mul(x87load(state.delta), x87load(scalar));
+        if (action === IST_AXIS) product = x87mul(product, x87double(0.01));
+        const result = x87store(x87add(product, prior));
+        if (field.metadata.arrayDim > 1) current[0] = result;
+        runtime.writeField(actor, field, field.metadata.arrayDim > 1 ? current : result);
+      }
+      return true;
+    }
+    return false;
+  }
+
   /** UInput::Exec 0x10393e10 (XInputExt keeps it). */
   function inputExec(cmd, ar) {
-    for (const keyword of ['BUTTON', 'PULSE', 'TOGGLE', 'AXIS'])
-      if (parseCommand(cmd, keyword) !== null)
-        throw new UnsupportedConsoleCommandError(`UInput::Exec ${keyword} (the input axis/button system) is not implemented: ${cmd}`,
-          {body: 'UInput::Exec', keyword});
+    if (inputCommand(cmd)) return true;
     let rest = parseCommand(cmd, 'KEYNAME');
     if (rest !== null) { ar.log(input.keyName(inputInteger(rest))); return true; }
     rest = parseCommand(cmd, 'KEYBINDING');
@@ -445,6 +533,10 @@ export function createConsoleCommands({runtime, input, services}) {
     return {log(text) { throw new UnsupportedConsoleCommandError(`Console output device is not linked: ${text}`); }};
   }
 
+  function gLogOutput() {
+    return {log(text) { throw new UnsupportedConsoleCommandError(`GLog output device is not linked: ${text}`); }};
+  }
+
   /** APlayerPawn::execConsoleCommand 0x103ba200: Player's Exec into a string
    * device; no UPlayer returns an empty string. */
   function consoleCommand(receiver, command) {
@@ -454,14 +546,62 @@ export function createConsoleCommands({runtime, input, services}) {
     return ar.text;
   }
 
-  /** UInput::ResetInput 0x10394910, first half: the key table (+0xeb0) is
-   * zeroed. WinDrv calls it from its focus handlers (after 0x1110a0f5 and
-   * 0x1110a1e2, next to Exec("SETPAUSE 1"/"SETPAUSE 0")); Play calls it when
-   * the browser window loses focus. The SETPAUSE exec and the actor
-   * input-property reset that follows are not driven. */
-  function resetInput() { state.held.fill(0); }
+  /** UInput::ReadInput 0x10394580: replay non-sentinel holds, then scale each
+   * CPF_Input float. This takes the selected GLog/Console output device from
+   * its caller because original Input::Process can log while replaying. */
+  function readInput(delta, ar = consoleOutput()) {
+    const {actor} = inputActor(), fields = inputPropertyFields(runtime.instance(actor)), dt = Math.fround(delta);
+    const comparison = x87cmp(x87load(dt), x87double(-1));
+    if (comparison !== 'eq' && comparison !== 'un') {
+      for (let key = 0; key < 0xff; key++)
+        if (state.held[key]) process(key, IST_HOLD, dt, ar);
+    }
+    const scale = comparison === 'eq' || comparison === 'un'
+      ? x87double(0) : x87div(x87double(20), x87load(dt));
+    for (const field of fields) if (field.metadata.type === 'float') {
+      const current = runtime.readField(actor, field), first = field.metadata.arrayDim > 1 ? current[0] : current;
+      const result = x87store(x87mul(x87load(first), scale));
+      if (field.metadata.arrayDim > 1) current[0] = result;
+      runtime.writeField(actor, field, field.metadata.arrayDim > 1 ? current : result);
+    }
+    return undefined;
+  }
 
-  return {state, aliases: input.aliases, inputEvent, process, execInputCommands, viewportExec, inputExec, consoleCommand,
+  /** UViewport::ReadInput 0x10374990: sample platform input unless Delta is
+   * the -1 sentinel, then call UInput::ReadInput with the original GLog. */
+  function viewportReadInput(delta, ar = gLogOutput()) {
+    const viewport = services.viewport(), dt = Math.fround(delta);
+    const comparison = x87cmp(x87load(dt), x87double(-1));
+    if (comparison !== 'eq' && comparison !== 'un') {
+      if (typeof services.updateInput !== 'function')
+        throw new UnsupportedConsoleCommandError('UWindowsViewport::UpdateInput(0) is not linked');
+      services.updateInput(viewport, 0);
+    }
+    return readInput(dt, ar);
+  }
+
+  /** UInput::ResetInput 0x10394910. Native clears ByteProperty input bytes,
+   * then FloatProperty input DWORDs in a second pass, and invokes the
+   * viewport's UpdateInput(1) through vtable +0x7c. */
+  function resetInput() {
+    state.held.fill(0);
+    const {viewport, actor} = inputActor(), instance = runtime.instance(actor);
+    for (const field of inputPropertyFields(instance)) if (field.metadata.type === 'byte') {
+      writeInputField(actor, field, 0);
+    }
+    for (const field of inputPropertyFields(instance)) if (field.metadata.type === 'float') {
+      if (field.metadata.arrayDim > 1) {
+        const value = runtime.readField(actor, field); value[0] = 0;
+        runtime.writeField(actor, field, value);
+      } else runtime.writeField(actor, field, 0);
+    }
+    state.action = 0; state.delta = 0;
+    if (typeof services.updateInput !== 'function')
+      throw new UnsupportedConsoleCommandError('UWindowsViewport::UpdateInput(1) virtual at viewport +0x7c is not linked');
+    services.updateInput(viewport, 1);
+  }
+
+  return {state, aliases: input.aliases, inputEvent, process, readInput, viewportReadInput, execInputCommands, viewportExec, inputExec, consoleCommand,
     flush, resetInput};
 }
 

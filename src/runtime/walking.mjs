@@ -7,7 +7,10 @@ export function walking(pawn,seconds,iterations=0){
  const dt=f(seconds);if(!(dt>0)||dt>f(.4))throw Error('Walking requires timestep in (0,0.4]');
  if(pawn.walkingPrelude(dt,iterations))return;
  pawn.velocity=pawn.velocity.map(f);pawn.acceleration=pawn.acceleration.map(f);pawn.position=pawn.position.map(f);
- pawn.velocity[2]=pawn.acceleration[2]=0;
+ // Script-backed FVector reads are values. Commit native component stores
+ // through the setter instead of changing only a temporary returned array.
+ pawn.acceleration=[pawn.acceleration[0],pawn.acceleration[1],0];
+ pawn.velocity=[pawn.velocity[0],pawn.velocity[1],0];
  Object.assign(pawn,groundVelocity({velocity:pawn.velocity,acceleration:pawn.acceleration,direction:safeNormal(pawn.acceleration),dt,maxSpeed:pawn.groundSpeed,accelRate:pawn.accelRate,friction:pawn.friction,walking:pawn.isWalking}));
  const desired=add(pawn.velocity,scale(scale(pawn.zoneVelocity,25),dt));desired[2]=0;
  const gravity=[0,0,pawn.gravity[2]>0?1:-1],floorDelta=scale(gravity,f(f(pawn.maxStepHeight)+2)),extent=[f(pawn.radius),f(pawn.radius),f(pawn.height)];
@@ -65,13 +68,13 @@ export function walking(pawn,seconds,iterations=0){
   if(hit.time<1)pawn.hitSlopedWall=true;
   const size=f(Math.sqrt(dot(originalDelta,originalDelta)));
   remaining=size===0?0:f(remaining+(1-Math.min(1,Math.hypot(pawn.position[0]-origin[0],pawn.position[1]-origin[1])/size))*step);
-  pawn.velocity[2]=0;pawn.fallingEvent();if(pawn.physics===1)pawn.setPhysics(2);
+  pawn.velocity=[pawn.velocity[0],pawn.velocity[1],0];pawn.fallingEvent();if(pawn.physics===1)pawn.setPhysics(2);
   if(pawn.physics===2){
-   const vz=pawn.velocity[2];if(!pawn.justTeleported&&dt>remaining){const inv=f(1/(dt-remaining));pawn.velocity=scale(sub(pawn.position,old),inv);}pawn.velocity[2]=vz;
+   const vz=pawn.velocity[2];if(!pawn.justTeleported&&dt>remaining){const inv=f(1/(dt-remaining));pawn.velocity=scale(sub(pawn.position,old),inv);}pawn.velocity=[pawn.velocity[0],pawn.velocity[1],vz];
    if(remaining>.01)pawn.falling(remaining,iterations);return;
   }
   pawn.move(scale(desired,remaining));remaining=0;
  }
  if(!pawn.justTeleported){const inv=1/dt;pawn.velocity=[f((pawn.position[0]-old[0])*inv),f(f(pawn.position[1]-old[1])*f(inv)),f(f(pawn.position[2]-old[2])*f(inv))];}
- pawn.velocity[2]=0;
+ pawn.velocity=[pawn.velocity[0],pawn.velocity[1],0];
 }

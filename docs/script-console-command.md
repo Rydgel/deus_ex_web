@@ -142,24 +142,17 @@ optional host hook. This is a platform boundary, not game state.
 * `PlayerPawn.ConsoleCommand` goes through `consoleCommand` (the window
   host's native handler). KEYNAME and KEYBINDING, the former input-console
   queries, are now the `UInput::Exec` step of this chain.
-* A browser key goes through `game.inputKey`, which runs `InputEvent`. The
-  viewer keeps its own stand-ins for the keys whose bindings need the
-  unimplemented axis/button system: movement, jump, crouch and walk (W A S
-  D Q E, the arrows, Shift, Space, Ctrl). F (use), Enter (fire) and 0–9
-  (belt) are kept too. For these keys the table update still happens, the
-  root still sees them first, and `hostBinding` replaces only their binding
-  step.
-* Every other key runs its `User.ini` binding: Escape `ShowMainMenu`, F1
-  `ShowInventoryWindow`, F2 `ShowGoalsWindow`, Tab `DropItem`, F3–F12
+* Browser key edges go through `game.inputKey` and the native `InputEvent`
+  route. W/A/S/D and the other installed key bindings run their `User.ini`
+  aliases through UInput::Exec; `BUTTON`, `PULSE`, `TOGGLE` and `AXIS` update
+  linked actor fields. Mouse axes enter through `MouseX`/`MouseY` bindings.
+* Other installed bindings include Escape `ShowMainMenu`, F1
+  `ShowInventoryWindow`, F2 `ShowGoalsWindow`, Tab `DropItem`, and F3–F12
   `ActivateAugmentation N`.
-* When the browser window loses focus or the page is hidden,
-  `game.resetInput` runs the first half of `UInput::ResetInput`
-  (`0x10394910`), which zeroes the key table. WinDrv calls `ResetInput`
-  from its focus handlers, next to `Exec("SETPAUSE 1")`/`("SETPAUSE 0")`.
-  Without it, a keyup lost to a focus change would leave its key held, so
-  the next press would be ignored. The SETPAUSE exec, the actor
-  input-property reset and the exact window-message mapping are not
-  traced.
+* WinDrv's focus path calls the complete `UInput::ResetInput` body
+  (`0x10394910`), which clears held keys, CPF_Input byte/float properties and
+  Action/Delta, then calls `UWindowsViewport::UpdateInput(1)`. The window host
+  translates the keyboard portion using its separate physical-key snapshot.
 * `ScriptConsoleExec`'s executor rule (`0x10150978–0x101509df`) is now
   translated, because `UPlayer::Exec` passes the Actor. Only the first
   parameter takes the executor, and only when it is an object or class
@@ -167,10 +160,8 @@ optional host hook. This is a platform boundary, not game state.
   class.
 
 Explicit boundaries (`UnsupportedConsoleCommandError`):
-* Every keyword claim other than KEYNAME, KEYBINDING and FLUSH, including
-  BUTTON, PULSE, TOGGLE and AXIS. A claim is found before its handler does
-  any work, so the viewer shows a notice instead of pausing. Pressing Alt
-  (`Strafe` → `Button bStrafe`) shows one.
+* Exec keywords outside the implemented input commands, KEYNAME, KEYBINDING
+  and FLUSH.
 * A binding that fails after an earlier line of it already ran is marked
   `partial` and pauses Play.
 * A logging command reached from a key, because the Console output device
@@ -178,21 +169,159 @@ Explicit boundaries (`UnsupportedConsoleCommandError`):
 * A net or demo driver on the level.
 * The Y/N remap.
 
-Not driven:
-* `UInput::ReadInput`'s per-tick `IST_Hold` replay of held keys.
-* Alias expansion of the host-owned movement keys.
+Alias expansion of movement keys now runs through the same recovered UInput
+command path as other bindings.
+
+### Original input sampling recovered for Stage 3 batch 6
+
+The original Engine.dll bodies are in `.cache/reference/readInput.asm`
+(`UInput::ReadInput`, body `0x10394580`) and `.cache/reference/Engine.asm`
+(`UInput::ResetInput`, body `0x10394910`). The latter disassembly is included
+here because the focused `readInput.asm` capture ends before ResetInput. The
+Engine.dll SHA-256 is
+`0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4`.
+
+`UInput::ReadInput(float Delta, FOutputDevice&)` recovers this order:
+
+1. It gets the viewport through `UInput+0xea0`, then the Actor through viewport
+   `+0x30`. A missing viewport takes an assertion/log path and is unsupported.
+2. It counts the Actor's `CPF_Input` properties (flag `0x4`) by walking the
+   linked class property chain, allocates a pointer array for that count, and
+   fills it with the matching property descriptors in the same order. The
+   comparison is against the exact double constant `-1.0` at
+   `Engine.dll+0x10429c58` after loading Delta as float32. For a non-sentinel
+   Delta, it calls **UInput** `Process(FOutputDevice,key,IST_Hold=2,Delta)`
+   through the input object's vtable `+0x60` for each nonzero held byte at
+   `UInput+0xeb0+key`, ascending key `0..254`. The comparison's equality flag
+   skips replay; unordered NaN takes the zero-scale path. The second ReadInput
+   argument is its FOutputDevice.
+3. It leaves an x87 extended-precision scale on the FPU stack. For
+   `Delta != -1.0f`, x87 `fdivr` computes the double constant `20.0`
+   (`+0x1042e4e0`) divided by float32 Delta. For
+   `Delta == -1.0f`, it loads the double zero at `+0x10429838`. It walks the
+   collected properties in order and selects only `FloatProperty` entries,
+   reading the class test via the original property ancestry. Each selected field at property offset
+   `+0x48` is multiplied by the scale with x87 `fmuls`, then stored by
+   `fstps` (float32). Thus the sentinel path zeros those float values; zero
+   Delta takes the non-sentinel path and reaches native divide-by-zero
+   behavior. Byte input properties are skipped.
+4. It updates the native garbage-collection counter and returns. ReadInput
+   does not clear Action/Delta and does not call `ProcessInput`.
+
+The `UInput::Exec` entry has an adjusted `FExec` subobject receiver. The
+offsets below are normalized to the complete UInput object; the native body
+compensates for that subobject adjustment before reading UInput fields or
+calling its virtuals. Array properties use only element zero: the native
+address is `Property+0x48` and does not iterate `ArrayDim`.
+
+The wrapper is Engine export `UViewport::ReadInput` (`0x10374990`, thunk
+`0x10303733`). It asserts when the viewport's Input at `+0x60` is null. It
+compares float32 Delta with the same exact double `-1.0`; unless equality or
+unordered, it calls viewport vtable `+0x7c` `UpdateInput(0)`. It then loads
+`GLog` through Engine IAT `0x10599bbc` and calls Input vtable `+0x64`
+`ReadInput(Delta,*GLog)`. Thus the per-tick call order is platform sampling,
+held-key replay, then axis scaling; sentinel `-1` skips only the platform
+sampling wrapper and still calls UInput::ReadInput.
+
+`UInput::ResetInput()` is separate. Engine.dll `0x10394910` clears the same
+255 held bytes, then gets the viewport through `+0xea0` and Actor through
+viewport `+0x30`. It makes two property passes derived-to-base: the first
+zeros one byte for each `CPF_Input` `ByteProperty`; the second selects
+`FloatProperty` entries that `IsA(FloatProperty)` and zeros the full four-byte
+float. Both passes write only the first array element at `Property+0x48`.
+It then clears Action and Delta at `UInput+0xea8/+0xeac` and calls the
+viewport's vtable `+0x7c` with `1`; this is WinDrv `UWindowsViewport::UpdateInput`
+(`0x11109280`), not Actor.ProcessInput. The level-tick CPF_Input
+FloatProperty pass (`runtime.resetActorInput`) also writes float-sized zeros
+after `PlayerInput`.
+
+`UInput::Exec` (`Engine.dll+0x10393e10`, `.cache/reference/inputExec.asm`)
+recovers BUTTON, PULSE, TOGGLE and AXIS. Each command gets its Actor from the
+viewport at `UInput+0xea0` and viewport `+0x30`. Button-family lookup uses the
+UInput object's virtual `FindButtonName` at `+0x74`; AXIS uses its virtual
+`FindAxisName` at `+0x78`.
+
+* BUTTON, PULSE and TOGGLE get the Actor through `UInput+0xea0` → viewport
+  `+0x30`, parse the property name using `ParseToken(256, no escapes)`, find it
+  through UInput virtual `FindButtonName` at `+0x74`, then address its byte at
+  `Property+0x48`. Both virtual lookups use UInput's cached Actor properties
+  that carry `CPF_Input` (`0x4`); byte commands require ByteProperty and AXIS
+  requires FloatProperty. BUTTON sets it on
+  Action 1 and clears it on Action 3 only when it was set. PULSE sets on
+  Action 1. TOGGLE xors bit `0x80` on Action 1. These are byte properties
+  such as bFire, bDuck, and bRun, not BoolProperty. Other actions do not write.
+* AXIS parses its property name with `ParseToken(256, no escapes)`, then
+  parses optional `Speed=` text with Core `Parse`. Omitted Speed retains its
+  initialized `1.0`. It accumulates into the resolved float field. The body
+  then multiplies the input object's `+0xe84`
+  float (Delta) by it. Native action/type is read at `+0xe80`: type 4 computes
+  `prior + (Delta * Speed * 0.01)` with x87 operations and float32 store; type
+  2 omits the `0.01` factor. The state action and delta set around
+  `ExecInputCommands` are at `+0xea8/+0xeac` in the Extension Process caller.
+  This comes from `0x10394038–0x10394085`; the factor is the original double
+  `0x10429858 = 0.01`.
+* Missing actor/property, unsupported axis type, parse errors and original
+  warning/log output are explicit boundaries until the linked reflection and
+  output paths cover them.
+
+`scripts/native-input-console-oracle.py` executes original Engine.dll
+instruction slices under Unicorn after verifying their bytes against the
+installed image. `scripts/validate-native-input-console.mjs` compares the
+translation with the native outputs. The oracle covers BUTTON press/release,
+TOGGLE xor, AXIS action 2/4 arithmetic, and ReadInput scaling, sentinel and
+zero-delta values. It does not execute full Exec, ReadInput or ResetInput
+methods; Pulse release, held-key order and property filters remain
+assembly-derived checks.
+
+Instruction-derived original reference cases are: (a) two set held bytes
+replay at indexes in ascending order for `Delta=0.05`, while `Delta=-1` skips
+replay; (b) a FloatProperty input value of `3` scales to `1200` at
+`Delta=0.05` and to zero at `Delta=-1`, while a ByteProperty is skipped;
+(c) BUTTON press/release stores `1`/`0`, PULSE release leaves the byte
+unchanged, and TOGGLE press xors `0x80`; (d) AXIS action 2 versus 4 applies
+the native `0.01` factor difference; and (e) ResetInput separately clears
+input bytes and float DWORDs, clears Action/Delta, then calls
+UWindowsViewport.UpdateInput(1).
+
+The WinDrv body at `0x11109280` in `.cache/reference/win-update-input.asm`
+implements `UpdateInput(mode)`. It polls joystick buttons/axes, then samples
+mouse coordinates, stores the current integer coordinates in viewport fields
+at `+0x1b0/+0x1b4`, and compares them with the prior sample at
+`+0x1a4/+0x1a8`. A changed X sends
+`CauseInputEvent(IK_MouseX=0xe4, IST_AXIS=4, DeltaX)`; changed Y sends
+`IK_MouseY=0xe5` with the negated integer delta. Keyboard reconciliation
+follows the mouse sample. The browser host accumulates
+integer relative X/Y deltas and delivers one pair at the next `UpdateInput`;
+its event timing and OS cursor/DPI quantization remain platform differences.
+
+For a nonzero mode, it compares
+the focused window handle with the viewport's handle and keeps the keyboard
+query flag only when they match. It visits key indexes `0..255`, skips indexes
+already handled by earlier device paths, and calls the `user32!GetKeyState`
+import (`WinDrv IAT 0x1111ecfc`); the high bit reports down. For a key whose
+UInput held byte is clear, a down result sends `CauseInputEvent(Press)` only
+when the focused-window flag is set. For a held key, an up result sends
+`CauseInputEvent(Release)` even when that flag is clear. Mode `0` therefore
+only releases stale held keys; mode `1` also presses physically-down keys when
+the viewport is focused. The browser host maintains an event-fed 255-key
+physical state snapshot. `UpdateInput(0)` reconciles key releases; after
+ResetInput, `UpdateInput(1)` replays still-down snapshot entries in key order.
+Blur/hidden clears the snapshot before ResetInput. Joystick polling and keys
+>=255 remain outside this browser adapter. The installed User.ini binds
+`MouseX=Axis aMouseX Speed=6.0` and `MouseY=Axis aMouseY Speed=6.0`; WinDrv
+converts vertical motion to the negative axis direction.
 
 Assumed, not traced: that the viewport's `RenDev` is the configured
 `GameRenderDevice` (WinDrv's device selection was not traced).
 
-## Known gap: the menu does not pause Training
+## Play menu and pause integration
 
-`UIPauseGame` → `PlayerPawn.ShowMenu` → `SetPause(true)` writes
-`PlayerReplicationInfo.PlayerName` to `Level.Pauser`. Play's player startup
-(`script-player-startup.mjs`) does not run `GameInfo.Login` or
-`Pawn.PreBeginPlay`, so the player has no PlayerReplicationInfo. `Pauser`
-stays empty, and the level keeps ticking behind the menu. The console,
-root and menu state are original.
+The original `UIPauseGame` → `PlayerPawn.ShowMenu` → `SetPause(true)` path
+sets `Level.Pauser` from the player's `PlayerReplicationInfo`. Play startup
+now runs the original Login/PRI setup, and the pause scheduler is verified at
+the level boundary. See [script-player-login.md](script-player-login.md),
+[script-level-tick.md](script-level-tick.md), and
+`scripts/validate-play-frame.mjs` for those integration checks.
 
 ## Checks
 
@@ -205,10 +334,17 @@ root and menu state are original.
   * Escape runs `ShowMainMenu` and FLUSH, and opens and draws `MenuMain`
     (DXFonts glyphs, button art);
   * the release and the next Escape are consumed and close it;
-  * W reaches its stand-in;
+  * W reaches its installed User.ini alias;
+  * mouse deltas accumulate until UViewport::ReadInput and yield native
+    `aMouseX`/`aMouseY` increments with the vertical sign;
   * `ConsoleCommand` answers FLUSH, KEYNAME, KEYBINDING and an unknown
-    command, and stops at OPEN, `MoveForward`, `obj list` and `stat fps`;
+    command, and stops at OPEN, `obj list` and `stat fps`;
   * F1 opens the inventory screen.
+
+`node scripts/validate-native-input-console.mjs` runs the original Engine.dll
+instruction-slice oracle and compares BUTTON/PULSE/TOGGLE, AXIS, ReadInput and
+ResetInput translation cases, including the AXIS default Speed and array
+property element writes.
 
 One difference from Core is not reproduced. A quoted `ParseToken` with
 escapes that ends in a backslash makes the original step past the string's

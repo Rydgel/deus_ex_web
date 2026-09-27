@@ -18,8 +18,10 @@ export function processLanded(pawn, hit, remainingTime, iterations) {
     if (fitted && fitted.some((value, axis) => f(value) !== start[axis])) {
       // The original ignores FarMoveActor's return value and keeps falling.
       pawn.farMove(fitted.map(f), 0, 0);
-      pawn.velocity[0] = f(pawn.random() * 60 - 30 + pawn.velocity[0]);
-      pawn.velocity[1] = f(pawn.random() * 60 - 30 + pawn.velocity[1]);
+      const x = f(pawn.random() * 60 - 30 + pawn.velocity[0]);
+      pawn.velocity = [x, pawn.velocity[1], pawn.velocity[2]];
+      const y = f(pawn.random() * 60 - 30 + pawn.velocity[1]);
+      pawn.velocity = [pawn.velocity[0], y, pawn.velocity[2]];
       return;
     }
   }

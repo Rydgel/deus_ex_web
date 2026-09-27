@@ -360,16 +360,13 @@ function makeBinding(runtime, record, field) {
       leaf: value?.['engine.actor.pointregion.ileaf'] ?? -1,
       zoneNumber: value?.['engine.actor.pointregion.zonenumber'] ?? 0 }; },
   };
-  // The controlled player's view state lives on the viewer's movement port:
-  // the camera integrates look input instead of PlayerPawn.UpdateRotation, so
-  // original bodies (DeusExWeapon.TraceFire's GetAxes(ViewRotation),
-  // CalcDrawOffset's EyeHeight/WalkBob, HighlightCenterObject) read it live.
-  // UpdateRotation stores `ViewRotation.Pitch & 65535` (PlayerPawn.uc:3342)
-  // and leaves Yaw unmasked; the read applies the same representation.
+  // Original PlayerInput/PlayerTick/UpdateRotation now own these live fields.
+  // Keep ViewRotation as raw signed rotator storage: masks belong to the
+  // bytecode operation that performs them, not every subsequent field read.
   if (host.controlledPlayer) {
     const view = {
       viewrotation: {
-        get: () => { const r = host.viewRotation ?? ZERO_VECTOR; return [(r[0] | 0) & 65535, r[1] | 0, r[2] | 0]; },
+        get: () => vector(host.viewRotation, true),
         set: value => { host.viewRotation = vector(value, true); },
       },
       eyeheight: { get: () => f(host.eyeHeight ?? 0), set: value => { host.eyeHeight = f(value); } },
@@ -1142,10 +1139,11 @@ export async function createScriptDoors({
   let tickBoundary = null, lastTickDelta = 0;
   const npcTickOptions = {
     allocateDeferredActor: () => ({}),
-    // Input sampling belongs to the explicitly retained player port. In the
-    // paused branch PlayerInput still executes and CPF_Input floats reset;
-    // browser movement is never advanced there.
-    readInput: () => {},
+    readInput: (viewport, delta) => {
+      if (viewport !== level.engine.client.viewports[0])
+        throw new Error('ReadInput requires the linked local viewport');
+      windowHost.viewportReadInput(delta);
+    },
     farMoveActor: (actor, destination, test, noCheck) =>
       runtime.farMoveActor(actor, destination, test, noCheck),
     beginTick: () => ({}),
@@ -1739,7 +1737,7 @@ export async function createScriptDoors({
     if (!record) return { handled: false };
     if (!record.function)
       throw new Error(`Original scene event is not prepared: ${runtime.instance(target).cls.record.key}.${event}`);
-    const invoke=()=>runtime.processEvent(target,event,args);
+    const invoke=()=>runtime.dispatchSpawnedEvent(target,event,args);
     const result=liveConPlay?liveConPlay.withLifecycle(invoke):invoke();
     // A pushable decoration's Bump starts a SetTimer(0.2) push-sound lifetime the
     // tick advances (bumpedDecorations); track it here now that decoration Bump
@@ -1829,21 +1827,14 @@ export async function createScriptDoors({
   }
 
   // Every dynamic actor is admitted by the original level/actor scheduler.
-  function tick(seconds, { tickPlayer = null } = {}) {
+  function tick(seconds) {
     if (tickBoundary) throw tickBoundary;
     if (npcFailures.size) {
       const [actor,message] = npcFailures.entries().next().value;
       throw new Error(`Original actor boundary (${actor.name ?? 'unnamed'}): ${message}`);
     }
     try {
-      lastTickDelta = runtime.processLevelTick(level, seconds, {...npcTickOptions,
-        controlledPlayerTick: (actor, delta) => {
-          if (actor !== playerActor) throw new Error('Controlled PlayerPawn has no linked player port');
-          if (typeof tickPlayer !== 'function') throw new Error('Controlled PlayerPawn requires the declared player movement port');
-          tickPlayer(delta);
-          return 1;
-        },
-      });
+      lastTickDelta = runtime.processLevelTick(level, seconds, npcTickOptions);
     } catch (error) {
       // A failed frame must never resume partially advanced actor state.
       // Reset/reload is the only way to leave this explicit boundary.
