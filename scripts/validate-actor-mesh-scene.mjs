@@ -12,6 +12,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createActorMeshScene,TRAINING_NPC_IDENTITIES} from '../src/viewer/npc-mesh-preview.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const directory of ['Maps','System','Textures','Sounds','Music'])
@@ -143,12 +144,11 @@ assert.deepEqual(snapshot(),before,'disposing meshes must not mutate runtime act
 // world pass draws an owned bOnlyOwnerSee actor in first person, so the layer
 // rebuilds the actor for its new Mesh instead of refusing.
 const live=await createActorMeshScene(runtime,assets,asset,{player});
-const idle={forward:0,right:0,yaw:0,pitch:0,jump:false,crouch:false,walk:false};
-const frames=async count=>{for(let i=0;i<count;i++){game.tick(1/60,idle);live.update([0,0,0]);await live.ready();}};
+const input=createPlayerInputFixture(game);
+const frames=async count=>{for(let i=0;i<count;i++){input.tick(1);live.update([0,0,0]);await live.ready();}};
 const tool=level.actors.find(a=>a?.name==='Multitool0');
 const worldMesh=get(tool,'Mesh');
-game.interaction.frobTarget=tool;
-assert.equal(game.use().ok,true,'Multitool0 is picked up');
+assert.equal((await input.frob(tool)).ok,true,'Multitool0 is picked up');
 const belt=game.hud.read(game.hud.hud,'belt');
 const toolSlot=[...Array(10).keys()].find(i=>game.hud.invoke(belt,'GetObjectFromBelt',[i])===tool);
 assert.equal((await game.activateBelt(toolSlot)).name,'Multitool0');

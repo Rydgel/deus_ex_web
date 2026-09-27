@@ -124,14 +124,15 @@ the native HUD. There are no mover, trigger, DataLink, light, NPC, inventory or
 mission tick passes. Renderer invalidation observes light/mover fields after
 the scheduler; it does not execute script.
 
-The controlled player remains the declared batch-6 substitute. Actor.Tick's
-stasis, owner dependency, bTicked and animation phases precede the player port
-at the controlled-PlayerPawn branch. The port retains its prior movement and
-hand/weapon operations. The paused branch calls original PlayerInput and
-resets CPF_Input floats; browser input sampling is part of the retained player
-substitute. It does not advance the movement port. Other paused actors receive
-the original bAlwaysTick gate. The existing DLL tests cover both branches and
-retry order independently of Play.
+At the batch 5 checkpoint the controlled player remained a declared substitute.
+Batch 6 replaces that branch with viewport ReadInput, original PlayerInput and
+state PlayerTick, reset, ProcessState/timers, Pawn physics and eye update.
+Actor.Tick's stasis, owner dependency, bTicked and animation phases still
+precede it. The paused branch calls original PlayerInput and resets CPF_Input
+floats without advancing player movement; other paused actors receive the
+original bAlwaysTick gate. The existing DLL tests cover both branches and
+retry order independently of Play. The new input/physics integration and its
+remaining limits are in [the player-tick contract](script-player-tick.md).
 
 An actor exception records its identity and freezes the entire frame at an
 explicit boundary. Subsequent calls rethrow the same failure until reload;

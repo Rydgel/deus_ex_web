@@ -96,10 +96,11 @@ before current stance/speed/jump effects; physics owns OldLocation; eye updates
 once after completed physics. The independent native composed physics corpus
 remains the evidence for the underlying geometry path (63frames/2547queries).
 
-Remaining original boundaries: input-device accumulation and fixed120Hz cadence;
-actual ProcessState/timer/mission effects between PlayerMove and physics; full
-Dodge/menu/animation state evaluation; non-world vertical moving-base jumps;
-original callback audio/damage/AI; camera FOV/zoom, ViewShake and visual captures.
-Those are not covered by the five ordinary dry, fixed-view cases. Healthy speed
-resolution and original config values are explicit preconditions, not inferred
-from class-default values.
+These five retained Stage 2 cases do not cover input-device accumulation,
+ProcessState/timer/mission effects, full Dodge/menu/animation state evaluation,
+non-world vertical moving-base jumps, callback audio/damage/AI, or full camera
+behavior. Batch 6 separately links ReadInput, ProcessState/timers, original
+script callbacks and PlayerCalcView; their evidence and remaining limits are
+recorded in [the live player-tick contract](script-player-tick.md). Play no
+longer uses the fixed 120 Hz port. Healthy speed and original config values
+remain explicit preconditions of the five fixture cases.

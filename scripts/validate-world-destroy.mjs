@@ -18,6 +18,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
@@ -123,7 +124,8 @@ runtime.processEvent = (actor, event, args, ...rest) => {
   if (actor === trigger || (event === 'UnTouch' && args?.[0] === trigger)) events.push(`${actor?.name}.${event}`);
   return processEvent(actor, event, args, ...rest);
 };
-const input = { forward: 1, right: 0, yaw: game.player.yaw, pitch: 0, jump: false, crouch: false, walk: false };
+const fixture=createPlayerInputFixture(game,{tickSeconds:1/120});
+const tickForward=()=>{fixture.driveLegacy({forward:1});fixture.tick();};
 // Live map pawns tick now, and their script bodies can join the ULevel
 // deferred-destroy chain mid-session (e.g. ScriptedPawn KillShadow on an
 // AttachDecal failure). Deleted is the chain head before this destruction's
@@ -132,7 +134,7 @@ const input = { forward: 1, right: 0, yaw: game.player.yaw, pitch: 0, jump: fals
 let opened = false, frames = 0, headBefore = null;
 while (level.actors.includes(trigger) && frames++ < 1200) {
   headBefore = level.pendingDeleted;
-  game.tick(1 / 120, input);
+  tickForward();
   if (!opened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); opened = true; }
 }
 assert.ok(frames < 1200, 'walking the authored route reaches OrdersTrigger2');
@@ -163,7 +165,7 @@ assert.equal(level.pendingDeleted, trigger, 'the idempotent path does not re-ent
 
 // Play continues past the point the unwired request used to pause it.
 const before = game.player.position[0];
-for (let i = 0; i < 600; i++) game.tick(1 / 120, input);
+for (let i = 0; i < 600; i++) tickForward();
 assert.ok(game.player.position[0] > before, 'movement continues after the live destruction');
 
 // -- Player start restores the serialized map state ---------------------------
@@ -181,7 +183,7 @@ assert.equal(inCollisionHash(trigger), true, 'the scene reset rebuilt the collis
 
 let second = 0, reopened = false;
 while (level.actors.includes(trigger) && second++ < 1200) {
-  game.tick(1 / 120, input);
+  tickForward();
   if (!reopened && game.interaction.frobTarget?.name === 'DeusExMover16') { game.use(); reopened = true; }
 }
 assert.equal(second, frames, 'the new session reproduces the same destruction frame');

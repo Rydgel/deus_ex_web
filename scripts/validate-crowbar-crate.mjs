@@ -9,6 +9,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -16,13 +17,13 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
 const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const input=createPlayerInputFixture(game);
 const get=(o,k)=>runtime.namedReference(o,k).get();
 const meshes=await createActorMeshScene(runtime,assets,asset,{player});
 const previewFor=actor=>meshes.actors.find(preview=>preview.actor===actor);
 const live=name=>level.actors.find(a=>a?.name===name);
 const stateKey=o=>runtime.instance(o).state?.stateNode?.record?.key??'none';
-function place(item){const loc=get(item,'Location');
-  game.collision.queries.changeActor(player,()=>{game.player.position=[loc[0]-40,loc[1],loc[2]];game.player.velocity=[0,0,0];});}
+const place=(item,options)=>input.aim(item,options);
 
 // Walk through the authored departure trigger before visiting the crates.
 // Skipping this approach used to hide Jaime's transient/stasis destruction.
@@ -30,11 +31,8 @@ const jaime=live('JaimeReyes0'),leavingTrigger=live('OrdersTrigger4');
 const departure=get(leavingTrigger,'Location');
 assert.equal(get(leavingTrigger,'Orders'),'Leaving');
 assert.equal(get(leavingTrigger,'Event'),'JaimeReyes');
-game.collision.queries.changeActor(player,()=>{
- game.player.position=[departure[0]-60,departure[1],-128+43+0.2];
- game.player.velocity=[0,0,0];
-});
-for(let frame=0;frame<40;frame++)game.tick(1/60,{forward:1,yaw:0,pitch:0});
+input.place([departure[0]-60,departure[1],-128+43+0.2]);
+input.driveLegacy({forward:1});input.tick(40);input.driveLegacy({forward:0});
 assert.equal(get(jaime,'bTransient'),true,'original Leaving.BeginState marks Jaime transient');
 assert.equal(stateKey(jaime),'deusex.scriptedpawn.patrolling');
 const jaimeInventory=[];
@@ -62,19 +60,17 @@ for(const tag of ['dl_start','dl_door']){
 // Pick up the crowbar through the public frob path (the covered pickup slice).
 const crowbar=live('WeaponCrowbar1');
 assert.ok(crowbar,'WeaponCrowbar1 is a live actor');
-place(crowbar);game.interaction.frobTarget=crowbar;
-assert.equal(game.use().ok,true,'the crowbar is taken into inventory');
+assert.equal((await input.frob(crowbar)).ok,true,'the crowbar is taken into inventory');
 assert.equal(get(crowbar,'Owner'),player,'the crowbar is owned by JC before selection');
 
 await game.selectWeaponGroup(10);
 const crate=live('CrateBreakableMedGeneral1'),upper=live('CrateBreakableMedGeneral2');
 const cl=get(crate,'Location');
 const px=[cl[0],cl[1]+64,-128+43+0.2];
-game.collision.queries.changeActor(player,()=>{game.player.position=px;game.player.velocity=[0,0,0];});
-const input={forward:0,right:0,yaw:-Math.PI/2,pitch:Math.atan2(cl[2]-(px[2]+40),px[1]-cl[1]),jump:false,crouch:false,walk:false};
+input.place(px,{yaw:-Math.PI/2,pitch:Math.atan2(cl[2]-(px[2]+game.player.baseEyeHeight),px[1]-cl[1])});
 const traces=new Set(),fragments=new Set();
 const tick=n=>{for(let i=0;i<n;i++){
- game.tick(1/60,input);
+ game.tick(1/60);
  for(const actor of level.actors){
   if(!actor)continue;
   const cls=runtime.instance(actor).cls;
@@ -117,9 +113,9 @@ assert.equal(stateKey(lockpick),'deusex.deusexpickup.pickup','dropped lockpick e
 // before frobbing them: the spawned collision view's class marker is
 // intentionally read-only and must only be observed by player physics.
 const beforeContentsMove=game.player.position.slice();
-input.forward=1;
+input.driveLegacy({forward:1});
 assert.doesNotThrow(()=>tick(30),'walking beside dropped contents must not mutate their class identity');
-input.forward=0;
+input.driveLegacy({forward:0});
 assert.notDeepEqual(game.player.position,beforeContentsMove,'the public walking path advances after crate destruction');
 assert.equal(lockpick.isPawn,false,'the dropped Inventory retains its canonical non-Pawn classification');
 assert.ok(level.actors.includes(lockpick),'movement does not implicitly pick up the Lockpick');
@@ -138,8 +134,7 @@ for(const actor of [...fragments,lockpick]){
  if(fragments.has(actor))assert.ok(preview.summary.textures.includes(skin.key),'fragment renders inherited crate skin');
 }
 assert.deepEqual(meshes.summary.errors,[]);
-place(lockpick);game.interaction.frobTarget=lockpick;
-assert.equal(game.use().ok,true,'public frob collects the revealed lockpick');
+assert.equal((await input.frob(lockpick)).ok,true,'public frob collects the revealed lockpick');
 assert.equal(get(lockpick,'Owner'),player);
 const belt=game.hud.read(game.hud.hud,'belt');
 const lockpickSlot=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===lockpick);

@@ -96,6 +96,16 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe($('viewport'));
+function applyPlayerView() {
+  const view = game.view();
+  const angle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
+  camera.position.fromArray(toView(view.location));
+  pitch = angle(view.rotation[0]); yaw = -angle(view.rotation[1]);
+  camera.rotation.set(pitch, yaw, -angle(view.rotation[2]));
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(view.fov / 2)) / camera.aspect));
+  camera.updateProjectionMatrix();
+  return view;
+}
 function resetCamera() {
   if (!map) return;
   hideNpcFocus();
@@ -109,21 +119,17 @@ function resetCamera() {
   pitch = (start?.rotation?.[0] ?? 0) * Math.PI / 32768;
   yaw = -(start?.rotation?.[1] ?? 0) * Math.PI / 32768;
   camera.rotation.set(pitch, yaw, 0); cameraMoved = false;
-  if (mode === 'play' && game) camera.position.fromArray(toView(game.player.eye));
+  if (mode === 'play' && game) applyPlayerView();
 }
 function setMode(next) {
+  if (mode === 'play' && next !== 'play') game?.resetInput({releasePhysical:true});
   mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
   if(mode==='play')hideNpcFocus();
   keys.clear();
-  if (mode === 'play') camera.position.fromArray(toView(game.player.eye));
+  if (mode === 'play') applyPlayerView();
   $('play-hint').textContent = '';
-  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · Ctrl crouch · Shift walk · F or right-click use · Click or Enter fire / use item in hand · 1–9 belt · 0 nanokey ring · Esc release' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc release';
-  $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, Control to crouch, F to use.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
-}
-function useDoor() {
-  if (mode !== 'play' || !game || loading || runtimeError) return;
-  try { const result = game.use(); toast(result.message); }
-  catch(error) { pauseForRuntimeError(error); }
+  $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · X crouch · Shift walk · Right-click use · F center view · Click or Enter fire / use item in hand · 1–9 belt · 0 nanokey ring · Esc menu' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc menu';
+  $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, X to crouch, right mouse to use, F to center view.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
 }
 function pauseForRuntimeError(error) {
   stopConversationAudio();
@@ -320,6 +326,28 @@ previews.npc=()=>{
   focusNpcPreview($('npc-focus').value);
 };
 
+// Explicit preview placement/aim only. Selection is still the original
+// HighlightCenterObject query, at its own FrobTime cadence.
+function aimPreview(target, point = null) {
+  const runtime = game.doors.scriptRuntime.runtime, pawn = game.player.collisionActor;
+  for (let frame = 0; frame < 60; frame++) {
+    const at = point ?? runtime.readNamed(target, 'Location');
+    const eye = runtime.readNamed(pawn, 'Location').slice();
+    eye[2] += runtime.readNamed(pawn, 'BaseEyeHeight');
+    const d = at.map((value, i) => value - eye[i]);
+    const rotation = [Math.trunc(Math.atan2(d[2], Math.hypot(d[0], d[1])) * 32768 / Math.PI),
+      Math.trunc(Math.atan2(d[1], d[0]) * 32768 / Math.PI), 0];
+    runtime.writeNamed(pawn, 'ViewRotation', rotation);
+    runtime.writeNamed(pawn, 'Rotation', [0, rotation[1], 0]);
+    game.tick(1 / 60);
+    if (runtime.readNamed(pawn, 'FrobTarget') === target) { applyPlayerView(); return; }
+  }
+  throw new Error(`Original preview trace did not select ${target.name}: ` +
+    `selected=${runtime.readNamed(pawn, 'FrobTarget')?.name ?? 'None'}, ` +
+    `player=${JSON.stringify(runtime.readNamed(pawn, 'Location'))}, ` +
+    `target=${JSON.stringify(runtime.readNamed(target, 'Location'))}`);
+}
+
 // Viewer test navigation only. Original startup, targeting and Frob still run;
 // no keys, doors, flags, target or conversation state are assigned here.
 previews.instructor=()=>{
@@ -334,11 +362,10 @@ previews.instructor=()=>{
       game.player.position=[location[0]-80,location[1],location[2]];
       game.player.velocity=[0,0,0];
     });
-    yaw=0;pitch=-.3;camera.rotation.set(pitch,yaw,0);
-    camera.position.fromArray(toView(game.player.eye));
+    aimPreview(instructor);
     drag=false;document.exitPointerLock?.();togglePanel(false);$('scene').focus();
     void activateInfoLinkAudio().catch(error=>pauseForRuntimeError(error));
-    toast('Instructor preview · wait a few seconds, then press F to speak. Player start returns to the beginning.');
+    toast('Instructor preview · wait a few seconds, then right-click to speak. Player start returns to the beginning.');
   }catch(error){pauseForRuntimeError(error);}
 };
 
@@ -363,7 +390,7 @@ previews.weapon = async () => {
     yaw = 0; pitch = -0.15; camera.rotation.set(pitch, yaw, 0);
     camera.position.fromArray(toView(game.player.eye));
     drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
-    game.interaction.frobTarget = crowbar;
+    aimPreview(crowbar);
     const picked = game.use();
     const belt=game.hud.read(game.hud.hud,'belt');
     const position=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===crowbar);
@@ -375,14 +402,13 @@ previews.weapon = async () => {
     game.collision.queries.changeActor(player,()=>{
       game.player.position=[at[0],at[1]+64,-128+43+0.2];game.player.velocity=[0,0,0];
     });
-    yaw=Math.PI/2;pitch=Math.atan2(at[2]-(game.player.position[2]+40),64);
-    camera.rotation.set(pitch,yaw,0);camera.position.fromArray(toView(game.player.eye));
+    aimPreview(crate);
     toast(`${picked.message || 'Crowbar'} · ${equipped.ok ? 'Click or press Enter twice to break the crate' : 'select from the object belt'}`);
   } catch (error) { pauseForRuntimeError(error); }
 };
 
 // Places Play in front of DataCube0 (the paddoor code) and aims at it. Reading
-// is the normal F key: ParseRightClick -> DoFrob -> InformationDevices.Frob.
+// uses the original RightMouse binding: ParseRightClick -> DoFrob -> InformationDevices.Frob.
 previews.datacube = () => {
   if (!game || loading || currentMap !== '00_Training') return;
   try {
@@ -390,19 +416,18 @@ previews.datacube = () => {
     const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
     const cube = runtime.levelFor(player).actors.find(actor => actor?.name === 'DataCube0');
     if (!cube) throw new Error('Training DataCube0 is unavailable');
-    const at = runtime.readNamed(cube, 'Location');
+    const at = runtime.readNamed(cube, 'Location'), side = 48 * Math.SQRT1_2;
     game.collision.queries.changeActor(player, () => {
-      game.player.position = [at[0] - 56, at[1], at[2] + 48];
+      game.player.position = [at[0] - side, at[1] - side, at[2]];
       game.player.velocity = [0, 0, 0];
     });
     for (let frame = 0; frame < 30; frame++)
-      game.tick(1 / 60, {forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false});
-    yaw = 0; pitch = Math.atan2(at[2] - game.player.eye[2], 56);
-    camera.rotation.set(pitch, yaw, 0); camera.position.fromArray(toView(game.player.eye));
+      game.tick(1 / 60);
+    camera.position.fromArray(toView(game.player.eye));
     drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
-    // The highlight a tick computes from this aim; set here like the crowbar preview.
-    game.interaction.frobTarget = cube;
-    toast('DataCube preview · press F to read it; walk away or press F again to close.');
+    // The original highlight tick selects the cube from the preview aim.
+    aimPreview(cube);
+    toast('DataCube preview · right-click to read it; walk away or right-click again to close.');
   } catch (error) { pauseForRuntimeError(error); }
 };
 
@@ -419,12 +444,12 @@ previews.keypad = () => {
       game.player.velocity = [0, 0, 0];
     });
     for (let frame = 0; frame < 30; frame++)
-      game.tick(1 / 60, {forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false});
+      game.tick(1 / 60);
     yaw = 0; pitch = Math.atan2(at[2] - game.player.eye[2], 48);
     camera.rotation.set(pitch, yaw, 0); camera.position.fromArray(toView(game.player.eye));
     drag = false; document.exitPointerLock?.(); togglePanel(false); $('scene').focus();
-    game.interaction.frobTarget = keypad;
-    toast('Keypad preview · press F to open it, then type the DataCube code 0012.');
+    aimPreview(keypad);
+    toast('Keypad preview · right-click to open it, then type the DataCube code 0012.');
   } catch (error) { pauseForRuntimeError(error); }
 };
 
@@ -436,9 +461,12 @@ previews.light = () => {
     const lightSwitch=runtime.levelFor(player).actors.find(actor=>actor?.name==='LightSwitch0');
     if (!lightSwitch) throw new Error('Training light switch is unavailable');
     const location=runtime.readNamed(lightSwitch,'Location');
-    setCamera({position:[location[0]-178,location[1],location[2]+35],rotation:[-2000,0,0]});
-    game.doors.scriptRuntime.dispatchEvent(lightSwitch,'Frob',[player,null]);
-    game.tick(.4,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+    setMode('play');
+    game.collision.queries.changeActor(player, () => {
+      game.player.position = [location[0]-80,location[1],location[2]]; game.player.velocity = [0,0,0];
+    });
+    aimPreview(lightSwitch); game.use();
+    game.tick(.4);
     world.syncMovers(game.collision.movers);
     const lit=runtime.levelFor(player).actors.some(actor=>actor&&/^TriggerLight[0-3]$/.test(actor.name)&&
       runtime.readNamed(actor,'LightBrightness')>0);
@@ -456,10 +484,14 @@ previews['dark-door'] = () => {
       ['DeusExMover19','DeusExMover20'].includes(mover.name));
     if(pair.length!==2||pair.some(mover=>!mover.supported))
       throw new Error('Training dark-room doors are unavailable');
-    setCamera({position:[4160,848,-105],rotation:[0,0,0]});
-    game.interaction.frobTarget=pair[0];
+    setMode('play');
+    const at = game.doors.scriptRuntime.runtime.readNamed(pair[0], 'Location');
+    game.collision.queries.changeActor(game.player.collisionActor, () => {
+      game.player.position = [at[0]-80,at[1],at[2]]; game.player.velocity = [0,0,0];
+    });
+    aimPreview(pair[0]);
     const result=game.use();
-    for(let frame=0;frame<260;frame++)game.tick(1/120,{});
+    for(let frame=0;frame<260;frame++)game.tick(1/120);
     world.syncMovers(game.collision.movers);
     const open=pair.every(mover=>mover.interpolation.key===1);
     toast(`Dark-room doors ${open?'opened':'closed'} · original padoor fanout found 0 actors`);
@@ -468,21 +500,13 @@ previews['dark-door'] = () => {
 };
 
 function look(dx, dy) {
+  if (mode === 'play' && game) {
+    try { game.mouseMotion(dx, dy); cameraMoved = true; }
+    catch (error) { pauseForRuntimeError(error); }
+    return;
+  }
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
-}
-// LeftMouse is bound to `ParseLeftClick|Fire` (installed User.ini). With the
-// pointer locked, press/release are the button edges; unlocked, left-drag
-// stays mouse look and a click without movement fires on release.
-let clickStart = null;
-function pressFire() {
-  if (mode !== 'play' || !game || loading || runtimeError) return;
-  try { const result = game.pressFire(); if (result?.message) toast(result.message); }
-  catch (error) { pauseForRuntimeError(error); }
-}
-function releaseFire() {
-  if (mode !== 'play' || !game || loading) return;
-  try { game.releaseFire(); } catch (error) { pauseForRuntimeError(error); }
 }
 function windowPointer(event,action=null){
   if(mode!=='play'||!game||runtimeError||!world||loading)return false;
@@ -491,28 +515,32 @@ function windowPointer(event,action=null){
   if(action!==null){const key=pointerButtonKey(event.button);if(key<0)return false;sample.key=key;sample.action=action;}
   try{return game.windowPointer(sample);}catch(error){pauseForRuntimeError(error);return true;}
 }
-$('scene').onpointerdown = event => { if (world && !loading) { paused = mode==='play'&&Boolean(runtimeError); $('scene').focus();
-  if(windowPointer(event,1)){keys.clear();drag=false;clickStart=null;$('scene').setPointerCapture(event.pointerId);event.preventDefault();return;}
-  if (event.button === 2) useDoor(); else if (event.button === 0 && document.pointerLockElement === $('scene')) pressFire(); else { drag = true; clickStart = { x: event.clientX, y: event.clientY }; $('scene').setPointerCapture(event.pointerId); } } };
+$('scene').onpointerdown = event => {
+  if (!world || loading) return;
+  paused = mode === 'play' && Boolean(runtimeError); $('scene').focus();
+  const windowHasMouse = windowPointer(event);
+  if (mode === 'play' && game && !runtimeError) {
+    const key = ['LeftMouse', 'MiddleMouse', 'RightMouse'][event.button];
+    try { if (key) game.inputButton(key, true); }
+    catch (error) { pauseForRuntimeError(error); }
+  }
+  if (windowHasMouse) { keys.clear(); drag = false; event.preventDefault(); return; }
+  if (event.button === 0 && document.pointerLockElement !== $('scene')) {
+    drag = true; $('scene').setPointerCapture(event.pointerId);
+  }
+};
 $('scene').oncontextmenu = event => event.preventDefault();
 $('scene').onpointerup = event => {
   drag = false;
-  if(windowPointer(event,3)){clickStart=null;event.preventDefault();return;}
-  if (event.button !== 0) return;
-  if (document.pointerLockElement === $('scene')) { releaseFire(); return; }
-  const moved = clickStart && Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y);
-  clickStart = null;
-  if (moved !== null && moved < 4) { pressFire(); releaseFire(); }
+  if (windowPointer(event)) event.preventDefault();
+  if (mode !== 'play' || !game) return;
+  const key = ['LeftMouse', 'MiddleMouse', 'RightMouse'][event.button];
+  try { if (key) game.inputButton(key, false); }
+  catch (error) { pauseForRuntimeError(error); }
 };
-$('scene').onpointercancel = () => { drag = false; };
+$('scene').onpointercancel = () => { drag = false; game?.resetInput({releasePhysical:true}); };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
 document.addEventListener('pointermove', event => { if(windowPointer(event))return; if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
-// Keys whose User.ini binding Play replaces with its own stand-in: movement
-// (UInput's axis/button system is not implemented), F use, Enter fire and the
-// 0-9 belt keys.
-const HOST_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ShiftLeft', 'ShiftRight', 'Space', 'ControlLeft', 'ControlRight', 'KeyF', 'Enter',
-  ...Array.from({length: 10}, (_, digit) => `Digit${digit}`)];
 // UEngine::InputEvent (docs/script-console-command.md): Console.KeyEvent, then
 // XInputExt::Process. A key the player's root window consumes (a grabbing
 // modal such as the keypad or a menu) releases every held binding and reaches
@@ -520,7 +548,7 @@ const HOST_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'A
 function inputKey(event, pressed) {
   if (mode !== 'play' || !game || runtimeError || !world || loading) return null;
   if (/INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return null;
-  try { return game.inputKey(event.code, pressed, {hostCodes: HOST_KEYS}); }
+  try { return game.inputKey(event.code, pressed); }
   catch (error) {
     // A console-command keyword claim throws before its handler does any
     // work, so Play continues; a binding that already ran a line pauses.
@@ -536,20 +564,13 @@ document.addEventListener('keydown', event => {
   const input = inputKey(event, true);
   if (input) {
     if (input.consumed) { keys.clear(); event.preventDefault(); return; }
-    if (!HOST_KEYS.includes(event.code)) { if (input.handled) event.preventDefault(); return; }
+    if (input.handled) {
+      event.preventDefault(); paused = false;
+      if(currentMap === '00_Training') activateInfoLinkAudio().catch(error => pauseForRuntimeError(error));
+    }
+    return;
   } else if (event.code === 'Escape') { document.exitPointerLock?.(); keys.clear(); drag = false; return; }
   if (!world || loading || /INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
-  if (event.code === 'KeyF' && !event.repeat) { useDoor(); event.preventDefault(); }
-  // Enter shares LeftMouse's `ParseLeftClick|Fire` binding.
-  if (event.code === 'Enter' && !event.repeat && mode === 'play' && game && !runtimeError) {
-    pressFire();
-    event.preventDefault();
-  }
-  if (/^Digit[0-9]$/.test(event.code) && !event.repeat && mode === 'play' && game && !runtimeError) {
-    const position=Number(event.code.slice(5));
-    (async()=>{try{await game.activateBelt(position);}catch(error){pauseForRuntimeError(error);}})();
-    event.preventDefault();
-  }
   if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','ControlLeft','ControlRight'].includes(event.code)) {
     if(mode==='play'&&runtimeError){event.preventDefault();return;}
     if(mode==='play'&&currentMap==='00_Training')activateInfoLinkAudio().catch(()=>{});
@@ -557,14 +578,14 @@ document.addEventListener('keydown', event => {
     keys.add(event.code); event.preventDefault();
   }
 });
-document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); });
+document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); game?.resetInput(); });
 document.addEventListener('keyup', event => {
   const input = inputKey(event, false);
   if (input?.consumed || (input?.handled && !input.host)) event.preventDefault();
-  keys.delete(event.code); if (event.code === 'Enter') releaseFire();
+  keys.delete(event.code);
 });
-window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; game?.resetInput(); });
-document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; game?.resetInput(); } });
+window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; game?.resetInput({releasePhysical:true}); });
+document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; game?.resetInput({releasePhysical:true}); } });
 function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
@@ -587,19 +608,19 @@ function animate(time) {
   requestAnimationFrame(animate);
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   if (world && !loading) {
+    let playerView = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
       if (!paused && !runtimeError && !document.hidden) {
-        try { game.tick(dt, { forward: z, right: x, yaw: -yaw, pitch, jump: keys.has('Space'),
-          crouch: keys.has('ControlLeft') || keys.has('ControlRight'), walk: keys.has('ShiftLeft') || keys.has('ShiftRight') }); }
+        try { game.tick(dt); }
         catch(error) { pauseForRuntimeError(error); }
       }
       world.syncMovers(game.collision.movers);
-      camera.position.fromArray(toView(game.player.eye));
+      try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
-      $('play-hint').textContent = runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `F · ${target.label}` : '';
+      $('play-hint').textContent = runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
     } else if (x || y || z) {
       const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -625,9 +646,8 @@ function animate(time) {
     if(mode==='play'&&weaponViewModel&&!runtimeError){
       try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
     }
-    if(mode==='play'&&hudRenderer){
-      const box=$('viewport').getBoundingClientRect();
-      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+    if(mode==='play'&&hudRenderer&&playerView){
+      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
       updateInfoLinkAccessibility();
     }
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);

@@ -112,11 +112,65 @@ Inventory use, mission state changes, visual highlight rendering and sound/UI
 are not implemented by this targeting helper. Original native iterator body
 callbacks can mutate the world; this bounded consumer performs only selection.
 
-Play integration now retains this cache across simulation calls, runs it before
-player rotation/movement, and consumes it at use time. The browser passes pitch
-and yaw through the documented integer-rotator boundary. UI hint visibility uses
-IsHighlighted separately, without removing an eligible cached target. Unsupported
-non-door interactions report the selected actor instead of tracing through it.
-Reset clears FrobTime and FrobTarget. UI action labels and toast messages remain
-browser additions; this does not claim the rest of ParseRightClick or a general
-original HUD implementation.
+## Geometry-driven Play probes
+
+The shared Training probe fixture no longer assigns `FrobTarget` or
+`FrobTime`. It places the test pawn near the requested actor, aims by writing
+the fixture pose to `Location`, `Rotation` and `ViewRotation`, then advances
+the ordinary Play tick until the original `HighlightCenterObject` trace selects
+that actor. Each aim step reads the actor's current `Location` and computes its
+angle from the pawn's current `Location + BaseEyeHeight`, so settling and
+falling targets continue to be aimed at. A missing target is a failed probe;
+the fixture does not inject the expected result.
+
+These pose writes are isolated in `scripts/player-input-fixture.mjs` and only
+set up a test vantage point. Input itself goes through `game.inputKey`,
+`game.inputAxis` or `game.inputButton`, and simulation advances with
+`game.tick(seconds)` so the original scheduler consumes those events. The
+legacy movement adapter translates bound forward, strafe, jump and walk keys
+into held User.ini key events; it does not reinterpret old yaw/pitch values as
+mouse motion. Validators that need angular movement must provide explicit raw
+axis samples; fixtures that need a precise sight line use the pose setup API.
+
+Four small-object probes use scoped approach poses selected from the original
+`TraceActors` query. DataCube0 uses `Location - (s, s, 0)` and Plant11 uses
+`Location + (s, -s, 0)`, where `s = 48/sqrt(2)`. Their default fixture origins
+hit BSP at the trace origin before the actor. Candybar0 uses
+`Location + (0, -64, 0)`; from the default approach its BSP hit at `t=.309`
+precedes the candybar, while this pose returns the candybar first and has no
+player/world overlap. Multitool0 uses `Location - (40, 0, 0)`: in the item-pickup
+sequence the default origin was clipped by BSP at `t=0`, while the scoped full
+world-and-actor query hit Multitool0 first and the player did not overlap. In
+every case the fixture still requires the original tick to set `FrobTarget`; it
+never assigns that field. The DataCube preview uses the same target-relative
+pose as its validator.
+
+The Training nano-key route remains an authored traversal: its turn controller
+feeds `MouseX`/`MouseY` through installed InputEvent bindings and adjusts later
+samples from measured `ViewRotation` response. Isolated per-class checks use the
+fixture's placement/aim helpers instead. Pickup, crate, keypad, datacube,
+weapon-view, actor-scene, light-cache, Frob, HUD and dark-door probes now share
+that geometry trace path instead of assigning the cached target themselves.
+
+Play integration runs the original PlayerWalking `HighlightCenterObject`
+bytecode on its native cadence and retains `FrobTarget` across simulation
+calls. HUD paints provide the current `game.view()` result from PlayerCalcView
+to the original HUD DrawDisplay path, so text drawing receives its FSceneNode.
+Browser keyboard and mouse events enter through installed User.ini bindings; selection reads the cached target at use time instead of deriving a
+second pitch/yaw target. UI hint visibility uses `IsHighlighted` separately,
+without changing target selection. The recovered RightMouse path continues
+through original `ParseRightClick` and `DoFrob`; information-device text and
+HUD presentation have their own evidence in [script-text-parser.md](script-text-parser.md),
+[script-play-hud.md](script-play-hud.md), and
+[script-viewport-console.md](script-viewport-console.md). Reset clears
+`FrobTime` and `FrobTarget` through the player-start path.
+
+Focused verification after the fixture migration: the DataCube read validator passed
+with its HUD paint, text and note lifecycle checks; the item-pickup validator
+passed for Crowbar, Combat Knife, ammo, Candybar, HazMat suit and Multitool,
+including reset; and the filtered Stage 3 gate passed Plant11, DataCube0,
+Candybar0 and DataCube-to-ShowGoalsWindow. The dedicated Multitool filter also
+passed both its Frob and fire/alt-fire probes. These are bounded original-path
+comparisons, not a full Stage 3 sweep. Filtered gate runs can leave the
+StaticLoadObject lifecycle coverage row open because that filter does not visit
+the broader load probe.

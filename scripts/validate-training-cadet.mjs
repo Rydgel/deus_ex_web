@@ -8,6 +8,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -20,18 +21,19 @@ const level=runtime.levelFor(player),get=(actor,name)=>runtime.readNamed(actor,n
 const cadet=level.actors.find(actor=>actor?.name==='UNATCOTroop2');
 const bodies=()=>level.actors.filter(actor=>actor?.lineage?.includes('deusex.deusexcarcass')&&
  get(actor,'CarcassName')===cadet.name);
-const tick=(frames,input={})=>{for(let i=0;i<frames;i++)game.tick(1/60,input);};
+const fixture=createPlayerInputFixture(game);
+// Explicit angles here are fixture setup; all action edges use public input.
+const tick=(frames,input={})=>{
+ const {yaw,pitch,...keys}=input;
+ if(yaw!==undefined||pitch!==undefined)fixture.place([...game.player.position],{yaw:yaw??0,pitch:pitch??0,zeroVelocity:false});
+ fixture.driveLegacy(keys);fixture.tick(frames);
+};
 const place=position=>game.collision.queries.changeActor(player,()=>{
  game.player.position=position;game.player.velocity=[0,0,0];
 });
 function aim(actor,position){
- place(position);
- const target=get(actor,'Location');
- const yaw=Math.atan2(target[1]-position[1],target[0]-position[0]);
- const pitch=Math.atan2(target[2]-(position[2]+game.player.baseEyeHeight),
-  Math.hypot(target[0]-position[0],target[1]-position[1]));
- tick(12,{yaw,pitch});
- assert.ok(game.interaction.frobTarget===actor,`normal view trace selects ${actor.name}; got ${game.interaction.frobTarget?.name}, position=${game.player.position}, eye=${game.player.baseEyeHeight}, rotation=${game.player.viewRotation}`);
+ fixture.aim(actor,{position});
+ assert.ok(game.interaction.frobTarget===actor,`original trace selects ${actor.name}`);
 }
 
 assert.equal(get(cadet,'Health'),100,'the map loads its authored living pawn');

@@ -14,6 +14,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { createWorld } from '../src/viewer/world.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { createPlayerInputFixture } from './player-input-fixture.mjs';
 
 const root = gameDirectory(), files = [];
 const python=process.env.DEUS_EX_NATIVE_PYTHON??'.cache/native-probe-env/bin/python';
@@ -46,24 +47,24 @@ assert.ok(tracked, 'initial sync must include a cached lightmap using TriggerLig
 assert.ok(changes[0].update.uploaded > 0, 'initial reset sync uploads dependent lightmaps');
 
 const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+const input = createPlayerInputFixture(game, {tickSeconds: 1 / 120});
 const level = runtime.levelFor(player), lightSwitch = level.actors.find(actor => actor?.name === 'LightSwitch0');
 assert.ok(lightSwitch, 'Training map has LightSwitch0');
 const pixelObject = tracked.lightmap, initialPixels = [...pixelObject.pixels];
 
-game.interaction.frobTarget = lightSwitch;
-game.use(); // On: authored steady brightness remains at its initial byte.
-game.tick(1 / 120, {});
+await input.frob(lightSwitch); // On: authored steady brightness remains at its initial byte.
+input.tick(1);
 assert.equal(syncCalls, 1, 'unchanged steady brightness does not trigger a redundant upload');
 
-game.use(); // Off: the original Tick body writes brightness zero.
-game.tick(1 / 120, {});
+await input.frob(lightSwitch); // Off: the original Tick body writes brightness zero.
+input.tick(1);
 assert.equal(syncCalls, 2, 'script Tick callback reaches world.updateLighting after the off write');
 assert.equal(tracked.lightmap, pixelObject, 'the affected cached lightmap object is retained');
 const darkPixels = [...pixelObject.pixels];
 assert.ok(darkPixels.some((value, index) => value !== initialPixels[index]), 'off brightness changes cached pixels in place');
 
-game.use(); // On again: the original Tick body restores the authored brightness.
-game.tick(1 / 120, {});
+await input.frob(lightSwitch); // On again: the original Tick body restores the authored brightness.
+input.tick(1);
 assert.equal(syncCalls, 3, 'restored steady brightness reaches the world callback');
 const litPixels = [...pixelObject.pixels];
 assert.ok(litPixels.some((value, index) => value !== darkPixels[index]), 'restored brightness changes the same cached pixels');

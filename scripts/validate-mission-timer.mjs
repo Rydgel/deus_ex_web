@@ -14,6 +14,7 @@ import {readFile,readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 
 const root=gameDirectory(),files=[];
@@ -25,8 +26,12 @@ const host=game.doors.scriptRuntime,runtime=host.runtime;
 // Player start logs in a new player; re-read it after every reset.
 let player=game.player.collisionActor;const level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get(),live=n=>level.actors.find(a=>a?.name===n);
-const idle={forward:0,right:0,yaw:0,pitch:-.3,jump:false,crouch:false,walk:false};
-const tick=(n=1,input=idle)=>{for(let i=0;i<n;i++)game.tick(1/60,input);};
+const fixture=createPlayerInputFixture(game),idle={};
+const tick=(n=1,input=idle)=>{
+ const {yaw,pitch,...keys}=input;
+ if(yaw!==undefined||pitch!==undefined)fixture.place([...game.player.position],{yaw:yaw??0,pitch:pitch??0,zeroVelocity:false});
+ fixture.driveLegacy(keys);fixture.tick(n);
+};
 const ready=()=>get(player,'flagBase').getBool('MunitionsTrooperReady');
 function place(p){game.collision.queries.changeActor(player,()=>{game.player.position=p;game.player.velocity=[0,0,0];});}
 function isMissionScript(a){try{for(let c=runtime.instance(a).cls;c;c=c.base)if(c.record.key==='deusex.missionscript')return true;}catch{}return false;}

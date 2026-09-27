@@ -3,7 +3,7 @@
  * runs DeusExPlayer.PutInHand -> UpdateInHand -> SwitchWeapon -> ChangedWeapon ->
  * Weapon.RaiseUp -> BringUp -> PlaySelect, drawing the weapon's first-person
  * (player-view) mesh. Research placement moves the player next to the crowbar and
- * sets the frob target; selection is the original bytecode. Nothing forces
+ * aims through the original highlight trace; selection is the original bytecode. Nothing forces
  * inHand/Weapon/mesh state. docs/script-weapon-equip.md. */
 import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
@@ -11,6 +11,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -21,15 +22,14 @@ const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor
 const get=(o,k)=>runtime.namedReference(o,k).get();
 const live=name=>level.actors.find(a=>a?.name===name);
 const stateKey=o=>runtime.instance(o).state?.stateNode?.record?.key??'none';
-function place(item){const loc=get(item,'Location');
-  game.collision.queries.changeActor(player,()=>{game.player.position=[loc[0]-40,loc[1],loc[2]];game.player.velocity=[0,0,0];});}
+const input=createPlayerInputFixture(game);
 
 // Pick up the crowbar through the public frob path (the covered pickup slice).
 const crowbar=live('WeaponCrowbar1');
 assert.ok(crowbar,'WeaponCrowbar1 is a live actor');
-place(crowbar);game.interaction.frobTarget=crowbar;
+input.aim(crowbar);
 assert.equal(game.use().ok,true,'the crowbar is taken into inventory');
-assert.equal(get(crowbar,'Owner'),player,'the crowbar is owned by JC before selection');
+assert.ok(get(crowbar,'Owner')===player,'the crowbar is owned by JC before selection');
 
 // Before selection nothing is in hand, and the crowbar carries its own belt
 // Icon so the HUD has real art to draw once it is selected.
@@ -45,9 +45,9 @@ assert.equal(selected.name,'WeaponCrowbar1','group 10 resolves the crowbar');
 
 // The original bytecode ran end to end: the crowbar is in hand, the selected
 // item, the drawn weapon, and its state advanced to the DeusExWeapon Active state.
-assert.equal(get(player,'inHand'),crowbar,'inHand is the crowbar');
-assert.equal(get(player,'SelectedItem'),crowbar,'SelectedItem is the crowbar');
-assert.equal(get(player,'Weapon'),crowbar,'the crowbar is the drawn Weapon');
+assert.ok(get(player,'inHand')===crowbar,'inHand is the crowbar');
+assert.ok(get(player,'SelectedItem')===crowbar,'SelectedItem is the crowbar');
+assert.ok(get(player,'Weapon')===crowbar,'the crowbar is the drawn Weapon');
 assert.equal(get(player,'PendingWeapon'),null,'the weapon switch completed (no PendingWeapon)');
 assert.equal(stateKey(crowbar),'deusex.deusexweapon.active','the crowbar advanced to its Active state');
 
@@ -66,7 +66,7 @@ assert.equal(runtime.meshResource(meshRef).payloadStatus,'decoded-lodmesh',
 // tracks the player. (The world crowbar and the player start ~48u apart in x.)
 const beforeWalk=game.player.position.slice();
 const crowbarBefore=get(crowbar,'Location').slice();
-for(let i=0;i<20;i++)game.tick(1/60,{forward:1,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+input.driveLegacy({forward:1}); input.tick(20); input.releaseAll();
 const playerDelta=game.player.position.map((v,i)=>v-beforeWalk[i]);
 assert.ok(Math.hypot(...playerDelta)>1,`the player walks while carrying the crowbar (moved ${Math.hypot(...playerDelta).toFixed(1)}u)`);
 assert.ok(crowbarBefore.some((v,i)=>v!==get(crowbar,'Location')[i]),'the drawn crowbar moved with its owner');
@@ -85,7 +85,7 @@ assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'no actor failures whil
 // one call. The native HUD integration test checks the per-frame drive-down.
 await game.selectItem(crowbar);
 assert.equal(get(player,'inHandPending'),null,'re-selecting the in-hand crowbar requests it be put away');
-assert.equal(get(player,'inHand'),crowbar,'the crowbar stays drawn until the put-away animation ticks down');
+assert.ok(get(player,'inHand')===crowbar,'the crowbar stays drawn until the put-away animation ticks down');
 
 // No startup or tick failures were introduced.
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0,'no actor failures after selection');

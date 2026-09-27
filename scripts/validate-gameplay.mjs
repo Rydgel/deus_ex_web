@@ -7,6 +7,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { readFunction } from '../src/unreal/script.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music']) for (const name of await readdir(path.join(root, dir))) files.push({ path: `${dir}/${name}`, read: () => readFile(path.join(root, dir, name)) });
@@ -14,7 +15,11 @@ const assets = new AssetStore(files), engine = await assets.get('Engine');
 const checkBob = readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob'));
 const report = { checkBob: { function: checkBob.entry.path, expandedBytes: checkBob.size, serializedBytes: checkBob.bytes.length,
   sha256: createHash('sha256').update(checkBob.bytes).digest('hex') }, maps: [] };
-const run = (game, seconds, input = {}) => { for (let i = 0; i < Math.round(seconds * 120); i++) game.tick(1 / 120, input); };
+const fixtures = new WeakMap();
+const fixture = game => { if (!fixtures.has(game)) fixtures.set(game, createPlayerInputFixture(game,{tickSeconds:1/120})); return fixtures.get(game); };
+// Live Training now consumes installed input bindings. The legacy port remains
+// isolated below for the existing NYC scene-only reference.
+const run = (game, seconds, input = {}) => { fixture(game).driveLegacy(input); fixture(game).tick(Math.round(seconds*120)); };
 // The NYC case predates full-world scheduling and measures only the retained
 // player port against its loaded scene. Its original UNATCOTroop3 reaches the
 // explicit map-pawn FarMoveActor boundary through ScriptedPawn.PutInWorld;
@@ -49,11 +54,12 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
   if (name === '00_Training') {
     assert.ok(Math.abs(initial.position[2] - -80.19999694824219) < 1e-4, 'standing height matches original saved pawn');
     run(game,.5,{crouch:true});
-    assert.equal(game.player.height,16);assert.equal(game.player.forceDuck,false,'original upward ceiling trace is clear at spawn');
+    assert.equal(game.player.height,16);assert.equal(game.doors.scriptRuntime.runtime.readNamed(game.player.collisionActor,'bForceDuck'),false,'original upward ceiling trace is clear at spawn');
     run(game,1);
     assert.equal(game.player.height,43);assert.deepEqual(game.player.position,initial.position,'source stance sequence returns to the standing floor band');
     const bob = [];
-    for (let i = 0; i < 240; i++) { game.tick(1 / 120, { forward: 1 }); bob.push([...game.player.walkBob]); }
+    fixture(game).driveLegacy({forward:1});
+    for (let i = 0; i < 240; i++) { game.tick(1 / 120); bob.push([...game.player.walkBob]); }
     assert.ok(Math.max(...bob.map(v => v[2])) > 5 && Math.min(...bob.map(v => v[2])) < -5, 'original CheckBob executes during movement');
     // The closed face is at X -220. Radius 20 plus native MoveActor/LineCheck
     // margins stop the pawn about 2.2 units short of its geometric contact.
@@ -65,10 +71,11 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
     run(game, 2.1);
     for (const name of ['DeusExMover16', 'DeusExMover17'])
       assert.equal(game.collision.movers.find(m => m.name === name).interpolation.key, 1, `ParseRightClick's DoFrob opened ${name}`); assert.ok(game.player.walkBob.every(v => Math.abs(v) < .001));
-    run(game, 1.5, { forward: 1 }); assert.ok(game.player.position[0] > 0); assert.ok(game.player.position[2] < initial.position[2] - 40);
+    run(game, 1.5, { forward: 1 }); assert.ok(game.player.position[0] > 0); assert.ok(game.player.position[2] < initial.position[2] - 40, `lower hall: ${JSON.stringify({position:game.player.position,velocity:game.player.velocity,physics:game.player.collisionActor.physics,groundSpeed:game.doors.scriptRuntime.runtime.readNamed(game.player.collisionActor,'GroundSpeed')})}`);
     result.lowerHall=game.player.status();
+    fixture(game).driveLegacy({forward:-1});
     for(let i=0;i<360;i++){
-      const before=game.player.status();game.tick(1/120,{forward:-1});
+      const before=game.player.status();game.tick(1/120);
       if(!result.stairApproach&&game.player.position[2]>before.position[2]+1)result.stairApproach=before;
     }
     assert.ok(game.player.position[0] < -300);
@@ -78,7 +85,8 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
     // which is checked above through the original cached target. Native composed
     // mover-scene cases independently verify the displacement/query algorithm.
     const panel=game.collision.movers.find(m=>m.name==='DeusExMover16');
-    assert.equal(game.player.nativeFarMove(game.player.physicsPawn,[-220,810,-80.2],0,1),true);
+    fixture(game).releaseAll();
+    assert.equal(game.doors.scriptRuntime.runtime.farMoveActor(game.player.collisionActor,[-220,810,-80.2],0,1),true);
     game.player.velocity=[0,0,0];
     const contactStart=game.player.position.slice();
     const closing=game.doors.use(game.doors.describe(panel),game.player.position);

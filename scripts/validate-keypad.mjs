@@ -14,6 +14,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root = gameDirectory(), files = [];
 for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
@@ -25,12 +26,15 @@ const runtime = game.doors.scriptRuntime.runtime, host = game.hud.host, W = host
 const player = game.player.collisionActor, level = runtime.levelFor(player);
 const get = (object, name) => runtime.namedReference(object, name).get();
 const className = object => object ? runtime.instance(object).cls.record.name : null;
-// Face +X, toward the keypad from the placement below, so HighlightCenterObject
-// targets it and FrobDisplayWindow draws its hack strength (FloatToString).
-const idle = {forward: 0, right: 0, yaw: 0, pitch: 0, jump: false, crouch: false, walk: false};
+// A failed assert.equal on live runtime objects asks Node to format both
+// object graphs. These identity checks are deliberately strict but report only
+// a scalar message, keeping a regression bounded under the validator RSS cap.
+const sameReference = (actual, expected, message) => assert.ok(actual === expected, message);
+const input = createPlayerInputFixture(game, {paint: () => game.hud.commands(1432, 1268,
+  {location: game.player.eye, rotation: game.player.viewRotation, fov: 75})});
 // Every frame also paints the HUD at the browser's canvas size, like the viewer.
 const paint = () => game.hud.commands(1432, 1268, {location: game.player.eye, rotation: game.player.viewRotation, fov: 75});
-const tick = frames => { for (let i = 0; i < frames; i++) { game.tick(1 / 60, idle); paint(); } };
+const tick = frames => input.tick(frames);
 const scriptStack = [];
 let failedStack = null;
 const callFunction = runtime.callFunction.bind(runtime);
@@ -47,16 +51,21 @@ runtime.processEvent = (receiver, event, ...rest) => { events.push(event); retur
 tick(60);
 const keypad = level.actors.find(actor => actor?.name === 'Keypad0');
 assert.equal(get(keypad, 'validCode'), '0012');
-const at = get(keypad, 'Location');
-game.collision.queries.changeActor(player, () => { game.player.position = [at[0] - 48, at[1], at[2]]; game.player.velocity = [0, 0, 0]; });
-// Standing here also starts Training's DataLink, whose InfoLink display is a
-// delegated legacy subtree that ShowHud(False) must not walk into.
+// Placing beside Keypad0 enters Training's DataLink trigger. Its InfoLink
+// display is a delegated legacy subtree that ShowHud(False) must not walk into.
+input.aim(keypad);
 tick(30);
-assert.equal(get(player, 'FrobTarget'), keypad, 'HighlightCenterObject targets the keypad');
-// Those painted frames ran FrobDisplayWindow.DrawWindow -> FormatString on the
-// keypad's hack strength, which needs FloatToString (VM opcode 0x55).
 assert.ok(game.doors.scriptRuntime.dataLinkPresentation(), 'the Training DataLink is being presented');
-game.interaction.frobTarget = keypad;
+// Player physics runs during the 30 settling frames; re-aim from the current
+// position so the real FrobTarget is still Keypad0 when game.use dispatches.
+input.aim(keypad, {position: [...game.player.position]});
+const selectedAfterSettle = get(player, 'FrobTarget');
+sameReference(selectedAfterSettle, keypad,
+  `HighlightCenterObject targets the keypad immediately before Frob (selected=${selectedAfterSettle?.name ?? 'None'}/${className(selectedAfterSettle) ?? 'null'}, ` +
+  `player=${JSON.stringify(game.player.position)}, view=${JSON.stringify(game.player.viewRotation)}, ` +
+  `keypad=${JSON.stringify(get(keypad, 'Location'))})`);
+// The last painted aim frame runs FrobDisplayWindow.DrawWindow -> FormatString
+// on the keypad's hack strength, which needs FloatToString (VM opcode 0x55).
 assert.deepEqual(game.use(), {ok: true, message: ''}, 'Keypad.Frob opens the original keypad screen');
 tick(10);
 
@@ -64,7 +73,7 @@ const rootWindow = get(player, 'rootWindow');
 const topModal = () => { let w = W.ptr(rootWindow, 0x140); while (w && W.u8(w, 0x28) < 2) w = W.ptr(w, 0x144); return w; };
 const window = topModal();
 assert.equal(className(window), 'HUDKeypadWindow');
-assert.equal(get(keypad, 'keypadwindow'), window);
+sameReference(get(keypad, 'keypadwindow'), window, 'Keypad.keypadwindow owns the modal');
 assert.equal(W.i32(rootWindow, 0x5d0), 1, 'the modal grabs keyboard events');
 assert.equal(W.i32(rootWindow, 0x5cc), 1, 'the modal grabs mouse events');
 // HUDKeypadWindow.Tick's SetCursorPos(width, height) puts the cursor on the
@@ -74,8 +83,8 @@ assert.equal(W.i32(rootWindow, 0x5cc), 1, 'the modal grabs mouse events');
 const clip = [W.f32(window, 0xd4), W.f32(window, 0xd8)];
 assert.deepEqual([W.f32(rootWindow, 0x590), W.f32(rootWindow, 0x594)],
   [Math.fround(clip[0] + W.f32(window, 0x80)), Math.fround(clip[1] + W.f32(window, 0x84))], 'SetCursorPos places the cursor at the keypad corner');
-assert.equal(W.ptr(rootWindow, 0x5a0), window, 'ProcessMouseMove records the keypad as the mouse window');
-assert.equal(W.ptr(rootWindow, 0x5c8), null, 'the unselectable keypad takes no EnterLeave focus');
+sameReference(W.ptr(rootWindow, 0x5a0), window, 'ProcessMouseMove records the keypad as the mouse window');
+sameReference(W.ptr(rootWindow, 0x5c8), null, 'the unselectable keypad takes no EnterLeave focus');
 const drawn = new Set(paint().map(command => command.texture?.name));
 for (const texture of ['MaskTexture', 'HUDKeypadBackground', 'HUDKeypadBorder', 'HUDKeypadButton_Normal', 'DeusExCursor1', 'DeusExCursor1_Shadow'])
   assert.ok(drawn.has(texture), `PaintWindows draws ${texture} (the keypad, MaskBackground and the grabbed-mouse cursor)`);
@@ -108,20 +117,20 @@ assert.equal(W.u8(rootWindow, 0x3c), 0, 'DSTY_None clears the background style')
 assert.ok(W.u32(get(rootWindow, 'hud'), 0x30) & 1, 'ShowHud restores HUD visibility');
 assert.equal(get(player, 'bShowMenu'), false);
 assert.equal(get(level.actors[0], 'Pauser'), '', 'GameInfo.SetPause(False) clears Pauser');
-assert.equal(viewport, level.engine.client.viewports[0]);
+sameReference(viewport, level.engine.client.viewports[0], 'attached viewport is first in Client.Viewports');
 assert.equal(className(viewport), 'Viewport');
-assert.equal(get(viewport, 'Actor'), player);
-assert.equal(get(consoleObject, 'Viewport'), viewport);
+sameReference(get(viewport, 'Actor'), player, 'Viewport.Actor is the player');
+sameReference(get(consoleObject, 'Viewport'), viewport, 'Console.Viewport is attached');
 assert.equal(className(consoleObject), 'Console');
 assert.equal(get(consoleObject, 'TopLine'), 63);
 assert.equal(get(consoleObject, 'BorderSize'), 1);
-assert.equal(runtime.instance(consoleObject).state.stateNode, null);
+sameReference(runtime.instance(consoleObject).state.stateNode, null, 'Console leaves Menuing');
 assert.ok(events.includes('KeypadDelay'), 'InvokeTimers ran the KeypadDelay timer function');
 assert.equal(host.isDestroyed(window), true, 'PopWindow destroyed the keypad window');
-assert.equal(get(keypad, 'keypadwindow'), null, 'HUDKeypadWindow.DestroyWindow cleared the owner');
+sameReference(get(keypad, 'keypadwindow'), null, 'HUDKeypadWindow.DestroyWindow cleared the owner');
 assert.equal(W.i32(rootWindow, 0x5d0), 0, 'hiding the modal released the keyboard grab');
 assert.equal(W.i32(rootWindow, 0x5cc), 0, 'hiding the modal released the mouse grab');
-assert.equal(runtime.callFunction(runtime.lookup(player, 'GetPlayerPawn'), player), player,
+sameReference(runtime.callFunction(runtime.lookup(player, 'GetPlayerPawn'), player), player,
   'native 720 still follows Client.Viewports[0].Actor');
 assert.equal(typeof runtime.callFunction(runtime.lookup(player, 'ConsoleCommand'), player, 1, ()=>'KEYBINDING W'), 'string');
 assert.notEqual(runtime.callFunction(runtime.lookup(player, 'GetDisplayName'), player, 1, ()=>keypad), '',

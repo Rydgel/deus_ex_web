@@ -3,9 +3,12 @@
 Contract before implementation: embedded DeusExPlayer.SetBasedPawnSize3187–3278,
 GetDefaultCollisionHeight3283–3286 and ResetBasedPawnSize3275–3278, plus the native
 SetCollisionSize/MoveActor contracts in docs/relocation.md and docs/move-query.md.
-The existing bounded script VM rejects the original 722-byte function at opcode
-0x3a; capture `.cache/stance/vm-scope.json` records that limitation. This is a
-source translation, not execution of the whole original function in a VM.
+At this helper's original checkpoint the bounded script VM rejected the
+722-byte function at opcode 0x3a; `.cache/stance/vm-scope.json` records that
+historical limitation. Batch 6 Play executes the original function's bytecode
+through ProcessMove, using the already recovered SetCollisionSize and
+MoveActor bodies. The helper described below remains a source translation
+for retained Stage 2 fixtures. See [the live player tick](script-player-tick.md).
 
 Arguments are float32, negatives clamp to zero. Save original radius and height;
 standalone unchanged dimensions return true before any other operation.
@@ -58,9 +61,9 @@ partial failure pose retention, partial successful growth, radius-only zero
 movement, negative clamp and unchanged-dimension early return. These are source
 regressions, not whole-script native conformance. Its numerical movement boundary
 is independently backed by404 native MoveActor comparisons including boolean;
-SetCollisionSize is separately validated by the relocation harness. Full script
-VM execution remains unsupported at opcode0x3a and was not substituted with a
-Python execution claimed as original.
+SetCollisionSize is separately validated by the relocation harness. These
+helper tests do not claim original VM execution; the former opcode0x3a
+limitation is historical and does not describe batch 6 Play.
 
 ```sh
 node --test test/stance.test.mjs test/move-query.test.mjs

@@ -7,6 +7,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const directory of ['Maps','System','Textures','Sounds','Music'])
@@ -14,14 +15,21 @@ for(const directory of ['Maps','System','Textures','Sounds','Music'])
     files.push({path:`${directory}/${name}`,read:()=>readFile(`${root}/${directory}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1});
+const input=createPlayerInputFixture(game);
 const runtime=game.doors.scriptRuntime.runtime;
 // Player start logs in a new player; re-read it after every reset.
 let pawn=game.player.collisionActor;
 const get=(object,key)=>runtime.namedReference(object,key).get();
 const level=()=>runtime.levelFor(pawn);
-const idle={forward:0,right:0,yaw:0,pitch:0,jump:false,crouch:false,walk:false};
-const move=(yaw,forward=1,pitch=0)=>({forward,right:0,yaw,pitch,jump:false,crouch:false,walk:false});
-const tick=input=>game.tick(1/60,input);
+const tick=(frames=1)=>input.tick(frames);
+const driveForward=pressed=>input.driveLegacy({forward:pressed?1:0});
+async function blocked(axis,yaw){
+  input.steer(yaw);let stuck=0,count=0;driveForward(true);
+  while(stuck<18&&count<800){const value=game.player.position[axis];tick(1);count++;
+    if(Math.abs(game.player.position[axis]-value)<0.05)stuck++;else stuck=0;}
+  driveForward(false);assert.ok(count<800,`the route reached its authored wall on axis ${axis}`);
+}
+const use=()=>game.use();
 const place=()=>game.player.position.map(value=>Math.round(value));
 
 assert.equal(game.start.name,'PlayerStart1');
@@ -33,47 +41,36 @@ assert.equal(get(pawn,'KeyList'),null);
 
 const samples=[];
 let still=0,frames=0;
+driveForward(true);
 while(still<18&&frames<400){
   const before=game.player.position[0];
-  tick(move(0));
+  tick(1);
   frames++;
   if(frames%30===0)samples.push(game.player.position[0]);
   if(Math.abs(game.player.position[0]-before)<0.05)still++;else still=0;
 }
+driveForward(false);
 assert.ok(samples.length>=4,'the walk to the spawn door lasts more than a step');
 for(let index=1;index<samples.length;index++)
   assert.ok(samples[index]-samples[index-1]>20,`sustained east travel stalled at sample ${index}`);
 assert.ok(game.player.position[0]-game.player.start[0]>800,'forward input reaches the spawn door');
 assert.equal(game.interaction.frobTarget?.name,'DeusExMover16');
-const opened=game.use();
+const opened=use();
 assert.equal(opened.ok,true,'right click runs ParseRightClick -> DoFrob -> DeusExMover.Frob');
-for(let index=0;index<150;index++)tick(idle);
+for(let index=0;index<150;index++)tick(1);
 for(const name of ['DeusExMover16','DeusExMover17'])
   assert.equal(game.collision.movers.find(mover=>mover.name===name).interpolation.key,1,`${name} finishes opening`);
 
-function blocked(axis,yaw){
-  let stuck=0,count=0;
-  while(stuck<18&&count<800){
-    const value=game.player.position[axis];
-    tick(move(yaw));
-    count++;
-    if(Math.abs(game.player.position[axis]-value)<0.05)stuck++;else stuck=0;
-  }
-}
-blocked(0,0);
+await blocked(0,0);
 const corridor=place();
 assert.ok(corridor[0]>500,'after the spawn door the corridor continues east');
-blocked(1,Math.PI/2);
-blocked(0,Math.PI);
+await blocked(1,Math.PI/2);
+await blocked(0,Math.PI);
 const key=level().actors.find(actor=>actor?.name==='NanoKey0');
-const keyLocation=get(key,'Location');
-const beside=game.player.position;
-const yaw=Math.atan2(keyLocation[1]-beside[1],keyLocation[0]-beside[0]);
-const pitch=Math.atan2(keyLocation[2]-(beside[2]+game.player.baseEyeHeight),
-  Math.hypot(keyLocation[0]-beside[0],keyLocation[1]-beside[1]));
-for(let index=0;index<12;index++)tick(move(yaw,0,pitch));
+input.steerAt(key);
+for(let index=0;index<12;index++)tick(1);
 assert.equal(game.interaction.frobTarget,key,'the view trace selects NanoKey0');
-assert.equal(game.use().ok,true);
+assert.equal(use().ok,true);
 const info=get(pawn,'KeyList');
 assert.equal(get(info,'KeyID'),'Train');
 assert.equal(get(info,'Description'),'Trainer Door');
@@ -82,29 +79,27 @@ assert.equal(level().actors.includes(key),false,'ParseRightClick destroys the wo
 assert.equal(game.selectNanoKeyRing(),true);
 assert.equal(get(pawn,'inHand'),ring);
 
-blocked(0,0);
-while(game.player.position[1]>840)tick(move(-Math.PI/2));
-for(let index=0;index<70;index++)tick(move(-2.4));
+await blocked(0,0);
+input.steer(-Math.PI/2);driveForward(true);
+while(game.player.position[1]>840)tick(1);
+driveForward(false);
+input.steer(-2.4);driveForward(true);tick(70);driveForward(false);
 const trainer=level().actors.find(actor=>actor?.name==='DeusExMover47');
 const other=level().actors.find(actor=>actor?.name==='DeusExMover48');
-const doorLocation=get(trainer,'Location');
-const stand=game.player.position;
-const doorYaw=Math.atan2(doorLocation[1]-stand[1],doorLocation[0]-stand[0]);
-const doorPitch=Math.atan2(doorLocation[2]-(stand[2]+game.player.baseEyeHeight),
-  Math.hypot(doorLocation[0]-stand[0],doorLocation[1]-stand[1]));
-for(let index=0;index<12;index++)tick(move(doorYaw,0,doorPitch));
+input.steerAt(trainer);
+for(let index=0;index<12;index++)tick(1);
 assert.equal(game.interaction.frobTarget,trainer);
 assert.equal(get(trainer,'bLocked'),true);
 // Enter/LeftMouse is `ParseLeftClick|Fire`: ParseLeftClick's DoFrob(Self,
 // inHand) branch sends the ring to DeusExMover.Frob.
-game.pressFire();game.releaseFire();
+game.inputButton('LeftMouse',true);game.inputButton('LeftMouse',false);
 assert.equal(get(trainer,'bLocked'),false);
 assert.equal(get(other,'bLocked'),false,'the original tag fanout unlocks both panels');
 assert.equal(get(pawn,'flagBase').getBool('MunitionsTrooperReady'),false);
-for(let index=0;index<8;index++)tick(move(doorYaw,0,doorPitch));
-const opening=game.use();
+for(let index=0;index<8;index++)tick(1);
+const opening=use();
 assert.equal(opening.ok,true,'right click runs ParseRightClick -> DoFrob -> DeusExMover.Frob');
-for(let index=0;index<150;index++)tick(idle);
+for(let index=0;index<150;index++)tick(1);
 for(const name of ['DeusExMover47','DeusExMover48'])
   assert.equal(game.collision.movers.find(mover=>mover.name===name).interpolation.key,1);
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0);

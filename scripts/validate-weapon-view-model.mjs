@@ -10,6 +10,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createWeaponViewModel} from '../src/viewer/weapon-view-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const files=[],root=gameDirectory();
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -17,12 +18,10 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
 const runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor,level=runtime.levelFor(player);
+const input=createPlayerInputFixture(game);
 const get=(o,k)=>runtime.namedReference(o,k).get(),set=(o,k,v)=>runtime.namedReference(o,k).set(v);
-const crowbar=level.actors.find(a=>a?.name==='WeaponCrowbar1'),location=get(crowbar,'Location');
-game.collision.queries.changeActor(player,()=>{
-  game.player.position=[location[0]-40,location[1],location[2]];game.player.velocity=[0,0,0];
-});
-game.interaction.frobTarget=crowbar;assert.equal(game.use().ok,true);
+const crowbar=level.actors.find(a=>a?.name==='WeaponCrowbar1');
+assert.equal((await input.frob(crowbar)).ok,true);
 assert.equal((await game.selectWeaponGroup(10)).ok,true);
 // Standalone display harness may supply the already recovered held-item native
 // adapter; Play installs the same relocation service at its host boundary.
@@ -72,7 +71,7 @@ assert.equal(view.summary.draws,0);assert.equal(clears,0);set(player,'ShowFlags'
 // Observe the shared ticked selection animation through persistent GPU buffers.
 // All actor time advances exclusively through game.tick, without calling Fire.
 const mesh=preview.children[0],positions=mesh.geometry.getAttribute('position'),old=[...positions.array];
-for(let i=0;i<5;i++)game.tick(1/60,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+input.tick(5);
 view.render(renderer,camera);
 assert.equal(mesh.geometry.getAttribute('position'),positions,'persistent geometry buffer');
 assert.ok(old.some((v,i)=>v!==positions.array[i]),'ticked Select animation changes the view pose');
@@ -83,7 +82,7 @@ assert.equal(game.doors.scriptRuntime.npcFailures.size,0);
 const ring=get(player,'KeyRing');assert.ok(ring);
 assert.equal((await game.activateBelt(0)).ok,true);
 for(let i=0;i<120&&get(player,'inHand')!==ring;i++)
-  game.tick(1/60,{forward:0,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+  input.tick(1);
 assert.equal(get(player,'inHand'),ring);assert.equal(get(player,'Weapon'),null);
 assert.equal(get(ring,'Mesh'),get(ring,'PlayerViewMesh'),'carried ring uses its PlayerViewMesh');
 await view.ready();

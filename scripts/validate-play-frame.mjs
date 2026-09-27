@@ -16,6 +16,12 @@ const runtime=game.doors.scriptRuntime.runtime,level=runtime.levelFor(game.playe
 const time=runtime.namedReference(level.actors[0],'TimeSeconds');
 const dilation=runtime.namedReference(level.actors[0],'TimeDilation');
 const tickActor=runtime.processActorTick.bind(runtime),calls=[];
+const processEvent=runtime.processEvent.bind(runtime);
+let playerTicks=0;
+runtime.processEvent=(actor,name,...args)=>{
+  if(actor===game.player.collisionActor && name==='PlayerTick') playerTicks++;
+  return processEvent(actor,name,...args);
+};
 runtime.processActorTick=(actor,seconds,options)=>{
   // Whether the owner had already ticked this frame when the call began (the
   // recovered owner-deferral test compares Owner.bTicked with TickTag).
@@ -39,6 +45,15 @@ const pickups=level.actors.filter(actor=>actor&&runtime.readNamed(actor,'Physics
 assert.ok(pickups.length>0);
 const initialVelocity=pickups.map(actor=>runtime.readNamed(actor,'Velocity').slice());
 game.tick(1/120,{});
+// Render-side out parameters must receive PlayerCalcView's original bytecode
+// result. This catches accidentally reading the retired host yaw/pitch path.
+const view=game.view(),pawn=game.player.collisionActor;
+const location=runtime.readNamed(pawn,'Location'),bob=runtime.readNamed(pawn,'WalkBob');
+assert.ok(view.actor===pawn);
+assert.deepEqual(view.rotation,runtime.readNamed(pawn,'ViewRotation'));
+assert.deepEqual(view.location,[Math.fround(location[0]+bob[0]),Math.fround(location[1]+bob[1]),
+  Math.fround(Math.fround(location[2]+runtime.readNamed(pawn,'EyeHeight'))+bob[2])]);
+assert.equal(view.fov,runtime.readNamed(pawn,'FOVAngle'));
 assert.ok(pickups.some((actor,i)=>runtime.readNamed(actor,'Velocity').some((v,k)=>v!==initialVelocity[i][k])),
   'previously omitted map pickups actually fall');
 game.reset();
@@ -48,13 +63,13 @@ let elapsed=0;
 for(const [seconds,scale,expected] of [[1/64,1,1/64],[1/8,1,1/8],[1,1,Math.fround(.4)],
   [1/1024,1,Math.fround(.005)],[1/8,.5,1/16]]) {
   dilation.set(scale);calls.length=0;hudDeltas.length=0;
-  const steps=game.player.steps;
+  const steps=playerTicks;
   game.tick(seconds,{});elapsed+=seconds*scale;
   assert.equal(levelCalls.at(-1).seconds,seconds,'host passes the unscaled input once');
   for(const actor of levelCalls.at(-1).actors)
     assert.ok(calls.some(call=>call.actor===actor)||!level.actors.includes(actor),
       `every dynamic slot ticks unless destroyed before its turn: ${actor.name}`);
-  assert.equal(game.player.steps,steps+1,'one player tick per host frame');
+  assert.equal(playerTicks,steps+1,'one player tick per host frame');
   assert.ok(calls.length>0,'supported NPCs still tick');
   // An owner-deferred actor (the player's carried key ring) returns 0 from its
   // first Actor.Tick and is retried from ULevel::Tick's deferred list once its
@@ -72,21 +87,21 @@ for(const [seconds,scale,expected] of [[1/64,1,1/64],[1/8,1,1/8],[1,1,Math.froun
   assert.equal(level.timeSeconds,elapsed,'double clock advances before the actor clamp');
   assert.equal(time.get(),Math.fround(elapsed),'scripts see the current level time');
 }
-game.reset();assert.equal(level.timeSeconds,0);assert.equal(time.get(),0);
+game.reset();playerTicks=0;assert.equal(level.timeSeconds,0);assert.equal(time.get(),0);
 dilation.set(1);calls.length=0;
 game.tick(1/64,{});
-assert.ok(calls.length>0);assert.equal(game.player.steps,1);
+assert.ok(calls.length>0);assert.equal(playerTicks,1);
 assert.equal(level.timeSeconds,1/64);
 
 // New integration boundary: paused ULevel.Tick still dispatches the original
-// PlayerInput and only bAlwaysTick actors; it never calls the movement port.
+// PlayerInput and only bAlwaysTick actors; it never dispatches PlayerTick.
 const always=level.actors.find(actor=>actor?.name==='LightSwitch0');
 assert.ok(always);runtime.writeNamed(always,'bAlwaysTick',true);
 runtime.writeNamed(level.actors[0],'Pauser','JC');
 runtime.writeNamed(game.player.collisionActor,'aForward',123);
-const steps=game.player.steps;calls.length=0;
+const steps=playerTicks;calls.length=0;
 game.tick(1/64,{});
-assert.equal(game.player.steps,steps);
+assert.equal(playerTicks,steps);
 assert.ok(calls.some(call=>call.actor===always));
 assert.ok(calls.every(call=>runtime.readNamed(call.actor,'bAlwaysTick')));
 assert.equal(runtime.readNamed(game.player.collisionActor,'aForward'),0);

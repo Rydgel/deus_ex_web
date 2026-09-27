@@ -15,6 +15,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { createPlayerInputFixture } from './player-input-fixture.mjs';
 
 const root = gameDirectory();
 const files = [];
@@ -26,6 +27,7 @@ const mapAsset = await assets.get('00_Training');
 const map = decodeMap(mapAsset.bytes);
 
 const game = await createGame(map, mapAsset, assets, { randomSeed: 1 });
+const input = createPlayerInputFixture(game);
 const runtime = game.doors.scriptRuntime.runtime;
 const player = game.player.collisionActor;
 const level = runtime.levelFor(player);
@@ -46,7 +48,7 @@ assert.deepEqual(outcome, { handled: true, result: true }, 'the real DeusExDecor
 // PutCarriedDecorationInHand's SetLocation runs the recovered FarMoveActor on
 // the map decoration (docs/script-map-actor-move.md), then bases it on JC with
 // its collision word cleared and bCollideWorld written off.
-game.interaction.frobTarget = plant;
+input.aim(plant);
 assert.deepEqual(game.use(), { ok: true, message: '' }, 'ParseRightClick grabs the pushable plant');
 assert.equal(ref(player, 'CarriedDecoration'), plant, 'GrabDecoration carries the plant');
 assert.equal(ref(plant, 'Base'), player, 'PutCarriedDecorationInHand bases the plant on JC');
@@ -55,7 +57,7 @@ assert.equal(plant.flags & 0x1f, 0, 'SetCollision(False,False,False) and bCollid
 assert.equal(ref(plant, 'bCollideWorld'), false, 'the script field reads the native word');
 // Right click with nothing highlighted is ParseRightClick -> PutInHand(None),
 // which drops the carried decoration (DeusExPlayer.DropDecoration).
-game.interaction.frobTarget = null;
+input.clearTarget();
 assert.deepEqual(game.use(), { ok: true, message: '' }, 'an empty right click runs ParseRightClick');
 assert.equal(ref(player, 'CarriedDecoration'), null, 'DropDecoration released the plant');
 assert.equal(ref(plant, 'Base'), null, 'the dropped plant leaves JC');
@@ -64,7 +66,7 @@ assert.equal(plant.flags & 0xd, 0xd, 'the dropped plant collides and blocks agai
 // A mover target takes the same ParseRightClick -> DoFrob -> DeusExMover.Frob path.
 const mover = level.actors.find(a => a?.lineage?.includes('engine.mover') && game.collision.movers.includes(a));
 if (mover) {
-  game.interaction.frobTarget = mover;
+  input.aim(mover);
   assert.deepEqual(game.use(), { ok: true, message: '' }, 'a mover frob runs ParseRightClick');
 }
 
@@ -87,7 +89,7 @@ assert.equal(ref(lightSwitch, 'bOn'), false, 'switch starts off');
 const before = dirs();
 const deferredBefore = new Set(game.player.unimplementedPhysicsEffects);
 
-game.interaction.frobTarget = lightSwitch;
+input.aim(lightSwitch);
 assert.deepEqual(game.use(), { ok: true, message: '' }, 'game.use() runs the full LightSwitch.Frob');
 assert.equal(ref(lightSwitch, 'bOn'), true, 'the switch toggled on');
 assert.equal(ref(lightSwitch, 'AnimSequence'), 'On', 'the real PlayAnim native set the switch animation');
@@ -96,7 +98,7 @@ const switchSound = [...game.player.unimplementedPhysicsEffects].filter(e => !de
 assert.ok(switchSound.some(e => /LightSwitch0\.SwitchSound/.test(e)), `switch click recorded as a Stage-4 audio boundary: ${switchSound.join(', ')}`);
 
 // A second frob reverses it: bOn, the lights, and the animation all toggle back.
-assert.deepEqual(game.use(), { ok: true, message: '' });
+assert.deepEqual(await input.frob(lightSwitch), { ok: true, message: '' });
 assert.equal(ref(lightSwitch, 'bOn'), false, 'the switch toggled back off');
 assert.equal(ref(lightSwitch, 'AnimSequence'), 'Off');
 assert.deepEqual(dirs(), before, 'the TriggerLights reversed back');

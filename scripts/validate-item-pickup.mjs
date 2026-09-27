@@ -11,6 +11,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
+import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -18,10 +19,16 @@ for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of
 const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1,presentation:true});
 const runtime=game.doors.scriptRuntime.runtime;
+const input=createPlayerInputFixture(game);
 // Player start logs in a new player; re-read it after every reset.
 let player=game.player.collisionActor;const level=runtime.levelFor(player);
 const get=(o,k)=>runtime.namedReference(o,k).get();
 const live=name=>level.actors.find(a=>a?.name===name);
+const frobPose=item=>item.name==='Candybar0'
+  ? {position:[get(item,'Location')[0],get(item,'Location')[1]-64,get(item,'Location')[2]]}
+  : item.name==='Multitool0'
+    ? {position:[get(item,'Location')[0]-40,get(item,'Location')[1],get(item,'Location')[2]]}
+    : undefined;
 const invNames=()=>{const a=[];let it=get(player,'Inventory');for(let n=0;it&&n<64;it=get(it,'Inventory'),n++)a.push(it.name);return a;};
 const stateKey=o=>runtime.instance(o).state?.stateNode?.record?.key??'none';
 const before=structuredClone(game.player.status());
@@ -38,9 +45,6 @@ for(const [name,expectState] of [['WeaponCrowbar1','engine.inventory.pickup'],
   assert.match(runtime.lookup(item,'Frob').key,/\.pickup\.frob$/,`${name} Frob resolves to the pickup give`);
 }
 assert.deepEqual(game.player.status(),before,'startup pickup preparation does not move or tick JC');
-
-function place(item){const loc=get(item,'Location');
-  game.collision.queries.changeActor(player,()=>{game.player.position=[loc[0]-40,loc[1],loc[2]];game.player.velocity=[0,0,0];});}
 
 // Build the actor mesh scene while the pickups are still visible; update() must
 // later hide the ones taken, through their own bHidden path.
@@ -63,12 +67,10 @@ for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','Ammo10mm2','Candybar0'
     runtime.writeNamed(item,'Acceleration',[7,-11,13]);
     assert.deepEqual(item.acceleration,[7,-11,13],'script acceleration reaches the map native member');
   }
-  place(item);
   const beforeInv=invNames().length;
-  game.interaction.frobTarget=item;
-  const result=game.use();
+  const result=await input.frob(item,frobPose(item));
   assert.equal(result.ok,true,`${name} pickup reports success: ${JSON.stringify(result)}`);
-  assert.equal(get(item,'Owner'),player,`${name} is now owned by JC`);
+  assert.ok(get(item,'Owner')===player,`${name} is now owned by JC`);
   assert.equal(get(item,'bHidden'),true,`${name} is removed from the world`);
   assert.ok(invNames().includes(name),`${name} is linked into JC's inventory list`);
   assert.ok(invNames().length>beforeInv,`${name} grew the inventory list`);
@@ -89,9 +91,9 @@ assert.ok(get(live('WeaponCrowbar1'),'invPosX')>=0&&get(live('WeaponCrowbar1'),'
 // Location += delta and tracks the player. docs/script-item-pickup.md.
 {
   const crowbar=live('WeaponCrowbar1');
-  assert.equal(get(crowbar,'Base'),player,'the picked-up crowbar is based on the player');
+  assert.ok(get(crowbar,'Base')===player,'the picked-up crowbar is based on the player');
   const beforePlayer=game.player.position.slice(),beforeItem=get(crowbar,'Location').slice();
-  for(let i=0;i<20;i++)game.tick(1/60,{forward:1,right:0,yaw:game.player.yaw,pitch:0,jump:false,crouch:false,walk:false});
+  input.driveLegacy({forward:1});input.tick(20);input.driveLegacy({forward:0});
   const dPlayer=game.player.position.map((v,i)=>v-beforePlayer[i]);
   const dItem=get(crowbar,'Location').map((v,i)=>v-beforeItem[i]);
   assert.ok(Math.hypot(...dPlayer)>1,'the player can walk while carrying the crowbar without pausing');
@@ -102,8 +104,7 @@ assert.ok(get(live('WeaponCrowbar1'),'invPosX')>=0&&get(live('WeaponCrowbar1'),'
 // A frobbed world NanoKey enters the key ring, not the inventory grid.
 {
   const nk=live('NanoKey0'),beforeKeys=get(player,'KeyList');
-  place(nk);game.interaction.frobTarget=nk;
-  const result=game.use();
+  const result=await input.frob(nk);
   assert.equal(result.ok,true,'NanoKey pickup reports success');
   const keys=get(player,'KeyList');
   assert.ok(keys&&keys!==beforeKeys,'the NanoKey entered the key ring (KeyList)');
@@ -138,9 +139,8 @@ assert.deepEqual(get(crowbar,'Acceleration'),[0,0,0],'reset restores the authore
 const reset=invNames();
 assert.equal(reset.length,1,`reset restores JC inventory to one item, got ${reset.join(', ')}`);
 assert.match(reset[0],/^NanoKeyRing/,'the one remaining item is the re-spawned key ring');
-place(crowbar);game.interaction.frobTarget=crowbar;
-assert.equal(game.use().ok,true,'the crowbar can be picked up again after reset');
-assert.equal(get(crowbar,'Owner'),player,'the re-picked crowbar is owned again');
+assert.equal((await input.frob(crowbar)).ok,true,'the crowbar can be picked up again after reset');
+assert.ok(get(crowbar,'Owner')===player,'the re-picked crowbar is owned again');
 
 console.log(`item pickup: crowbar/knife/ammo/candybar/hazmat/multitool taken, NanoKey enters the ring, `+
   `picked-up meshes hide, Player start returns items to the world and inventory to the ring.`);
