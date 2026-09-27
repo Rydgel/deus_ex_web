@@ -24,6 +24,41 @@ const stateKey=o=>runtime.instance(o).state?.stateNode?.record?.key??'none';
 function place(item){const loc=get(item,'Location');
   game.collision.queries.changeActor(player,()=>{game.player.position=[loc[0]-40,loc[1],loc[2]];game.player.velocity=[0,0,0];});}
 
+// Walk through the authored departure trigger before visiting the crates.
+// Skipping this approach used to hide Jaime's transient/stasis destruction.
+const jaime=live('JaimeReyes0'),leavingTrigger=live('OrdersTrigger4');
+const departure=get(leavingTrigger,'Location');
+assert.equal(get(leavingTrigger,'Orders'),'Leaving');
+assert.equal(get(leavingTrigger,'Event'),'JaimeReyes');
+game.collision.queries.changeActor(player,()=>{
+ game.player.position=[departure[0]-60,departure[1],-128+43+0.2];
+ game.player.velocity=[0,0,0];
+});
+for(let frame=0;frame<40;frame++)game.tick(1/60,{forward:1,yaw:0,pitch:0});
+assert.equal(get(jaime,'bTransient'),true,'original Leaving.BeginState marks Jaime transient');
+assert.equal(stateKey(jaime),'deusex.scriptedpawn.patrolling');
+const jaimeInventory=[];
+for(let item=get(jaime,'Inventory');item;item=get(item,'Inventory')){
+ assert.ok(!jaimeInventory.includes(item),'original NPC inventory chain must not cycle');
+ jaimeInventory.push(item);
+}
+const pawnList=()=>{
+ const result=[];
+ for(let pawn=get(level.actors[0],'PawnList');pawn;pawn=get(pawn,'NextPawn')){
+  assert.ok(!result.includes(pawn),'original PawnList must not cycle');result.push(pawn);
+ }
+ return result;
+};
+assert.ok(pawnList().includes(jaime));
+// Original trigger Touch bodies start/queue earlier transmissions. Mission00's
+// Timer must queue DL_Lockpick behind them when it observes the broken crate.
+for(const tag of ['dl_start','dl_door']){
+ const trigger=level.actors.find(actor=>actor?.lineage?.includes('deusex.datalinktrigger')&&
+  String(get(actor,'dataLinkTag')).toLowerCase()===tag);
+ assert.ok(trigger,`authored ${tag} trigger exists`);
+ runtime.processEvent(trigger,'Touch',[player]);
+}
+
 // Pick up the crowbar through the public frob path (the covered pickup slice).
 const crowbar=live('WeaponCrowbar1');
 assert.ok(crowbar,'WeaponCrowbar1 is a live actor');
@@ -88,6 +123,12 @@ input.forward=0;
 assert.notDeepEqual(game.player.position,beforeContentsMove,'the public walking path advances after crate destruction');
 assert.equal(lockpick.isPawn,false,'the dropped Inventory retains its canonical non-Pawn classification');
 assert.ok(level.actors.includes(lockpick),'movement does not implicitly pick up the Lockpick');
+const play=get(player,'dataLinkPlay');
+assert.ok(play,'earlier messages are still playing when the crate is broken');
+const lockpickConversation=get(play,'dataLinkQueue').find(con=>con&&String(get(con,'conName')).toLowerCase()==='dl_lockpick');
+assert.ok(lockpickConversation,
+ 'Mission00 queued the lockpick transmission behind the earlier messages');
+const lockpickSoundId=get(get(get(lockpickConversation,'eventList'),'conSpeech'),'soundID');
 meshes.update();await meshes.ready();meshes.update();
 assert.equal(previewFor(upper),undefined,'destroyed crate releases its draw resource');
 for(const actor of [...fragments,lockpick]){
@@ -97,6 +138,13 @@ for(const actor of [...fragments,lockpick]){
  if(fragments.has(actor))assert.ok(preview.summary.textures.includes(skin.key),'fragment renders inherited crate skin');
 }
 assert.deepEqual(meshes.summary.errors,[]);
+place(lockpick);game.interaction.frobTarget=lockpick;
+assert.equal(game.use().ok,true,'public frob collects the revealed lockpick');
+assert.equal(get(lockpick,'Owner'),player);
+const belt=game.hud.read(game.hud.hud,'belt');
+const lockpickSlot=game.hud.read(belt,'objects').findIndex(slot=>game.hud.read(slot,'item')===lockpick);
+assert.ok(lockpickSlot>=0);
+assert.equal((await game.activateBelt(lockpickSlot)).ok,true,'the collected lockpick can be equipped');
 let faded=false;
 const maxLife=Math.max(...[...fragments].map(actor=>get(actor,'LifeSpan')));
 for(let frame=0;frame<Math.ceil((maxLife+0.1)*60);frame++){
@@ -110,7 +158,27 @@ for(let frame=0;frame<Math.ceil((maxLife+0.1)*60);frame++){
 }
 assert.ok(faded,'fragment fade executed');
 assert.ok([...fragments].every(actor=>runtime.instance(actor).pendingKill),'LifeSpan destroys every fragment');
+// Keep ticking through the queued messages and the original stasis destroy.
+// No direct Destroy, artificial LifeSpan or forced stasis is used for Jaime.
+for(let frame=0;frame<3600&&(level.actors.includes(jaime)||get(player,'dataLinkPlay'));frame++)tick(1);
+assert.equal(runtime.instance(jaime).pendingKill,true,'original Actor.Tick destroys departed Jaime');
+assert.ok(!level.actors.includes(jaime),'departed Jaime leaves the live actor array');
+assert.ok(!pawnList().includes(jaime),'original Pawn.Destroyed unlinks Jaime');
+assert.ok(jaimeInventory.every(item=>runtime.instance(item).pendingKill&&!level.actors.includes(item)),
+ 'original Pawn.Destroyed destroys the carried inventory');
+assert.equal(get(jaime,'Inventory'),null);
+assert.equal(get(jaime,'Weapon'),null);
+assert.equal(get(player,'dataLinkPlay'),null,'the original transmission queue drains without a pause');
+assert.ok(game.doors.scriptRuntime.liveConPlay.soundRequests.some(request=>
+ request.kind==='speech'&&request.audio.soundId===lockpickSoundId),
+ 'the queued lockpick message reaches original speech playback');
+meshes.update();
+assert.equal(previewFor(jaime),undefined,'departed Jaime releases his draw resource');
 game.reset();
+assert.ok(level.actors.includes(jaime),'reset restores the serialized NPC');
+assert.equal(runtime.instance(jaime).pendingKill,false);
+assert.equal(get(jaime,'bTransient'),false);
+assert.ok(pawnList().includes(jaime),'startup restores Jaime to the PawnList');
 assert.ok(level.actors.includes(upper),'reset restores serialized crate identity');
 assert.equal(runtime.instance(upper).pendingKill,false);
 assert.equal(get(upper,'HitPoints'),hp);
@@ -121,6 +189,7 @@ assert.ok([...fragments,...traces].every(a=>!level.actors.includes(a)),'reset le
 assert.equal(game.doors.scriptRuntime.npcFailures.size,0);
 meshes.update();await meshes.ready();meshes.update();
 assert.ok(previewFor(upper)?.root.visible,'reset redraws the restored crate');
+assert.ok(previewFor(jaime)?.root.visible,'reset redraws Jaime');
 assert.ok([...fragments,lockpick].every(actor=>!previewFor(actor)),'reset releases spawned draw resources');
 meshes.dispose();
-console.log('crowbar crate: ticked hits, original damage, six fragments/bounce/fade/expiry, dropped Lockpick landing, dynamic meshes/glow, effect timers and reset passed.');
+console.log('crowbar crate: ticked hits, fragments/bounce/fade/expiry, Lockpick landing/pickup/equip, queued lockpick speech, Jaime departure/destruction/PawnList cleanup, dynamic meshes and reset passed.');

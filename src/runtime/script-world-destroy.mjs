@@ -80,10 +80,11 @@ export function createWorldDestroyServices({ runtime, level, hash = null, dispat
     // UNetConnection, with channel 0 (+0xe64) open and State (+0x60) not
     // USOCK_Closed, closes that channel and returns false. A None Player (as
     // LoadMap leaves the actor it dissociates) or a local viewport takes the
-    // normal path; other Pawns skip the test. Play admits only the player
-    // LoadMap retires: its NPC tick lists do not yet drop a destroyed pawn,
-    // and a live player's host scene is rebuilt only by that reload.
-    if (isA(receiver, 'engine.pawn')) {
+    // normal path; other Pawns skip the test. The live level scheduler drops
+    // destroyed NPC slots, and original Pawn.Destroyed removes the PawnList
+    // link and inventory. A live PlayerPawn's host scene still requires the
+    // LoadMap reload, so only the player being retired is admitted here.
+    if (isA(receiver, 'engine.playerpawn')) {
       if (receiver !== level.retiringPlayer) return false;
       if (runtime.readNamed(receiver, 'Player') !== null) return false;
     }

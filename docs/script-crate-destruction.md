@@ -53,8 +53,13 @@ stacked `CrateBreakableMedGeneral2`: 10 → 4 → −2 HP, six WoodFragments,
 the crate's mesh texture copied to their Skin, bounce and settling, the
 authored Lockpick contents landing on a support, 0.1-second hit-effect
 expiry, walking beside the uncollected Lockpick through public player input,
-fragment fade and LifeSpan expiry, then reset restoring the crate and removing
-spawned actors. The movement case preserves the spawned collision view's
+then collecting/equipping it, fragment fade and LifeSpan expiry, and reset
+restoring the crate and removing spawned actors. It also walks across Jaime's
+departure trigger before the crates and keeps earlier transmissions queued:
+the original Mission00 lockpick message must play through while the original
+tick destroys departed Jaime. PawnList/inventory cleanup, mesh removal and NPC
+reset are checked as described in [world destruction](script-world-destroy.md).
+The movement case preserves the spawned collision view's
 read-only, class-derived `isPawn=false`: the original engine observes class
 ancestry and never writes classification back to the hit actor. The float32
 ResetScaleGlow expression yields

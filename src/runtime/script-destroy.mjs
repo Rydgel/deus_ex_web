@@ -75,7 +75,7 @@ export function destroyScriptActor(receiver, options, netForce = false) {
 
   // A false/absent eligibility result is an unsupported host boundary, not a
   // native DestroyActor rejection. This prevents silently entering editor,
-  // proxy, Pawn, or subclass paths whose contracts are not in this adapter.
+  // proxy or subclass paths whose contracts are not in this adapter.
   if (validate(receiver, level) !== true) unsupported('host eligibility validation');
   if (flag(level.editor)) unsupported('editor cleanup');
 

@@ -109,8 +109,8 @@ const inCollisionHash = actor => {
 assert.equal(inCollisionHash(trigger), true, 'the live trigger starts registered in the level collision hash');
 
 // -- Host eligibility boundary ------------------------------------------------
-// A Pawn reaches the unresolved APlayerPawn/UNetConnection decision, so the
-// adapter must raise its explicit unsupported-branch error, never destroy.
+// A live PlayerPawn still requires the host's LoadMap retirement path. Ordinary
+// NPCs take the normal destruction path (validate-crowbar-crate.mjs).
 assert.throws(() => runtime.destroyActor(player, false),
   /Unsupported original DestroyActor branch: host eligibility validation/);
 assert.equal(ref(player, 'bDeleteMe').get(), false, 'a refused request leaves the actor untouched');
@@ -190,4 +190,4 @@ console.log(`Live Actor.Destroy validated: OrdersTrigger2.Touch destroyed its on
   `fixed frames through the recovered ULevel::DestroyActor order (Destroyed, EndTouch(other,1), ` +
   `FCollisionHash::RemoveActor, slot ${slot} cleared and compacted, bDeleteMe, ObjectFlags ` +
   `0x${(exportEntry.flags >>> 0).toString(16)} -> 0x${((exportEntry.flags | 0x00800000 | 0x80000000) >>> 0).toString(16)}, ` +
-  `deferred chain head), refused the Pawn branch explicitly, stayed idempotent, and reset restored the map state.`);
+  `deferred chain head), refused live PlayerPawn destruction explicitly, stayed idempotent, and reset restored the map state.`);

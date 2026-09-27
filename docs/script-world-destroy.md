@@ -41,7 +41,7 @@ rather than like a destruction gap.
 | `endTouch(receiver, other, 1)` | `actor-touch.mjs` `endTouch`, dispatching the other side's `UnTouch` | step 7 |
 | `level.collisionHash` | The live `FCollisionHash` (`level.hash`): `removeActor`, and `checkActorNotReferenced` as the verified no-op (`ret $0x4`) | step 5 |
 | `level.engine.audio` | `null` — the verified original no-audio branch; audible playback is Stage 4 | step 10 |
-| `setBase` | Not bound. A target with a `Base` or based children raises `DestroyActor requires setBase` | step 4 |
+| `setBase` | `ScriptRuntime.destroyActor` binds the recovered `AActor::SetBase`, including LevelInfo/world identity and synchronous callbacks | step 4 |
 
 `level.hash` is read through a function, not captured, because the scene rebuilds
 the hash object on reset.
@@ -55,14 +55,58 @@ unsupported-branch error. It refuses:
 * a different level container, an unattached identity, or an editor level;
 * `netMode != 0` or a non-null `demoRecDriver` — the two unresolved
   level-owned hooks at `ULevel+0x3c` and `+0x88` are driver objects;
-* any `Engine.Pawn` subclass except the player that LoadMap is retiring
+* any `Engine.PlayerPawn` subclass except the player that LoadMap is retiring
   (`level.retiringPlayer`, with its `Player` already None). The class/network
   test at `0x10395c59-0x10395cd8` is resolved
   ([Actor.Destroy](script-destroy.md)): a None `Player` takes the normal path.
-  Other pawns stay refused, because Play's NPC tick lists do not yet drop a
-  destroyed pawn, and only the reload rebuilds a live player's host scene;
+  Other pawns skip this native test. Only the reload rebuilds a live player's
+  host scene;
 * any `Engine.Mover` or moving brush, whose brush model, encroachment and base
   contract are not recovered here.
+
+### Training: Jaime leaves while the lockpick transmission is queued
+
+The old host gate rejected every Pawn. After Play adopted the original
+`ULevel::Tick`, that gate stopped the whole world when `JaimeReyes0` left the
+first room. A focused reproduction walks across `OrdersTrigger4`, breaks the
+crates, collects their lockpicks and ticks at the crate location. It reaches
+the rejection at level time 17.700000923 with Jaime in `Patrolling`,
+`bTransient=True`, near `[581.683,1752.961,-52.900]`. Earlier crate checks
+teleported directly to the crowbar and never crossed the departure trigger.
+The transmission visible when the pause occurs is incidental to the failing
+destroy request; the regression must also exercise queued transmissions.
+
+Original evidence, established before changing the gate:
+
+* `00_Training` serializes `OrdersTrigger4` at
+  `[772.4385,139.7297,-87.9004]`, with `Event=JaimeReyes`, `Orders=Leaving`,
+  and `ordersTag=gone`. `OrdersTrigger.Touch` calls `StartPatrolling`, which
+  calls the matching ScriptedPawn's `SetOrders`.
+* Installed `ScriptedPawn.Leaving.BeginState` sets `bTransient=True` and
+  `bDisappear=True`, then enters `Patrolling`. The original
+  [Actor.Tick stasis branch](script-actor-tick.md#admission-and-ordering)
+  calls `DestroyActor(actor,0)` for a transient authority actor in stasis.
+* `ULevel::DestroyActor` at `0x10395c59–0x10395cd8` tests **APlayerPawn**, not
+  APawn. An ordinary ScriptedPawn continues through the recovered normal
+  destruction sequence; no new NPC-specific native rejection exists here.
+* Installed `ScriptedPawn.Destroyed` notifies `player.conPlay.ActorDestroyed`
+  if present, then calls `Pawn.Destroyed`. That body destroys Shadow, calls
+  [RemovePawn](pawn-list.md), destroys the inventory chain on authority,
+  clears Weapon/Inventory, conditionally logs out player pawns, destroys
+  PlayerReplicationInfo, notifies the remaining PawnList through `Killed`,
+  then calls its superclass. These are original VM bodies, not host cleanup.
+* Hash-verified Engine.dll APawn vtable `0x10426994 + 0x24` points to
+  `0x10301f8c -> 0x10368f60` (`AActor::Destroy`). DeusEx.dll ScriptedPawn
+  vtable `0x10027624 + 0x24` points to `0x1001afa4`, an import jump through
+  `0x1002727c` to the same `AActor::Destroy`. The existing map-object native
+  destroy hook is therefore correct for Jaime's nearest native ancestor.
+
+Play can admit ordinary NPC destruction: the level scheduler uses live actor
+slots and drops the nulled entry; the original `Pawn.Destroyed` removes the
+PawnList link; collision removal, native teardown and the reload ledger are
+already supplied. The mesh scene also removes actors absent from Level.Actors.
+PlayerPawn/network and moving-brush restrictions remain. This covers the
+ordinary NPC lifecycle, not every possible subclass-specific death effect.
 
 ## Core object record for a pre-placed map export
 
@@ -92,9 +136,10 @@ target's native `UObject` record. Every attached map actor now carries one
   here. The post-destroy `linkerIndex` bookkeeping that `UObject::Destroy`
   derives from `Outer` is therefore not meaningful for a map actor and is not
   asserted anywhere.
-* **`CleanupDestroyed` is not run.** The target stays on the ULevel deferred
-  chain (`level.pendingDeleted`), which is the recovered play behavior until the
-  separately documented cleanup path runs; no early release is introduced.
+* **`CleanupDestroyed(0)` runs at the original level-tick tail.** The target
+  stays on `level.pendingDeleted` until the native threshold permits release;
+  the recovered cleanup also compacts the live actor array. See
+  [level tick](script-level-tick.md) and [object release](script-object-release.md).
 
 ## `Touching` is live state
 
@@ -141,7 +186,15 @@ It proves the authored route reaches `OrdersTrigger2`, that the only destruction
 callback its body reaches is `Destroyed`, that `EndTouch(other, 1)` clears the
 player side, that the actor leaves the collision hash and its `Level.Actors`
 slot, the `bDeleteMe` and `ObjectFlags` transitions, the deferred-chain head and
-`Deleted` link, that a repeated request is idempotent, that a Pawn other
-than the retiring player is refused with the explicit unsupported-branch error, that Play continues past the old
+`Deleted` link, that a repeated request is idempotent, that a live PlayerPawn
+is refused with the explicit unsupported-branch error, that Play continues past the old
 pause point, and that reset restores the map state so the next session
 reproduces the same destruction frame.
+
+`validate-crowbar-crate.mjs` additionally crosses `OrdersTrigger4`, queues the
+start/door transmissions, breaks a crate and collects/equips its lockpick
+while `Mission00.Timer` queues `DL_Lockpick`. It checks original stasis
+destruction of Jaime, PawnList and inventory cleanup, continued speech and
+queue completion, mesh removal, and reset restoring Jaime and the crate.
+This is a translation/integration check against the original contracts above,
+not an original-executable whole-scene recording.
