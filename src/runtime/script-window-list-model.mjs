@@ -486,7 +486,7 @@ function fmtFloatG(value, prec, flags, upper) {
     body = '0';
   } else {
     const d = decimalExpansion(value);
-    const exp = decimalExponent(d.ip, d.frac);
+    let exp = decimalExponent(d.ip, d.frac);
     if (exp < -4 || exp >= prec) {
       const p = prec - 1;
       let ds = roundScaled(d.ip, d.frac, p - exp).toString();

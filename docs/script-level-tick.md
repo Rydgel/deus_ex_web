@@ -100,13 +100,77 @@ Focused commands: `node scripts/validate-level-tick.mjs`,
 These checks do not establish complete NPC startup, full-world execution,
 native visibility/physics services or final mesh rendering.
 
-## Play frame timing integration
+## Earlier Play frame timing integration (superseded by batch 5)
 
-The time calculation is shared through `levelTickTime`: both the complete
-scheduler and the bounded Play host use the same extended product, separate
+Before batch 5, the time calculation was shared through `levelTickTime`: both the complete
+scheduler and the bounded Play host used the same extended product, separate
 double/float time stores, and actor delta clamp. Play supplies one call per
 browser animation frame, with no outer fixed-step accumulator. It publishes
 TimeSeconds before actors run and reads the live LevelInfo.TimeDilation.
-This does not enroll additional actors or claim the complete level scheduler
-is connected to Play. `validate-play-frame.mjs` checks the new admission
-boundary; the 31 original-DLL cases above continue to check the shared math.
+That change did not enroll additional actors or connect the complete level
+scheduler to Play. Batch 5 below replaces that bounded host and expands
+`validate-play-frame.mjs` at the integration boundary; the 31 original-DLL
+cases above continue to check the shared math.
+
+
+## Batch 5 Play integration (2026-09-27)
+
+The original references above establish the scheduling contract before this
+integration. Play now calls `ScriptRuntime.processLevelTick` on the scene level
+itself: the live `Actors` array, LoadMap `FirstDynamicActor`, double clock,
+TickTag, deferred head and pending-deletion chain have a single owner. The
+browser supplies the input delta once; the returned actor delta also drives
+the native HUD. There are no mover, trigger, DataLink, light, NPC, inventory or
+mission tick passes. Renderer invalidation observes light/mover fields after
+the scheduler; it does not execute script.
+
+The controlled player remains the declared batch-6 substitute. Actor.Tick's
+stasis, owner dependency, bTicked and animation phases precede the player port
+at the controlled-PlayerPawn branch. The port retains its prior movement and
+hand/weapon operations. The paused branch calls original PlayerInput and
+resets CPF_Input floats; browser input sampling is part of the retained player
+substitute. It does not advance the movement port. Other paused actors receive
+the original bAlwaysTick gate. The existing DLL tests cover both branches and
+retry order independently of Play.
+
+An actor exception records its identity and freezes the entire frame at an
+explicit boundary. Subsequent calls rethrow the same failure until reload;
+there is no skip-forever actor list. Startup failure records likewise block
+world ticking. Spawn tracking surrounds actual scheduled calls and is only
+used for reload bookkeeping.
+
+Native scratch allocation is represented by per-frame JavaScript objects;
+profiling counters are not simulated. Calendar values are supplied by the
+platform local clock, corresponding to UpdateTime/appSystemTime. Network,
+demo, optional +f8 service and EventManager remain explicit boundaries.
+Training's Stage-5 event service keeps EventManager null; if a real manager is
+installed, its native Tick and exact Pauser FString allocation count must be
+provided (the logical string adapter cannot distinguish allocated-empty).
+
+Actor identity remains unified, with two storage adapters: serialized map
+actors expose native members bound to VM properties; spawned actors install a
+field-backed collision view on the very same script identity. Both occur in
+Level.Actors and the collision hash without proxy identities. Falling map
+pickups use the existing map MoveActor surface and actorLanded; map decorations
+keep the decoration-specific landing callback. See [actor physics](actor-physics.md).
+
+`validate-gameplay.mjs` runs its full Training route, interactions, closing-door
+contact and reset through this scheduler. Its older NYC landing/walking case
+first asserts the actual full-world boundary and its recorded actor, then
+creates a fresh scene for an explicitly isolated retained-player-port check.
+That check calls the existing player port against the loaded scene without
+advancing world scripts.
+It does not establish full-world support for `01_NYC_UNATCOIsland`. Read-only
+native-call tracing of the full NYC scheduler identified native 267
+(`SetLocation`) in original `ScriptedPawn.PutInWorld`, with receiver
+`UNATCOTroop3` (`DeusEx.UNATCOTroop`), reaching the explicit unlinked map-pawn
+`FarMoveActor` service. That boundary remains visible in ordinary Play; no
+actor is skipped or given substitute movement. The previous NPC failure
+suppression had concealed that distinction in the old mixed-map smoke test.
+
+An additional diagnostic attempted NYC reset after that failed frame and
+reached a JavaScript stack overflow in LoadMap GC's recursive reference walk
+(`script-loadmap-gc.mjs` -> `serializeReferences`). NYC reset was not part of
+the old test's coverage and remains unresolved. The isolated fixture does not
+claim support for that path. Training's original full-world reset assertions
+remain unchanged.

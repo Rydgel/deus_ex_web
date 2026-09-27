@@ -39,7 +39,7 @@ import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
-import { tickStandaloneActor } from './actor-tick.mjs';
+import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
@@ -2775,6 +2775,13 @@ export class ScriptRuntime {
       if(!model)throw new Error('FastTrace requires the live level BSP model');
       return scriptFastTrace(model,source,end,start,level.fastLineCheck);
     }
+    if(call.index===721){
+      // execInStasis 1036d320 consumes EndFunctionParms and directly calls
+      // AActor::InStasis 1036bfe0; there are no script operands.
+      if(call.argumentCount!==0)throw new Error('InStasis takes no arguments');
+      return actorInStasis(call.receiver,{read:(actor,name)=>this.readNamed(actor,name),
+        level:this.levelFor(call.receiver)});
+    }
     if(call.index===718){
       // execIsOverlapping 0x1036ddb0: checkActor evaluates first; a null
       // reference publishes 0 without entering AActor::IsOverlapping
@@ -3212,7 +3219,10 @@ export class ScriptRuntime {
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
         return false;
       },
-      tickActor:(actor,delta,type)=>this.processActorTick(actor,delta,{...nativeServices,level,tickType:type}),
+      tickActor:(actor,delta,type)=>{
+        const run=()=>this.processActorTick(actor,delta,{...nativeServices,level,tickType:type});
+        return nativeServices.aroundActorTick?nativeServices.aroundActorTick(actor,run):run();
+      },
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       resetInputProperties:actor=>this.resetActorInput(actor),
       cleanupDestroyed:(world,force)=>this.cleanupDestroyed(world,Boolean(force)),
@@ -3407,7 +3417,7 @@ export class ScriptRuntime {
       // IteratorStart and publish each hit list node in order; see
       // docs/script-trace.md.
       const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
-      return create({...call,levelFor:this.levelFor});
+      return create({...call,levelFor:this.levelFor,readActor:(actor,name)=>this.readNamed(actor,name)});
     }
     if(call.index===310||call.index===311||call.index===306||call.index===1002){
       // execRadiusActors/execVisibleActors/execBasedActors/execCycleActors

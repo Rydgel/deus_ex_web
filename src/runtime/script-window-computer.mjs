@@ -55,7 +55,7 @@ export const COMPUTER_WINDOW_NATIVE_ADDRESSES = freeze({
   reallocIat: 0x1005909c,
   appStrcpyIat: 0x100590d8,
   gmallocIat: 0x10059060,
-  textWindowClass: 0x100ae5b8,
+  textWindowClass: 0x100ae5b8, // Compatibility name: the original class global is Window.
   inputWindowClass: 0x1009ae18,
   xWindowVtable: 0x10059930,
   xComputerWindowVtable: 0x1005b2c8,
@@ -133,7 +133,7 @@ export const COMPUTER_WINDOW_OFFSETS = freeze({
   cursorFlags: 0x1c0,
   cursorNextEvent: 0x1c4,
   unknown1c8: 0x1c8,
-  textWindow: 0x1cc,
+  textWindow: 0x1cc, // Compatibility name: container Window for native display children.
   player: 0x1d0,
   displayBuffer: 0x1d4,
   queuedBuffer: 0x1e0,
@@ -166,15 +166,15 @@ export const COMPUTER_WINDOW_NATIVE_CONTRACT = freeze({
   init: freeze([
     'call XWindow::Init(parent)',
     'GetRootWindow then GetPlayerPawn; store Player +0x1d0',
-    'read Player viewport name and compare with NAME_None/empty string; set inputFlags bit 0x20 when nonempty',
-    'Create TextWindow with class global 0x100ae5b8 and bShow=1; store +0x1cc',
-    'when textFont and TextWindow are non-null, Resize this ComputerWindow to cols*fontWidth by rows*fontHeight',
-    'SetWindowAlignments(TextWindow, 3, 3, 0, 0, 0, 0)',
+    'read Player.Level.Pauser and compare with the empty string; set inputFlags bit 0x20 when nonempty',
+    'Create container Window with class global 0x100ae5b8 and bShow=1; store +0x1cc',
+    'when textFont and container Window are non-null, Resize this ComputerWindow to cols*fontWidth by rows*fontHeight',
+    'SetWindowAlignments(container Window, 3, 3, 0, 0, 0, 0)',
     'Create input window with class global 0x1009ae18 and bShow=0; store +0x210',
     'SetTextMargins(input,0,0), SetInsertionPointBlinkRate(input,2*cursorBlinkSpeed,0), SetSelectability(this,1)',
   ]),
   methods: freeze([
-    'SetTextSize writes cols/rows before the font/TextWindow guards, then resizes this ComputerWindow',
+    'SetTextSize writes cols/rows before the font/container Window guards, then resizes this ComputerWindow',
     'SetTextFont writes font/width/height, appends queued event type 1 with timeNextEvent and Color, copies timeCurrent to timeLastEvent, then conditionally resizes this ComputerWindow',
     'SetTextTiming and SetFadeSpeed copy one float dword',
     'SetCursorColor copies one Color dword',
@@ -190,13 +190,13 @@ export const COMPUTER_WINDOW_NATIVE_CONTRACT = freeze({
     'arrayRealloc({object,arrayOffset,elementSize:0x20})',
   ]),
   initLeaves: freeze([
-    'initWindow', 'getRootWindow', 'getPlayerPawn', 'readPlayerViewportName',
+    'initWindow', 'getRootWindow', 'getPlayerPawn', 'readLevelPauser',
     'createNewWindow', 'resize', 'setWindowAlignments', 'setTextMargins',
     'setInsertionPointBlinkRate', 'setSelectability',
   ]),
   limitations: freeze([
     'The native Print temporary FString allocator/copy/free sequence is represented by the resolved JavaScript string and explicit queued-event leaf; allocator ownership is not guessed.',
-    'The Player viewport FString graph is an explicit host leaf because it belongs to the Engine/DeusEx object graph outside this Extension.dll body.',
+    'The Player.Level.Pauser FString graph is an explicit host leaf because it belongs to Engine object storage outside this Extension.dll body.',
   ]),
 });
 
@@ -442,8 +442,10 @@ export function initComputerWindowNative(object, parent = null, services = {}) {
   const player = rawRead(target, O.player, 'ptr', services, 'XComputerWindow::Init',
     COMPUTER_WINDOW_NATIVE_ADDRESSES.init);
   if (present(player)) {
-    const viewportName = call(services, ['readPlayerViewportName', 'playerViewportName'],
-      'Player viewport name', {player, native: COMPUTER_WINDOW_NATIVE_ADDRESSES.init});
+    // Actor +0xa8 = Level; LevelInfo +0x4e0 = Pauser. The older viewport
+    // service name remains an API alias for external preview fixtures only.
+    const viewportName = call(services, ['readLevelPauser', 'readPlayerViewportName', 'playerViewportName'],
+      'Player.Level.Pauser', {player, native: COMPUTER_WINDOW_NATIVE_ADDRESSES.init});
     let comparison;
     if (typeof services.appStricmp === 'function' || typeof services.compareStrings === 'function') {
       comparison = call(services, ['appStricmp', 'compareStrings'], 'appStricmp', {
@@ -455,7 +457,7 @@ export function initComputerWindowNative(object, parent = null, services = {}) {
     } else if (typeof viewportName === 'string') {
       // The right operand is the empty NAME_None FString.  The comparison is
       // therefore zero exactly for an empty source, independent of folding.
-      comparison = viewportName.length === 0 ? 0 : 1;
+      comparison = viewportName.length === 0 || viewportName.charCodeAt(0) === 0 ? 0 : 1;
     } else {
       fail('XComputerWindow::Init requires appStricmp or a resolved viewport name string', {
         kind: 'SERVICE', operation: 'appStricmp', value: viewportName,

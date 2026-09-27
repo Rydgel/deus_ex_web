@@ -44,9 +44,9 @@ The native offsets used by this slice are:
 
 `XComputerWindow::Init` at `0x1000d530` first calls base
 `XWindow::Init(parent)`, then calls `GetRootWindow` and `GetPlayerPawn`, storing
-the result at `+0x1d0`. It reads the Player viewport FString name and compares
-it with the static empty `NAME_None` string. A nonempty name sets input flag
-`+0x214` bit `0x20` (`bIgnoreGamePaused`). It then creates the TextWindow
+the result at `+0x1d0`. It reads Player.Level.Pauser (`Actor +0xa8`,
+`LevelInfo +0x4e0`) and compares it with the static empty string. A nonempty
+Pauser sets input flag `+0x214` bit `0x20` (`bIgnoreGamePaused`). It creates a Window
 class at static address `0x100ae5b8` with `bShow=1` and stores it at `+0x1cc`.
 
 When `textFont` and TextWindow are both non-null, Init calls `Resize` on the
@@ -58,8 +58,8 @@ window class at `0x1009ae18` with `bShow=0`, stores it at `+0x210`, calls
 `SetSelectability(this, 1)`.
 
 The JavaScript module exposes each of those graph operations as a synchronous
-service. The Player viewport FString graph remains an explicit
-`readPlayerViewportName` service because it belongs to Engine/DeusEx object
+service. The Player.Level.Pauser FString graph remains an explicit
+`readLevelPauser` service (with a legacy `readPlayerViewportName` alias) because it belongs to Engine object
 storage outside the bounded Extension body.
 
 ## Implemented native methods
@@ -102,23 +102,14 @@ allocator identity and lifetime are intentionally outside this slice.
 
 ## Shared Play root
 
-The general HUD integration supplies `windowHost` to `createInfoLinkShellPreview`.
-The shell then uses the existing DeusExRootWindow/DeusExHUD identities and the
-host's native byte heap. It does not replace either initialized window or the
-HUD's original receivedItems object. The original HUDInfoLinkDisplay.NewChild
-and its six-control CreateControls path still execute through the shell's
-previously recovered ComputerWindow boundary. ConPlay's first-person window
-uses the same compatibility path.
+Batch 5 routes original HUDInfoLinkDisplay.NewChild and CreateControls through
+the general native host. Both ComputerWindow buffers are real FArrays in its
+shared heap. The original Tick, queue processing, fixed-cell character drawing,
+cursor drawing, cleanup and destructor member ordering are translated in
+`script-window-computer-playback.mjs`; see
+[the recovered contract and boundaries](script-window-computer-playback.md).
+The read-only `host.computerText` accessibility view reads displayBuffer.
 
-While a DataLink/ConPlay callback runs, lifecycle calls on shell-owned windows
-use that bounded implementation; calls on the general HUD use its own native
-services. The general host delegates the InfoLink/ConPlay subtrees to the
-existing specialized presentation and layout implementation. This is an
-explicit remaining native-window gap, not a claim that ComputerWindow paint,
-WindowReady, or general input handling are complete. Original actor-world
-allocation is separated from DataLink playback setup so player subsystems can
-exist before the full HUD's InitWindow reads them.
-
-The existing shell, DataLink TransferObject, and player-subsystem validators
-pass after this refactor. The shared native-host branch is verified with the
-Play HUD integration rather than those headless shell-only cases.
+The older InfoLink shell remains a historical standalone research fixture;
+its window family and viewport-name shortcuts do not define Play behavior.
+Terminal input queue events and graphic positioning remain explicit boundaries.

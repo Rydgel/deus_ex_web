@@ -15,12 +15,37 @@ const checkBob = readFunction(engine, engine.exportsByPath.get('playerpawn.check
 const report = { checkBob: { function: checkBob.entry.path, expandedBytes: checkBob.size, serializedBytes: checkBob.bytes.length,
   sha256: createHash('sha256').update(checkBob.bytes).digest('hex') }, maps: [] };
 const run = (game, seconds, input = {}) => { for (let i = 0; i < Math.round(seconds * 120); i++) game.tick(1 / 120, input); };
+// The NYC case predates full-world scheduling and measures only the retained
+// player port against its loaded scene. Its original UNATCOTroop3 reaches the
+// explicit map-pawn FarMoveActor boundary through ScriptedPawn.PutInWorld;
+// running this isolated port is not evidence of NYC world-script support.
+const runPlayerPort = (game, seconds, input = {}) => {
+  for (let i = 0; i < Math.round(seconds * 120); i++) game.player.tick(1 / 120, input);
+};
 for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
-  const asset = await assets.get(name), map = decodeMap(asset.bytes), game = await createGame(map, asset, assets);
-  run(game, 1); const initial = game.player.status(); assert.equal(initial.grounded, true, `${name} lands at spawn`);
+  const asset = await assets.get(name), map = decodeMap(asset.bytes);
+  let game = await createGame(map, asset, assets);
+  let fullWorldBoundary = null;
+  if (name === '01_NYC_UNATCOIsland') {
+    const message = 'FarMoveActor for a pawn, brush or non-colliding map actor is not linked';
+    assert.throws(() => run(game, 1), { message }, 'NYC world scheduling remains explicitly unsupported');
+    const failure = [...game.doors.scriptRuntime.npcFailures].find(([actor]) => actor.name === 'UNATCOTroop3');
+    assert.ok(failure, 'world scheduler records the original failing UNATCOTroop3 identity');
+    assert.equal(failure[1], message);
+    fullWorldBoundary = { actor: failure[0].name, caller: 'ScriptedPawn.PutInWorld', native: 267, message };
+    // A separate fixture keeps the isolated player check independent of the
+    // failed world. NYC reset/GC is outside this test's prior coverage and
+    // currently has its own measured stack-overflow boundary.
+    game = await createGame(map, asset, assets);
+    assert.equal(game.doors.scriptRuntime.npcFailures.size, 0, 'the isolated port starts with a fresh scene');
+  }
+  const advance = name === '00_Training' ? run : runPlayerPort;
+  advance(game, 1); const initial = game.player.status(); assert.equal(initial.grounded, true, `${name} lands at spawn`);
   assert.equal(game.collision.overlaps(initial.position, game.player.extent), false);
-  const result = { name, initial, hulls: game.collision.bsp.hulls.length,
+  const result = { name, scope: name === '00_Training' ? 'full-world Training integration' : 'isolated retained-player-port scene smoke',
+    initial, hulls: game.collision.bsp.hulls.length,
     blockingActors: game.collision.actors.filter(actor => actor.blocking).length };
+  if (fullWorldBoundary) result.fullWorldBoundary = fullWorldBoundary;
   if (name === '00_Training') {
     assert.ok(Math.abs(initial.position[2] - -80.19999694824219) < 1e-4, 'standing height matches original saved pawn');
     run(game,.5,{crouch:true});
@@ -67,7 +92,7 @@ for (const name of ['00_Training', '01_NYC_UNATCOIsland']) {
     result.closingContact={start:contactStart,end:game.player.position.slice()};
     game.reset(); run(game, 1); assert.deepEqual(game.player.position, initial.position); assert.equal(game.doors.uses, 0);
   } else {
-    run(game, 1, { forward: 1, yaw: (game.start.values.Rotation?.[1] ?? 0) * Math.PI / 32768 });
+    advance(game, 1, { forward: 1, yaw: (game.start.values.Rotation?.[1] ?? 0) * Math.PI / 32768 });
     assert.notDeepEqual(game.player.position, initial.position); assert.equal(game.collision.overlaps(game.player.position, game.player.extent), false);
     result.walked = game.player.status();
   }

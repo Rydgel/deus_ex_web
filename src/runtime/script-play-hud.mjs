@@ -1,7 +1,6 @@
 /** Original DeusExHUD tree driven by recovered Extension native layout/GC.
- * InfoLink/ConPlay retain their explicitly bounded presentation owners. */
+ * InfoLink is part of the same native window tree. */
 import {TextureStore} from '../unreal/textures.mjs';
-import {WINDOW_SIZE_OFFSETS as REQUESTED_SIZE} from './script-window-size.mjs';
 const parts=['head','torso','armLeft','armRight','legLeft','legRight'];
 const deref=value=>value?.reference?value.get():value;
 export const hudColor=value=>['r','g','b'].map(key=>value[`core.object.color.${key}`]);
@@ -10,7 +9,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   if(!host?.root||!host?.hud)throw new Error('Play HUD requires the original initialized window host');
   const read=(object,name)=>runtime.readNamed(object,name);
   const invoke=(object,name,args=[])=>runtime.callFunction(runtime.lookup(object,name),object,args.length,i=>args[i]);
-  const scoped=callback=>shell.withLifecycle(callback);
+  const scoped=callback=>callback();
   let root=host.root,hud=host.hud,hit=read(hud,'hit'),compass=read(hud,'compass'),cross=read(hud,'cross');
   const images=new Map(),pending=new Map(),store=new TextureStore(assets);
   async function imageFor(ref){
@@ -22,15 +21,6 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   const gc={};runtime.attach(gc,host.classes.get('extension.gc'));
   function decorationCommands(object,post=false){
     const commands=[];
-    // The delegated InfoLink/ConPlay presenter still draws at SetSize's
-    // requested dimensions (+9c/+a0). Its bounded lifecycle does not perform
-    // native layout into +80/+84; general HUD windows already have their own
-    // true configured-size bindings and must keep them.
-    for(const [name,offset] of [['width',REQUESTED_SIZE.width],['height',REQUESTED_SIZE.height]]){
-      const instance=runtime.instance(object),field=runtime.lookupMember(instance.cls,'fields',name);
-      if(!instance.bindings.has(field.key))instance.bindings.set(field.key,{
-        get:()=>shell.readNative(object,offset,'f32'),set:()=>{throw new Error('HUD dimensions require Window setters');}});
-    }
     scoped(()=>{
       const native=runtime.native,boundaries=runtime.boundaryNatives;
       runtime.boundaryNatives=new Set([...boundaries,1212,1230,1284,1289]);
@@ -51,7 +41,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
       finally{runtime.native=native;runtime.boundaryNatives=boundaries;}
     });return commands;
   }
-  const raw=(object,offset,kind)=>host.owns(object)?host.raw.read(object,offset,kind):shell.readNative(object,offset,kind);
+  const raw=host.raw.read;
   const rect=object=>({x:raw(object,0x78,'f32'),y:raw(object,0x7c,'f32'),width:raw(object,0x80,'f32'),height:raw(object,0x84,'f32')});
   const tile=object=>({color:unpack(raw(object,0x60,'u32')),style:raw(object,0x3c,'u8')});
   const visible=object=>Boolean(raw(object,0x30,'u32')&1);

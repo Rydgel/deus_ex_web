@@ -82,7 +82,7 @@ game.reset();
 const resetShell=await game.doors.scriptRuntime.infoLinkShell();
 assert.equal(resetShell.object,null,'a reset session has no InfoLink display before its first DataLink');
 assert.equal(runtime.namedReference(hud,'infoLink').get(),null);
-assert.equal(resetShell.root,firstShell.root);assert.equal(resetShell.hud,firstShell.hud);
+assert.notEqual(resetShell.root,firstShell.root);assert.notEqual(resetShell.hud,firstShell.hud);
 assert.equal(game.doors.scriptRuntime.triggerActions.flagBase.getEntry('DL_Start_Played'),null,
   'reset begins a fresh Training session with no played DataLink flag');
 assert.equal(runtime.namedReference(trigger,'bCollideActors').get(),true);

@@ -96,3 +96,16 @@ boundary. Number keys select by the weapon's `InventoryGroup` through the
 engine's `Inventory.WeaponChange` walk (no object belt is modeled). See
 [weapon equip](script-weapon-equip.md). Weapon fire / damage and the crate's
 `TakeDamage` -> destruction remain the next increment.
+
+### NPC initial-inventory mesh preparation (batch 5)
+
+Original `ScriptedPawn.InitializeInventory` iterates the eight authored
+InitialInventory slots, spawns their classes, calls GiveTo/SetBase, then
+SetupWeapon(false). The existing Weapon.BringUp -> PlaySelect body calls
+PlayAnim on the current mesh. Full level ticking exposed
+`01_NYC_UNATCOIsland`'s spawned `WeaponMiniCrossbow2` reaching native 259 from
+`Weapon.PlaySelect` with `DeusExItems.MiniCrossbow` not yet decoded. The
+load-time InitialInventory class preparation now runs the same existing
+Mesh/PlayerViewMesh/PickupViewMesh/ThirdPersonMesh preparation as world pickups
+and crate contents. Classes and mesh references come from the original slots
+and class defaults; there is no substitute animation or extra inventory item.

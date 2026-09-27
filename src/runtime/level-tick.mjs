@@ -115,4 +115,5 @@ export function tickStandaloneLevel(level,seconds,tickType,services) {
   level.inTick=0;
   services.endTick(level,mark);
   services.cleanupDestroyed(level,0);
+  return delta;
 }

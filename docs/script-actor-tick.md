@@ -132,3 +132,13 @@ world admission, native host services and NPC startup remain open. The later
 ShowSelf/CheckEnemyVisible by default, including their LOS worker. Native
 validity, clock/BSP/RNG bindings and prepared events are still required when
 reached. The focused checks and build pass; no new full sweep is claimed.
+
+## Batch 5 InStasis script entry
+
+A full Level.Actors tick reaches `Shadow.Tick` and its `Owner.InStasis()`.
+`execInStasis` export thunk `1030372e` enters `1036d320`: increment
+FFrame.Code (+0xc) to consume EndFunctionParms, call the direct thunk
+`10302013` → AActor::InStasis `1036bfe0`, and store EAX to the result DWORD.
+There are no operands. Native 721 now calls the already oracle-validated
+`actorInStasis` body using the same real level and fields as Actor.Tick.
+This closes a linking boundary; it adds no alternative stasis policy.

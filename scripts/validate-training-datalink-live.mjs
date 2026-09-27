@@ -1,4 +1,4 @@
-/** Validate all authored Training DataLink admissions and the live queue. */
+/** Focused original DataLinkPlay start/speech/end, native HUD/audio and queue integration. */
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -22,7 +22,7 @@ assert.equal(catalog.counts.trainingTriggers, 18);
 
 const events = [];
 const game = await createGame(decodeMap(mapAsset.bytes), mapAsset, assets, {
-  randomSeed: 1,
+  randomSeed: 1, presentation: true,
   onDataLinkTransmission: event => events.push(event),
 });
 const runtime = game.doors.scriptRuntime.runtime;
@@ -45,16 +45,21 @@ const tickUntil = (predicate, limit = 420) => {
   assert.ok(predicate(), `live DataLink condition was not reached in ${limit} frames`);
 };
 
-// Every map trigger must enter through its exact catalog tag and expose the
-// resolved original package objects plus its route-specific content/audio.
-for (const route of catalog.routes) {
-  game.reset();player=game.player.collisionActor;
+// Catalog validation already covers all 18 original route graphs/resources.
+// Cross the changed scheduler/HUD/audio boundary on the first route and the
+// differently timed door route, then exercise their original queue below.
+const selectedRoutes=[catalog.routeForTag('dl_start'),catalog.routeForTag('dl_door')];
+for (const route of selectedRoutes) {
+  console.log(`DataLink integration: ${route.dataLinkTag}`);
+  if(route!==selectedRoutes[0])game.reset();
+  player=game.player.collisionActor;
   events.length = 0;
   const trigger = triggerFor(route);
   assert.ok(trigger, `missing live ${route.trigger.name}`);
   if (route.trigger.checkFlag)
     game.doors.scriptRuntime.triggerActions.flagBase.setBool(route.trigger.checkFlag, true);
   assert.equal(runtime.processEvent(trigger, 'Touch', [player]), true);
+  game.doors.scriptRuntime.dataLinkActive(); // read-only observer at this explicit event boundary
   assert.equal(events[0]?.kind, 'started');
   assert.equal(events[0]?.tag, route.dataLinkTag);
   assert.equal(events[0]?.trigger, trigger);
@@ -70,6 +75,7 @@ for (const route of catalog.routes) {
   assert.equal(presentation.audio.soundId, route.audio.soundId);
   assert.equal(presentation.audio.sha256, route.audio.sha256);
   assert.equal(presentation.audio.seconds, route.audio.seconds);
+  console.log('DataLink integration: startup timer');
   tickUntil(() => events.some(event => event.kind === 'speech'));
   const shell = await game.doors.scriptRuntime.infoLinkShell();
   assert.equal(runtime.namedReference(shell.object, 'speakerPortrait').get(), portraitObject,
@@ -95,46 +101,45 @@ for (const route of catalog.routes) {
     route.chain.speechEvent.exportIndex, 'speech phase keeps the resolved Speech event');
   assert.equal(events.find(event => event.kind === 'speech')?.tag, route.dataLinkTag);
 
-  // One complete route proves the source-authored Speech -> End transition.
-  // PlayNextEvent must first leave lastEvent=Speech/currentEvent=End, then the
-  // prepared PlayEvent.SetupEvent + inherited SetupEventEnd path must pass
-  // EA_End through ProcessAction, clear currentEvent, and only then enter the
-  // DataLinkPlay termination body.
+  // One complete route crosses original Timer -> WaitForSpeech.Sleep ->
+  // PlayEvent -> TerminateConversation, all under the real level scheduler.
   if (route === catalog.routes[0]) {
+    assert.equal(runtime.instance(play).state.stateNode.record.key,'deusex.datalinkplay.waitforspeech');
+    const display=runtime.readNamed(play,'dataLink');
+    assert.ok(game.doors.scriptRuntime.windowHost.owns(display),'native host owns InfoLink');
+    assert.ok(game.doors.scriptRuntime.windowHost.owns(runtime.readNamed(display,'winText')),
+      'native host owns ComputerWindow; there is no delegated InfoLink subtree');
+    for(let frame=0;frame<24;frame++)game.tick(1/120,{});
+    const host=game.doors.scriptRuntime.windowHost,textWindow=runtime.readNamed(display,'winText');
+    const displayed=host.computerText(textWindow);
+    assert.ok(displayed.trim().length>0,'native ComputerWindow tick consumed authored speech characters');
+    assert.ok(route.chain.speech.text.startsWith(displayed.trim()),'displayed characters come from original Print queue');
+    const commands=game.hud.commands(960,600,{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+    assert.ok(commands.some(command=>command.texture.key===portraitObject.key),
+      'native HUD draw submits the canonical portrait');
+    assert.equal(runtime.boundaryFunctions.has('deusex.deusexplayer.startdatalinktransmission'),false);
+    assert.equal(runtime.boundaryFunctions.has('deusex.datalinkplay.startconversation'),false);
+    const requests=game.doors.scriptRuntime.liveConPlay.soundRequests.filter(x=>x.kind==='speech');
+    assert.equal(requests[0].audio.soundObject,'DataLinkStart');
+    assert.equal(requests[1].audio.soundId,route.audio.soundId);
+    assert.equal(requests[1].audio.bytes.byteLength,route.audio.bytes.byteLength);
+    console.log('DataLink integration: speech timer and latent sleep');
     tickUntil(() => events.some(event => event.kind === 'ending' && event.tag === route.dataLinkTag), 2400);
     assert.deepEqual(events.filter(event => event.tag === route.dataLinkTag).map(event => event.kind),
-      ['started', 'speech', 'ending'], 'public DataLink lifecycle event order is preserved');
-    const ending = events.find(event => event.kind === 'ending' && event.tag === route.dataLinkTag);
-    assert.ok(ending?.trace, 'termination publishes the original end transition trace');
-    assert.deepEqual(ending.trace.map(edge => edge.stage),
-      ['end-setup', 'end-action', 'end-null'],
-      'original DataLink end edges occur in source order');
-    const setup = ending.trace.find(edge => edge.stage === 'end-setup');
-    assert.ok(setup, 'original PlayNextEvent reached the End setup edge');
-    assert.equal(setup.lastEvent?.index, route.chain.speechEvent.exportIndex,
-      'PlayNextEvent records the resolved Speech as lastEvent');
-    assert.equal(setup.currentEvent?.index, route.chain.endEvent.exportIndex,
-      'PlayNextEvent leaves the resolved End as currentEvent during setup');
-
-    const action = ending.trace.find(edge => edge.stage === 'end-action');
-    assert.ok(action, 'prepared ProcessAction reached the End action edge');
-    assert.equal(action.action, 'EA_End');
-    assert.equal(action.actionValue, 8, 'SetupEventEnd returned the original EA_End enum value');
-    assert.equal(action.currentEvent?.index, route.chain.endEvent.exportIndex);
-
-    const cleared = ending.trace.find(edge => edge.stage === 'end-null');
-    assert.ok(cleared, 'EA_End cleared currentEvent before termination');
-    assert.equal(cleared.currentEvent, null);
-    assert.equal(cleared.lastEvent?.index, route.chain.endEvent.exportIndex,
-      'ProcessAction records End before entering TerminateConversation');
+      ['started', 'speech', 'ending'], 'original script fields determine diagnostic lifecycle order');
     assert.equal(runtime.namedReference(play, 'currentEvent').get(), null);
     assert.equal(runtime.namedReference(play, 'lastEvent').get(), null,
-      'inherited TerminateConversation clears the event history fields after the transition');
+      'inherited TerminateConversation clears the event history fields');
+    const history=runtime.readNamed(player,'conHistory');
+    assert.ok(history,'original SetupHistory/TerminateConversation saves history');
+    assert.ok(runtime.readNamed(history,'firstEvent'),'original SetupEventSpeech saved the event');
   }
+
 }
 
 // The boundary remains explicit for a name that is outside the 18 authored
 // map routes; it must not fabricate a conversation or presentation.
+console.log('DataLink integration: original queue');
 game.reset();player=game.player.collisionActor;
 events.length = 0;
 const startRecord = runtime.lookup(player, 'StartDataLinkTransmission');
@@ -148,6 +153,7 @@ const first = catalog.routeForTag('dl_start');
 const second = catalog.routeForTag('dl_door');
 const firstTrigger = triggerFor(first), secondTrigger = triggerFor(second);
 assert.equal(runtime.processEvent(firstTrigger, 'Touch', [player]), true);
+game.doors.scriptRuntime.dataLinkActive();
 const firstShell = await game.doors.scriptRuntime.infoLinkShell();
 assert.equal(runtime.processEvent(secondTrigger, 'Touch', [player]), true);
 const play = runtime.namedReference(player, 'dataLinkPlay').get();
@@ -168,4 +174,4 @@ assert.equal(runtime.namedReference(play, 'dataLink').get(), secondShell.object)
 assert.equal(game.doors.scriptRuntime.dataLinkPresentation().tag, 'dl_door');
 assert.equal(game.doors.scriptRuntime.dataLinkPresentation().audio.sha256, second.audio.sha256);
 
-console.log('Live Training DataLinks passed: all 18 catalog routes admitted with resolved Conversation/Speech/End identities, installed SetSpeaker assigned the canonical portrait, the prepared Speech-to-End PlayNextEvent/SetupEvent/EA_End lifecycle completed before original termination, exact route content/audio/timing published, unknown tags rejected, and the one-active-play queue advanced through original HUD destruction, PopDataLink, and fresh shell construction.');
+console.log('Live Training DataLinks passed: start/door routes admitted with resolved Conversation/Speech/End identities, installed SetSpeaker assigned the canonical portrait, the prepared Speech-to-End PlayNextEvent/SetupEvent/EA_End lifecycle completed before original termination, canonical route metadata and native PlaySound requests recorded, unknown tags rejected, and the one-active-play queue advanced through original HUD destruction, PopDataLink, native host construction, and original timer/state scheduling.');

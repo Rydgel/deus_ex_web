@@ -68,7 +68,7 @@ function fallingStep(host, seconds, iterations, { queries, zone, landedEvent, on
     },
     landed(hit) { decorationLanded(pawn, hit); },
   };
-  falling(pawn, seconds, iterations);
+  falling(pawn, seconds, iterations, {nonPawn: true});
   host.position = pawn.position;
   host.velocity = pawn.velocity;
   host.physics = pawn.physics;

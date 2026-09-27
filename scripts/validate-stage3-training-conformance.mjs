@@ -76,27 +76,20 @@ const HOST_NATIVES = Object.freeze({
   1120: {recovered: 'FlagBase.CheckFlag 0x100247d0 (script-triggers.mjs createFlagBase)'},
   1125: {recovered: 'FlagBase.SetDefaultExpiration: XFlagBase bool slice (script-triggers.mjs createFlagBase)'},
   3010: {recovered: 'CreateLogObject (script-player-log.mjs)'},
+  3002: {recovered: 'CreateHistoryObject exec 0x10014640, original UObject/ConHistory constructor chain (script-conplay-live.mjs; docs/script-instructor-conversation.md)'},
+  3003: {recovered: 'CreateHistoryEvent exec 0x100146d0, original UObject/ConHistoryEvent constructor chain (script-conplay-live.mjs; docs/script-instructor-conversation.md)'},
   3015: {recovered: 'CreateDumpLocationObject (script-player-dump.mjs)'},
   3039: {recovered: 'DumpLocation.HasLocationBeenSaved (script-player-dump.mjs)'},
   262: {recovered: 'SetCollision on map actors: execSetCollision 0x103e1900 -> AActor::SetCollision 0x10369200 on the native +0x1dc word (script-actor-collision.mjs setActorCollision); no other receiver representation'},
   3970: {recovered: 'SetPhysics on movers: PHYS_MovingBrush while already moving-brush returns at AActor::setPhysics 0x103c9620 (equal Physics); every other attached actor runs the recovered body in script-runtime.mjs'},
-  1460: {substitute: 'AskParentForReconfigure answered as a no-op for windows outside the native window host (script-doors.mjs)'},
-  1461: {substitute: 'ConfigureChild answered as a no-op for windows outside the native window host (script-doors.mjs)'},
-  1463: {substitute: 'QueryPreferredWidth answered 0 for windows outside the native window host (script-doors.mjs)'},
-  1464: {substitute: 'QueryPreferredHeight answered 0 for windows outside the native window host (script-doors.mjs)'},
-  1465: {substitute: 'QueryPreferredSize answered 0 for windows outside the native window host (script-doors.mjs)'},
-  1466: {substitute: 'QueryGranularity answered 0 for windows outside the native window host (script-doors.mjs)'},
 });
 // Scripted functions whose original body a Play host replaces
 // (runtime.boundaryFunctions). None is allowed in single-player Training.
 const HOST_FUNCTION_REASONS = Object.freeze({
-  'deusex.deusexplayer.startdatalinktransmission': 'live DataLink host handler replaces the original body',
-  'deusex.datalinkplay.startconversation': 'live DataLink host handler replaces the original body',
 });
 // Host structures the call instrumentation cannot see. Each is a substitute
 // until Play runs the original route instead.
 const DECLARED_SUBSTITUTES = Object.freeze([
-  'Level tick: Play admits actor categories in host passes (movers, mission triggers, DataLink, TriggerLights via lights.tick, pawns, carried items) instead of ULevel::Tick running every Level.Actors entry through Actor.Tick; a failing actor is skipped forever (npcFailures) (script-doors.mjs tick)',
   'Player tick: the viewer movement port plus UpdateInHand stand in for APlayerPawn::Tick -> PlayerTick/PlayerInput/PlayerMove (game.mjs tick, player.mjs)',
   'Frob target: the host highlight trace writes FrobTarget/FrobTime instead of DeusExPlayer.HighlightCenterObject (game.mjs tickWalkingInteraction)',
 ]);

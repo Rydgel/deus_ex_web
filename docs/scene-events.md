@@ -133,7 +133,13 @@ returns false. The original body then writes `HealthLegLeft=90`, recomputes
 `Health=98`, and selects `PlayAnim('HitLegLeft',,0.1)` on the prepared
 `DeusExCharacters.GM_Trench` mesh (`AnimFrame=-0.25`, `AnimRate=2.5`,
 `TweenRate=2.5`, `AnimLast=0.75`; see the original-execution correction in
-[animation controls](script-animation-controls.md)). `PlayDXTakeDamageHit`, `PlayHit`, and
+[animation controls](script-animation-controls.md)). These are native call-exit
+values. The full scheduler runs the original Actor.Tick animation phase before
+the controlled-player tail, so subsequent ticks advance the negative tween by
+`f32(frame + f32(delta) * TweenRate)` ([original animation tick](script-animation-tick.md)).
+The trigger validator captures native 259's start values and separately checks
+each subsequent public-tick tween step; a final frame fixed at -0.25 would
+incorrectly require player animation to stop. `PlayDXTakeDamageHit`, `PlayHit`, and
 `Human.PlayTakeHitSound` are prepared from the installed bytecode. The next
 exact unsupported operation is `Actor.PlaySound(264)` from
 `Human.PlayTakeHitSound`; normal scene dispatch records it as the

@@ -34,7 +34,7 @@ function readMaybe(runtime, object, key) {
 /** Prepare one conversation's authored object graph: its ConFlagRef chain, its
  * ConEvent chain (Conversation.eventList -> ConEvent.nextEvent, including the
  * ConEventRandomLabel head) and each event's ConSpeech. Idempotent. */
-async function prepareConversationGraph(runtime, conversation, objects) {
+export async function prepareConversationGraph(runtime, conversation, objects = new Set()) {
   let prepared = 0;
   // prepareObject attaches the object, after which its own linked next-pointer
   // is readable; walk each chain to completion with a cycle guard.

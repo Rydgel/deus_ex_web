@@ -24,11 +24,12 @@ const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
-let hudRenderer=null,activeInfoLinkShell=null;
+let hudRenderer=null;
 let npcPreview=null;
 let weaponViewModel=null;
-let infoLinkAudioContext=null,infoLinkAudioSources=new Set();
+let infoLinkAudioContext=null;
 const conversationAudio=new Map();
+const audioTransport={requests:0,starts:0,failures:0,lastRequest:null,lastStarted:null,lastError:null};
 function stopConversationAudio(id){
   for(const [key,entry] of conversationAudio)if(id===undefined||id===key){
     entry.cancelled=true;entry.source?.stop();conversationAudio.delete(key);
@@ -37,7 +38,9 @@ function stopConversationAudio(id){
 async function playConversationSpeech(event){
   stopConversationAudio(event.id);
   if(event.kind==='stop')return;
-  const entry={cancelled:false,source:null};conversationAudio.set(event.id,entry);
+  const sound=event.audio.sound?.key??event.audio.soundObject;
+  audioTransport.requests++;audioTransport.lastRequest={id:event.id,sound};
+  const entry={cancelled:false,source:null,sound};conversationAudio.set(event.id,entry);
   try{
     const context=await activateInfoLinkAudio(),bytes=event.audio.bytes;
     const buffer=await context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
@@ -48,9 +51,10 @@ async function playConversationSpeech(event){
     source.connect(gain);gain.connect(context.destination);
     source.onended=()=>{if(conversationAudio.get(event.id)===entry)conversationAudio.delete(event.id);};
     source.start();
-  }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);pauseForRuntimeError(error);}
+    audioTransport.starts++;audioTransport.lastStarted={id:event.id,sound};
+  }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);
+    audioTransport.failures++;audioTransport.lastError=String(error.message);pauseForRuntimeError(error);}
 }
-let infoLinkAnimationFrame=0,infoLinkRunToken=0;
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
 const keys = new Set(), velocity = new THREE.Vector3();
@@ -66,50 +70,24 @@ async function activateInfoLinkAudio(){
   if(infoLinkAudioContext.state==='suspended')await infoLinkAudioContext.resume();
   return infoLinkAudioContext;
 }
-function stopInfoLinkAudio(){for(const source of infoLinkAudioSources){try{source.stop();}catch{}}infoLinkAudioSources.clear();}
-async function playInfoLinkAudio(audio,context=null,isCurrent=()=>true){
-  if(!audio?.startCue?.bytes?.byteLength||!audio?.bytes?.byteLength)
-    throw new Error('The original DataLink audio payloads are unavailable');
-  context??=await activateInfoLinkAudio();
-  stopInfoLinkAudio();
-  const decode=bytes=>context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
-  const [startBuffer,speechBuffer]=await Promise.all([decode(audio.startCue.bytes),decode(audio.bytes)]);
-  if(!isCurrent())return null;
-  const schedule=(buffer,when)=>{const source=context.createBufferSource();source.buffer=buffer;
-    source.connect(context.destination);infoLinkAudioSources.add(source);
-    source.onended=()=>infoLinkAudioSources.delete(source);source.start(when);};
-  const now=context.currentTime;schedule(startBuffer,now);schedule(speechBuffer,now+audio.speechDelaySeconds);
-  return {context,startTime:now};
-}
 function stopInfoLinkPresentation(){
   stopConversationAudio();
-  activeInfoLinkShell=null;
-  infoLinkRunToken++;
-  if(infoLinkAnimationFrame)cancelAnimationFrame(infoLinkAnimationFrame);
-  infoLinkAnimationFrame=0;
   $('infolink-shell').hidden=true;
-  stopInfoLinkAudio();
 }
-function startInfoLinkPresentation(shell){
-  activeInfoLinkShell=shell;
-  const token=++infoLinkRunToken;
-  const frame=()=>{
-    if(token!==infoLinkRunToken)return;
-    const state=game?.doors?.scriptRuntime?.dataLinkPresentation?.();
-    if(!state){$('infolink-shell').hidden=true;infoLinkAnimationFrame=0;return;}
-    // The WebGL HUD draws the original art; this region exposes its text to
-    // assistive technology without a second visual dialog.
-    $('infolink-shell').hidden=!state.shellVisible;
-    $('infolink-title').textContent=state.title;
-    $('infolink-queued').textContent=state.queuedText??'';
-    $('infolink-text').textContent=state.text;
-    if(state.phase==='destroyed'){
-      infoLinkAnimationFrame=0;stopInfoLinkAudio();
-      return;
-    }
-    infoLinkAnimationFrame=requestAnimationFrame(frame);
-  };
-  frame();
+// Accessibility mirrors native TextWindow contents. The pixels are emitted
+// only by the recovered native HUD/GC tree; no independent playback timeline.
+function updateInfoLinkAccessibility(){
+  const bridge=game?.doors?.scriptRuntime,host=bridge?.windowHost;
+  if(!host?.hud)return;
+  const runtime=bridge.runtime,read=(o,k)=>runtime.readNamed(o,k);
+  const info=read(host.hud,'infoLink');
+  $('infolink-shell').hidden=!info;
+  if(!info)return;
+  const text=read(info,'winText');
+  $('infolink-title').textContent=host.raw.read(read(info,'winName'),0x168,'string');
+  $('infolink-queued').textContent=host.raw.read(read(info,'winQueued'),0x168,'string');
+  // Native displayBuffer contains the characters that have actually appeared.
+  $('infolink-text').textContent=host.computerText(text);
 }
 function resize() {
   const box = $('viewport').getBoundingClientRect();
@@ -190,10 +168,6 @@ async function loadMap(name) {
         subtitles: subtitlePreference,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
         onConversationSpeech:event=>{void playConversationSpeech(event);},
-        onDataLinkTransmission: event => {
-          if(event.kind!=='started')return;
-          queueMicrotask(()=>playInfoLinkTransmission(event));
-        },
       });
     }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
@@ -493,21 +467,6 @@ previews['dark-door'] = () => {
   } catch(error) { pauseForRuntimeError(error); }
 };
 
-async function playInfoLinkTransmission({tag='DataLink'}={}){
-  if(!game||loading||currentMap!=='00_Training')return;
-  const request=++infoLinkRunToken,sourceGame=game;
-  const isCurrent=()=>request===infoLinkRunToken&&game===sourceGame;
-  try{
-    const audioContext=await activateInfoLinkAudio();
-    const shell=await sourceGame.doors.scriptRuntime.infoLinkShell();
-    if(!isCurrent())return;
-    const presentation=sourceGame.doors.scriptRuntime.dataLinkPresentation?.();
-    const audio=await playInfoLinkAudio(presentation?.audio??shell.audio,audioContext,isCurrent);
-    if(!audio||!isCurrent())return;
-    startInfoLinkPresentation(shell);
-  }catch(error){if(isCurrent())pauseForRuntimeError(error);}
-}
-
 function look(dx, dy) {
   yaw -= dx * .0025; pitch = THREE.MathUtils.clamp(pitch - dy * .0025, -Math.PI / 2 + .01, Math.PI / 2 - .01);
   camera.rotation.set(pitch, yaw, 0); cameraMoved = true;
@@ -611,6 +570,8 @@ function status() {
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: game?.status() ?? null,
+    audio:{...audioTransport,contextState:infoLinkAudioContext?.state??'uninitialized',
+      active:[...conversationAudio].map(([id,entry])=>({id,sound:entry.sound,started:Boolean(entry.source)}))},
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
     weaponViewModel:weaponViewModel?.summary??null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
@@ -666,7 +627,8 @@ function animate(time) {
     }
     if(mode==='play'&&hudRenderer){
       const box=$('viewport').getBoundingClientRect();
-      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,{shell:activeInfoLinkShell,state:activeInfoLinkShell?game.doors.scriptRuntime.dataLinkPresentation():null},{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,{location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+      updateInfoLinkAccessibility();
     }
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {

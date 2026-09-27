@@ -63,6 +63,10 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
   } else if(get('Role')>=2) {
     if(pawn&&isA(actor,'engine.playerpawn')&&get('Player')) {
       if(isA(actor,'engine.camera')&&!(get('ShowFlags')&0x800))return 1;
+      // Play's explicitly declared batch-6 player port is entered at the
+      // controlled-PlayerPawn branch, after stasis/owner/animation admission.
+      // Other hosts execute the original input/script/physics tail below.
+      if(services.controlledPlayerTick)return services.controlledPlayerTick(actor,delta);
       services.readInput(get('Player'),delta);
       event('PlayerInput',[delta]);
       event('PlayerTick',[delta]);

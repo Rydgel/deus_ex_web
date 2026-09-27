@@ -42,7 +42,9 @@ assert.ok(plantHeight > 0);
 
 // Place JC in vertical overlap with the plant and give the pawn a live velocity;
 // the bump copies Other.Velocity into the decoration.
-game.player.position = [plantLocation[0] + 10, plantLocation[1], plantLocation[2]];
+game.collision.queries.changeActor(player, () => {
+  game.player.position = [plantLocation[0] + 10, plantLocation[1], plantLocation[2]];
+});
 game.player.velocity = [120, -30, 18];
 assert.deepEqual(ref(player, 'Velocity').get(), [120, -30, 18], 'live pawn velocity reaches the runtime');
 const deferredBefore = new Set(game.player.unimplementedPhysicsEffects);
@@ -68,9 +70,9 @@ assert.ok(newDeferred.some(effect => /Plant7\.AIStartEvent/.test(effect)), `AI l
 
 // The SetTimer(0.2) push-sound lifetime clears bPushSoundPlaying once the
 // one-shot Timer fires (DeusExDecoration.Timer -> StopSound/AIEndEvent).
-game.doors.tick(0.1);
+game.tick(0.1, {});
 assert.equal(ref(plant, 'bPushSoundPlaying').get(), true, 'still playing before 0.2s');
-game.doors.tick(0.15); // total 0.25s > 0.2s
+game.tick(0.15, {}); // total 0.25s > 0.2s
 assert.equal(ref(plant, 'bPushSoundPlaying').get(), false, 'Timer cleared the push sound after 0.2s');
 const afterTimer = [...game.player.unimplementedPhysicsEffects].filter(effect => !deferredBefore.has(effect));
 assert.ok(afterTimer.some(effect => /Plant7\.StopSound/.test(effect)), 'StopSound recorded by Timer');

@@ -237,3 +237,80 @@ PendingTouch chains, SecurityCamera-style PHYS_Rotating sweeps (RotationRate
 65535,65535,0 with bRotateToDesired), `_ftol` exactness stress and seeded int32
 extremes. The oracle also checks the MoveActor call-site constants (zero Delta,
 `Hit.Time = 1`, four zero flags) and the DeltaTime reaching physicsRotation.
+
+## Stage 3 batch 5: full actor dispatch and mover velocity bracket
+
+Before wiring the full level scheduler, the 2026-09-27 local Training boot
+measurement found 423 live actors: 342 with Physics None, 52 Falling (including
+Pawns), four Rotating SecurityCameras and 25 MovingBrush movers.
+FirstDynamicActor was 192. The former category tick omitted nine Falling
+Inventory actors: NanoKey0, Ammo10mm2, WeaponCombatKnife0, WeaponCrowbar1,
+Candybar0, Multitool0/1/2 and HazMatSuit2. No Projectile mode was observed at
+boot or in the category scheduler's first ten seconds; that does not establish
+that the full scheduler never reaches it. The local report is
+`.cache/training-physics-modes.json` (15 seconds, 623 MiB peak under the RSS
+watchdog). Falling Inventory must use `actorLanded`, not the Decoration landing
+counter/footprint route. Existing Falling, Rolling, rotation and mover bodies
+retain their original evidence and scope above.
+
+The `performPhysics` wrapper was re-read directly from Engine.dll before the
+translation change. At `0x103c9856..0x103c987c` (MovingBrush) and
+`0x103c97d6..0x103c97fc` (Interpolating), it copies all three Location DWORDs to
+OldLocation before the body. After the body it re-reads both fields, so a body
+or event may alter OldLocation. It stores X/Y differences as float32, keeps the
+Z difference extended, computes `1.0 / DeltaTime` extended and `fst`s a float32
+copy without popping it. Z multiplies by the extended reciprocal; X and Y
+multiply the stored differences by the stored reciprocal. All final Velocity
+components are float32. Tail rotation and PendingTouch follow even if the
+movement body changed Physics or bDeleteMe. This bracket is implemented with
+the existing x87 primitives, without a binary64 reciprocal substitute.
+
+Bodies for Projectile, Interpolating and Trailer remain explicit unsupported
+boundaries unless a caller supplies a separately recovered service. Their
+jump-table dispatch is recovered; exposing a callback does not claim those
+bodies are implemented. MovingBrush reuses the recovered constant-rotation,
+two-key `tickMoverInterpolation` body; general mover rotation/key paths remain
+outside that body's scope.
+
+The dispatcher differential is `scripts/validate-native-actor-physics.mjs` /
+`native-actor-physics-oracle.py`: **114 cases, zero mismatches**, comparing the
+entire supplied 0x400-byte actor heap and ordered body calls. Every byte Physics
+case in the original table, out-of-range dispatch, changed body Physics,
+OldLocation changes, post-body rotation-rate gates and float32/extended mover
+velocity differences are included. Movement and rotation bodies are explicit
+call-boundary doubles in this wrapper test, never claimed as body validation.
+The existing original-DLL body validators remain the evidence for their bodies.
+
+`runSpawnedActorFalling` now also admits the already-linked map actor surface
+through `runtime.mapMoveLevel`. This preserves the actor identity, native
+collision word and VM field bindings, and links only its collision-hash
+Location getter. Both representations then enter the same recovered MoveActor
+and non-Decoration `actorLanded` adapter. Decorations continue through their
+separately recovered Decoration landing route.
+
+The final 12 wrapper cases enter the **unchanged physMovingBrush body** to
+verify its early gates: actor class-chain IsA(AMover), then KeyNum byte +0x377
+clamped into the local +0..8 range (no actor store), then bInterpolating
+(actor+0x1ec bit 0x80, `0x103de707`) and DeltaTime > 0 (`0x103de714`). KeyNum
+0/7/8/255, a non-Mover, non-interpolating Movers and zero dt all leave the
+mover fields untouched; the outer dispatcher still writes OldLocation and
+Velocity. A serialized mover therefore needs no interpolation host storage
+while this original body returns early. An active mover without prepared
+storage remains explicitly unsupported.
+
+The audit also corrected `runDecorationPhysics` to pass `{nonPawn: true}` to
+its recovered falling body, as the original IsA(APawn) gate requires. The
+former default took the Pawn acceleration prelude (including clearing Z),
+which was invisible for Training's zero-acceleration initial decoration falls.
+The 11 focused Decoration/Falling checks and the 29-case original mover body
+differential pass after the integration change.
+
+After the full scheduler was linked, `node scripts/measure-training-physics.mjs`
+completed the same 600 idle frames without an exception (54 seconds, 586 MiB
+peak RSS). It reached non-Pawn Falling and all 25 MovingBrush actors, including
+the nine previously unticked Falling pickups, plus Pawn Falling/Walking. No
+Projectile call occurred. The four cameras start at Physics Rotating but do not
+reach `performPhysics(5)` in that idle sample; their script/stasis behavior
+precedes the physics gate. Reachability for active interactions is recorded by
+the batch census separately; this idle measurement is not a claim about every
+Training route.

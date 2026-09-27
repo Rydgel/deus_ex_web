@@ -5,7 +5,6 @@ import { pointZone } from '../unreal/lighting.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { CollisionWorld, BspCollider } from '../runtime/collision.mjs';
 import { Player } from '../runtime/player.mjs';
-import { levelTickTime } from '../runtime/level-tick.mjs';
 import { Doors } from '../runtime/doors.mjs';
 import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
@@ -106,6 +105,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
+  Object.defineProperty(playerScene.level,'timeSeconds',{configurable:true,
+    get:()=>timeSeconds,set:value=>{timeSeconds=value;}});
   playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
   // ULevel ReachSpec table (+0x8c, 28-byte records): serialized start/end are
   // map-export refs; the nav natives walk them as live actors. readLevel's
@@ -188,13 +189,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // One browser frame is one level tick, including on slow frames. The
       // original physics routines own their remaining-time subdivisions.
       player.timeDilation=levelDilation.get();
-      const frame=levelTickTime(timeSeconds,seconds,player.timeDilation),dt=frame.delta;
-      timeSeconds=frame.timeSeconds;
-      levelTime.set(frame.infoTimeSeconds);
-      // The scripted actors tick first; the player's own route runs at the
-      // end of that level tick so the actors it owns (a drawn weapon) follow it
-      // through ULevel::Tick's deferred list (docs/script-weapon-fire.md).
-      doors.tick(dt, { tickPlayer: () => {
+      // ULevel.Tick owns the clock and clamped actor delta. The controlled
+      // player retains its declared movement port at its actual actor slot.
+      doors.tick(seconds, { tickPlayer: dt => {
         tickWalkingInteraction(interaction,dt,trace);
         // HighlightCenterObject's result is DeusExPlayer.FrobTarget/FrobTime;
         // original bodies (ParseLeftClick, the HUD frob display) read them.
@@ -211,7 +208,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         const weapon = runtime?.readNamed(player.collisionActor, 'Weapon');
         if (weapon) runtime.farMoveActor(weapon, player.position, 0, 0);
       } });
-      hud?.tick(dt);
+      hud?.tick(doors.scriptRuntime.lastTickDelta);
     },
     reset() {
       // LoadMap's first step, in the old world: the viewport's player is

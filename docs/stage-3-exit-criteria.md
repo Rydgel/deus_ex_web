@@ -342,3 +342,94 @@ Removed from criterion 5 in this batch:
 The LargeText/Edit bodies are checked against Extension.dll by
 `scripts/validate-text-layout-diff.mjs` (147 cases identical), which also
 found and fixed a MakeAreaDirty bug in the edit model.
+
+## Batch 5: original world scheduler and DataLinkPlay
+
+Measured 2026-09-27. The gate passed criteria 1–4 and lists only the two
+batch-6 substitutes (94 probes, 3 boots; 281 s in the final four-job sweep,
+peak 1634 MiB in the gate's watchdog and 4.0 GiB runner group footprint).
+The census completed 93 probes in one boot, 232 s, peak 735 MiB,
+with zero terminal boundaries. ClientTravel and SaveGame remain the two
+tolerated Stage-6 natives.
+
+| Criterion | Result |
+| --- | --- |
+| 1. startup | PASS: no excluded actors or preparation/startup/reset failures. |
+| 2. tick | PASS: both 10 s legs and reset, now through the original ULevel::Tick over the actual Level.Actors and FirstDynamicActor. |
+| 3. interactions | PASS: original DataLinkPlay start/timer/state/queue/end, doors, lights, decorations and the existing interaction probes. |
+| 4. lifecycle | PASS: 107 classes, 12024 accepted spawns, 285 original-gate rejections, no throws; 1047 accepted destroys across 13 classes; 5460 cleanup passes, 93 compacted slots, no host removals; shared-graph resource loading. |
+| 5. substitutes | OPEN, 2 items (down from 6): only the controlled player movement/hand port and host FrobTarget remain for batch 6. The four batch-5 routes are absent from the measured audit. |
+
+The standalone gate newly observed CreateHistoryObject (3002). Its audit
+classification now points to the already-recovered exec and constructor chain
+in [instructor conversation](script-instructor-conversation.md), also covering
+CreateHistoryEvent (3003). This is reuse of existing native evidence, not an
+allowed no-op. The original calls now arrive through DataLinkPlay.SetupHistory.
+
+Play has no actor-category tick passes or skip-forever failure list. The
+original owner retry and paused branches run on the real level; an actor error
+freezes the frame at an explicit boundary until reload. Actor.Tick invokes
+the retained player port at its controlled-PlayerPawn branch. Map actors and
+spawned actors keep their own native-field storage adapters on a single script
+identity; [level integration](script-level-tick.md) documents their join.
+The map Acceleration binding now shares native storage with script reads, so
+original SetPhysics clearing and reload cannot leave a stale VM value; the
+existing public pickup validator checks that boundary.
+
+The measured Training modes are None, Falling, Rotating and MovingBrush;
+Bump reaches Rolling. Nine map pickups now receive the falling physics that
+the category loop omitted. Original AActor::performPhysics dispatch and the
+MovingBrush velocity bracket pass 114 same-heap DLL comparisons, including
+x87 store boundaries and calls into the rotation tail. The existing 1174-case
+rotation/PendingTouch differential and falling, rolling and translating-mover
+body evidence are reused. Projectile/pathing/trailer and unrecovered
+active mover branches remain explicit boundaries when reached; the measured
+Training routes do not need them. See [actor physics](actor-physics.md).
+
+[DataLinkPlay](script-datalink-original.md) now executes the installed scripts
+as an ordinary spawned actor. There are no live StartDataLinkTransmission or
+StartConversation replacements, host playback timers or 1460–1466 zero-layout
+stubs. The original HUD creates its native InfoLink window. The newly reached
+[ComputerWindow playback](script-window-computer-playback.md) passes 28
+same-heap Extension.dll comparisons; terminal-input and graphic-queue branches
+not used by InfoLink remain explicit boundaries. Rendering reads the native
+HUD draw list, and audio transport consumes the actual PlaySound requests.
+Preparation follows Login's full DataLink list, including Mission00.Timer's
+`DL_Lockpick` after crate destruction, rather than just the 18 map-trigger
+entries. The unchanged crowbar/crate integration check covers that path.
+
+Browser-pane checks walked through the starting transmissions, rendered native
+text/portrait, opened the entrance door, and exercised plant contact,
+carry/drop and pushing. WebAudio recorded successful cue/speech source starts
+with zero failures and a running context; physical audibility is not asserted.
+The local capture is `.cache/batch5-browser-infolink.png`. A focused carry/drop
+probe additionally observed 27 falling calls before the plant settled with
+Physics=None, Base=LevelInfo and zero velocity. The existing settle/roll and
+push-sound timer validators now use full game ticks with their assertions
+unchanged; the settled plant moved 3.02 units over 10 Rolling ticks. The timer
+check caught and verified the fix for speech transport intercepting unrelated
+StopSound calls. These are integration checks;
+the original bytecode/native references remain the behavior authority.
+
+The broader gameplay smoke now distinguishes its supported scopes. Training
+retains its full-world walking, interaction, collision and reset assertions.
+NYC first asserts the real `UNATCOTroop3` boundary at original
+`ScriptedPawn.PutInWorld -> SetLocation` (native 267): map-pawn FarMoveActor is
+not linked. It then uses a fresh scene for its existing isolated player-port
+landing/walking/collision checks. This is not a claim of NYC world support;
+the former skip-forever behavior had hidden the NPC failure. An additional
+NYC reset diagnostic reached a recursive LoadMap-GC stack overflow and remains
+unresolved. See [level integration](script-level-tick.md).
+
+Final full sweep:
+`NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python npm run validate -- --jobs 4`
+completed with **400 passed, 0 skipped, 2 known failures** in 1198.6 seconds
+(four jobs). No new red remains. Stage 3 is still open solely for the two
+batch-6 substitutes above; `validate-npc-mesh-preview` retains its known
+unchanged-pose geometry-upload assertion failure. The local sweep log is
+`.cache/batch5-sweep-final.log`.
+
+Unit tests: 542/542. The final production build passes after correcting an
+existing reassigned `const` in list-number formatting. Final integration checks
+also cover the map acceleration binding and the explicitly scoped NYC fixture
+described above. Delivery remains local; no deployment or push was made.

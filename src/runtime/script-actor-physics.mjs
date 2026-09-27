@@ -10,8 +10,13 @@ import {setScriptRotation} from './script-set-rotation.mjs';
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
 export function runSpawnedActorFalling(runtime,actor,seconds,zone) {
-  if(!runtime.collisionViewActors.has(actor))throw new Error('Falling actor lacks its native collision view');
-  const level=runtime.levelFor(actor),get=name=>runtime.readNamed(actor,name);
+  // A serialized map actor already owns its collision/native surface; preserve
+  // that identity and only link its hash cylinder to live Location. Spawned
+  // actors expose the same members through installActorCollisionView.
+  const level=runtime.collisionViewActors.has(actor)?runtime.levelFor(actor)
+    :runtime.mapMoveLevel(actor,'physFalling');
+  if(!level?.hash)throw new Error('Falling actor requires the level collision hash');
+  const get=name=>runtime.readNamed(actor,name);
   const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
   const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
   const host={};

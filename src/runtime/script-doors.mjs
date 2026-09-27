@@ -6,19 +6,16 @@ import { refValue } from './script-vm.mjs';
 import { tickMoverInterpolation } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
-import { updateActorTimer } from './script-timers.mjs';
 import { runDecorationPhysics, linkDecorationCollision, PHYS_FALLING, PHYS_ROLLING, PHYS_NONE } from './decoration-physics.mjs';
 import { processDecorationHitWall } from './walking-callbacks.mjs';
 import { createScriptLights } from './script-lights.mjs';
 import { createScriptTriggers, prepareTriggerFunctions } from './script-triggers.mjs';
-import { createInfoLinkShellPreview } from './script-infolink-shell.mjs';
 import { createLiveDataLinkRuntime, prepareLiveActorSpawnWorld } from './script-datalink-live.mjs';
 import { createExtStringSource } from './script-text-parser-natives.mjs';
 import { readObject } from '../unreal/objects.mjs';
 import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
-import { WINDOW_DESTROY_OFFSETS } from './script-window-destroy.mjs';
 import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionArguments } from './script-actor-collision.mjs';
 import { COLLISION_FIELD_BITS, writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
 import { setBase } from './walking-callbacks.mjs';
@@ -31,7 +28,6 @@ import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
-import { playerDistance } from './level-tick.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRotation } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
@@ -210,8 +206,9 @@ function makeBinding(runtime, record, field) {
       set: value => { if (interpolation()) interpolation().rate = f(value); },
     },
     binterpolating: {
-      get: () => Boolean(interpolation()?.interpolating),
-      set: value => { if (interpolation()) interpolation().interpolating = Boolean(value); },
+      get: () => interpolation() ? Boolean(interpolation().interpolating) : stored(),
+      set: value => { if (interpolation()) interpolation().interpolating = Boolean(value);
+        else runtime.writeStoredField(host,field,Boolean(value)); },
     },
     oldpos: {
       get: () => interpolation()?.oldPosition ?? values.OldPos ?? ZERO_VECTOR,
@@ -262,6 +259,11 @@ function makeBinding(runtime, record, field) {
     velocity: {
       get: () => vector(host.velocity ?? values.Velocity ?? ZERO_VECTOR),
       set: value => { host.velocity = vector(value); },
+    },
+    // SetPhysics and the falling adapter share Actor+0x150 with script reads.
+    acceleration: {
+      get: () => vector(host.acceleration ?? values.Acceleration ?? ZERO_VECTOR),
+      set: value => { host.acceleration = vector(value); },
     },
     clientupdate: {
       get: () => host.clientUpdate ?? values.ClientUpdate ?? 0,
@@ -754,22 +756,6 @@ export async function createScriptDoors({
       // Training receiver reaches a third representation.
       throw new Error(`SetCollision on ${runtime.instance(call.receiver).cls.record.key} has no recovered collision representation`);
     }
-    // Extension window-layout natives (Window.ConfigureChild 1461,
-    // AskParentForReconfigure 1460, QueryPreferredSize/Width/Height
-    // 1465/1463/1464, QueryGranularity 1466). The live DataLink host wires a
-    // real attached HUDReceivedDisplay onto hud.receivedItems, which makes the
-    // installed DeusExHUD.ConfigurationChanged body run its received-display
-    // layout branch against these. They are bounded zero/no-op boundaries
-    // until the Stage-4 window-layout natives are recovered; every other
-    // ConfigurationChanged window field is still None in the preview shell.
-    if (call.index === 1460 || call.index === 1461) return undefined;
-    if (call.index === 1463 || call.index === 1464 || call.index === 1465 || call.index === 1466) {
-      for (let index = 0; index < call.argumentCount; index++) {
-        const value = call.evaluateArgument(index);
-        if (value?.reference && typeof value.set === 'function') value.set(0);
-      }
-      return 0;
-    }
     if (call.index === 1052) {
       // APlayerPawnExt::execInitRootWindow 0x10038560 -> InitRootWindow
       // 0x10037df0: construct only while rootWindow (+0x894) is still None.
@@ -804,6 +790,7 @@ export async function createScriptDoors({
    * without an image cell. */
   function resetProperties(record) {
     record.store.clear();
+    delete record.object.acceleration;
     runtime.restoreStorage(record.object, record.initialStorage);
   }
 
@@ -1061,6 +1048,9 @@ export async function createScriptDoors({
             if (!key.toLowerCase().endsWith('.inventory') || !value) continue;
             const itemClass = await runtime.loadClass(value.asset, value.index);
             await prepareNpcClass(itemClass);
+            // InitializeInventory gives the authored item to its pawn; weapon
+            // selection can immediately PlayAnim on a switched view mesh.
+            await prepareItemViewMeshes(itemClass);
             // Only classes that declare/inherit AmmoName (Weapon ancestry)
             // reference a second class through it — Ammo subclasses do not.
             const ammoField = runtime.lookupMember(itemClass, 'fields', 'AmmoName');
@@ -1127,29 +1117,43 @@ export async function createScriptDoors({
     }
   }
 
-  // The ULevel::Tick actor-view over the scene level: ULevel::TimeSeconds is
-  // the original double the game clock owns; TickTag and the deferred list are
-  // the level tick's persistent parity state.
-  const npcTickLevel = Object.create(level);
-  Object.assign(npcTickLevel, { netMode: 0, demoRecDriver: null, tickTag: 0, deferredHead: null, inTick: 0 });
-  Object.defineProperty(npcTickLevel, 'timeSeconds', { get: () => level.timeSeconds() });
-  // UModel.Zones[Actor.Region.ZoneNumber].LastRenderTime, reached only after
-  // LastRenderTime and bStasis/bForceStasis admit the actor.
-  npcTickLevel.zoneLastRenderTime = actor => {
+  // The scene level and scheduler share the actual actor array, parity,
+  // clock and pending-deletion chain. No category-owned tick view remains.
+  Object.assign(level, { netMode: 0, netDriver: null, demoRecDriver: null,
+    serviceAtF8: null, tickTag: 0, deferredHead: null, inTick: 0 });
+  Object.defineProperty(level, 'firstViewport', {configurable:true,
+    get:()=>level.engine.client.viewports[0]});
+  level.zoneLastRenderTime = actor => {
     const region = runtime.readNamed(actor, 'Region');
-    // InStasis reads UModel.Zones[Region.ZoneNumber], not ZoneInfo+0x34.
-    const number = region?.['engine.actor.pointregion.zonenumber'];
-    return level.zoneLastRenderTimes?.[number];
+    return level.zoneLastRenderTimes?.[region?.['engine.actor.pointregion.zonenumber']];
   };
+  let tickBoundary = null, lastTickDelta = 0;
   const npcTickOptions = {
-    level: npcTickLevel, tickType: 2,
     allocateDeferredActor: () => ({}),
-    readInput: () => { throw new Error('Actor.Tick player input is not linked'); },
-    // The Actor.Tick pawn tail runs FarMoveActor(Weapon, Location, 0, 0) once
-    // a pawn carries a weapon. Training's NPCs keep Weapon = None, so this is
-    // linked but unexercised by them (docs/script-npc-weapon-startup.md).
+    // Input sampling belongs to the explicitly retained player port. In the
+    // paused branch PlayerInput still executes and CPF_Input floats reset;
+    // browser movement is never advanced there.
+    readInput: () => {},
     farMoveActor: (actor, destination, test, noCheck) =>
       runtime.farMoveActor(actor, destination, test, noCheck),
+    beginTick: () => ({}),
+    endTick: () => {},
+    updateTime: info => {
+      const now = new Date();
+      for (const [name,value] of Object.entries({Year:now.getFullYear(),Month:now.getMonth()+1,
+        Day:now.getDate(),DayOfWeek:now.getDay(),Hour:now.getHours(),Minute:now.getMinutes(),
+        Second:now.getSeconds(),Millisecond:now.getMilliseconds()})) runtime.writeNamed(info,name,value);
+    },
+    // The string adapter does not retain allocated-empty FString storage.
+    // Only an actual EventManager needs this distinction; remain explicit.
+    pauserArrayCount: () => {throw new Error('Level.Tick EventManager requires native Pauser FString allocation storage');},
+    tickEventManager: () => {throw new Error('Level.Tick EventManager.Tick is not linked');},
+    aroundActorTick: (actor, run) => {
+      const from = level.actors.length;
+      try { return liveConPlay.withLifecycle(run); }
+      catch (error) { npcFailures.set(actor, String(error?.message ?? error)); throw error; }
+      finally { collectSpawned(from); }
+    },
   };
 
   // Non-Pawn AActor::performPhysics (actor-physics.mjs), reached from the
@@ -1183,10 +1187,22 @@ export async function createScriptDoors({
   runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
     read: (target, name) => runtime.readNamed(target, name),
     write: (target, name, value) => runtime.writeNamed(target, name,value),
-    physFalling: (actor,delta)=>runtime.collisionViewActors.has(actor)
-      ?runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{})
-      :decorationMovement(actor,delta),
+    physFalling: (actor,delta)=>linkedDecorations.has(actor)
+      ?decorationMovement(actor,delta)
+      :runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physRolling: decorationMovement,
+    physMovingBrush: (actor,delta)=>{
+      // AMover::physMovingBrush returns when bInterpolating is clear. All
+      // map movers have native interpolation storage, including idle movers
+      // outside the recovered constant-rotation translation subset.
+      let mover=false;
+      for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.mover'){mover=true;break;}
+      if(!mover||!runtime.readNamed(actor,'bInterpolating')||!(f(delta)>0))return;
+      if(!actor.interpolation)throw new Error('MovingBrush requires its original mover interpolation storage');
+      if(actor.interpolation.interpolating&&!selectedMover(actor,level))
+        throw new Error(`MovingBrush interpolation outside the recovered translating subset: ${actor.name}`);
+      tickMoverInterpolation(actor.interpolation,delta);
+    },
     physicsRotation: (target,delta)=>runActorRotation(runtime,target,delta),
     processEvent: (target, name, args) => runtime.processEvent(target, name, args),
     unsupported: (target, what) => {
@@ -1421,6 +1437,8 @@ export async function createScriptDoors({
     npcSpawned.clear();
     npcSpawnedOwner.clear();
     npcFailures.clear();
+    tickBoundary = null;
+    level.tickTag = 0; level.deferredHead = null; level.inTick = 0;
     level.actors = reload ? [...initialActorArray]
       : [...initialActorArray, ...level.actors.filter(actor => actor && !initialActorSet.has(actor))];
     level.zoneLastRenderTimes?.fill(0);
@@ -1475,6 +1493,9 @@ export async function createScriptDoors({
         resetProperties(identities.get(actor));
         const restore = () => {
           if (actor.values?.Location) actor.position = [...actor.values.Location];
+          // Full-world ticking now advances Falling pickups. Their native
+          // velocity/acceleration mirrors must reload with the map image.
+          delete actor.velocity; delete actor.acceleration;
           actor.base = actorByIndex.get(actor.values?.Base) ?? null;
         };
         if (level.hash && actor.collisionValues && actor.collideActors !== false) level.hash.changeActor(actor, restore);
@@ -1548,7 +1569,6 @@ export async function createScriptDoors({
     try { return runtime.instance(actor).cls.record === triggerLightClass.record; } catch { return false; }
   });
   const lights = await createScriptLights({ runtime, assets, lights: triggerLights, sharedStartup: true });
-  const missionTriggers=(level.actors??[]).filter(actor=>actor?.lineage?.includes('engine.trigger'));
 
   const records = [];
   for (const mover of movers) {
@@ -1641,9 +1661,7 @@ export async function createScriptDoors({
       runtime.writeNamed(actor, 'Player',null);
       runtime.writeNamed(viewport, 'Actor',null);
       level.retiringPlayer = actor;
-      // The InfoLink shell stores the windows it constructed; its merged
-      // lifecycle routes each destroy service by the window's storage owner.
-      try { infoLinkShellValue.withLifecycle(() => runtime.destroyActor(actor, false)); }
+      try { runtime.destroyActor(actor, false); }
       finally { level.retiringPlayer = null; }
     }
   }
@@ -1669,7 +1687,6 @@ export async function createScriptDoors({
     loginPlayer();
     // The Play services follow the new player; the old HUD tree went with the
     // retired player's root window, and the new Possess built the new one.
-    infoLinkShellValue.bindPlayer(playerActor);
     liveConPlay.bindPlayer(playerActor);
     liveDataLink.bindPlayer(playerActor);
     finishPlayerStartup();
@@ -1799,211 +1816,31 @@ export async function createScriptDoors({
     return { ok: true, mover, actors: selected };
   }
 
-  // Inventory the player carries, walked from Pawn.Inventory: picked-up map
-  // pickups and items spawned into the chain (GiveTo's ammo, the key ring).
-  // The original ULevel::Tick ticks every live actor; this host admits the
-  // carried ones (Physics None, no collision after BecomeItem), which is what
-  // advances a drawn weapon's latent states, animation notifies and Tick
-  // (docs/script-weapon-fire.md). World pickups still resting in their Pickup
-  // state stay unticked: their PHYS_Falling needs the non-Pawn performPhysics.
-  function playerCarriedItems() {
-    const carried = new Set();
-    for (let item = runtime.readNamed(playerActor, 'Inventory'), guard = 0;
-      item && typeof item === 'object' && guard < 256; item = runtime.readNamed(item, 'Inventory'), guard++)
-      carried.add(item);
-    return carried;
-  }
-  // One carried item's Actor.Tick. A boundary reached by the player's own
-  // weapon is not skipped silently: it is recorded and rethrown so Play pauses
-  // on the explicit original boundary instead of freezing the weapon mid-state.
-  function tickCarried(actor, delta) {
-    if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) return 0;
-    const spawnedFrom = level.actors.length;
-    let ticked = 0;
-    try { ticked = liveConPlay.withLifecycle(() => runtime.processActorTick(actor, delta, npcTickOptions)); }
-    catch (error) {
-      npcFailures.set(actor, String(error?.message ?? error));
-      throw error;
-    } finally { collectSpawned(spawnedFrom); }
-    return ticked;
-  }
-
+  // Every dynamic actor is admitted by the original level/actor scheduler.
   function tick(seconds, { tickPlayer = null } = {}) {
-    const delta = f(seconds);
-    // ULevel::Tick 0x103a5793-0x103a58cf (level-tick.mjs): a nonempty Pauser
-    // (UTF-16 C-string test) replaces the whole actor pass. Controlled
-    // PlayerPawns only read input and run PlayerInput — Play's viewer movement
-    // port stands in for that route and, like PlayerTick, does not run — and
-    // other actors tick only with bAlwaysTick. No distances, no deferred list.
-    const pauser = runtime.readNamed(levelInfo, 'Pauser');
-    if (pauser.length > 0 && pauser.charCodeAt(0) !== 0) {
-      for (const actor of level.actors) {
-        if (!actor || actor === playerActor || npcFailures.has(actor)) continue;
-        let alwaysTick = false;
-        try { alwaysTick = Boolean(runtime.readNamed(actor, 'bAlwaysTick')); } catch { continue; }
-        if (alwaysTick) npcFailures.set(actor, 'Paused bAlwaysTick Actor.Tick is not admitted in Play');
-      }
-      npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
-      // The paused branch falls through to the same ULevel::Tick tail.
-      runtime.cleanupDestroyed(level, false);
-      return records.length;
+    if (tickBoundary) throw tickBoundary;
+    if (npcFailures.size) {
+      const [actor,message] = npcFailures.entries().next().value;
+      throw new Error(`Original actor boundary (${actor.name ?? 'unnamed'}): ${message}`);
     }
-    // ULevel::Tick 0x103a55c1-0x103a5698: with the first viewport's Actor a
-    // PlayerPawn holding a Player, snapshot its Location and write
-    // DistanceFromPlayer for every non-null slot from FirstDynamicActor (+0x110,
-    // the LoadMap partition boundary) — all distances precede all ticks. The
-    // stasis gate and ScriptedPawn.Tick read it; the map's serialized editor
-    // value is never current (docs/script-level-tick.md).
-    const viewer = level?.engine?.client?.viewports?.[0]?.actor ?? null;
-    if (viewer === playerActor && runtime.readNamed(playerActor, 'Player')) {
-      const origin = [...runtime.readNamed(playerActor, 'Location')];
-      for (let index = level.iFirstNetActor ?? 0; index < level.actors.length; index++) {
-        const actor = level.actors[index];
-        if (!actor) continue;
-        let field;
-        try { field = runtime.namedField(actor, 'DistanceFromPlayer'); } catch { continue; }
-        runtime.writeField(actor, field, playerDistance(runtime.readNamed(actor, 'Location'), origin));
-      }
+    try {
+      lastTickDelta = runtime.processLevelTick(level, seconds, {...npcTickOptions,
+        controlledPlayerTick: (actor, delta) => {
+          if (actor !== playerActor) throw new Error('Controlled PlayerPawn has no linked player port');
+          if (typeof tickPlayer !== 'function') throw new Error('Controlled PlayerPawn requires the declared player movement port');
+          tickPlayer(delta);
+          return 1;
+        },
+      });
+    } catch (error) {
+      // A failed frame must never resume partially advanced actor state.
+      // Reset/reload is the only way to leave this explicit boundary.
+      tickBoundary = error;
+      throw error;
     }
-    // ULevel::Tick clears the deferred-actor list before its actor loop.
-    npcTickLevel.deferredHead = null;
-    let progress = 0;
-    const carried = playerCarriedItems();
-    for (const record of records) {
-      // Actor.Tick's ProcessState phase precedes performPhysics. A newly
-      // selected label therefore executes here, and a latent 302 is polled
-      // before the same actor's next script statements.
-      runtime.processActorScript(record.mover,delta);
-      tickMoverInterpolation(record.mover.interpolation, delta);
-      updateDisplay(record);
-    }
-    // A bumped decoration's SetTimer(0.2) push-sound lifetime now advances in
-    // its own Actor.Tick timer phase (the decoration branch below), in
-    // Level.Actors order, instead of a separate host pass.
-    // Mission triggers share the recovered native timer step. DamageTrigger's
-    // original Timer runs the prepared Training radiation chain, including the
-    // GM_Trench PlayAnim state write, and stops at Human.PlayTakeHitSound's
-    // Actor.PlaySound audio boundary after preserving damage and flash writes.
-    for(const trigger of missionTriggers)
-      updateActorTimer(runtime.timerState(trigger),delta,()=>dispatch(trigger,'Timer',[]));
-    // DataLinkPlay is a spawned Actor. Its selected playback state and Timer
-    // phase run after ProcessState and before physics, on the same fixed tick.
-    liveDataLink?.tick(delta);
-    // Pawn phase: the recovered standalone Actor.Tick runs in Level.Actors
-    // array order — the original ULevel::Tick iteration. Serialized map pawns
-    // (the player's own route is separate) plus every runtime-spawned
-    // Inventory-ancestry actor: the items append after their owner and tick
-    // after it in the same frame (docs/script-npc-weapon-startup.md "Ticking
-    // the spawned items"). Spawned Shadows (Decal ancestry) are NOT ticked —
-    // the recorded Shadow.Tick boundary (docs/script-decal-startup.md). An
-    // actor whose startup/tick hit an explicit boundary stays in its
-    // serialized pose rather than resuming a half-advanced state.
-    for (let index = 0; index < level.actors.length; index++) {
-      const actor = level.actors[index];
-      if (!actor) continue;
-      if(liveConPlay.spawned.has(actor)) {
-        if(!runtime.instance(actor).pendingKill){
-          const spawnedFrom=level.actors.length;
-          progress+=liveConPlay.withLifecycle(()=>runtime.processActorTick(actor,delta,npcTickOptions));
-          collectSpawned(spawnedFrom);
-        }
-      } else if (carried.has(actor)) {
-        // Owner = the player, whose own route runs after this loop: the
-        // recovered owner test defers the item onto the deferred list below.
-        progress += tickCarried(actor, delta);
-      } else if (npcDecorationSet.has(actor)) {
-        // Map decorations run the recovered Actor.Tick: stasis gate (bStasis,
-        // LastRenderTime), animation, the DeusExDecoration.Tick event, state
-        // code, the Timer phase (a bump's push-sound lifetime) and the non-Pawn
-        // performPhysics above. A reached boundary records the decoration and
-        // leaves it out of later ticks, like the map pawns.
-        if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
-        const spawnedFrom = level.actors.length;
-        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
-        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
-        collectSpawned(spawnedFrom);
-      } else if (npcPawnSet.has(actor)) {
-        if (npcFailures.has(actor) || runtime.instance(actor).pendingKill) continue;
-        // startup state's Begin: InitializePawn -> InitializeInventory runs on
-        // the first ProcessState tick, so the armed NPCs' weapon SpawnActor
-        // boundary surfaces here rather than at reset. Recording it leaves the
-        // pawn out of later ticks instead of resuming a half-advanced state.
-        const spawnedFrom = level.actors.length;
-        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
-        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
-        collectSpawned(spawnedFrom);
-      } else if (loadMapGame?.actors.has(actor)) {
-        if (runtime.instance(actor).pendingKill || npcFailures.has(actor)) continue;
-        const from=level.actors.length;
-        try { progress += runtime.processActorTick(actor,delta,npcTickOptions); }
-        catch(error){npcFailures.set(actor,String(error?.message??error));}
-        collectSpawned(from);
-      } else if (npcSpawned.has(actor) && !liveMission?.has(actor)) {
-        // Inventory, Projectile and TraceHitSpawner actors share Actor.Tick.
-        // Decal-ancestry spawned Shadows remain the recorded non-ticked case.
-        let lineage = null;
-        try { lineage = runtime.instance(actor).cls; } catch { continue; }
-        let admitted = false;
-        for (let cls = lineage; cls; cls = cls.base)
-          if (['engine.inventory','engine.projectile','engine.replicationinfo','deusex.tracehitspawner'].includes(cls.record.key)) { admitted = true; break; }
-        if (!admitted || lineage === null) continue;
-        const owner = npcSpawnedOwner.get(actor) ?? runtime.readNamed(actor, 'Owner');
-        if (runtime.instance(actor).pendingKill) continue;
-        if (owner && npcFailures.has(owner)) continue;
-        const spawnedFrom = level.actors.length;
-        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
-        catch (error) {
-          npcFailures.set(owner ?? actor,
-            `${actor.name ?? runtime.readNamed(actor, 'Name')}: ${String(error?.message ?? error)}`);
-        }
-        collectSpawned(spawnedFrom);
-      } else if (liveMission?.has(actor)) {
-        // The mission state machine ticks in Level.Actors order like the map
-        // pawns; its SetTimer fires Mission00.Timer through Actor.Tick.
-        const spawnedFrom = level.actors.length;
-        try { progress += liveConPlay.withLifecycle(()=>runtime.processActorTick(actor, delta, npcTickOptions)); }
-        catch (error) { npcFailures.set(actor, String(error?.message ?? error)); }
-        collectSpawned(spawnedFrom);
-      }
-    }
-    // Decoration physics now runs inside each decoration's Actor.Tick above
-    // (non-Pawn performPhysics), not as a separate pass after the pawns.
-    // Advance the TriggerLights' Alpha animation (their Tick/ProcessState phase).
-    const lightTicks = lights.tick(delta);
-    // The player's own route (the viewer's recovered movement port) runs after
-    // the scripted actors, as before; its Actor.Tick writes bTicked = TickTag&1
-    // (actor-tick.mjs), which is what releases the actors it owns.
-    if (typeof tickPlayer === 'function') { tickPlayer(delta); progress = (progress + 1) | 0; }
-    runtime.writeNamed(playerActor, 'bTicked',Boolean(npcTickLevel.tickTag & 1));
-    // ULevel::Tick's deferred list (level-tick.mjs): actors whose Owner had not
-    // ticked yet when the loop reached them — the player's carried weapon —
-    // tick now, once their owner's bTicked matches this frame's TickTag. Nodes
-    // were pushed at the head, so they run in reverse deferral order.
-    while (npcTickLevel.deferredHead && progress !== 0) {
-      let node = npcTickLevel.deferredHead;
-      npcTickLevel.deferredHead = null; progress = 0;
-      while (node) {
-        if (Number(Boolean(runtime.readNamed(node.actor, 'bTicked'))) !== npcTickLevel.tickTag) {
-          if (carried.has(node.actor)) progress = (progress + tickCarried(node.actor, delta)) | 0;
-          else if (!npcFailures.has(node.actor) && !runtime.instance(node.actor).pendingKill) {
-            // Any other owner-deferred actor keeps the NPC failure contract.
-            const spawnedFrom = level.actors.length;
-            try { progress = (progress + liveConPlay.withLifecycle(() =>
-              runtime.processActorTick(node.actor, delta, npcTickOptions))) | 0; }
-            catch (error) { npcFailures.set(node.actor, String(error?.message ?? error)); }
-            collectSpawned(spawnedFrom);
-          }
-        }
-        node = node.next;
-      }
-    }
-    npcTickLevel.tickTag = Number(npcTickLevel.tickTag === 0);
-    // ULevel::Tick's tail (level-tick.mjs): after TickTag flips and the tick
-    // ends, ULevel::CleanupDestroyed(0) 0x103965a0 compacts Level.Actors past
-    // FirstDynamicActor and, once 128 deletions are pending, clears references
-    // to them and releases them (script-cleanup.mjs).
-    runtime.cleanupDestroyed(level, false);
-    const lightingChanges = lightTicks.map(result => result.lightingChange).filter(Boolean);
+    liveDataLink?.observe();
+    for (const record of records) updateDisplay(record);
+    const lightingChanges = lights.collectLightingChanges();
     if (onLightingChanged && lightingChanges.length) onLightingChanged(lightingChanges);
     return records.length;
   }
@@ -2031,10 +1868,10 @@ export async function createScriptDoors({
     get:()=>level.iFirstNetActor,set:value=>{level.iFirstNetActor=value;}});
   level.editor=false;
   // SpawnActor's bTicked write reads the original Level+0x10c tick parity —
-  // the npcTickLevel tag the recovered actor-tick scheduler owns.
+  // the parity owned by the recovered level scheduler.
   Object.defineProperty(level,'tickParity',{
     configurable:true,enumerable:true,
-    get:()=>Boolean(npcTickLevel.tickTag),
+    get:()=>Boolean(level.tickTag),
   });
   const baseDestroyActor=runtime.destroyActor.bind(runtime);
   runtime.destroyActor=(receiver,netForce=false)=>{
@@ -2131,32 +1968,21 @@ export async function createScriptDoors({
   playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
   loginPlayer();
   playerLogs.enableMessages();
-  // Deferred: DataLinkPlay.StartConversation constructs each display through
-  // DeusExHUD.CreateInfoLinkWindow; the HUD has none before that.
-  const infoLinkShellValue=await createInfoLinkShellPreview({runtime,assets,player:playerActor,windowHost,deferWindow:true});
+  // Original DataLinkPlay constructs and owns its display in the native HUD.
   liveDataLink=await createLiveDataLinkRuntime({runtime,assets,engine,deusEx,level,levelInfo,
-    player:playerActor,shell:infoLinkShellValue,spawnWorldPrepared:true,
+    player:playerActor,windowHost,spawnWorldPrepared:true,
     onLifecycle:event=>callbacks.dataLinkTransmission?.(event)});
-  // player.rootWindow is the shell's native-backed root window
-  // (script-datalink-live sets it). Window hierarchy natives reachable from
-  // NPC ticks — GetRootWindow(1425) via DeusExPlayer.CanStartConversation →
-  // DeusExRootWindow.CanStartConversation — read the same +0x138 parent and
-  // +0x28 type words the shell allocates, so publish those readers for the
-  // whole Play session rather than only inside the DataLink lifecycle.
-  runtime.windowLifecycle={...runtime.windowLifecycle,
-    hierarchy:{readParent:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.parent,'ptr'),
-      readType:object=>infoLinkShellValue.readNative(object,WINDOW_DESTROY_OFFSETS.type,'u8')}};
+  const nativeWindowFacade={get root(){return windowHost.root;},get hud(){return windowHost.hud;},
+    withLifecycle:fn=>fn(),readNative:windowHost.raw.read,isDestroyed:windowHost.isDestroyed};
 
   // Prepare the live face-to-face (ConPlay) conversations the map's
   // conversation-owning pawns can invoke, so a frobbed instructor runs the real
   // DeusExPlayer.StartConversation selection over attached ConFlagRef/ConEvent
   // graphs. docs/script-instructor-conversation.md.
   const faceConversations=await prepareFaceConversations(runtime,{assets,level});
-  liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:infoLinkShellValue,
-    conversations:faceConversations.conversations,prepareClass:prepareNpcClass,
+  liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:nativeWindowFacade,
+    conversations:faceConversations.conversations,dataLinkConversations:liveDataLink.conversations,prepareClass:prepareNpcClass,
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
-  runtime.boundaryFunctions.set('deusex.deusexplayer.startdatalinktransmission',liveDataLink.startHandler);
-  runtime.boundaryFunctions.set('deusex.datalinkplay.startconversation',liveDataLink.handleStartConversation);
 
   // Prepare the newly initialized player subsystem graph for subsequent ticks.
   await prepareNpcs();
@@ -2165,6 +1991,7 @@ export async function createScriptDoors({
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
   return { reset, retirePlayer, get lastCollection(){return lastCollection;}, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
+    get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
     dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
 }

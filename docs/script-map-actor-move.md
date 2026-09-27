@@ -25,6 +25,7 @@ move bodies already read. The retail `AActor` layout
 | `+0x1dc` bits 0–4 | `bCollideActors`, `bCollideWorld`, `bBlockActors`, `bBlockPlayers`, `bProjTarget` | `flags` |
 | `+0x1ec` bit 8 (`+0x1ed` bit 0) | `bJustTeleported` | `motionFlags` |
 | `+0x12c` | `OldLocation` | `oldLocation` |
+| `+0x144` / `+0x150` | `Velocity` / `Acceleration` | `velocity` / `acceleration` |
 
 Before this change, those script fields lived in a separate store. A script
 write such as `CarriedDecoration.bCollideWorld = False` therefore left the
@@ -35,6 +36,20 @@ and `OldLocation` for non-pawn map actors.
 `map-actor-native.mjs` `writeCollisionFlags` also refreshes the host's per-bit
 copies (`collisionBits`, `collideActors`, `collideWorld`, `blockActors`,
 `blockPlayers`, `blocking`), so no reader sees a stale bit.
+
+Batch 5 joins the map actor's `Acceleration` to the same native surface as
+`Velocity`. The recovered `AActor::setPhysics` zeroes both members at
+`0x103c9676` when its re-read mode is None or Rotating, including after a
+landing callback. Previously the map host's acceleration could be zero while
+the VM's separate field remained nonzero. The existing native SetPhysics body
+and non-Pawn falling adapter now observe one value. Reload discards the native
+acceleration mirror before restoring the original fields. The focused public
+pickup check seeds a map crowbar's acceleration, then verifies that original
+`Inventory.BecomeItem` (`Engine/Inventory.uc:298–308`) clears it through
+`SetPhysics(PHYS_None)` in both native and script reads.
+`validate-item-pickup.mjs` passed this boundary and its existing pickup,
+carried-movement and reset checks under the RSS watchdog: 44 seconds,
+729 MiB peak (2 GiB cap).
 
 ## Bodies
 

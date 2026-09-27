@@ -55,6 +55,14 @@ for(const name of ['WeaponCrowbar1','Candybar0','CrateBreakableMedGeneral1'])
 // HandleItemPickup; a weapon receives a real grid slot.
 for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','Ammo10mm2','Candybar0','HazMatSuit2','Multitool0']){
   const item=live(name);
+  // Original Inventory.BecomeItem calls SetPhysics(PHYS_None), whose native
+  // tail zeroes Velocity and Acceleration (0x103c9676). Seed a nonzero value
+  // before the public frob to expose a map native/VM acceleration split.
+  if(name==='WeaponCrowbar1'){
+    assert.equal(get(item,'Physics'),2,'the map crowbar starts Falling');
+    runtime.writeNamed(item,'Acceleration',[7,-11,13]);
+    assert.deepEqual(item.acceleration,[7,-11,13],'script acceleration reaches the map native member');
+  }
   place(item);
   const beforeInv=invNames().length;
   game.interaction.frobTarget=item;
@@ -64,6 +72,11 @@ for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','Ammo10mm2','Candybar0'
   assert.equal(get(item,'bHidden'),true,`${name} is removed from the world`);
   assert.ok(invNames().includes(name),`${name} is linked into JC's inventory list`);
   assert.ok(invNames().length>beforeInv,`${name} grew the inventory list`);
+  if(name==='WeaponCrowbar1'){
+    assert.equal(get(item,'Physics'),0,'original BecomeItem changes the crowbar to PHYS_None');
+    assert.deepEqual(item.acceleration,[0,0,0],'native SetPhysics clears map acceleration');
+    assert.deepEqual(get(item,'Acceleration'),[0,0,0],'the VM observes native SetPhysics acceleration clearing');
+  }
 }
 // A weapon takes a real inventory-grid slot through HandleItemPickup's search.
 assert.ok(get(live('WeaponCrowbar1'),'invPosX')>=0&&get(live('WeaponCrowbar1'),'invPosY')>=0,
@@ -121,6 +134,7 @@ const crowbar=live('WeaponCrowbar1');
 assert.equal(get(crowbar,'Owner'),null,'reset returns the crowbar to the world un-owned');
 assert.equal(get(crowbar,'bHidden'),false,'reset makes the crowbar visible again');
 assert.equal(stateKey(crowbar),'engine.inventory.pickup','reset restores the crowbar Pickup state');
+assert.deepEqual(get(crowbar,'Acceleration'),[0,0,0],'reset restores the authored map acceleration');
 const reset=invNames();
 assert.equal(reset.length,1,`reset restores JC inventory to one item, got ${reset.join(', ')}`);
 assert.match(reset[0],/^NanoKeyRing/,'the one remaining item is the re-spawned key ring');

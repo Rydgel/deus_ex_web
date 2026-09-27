@@ -41,7 +41,7 @@ const loadLocation = num(ref(plant, 'Location').get());
 // 2. Settle: the decoration physics phase advances physFalling each tick. A plant
 // resting on the floor lands within a tick, so setPhysics(PHYS_None) rebases it and
 // zeroes its velocity. Tick a fixed budget and assert it has settled.
-for (let i = 0; i < 30; i++) game.doors.tick(1 / 60);
+for (let i = 0; i < 30; i++) game.tick(1 / 60, {});
 assert.equal(num(ref(plant, 'Physics').get()), PHYS_NONE, 'Plant7 settles to PHYS_None on its floor');
 assert.deepEqual(num(ref(plant, 'Velocity').get()), [0, 0, 0], 'settling zeroes the velocity');
 assert.ok(ref(plant, 'Base').get(), 'settling bases the plant on the floor actor');
@@ -52,7 +52,9 @@ assert.ok(Math.hypot(settledLocation[0] - loadLocation[0], settledLocation[1] - 
 // 3. Push the settled plant. Because it is now PHYS_None (not PHYS_Falling), the
 // Bump body zeroes Velocity.Z and calls SetPhysics(PHYS_Rolling).
 const pushVelocity = [180, -40, 22];
-game.player.position = [settledLocation[0] + 10, settledLocation[1], settledLocation[2]];
+game.collision.queries.changeActor(player, () => {
+  game.player.position = [settledLocation[0] + 10, settledLocation[1], settledLocation[2]];
+});
 game.player.velocity = [...pushVelocity];
 assert.deepEqual(num(ref(player, 'Velocity').get()), pushVelocity, 'live pawn velocity reaches the runtime');
 game.collision.doorCallbacks.dispatch(plant, 'Bump', [player]);
@@ -64,7 +66,7 @@ assert.equal(bumped[2], 0, 'the non-falling Bump branch zeroes Velocity.Z');
 
 // 4. Roll: physRolling now advances the plant along the floor each tick.
 const beforeRoll = num(ref(plant, 'Location').get());
-for (let i = 0; i < 10; i++) game.doors.tick(1 / 60);
+for (let i = 0; i < 10; i++) game.tick(1 / 60, {});
 const afterRoll = num(ref(plant, 'Location').get());
 const horizontal = Math.hypot(afterRoll[0] - beforeRoll[0], afterRoll[1] - beforeRoll[1]);
 assert.ok(horizontal > 1, `the rolling plant physically moves along the floor (moved ${horizontal.toFixed(2)} units)`);

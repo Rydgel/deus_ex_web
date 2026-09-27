@@ -121,6 +121,7 @@ export function createTraceActorsIterator({
   argumentCount,
   evaluateArgument,
   levelFor,
+  readActor = (actor,name) => name==='Location'?actor.position:actor.worldActor,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('TraceActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('TraceActors requires levelFor');
@@ -133,13 +134,13 @@ export function createTraceActorsIterator({
   const outLocation = writeSlot(evaluateArgument(2));
   const outNormal = writeSlot(evaluateArgument(3));
   const end = refValue(evaluateArgument(4));
-  const startDefault = receiver.position;
+  const startDefault = readActor(receiver,'Location');
   const start = (argumentCount > 5 ? refValue(evaluateArgument(5)) : undefined) ?? startDefault;
   const extent = (argumentCount > 6 ? refValue(evaluateArgument(6)) : undefined) ?? [0, 0, 0];
 
   const level = levelFor(receiver);
   const queries = level?.hash;
-  const worldActor = receiver.worldActor;
+  const worldActor = readActor(receiver,'Level');
   if (typeof queries?.multiLineCheck !== 'function')
     throw new TypeError('TraceActors requires the live level MultiLineCheck service');
   if (worldActor === undefined)
@@ -175,6 +176,7 @@ export function createTraceTextureIterator({
   argumentCount,
   evaluateArgument,
   levelFor,
+  readActor = (actor,name) => name==='Location'?actor.position:actor.worldActor,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('TraceTexture requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('TraceTexture requires levelFor');
@@ -190,13 +192,13 @@ export function createTraceTextureIterator({
   const outLocation = writeSlot(evaluateArgument(5));
   const outNormal = writeSlot(evaluateArgument(6));
   const end = refValue(evaluateArgument(7));
-  const startDefault = receiver.position;
+  const startDefault = readActor(receiver,'Location');
   const start = (argumentCount > 8 ? refValue(evaluateArgument(8)) : undefined) ?? startDefault;
   const extent = (argumentCount > 9 ? refValue(evaluateArgument(9)) : undefined) ?? [0, 0, 0];
 
   const level = levelFor(receiver);
   const queries = level?.hash;
-  const worldActor = receiver.worldActor;
+  const worldActor = readActor(receiver,'Level');
   if (typeof queries?.multiLineCheck !== 'function')
     throw new TypeError('TraceTexture requires the live level MultiLineCheck service');
   if (worldActor === undefined)

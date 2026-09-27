@@ -7,7 +7,7 @@ import {decodeSoundResource} from './script-sound-resource.mjs';
 import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
 
-export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,onSpeech,prepareClass}){
+export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,dataLinkConversations=[],onSpeech,prepareClass}){
   const get=(o,k)=>runtime.readNamed(o,k);
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const [deus,conSys,engine]=await Promise.all(['DeusEx','ConSys','Engine'].map(x=>assets.get(x)));
@@ -41,7 +41,21 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     if(Number.isInteger(index))runtime.instance(object).globalIndex=index;
   }
   const sounds=new Map();
-  for(const {conversation} of conversations){
+  async function prepareSound(sound,id=null){
+    if(sounds.has(sound))return;
+    const {asset,index}=sound;
+    await runtime.classLoader.prepare(asset);
+    const resource=await runtime.prepareResource(sound);
+    await runtime.dynamicLoadGraph.prepare(sound,resource);
+    const decoded=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry:asset.pkg.exports[index-1]});
+    const format=decoded.lazy.formatName.toLowerCase();
+    const start=asset.pkg.exports[index-1].serialOffset+decoded.lazy.inlineOffset;
+    const bytes=decoded.bytes??asset.bytes.slice(start,start+decoded.lazy.byteCount);
+    if(bytes.length!==decoded.lazy.byteCount)throw new Error('Truncated original speech payload');
+    sounds.set(sound,{sound,bytes,format,mimeType:format==='mp3'?'audio/mpeg':'audio/wav',
+      soundObject:sound.name,soundId:id,soundData:{array:{data:bytes,num:bytes.length}}});
+  }
+  for(const {conversation} of [...conversations,...dataLinkConversations]){
     const suffix=get(conversation,'audioPackageName');
     const context=get(conversation,'Outer').name.replace(/Text$/i,'');
     for(let event=get(conversation,'eventList');event;event=get(event,'nextEvent')){
@@ -52,19 +66,12 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       const packageName=`${context}Audio${suffix}`,name=`ConAudio${suffix}_${id}`;
       const asset=await assets.get(packageName),index=asset.exportsByPath.get(name.toLowerCase());
       if(!index)throw new Error(`Missing original speech ${packageName}.${name}`);
-      await runtime.classLoader.prepare(asset);
       const sound=await runtime.objects.resolve(asset,index);
-      const resource=await runtime.prepareResource(sound);
-      await runtime.dynamicLoadGraph.prepare(sound,resource);
-      const decoded=decodeSoundResource({pkg:asset.pkg,bytes:asset.bytes,entry:asset.pkg.exports[index-1]});
-      const format=decoded.lazy.formatName.toLowerCase();
-      const start=asset.pkg.exports[index-1].serialOffset+decoded.lazy.inlineOffset;
-      const bytes=decoded.bytes??asset.bytes.slice(start,start+decoded.lazy.byteCount);
-      if(bytes.length!==decoded.lazy.byteCount)throw new Error('Truncated original speech payload');
-      sounds.set(sound,{sound,bytes,format,mimeType:format==='mp3'?'audio/mpeg':'audio/wav',
-        soundObject:name,soundId:id,soundData:{array:{data:bytes,num:bytes.length}}});
+      await prepareSound(sound,id);
     }
   }
+  const dataLinkClass=await load(deus,'datalinkplay');
+  await prepareSound(runtime.defaultValue(dataLinkClass,runtime.lookupMember(dataLinkClass,'fields','startSound')));
   const transferNames=new Set();
   for(const {conversation} of conversations)for(let event=get(conversation,'eventList');event;event=get(event,'nextEvent')){
     const key=runtime.instance(event).cls.record.key;
@@ -161,26 +168,34 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     };
     return object;
   }
-  let activeAudio=null;
+  const activeAudio=new Map(),soundRequests=[];
   function handleNative(call){
+    const scriptPath=String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase();
     if(call.index===3002||call.index===3003){
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};
     }
-    if(call.index===264&&String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase()==='conplay.playspeech'){
+    if(call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation'].includes(scriptPath)){
       const services=runtime.soundServices(call);
       const result=execActorPlaySound(call,{...services,processNativeEvent:(receiver,name,args)=>{
         if(name!=='ClientHearSound')return services.processNativeEvent(receiver,name,args);
         if(receiver!==player)throw new Error('Conversation ClientHearSound reached another listener');
         const [emitter,id,sound,location,parameters]=args;
         const audio=sounds.get(sound);if(!audio)throw new Error('Conversation speech is not prepared');
-        activeAudio={audio,emitter,id,location,parameters};onSpeech?.({kind:'speech',...activeAudio});
+        const request={kind:'speech',audio,emitter,id,location,parameters};
+        activeAudio.set(id,request);soundRequests.push(request);onSpeech?.(request);
       }});
       return {handled:true,value:result.resultWritten?result.result:undefined};
     }
-    if(call.index===265&&activeAudio){
+    // Only these original player.StopSound(playingSoundID) sites belong to
+    // this speech transport. Other actors (notably Decoration.Timer) retain
+    // their normal native route; reject before consuming any VM operands.
+    if(call.index===265&&call.receiver===player&&[
+      'conplaybase.stopspeech','conplaybase.terminateconversation',
+      'datalinkplay.terminateconversation','datalinkplay.abortdatalink','datalinkplay.abortandsavehistory',
+    ].includes(scriptPath)){
       const id=call.argumentCount?refValue(call.evaluateArgument(0)):0;
-      if(id===activeAudio.id){onSpeech?.({kind:'stop',id});activeAudio=null;}
+      if(activeAudio.has(id)){const request={kind:'stop',id};soundRequests.push(request);onSpeech?.(request);activeAudio.delete(id);}
       return {handled:true,value:undefined};
     }
     return {handled:false};
@@ -190,9 +205,9 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   // ConPlay actors and ConHistory objects are purged by LoadMap's collection
   // (docs/script-loadmap-gc.md). Only the host's own tracking is dropped here.
   function reset(){
-    if(activeAudio)onSpeech?.({kind:'stop',id:activeAudio.id});activeAudio=null;
+    for(const id of activeAudio.keys())onSpeech?.({kind:'stop',id});activeAudio.clear();soundRequests.length=0;
   }
-  return {handleNative,reset,spawned,sounds,
+  return {handleNative,reset,spawned,sounds,soundRequests,
     // Call reset against the old player before adopting the next Login result.
     bindPlayer(next){runtime.instance(next);player=next;},
     withLifecycle:fn=>shell.withLifecycle(fn),

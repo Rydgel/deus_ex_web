@@ -174,3 +174,20 @@ the recovered defaults; the oracle scenes keep emitting all arguments.
   through a compiled `foreach` byte stream, which remains covered only at
   the `createAllActorsIterator` level.
 - The probe establishes the GOTY Engine build only.
+
+### Batch 5 canonical actor field adapter
+
+The level scheduler also reaches non-colliding map actors, including
+`ElectricityEmitter0` in `01_NYC_UNATCOIsland`. Its original
+ElectricityEmitter.CalcTrace uses native 1000. TraceActors/TraceTexture previously
+required the optional collision view's `position`/`worldActor` mirrors even
+though their recovered exec bodies read Actor.Location and the receiver's
+`+0xa8` Level field. ScriptRuntime now supplies those two reads from the
+canonical actor's attached script storage. It does not allocate a replacement
+actor or fabricate a world pointer. Direct native oracle fixtures still supply
+their own corresponding memory view.
+
+The existing five TraceTexture DLL cases remain unchanged; the optional-argument
+binding check now invokes ScriptRuntime.createIterator on an actor with neither
+collision mirror, verifies Location/Level read order and exact Level identity,
+and retains its native Start/Extent expectations.

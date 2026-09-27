@@ -36,9 +36,12 @@ import {createNewWindowNative} from './script-window-child.mjs';
 import {constructWindowNative, constructWindowGcNative, setWindowGcFontsNative} from './script-window-construction.mjs';
 import {initWindowNative} from './script-window-init.mjs';
 import {addWindowChildNative, removeWindowChildNative} from './script-window-hierarchy.mjs';
-import {initTextWindowNative, WINDOW_TEXT_OFFSETS} from './script-window-text.mjs';
+import {initTextWindowNative, setTextMarginsNative, WINDOW_TEXT_OFFSETS} from './script-window-text.mjs';
 import {constructTileWindow, initTileWindow} from './script-window-tile.mjs';
 import {constructComputerWindowNative, initComputerWindowNative} from './script-window-computer.mjs';
+import * as Computer from './script-window-computer-playback.mjs';
+import {resizeWindowNative} from './script-window-size.mjs';
+import {setWindowAlignmentsNative} from './script-window-alignments.mjs';
 import {askParentForReconfigureNative, WINDOW_RECONFIGURE_GLOBALS} from './script-window-reconfigure.mjs';
 import {configureChildNative, WINDOW_CONFIGURE_CHILD_GLOBALS} from './script-window-configure-child.mjs';
 import {boundsUpdateNative} from './script-window-bounds-update.mjs';
@@ -331,6 +334,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     allocTimerNode:()=>{const node={windowTimerNode:true};heap.allocate(node,Timers.WINDOW_TIMER.size);timerNodes.add(node);return node;},
     soundPawnFields:pawn=>({location:runtime.readNamed(pawn,'Location'),viewRotation:runtime.readNamed(pawn,'ViewRotation')}),
     deferWindowSound:request=>soundRequests.push(request),
+    computerPauser:pawn=>runtime.readNamed(runtime.readNamed(pawn,'Level'),'Pauser'),
   };
   // FArray over heap storage ({Data, Num, Max} at the given offset).
   W.farray = {
@@ -370,6 +374,22 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const rawServices = {
     read: (object, offset, kind) => heap.read(object, offset, kind === 'string' ? 'string' : kind),
     write: (object, offset, kind, value) => heap.write(object, offset, kind, value),
+  };
+  const computerServices={...rawServices,
+    resize:({object,width,height})=>resizeWindowNative(object,width,height,{...rawServices,askParentForReconfigure:({object})=>askParentForReconfigure(object)}),
+    appendQueuedEvent({object,event}){
+      const index=W.farray.add(object,0x1e0,1,32),at=W.u32(object,0x1e0)+index*32;
+      for(let i=0;i<32;i+=4)heap.mem.write(at+i,'u32',0);
+      heap.mem.write(at,'u32',event.type);heap.mem.write(at+4,'f32',event.time);
+      if(event.type===1)heap.mem.write(at+8,'u32',event.colorWord);
+      else{
+        heap.mem.write(at+8,'u16',event.charCode);
+        heap.mem.write(at+16,'i32',event.param0);heap.mem.write(at+20,'i32',event.param1);
+        heap.mem.write(at+24,'u32',event.flags);
+      }
+      return index;
+    },
+    arrayRealloc:({object,arrayOffset,elementSize,num,max})=>{W.setI32(object,arrayOffset+4,num);W.setI32(object,arrayOffset+8,max);W.farray.realloc(object,arrayOffset,elementSize);},
   };
 
   // ------------------------------------------------------------------
@@ -578,6 +598,17 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.textlogwindow': return F.initTextLogWindow(W, win, parent);
       case 'extension.modalwindow': return F.initModalWindow(W, win, parent);
       case 'extension.rootwindow': return boundary('XRootWindow::Init(XWindow*) 0x10005ca0: "Root cannot have a parent window!"');
+      case 'extension.computerwindow': return initComputerWindowNative(win,parent,{...computerServices,
+        initWindow:({object,parent})=>W.initWindow(object,parent),
+        getRootWindow:({object})=>T.getRootWindow(W,object),
+        getPlayerPawn:({object})=>W.ptr(object,T.ROOT.parentPawn),
+        readLevelPauser:({player})=>W.computerPauser(player),
+        createNewWindow:({classPointer,parent,bShow})=>W.createNewWindow(classPointer===0x100ae5b8?'window':'editwindow',parent,bShow),
+        setWindowAlignments:({object,alignments})=>setWindowAlignmentsNative(object,...alignments,{...rawServices,askParentForReconfigure:({object})=>askParentForReconfigure(object)}),
+        setTextMargins:({object,horizontal,vertical})=>setTextMarginsNative(object,horizontal,vertical,{...rawServices,askParentForReconfigure:({object})=>askParentForReconfigure(object)}),
+        setInsertionPointBlinkRate:({object,rate,flags})=>{W.setF32(object,0x23c,rate);W.setF32(object,0x240,flags);},
+        setSelectability:({object,selectable})=>T.setSelectability(W,object,selectable),
+      });
       case 'extension.largetextwindow': return initLargeText(win, parent);
       case 'extension.editwindow': return ED.initEditWindow(W, win, parent, editEnv);
       default: return boundary(`Window family ${familyOf(win)} has no recovered Init`);
@@ -709,8 +740,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // root keyboard/mouse grab counters for a parented modal.
       if (is(win, 'extension.modalwindow')) return Input.modalVisibilityChanged(W, win, visible, T.getRootWindow);
       if (is(win, 'extension.editwindow')) return ED.editVisibilityChanged(W, win, visible, editEnv);
+      if (is(win, 'extension.computerwindow')) return Computer.computerVisibilityChanged(W,win,visible);
       processScript(win, 'VisibilityChanged', [Boolean(visible)]);                     // 0x10003610
-      if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VisibilityChanged is not recovered');
     },
     // vtable +0x78, called by InvokeTimers for a nameless timer: XButtonWindow::
     // Timer 0x100080e0 for the Button/Toggle/Checkbox families; every other
@@ -733,7 +764,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.textlogwindow': return textLogTick(win, delta);
         case 'extension.modalwindow': return F.buildAcceleratorTable(W, win);
         case 'extension.rootwindow': return rootTickVirtual(win, delta);
-        case 'extension.computerwindow': return boundary('XComputerWindow::Tick is not recovered');
+        case 'extension.computerwindow': return Computer.computerTick(W,win,delta);
         case 'extension.editwindow': return ED.editTick(W, win, delta, editEnv);
         default: return undefined;                                                     // 0x10003be0: ret 4
       }
@@ -744,7 +775,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.textwindow': return textDraw(win, gc);
         case 'extension.buttonwindow': case 'extension.togglewindow': return buttonDraw(win, gc);
         case 'extension.textlogwindow': return textLogDraw(win, gc);
-        case 'extension.computerwindow': return boundary('XComputerWindow::Draw 0x1000ed60 is not recovered');
+        case 'extension.computerwindow': return Computer.computerDraw(W,win,gc);
         case 'extension.largetextwindow': return LT.largeTextDraw(W, win, gc);
         case 'extension.editwindow': return ED.editDraw(W, win, gc, editEnv);
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
@@ -1073,6 +1104,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     'extension.clipwindow': {members:win=>tabGroupCleanUp(win),destructor:win=>{W.farray.empty(win,0x158,4);W.farray.empty(win,0x14c,4);}},
     // XWindow::CleanUp 0x1004bec0 and deleting destructor 0x10004860.
     'extension.window': {},
+    'extension.computerwindow': {members:win=>Computer.computerCleanUp(W,win),destructor:win=>Computer.computerDestroyMembers(W,win)},
     // XTextWindow::CleanUp 0x10045c30 empties the text FString (+0x168)
     // before XWindow::CleanUp; ~XTextWindow 0x10008d40 finalizes it again.
     'extension.textwindow': {members: win => W.heap.write(win, 0x168, 'string', '')},
@@ -1224,6 +1256,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const actorRefs=createWindowActorRefDispatcher(W,{isDeleted:actor=>runtime.readNamed(actor,'bDeleteMe')});
   const lifecycle = {
+    computer:computerServices,
     host: null,
     errorDevice: {name: 'GError'},
     isScriptable: () => true,
@@ -1352,6 +1385,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
 
   const host = {
     runtime, heap, W, lifecycle, classes, globals, boundaryLog, soundRequests, resourceImages, textureInfo,
+    computerText:win=>Computer.computerDisplayedText(W,win),
     root:null,hud:null,owns:object=>families.has(object),
     // Rebind viewport/console routing; root construction remains the native
     // ConstructRootWindow entry, invoked by its actual startup caller.

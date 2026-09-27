@@ -102,8 +102,26 @@ desiredFlashFog.set([0,0,0]);
 runtime.namedReference(player,'LastPainSound').set(-100);
 assert.ok(augmentationSystem.get(),'Player startup creates AugmentationSystem before damage interaction');
 const unwrappedCallFunction=runtime.callFunction;
+const unwrappedInvokeNative=runtime.invokeNative;
+const unwrappedProcessActorAnimation=runtime.processActorAnimation;
 let liveAdjustedDamage;
 let liveDamageReduced;
+let liveHitAnimationStart;
+const liveHitTweenSteps=[];
+const animationFields=['AnimSequence','AnimFrame','AnimRate','TweenRate','AnimLast'];
+runtime.invokeNative=function captureHitAnimationStart(call){
+  const result=unwrappedInvokeNative.call(this,call);
+  if(call.index===259&&call.receiver===player&&ref(player,'AnimSequence')==='HitLegLeft')
+    liveHitAnimationStart=Object.fromEntries(animationFields.map(field=>[field,ref(player,field)]));
+  return result;
+};
+runtime.processActorAnimation=function captureHitAnimationTick(actor,seconds){
+  const before=actor===player&&liveHitAnimationStart&&ref(player,'AnimSequence')==='HitLegLeft'
+    ?{frame:ref(player,'AnimFrame'),rate:ref(player,'TweenRate')}:null;
+  const result=unwrappedProcessActorAnimation.call(this,actor,seconds);
+  if(before?.frame<0)liveHitTweenSteps.push({...before,seconds,after:ref(player,'AnimFrame')});
+  return result;
+};
 runtime.callFunction=function captureDamageReduction(record,receiver,argumentCount,evaluateArgument,context){
   if(record?.key!=='deusex.deusexplayer.dxreducedamage')
     return unwrappedCallFunction.call(this,record,receiver,argumentCount,evaluateArgument,context);
@@ -120,6 +138,8 @@ try {
   for(let i=0;i<130;i++)game.tick(1/120,{});
 } finally {
   runtime.callFunction=unwrappedCallFunction;
+  runtime.invokeNative=unwrappedInvokeNative;
+  runtime.processActorAnimation=unwrappedProcessActorAnimation;
 }
 assert.equal(liveAdjustedDamage,10,'live DXReduceDamage writes adjustedDamage=10 for unowned AugEnviro');
 assert.equal(liveDamageReduced,false,'live DXReduceDamage reports no reduction for unowned AugEnviro');
@@ -129,10 +149,24 @@ assert.deepEqual(Object.fromEntries(bodyParts.map(field=>[field,ref(player,field
   HealthLegLeft:90,HealthLegRight:100,
 });
 assert.equal(ref(player,'AnimSequence'),'HitLegLeft','Radiation10 selects the left-leg hit animation');
-assert.equal(ref(player,'AnimFrame'),-0.25,'PlayAnim native starts HitLegLeft at its original frame');
-assert.equal(ref(player,'AnimRate'),2.5,'PlayAnim native applies the original HitLegLeft rate');
-assert.equal(ref(player,'TweenRate'),2.5,'PlayAnim native applies the authored tween time');
-assert.equal(ref(player,'AnimLast'),0.75,'PlayAnim native stores the authored last frame');
+assert.ok(liveHitAnimationStart,'Radiation10 reaches native PlayAnim during the Timer event');
+assert.equal(liveHitAnimationStart.AnimFrame,-0.25,'PlayAnim native starts HitLegLeft at its original frame');
+assert.equal(liveHitAnimationStart.AnimRate,2.5,'PlayAnim native applies the original HitLegLeft rate');
+assert.equal(liveHitAnimationStart.TweenRate,2.5,'PlayAnim native applies the authored tween time');
+assert.equal(liveHitAnimationStart.AnimLast,0.75,'PlayAnim native stores the authored last frame');
+// Original AActor::Tick animation runs before the controlled-player tail.
+// Engine 0x103a1bf0..0x103a1fd2 advances a negative tween frame by the
+// float32-stored frame + delta*TweenRate (docs/script-animation-tick.md).
+// The PlayAnim start values belong to its event boundary, not the last frame
+// of this 130-tick interval.
+assert.ok(liveHitTweenSteps.length>0,'later public ticks advance the player hit tween');
+for(const step of liveHitTweenSteps){
+  const expected=Math.fround(step.frame+Math.fround(step.seconds)*step.rate);
+  assert.ok(expected<0,'this focused interval remains inside the initial tween');
+  assert.equal(step.after,expected,'the live scheduler follows the original tween advancement');
+}
+assert.equal(ref(player,'AnimFrame'),liveHitTweenSteps.at(-1).after,'the final player frame retains ticked animation progress');
+assert.ok(ref(player,'AnimFrame')>liveHitAnimationStart.AnimFrame,'the player animation advances beyond the native start frame');
 assert.ok(!game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
 assert.ok(game.player.unimplementedPhysicsEffects.has(`${player.name}.PlaySound audio`));
 dispatch(damage,'UnTouch',[player]);

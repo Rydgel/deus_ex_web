@@ -2,6 +2,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {createTraceTextureIterator} from '../src/runtime/script-iterators.mjs';
+import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {gameDirectory} from './game-directory.mjs';
 const directory='.cache/trace-texture';await mkdir(directory,{recursive:true});
 // Surface records pair a texture name dword with a group name dword; entries
@@ -57,13 +58,19 @@ for(const [index,c] of cases.entries()){
 // still reach MultiLineCheck rather than fail arity.
 {
  let shortQuery;const shortWorld={id:'world',lineage:['engine.levelinfo']};
- const shortSource={id:'self',position:[10,20,30],worldActor:shortWorld};
+ const shortSource={id:'self'}; // canonical non-colliding map actor, no collision-view mirrors
+ const reads=[];
  const shortSlot=initial=>{const s={reference:true,value:initial,get(){return s.value},set(v){s.value=v}};return s;};
  const shortOut={actor:shortSlot(null),name:shortSlot(0),group:shortSlot(0),flags:shortSlot(0),location:shortSlot([0,0,0]),normal:shortSlot([0,0,0])};
- const short=createTraceTextureIterator({receiver:shortSource,argumentCount:8,
-  evaluateArgument:i=>[null,shortOut.actor,shortOut.name,shortOut.group,shortOut.flags,shortOut.location,shortOut.normal,[1,2,3]][i],
-  levelFor:()=>({hash:{multiLineCheck(q){shortQuery=q;return[];}},model:{nodes:[],surfaces:[]},surfaceTexture:[]})});
+ const receiverRuntime={readNamed(actor,name){
+  assert.equal(actor,shortSource);reads.push(name);
+  if(name==='Location')return [10,20,30];if(name==='Level')return shortWorld;
+  throw new Error('Unexpected native actor field '+name);
+ },levelFor:()=>({hash:{multiLineCheck(q){shortQuery=q;return[];}},model:{nodes:[],surfaces:[]},surfaceTexture:[]})};
+ const short=ScriptRuntime.prototype.createIterator.call(receiverRuntime,{index:1000,receiver:shortSource,argumentCount:8,
+  evaluateArgument:i=>[null,shortOut.actor,shortOut.name,shortOut.group,shortOut.flags,shortOut.location,shortOut.normal,[1,2,3]][i]});
  assert.equal(short.next(),false);
+ assert.deepEqual(reads,['Location','Level']);assert.equal(shortQuery.worldActor,shortWorld);
  try{assert.deepEqual({start:shortQuery.start,extent:shortQuery.extent},{start:[10,20,30],extent:[0,0,0]});}
  catch{mismatches++;console.log('short-call defaults mismatch');}
 }
