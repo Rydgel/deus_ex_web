@@ -1,0 +1,7 @@
+# Local renders and captures stay out of Git (original game content; see AGENTS.md)
+out/
+captures/
+build/
+*.exe
+*.mp4
+*.wav
