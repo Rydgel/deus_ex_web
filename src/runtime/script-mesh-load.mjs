@@ -25,8 +25,10 @@ export const MESH_ARRAY_LAYOUTS = new Map([
 const LAZY = [[0x54, 8, 0x10429188], [0x6c, 20, 0x10429228],
   [0x90, 8, 0x104292c8], [0xc0, 4, 0x10429368]];
 
-/** Defaults have already been copied by InitProperties. Preserve untouched fields. */
-export function constructLodMesh(object, s) {
+/** UMesh::UMesh (0x103a6130): UPrimitive base, the UMesh member arrays, the
+ * UMesh vtable and its scalar defaults. ULodMesh's constructor continues from
+ * here (constructLodMesh). Defaults were copied by InitProperties. */
+export function constructMesh(object, s) {
   call(s, 'objectConstructor', object);
   for (let offset = 0x28; offset <= 0x50; offset += 4) write(object, offset, 0, s, offset === 0x40 ? 'u8' : 'u32');
   write(object, 0, 0x1042655c, s);
@@ -50,6 +52,11 @@ export function constructLodMesh(object, s) {
   write(object, 0xf8, 0xffffffff, s); write(object, 0xfc, 0, s);
   for (const offset of [0x100, 0x104, 0x108]) write(object, offset, 0x3f800000, s);
   for (let offset = 0x10c; offset <= 0x120; offset += 4) write(object, offset, 0, s);
+}
+
+/** Defaults have already been copied by InitProperties. Preserve untouched fields. */
+export function constructLodMesh(object, s) {
+  constructMesh(object, s);
   for (const [offset, size] of [[0x12c, 2], [0x138, 2], [0x144, 8], [0x150, 2],
     [0x15c, 4], [0x168, 8], [0x174, 8], [0x1a0, 2]]) write(object, offset, array(size), s, 'array');
   write(object, 0, 0x1042942c, s);
@@ -129,9 +136,11 @@ function sequences(a, archive, s) {
 }
 
 /** Native loading branch only, preserving the supplied archive and object. */
-export function serializeLodMesh(object, archive, s) {
+/** UMesh::Serialize (0x103a63b0), which ULodMesh::Serialize (0x10354ab0)
+ * calls first (0x10354b03) before its own arrays at +0x12c onward. */
+export function serializeMesh(object, archive, s) {
   if (!archive.ar0c || archive.ar10 || archive.ar04 !== 68)
-    fail('LodMesh serializer currently requires the version 68 loading archive');
+    fail('Mesh serializer currently requires the version 68 loading archive');
   call(s, 'objectSerialize', object, archive);
   bounds(object, archive, s);
   serializeLazy(read(object, 0x54, s), archive, s);
@@ -155,6 +164,12 @@ export function serializeLodMesh(object, archive, s) {
   raw(0xa8); raw(0xb4);
   for (let offset = 0xf0; offset <= 0x128; offset += 4) write(object, offset, archive.readU32(), s);
   raw(0xe4);
+}
+
+export function serializeLodMesh(object, archive, s) {
+  serializeMesh(object, archive, s);
+  const verts = read(object, 0x60, s);
+  const raw = offset => rawArray(read(object, offset, s), archive, s, MESH_ARRAY_LAYOUTS.get(offset));
   for (const offset of [0x12c, 0x138, 0x144, 0x150, 0x15c, 0x168, 0x174]) raw(offset);
   for (const offset of [0x180, 0x184, 0x188, 0x19c, 0x18c, 0x190, 0x194, 0x198])
     write(object, offset, archive.readU32(), s);

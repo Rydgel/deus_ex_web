@@ -42,6 +42,8 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone,iterations=0) 
     hitWall:hit=>processDecorationHitWall(actor,hit.normal,hit.actor,{
       isProbing:(source,name)=>runtime.isProbing(source,name),dispatch}),
     landedEvent:normal=>dispatch(actor,'Landed',[normal]),
+    // physFalling's zone-0 branch (0x103d0b89): Actor.FellOutOfWorld.
+    fellOutOfWorld:()=>dispatch(actor,'FellOutOfWorld',[]),
     setPhysics:(next,base)=>setActorPhysics(actor,next,world(base),{dispatch,
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
     landed:hit=>isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}),

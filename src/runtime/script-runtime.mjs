@@ -2903,7 +2903,10 @@ export class ScriptRuntime {
         &&(()=>{
           let actor=false;
           for(let c=attached.cls;c;c=c.base){
-            if(c.record.key==='engine.mover')return false;
+            // Mover.PostBeginPlay's M.SetBase(Self) attaches slave movers to
+            // their leader through the same AActor::SetBase body; movers keep
+            // their own SetPhysics route.
+            if(c.record.key==='engine.mover'&&call.index!==298)return false;
             if(c.record.key==='engine.actor')actor=true;
           }
           return actor;

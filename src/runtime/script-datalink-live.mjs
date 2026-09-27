@@ -150,6 +150,34 @@ export async function createLiveDataLinkRuntime({
     await prepareConversationGraph(runtime,conversation);
     conversations.push({conversation});
   }
+  // HUDInfoLinkDisplay.SetSpeaker loads "InfoPortraits." $ Left(bindName,16)
+  // through DynamicLoadObject for each speech speaker (PaulDenton appends
+  // "_" $ Chr(49 + player.PlayerSkin); BobPage on mission 15 is BobPageAug).
+  // The synchronous native needs each such export prepared; a name with no
+  // export is left alone (the original DynamicLoadObject returns None).
+  const portraits=await assets.get('InfoPortraits');
+  // DeusExPlayer.GetLevelInfo: the level's DeusExLevelInfo actor.
+  const isDeusExLevelInfo=actor=>{
+    try{for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='deusex.deusexlevelinfo')return true;}catch{}
+    return false;
+  };
+  const deusExLevelInfo=(level.actors??[]).find(actor=>actor&&isDeusExLevelInfo(actor))??null;
+  const mission=deusExLevelInfo?get(runtime,deusExLevelInfo,'missionNumber'):null;
+  const portraitNames=new Set();
+  for(const {conversation} of conversations){
+    for(let event=get(runtime,conversation,'eventList'),guard=0;event&&guard<4096;event=get(runtime,event,'nextEvent'),guard++){
+      if(runtime.instance(event).cls.record.key!=='consys.coneventspeech')continue;
+      const bindName=String(get(runtime,event,'speakerName')??'');
+      if(!bindName)continue;
+      let name=bindName.slice(0,16);
+      if(bindName==='PaulDenton')name+=`_${String.fromCharCode(49+(get(runtime,player,'PlayerSkin')|0))}`;
+      if(bindName==='BobPage'&&mission===15)name='BobPageAug';
+      portraitNames.add(name);
+    }
+  }
+  for(const name of portraitNames)
+    if(portraits.exportsByPath.has(name.toLowerCase())&&`infoportraits.${name.toLowerCase()}`!==catalog.speaker.portrait.objectName.toLowerCase())
+      await runtime.prepareDynamicLoadObject(`InfoPortraits.${name}`);
   const routes=[];
   for(const route of catalog.routes){
     const conversation=await runtime.objects.resolve(conText,route.conversation.exportIndex);

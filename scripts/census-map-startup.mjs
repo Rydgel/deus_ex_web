@@ -82,6 +82,26 @@ function summarize(data) {
     errors, natives, excluded, clean};
 }
 
+// Boundary families that belong to a later roadmap stage (docs/roadmap.md,
+// docs/stage-3-exit-criteria.md). Everything unmatched is Stage 3 work. Each
+// pattern names its evidence so a classification is reviewable, not a
+// tolerance by convenience.
+const LATER_STAGES = Object.freeze([
+  {stage: 5, reason: 'AI navigation/latent movement natives (docs/script-pawn-nav.md unported workers)',
+    test: key => /^native (504|506|508|518|523|524|525|526|708|712) /.test(key)},
+  {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
+    test: key => /performPhysics Physics=3\b/.test(key)},
+  {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating)',
+    test: key => /physProjectile|PHYS_Interpolating/.test(key)},
+  {stage: 5, reason: 'moving doors/elevators: rotating MovingBrush interpolation (roadmap Stage 5)',
+    test: key => /MovingBrush interpolation outside the recovered translating subset/.test(key)},
+  {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
+    test: key => /XRootWindow::DrawRawBackground/.test(key)},
+  {stage: 6, reason: 'map travel / saved games',
+    test: key => /clienttravel|native 3011 /i.test(key)},
+]);
+const stageOf = key => LATER_STAGES.find(entry => entry.test(key.replace(/^(BOOT |\[swallowed\] |CRASH )/, ''))) ?? null;
+
 const queue = [...maps], results = [];
 await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
   while (queue.length) results.push(await runMap(queue.shift()));
@@ -106,13 +126,25 @@ const perMap = results.map(({map, seconds, peakMiB, crash, data}) => {
   return {map, seconds, peakMiB, status: s.status, clean: s.clean};
 });
 const ranked = [...families.values()].sort((a, b) => b.maps.size - a.maps.size || b.hits - a.hits)
-  .map(entry => ({key: entry.key, maps: entry.maps.size, hits: entry.hits, examples: [...entry.maps].slice(0, 6)}));
+  .map(entry => ({key: entry.key, maps: entry.maps.size, hits: entry.hits, examples: [...entry.maps].slice(0, 6),
+    stage: stageOf(entry.key)?.stage ?? 3}));
+// A map is Stage 3 complete when every boundary it reaches belongs to a later stage.
+const stage3Open = new Set();
+for (const family of families.values()) if (!stageOf(family.key)) for (const map of family.maps) stage3Open.add(map);
+for (const entry of perMap) entry.stage3Complete = !stage3Open.has(entry.map);
 const summary = {maps: results.length, clean: perMap.filter(m => m.clean).length,
+  stage3Complete: perMap.filter(m => m.stage3Complete).length,
   crashed: perMap.filter(m => /^killed|^child/.test(m.status)).length, boot: perMap.filter(m => /^BOOT/.test(m.status)).length,
   seconds: Math.round((Date.now() - started) / 1000), continue: !argv.includes('--strict')};
 writeFileSync(out, JSON.stringify({summary, perMap, families: ranked}, null, 1) + '\n');
-console.log(`\nMap startup census: ${summary.maps} maps, ${summary.clean} clean, ${summary.boot} boot failures, ` +
-  `${summary.crashed} crashed/killed, ${summary.seconds}s${summary.continue ? ' (--continue)' : ''}`);
-console.log('\nBoundary families by map count:');
-for (const family of ranked.slice(0, 40)) console.log(`  ${String(family.maps).padStart(3)} maps  ${family.key}  e.g. ${family.examples.slice(0, 3).join(', ')}`);
+console.log(`\nMap startup census: ${summary.maps} maps, ${summary.clean} clean, ${summary.stage3Complete} Stage 3 complete ` +
+  `(only later-stage boundaries), ${summary.boot} boot failures, ${summary.crashed} crashed/killed, ${summary.seconds}s` +
+  `${summary.continue ? ' (--continue)' : ''}`);
+for (const stage of [3, 4, 5, 6]) {
+  const list = ranked.filter(family => family.stage === stage && !family.key.startsWith('[swallowed]'));
+  if (!list.length) continue;
+  console.log(`\nStage ${stage}${stage === 3 ? ' (open)' : ''} boundary families by map count:`);
+  for (const family of list.slice(0, 40))
+    console.log(`  ${String(family.maps).padStart(3)} maps  ${family.key}  e.g. ${family.examples.slice(0, 3).join(', ')}`);
+}
 console.log(`\nWrote ${path.relative(root, out)}`);

@@ -456,6 +456,15 @@ export async function createScriptDoors({
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();} });
+  // LoadMap startup (Mover.BeginPlay's Move/SetRotation) and Login already
+  // move actors and cross zones. Bind the scene's event, rider, map-rotation
+  // and pawn-move entries to the original runtime as soon as it exists, so no
+  // move reaches the scene's pre-runtime fixture callbacks.
+  playerScene.hooks.dispatchEvent=(target,event,args)=>dispatchEvent(target,event,args);
+  playerScene.hooks.moveRider=(actor,delta,rotation)=>runtime.moveSpawnedActor(actor,delta,rotation);
+  playerScene.hooks.rotateMapActor=(actor,rotation)=>runtime.rotateMapActor(actor,rotation);
+  playerScene.hooks.movePawn=(actor,delta,rotation,flags)=>runtime.movePawn(actor,delta,rotation,flags);
+  playerScene.hooks.moveSmoothPawn=(actor,delta)=>runtime.moveSmoothPawn(actor,delta);
   const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
     if(name==='XLevel')return runtime.levelFor(object);
     const field={Engine:'engine',Client:'client',Viewports:'viewports',Actor:'actor'}[name];
@@ -1628,10 +1637,14 @@ export async function createScriptDoors({
     const state = mover.interpolation;
     if (!state) throw new Error(`Doors.reset() must create interpolation state before attaching ${mover.name}`);
     const entry=asset?.pkg.exports[mover.index-1];
-    if(!entry||(await runtime.loadClass(asset,entry.classIndex)).record!==deusExMoverClass.record){
-      throw new Error(`Mover subclass is outside the prepared script subset: ${mover.name}`);
-    }
-    const record = await attach(mover, deusExMoverClass, 'mover');
+    const moverClass=entry?await runtime.loadClass(asset,entry.classIndex):null;
+    let descends=false;
+    for(let cls=moverClass;cls;cls=cls.base)if(cls.record===deusExMoverClass.record){descends=true;break;}
+    if(!descends)throw new Error(`Mover class is not a DeusExMover: ${mover.name}`);
+    // BreakableGlass/BreakableWall run their own class's bodies (state code,
+    // BaseChange/TakeDamage overrides) over the same mover record.
+    await prepareNpcClass(moverClass);
+    const record = await attach(mover, moverClass, 'mover');
     moversByObject.set(mover, record);
     record.mover = mover;
     records.push(record);
@@ -2011,15 +2024,6 @@ export async function createScriptDoors({
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
   playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
-  // Login already moves the player (SpawnPlayActor/SetLocation, the key ring's
-  // SetBase rider) and crosses zones. Bind the scene's event, rider and map
-  // rotation entries to the original runtime first, so those moves never use
-  // the scene's pre-runtime fixture callbacks.
-  playerScene.hooks.dispatchEvent=(target,event,args)=>dispatchEvent(target,event,args);
-  playerScene.hooks.moveRider=(actor,delta,rotation)=>runtime.moveSpawnedActor(actor,delta,rotation);
-  playerScene.hooks.rotateMapActor=(actor,rotation)=>runtime.rotateMapActor(actor,rotation);
-  playerScene.hooks.movePawn=(actor,delta,rotation,flags)=>runtime.movePawn(actor,delta,rotation,flags);
-  playerScene.hooks.moveSmoothPawn=(actor,delta)=>runtime.moveSmoothPawn(actor,delta);
   loginPlayer();
   playerLogs.enableMessages();
   // Original DataLinkPlay constructs and owns its display in the native HUD.

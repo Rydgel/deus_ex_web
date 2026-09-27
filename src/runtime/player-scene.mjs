@@ -57,6 +57,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
   // The recursive rider MoveActor (bIgnoreBases=1) for one based actor.
   const riderMove=(other,riderDelta,riderRot)=>{
     if(other===source)return move(riderDelta,riderRot,{ignoreBases:true});
+    // A slave mover riding its leader: the moving-brush MoveActor skips the
+    // cylinder MultiLineCheck that bIgnoreBases filters.
+    if(other.movingBrush)return moveMover(other,riderDelta,riderRot);
     if(other.isPawn){
       if(typeof hooks.movePawn!=='function')throw Error('map pawn rider MoveActor is not linked');
       return hooks.movePawn(other,riderDelta,riderRot,{ignoreBases:true});
@@ -192,7 +195,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     if(!actor.isPawn&&!actor.movingBrush){delete actor.motionFlags;delete actor.oldLocation;}
     actor.waitingPawn=actors.find(a=>a.index===v.WaitingPawn)??null;
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
-    if(actor.movingBrush)updateZone(actor,false,true);
+    // LoadMap's SetActorZone(actor, test=1, force=1) (0x1038da02): regions
+    // rebuilt with the zone callbacks suppressed.
+    if(actor.movingBrush)updateZone(actor,true,true);
   };
   return {dispatch,level,hooks,
     // The LoadMap Login path retires the browser placeholder before original
@@ -235,6 +240,8 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       mass:player.defaults.Mass,warping:false,specialGoal:null});
     collision.queries.addActor(source);player.actorRegistered=true;
     addPawn(level,source);
-    updateZone(source,false,true);
+    // The placeholder's regions follow LoadMap's suppressed SetActorZone;
+    // original Login replaces it (detachPlayerIdentity) with a spawned player.
+    updateZone(source,true,true);
   }};
 }

@@ -23,6 +23,7 @@ const TYPE_BY_CLASS = Object.freeze({
 });
 
 const TYPE_OBJECT = new Set(['object', 'class']);
+const SCALAR_TYPES = new Set(['byte', 'int', 'bool', 'float', 'string']);
 const NATIVE_VECTOR = 'core.object.vector';
 const NATIVE_ROTATOR = 'core.object.rotator';
 
@@ -230,6 +231,15 @@ function visitValue(field, reference, archive, options, context, stack) {
   if (type === 'array' || type === 'map') {
     const handled = callSerializerHook(serializerHook, field, reference, context, type);
     if (handled !== null) return handled;
+    // UArrayProperty::SerializeItem serializes the count, then each item
+    // through Inner. For a reference-free Inner (Decal.SurfList's int) every
+    // step is a byte serialize the reference archive ignores, exactly like
+    // the scalar leaves below, so no reference is visited.
+    const inner = metadata.innerMetadata ?? metadata.innerProperty ??
+      (metadata.inner?.metadata ? metadata.inner.metadata :
+        (metadata.inner?.type || metadata.inner?.className ? metadata.inner : null));
+    const innerType = type === 'array' && inner ? typeOf(inner) : null;
+    if (innerType && SCALAR_TYPES.has(innerType)) return 0;
     fail(`Dynamic ${type} serialization is unsupported for ${parts.key}`, {
       key: parts.key, metadata, type, operation: 'serializeScriptReferences',
     });
