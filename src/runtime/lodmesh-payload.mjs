@@ -12,7 +12,7 @@ const asFloat = bits => {
 };
 
 /** The same presentation of fields works for detached inspection and the graph. */
-export function meshPayloadView(object, services, {entry, archive}) {
+export function meshPayloadView(object, services, {entry, archive, classic = false}) {
   const get = offset => services.read(object, offset), arrays = new Map(), lazyArrays = new Map();
   const project = (a, lazy = null) => {
     let lastData, lastNum, bytes = empty;
@@ -38,12 +38,15 @@ export function meshPayloadView(object, services, {entry, archive}) {
     const lazy = get(offset), a = project(lazy.array, lazy);
     lazyArrays.set(offset, a); arrays.set(offset + 12, a);
   }
-  for (const offset of [0x84, 0xa8, 0xb4, 0xd8, 0xe4, 0x12c, 0x138, 0x144,
-    0x150, 0x15c, 0x168, 0x174, 0x1a0]) arrays.set(offset, project(get(offset)));
+  // A classic UMesh (0x12c bytes) ends at +0xe4; the rest is ULodMesh's.
+  for (const offset of [0x84, 0xa8, 0xb4, 0xd8, 0xe4, ...(classic ? [] : [0x12c, 0x138, 0x144,
+    0x150, 0x15c, 0x168, 0x174, 0x1a0])]) arrays.set(offset, project(get(offset)));
   const scalarBits = new Map();
   for (let offset = 0xf0; offset <= 0x128; offset += 4) scalarBits.set(offset, get(offset));
-  for (let offset = 0x180; offset <= 0x19c; offset += 4) scalarBits.set(offset, get(offset));
-  scalarBits.set(0x1ac, get(0x1ac));
+  if (!classic) {
+    for (let offset = 0x180; offset <= 0x19c; offset += 4) scalarBits.set(offset, get(offset));
+    scalarBits.set(0x1ac, get(0x1ac));
+  }
   const floats = offsets => offsets.map(offset => asFloat(get(offset)));
   return {entry, arrays, lazyArrays, scalarBits,
     boundingBox: {min: floats([0x28, 0x2c, 0x30]), max: floats([0x34, 0x38, 0x3c]), valid: !!(get(0x40) & 255)},
@@ -56,8 +59,9 @@ export function meshPayloadView(object, services, {entry, archive}) {
     frameVertexCount: get(0xf0), frameCount: get(0xf4),
     scale: floats([0x100, 0x104, 0x108]), origin: floats([0x10c, 0x110, 0x114]),
     rotation: [0x118, 0x11c, 0x120].map(offset => get(offset) | 0),
-    payloadStatus: 'decoded-lodmesh', payloadComplete: false,
-    unsupported: ['LodMesh live Play load finalization, renderer and final release are not bound'],
+    payloadStatus: classic ? 'decoded-mesh' : 'decoded-lodmesh', payloadComplete: false,
+    unsupported: [classic ? 'Classic UMesh frame decoding and rendering are not bound (Stage 4); sequences are'
+      : 'LodMesh live Play load finalization, renderer and final release are not bound'],
   };
 }
 

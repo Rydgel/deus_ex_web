@@ -23,7 +23,7 @@ import {constructTexture, constructPalette, serializeTexture, serializePalette,
   postLoadTexture, loadTextureLazyBytes, removeResourceArray} from './script-texture-load.mjs';
 import {constructSoundNative} from './script-sound-construction.mjs';
 import {FONT_NATIVE, constructFont, serializeFont} from './script-font-load.mjs';
-import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray} from './script-mesh-load.mjs';
+import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray, constructMesh, serializeMesh} from './script-mesh-load.mjs';
 import {meshPayloadView} from './lodmesh-payload.mjs';
 import {serializeSoundLifecycle, serializeSoundByteArray} from './script-sound-lifecycle.mjs';
 import {loadLazyByteArray} from './script-lazy-byte-array.mjs';
@@ -665,13 +665,14 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
 
   function initializeResource(object) {
     const kind = fullName(classRecordOf(object));
-    if (kind === 'Engine.LodMesh' ? !meshLoadServices :
+    if (kind === 'Engine.LodMesh' || kind === 'Engine.Mesh' ? !meshLoadServices :
       !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound', 'Engine.Font'].includes(kind)) return;
     const source = classRecordOf(object)?.defaults?.data;
     if (!(source instanceof Map)) throw new Error(`Resource construction requires loaded class defaults: ${kind}`);
     object.instanceValues = new Map([...source].filter(([offset]) => offset >= 0x28)
       .map(([offset, value]) => [offset, deepCopy(value)]));
     if (kind === 'Engine.LodMesh') constructLodMesh(object, meshServices);
+    else if (kind === 'Engine.Mesh') constructMesh(object, meshServices);
     else if (kind === 'Engine.Sound') {
       // Existing Sound translations use semantic names. Accessors preserve one
       // backing store for these names and the shared native field offsets.
@@ -805,8 +806,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
 
   function requireSerializer(object) {
     const kind = fullName(classRecordOf(object));
-    if (kind === 'Engine.LodMesh' && slotOf(object, 0x10)?.pkg.version !== 68)
-      throw new Error(`No recovered LodMesh load archive version for ${fullName(object)}`);
+    if ((kind === 'Engine.LodMesh' || kind === 'Engine.Mesh') && slotOf(object, 0x10)?.pkg.version !== 68)
+      throw new Error(`No recovered ${kind === 'Engine.Mesh' ? 'Mesh' : 'LodMesh'} load archive version for ${fullName(object)}`);
     if (!serializedMetadataKinds.has(kind) && object.resourceConstructed !== kind)
       throw new Error(`ULinkerLoad::Preload has no recovered Serialize body for ${fullName(object)} (${kind})`);
   }
@@ -830,6 +831,12 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       serializeLodMesh(object, archive, meshServices);
       const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
       object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports[index]});
+      return;
+    }
+    if (object.resourceConstructed === 'Engine.Mesh') {
+      serializeMesh(object, archive, meshServices);
+      const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
+      object.meshPayload = meshPayloadView(object, meshServices, {archive, entry: linker.pkg.exports[index], classic: true});
       return;
     }
     if (isA(object, classStatic)) return serializeLoadedClass(object, archive, preloadServices, {events});
@@ -1158,8 +1165,10 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     metadataPostLoad.set('Engine.Sound', postLoadObject); // Engine 0x1036fb20 forwards only to UObject
     metadataPostLoad.set('Engine.Font', postLoadObject); // vtable +0x20 -> 0x1040c72e -> Core UObject::PostLoad
   }
-  if (meshLoadServices)
+  if (meshLoadServices) {
     metadataPostLoad.set('Engine.LodMesh', postLoadObject); // original vtable +20 -> 0x1040c72e -> Core
+    metadataPostLoad.set('Engine.Mesh', postLoadObject); // UMesh vtable 0x104290b8 +20 is the same 0x1040c72e
+  }
   const postFields = {objectFlags: 0x1c, class: 0x24, outer: 0x18, superField: 0x28,
     classWithin: 0x49c, functionFlags: 0x6c, nativeIndex: 0x70, nativeFunction: 0x7c,
     linker: 0x10};

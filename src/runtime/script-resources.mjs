@@ -75,6 +75,7 @@ const NATIVE_SPECS = Object.freeze({
     defaultConstructor: {body: 0x103a6130}, registrationBody: 0x103a6770,
     serializer: {thunk: 0x10301717, body: 0x103a63b0},
     superKey: 'engine.primitive', withinKey: 'core.object',
+    resourceKind: 'Mesh', payloadDecoder: 'mesh',
   },
   'engine.lodmesh': {
     packageName: 'Engine', name: 'LodMesh', staticClass: 0x105359d0,
@@ -485,7 +486,9 @@ export class ScriptResourceRegistry {
       return;
     }
     record.materialization = 'native-resource';
-    if (native.resourceKind === 'LodMesh') {
+    if (native.resourceKind === 'LodMesh' || native.resourceKind === 'Mesh') {
+      if (!this.loader && native.resourceKind === 'Mesh')
+        throw new ScriptResourceError(`Classic Mesh payloads load only through the native load graph: ${record.fullPath}`);
       if (this.loader) {
         const loaded = await this.loader.load(record.object);
         const {slotOf} = this.loader.graph;

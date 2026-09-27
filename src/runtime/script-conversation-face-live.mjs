@@ -97,7 +97,10 @@ export async function prepareFaceConversations(runtime, { assets, level, package
     if (bindName && bindName !== 'none') bindNames.add(bindName);
   }
 
-  const descriptors = loadMissionConversations(conText, missionNumber);
+  // The recovered ConBindEvents binds nothing without a DeusExLevelInfo or
+  // for a negative missionNumber (DX -2, DXOnly -1), so no face
+  // conversation can start there (script-conversation-wrapper.mjs).
+  const descriptors = levelInfoActor && missionNumber >= 0 ? loadMissionConversations(conText, missionNumber) : [];
   const conversations = [];
   const objects = new Set();
   let preparedObjects = 0;

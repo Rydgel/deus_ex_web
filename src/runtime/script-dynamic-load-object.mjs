@@ -9,6 +9,10 @@ import {createLinkerLoadArchive} from './script-linker-lazy-loader.mjs';
 // InfoPortraits linker exists.  Keep that one first-load route explicit while
 // retaining prepared linker construction for the other focused exports.
 export const DYNAMIC_LOAD_FIRST_LOAD_PATH='infoportraits.jaimereyes';
+// Packages only DynamicLoadObject reaches: their linker is built by the first
+// StaticLoadObject at run time (GetPackageLinker), whichever export it asks
+// for. Every prepared export of such a package waits for that linker.
+export const DYNAMIC_LOAD_FIRST_LOAD_PACKAGES=Object.freeze(new Set(['infoportraits']));
 
 /** Installed Core.dll UObject::execDynamicLoadObject wrapper. */
 export const DYNAMIC_LOAD_OBJECT_NATIVE=Object.freeze({
@@ -111,7 +115,7 @@ export class PreparedDynamicLoadGraph{
       throw new Error('Prepared DynamicLoadObject resource identity diverged from ScriptObjects');
     const objectKey=object.key.toLowerCase();
     const packageKey=object.asset.name.toLowerCase();
-    if(objectKey===DYNAMIC_LOAD_FIRST_LOAD_PATH){
+    if(DYNAMIC_LOAD_FIRST_LOAD_PACKAGES.has(packageKey)){
       // Materialize the package identity before the synchronous native frame;
       // this is the root Outer returned by ResolveName and the constructor's
       // `root` argument.  The linker itself is deliberately deferred until
@@ -120,7 +124,10 @@ export class PreparedDynamicLoadGraph{
       if(!packageOuter||packageOuter.materialization!=='package-identity'||
           packageOuter.asset!==object.asset)
         throw new Error(`First-load portrait package Outer is not canonical: ${object.key}`);
-      this.firstLoadPackages.set(packageKey,{asset:object.asset,outer:packageOuter,object});
+      const entry=this.firstLoadPackages.get(packageKey)??{asset:object.asset,outer:packageOuter,objects:[]};
+      if(entry.outer!==packageOuter)throw new Error(`First-load package Outer diverged: ${object.key}`);
+      entry.objects.push(object);
+      this.firstLoadPackages.set(packageKey,entry);
       const linker=this.linkerByPackage.get(packageKey);
       if(linker)linker.exports[object.index-1].object=object;
     }else{
@@ -210,7 +217,7 @@ export class PreparedDynamicLoadGraph{
     if(existing)return existing;
     const linker=this.buildLinker(prepared.asset,root,{flags});
     this.linkerByPackage.set(packageKey,linker);this.linkers.push(linker);
-    linker.exports[prepared.object.index-1].object=prepared.object;
+    for(const object of prepared.objects)linker.exports[object.index-1].object=object;
     return linker;
   }
 

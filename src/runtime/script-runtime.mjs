@@ -224,6 +224,10 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
 /** Linked, synchronous original script calls. Loading/linking remains async;
  * an event never suspends halfway through an original call to fetch an asset.
  * A prepared function/state subset fails explicitly on an unprepared target. */
+// Mesh payloads the script-side mesh consumers (anim sequences, textures)
+// accept: ULodMesh, and a classic UMesh whose frames are not decoded.
+const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
+
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
     this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
@@ -1294,7 +1298,7 @@ export class ScriptRuntime {
     const reference=this.readNamed(receiver,'Mesh');
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=await this.prepareResource(reference);
-    if(resource.payloadStatus!=='decoded-lodmesh')
+    if(!MESH_PAYLOADS.has(resource.payloadStatus))
       throw new Error(`Original mesh payload is unsupported: ${reference.key}`);
     return resource.payload;
   }
@@ -1307,7 +1311,7 @@ export class ScriptRuntime {
   meshResource(reference) {
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=this.resources?.resources.get(reference.key);
-    if(!resource||this.resources.pending.has(reference.key)||resource.payloadStatus!=='decoded-lodmesh')
+    if(!resource||this.resources.pending.has(reference.key)||!MESH_PAYLOADS.has(resource.payloadStatus))
       throw new Error(`Original mesh resource is not prepared: ${reference.key}`);
     return resource;
   }
@@ -1318,6 +1322,7 @@ export class ScriptRuntime {
   getActorMeshFrame(receiver,coords,options={}) {
     const mesh=this.meshPayload(receiver);
     if(!mesh)throw new Error('Original GetFrame requires a prepared LodMesh');
+    if(mesh.payloadStatus!=='decoded-lodmesh')throw new Error('Classic UMesh GetFrame is not bound (Stage 4 rendering)');
     return getLodMeshFrame(mesh,receiver,coords,{
       cache:this.meshFrameCache??=createLodMeshFrameCache(),
       read:(actor,name)=>this.readNamed(actor,name),
@@ -1346,6 +1351,7 @@ export class ScriptRuntime {
   getActorMeshSurfaces(receiver,options={}) {
     const mesh=this.meshPayload(receiver);
     if(!mesh)throw new Error('Original surface decoding requires a prepared LodMesh');
+    if(mesh.payloadStatus!=='decoded-lodmesh')throw new Error('Classic UMesh surfaces are not bound (Stage 4 rendering)');
     return readLodMeshSurfaces(mesh,options);
   }
   /** Native PlaySound264 services per docs/script-sound.md: reflected fields,

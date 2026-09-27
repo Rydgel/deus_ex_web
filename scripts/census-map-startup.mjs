@@ -91,14 +91,20 @@ const LATER_STAGES = Object.freeze([
     test: key => /^native (504|506|508|518|523|524|525|526|708|712) /.test(key)},
   {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
     test: key => /performPhysics Physics=3\b/.test(key)},
-  {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating)',
-    test: key => /physProjectile|PHYS_Interpolating/.test(key)},
+  {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating; pawns on InterpolationPoint paths)',
+    test: key => /physProjectile|PHYS_Interpolating|performPhysics Physics=8\b/.test(key)},
   {stage: 5, reason: 'moving doors/elevators: rotating MovingBrush interpolation (roadmap Stage 5)',
     test: key => /MovingBrush interpolation outside the recovered translating subset/.test(key)},
   {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
     test: key => /XRootWindow::DrawRawBackground/.test(key)},
   {stage: 6, reason: 'map travel / saved games',
     test: key => /clienttravel|native 3011 /i.test(key)},
+  // A pre-placed actor's global GObjObjects index depends on the session's
+  // whole load history (Entry, menus, maps reached by travel). Only 00_Training
+  // has a measured capture; other maps leave it unmeasured rather than invent
+  // one. PlaySound's channel id (ObjectIndex<<4|slot<<1|noOverride) needs it.
+  {stage: 6, reason: 'session-dependent global UObject index of pre-placed actors (measured only for 00_Training)',
+    test: key => /PlaySound requires the registered global UObject index/.test(key)},
 ]);
 const stageOf = key => LATER_STAGES.find(entry => entry.test(key.replace(/^(BOOT |\[swallowed\] |CRASH )/, ''))) ?? null;
 

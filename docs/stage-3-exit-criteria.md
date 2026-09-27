@@ -667,3 +667,65 @@ known report race; it passes alone. Unit tests: 545/545.
 
 NYC remains unsupported. Its first map pawn stops at the explicit
 `ScriptedPawn.PutInWorld -> SetLocation` FarMoveActor boundary.
+
+## Stage 3 beyond Training: the all-maps startup census
+
+The Training gate proves Training only. The user asked for Stage 3 to be
+finished beyond that, so the same original-bytecode standard now applies to
+every single-player map. `scripts/census-map-startup.mjs` is the measurement.
+It boots each of the 83 non-DXMP maps in its own watched child through Play's
+`createGame`, which runs the original LoadMap startup and Login. It then ticks
+10 s, does a Player-start reload, and ticks 10 s more. It groups boot failures,
+preparation failures, LoadMap exclusions, swallowed actor failures and
+unsupported natives into families across maps.
+
+**Stage classification.** A boundary family that belongs to a later roadmap
+stage is tagged by an explicit, reviewable table (`LATER_STAGES` in the
+census). Everything unmatched is open Stage 3 work. A map is *Stage 3
+complete* when every boundary it reaches belongs to a later stage.
+
+| Stage | Family | Why it is not Stage 3 |
+| --- | --- | --- |
+| 5 | AI navigation/latent movement natives 504, 506, 508, 518, 523–526, 708, 712 | Unported pawn-nav workers ([pawn nav](script-pawn-nav.md)); the roadmap puts AI navigation in Stage 5. |
+| 5 | `APawn::performPhysics` PHYS_Swimming | Roadmap Stage 5 movement (swimming, water zones). |
+| 5 | physProjectile, PHYS_Interpolating (actors and pawns on InterpolationPoint paths) | Projectiles and scripted/cinematic movement. |
+| 5 | Rotating MovingBrush interpolation | Roadmap Stage 5 "moving doors and elevators". The MoveActor itself is Stage 3 and is done (below). |
+| 4 | `XRootWindow::DrawRawBackground` | UI presentation. |
+| 6 | ClientTravel, SaveGame | Travel and saves. |
+| 6 | PlaySound's global UObject index for pre-placed actors on maps without a capture | The original index depends on the session's whole load history (Entry, menus, maps reached by travel). Only 00_Training has a measured capture ([capture oracle](boot-replay.md)); no index is invented. |
+
+**Batches.** All are on master; each ran the Training gate, which still
+passes.
+- **Batch 1 (`f9c102a`):**
+  - Scene hooks bind before LoadMap and Login.
+  - Map pawns relocate and move through their recovered pawn view.
+  - Every non-brush export carries the native `+0x1dc` word.
+  - Core's runaway guard replaces a 16,384-statement host budget: execJump
+    and execJumpIfNot count toward 10,000,000, reset by ULevel::Tick's
+    GInitRunaway.
+  - The LoadMap GC mark phase runs on an explicit stack in the same
+    depth-first order.
+- **Batch 2 (`928e5d5`):**
+  - Natives 520, 521 and 717 are dispatched to their existing bit-exact ports.
+  - Moving-brush MoveActor handles rotation, riders and a bCollideWorld
+    source: 26/26 native cases, both replayed and composed.
+  - Spawn-closure preparation covers generator-spawned classes.
+  - Hull-less NotSolid brushes no longer abort boot.
+  - FellOutOfWorld is dispatched.
+  - Conversation binding prepares nothing where the original binds nothing.
+- **Batch 3 (`c4b2b82`):**
+  - LoadMap zone updates suppress callbacks (`SetActorZone(test=1, force=1)`).
+  - Slave movers use the recovered SetBase.
+  - All DataLink speaker portraits are prepared.
+  - DeusExMover subclasses attach with their own class.
+  - Reference-free dynamic arrays serialize for GC.
+  - The UMesh load is split out of LodMesh (8 DLL comparisons unchanged).
+- **Batch 4:**
+  - Classic UMesh resources (Fly, DXLogo) load through UMesh::Serialize with
+    a `decoded-mesh` payload the anim natives read. Frame decoding is Stage 4.
+  - Every InfoPortraits export waits for the runtime-built linker, the
+    original first-load contract.
+  - Face conversations prepare nothing without a DeusExLevelInfo or for a
+    negative mission.
+  - Absent transfer-object classes are skipped: the original DynamicLoadObject
+    returns None for them.

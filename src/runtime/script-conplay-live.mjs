@@ -78,6 +78,10 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     if(key==='consys.coneventtransferobject'||key==='consys.coneventcheckobject')transferNames.add(get(event,'objectName'));
   }
   for(const name of transferNames)if(!name.startsWith('NK_')){
+    // An authored name with no DeusEx export (08_NYC_Smug's
+    // "AugmentationUpgrade") makes the original DynamicLoadObject miss and
+    // return None; there is nothing to prepare for it.
+    if(!deus.exportsByPath.has(String(name).toLowerCase()))continue;
     const object=await runtime.prepareDynamicLoadObject(`DeusEx.${name}`);
     const cls=await runtime.loadClass(object.asset,object.index);
     await prepareClass(cls);

@@ -989,7 +989,7 @@ export async function createScriptDoors({
       for (const reference of [actor ? runtime.readNamed(actor, name) : null, runtime.defaultValue(cls, field)]) {
         if (!reference || !['LodMesh', 'Mesh'].includes(reference.kind)) continue;
         const resource = await runtime.prepareResource(reference);
-        if (resource.payloadStatus !== 'decoded-lodmesh')
+        if (resource.payloadStatus !== 'decoded-lodmesh' && resource.payloadStatus !== 'decoded-mesh')
           throw new Error(`Original item view mesh payload is unsupported: ${reference.key}`);
       }
     }
