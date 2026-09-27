@@ -26,6 +26,7 @@
  * docs/script-pawn-locomotion.md field map. */
 import { falling } from './falling.mjs';
 import { walking } from './walking.mjs';
+import { physFlying } from './flying.mjs';
 import { processLanded } from './landing.mjs';
 import { walkingSurfacePrelude } from './walking-surface.mjs';
 import { processPlayerHitWall, setSupportBase, setBase } from './walking-callbacks.mjs';
@@ -106,11 +107,19 @@ export function pawnPhysicsView(actor, services) {
   bind('pendingTouch', 'PendingTouch');
   for (const [prop, name] of [['groundSpeed', 'GroundSpeed'], ['accelRate', 'AccelRate'],
     ['airControl', 'AirControl'], ['maxStepHeight', 'MaxStepHeight'], ['minHitWall', 'MinHitWall'],
-    ['mass', 'Mass'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
+    ['mass', 'Mass'], ['buoyancy', 'Buoyancy'], ['airSpeed', 'AirSpeed'], ['desiredSpeed', 'DesiredSpeed'],
+    ['viewRotation', 'ViewRotation'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
     Object.defineProperty(pawn, prop, { get: () => get(name), enumerable: true });
-  for (const [prop, name] of [['canJump', 'bCanJump'], ['isWalking', 'bIsWalking'],
-    ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe']])
+  for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
+    ['collideWorld', 'bCollideWorld']])
     Object.defineProperty(pawn, prop, { get: () => Boolean(get(name)), enumerable: true });
+  // The ladder branch (0x103cc5ed) sets bIsWalking before physFlying.
+  bind('isWalking', 'bIsWalking', Boolean, Boolean);
+  // calcVelocity/physFlying test the class chain for PlayerPawn (0x1058c160).
+  const isPlayerPawn = services.isA(actor, 'engine.playerpawn');
+  Object.defineProperty(pawn, 'isPlayerPawn', { get: () => isPlayerPawn, enumerable: true });
+  Object.defineProperty(pawn, 'netMode', { get: () => level.netMode ?? 0, enumerable: true });
+  Object.defineProperty(pawn, 'zoneNumber', { get: () => pawn.region.zoneNumber, enumerable: true });
   for (const [prop, name] of [['region', 'Region'], ['footRegion', 'FootRegion'], ['headRegion', 'HeadRegion']]) {
     const ref = regionBinding(field, actor, name);
     Object.defineProperty(pawn, prop, { get: () => ref.get(), set: v => ref.set(v), enumerable: true });
@@ -145,6 +154,9 @@ export function pawnPhysicsView(actor, services) {
   Object.defineProperty(pawn, 'zoneVelocity', { get: () => (zone().ZoneVelocity ?? [0, 0, 0]).map(f), enumerable: true });
   Object.defineProperty(pawn, 'terminalVelocity', { get: () => f(zone().ZoneTerminalVelocity ?? 2500), enumerable: true });
   Object.defineProperty(pawn, 'friction', { get: () => f(zone().ZoneGroundFriction ?? 8), enumerable: true });
+  // 1.2 is Engine.u's serialized ZoneInfo default, for zones read from values.
+  Object.defineProperty(pawn, 'fluidFriction', { get: () => f(zone().ZoneFluidFriction ?? 1.2), enumerable: true });
+  Object.defineProperty(pawn, 'zoneGravityZ', { get: () => pawn.gravity[2], enumerable: true });
 
   // The original collision-hash entries, Touching slots and IsBlockedBy bits
   // live on the registered host identities. Candidates that never ran the
@@ -203,7 +215,7 @@ export function pawnPhysicsView(actor, services) {
     return level.findSpot(extent, fitted, checkActors, checkFirst) ? fitted : null;
   };
   pawn.random = services.random;
-  pawn.walkingPrelude = () => walkingSurfacePrelude(pawn);
+  pawn.walkingPrelude = (seconds, iterations) => walkingSurfacePrelude(pawn, seconds, iterations);
   pawn.airControlBlocked = delta => lineCheck(pawn.position, pawn.position.map((v, i) => f(v + delta[i])),
     [pawn.radius, pawn.radius, pawn.height], 6, 0).time < 1;
   pawn.landedEvent = normal => dispatch(actor, 'Landed', [normal]);
@@ -221,6 +233,7 @@ export function pawnPhysicsView(actor, services) {
   pawn.landed = (hit, remaining, iterations) => processLanded(pawn, hit, remaining, iterations);
   pawn.walking = (seconds, iterations) => walking(pawn, seconds, iterations);
   pawn.falling = (seconds, iterations) => falling(pawn, seconds, iterations);
+  pawn.flying = (seconds, iterations) => physFlying(pawn, seconds, iterations);
   pawn.setPhysics = (next, support = null) => setActorPhysics(pawn, next, support,
     { dispatch, findBase: a => findActorBase(a, { lineCheck, dispatch }) });
   pawn.setSupportBase = target => setSupportBase(pawn, target, dispatch);
@@ -387,6 +400,7 @@ export function runScriptPawnPhysics(actor, dt, services) {
   switch (pawn.physics) {
     case 1: pawn.walking(delta, 0); break;
     case 2: pawn.falling(delta, 0); break;
+    case 4: pawn.flying(delta, 0); break;
     default: unsupported(`APawn::performPhysics Physics=${pawn.physics}`);
   }
   if (pawn.physics !== 0xa && (services.isA(actor, 'engine.playerpawn') ||

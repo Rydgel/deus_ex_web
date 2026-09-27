@@ -3279,7 +3279,8 @@ export class ScriptRuntime {
       zoneFields:zone=>{
         const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
         return {get ZoneGravity(){return read('ZoneGravity');},get ZoneVelocity(){return read('ZoneVelocity');},
-          get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');}};
+          get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');},
+          get ZoneFluidFriction(){return read('ZoneFluidFriction');}};
       },
       dispatch:(target,name,args=[])=>{
         const record=this.lookup(target,name);

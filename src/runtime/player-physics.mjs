@@ -76,7 +76,7 @@ export function runPlayerPhysics(player,dt,{acceleration,groundSpeed,isWalking,z
  pawn.fallingEvent=()=>{player.unimplementedPhysicsEffects.add('PlayerPawn.PlayInAir animation');};
  pawn.walkTexture=()=>{};
  pawn.textureForHit=hit=>player.textureForHit?player.textureForHit(hit):unsupported('original surface texture lookup');
- pawn.walkingPrelude=()=>walkingSurfacePrelude(pawn);
+ pawn.walkingPrelude=(seconds,iterations)=>walkingSurfacePrelude(pawn,seconds,iterations);
  pawn.findSpot=(position,extent,checkActors,checkFirst)=>player.collision.findSpot(position,extent,checkActors,checkFirst);
  pawn.farMove=(...args)=>player.nativeFarMove?player.nativeFarMove(pawn,...args):unsupported('FarMoveActor');
  pawn.random=()=>player.nativeRandom?player.nativeRandom():unsupported('original RNG state');
