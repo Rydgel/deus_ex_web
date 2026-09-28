@@ -184,3 +184,13 @@ expression. Stacked labels (`case 0: case 9: case 10:`) and case bodies without 
 `break` therefore fall through. Until 2026-09-23 the VM compared at every
 `EX_Case`, so a stacked label's body never ran: InformationDevices.ProcessTag lost
 its text (`case 0`) and colour (`case 15`) tags.
+
+An object or class switch compares 4-byte `UObject*` values, so its `appMemcmp`
+is pointer identity, the same test as `EqualEqual_ObjectObject` (native 114).
+Script objects and generic struct values are both plain JS objects in the VM, so
+the switch reads the declared element type of the switch lvalue
+(`referenceElementType`) to tell them apart. Object and class switches compare by
+identity; a switch over a struct remains explicitly unrecovered and throws. Until
+2026-09-28, every mismatched object case threw as a struct compare. That paused
+Play on the first button whose `switch(buttonPressed)` case was not the first:
+MedBot Exit and Augmentations, and RepairBot Recharge.

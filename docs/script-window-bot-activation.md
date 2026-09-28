@@ -45,7 +45,13 @@ real `Frob` route in a fresh Play host and verifies:
 * `StandStill` clears `Acceleration`, `PlayAnim` selects `Start`, and the
   original setter returns;
 * the previously verified button, accelerator, medical scroll layout,
-  movement, show-area, and recursive cleanup assertions still pass.
+  movement, show-area, and recursive cleanup assertions still pass;
+* for the RepairBot, the drained player (Energy 10, set before `Frob` because
+  `EnableButtons` has no later refresh) presses Recharge through the button's
+  original `ActivateButton(IK_LeftMouse)` after a few ticks advance
+  `Level.TimeSeconds` past `CanCharge`. `HUDRechargeWindow.ButtonActivated`
+  passes the mismatched `btnClose` case by pointer identity, and
+  `DeusExPlayer.ChargePlayer` adds `Min(EnergyMax - Int(Energy), chargeAmount)`.
 
 Both complete routes and the production build pass. This closes the reached
 bot activation/audio-call boundary, not audible playback, Scale drawing, full

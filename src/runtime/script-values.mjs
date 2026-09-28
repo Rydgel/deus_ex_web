@@ -489,6 +489,12 @@ class PropertyReference {
   }
 }
 
+/** The declared element type ('object', 'struct', ...) an lvalue reads, or
+ * null for a value that is not a metadata-carrying property reference. */
+export function referenceElementType(value) {
+  return PropertyReference.stateOf(value)?.descriptor.element.type ?? null;
+}
+
 /**
  * Create a metadata-carrying lvalue.  A fixed-array field reads and writes
  * the complete ArrayDim value, matching CopyCompleteValue (+0x90).

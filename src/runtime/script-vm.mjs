@@ -5,6 +5,7 @@ import { scriptStringText, scriptStringEqual, scriptStringComplementEqual, scrip
 import { getAxes } from './camera.mjs';
 import { msvcrtWtoi } from './script-text-parser.mjs';
 import { rotatorSin } from './coords.mjs';
+import { referenceElementType } from './script-values.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -348,13 +349,18 @@ function x87Transcendental(name, operand) {
 
 /** execSwitch's comparison: appMemcmp over the switch value's size, or
  * appStricmp of the two FStrings when that size is 0. Names are FName
- * indices, so equal names are the ASCII-folded equal spellings. */
-function switchCaseEqual(key, value, size) {
+ * indices, so equal names are the ASCII-folded equal spellings. An object or
+ * class switch compares the 4-byte UObject pointers, so it is identity (the
+ * same test as EqualEqual_ObjectObject, native 114); keyType is the switch
+ * lvalue's declared element type, since script objects and generic struct
+ * values are both plain JS objects here. */
+function switchCaseEqual(key, value, size, keyType = null) {
   if (size === 0) return scriptStringComplementEqual(key, value);
   if (typeof key === 'number' && typeof value === 'number') return Object.is(key, value);
   if (typeof key === 'string' && typeof value === 'string') return scriptStringComplementEqual(key, value);
   if (typeof key === 'boolean' || typeof value === 'boolean') return Boolean(key) === Boolean(value);
   if (key === value) return true;
+  if (keyType === 'object' || keyType === 'class') return false;
   if (key && value && typeof key === 'object' && typeof value === 'object' && !key.reference && !value.reference &&
       (Array.isArray(key) || Object.getPrototypeOf(key) === Object.prototype))
     throw new Error('EX_Switch over a struct value is not recovered');
@@ -1002,12 +1008,12 @@ export function compileFunction(fn) {
             // switch value, then walk the EX_Case chain. A 0xffff case (default
             // or the terminator) or a matching value enters the code after that
             // case; a mismatch continues at the case's next-case offset.
-            const key = refValue(evaluate(n.value));
+            const switched = evaluate(n.value), key = refValue(switched), keyType = referenceElementType(switched);
             for (let at = entry.next;;) {
               const header = statements.get(at);
               if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
               if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
-              if (switchCaseEqual(key, refValue(evaluate(header.node.value)), n.valueSize)) { frame.cursor = header.next; break; }
+              if (switchCaseEqual(key, refValue(evaluate(header.node.value)), n.valueSize, keyType)) { frame.cursor = header.next; break; }
               at = header.node.target;
             }
           } else if (n.op === 0x0a) {

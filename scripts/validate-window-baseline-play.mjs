@@ -68,6 +68,10 @@ const target=process.argv[2]??'MedicalBot';
 const bot=level.actors.find(actor=>actor&&runtime.instance(actor).cls.record.name===target);
 assert.ok(bot,`Training contains ${target}`);
 const effectsBefore=new Set(game.player.unimplementedPhysicsEffects);
+// SetRepairBot's EnableButtons enables Recharge only below EnergyMax, and the
+// window has no Tick to re-enable it, so the drained state precedes Frob.
+const lowEnergy=10;
+if(target==='RepairBot')runtime.namedReference(player,'Energy').set(lowEnergy);
 // Run the original Frob. SetMedicalBot/SetRepairBot discard PlaySound's channel
 // id, so the live host records the one-shot effect and continues the script.
 assert.doesNotThrow(()=>runtime.processEvent(bot,'Frob',[player,null]));
@@ -101,6 +105,23 @@ for(const call of accelerators)assert.ok(completed.some(row=>row.receiver===call
 assert.deepEqual(accelerators.slice(0,initialCalls.length).map(({text,key})=>({text,key})),target==='MedicalBot'?
   [{text:'   |&Augmentations   ',key:65},{text:' |&Health   ',key:72},{text:'E|&xit',key:120}]:
   [{text:'  |&Close  ',key:67},{text:'  |&Recharge  ',key:82}]);
+if(target==='RepairBot'){
+  // HUDRechargeWindow.ButtonActivated's switch(buttonPressed) tests btnClose
+  // before btnRecharge. execSwitch memcmps the 4-byte Window pointers, so the
+  // mismatched case falls through by identity rather than as a struct compare.
+  const recharge=accelerators.find(row=>row.key===82).receiver;
+  const chargeAmount=runtime.namedReference(bot,'chargeAmount').get();
+  const energyMax=runtime.namedReference(player,'EnergyMax').get();
+  // RepairBot.CanCharge needs Level.TimeSeconds - int(lastChargeTime) above
+  // chargeRefreshTime, which the unticked startup level (TimeSeconds 0) is not.
+  for(let frame=0;frame<3;frame++)game.tick(1/60);
+  // The headless root has no viewport, so press through the button's own
+  // original ActivateButton(IK_LeftMouse) rather than root coordinates.
+  runtime.callFunction(runtime.lookup(recharge,'ActivateButton'),recharge,1,()=>1);
+  // DeusExPlayer.ChargePlayer: Energy += Min(EnergyMax - Int(Energy), chargeAmount).
+  assert.equal(runtime.namedReference(player,'Energy').get(),lowEnergy+Math.min(energyMax-lowEnergy,chargeAmount),
+    'the original btnRecharge case charges the player after passing btnClose');
+}
 if(target==='MedicalBot'){
   const areas=completed.filter(row=>row.key==='deusex.personascrollareawindow.initwindow');
   assert.equal(areas.length,1,'original PersonaScrollAreaWindow.InitWindow returns');
