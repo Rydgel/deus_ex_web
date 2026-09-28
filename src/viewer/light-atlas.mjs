@@ -9,7 +9,11 @@ export class LightAtlas {
     texture.minFilter = texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false; texture.flipY = false;
     texture.colorSpace = THREE.NoColorSpace;
-    const page = { index: this.pages.length, texture, pixels, x: 0, y: 0, rowHeight: 0 };
+    // The staging texture shares the pixels but never renders, so the
+    // renderer copies its rectangles from memory, not by framebuffer.
+    const staging = new THREE.DataTexture(pixels, this.size, this.size, THREE.RGBAFormat);
+    const page = { index: this.pages.length, texture, staging, pixels, x: 0, y: 0, rowHeight: 0, uploaded: false, dirty: [] };
+    texture.onUpdate = () => { page.uploaded = true; };
     this.pages.push(page); return page;
   }
   add(lightmap) {
@@ -28,21 +32,39 @@ export class LightAtlas {
     return this.update(lightmap);
   }
   /** Upload changed light samples into the existing tile, retaining its UVs,
-   * page and padding. The lighting engine owns when and how samples change. */
-  update(lightmap) {
+   * page and padding. The lighting engine owns when and how samples change.
+   * A partial update of an uploaded page defers to flush() as one sub-image
+   * copy per tile instead of re-uploading the page. */
+  update(lightmap, { partial = false, region = null } = {}) {
     const tile = this.tiles.get(lightmap);
     if (!tile) throw new Error('Lightmap is not allocated in this atlas');
     if (lightmap.width !== tile.width || lightmap.height !== tile.height)
       throw new Error('Updating a lightmap cannot change its atlas dimensions');
     const {page, x, y} = tile;
-    for (let row = -1; row <= lightmap.height; row++) for (let col = -1; col <= lightmap.width; col++) {
+    // A region (source texel rectangle) also refreshes the padding it borders.
+    const [left, right] = region ? [region.minU ? region.minU : -1, region.maxU < lightmap.width ? region.maxU - 1 : lightmap.width] : [-1, lightmap.width];
+    const [top, bottom] = region ? [region.minV ? region.minV : -1, region.maxV < lightmap.height ? region.maxV - 1 : lightmap.height] : [-1, lightmap.height];
+    for (let row = top; row <= bottom; row++) for (let col = left; col <= right; col++) {
       const src = (Math.max(0, Math.min(lightmap.height - 1, row)) * lightmap.width + Math.max(0, Math.min(lightmap.width - 1, col))) * 3;
       const dst = ((y + row) * this.size + x + col) * 4;
       for (let c = 0; c < 3; c++) page.pixels[dst + c] = Math.round(Math.max(0, Math.min(1, lightmap.pixels[src + c])) * 255);
       page.pixels[dst + 3] = 255;
     }
-    page.texture.needsUpdate = true;
+    if (partial && page.uploaded) page.dirty.push([x + left, y + top, right - left + 1, bottom - top + 1]);
+    else page.texture.needsUpdate = true;
     return tile;
+  }
+  /** Send deferred tile rectangles; without a renderer the pages re-upload. */
+  flush(renderer) {
+    for (const page of this.pages) {
+      if (!page.dirty.length) continue;
+      const rects = page.dirty; page.dirty = [];
+      if (!renderer || rects.length > 256) { page.texture.needsUpdate = true; continue; }
+      for (const [x, y, width, height] of rects) {
+        const region = new THREE.Box2(new THREE.Vector2(x, y), new THREE.Vector2(x + width, y + height));
+        renderer.copyTextureToTexture(page.staging, page.texture, region, new THREE.Vector2(x, y));
+      }
+    }
   }
   coordinates(tile, point) {
     if (!tile.enabled) return [0, 0, 0];

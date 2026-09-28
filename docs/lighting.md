@@ -98,6 +98,11 @@ not reproduced bit for bit. Remaining small differences are recorded rather than
 hidden by an exposure adjustment. Gamma is currently applied per material;
 matching gamma after transparency/reflection compositing belongs with Stage 4.
 
+Moving lights (AugLight's Beams, cameras and other non-static light actors) now
+add their unshadowed texels per frame; see [moving lights](dynamic-lighting.md).
+The same native evidence corrected NonIncidence to `1.02 − d` with its
+`FISTP(d²·4093) < 4096` cutoff for static lights as well.
+
 Switchable lights use stored initial illumination; script-driven changes require
 Stage 3. Time-varying light effects, moving-actor lighting, reflected geometry,
 animated water, meshes, fog and other presentation effects require Stage 4.

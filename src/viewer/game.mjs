@@ -17,6 +17,7 @@ import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
+import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
@@ -229,6 +230,29 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       player.timeDilation = levelDilation.get();
       doors.tick(seconds);
       hud?.tick(doors.scriptRuntime.lastTickDelta);
+    },
+    // Render.dll SetupDynamics' per-frame scan of the level actor array
+    // (docs/dynamic-lighting.md): live light fields of every moving-light
+    // candidate, e.g. AugLight's Beams, for the world's lightmap pass.
+    movingLights() {
+      const lights = [];
+      for (const actor of runtime.levelFor(player.collisionActor).actors) {
+        if (!actor) continue;
+        const read = name => runtime.readNamed(actor, name), LightType = read('LightType');
+        if (!LightType || read('bDeleteMe')) continue;
+        const values = { LightType, bStatic: read('bStatic'), bNoDelete: read('bNoDelete'), bDynamicLight: read('bDynamicLight'),
+          LightBrightness: read('LightBrightness'), LightRadius: read('LightRadius') };
+        if (!isMovingLightCandidate(values)) continue;
+        Object.assign(values, { LightEffect: read('LightEffect'), LightHue: read('LightHue'), LightSaturation: read('LightSaturation'),
+          bSpecialLit: read('bSpecialLit') });
+        // Only the spot effects read the cone and direction (a swivelling
+        // SecurityCamera's normal light does not change with its Rotation).
+        if (values.LightEffect === 8 || values.LightEffect === 12)
+          Object.assign(values, { LightCone: read('LightCone'), Rotation: [...read('Rotation')] });
+        lights.push({ name: actor.name, location: [...read('Location')], values,
+          levelBrightness: runtime.readNamed(read('Level'), 'Brightness') });
+      }
+      return lights;
     },
     view() {
       // ProcessEvent copies its typed parameter block back to this array;

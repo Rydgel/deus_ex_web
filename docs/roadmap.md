@@ -412,6 +412,13 @@ Done when representative scenes reproduce the original animated actors, effects,
 sound, text, and interfaces, including synchronized speech and conversation camera
 behavior where used. A feature being decoded is not evidence that it renders or plays correctly.
 
+**Moving lights on light maps (2026-09-28).** Render.dll's SetupDynamics,
+FDynamicLight::Filter, AddLight and the NonIncidence path are translated and
+match the original on Training's BSP (square-root table, all radii, FGetHSV,
+438 filtered surfaces, 72,255 texels). AugLight lights Training's dark room in
+Play. Mesh lighting, normal/spot moving lights' integer pipeline and the
+renderer's FPU control word remain open; see [moving lights](dynamic-lighting.md).
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,

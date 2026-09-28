@@ -112,7 +112,9 @@ or push further hosting updates unless the user asks.
 window/tab pause acceptance remain open. Broader script execution, the complete
 live object/resource graph, NPC behavior and generic conversations remain
 unfinished. The verified light-switch brightness path does not establish every
-light effect or cache-invalidation branch. Animated characters, the remaining
+light effect or cache-invalidation branch. Moving lights such as AugLight's
+beam light BSP and mover light maps from the original Render.dll path
+([moving lights](docs/dynamic-lighting.md)). Animated characters, the remaining
 native UI presentation, audio mixing, reflections (including the polished training floor)
 and renderer polish remain Stage 4 work.
 Procedural water displays its original source image statically. The training map

@@ -25,9 +25,11 @@ Invisible faces are omitted. Masked P8 surfaces make palette index zero transpar
 palette alpha is otherwise ignored. Two-sided, no-smoothing, translucent screen
 blend, and modulated blend flags affect materials. Fake-backdrop openings reveal
 an initial pass from the original SkyZoneInfo location. Static lightmaps and shadow
-masks are reconstructed as described in [lighting.md](lighting.md). Animated
-texture panning, environment mapping, reflections, fog, and dynamic lighting
-remain outside the current renderer. Display brightness follows the original D3D
+masks are reconstructed as described in [lighting.md](lighting.md). Moving
+lights add their texels to BSP and mover light maps in Play, as described in
+[dynamic-lighting.md](dynamic-lighting.md). Animated texture panning,
+environment mapping, reflections, fog, and dynamic lighting of meshes remain
+outside the current renderer. Display brightness follows the original D3D
 gamma curve, separately from light intensities. Precise gamma handling of blended
 and reflective surfaces is part of the remaining presentation work.
 

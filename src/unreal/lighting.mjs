@@ -60,8 +60,9 @@ export function pointZone(model, point) {
 export function lightAttenuation(light, point, normal) {
   const delta = sub(light.Location ?? [0, 0, 0], point), distance = Math.hypot(...delta);
   const radius = ((light.LightRadius ?? 0) + 1) * 25, d = distance / radius;
+  // NonIncidence 0x10b054e0: (1.02 - d) wherever FISTP(d^2*4093) < 4096.
+  if (light.LightEffect === 13) return d * d * 4093 < 4095.5 ? 1.02 - d : 0;
   if (d >= 1) return 0;
-  if (light.LightEffect === 13) return 1 - d; // NonIncidence
   const incidence = distance > 1e-6 ? Math.abs(dot(delta, normal)) / distance : 1;
   // Native table stores smooth falloff / d, then multiplies plane distance / radius.
   let attenuation = incidence * (1 + 2 * d ** 3 - 3 * d ** 2);
@@ -142,10 +143,23 @@ export async function createLighting(map, asset, assets) {
   await Promise.all(map.model.zones.map(z => actor(z.actor)));
   const levelValues = await actor(levelInfo.index);
   const zoneValues = map.model.zones.map(z => actors.get(z.actor) ?? levelValues);
-  const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set();
+  const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set(), bySurface = new WeakMap(), owned = [];
+  let movingApplier = null;
+
+  // Moving lights (docs/dynamic-lighting.md) add onto a copy of the static
+  // texels, as SetupForSurf's per-frame pass copies the static cache item.
+  function compose(result) {
+    if (!result.moving?.length) {
+      if (result.staticPixels) { result.pixels.set(result.staticPixels); result.staticPixels = null; }
+      return;
+    }
+    if (!result.staticPixels) result.staticPixels = Float32Array.from(result.pixels);
+    else result.pixels.set(result.staticPixels);
+    movingApplier(result, result.moving);
+  }
 
   function refill(result) {
-    const { pixels, points, normal, surface, lightEntries } = result;
+    const { points, normal, surface, lightEntries } = result, pixels = result.staticPixels ?? result.pixels;
     const ambient = zoneValues[result.zone] ?? levelValues;
     const rgb = lightColor(ambient.AmbientHue, ambient.AmbientSaturation, ambient.AmbientBrightness).map(c => c * .25);
     for (let p = 0; p < points.length; p++) pixels.set(rgb, p * 3);
@@ -167,6 +181,7 @@ export async function createLighting(map, asset, assets) {
         for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(127 / 255, pixels[p * 3 + c] + color[c] * weight);
       }
     }
+    if (result.staticPixels) compose(result);
     return result;
   }
 
@@ -182,6 +197,30 @@ export async function createLighting(map, asset, assets) {
     stats, notes,
     async prepare(model) { await Promise.all([...new Set(model.lights.filter(Boolean))].map(actor)); },
     updateActor,
+    /** `apply(result, contributions)` adds moving-light texels onto the static copy. */
+    setMovingApplier(apply) { movingApplier = apply; },
+    /** Replace a record's moving contributions. With a `region` (texel
+     * rectangle covering both the old and new moving texels) only that part
+     * returns to the static copy before the applier adds the new ones. */
+    setMoving(result, contributions, region) {
+      if (contributions?.length && !movingApplier) throw new Error('No moving-light applier is installed');
+      result.moving = contributions?.length ? contributions : null;
+      if (region === undefined) return compose(result);
+      if (!region) { if (!result.moving) result.staticPixels = null; return; }
+      if (!result.staticPixels) {
+        if (!result.moving) return;
+        result.staticPixels = Float32Array.from(result.pixels);
+      } else {
+        for (let v = region.minV; v < region.maxV; v++) {
+          const from = (v * result.width + region.minU) * 3, to = (v * result.width + region.maxU) * 3;
+          result.pixels.set(result.staticPixels.subarray(from, to), from);
+        }
+      }
+      if (result.moving) movingApplier(result, result.moving);
+      else result.staticPixels = null;
+    },
+    recordsFor(model, surfaceIndex) { return bySurface.get(model)?.get(surfaceIndex) ?? []; },
+    ownedRecords() { return owned; },
     invalidate(changes) {
       const entries = normalizeLightingChanges(changes), changedLights = [...new Set(entries.map(entry => entry.ref))];
       for (const { ref, values } of entries) if (values) updateActor(ref, values);
@@ -190,7 +229,7 @@ export async function createLighting(map, asset, assets) {
       return { changedLights, lightmaps: affected,
         affected: affected.map(result => ({ surfaceIndex: result.surfaceIndex, lightMapIndex: result.index, zone: result.zone, lightmap: result })) };
     },
-    surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n) {
+    surface(model, surfaceIndex, zone, transform = p => p, transformNormal = n => n, owner = null) {
       const surface = model.surfaces[surfaceIndex], lm = model.lightMaps[surface.lightMap];
       if (!lm) { stats.missingLightmaps++; return null; }
       const [width, height] = lm.clamp;
@@ -205,9 +244,15 @@ export async function createLighting(map, asset, assets) {
       const lightEntries = refs.map((ref, lightIndex) => ({ ref, shadow: shadowMask(model, lm, lightIndex) }));
       stats.shadowMasks += lightEntries.length;
       const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
-        model, surfaceIndex, surface, points, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal };
+        model, surfaceIndex, surface, points, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,
+        basis, lightMap: lm, owner, staticPixels: null, moving: null };
       refill(result);
       cache.set(key, result); cacheRecords.add(result); stats.lightmaps++;
+      if (!bySurface.has(model)) bySurface.set(model, new Map());
+      const surfaceRecords = bySurface.get(model);
+      if (!surfaceRecords.has(surfaceIndex)) surfaceRecords.set(surfaceIndex, []);
+      surfaceRecords.get(surfaceIndex).push(result);
+      if (owner) owned.push(result);
       return result;
     },
   };

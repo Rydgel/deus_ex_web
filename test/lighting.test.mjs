@@ -50,7 +50,11 @@ test('native falloff combines incidence with smooth radius falloff and cone dire
   close(lightAttenuation(light, [25, 0, 0], [1, 0, 0]), .84375);
   assert.equal(lightAttenuation(light, [100, 0, 0], [1, 0, 0]), 0);
   assert.equal(lightAttenuation(light, [50, 0, 0], [0, 1, 0]), 0);
-  close(lightAttenuation({ ...light, LightEffect: 13 }, [25, 0, 0], [0, 1, 0]), .75);
+  // NonIncidence (0x10b054e0) subtracts the distance fraction from 1.02 and
+  // keeps texels while FISTP(d^2*4093) < 4096, slightly past the radius.
+  close(lightAttenuation({ ...light, LightEffect: 13 }, [25, 0, 0], [0, 1, 0]), .77);
+  close(lightAttenuation({ ...light, LightEffect: 13 }, [100, 0, 0], [0, 1, 0]), .02);
+  assert.equal(lightAttenuation({ ...light, LightEffect: 13 }, [100.04, 0, 0], [0, 1, 0]), 0);
   const spot = { ...light, LightEffect: 12, LightCone: 128, Rotation: [0, 0, 0] };
   close(lightAttenuation(spot, [50, 0, 0], [1, 0, 0]), .5);
   assert.equal(lightAttenuation(spot, [-50, 0, 0], [1, 0, 0]), 0);

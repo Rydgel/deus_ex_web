@@ -6,11 +6,14 @@ import { brushMatrix } from './transforms.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
 import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
+import { createMovingLights } from './moving-lights.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
+  const movingLights = createMovingLights(lighting, map.model);
+  lighting.setMovingApplier(movingLights.apply);
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
   const counts = { triangles: 0, degenerate: 0, corrected: 0, movers: 0, surfaces: 0 };
@@ -76,7 +79,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const surface = model.surfaces[surfaceIndex];
       if (surface.flags & (POLY.Invisible | POLY.FakeBackdrop)) continue;
       try {
-        const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal);
+        const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
         const { material, flags, key } = await materialFor(surface, tile);
         if (flags & POLY.Invisible) continue;
@@ -142,7 +145,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
     return { ...update, uploaded: update.lightmaps.length };
   }
-  return { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
+  const world = { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
@@ -153,8 +156,20 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       }
     },
     updateLighting,
+    /** Play's per-frame moving lights (game.movingLights()) over the current
+     * mover offsets; changed tiles upload on the next flushLighting. */
+    syncMovingLights(lights, movers = []) {
+      const offsets = new Map(movers.map(mover => [mover.name, mover.collider.offset]));
+      const changed = movingLights.update(lights, offsets);
+      for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
+      for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
+      return { lightmaps: changed.length, surfaces: movingLights.surfaces };
+    },
+    flushLighting(renderer) { lightAtlas.flush(renderer); },
+    movingLightRecords: () => movingLights.records(),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
       for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); },
   };
+  return world;
 }

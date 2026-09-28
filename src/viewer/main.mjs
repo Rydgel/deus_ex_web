@@ -617,6 +617,9 @@ function animate(time) {
         catch(error) { pauseForRuntimeError(error); }
       }
       world.syncMovers(game.collision.movers);
+      if (!runtimeError) {
+        try { world.syncMovingLights(game.movingLights(), game.collision.movers); } catch (error) { pauseForRuntimeError(error); }
+      }
       try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
@@ -634,6 +637,7 @@ function animate(time) {
       try{npcPreview.update(fromView(camera.position.toArray()));}catch(error){pauseForRuntimeError(error);}
     }
     renderer.info.reset();
+    world.flushLighting(renderer);
     renderer.setClearColor('#06101b', 1); renderer.clear();
     if (world.sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));

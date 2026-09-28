@@ -188,7 +188,7 @@ frontier:
 | | `MoveActor` for a non-spawned rider (pickup) — **closed**; Candybar and HazMatSuit were a reset leak | CombatKnife, Candybar, HazMatSuit |
 | Exec invocation | exec with omitted optional parameters — **closed** ([console exec](script-console-exec.md)) | PutInHand, DropItem |
 | | null-Context result of a native token — **closed** ([null context](script-null-context.md)) | SwitchAmmo |
-| Spawn admission | `Beam` subclass: needs the collision view, `MakeNoise`/`AIStartEvent`, and a light that renders only in Stage 4 | ActivateAugmentation 9 (AugLight) |
+| Spawn admission | `Beam` subclass: needs the collision view, `MakeNoise`/`AIStartEvent`, and a light that renders only in Stage 4 (now rendered; see [moving lights](dynamic-lighting.md)) | ActivateAugmentation 9 (AugLight) |
 | Resource graph | `DynamicLoadObject` of `DXFonts` — **closed**: Font registration, constructor, Serialize and PostLoad recovered, and the first load runs StaticLoadObject/CreateExport/EndLoad over the shared graph ([font load](script-font-load.md)); `GetDeusExVersion` 1099 closed on the same path | ShowMainMenu |
 | Outside Stage 3 | 3011 `SaveGame`, `ClientTravel`, audible `PlaySound` (discarded-result calls now recorded without stopping) | QuickSave, Teleporter0 |
 
