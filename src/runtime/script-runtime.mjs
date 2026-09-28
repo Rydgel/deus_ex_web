@@ -2273,6 +2273,12 @@ export class ScriptRuntime {
   }
   classDefaultReference(cls,field) {
     if(!cls.propertyLink.includes(field))throw new Error('Class default property is not linked to this class');
+    // InitClassDefaultObject (0x10152300) zeroes the default object's UObject
+    // header and stores Class and Index (-1); `Default.Class` in a static
+    // function (LocalMessage.ClientReceive) reads that Class. Other header
+    // fields stay unbound.
+    if(field.key==='core.object.class')
+      return propertyReference(field,()=>cls.record,()=>{throw new Error('Class default object Class is immutable');});
     if(field.key.startsWith('core.object.'))
       throw new Error('Native class-default header storage is not bound');
     return propertyReference(field,()=>this.defaultValue(cls,field),value=>{
@@ -2298,6 +2304,12 @@ export class ScriptRuntime {
     return propertyReference(member,()=>refValue(ref)[index],item=>{const struct=refValue(ref);struct[index]=item;ref.set(struct);});
   }
   lookup(receiver,name,global=false) {
+    // execClassContext (0x1012edb0) steps `ClassExpr.static.F()` with this =
+    // the class's Defaults (+0x4d4), the class default object. Its header has
+    // no StateFrame (InitClassDefaultObject 0x10152300 zeroes it), so the
+    // call resolves in the class scope.
+    if(receiver?.kind==='Class'&&!this.instances.has(receiver))
+      return this.lookupMember(this.defaultObjectClass(receiver),'methods',name);
     const instance=this.instance(receiver);
     return (!global&&this.lookupMember(instance.state?.stateNode,'methods',name))||this.lookupMember(instance.cls,'methods',name);
   }
@@ -3572,8 +3584,18 @@ export class ScriptRuntime {
     this.destroyFunctionLocals(fn,locals,{parameters:false});
     return true;
   }
+  /** The linked class whose default object a class-context receiver names. */
+  defaultObjectClass(receiver) {
+    if(!receiver.linkedClass)throw new Error(`Class-context call requires a linked class: ${receiver.key}`);
+    return receiver.linkedClass;
+  }
   executeScript(fn,receiver,locals) {
-    const instance=this.instance(receiver),singular=Boolean(fn.script.functionFlags&0x20);
+    // A class-context call runs on the class default object; its singular
+    // guard is that object's own flag, kept per class.
+    const instance=receiver?.kind==='Class'&&!this.instances.has(receiver)
+      ?((this.defaultObjectStates??=new WeakMap()).get(receiver)
+        ??this.defaultObjectStates.set(receiver,{singular:false}).get(receiver))
+      :this.instance(receiver),singular=Boolean(fn.script.functionFlags&0x20);
     if(singular&&instance.singular)return fn.result?zeroValue(fn.result):undefined;
     if(singular)instance.singular=true;
     try{return fn.compiled.run(receiver,locals,this.services);}

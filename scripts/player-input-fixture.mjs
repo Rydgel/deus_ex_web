@@ -178,12 +178,18 @@ export function createPlayerInputFixture(game, {tickSeconds = 1 / 60, paint = nu
     return game.use();
   }
 
-  function loseTarget(target, {distance = 400, maxFrames = 60} = {}) {
+  /** Step `distance` units from the target along the unit XY `direction` and
+   * face further away. The spot must be inside the world: a zone-0
+   * placement makes original physFalling dispatch FellOutOfWorld (JC dies). */
+  function loseTarget(target, {distance = 400, direction = [-1, 0], maxFrames = 60} = {}) {
     if (!target) throw new TypeError('loseTarget requires the current target actor');
     const at = currentLocation(target);
-    place([at[0] - distance, at[1], at[2]], {yaw: Math.PI});
+    place([at[0] + direction[0] * distance, at[1] + direction[1] * distance, at[2]],
+      {yaw: Math.atan2(direction[1], direction[0])});
     for (let frame = 0; frame < maxFrames; frame++) {
       tick(1);
+      if (read(playerActor(), 'Region')?.['engine.actor.pointregion.zonenumber'] === 0)
+        throw new Error(`loseTarget placed JC outside the world (zone 0) ${distance} units from ${target.name ?? 'actor'}; choose another direction`);
       if (game.interaction.frobTarget !== target) return {target: game.interaction.frobTarget, frames: frame + 1};
     }
     throw new Error(`View trace retained ${target.name ?? 'actor'} after moving ${distance} units and looking away`);

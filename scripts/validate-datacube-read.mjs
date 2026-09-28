@@ -127,7 +127,9 @@ assert.ok(registry.freeIndices.includes(parser.index), 'the parser index is reus
 assert.equal(get(player, 'AnimSequence'), 'PushButton', 'DoFrob -> PlayPickupAnim height branch');
 
 // Walking out of frob range: InformationDevices.Tick sees FrobTarget != Self.
-input.loseTarget(cube, {distance: 400});
+// DataCube0 backs onto a wall on its -X side; step away along +X to stay in
+// the world.
+input.loseTarget(cube, {distance: 400, direction: [1, 0]});
 input.tick(1); // Let InformationDevices.Tick observe the changed FrobTarget on its next actor update.
 assert.ok(get(cube, 'infoWindow')===null, 'Tick closed the window once FrobTarget changed');
 assert.equal(visible(info), false, 'DestroyWindow hides the display');
