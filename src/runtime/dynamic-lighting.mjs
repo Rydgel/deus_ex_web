@@ -98,6 +98,34 @@ export function filterMovingLight(model, location, radius, specialLit = false) {
   return surfaces;
 }
 
+/** The same Filter walk's leaf part (0x10b24a8d-0x10b24bcb, 0x10b24e04-
+ * 0x10b24f6b): a side the light reaches whose child is a leaf
+ * (FBspNode.iLeaf[side] ≠ -1) puts the light on URender::LeafLights[leaf],
+ * which DrawActorSprite hands to SetupForActor for actors in that leaf. Root
+ * items start with HitLeaf clear, so every such leaf is taken. Returns the
+ * leaf indices in first-hit order of this depth-first walk. */
+export function movingLightLeaves(model, location, radius) {
+  const leaves = [], seen = new Set();
+  if (!model.nodes.length) return leaves;
+  const [lx, ly, lz] = location.map(f), stack = [0];
+  const add = leaf => { if (leaf >= 0 && !seen.has(leaf)) { seen.add(leaf); leaves.push(leaf); } };
+  for (let visited = 0; stack.length; visited++) {
+    if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
+    const node = model.nodes[stack.pop()];
+    const [px, py, pz, pw] = node.plane;
+    const distance = f(pz * lz + py * ly + px * lx - pw);
+    if (-radius < distance) {
+      add(node.leaves[1]);
+      if (node.front >= 0) stack.push(node.front);
+    }
+    if (distance < radius) {
+      add(node.leaves[0]);
+      if (node.back >= 0) stack.push(node.back);
+    }
+  }
+  return leaves;
+}
+
 const K85 = x87load(f(1 / 85)), K84 = x87load(f(1 / 84)), ZERO = x87load(0), ONE = x87load(1);
 
 /** Engine.dll FGetHSV 0x103ec8d0 on the 80-bit model: the brightness

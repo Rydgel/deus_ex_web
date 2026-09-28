@@ -4,6 +4,7 @@ import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
+import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormals,meshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
@@ -13,7 +14,7 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
  * runtime's pose fields change, so original startup/animation is visible in
  * ordinary Play without preview controls. Original mesh lighting remains a
  * boundary. Contracts and captured cache identity: docs/npc-mesh-preview.md. */
-export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={}) {
+export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   let kernelError=null;
   if(kernel===undefined) {
@@ -27,16 +28,16 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
       if(runtime.readNamed(actor,'bHidden'))continue;
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel});
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));
-  return {root,actors,update(cameraPosition){for(const actor of actors)actor.update(cameraPosition);},
+  return {root,actors,update(cameraPosition,view={}){for(const actor of actors)actor.update(cameraPosition,view);},
     dispose(){for(const actor of actors)actor.dispose();},
     summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
-      shading:'texture-only inspection',startup:'original'}};
+      shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'}};
 }
 
 /** Whole-level actor mesh layer for Play: the captured NPC bindings above plus
@@ -50,7 +51,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel}={})
  * stays texture-only, as documented for the NPC layer. */
 /** `player` is the player actor or a getter for it: Player start logs a new
  * player in, so the viewer passes a getter. */
-export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource}={}) {
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -62,7 +63,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   let npc=null;
   if(asset.name.toLowerCase()==='00_training') {
     try {
-      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel});
+      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma});
       root.add(npc.root);npc.root.visible=true;
       npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
@@ -91,7 +92,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   const pending=new Map(),failed=new WeakMap();
   const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,
     npcs:npcActors.length,props:0,skipped:[],triangles:0,
-    shading:'texture-only inspection',startup:'original'};
+    shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
   const refreshSummary=()=>{
     summary.actors=actors.map(actor=>actor.summary);summary.props=propActors.length;summary.npcs=npcActors.length;
     summary.skipped=actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s})));
@@ -102,7 +103,8 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
-    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld})
+    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
+      lighting,displayGamma})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
         preview.root.visible=drawnInWorld(actor);root.add(preview.root);
@@ -132,14 +134,17 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
   return {root,actors,npcActors,propActors,summary,
-    update(cameraPosition){reconcile();for(const actor of actors)actor.update(cameraPosition);},
+    /** `view.lit` marks the main viewport frame, whose drawn actors get one
+     * SetupForActor/Light pass each; mirror frames reuse those colours. */
+    update(cameraPosition,view={}){reconcile();for(const actor of actors)actor.update(cameraPosition,view);},
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
     dispose(){disposed=true;for(const actor of actors)actor.dispose();},
   };
 }
 
-export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null}) {
+export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
+  lighting=null,displayGamma={value:1}}) {
   const read=(object,name)=>runtime.readNamed(object,name);
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
@@ -201,6 +206,24 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       positions[at+2]=-vertices.getFloat32(offset,true);
     }
   };
+  // One DrawLodMesh lighting pass (docs/mesh-lighting.md) over every face in
+  // draw order; each group's corners take their face's colours.
+  function relight(){
+    const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
+    const count=frame.output.byteLength/12,points=new Array(count);
+    for(let i=0;i<count;i++)points[i]=[vertices.getFloat32(i*12,true),vertices.getFloat32(i*12+4,true),vertices.getFloat32(i*12+8,true)];
+    const result=lighting.lightMesh(actor,points,faces);
+    if(!result)return null;
+    for(const group of groups.values()){
+      const attribute=group.geometry.getAttribute('deusLight'),array=attribute.array;
+      group.faces.forEach((faceIndex,k)=>{
+        for(const [slot,corner] of [0,2,1].entries())
+          array.set(result.colors.subarray(faceIndex*9+corner*3,faceIndex*9+corner*3+3),(k*3+slot)*3);
+      });
+      attribute.needsUpdate=true;
+    }
+    return {lights:result.setup.lights.length,flags:result.flags};
+  }
   try {
     for(const [faceIndex,face] of faces.entries()) {
       if(face.flags&POLY.Invisible)continue;
@@ -238,20 +261,38 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
         // Keep the current texture-only shading in both the main framebuffer
         // and the display-encoded mirror target (Three defaults targets to linear).
-        material.customProgramCacheKey=()=>'deus-ex-mesh-display-color-v1';
-        material.onBeforeCompile=shader=>{shader.fragmentShader=shader.fragmentShader.replace(
-          '#include <colorspace_fragment>','gl_FragColor = sRGBTransferOETF(gl_FragColor);');};
+        // D3D modulates the display-encoded texel by the vertex diffuse
+        // (docs/mesh-lighting.md), before the display gamma ramp; the world
+        // shader treats light maps the same way.
+        // Style can switch a material to PF_Modulated at run time, so the
+        // modulated display ramp (displayRampGlsl) is a uniform branch.
+        const modulatedUniform={value:!(flags&POLY.Translucent)&&flags&POLY.Modulated?1:0};
+        material.customProgramCacheKey=()=>'deus-ex-mesh-display-color-v3';
+        material.onBeforeCompile=shader=>{
+          shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
+          shader.vertexShader=shader.vertexShader.replace('#include <common>',
+            '#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;')
+            .replace('#include <begin_vertex>','#include <begin_vertex>\nvDeusLight = deusLight;');
+          shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
+            '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
+            .replace('#include <colorspace_fragment>',
+              'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
+              `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
+              `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+        };
         materials.push(material);
         if(flags&(POLY.Translucent|POLY.Modulated)) {
           material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
           material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
           material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
         }
-        material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length};
+        material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length,modulatedUniform};
         const geometry=new THREE.BufferGeometry();
         const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
         geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
         geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
+        geometry.setAttribute('deusLight',new THREE.BufferAttribute(new Float32Array(group.indices.length*3).fill(1),3)
+          .setUsage(THREE.DynamicDrawUsage));
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();
         group.geometry=geometry;
@@ -273,24 +314,26 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         triangles:[...groups.values()].reduce((total,group)=>total+group.faces.length,0),
         textures:[...new Set([...groups.values()].map(group=>group.reference.key))],
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
-        shading:'texture-only inspection',startup:'original'};
+        shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
     lastPose=pose();
     return {actor,root,dispose,mesh:meshReference,
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
-      update(cameraPosition){
+      update(cameraPosition,view={}){
         if(disposed)return false;
         root.visible=visible?visible(actor):(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
         if(!root.visible)return false;
         if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
-        // Actor.uc declares ScaleGlow as the lighting multiplier. This applies
-        // it to this renderer's explicitly texture-only inspection lighting.
-        const glow=Math.min(1,read(actor,'ScaleGlow')),style=read(actor,'Style');
+        // Actor.uc declares ScaleGlow as the lighting multiplier. With original
+        // mesh lighting it is inside FLightManager::Light and the unlit colour;
+        // the unlit inspection path applies it to the texture directly.
+        const glow=lighting?1:Math.min(1,read(actor,'ScaleGlow')),style=read(actor,'Style');
         for(const material of materials){
           material.color.setRGB(glow,glow,glow);
           const flags=material.userData.flags;
           const translucent=style===3||Boolean(flags&POLY.Translucent);
           const modulated=!translucent&&(style===4||Boolean(flags&POLY.Modulated));
           material.transparent=translucent||modulated;material.depthWrite=!material.transparent;
+          material.userData.modulatedUniform.value=modulated?1:0;
           material.blending=material.transparent?THREE.CustomBlending:THREE.NormalBlending;
           material.blendSrc=translucent?THREE.OneFactor:THREE.DstColorFactor;
           material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
@@ -318,6 +361,9 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
             uv.needsUpdate=true;
           }
         }
+        if(lighting&&view.lit&&lighting.frame&&(!view.frustum||[...groups.values()].some(group=>
+          group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))
+          summary.lighting=relight()??summary.lighting;
         lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
         // True when a buffer was re-uploaded: pose positions, or the
         // camera-relative environment UVs, which change with the viewer.

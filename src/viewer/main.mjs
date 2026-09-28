@@ -9,6 +9,7 @@ import { createGame } from './game.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { createWeaponViewModel } from './weapon-view-model.mjs';
+import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 
@@ -27,6 +28,7 @@ let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
 let weaponViewModel=null;
+let meshLighting=null;
 let infoLinkAudioContext=null;
 const conversationAudio=new Map();
 const audioTransport={requests:0,starts:0,failures:0,lastRequest:null,lastStarted:null,lastError:null};
@@ -159,7 +161,7 @@ async function loadMap(name) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel;
+  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel, nextMeshLighting;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -188,16 +190,22 @@ async function loadMap(name) {
     if(nextGame){
       $('gate-message').textContent='Preparing original actor meshes…';
       try{
+        const meshRuntime=nextGame.doors.scriptRuntime.runtime;
+        const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
+        nextMeshLighting=createMeshLightingView(meshRuntime,()=>meshRuntime.levelFor(nextGame.player.collisionActor),
+          {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
         nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{
           // Player start logs in a new player; follow the current one.
-          player:()=>nextGame.player.collisionActor,
+          player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
-        nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses in Play. Original mesh lighting, distance LOD and animated/procedural mesh skins remain unsupported.`);
+        nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
-    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor);
+    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
+      {lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
+    meshLighting=nextMeshLighting??null;
     hudRenderer?.dispose();hudRenderer=nextHud;
     weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
@@ -634,8 +642,19 @@ function animate(time) {
     }
     // Draw the current shared-runtime pose; rendering neither chooses an
     // animation nor advances NPC time — the script runtime owns both.
+    // One lighting frame per main-viewport draw (docs/mesh-lighting.md).
+    // Inspect's free camera lights meshes from its own view.
+    if(meshLighting&&!runtimeError){
+      const toUnits=radians=>Math.round(radians*32768/Math.PI);
+      const view=playerView??{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
+      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000});}
+      catch(error){pauseForRuntimeError(error);}
+    }
     if(npcPreview&&!runtimeError){
-      try{npcPreview.update(fromView(camera.position.toArray()));}catch(error){pauseForRuntimeError(error);}
+      camera.updateMatrixWorld();
+      const frustum=new THREE.Frustum().setFromProjectionMatrix(
+        new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
+      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum});}catch(error){pauseForRuntimeError(error);}
     }
     renderer.info.reset();
     world.flushLighting(renderer);

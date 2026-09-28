@@ -74,8 +74,8 @@ export class LightAtlas {
   dispose() { for (const page of this.pages) page.texture.dispose(); }
 }
 
-export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null) {
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v2:${Boolean(mirror)}`;
+export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false) {
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v3:${Boolean(mirror)}:${Boolean(modulated)}`;
   material.onBeforeCompile = shader => {
     shader.uniforms.deusLightAtlas = { value: page.texture };
     shader.uniforms.deusLightingEnabled = enabled;
@@ -112,6 +112,20 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
         vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
         gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);
       }` : ''}
-      gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(deusDisplayGamma));`);
+      ${displayRampGlsl('deusDisplayGamma', modulated)}`);
   };
+}
+
+/** The display gamma ramp (D3DDrv 0x2e3e) applies to the finished framebuffer,
+ * after blending. Shaders apply it per fragment instead. That is exact for
+ * opaque output. It is also exact for PF_Modulated, whose SetBlending state
+ * (0x1000837a: DESTCOLOR, SRCCOLOR) stores 2*src*dst: emitting pow(2*src, g)/2
+ * blends to pow(2*src*dst, g). The masked-out character glasses rely on this,
+ * with GrayMaskTex (128) blending to the unchanged background. For g > 1
+ * (Brightness < 0.4), src > 2^(1/g)/2 would need a fragment value above 1 and
+ * clamps. */
+export function displayRampGlsl(gamma, modulated) {
+  return modulated
+    ? `gl_FragColor.rgb = 0.5 * pow(max(2.0 * gl_FragColor.rgb, vec3(0.0)), vec3(${gamma}));`
+    : `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${gamma}));`;
 }

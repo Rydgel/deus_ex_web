@@ -41,6 +41,7 @@ SQRT_TABLE = 0x10b3e1b8
 GDYNMEM = 0x10b32618
 DYNAMICS_CACHE, SURF_LIGHTS, LEAF_LIGHTS, GRENDER = 0x10b5a6f0, 0x10b5a6f8, 0x10b5a6fc, 0x10b5a718
 NUM_DYN_LIGHT_SURFS, DYN_LIGHT_SURFS = 0x10b5a6d8, 0x10b57324
+NUM_DYN_LIGHT_LEAVES, DYN_LIGHT_LEAVES = 0x10b595fc, 0x10b59600
 FILTER = 0x10b24a10
 DYNAMIC_LIGHT_VTABLE = 0x10b2b80c
 
@@ -280,10 +281,11 @@ class Oracle:
         nodes, surfaces = model['nodes'], model['surfaces']
         node_array = self.alloc(len(nodes) * 64)
         blob = bytearray(len(nodes) * 64)
-        for index, (px, py, pz, pw, surface, back, front, coplanar) in enumerate(nodes):
+        for index, (px, py, pz, pw, surface, back, front, coplanar, *leaves) in enumerate(nodes):
             struct.pack_into('<ffff', blob, index * 64, px, py, pz, pw)
             struct.pack_into('<iiii', blob, index * 64 + 0x1c, surface, back, front, coplanar)
-            struct.pack_into('<ii', blob, index * 64 + 0x38, -1, -1)
+            # FBspNode.iLeaf[back, front]; -1 when the fixture omits leaves.
+            struct.pack_into('<ii', blob, index * 64 + 0x38, *(leaves or (-1, -1)))
         self.cpu.mem_write(node_array, bytes(blob))
         surf_array = self.alloc(len(surfaces) * 64)
         blob = bytearray(len(surfaces) * 64)
@@ -304,7 +306,10 @@ class Oracle:
         self.write(DYNAMICS_CACHE, 'I', dynamics)
         surf_lights = self.alloc(len(surfaces) * 4)
         self.write(SURF_LIGHTS, 'I', surf_lights)
-        self.write(LEAF_LIGHTS, 'I', self.alloc(0x100))
+        leaf_count = max([max(node[8:10]) for node in nodes if len(node) > 8] + [0]) + 1
+        leaf_lights = self.alloc(leaf_count * 4 + 0x100)
+        self.write(LEAF_LIGHTS, 'I', leaf_lights)
+        self.write(NUM_DYN_LIGHT_LEAVES, 'i', 0)
         grender = self.alloc(0x200)
         self.write(grender + 0xf0, 'I', self.alloc(len(nodes) * 4 + 16))
         self.write(GRENDER, 'I', grender)
@@ -333,7 +338,9 @@ class Oracle:
         count = self.read(NUM_DYN_LIGHT_SURFS, 'i')[0]
         order = list(self.read(DYN_LIGHT_SURFS, f'{count}i')) if count else []
         lit = [index for index, link in enumerate(self.read(surf_lights, f'{len(surfaces)}I')) if link]
-        return {'surfaces': sorted(lit), 'dynLightSurfs': order, 'visited': visited}
+        leaf_total = self.read(NUM_DYN_LIGHT_LEAVES, 'i')[0]
+        leaves = list(self.read(DYN_LIGHT_LEAVES, f'{leaf_total}i')) if leaf_total else []
+        return {'surfaces': sorted(lit), 'dynLightSurfs': order, 'visited': visited, 'leaves': leaves}
 
 
 def main():

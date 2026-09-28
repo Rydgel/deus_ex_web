@@ -11,7 +11,7 @@ import {createActorMeshPreview} from './npc-mesh-preview.mjs';
  * docs/script-weapon-rendering.md. */
 /** `playerSource` is the player actor or a getter for it: Player start logs
  * a new player in, so the viewer passes a getter. */
-export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=null}={}) {
+export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=null,lighting=null,displayGamma}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource;
   const engine=await assets.get('Engine');
   const canvasClass=await runtime.loadClass(engine,engine.exportsByPath.get('canvas'));
@@ -20,7 +20,7 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
   runtime.attach(canvas,canvasClass);
   const read=(actor,name)=>runtime.readNamed(actor,name);
   const scene=new THREE.Scene(),entries=new Map(),pending=new Map();
-  const summary={actor:null,mesh:null,loading:false,draws:0,shading:'texture-only inspection'};
+  const summary={actor:null,mesh:null,loading:false,draws:0,shading:lighting?'original mesh lighting':'texture-only inspection'};
   let disposed=false,error=null,index=0x50000000;
   const prepare=actor=>{
     const mesh=read(actor,'Mesh');
@@ -28,7 +28,8 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
     if(entry?.mesh===mesh)return entry;
     if(entry){scene.remove(entry.preview.root);entry.preview.dispose();entries.delete(actor);}
     if(pending.has(actor))return null;
-    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:index++,kernel,drawActor:true})
+    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:index++,kernel,drawActor:true,
+      lighting,displayGamma})
       .then(preview=>{
         if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){preview.dispose();return;}
         entries.set(actor,{mesh,preview});scene.add(preview.root);
@@ -88,7 +89,9 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
           summary.actor??=command.actor.name;summary.mesh??=read(command.actor,'Mesh')?.key??null;
           const entry=prepare(command.actor);if(!entry)continue;
           for(const {preview} of entries.values())preview.root.visible=false;
-          entry.preview.update(fromView(camera.position.toArray()));
+          // Canvas.DrawActor -> URender::DrawActor lights the weapon as its
+          // own light sink in the main frame (docs/mesh-lighting.md).
+          entry.preview.update(fromView(camera.position.toArray()),{lit:true});
           for(const mesh of entry.preview.root.children)mesh.material.wireframe=command.wireframe;
           // Canvas.DrawActor's optional ClearZ (default false, 0x10377f3c).
           if(command.clearZ)renderer.clearDepth();

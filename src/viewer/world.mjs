@@ -48,7 +48,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const material = new THREE.MeshBasicMaterial({ map: textureGPU.get(texKey),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
-      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror);
+      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror,
+        !mirror && !(flags & POLY.Translucent) && Boolean(flags & POLY.Modulated));
       if (mirror) {
         // The reflected child is composited by the shader, then PF_Occlude
         // writes floor depth. Ordinary translucent surfaces keep their blend.
