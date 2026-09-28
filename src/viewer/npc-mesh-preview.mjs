@@ -236,6 +236,11 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         texture.needsUpdate=true;
         const material=new THREE.MeshBasicMaterial({map:texture,
           side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
+        // Keep the current texture-only shading in both the main framebuffer
+        // and the display-encoded mirror target (Three defaults targets to linear).
+        material.customProgramCacheKey=()=>'deus-ex-mesh-display-color-v1';
+        material.onBeforeCompile=shader=>{shader.fragmentShader=shader.fragmentShader.replace(
+          '#include <colorspace_fragment>','gl_FragColor = sRGBTransferOETF(gl_FragColor);');};
         materials.push(material);
         if(flags&(POLY.Translucent|POLY.Modulated)) {
           material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;

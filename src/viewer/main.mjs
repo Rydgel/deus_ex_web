@@ -596,6 +596,7 @@ function status() {
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
     weaponViewModel:weaponViewModel?.summary??null,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
+    mirrors: world ? { ...world.mirrors.stats } : null,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
     calls: renderer.info.render.calls, frame: renderer.info.render.frame,
@@ -638,6 +639,8 @@ function animate(time) {
     }
     renderer.info.reset();
     world.flushLighting(renderer);
+    world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
+      updateActors: npcPreview && !runtimeError ? position => npcPreview.update(position) : null });
     renderer.setClearColor('#06101b', 1); renderer.clear();
     if (world.sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));

@@ -28,10 +28,12 @@ an initial pass from the original SkyZoneInfo location. Static lightmaps and sha
 masks are reconstructed as described in [lighting.md](lighting.md). Moving
 lights add their texels to BSP and mover light maps in Play, as described in
 [dynamic-lighting.md](dynamic-lighting.md). Animated texture panning,
-environment mapping, reflections, fog, and dynamic lighting of meshes remain
+fog and dynamic lighting of meshes remain
 outside the current renderer. Display brightness follows the original D3D
-gamma curve, separately from light intensities. Precise gamma handling of blended
-and reflective surfaces is part of the remaining presentation work.
+gamma curve, separately from light intensities. Static translucent horizontal
+mirror floors now render reflected views and blend before gamma; see
+[original mirror evidence and remaining limits](mirror-surfaces.md). General
+gamma handling of other blended surfaces remains presentation work.
 
 P8 palettes and stored mip chains are used directly. RGB565, RGB8, and BGRA8 also
 have decoders, covered with synthetic fixtures. Training's WetTexture has empty

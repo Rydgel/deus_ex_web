@@ -108,8 +108,8 @@ or push further hosting updates unless the user asks.
 
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
 not every interaction or full campaign compatibility. Original mesh lighting,
-remaining native UI presentation, audio mixing, reflections (including the
-polished training floor), procedural textures and other renderer effects remain
+remaining native UI presentation, audio mixing, recursive/other mirror modes,
+procedural textures and other renderer effects remain
 Stage 4 work. Training is the visual acceptance target; other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open. See
@@ -152,6 +152,12 @@ the installed DLL under the documented FPU convention; live composition matches
 on 11 Training lightmaps. Original-game visual comparison and the running
 renderer's FPU mode remain open. See [ordinary moving-light evidence](docs/moving-normal-lighting.md)
 and [the broader rendering limits](docs/dynamic-lighting.md).
+
+Training's polished floor now renders the reflected world and actors using its
+original mirror flags, plane and translucent blend. Twelve reflected camera/clip
+cases match the original DLL, and the entrance floor has been compared with the
+native capture. Other mirror modes and recursive/sky combinations remain open.
+See [mirror-floor evidence and limits](docs/mirror-surfaces.md).
 
 ## Open the viewer
 

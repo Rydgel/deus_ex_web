@@ -74,12 +74,17 @@ export class LightAtlas {
   dispose() { for (const page of this.pages) page.texture.dispose(); }
 }
 
-export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }) {
-  material.customProgramCacheKey = () => 'deus-ex-lightmap-v1';
+export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null) {
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v2:${Boolean(mirror)}`;
   material.onBeforeCompile = shader => {
     shader.uniforms.deusLightAtlas = { value: page.texture };
     shader.uniforms.deusLightingEnabled = enabled;
     shader.uniforms.deusDisplayGamma = gamma;
+    if (mirror) {
+      shader.uniforms.deusMirror = mirror.texture;
+      shader.uniforms.deusMirrorSize = mirror.size;
+      shader.uniforms.deusMirrorActive = mirror.active;
+    }
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
       attribute vec3 lightUV;
       attribute vec4 lightBounds;
@@ -91,13 +96,22 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }) {
       uniform sampler2D deusLightAtlas;
       uniform float deusLightingEnabled;
       uniform float deusDisplayGamma;
+      ${mirror ? 'uniform sampler2D deusMirror; uniform vec2 deusMirrorSize; uniform float deusMirrorActive;' : ''}
       varying vec3 vDeusLightUV;
-      varying vec4 vDeusLightBounds;`).replace('#include <colorspace_fragment>', `#include <colorspace_fragment>
+      varying vec4 vDeusLightBounds;`).replace('#include <colorspace_fragment>', `
+      // Offscreen mirror targets need the same encoded colours as the main
+      // framebuffer; Three normally leaves render-target colours linear.
+      gl_FragColor = sRGBTransferOETF(gl_FragColor);
       // The original fixed-function renderer modulates display-encoded texture colours.
       if (deusLightingEnabled > 0.5 && vDeusLightUV.z > 0.5) {
         vec2 lm = clamp(vDeusLightUV.xy, vDeusLightBounds.xy, vDeusLightBounds.zw);
         gl_FragColor.rgb *= texture2D(deusLightAtlas, lm).rgb * 2.0;
       }
+      ${mirror ? `if (deusMirrorActive > 0.5) {
+        vec3 reflection = texture2D(deusMirror, gl_FragCoord.xy / deusMirrorSize).rgb;
+        vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
+        gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);
+      }` : ''}
       gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(deusDisplayGamma));`);
   };
 }

@@ -7,6 +7,7 @@ import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
 import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
+import { createMirrors } from './mirrors.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
@@ -16,18 +17,19 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   lighting.setMovingApplier(movingLights.apply);
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
+  const mirrors = createMirrors(notes, displayGamma);
   const counts = { triangles: 0, degenerate: 0, corrected: 0, movers: 0, surfaces: 0 };
   const flagProperties = { bInvisible: 1, bMasked: 2, bTranslucent: 4, bTwoSided: 256,
     bNoSmooth: 2048, bUnlit: POLY.Unlit, bModulated: POLY.Modulated };
 
-  async function materialFor(surface, tile) {
+  async function materialFor(surface, tile, mirror) {
     let flags = surface.flags;
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
     if (data.procedural) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
-    const key = `${data.key}:${flags}:${tile.page.index}`;
+    const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}`;
     if (!materials.has(key)) {
       const texKey = `${data.key}:${Boolean(flags & POLY.Masked)}:${Boolean(flags & POLY.NoSmooth)}`;
       if (!textureGPU.has(texKey)) {
@@ -46,8 +48,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const material = new THREE.MeshBasicMaterial({ map: textureGPU.get(texKey),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
-      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma);
-      if (flags & POLY.Translucent) {
+      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror);
+      if (mirror) {
+        // The reflected child is composited by the shader, then PF_Occlude
+        // writes floor depth. Ordinary translucent surfaces keep their blend.
+        material.blending = THREE.NoBlending; material.depthWrite = true;
+      } else if (flags & POLY.Translucent) {
         material.transparent = true; material.depthWrite = false; material.blending = THREE.CustomBlending;
         material.blendSrc = THREE.OneFactor; material.blendDst = THREE.OneMinusSrcColorFactor;
       } else if (flags & POLY.Modulated) {
@@ -81,14 +87,15 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       try {
         const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
-        const { material, flags, key } = await materialFor(surface, tile);
+        const mirror = mirrors.surface(model, surface, actorName);
+        const { material, flags, key } = await materialFor(surface, tile, mirror);
         if (flags & POLY.Invisible) continue;
         const lit = tile.enabled && !(flags & (POLY.Unlit | POLY.Modulated));
         lighting.stats[lit ? 'litSurfaces' : 'unlitSurfaces']++;
         const g = buildSurfaceGeometry(model, ts, surfaceIndex, material.userData.width, material.userData.height);
         counts.degenerate += g.degenerate; counts.corrected += g.corrected;
         if (!g.positions.length) continue;
-        if (!batches.has(key)) batches.set(key, { material, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], faces: [] });
+        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], faces: [] });
         const batch = batches.get(key);
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
         for (let i = 0; i < g.positions.length; i += 3) {
@@ -113,6 +120,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       const mesh = new THREE.Mesh(geometry, batch.material);
       mesh.userData = { actor: actorName, faces: batch.faces, model: model.entry.name };
       parent.add(mesh);
+      batch.mirror?.meshes.push(mesh);
     }
   }
 
@@ -136,7 +144,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
   root.add(markers);
   notes.add(`${map.summary.unknownLevelBytes} trailing Level bytes and ${map.summary.undecodedActorProperties} property values remain opaque.`);
   for (const note of lighting.notes) notes.add(note);
-  if (map.model.surfaces.some(s => s.flags & POLY.Mirrored)) notes.add('Reflective surfaces show their base texture and lighting; mirror reflections are not active.');
+  if (mirrors.stats.surfaces) notes.add('Static translucent mirror floors render reflected world and actor views. Recursive mirrors and mirror/sky combinations remain unverified.');
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
@@ -145,7 +153,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
     return { ...update, uploaded: update.lightmaps.length };
   }
-  const world = { root, markers, counts, textures: textureNames.size, materials, notes: [...notes], errors, sky,
+  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, notes: [...notes], errors, sky,
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
@@ -169,7 +177,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
     movingLightRecords: () => movingLights.records(),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); },
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); },
   };
   return world;
 }

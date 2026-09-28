@@ -395,8 +395,9 @@ of general script compatibility.
 
 ## 4. Restore the remaining presentation
 
-**In progress.** The current rendering increment restores original moving-light
-spatial calculations on BSP/mover lightmaps. Full Stage 4 acceptance remains open.
+**In progress.** Current rendering increments restore original moving-light
+spatial calculations on BSP/mover lightmaps and Training's mirrored floor.
+Full Stage 4 acceptance remains open.
 
 Decode and render original character, weapon, and prop meshes, skins, animation
 sequences, sprites, attachments, and the first-person weapon view. Restore animated
@@ -425,6 +426,15 @@ match their documented original-code comparisons. Mesh lighting, spotlights,
 other light effects, the live renderer's FPU control word and original-game
 visual acceptance remain open; see [ordinary moving lights](moving-normal-lighting.md)
 and [moving lights](dynamic-lighting.md).
+
+**Training mirror floors (2026-09-28).** The 46 authored mirror surfaces at four
+heights render reflected world/actor views, clipped at the original plane, with
+the original translucent screen blend and depth writes. Twelve frame/clip cases
+and the D3D blend-state trace match original DLL execution. The saved entrance
+floor comparison has mean absolute RGB error 3.33/255, with existing lightmap
+and mesh differences still explicit. Recursive mirrors, other orientations and
+material modes, and mirror/sky combinations remain outside this slice. See
+[mirror evidence](mirror-surfaces.md).
 
 ## 5. Implement the full gameplay systems
 

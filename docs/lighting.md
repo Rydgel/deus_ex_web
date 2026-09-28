@@ -96,7 +96,8 @@ Lightmaps use floating-point reconstruction and padded GPU atlases. The original
 fixed-point intermediate rounding, lookup-table discretization and filtering are
 not reproduced bit for bit. Remaining small differences are recorded rather than
 hidden by an exposure adjustment. Gamma is currently applied per material;
-matching gamma after transparency/reflection compositing belongs with Stage 4.
+the mirror-floor path now composes reflected raw colours before gamma, while
+general transparency composition remains Stage 4 work.
 
 Moving lights (AugLight's Beams, cameras and other non-static light actors) now
 add their unshadowed texels per frame; see [moving lights](dynamic-lighting.md).
@@ -104,10 +105,11 @@ The same native evidence corrected NonIncidence to `1.02 − d` with its
 `FISTP(d²·4093) < 4096` cutoff for static lights as well.
 
 Switchable lights use stored initial illumination; script-driven changes require
-Stage 3. Time-varying light effects, moving-actor lighting, reflected geometry,
+Stage 3. Time-varying light effects, moving-actor lighting,
 animated water, meshes, fog and other presentation effects require Stage 4.
-The polished training floor currently shows its lit base texture without its mirror
-reflection. Diagnostics explicitly report these limits. Other maps remain outside
+The polished Training floor now reflects world geometry and actors using the
+recovered native mirror path; see [mirror surfaces](mirror-surfaces.md).
+Diagnostics explicitly report the remaining limits. Other maps remain outside
 visual acceptance, even when they decode successfully.
 
 ## Research references
