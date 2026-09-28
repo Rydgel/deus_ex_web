@@ -8,6 +8,11 @@ light maps. This note records how the original Render.dll applies such moving
 lights to BSP surfaces, what the browser translation reproduces and how it was
 checked.
 
+The next Stage 4 increment also translates the integer spatial body for steady
+ordinary moving lights (`LightEffect=0`), including Training's four security
+cameras. Its original contract, table/texel comparisons and remaining precision
+limits are in [ordinary moving lights](moving-normal-lighting.md).
+
 Sources of truth are the hash-pinned GOTY binaries (Render.dll
 `607f1077…d75d1`, Engine.dll `0c3a8b18…c20b4`), `00_Training.dx` and the
 installed `DeusEx.u` bytecode. Addresses are virtual addresses at the DLLs'
@@ -96,7 +101,8 @@ contribution inside their radius.
   gate, AddLight's class, `WorldLightRadius`, the BSP filter, `fgetHsv` (Engine
   FGetHSV `0x103ec8d0` on the project's 80-bit x87 model), the per-light
   constants, the rectangle, the square-root table, NonIncidence and the colour
-  table entry.
+  table entry. It also implements the normal falloff table, incidence factor
+  and integer spatial recurrence for steady effect-0 lights.
 * `game.movingLights()` scans the live level actor array in order, reading the
   light fields SetupDynamics reads.
 * `src/viewer/moving-lights.mjs` filters each light through the level BSP,
@@ -168,10 +174,11 @@ still match on the supplied inputs. The control word in the running game
 * Mover polygons: the brush tracker's insertion into the level BSP is not
   recovered. Mover light maps take Filter's straddle test on their own plane,
   follow translation offsets only, and use a float facet.
-* Moving normal and spot lights (effects 0, 8, 12 and the waver effects 1–3,
-  11, 19) use the static float reconstruction with the `0x7f` illumination;
-  their integer spatial bodies and the waver/shimmer random modulation are not
-  translated. Other effects are skipped with a diagnostics note.
+* Steady effect-0 moving lights now use the original integer body. Moving spot
+  lights (8, 12), the other normal-effect variants (1–3, 11, 19), and non-steady
+  effect-0 snapshots still use the static float reconstruction with `0x7f`
+  illumination. Their effect/type processing and waver/shimmer random modulation
+  remain unrecovered. Other effects are skipped with a diagnostics note.
 * Non-steady `LightType` functions (`0x10b2a284` table) are not applied.
 * Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
   unsupported mesh lighting.

@@ -1,7 +1,7 @@
 /** Render.dll moving-light lightmap path: the SetupDynamics candidate gate,
  * FDynamicLight::Filter over the level BSP, FLightManager::AddLight's light
  * class, ComputeFromActor's per-light constants and texel rectangle, the
- * NonIncidence spatial function and the colour table merge. Evidence,
+ * normal/NonIncidence spatial functions and the colour table merge. Evidence,
  * precision and remaining limits: docs/dynamic-lighting.md. */
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87sqrt, x87store, x87storeDouble,
   x87cmp } from './script-vm.mjs';
@@ -186,5 +186,70 @@ export function nonIncidenceSpatial(rect, grid, location, constants, write, illu
       dx = f(dx + ux); dy = f(dy + uy); dz = f(dz + uz);
     }
     rowX = f(rowX + vx); rowY = f(rowY + vy); rowZ = f(rowZ + vz);
+  }
+}
+
+let NORMAL_TABLE;
+function getNormalTable() {
+  if (!NORMAL_TABLE) {
+    NORMAL_TABLE = new Float32Array(4096);
+    // Init 0x10b022fe: sqrt returns on the x87 stack. Its double spill is
+    // not reloaded; retain that extended root through the cubic and divide.
+    for (let i = 0; i < NORMAL_TABLE.length; i++) {
+      const d = x87sqrt(x87double((i + 1) / 4096)), squared = x87mul(d, d);
+      const cubed = x87mul(squared, d);
+      const numerator = x87add(x87add(x87add(cubed, cubed), x87neg(x87mul(squared, x87load(3)))), ONE);
+      NORMAL_TABLE[i] = x87store(x87div(numerator, d));
+    }
+  }
+  return NORMAL_TABLE;
+}
+
+/** Init 0x10b022fe..0x10b02352: a copy of the 4096 normal falloff floats. */
+export const normalLightTable = () => getNormalTable().slice();
+
+/** ComputeFromActor 0x10b06325..0x10b0639e, info +0x24. The displacement
+ * components are stored before the Z/Y/X dot and reciprocal multiply. */
+export function normalLightIncidence(location, facet, rradius) {
+  const delta = location.map((v, i) => f(v - facet.origin[i])), n = facet.normal;
+  const dot = x87add(x87add(x87mul(x87load(delta[2]), x87load(n[2])),
+    x87mul(x87load(delta[1]), x87load(n[1]))), x87mul(x87load(delta[0]), x87load(n[0])));
+  return Math.abs(x87store(x87mul(dot, x87load(rradius))));
+}
+
+/** Normal spatial function 0x10b03360. Integer forward differences select
+ * the falloff table; the output byte is the low float byte after adding
+ * 2^23, not a floor/clamp. See docs/moving-normal-lighting.md. */
+export function normalLightSpatial(rect, grid, location, constants, write, illumination = 0x7f) {
+  const { minU, maxU, minV, maxV } = rect, { rr2, incidence } = constants;
+  const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
+  const [lx, ly, lz] = location;
+  const delta = [f(f(sx - lx + f(ux * minU)) + f(vx * minV)),
+    f(f(f(sy - ly) + f(uy * minU)) + f(vy * minV)), f(uz * minU + f(sz - lz) + vz * minV)];
+  const scale = f(rr2 * 4096), table = getNormalTable();
+  const coefficient = (a, b) => {
+    const dot = x87add(x87add(x87mul(x87load(a[2]), x87load(b[2])),
+      x87mul(x87load(a[1]), x87load(b[1]))), x87mul(x87load(a[0]), x87load(b[0])));
+    const rounded = fistp(x87store(x87mul(dot, x87load(scale))));
+    return rounded >= -0x80000000 && rounded < 0x80000000 ? rounded : -0x80000000;
+  };
+  let row = coefficient(delta, delta);
+  const du = coefficient(delta, grid.stepU), dv = coefficient(delta, grid.stepV);
+  const uu = coefficient(grid.stepU, grid.stepU), vv = coefficient(grid.stepV, grid.stepV);
+  const uv = coefficient(grid.stepU, grid.stepV);
+  let rowU = (uu + 2 * du) | 0, rowV = (vv + 2 * dv) | 0;
+  const stepUU = (2 * uu) | 0, stepVV = (2 * vv) | 0, stepUV = (2 * uv) | 0;
+  for (let v = minV; v < maxV; v++) {
+    let distance = row, step = rowU;
+    for (let u = minU; u < maxU; u++) {
+      const byte = illumination && (distance >>> 0) < 0x1000000
+        ? bitsOf(f(illumination * table[distance >>> 12] * incidence + 8388608)) & 255 : 0;
+      write(u, v, byte);
+      distance = (distance + step) | 0;
+      step = (step + stepUU) | 0;
+    }
+    row = (row + rowV) | 0;
+    rowV = (rowV + stepVV) | 0;
+    rowU = (rowU + stepUV) | 0;
   }
 }

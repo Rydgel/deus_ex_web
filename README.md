@@ -1,14 +1,12 @@
 # Deus Ex on the web
 
 The aim is to make the original Deus Ex playable in a browser using its original
-maps, assets, and game behavior. Training and Liberty Island have the **Stage 2
-playable movement/collision slice**. **Stage 3 is in progress:** original scripts
-now drive Training doors, light switches, selected mission/damage triggers,
-player augmentation startup and the direct DataLink lifecycle. Current native
-work covers UI controls and NPC movement, perception and navigation. These are
-documented subsets; general script compatibility and complete NPC behavior are
-still unfinished. See the current checkpoint below and the
-[Stage 3 completion audit](docs/stage-3-completion-audit.md).
+maps, assets, and game behavior. **Stage 3 is complete within its adopted scope:**
+Training passes all five runtime criteria across 95 probes, and all 83
+single-player maps reach only boundaries assigned to later stages in the startup
+census. **Stage 4 rendering is in progress**, building on the existing actor,
+weapon, HUD and moving-light rendering. See the [completion record and coverage
+limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -108,156 +106,52 @@ or push further hosting updates unless the user asks.
   match ordered geometry, movement and events. Whole-scene acceptance remains. See
   [movement evidence](docs/movement.md) and [level queries](docs/level-queries.md).
 
-**Current boundary:** the final original camera/motion comparison and actual
-window/tab pause acceptance remain open. Broader script execution, the complete
-live object/resource graph, NPC behavior and generic conversations remain
-unfinished. The verified light-switch brightness path does not establish every
-light effect or cache-invalidation branch. Moving lights such as AugLight's
-beam light BSP and mover light maps from the original Render.dll path
-([moving lights](docs/dynamic-lighting.md)). Animated characters, the remaining
-native UI presentation, audio mixing, reflections (including the polished training floor)
-and renderer polish remain Stage 4 work.
-Procedural water displays its original source image statically. The training map
-is the visual acceptance target; other maps expose diagnostics for unsupported
-content. See the [rendering contract](docs/rendering.md) and [movement evidence
-and open work](docs/movement.md).
+**Current boundaries:** Stage 3 completion covers the measured runtime paths,
+not every interaction or full campaign compatibility. Original mesh lighting,
+remaining native UI presentation, audio mixing, reflections (including the
+polished training floor), procedural textures and other renderer effects remain
+Stage 4 work. Training is the visual acceptance target; other maps expose
+unsupported-content diagnostics. The final original camera/motion comparison
+and actual window/tab pause acceptance deferred from Stage 2 remain open. See
+[rendering](docs/rendering.md) and [movement](docs/movement.md).
 
-## Stage 3 checkpoint — 2026-09-19
+## Stage 3 completion — 2026-09-28
 
-- **Toward visible NPCs:** the runtime now reads the complete original v68
-  LodMesh payload and resolves its texture references. GM_Trench exposes all
-  366 vertex frames and 71 sequences on the same resource used by PlayAnim.
-  Deferred loading, remapping and signed vertex unpacking are compared with
-  original DLL execution. GetFrame now produces transformed, interpolated
-  vertices with persistent tween caches and all four additive blend channels;
-  46 complete original-DLL calls match byte for byte. Jaime's original helpers
-  and animation tick feed this same pose path. The browser now draws 14
-  Training NPC meshes through the shared frame/material path, re-posed live
-  from the runtime's animated fields. Reduced LOD, original mesh lighting and
-  the four environment-mapped troop surfaces remain unfinished
-  ([mesh payload](docs/script-mesh-payload.md),
-  [frame evaluation](docs/script-lodmesh-frame.md)).
-- **NPC startup-to-display integration:** the Play host runs the original
-  `PreBeginPlay → BeginPlay → PostBeginPlay → SetInitialState →
-  PostPostBeginPlay` chain for every pawn-ancestry map actor, ticks them
-  through the recovered `ULevel::Tick`/`APawn::performPhysics` path, and the
-  renderer resamples live `AnimSequence`/`AnimFrame` through GetFrame every
-  frame — NPCs are visible and animating in ordinary Play, across Inspect →
-  Play and player reset. `Pawn.PreBeginPlay`'s native `AddPawn` owns
-  `Level.PawnList` membership; Shadow spawn reaches the recovered `AttachDecal`
-  BSP sweep with `Engine.Client.Decals = true`. Remaining explicit boundaries:
-  weapon `SpawnActor` for armed NPCs, `PlayerReplicationInfo` for cameras, the
-  `IsValidEnemy`/`FindPathToward` natives, the root-window conversation check,
-  and environment-mapped surfaces for the four UNATCO troops
-  ([exact boundary and evidence](docs/script-npc-startup-animation.md),
-  [Decal startup](docs/script-decal-startup.md)).
-- **NPC surfaces and skins:** full-resolution triangle/material/UV decoding
-  matches original Render instruction ranges for all 629 LightSwitch/GM_Trench
-  faces. Skin selection and GetMeshTexture1013 match 28 full native calls.
-  Jaime's authored skins and original SetSkinStyle/ResetSkinStyle now work
-  through this runtime boundary ([surface/skin evidence](docs/script-lodmesh-materials.md)).
-- **Native mesh loading:** LodMesh construction and serialization now use one
-  shared implementation for inspection and the loader graph. Original native
-  class defaults, constructor bytes and deferred arrays match the DLL. GM_Trench
-  and LightSwitch complete their full 1-object and 733-object EndLoad scopes,
-  including the latter's texture dependencies. Play now prepares meshes through
-  its existing class-loader records and retained archives, with canonical
-  texture references. The larger Play load queue and native release remain open
-  ([native mesh loading](docs/script-mesh-load-graph.md)).
-- **NPC animation controls:** original PlayAnim, LoopAnim and TweenAnim now
-  match 37 complete DLL executions. This also fixes reciprocal frame/tween
-  errors that prevented valid FinishAnim waits. Jaime's original animation
-  helper bytecode reaches these controls through linked flags and SimAnim
-  ([animation evidence](docs/script-animation-controls.md)).
-- **NPC animation progression:** main and four-slot blend ticking now match
-  38 original-DLL cases, including notifies, AnimEnd, looping and leftover time.
-  Jaime's runtime check completes an animation and releases FinishAnim through
-  the real linked fields. Full-world admission/state startup and visual
-  playback remain open ([tick evidence](docs/script-animation-tick.md)).
-- **Actor tick path:** standalone authority Actor.Tick now matches 37 original
-  executions, including owner deferral, stasis, animation/script/timer/physics
-  order, expiry and Pawn timers. Training's LightSwitch runs its original Frob
-  and inherited Tick through this runtime entry in the focused check. NPC
-  startup remains open ([actor tick evidence](docs/script-actor-tick.md)).
-- **World scheduling:** standalone level scheduling now matches 31 complete
-  original-DLL references for live actor-array changes, deferred retries,
-  clocks/distances, pause/input and event/cleanup order. The runtime composes
-  actual Actor.Tick and CleanupDestroyed; a two-frame Training fixture checks
-  owner dependencies and animation completion. Full-world enrollment, native
-  host services and NPC startup remain open
-  ([level tick evidence](docs/script-level-tick.md)).
-- **Tick visibility callbacks:** ShowSelf and CheckEnemyVisible now match
-  24 complete original-DLL cases including the real LOS worker. Actor.Tick uses
-  these helpers by default; the linked Training check reaches Jaime's original
-  SeePlayer function through BSP sight checks and preserves his class's disabled
-  EnemyNotVisible probe ([visibility evidence](docs/script-pawn-tick-visibility.md)).
-- **NPC perception lighting:** AIGetLightLevel and AIVisibility now match 41
-  original-DLL cases, including static-light occlusion, zone ambience, cache
-  interpolation and movement sensitivity. AICanSee calls this original chain.
-  Training light-switch off/on changes reach the query through real BSP traces;
-  three map snapshots also match the DLL. Full startup and Region/clock
-  synchronization remain open ([AI lighting evidence](docs/script-ai-visibility.md)).
-- **Visible HUD:** original DeusExHUD initialization, native family layout and
-  GC drawing provide the object belt, health/energy/compass, ammo, AugLight,
-  frob brackets and log. Root scaling uses the original integer multipliers.
-  InfoLink/ConPlay retain their bounded presentation owners on the same root;
-  general focus/destruction, static interference and whole-renderer visual
-  equivalence remain open
-  ([evidence and boundaries](docs/script-play-hud.md)).
-- **Object/runtime foundation:** recovered class/property linking, construction,
-  serialization and GC components support the selected live paths. Absent-export
-  loading now reaches `CreateExport` and `Preload`; seven classes are checked
-  field-for-field against their package bytes, including indexed defaults and
-  structs with strings. Play now loads classes and serialized defaults through
-  the shared graph: recovered import matching, lazy construction through the
-  owning linker, `Preload`, and native property linking. VM/resource identities
-  remain canonical. The shared load helper now implements original two-pass
-  EndLoad, metadata PostLoad and import cleanup, checked against 17 original
-  DLL cases. Function binding has 12 original-DLL comparisons; the shared graph
-  finalizes Core.Object's full 652-object metadata queue and 164 functions with
-  original native-table inputs. Texture/palette loading now has nine original-DLL
-  reference cases; two real textures and their palettes load through the shared
-  graph, including nine deferred mip levels and PostLoad. Native-only Sound
-  defaults and WAV/MP3 loads now match the DLL too: their load queues finalize,
-  lazy bytes retain the canonical archive, and WAV duration matches exactly.
-  Meshes and procedural textures still block the full resource lifecycle in Play.
-  Native constructor defaults, config/localization, resource
-  lifetimes and live-world collection remain incomplete
-  ([loader evidence](docs/script-linker-preload.md),
-  [original import comparisons](docs/script-linker-imports.md),
-  [EndLoad/PostLoad evidence](docs/script-end-load.md),
-  [function binding](docs/script-function-bind.md),
-  [texture/palette loading](docs/script-texture-loading.md),
-  [Sound loading](docs/script-sound-load-graph.md),
-  [Play integration](docs/script-load-graph.md)).
-- **UI natives:** window layout, text, drawing-command and interactive-control
-  translations have original-DLL comparisons. Their scoped host services do not
-  establish a complete original UI renderer/input loop
-  ([controls](docs/script-window-controls.md),
-  [drawing](docs/script-gc-draw-model.md)).
-- **NPC natives:** `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward` and
-  `WaitForLanding`, including their latent polls, are wired into script dispatch.
-  Six perception/target-selection natives and the original AI light/visibility
-  natives are wired. AICanSee now preserves the target's cache, movement boost
-  and extended return precision. Original NPC physics integration, startup and
-  full-world field/clock synchronization remain open
-  ([locomotion](docs/script-pawn-locomotion.md),
-  [perception](docs/script-pawn-perception.md)).
-- **Navigation frontier:** `checkMove`, `walkReach`, physics dispatch,
-  `pointReachable`'s worker, `reachMask`, `directReach` and `actorReachable`'s
-  worker/exec are translated and compared with original instructions using
-  scripted collision boundaries. `flyMove`/`flyReach` now also run through the
-  physics dispatcher and walking flight fallback, with 30 original-DLL cases
-  checking ordered calls and exact argument/state bits. Navigation is not yet
-  wired into script dispatch; swimming/jump helpers and graph pathfinding
-  remain open
-  ([navigation evidence and next work](docs/script-pawn-nav.md)).
+- Training's gate passes startup, tick, interaction, object lifecycle and
+  host-substitute checks. Its 95 probes include a continuous public-input route
+  from PlayerStart1 through `DL_part2`.
+- The all-maps census covers original LoadMap startup and Login, ten seconds of
+  ticking, a Player-start reload and ten further seconds. All **83/83**
+  single-player maps have no unclassified Stage 3 boundary, boot failure or crash;
+  **53/83** run without any boundary, while the other 30 reach named Stage 4–6
+  features.
+- Interactions outside Training remain unprobed. The census continues past
+  deferred boundaries with declared zero results; behavior downstream of those
+  returns is not original-game fidelity evidence. Implementing those features
+  may expose additional runtime work.
+- Saves, map travel and the measured fresh-entry `PlayerTraveling` marker remain
+  explicit Stage 6 tolerances. AI navigation, broader movement, combat and other
+  gameplay systems belong to Stage 5.
 
-The [completion audit](docs/stage-3-completion-audit.md) records the broader
-Stage 3 gates and current loader boundaries. The
-[historical handoff](docs/stage-3-handoff.md) predates the latest native batches.
-Native counts and passing focused checks describe scoped coverage, not a Stage 3
-completion percentage.
+The [exit criteria and measured results](docs/stage-3-exit-criteria.md) are the
+current status. The [September 20 audit](docs/stage-3-completion-audit.md) and
+[earlier handoff](docs/stage-3-handoff.md) are historical checkpoints.
+
+## Stage 4 rendering — in progress
+
+Original actor meshes and animation poses, first-person weapons, static lighting
+and parts of the original HUD already render in the browser. These remain scoped
+implementations: mesh lighting, distance LOD and complete presentation fidelity
+are unfinished.
+
+AugLight's moving beams now illuminate BSP and mover light maps through the
+recovered Render.dll NonIncidence path. Steady ordinary moving lights, including
+Training's four security-camera lights, now use the original integer spatial
+routine too. All 4,096 falloff-table entries and 37,763 reference texels match
+the installed DLL under the documented FPU convention; live composition matches
+on 11 Training lightmaps. Original-game visual comparison and the running
+renderer's FPU mode remain open. See [ordinary moving-light evidence](docs/moving-normal-lighting.md)
+and [the broader rendering limits](docs/dynamic-lighting.md).
 
 ## Open the viewer
 
@@ -352,11 +246,11 @@ static doors. The footprint overlays every height and is not a game screenshot.
 - **Stage 1:** render training with textures and an inspection camera — complete.
 - **Stage 1.5:** restore original static lighting and shadows — complete.
 - **Stage 2:** playable movement/collision/door slice delivered; remaining validation deferred.
-- **Stage 3:** implement the original script/native runtime and object lifecycle —
-  in progress; live Training script paths and scoped object lifecycles work,
-  UI and NPC native coverage is expanding, and navigation reachability is the
-  current implementation frontier. See the checkpoint above for integration gaps.
-- **Stage 4:** restore animated actors, visual effects, audio, and original interfaces.
+- **Stage 3:** original script/native runtime and object lifecycle — complete for
+  the Training gate and all 83 single-player maps' startup census; coverage limits
+  are recorded above.
+- **Stage 4:** restore animated actors, visual effects, audio, and original interfaces —
+  in progress, currently extending original moving-light rendering.
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations.
 - **Stage 6:** persist saves and map state, then validate the full campaign.
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.

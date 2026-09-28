@@ -395,6 +395,9 @@ of general script compatibility.
 
 ## 4. Restore the remaining presentation
 
+**In progress.** The current rendering increment restores original moving-light
+spatial calculations on BSP/mover lightmaps. Full Stage 4 acceptance remains open.
+
 Decode and render original character, weapon, and prop meshes, skins, animation
 sequences, sprites, attachments, and the first-person weapon view. Restore animated
 and procedural textures, water/fire effects, particles, decals, sky/fog, mirrors
@@ -416,8 +419,12 @@ behavior where used. A feature being decoded is not evidence that it renders or 
 FDynamicLight::Filter, AddLight and the NonIncidence path are translated and
 match the original on Training's BSP (square-root table, all radii, FGetHSV,
 438 filtered surfaces, 72,255 texels). AugLight lights Training's dark room in
-Play. Mesh lighting, normal/spot moving lights' integer pipeline and the
-renderer's FPU control word remain open; see [moving lights](dynamic-lighting.md).
+Play. Steady ordinary moving lights now use the original integer pipeline too:
+4,096 table entries, 37,763 reference texels and 11 live camera-light lightmaps
+match their documented original-code comparisons. Mesh lighting, spotlights,
+other light effects, the live renderer's FPU control word and original-game
+visual acceptance remain open; see [ordinary moving lights](moving-normal-lighting.md)
+and [moving lights](dynamic-lighting.md).
 
 ## 5. Implement the full gameplay systems
 

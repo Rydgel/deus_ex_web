@@ -2,11 +2,12 @@
 
 Optional research tool, never imported by the browser. Runs the hash-pinned
 Render.dll and Engine.dll bodies documented in docs/dynamic-lighting.md:
-the light-manager square-root table, ComputeFromActor's radius, colour and
-rectangle segments, Engine FGetHSV, the NonIncidence spatial function, the
-colour merge and FDynamicLight::Filter over a supplied BSP. Core imports are
-replaced only by appSqrt's own body (fld/fsqrt/ret) and a bump allocator for
-FMemStack::PushBytes; any other import traps. Cases arrive as JSON on stdin.
+the light-manager square-root/normal tables, ComputeFromActor's radius, colour,
+incidence and rectangle segments, Engine FGetHSV, the normal/NonIncidence
+spatial functions, colour merge and FDynamicLight::Filter over a supplied BSP.
+Core's original FVector constructor runs unchanged; appSqrt uses its own body
+(fld/fsqrt/ret), and FMemStack::PushBytes uses a bump allocator. Other imports
+trap unless explicitly linked below. Cases arrive as JSON on stdin.
 """
 import importlib.util
 import json
@@ -49,9 +50,10 @@ class Oracle:
         system = Path(root) / 'System'
         self.render = native.Image(system / 'Render.dll', RENDER_HASH)
         self.engine = native.Image(system / 'Engine.dll')
+        self.core = native.Image(system / 'Core.dll')
         self.control_word = control_word
         cpu = self.cpu = Uc(UC_ARCH_X86, UC_MODE_32)
-        for image in (self.render, self.engine):
+        for image in (self.render, self.engine, self.core):
             cpu.mem_map(image.base, (image.size + 4095) & ~4095)
             for _, _, virtual, raw_size, raw in image.sections:
                 if raw_size:
@@ -66,10 +68,11 @@ class Oracle:
             '8b01' '8b542408' '4a' '01d0' 'f7d2' '21d0' '89c2' '03542404' '8911' 'c20800'))
         cpu.mem_write(RETURN, b'\xf4')
         engine_exports = self.engine.exports()
+        core_exports = self.core.exports()
         self.world_light_radius = engine_exports['?WorldLightRadius@AActor@@UBEMXZ']
         self.fgethsv_address = engine_exports['?FGetHSV@@YA?AVFPlane@@EEE@Z']
         self.gmem = HEAP + 0x100
-        for image in (self.render, self.engine):
+        for image in (self.render, self.engine, self.core):
             for library, symbol, slot in image.imports():
                 target = TRAP
                 if symbol == '?appSqrt@@YANN@Z':
@@ -80,6 +83,8 @@ class Oracle:
                     target = self.gmem
                 elif library == 'engine.dll' and symbol in engine_exports:
                     target = engine_exports[symbol]
+                elif library == 'core.dll' and symbol == '??0FVector@@QAE@MMM@Z':
+                    target = core_exports[symbol]
                 cpu.mem_write(slot, struct.pack('<I', target))
         cpu.hook_add(UC_HOOK_MEM_INVALID, self.invalid)
         self.alloc_top = HEAP + 0x1000
@@ -149,6 +154,23 @@ class Oracle:
         self.run(0x10b0225b, 0x10b022d0)
         return list(self.read(SQRT_TABLE, '2048I'))
 
+    def normal_table(self):
+        self.frame()
+        self.run(0x10b022fe, 0x10b02352)
+        return list(self.read(0x10b34a6c, '4096I'))
+
+    def incidence(self, light, facet, reciprocal):
+        info, coords = self.alloc(0x100), self.alloc(0x40)
+        actor = self.actor(light)
+        self.write(info, 'I', actor)
+        self.write(info + 0x18, 'I', reciprocal)
+        self.write(coords, '12I', *facet['origin'], *facet['axisU'], *facet['axisV'], *facet['normal'])
+        self.write(FACET, 'I', coords)
+        self.frame()
+        self.cpu.reg_write(UC_X86_REG_EBX, info)
+        self.run(0x10b06325, 0x10b0639e)
+        return self.read(info + 0x24, 'I')[0]
+
     # ComputeFromActor 0x10b05fc3-0x10b0602c: radius, reciprocal, 4093/R^2.
     def radius_constants(self, radius):
         info = self.alloc(0x100)
@@ -213,22 +235,29 @@ class Oracle:
         self.run(0x10b0660e, 0x10b06868)
         return list(self.read(info + 0x34, 'iiii'))
 
-    # NonIncidence spatial 0x10b054e0 then the merge 0x10b03040 onto a copy
-    # of the supplied static texels.
-    def spatial_merge(self, light, facet, grid, rect, constants, table, static):
+    # Normal 0x10b03360 / NonIncidence 0x10b054e0, then merge 0x10b03040
+    # onto a copy of the supplied static texels.
+    def spatial_merge(self, light, facet, grid, rect, constants, table, static, illumination=0x7f):
         width, height = facet['clamp']
         stride = ((width + 7) >> 3) * 8
         info, actor = self.alloc(0x100), self.actor(light)
         illum, spatial = self.alloc(stride * height + 16), self.alloc(width * height + 16)
-        self.cpu.mem_write(illum, b'\x7f' * (stride * height))
+        self.cpu.mem_write(illum, bytes([illumination]) * (stride * height))
         self.write(info, 'I', actor)
         self.write(info + 0x18, 'II', constants['rradius'], constants['rr2'])
+        self.write(info + 0x24, 'I', constants.get('incidence', 0))
         self.write(info + 0x34, 'iiii', *rect)
         self.write(START, 'III', *grid['start'])
         self.write(STEP_U, 'III', *grid['stepU'])
         self.write(STEP_V, 'III', *grid['stepV'])
         self.lightmap_globals(facet)
-        self.call(0x10b054e0, [LIGHTMAP, info, illum, spatial])
+        effect = light.get('effect', 13)
+        if effect not in (0, 13):
+            raise ValueError(f'Unsupported oracle spatial effect {effect}')
+        # Normal's local static registers an empty CRT destructor once. Supply
+        # its initialized guard; the numerical body still runs unchanged.
+        self.write(0x10b34a5c, 'B', 1)
+        self.call(0x10b03360 if effect == 0 else 0x10b054e0, [LIGHTMAP, info, illum, spatial])
         bytes_out = list(self.read(spatial, f'{width * height}B'))
         size_u = 1 << (width - 1).bit_length()
         colors = self.alloc(0x400)
@@ -238,7 +267,7 @@ class Oracle:
         source, target = self.alloc(size_u * height * 4 + 16), self.alloc(size_u * height * 4 + 16)
         for y in range(height):
             self.write(source + y * size_u * 4, f'{width}I', *static[y * width:(y + 1) * width])
-        self.call(0x10b03040, [LIGHTMAP, 13, 0, info, source, target])
+        self.call(0x10b03040, [LIGHTMAP, effect, 0, info, source, target])
         merged = []
         inside = lambda x, y: rect[0] <= x < rect[1] and rect[2] <= y < rect[3]
         for y in range(height):
@@ -314,13 +343,17 @@ def main():
     out = {'controlWord': control_word}
     if cases.get('sqrtTable'):
         out['sqrtTable'] = oracle.sqrt_table()
+    if cases.get('normalTable'):
+        out['normalTable'] = oracle.normal_table()
     out['radii'] = [oracle.radius_constants(radius) for radius in cases.get('radii', [])]
     out['hsv'] = [oracle.fgethsv(*triple) for triple in cases.get('hsv', [])]
     out['colors'] = [oracle.color_table(case['brightness'], case['levelBrightness'], case['hsv'])
                      for case in cases.get('colors', [])]
     out['rects'] = [oracle.rect(case['light'], case['facet']) for case in cases.get('rects', [])]
+    out['incidence'] = [oracle.incidence(case['light'], case['facet'], case['rradius'])
+                        for case in cases.get('incidence', [])]
     out['spatial'] = [oracle.spatial_merge(case['light'], case['facet'], case['grid'], case['rect'],
-                                           case['constants'], case['table'], case['static'])
+                                           case['constants'], case['table'], case['static'], case.get('illumination', 0x7f))
                       for case in cases.get('spatial', [])]
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []

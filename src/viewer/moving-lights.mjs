@@ -1,10 +1,10 @@
 import { lightAttenuation } from '../unreal/lighting.mjs';
 import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLightRect, nonIncidenceSpatial,
-  colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
+  normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
 
 const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0];
-// Effects whose spatial function is the normal (0x10b01113) or spot
-// (0x10b010c8) body; lighting.mjs holds their float reconstruction.
+// Remaining normal/spot effect snapshots. Steady effect 0 uses the recovered
+// integer normal body; effect 13 uses the recovered NonIncidence body.
 const FLOAT_EFFECTS = new Set([0, 1, 2, 3, 8, 11, 12, 19]);
 const add = (a, b) => a.map((v, i) => v + b[i]);
 const union = rects => rects.length ? {
@@ -44,10 +44,11 @@ export function createMovingLights(lighting, model) {
   function apply(record, contributions) {
     const { pixels, width } = record, offset = record.movingOffset ?? ORIGIN;
     let written = 0;
-    for (const { item: { effect, constants, location, values }, rect, grid } of contributions) {
-      if (effect === 13) {
+    for (const { item: { effect, originalNormal, constants, location, values }, rect, grid, incidence } of contributions) {
+      if (effect === 13 || originalNormal) {
         const [red, green, blue] = constants.steps;
-        nonIncidenceSpatial(rect, grid, location, constants, (u, v, spatial) => {
+        const spatialFunction = originalNormal ? normalLightSpatial : nonIncidenceSpatial;
+        spatialFunction(rect, grid, location, originalNormal ? { ...constants, incidence } : constants, (u, v, spatial) => {
           if (!spatial) return;
           const at = (v * width + u) * 3; written++;
           pixels[at] = Math.min(MAX, pixels[at] + colorTableEntry(red, spatial) / 255);
@@ -72,16 +73,18 @@ export function createMovingLights(lighting, model) {
     if (lightClass === 3) notes.add('Moving bump-map lights (LE_OmniBumpMap) add no light-map texels, as in the original.');
     if (lightClass !== 2) return null;
     const effect = values.LightEffect ?? 0;
+    const originalNormal = effect === 0 && values.LightType === 1;
     if (effect !== 13 && !FLOAT_EFFECTS.has(effect)) {
       notes.add(`Moving lights with effect ${effect} are not implemented and stay unlit.`);
       return null;
     }
-    if (effect !== 13) notes.add('Moving normal and spot lights use the float static-light reconstruction, not the original integer pipeline.');
+    if (effect !== 13 && !originalNormal)
+      notes.add('Moving spot lights and unrecovered normal-light effect/type variants still use the float static-light reconstruction.');
     if ([1, 2, 3].includes(effect)) notes.add('Moving torch, fire and watery lights omit their per-texel random modulation.');
     if (values.LightType !== 1) notes.add(`Moving light type ${values.LightType} uses a steady snapshot; its time variation is not active.`);
     const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
     if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
-    return { effect, values, location: light.location.map(Math.fround),
+    return { effect, originalNormal, values, location: light.location.map(Math.fround),
       constants: movingLightConstants(values, light.levelBrightness, hsv.get(key)) };
   }
 
@@ -96,7 +99,8 @@ export function createMovingLights(lighting, model) {
       const rect = movingLightRect(item.location, item.constants.radius, facet);
       if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) return;
       if (!touched.has(record)) touched.set(record, []);
-      touched.get(record).push({ item, rect, grid });
+      const incidence = item.originalNormal ? normalLightIncidence(item.location, facet, item.constants.rradius) : null;
+      touched.get(record).push({ item, rect, grid, incidence });
     };
     const owned = lighting.ownedRecords();
     for (const light of lights) {
