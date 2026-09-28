@@ -690,7 +690,9 @@ complete* when every boundary it reaches belongs to a later stage.
 | 5 | `APawn::performPhysics` PHYS_Swimming | Roadmap Stage 5 movement (swimming, water zones). |
 | 5 | physProjectile, PHYS_Interpolating (actors and pawns on InterpolationPoint paths) | Projectiles and scripted/cinematic movement. |
 | 5 | Rotating MovingBrush interpolation | Roadmap Stage 5 "moving doors and elevators". The MoveActor itself is Stage 3 and is done (below). |
+| 5 | Iterator 312 `VisibleCollidingActors` | Reached from `HurtRadius` (explosion/proximity damage); roadmap Stage 5 damage. |
 | 4 | `XRootWindow::DrawRawBackground` | UI presentation. |
+| 4 | Native 2051 `CreateConCamera`, `GetCurrentRes` | Third-person conversation camera and ConWindow presentation (roadmap Stage 4 "conversation camera behavior"). |
 | 6 | ClientTravel, SaveGame | Travel and saves. |
 | 6 | PlaySound's global UObject index for pre-placed actors on maps without a capture | The original index depends on the session's whole load history (Entry, menus, maps reached by travel). Only 00_Training has a measured capture ([capture oracle](boot-replay.md)); no index is invented. |
 
@@ -720,7 +722,7 @@ passes.
   - DeusExMover subclasses attach with their own class.
   - Reference-free dynamic arrays serialize for GC.
   - The UMesh load is split out of LodMesh (8 DLL comparisons unchanged).
-- **Batch 4:**
+- **Batch 4 (`4883b86`):**
   - Classic UMesh resources (Fly, DXLogo) load through UMesh::Serialize with
     a `decoded-mesh` payload the anim natives read. Frame decoding is Stage 4.
   - Every InfoPortraits export waits for the runtime-built linker, the
@@ -729,3 +731,42 @@ passes.
     negative mission.
   - Absent transfer-object classes are skipped: the original DynamicLoadObject
     returns None for them.
+
+The census keeps EPhysics and iterator names in its family keys (`c68f965`,
+`3c7d31e`) so swimming, interpolating and VisibleCollidingActors classify by
+name. `--reuse` re-aggregates a run's per-map results after a classification
+change without booting every map again.
+
+**Result (2026-09-28, master `4883b86` code, census 5).**
+
+| Census | Clean | Stage 3 complete | Boot failures |
+| --- | --- | --- | --- |
+| 1 (before batch 1) | 3/83 | — | 27 |
+| 2 (batch 1) | 35/83 | — | 8 |
+| 4 (batch 3) | 50/83 | 79/83 | 3 |
+| 5 (batch 4) | 53/83 | **83/83** | 0 |
+
+No map reaches a Stage 3 boundary: every family left belongs to a later
+stage. Crashes and memory kills: 0. Each child peaked below 2.1 GB.
+
+- **Stage 4:**
+  - DrawRawBackground (00_Intro, 99_Endgame1–4);
+  - Everett's conversation camera and GetCurrentRes (11_Paris_Everett).
+- **Stage 5:**
+  - swimming (5 maps);
+  - PoisonGas and Dart physProjectile (6 maps);
+  - PHYS_Interpolating helicopters and cinematic pawns (6 maps);
+  - AI natives 504, 518, 523 and 708 (5 maps);
+  - one rotating DeusExMover (09_NYC_ShipBelow);
+  - VisibleCollidingActors (09_NYC_ShipFan).
+- **Stage 6:** PlaySound's global index on 01_NYC_UNATCOHQ.
+
+What this does and does not prove:
+- It proves every single-player map's original LoadMap startup, Login,
+  20 s of ticking and a Player-start reload on original bytecode.
+- It does not probe interactions on maps other than Training. The Training
+  gate covers those for Training only.
+- Under `--continue`, values after a later-stage boundary are the declared
+  zero, not original behavior. A Stage 3 boundary on a path only reachable
+  after such a boundary would appear once that later-stage family is
+  implemented, and would then be Stage 3 work again.

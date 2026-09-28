@@ -127,6 +127,12 @@ tolerances; see [Stage 3 close](stage-3-exit-criteria.md#stage-3-close). The
 September 10 handoff and September 20 completion audit are historical
 checkpoints.
 
+**Beyond Training (2026-09-28).** The same standard now covers every
+single-player map: the all-maps startup census reports 83/83 maps
+[Stage 3 complete](stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
+Each map's original startup, Login, ticking and Player-start reload reach only
+boundaries classified as Stage 4, 5 or 6.
+
 **Gate (adopted 2026-09-25):** Stage 3 is done when
 `scripts/validate-stage3-training-conformance.mjs` passes — Training's startup,
 ticking and every probed interaction on original bytecode with no boundary
