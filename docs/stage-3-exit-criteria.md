@@ -732,6 +732,15 @@ passes.
   - Absent transfer-object classes are skipped: the original DynamicLoadObject
     returns None for them.
 
+- **Post-census sweep (`3878c2f`):** the full validator sweep ran 410/411.
+  The one failure was a fixture error: `loseTarget` stepped JC through a
+  wall and out of the world. The original FellOutOfWorld → Died →
+  GameInfo.Killed chain then reached `Message.Static.ClientReceive`.
+  Class-context static calls now run on the class default object, per
+  execClassContext `0x1012edb0` and InitClassDefaultObject `0x10152300`
+  (`validate-class-context-static-call`). The fixture refuses zone-0
+  placements. The Training gate still passes.
+
 The census keeps EPhysics and iterator names in its family keys (`c68f965`,
 `3c7d31e`) so swimming, interpolating and VisibleCollidingActors classify by
 name. `--reuse` re-aggregates a run's per-map results after a classification
