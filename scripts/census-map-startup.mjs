@@ -14,7 +14,7 @@
  * boundary as Play does.
  *
  *   node scripts/census-map-startup.mjs [--jobs 3] [--only regex] [--strict]
- *        [--mem-cap MiB] [--time-limit s] [--json .cache/map-startup-census.json]
+ *        [--mem-cap MiB] [--time-limit s] [--json .cache/map-startup-census.json] [--reuse]
  *
  * Multiplayer maps (DXMP_*) are excluded: multiplayer is deferred. */
 import {spawn, execFileSync} from 'node:child_process';
@@ -44,6 +44,11 @@ const jobs = Number(flag('--jobs', 3)), capMiB = Number(flag('--mem-cap', 5120))
 const self = fileURLToPath(import.meta.url), started = Date.now();
 
 function runMap(map) {
+  // --reuse re-aggregates a previous run's per-map results (e.g. after a
+  // classification change) instead of booting the map again.
+  const saved = path.join(work, `${map}.json`);
+  if (argv.includes('--reuse') && existsSync(saved))
+    return Promise.resolve({map, seconds: 0, peakMiB: 0, crash: null, data: JSON.parse(readFileSync(saved, 'utf8'))});
   return new Promise(resolve => {
     const file = path.join(work, `${map}.json`);
     rmSync(file, {force: true});
@@ -97,6 +102,16 @@ const LATER_STAGES = Object.freeze([
     test: key => /MovingBrush interpolation outside the recovered translating subset/.test(key)},
   {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
     test: key => /XRootWindow::DrawRawBackground/.test(key)},
+  // ConPlay's third-person conversation: CreateConCamera (2051) and the
+  // ConWindow speech font chosen from "GetCurrentRes" (roadmap Stage 4:
+  // conversation screens and camera behavior).
+  {stage: 4, reason: 'third-person conversation camera and ConWindow presentation',
+    test: key => /native N ConSys\.Conversation\.CreateConCamera|native 2051 |UWindowsViewport::Exec GetCurrentRes/.test(key)},
+  // VisibleCollidingActors (312: FCollisionHash::ActorRadiusCheck, hash
+  // vtable +0x18, then IsA/bHidden/FastLineCheck per link, exec 0x103e55b0)
+  // is reached only from HurtRadius-style explosion/proximity damage.
+  {stage: 5, reason: 'explosion/proximity damage: VisibleCollidingActors (312) from HurtRadius',
+    test: key => /Original iterator native is not implemented: VisibleCollidingActors/.test(key)},
   {stage: 6, reason: 'map travel / saved games',
     test: key => /clienttravel|native 3011 /i.test(key)},
   // A pre-placed actor's global GObjObjects index depends on the session's
@@ -124,7 +139,11 @@ const note = (key, map, detail) => {
 // interpolating (8) apart from other physics modes.
 const PHYSICS_NAMES = ['None', 'Walking', 'Falling', 'Swimming', 'Flying', 'Rotating', 'Projectile', 'Rolling',
   'Interpolating', 'MovingBrush', 'Spider', 'Trailer'];
+// Engine Actor iterator natives (Actor.uc) keep their names as well.
+const ITERATOR_NAMES = {304: 'AllActors', 305: 'ChildActors', 306: 'BasedActors', 307: 'TouchingActors',
+  309: 'TraceActors', 310: 'RadiusActors', 311: 'VisibleActors', 312: 'VisibleCollidingActors', 321: 'CollidingActors'};
 const normalize = text => String(text).replace(/Physics=(\d+)\b/g, (_, n) => `Physics=${PHYSICS_NAMES[n] ?? n}`)
+  .replace(/iterator native is not implemented: (\d+)/g, (_, n) => `iterator native is not implemented: ${ITERATOR_NAMES[n] ?? n}`)
   .replace(/\b\d+(\.\d+)?\b/g, 'N').replace(/[A-Za-z_]+\d+\b/g, m => m.replace(/\d+$/, '#')).slice(0, 160);
 const perMap = results.map(({map, seconds, peakMiB, crash, data}) => {
   if (crash) { note(`CRASH ${normalize(crash)}`, map); return {map, seconds, peakMiB, status: crash}; }
