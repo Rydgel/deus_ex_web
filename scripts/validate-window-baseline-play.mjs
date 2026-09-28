@@ -105,6 +105,22 @@ for(const call of accelerators)assert.ok(completed.some(row=>row.receiver===call
 assert.deepEqual(accelerators.slice(0,initialCalls.length).map(({text,key})=>({text,key})),target==='MedicalBot'?
   [{text:'   |&Augmentations   ',key:65},{text:' |&Health   ',key:72},{text:'E|&xit',key:120}]:
   [{text:'  |&Close  ',key:67},{text:'  |&Recharge  ',key:82}]);
+// PersonaButtonBarWindow.ConfigurationChanged configures each button, top child
+// first, at its QueryPreferredSize, then the filler over the rest.
+// PersonaBorderButtonWindow.ParentRequestedPreferredSize gives Max(minimumButtonWidth 20,
+// Left_Textures[0].width 4 + leftMargin 6 + textWidth + rightMargin 0 +
+// Right_Textures[0].width 8) by buttonHeight 16. textWidth is GC.GetTextExtent's
+// first out parameter. The Extension.dll exec body measures the FontMenuHeaders
+// labels as Augmentations 107, Health 52, Exit 24, Close 47 and Recharge 68
+// (persona-button-* cases in validate-gc-get-text-extent.mjs).
+// The Exit bar keeps bFillAllSpace, so it pads Exit's preferred 42 to its width 48.
+const geometry=win=>[W.f32(win,0x78),W.f32(win,0x7c),W.f32(win,0x80),W.f32(win,0x84)];
+const barButtons=accelerators.slice(0,initialCalls.length).map(row=>row.receiver);
+const filler=runtime.namedReference(W.ptr(barButtons[0],0x138),'winFiller').get();
+assert.deepEqual([...barButtons.map(geometry),geometry(filler)],target==='MedicalBot'?
+  [[70,0,125,16],[0,0,70,16],[0,0,48,16],[195,0,339,16]]:
+  [[86,0,65,16],[0,0,86,16],[151,0,40,16]],
+  'button bars place text-sized buttons from the original GetTextExtent widths');
 if(target==='RepairBot'){
   // HUDRechargeWindow.ButtonActivated's switch(buttonPressed) tests btnClose
   // before btnRecharge. execSwitch memcmps the 4-byte Window pointers, so the

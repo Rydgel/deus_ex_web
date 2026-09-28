@@ -160,13 +160,15 @@ Space glyph = char `0x20` through the same mapper; a miss contributes 0.
 
 Real exports decoded and executed by the oracle: `Engine.SmallFont`
 (1×256, space 6×8), `Engine.MedFont`, `Engine.LargeFont` (4×64, space
-23×39), `DeusExUI.FontConversation`. Synthetic images cover zero-space,
-tall-space and two-page edge layouts.
+23×39), `DeusExUI.FontConversation`, `DeusExUI.FontMenuHeaders`. Synthetic
+images cover zero-space, tall-space and two-page edge layouts.
 
-Validation: `scripts/validate-gc-get-text-extent.mjs` — 45 cases bit-exact
+Validation: `scripts/validate-gc-get-text-extent.mjs` — 50 cases bit-exact
 (empty, real fonts, ±vSpacing, wrap exact/word/space/midword/tight,
 newline variants incl. trailing-line, bold/color/palette/amp escapes,
-missing glyph, multipage, destWidth zero/negative/NaN, method-vs-exec);
+missing glyph, multipage, destWidth zero/negative/NaN, method-vs-exec,
+and the five Training bot button labels in the GC state their
+`ParentRequestedPreferredSize` measures with: `persona-button-*`);
 `scripts/validate-gc-get-font-height.mjs` — 12 cases bit-exact. Mutation
 gates per native (each must diverge, and does): glyph width/height field
 offsets, char→page map, `|b` polarity, newline stop char, overflow

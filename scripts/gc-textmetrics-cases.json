@@ -3,7 +3,8 @@
   "Engine.SmallFont",
   "Engine.MedFont",
   "Engine.LargeFont",
-  "DeusExUI.FontConversation"
+  "DeusExUI.FontConversation",
+  "DeusExUI.FontMenuHeaders"
  ],
  "fontDefs": {
   "syntheticNoSpace": {
@@ -1501,6 +1502,166 @@
       32,
       99
      ]
+    }
+   ]
+  },
+  "persona-button-recharge": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "boldFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "textVSpacing": 1065353216,
+    "textFlags": 3,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1128792064
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "  |&Recharge  "
+    }
+   ]
+  },
+  "persona-button-close": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "boldFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "textVSpacing": 1065353216,
+    "textFlags": 3,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1128792064
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "  |&Close  "
+    }
+   ]
+  },
+  "persona-button-augmentations": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "boldFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "textVSpacing": 1065353216,
+    "textFlags": 3,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1128792064
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "   |&Augmentations   "
+    }
+   ]
+  },
+  "persona-button-health": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "boldFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "textVSpacing": 1065353216,
+    "textFlags": 3,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1128792064
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": " |&Health   "
+    }
+   ]
+  },
+  "persona-button-exit": {
+   "spec": {
+    "nodes": [],
+    "normalFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "boldFont": {
+     "$font": "DeusExUI.FontMenuHeaders"
+    },
+    "textVSpacing": 1065353216,
+    "textFlags": 3,
+    "stackTop": 0,
+    "freeList": 0,
+    "canvas": 0,
+    "owner": 0,
+    "vtable": 0
+   },
+   "args": [
+    {
+     "value": 1128792064
+    },
+    {
+     "out": 0
+    },
+    {
+     "out": 0
+    },
+    {
+     "$text": "E|&xit"
     }
    ]
   }

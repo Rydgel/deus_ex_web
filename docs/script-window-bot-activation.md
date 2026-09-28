@@ -53,6 +53,60 @@ real `Frob` route in a fresh Play host and verifies:
   passes the mismatched `btnClose` case by pointer identity, and
   `DeusExPlayer.ChargePlayer` adds `Min(EnergyMax - Int(Energy), chargeAmount)`.
 
+## Button bar layout — 2026-09-28
+
+The MedBot tabs (Health, Augmentations) and the RepairBot Recharge and Close
+buttons drew 20 pixels wide with wrapped labels. `PersonaButtonBarWindow` with
+`FillAllSpace(False)` gives each button its `QueryPreferredSize`, and
+`PersonaBorderButtonWindow.ParentRequestedPreferredSize` returns
+
+```
+Max(minimumButtonWidth, Left_Textures[0].width + leftMargin + textWidth
+    + rightMargin + Right_Textures[0].width) by buttonHeight + buttonVerticalOffset
+```
+
+The installed defaults are 20, 4, 6, 0, 8 and 16 + 0. `textWidth` comes from
+`gc.GetTextExtent(maxTextWidth, textWidth, textHeight, buttonText)` after
+`GetGC()` and `SetFont(fontButtonText)`. That GC measures with FontMenuHeaders
+in both font slots, textFlags 3, textVSpacing 1.0 and destWidth 200. The script
+dispatcher for native 1280 (`script-window-gc-dispatch.mjs`) read `width` and
+`height` from a result that has `xExtent` and `yExtent`. Every script
+GetTextExtent caller therefore got 0, and each text-sized button fell back to
+`minimumButtonWidth`. The HUD's native layout adapter had already been fixed for
+the same shape mismatch ([text parser](script-text-parser.md)); the script
+path had not.
+
+Evidence for the corrected contract:
+
+* The exec body `0x1002c020` passes its out parameters 1 and 2 as the X and Y
+  extent pointers. The Unicorn oracle runs that exec body.
+* The oracle's `persona-button-*` cases use the real FontMenuHeaders glyphs in
+  the captured GC state. They measure the labels as follows, all with height 11:
+  Augmentations 107, Health 52, Exit 24, Close 47 and Recharge 68.
+* The bar places the top child first, so the last button created is leftmost.
+  `PersonaNavBarWindow` creates Logs through Inventory, and the original screen
+  shows Inventory leftmost.
+
+The expected `x, y, width, height` values (XWindow +0x78..+0x84, SDK layout)
+are:
+
+| screen | button | geometry |
+| --- | --- | --- |
+| MedBot | Health | 0, 0, 70, 16 |
+| MedBot | Augmentations | 70, 0, 125, 16 |
+| MedBot | Exit (fill-all bar, width 48) | 0, 0, 48, 16 |
+| MedBot | nav filler | 195, 0, 339, 16 |
+| RepairBot | Recharge | 0, 0, 86, 16 |
+| RepairBot | Close | 86, 0, 65, 16 |
+| RepairBot | filler | 151, 0, 40, 16 |
+
+`validate-window-baseline-play.mjs` asserts this geometry for both bots. It
+fails with the old marshalling (every text-sized button 20 wide). The same fix
+reaches the other script GetTextExtent callers: FrobDisplayWindow,
+MenuUIBorderButtonWindow, MenuUITitleWindow, HUDMissionStartTextDisplay,
+DamageHUDDisplay and AugmentationDisplayWindow. They were measured as zero-width
+text before. Those screens have not been compared visually with the original.
+
 Both complete routes and the production build pass. This closes the reached
 bot activation/audio-call boundary, not audible playback, Scale drawing, full
 root input routing, value-field formatting, complete bot interaction, or visual

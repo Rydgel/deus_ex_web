@@ -115,7 +115,9 @@ export function dispatchGcNative(heap,services,call) {
   case 1281:a[0]=a[0]?1:0;break;
   case 1262:a[0]??=0;a[1]??=0;break;
  }
- if(call.index===1280){value=fn(call.receiver,a[0],a[3],services);set(1,value.width);set(2,value.height);value=undefined;}
+ // execGetTextExtent (0x1002c020) passes its two out params to the method as
+ // the X and Y extent pointers, in declaration order.
+ if(call.index===1280){value=fn(call.receiver,a[0],a[3],services);set(1,value.xExtent);set(2,value.yExtent);value=undefined;}
  else if(call.index===1231||call.index===1241){set(0,unpack(fn(call.receiver,services)));}
  else if(call.index===1246){const r=fn(call.receiver,services);set(0,heap.objectAt(r.normalFont));set(1,heap.objectAt(r.boldFont));}
  else if(call.index===1257){const r=fn(call.receiver,services);set(0,r.hAlign);set(1,r.vAlign);}
