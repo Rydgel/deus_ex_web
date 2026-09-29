@@ -1,5 +1,6 @@
 import { safeNormal, twoWallAdjust } from './steps.mjs';
 import { x87add, x87load, x87mul, x87neg, x87store } from './script-vm.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 
 const f = Math.fround;
 const add = (a, b) => a.map((v, i) => f(v + b[i]));
@@ -14,7 +15,7 @@ const X87_ONE = Object.freeze({ neg: 0, sig: 1n, exp: 0 });
  * fsubr qword 1.0; fmul dword TimeTick; fadd dword RemainingTime; fstp dword`.
  * The difference, product and sum stay on the x87 stack (64-bit significand,
  * control word 0x037f as in the native oracle) and round once at the store. */
-const refundTime = (remaining, time, step) =>
+const refundTime = (remaining, time, step) => scriptVmKernel ? scriptVmKernel.refundTime(remaining, time, step) :
   x87store(x87add(x87mul(x87add(X87_ONE, x87neg(x87load(time))), x87load(step)), x87load(remaining)));
 
 /** AActor.physFalling (Engine.dll 0x103d0a50): the dry Pawn (player) path, the

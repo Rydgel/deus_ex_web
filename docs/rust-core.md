@@ -711,6 +711,194 @@ around the traces: SingleLineCheck and MultiLineCheck (about 1 ms), the
 collision hash, the primitives and property reads. They move once actor state
 is in the arena.
 
+**R3-b — Collision hash, line checks and the walking-surface scan
+(implemented, stages B0 to B2).** ULevel's actor queries run in Rust
+(`native/script-vm/src/hash.rs`, JavaScript side `collision-kernel.mjs`).
+Each Rust piece transcribes its JavaScript body the way R3-a does: the same
+double intermediates in the same order, `as f32` at every `Math.fround`, and
+the same comparisons (NaN, signed zeros). `x ** 2` becomes `x * x`, which
+fdlibm's `pow` special case for y == 2 makes exact, and the validator checks
+it on 3 million doubles. The JavaScript stays the reference: it runs before
+the kernel loads, under `HASH_KERNEL=js`, and for every query the kernel hands
+back.
+
+* **What runs in Rust.**
+  * The hash buckets: per-cell LIFO link lists, and a removal that unlinks
+    every link of the actor and keeps the other links in order.
+  * The line-query cells: X's 64-bit x87 expansion is exact through a signed
+    `u128` dyadic sum with a jammed sticky bit, in place of BigInt.
+  * A visit stamp per registration, in X, then Y, then Z cell order.
+  * Level-queries' primitive callback: the cylinder (`primitiveLineHit`), or
+    a brush traced through `trace.rs` with its ToWorld.
+  * MultiLineCheck: the world trace and clip, the collected hits reversed,
+    the 64-hit cap, the movers-only rule, the mover backoff, and the CRT
+    qsort with its comparator, its NaN branch and its 44-byte partition test.
+  * SingleLineCheck's walk of the sorted hits.
+  * The walking-surface prelude's 36 scan queries and its floor query, as one
+    call (`lc_scan`).
+* **Live reads, never snapshots.** Actor state is read through three imports,
+  at the points where the JavaScript reads it:
+  * `lc_candidate`: `valuesOf(actor)`, then the brush model and ToWorld or
+    the cylinder's Location, CollisionRadius and CollisionHeight.
+  * `lc_mover`: `isMover`, for each joined actor hit.
+  * `lc_accept`: the whole SingleLineCheck filter body for one examined hit
+    (owner chain, class flags, and the live `collisionBits` that script can
+    write).
+  Inside one `lc_scan` call, every import only reads. So each registration's
+  cylinder, isMover and filter answers are cached for the rest of the call
+  (brushes are read at every visit, because their ToWorld lives in the trace
+  static). The floor query is skipped exactly when the ladder branch will
+  not ask for it. The plan's snapshot-at-registration design was not used:
+  nothing guarantees that a registered actor's Location or radius is always
+  re-registered before it changes, and the JavaScript reads them live.
+* **Placement (B0).** The hash and its queries live in the trace kernel's
+  instance (`trace-kernel.mjs`), not in a runtime's instance:
+  * the BSP models are already uploaded there;
+  * `SCRIPT_VM=js` needs no Rust runtime instance;
+  * the queries read no script image, since everything live comes through
+    the imports until stage 1e moves Location and the collision word into
+    images.
+
+  The code is address-based (a header pointer and model pointers). A later
+  stage can therefore instantiate the same code on a runtime's arena and
+  upload the BSP there.
+* **Memory.** Per level queries object:
+  * an 80-byte header: table, links, stamps, the scratch, the scan cache,
+    and the `querying` and `busy` words;
+  * the cell table (open addressing on the packed tag, at most half full);
+  * links (registration id and next link, with a free list);
+  * per registration id, a stamp, an 80-byte actor-hit scratch slot and an
+    80-byte scan cache entry;
+  * per texture list, a scan table with one byte per BSP node: whether the
+    node's texture stops the scan, and whether it takes the ladder branch.
+
+  JavaScript allocates and grows these ranges between calls, and a
+  FinalizationRegistry releases them with the store. Island uses about
+  0.3 MB. Registration ids are JavaScript's, and are reused only once no
+  query still names them.
+* **Re-entrancy.**
+  * Rust sets the header's `querying` word (volatile, reached through a raw
+    pointer) while candidates are visited. JavaScript's `createCollisionHash`
+    shares the same word, so a hash change or a nested query from a getter
+    throws the reference's error.
+  * `busy` and a module flag send any line check nested inside a Rust call
+    to the JavaScript path.
+  * When an import throws through the Rust frames, the host puts back the
+    shadow stack base and both words.
+  * A scratch or scan cache range that is replaced while a call still reads
+    it is released after the call returns.
+* **Results.** `lineCheck` builds the reference's result object: the same
+  keys in the same order, including `next`, `primitive` and `item` (which are
+  undefined for cylinders), and the `next` chain of hit objects in their own
+  five shapes: world ray, world extent, cylinder, brush ray and brush extent.
+* **Hand-backs.** Rust hands a query back, and the JavaScript then runs the
+  whole query (errors included), in these cases:
+  * non-number inputs;
+  * non-finite values;
+  * cells outside 0..255, or more than 1,000,000 cells;
+  * a model the trace kernel refuses, or a trace it hands back;
+  * a negative extent reaching a trace;
+  * a query nested inside another.
+
+  Every query only reads, so running it again is not observable.
+* **Switches.** `HASH_KERNEL=js` turns the whole kernel off. `SCAN_KERNEL=js`
+  turns off only the scan.
+
+  `HASH_DIFFERENTIAL=1` keeps a JavaScript hash beside the Rust one. Every
+  add and remove runs on both, with the same result or error, and every
+  query's visit order is compared. Every Rust line check and scan is also
+  compared with the JavaScript path: keys, numbers by `Object.is`, and
+  identities.
+
+  `TRACE_DIFFERENTIAL=1` makes the same line-check and scan comparisons,
+  with the JavaScript path's traces checked against the trace bodies.
+* **Hooks outside these modules.**
+  * `game.mjs` awaits `loadTraceKernel()` before registering the level's
+    actors.
+  * `script-pawn-physics.mjs` defines the pawn view's `surfaceScan`. It is
+    non-enumerable, like `decorate`. An enumerable property changed Island's
+    digest from tick 280 without changing the simulation:
+    `OfficeChair0.Touching` holds UNATCOTroop6's physics *view*, and the
+    digest walks a view by its keys. That view-versus-host leak is the plan's
+    risk 1, and it is still open.
+  * `instantiateScriptVm` stubs the new imports in interpreter instances.
+* **Quick wins (B0).** AvgPhysicsTime (`script-pawn-physics.mjs`) and
+  physFalling's refund (`falling.mjs`) use the x87 kernel's `Ext` model
+  (`phys_avg_time`, `phys_refund_time`) in place of BigInt. Each is one
+  hook, and they are proven equal on 800,000 operand sets. They save about
+  0.04 ms per tick. The BigInt x87 left on Island (about 0.6 ms) is AI
+  visibility and locomotion.
+* **Left in JavaScript, and why.**
+  * The registration checks, the bounds and `registrations` (`addActor` and
+    `removeActor` are rarer than queries, and their errors stay one piece of
+    code).
+  * The point and encroachment queries' primitives: their visit order comes
+    from `hash_candidates`.
+  * The explicit-table hash (fixtures only).
+  * The seed-independent hash before the kernel loads.
+  * `pointRegion`, which the plan put in B0, is not ported: it is zone.mjs
+    work and is worth about 0.15 ms.
+
+Verification:
+
+* `scripts/validate-collision-kernel.mjs` compares each piece with its
+  JavaScript body on seeded and edge inputs:
+  * 600,000 line-query cell sets (float32 midpoints plus tiny extents, which
+    take the 64-bit path, and huge, zero and negative extents);
+  * 433,333 cylinder primitives, including boundary starts, thin cylinders
+    and NaN and infinite geometry;
+  * 40,000 qsorts (ties, NaN, signed zeros);
+  * 80,000 joins (160,000 mover backoffs, the 64-hit cap, movers-only, and
+    subnormal X);
+  * 60,000 hash operations against the JavaScript buckets, with refused
+    inputs, re-entrant mutation and nested queries.
+* On Training and Island, with the actors registered as `game.mjs` does
+  (including twin cylinders for ties), it runs 56,240 `lineCheck` and
+  `multiLineCheck` queries through a kernel and a JavaScript
+  `createLevelQueries`. The queries cover every flag family, sources with
+  owner chains, rays into mover brushes with extra flags 0x10 and 0x20,
+  zero, pawn, negative and non-finite extents, and huge and NaN
+  coordinates. Between batches:
+  * actors move, and are destroyed (0x80) and re-added;
+  * collision bits change without re-registration;
+  * live cylinders turn NaN, and radii change.
+* It also runs 10,424 walking-surface preludes with and without the kernel
+  scan: 1,200 take the ladder branch, some use case-variant and null texture
+  outer names, some sit beside owned movers, and some have a Location read
+  that throws.
+* All of these are identical, errors included.
+* A mutation pass broke the new Rust 55 ways; every mutant fails the
+  validator except one equivalent mutant: the partition test's byte
+  arithmetic only chooses which of two disjoint ranges is sorted first.
+* The native oracles pass through the kernel:
+  * level (3,556 line checks and 465 point checks on both maps), collision,
+    world fitting, the mover and far-move scenes and the player sequence;
+  * level points, points, encroachment and extents;
+  * multiline, line-filter, hash, primitive, move-query, walking,
+    walking-surface, ladder and the other movement validators.
+* Digests are unchanged at all 30 checkpoints under both VMs: Island
+  `5496f30ee89033fc`, Training `04f77dc631509ae4`.
+* Under `HASH_DIFFERENTIAL=1` on Island, 757,112 line checks and 19,159 scans
+  were compared, with 757,122 visit orders and no hand-back. Under
+  `TRACE_DIFFERENTIAL=1`, 820,898 rays and 28,994 extents were compared
+  through them.
+* The 546 unit tests pass.
+
+Cost: the Island tick median fell from 19.4 to 18.2 ms (four headless A/B
+pairs, `SCRIPT_VM=rust`: 19.02/19.16/19.59/19.74 against
+17.99/18.37/18.78/17.52). The table gives ms per profiled tick:
+
+| Profiled on Island (ms per tick) | Before | After |
+|---|---|---|
+| `walkingSurfacePrelude` | 2.45 | 1.08 (0.72 in `lc_scan`) |
+| `pawn.walking` | 5.65 | 4.14 |
+| `multiLineCheck` | 1.91 | 0.09 |
+| JavaScript self time in collision-hash, level-queries, multiline, line-filter, primitive-collision and collision-kernel | 2.22 | 0.32 |
+
+What remains in the scan is Rust arithmetic: the world ray, the cell
+conversions (about 60 ns a query) and the software `sqrt` (about 25 ns),
+plus about 2.4 candidate reads per scan.
+
   that subtree with the existing compiled closures on the same frame object.
   Every function can then run in Rust from the start, and coverage grows kind
   by kind without an eligibility cliff.

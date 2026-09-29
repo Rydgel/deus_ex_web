@@ -9,6 +9,7 @@
 //! results are written to `RESULT`.
 #![no_std]
 
+mod hash;
 mod interp;
 mod trace;
 mod x87;
@@ -236,4 +237,29 @@ pub extern "C" fn op_mirror_vector_by_normal(a0: u32, a1: u32, a2: u32, b0: u32,
     let prod_y = two_y.mul(dot).stored();
     let prod_z = two_z.mul(dot).stored();
     out3([vx.add(prod_x.neg()).store(), vy.add(prod_y.neg()).store(), vz.add(prod_z.neg()).store()]);
+}
+
+/// FLD m64 of a finite binary64 constant (script-vm.mjs `x87double`).
+fn load_double(v: f64) -> Ext {
+    let bits = v.to_bits();
+    let e = ((bits >> 52) & 0x7ff) as i32;
+    let m = bits & ((1u64 << 52) - 1);
+    let sign = ((bits >> 32) as u32) & 0x8000_0000;
+    let sig = if e == 0 { m } else { m | (1u64 << 52) };
+    Ext::normalized(sig as u128, if e == 0 { -1074 } else { e - 1075 }, sign)
+}
+
+/// APawn::performPhysics's AvgPhysicsTime (script-pawn-physics.mjs,
+/// 0x103c9c37..0x103c9c4e): old * 0.8 + dt * 0.2 with both products and
+/// their sum on the x87 stack, then one float store.
+#[no_mangle]
+pub extern "C" fn phys_avg_time(avg: u32, dt: u32) -> u32 {
+    Ext::load(avg).mul(load_double(0.8)).add(Ext::load(dt).mul(load_double(0.2))).store()
+}
+
+/// physFalling's time refund (falling.mjs `refundTime`, 0x103d1de0 and
+/// 0x103d1e0e): RemainingTime + TimeTick * (1.0 - Hit.Time), one store.
+#[no_mangle]
+pub extern "C" fn phys_refund_time(remaining: u32, time: u32, step: u32) -> u32 {
+    Ext::load_i32(1).add(Ext::load(time).neg()).mul(Ext::load(step)).add(Ext::load(remaining)).store()
 }

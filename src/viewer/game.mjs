@@ -19,6 +19,7 @@ import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properti
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
 import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
+import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
@@ -90,6 +91,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       collision.actors.push(actor);
     }
   }
+  // The level queries keep their collision hash in the Rust kernel when it is
+  // loaded as they are created (docs/rust-core.md R3-b).
+  await loadTraceKernel();
   collision.registerActors(collidable);
   const start = [...actors.values()].find(a => a.className === 'PlayerStart' && a.values.bSinglePlayer && a.values.bEnabled !== false && a.values.Location);
   if (!start) throw new Error('No enabled single-player start in this map');

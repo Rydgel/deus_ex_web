@@ -3,7 +3,10 @@ import {getAxes} from './camera.mjs';
 import {x87cmp,x87load} from './script-vm.mjs';
 import {readObject,objectAt} from '../unreal/objects.mjs';
 import {ClassDefaults} from '../unreal/classes.mjs';
+import {HASH_DIFFERENTIAL,lineResultDifference} from './collision-kernel.mjs';
+import {TRACE_DIFFERENTIAL} from './trace-kernel.mjs';
 const f=Math.fround;
+const CHECK_SCAN=HASH_DIFFERENTIAL||TRACE_DIFFERENTIAL;
 
 /** Decode original serialized texture overrides plus original class defaults.
  * Result is indexed by BSP surface; actor/mesh hit selection belongs to caller. */
@@ -43,22 +46,62 @@ function climbLadder(pawn,dt,iterations){
  return true;
 }
 
+/** The scanner's segments: the pawn's stored position, the scan start, the
+ * four scan ends' X/Y and the floor end. */
+export function surfaceScanInputs(pawn){
+ const position=pawn.position.map(f),radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
+ const start=[position[0],position[1],f(position[2]-f(height*f(.95)))];
+ const ends=[0,-16384,16384,32768].map(offset=>{
+  const angle=(yaw+offset)|0;
+  return [f(start[0]+f(2*radius*rotatorSin((angle+16384)|0))),f(start[1]+f(2*radius*rotatorSin(angle)))];
+ });
+ return {position,start,ends,floorEnd:[position[0],position[1],f(position[2]-f(height+2*radius))]};
+}
+
+/** The scanner's queries in JavaScript: the last scan hit and its texture,
+ * the index of the last scan query run, and the floor hit (null where the
+ * ladder branch takes over). */
+export function scanSurface(pawn,start,ends,position,floorEnd){
+ const query=(a,b)=>pawn.lineCheck(a,b,[0,0,0],6,0);
+ let selected=null,selectedHit=null,index=0;
+ scan:for(let d=0;d<4;d++){
+  const end=[ends[d][0],ends[d][1],start[2]];
+  for(let z=0;z<=32;z+=4){
+   const hit=query(start,[end[0],end[1],f(end[2]+z)]);selected=pawn.textureForHit(hit);selectedHit=hit;index=d*9+z/4;
+   if(selected&&(selected.outerName===null||selected.outerName==='Ladder'))break scan;
+  }
+ }
+ let ladder;
+ try{ladder=selected?.outerName?.toLowerCase()==='ladder';}catch{ladder=true;}
+ return {selected,selectedHit,index,floor:ladder?null:query(position,floorEnd)};
+}
+
 /** Original103cc450 surface prelude: native scanner103ccc40, then either the
  * Ladder branch (WalkTexture with the scan hit, climbLadder) or the floor
  * texture query103ccb70 and its WalkTexture callback. Texture friction<1
  * fails explicitly before guessed motion.
+ *
+ * A pawn offering `surfaceScan` (script-pawn-physics.mjs) runs the scan and
+ * the floor query in one Rust call (collision-kernel.mjs, docs/rust-core.md
+ * R3-b), with the same reads. HASH_DIFFERENTIAL/TRACE_DIFFERENTIAL compare
+ * it with the JavaScript scan.
  */
 export function walkingSurfacePrelude(pawn,dt,iterations=0){
- const position=pawn.position.map(f),radius=f(pawn.radius),height=f(pawn.height),yaw=pawn.rotation[1]|0;
- const start=[position[0],position[1],f(position[2]-f(height*f(.95)))];
+ const {position,start,ends,floorEnd}=surfaceScanInputs(pawn);
  const query=(a,b)=>pawn.lineCheck(a,b,[0,0,0],6,0);
- let selected=null,selectedHit=null;
- scan:for(const offset of [0,-16384,16384,32768]){
-  const angle=(yaw+offset)|0;
-  const end=[f(start[0]+f(2*radius*rotatorSin((angle+16384)|0))),f(start[1]+f(2*radius*rotatorSin(angle))),start[2]];
-  for(let z=0;z<=32;z+=4){
-   const hit=query(start,[end[0],end[1],f(end[2]+z)]);selected=pawn.textureForHit(hit);selectedHit=hit;
-   if(selected&&(selected.outerName===null||selected.outerName==='Ladder'))break scan;
+ let selected=null,selectedHit=null,floor=null;
+ const scan=pawn.surfaceScan?.(start,ends,position,floorEnd);
+ if(scan){
+  selectedHit=scan.selected;selected=pawn.textureForHit(selectedHit);floor=scan.floor;
+  if(CHECK_SCAN)checkScan(scan,selected,scanSurface(pawn,start,ends,position,floorEnd));
+ } else {
+  // The JavaScript scan, with the floor query where the original has it.
+  scan:for(let d=0;d<4;d++){
+   const end=[ends[d][0],ends[d][1],start[2]];
+   for(let z=0;z<=32;z+=4){
+    const hit=query(start,[end[0],end[1],f(end[2]+z)]);selected=pawn.textureForHit(hit);selectedHit=hit;
+    if(selected&&(selected.outerName===null||selected.outerName==='Ladder'))break scan;
+   }
   }
  }
  if(selected?.outerName?.toLowerCase()==='ladder'){
@@ -67,9 +110,19 @@ export function walkingSurfacePrelude(pawn,dt,iterations=0){
   pawn.walkTexture(selected,selectedHit.location,selectedHit.normal);
   return climbLadder(pawn,dt,iterations);
  }
- const hit=query(position,[position[0],position[1],f(position[2]-f(height+2*radius))]);
+ const hit=floor??query(position,floorEnd);
  const texture=pawn.textureForHit(hit);
  pawn.walkTexture(texture,hit.location,hit.normal);
  if(pawn.physics===1&&texture&&texture.friction<1)throw Error(`Unsupported original texture sliding: ${texture.key}`);
  return false;
+}
+
+// The kernel scan against the JavaScript one: the same last scan query,
+// texture and the fields read from both hits.
+function checkScan(scan,selected,expected){
+ const fields=hit=>({actor:hit.actor,item:hit.item,location:hit.location,normal:hit.normal});
+ const difference=scan.index!==expected.index?`index ${scan.index} ${expected.index}`:selected!==expected.selected?'texture'
+  :(scan.floor===null)!==(expected.floor===null)?'floor queried'
+  :lineResultDifference(fields(scan.selected),fields(expected.selectedHit))??(scan.floor&&lineResultDifference(fields(scan.floor),fields(expected.floor)));
+ if(difference)throw Error(`walking-surface kernel differential mismatch: ${difference}`);
 }

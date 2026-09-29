@@ -7,6 +7,9 @@ import { primitiveLineHit } from './primitive-collision.mjs';
 import { traceRay } from './ray.mjs';
 import { createLevelPoints } from './level-points.mjs';
 import { actorEncroachmentCheck } from './encroachment-query.mjs';
+import { traceExtent } from './extent-trace.mjs';
+import { TRACE_DIFFERENTIAL } from './trace-kernel.mjs';
+import { kernelHashStore, createKernelLineChecks, createDifferentialHash, checkLineKernel, HASH_DIFFERENTIAL } from './collision-kernel.mjs';
 
 // ABrush.ToWorld of a mover's current values, reused while every input it
 // reads (the effective Location, Rotation, PrePivot and Post/MainScale after
@@ -39,10 +42,18 @@ const lineageKey = kind => {
  * routines. Actors must arrive in Level.Actors order with original ancestry.
  * Point/extent queries remain explicit dependencies until their full evidence
  * is connected. See docs/fitting.md and docs/collision-hash.md.
+ *
+ * Once the trace kernel is loaded, the hash's buckets are in Rust and
+ * lineCheck/multiLineCheck run there (collision-kernel.mjs, docs/rust-core.md
+ * R3-b); the JavaScript below stays the reference, the path before loading,
+ * with `kernel: false`, and the answer to every query the kernel hands back.
  */
 export function createLevelQueries(model, actors, { pointCheck, extentCheck,
-  levelInfo = { id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] } } = {}) {
-  const hash = createCollisionHash();
+  levelInfo = { id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] },
+  kernel = true } = {}) {
+  const store = kernel ? kernelHashStore() : null;
+  const hash = !store ? createCollisionHash() : HASH_DIFFERENTIAL
+    ? createDifferentialHash(createCollisionHash({ store }), createCollisionHash()) : createCollisionHash({ store });
   const valuesOf = actor => actor.collisionValues ?? actor.values;
   const isA = (actor, kind) => actor.lineage.includes(lineageKey(kind));
   const bounds = actor => actor.model ? brushCollisionBounds(actor.model, valuesOf(actor)) : primitiveCollisionBounds(null, valuesOf(actor));
@@ -79,18 +90,48 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
     }),
   };
   const filter = { isA, levelInfo, multiLineCheck: (...args) => multiLineCheck(join, ...args) };
+  // The kernel's line checks need its extent trace: traceExtent's kernel entry.
+  const fast = store && extentCheck === traceExtent
+    ? createKernelLineChecks({ store, model, levelInfo, valuesOf, isA, brushToWorld: brushToWorldCached }) : null;
+  const checked = HASH_DIFFERENTIAL || TRACE_DIFFERENTIAL;
+  const javascriptMulti = ({ end, start, extent, checkActors, worldActor, extra = 0 }) =>
+    multiLineCheck(join, end, start, extent, checkActors, worldActor, extra);
+  const javascriptLine = (start, end, extent, flags, extra, source) => {
+    const hit = { time: 1, actor: null, location: [0,0,0], normal: [0,0,0] };
+    const outside = Boolean(singleLineCheck(filter, hit, source, end, start, flags, extent, extra));
+    return { ...hit, outside };
+  };
   return {
     levelInfo, hash, addActor, removeActor, ...points,
     actorEncroachmentCheck(actor, position, rotation, extra = 0) {
       return actorEncroachmentCheck(hash,actor,position,rotation,extra);
     },
-    multiLineCheck({ end, start, extent, checkActors, worldActor, extra = 0 }) {
-      return multiLineCheck(join, end, start, extent, checkActors, worldActor, extra);
+    multiLineCheck(query) {
+      if (fast) {
+        const hits = fast.multiLineCheck(query);
+        if (hits !== undefined) {
+          if (checked) checkLineKernel('multiLineCheck', hits, () => javascriptMulti(query),
+            { end: query.end, start: query.start, extent: query.extent, checkActors: query.checkActors, world: Boolean(query.worldActor), extra: query.extra });
+          return hits;
+        }
+      }
+      return javascriptMulti(query);
     },
     lineCheck(start, end, extent = [0,0,0], flags = 0x17, extra = 0, source = null) {
-      const hit = { time: 1, actor: null, location: [0,0,0], normal: [0,0,0] };
-      const outside = Boolean(singleLineCheck(filter, hit, source, end, start, flags, extent, extra));
-      return { ...hit, outside };
+      if (fast) {
+        const result = fast.lineCheck(start, end, extent, flags, extra, source);
+        if (result !== undefined) {
+          if (checked) checkLineKernel('lineCheck', result, () => javascriptLine(start, end, extent, flags, extra, source),
+            { start, end, extent, flags, extra, source: source?.name ?? source?.id ?? null });
+          return result;
+        }
+      }
+      return javascriptLine(start, end, extent, flags, extra, source);
+    },
+    /** walking-surface.mjs's scan in one kernel call (collision-kernel.mjs
+     * surfaceScan), or undefined for the JavaScript scan. */
+    surfaceScan(start, ends, position, floorEnd, source, textureModel, textures, worldActor) {
+      return fast ? fast.surfaceScan(start, ends, position, floorEnd, source, textureModel, textures, worldActor) : undefined;
     },
     pointCheck(position, extent, flags, checkActors) {
       return pointCheck ? pointCheck(position, extent, flags, checkActors)

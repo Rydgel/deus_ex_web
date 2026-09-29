@@ -40,6 +40,7 @@ import { farMoveActor } from './relocation.mjs';
 import { setActorZone } from './zone.mjs';
 import { linkDecorationCollision } from './decoration-physics.mjs';
 import { x87add, x87double, x87load, x87mul, x87store } from './script-vm.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 
 const f = Math.fround;
 const unsupported = name => { throw new Error(`Original pawn physics boundary not linked: ${name}`); };
@@ -241,6 +242,12 @@ export function pawnPhysicsView(actor, services) {
     if (!node) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
     return level.surfaceTexture[node.surface] ?? null;
   };
+  // walking-surface.mjs's scan in one Rust call (docs/rust-core.md R3-b):
+  // the queries of `lineCheck` above and the table of `textureForHit`. Not
+  // enumerable, as `decorate`: a view reachable from script properties is
+  // walked by its keys (bench-sim's digest), which stay as they were.
+  Object.defineProperty(pawn, 'surfaceScan', { value: (start, ends, position, floorEnd) =>
+    level.hash.surfaceScan?.(start, ends, position, floorEnd, pawn, level.model, level.surfaceTexture, worldActor) });
   pawn.hitWall = hit => processPlayerHitWall(pawn, hit.normal, hit.actor,
     { isProbing: (target, name) => services.isProbing(actor, name), dispatch });
   pawn.landed = (hit, remaining, iterations) => processLanded(pawn, hit, remaining, iterations);
@@ -427,7 +434,8 @@ export function runScriptPawnPhysics(actor, dt, services) {
   // x87double models those exact binary64 constants; the field and timestep
   // are float32 memory operands. Native 64-bit-significand rounding matters
   // for rare halfway cases, so avoid JS binary64 intermediates here.
-  pawn.avgPhysicsTime = x87store(x87add(
+  // The Rust x87 kernel computes the same (docs/rust-core.md R3-b).
+  pawn.avgPhysicsTime = scriptVmKernel ? scriptVmKernel.avgPhysicsTime(pawn.avgPhysicsTime, delta) : x87store(x87add(
     x87mul(x87load(pawn.avgPhysicsTime), x87double(0.8)),
     x87mul(x87load(delta), x87double(0.2))));
   // APawn has the same deferred-touch tail ordering: call the current target's

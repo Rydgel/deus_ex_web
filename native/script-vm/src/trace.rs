@@ -26,9 +26,9 @@
 
 use core::ptr::{addr_of, addr_of_mut};
 
-const MISS: i32 = 0;
-const HIT: i32 = 1;
-const FALLBACK: i32 = 2;
+pub(crate) const MISS: i32 = 0;
+pub(crate) const HIT: i32 = 1;
+pub(crate) const FALLBACK: i32 = 2;
 
 #[repr(C)]
 struct Header {
@@ -107,15 +107,15 @@ pub extern "C" fn trace_test_stored_support(p0: f64, p1: f64, p2: f64, e0: f64, 
 }
 
 #[inline(always)]
-fn f(x: f64) -> f64 {
+pub(crate) fn f(x: f64) -> f64 {
     x as f32 as f64
 }
 #[inline(always)]
-fn abs(x: f64) -> f64 {
+pub(crate) fn abs(x: f64) -> f64 {
     f64::from_bits(x.to_bits() & !(1u64 << 63))
 }
 /// Math.min: NaN if either is NaN; -0 below +0.
-fn js_min(a: f64, b: f64) -> f64 {
+pub(crate) fn js_min(a: f64, b: f64) -> f64 {
     if a != a || b != b {
         f64::NAN
     } else if a < b {
@@ -129,7 +129,7 @@ fn js_min(a: f64, b: f64) -> f64 {
     }
 }
 /// Math.max: NaN if either is NaN; +0 above -0.
-fn js_max(a: f64, b: f64) -> f64 {
+pub(crate) fn js_max(a: f64, b: f64) -> f64 {
     if a != a || b != b {
         f64::NAN
     } else if a > b {
@@ -407,7 +407,7 @@ fn support(p: &[f64], e: &[f64; 3]) -> f64 {
 }
 
 /// JavaScript `2 ** k` for an integer k.
-fn pow2(k: i32) -> f64 {
+pub(crate) fn pow2(k: i32) -> f64 {
     if k > 1023 {
         f64::INFINITY
     } else if k >= -1022 {
@@ -744,6 +744,44 @@ pub extern "C" fn trace_extent(
             node: 0,
         };
         extent(&m, &mut t)
+    }
+}
+
+/// A model trace's hit, as `result()` in trace-kernel.mjs reads `OUT`.
+#[derive(Clone, Copy)]
+pub(crate) struct TraceHit {
+    pub time: f64,
+    pub normal: [f64; 3],
+    pub location: [f64; 3],
+    pub node: f64,
+    pub penetrating: bool,
+}
+
+/// The hit `OUT` holds after a HIT, copied out at once (a later trace
+/// reuses the static).
+unsafe fn out_hit() -> TraceHit {
+    let o = &*addr_of!(OUT);
+    TraceHit { time: o[0], normal: [o[1], o[2], o[3]], location: [o[4], o[5], o[6]], node: o[7], penetrating: o[8] != 0.0 }
+}
+
+/// traceRay for the level queries (hash.rs): `trace_ray`'s body on a model
+/// at `ptr`, with rounded inputs. Err is FALLBACK.
+pub(crate) unsafe fn ray_hit(ptr: u32, s: [f64; 3], e: [f64; 3], extra: i32, owned: bool) -> Result<Option<TraceHit>, ()> {
+    match ray(&model(ptr), [f(s[0]), f(s[1]), f(s[2])], [f(e[0]), f(e[1]), f(e[2])], extra, owned) {
+        HIT => Ok(Some(out_hit())),
+        MISS => Ok(None),
+        _ => Err(()),
+    }
+}
+
+/// traceExtent for the level queries: `trace_extent`'s body. The caller has
+/// checked what trace-kernel.mjs `extent` checks (finite, nonzero and
+/// nonnegative extent). Err is FALLBACK.
+pub(crate) unsafe fn extent_hit(ptr: u32, s: [f64; 3], e: [f64; 3], x: [f64; 3], owned: bool) -> Result<Option<TraceHit>, ()> {
+    match trace_extent(ptr, s[0], s[1], s[2], e[0], e[1], e[2], x[0], x[1], x[2], owned as i32) {
+        HIT => Ok(Some(out_hit())),
+        MISS => Ok(None),
+        _ => Err(()),
     }
 }
 

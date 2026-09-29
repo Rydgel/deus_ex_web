@@ -48,16 +48,26 @@ export function loadTraceKernel() {
   return pending ??= load().then(kernel => (traceKernel = kernel));
 }
 
+// The level queries' callbacks (native/script-vm/src/hash.rs), answered by
+// the query in flight (collision-kernel.mjs sets the host).
+let lineCheckHost = null;
+export const setLineCheckHost = host => { lineCheckHost = host; };
+const lineCheckImports = {
+  lc_candidate: id => lineCheckHost.candidate(id),
+  lc_mover: id => lineCheckHost.mover(id),
+  lc_accept: id => lineCheckHost.accept(id),
+};
+
 async function load() {
   const module = await compileScriptVm();
   const arena = new ObjectArena();
-  // This instance runs no scripts: every function the module imports (the
-  // interpreter's) is a host fault here.
+  // This instance runs no scripts: every other function the module imports
+  // (the interpreter's) is a host fault here.
   const imports = {memory: arena.memory};
   for (const {module: from, name, kind} of WebAssembly.Module.imports(module)) {
-    if (from === 'env' && kind === 'function') imports[name] = () => {
+    if (from === 'env' && kind === 'function') imports[name] = lineCheckImports[name] ?? (() => {
       throw new Error(`The trace kernel instance does not run scripts (${name})`);
-    };
+    });
   }
   const instance = await WebAssembly.instantiate(module, {env: imports});
   if (instance.exports.__heap_base.value > RESERVED) throw new Error('Script VM statics exceed the object arena\'s reserved region');
@@ -76,6 +86,9 @@ class TraceKernel {
   constructor(exports, arena) {
     this.x = exports;
     this.arena = arena;
+    // The shadow stack's base, where a call from JavaScript starts
+    // (collision-kernel.mjs restores it after an import throws).
+    this.stackBase = exports.__stack_pointer.value;
     this.models = new WeakMap();
     this.lastModel = null;
     this.lastBase = 0;

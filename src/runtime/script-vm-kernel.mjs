@@ -71,7 +71,9 @@ function uploadSineTable(x, memory) {
  * exports work in it as in the kernel instance. */
 export async function instantiateScriptVm(memory, imports) {
   const module = await compileScriptVm();
-  const instance = await WebAssembly.instantiate(module, {env: {memory, ...imports}});
+  // The level queries' imports (hash.rs) are the trace kernel instance's
+  // (trace-kernel.mjs); an interpreter instance never runs them.
+  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module), ...imports}});
   const x = instance.exports;
   if (x.__heap_base.value > RESERVED) throw new Error('Script VM statics exceed the object arena\'s reserved region');
   uploadSineTable(x, memory);
@@ -102,5 +104,9 @@ export function createScriptVmKernel(instance, memory) {
     multiplyVectorVector: (a, b) => (x.op_multiply_vector_vector(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
     multiplyEqualVectorVector: (a, b) => (x.op_multiply_equal_vector_vector(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
     mirrorVectorByNormal: (a, b) => (x.op_mirror_vector_by_normal(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
+    // Pawn physics' x87 tails (docs/rust-core.md R3-b): script-pawn-physics.mjs
+    // AvgPhysicsTime and falling.mjs refundTime.
+    avgPhysicsTime: (avg, dt) => num(x.phys_avg_time(bits(avg), bits(dt))),
+    refundTime: (remaining, time, step) => num(x.phys_refund_time(bits(remaining), bits(time), bits(step))),
   });
 }

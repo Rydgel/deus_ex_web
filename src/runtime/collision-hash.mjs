@@ -110,9 +110,15 @@ function tag(x, y, z) { return (((z << 8) + y << 8) + x) >>> 0; }
 
 /** Static actor registration and primitive line queries. No options selects the
  * proven seed-independent 0..255-cell domain. Explicit seed/tables select full
- * native bucket semantics; seed means a fixture state, not original startup. */
-export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
+ * native bucket semantics; seed means a fixture state, not original startup.
+ * `store` (collision-kernel.mjs KernelHashStore) keeps the buckets in the Rust
+ * kernel instead of `buckets` below, in the seed-independent domain only: its
+ * add/remove are these bucket writes, its candidates(cells) the order in which
+ * the queries below visit registrations, and its querying word this hash's
+ * `querying` flag, which the kernel's own line checks share. */
+export function createCollisionHash({ tables, seed, maxCells = 1000000, store = null } = {}) {
   if (tables && seed !== undefined) throw new TypeError('Supply captured tables or a fixture seed, not both');
+  if (store && (tables || seed !== undefined)) throw new TypeError('A kernel hash store has only the seed-independent domain');
   if (seed !== undefined) tables = collisionHashTables(seed);
   if (tables) {
     if (tables.length !== 3 || tables.some(t => t.length !== TABLE_SIZE || new Set(t).size !== TABLE_SIZE || [...t].some(v => !Number.isInteger(v) || v < 0 || v >= TABLE_SIZE))) throw new TypeError('Expected three original 16384-entry permutations in X,Y,Z order');
@@ -121,6 +127,26 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
   if (!Number.isSafeInteger(maxCells) || maxCells < 1) throw new TypeError('maxCells must be a positive integer');
   const buckets = new Map(), registrations = new Map();
   let querying = false;
+  const busy = store ? () => querying || store.querying() : () => querying;
+  const setQuerying = value => { querying = value; if (store) store.setQuerying(value); };
+  // The registrations a query over `cells` visits, in order, each once.
+  const candidateOrder = cells => {
+    if (store) return store.candidates(cells);
+    const order = [], seen = new Set();
+    each(cells, (bucket, packed) => {
+      for (let link = buckets.get(bucket); link; link = link.next) {
+        if (link.tag !== packed || seen.has(link.actor)) continue;
+        seen.add(link.actor);
+        order.push(link.actor);
+      }
+    });
+    return order;
+  };
+  const lineQueryCells = query => {
+    const args = { start: vector(query.start, 'start'), end: vector(query.end, 'end'), extent: vector(query.extent ?? [0, 0, 0], 'extent'), extraNodeFlags: (query.extraNodeFlags ?? 0) & 255 };
+    const cells = collisionHashLineBounds(args); check(cells);
+    return cells;
+  };
   function check(cells) {
     const min = cells.min, max = cells.max;
     if (!tables && (min[0] > 255 || min[1] > 255 || min[2] > 255 || max[0] > 255 || max[1] > 255 || max[2] > 255))
@@ -137,19 +163,20 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
   return {
     mode: tables ? 'explicit-tables' : 'seed-independent-0..255',
     addActor(actor, bounds, { collideActors = true, objectFlags = actor.objectFlags ?? 0, actorFlags = actor.actorFlags ?? objectFlags, location = actor.location ?? [0, 0, 0] } = {}) {
-      if (querying) throw new Error('Hash mutation during primitive queries is unsupported');
+      if (busy()) throw new Error('Hash mutation during primitive queries is unsupported');
       if (!collideActors) throw new Error('Original AddActor requires bCollideActors');
       if (actorFlags & 0x80) return null;
       if (registrations.has(actor)) throw new Error('Actor is already registered');
       const cells = collisionHashBounds(bounds); check(cells);
       const hashLocation = vector(location, 'location');
-      each(cells, (bucket, packed) => buckets.set(bucket, { actor, tag: packed, next: buckets.get(bucket) }));
+      if (store) store.add(actor, cells);
+      else each(cells, (bucket, packed) => buckets.set(bucket, { actor, tag: packed, next: buckets.get(bucket) }));
       const registration = { cells, hashLocation };
       registrations.set(actor, registration);
       return { cells: { min: [...cells.min], max: [...cells.max] }, hashLocation: [...hashLocation] };
     },
     removeActor(actor, bounds, { collideActors = true, objectFlags = actor.objectFlags ?? 0, actorFlags = actor.actorFlags ?? objectFlags, location } = {}) {
-      if (querying) throw new Error('Hash mutation during primitive queries is unsupported');
+      if (busy()) throw new Error('Hash mutation during primitive queries is unsupported');
       if (!collideActors) throw new Error('Original RemoveActor requires bCollideActors');
       if (actorFlags & 0x80) return false;
       const registration = registrations.get(actor);
@@ -157,7 +184,8 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
       if (location && vector(location, 'location').some((v, i) => v !== registration.hashLocation[i])) throw new Error('Remove actor before changing its registered location');
       const cells = bounds ? collisionHashBounds(bounds) : registration.cells;
       if ([...cells.min, ...cells.max].some((v, i) => v !== [...registration.cells.min, ...registration.cells.max][i])) throw new Error('Remove actor before changing its registered bounds');
-      each(cells, bucket => {
+      if (store) store.remove(actor, cells);
+      else each(cells, bucket => {
         let head = buckets.get(bucket), previous;
         for (let link = head; link; link = link.next) {
           if (link.actor === actor) {
@@ -177,9 +205,16 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
         (actor,args)=>primitivePointCheck(actor,{position:args.start,extent:args.extent,extraNodeFlags:0}));
     },
     actorEncroachmentCheck({bounds},primitiveCheck) {
-      if(querying)throw Error('Nested collision hash queries are unsupported');
+      if(busy())throw Error('Nested collision hash queries are unsupported');
       const cells=collisionHashBounds(bounds);check(cells);
-      const visited=new Set(),hits=[];querying=true;
+      const visited=new Set(),hits=[];
+      if(store){
+        const candidates=store.candidates(cells);setQuerying(true);
+        try{for(const actor of candidates){const hit=primitiveCheck(actor);if(hit!==null&&hit!==undefined)hits.push(hit);}}
+        finally{setQuerying(false);}
+        return hits;
+      }
+      querying=true;
       try{each(cells,(bucket,packed)=>{
         for(let link=buckets.get(bucket);link;link=link.next){
           if(visited.has(link.actor)||link.tag!==packed)continue;
@@ -192,10 +227,21 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
       return hits;
     },
     actorLineCheck(query, primitiveLineCheck) {
-      if (querying) throw new Error('Nested collision hash queries are unsupported');
+      if (busy()) throw new Error('Nested collision hash queries are unsupported');
       if (typeof primitiveLineCheck !== 'function') throw new TypeError('An evidenced primitive callback is required');
       const args = { start: vector(query.start, 'start'), end: vector(query.end, 'end'), extent: vector(query.extent ?? [0, 0, 0], 'extent'), extraNodeFlags: (query.extraNodeFlags ?? 0) & 255 };
       const cells = collisionHashLineBounds(args); check(cells);
+      if (store) {
+        const candidates = store.candidates(cells), hits = [];
+        setQuerying(true);
+        try {
+          for (const actor of candidates) {
+            const hit = primitiveLineCheck(actor, args);
+            if (hit !== null && hit !== undefined) hits.push(hit);
+          }
+        } finally { setQuerying(false); }
+        return hits.reverse();
+      }
       // Few actors share a line's cells: a short list, then a Set, records
       // those already checked (each actor is checked once, in cell order).
       let visited = [];
@@ -222,6 +268,16 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
         }
       } finally { querying = false; }
       return hits.reverse();
+    },
+    /** The registrations actorLineCheck(query) would visit, in its order,
+     * after the same argument checks (the collision-kernel differential). */
+    lineCandidates(query) {
+      return candidateOrder(lineQueryCells(query));
+    },
+    /** The registrations actorEncroachmentCheck({bounds}) would visit. */
+    boundsCandidates({ bounds }) {
+      const cells = collisionHashBounds(bounds); check(cells);
+      return candidateOrder(cells);
     },
   };
 }
