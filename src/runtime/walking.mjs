@@ -2,6 +2,13 @@ import {groundVelocity} from './velocity.mjs';
 import {safeNormal,stepUp} from './steps.mjs';
 const f=Math.fround,add=(a,b)=>a.map((v,i)=>f(v+b[i])),sub=(a,b)=>a.map((v,i)=>f(v-b[i])),scale=(a,s)=>a.map(v=>f(v*s)),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
 const sloped=h=>h.time<1&&h.normal[2]>.01&&h.normal[2]<.7;
+/** physWalking's three PHYS_Swimming checks (0x103cb3fd, 0x103cb6d9,
+ * 0x103cb97d) call startSwimming(Velocity, timeTick, remainingTime, Iterations)
+ * and return. docs/swimming.md. */
+const swimFrom=(pawn,step,remaining,iterations)=>{
+ if(typeof pawn.startSwimming!=='function')throw Error('physWalking entered PHYS_Swimming without the startSwimming service (0x103cb44e)');
+ pawn.startSwimming(pawn.velocity.map(f),step,remaining,iterations);
+};
 /** Original APawn.physWalking ordinary dry Player path. See docs/walking.md. */
 export function walking(pawn,seconds,iterations=0){
  const dt=f(seconds);if(!(dt>0)||dt>f(.4))throw Error('Walking requires timestep in (0,0.4]');
@@ -44,6 +51,9 @@ export function walking(pawn,seconds,iterations=0){
      pawn.fallingEvent();if(pawn.physics===2&&remaining>.01)pawn.falling(remaining,iterations);return;
     }
    }
+   // 0x103cb3fd (also reached from 0x103cb190): a move or stepUp that left
+   // PHYS_Swimming (a script ZoneChange) hands off to startSwimming.
+   if(pawn.physics===3)return swimFrom(pawn,step,remaining,iterations);
    if(pawn.physics!==1)throw Error('Walking entered unsupported non-dry physics');
   }
   if(stopped){
@@ -55,11 +65,13 @@ export function walking(pawn,seconds,iterations=0){
   const distance=f((f(pawn.maxStepHeight)+2)*hit.time);
   if(hit.time<1&&(hit.actor!==pawn.base||distance>2.4)){
    hit=pawn.move(floorDelta);if(hit.actor!==pawn.base)pawn.setSupportBase(hit.actor);
+   if(pawn.physics===3)return swimFrom(pawn,step,remaining,iterations); // 0x103cb6d9
   }else if(distance<1.9){const normal=[...hit.normal];hit=pawn.move([0,0,f(2.1-distance)]);hit={...hit,time:0,normal};}
   if(hit.time<1&&hit.normal[2]>=.7){
    if(hit.normal[2]<1&&hit.normal[2]*f(pawn.friction)<3.3){
     const g=scale(scale(scale(pawn.gravity,dt),1/(2*Math.max(f(pawn.friction),.5))),dt),into=dot(g,hit.normal);
     const slide=sub(g,scale(hit.normal,into));if(dot(slide,g)>=0)pawn.move(slide);
+    if(pawn.physics===3)return swimFrom(pawn,step,remaining,iterations); // 0x103cb97d
    }
    continue;
   }

@@ -192,9 +192,11 @@ Remaining boundaries for Training-style walking/crouching/jump/fall/camera are:
 * DoJump bytecode uses the canonical Base and velocity fields, and Walking /
   Falling are linked. Moving-base, carried-mass/equipment, landed damage,
   audio, animation and relocation outcomes still need their focused original
-  cases. Training's WaterZone path also reaches missing PHYS_Swimming=3
-  physics; `APawn::performPhysics` dispatches it to `physSwimming` at
-  `0x103d3cd0`, while `runScriptPawnPhysics` deliberately fails on mode 3. The
+  cases. Training's WaterZone path also needs the player's PHYS_Swimming=3:
+  `APawn::performPhysics` dispatches it to `physSwimming` at `0x103d3cd0`.
+  Script pawns now run it through `runScriptPawnPhysics`
+  ([swimming](swimming.md)), but the player route (`runPlayerPhysics`, the
+  PlayerSwimming state and breath effects) still refuses water regions. The
   source route and native work boundary are recorded in `player-physics.md`.
 * Eye/FOV/zoom bytecode executes on the live route and the eye expressions have
   original-native comparisons. Jolt production and full rendered camera parity

@@ -21,7 +21,9 @@ const refundTime = (remaining, time, step) => scriptVmKernel ? scriptVmKernel.re
 /** AActor.physFalling (Engine.dll 0x103d0a50): the dry Pawn (player) path, the
  * non-Pawn path and the bBounce wall-hit branch. World movement/queries and the
  * reached engine/script events are supplied by the caller; this function does
- * not implement swimming/buoyancy, surface events or landing fitting.
+ * not implement surface events or landing fitting. A Pawn that a MoveActor
+ * left in PHYS_Swimming hands off to the caller's `startSwimming` service
+ * (docs/swimming.md).
  *
  * `options` (all explicit; the defaults are the previously validated player path):
  *  - `nonPawn`: the source is not a Pawn (`IsA(APawn)` false at 0x103d0a7d). The
@@ -99,8 +101,19 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     iterations++;
     let step = remaining > .1 ? f(Math.min(remaining * .5, f(.1))) : remaining;
     const origin = [...pawn.position], oldVelocity = [...pawn.velocity];
+    // 0x103d0ee2: every substep starts with OldLocation = Location (read by
+    // startSwimming's water-line search) and clears bJustTeleported.
+    pawn.oldLocation = [...origin];
     pawn.justTeleported = false;
     remaining = f(remaining - step);
+    // 0x103d0f2f: the integration branches on Region.Zone->bWaterZone (fluid
+    // friction and buoyancy, 0x103d125a) and, for a PlayerPawn falling with its
+    // FootRegion in water, on 0x103d1039. Neither is translated; hosts that
+    // expose the zone flags (the script pawn view) stop here explicitly.
+    if (pawn.regionWater === true)
+      throw new Error('Original physFalling water-zone integration (Region.Zone->bWaterZone, 0x103d0f35 -> 0x103d125a) is not translated');
+    if (!nonPawn && pawn.isPlayerPawn && pawn.footWater === true && !(oldVelocity[2] >= 0))
+      throw new Error('Original physFalling PlayerPawn foot-in-water integration (0x103d1039) is not translated');
     // Each integration re-reads the actor's Acceleration (actor+0x150), which the
     // Pawn prelude stored clamped; a script event may have changed it since.
     const integrate = () => add(oldVelocity, scale(scale(add(pawn.acceleration, gravity), .5), step));
@@ -122,6 +135,17 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     // 0x103d1ca2: a MoveActor whose touch/bump events destroyed the actor
     // (bDeleteMe, actor+0x28 bit 0x80) ends physics without restoring anything.
     if (pawn.bDeleteMe) return;
+    // 0x103d1cac-0x103d1cf0: a Pawn whose MoveActor left PHYS_Swimming (a
+    // script ZoneChange) refunds (1 - Hit.Time) * TimeTick and hands off to
+    // startSwimming(OldVelocity, TimeTick, RemainingTime, Iterations), without
+    // restoring Acceleration.
+    if (!nonPawn && pawn.physics === 3) {
+      remaining = refundTime(remaining, hit.time, step);
+      if (typeof pawn.startSwimming !== 'function')
+        throw new Error('physFalling entered PHYS_Swimming without the startSwimming service (0x103d1cf0)');
+      pawn.startSwimming([...oldVelocity], step, remaining, iterations);
+      return;
+    }
     const blocked = hit.time < 1;
     if (blocked) {
       if (bouncing()) {

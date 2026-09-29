@@ -168,4 +168,4 @@ INT bFluid, INT bBrake, INT bBuoyant)`, `retl $0x24`.
 
 Not covered: the out-of-world branch (it throws), the calcVelocity braking
 path with bFluid, and the network clamp. Swimming, which uses bBuoyant and
-startSwimming, is the next slice.
+startSwimming, is in [swimming](swimming.md).

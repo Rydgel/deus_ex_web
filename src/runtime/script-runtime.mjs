@@ -3688,7 +3688,7 @@ export class ScriptRuntime {
    * physicsRotation gate, MoveTimer decay and AvgPhysicsTime averaging. World
    * queries come from the live level hash; the synchronous move path never
    * populates the original PendingTouch tail. Physics modes outside
-   * {Walking=1,Falling=2}, non-Pawn actors and the unsupported zone-event
+   * {Walking=1,Falling=2,Swimming=3,Flying=4}, non-Pawn actors and the unsupported zone-event
    * branches stay explicit boundaries. */
   /** Shared live-level services for the script-attached pawn consumers:
    * performPhysics (processActorPhysics) and the native-709 pick chain. Field
@@ -3712,7 +3712,7 @@ export class ScriptRuntime {
         const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
         return {get ZoneGravity(){return read('ZoneGravity');},get ZoneVelocity(){return read('ZoneVelocity');},
           get ZoneTerminalVelocity(){return read('ZoneTerminalVelocity');},get ZoneGroundFriction(){return read('ZoneGroundFriction');},
-          get ZoneFluidFriction(){return read('ZoneFluidFriction');}};
+          get ZoneFluidFriction(){return read('ZoneFluidFriction');},get bWaterZone(){return read('bWaterZone');}};
       },
       dispatch:(target,name,args=[])=>{
         const record=this.lookup(target,name);

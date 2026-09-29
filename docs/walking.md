@@ -59,8 +59,9 @@ Callbacks, invoked with pawn as receiver:
 | farMove(position,0,0) | Original rollback relocation; updates pawn.position. Its return is ignored here. |
 
 PlayerPawn.Falling calls PlayInAir in original embedded source; its visual/script
-work is external to this math caller. Swimming/flying transitions from callbacks
-are explicitly unsupported. Entry requires a valid dry PlayerPawn world region.
+work is external to this math caller. A callback that leaves PHYS_Swimming
+hands off to startSwimming at the original checks ([swimming](swimming.md));
+other transitions from callbacks are explicitly unsupported. Entry requires a valid dry PlayerPawn world region.
 Native MoveActor/query/event internals are supplied callbacks, not proven by this
 harness. MayFall probing/state-machine suppression is likewise the adapter's
 responsibility; for ordinary PlayerPawn the inherited event is empty.

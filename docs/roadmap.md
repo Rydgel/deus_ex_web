@@ -449,20 +449,34 @@ hacking. Support dialogue choices, trading, objectives, notes, mission flags, an
 scripted/cinematic events using original game data and behavior.
 
 **Open Liberty Island blockers, bypassed only for performance runs.** Within
-seconds of Player start, UNATCO Island reaches three unimplemented original
-paths, and Play pauses there by design. `bench-sim --bypass`,
+seconds of Player start, UNATCO Island reaches unimplemented original paths,
+and Play pauses there by design. `bench-sim --bypass`,
 `profile-play-browser --bypass` and local timing copies rewrite them into early
 returns (`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior:
 frames after it are only a timing workload. Each bypass patch is removed when
 its behavior lands.
 
-1. **Swimming.** `APawn::performPhysics` with Physics=3: startSwimming
-   `0x103d2b70` and physSwimming `0x103d3cd0`. physWalking hands off to it at
-   `0x103cb3fd` and checks for it again at `0x103cb6d9` and `0x103cb97d`;
-   physFalling at `0x103d1cb6` ([ladder and flying](ladder-flying.md)).
-2. **aiPickSearch's waterMove service** `0x103c3ca0`, with waterReach
-   `0x103c15a0` ([pawn navigation](script-pawn-nav.md)).
-3. **Native 708, `AIDirectionReachable`.**
+1. ~~**Swimming.**~~ Done ([swimming](swimming.md)): startSwimming
+   `0x103d2b70`, physSwimming `0x103d3cd0`, Swim `0x103d3850` and
+   findWaterLine `0x103d3b10` are bit-exact against Engine.dll in
+   `validate-native-swimming` (1093 cases, maxError 0, every instruction of the
+   four bodies executed). The physWalking (`0x103cb3fd`, `0x103cb6d9`,
+   `0x103cb97d`) and physFalling (`0x103d1cb6`) hand-offs are covered too.
+   `validate-island-swimming` shows the fish GeneratorScouts running
+   physSwimming in Play. The Island bench digest changed to `babe023941d42a3c`
+   (JS and Rust VM agree at all 30 checkpoints). Swimming was never the first
+   boundary: in the forward-walk workload, the first GeneratePawn (tick 153)
+   sets a scout to PHYS_Swimming and then reaches item 2 in the same call. The
+   `performPhysics` default rewrite is no longer reached in either map's bench
+   run. Falling *through* water (physFalling's water-zone integration
+   `0x103d125a` and PlayerPawn foot-water `0x103d1039`) is now an explicit
+   boundary instead of a silent dry integration.
+2. **aiPickSearch's waterMove service** `0x103c3ca0` (`APawn::swimMove`), with
+   waterReach `0x103c15a0` (`swimReachable`)
+   ([pawn navigation](script-pawn-nav.md)). This is the first boundary of the
+   bench workload, at tick 153 (2.55 s).
+3. **Native 708, `AIDirectionReachable`.** It is not reached in 400 ticks
+   while item 2 is stood in by bench-sim's early return.
 
 Behind these, latent 506 `StrafeFacing` and `altMove` are the next
 boundaries ([Play frame cost](play-frame-cost.md)).

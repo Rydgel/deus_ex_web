@@ -918,8 +918,10 @@ plus about 2.4 candidate reads per scan.
   bench-sim digests (`--digest-every`) on Training and Island must equal the
   JavaScript VM's at every checkpoint, and the full sweep runs in that mode.
 
-New subsystems still missing (swimming, the remaining natives, rendering)
-are researched as before and implemented against this core. A new native
+New subsystems still missing (the remaining natives, rendering) are
+researched as before and implemented against this core. Swimming
+([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;
+its Rust port is a later performance step. A new native
 written in JavaScript during the transition uses shared-memory field access,
 so it stays valid until its family moves.
 

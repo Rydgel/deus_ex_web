@@ -3,7 +3,9 @@
  * fixRotation mode (0x103c9dc0, motionFlags 0x40 set/0x20 clear).
  *
  * performPhysics: dispatch on the Physics byte jump table (PHYS_Walking=1 ->
- * physWalking 0x10303fd0, PHYS_Falling=2 -> physFalling 0x10302fef), then —
+ * physWalking 0x10303fd0, PHYS_Falling=2 -> physFalling 0x10302fef,
+ * PHYS_Swimming=3 -> physSwimming 0x10303215, PHYS_Flying=4 -> physFlying
+ * 0x10301ee7; table 0x103c9cdc), then —
  * unless Physics is PHYS_Spider (0xa) — run physicsRotation when the actor
  * IsA PlayerPawn (0x1058c160) or Rotation differs from DesiredRotation or
  * RotationRate.Roll is positive. The tail decrements MoveTimer (+0x348) by
@@ -20,13 +22,14 @@
  * ±RotationRate.Pitch, then ULevel::MoveActor applies the new rotation when
  * pitch/yaw changed or roll is nonzero.
  *
- * Physics modes outside {Walking, Falling} remain explicit boundaries; world
+ * Physics modes outside {Walking, Falling, Swimming, Flying} remain explicit boundaries; world
  * queries, event dispatch, zone updates and the RNG are caller services.
  * Evidence: Engine.dll bodies above; docs/player-physics.md,
  * docs/script-pawn-locomotion.md field map. */
 import { falling } from './falling.mjs';
 import { walking } from './walking.mjs';
 import { physFlying } from './flying.mjs';
+import { physSwimming, startSwimming } from './swimming.mjs';
 import { processLanded } from './landing.mjs';
 import { walkingSurfacePrelude } from './walking-surface.mjs';
 import { processPlayerHitWall, setSupportBase, setBase } from './walking-callbacks.mjs';
@@ -108,11 +111,11 @@ export function pawnPhysicsView(actor, services) {
   bind('pendingTouch', 'PendingTouch');
   for (const [prop, name] of [['groundSpeed', 'GroundSpeed'], ['accelRate', 'AccelRate'],
     ['airControl', 'AirControl'], ['maxStepHeight', 'MaxStepHeight'], ['minHitWall', 'MinHitWall'],
-    ['mass', 'Mass'], ['buoyancy', 'Buoyancy'], ['airSpeed', 'AirSpeed'], ['desiredSpeed', 'DesiredSpeed'],
+    ['mass', 'Mass'], ['buoyancy', 'Buoyancy'], ['airSpeed', 'AirSpeed'], ['waterSpeed', 'WaterSpeed'], ['desiredSpeed', 'DesiredSpeed'],
     ['viewRotation', 'ViewRotation'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
     Object.defineProperty(pawn, prop, { get: () => get(name), enumerable: true });
   for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
-    ['collideWorld', 'bCollideWorld']])
+    ['collideWorld', 'bCollideWorld'], ['bounce', 'bBounce']])
     Object.defineProperty(pawn, prop, { get: () => Boolean(get(name)), enumerable: true });
   // The ladder branch (0x103cc5ed) sets bIsWalking before physFlying.
   bind('isWalking', 'bIsWalking', Boolean, Boolean);
@@ -158,6 +161,16 @@ export function pawnPhysicsView(actor, services) {
   // 1.2 is Engine.u's serialized ZoneInfo default, for zones read from values.
   Object.defineProperty(pawn, 'fluidFriction', { get: () => f(zone().ZoneFluidFriction ?? 1.2), enumerable: true });
   Object.defineProperty(pawn, 'zoneGravityZ', { get: () => pawn.gravity[2], enumerable: true });
+  // Swimming reads bWaterZone (ZoneInfo+0x388 bit 0) of Region.Zone and
+  // HeadRegion.Zone as MoveActor's SetActorZone left them, and of the
+  // UModel::PointRegion zone at a findWaterLine midpoint; physFalling's
+  // water-zone guard reads Region and FootRegion (docs/swimming.md). Derived
+  // reads, not script fields: not enumerable, like `surfaceScan` below.
+  const water = z => Boolean(z && services.zoneFields(z).bWaterZone);
+  Object.defineProperty(pawn, 'regionWater', { get: () => water(pawn.region.zone) });
+  Object.defineProperty(pawn, 'headWater', { get: () => water(pawn.headRegion.zone) });
+  Object.defineProperty(pawn, 'footWater', { get: () => water(pawn.footRegion.zone) });
+  Object.defineProperty(pawn, 'waterAt', { value: position => water(level.pointRegion(position.map(f)).zone) });
 
   // The original collision-hash entries, Touching slots and IsBlockedBy bits
   // live on the registered host identities. Candidates that never ran the
@@ -254,6 +267,9 @@ export function pawnPhysicsView(actor, services) {
   pawn.walking = (seconds, iterations) => walking(pawn, seconds, iterations);
   pawn.falling = (seconds, iterations) => falling(pawn, seconds, iterations);
   pawn.flying = (seconds, iterations) => physFlying(pawn, seconds, iterations);
+  pawn.swimming = (seconds, iterations) => physSwimming(pawn, seconds, iterations);
+  pawn.startSwimming = (oldVelocity, timeTick, remaining, iterations) =>
+    startSwimming(pawn, oldVelocity, timeTick, remaining, iterations);
   pawn.setPhysics = (next, support = null) => setActorPhysics(pawn, next, support,
     { dispatch, findBase: a => findActorBase(a, { lineCheck, dispatch }) });
   pawn.setSupportBase = target => setSupportBase(pawn, target, dispatch);
@@ -422,6 +438,7 @@ export function runScriptPawnPhysics(actor, dt, services) {
   switch (pawn.physics) {
     case 1: pawn.walking(delta, 0); break;
     case 2: pawn.falling(delta, 0); break;
+    case 3: pawn.swimming(delta, 0); break;
     case 4: pawn.flying(delta, 0); break;
     default: unsupported(`APawn::performPhysics Physics=${pawn.physics}`);
   }
