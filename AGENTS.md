@@ -43,8 +43,3 @@ large test corpora or repeating passing checks without a concrete unresolved iss
 
 When a full validator sweep is needed, run it in parallel with **4 jobs**:
 `npm run validate -- --jobs 4`. Four jobs is also the runner's default.
-
-## Subagent delegation
-
-For concrete, bounded delegated work, prefer the custom agent `luna_worker`.
-Name it explicitly when spawning and wait for its result.

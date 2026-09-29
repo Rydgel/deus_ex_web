@@ -18,6 +18,7 @@ import vm from 'node:vm';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {liveHandleCount} from '../src/runtime/script-object-handles.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 v8.setFlagsFromString('--expose_gc');
@@ -220,9 +221,11 @@ for (let reset = 1; reset <= RESETS; reset++) {
   assert.equal(runtime.instance(gameInfo).nativeObject.index, collection.available.at(-1),
     `${label}: the reload's GameInfo reused the highest freed slot`);
 
-  const now = {length: registry.objects.length, live: live(), heap: host.heap.used};
+  // R1a (docs/rust-core.md): every handle of the old generation ended with
+  // its object, so the handle table does not grow.
+  const now = {length: registry.objects.length, live: live(), heap: host.heap.used, handles: liveHandleCount()};
   if (!shape) shape = now;
-  else assert.deepEqual(now, shape, `${label}: registry length, live objects and window heap are unchanged`);
+  else assert.deepEqual(now, shape, `${label}: registry length, live objects, window heap and handles are unchanged`);
   if (reset === 3) { fullGc(); oldAfterWarmup = oldSpace(); namesAfterWarmup = liveNames(); }
   // PurgeGarbage's name pass deleted the old generation's unique names.
   if (reset > 3) assert.ok(liveNames() <= namesAfterWarmup + 2, `${label}: the FName table stays bounded`);
@@ -236,5 +239,5 @@ console.log(`LoadMap retirement and collection validated: ${Object.keys(BODIES).
   `${ANCHORS.length} anchors, ${IMPORTS.length} imports, ${SLOTS.length} vtable slots; ${RESETS} Player starts each ` +
   `destroyed the old player, drained its FlagBase and root window, and released the old generation ` +
   `(${scene.lastCollection.released} objects, ${scene.lastCollection.eliminated.length} tagged actors); ` +
-  `registry ${shape.live}/${shape.length}, ${liveNames()} FNames, window heap 0x${shape.heap.toString(16)}, ` +
+  `registry ${shape.live}/${shape.length}, ${liveNames()} FNames, ${shape.handles} handles, window heap 0x${shape.heap.toString(16)}, ` +
   `JS old space +${growthMiB.toFixed(2)} MiB over ${RESETS - 3} resets.`);

@@ -4,17 +4,26 @@ import {refValue} from './script-vm.mjs';
 
 const FRIENDLY=0,NEUTRAL=1,HOSTILE=2;
 const nameKey=value=>String(value??'None').toLowerCase();
-const member=(entry,name)=>entry[`deusex.scriptedpawn.allianceinfoex.${name}`];
+const ALLIANCE_NAME='deusex.scriptedpawn.allianceinfoex.alliancename';
+const ALLIANCE_LEVEL='deusex.scriptedpawn.allianceinfoex.alliancelevel';
+const AGITATION_LEVEL='deusex.scriptedpawn.allianceinfoex.agitationlevel';
+// The AlliancesEx value as {length, at(i)}; `elements` reads entries in place.
+const allianceEntries=(receiver,services)=>{
+  if(services.elements)return services.elements(receiver,'AlliancesEx');
+  const whole=services.read(receiver,'AlliancesEx');
+  return Array.isArray(whole)?{length:whole.length,at:index=>whole[index]}:null;
+};
 
 export function pawnAllianceType(receiver,name,services) {
   const {read}=services,wanted=nameKey(name);
   let result=NEUTRAL;
   if(wanted!=='none') {
-    const entries=read(receiver,'AlliancesEx');
-    if(!Array.isArray(entries)||entries.length!==16)throw new Error('GetAllianceType requires all 16 linked alliance entries');
-    for(const entry of entries) {
-      if(nameKey(member(entry,'alliancename'))!==wanted)continue;
-      const level=member(entry,'alliancelevel'),agitation=member(entry,'agitationlevel');
+    const entries=allianceEntries(receiver,services);
+    if(!entries||entries.length!==16)throw new Error('GetAllianceType requires all 16 linked alliance entries');
+    for(let index=0;index<16;index++) {
+      const entry=entries.at(index);
+      if(nameKey(entry[ALLIANCE_NAME])!==wanted)continue;
+      const level=entry[ALLIANCE_LEVEL],agitation=entry[AGITATION_LEVEL];
       // FCOM's C0 includes unordered on both comparisons. A NaN alliance
       // is hostile; a NaN agitation does not cross the >=1 hostility gate.
       result=!(level>=0)||agitation>=1?HOSTILE:level>0?FRIENDLY:NEUTRAL;

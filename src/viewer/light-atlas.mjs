@@ -108,7 +108,8 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
         gl_FragColor.rgb *= texture2D(deusLightAtlas, lm).rgb * 2.0;
       }
       ${mirror ? `if (deusMirrorActive > 0.5) {
-        vec3 reflection = texture2D(deusMirror, gl_FragCoord.xy / deusMirrorSize).rgb;
+        vec2 mirrorUV = gl_FragCoord.xy / deusMirrorSize;
+        vec3 reflection = texture2D(deusMirror, vec2(1.0 - mirrorUV.x, mirrorUV.y)).rgb;
         vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
         gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);
       }` : ''}

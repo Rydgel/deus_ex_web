@@ -14,6 +14,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { createGame } from '../src/viewer/game.mjs';
 import { createMeshLightingView } from '../src/viewer/mesh-lighting-view.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from '../src/runtime/lodmesh-frame.mjs';
+import { loadLodMeshKernel } from '../src/runtime/lodmesh-wasm.mjs';
 import { traceRay } from '../src/runtime/ray.mjs';
 import { d3dDiffuse } from '../src/runtime/mesh-lighting.mjs';
 import { gameDirectory } from './game-directory.mjs';
@@ -31,8 +32,9 @@ const runtime = game.doors.scriptRuntime.runtime, player = game.player.collision
 const level = runtime.levelFor(player), model = level.model;
 const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
 const exportIndexByName = new Map(asset.pkg.exports.map((entry, i) => [entry.name, i + 1]));
-const lighting = createMeshLightingView(runtime, () => runtime.levelFor(player),
-  { exportName: ref => asset.pkg.exports[ref - 1]?.name, exportIndex: name => exportIndexByName.get(name) });
+const lightingOptions={exportName: ref => asset.pkg.exports[ref - 1]?.name, exportIndex: name => exportIndexByName.get(name)};
+const lighting = createMeshLightingView(runtime, () => runtime.levelFor(player),lightingOptions);
+const lightingWasm=createMeshLightingView(runtime,()=>runtime.levelFor(player),{...lightingOptions,kernel:await loadLodMeshKernel()});
 const view = game.view(), f = Math.fround, bits = new DataView(new ArrayBuffer(4));
 const u32 = value => { bits.setFloat32(0, value, true); return bits.getUint32(0, true); };
 const float = value => { bits.setUint32(0, value >>> 0, true); return bits.getFloat32(0, true); };
@@ -63,7 +65,9 @@ for (const actor of chosen) {
   const frame = getLodMeshFrame(payload, actor, [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], services);
   const data = new DataView(frame.output.buffer, frame.output.byteOffset, frame.output.byteLength);
   const points = Array.from({ length: frame.output.byteLength / 12 }, (_, i) => [0, 4, 8].map(o => data.getFloat32(i * 12 + o, true)));
-  meshes.set(actor, { points, faces: runtime.getActorMeshSurfaces(actor) });
+  const faces=runtime.getActorMeshSurfaces(actor),packedPoints=Float32Array.from(points.flat());
+  const faceWords=new Uint32Array(faces.length*4);faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
+  meshes.set(actor, { points,packedPoints,faces,faceWords });
 }
 
 // Two Play frames: a new visibility cache, then a cached one.
@@ -71,10 +75,14 @@ const frames = [{ seconds: 20 }, { seconds: 20.02 }];
 const passes = new Map(chosen.map(actor => [actor, []]));
 for (const frame of frames) {
   lighting.beginFrame({ location: view.location, rotation: view.rotation, seconds: frame.seconds });
+  lightingWasm.beginFrame({ location: view.location, rotation: view.rotation, seconds: frame.seconds });
   frame.viewport = { ...lighting.frame.viewport };
   for (const actor of chosen) {
-    const { points, faces } = meshes.get(actor);
-    passes.get(actor).push(lighting.lightMesh(actor, points, faces));
+    const { points,packedPoints,faces,faceWords } = meshes.get(actor);
+    const pass=lighting.lightMesh(actor, points, faces),wasm=lightingWasm.lightMesh(actor,packedPoints,faces,faceWords);
+    assert.deepEqual(new Uint32Array(wasm.colors.buffer,wasm.colors.byteOffset,wasm.colors.length),
+      new Uint32Array(pass.colors.buffer,pass.colors.byteOffset,pass.colors.length),`${actor.name}: Wasm diffuse colours`);
+    passes.get(actor).push(pass);
   }
 }
 
@@ -163,6 +171,7 @@ for (let k = 0; k < 30; k++) {
 }
 const perFrame = (performance.now() - started) / 30;
 console.log(JSON.stringify({ actors: chosen.map(actor => actor.name), passes: expectations.length, lights, vertices,
+  wasm:{passes:expectations.length,diffuseBytesOff:0},
   doublePath: { channelsOff, maxUlps, diffuseBytesOff: bytesOff },
   cost: { actors: chosen.length, vertices: [...meshes.values()].reduce((n, m) => n + m.points.length, 0),
     faces: [...meshes.values()].reduce((n, m) => n + m.faces.length, 0), msPerFrame: Number(perFrame.toFixed(2)) } }));

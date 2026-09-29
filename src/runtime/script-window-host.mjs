@@ -85,6 +85,7 @@ import {editMemory, cleanUpUndo, setTextVirtual, textChangedRange} from './scrip
 import {dispatchEditWindowNative} from './script-window-edit-natives.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
 import {enableTextAsAcceleratorNative} from './script-window-text.mjs';
+import {releaseHandle} from './script-object-handles.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -1237,6 +1238,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     }
     if (count > 16) boundaryLog.push({log: 'GLog', text: `***WARNING: GC contains an abnormally large GC stack! (${count})`});
     heap.free(gc);
+    // R1a: the GC's handle ends with it (docs/rust-core.md). Its image range
+    // is left to the runtime's finalizer: a host window has no released
+    // flag, so a later access would read a reused range.
+    releaseHandle(gc);
   }
   const destroyServices = {
     ...rawServices,
@@ -1270,6 +1275,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       destroyed.add(object);
       families.delete(object);
       heap.free(object);
+      releaseHandle(object);
     },
   };
   function safeDestroy(win) { return safeDestroyWindowNative(win, destroyServices); }

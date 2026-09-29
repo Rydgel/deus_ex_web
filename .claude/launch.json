@@ -4,8 +4,20 @@
     {
       "name": "deus-ex-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "r0-scratch",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-gcc-Documents-deus-ex-web/6f62549e-b9f4-453e-afbb-165397ef3020/scratchpad/r0 && exec npx vite --port 5181 --strictPort"
+      ],
+      "port": 5181
     }
   ]
 }

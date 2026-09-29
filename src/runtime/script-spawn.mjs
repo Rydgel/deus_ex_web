@@ -1,4 +1,5 @@
 import {refValue} from './script-vm.mjs';
+import {bumpBaseEpoch} from './base-epoch.mjs';
 import {SCRIPTED_ACTOR_CONSTRUCTION} from './script-scripted-actor-construction.mjs';
 import {INVENTORY_CONSTRUCTION, resolveInheritedInventoryConstructorChain} from './script-inventory-construction.mjs';
 import {NATIVE_ACTOR_CONSTRUCTORS} from './script-native-actor-constructors.mjs';
@@ -141,9 +142,9 @@ export function spawnActor(args,services) {
   // 0x103951bc-0x10395236: append, construct through the ClassConstructor,
   // RF_Transactional, Tag = the class name.
   const index=level.actors.length;
-  level.actors.push(null);
+  level.actors.push(null);bumpBaseEpoch();
   const actor=construct(cls,{outer:level.nativeObject.outer,name,flags:0,template:null},{constructorSelection:selection});
-  level.actors[index]=actor;
+  level.actors[index]=actor;bumpBaseEpoch();
   write(actor,'ObjectFlags',read(actor,'ObjectFlags')|1);
   write(actor,'Tag',cls.record.name);
   // 0x10395286-0x1039531c: Level/XLevel, Region, bTicked parity, Role warning, Brush.

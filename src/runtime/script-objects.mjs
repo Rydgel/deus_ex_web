@@ -8,6 +8,9 @@ export class ScriptObjects {
     this.objects = new Map();
     this.linkedScripts = new WeakMap();
     this.linkedOperands = new WeakMap();
+    // Advances whenever an expanded operand can change (link, GC rewrite), so
+    // callers may keep a resolved operand while it is unchanged.
+    this.operandEpoch = 0;
   }
   async resolve(asset, index) {
     if (!index) return null;
@@ -65,6 +68,7 @@ export class ScriptObjects {
     }
     this.linkedScripts.set(script,bindings);
     this.linkedOperands.set(script,{decoded,objects,names});
+    this.operandEpoch++;
     return bindings;
   }
   /** Package-index lookup is for linking metadata. Execution reads the
@@ -81,7 +85,7 @@ export class ScriptObjects {
     if(!operands?.has(node))throw new Error(`Unlinked bytecode operand ${script.entry.path}:${node?.offset}`);
     return {reference:true,get:()=>operands.get(node),set:value=>{
       if(value!==null&&typeof value!=='object')throw new TypeError('Bytecode object operand requires UObject identity or null');
-      operands.set(node,value);
+      operands.set(node,value);this.operandEpoch++;
     }};
   }
   operand(script,node) {

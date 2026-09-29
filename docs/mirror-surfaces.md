@@ -71,10 +71,15 @@ as in the existing lighting work.
 
 `viewer/mirrors.mjs` groups supported coplanar faces, renders a full-resolution
 reflected view, and clips against the original world plane. It preserves the
-reflected matrix's negative determinant and reverses material culling during the
-child draw. Marker overlays, HUD and first-person weapon draws are outside the
+reflected matrix's negative determinant. For WebGL submission it negates the
+child camera's local X axis and samples the target right-to-left; those two
+screen-space reflections cancel, preserving the original view without changing
+material culling state between child and parent draws. Marker overlays, HUD and first-person weapon draws are outside the
 child. Actor geometry/UVs use the reflected eye and restore the parent eye after
-the pass. Original textures and lightmaps use the same display-encoded colours
+the pass. One global clipping-plane shader shape stays active across both child
+and parent submissions; the parent uses a zero normal, while each child receives
+the original mirror plane. This avoids changing every material's three.js
+program variant without changing clipping. Original textures and lightmaps use the same display-encoded colours
 in the target as on screen; Three's default linear render-target output cannot
 be used for this legacy blend. Gamma is 1 during the child draw. The floor
 shader computes S+R(1-S), then applies the configured display gamma once and

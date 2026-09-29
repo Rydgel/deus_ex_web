@@ -1,4 +1,5 @@
 import {propertyReference} from './script-values.mjs';
+import {bumpBaseEpoch} from './base-epoch.mjs';
 
 const objectField=field=>field.metadata.type==='object'||field.metadata.type==='class';
 const structField=field=>field.metadata.type==='struct';
@@ -68,9 +69,10 @@ export function compactScriptActors(level,{read,warning,recordArrayRemoval}={}) 
     const actor=actors[index];
     if(actor===null)continue;
     if(read(actor,'bDeleteMe'))warning?.({type:'PendingActorInArray',actor});
-    else actors[write++]=actor;
+    else{if(write!==index)bumpBaseEpoch();actors[write++]=actor;}
   }
   if(write===actors.length)return;
+  bumpBaseEpoch();
   if(level.undo!==null){
     if(typeof recordArrayRemoval!=='function')throw new Error('CompactActors requires array transaction recording');
     recordArrayRemoval(level,write,actors.length-write);

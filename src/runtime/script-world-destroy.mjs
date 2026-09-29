@@ -12,6 +12,7 @@
  */
 import { modifyScriptObject } from './script-object-lifecycle.mjs';
 import { endTouch as endActorTouch } from './actor-touch.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
 
 /** Native object record for a pre-placed map export.
  *
@@ -158,6 +159,7 @@ export function createDestroyedActorLedger({ level, runtime }) {
       if (!level.actors.includes(receiver)) {
         if (level.actors[saved.slot] === null) level.actors[saved.slot] = receiver;
         else level.actors.splice(Math.min(saved.slot, level.actors.length), 0, receiver);
+        bumpBaseEpoch();
       }
       clearStore?.(receiver);
       const object = runtime.instance(receiver).nativeObject;

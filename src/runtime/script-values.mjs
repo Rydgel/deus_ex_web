@@ -145,6 +145,7 @@ const descriptorCache = new WeakMap();
 // A linked field record ({key, metadata}) resolves straight to its entry,
 // without rebuilding the key string or a second map lookup per access.
 const fieldDescriptors = new WeakMap();
+const DESCRIPTOR_ENTRY = Symbol('property descriptor entry');
 
 const currentFor = (cached, metadata) =>
   cached.arrayDim === metadata.arrayDim && cached.elementSize === metadata.elementSize &&
@@ -162,7 +163,9 @@ function describeEntry(field) {
   if (!metadata || typeof metadata !== 'object') return null;
   const linked = field !== metadata && typeof field.key === 'string';
   if (linked) {
-    const direct = fieldDescriptors.get(field);
+    // The field record's own link (set below) spares the WeakMap lookup; the
+    // same metadata/key/currency checks decide whether it is still valid.
+    const direct = field[DESCRIPTOR_ENTRY] ?? fieldDescriptors.get(field);
     if (direct && direct.metadata === metadata && direct.key === field.key && currentFor(direct, metadata))
       return direct;
   }
@@ -177,7 +180,11 @@ function describeEntry(field) {
       arrayDim: metadata.arrayDim, elementSize: metadata.elementSize, structKey: metadata.structKey,
       structFields: metadata.structFields, innerMetadata: metadata.innerMetadata });
   }
-  if (linked) fieldDescriptors.set(field, cached);
+  if (linked) {
+    fieldDescriptors.set(field, cached);
+    if (Object.isExtensible(field))
+      Object.defineProperty(field, DESCRIPTOR_ENTRY, {value: cached, writable: true, enumerable: false, configurable: true});
+  }
   return cached;
 }
 
@@ -442,6 +449,10 @@ export function copyValue(field, value) {
   return copyFromDescriptor(descriptor, value);
 }
 
+/** A storage's readElement(index) result when it cannot read one element
+ * of its fixed array on its own; the reference then copies the whole value. */
+export const NO_ELEMENT = Symbol('no element');
+
 // Reference backing: the storage getter/setter and the field descriptor.
 const readWhole = state => copyStored(state.get(), state.descriptor, 'propertyReference.get');
 const writeLogical = (state, value) =>
@@ -470,8 +481,17 @@ class PropertyReference {
       container: container ?? this,
     } : null;
     // Own functions: callers pass ref.get/ref.set on as detached accessors.
+    // readWhole copies every element (copyScalar each, non-bool) before the
+    // index; a storage that reads the one element's cell yields that same
+    // element value without copying its neighbours.
     this.get = isElement
-      ? () => copyScalar(readWhole(state)[index], descriptor.element, 'arrayReference.get')
+      ? typeof state.readElement === 'function' && descriptor.element.type !== 'bool'
+        ? () => {
+          const element = state.readElement(index);
+          return copyScalar(element === NO_ELEMENT ? readWhole(state)[index] : element,
+            descriptor.element, 'arrayReference.get');
+        }
+        : () => copyScalar(readWhole(state)[index], descriptor.element, 'arrayReference.get')
       : () => readWhole(state);
     this.set = isElement ? value => {
       const whole = readWhole(state);
@@ -535,6 +555,8 @@ function codecFor(descriptor) {
     read: readerFor(descriptor),
     store: (value, raw) => copyToStorage(value, descriptor, raw),
     copy: value => copyFromDescriptor(descriptor, value),
+    // The value a whole-property PropertyReference.set returns.
+    assigned: value => copyFromDescriptor(descriptor, value, 'arrayReference.set'),
   };
 }
 

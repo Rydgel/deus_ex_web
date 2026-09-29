@@ -16,7 +16,11 @@ import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.autoClear = false;
+// World and actor shaders apply the original display-encoded modulation and
+// gamma ramp themselves.  Keep canvas and render-target programs in Three's
+// working space so mirror child draws do not select a second shader variant
+// for every material; the custom output bytes are unchanged.
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.autoClear = false;
 renderer.info.autoReset=false;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.clone();
@@ -198,13 +202,14 @@ async function loadMap(name) {
           // Player start logs in a new player; follow the current one.
           player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
+        nextMeshLighting.kernel=nextNpcPreview.kernel;
         nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
     if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
-      {lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
+      {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
     meshLighting=nextMeshLighting??null;
     hudRenderer?.dispose();hudRenderer=nextHud;
     weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
@@ -611,11 +616,23 @@ function status() {
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
-window.deusExViewer = { status };
+window.deusExViewer = { status, framePhases(reset = true) {
+  const result = { ...framePhases, runtimeError: runtimeError?.message ?? null, paused };
+  if (reset) for (const key of Object.keys(framePhases)) framePhases[key] = 0;
+  return result;
+} };
 
+// Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
+// phase, read and reset by deusExViewer.framePhases(). Measurement only.
+const framePhases = { frames: 0, tick: 0, lighting: 0, actors: 0, mirrors: 0, render: 0, hud: 0, total: 0,
+  mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0 };
+const drawCalls = () => renderer.info.render.calls;
+let phaseMark = 0;
+const phase = name => { const now = performance.now(); framePhases[name] += now - phaseMark; phaseMark = now; };
 function animate(time) {
   requestAnimationFrame(animate);
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
+  const frameStart = phaseMark = performance.now();
   if (world && !loading) {
     let playerView = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
@@ -630,6 +647,7 @@ function animate(time) {
         try { world.syncMovingLights(game.movingLights(), game.collision.movers); } catch (error) { pauseForRuntimeError(error); }
       }
       try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
+      phase('tick');
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
       $('play-hint').textContent = runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
@@ -650,16 +668,21 @@ function animate(time) {
       try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000});}
       catch(error){pauseForRuntimeError(error);}
     }
+    phase('lighting');
     if(npcPreview&&!runtimeError){
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
-      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum});}catch(error){pauseForRuntimeError(error);}
+      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,
+        cull:!world.mirrors.mayRender(camera)});}catch(error){pauseForRuntimeError(error);}
     }
+    phase('actors');
     renderer.info.reset();
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
-      updateActors: npcPreview && !runtimeError ? position => npcPreview.update(position) : null });
+      updateActors: npcPreview && !runtimeError ? position => npcPreview.updateView(position) : null });
+    phase('mirrors');
+    let calls = drawCalls(); framePhases.mirrorCalls += calls;
     renderer.setClearColor('#06101b', 1); renderer.clear();
     if (world.sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));
@@ -667,15 +690,20 @@ function animate(time) {
       const npcVisible=npcPreview?.root.visible;if(npcPreview)npcPreview.root.visible=false;
       renderer.render(scene, skyCamera); world.markers.visible = markersVisible;
       if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
+      framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
     }
     renderer.render(scene, camera);
+    framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
     if(mode==='play'&&weaponViewModel&&!runtimeError){
       try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
     }
+    phase('render');
     if(mode==='play'&&hudRenderer&&playerView){
       hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
       updateInfoLinkAccessibility();
     }
+    framePhases.hudCalls += drawCalls() - calls;
+    phase('hud');
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {
       lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);
@@ -683,6 +711,7 @@ function animate(time) {
       $('surface-info').textContent = hit ? `${hit.object.material.userData.key}\n${hit.object.material.userData.width} × ${hit.object.material.userData.height} · ${hit.object.material.userData.mipCount} mips\nSurface ${hit.object.userData.faces[hit.faceIndex]} · ${hit.object.userData.actor ?? 'world'}\nFlags 0x${hit.object.material.userData.flags.toString(16)}` : 'No surface under the crosshair.';
     }
   }
+  framePhases.frames++; framePhases.total += performance.now() - frameStart;
   frameCount++;
   if (time - fpsTime > 1000) { $('performance').textContent = world ? `${Math.round(frameCount * 1000 / (time - fpsTime))} fps` : ''; frameCount = 0; fpsTime = time; }
 }

@@ -14,6 +14,7 @@
 import { collectLoadMapGarbage } from './script-loadmap-gc.mjs';
 import { destructScriptObject, freeScriptObject } from './script-object-release.mjs';
 import { releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
 import { releaseTextParserObject } from './script-text-parser-natives.mjs';
 import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
 
@@ -61,7 +62,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
       header(standIn, visit);
       if (standIn === levelRecord) {
         for (let index = 0; index < level.actors.length; index++)
-          visit({ get: () => level.actors[index] ?? null, set: value => { level.actors[index] = value; } });
+          visit({ get: () => level.actors[index] ?? null, set: value => { level.actors[index] = value; bumpBaseEpoch(); } });
       }
       return;
     }
@@ -78,7 +79,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     // The host's FStateFrame is the ScriptState record; freeing it releases
     // nothing beyond the object record itself.
     freeStateFrame: () => {},
-    freeObject: object => { object.released = true; },
+    freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpoch(); },
     warning: runtime.warning,
   };
   function finalDelete(record, flags) {
@@ -116,6 +117,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
       });
       const released = before.filter(record => record.released).map(record => record.identity);
       for (const identity of released) onReleased?.(identity);
+      runtime.reclaimReleased?.();
       return { ...result, released: released.length };
     },
   };

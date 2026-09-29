@@ -14,7 +14,7 @@ const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue',
  * SetupForActor call per drawn actor per frame. `levelSource()` returns the
  * current Play level; `exportName(ref)` names a map export, since UModel.Lights
  * holds map export references. */
-export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined }) {
+export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined, kernel = null }) {
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
   const manager = createMeshLightManager();
   let frame = null, frameCount = 0, lastTime = null;
@@ -37,7 +37,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     return record;
   };
   const view = {
-    manager,
+    manager,kernel,
     get frame() { return frame; },
     /** URender's per-frame setup for the main viewport: Frame->Coords, the
      * viewport clock and SetupDynamics' moving-light leaf lists. */
@@ -80,7 +80,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
      * vertices, `faces` the mesh faces in draw order ({vertices, flags}).
      * Returns per-face corner diffuse colours in [0,1], three corners per face
      * in face-vertex order, as D3D's FISTP bytes. */
-    lightMesh(actor, points, faces) {
+    lightMesh(actor, points, faces, faceWords = null) {
       if (!frame) return null;
       const zoneActor = (() => {
         const region = read(actor, 'Region');
@@ -117,6 +117,15 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         worldToCamera: point => view.toCamera(point),
       });
       const flags = polyFlags | setup.flags;
+      if(view.kernel&&ArrayBuffer.isView(points)){
+        if(!(faceWords instanceof Uint32Array)||faceWords.length!==faces.length*4)
+          throw new TypeError('Wasm mesh lighting requires packed face topology');
+        const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,
+          ambient:setup.ambient,scaleGlow:setup.scaleGlow,
+          unlit:unlitColor(read(actor,'AmbientGlow')??0,f(read(actor,'ScaleGlow')??1)),lights:setup.lights,flags});
+        return {colors,setup,flags,vertices:null};
+      }
+      if(ArrayBuffer.isView(points))points=Array.from({length:points.length/3},(_,i)=>Array.from(points.subarray(i*3,i*3+3)));
       // DrawLodMesh: camera-space vertices, summed face normals over every
       // face, then per-vertex light for vertices of faces that are drawn.
       const camera = points.map(point => view.toCamera(point));

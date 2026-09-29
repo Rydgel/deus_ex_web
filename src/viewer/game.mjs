@@ -9,6 +9,7 @@ import { Doors } from '../runtime/doors.mjs';
 import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
+import { bumpBaseEpoch } from '../runtime/base-epoch.mjs';
 import { brushMatrix } from './transforms.mjs';
 import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { isHighlighted } from '../runtime/interaction.mjs';
@@ -55,7 +56,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
       actor.movingBrush = false;
       actor.projectile = actor.lineage.includes('engine.projectile');
-      actor.base = actors.get(v.Base) ?? null;
+      actor.base = actors.get(v.Base) ?? null; bumpBaseEpoch();
       Object.assign(actor, { position: [...v.Location], radius: v.CollisionRadius ?? 0, height: v.CollisionHeight ?? 0 });
       nonColliding.push(actor);
       continue;
@@ -67,7 +68,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
     actor.movingBrush = Boolean(v.Brush) && actor.lineage.includes('engine.brush');
     actor.projectile = actor.lineage.includes('engine.projectile');
-    actor.base = actors.get(v.Base) ?? null;
+    actor.base = actors.get(v.Base) ?? null; bumpBaseEpoch();
     actor.blocking = Boolean(v.bBlockPlayers);
     collidable.push(actor);
     if (v.bIsMover && v.Brush > 0) {
@@ -127,6 +128,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   playerScene.reset();
   Object.defineProperty(playerScene.level,'timeSeconds',{configurable:true,
     get:()=>timeSeconds,set:value=>{timeSeconds=value;}});
+  bumpBaseEpoch();
   playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
   // ULevel ReachSpec table (+0x8c, 28-byte records): serialized start/end are
   // map-export refs; the nav natives walk them as live actors. readLevel's
@@ -209,7 +211,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       ? {actor,label:doors.scriptRuntime.runtime.readNamed(actor,'FamiliarName')}
       : { actor, label: itemLabel(actor) };
   notes.push('Training Play supports movement, translating doors, decoration physics, frob interactions, item pickup and weapon use. Mission progression remains incomplete.');
-  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Original mesh lighting remains incomplete.`);
+  if (collision.actors.length) notes.push(`${collision.actors.length} original actor collision cylinders are active. Mesh fog, volumetric lights and distance LOD remain incomplete.`);
   // Legacy research helper: choose item/None before original PutInHand and
   // UpdateInHand. Its toggle is host policy, not the original belt-key path;
   // user digits below call ActivateBelt without changing its argument.

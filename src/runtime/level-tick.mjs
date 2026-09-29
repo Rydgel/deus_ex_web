@@ -1,6 +1,7 @@
 /** Standalone ULevel.Tick simulation scheduling. Original instruction contract,
  * reference cases and service boundaries: docs/script-level-tick.md. */
 import {x87load, x87add, x87mul, x87neg, x87store, x87storeDouble, x87sqrt} from './script-vm.mjs';
+import {unambiguousF32, ulps53} from './x87-fast.mjs';
 
 const f=Math.fround;
 const scratch=new DataView(new ArrayBuffer(8));
@@ -29,9 +30,23 @@ export function levelTickTime(timeSeconds,seconds,timeDilation) {
   else if(!(delta<f(0.4)))delta=f(0.4);
   return {timeSeconds:storeDouble(time),infoTimeSeconds:x87store(time),delta};
 }
+// Fast path for playerDistance (x87-fast.mjs). The double differences of the
+// f32 loads carry relative error <= 2^-53 each, the squares and the sum of
+// nonnegative terms <= 5*2^-53, and the square root halves it and adds 2^-53
+// (3.5*2^-53). The x87 sequence (64-bit adds/products, the 53-bit FSTL and a
+// 64-bit FSQRT) stays within about 0.6*2^-53 of the exact root. A 16*2^-53
+// bound covers both with margin.
+function playerDistanceFast(location,origin) {
+  const dx=f(location[0])-f(origin[0]),dy=f(location[1])-f(origin[1]),dz=f(location[2])-f(origin[2]);
+  if(dx===0&&dy===0&&dz===0)return undefined;
+  const root=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  return unambiguousF32(root,root*ulps53(16));
+}
 export function playerDistance(location,origin) {
   if(!location.every(Number.isFinite)||!origin.every(Number.isFinite))
     throw new Error('Level.Tick nonfinite distance coordinates are not implemented');
+  const fast=playerDistanceFast(location,origin);
+  if(fast!==undefined)return fast;
   const [x,y,z]=location.map((v,i)=>x87add(x87load(v),x87neg(x87load(origin[i]))));
   const square=x87add(x87add(x87mul(y,y),x87mul(z,z)),x87mul(x,x));
   return x87store(x87sqrt(x87storeDouble(square)));

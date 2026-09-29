@@ -302,8 +302,9 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn
     // (ScriptRuntime.moveSpawnedActor raises the explicit boundary for any
     // other identity).
     moveRiders: (src, finalDelta, rot) => moveActorRiders(pawn.self, finalDelta, rot, {
+      riderCacheKey: 'pawn-physics',
       actors: level.actors,
-      baseOf: other => other.base !== undefined ? other.base : readOther(other, 'Base'),
+      baseOf: other => { const base = other.base; return base !== undefined ? base : readOther(other, 'Base'); },
       location: other => other.position ?? readOther(other, 'Location'),
       rotation: other => other.rotation ?? readOther(other, 'Rotation'),
       isPawn: other => Boolean(other.lineage?.includes('engine.pawn')),

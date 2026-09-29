@@ -7,7 +7,8 @@ import {findAnimSeq} from './play-anim.mjs';
 const f=Math.fround;
 const less=(a,b)=>a<b||Number.isNaN(a)||Number.isNaN(b); // x87 C0
 const nonzero=value=>value!==0&&!Number.isNaN(value); // !x87 C3 against zero
-const named=value=>value!=null&&String(value).toLowerCase()!=='none'&&value!=='';
+// 'None' (the unset FName) is answered without building a lowercase copy.
+const named=value=>value!=='None'&&value!=null&&String(value).toLowerCase()!=='none'&&value!=='';
 const active=actor=>named(actor.AnimSequence)&&nonzero(less(actor.AnimFrame,0)?actor.TweenRate:actor.AnimRate);
 
 function scaledRate(actor,rate,minimum,blend=false) {

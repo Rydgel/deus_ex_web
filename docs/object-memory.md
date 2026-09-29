@@ -214,16 +214,20 @@ after 600 ticks, and after a Player-start reset and 300 more ticks. It gives
 identical results on `be02895` and with 1d, error messages included. Measurements are in
 [frame cost](play-frame-cost.md#stages-1c-and-1d-layout-tables-and-object-images).
 
-What 1d does not do: the images are per-object buffers, not addresses on the
-native heap. The Extension windows' native members stay in the native heap
+Since [Rust core](rust-core.md) step R0, the images are ranges of one
+`WebAssembly.Memory` per runtime rather than per-object buffers.
+
+What 1d does not do: the images are not addresses on the native heap. The Extension windows' native members stay in the native heap
 image the window natives address. Sharing one address space is part of 1e.
 
-**1e: host-owned fields move into the image (deferred).** Physics, collision
+**1e: host-owned fields move into the image (next).** Physics, collision
 and presentation read the original offsets directly, and the corresponding
 bindings disappear. After this step a Rust kernel can share the image as
-`WebAssembly.Memory` with no marshaling. Nothing measured needs this now: its
-main payoff is a WebAssembly kernel, and none is justified yet. It stays design
-until a measured playability problem calls for it.
+`WebAssembly.Memory` with no marshaling. It was deferred until a measured
+playability problem called for it. UNATCO Island's frame cost now does, and
+the [Rust core](rust-core.md) VM needs `Location`, `Velocity` and the other
+bound Actor fields in the image, or every read would cross into
+JavaScript.
 
 Each stage keeps the existing native oracle cases green, runs the full sweep
 and repeats the paired A/B profile.
@@ -236,9 +240,10 @@ and repeats the paired A/B profile.
   serialization) is not established.
 * **Pointers.** Object and class slots need address ↔ identity mapping. The
   image's reference array holds identities; the native heap's opaque handles
-  provide identity only. The GObjObjects index
-  model ([boot replay](boot-replay.md)) is separate and must stay the source of
-  object indices.
+  provide identity only. Since [Rust core](rust-core.md) step R1a, the slot's
+  bytes also hold a host handle for the identity; it is not an address. The
+  GObjObjects index model ([boot replay](boot-replay.md)) is separate and must
+  stay the source of object indices.
 * **Owning values.** FString and dynamic arrays (`Data`/`Num`/`Max`) keep whole
   logical values in the image's reference array. Their byte form needs the recovered property
   copy/destroy dispatch and allocator services. Map properties remain

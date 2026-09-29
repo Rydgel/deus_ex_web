@@ -6,6 +6,7 @@
  * host cannot accidentally turn an unsupported branch into a guessed one.
  */
 
+import { bumpBaseEpoch } from './base-epoch.mjs';
 const AUTHORITY_ROLE = 4;
 
 const present = value => value !== null && value !== undefined;
@@ -182,7 +183,7 @@ export function destroyScriptActor(receiver, options, netForce = false) {
 
   // Assert the original saved slot immediately before mutating the array.
   if (actors[index] !== receiver) throw new Error('DestroyActor saved actor slot changed during callbacks');
-  actors[index] = null;
+  actors[index] = null; bumpBaseEpoch();
   write(receiver, 'bDeleteMe', true);
 
   // XLevel+0x40 is UEngine*, +0x4c is optional UAudioSubsystem*, and +0x7c

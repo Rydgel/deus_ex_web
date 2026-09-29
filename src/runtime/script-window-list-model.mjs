@@ -157,8 +157,17 @@ export function listMemory(object, services) {
     if (kind === 'f32') return float32;
     return modelFail(`ListWindow unsupported heap kind ${kind}`, {kind: 'VALUE', value: kind});
   };
-  const read = (address, kind) => checked(kind)(sync(mem.read(address, kind), `read 0x${address.toString(16)}`));
-  const write = (address, kind, value) => sync(mem.write(address, kind, value), `write 0x${address.toString(16)}`);
+  // rejectAsync with the label built only for the failure message.
+  const read = (address, kind) => {
+    const value = mem.read(address, kind);
+    if (value && typeof value.then === 'function') rejectAsync(value, `read 0x${address.toString(16)}`);
+    return checked(kind)(value);
+  };
+  const write = (address, kind, value) => {
+    const result = mem.write(address, kind, value);
+    if (result && typeof result.then === 'function') rejectAsync(result, `write 0x${address.toString(16)}`);
+    return result;
+  };
   const alloc = (size, tag) => {
     const address = sync(mem.alloc(size, tag), 'alloc');
     return uint32(address);

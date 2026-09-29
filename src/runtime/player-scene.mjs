@@ -11,6 +11,7 @@ import { addPawn, removePawn } from './pawn-list.mjs';
 import { finishMoverNotify, moverFinishBounds } from './mover-finish.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { setBase as setActorBase } from './walking-callbacks.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
 import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
@@ -68,8 +69,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     return hooks.moveRider(other,riderDelta,riderRot);
   };
   const ridersFor=base=>({
+      riderCacheKey:'player-scene',
       actors:level.actors,
-      baseOf:other=>other.base!==undefined?other.base:null,
+      baseOf:other=>{const base=other.base;return base!==undefined?base:null;},
       location:other=>other.position,
       rotation:other=>other.rotation??[0,0,0],
       isPawn:other=>Boolean(other.controlledPlayer||other.lineage?.includes('engine.pawn')),
@@ -206,7 +208,7 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       const old=source;
       collision.queries.removeActor(old);player.actorRegistered=false;
       removePawn(level,old);
-      for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old)level.actors[i]=null;
+      for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old){level.actors[i]=null;bumpBaseEpoch();}
       for(const viewport of level.engine?.client?.viewports??[])if(viewport.actor===old)viewport.actor=null;
       if(collision.playerActor===old)collision.playerActor=null;
       return old;

@@ -18,6 +18,7 @@ import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeO
 import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionArguments } from './script-actor-collision.mjs';
 import { COLLISION_FIELD_BITS, writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
 import { setBase } from './walking-callbacks.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
 import { setActorZone } from './zone.mjs';
 import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
@@ -139,7 +140,7 @@ function makeBinding(runtime, record, field) {
     },
     base: {
       get: () => host.base ?? null,
-      set: value => { host.base = value; },
+      set: value => { host.base = value; bumpBaseEpoch(); },
     },
     // The live four `Touching` slots (Actor.uc:186) are kept on the host actor
     // by the recovered BeginTouch/EndTouch pair (actor-touch.mjs). Script reads
@@ -1457,7 +1458,7 @@ export async function createScriptDoors({
     const { actors, firstNetActor } = partitionActorArray(level.actors, actor =>
       Boolean(startupRead(actor, 'bStatic') ?? actor?.static ?? ((actor?.actorFlags ?? 0) & 1)));
     level.iFirstNetActor = firstNetActor;
-    level.actors = actors;
+    level.actors = actors; bumpBaseEpoch();
   }
   function clearStartupPawnList() {
     // Level.PawnList membership is the original's callback-order list: the
@@ -1496,6 +1497,7 @@ export async function createScriptDoors({
     npcFailures.clear();
     tickBoundary = null;
     level.tickTag = 0; level.deferredHead = null; level.inTick = 0;
+    bumpBaseEpoch();
     level.actors = reload ? [...initialActorArray]
       : [...initialActorArray, ...level.actors.filter(actor => actor && !initialActorSet.has(actor))];
     level.zoneLastRenderTimes?.fill(0);
@@ -1525,7 +1527,7 @@ export async function createScriptDoors({
         // arrive through the script, not a binding — so reseed it from the
         // serialized field like the other live host props.
         actor.standingCount = actor.values?.StandingCount ?? 0;
-        actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+        actor.base = actorByIndex.get(actor.values?.Base) ?? null; bumpBaseEpoch();
         actor.waitingPawn = actorByIndex.get(actor.values?.WaitingPawn) ?? null;
         actor.marker = actorByIndex.get(actor.values?.MyMarker) ?? null;
         level.hash?.addActor(actor);
@@ -1556,7 +1558,7 @@ export async function createScriptDoors({
           // Full-world ticking now advances Falling pickups. Their native
           // velocity/acceleration mirrors must reload with the map image.
           delete actor.velocity; delete actor.acceleration;
-          actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+          actor.base = actorByIndex.get(actor.values?.Base) ?? null; bumpBaseEpoch();
         };
         if (level.hash && actor.collisionValues && actor.collideActors !== false) level.hash.changeActor(actor, restore);
         else restore();
@@ -1574,7 +1576,7 @@ export async function createScriptDoors({
         const restore = () => {
           if (actor.values?.Location) actor.position = [...actor.values.Location];
           delete actor.velocity; delete actor.acceleration; delete actor.landingCounter;
-          actor.base = actorByIndex.get(actor.values?.Base) ?? null;
+          actor.base = actorByIndex.get(actor.values?.Base) ?? null; bumpBaseEpoch();
         };
         if (level.hash && actor.collisionValues && actor.collideActors !== false) level.hash.changeActor(actor, restore);
         else restore();

@@ -14,8 +14,8 @@ test('Training floor matches the native reflection and clips geometry behind the
   });
   await page.route(/\/src\/viewer\/mirrors\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
-    await route.fulfill({ response, body: (await response.text()).replace('renderer.clippingPlanes = [group.plane];',
-      'renderer.clippingPlanes = window.__disableMirrorClip ? [] : [group.plane];') });
+    await route.fulfill({ response, body: (await response.text()).replace('renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;',
+      'if(window.__disableMirrorClip){renderClip.normal.set(0,0,0);renderClip.constant=1;}else renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;') });
   });
   await page.setViewportSize({ width: 926, height: 719 });
   await page.goto('http://127.0.0.1:5173');
@@ -88,8 +88,9 @@ test('Training floor matches the native reflection and clips geometry behind the
   await canvas.screenshot({ path: '.cache/mirrors/resized.png' });
   expect(await page.evaluate(() => window.__mirrorProbe.renderer.info.memory.textures)).toBe(textures);
   expect(await page.evaluate(() => ({ errors: window.deusExViewer.status().renderErrors,
-    gamma: window.deusExViewer.status().displayGamma, clipping: window.__mirrorProbe.renderer.clippingPlanes.length,
+    gamma: window.deusExViewer.status().displayGamma,
+    clipping: window.__mirrorProbe.renderer.clippingPlanes.map(plane=>[...plane.normal.toArray(),plane.constant]),
     sides: [...window.__mirrorProbe.world.materials.values()].every(m => m.side !== window.__mirrorProbe.THREE.BackSide) })))
-    .toEqual({ errors: [], gamma: 1, clipping: 0, sides: true });
+    .toEqual({ errors: [], gamma: 1, clipping: [[0,0,0,1]], sides: true });
   expect(errors).toEqual([]);
 });

@@ -90,11 +90,20 @@ export function findActorBase(actor,{lineCheck,dispatch}){
  * map-actor surface consumed by collision-hash, encroachment-query and the
  * line filters. `values`/`collisionValues` expose only the enumerable fields
  * the original collision queries read. */
-export function installActorCollisionView(actor,{read,write,worldActor,lineage}){
+export function installActorCollisionView(actor,{read,write,bind=null,worldActor,lineage}){
  const isPawn=lineage.includes('engine.pawn');
- const field=name=>()=>read(actor,name);
- const fieldWrite=name=>value=>write(actor,name,value);
- const bit=(mask,name)=>()=>Boolean(read(actor,name)?mask:0);
+ // `bind(actor,name)` (ScriptRuntime.boundField) resolves the same storage
+ // read/write reach once, on first access, so lookup errors keep their timing.
+ const bound=new Map(),access=name=>{
+  let entry=bound.get(name);
+  if(!entry)bound.set(name,entry=bind(actor,name));
+  return entry;
+ };
+ const field=bind?name=>{let entry=null;return ()=>(entry??=access(name)).get();}:name=>()=>read(actor,name);
+ const fieldWrite=bind?name=>{let entry=null;return value=>(entry??=access(name)).set(value);}:name=>value=>write(actor,name,value);
+ const get=bind?name=>access(name).get():name=>read(actor,name);
+ const put=bind?(name,value)=>access(name).set(value):(name,value)=>write(actor,name,value);
+ const bit=(mask,name)=>()=>Boolean(get(name)?mask:0);
  const values={};
  for(const name of ['Tag','Location','Rotation','CollisionRadius','CollisionHeight','Physics'])
   Object.defineProperty(values,name,{enumerable:true,get:field(name)});
@@ -110,13 +119,13 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   scriptView:{value:true},pawn:{value:isPawn},decoration:{value:false},
   standingCount:{get:field('StandingCount'),set:fieldWrite('StandingCount')},
   touching:{value:[null,null,null,null]},
-  actorFlags:{get:()=>(read(actor,'bStatic')?1:0)|(read(actor,'bDeleteMe')?0x80:0)|
-   (read(actor,'bCollideWhenPlacing')?0x20000:0)|(read(actor,'bMovable')?0x80000:0)},
-  collisionBits:{get:()=>(read(actor,'bCollideActors')?1:0)|(read(actor,'bBlockActors')?4:0)|
-   (read(actor,'bBlockPlayers')?8:0)|(read(actor,'bProjTarget')?0x10:0)},
-  flags:{get(){return this.collisionBits|(read(actor,'bCollideWorld')?2:0);},
-   set(v){write(actor,'bCollideActors',Boolean(v&1));
-    write(actor,'bBlockActors',Boolean(v&4));write(actor,'bBlockPlayers',Boolean(v&8));}},
+  actorFlags:{get:()=>(get('bStatic')?1:0)|(get('bDeleteMe')?0x80:0)|
+   (get('bCollideWhenPlacing')?0x20000:0)|(get('bMovable')?0x80000:0)},
+  collisionBits:{get:()=>(get('bCollideActors')?1:0)|(get('bBlockActors')?4:0)|
+   (get('bBlockPlayers')?8:0)|(get('bProjTarget')?0x10:0)},
+  flags:{get(){return this.collisionBits|(get('bCollideWorld')?2:0);},
+   set(v){put('bCollideActors',Boolean(v&1));
+    put('bBlockActors',Boolean(v&4));put('bBlockPlayers',Boolean(v&8));}},
   collideActors:bit(1,'bCollideActors'),collideWorld:bit(1,'bCollideWorld'),
   blockActors:bit(1,'bBlockActors'),blockPlayers:bit(1,'bBlockPlayers'),
   blocking:{get(){return this.blockPlayers;}},
@@ -125,8 +134,8 @@ export function installActorCollisionView(actor,{read,write,worldActor,lineage})
   rotation:{get:field('Rotation'),set:fieldWrite('Rotation')},
   // motionFlags carries the native +0x?? motion byte; the only bit this host
   // tracks is bJustTeleported (0x100, Actor.uc:416) written by FarMoveActor.
-  motionFlags:{get:()=>read(actor,'bJustTeleported')?0x100:0,
-   set:v=>write(actor,'bJustTeleported',Boolean(v&0x100))},
+  motionFlags:{get:()=>get('bJustTeleported')?0x100:0,
+   set:v=>put('bJustTeleported',Boolean(v&0x100))},
   radius:{get:field('CollisionRadius'),set:fieldWrite('CollisionRadius')},
   height:{get:field('CollisionHeight'),set:fieldWrite('CollisionHeight')},
   base:{get:field('Base'),set:fieldWrite('Base')},

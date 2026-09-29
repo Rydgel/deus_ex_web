@@ -70,3 +70,27 @@ export function linkedClassLayout(cls, {graph, identity}) {
   return Object.freeze({key: cls.record.key, size: graph.slotOf(record, 0x3c),
     properties: Object.freeze(properties), byKey: new Map(properties.map(entry => [entry.key, entry]))});
 }
+
+/** A linked UFunction's frame: PropertiesSize `+0x3c` and one entry per own
+ * parameter and local, in `fields` (Children) order. UObject::CallFunction
+ * and ProcessEvent allocate PropertiesSize zeroed bytes as the frame's
+ * Locals and address each property at its Offset `+0x48`. UFunction's
+ * MergeBools (1010fee0) is 0 (docs/script-bool-property-link.md), so every bool has its own
+ * dword. Returns null while the function's class is not linked by the native
+ * loader: its records then carry no offsets. */
+export function linkedFunctionLayout(record, fields, {graph, identity, nativeRecord}) {
+  const size = graph.slotOf(record, 0x3c);
+  if (!Number.isInteger(size)) return null;
+  const properties = [];
+  for (const field of fields) {
+    const load = field.loadRecord ?? nativeRecord(field);
+    const entry = propertyEntry(load, graph);
+    if (!Number.isInteger(entry.offset) || !Number.isInteger(entry.elementSize)) return null;
+    properties.push(Object.freeze({
+      ...entry, field, key: field.key, name: field.name,
+      struct: entry.type === 'struct' ? linkedStructLayout(graph.slotOf(load, 0x5c), {graph, identity}) : null,
+    }));
+  }
+  return Object.freeze({key: graph.fullName(record).toLowerCase(), size,
+    properties: Object.freeze(properties), byKey: new Map(properties.map(entry => [entry.key, entry]))});
+}

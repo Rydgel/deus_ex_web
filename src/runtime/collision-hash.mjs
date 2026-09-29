@@ -3,6 +3,15 @@ const f32 = Math.fround;
 const TABLE_SIZE = 16384;
 
 function vector(value, label) {
+  // Plain three-element arrays (every query path) take the unrolled form of
+  // the general check below; other array-likes keep the general one.
+  if (Array.isArray(value) && value.length === 3 && 0 in value && 1 in value && 2 in value) {
+    const x = value[0], y = value[1], z = value[2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new TypeError(`${label} must contain three finite numbers`);
+    const result = [f32(x), f32(y), f32(z)];
+    if (!Number.isFinite(result[0]) || !Number.isFinite(result[1]) || !Number.isFinite(result[2])) throw new RangeError(`${label} exceeds float32`);
+    return result;
+  }
   if (!value || value.length !== 3 || !value.every(Number.isFinite)) throw new TypeError(`${label} must contain three finite numbers`);
   const result = value.map(f32);
   if (!result.every(Number.isFinite)) throw new RangeError(`${label} exceeds float32`);
@@ -36,7 +45,15 @@ function addBinary(a, b) {
   const e = Math.min(a.e, b.e);
   return roundedBinary({ n: (a.n << BigInt(a.e - e)) + (b.n << BigInt(b.e - e)), e }, 64);
 }
+// Error-free TwoSum: the double sum is exact iff the rounding error is zero.
+const exactSum = (a, b) => { const s = a + b, bb = s - a; return (a - (s - bb)) + (b - bb) === 0 ? s : NaN; };
 function expandedXCell(coordinate, extent, sign) {
+  // When both adds are exact in a double (at most 53 significant bits), the
+  // two x87 64-bit roundings below are identities and the only rounding is
+  // the float store of (sum / 256), which Math.fround performs identically
+  // (nearest-even; the magnitude guard keeps it out of the subnormal range).
+  const sum = exactSum(exactSum(coordinate, sign * extent), 32768);
+  if (Math.abs(sum) >= 2 ** -100 && Math.abs(sum) < 2 ** 100) return roundedCell(f32(sum / 256));
   const amount = binary(extent); amount.n *= BigInt(sign);
   const expanded = addBinary(addBinary(binary(coordinate), amount), binary(32768));
   const stored = roundedBinary({ n: expanded.n, e: expanded.e - 8 }, 24);
@@ -67,8 +84,10 @@ export function collisionHashBounds(bounds) {
 
 export function collisionHashLineBounds({ start, end, extent = [0, 0, 0] }) {
   start = vector(start, 'start'); end = vector(end, 'end'); extent = vector(extent, 'extent');
-  const min = start.map((v, i) => i === 0 ? expandedXCell(Math.min(v, end[i]), extent[i], -1) : cell(f32(Math.min(v, end[i]) - extent[i])));
-  const max = start.map((v, i) => i === 0 ? expandedXCell(Math.max(v, end[i]), extent[i], 1) : cell(f32(Math.max(v, end[i]) + extent[i])));
+  const min = [expandedXCell(Math.min(start[0], end[0]), extent[0], -1),
+    cell(f32(Math.min(start[1], end[1]) - extent[1])), cell(f32(Math.min(start[2], end[2]) - extent[2]))];
+  const max = [expandedXCell(Math.max(start[0], end[0]), extent[0], 1),
+    cell(f32(Math.max(start[1], end[1]) + extent[1])), cell(f32(Math.max(start[2], end[2]) + extent[2]))];
   return { min, max };
 }
 
@@ -103,8 +122,10 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
   const buckets = new Map(), registrations = new Map();
   let querying = false;
   function check(cells) {
-    if (!tables && [...cells.min, ...cells.max].some(v => v > 255)) throw new RangeError('Hash cells outside proven seed-independent 0..255 domain require captured tables or an explicit fixture seed');
-    const count = cells.max.reduce((n, v, i) => n * Math.max(0, v - cells.min[i] + 1), 1);
+    const min = cells.min, max = cells.max;
+    if (!tables && (min[0] > 255 || min[1] > 255 || min[2] > 255 || max[0] > 255 || max[1] > 255 || max[2] > 255))
+      throw new RangeError('Hash cells outside proven seed-independent 0..255 domain require captured tables or an explicit fixture seed');
+    const count = Math.max(0, max[0] - min[0] + 1) * Math.max(0, max[1] - min[1] + 1) * Math.max(0, max[2] - min[2] + 1);
     if (count > maxCells) throw new RangeError(`Hash operation exceeds explicit ${maxCells} cell budget`);
   }
   function each(cells, callback) {
@@ -175,18 +196,30 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000 } = {}) {
       if (typeof primitiveLineCheck !== 'function') throw new TypeError('An evidenced primitive callback is required');
       const args = { start: vector(query.start, 'start'), end: vector(query.end, 'end'), extent: vector(query.extent ?? [0, 0, 0], 'extent'), extraNodeFlags: (query.extraNodeFlags ?? 0) & 255 };
       const cells = collisionHashLineBounds(args); check(cells);
-      const visited = new Set(), hits = [];
+      // Few actors share a line's cells: a short list, then a Set, records
+      // those already checked (each actor is checked once, in cell order).
+      let visited = [];
+      const hits = [], min = cells.min, max = cells.max;
       querying = true;
       try {
-        each(cells, (bucket, packed) => {
+        for (let x = min[0]; x <= max[0]; x++) for (let y = min[1]; y <= max[1]; y++) for (let z = min[2]; z <= max[2]; z++) {
+          const packed = tag(x, y, z), bucket = tables ? tables[0][x] ^ tables[1][y] ^ tables[2][z] : packed;
           for (let link = buckets.get(bucket); link; link = link.next) {
-            if (visited.has(link.actor) || link.tag !== packed) continue;
-            visited.add(link.actor);
+            if (link.tag !== packed) continue;
+            const actor = link.actor;
+            if (Array.isArray(visited)) {
+              if (visited.includes(actor)) continue;
+              visited.push(actor);
+              if (visited.length > 32) visited = new Set(visited);
+            } else {
+              if (visited.has(actor)) continue;
+              visited.add(actor);
+            }
             // Null means the primitive reported clear; every other result is a hit.
-            const hit = primitiveLineCheck(link.actor, args);
+            const hit = primitiveLineCheck(actor, args);
             if (hit !== null && hit !== undefined) hits.push(hit);
           }
-        });
+        }
       } finally { querying = false; }
       return hits.reverse();
     },

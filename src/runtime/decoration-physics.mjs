@@ -1,4 +1,5 @@
 import { falling } from './falling.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
 import { decorationLanded } from './landing.mjs';
 import { moveQuery } from './move-query.mjs';
 import { rolling, PHYS_NONE, PHYS_FALLING, PHYS_ROLLING } from './rolling.mjs';
@@ -66,7 +67,7 @@ function fallingStep(host, seconds, iterations, { queries, zone, landedEvent, on
     setPhysics(next, floor) {
       // Original setPhysics (0x103c95f0): rebase and zero velocity/acceleration
       // into PHYS_None/Interpolating.
-      pawn.physics = next; host.physics = next; host.base = floor ?? null;
+      pawn.physics = next; host.physics = next; host.base = floor ?? null; bumpBaseEpoch();
       if (next === PHYS_NONE || next === 5) { pawn.velocity = [0, 0, 0]; host.velocity = [0, 0, 0]; host.acceleration = [0, 0, 0]; }
     },
     landed(hit) { decorationLanded(pawn, hit); },
@@ -120,13 +121,13 @@ export function runDecorationPhysics(host, dt, { queries, zone, landedEvent, onH
     eventFalling() { onFalling?.(); },
     setPhysics(next, floor) {
       // Original setPhysics (0x103c95f0), decoration transitions.
-      host.physics = next; host.base = floor ?? null;
+      host.physics = next; host.base = floor ?? null; bumpBaseEpoch();
       if (next === PHYS_NONE || next === 5) { host.velocity = [0, 0, 0]; host.acceleration = [0, 0, 0]; }
     },
     physFalling(remaining, iterations) {
       fallingStep(host, remaining, iterations, { queries, zone, landedEvent, onHitWall: hitWall });
     },
-    setBase(actor) { if (setBase) setBase(actor); else host.base = actor; },
+    setBase(actor) { if (setBase) setBase(actor); else { host.base = actor; bumpBaseEpoch(); } },
   });
   return host.physics;
 }

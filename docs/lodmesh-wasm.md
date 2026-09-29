@@ -45,6 +45,109 @@ remain as documented in the original contract. Arithmetic differential tests
 check the new language boundary; only the original captures establish native
 agreement for their covered behavior.
 
+## September 28 mesh-lighting extension
+
+Stage 4 made the same actor layer expensive for a different measured reason.
+On `01_NYC_UNATCOIsland`, with simulation held to avoid the map's existing
+unsupported `waterMove`/door-native boundaries, 291 admitted actor meshes
+contained 47,063 faces and the 220 actors in the view submitted about 33,238
+faces to mesh lighting. Disabling only mesh lighting changed the mean frame
+interval from 36.08 ms to 16.63 ms and reduced the actor update from 21.58 ms
+to 2.42 ms. This is the evidence for extending the kernel; the sky comparison
+changed only ten draw calls and did not improve the frame.
+
+The added bulk operation translates the already recovered DrawLodMesh contract
+in [mesh lighting](mesh-lighting.md). It performs the camera transform, ordered
+face-normal accumulation, original face culling, marked-vertex `Light`, ordered
+`PF_Unlit` overwrites and D3D nearest-even diffuse quantization. JavaScript
+retains `SetupForActor`: live object reads, leaf candidates, line traces, fade
+cache mutation and call order remain with the shared runtime. Immutable face
+indices/flags are uploaded once per admitted preview and released with it;
+posed points and the selected lights cross as bulk typed buffers. Scratch views
+are reused after memory growth, and colour upload does not allocate one typed
+view per face corner.
+
+This boundary preserves the original numeric path rather than introducing a
+new lighting approximation. The kernel consumes the same validated 2,048-word
+square-root table and 512/1,024-word reciprocal-root tables as the JavaScript
+reference. The focused unit case includes two-sided, invisible, degenerate,
+unlit and modulated faces. The live validator runs 24 passes over 12 Training
+actors (2,512 vertices total) and compares every Wasm diffuse float bit with
+the JavaScript translation; it reports zero differences. That JavaScript path
+is separately checked against the recovered native contract and its recorded
+reference cases in `docs/mesh-lighting.md`.
+
+In the same Island render isolation, the first bulk port reduced the mean to
+25.81 ms with 12.92 MB/frame allocation. Removing per-corner views and
+retaining static topology then produced a 20.97 ms representative
+run, 16.7 ms median, with 4.03 MB/frame allocation and a 9.25 ms actor update.
+Host scheduling varied substantially: a later identical clean build measured
+25.87 ms while browser-native `(program)` time doubled. The stable conclusions
+are the feature ablation and the large reduction in actor-update allocation;
+no single run establishes 120 fps. The capture display is 60 Hz, so intervals
+also cannot show a rate above 60 fps. Raw profiles are
+`.cache/perf/unatco-{render,no-lighting,wasm-lighting-v2,wasm-final}.cpuprofile`,
+outside Git.
+
+## Exact integer posing
+
+The x87 model rounds to a 64-bit significand only when a result needs more
+bits. `pose_exact` (in `native/lodmesh-kernel/src/lib.rs`) runs each vertex of
+the main, tween and blend passes as exact dyadic integers (`m·2^e`, with at
+most 62 significant bits held in an `i64`). It follows the `Ext` loop's
+operation order and store points exactly. Every add, subtraction and multiply
+below that bound is exact in x87 as well, so the only roundings are the f32
+stores, and those round the same exact values to nearest-even. Signed zeros
+follow the same round-to-nearest rules as `Ext`. If an intermediate would
+exceed the bound or leave the normal f32 range, or an operand is not finite,
+that vertex runs through `Ext`.
+
+Evidence:
+
+* The Rust differential test `exact_pose_matches_ext` compares every cache
+  and output word of both paths. It covers 6,000 random calls (198k vertices)
+  over main, tween and blend passes with zeros, −0, NaN, tiny and negative
+  alpha; about half of those vertices take the exact path.
+* `node scripts/validate-lodmesh-frame.mjs --wasm` matches all 46 original
+  GetFrame captures, including tweens and four additive blends.
+* On a running Island, 92% of posed vertices took the exact path (the
+  `poseCounts()` diagnostic). Kernel time went from 6.5 to 4.1 ms per frame.
+
+Natively the exact path costs 154 ns per vertex against 270 ns for `Ext`. It
+performs about 54 exact operations per vertex, each 20–30 integer
+instructions, so integer emulation has little headroom left. A further step
+would compute in f64 and accept the f32 store only when its rounding is
+unambiguous under a rigorous error bound, falling back to this path.
+
+## Certain-rounding f64 posing and lighting cleanup (September 29)
+
+`pose_double` evaluates each vertex in f64 before `pose_exact`. A store of
+two f32 operands whose TwoSum shows an exact double result is that result;
+the x87 result is the same exact value, zeros and signs included. Any other
+store is accepted only when `certain_f32` proves that every real within the
+error bound rounds to the same f32. The bound is 32·2^-53 per unit of term
+magnitude, several times the worst accumulated f64 plus x87 error of each
+store's expression. f32×f32 products are exact in both representations.
+Stores that are ties (as in the synthetic benchmark's round numbers), zero or
+subnormal fall through to `pose_exact`, then `Ext`. On running Island in the
+browser the paths took 91% (f64), 8% (exact integer) and 1% (Ext) of
+vertices, and pose time fell to about 1.5 ms per frame. The differential test
+now requires all three paths to be exercised and compares every output and
+cache word with `Ext`. The 46 original captures pass with `--wasm`.
+
+The light kernel reads each light's seven words once per mesh and skips a
+light whose attenuation factor is not positive: `total` is non-negative,
+infinite or NaN, so `amount > 0` cannot hold. Diffuse bytes are converted
+once per vertex and reused by each corner, with the cache cleared when a
+`PF_Unlit` face overwrites that vertex. `validate-mesh-lighting-play` still
+reports zero Wasm diffuse bytes differing from the JavaScript translation.
+
+A kernel call that allocates can grow Wasm memory and detach the
+`ArrayBuffer` behind the JavaScript views. The wrapper therefore re-derives
+its views after every call (`current()`), and the kernel keeps per-call
+scratch in reusable thread-local buffers. Headless validators did not catch
+this; the Island browser run did.
+
 ## Results
 
 Unprofiled Training CPU runs with the same seed, data, 14 displayed meshes,
@@ -83,7 +186,7 @@ Install a Rust toolchain and `rustup target add wasm32-unknown-unknown` once.
 The dependency-free crate uses the [Rust Wasm target](https://doc.rust-lang.org/rustc/platform-support/wasm32-unknown-unknown.html)
 and integer/buffer exports, with no wasm-bindgen or host imports. Tested with
 Rust 1.95. `npm run dev`, `npm run build` and `npm test` compile it via
-`npm run build:wasm`. The generated 31 KiB `.wasm` stays out of Git and Vite
+`npm run build:wasm`. The generated 44 KiB `.wasm` stays out of Git and Vite
 ships it as a hashed static asset. No original assets enter the module.
 
 Play loads the kernel once and reuses scratch memory across meshes/channels.

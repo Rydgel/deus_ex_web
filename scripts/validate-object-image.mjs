@@ -19,6 +19,9 @@
  *    their linked BitMask; a bool write leaves its dword neighbors intact.
  * 4. Unproducible values. A default or map-authored value that cannot be
  *    produced or copied throws at the same accesses as before.
+ * 5. Handles (docs/rust-core.md, R1a). An object or class pointer's four bytes
+ *    at its linked Offset name the identity the property holds, in class
+ *    defaults and after writes; None is zero.
  */
 import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
@@ -27,6 +30,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {propertyCodec, zeroValue} from '../src/runtime/script-values.mjs';
 import {linkedClassLayout} from '../src/runtime/script-object-layout.mjs';
+import {identityOfHandle} from '../src/runtime/script-object-handles.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const root = gameDirectory();
@@ -61,8 +65,8 @@ const SCALAR_PROBES = {
   bool: [true, false, 1, 0],
   name: ['Foo', 'None', null],
   string: ['abc', '', null],
-  object: [null],
-  class: [null],
+  object: [null, 'SELF'],
+  class: [null, 'CLASS'],
 };
 function probesFor(field) {
   const metadata = field.metadata, dim = metadata.arrayDim ?? 1;
@@ -88,7 +92,8 @@ function elementProbes(field, metadata) {
   return [];
 }
 
-let objects = 0, defaults = 0, defaultErrors = 0, writes = 0, byteChecks = 0, boolNeighbors = 0;
+let objects = 0, defaults = 0, defaultErrors = 0, writes = 0, byteChecks = 0, boolNeighbors = 0, handleDefaults = 0;
+const pointer = entry => (entry.type === 'object' || entry.type === 'class') && entry.arrayDim === 1;
 for (const cls of classes) {
   const layout = linkedClassLayout(cls, {graph, identity});
   const object = {name: `Image${objects}`};
@@ -107,18 +112,29 @@ for (const cls of classes) {
     if (expected.error) defaultErrors++;
   }
 
-  // 2 and 3. Writes, and where their bytes land.
+  // 5. Handles of the class defaults.
   const cells = instance.cells;
+  for (const entry of layout.properties) {
+    if (!pointer(entry) || !cells.has(entry.key)) continue;
+    const value = outcome(() => runtime.readField(object, entry.field));
+    if (value.error) continue;
+    assert.equal(identityOfHandle(instance.image.getUint32(entry.offset, true)), value.value ?? null,
+      `${entry.key} default handle at +0x${entry.offset.toString(16)}`);
+    handleDefaults++;
+  }
+
+  // 2 and 3. Writes, and where their bytes land.
   for (const entry of layout.properties) {
     const field = entry.field;
     if (!cells.has(field.key) || outcome(() => runtime.readField(object, field)).error) continue;
-    for (const probe of probesFor(field)) {
+    for (const raw of probesFor(field)) {
+      const probe = raw === 'SELF' ? object : raw === 'CLASS' ? cls.record : raw;
       const codec = propertyCodec(field);
       const returned = outcome(() => runtime.writeField(object, field, probe));
       const expected = outcome(() => codec.copy(probe));
-      assert.deepEqual(returned, expected, `${field.key} write ${JSON.stringify(probe)}`);
+      assert.deepEqual(returned, expected, `${field.key} write ${JSON.stringify(raw)}`);
       if (expected.error) continue;
-      assert.deepEqual(runtime.readField(object, field), expected.value, `${field.key} read after ${JSON.stringify(probe)}`);
+      assert.deepEqual(runtime.readField(object, field), expected.value, `${field.key} read after ${JSON.stringify(raw)}`);
       writes++;
       if (entry.arrayDim !== 1) continue;
       const image = instance.image, at = entry.offset, value = expected.value;
@@ -127,6 +143,10 @@ for (const cls of classes) {
         case 'int': assert.equal(image.getInt32(at, true), value, `${field.key} int at +0x${at.toString(16)}`); break;
         case 'float': assert.ok(Object.is(image.getFloat32(at, true), value), `${field.key} float at +0x${at.toString(16)}`); break;
         case 'bool': assert.equal((image.getUint32(at, true) & entry.mask) !== 0, value, `${field.key} bit ${entry.mask.toString(16)} at +0x${at.toString(16)}`); break;
+        case 'object': case 'class':
+          assert.equal(identityOfHandle(image.getUint32(at, true)), value ?? null, `${field.key} handle at +0x${at.toString(16)}`);
+          assert.equal(image.getUint32(at, true) === 0, value === null, `${field.key} None is a zero pointer`);
+          break;
         case 'struct':
           if (field.metadata.structKey === 'core.object.vector')
             for (let i = 0; i < 3; i++) assert.ok(Object.is(image.getFloat32(at + 4 * i, true), value[i]), `${field.key}[${i}] at +0x${(at + 4 * i).toString(16)}`);
@@ -204,4 +224,4 @@ assert.deepEqual(outcome(() => runtime.readField(reset, vectorField)), badCopy, 
 assert.deepEqual(outcome(() => runtime.readField(reset, intField)), unmapped, 'reset keeps the undecoded value');
 
 console.log(`validate-object-image: ${objects} objects, ${defaults} defaults (${defaultErrors} unproducible), ` +
-  `${writes} writes, ${byteChecks} byte placements, ${boolNeighbors} bool words: ok`);
+  `${writes} writes, ${byteChecks} byte placements, ${boolNeighbors} bool words, ${handleDefaults} default handles: ok`);

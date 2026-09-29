@@ -6,6 +6,7 @@ coverage/
 dist/
 native/**/target/
 src/runtime/lodmesh-kernel.wasm
+src/runtime/script-vm.wasm
 test-results/
 playwright-report/
 game/

@@ -1,4 +1,5 @@
 import {safeNormal} from './steps.mjs';
+import {bumpBaseEpoch} from './base-epoch.mjs';
 const f=Math.fround;
 
 /** Original SetBase10369c80. dispatch(target,event,args) runs synchronously;
@@ -11,7 +12,7 @@ export function setBase(pawn,target,dispatch,notify=true){
   old.standingCount=(old.standingCount-1)&255;
   dispatch(old,'Detach',[pawn]);
  }
- pawn.base=target;
+ pawn.base=target;bumpBaseEpoch();
  if(target && target!==pawn.worldActor){
   target.standingCount=(target.standingCount+1)&255;
   dispatch(target,'Attach',[pawn]);

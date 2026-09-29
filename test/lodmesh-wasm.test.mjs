@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {createLodMeshKernel,loadLodMeshKernel} from '../src/runtime/lodmesh-wasm.mjs';
 import {getLodMeshFrame,createLodMeshFrameCache} from '../src/runtime/lodmesh-frame.mjs';
 import {x87load,x87store,x87add,x87neg,x87mul,f32bits,f32num} from '../src/runtime/script-vm.mjs';
+import {PF,accumulateFaceNormal,vertexNormalPlane,lightVertex,unlitColor,d3dDiffuse} from '../src/runtime/mesh-lighting.mjs';
 
 const kernel=await loadLodMeshKernel();
 const coords=[31.13,-17.7,0.005,0.37,-0.95,0.01,-0.21,0.73,0.875,0.015,-0.375,0.91];
@@ -89,4 +90,45 @@ test('raw Wasm cache stores preserve the scalar x87 NaN payload and infinity rul
       output:new Uint8Array(12),stride:12,matrix:[[0,0,0],[1,0,0],[0,1,0],[0,0,1]],origin:[0,0,0]});
     assert.deepEqual([...words],expected);
   }
+});
+
+test('Wasm bulk mesh lighting preserves the JavaScript face and diffuse-byte path',()=>{
+  const nested=[[-14,3,8],[9,-7,11],[5,16,-2],[-3,4,19],[12,1,-6],[2,-11,7]].map(p=>p.map(Math.fround));
+  const points=Float32Array.from(nested.flat()),faces=[
+    {vertices:[0,1,2],flags:PF.TwoSided},{vertices:[2,1,3],flags:PF.TwoSided|PF.Unlit},
+    {vertices:[0,0,4],flags:PF.TwoSided},{vertices:[1,4,5],flags:PF.Invisible??1},
+    {vertices:[3,4,5],flags:PF.TwoSided|PF.Modulated},
+  ];
+  // Invisible is deliberately the raw DrawLodMesh bit; it is not part of the
+  // public PF subset used by actor materials.
+  faces[3].flags=1;
+  const faceWords=new Uint32Array(faces.length*4);faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags],i*4));
+  const origin=[1.25,-2.5,.75].map(Math.fround),axes=[[.8,.2,-.1],[-.3,.9,.15],[.05,-.2,.95]].map(a=>a.map(Math.fround));
+  const setup={ambient:[.04,.08,.12].map(Math.fround),scaleGlow:Math.fround(.85),lights:[
+    {location:[20,-12,35].map(Math.fround),rradius:Math.fround(1/80),color:[.7,.4,.2].map(Math.fround)},
+    {location:[-30,25,10].map(Math.fround),rradius:Math.fround(1/120),color:[.1,.3,.8].map(Math.fround)},
+  ]};
+  const flags=PF.Flat,camera=nested.map(point=>axes.map(axis=>Math.fround(
+    (point[0]-origin[0])*axis[0]+(point[1]-origin[1])*axis[1]+(point[2]-origin[2])*axis[2])));
+  const normals=camera.map(()=>[0,0,0]),drawn=new Uint8Array(faces.length),lit=new Uint8Array(camera.length);
+  faces.forEach((face,i)=>{
+    const [a,b,c]=face.vertices,unit=accumulateFaceNormal(camera[a],camera[b],camera[c],normals[a],normals[b],normals[c]);
+    const p=camera[a];if(!(face.flags&1)&&(face.flags&PF.TwoSided||unit[0]*p[0]+unit[1]*p[1]+unit[2]*p[2]<0)){
+      drawn[i]=1;lit[a]=lit[b]=lit[c]=1;
+    }
+  });
+  const light=camera.map((point,i)=>lit[i]?lightVertex(setup,point,vertexNormalPlane(point,normals[i]),flags):null);
+  const unlit=unlitColor(17,setup.scaleGlow),expected=new Float32Array(faces.length*9);
+  faces.forEach((face,i)=>{
+    const faceFlags=face.flags|flags;if(drawn[i]&&faceFlags&PF.Unlit)for(const v of face.vertices)light[v]=unlit;
+    face.vertices.forEach((v,corner)=>{
+      const at=i*9+corner*3;if(faceFlags&PF.Modulated||!light[v])expected.fill(1,at,at+3);
+      else{const packed=d3dDiffuse(light[v]);expected[at]=((packed>>>16)&255)/255;
+        expected[at+1]=((packed>>>8)&255)/255;expected[at+2]=(packed&255)/255;}
+    });
+  });
+  const input={points,faces:faceWords,origin,axes,ambient:setup.ambient,scaleGlow:setup.scaleGlow,
+    unlit,lights:setup.lights,flags};
+  const actual=kernel.light(input);
+  assert.deepEqual(new Uint32Array(actual.buffer,actual.byteOffset,actual.length),new Uint32Array(expected.buffer));
 });

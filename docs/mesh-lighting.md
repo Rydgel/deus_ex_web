@@ -215,6 +215,30 @@ Translucent faces are exact only for black or white sources: `pow(s,g) +
 pow(d,g)·(1 − pow(s,g))` differs from `pow(s + d − s·d, g)` for other colours,
 as it already does for world surfaces.
 
+## Wasm translation boundary
+
+The September 28 Island profile attributed about 19 ms/frame specifically to
+the presence of this mesh-lighting pass. The repeated numeric portion now runs
+in `native/lodmesh-kernel`: camera transforms, face normals and culling, marked
+vertex lighting, ordered `PF_Unlit` replacement, and diffuse-byte conversion.
+The Rust code consumes the validated table bits and retains the store order and
+f32/f64 intermediates of the JavaScript translation. Face topology is immutable
+per preview and is uploaded once; posed vertices, camera state and selected
+lights cross the boundary in bulk.
+
+`SetupForActor` deliberately remains in JavaScript. It reads live UObject
+state, walks leaf light candidates, schedules and performs original line
+checks, and mutates the fade/cache records. Moving it without first moving the
+object representation would trade its measured work for per-field marshalling
+and make the behavior boundary harder to verify.
+
+`test/lodmesh-wasm.test.mjs` checks difficult face ordering and output bits.
+`scripts/validate-mesh-lighting-play.mjs` also runs the JavaScript and Wasm
+paths over two frames of 12 live Training actors: 24 passes, 100 selected
+lights and 2,512 vertices, with zero diffuse-float bit differences. The
+JavaScript path in that same validator remains the bridge to the original
+native reference; JS/Wasm agreement by itself is not fidelity evidence.
+
 ## Not reproduced / open
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.

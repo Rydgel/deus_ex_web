@@ -12,6 +12,8 @@ function compare(a, b) {
  * Engine's comparator at 0x1039c060 observes only Time.
  */
 export function sortLineHits(hits) {
+  // Zero or one entry: the qsort below pops one range of fewer than two.
+  if (hits.length < 2) return hits;
   const swap = (a, b) => { [hits[a], hits[b]] = [hits[b], hits[a]]; };
   const pending = [[0, hits.length - 1]];
   while (pending.length) {

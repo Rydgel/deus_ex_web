@@ -89,7 +89,10 @@ export function animationTickView(runtime,actor) {
     const element=name=>arrayReference(index,field(name),runtime.warning);
     // An in-range element read is that element of the copied whole value;
     // anything else keeps arrayReference's clamp/warning and errors.
-    const read=name=>{const whole=get(name);return Array.isArray(whole)&&index<whole.length?whole[index]:element(name).get();};
+    // readNamedElements reads the element's own cell (the value the whole
+    // read would hold at this index) or falls back to the whole value.
+    const read=name=>{const whole=runtime.readNamedElements(actor,name);
+      return whole&&index<whole.length?whole.at(index):element(name).get();};
     const blend={get simAnim(){return readSim(element('SimBlendAnim'));},
       set simAnim(value){writeSim(element('SimBlendAnim'),value);}};
     for(const [key,name] of Object.entries({AnimSequence:'BlendAnimSequence',AnimFrame:'BlendAnimFrame',

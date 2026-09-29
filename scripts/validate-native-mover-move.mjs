@@ -18,7 +18,7 @@ cases.push({actor:actors[0].id,delta:[4,0,0],rotation:[0,512,0],pawnPosition:[-1
 for(const delta of [[0,0,1],[0,0,-1],[16,0,0]])cases.push({actor:actors[0].id,delta,collideWorld:1},{actor:actors[0].id,delta,collideWorld:1,pawnPosition:[-1000,0,0]});
 for(const delta of [[0,0,2],[0,0,-2],[3,0,0]])cases.push({actor:actors[0].id,delta,rider:'$pawn'});
 const dir=path.resolve('reports/movement/mover-move');await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'scene.json'),JSON.stringify(scene));await writeFile(path.join(dir,'cases.json'),JSON.stringify(cases));
-const {stdout}=await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON??'python3',['scripts/native-mover-move-oracle.py',root,path.join(dir,'scene.json'),path.join(dir,'cases.json')],{maxBuffer:16*1024*1024,timeout:120000});await writeFile(path.join(dir,'original.json'),stdout);const native=JSON.parse(stdout),mismatches=[];
+const {stdout}=await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON??'python3',['scripts/native-mover-move-oracle.py',root,path.join(dir,'scene.json'),path.join(dir,'cases.json')],{maxBuffer:16*1024*1024,timeout:300000});await writeFile(path.join(dir,'original.json'),stdout);const native=JSON.parse(stdout),mismatches=[];
 for(let i=0;i<cases.length;i++){
  const c=cases[i],expected=native.results[i],objects=new Map(actors.map(a=>[a.id,{id:a.id,position:[...a.values.Location],rotation:a.values.Rotation??[0,0,0],movingBrush:a.kind==='Mover',isPawn:a.kind==='Pawn',collideWorld:!!(a.collisionBits&2),collideActors:true,blockPlayers:true,blockActors:true,movable:true,standingCount:0}]));
  if(c.pawnPosition)objects.get('$pawn').position=c.pawnPosition;

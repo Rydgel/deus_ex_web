@@ -116,18 +116,262 @@ The costs are representation, not work, so the order is:
    major GCs stay short.
 5. **Presentation.** Normals, bounds, the sky pass and the HUD tree.
 
-**Status: stopped after stage 1d (`74e37a3`).** Walking Training went from
+**Stage 1 status: stopped after stage 1d (`74e37a3`).** Walking Training went from
 29.7 ms per frame (about 34 fps) to 17.3 ms (about 58 fps; the machine's speed
 varies between A/B rounds, so these come from different rounds). That meets the
-project's current goal of basic playability. Stage 1e, steps 2 to 5 and the VM
-rvalue path are deferred. Resume one only when a measurement shows a
-playability problem it addresses, and start with a fresh profile.
+then-current goal of basic playability. Stage 1e, steps 2 to 5 and the VM
+rvalue path stayed deferred until a new measurement identified a matching
+problem.
 
 WebAssembly follows the data. Porting the VM or the natives now would add
 marshaling on every native call, because actor state lives in JavaScript
 objects. Once objects live in one `ArrayBuffer`, that buffer can be a
 `WebAssembly.Memory`, and a measured hot kernel (traces, walking, GetFrame) can
 move to Rust without copying, like [the mesh kernel](lodmesh-wasm.md).
+
+## September 28 Stage 4 reprofile
+
+Stage 4 actor lighting and mirror rendering invalidated the earlier stopping
+point. A new Training walk measured 47.75 ms mean, with 12.70 ms in simulation,
+12.39 ms in four mirror child views, 9.78 ms in the actor-mesh update, 5.86 ms
+in the HUD and 29.17 MB/frame allocation. Disabling mirrors reduced the mean
+to 31.95 ms; disabling mesh lighting as well reduced it to 23.94 ms. Those are
+separate costs: WebAssembly cannot remove extra render submissions, while the
+lighting arithmetic is a suitable bulk kernel.
+
+The Island finding is stronger. Its live simulation currently stops at known,
+explicit fidelity boundaries (`aiPickSearch` requiring original `waterMove`,
+or an unrecovered door native), so `--no-simulation` isolates presentation
+without hiding that limitation. The comparison at the same initial view was:
+
+| `01_NYC_UNATCOIsland`, 1440×960 Metal | Mean interval | Median | Actor update | Allocation |
+| --- | ---: | ---: | ---: | ---: |
+| Stage 4 JavaScript lighting | 36.08 ms | 33.3 ms | 21.58 ms | not sampled |
+| Lighting disabled | 16.63 ms | 16.7 ms | 2.42 ms | not sampled |
+| Rust lighting, first bulk boundary | 25.81 ms | 33.3 ms | 13.37 ms | 12.92 MB/frame |
+| Rust + retained topology/allocation fix | 20.97 ms | 16.7 ms | 9.25 ms | 4.03 MB/frame |
+
+The last row is a representative run; an identical later run measured 25.87
+ms because browser-native `(program)` work rose from 12.02 to 22.07 sampled
+ms/frame. The profiler host's display is 60 Hz, so its frame intervals cannot
+demonstrate 120 fps. The actionable result is the ablation and component cost:
+lighting fell substantially but it is not the whole frame. At this Island
+view there are still 1,072 WebGL submissions, roughly 4.8 ms attributed to the
+main render and 2.9 ms to the HUD before simulation. Rust cannot improve those
+GPU/DOM submission costs.
+
+The response therefore keeps the recovered `SetupForActor` state machine in
+JavaScript and moves only the measured numeric loop—camera transforms, ordered
+normals/culling, vertex `Light`, unlit overwrite and D3D diffuse conversion—to
+the existing Rust/Wasm module. Mirror child passes now reuse the main actor
+lighting/pose, keep one clipping-program shape, compensate reflected handedness
+in the camera/target sample and scissor to each mirror's screen bounds. See
+[the kernel boundary](lodmesh-wasm.md) and [mirror surfaces](mirror-surfaces.md)
+for the behavior and verification contracts.
+
+A final 300-frame Training walk with simulation and all four mirror planes
+active measured 33.20 ms mean / 33.3 ms median / 49.9 ms p95. Against the new
+47.75 ms regression baseline, actor update fell from 9.78 to 5.95 ms, mirrors
+from 12.39 to 6.41 ms, and allocation from 29.17 to 16.00 MB/frame. Simulation
+(11.32 ms) and the HUD (5.71 ms) are now the largest JavaScript components in
+that run. This restores substantial headroom but does not establish the user's
+120 fps target; those components and the render submission count require their
+own measured work rather than a broader speculative port.
+
+## September 28 running-Island profile
+
+The user reported at most 10 fps on `01_NYC_UNATCOIsland` and asked for 120 fps
+(an 8.3 ms frame). The earlier Island rows above were render isolation. A
+per-second timeline shows why they missed the report: after Player start the
+simulation runs for about two seconds at 100 ms per frame, then stops at an
+explicit, unimplemented original boundary (`aiPickSearch` needs `waterMove`
+0x103c3ca0), and the paused scene draws at the 60 Hz display cap. Behind that
+boundary wait swimming physics (`APawn::performPhysics Physics=3`), native 708
+`AIDirectionReachable`, latent 506 `StrafeFacing` and `altMove`. Island is not
+playable past those seconds regardless of speed.
+
+To measure a *running* Island, two host tools apply the same measurement-only
+bypass (`scripts/bench-sim-hooks.mjs`): those throws become early returns. The
+frames after a bypass are a workload, not original behavior.
+
+* `scripts/bench-sim.mjs` boots a map through Play's `createGame` in Node, holds
+  forward and times `game.tick` at 60 Hz. It then hashes every script property
+  of every `Level.Actors` entry, with the calendar and clocks pinned to the
+  simulated time. `--continue` returns declared zero values from unsupported
+  natives, as the census does. A representation change must leave the digest
+  identical, and the digest is deterministic run to run. `--tickstats` times
+  each Actor.Tick by class.
+* `scripts/profile-play-browser.mjs --bypass --settle 500` profiles the browser.
+  It now also reports `deusExViewer.framePhases()`, which is wall time per
+  `animate()` phase: tick, lighting setup, actor meshes, mirrors, render, HUD.
+
+Running Island, walking, Chromium/Metal 1440×960 at DPR 1 (DPR 2 at 1728×1000
+measured the same, so fill rate is not the limit):
+
+| Per frame | Before | After |
+| --- | ---: | ---: |
+| `game.tick` | 50.4 ms | 31.5 ms |
+| Actor meshes (pose, light, upload) | 22.9 ms | 15.0 ms |
+| HUD window tree | 5.1 ms | 4.2 ms |
+| three.js render (~1,070 draw calls) | 4.8 ms | 4.4 ms |
+| Mesh-lighting frame setup | 1.9 ms | 1.5 ms |
+| **Frame interval, mean** | **86 ms (≈12 fps)** | **57 ms (≈17.5 fps)** |
+| Headless Island tick (bench-sim) | 54.7 ms | ≈23 ms |
+| Headless Training tick | 7.5 ms | 5.3 ms |
+
+Headless per-class Actor.Tick after the changes: 29 Terrorists at about
+270 µs each (7.8 ms), the player 1.1 ms, 10 UNATCO troops at 140 µs, and 35
+pistols at 29 µs. An NPC tick splits roughly 40% pawn physics (walking moves,
+the rider scan, the 37-trace walking-surface scanner) and 40% UnrealScript.
+
+Changes. Each one is a host representation or ordering change; the original
+behavior contract is untouched.
+
+1. **Bound field accessors.** `ScriptRuntime.boundField` resolves the instance
+   and handle once. Collision views bind each field on first access, so lookup
+   errors keep their timing. The MoveActor rider pass scans `Level.Actors`
+   (about 2,600 entries, 26 times per tick) and reads each `Base`: 67k reads per
+   tick for 77 riders. Base writes span host records, view cells and physics
+   helpers, so an exact rider index was rejected. Rider `baseOf` also read the
+   `base` getter twice; it now reads it once. Headless tick: 54.7 → 30.6 ms.
+2. **Line checks.** Collision-hash X-cell expansion used BigInt x87 arithmetic
+   on every trace. When error-free TwoSum shows both adds are exact in a
+   double, the x87 64-bit roundings are identities and one `Math.fround`
+   equals the BigInt result; otherwise the BigInt path runs. A 2M-case
+   randomized differential against the committed version found 0
+   differences. The hash query no longer uses a Set or closures.
+   `primitiveLineHit` is `primitiveLineCheck`'s arithmetic without
+   temporaries: over 3M cases (856k hits) it matched, including key order and
+   −0. The native hash and primitive oracle validators pass. Walking-surface
+   traces went from 5.7 to 2.3 ms per tick.
+3. **Script values.** Reading one fixed-array element no longer copies the
+   whole array: image-backed storage reads the element's own cell, and a
+   poisoned cell keeps the whole-value path. The VM reads plain variable
+   operands through `fieldValue`/`localValue`, which reproduce
+   `refValue(fieldReference(...))` without the lvalue.
+4. **Quadratic or eager host work.** `ConBindEvents` re-filtered all level
+   actors at every iteration step. It now reloads the array only after a
+   candidate's binding, because the other steps only read. `soundField`
+   resolves the level container only for level/graph names, and
+   `levelFor` is a pure lookup. The GC, text, edit and window-list heap models
+   built an error label on every access; they now build it only on failure.
+   Actor.Tick builds the timer accessor view only for a running timer, and
+   the scheduler builds its per-actor services once per tick type.
+5. **Actor meshes.** An actor outside the view frustum is not posed or lit.
+   The test uses a conservative sphere: the farthest vertex of every
+   animation frame, scaled, around Location+PrePivot. On posed Island actors
+   the worst vertex reached 1.00004 of the unmargined radius, and the test
+   adds 1% + 1 unit. Render.dll also calls GetFrame only for drawn actors,
+   and three.js would cull those groups anyway, so render feedback is
+   unchanged. Culling is off whenever a mirror plane may render. It culled
+   27% of actors at the open Island view. Environment normals use flat
+   buffers, with a bitwise differential over 920k components: 4.8 → 0.4 ms.
+   The GetFrame kernel has an exact integer path
+   ([mesh kernel](lodmesh-wasm.md)): 6.5 → 4.1 ms.
+
+Verification: the Island digest (`5483419aeb08dd30`, 300 walking ticks) was
+identical after every change. Training and Battery Park digests match a HEAD
+worktree at every 50-tick checkpoint. The full validator sweep passes
+418/418, as do all 546 unit tests, `validate-lodmesh-frame --wasm` (46
+original GetFrame captures), the mesh-lighting, NPC preview and mirror
+validators, and the Wasm and mirror browser specs.
+
+What remains toward 8.3 ms is not one bottleneck.
+
+* **The tick (31.5 ms)** is spread across property access, VM plumbing (a
+  locals `Map` and value copies per call), BigInt x87 natives, collision and
+  animation. The next multiples need structural work:
+  * compiling UnrealScript bytecode to JavaScript, with array locals and
+    direct cell access, differential-checked against the interpreter;
+  * the collision core (BSP traces, hash, primitives) in Rust over actor
+    collision data kept in Wasm memory;
+  * a rounding-unambiguity (Ziv) f64 fast path for the x87 natives, which
+    falls back to the exact path.
+* **Actor meshes (15 ms)** are about half Wasm kernels and half per-actor
+  JavaScript. They can run in a worker pool, or overlap the tick. Exact
+  integer posing measures 154 ns per vertex natively (the extended loop is
+  270 ns), so an f64 path with a Ziv rounding test would be the next kernel
+  step.
+* **Render and HUD (8.6 ms):** about 1,070 draw calls for world surfaces could
+  be batched, and the HUD window tree still runs through the byte-level heap
+  model.
+
+## September 29: render-feedback workload, VM compiler and exact caches
+
+**Measuring the browser workload headless.** The browser tick was about 1.5×
+the headless one. In Play, drawn actor meshes copy TimeSeconds into
+LastRenderTime (`actor-render-feedback.mjs`), and scripts read it through
+`LastRendered()`, so seen NPCs run branches that never run headless.
+`bench-sim.mjs --render-feedback` stamps visible mesh actors inside an
+approximate player frustum after each tick. It is a workload approximation
+that brings the headless tick in line with the browser. A HEAD worktree
+produces the same digest in this mode (`5496f30ee89033fc`), so every earlier
+change is exact under that workload too.
+`--tickstats` (per-class Actor.Tick time), `--counts`, `--script-profile`
+(per-UnrealScript-function inclusive and self time), `--script-frames`
+(CPU-profile frames named after UnrealScript functions) and `--read-sites`
+located the costs below.
+
+Changes. Each was verified against the Island digests (with and without
+render feedback), the Training digest, unit tests, the relevant oracle
+validators and a browser run.
+
+* **Compiled VM** (`script-vm.mjs`). Each decoded node compiles once into
+  `ev`/`rv` closures, transcribed case by case from the reference `evaluate`,
+  with children precompiled and the frame passed explicitly.
+  `SCRIPT_VM_REFERENCE=1` selects the reference engine. Variable nodes cache
+  their resolved operand while `ScriptObjects.operandEpoch` is unchanged (it
+  advances on link and on any GC operand rewrite). A script call evaluates
+  non-out arguments by value (`evaluateArgumentValue`), and struct-member
+  reads skip the second struct copy (`structValue`).
+* **Rider scan cache** (`move-riders.mjs`, `base-epoch.mjs`). The MoveActor
+  rider pass reuses a mover's rider list from a full `Level.Actors` scan while
+  a global epoch is unchanged. The epoch advances on every Base write (image
+  cell, slot, host binding and record), every structural `Level.Actors`
+  change, bulk restores, poisoning and releases. If a rider's move advances
+  it, the original loop resumes reading from the next index.
+  `RIDER_VERIFY=1` compares each cached list with a full scan (no mismatch
+  over the Island, Training and Battery Park runs). Tick: about 2.5–3 ms less.
+* **Iterator and event paths.**
+  * `classIsA` memoizes class-chain tests per class for the actor iterators.
+  * `ConBindEvents` reloads its object array only after a candidate.
+  * `processEvent` memoizes the engine.actor chain test and lowercased names.
+  * Locals maps are built without intermediate pair arrays.
+  * `destroyFunctionLocals` caches its filtered field lists.
+* **Values.** A fixed-array element read touches its own cell, and alliance
+  natives read `AlliancesEx` entries in place. The descriptor entry is linked
+  from the field record, with the same currency checks.
+* **x87 fast paths** (`x87-fast.mjs`). `playerDistance` and the GetFrame
+  matrix setup (`lodMeshFrameMatrix`) compute in doubles. TwoSum detects
+  exact results; otherwise an f32 store is accepted only when every value
+  within a proven bound rounds to it, and anything else runs the BigInt x87
+  model. Differentials: 3M distances and 200k matrices with no difference;
+  the 46 original GetFrame captures still pass.
+* **Collision.** `traceRay` no longer allocates per call and caches mover
+  planes per coords. Mover `ToWorld` coords are cached per unchanged inputs.
+  The line-filter class keys are precomputed. The multiline, hash, primitive,
+  ray, brush-ray, fitting and walking-surface native oracles all pass, and
+  `RAY_DIFFERENTIAL=1` checks every live trace against the reference.
+* **Presentation.** Mesh bounds replicate three.js's box/sphere arithmetic in
+  one pass (bit-identical over 20k buffers). The HUD heap uses direct
+  DataView calls, and GC heap-model labels are built lazily.
+
+* **Assignments and bool reads without lvalues.** An assignment to a local or
+  instance variable (`0x0f`, and `0x14` through a `BoolVariable` target) goes
+  through `assignLocalOf`/`assignField`. They keep the reference's order
+  (scope check, storage selection, poison pre-read, slot default, descriptor,
+  then the value, then the read-merge-store) without allocating the reference.
+  A `BoolVariable` read of a variable is `Boolean` of its value. The last
+  linked receiver's instance is remembered, since its symbol link is
+  permanent.
+
+Headless Island tick (render-feedback workload, alternating A/B, 400 ticks):
+HEAD 47.0 ms against 25.5 ms now, with identical digests. The browser
+running-Island frame went from 57 ms (September 28 evening) to about 45–48 ms,
+with the tick at 24–27 ms and the actor meshes at about 10 ms.
+
+Where the tick still goes, and why further JavaScript tuning stops here, is in
+[Rust simulation core](rust-core.md#why-now).
 
 ## Stage 1a: value access without references
 
@@ -374,6 +618,10 @@ of the direction (see [Direction](#direction)).
 ```sh
 npm run dev   # or reuse the running server on 5173
 node scripts/profile-play-browser.mjs --walk --alloc --counts --tag mine
+# A running Island (measurement-only bypass of its early boundaries):
+node scripts/profile-play-browser.mjs --map 01_NYC_UNATCOIsland --walk --bypass --settle 500
+# Headless tick timing and state digest (compare digests between builds):
+node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue --ticks 300 [--tickstats]
 ```
 
 Frame intervals depend on the display cadence; compare A/B runs on one machine,

@@ -87,12 +87,10 @@ property (with float stores), then caps each at 1. Engine Actor.uc declares
 ScaleGlow as "Multiplies lighting" (line 261),
 and its ERenderStyle declaration records the exact Normal/Masked/Translucent/
 Modulated values 1/2/3/4. The display applies this documented lighting multiplier
-to its existing texture-only inspection shading, and uses its existing recovered
-blend functions for the live Style value. This is a partial presentation of
-the original damage/fade fields, not a claim of recovered native mesh lighting.
-Original mesh lighting and distance LOD remain the existing explicitly
-unsupported renderer branches. Texture-only inspection shading is not an
-original-game lighting claim.
+through the recovered per-vertex mesh-lighting path, and uses its recovered
+blend functions for the live Style value. Distance LOD, fog and volumetric
+mesh lights remain explicit renderer boundaries; see
+[mesh lighting](mesh-lighting.md).
 
 ## Integration and scope
 

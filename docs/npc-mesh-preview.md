@@ -38,10 +38,11 @@ are retained. Static texture decoding and GPU surface-flag handling reuse the
 world viewer's established conventions; animated/procedural textures remain unsupported. The selected PF_Environment
 path is now recovered; see [instructor material evidence](script-instructor-conversation.md#guard-environment-materials-recovered-selected-path).
 
-The mesh uses **texture-only inspection shading**, explicitly labeled in the
-view. `bUnlit` remains false on the actor. No guessed mesh lighting is installed
-as original behavior. Full resolution is deliberate inspection behavior, not
-a claim that DrawLodMesh's distance-dependent topology is complete.
+The mesh uses the recovered DrawLodMesh per-vertex lighting documented in
+[mesh lighting](mesh-lighting.md); it is no longer texture-only inspection
+shading. Full resolution remains deliberate inspection behavior, not a claim
+that DrawLodMesh's distance-dependent topology, fog or volumetric lights are
+complete.
 
 `createActorMeshPreview` is shared by every admitted actor. The Training
 fixture uses the same capture's 18 identities, listed in
@@ -166,4 +167,5 @@ removed on destruction/reset release their draw resources. Original ScaleGlow
 and live Style update materials without altering actor animation. Their native
 color multiplication and the first-person DrawActor path are recorded in
 [weapon/rendering evidence](script-weapon-rendering.md). Mesh lighting remains
-explicitly texture-only inspection shading.
+the recovered per-vertex path; its remaining unsupported branches are listed
+in [mesh lighting](mesh-lighting.md).

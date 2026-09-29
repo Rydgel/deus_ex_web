@@ -404,10 +404,13 @@ export function bindEventsNative({
   for (const classToken of actorClassOrder) {
     const pass = { classToken, candidates: 0, selected: 0, events: 0, bound: 0 };
     report.classPasses.push(pass);
+    let globalObjects = null;
     for (let index = 0; ; index++) {
       // The original iterator reloads the global array and its count when
-      // advancing. Native callbacks can change that storage between visits.
-      const globalObjects = actorObjects(objects, nativeIndex);
+      // advancing. Native callbacks can change that storage between visits;
+      // only a matching candidate's binding runs any (reference and isA are
+      // reads), so the array is reloaded at the start and after each one.
+      globalObjects ??= actorObjects(objects, nativeIndex);
       if (index >= globalObjects.length) break;
       const raw = globalObjects[index];
       if (raw === null) continue;
@@ -432,6 +435,7 @@ export function bindEventsNative({
         service,
         report,
       );
+      globalObjects = null;
       report.candidates.push({ classToken, actor: object, ...candidateReport });
       if (candidateReport.selected) {
         pass.selected++;

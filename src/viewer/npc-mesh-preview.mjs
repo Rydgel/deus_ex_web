@@ -5,15 +5,15 @@ import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
-import {meshVertexNormals,meshEnvironmentUV} from '../runtime/mesh-environment.mjs';
+import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 
 /** Live NPC mesh binding: update() resamples GetFrame whenever the shared
  * runtime's pose fields change, so original startup/animation is visible in
- * ordinary Play without preview controls. Original mesh lighting remains a
- * boundary. Contracts and captured cache identity: docs/npc-mesh-preview.md. */
+ * ordinary Play without preview controls. Contracts and captured cache
+ * identity: docs/npc-mesh-preview.md; lighting: docs/mesh-lighting.md. */
 export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   let kernelError=null;
@@ -47,8 +47,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
  * `createActorMeshPreview` owns an isolated GetFrame cache per actor, and that
  * key selects only tween/blend heap identity, never the drawn geometry — these
  * props carry AnimSequence None, so a synthetic key is exact. The measured NPC
- * identities keep their captured index for animation-history fidelity. Shading
- * stays texture-only, as documented for the NPC layer. */
+ * identities keep their captured index for animation-history fidelity. */
 /** `player` is the player actor or a getter for it: Player start logs a new
  * player in, so the viewer passes a getter. */
 export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma}={}) {
@@ -133,14 +132,43 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   };
   reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
-  return {root,actors,npcActors,propActors,summary,
+  return {root,actors,npcActors,propActors,summary,kernel,
     /** `view.lit` marks the main viewport frame, whose drawn actors get one
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
     update(cameraPosition,view={}){reconcile();for(const actor of actors)actor.update(cameraPosition,view);},
+    /** Mirror child frames change only camera-relative environment UVs.  The
+     * main-frame update immediately before them already reconciled actors,
+     * sampled poses, applied styles and lit the geometry. */
+    updateView(cameraPosition){for(const actor of actors)if(actor.viewDependent)actor.updateView(cameraPosition);},
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
     dispose(){disposed=true;for(const actor of actors)actor.dispose();},
   };
+}
+
+/** BufferGeometry.computeBoundingBox + computeBoundingSphere (three.js
+ * r186) for a plain position array without morph targets, in one pass: the
+ * same Math.min/max expansion, empty-box centre, (min + max) * 0.5 centre and
+ * largest dx*dx + dy*dy + dz*dz, so frustum culling sees identical bounds. */
+function setMeshBounds(geometry,array){
+  let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+  for(let i=0;i<array.length;i+=3){
+    const x=array[i],y=array[i+1],z=array[i+2];
+    minX=Math.min(minX,x);minY=Math.min(minY,y);minZ=Math.min(minZ,z);
+    maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);maxZ=Math.max(maxZ,z);
+  }
+  geometry.boundingBox??=new THREE.Box3();
+  geometry.boundingBox.min.set(minX,minY,minZ);geometry.boundingBox.max.set(maxX,maxY,maxZ);
+  geometry.boundingSphere??=new THREE.Sphere();
+  const center=geometry.boundingSphere.center;
+  if(maxX<minX||maxY<minY||maxZ<minZ)center.set(0,0,0);
+  else center.set((minX+maxX)*0.5,(minY+maxY)*0.5,(minZ+maxZ)*0.5);
+  let maxRadiusSq=0;
+  for(let i=0;i<array.length;i+=3){
+    const dx=center.x-array[i],dy=center.y-array[i+1],dz=center.z-array[i+2];
+    maxRadiusSq=Math.max(maxRadiusSq,dx*dx+dy*dy+dz*dz);
+  }
+  geometry.boundingSphere.radius=Math.sqrt(maxRadiusSq);
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
@@ -159,13 +187,34 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     return originalObjectIndex;
   }};
   const frame=getLodMeshFrame(payload,actor,coords,services);
+  // Host culling bound, never drawn geometry: the farthest vertex of every
+  // animation frame from the mesh origin, plus the origin offset, in mesh
+  // units. update() scales it by the mesh Scale and DrawScale around
+  // Location+PrePivot, so it contains any pose GetFrame can produce.
+  const cullRadius=(()=>{
+    const data=payload.arrays.get(0x60).load().data;
+    const vertices=new DataView(data.buffer,data.byteOffset,data.byteLength);
+    let farthest=0;
+    for(let at=0;at+6<=vertices.byteLength;at+=8){
+      const x=vertices.getInt16(at,true),y=vertices.getInt16(at+2,true),z=vertices.getInt16(at+4,true);
+      farthest=Math.max(farthest,x*x+y*y+z*z);
+    }
+    const origin=payload.origin;
+    return (Math.sqrt(farthest)+Math.hypot(origin[0],origin[1],origin[2]))*Math.max(...payload.scale.map(Math.abs));
+  })();
+  const cullSphere=new THREE.Sphere();
   const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets);
+  const faceWords=new Uint32Array(faces.length*4);
+  faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
   const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  // The posed x,y,z floats (GetFrame's 12-byte stride) and their
+  // environment normals, recomputed whenever the pose changes.
   let points=null,normals=null;
+  const faceIndices=hasEnvironment?Uint32Array.from(faces.flatMap(face=>face.vertices)):null;
   function updateNormals(){
-    const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
-    points=Array.from({length:frame.output.byteLength/12},(_,i)=>[0,4,8].map(o=>vertices.getFloat32(i*12+o,true)));
-    normals=meshVertexNormals(points,faces);
+    points??=new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
+    normals??=new Float32Array(points.length);
+    meshVertexNormalsInto(points,faceIndices,normals);
   }
   if(hasEnvironment)updateNormals();
   const environmentTexture=()=>{
@@ -185,6 +234,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     root.traverse(object=>object.geometry?.dispose());
     for(const material of materials)material.dispose();
     for(const texture of gpuTextures)texture.dispose();
+    kernel?.releaseLightingMesh?.(faceWords);
     // A failed pose may have left an internal lease outstanding; disposal
     // still releases this private cache and must not mask the original error.
     cache.entries.clear();
@@ -209,17 +259,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   // One DrawLodMesh lighting pass (docs/mesh-lighting.md) over every face in
   // draw order; each group's corners take their face's colours.
   function relight(){
-    const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
-    const count=frame.output.byteLength/12,points=new Array(count);
-    for(let i=0;i<count;i++)points[i]=[vertices.getFloat32(i*12,true),vertices.getFloat32(i*12+4,true),vertices.getFloat32(i*12+8,true)];
-    const result=lighting.lightMesh(actor,points,faces);
+    const points=new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
+    const result=lighting.lightMesh(actor,points,faces,faceWords);
     if(!result)return null;
+    const colors=result.colors;
     for(const group of groups.values()){
       const attribute=group.geometry.getAttribute('deusLight'),array=attribute.array;
-      group.faces.forEach((faceIndex,k)=>{
-        for(const [slot,corner] of [0,2,1].entries())
-          array.set(result.colors.subarray(faceIndex*9+corner*3,faceIndex*9+corner*3+3),(k*3+slot)*3);
-      });
+      // Avoid short-lived typed-array views and per-face iterator arrays.
+      // Island has thousands of drawn mesh faces, so those objects alone
+      // accounted for several MiB of sampled allocation every frame.
+      for(let k=0;k<group.faces.length;k++){
+        const source=group.faces[k]*9,destination=k*9;
+        array[destination]=colors[source];array[destination+1]=colors[source+1];array[destination+2]=colors[source+2];
+        array[destination+3]=colors[source+6];array[destination+4]=colors[source+7];
+        array[destination+5]=colors[source+8];
+        array[destination+6]=colors[source+3];array[destination+7]=colors[source+4];
+        array[destination+8]=colors[source+5];
+      }
       attribute.needsUpdate=true;
     }
     return {lights:result.setup.lights.length,flags:result.flags};
@@ -259,8 +315,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         texture.needsUpdate=true;
         const material=new THREE.MeshBasicMaterial({map:texture,
           side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
-        // Keep the current texture-only shading in both the main framebuffer
-        // and the display-encoded mirror target (Three defaults targets to linear).
+        // Keep texture sampling and recovered vertex lighting in the same
+        // display-encoded space for the main framebuffer and mirror target.
         // D3D modulates the display-encoded texel by the vertex diffuse
         // (docs/mesh-lighting.md), before the display gamma ramp; the world
         // shader treats light maps the same way.
@@ -315,13 +371,39 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         textures:[...new Set([...groups.values()].map(group=>group.reference.key))],
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
         shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
+    const updateView=cameraPosition=>{
+      if(disposed||!root.visible||!hasEnvironment||!cameraPosition)return false;
+      const relative=[0,0,0],normal=[0,0,0];
+      for(const group of groups.values())if(group.flags&POLY.Environment){
+        const uv=group.geometry.getAttribute('uv');
+        for(let i=0;i<group.indices.length;i++){
+          const at=group.indices[i]*3;
+          relative[0]=Math.fround(points[at]-cameraPosition[0]);relative[1]=Math.fround(points[at+1]-cameraPosition[1]);
+          relative[2]=Math.fround(points[at+2]-cameraPosition[2]);
+          normal[0]=normals[at];normal[1]=normals[at+1];normal[2]=normals[at+2];
+          writeMeshEnvironmentUV(uv.array,i*2,relative,normal);
+        }
+        uv.needsUpdate=true;
+      }
+      return true;
+    };
     lastPose=pose();
-    return {actor,root,dispose,mesh:meshReference,
+    return {actor,root,dispose,mesh:meshReference,viewDependent:hasEnvironment,updateView,
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition,view={}){
         if(disposed)return false;
         root.visible=visible?visible(actor):(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
         if(!root.visible)return false;
+        // Render.dll only draws, and so only calls GetFrame for, actors in
+        // the view. Outside the frustum even a conservative bound of every
+        // pose is culled here; three.js would cull each group anyway, so
+        // render feedback is unchanged. Mirror frames disable this (view.cull).
+        if(view.cull&&view.frustum){
+          const location=read(actor,'Location'),pivot=read(actor,'PrePivot');
+          cullSphere.center.set(location[1]+pivot[1],location[2]+pivot[2],-(location[0]+pivot[0]));
+          cullSphere.radius=cullRadius*Math.max(1,Math.abs(read(actor,'DrawScale')))*1.01+1;
+          if(!view.frustum.intersectsSphere(cullSphere)){root.visible=false;return false;}
+        }
         if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
@@ -347,20 +429,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           for(const group of groups.values()){
             const positions=group.geometry.getAttribute('position');
             copyPositions(positions.array,group.indices);positions.needsUpdate=true;
-            group.geometry.computeBoundingBox();group.geometry.computeBoundingSphere();
+            setMeshBounds(group.geometry,positions.array);
           }
         }
-        const environmentUpload=Boolean(hasEnvironment&&cameraPosition);
-        if(environmentUpload){
-          for(const group of groups.values())if(group.flags&POLY.Environment){
-            const uv=group.geometry.getAttribute('uv');
-            for(let i=0;i<group.indices.length;i++){
-              const index=group.indices[i];
-              uv.array.set(meshEnvironmentUV(points[index].map((v,j)=>Math.fround(v-cameraPosition[j])),normals[index]),i*2);
-            }
-            uv.needsUpdate=true;
-          }
-        }
+        const environmentUpload=updateView(cameraPosition);
         if(lighting&&view.lit&&lighting.frame&&(!view.frustum||[...groups.values()].some(group=>
           group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))
           summary.lighting=relight()??summary.lighting;

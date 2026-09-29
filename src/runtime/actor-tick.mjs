@@ -40,11 +40,15 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
   set('bTicked',Boolean(level.tickTag&1));
   const pawn=get('bIsPawn')&&isA(actor,'engine.pawn');
   advanceAnimation(actor,delta);
-  const timers={};
-  for(const name of ['TimerRate','TimerCounter','bTimerLoop'])
-    Object.defineProperty(timers,name,{get:()=>get(name),set:value=>set(name,value)});
   const scriptAndTimer=()=>{
     processState(actor,delta);
+    // updateActorTimer's first access reads TimerRate and returns for a
+    // disabled (zero, negative or NaN) rate; most actors stop there, so the
+    // accessor view is only built for a running timer.
+    if(!(f(get('TimerRate')??0)>0))return;
+    const timers={};
+    for(const name of ['TimerRate','TimerCounter','bTimerLoop'])
+      Object.defineProperty(timers,name,{get:()=>get(name),set:value=>set(name,value)});
     updateActorTimer(timers,delta,()=>event('Timer'));
   };
   if(get('RemoteRole')===3) {

@@ -153,7 +153,6 @@ export function gcMemory(object, services) {
   const base = rejectAsync(services.objectAddress ? services.objectAddress(object) : object.base, 'objectAddress');
   if (typeof base !== 'number' || !Number.isInteger(base) || base <= 0)
     modelFail('GC requires the object heap address', {kind: 'SERVICE', value: base});
-  const sync = (value, label) => rejectAsync(value, label);
   const int32 = value => {
     if (typeof value !== 'number' || !Number.isInteger(value))
       modelFail('GC heap read returned a non-integer', {kind: 'VALUE', value});
@@ -175,8 +174,17 @@ export function gcMemory(object, services) {
     if (kind === 'f32') return float32;
     return modelFail(`GC unsupported heap kind ${kind}`, {kind: 'VALUE', value: kind});
   };
-  const read = (address, kind) => checked(kind)(sync(mem.read(address, kind), `read 0x${address.toString(16)}`));
-  const write = (address, kind, value) => sync(mem.write(address, kind, value), `write 0x${address.toString(16)}`);
+  // rejectAsync with the label built only for the failure message.
+  const read = (address, kind) => {
+    const value = mem.read(address, kind);
+    if (value && typeof value.then === 'function') rejectAsync(value, `read 0x${address.toString(16)}`);
+    return checked(kind)(value);
+  };
+  const write = (address, kind, value) => {
+    const result = mem.write(address, kind, value);
+    if (result && typeof result.then === 'function') rejectAsync(result, `write 0x${address.toString(16)}`);
+    return result;
+  };
   return {mem, object, services, base, read, write};
 }
 

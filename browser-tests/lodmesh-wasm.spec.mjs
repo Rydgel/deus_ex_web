@@ -7,7 +7,8 @@ test('unavailable Wasm keeps the existing JavaScript pose path playable and repo
   await page.locator('#scene').click({position:{x:500,y:350}});
   const initial=await page.evaluate(()=>window.deusExViewer.status());
   expect(initial).toMatchObject({mode:'play',runtimeError:null,npcPreview:{poseBackend:'javascript'}});
-  expect(initial.npcPreview.actors).toHaveLength(18);
+  expect(initial.npcPreview.actors).toHaveLength(64);
+  expect(initial.npcPreview.npcs+initial.npcPreview.props).toBe(64);
   expect(initial.npcPreview.kernelError).toBeTruthy();
   await page.keyboard.down('KeyW');
   try {

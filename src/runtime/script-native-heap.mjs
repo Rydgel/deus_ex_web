@@ -247,12 +247,20 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   }
 
   function readAt(address, kind) {
-    if (kind === 'ptr') return objectAt(view.getUint32(byteIndex(address, 4), true));
-    if (kind === 'string') return readString(address);
-    if (kind === 'name') return side.has(address) ? side.get(address) : 'None';
-    const spec = KINDS[kind];
-    if (!spec) fail(`Native heap does not support read kind ${kind}`, {kind});
-    return view[spec[1]](byteIndex(address, spec[0]), true);
+    // Direct DataView calls per kind (KINDS' widths and getters).
+    switch (kind) {
+      case 'u32': return view.getUint32(byteIndex(address, 4), true);
+      case 'i32': return view.getInt32(byteIndex(address, 4), true);
+      case 'f32': return view.getFloat32(byteIndex(address, 4), true);
+      case 'u8': return view.getUint8(byteIndex(address, 1));
+      case 'i8': return view.getInt8(byteIndex(address, 1));
+      case 'u16': return view.getUint16(byteIndex(address, 2), true);
+      case 'i16': return view.getInt16(byteIndex(address, 2), true);
+      case 'ptr': return objectAt(view.getUint32(byteIndex(address, 4), true));
+      case 'string': return readString(address);
+      case 'name': return side.has(address) ? side.get(address) : 'None';
+    }
+    return fail(`Native heap does not support read kind ${kind}`, {kind});
   }
 
   function writeAt(address, kind, value) {
@@ -272,7 +280,16 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
     if (typeof value !== 'number') fail(`Native heap ${kind} write requires a number`, {value, kind});
     if (kind !== 'f32' && !Number.isInteger(value))
       fail(`Native heap ${kind} write requires an integer`, {value, kind});
-    view[spec[2]](byteIndex(address, spec[0]), kind === 'f32' ? value : value, true);
+    const index = byteIndex(address, spec[0]);
+    switch (kind) {
+      case 'u32': view.setUint32(index, value, true); break;
+      case 'i32': view.setInt32(index, value, true); break;
+      case 'f32': view.setFloat32(index, value, true); break;
+      case 'u8': view.setUint8(index, value); break;
+      case 'i8': view.setInt8(index, value); break;
+      case 'u16': view.setUint16(index, value, true); break;
+      case 'i16': view.setInt16(index, value, true); break;
+    }
     // A numeric store over a name slot invalidates the side value.
     if (side.size) for (let i = 0; i < spec[0]; i++) side.delete(address + i);
   }

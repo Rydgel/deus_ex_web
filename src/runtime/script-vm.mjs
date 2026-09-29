@@ -6,6 +6,7 @@ import { getAxes } from './camera.mjs';
 import { msvcrtWtoi } from './script-text-parser.mjs';
 import { rotatorSin } from './coords.mjs';
 import { referenceElementType } from './script-values.mjs';
+import { scriptVmKernel } from './script-vm-kernel.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -347,6 +348,88 @@ function x87Transcendental(name, operand) {
   return f(fn(x));
 }
 
+/** The BigInt bodies of the float, vector and rotator operators that the
+ * Rust kernel (script-vm-kernel.mjs) also implements: the reference the
+ * kernel is validated against, and the path while it is not loaded. Each
+ * body's evidence is at its case in native(). */
+export const x87Operators = Object.freeze({
+  divideEqualIntFloat: (a, b) => {
+    const divisor=x87load(b);
+    return divisor.nan!==undefined||(!divisor.inf&&divisor.sig===0n)?0
+      :x87ftol(x87div(x87int32(a),divisor));
+  },
+  percent: (a, b) => {
+    const x=x87load(a),y=x87load(b);
+    if(x.nan!==undefined)return x87store(y.nan===undefined?x87quiet(x):x87nan(x,y));
+    if(y.nan!==undefined)return x87store(x87quiet(y));
+    if(y.sig===0n||x.inf||y.inf)return x87store({nan:X87_INDEFINITE});
+    const r=a%b;
+    return f(r===0?0:r);
+  },
+  sqrt: a => {
+    const d=x87load(a);
+    return d.nan!==undefined?x87store(x87quiet(d))
+      :d.neg&&(d.inf||d.sig!==0n)?x87store({nan:X87_INDEFINITE})
+      :x87store(x87sqrt(d));
+  },
+  square: a => { const d=x87load(a); return x87store(x87mul(d,d)); },
+  dot: (a, b) => {
+    const px=x87mul(x87load(a[0]),x87load(b[0]));
+    const py=x87mul(x87load(a[1]),x87load(b[1]));
+    const pz=x87mul(x87load(a[2]),x87load(b[2]));
+    return x87store(x87add(px,x87add(py,pz)));
+  },
+  multiplyEqualVectorFloat: (a, b) => { const s=x87load(b); return a.map(v=>x87store(x87mul(x87load(v),s))); },
+  divideEqualVectorFloat: (a, b) => {
+    const d=x87load(b);
+    const r=d.nan!==undefined?x87quiet(d):d.inf?{neg:d.neg,sig:0n,exp:0}
+      :d.sig===0n?{neg:d.neg,inf:true}:x87recip(d);
+    return a.map(v=>x87store(x87mul(x87load(v),r)));
+  },
+  subtractEqualVectorVector: (a, b) => a.map((v,i)=>x87store(x87add(x87load(v),x87neg(x87load(b[i]))))),
+  normal: a => x87safeNormal(a),
+  smerp: (alpha, a, b) => {
+    const al=x87load(alpha),aa=x87load(a),bb=x87load(b);
+    const p=x87mul(al,al),cube=x87mul(al,p);
+    const s=x87add(x87mul(p,x87three),x87neg(x87add(cube,cube)));
+    return x87store(x87add(x87mul(s,x87add(bb,x87neg(aa))),aa));
+  },
+  rotate: (a, b) => {
+    const dot=(t,r)=>x87store(x87add(
+      x87add(x87mul(t[0],x87load(r[0])),x87mul(t[1],x87load(r[1]))),
+      x87mul(t[2],x87load(r[2]))));
+    const [pitch,yaw,roll]=b.map(v=>v|0);
+    const sy=rotatorSin(yaw),cy=rotatorSin((yaw+0x4000)|0);
+    const sp=rotatorSin(pitch),cp=rotatorSin((pitch+0x4000)|0);
+    const sr=rotatorSin(roll),cr=rotatorSin((roll+0x4000)|0);
+    let m=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
+    for(const r of [[[0,0,0],[cy,sy,0],[-sy,cy,0],[0,0,1]],
+      [[0,0,0],[cp,0,sp],[0,1,0],[-sp,0,cp]],
+      [[0,0,0],[1,0,0],[0,cr,-sr],[0,sr,cr]]])
+      m=m.map((v,i)=>{
+        const t=i?v.map(x87load)
+          :v.map((x,j)=>x87add(x87load(x),x87neg(x87load(r[0][j]))));
+        return [dot(t,r[1]),dot(t,r[2]),dot(t,r[3])];
+      });
+    return [dot(a.map(x87load),m[1]),dot(a.map(x87load),m[2]),dot(a.map(x87load),m[3])];
+  },
+  multiplyRotatorFloat: (r, scale) => { const s=x87load(scale); return r.map(v=>x87ftol(x87mul(x87int32(v),s))); },
+  multiplyVectorVector: (a, b) => a.map((v,i)=>x87store(x87mul(x87load(v),x87load(b[i])))),
+  multiplyEqualVectorVector: (a, b) => a.map((v,i)=>x87store(x87mul(x87load(b[i]),x87load(v)))),
+  mirrorVectorByNormal: (a, b) => {
+    const n=x87safeNormal(b);
+    const nx=x87load(n[0]),ny=x87load(n[1]),nz=x87load(n[2]);
+    const vx=x87load(a[0]),vy=x87load(a[1]),vz=x87load(a[2]);
+    const twoX=x87add(nx,nx);
+    const twoY=x87load(x87store(x87add(ny,ny))),twoZ=x87load(x87store(x87add(nz,nz)));
+    const dot=x87load(x87store(x87add(x87add(x87mul(vy,ny),x87mul(vz,nz)),x87mul(vx,nx))));
+    const prodX=x87mul(twoX,dot);
+    const prodY=x87load(x87store(x87mul(twoY,dot))),prodZ=x87load(x87store(x87mul(twoZ,dot)));
+    return [x87store(x87add(vx,x87neg(prodX))),x87store(x87add(vy,x87neg(prodY))),x87store(x87add(vz,x87neg(prodZ)))];
+  },
+});
+const x87Kernel = () => scriptVmKernel ?? x87Operators;
+
 /** execSwitch's comparison: appMemcmp over the switch value's size, or
  * appStricmp of the two FStrings when that size is 0. Names are FName
  * indices, so equal names are the ASCII-folded equal spellings. An object or
@@ -366,6 +449,13 @@ function switchCaseEqual(key, value, size, keyType = null) {
     throw new Error('EX_Switch over a struct value is not recovered');
   return false;
 }
+
+// native()'s operand-shape claims by index (constant sets, not per-call literals).
+const STRING_COMPARE_NATIVES=new Set([115,120,121]);
+const UNARY_FLOAT_NATIVES=new Set([188,189,190]);
+const VECTOR_PAIR_NATIVES=new Set([142,203,276,297,317,318,319]);
+
+const REFERENCE_ENGINE = typeof process !== 'undefined' && process.env?.SCRIPT_VM_REFERENCE === '1';
 
 export function compileFunction(fn) {
   const decoded = decodeScript(fn), { statements } = decoded;
@@ -391,11 +481,11 @@ export function compileFunction(fn) {
       : index===173 ? values.length===2 && typeof a==='number' && typeof b==='number'
       : index===160 ? values.length===2 && typeof a==='number' && typeof b==='number'
       : index===237 ? values.length===1 && typeof a==='string'
-      : [115,120,121].includes(index) ? values.length===2 && typeof a==='string' && typeof b==='string'
-      : [188,189,190].includes(index) ? values.length===1 && typeof a==='number'
+      : STRING_COMPARE_NATIVES.has(index) ? values.length===2 && typeof a==='string' && typeof b==='string'
+      : UNARY_FLOAT_NATIVES.has(index) ? values.length===1 && typeof a==='number'
       : index===287 ? values.length===2 && isVec3(a) && typeof b==='number'
       : index===288 ? values.length===2 && typeof a==='number' && isVec3(b)
-      : [142,203,276,297,317,318,319].includes(index) ? values.length===2 && isVec3(a) && isVec3(b)
+      : VECTOR_PAIR_NATIVES.has(index) ? values.length===2 && isVec3(a) && isVec3(b)
       : true;
     if (!claimed) {
       if (services.native) return services.native({index,args,receiver,script:fn,frame});
@@ -466,9 +556,7 @@ export function compileFunction(fn) {
       // _ftol truncates to int64 and stores the low DWORD.  The out
       // operand arrives through GPropAddr like every out native.
       case 160: {
-        const divisor=x87load(b);
-        const v=divisor.nan!==undefined||(!divisor.inf&&divisor.sig===0n)?0
-          :x87ftol(x87div(x87int32(a),divisor));
+        const v=x87Kernel().divideEqualIntFloat(a,b);
         if(args[0]?.reference)assign(args[0],v);
         return v;
       }
@@ -508,14 +596,7 @@ export function compileFunction(fn) {
       // For finite nonzero operands the FPREM result equals the exact fmod,
       // which is always representable in float32, so the single store is
       // bit-exact.
-      case 173: {
-        const x=x87load(a),y=x87load(b);
-        if(x.nan!==undefined)return x87store(y.nan===undefined?x87quiet(x):x87nan(x,y));
-        if(y.nan!==undefined)return x87store(x87quiet(y));
-        if(y.sig===0n||x.inf||y.inf)return x87store({nan:X87_INDEFINITE});
-        const r=a%b;
-        return f(r===0?0:r);
-      }
+      case 173: return x87Kernel().percent(a,b);
       case 174: return f(a + b);
       case 175: return f(a - b);
       // Core's preoperator float - loads the operand as a float32 and uses
@@ -595,17 +676,12 @@ export function compileFunction(fn) {
       // 0).  FADDP ties hand the inner add to py and the outer add to px,
       // matching x87nan's first-operand preference on equal significands
       // (dot-nan-tie-inner / dot-nan-tie-outer).
-      case 219: {
-        const px=x87mul(x87load(a[0]),x87load(b[0]));
-        const py=x87mul(x87load(a[1]),x87load(b[1]));
-        const pz=x87mul(x87load(a[2]),x87load(b[2]));
-        return x87store(x87add(px,x87add(py,pz)));
-      }
+      case 219: return x87Kernel().dot(a,b);
       // The out-vector operators mutate their first operand through the
       // GPropAddr lvalue handoff; a non-lvalue first operand mutates the
       // discarded stack temporary instead and still returns the result.
       case 221: {
-        const s=x87load(b),out=a.map(v=>x87store(x87mul(x87load(v),s)));
+        const out=x87Kernel().multiplyEqualVectorFloat(a,b);
         if(args[0]?.reference)assign(args[0],out);
         return out;
       }
@@ -616,22 +692,19 @@ export function compileFunction(fn) {
       // signed zeros.  Verified by diveq-recip-extended and the divisor
       // sweep cases against the original body.
       case 222: {
-        const d=x87load(b);
-        const r=d.nan!==undefined?x87quiet(d):d.inf?{neg:d.neg,sig:0n,exp:0}
-          :d.sig===0n?{neg:d.neg,inf:true}:x87recip(d);
-        const out=a.map(v=>x87store(x87mul(x87load(v),r)));
+        const out=x87Kernel().divideEqualVectorFloat(a,b);
         if(args[0]?.reference)assign(args[0],out);
         return out;
       }
       case 224: {
-        const out=a.map((v,i)=>x87store(x87add(x87load(v),x87neg(x87load(b[i])))));
+        const out=x87Kernel().subtractEqualVectorVector(a,b);
         if(args[0]?.reference)assign(args[0],out);
         return out;
       }
       // Normal (226): a thiscall to FVector::SafeNormal — see x87safeNormal
       // for the recovered 80-bit accumulation, the 1e-08 FCOMP boundary and
       // the reciprocal-multiply store sequence.
-      case 226: return x87safeNormal(a);
+      case 226: return x87Kernel().normal(a);
       // GetAxes (229): void — the rotator argument evaluates normally while
       // X, Y and Z publish through GPropAddr (primitiveOutNatives keeps
       // argument positions 1-3 as references; a non-lvalue expression falls
@@ -649,12 +722,7 @@ export function compileFunction(fn) {
       // st0+st0, FSUBP, FSUB m32 (B-A), FMULP and FADD m32 keep every
       // intermediate on the 80-bit stack — the only rounding is the final
       // FSTP float32 store.
-      case 248: {
-        const al=x87load(a),aa=x87load(b),bb=x87load(values[2]);
-        const p=x87mul(al,al),cube=x87mul(al,p);
-        const s=x87add(x87mul(p,x87three),x87neg(x87add(cube,cube)));
-        return x87store(x87add(x87mul(s,x87add(bb,x87neg(aa))),aa));
-      }
+      case 248: return x87Kernel().smerp(a,b,values[2]);
       // Min (249) is a signed dword compare: A>B ? B : A.
       case 249: return Math.min(a|0,b|0);
       // Sqrt (193): the float32 operand is promoted to a double (exact) for
@@ -663,18 +731,13 @@ export function compileFunction(fn) {
       // bound (64 >= 2*24+2) this is the correctly-rounded float32 root.
       // Negative nonzero operands produce the x87 real indefinite; a NaN
       // operand propagates quieted; -0 stays -0.
-      case 193: {
-        const d=x87load(a);
-        return d.nan!==undefined?x87store(x87quiet(d))
-          :d.neg&&(d.inf||d.sig!==0n)?x87store({nan:X87_INDEFINITE})
-          :x87store(x87sqrt(d));
-      }
+      case 193: return x87Kernel().sqrt(a);
       // Square (194): A loaded as float32, multiplied once in x87, a single
       // FSTP float32 store — including -0 -> +0 and NaN payload propagation.
-      case 194: { const d=x87load(a); return x87store(x87mul(d,d)); }
+      case 194: return x87Kernel().square(a);
       // Multiply_VectorVector (296): each component product stores to
       // float32 with its own FSTP — no cross-component accumulation.
-      case 296: return a.map((v,i)=>x87store(x87mul(x87load(v),x87load(b[i]))));
+      case 296: return x87Kernel().multiplyVectorVector(a,b);
       // MultiplyEqual_VectorVector (297): the first operand arrives through
       // the original GPropAddr handoff (an lvalue mutates its variable, a
       // non-lvalue mutates the discarded stack temporary); each component
@@ -683,7 +746,7 @@ export function compileFunction(fn) {
       // computes arg1*st0 x arg0*mem per component — written in that order
       // though FMUL is commutative under the proven NaN-selection rules.
       case 297: {
-        const out=a.map((v,i)=>x87store(x87mul(x87load(b[i]),x87load(v))));
+        const out=x87Kernel().multiplyEqualVectorVector(a,b);
         if(args[0]?.reference)assign(args[0],out);
         return out;
       }
@@ -692,17 +755,7 @@ export function compileFunction(fn) {
       // value feeds all three product terms.  2N'.x stays on the stack;
       // 2N'.y/2N'.z and the y/z products each take an FSTP float32 store,
       // while only the x product remains in 80-bit through the closing FSUB.
-      case 300: {
-        const n=x87safeNormal(b);
-        const nx=x87load(n[0]),ny=x87load(n[1]),nz=x87load(n[2]);
-        const vx=x87load(a[0]),vy=x87load(a[1]),vz=x87load(a[2]);
-        const twoX=x87add(nx,nx);
-        const twoY=x87load(x87store(x87add(ny,ny))),twoZ=x87load(x87store(x87add(nz,nz)));
-        const dot=x87load(x87store(x87add(x87add(x87mul(vy,ny),x87mul(vz,nz)),x87mul(vx,nx))));
-        const prodX=x87mul(twoX,dot);
-        const prodY=x87load(x87store(x87mul(twoY,dot))),prodZ=x87load(x87store(x87mul(twoZ,dot)));
-        return [x87store(x87add(vx,x87neg(prodX))),x87store(x87add(vy,x87neg(prodY))),x87store(x87add(vz,x87neg(prodZ)))];
-      }
+      case 300: return x87Kernel().mirrorVectorByNormal(a,b);
       case 212: return a.map(v => f(f(v) * f(b)));
       case 213: return b.map(v => f(f(a) * f(v)));
       // Multiply_RotatorFloat (287) / Multiply_FloatRotator (288): each int32
@@ -713,14 +766,8 @@ export function compileFunction(fn) {
       // bits (truncates to 2147483902) while a double product rounds up to
       // 2147483903.  Nonfinite scalars and int64 overflow produce the
       // integer indefinite, whose low DWORD is 0.
-      case 287: {
-        const s=x87load(b);
-        return a.map(v=>x87ftol(x87mul(x87int32(v),s)));
-      }
-      case 288: {
-        const s=x87load(a);
-        return b.map(v=>x87ftol(x87mul(x87int32(v),s)));
-      }
+      case 287: return x87Kernel().multiplyRotatorFloat(a,b);
+      case 288: return x87Kernel().multiplyRotatorFloat(b,a);
       case 215: return a.map((v,i) => f(v + b[i]));
       case 216: return a.map((v,i) => f(v - b[i]));
       case 223: return assign(args[0], a.map((v,i) => f(f(v) + f(b[i]))));
@@ -774,33 +821,367 @@ export function compileFunction(fn) {
       // (x*ax + y*ay) + z*az stored once to float32, and the origin row's
       // subtracted intermediates likewise stay on the stack.  The final
       // block dots V against M's three axes with the same shape.
-      case 276: {
-        const dot=(t,r)=>x87store(x87add(
-          x87add(x87mul(t[0],x87load(r[0])),x87mul(t[1],x87load(r[1]))),
-          x87mul(t[2],x87load(r[2]))));
-        const [pitch,yaw,roll]=b.map(v=>v|0);
-        const sy=rotatorSin(yaw),cy=rotatorSin((yaw+0x4000)|0);
-        const sp=rotatorSin(pitch),cp=rotatorSin((pitch+0x4000)|0);
-        const sr=rotatorSin(roll),cr=rotatorSin((roll+0x4000)|0);
-        let m=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
-        for(const r of [[[0,0,0],[cy,sy,0],[-sy,cy,0],[0,0,1]],
-          [[0,0,0],[cp,0,sp],[0,1,0],[-sp,0,cp]],
-          [[0,0,0],[1,0,0],[0,cr,-sr],[0,sr,cr]]])
-          m=m.map((v,i)=>{
-            const t=i?v.map(x87load)
-              :v.map((x,j)=>x87add(x87load(x),x87neg(x87load(r[0][j]))));
-            return [dot(t,r[1]),dot(t,r[2]),dot(t,r[3])];
-          });
-        return [dot(a.map(x87load),m[1]),dot(a.map(x87load),m[2]),dot(a.map(x87load),m[3])];
-      }
+      case 276: return x87Kernel().rotate(a,b);
       default:
         if (services.native) return services.native({index,args,receiver,script:fn,frame});
         throw new Error(`VM does not support native ${index}`);
     }
   }
+  // ---- Compiled engine -------------------------------------------------
+  // Each decoded node becomes an `ev` (evaluate) and `rv` (refValue of
+  // evaluate) closure on first execution. The closures transcribe the
+  // reference `evaluate`/`rvalue` below case by case: the same services, in
+  // the same order, with the same arguments and receivers. The frame object
+  // (with its services) is passed explicitly instead of being captured by
+  // per-frame closures. SCRIPT_VM_REFERENCE=1 selects the reference engine.
+  const nodeCode = new Map();
+  const code = n => nodeCode.get(n) ?? compileNode(n);
+  const evNode = (n, fr, r) => code(n).ev(fr, r);
+  const rvNode = (n, fr, r) => code(n).rv(fr, r);
+  // A child's code, compiled with its parent. A missing child (malformed
+  // bytecode) keeps the lazy path, so its error still surfaces on evaluation.
+  const sub = n => n !== null && typeof n === 'object'
+    ? code(n) : { ev: (fr, r) => evNode(n, fr, r), rv: (fr, r) => rvNode(n, fr, r) };
+  // A node's resolved operand, kept while the runtime's operand epoch and
+  // services are unchanged. Resolution (and its unlinked-operand error) is
+  // the same objects.operand call the services make.
+  const operandCache = () => {
+    let services = null, epoch = -1, value;
+    return (s, node) => {
+      const current = s.operandEpoch();
+      if (s !== services || current !== epoch) { value = s.operand(fn, node); services = s; epoch = current; }
+      return value;
+    };
+  };
+  function compileNode(n) {
+    const op = n.op;
+    const entry = { ev: null, rv: null };
+    // Registered before the children compile, so a (malformed) cycle reuses it.
+    nodeCode.set(n, entry);
+    const ev = compileEv(n, op);
+    entry.ev = ev;
+    if (op === 0x01) {
+      const resolved = operandCache();
+      entry.rv = (fr, r) => {
+        const s = fr.services;
+        if (!s.fieldValue) return refValue(ev(fr, r));
+        return s.fieldValueOf ? s.fieldValueOf(r, resolved(s, n)) : s.fieldValue(r, fn, n);
+      };
+    } else if (op === 0x00) {
+      const resolved = operandCache();
+      entry.rv = (fr, r) => {
+        const s = fr.services;
+        if (!s.localValue) return refValue(ev(fr, r));
+        return s.localValueOf ? s.localValueOf(fr.locals, resolved(s, n)) : s.localValue(fr.locals, fn, n);
+      };
+    }
+    else if (op === 0x2d && directTarget(n.value)) {
+      // refValue of the BoolVariable wrapper is Boolean(refValue(inner)); a
+      // variable operand always yields a reference, and its rv is that value.
+      const value = sub(n.value);
+      entry.rv = (fr, r) => Boolean(value.rv(fr, r));
+    }
+    else if (op === 0x36) {
+      const value = sub(n.value);
+      entry.rv = (fr, r) => {
+        const s = fr.services;
+        return s.structValue && s.structReference ? s.structValue(value.ev(fr, r), fn, n) : refValue(ev(fr, r));
+      };
+    } else entry.rv = (fr, r) => refValue(ev(fr, r));
+    return entry;
+  }
+  // Local (0x00) and instance (0x01) variables are the operands whose
+  // assignment has a reference-free service (assignLocalOf/assignFieldOf).
+  const directTarget = n => n !== null && typeof n === 'object' && (n.op === 0x00 || n.op === 0x01);
+  /** assign(target.ev(fr, fr.instance), valueOf(fr)): a local or instance
+   * variable target goes through the linked assign service, which keeps the
+   * reference's check/select/evaluate/store order without building it. */
+  function compileAssign(target, valueOf) {
+    const left = sub(target);
+    const generic = fr => assign(left.ev(fr, fr.instance), valueOf(fr));
+    if (!directTarget(target)) return generic;
+    const resolved = operandCache();
+    if (target.op === 0x00) return fr => {
+      const s = fr.services;
+      if (!(s.assignLocalOf && s.localReference && s.localReferenceOf)) return generic(fr);
+      return s.assignLocalOf(fr.locals, resolved(s, target), valueOf, fr);
+    };
+    return fr => {
+      const s = fr.services;
+      if (!(s.assignFieldOf && s.fieldReference && s.fieldReferenceOf)) return generic(fr);
+      return s.assignFieldOf(fr.instance, resolved(s, target), valueOf, fr);
+    };
+  }
+  function compileCall(n, op) {
+    const kind = op === 0x1c ? 'final' : op === 0x38 ? 'global' : 'virtual';
+    const args = n.args, count = args.length, codes = args.map(sub);
+    return (fr, r) => {
+      const s = fr.services;
+      // evaluateArgumentValue(i) is refValue(evaluateArgument(i)) without the
+      // lvalue, for a callee parameter that is not an out parameter.
+      if (s.invoke) return s.invoke({ kind, receiver: r, name: n.name, index: n.functionIndex, script: fn, node: n, frame: fr,
+        argumentCount: count, evaluateArgument: index => index >= 0 && index < count ? codes[index].ev(fr, fr.instance) : evNode(args[index], fr, fr.instance),
+        evaluateArgumentValue: index => index >= 0 && index < count ? codes[index].rv(fr, fr.instance) : rvNode(args[index], fr, fr.instance) });
+      if (!s.call) throw new Error(`Script call is not linked: ${n.name ?? n.functionIndex}`);
+      const values = codes.map(c => c.ev(fr, fr.instance));
+      return s.call({ kind, receiver: r, name: n.name, index: n.functionIndex, script: fn, node: n, frame: fr, args: values });
+    };
+  }
+  function compileNative(n) {
+    const index = n.index, args = n.args, count = args.length;
+    if (index === 130 || index === 132) {
+      const first = sub(args[0]), second = args[1];
+      const secondValue = second?.op === 0x18 ? sub(second.value) : null;
+      return (fr) => {
+        const a = Boolean(first.rv(fr, fr.instance));
+        if (!secondValue) throw new Error('Original short-circuit call requires Skip');
+        return index === 130 ? a && Boolean(secondValue.rv(fr, fr.instance)) : a || Boolean(secondValue.rv(fr, fr.instance));
+      };
+    }
+    const primitive = primitiveNatives.has(index), discarded = discardedCalls.has(n);
+    const outs = primitiveOutNatives.get(index), codes = args.map(sub);
+    const byReference = Array.from({ length: count }, (_, i) => !primitive || Boolean(outs?.has(i)));
+    return (fr, r) => {
+      const s = fr.services;
+      if (!primitive && s.invokeNative) return s.invokeNative({ index, receiver: r, script: fn, frame: fr,
+        resultDiscarded: discarded, argumentCount: count,
+        evaluateArgument: i => i >= 0 && i < count ? codes[i].ev(fr, fr.instance) : evNode(args[i], fr, fr.instance) });
+      const values = new Array(count);
+      for (let i = 0; i < count; i++) {
+        if (byReference[i]) values[i] = codes[i].ev(fr, fr.instance);
+        else { const value = codes[i].rv(fr, fr.instance); values[i] = Array.isArray(value) ? value.slice() : value; }
+      }
+      return native(index, values, r, s, fr);
+    };
+  }
+  function compileEv(n, op) {
+    switch (op) {
+      case 'literal': { const value = n.value; return Array.isArray(value) ? () => value.slice() : () => value; }
+      case 'native': return compileNative(n);
+      case 0x00: {
+        const resolved = operandCache();
+        return fr => {
+          const s = fr.services;
+          if (s.localReference && s.localReferenceOf) return s.localReferenceOf(fr.locals, resolved(s, n)) ?? reference(fr.locals, n.name);
+          return s.localReference?.(fr.locals, fn, n) ?? reference(fr.locals, n.name);
+        };
+      }
+      case 0x01: {
+        const resolved = operandCache();
+        return (fr, r) => {
+          const s = fr.services;
+          if (s.fieldReference && s.fieldReferenceOf) return s.fieldReferenceOf(r, resolved(s, n)) ?? reference(r, n.name);
+          return s.fieldReference?.(r, fn, n) ?? reference(r, n.name);
+        };
+      }
+      case 0x02: return (fr, r) => {
+        if (!fr.services.defaultReference) throw new Error('Default property is not linked');
+        return fr.services.defaultReference(r, fn, n);
+      };
+      case 0x0e: { const value = sub(n.value); return (fr, r) => { value.ev(fr, r); return undefined; }; }
+      case 0x09: {
+        const value = sub(n.value);
+        return fr => {
+          if (!value.rv(fr, fr.instance)) throw new Error(`Script assertion failed: ${fn.entry.path}, line ${n.target}`);
+          return undefined;
+        };
+      }
+      case 0x0f: { const right = sub(n.right); return compileAssign(n.left, fr => right.rv(fr, fr.instance)); }
+      case 0x14: {
+        // A BoolVariable target's set is assign(inner, Boolean(v)) on the
+        // variable it wraps, so a local/instance-variable target assigns it directly.
+        const right = sub(n.right), valueOf = fr => Boolean(right.rv(fr, fr.instance));
+        const target = n.left;
+        if (target !== null && typeof target === 'object' && target.op === 0x2d && directTarget(target.value)) {
+          const wrapped = compileAssign(target, valueOf), direct = compileAssign(target.value, valueOf);
+          return fr => (fr.services.assignLocalOf && fr.services.assignFieldOf ? direct : wrapped)(fr);
+        }
+        return compileAssign(target, valueOf);
+      }
+      case 0x17: return fr => fr.instance;
+      case 0x12: case 0x19: {
+        const context = sub(n.context), value = sub(n.value);
+        return (fr, r) => {
+          const object = context.rv(fr, r);
+          if (object !== null && object !== undefined) return value.ev(fr, object);
+          const s = fr.services;
+          s.warning?.({ type: 'Accessed None', script: fn.entry.path, offset: n.offset });
+          if (!n.valueSize) return undefined;
+          if (!s.zeroContextResult) throw new Error('Null context requires linked result type');
+          return s.zeroContextResult(fn, n.value, n.valueSize);
+        };
+      }
+      case 0x1b: case 0x1c: case 0x38: return compileCall(n, op);
+      case 0x1a: {
+        const left = sub(n.left), right = sub(n.right);
+        return (fr, r) => {
+          const s = fr.services;
+          if (!s.arrayReference) throw new Error('Array property is not linked');
+          return s.arrayReference(left.rv(fr, fr.instance), right.ev(fr, r), fn, n);
+        };
+      }
+      case 0x20: return fr => {
+        if (!n.objectIndex) return null;
+        if (!fr.services.objectReference) throw new Error('Object constant is not linked');
+        return fr.services.objectReference(fn, n.objectIndex, n);
+      };
+      case 0x21: return () => n.name;
+      case 0x13: case 0x2e: {
+        const value = sub(n.value);
+        return fr => {
+          const s = fr.services;
+          if (typeof s.objectReference !== 'function') throw new Error('Object cast target is not linked');
+          if (typeof s.castObject !== 'function') throw new Error('Object cast is not linked');
+          const target = s.objectReference(fn, n.fieldIndex, n);
+          const object = value.rv(fr, fr.instance);
+          return s.castObject(object, target, op === 0x13 ? 'meta' : 'dynamic');
+        };
+      }
+      case 0x2d: {
+        const value = sub(n.value);
+        return (fr, r) => {
+          const field = value.ev(fr, r);
+          if (!field?.reference) throw new Error('BoolVariable requires a property');
+          return { reference: true, get: () => Boolean(refValue(field)), set: v => assign(field, Boolean(v)) };
+        };
+      }
+      case 0x39: { const value = sub(n.value); return fr => rotatorToVector(value.rv(fr, fr.instance)); }
+      case 0x3a: case 0x3d: { const value = sub(n.value); return fr => value.rv(fr, fr.instance) & 255; }
+      case 0x3c: { const value = sub(n.value); return fr => f(value.rv(fr, fr.instance) & 255); }
+      case 0x3f: { const value = sub(n.value); return fr => f(value.rv(fr, fr.instance) | 0); }
+      case 0x43: {
+        const value = sub(n.value);
+        return fr => {
+          const v = f(value.rv(fr, fr.instance));
+          if (!Number.isFinite(v) || v < -(2 ** 63) || v >= 2 ** 63)
+            throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
+          return Math.trunc(v) & 255;
+        };
+      }
+      case 0x44: {
+        const value = sub(n.value);
+        return fr => {
+          const v = f(value.rv(fr, fr.instance));
+          if (!Number.isFinite(v) || v < -(2 ** 63) || v >= 2 ** 63)
+            throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
+          return Math.trunc(v) | 0;
+        };
+      }
+      case 0x4a: { const value = sub(n.value); return fr => msvcrtWtoi(scriptStringText(value.rv(fr, fr.instance) ?? '')); }
+      case 0x50: { const value = sub(n.value); return fr => vectorToRotator(value.rv(fr, fr.instance)); }
+      case 0x53: { const value = sub(n.value); return fr => String(value.rv(fr, fr.instance) | 0); }
+      case 0x55: { const value = sub(n.value); return fr => scriptFloatToString(value.rv(fr, fr.instance)); }
+      case 0x56: { const value = sub(n.value); return fr => (fr.services.objectToString ?? scriptObjectToString)(value.rv(fr, fr.instance)); }
+      case 0x57: { const value = sub(n.value); return fr => scriptNameToString(value.rv(fr, fr.instance)); }
+      case 0x36: {
+        const value = sub(n.value);
+        return (fr, r) => {
+          const field = value.ev(fr, r);
+          if (fr.services.structReference) return fr.services.structReference(field, fn, n);
+          const v = refValue(field);
+          return reference(v, Array.isArray(v) ? { X: 0, Y: 1, Z: 2, Pitch: 0, Yaw: 1, Roll: 2 }[n.name] : n.name);
+        };
+      }
+      case 0x0b: return () => undefined;
+      case 0x11: {
+        const outer = sub(n.args[0]), nameNode = n.args[1], flagsNode = n.args[2];
+        const name = sub(nameNode), flags = sub(flagsNode), classRef = sub(n.args[3]);
+        return fr => {
+          const s = fr.services;
+          if (typeof s.newObject !== 'function') throw new Error('new is not linked');
+          const o = outer.rv(fr, fr.instance);
+          const nm = nameNode.op === 0x0b ? 'None' : name.rv(fr, fr.instance);
+          const fl = flagsNode.op === 0x0b ? 0 : flags.rv(fr, fr.instance);
+          const c = classRef.rv(fr, fr.instance);
+          return s.newObject({ outer: o, name: nm, flags: fl, classRef: c });
+        };
+      }
+      case 0x0d: {
+        const value = sub(n.value);
+        return fr => {
+          if (!fr.state) throw new Error('GotoLabel requires a state frame');
+          if (!fr.services.gotoLabel) throw new Error('GotoLabel service is not linked');
+          fr.services.gotoLabel(fr.instance, value.rv(fr, fr.instance));
+          return undefined;
+        };
+      }
+      default: return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
+    }
+  }
+  function resumeCompiled(frame) {
+    const services = frame.services, instance = frame.instance;
+    let budget = 200000000;
+    while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
+      if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
+      const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
+      const n = entry.node, op = n.op;
+      frame.cursor = entry.next;
+      if(op===0x2f){
+        if(!services.iterator)throw new Error('Original iterator native is not linked');
+        const after=statements.get(n.target).next;
+        let call=n.value,receiver=instance,skipped=false;
+        if(call.op===0x19){
+          const context=rvNode(call.context,frame,instance);
+          if(context===null||context===undefined){
+            services.warning?.({type:'Accessed None',script:fn.entry.path,offset:call.offset});
+            frame.cursor=after;skipped=true;
+          }else{receiver=context;call=call.value;}
+        }
+        if(!skipped){
+          if(call.op!=='native')throw new Error('Original iterator native is not linked');
+          const args=call.args;
+          const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
+            argumentCount:args.length,evaluateArgument:index=>evNode(args[index],frame,instance)});
+          const continuation={iterator,body:entry.next,after};
+          if(iterator.next())frame.iterators.push(continuation);
+          else frame.cursor=continuation.after;
+        }
+      }else if(op===0x31){
+        const current=frame.iterators.at(-1);
+        if(!current)throw new Error('IteratorNext without an active iterator');
+        if(current.iterator.next())frame.cursor=current.body;
+        else{frame.iterators.pop();frame.cursor=current.after;}
+      }else if(op===0x30){
+        if(!frame.iterators.pop())throw new Error('IteratorPop without an active iterator');
+      }else if (op === 0x04) {
+        if(frame.iterators.length)throw new Error('Return requires compiled iterator unwind');
+        frame.result=rvNode(n.value,frame,instance);frame.returned=true;frame.cursor=null;
+      }
+      else if (op === 0x08) {
+        if(!frame.state)throw new Error('Stop requires a state frame');
+        frame.cursor=null;
+      } else if (op === 0x05) {
+        const switched = evNode(n.value,frame,instance), key = refValue(switched), keyType = referenceElementType(switched);
+        for (let at = entry.next;;) {
+          const header = statements.get(at);
+          if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
+          if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
+          if (switchCaseEqual(key, rvNode(header.node.value,frame,instance), n.valueSize, keyType)) { frame.cursor = header.next; break; }
+          at = header.node.target;
+        }
+      } else if (op === 0x0a) {
+        if (n.target !== 0xffff) evNode(n.value,frame,instance);
+      } else if (op === 0x06 || op === 0x07) {
+        if (++scriptRunaway > SCRIPT_RUNAWAY_LIMIT) {
+          scriptRunaway = 0;
+          throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${fn.name??fn.objectName??'script'}`);
+        }
+        if (op === 0x06 || !rvNode(n.value,frame,instance)) frame.cursor = n.target;
+      } else evNode(n,frame,instance);
+    }
+    return frame.result;
+  }
+
   const compiled = {
     name: fn.entry.path, size: fn.size, decoded,
-    createFrame(instance, locals = {}, services = {}, { offset = 0, state = false } = {}) {
+    createFrame(instance, locals = {}, services = {}, options = {}) {
+      if (REFERENCE_ENGINE) return compiled.createReferenceFrame(instance, locals, services, options);
+      const { offset = 0, state = false } = options;
+      const frame = { instance, locals, script: fn, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[], services };
+      frame.resume = () => resumeCompiled(frame);
+      return frame;
+    },
+    createReferenceFrame(instance, locals = {}, services = {}, { offset = 0, state = false } = {}) {
       const frame = { instance, locals, script: fn, cursor: offset, latent: 0, state, returned: false, result: undefined, iterators:[] };
       const call = (node, receiver) => {
         const target={kind:node.op===0x1c?'final':node.op===0x38?'global':'virtual',
@@ -814,23 +1195,31 @@ export function compileFunction(fn) {
         const args = node.args.map(arg => evaluate(arg, instance));
         return services.call({...target,args});
       };
+      // refValue(evaluate(n, receiver)): a plain variable operand is read
+      // through the runtime's value services instead of a transient lvalue.
+      const localValue=services.localValue,fieldValue=services.fieldValue,structValue=services.structValue;
+      const rvalue = (n, receiver = instance) =>
+        n.op === 0x01 && fieldValue ? fieldValue(receiver, fn, n)
+          : n.op === 0x00 && localValue ? localValue(locals, fn, n)
+            : n.op === 0x36 && structValue && services.structReference
+              ? structValue(evaluate(n.value, receiver), fn, n)
+              : refValue(evaluate(n, receiver));
       const evaluate = (n, receiver = instance) => {
         switch (n.op) {
           case 'literal': return Array.isArray(n.value) ? n.value.slice() : n.value;
           case 'native': {
             if (n.index===130 || n.index===132) {
-              const first=Boolean(refValue(evaluate(n.args[0],instance))),second=n.args[1];
+              const first=Boolean(rvalue(n.args[0],instance)),second=n.args[1];
               if(second?.op!==0x18)throw new Error('Original short-circuit call requires Skip');
-              return n.index===130 ? first&&Boolean(refValue(evaluate(second.value,instance)))
-                : first||Boolean(refValue(evaluate(second.value,instance)));
+              return n.index===130 ? first&&Boolean(rvalue(second.value,instance))
+                : first||Boolean(rvalue(second.value,instance));
             }
             if(!primitiveNatives.has(n.index)&&services.invokeNative)return services.invokeNative({index:n.index,receiver,script:fn,frame,
               resultDiscarded:discardedCalls.has(n),
               argumentCount:n.args.length,evaluateArgument:index=>evaluate(n.args[index],instance)});
             const args=n.args.map((arg,index)=>{
-              const result=evaluate(arg,instance);
-              if(!primitiveNatives.has(n.index)||primitiveOutNatives.get(n.index)?.has(index))return result;
-              const value=refValue(result);return Array.isArray(value)?value.slice():value;
+              if(!primitiveNatives.has(n.index)||primitiveOutNatives.get(n.index)?.has(index))return evaluate(arg,instance);
+              const value=rvalue(arg,instance);return Array.isArray(value)?value.slice():value;
             });
             return native(n.index,args,receiver,services,frame);
           }
@@ -847,11 +1236,11 @@ export function compileFunction(fn) {
           case 0x09:
             // Core execAssert 1012fcc0 reads a uint16 source line, evaluates
             // one bool, then reports NAME_Critical on zero (1012fcf9).
-            if(!refValue(evaluate(n.value,instance)))
+            if(!rvalue(n.value,instance))
               throw new Error(`Script assertion failed: ${fn.entry.path}, line ${n.target}`);
             return undefined;
-          case 0x0f: return assign(evaluate(n.left), refValue(evaluate(n.right)));
-          case 0x14: return assign(evaluate(n.left),Boolean(refValue(evaluate(n.right))));
+          case 0x0f: return assign(evaluate(n.left), rvalue(n.right));
+          case 0x14: return assign(evaluate(n.left),Boolean(rvalue(n.right)));
           case 0x17: return instance;
           case 0x12: case 0x19: {
             // execClassContext (0x1012edb0) shares execContext's null/skip
@@ -859,7 +1248,7 @@ export function compileFunction(fn) {
             // bytes and zeroes valueSize of result; a non-null context
             // evaluates the value expression against it (a class for 0x12 —
             // `SomeClass.default.Member` resolves Default on that class).
-            const context=refValue(evaluate(n.context,receiver));
+            const context=rvalue(n.context,receiver);
             if(context!==null && context!==undefined)return evaluate(n.value,context);
             services.warning?.({type:'Accessed None',script:fn.entry.path,offset:n.offset});
             if(!n.valueSize)return undefined;
@@ -869,7 +1258,7 @@ export function compileFunction(fn) {
           case 0x1b: case 0x1c: case 0x38:return call(n,receiver);
           case 0x1a:
             if(!services.arrayReference)throw new Error('Array property is not linked');
-            return services.arrayReference(refValue(evaluate(n.left,instance)),evaluate(n.right,receiver),fn,n);
+            return services.arrayReference(rvalue(n.left,instance),evaluate(n.right,receiver),fn,n);
           case 0x20:
             if(!n.objectIndex)return null;
             if(!services.objectReference)throw new Error('Object constant is not linked');
@@ -882,7 +1271,7 @@ export function compileFunction(fn) {
             if(typeof services.objectReference!=='function')throw new Error('Object cast target is not linked');
             if(typeof services.castObject!=='function')throw new Error('Object cast is not linked');
             const target=services.objectReference(fn,n.fieldIndex,n);
-            const object=refValue(evaluate(n.value,instance));
+            const object=rvalue(n.value,instance);
             return services.castObject(object,target,n.op===0x13?'meta':'dynamic');
           }
           case 0x2d:{
@@ -890,36 +1279,36 @@ export function compileFunction(fn) {
             if(!field?.reference)throw new Error('BoolVariable requires a property');
             return {reference:true,get:()=>Boolean(refValue(field)),set:value=>assign(field,Boolean(value))};
           }
-          case 0x39: return rotatorToVector(refValue(evaluate(n.value,instance)));
-          case 0x3a: return refValue(evaluate(n.value)) & 255;
-          case 0x3c: return f(refValue(evaluate(n.value)) & 255);
-          case 0x3d: return refValue(evaluate(n.value)) & 255;
-          case 0x3f: return f(refValue(evaluate(n.value)) | 0);
+          case 0x39: return rotatorToVector(rvalue(n.value,instance));
+          case 0x3a: return rvalue(n.value) & 255;
+          case 0x3c: return f(rvalue(n.value) & 255);
+          case 0x3d: return rvalue(n.value) & 255;
+          case 0x3f: return f(rvalue(n.value) | 0);
           case 0x43: {
             // execFloatToByte 10131aa0: float32 local -> _ftol -> store AL.
-            const value = f(refValue(evaluate(n.value)));
+            const value = f(rvalue(n.value));
             if (!Number.isFinite(value) || value < -(2 ** 63) || value >= 2 ** 63)
               throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
             return Math.trunc(value) & 255;
           }
           case 0x44: {
             // Core10131b40: float32 local -> _ftol -> store low DWORD.
-            const value=f(refValue(evaluate(n.value)));
+            const value=f(rvalue(n.value));
             if(!Number.isFinite(value)||value<-(2**63)||value>=2**63)
               throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
             return Math.trunc(value)|0;
           }
           // Core execStringToInt 0x10132320: evaluate the FString, then
           // appAtoi(*Str) (an empty FString reads as ""), store the DWORD.
-          case 0x4a: return msvcrtWtoi(scriptStringText(refValue(evaluate(n.value,instance)) ?? ''));
-          case 0x50: return vectorToRotator(refValue(evaluate(n.value,instance)));
+          case 0x4a: return msvcrtWtoi(scriptStringText(rvalue(n.value,instance) ?? ''));
+          case 0x50: return vectorToRotator(rvalue(n.value,instance));
           // Core execIntToString 10131600: evaluate one signed DWORD,
           // FString::Printf with the UTF-16 "%i" constant at 101aaf70.
-          case 0x53: return String(refValue(evaluate(n.value,instance)) | 0);
+          case 0x53: return String(rvalue(n.value,instance) | 0);
           // Core execFloatToString 10131ca0: Printf("%f", (double)F).
-          case 0x55: return scriptFloatToString(refValue(evaluate(n.value,instance)));
-          case 0x56: return (services.objectToString??scriptObjectToString)(refValue(evaluate(n.value,instance)));
-          case 0x57: return scriptNameToString(refValue(evaluate(n.value,instance)));
+          case 0x55: return scriptFloatToString(rvalue(n.value,instance));
+          case 0x56: return (services.objectToString??scriptObjectToString)(rvalue(n.value,instance));
+          case 0x57: return scriptNameToString(rvalue(n.value,instance));
           case 0x36: {
             const field=evaluate(n.value,receiver);
             if(services.structReference)return services.structReference(field,fn,n);
@@ -931,11 +1320,11 @@ export function compileFunction(fn) {
             // are outer, optional name, optional flags, class. EX_Nothing
             // leaves the P_GET defaults (NAME_None, flags 0).
             if (typeof services.newObject !== 'function') throw new Error('new is not linked');
-            const outer = refValue(evaluate(n.args[0], instance));
+            const outer = rvalue(n.args[0], instance);
             const nameNode = n.args[1], flagsNode = n.args[2];
-            const name = nameNode.op === 0x0b ? 'None' : refValue(evaluate(nameNode, instance));
-            const flags = flagsNode.op === 0x0b ? 0 : refValue(evaluate(flagsNode, instance));
-            const classRef = refValue(evaluate(n.args[3], instance));
+            const name = nameNode.op === 0x0b ? 'None' : rvalue(nameNode, instance);
+            const flags = flagsNode.op === 0x0b ? 0 : rvalue(flagsNode, instance);
+            const classRef = rvalue(n.args[3], instance);
             return services.newObject({ outer, name, flags, classRef });
           }
           case 0x0d: {
@@ -943,7 +1332,7 @@ export function compileFunction(fn) {
             // offset resolved through the current state chain.
             if(!frame.state)throw new Error('GotoLabel requires a state frame');
             if(!services.gotoLabel)throw new Error('GotoLabel service is not linked');
-            services.gotoLabel(instance,refValue(evaluate(n.value,instance)));
+            services.gotoLabel(instance,rvalue(n.value,instance));
             return undefined;
           }
           default: throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
@@ -975,7 +1364,7 @@ export function compileFunction(fn) {
             const after=statements.get(n.target).next;
             let call=n.value,receiver=instance,skipped=false;
             if(call.op===0x19){
-              const context=refValue(evaluate(call.context,instance));
+              const context=rvalue(call.context,instance);
               if(context===null||context===undefined){
                 services.warning?.({type:'Accessed None',script:fn.entry.path,offset:call.offset});
                 frame.cursor=after;skipped=true;
@@ -998,7 +1387,7 @@ export function compileFunction(fn) {
             if(!frame.iterators.pop())throw new Error('IteratorPop without an active iterator');
           }else if (n.op === 0x04) {
             if(frame.iterators.length)throw new Error('Return requires compiled iterator unwind');
-            frame.result=refValue(evaluate(n.value));frame.returned=true;frame.cursor=null;
+            frame.result=rvalue(n.value);frame.returned=true;frame.cursor=null;
           }
           else if (n.op === 0x08) {
             if(!frame.state)throw new Error('Stop requires a state frame');
@@ -1013,7 +1402,7 @@ export function compileFunction(fn) {
               const header = statements.get(at);
               if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
               if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
-              if (switchCaseEqual(key, refValue(evaluate(header.node.value)), n.valueSize, keyType)) { frame.cursor = header.next; break; }
+              if (switchCaseEqual(key, rvalue(header.node.value), n.valueSize, keyType)) { frame.cursor = header.next; break; }
               at = header.node.target;
             }
           } else if (n.op === 0x0a) {
@@ -1026,7 +1415,7 @@ export function compileFunction(fn) {
               scriptRunaway = 0;
               throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${fn.name??fn.objectName??'script'}`);
             }
-            if (n.op === 0x06 || !refValue(evaluate(n.value))) frame.cursor = n.target;
+            if (n.op === 0x06 || !rvalue(n.value)) frame.cursor = n.target;
           } else evaluate(n);
         }
         return frame.result;

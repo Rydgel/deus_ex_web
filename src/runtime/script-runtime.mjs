@@ -9,9 +9,13 @@ import { compileFunction, refValue } from './script-vm.mjs';
 import { ScriptState } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
-  zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec,
+  zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, createImage, copyImage, readCell, writeCell } from './script-object-image.mjs';
+import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell } from './script-object-image.mjs';
+import { createFrameLocals, FrameStack, LocalCellStorage } from './script-frame-locals.mjs';
+import { releaseHandle } from './script-object-handles.mjs';
+import { loadScriptVmKernel } from './script-vm-kernel.mjs';
+import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
@@ -41,6 +45,8 @@ import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
+import { bumpBaseEpoch } from './base-epoch.mjs';
+const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
@@ -156,6 +162,28 @@ import {execRotRand} from './script-rot-rand.mjs';
 import {parseToken} from './script-console-command.mjs';
 
 const lower=name=>String(name).toLowerCase();
+// Event and function names are a small fixed vocabulary: keep their lowercase.
+const lowerNames=new Map();
+const lowerName=name=>{
+  if(typeof name!=='string')return lower(name);
+  let key=lowerNames.get(name);
+  if(key===undefined)lowerNames.set(name,key=name.toLowerCase());
+  return key;
+};
+// Per linked class: whether its chain reaches engine.actor (fixed once linked).
+const actorChains=new WeakMap();
+const reachesActor=cls=>{
+  let result=actorChains.get(cls);
+  if(result===undefined){
+    result=false;
+    for(let entry=cls;entry;entry=entry.base)if(entry.record.key==='engine.actor'){result=true;break;}
+    actorChains.set(cls,result);
+  }
+  return result;
+};
+// A prepared function's destroyable locals (CPF_NeedCtorLink), with and
+// without its parameters; the field list is fixed once prepared.
+const destroyedLocals=new WeakMap();
 const memberCaches=new WeakMap();
 // Stage 1b (docs/object-memory.md): per class, each spelled property name
 // resolved once to a handle on its linked field (a miss included).
@@ -177,11 +205,16 @@ class ScriptInstance {
     this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
     this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
     this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;this.sleepTimeLeft=sleepTimeLeft;
-    this.cells=storage.cells;this.image=storage.image;this.refs=storage.refs;
+    // The image is [base, base+size) of the runtime's object arena (R0).
+    this.cells=storage.cells;this.arena=storage.arena;this.base=storage.base;this.size=storage.size;this.refs=storage.refs;
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
     this.nativeObject=undefined;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
     this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
+    // The image range's release token (arena, base, size); see releaseObjectImage.
+    this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
   }
+  /** The image addressed from zero, for callers outside the access paths. */
+  get image(){return this.base?this.arena.window(this.base,this.size):null;}
   // An actor's pendingKill is its bDeleteMe and cannot be assigned; another
   // object keeps whatever its host assigns (fixtures set it directly).
   get pendingKill(){
@@ -201,17 +234,45 @@ class CellStorage {
   }
   get(){
     const instance=this.instance,entry=instance.poison?.get(this.field.key);
-    return entry?entry.read():readCell(this.cell,instance.image,instance.refs);
+    return entry?entry.read():readCell(this.cell,instance.arena.view,instance.refs,instance.base);
+  }
+  /** One element of a fixed-array cell (PropertyReference element reads);
+   * a poisoned value keeps the whole-value path and its error timing. */
+  readElement(index){
+    const instance=this.instance;
+    if(!isFixedCell(this.cell)||instance.poison?.get(this.field.key))return NO_ELEMENT;
+    return readFixedElement(this.cell,instance.arena.view,instance.refs,index,instance.base);
   }
   set(value){
     const instance=this.instance,entry=instance.poison?.get(this.field.key);
     if(entry?.write)entry.read();
-    writeCell(this.cell,instance.image,instance.refs,value);
+    writeCell(this.cell,instance.arena.view,instance.refs,value,instance.base);
     if(entry)this.runtime.clearPoison(instance,this.field.key);
   }
 }
+// The VM's local operands (R2a): a linked frame's cell, else the field's
+// entry in the Map storage of an unlinked function. The same scope checks
+// and value copy (the field codec is readWhole's copyStored) either way.
+const localValue=(locals,field)=>{
+  if(!field)throw new Error('Local bytecode property reference was cleared');
+  const cell=locals.layout?.cells.get(field.key);
+  if(cell)return propertyCodec(field).read(locals.readCell(cell));
+  if(!locals.has(field.key))throw new Error(`Local is outside the function: ${field.key}`);
+  return propertyCodec(field).read(locals.get(field.key));
+};
+const localReference=(locals,field)=>{
+  if(!field)throw new Error('Local bytecode property reference was cleared');
+  const cell=locals.layout?.cells.get(field.key);
+  if(cell)return storageReference(field,new LocalCellStorage(locals,cell));
+  if(!locals.has(field.key))throw new Error(`Local is outside the function: ${field.key}`);
+  return propertyReference(field,()=>locals.get(field.key),value=>locals.set(field.key,value));
+};
 // Stage 1d: each class's default image, rebuilt when a class default changes.
 const classImages=new WeakMap();
+const imageFinalizer=new FinalizationRegistry(token=>{
+  if(token.released)return;
+  token.released=true;token.arena.release(token.base,token.size);
+});
 const sameDefaults=(snapshot,defaults)=>{
   if(snapshot.size!==defaults.size)return false;
   for(const [key,values] of defaults)if(snapshot.get(key)!==values)return false;
@@ -227,9 +288,14 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
 // Mesh payloads the script-side mesh consumers (anim sequences, textures)
 // accept: ULodMesh, and a classic UMesh whose frames are not decoded.
 const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
+// soundField names served from the level container or native graph.
+const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
+  'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
+    this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
+    this.lastLinkedReceiver=null;this.lastLinkedInstance=undefined;
     this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
     // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
     // archive keeps Play's separately documented deferred policy below.
@@ -349,7 +415,7 @@ export class ScriptRuntime {
     // receives {record, receiver, argumentCount, evaluateArgument}.
     this.boundaryFunctions=boundaryFunctions instanceof Map?boundaryFunctions:new Map(boundaryFunctions);
     this.levelFor=receiver=>{
-      const object=this.instances.get(receiver)?.nativeObject;
+      const object=(receiver?.[this.instanceKey]??this.instances.get(receiver))?.nativeObject;
       return object&&Object.hasOwn(object,'xLevel')?object.xLevel:levelFor?.(receiver);
     };
     this.actorClass=null;this.actorLifecycle=actorLifecycle;
@@ -357,6 +423,7 @@ export class ScriptRuntime {
     this.nameServices=nameServices;
     this.relocation=relocation;
     this.contextResults=new WeakMap();
+    this.levelTickActorOptions=new WeakSet();this.levelTickActorServices=new WeakMap();
     this.services={
       invoke:call=>this.invoke(call),invokeNative:call=>this.invokeNative(call),
       iterator:call=>this.createIterator(call),
@@ -364,16 +431,43 @@ export class ScriptRuntime {
       castObject:(value,target,kind)=>this.castObject(value,target,kind),
       objectToString:value=>scriptObjectToString(value,object=>this.instances.get(object)?.nativeObject??object),
       zeroContextResult:(script,node,size)=>zeroContextResult(this.contextResults.get(script),node,size),
-      localReference:(locals,script,node)=>{
-        const field=this.objects.operand(script,node);
+      localReference:(locals,script,node)=>localReference(locals,this.objects.operand(script,node)),
+      // refValue(localReference(...)): same operand/scope checks and value
+      // copy (the field codec is readWhole's copyStored), without the lvalue.
+      localValue:(locals,script,node)=>localValue(locals,this.objects.operand(script,node)),
+      // The same services with the operand already resolved by the caller
+      // (the compiled VM keeps it while objects.operandEpoch is unchanged).
+      operand:(script,node)=>this.objects.operand(script,node),
+      operandEpoch:()=>this.objects.operandEpoch,
+      localValueOf:localValue,
+      localReferenceOf:localReference,
+      // assign(localReferenceOf(locals, field), valueOf(frame)) without the
+      // lvalue: the same scope checks and descriptor before the value is
+      // evaluated, then PropertyReference.set's merge-store and returned copy.
+      assignLocalOf:(locals,field,valueOf,frame)=>{
         if(!field)throw new Error('Local bytecode property reference was cleared');
+        // R2a: a linked frame's cell; the stored value is read after the
+        // right-hand side is evaluated, as the Map storage was.
+        const cell=locals.layout?.cells.get(field.key);
+        if(cell){
+          const codec=propertyCodec(field),value=valueOf(frame);
+          locals.writeCell(cell,codec.store(value,locals.readCell(cell)));
+          return codec.assigned(value);
+        }
         if(!locals.has(field.key))throw new Error(`Local is outside the function: ${field.key}`);
-        return propertyReference(field,()=>locals.get(field.key),value=>locals.set(field.key,value));
+        const codec=propertyCodec(field),value=valueOf(frame);
+        locals.set(field.key,codec.store(value,locals.get(field.key)));
+        return codec.assigned(value);
       },
+      assignFieldOf:(receiver,field,valueOf,frame)=>this.assignField(receiver,field,valueOf,frame),
+      fieldValueOf:(receiver,field)=>this.fieldValue(receiver,field),
+      fieldReferenceOf:(receiver,field)=>this.fieldReference(receiver,field),
       fieldReference:(receiver,script,node)=>this.fieldReference(receiver,this.objects.operand(script,node)),
+      fieldValue:(receiver,script,node)=>this.fieldValue(receiver,this.objects.operand(script,node)),
       defaultReference:(receiver,script,node)=>this.defaultReference(receiver,this.objects.operand(script,node)),
       arrayReference:(index,ref)=>arrayReference(index,ref,this.warning),
       structReference:(ref,script,node)=>this.structReference(ref,this.objects.operand(script,node)),
+      structValue:(ref,script,node)=>this.structValue(ref,this.objects.operand(script,node)),
       warning:message=>this.warning?.(message),
       newObject:request=>this.newObject(request),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
@@ -565,6 +659,8 @@ export class ScriptRuntime {
     return null;
   }
   async prepareFunction(asset,index) {
+    // The Rust operator kernel is in place before any compiled body runs.
+    await loadScriptVmKernel();
     const record=await this.objects.resolve(asset,index);
     if(record.kind!=='Function')throw new Error(`Expected script function: ${record.key}`);
     if(record.function)return record;
@@ -576,7 +672,7 @@ export class ScriptRuntime {
     await this.prefetchDynamicLoadPackages(compiled.decoded,bindings);
     const fields=[];
     for(const child of script.children)if(child.className?.endsWith('Property'))fields.push(await this.field(await this.objects.resolve(record.asset,child.index)));
-    record.function={script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
+    record.function={record,script,compiled,fields,parameters:fields.filter(field=>field.metadata.parameter&&!field.metadata.return),
       result:fields.find(field=>field.metadata.return)??null};
     this.functions.set(record.key,record);
     return record;
@@ -609,10 +705,10 @@ export class ScriptRuntime {
       const cell=storage.cells?.get(key);
       if(!cell){slots.set(key,value);continue;}
       const field=storage.source.layout.fields.get(key);
-      writeCell(cell,storage.image,storage.refs,copyValue(field,value));
+      writeCell(cell,storage.arena.view,storage.refs,copyValue(field,value),storage.base);
       storage.poison?.delete(key);
     }
-    this.instances.set(instance,new ScriptInstance(this,cls,slots,state,storage,0));
+    this.linkInstance(instance,new ScriptInstance(this,cls,slots,state,storage,0));
     state.transition(null,cls.metadata);
     return state;
   }
@@ -634,25 +730,49 @@ export class ScriptRuntime {
     if(!layout)return null;
     let image=classImages.get(cls);
     if(image&&sameDefaults(image.defaults,cls.defaults))return image;
-    const defaults=new Map(cls.defaults),view=createImage(layout.size),refs=new Array(layout.refCount).fill(null);
+    const arena=this.objectArena(),base=arena.alloc(layout.size);
+    const defaults=new Map(cls.defaults),refs=new Array(layout.refCount).fill(null);
     let poison=null;
     for(const [key,cell] of layout.cells){
       const field=layout.fields.get(key);
       let value;
       try{value=this.defaultValue(cls,field,defaults);}
       catch{(poison??=new Map()).set(key,{read:()=>this.defaultValue(cls,field,defaults),write:true,lazy:false});continue;}
-      writeCell(cell,view,refs,value);
+      writeCell(cell,arena.view,refs,value,base);
     }
-    image={layout,defaults,view,refs,poison};
+    // A replaced default image is only a copy source; its range is released.
+    if(image)image.arena.release(image.base,image.layout.size);
+    image={layout,defaults,arena,base,refs,poison};
     classImages.set(cls,image);
     return image;
   }
-  /** Fresh storage for one object of `cls`: a copy of the class image. */
+  /** The runtime's object arena (docs/rust-core.md, R0). Harnesses built with
+   * Object.create(ScriptRuntime.prototype) get theirs on first use. */
+  objectArena(){return this.arena??=new ObjectArena();}
+  /** Fresh storage for one object of `cls`: a copy of the class image. The
+   * class image may sit in another runtime's arena (classes are shared). */
   objectStorage(cls) {
     const source=this.classImage(cls);
-    if(!source)return {cells:null,image:null,refs:null,poison:null,source:null,complete:false};
-    return {cells:source.layout.cells,image:copyImage(source.view),refs:source.refs.slice(),
+    if(!source)return {cells:null,arena:null,base:0,size:0,refs:null,poison:null,source:null,complete:false};
+    const arena=this.objectArena(),size=source.layout.size,base=arena.alloc(size);
+    arena.bytes.set(source.arena.bytes.subarray(source.base,source.base+size),base);
+    return {cells:source.layout.cells,arena,base,size,refs:source.refs.slice(),
       poison:source.poison&&new Map(source.poison),source,complete:source.layout.cells.size===cls.propertyLink.length};
+  }
+  /** Make released image ranges reusable: at a purge's end or a level
+   * tick's start, when no reference made before the release is in use
+   * (docs/rust-core.md). */
+  reclaimReleased(){this.arena?.reclaim();}
+  /** Core's free of a released object's memory: its image range goes back to
+   * the arena (reused after the next reclaim). */
+  releaseObjectImage(identity) {
+    // R1a: the identity's lifetime ends here, so its handle does too.
+    releaseHandle(identity);
+    const token=(identity?.[this.instanceKey]??this.instances?.get(identity))?.imageToken;
+    if(!token||token.released)return;
+    token.released=true;
+    imageFinalizer.unregister(token);
+    token.arena.release(token.base,token.size);
   }
   /** Construct fresh script storage using the class-default/template values,
    * followed by registry insertion and a verified class-native constructor.
@@ -773,10 +893,10 @@ export class ScriptRuntime {
           if(cell&&!template){storage.poison?.get(field.key)?.read();continue;}
           const value=template?this.fieldReference(template,field).get():this.defaultValue(cls,field);
           if(!cell){slots.set(field.key,copyValue(field,value));continue;}
-          writeCell(cell,storage.image,storage.refs,copyValue(field,value));
+          writeCell(cell,storage.arena.view,storage.refs,copyValue(field,value),storage.base);
           storage.poison?.delete(field.key);
         }
-        this.instances.set(object.identity,new ScriptInstance(this,cls,slots,null,storage,undefined));
+        this.linkInstance(object.identity,new ScriptInstance(this,cls,slots,null,storage,undefined));
         this.bindNativeObject(object.identity,object);
         services.initNativeProperties(object,template);
       },
@@ -858,8 +978,12 @@ export class ScriptRuntime {
     // UFunction has no inheritance super. UStruct::Link builds +68 in its
     // own Children order, selecting CPF_NeedCtorLink. ProcessEvent skips the
     // parameter prefix at 1013f963; CallFunction destroys that prefix too.
-    const fields=fn.fields.filter(field=>(field.metadata.flags&0x00400000)&&
-      (parameters||!field.metadata.parameter));
+    let cached=destroyedLocals.get(fn);
+    if(!cached||cached.source!==fn.fields)destroyedLocals.set(fn,cached={source:fn.fields,
+      all:fn.fields.filter(field=>field.metadata.flags&0x00400000),
+      locals:fn.fields.filter(field=>(field.metadata.flags&0x00400000)&&!field.metadata.parameter)});
+    const fields=parameters?cached.all:cached.locals;
+    if(!fields.length)return;
     this.destroyProperties(fields,field=>propertyReference(field,
       ()=>locals.get(field.key),value=>locals.set(field.key,value)));
   }
@@ -923,10 +1047,43 @@ export class ScriptRuntime {
   /** Whether a collection or a deleting destructor released the object: host
    * caches drop such identities instead of reading them. */
   isReleased(receiver) {
-    return this.instances.get(receiver)?.nativeObject?.released===true;
+    return (receiver?.[this.instanceKey]??this.instances.get(receiver))?.nativeObject?.released===true;
+  }
+  /** Whether a linked class's chain reaches `base` (a class record). The
+   * chain is fixed once linked; iterators test thousands of actors per call. */
+  classIsA(cls,base) {
+    // Lazy: harnesses build a runtime with Object.create(prototype).
+    const caches=this.classIsACache??=new WeakMap(),cache=caches.get(cls);
+    let result=cache?.get(base);
+    if(result===undefined){
+      result=false;
+      for(let entry=cls;entry;entry=entry.base)if(entry.record===base){result=true;break;}
+      if(cache)cache.set(base,result);else caches.set(cls,new Map([[base,result]]));
+    }
+    return result;
+  }
+  /** Attach storage to a receiver. The WeakMap stays the authority; a
+   * non-enumerable per-runtime symbol on the receiver is a direct link that
+   * spares the hash lookup on every property access (attachment is permanent). */
+  linkInstance(receiver,instance) {
+    this.instances.set(receiver,instance);
+    // An object the collection model never frees (it was unreachable, so the
+    // host's own GC reclaimed it) returns its image range when collected.
+    if(instance.imageToken)imageFinalizer.register(receiver,instance.imageToken,instance.imageToken);
+    if(this.instanceKey&&Object.isExtensible(receiver))
+      Object.defineProperty(receiver,this.instanceKey,{value:instance,enumerable:false,writable:false,configurable:false});
   }
   instance(receiver) {
-    const instance=this.instances.get(receiver);
+    // Actor host objects are dictionary-mode, so the link load is a hash
+    // lookup; host code mostly reads several fields of one receiver in a row.
+    // Only a symbol link is remembered: it is non-writable, so the pair stays
+    // valid forever. The released check below still runs on every access.
+    let instance=this.lastLinkedInstance;
+    if(instance===undefined||receiver!==this.lastLinkedReceiver){
+      instance=receiver?.[this.instanceKey];
+      if(instance!==undefined&&this.instanceKey!==undefined){this.lastLinkedReceiver=receiver;this.lastLinkedInstance=instance;}
+      else instance=this.instances.get(receiver);
+    }
     if(!instance)throw new Error(`Object is not attached to script runtime: ${receiver?.key??receiver?.name??'None'}`);
     if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
     return instance;
@@ -934,7 +1091,7 @@ export class ScriptRuntime {
   /** Core.IsProbing0x10115670 against the actor's live state-frame probe mask.
    * A no-state actor probes everything (the recovered init mask is all ones);
    * a name outside the reserved probe interval is always probed. */
-  isProbing(receiver,name){return this.instance(receiver).state?.isProbing(probeNames.get(lower(name))??-1)??true;}
+  isProbing(receiver,name){return this.instance(receiver).state?.isProbing(probeNames.get(lowerName(name))??-1)??true;}
   defaultValue(cls,field,defaults=cls.defaults) {
     if(!field.metadata)throw new Error(`Property is not prepared: ${field.key}`);
     const authored=defaults.get(field.key),value=zeroValue(field);
@@ -989,7 +1146,59 @@ export class ScriptRuntime {
       return storageReference(field,new CellStorage(this,instance,field,cell));
     }
     if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
-    return propertyReference(field,()=>instance.slots.get(field.key),value=>instance.slots.set(field.key,value));
+    return propertyReference(field,()=>instance.slots.get(field.key),field.key===ACTOR_BASE_KEY
+      ?value=>{instance.slots.set(field.key,value);bumpBaseEpoch();}
+      :value=>instance.slots.set(field.key,value));
+  }
+  /** refValue(fieldReference(receiver, field)) without allocating the
+   * lvalue: the same binding/cell/slot selection, poison pre-read, slot
+   * default and ordering, then the reference's readWhole copy (the codec). */
+  fieldValue(receiver,field) {
+    if(receiver?.kind==='Class'&&field.key==='core.object.name'&&!this.instances.has(receiver))
+      return this.fieldReference(receiver,field).get();
+    const instance=this.instance(receiver);
+    const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
+    if(binding){const codec=propertyCodec(field);return codec.read(binding.get());}
+    const cell=instance.cells?.get(field.key);
+    if(cell){
+      const poisoned=instance.poison?.get(field.key);
+      if(poisoned&&!poisoned.lazy)poisoned.read();
+      const codec=propertyCodec(field),entry=instance.poison?.get(field.key);
+      return codec.read(entry?entry.read():readCell(cell,instance.arena.view,instance.refs,instance.base));
+    }
+    if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+    const codec=propertyCodec(field);
+    return codec.read(instance.slots.get(field.key));
+  }
+  /** assign(fieldReference(receiver, field), valueOf(frame)) without the
+   * lvalue: the same storage selection, poison pre-read, slot default and
+   * descriptor before the value is evaluated, then PropertyReference.set's
+   * read-merge-store (CellStorage get/set order) and returned copy. A
+   * binding or an unattached class keeps the reference path itself. */
+  assignField(receiver,field,valueOf,frame) {
+    if(receiver?.kind==='Class'&&field.key==='core.object.name'&&!this.instances.has(receiver))
+      return this.fieldReference(receiver,field).set(valueOf(frame));
+    const instance=this.instance(receiver);
+    if(instance.bindings.size&&instance.bindings.has(field.key))
+      return this.fieldReference(receiver,field).set(valueOf(frame));
+    const cell=instance.cells?.get(field.key);
+    if(cell){
+      const poisoned=instance.poison?.get(field.key);
+      if(poisoned&&!poisoned.lazy)poisoned.read();
+      const codec=propertyCodec(field),value=valueOf(frame);
+      const current=instance.poison?.get(field.key);
+      const stored=codec.store(value,current?current.read():readCell(cell,instance.arena.view,instance.refs,instance.base));
+      const entry=instance.poison?.get(field.key);
+      if(entry?.write)entry.read();
+      writeCell(cell,instance.arena.view,instance.refs,stored,instance.base);
+      if(entry)this.clearPoison(instance,field.key);
+      return codec.assigned(value);
+    }
+    if(!instance.slots.has(field.key))instance.slots.set(field.key,this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
+    const codec=propertyCodec(field),value=valueOf(frame);
+    instance.slots.set(field.key,codec.store(value,instance.slots.get(field.key)));
+    if(field.key===ACTOR_BASE_KEY)bumpBaseEpoch();
+    return codec.assigned(value);
   }
   namedReference(receiver,name) {
     return this.fieldReference(receiver,this.namedField(receiver,name));
@@ -1019,7 +1228,7 @@ export class ScriptRuntime {
     return this.readInstanceField(this.instance(receiver),field);
   }
   readInstanceField(instance,field,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
-    const binding=instance.bindings.get(field.key);
+    const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
     if(binding)return codec.read(binding.get());
     return this.readStorage(instance,field,codec,cell);
   }
@@ -1029,7 +1238,7 @@ export class ScriptRuntime {
   readStorage(instance,field,codec,cell) {
     if(cell){
       const poisoned=instance.poison?.get(field.key);
-      return poisoned?codec.read(poisoned.read()):readCell(cell,instance.image,instance.refs);
+      return poisoned?codec.read(poisoned.read()):readCell(cell,instance.arena.view,instance.refs,instance.base);
     }
     let raw=instance.slots.get(field.key);
     if(raw===undefined&&!instance.slots.has(field.key))
@@ -1043,7 +1252,7 @@ export class ScriptRuntime {
     return this.writeInstanceField(this.instance(receiver),field,value);
   }
   writeInstanceField(instance,field,value,codec=propertyCodec(field),cell=instance.cells?.get(field.key)) {
-    const binding=instance.bindings.get(field.key);
+    const binding=instance.bindings.size?instance.bindings.get(field.key):undefined;
     if(binding)binding.set(codec.store(value,binding.get()));
     else this.writeStorage(instance,field,value,codec,cell);
     return codec.copy(value);
@@ -1052,7 +1261,7 @@ export class ScriptRuntime {
     if(cell){
       const poisoned=instance.poison?.get(field.key);
       if(poisoned?.write)poisoned.read();
-      writeCell(cell,instance.image,instance.refs,codec.copy(value));
+      writeCell(cell,instance.arena.view,instance.refs,codec.copy(value),instance.base);
       if(poisoned)this.clearPoison(instance,field.key);
       return;
     }
@@ -1060,6 +1269,7 @@ export class ScriptRuntime {
     if(raw===undefined&&!instance.slots.has(field.key))
       instance.slots.set(field.key,raw=this.defaultValue(instance.cls,field,instance.defaultsSnapshot));
     instance.slots.set(field.key,codec.store(value,raw));
+    if(field.key===ACTOR_BASE_KEY)bumpBaseEpoch();
   }
   // A receiver attached as a script instance is never the unattached-class
   // case readField/writeField serve, so the name path goes straight to it.
@@ -1070,6 +1280,37 @@ export class ScriptRuntime {
   writeNamed(receiver,name,value) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
     return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field),handle.cell);
+  }
+  /** readNamed(receiver, name) as an indexable view: {length, at(i)} of the
+   * array readNamed would return, or null where it is not an array. An
+   * unbound, unpoisoned fixed-array cell yields each element from its own
+   * cell (readNamed builds the same values for all of them); any other
+   * storage reads the whole value once. */
+  readNamedElements(receiver,name) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name),cell=handle.cell;
+    if(cell&&isFixedCell(cell)&&!(instance.bindings.size&&instance.bindings.has(handle.field.key))
+      &&!instance.poison?.get(handle.field.key))
+      return {length:cell.dim,at:index=>readFixedElement(cell,instance.arena.view,instance.refs,index,instance.base)};
+    const whole=this.readInstanceField(instance,handle.field,handle.codec??=propertyCodec(handle.field),cell);
+    return Array.isArray(whole)?{length:whole.length,at:index=>whole[index]}:null;
+  }
+  /** readNamed/writeNamed for one (receiver, name) pair, with the instance
+   * and handle resolved once. Host views (collision views) read the same
+   * fields of every actor each frame. Attachment is permanent, so only the
+   * released-allocation check has to run per access. */
+  boundField(receiver,name) {
+    const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
+    const field=handle.field,codec=handle.codec??=propertyCodec(field),cell=handle.cell;
+    return {
+      get:()=>{
+        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+        return this.readInstanceField(instance,field,codec,cell);
+      },
+      set:value=>{
+        if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
+        return this.writeInstanceField(instance,field,value,codec,cell);
+      },
+    };
   }
   /** A bound property's storage beneath its host binding. A binding whose
    * host state is absent (an actor without live Touching slots, a player
@@ -1097,7 +1338,8 @@ export class ScriptRuntime {
     const instance=this.instance(receiver);
     if(!instance.cells)return;
     const source=this.classImage(instance.cls);
-    if(source!==instance.imageSource)this.copyStorage(instance,{bytes:source.view.buffer,refs:source.refs,poison:source.poison});
+    if(source!==instance.imageSource)this.copyStorage(instance,{bytes:source.arena.bytes.subarray(source.base,source.base+source.layout.size),
+      refs:source.refs,poison:source.poison});
     instance.imageSource=source;
     // A map actor's property reached its default through a binding, which
     // threw on get and set, not when the reference was made.
@@ -1110,26 +1352,28 @@ export class ScriptRuntime {
       catch{this.poisonField(instance,field.key,{read:()=>initial(field),write:true,lazy:true});continue;}
       try{logical=copyValue(field,value);}
       catch{this.poisonField(instance,field.key,{read:()=>value,write:false,lazy:true});continue;}
-      writeCell(cell,instance.image,instance.refs,logical);
+      writeCell(cell,instance.arena.view,instance.refs,logical,instance.base);
       if(instance.poison?.has(field.key))this.clearPoison(instance,field.key);
     }
   }
   /** The object's storage, to restore with restoreStorage (a mover reset). */
   snapshotStorage(receiver) {
     const instance=this.instance(receiver);
-    if(!instance.image)return null;
-    return {bytes:instance.image.buffer.slice(0),refs:instance.refs.slice(),poison:instance.poison&&new Map(instance.poison)};
+    if(!instance.base)return null;
+    return {bytes:instance.arena.snapshot(instance.base,instance.size),refs:instance.refs.slice(),poison:instance.poison&&new Map(instance.poison)};
   }
   restoreStorage(receiver,snapshot) {
     if(snapshot)this.copyStorage(this.instance(receiver),snapshot);
   }
   /** Overwrite in place: live references hold the image and refs arrays. */
   copyStorage(instance,{bytes,refs,poison}) {
-    new Uint8Array(instance.image.buffer).set(new Uint8Array(bytes));
+    bumpBaseEpoch();
+    instance.arena.bytes.set(bytes instanceof Uint8Array?bytes:new Uint8Array(bytes),instance.base);
     for(let index=0;index<refs.length;index++)instance.refs[index]=refs[index];
     instance.poison=poison?.size?new Map(poison):null;
   }
   poisonField(instance,key,entry) {
+    bumpBaseEpoch();
     (instance.poison??=new Map()).set(key,entry);
   }
   clearPoison(instance,key) {
@@ -1704,6 +1948,14 @@ export class ScriptRuntime {
       try{return this.readNamed(actor,name);}
       catch(error){return undefined;}
     };
+    // An ordinary reflected property (LightType on every actor in
+    // AIGetLightLevel's scan) needs none of the level-graph cases below;
+    // levelFor is a pure lookup, so skipping it changes no result.
+    if(!SOUND_LEVEL_FIELDS.has(name)){
+      const value=reflected(name);
+      if(value===undefined)throw new Error(`Original sound field is not linked: ${name}`);
+      return value;
+    }
     // The host keeps the level graph in one container (levelFor); the original
     // splits it: XLevel is the ULevel (Actors/Model/DemoRecDriver), Level is the
     // LevelInfo actor (PawnList/NetMode). Map both faithfully onto the container
@@ -1991,8 +2243,9 @@ export class ScriptRuntime {
       // 0x103998a0-0x10399bb0: a spawned actor carrying riders recurses into
       // the same recovered MoveActor entry for each based child.
       moveRiders:(src,finalDelta,rot)=>moveActorRiders(src,finalDelta,rot,{
+        riderCacheKey:'spawned-move',
         actors:level.actors,
-        baseOf:other=>other.base!==undefined?other.base:this.readNamed(other,'Base'),
+        baseOf:other=>{const base=other.base;return base!==undefined?base:this.readNamed(other,'Base');},
         location:other=>other.position??this.readNamed(other,'Location'),
         rotation:other=>other.rotation??this.readNamed(other,'Rotation'),
         isPawn:other=>Boolean(other.lineage?.includes('engine.pawn')),
@@ -2185,6 +2438,7 @@ export class ScriptRuntime {
         installActorCollisionView(actor,{
           read:(a,name)=>this.readNamed(a,name),
           write:(a,name,value)=>this.writeNamed(a,name,value),
+          bind:(a,name)=>this.boundField(a,name),
           worldActor:level.actors[0],lineage});
         this.collisionViewActors.add(actor);
         return actor;
@@ -2302,6 +2556,21 @@ export class ScriptRuntime {
     if(index<0||ref.field?.metadata.structKey&&ref.field.metadata.structKey!==key)throw new Error(`Unsupported struct member: ${member.key}`);
     if(!ref?.reference)return copyValue(member,value[index]);
     return propertyReference(member,()=>refValue(ref)[index],item=>{const struct=refValue(ref);struct[index]=item;ref.set(struct);});
+  }
+  /** refValue(structReference(ref, member)): the reference form reads the
+   * struct to validate the member, then again on get. Nothing runs between
+   * the two reads, so the member of the first read, copied as the member
+   * reference's get copies it (the codec), is the same value. */
+  structValue(ref,member) {
+    const value=refValue(ref),key=member.key.slice(0,member.key.lastIndexOf('.'));
+    if(value&&typeof value==='object'&&!Array.isArray(value)){
+      if(!Object.hasOwn(value,member.key))throw new Error(`Struct member is not linked: ${member.key}`);
+      return ref?.reference?propertyCodec(member).read(value[member.key]):copyValue(member,value[member.key]);
+    }
+    const components=key==='core.object.vector'?['X','Y','Z']:key==='core.object.rotator'?['Pitch','Yaw','Roll']:null;
+    const index=components?.indexOf(member.name)??-1;
+    if(index<0||ref.field?.metadata.structKey&&ref.field.metadata.structKey!==key)throw new Error(`Unsupported struct member: ${member.key}`);
+    return ref?.reference?propertyCodec(member).read(value[index]):copyValue(member,value[index]);
   }
   lookup(receiver,name,global=false) {
     // execClassContext (0x1012edb0) steps `ClassExpr.static.F()` with this =
@@ -3152,6 +3421,7 @@ export class ScriptRuntime {
     }
     if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,{
       read:(actor,name)=>this.readNamed(actor,name),
+      elements:(actor,name)=>this.readNamedElements(actor,name),
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)
           if(cls.record.key===key)return true;
@@ -3268,8 +3538,19 @@ export class ScriptRuntime {
   /** Recovered standalone per-actor Tick. The level scheduler supplies its
    * clock/tag/deferred list and reached native physics/input/visibility services.
    * Startup and world actor iteration are not invented by this entry point. */
-  processActorTick(receiver,seconds,{tickType=2,...nativeServices}) {
-    return tickStandaloneActor(receiver,seconds,tickType,{
+  processActorTick(receiver,seconds,options) {
+    // processLevelTick passes one options object per tick type for every
+    // actor; its services are the same for each, so build them once.
+    const shared=this.levelTickActorOptions?.has(options)===true;
+    let entry=shared?this.levelTickActorServices?.get(options):undefined;
+    if(!entry){
+      entry=this.actorTickServices(options);
+      if(shared)(this.levelTickActorServices??=new WeakMap()).set(options,entry);
+    }
+    return tickStandaloneActor(receiver,seconds,entry.tickType,entry.services);
+  }
+  actorTickServices({tickType=2,...nativeServices}) {
+    return {tickType,services:{
       showSelf:actor=>this.showPawnSelf(actor,nativeServices),
       checkEnemyVisible:actor=>this.checkPawnEnemyVisible(actor,nativeServices),
       ...nativeServices,
@@ -3285,7 +3566,7 @@ export class ScriptRuntime {
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       destroyActor:(actor,force)=>this.destroyActor(actor,Boolean(force)),
       performPhysics:(actor,delta)=>this.processActorPhysics(actor,delta),
-    });
+    }};
   }
   /** Paused ULevel.Tick's derived-to-base FloatProperty/CPF_Input traversal.
    * Original writes one DWORD even when the property has multiple elements. */
@@ -3300,6 +3581,11 @@ export class ScriptRuntime {
    * Native entry/exit memory/counters, calendar, viewport, physics/visibility,
    * event manager and exact FString allocation count remain explicit services. */
   processLevelTick(level,seconds,{tickType=2,...nativeServices}) {
+    // Released image ranges become reusable before any actor runs.
+    this.reclaimReleased();
+    // Every actor of this scheduler tick receives the same nativeServices
+    // snapshot; one options object per tick type replaces a copy per actor.
+    const actorOptions=new Map();
     return tickStandaloneLevel(level,seconds,tickType,{
       ...nativeServices,
       read:(actor,name)=>this.readNamed(actor,name),
@@ -3309,7 +3595,12 @@ export class ScriptRuntime {
         return false;
       },
       tickActor:(actor,delta,type)=>{
-        const run=()=>this.processActorTick(actor,delta,{...nativeServices,level,tickType:type});
+        let options=actorOptions.get(type);
+        if(!options){
+          actorOptions.set(type,options={...nativeServices,level,tickType:type});
+          (this.levelTickActorOptions??=new WeakSet()).add(options);
+        }
+        const run=()=>this.processActorTick(actor,delta,options);
         return nativeServices.aroundActorTick?nativeServices.aroundActorTick(actor,run):run();
       },
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
@@ -3515,10 +3806,7 @@ export class ScriptRuntime {
       // ancestry walk is the attached instance's cls chain, same as
       // AllActors. See docs/script-actor-queries.md.
       if(!this.actorClass||!this.levelFor)throw new Error('Actor iterators require a linked original actor array');
-      const isA=(actor,base)=>{
-        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
-        return false;
-      };
+      const isA=(actor,base)=>this.classIsA(this.instance(actor).cls,base);
       if(call.index===306){
         // The native compares candidate->+0xc4 (the Base property) to the
         // receiver; fieldReference reads the attached field storage.
@@ -3534,10 +3822,8 @@ export class ScriptRuntime {
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');
     const tag=this.lookupMember(this.actorClass,'fields','Tag');
     return createAllActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,
-      isA:(actor,base)=>{
-        for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record===base)return true;
-        return false;
-      },tagOf:actor=>this.fieldReference(actor,tag).get(),
+      isA:(actor,base)=>this.classIsA(this.instance(actor).cls,base),
+      tagOf:actor=>this.fieldReference(actor,tag).get(),
     });
   }
   /** Core ProcessEvent's ordinary script/typed parameter path. The supplied
@@ -3549,16 +3835,13 @@ export class ScriptRuntime {
     if(!this.scriptability())return false;
     // The recovered table covers every reserved probe index. Any other valid
     // loaded function name is outside that interval and bypasses its mask gate.
-    const instance=this.instance(receiver),ename=probeNames.get(lower(name))??-1;
+    const instance=this.instance(receiver),ename=probeNames.get(lowerName(name))??-1;
     // AActor::ProcessEvent 0x10369100 precedes Core's body on world actors:
     // actor.Level (+0xa8), LevelInfo flags (+0x4f0), mask bBegunPlay (2).
     // Standalone Core-event fixtures have no linked world/Actor.Level slot.
-    if(this.levelFor(receiver)) {
-      for(let cls=instance.cls;cls;cls=cls.base)if(cls.record.key==='engine.actor'){
-        const info=this.readNamed(receiver,'Level');
-        if(info && !this.readNamed(info,'bBegunPlay'))return false;
-        break;
-      }
+    if(this.levelFor(receiver)&&reachesActor(instance.cls)) {
+      const info=this.readNamed(receiver,'Level');
+      if(info && !this.readNamed(info,'bBegunPlay'))return false;
     }
     if(instance.state&&!instance.state.isProbing(ename))return false;
     const record=selectedRecord??this.lookup(receiver,name),fn=record?.function;
@@ -3570,8 +3853,10 @@ export class ScriptRuntime {
     if(fn.result&&(!resultReference?.reference||typeof resultReference.get!=='function'||typeof resultReference.set!=='function'))
       throw new Error(`Return-value ProcessEvent requires a caller result reference: ${record.key}`);
     if(args.length!==fn.parameters.length)throw new Error(`Incomplete ProcessEvent parameter block: ${record.key}`);
-    const locals=new Map(fn.fields.map(field=>[field.key,zeroValue(field)]));
-    for(const [index,field] of fn.parameters.entries())locals.set(field.key,copyValue(field,args[index]));
+    const stack=this.classLoader?this.frameStack():null,stackIndex=stack?.index,stackTop=stack?.top;
+    try{
+    const locals=createFrameLocals(fn,this.classLoader,stack),parameters=fn.parameters;
+    for(let index=0;index<parameters.length;index++)locals.set(parameters[index].key,copyValue(parameters[index],args[index]));
     if(fn.result)locals.set(fn.result.key,copyValue(fn.result,resultReference.get()));
     const suppressed=Boolean((fn.script.functionFlags&0x20)&&instance.singular);
     const result=this.executeScript(fn,receiver,locals);
@@ -3579,10 +3864,11 @@ export class ScriptRuntime {
     // Singular suppression (and a void Return expression) leaves that slot as
     // copied from the caller rather than fabricating a zero return value.
     if(fn.result&&!suppressed&&result!==undefined)locals.set(fn.result.key,copyValue(fn.result,result));
-    for(const [index,field] of fn.parameters.entries())args[index]=copyValue(field,locals.get(field.key));
+    for(let index=0;index<parameters.length;index++)args[index]=copyValue(parameters[index],locals.get(parameters[index].key));
     if(fn.result)resultReference.set(copyValue(fn.result,locals.get(fn.result.key)));
     this.destroyFunctionLocals(fn,locals,{parameters:false});
     return true;
+    }finally{stack?.restore(stackIndex,stackTop);}
   }
   /** The linked class whose default object a class-context receiver names. */
   defaultObjectClass(receiver) {
@@ -3608,9 +3894,22 @@ export class ScriptRuntime {
     if(!fn)throw new Error(`Original function is not prepared: ${record.key}`);
     if(fn.script.nativeIndex||fn.script.functionFlags&0x400)return this.invokeNative({...context,index:fn.script.nativeIndex,record,receiver,argumentCount,evaluateArgument});
     if(argumentCount>fn.parameters.length)throw new Error(`Unsupported extra script arguments: ${record.key}`);
-    const locals=new Map(fn.fields.map(field=>[field.key,zeroValue(field)])),out=[];
+    // R2a: the frame block comes from the runtime's FrameStack and is
+    // released when this call ends, as CallFunction's FMemMark is.
+    const stack=this.classLoader?this.frameStack():null,stackIndex=stack?.index,stackTop=stack?.top;
+    try{
+    const locals=createFrameLocals(fn,this.classLoader,stack),out=[];
+    // A non-out parameter only needs the argument's value: the VM's
+    // evaluateArgumentValue is refValue(evaluateArgument) without an lvalue
+    // (linked reads never yield undefined, so the skip test is unchanged).
+    const byValue=typeof context.evaluateArgumentValue==='function';
     for(const [index,field] of fn.parameters.entries()){
       if(index>=argumentCount)break;
+      if(byValue&&!field.metadata.out){
+        const value=context.evaluateArgumentValue(index);
+        if(value!==undefined)locals.set(field.key,copyValue(field,value));
+        continue;
+      }
       const value=evaluateArgument(index);
       if(value!==undefined)locals.set(field.key,copyValue(field,refValue(value)));
       if(field.metadata.out&&value?.reference)out.push({field,reference:value});
@@ -3622,5 +3921,8 @@ export class ScriptRuntime {
     for(const entry of out.reverse())entry.reference.set(copyValue(entry.field,locals.get(entry.field.key)));
     this.destroyFunctionLocals(fn,locals);
     return result;
+    }finally{stack?.restore(stackIndex,stackTop);}
   }
+  /** The FMemStack of function frame blocks (script-frame-locals.mjs). */
+  frameStack(){return this.frameBlocks??=new FrameStack(this.objectArena());}
 }
