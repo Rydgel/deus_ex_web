@@ -144,7 +144,12 @@ const x87compare = (a, b) => {
     return a.inf ? { c0: a.neg ? 1 : 0, c3: 0 } : { c0: b.neg ? 0 : 1, c3: 0 };
   }
   let m;
+  // A zero significand is ±0 whatever its exponent field (x87add/x87mul leave
+  // arithmetic zeros at exp 0), so it must not enter the magnitude compare
+  // (the same fix as script-pawn-nav.mjs).
   if (a.sig === 0n && b.sig === 0n) m = 0;
+  else if (a.sig === 0n) m = b.neg ? 1 : -1;
+  else if (b.sig === 0n) m = a.neg ? -1 : 1;
   else if (a.neg !== b.neg) m = a.neg ? -1 : 1;
   else {
     const ea = a.exp + x87width(a.sig), eb = b.exp + x87width(b.sig);
