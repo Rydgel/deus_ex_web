@@ -325,7 +325,7 @@ fixture.key('KeyW', true);
 log('warming');
 for (let i = 0; i < warm; i++) step();
 log('timing');
-tickStats.clear(); counts.clear(); scriptProfile.clear(); if (argv.includes('--vm-counts')) { globalThis.__stmtCounts = new Map(); globalThis.__exprCounts = new Map(); }
+tickStats.clear(); counts.clear(); scriptProfile.clear(); globalThis.__scriptVmStatsReset?.(); if (argv.includes('--vm-counts')) { globalThis.__stmtCounts = new Map(); globalThis.__exprCounts = new Map(); }
 const times = [], digests = [];
 globalThis.__callerOn?.(true);
 const cpuStart = process.cpuUsage();

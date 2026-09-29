@@ -103,6 +103,15 @@ Hit/miss, time, normal and location agree exactly, including signed zero. World
 rays in BspCollider use this traversal. Owned brushes now use its separately
 verified owner path described below; synthetic hull-only fixtures remain separate.
 
+Once Play has loaded the Rust trace kernel (`native/script-vm/src/trace.rs`,
+[Rust core](rust-core.md) step R3-a), `traceRay` in `ray.mjs` runs the
+traversal there. The JavaScript body (`traceRayFast`) stays the reference. It
+is the path in unit tests and under `TRACE_KERNEL=js`, and it answers every
+case the kernel hands back (inputs it throws on). The ray, brush-ray and
+world-fitting validators load the kernel, so the comparisons here run against
+it. `validate-trace-kernel` compares both paths on seeded cases from real
+levels.
+
 The full original FindSpot → AdjustSpot → level query → UModel chain matches
 1,112 cases on training and Liberty Island. All final positions/successes, query
 arguments/order, 6,878 ray results and 1,566 point hit/miss decisions agree exactly.

@@ -19,6 +19,8 @@ import { traceRay } from '../src/runtime/ray.mjs';
 import { d3dDiffuse } from '../src/runtime/mesh-lighting.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { createPlayerInputFixture } from './player-input-fixture.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])

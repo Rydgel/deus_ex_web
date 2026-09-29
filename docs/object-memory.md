@@ -175,7 +175,8 @@ the linked offsets (`script-object-image.mjs`):
   floats or ints. Structs and fixed arrays place their members at their
   linked offsets. FName, FString, object and class pointers and dynamic
   arrays keep their logical value in a per-object reference array; their
-  bytes stay zero (see Unresolved).
+  bytes stay zero (see Unresolved). Since [Rust core](rust-core.md) step
+  R1a-2, object and class pointers are handles in their bytes instead.
 * **Construction.** Each class has a default image holding every imaged
   property's default value, the block InitProperties copies. It is rebuilt
   when a class default changes, so a new object sees the defaults at its
@@ -238,12 +239,13 @@ and repeats the paired A/B profile.
   The image's reference array holds spellings. Identity needs only an intern table; whether original index
   values are observable anywhere in the single-player path (ordering, hashing,
   serialization) is not established.
-* **Pointers.** Object and class slots need address ↔ identity mapping. The
-  image's reference array holds identities; the native heap's opaque handles
-  provide identity only. Since [Rust core](rust-core.md) step R1a, the slot's
-  bytes also hold a host handle for the identity; it is not an address. The
-  GObjObjects index model ([boot replay](boot-replay.md)) is separate and must
-  stay the source of object indices.
+* **Pointers.** Object and class slots need address ↔ identity mapping. Since
+  [Rust core](rust-core.md) step R1a-2, the slot's four bytes hold a host
+  handle for the identity and are its only storage; the reference array has
+  no pointer entries. A handle is not an address, and the native heap's
+  opaque handles provide identity only. The GObjObjects index model
+  ([boot replay](boot-replay.md)) is separate and must stay the source of
+  object indices.
 * **Owning values.** FString and dynamic arrays (`Data`/`Num`/`Max`) keep whole
   logical values in the image's reference array. Their byte form needs the recovered property
   copy/destroy dispatch and allocator services. Map properties remain

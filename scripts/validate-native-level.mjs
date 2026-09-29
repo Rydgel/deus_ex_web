@@ -14,6 +14,8 @@ import { BspCollider } from '../src/runtime/collision.mjs';
 import { createLevelQueries } from '../src/runtime/level-queries.mjs';
 import { findSpot } from '../src/runtime/fitting.mjs';
 import { traceExtent } from '../src/runtime/extent-trace.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), f = Math.fround, files = [];
 // Other validators read these reports while the sweep runs, so a reader must

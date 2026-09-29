@@ -11,6 +11,8 @@ import {moveActorRiders} from '../src/runtime/move-riders.mjs';
 import {playerMove} from '../src/runtime/player-move.mjs';
 import {playerBlockedBy} from '../src/runtime/check-encroachment.mjs';
 import {beginTouch,endTouch,isOverlapping} from '../src/runtime/actor-touch.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const dir='reports/movement/mover-move';
 if(!process.argv.includes('--reuse')){
  const result=spawnSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',['scripts/native-mover-scene-oracle.py',gameDirectory(),`${dir}/scene.json`,`${dir}/cases.json`],{encoding:'utf8',maxBuffer:16*1024*1024});

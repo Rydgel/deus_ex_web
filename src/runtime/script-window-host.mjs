@@ -507,6 +507,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     for (const entry of layout.fields.values()) {
       const binding = bindingFor(object, entry);
       instance.bindings.set(entry.field.key, binding);
+      runtime.noteBoundKey(entry.field.key);
       for (let c = cls; c; c = c.base) {
         const authored = c.defaults?.get(entry.field.key);
         if (!authored) continue;

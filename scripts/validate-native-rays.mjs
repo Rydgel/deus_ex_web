@@ -9,6 +9,8 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { traceRay } from '../src/runtime/ray.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { nativeModel } from './native-model.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), f = Math.fround, reports = [];
 const point = value => [f(value), 0, 0];

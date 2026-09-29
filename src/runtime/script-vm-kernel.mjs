@@ -6,9 +6,11 @@
  *
  * Operands cross as float32 bit patterns through the same f32bits/f32num the
  * BigInt model loads and stores with, so NaN payloads and signed zeros agree.
- * The kernel has its own memory for now; the VM proper will run in the
- * runtime's object arena. */
+ * The kernel instance has its own memory; the interpreter (interp.rs, step
+ * R2b-2) runs in an instance on the runtime's object arena
+ * (instantiateScriptVm). */
 import {rotationSineTable} from './coords.mjs';
+import {RESERVED} from './script-object-arena.mjs';
 
 const f32io = new DataView(new ArrayBuffer(4));
 const bits = v => (f32io.setFloat32(0, Math.fround(v), true), f32io.getUint32(0, true));
@@ -22,30 +24,65 @@ export function loadScriptVmKernel() {
   return pending ??= load().then(kernel => (scriptVmKernel = kernel));
 }
 
+let compiled = null;
+
+/** The compiled module, fetched and compiled once for every instance (the
+ * trace kernel, trace-kernel.mjs, instantiates it too). */
+export function compileScriptVm() {
+  return compiled ??= (async () => {
+    const url = new URL('./script-vm.wasm', import.meta.url);
+    let bytes;
+    if (url.protocol === 'file:') {
+      const module = 'node:fs/promises';
+      bytes = await (await import(/* @vite-ignore */ module)).readFile(url);
+    } else {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Cannot load the script VM kernel: HTTP ${response.status}`);
+      bytes = await response.arrayBuffer();
+    }
+    return WebAssembly.compile(bytes);
+  })();
+}
+
+// The interpreter's imports (interp.rs), whatever the module declares. The
+// kernel-only instance runs no script code, so reaching one of them there is
+// a host fault.
+const kernelOnlyImports = module => Object.fromEntries(WebAssembly.Module.imports(module)
+  .filter(entry => entry.module === 'env' && entry.kind === 'function')
+  .map(({name}) => [name, () => { throw new Error(`The script VM kernel instance does not run scripts (${name})`); }]));
+
 async function load() {
-  const url = new URL('./script-vm.wasm', import.meta.url);
-  let bytes;
-  if (url.protocol === 'file:') {
-    const module = 'node:fs/promises';
-    bytes = await (await import(/* @vite-ignore */ module)).readFile(url);
-  } else {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Cannot load the script VM kernel: HTTP ${response.status}`);
-    bytes = await response.arrayBuffer();
-  }
-  const module = await WebAssembly.compile(bytes);
+  const module = await compileScriptVm();
   // The module's shadow stack and statics end below 2 MiB (build.rs).
   const memory = new WebAssembly.Memory({initial: 32});
-  const instance = await WebAssembly.instantiate(module, {env: {memory}});
+  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module)}});
   return createScriptVmKernel(instance, memory);
+}
+
+/** Core FGlobalMath's sine table into an instance's SINE static. */
+function uploadSineTable(x, memory) {
+  const sine = rotationSineTable(), table = new Uint32Array(memory.buffer), sineAt = x.sine_ptr() >>> 2;
+  for (let i = 0; i < sine.length; i++) table[sineAt + i] = bits(sine[i]);
+}
+
+/** An interpreter instance on `memory` (a runtime's ObjectArena memory, whose
+ * low RESERVED bytes hold the module's shadow stack and statics) with the
+ * host's interpreter imports. Returns the raw exports; the x87 operator
+ * exports work in it as in the kernel instance. */
+export async function instantiateScriptVm(memory, imports) {
+  const module = await compileScriptVm();
+  const instance = await WebAssembly.instantiate(module, {env: {memory, ...imports}});
+  const x = instance.exports;
+  if (x.__heap_base.value > RESERVED) throw new Error('Script VM statics exceed the object arena\'s reserved region');
+  uploadSineTable(x, memory);
+  return x;
 }
 
 export function createScriptVmKernel(instance, memory) {
   const x = instance.exports;
   if (x.__heap_base.value > memory.buffer.byteLength) throw new Error('Script VM kernel statics exceed its memory');
   const words = () => new Uint32Array(memory.buffer);
-  const sine = rotationSineTable(), table = words(), sineAt = x.sine_ptr() >>> 2;
-  for (let i = 0; i < sine.length; i++) table[sineAt + i] = bits(sine[i]);
+  uploadSineTable(x, memory);
   const resultAt = x.result_ptr() >>> 2;
   const vector = () => { const w = words(); return [num(w[resultAt]), num(w[resultAt + 1]), num(w[resultAt + 2])]; };
   const ints = () => { const w = new Int32Array(memory.buffer); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; };

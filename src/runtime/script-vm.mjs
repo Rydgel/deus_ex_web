@@ -73,6 +73,8 @@ export const SCRIPT_RUNAWAY_LIMIT = 10000000;
 let scriptRunaway = 0;
 export const initScriptRunaway = () => { scriptRunaway = 0; };
 export const scriptRunawayCount = () => scriptRunaway;
+// The Rust interpreter's copy of the counter comes back through this.
+export const setScriptRunaway = value => { scriptRunaway = value; };
 export const x87load = v => {
   const b = f32bits(v), neg = b >>> 31, e = (b >>> 23) & 0xff, m = b & 0x7fffff;
   if (e === 0xff) return m ? { nan: b } : { neg, inf: true };
@@ -1108,72 +1110,85 @@ export function compileFunction(fn) {
       default: return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
     }
   }
+  // One statement of the loop below, after the cursor has advanced past it.
+  // The Rust interpreter (script-vm-rust.mjs) runs the statements its
+  // lowering leaves to JavaScript through this.
+  function stepCompiled(frame, entry) {
+    const services = frame.services, instance = frame.instance, n = entry.node, op = n.op;
+    if(op===0x2f){
+      if(!services.iterator)throw new Error('Original iterator native is not linked');
+      const after=statements.get(n.target).next;
+      let call=n.value,receiver=instance,skipped=false;
+      if(call.op===0x19){
+        const context=rvNode(call.context,frame,instance);
+        if(context===null||context===undefined){
+          services.warning?.({type:'Accessed None',script:fn.entry.path,offset:call.offset});
+          frame.cursor=after;skipped=true;
+        }else{receiver=context;call=call.value;}
+      }
+      if(!skipped){
+        if(call.op!=='native')throw new Error('Original iterator native is not linked');
+        const args=call.args;
+        const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
+          argumentCount:args.length,evaluateArgument:index=>evNode(args[index],frame,instance)});
+        const continuation={iterator,body:entry.next,after};
+        if(iterator.next())frame.iterators.push(continuation);
+        else frame.cursor=continuation.after;
+      }
+    }else if(op===0x31){
+      const current=frame.iterators.at(-1);
+      if(!current)throw new Error('IteratorNext without an active iterator');
+      if(current.iterator.next())frame.cursor=current.body;
+      else{frame.iterators.pop();frame.cursor=current.after;}
+    }else if(op===0x30){
+      if(!frame.iterators.pop())throw new Error('IteratorPop without an active iterator');
+    }else if (op === 0x04) {
+      if(frame.iterators.length)throw new Error('Return requires compiled iterator unwind');
+      frame.result=rvNode(n.value,frame,instance);frame.returned=true;frame.cursor=null;
+    }
+    else if (op === 0x08) {
+      if(!frame.state)throw new Error('Stop requires a state frame');
+      frame.cursor=null;
+    } else if (op === 0x05) {
+      const switched = evNode(n.value,frame,instance), key = refValue(switched), keyType = referenceElementType(switched);
+      for (let at = entry.next;;) {
+        const header = statements.get(at);
+        if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
+        if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
+        if (switchCaseEqual(key, rvNode(header.node.value,frame,instance), n.valueSize, keyType)) { frame.cursor = header.next; break; }
+        at = header.node.target;
+      }
+    } else if (op === 0x0a) {
+      if (n.target !== 0xffff) evNode(n.value,frame,instance);
+    } else if (op === 0x06 || op === 0x07) {
+      if (++scriptRunaway > SCRIPT_RUNAWAY_LIMIT) {
+        scriptRunaway = 0;
+        throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${fn.name??fn.objectName??'script'}`);
+      }
+      if (op === 0x06 || !rvNode(n.value,frame,instance)) frame.cursor = n.target;
+    } else evNode(n,frame,instance);
+  }
   function resumeCompiled(frame) {
-    const services = frame.services, instance = frame.instance;
+    const vm = frame.services.scriptVm;
+    if (vm !== undefined && !frame.state) {
+      const lowered = vm.lowering(compiled, frame);
+      if (lowered) return vm.resume(frame, compiled, lowered);
+    }
     let budget = 200000000;
     while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
       if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
       const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
-      const n = entry.node, op = n.op;
       frame.cursor = entry.next;
-      if(op===0x2f){
-        if(!services.iterator)throw new Error('Original iterator native is not linked');
-        const after=statements.get(n.target).next;
-        let call=n.value,receiver=instance,skipped=false;
-        if(call.op===0x19){
-          const context=rvNode(call.context,frame,instance);
-          if(context===null||context===undefined){
-            services.warning?.({type:'Accessed None',script:fn.entry.path,offset:call.offset});
-            frame.cursor=after;skipped=true;
-          }else{receiver=context;call=call.value;}
-        }
-        if(!skipped){
-          if(call.op!=='native')throw new Error('Original iterator native is not linked');
-          const args=call.args;
-          const iterator=services.iterator({index:call.index,receiver,script:fn,frame,
-            argumentCount:args.length,evaluateArgument:index=>evNode(args[index],frame,instance)});
-          const continuation={iterator,body:entry.next,after};
-          if(iterator.next())frame.iterators.push(continuation);
-          else frame.cursor=continuation.after;
-        }
-      }else if(op===0x31){
-        const current=frame.iterators.at(-1);
-        if(!current)throw new Error('IteratorNext without an active iterator');
-        if(current.iterator.next())frame.cursor=current.body;
-        else{frame.iterators.pop();frame.cursor=current.after;}
-      }else if(op===0x30){
-        if(!frame.iterators.pop())throw new Error('IteratorPop without an active iterator');
-      }else if (op === 0x04) {
-        if(frame.iterators.length)throw new Error('Return requires compiled iterator unwind');
-        frame.result=rvNode(n.value,frame,instance);frame.returned=true;frame.cursor=null;
-      }
-      else if (op === 0x08) {
-        if(!frame.state)throw new Error('Stop requires a state frame');
-        frame.cursor=null;
-      } else if (op === 0x05) {
-        const switched = evNode(n.value,frame,instance), key = refValue(switched), keyType = referenceElementType(switched);
-        for (let at = entry.next;;) {
-          const header = statements.get(at);
-          if (!header || header.node.op !== 0x0a) throw new Error('EX_Switch requires its EX_Case chain');
-          if (header.node.target === 0xffff) { frame.cursor = header.next; break; }
-          if (switchCaseEqual(key, rvNode(header.node.value,frame,instance), n.valueSize, keyType)) { frame.cursor = header.next; break; }
-          at = header.node.target;
-        }
-      } else if (op === 0x0a) {
-        if (n.target !== 0xffff) evNode(n.value,frame,instance);
-      } else if (op === 0x06 || op === 0x07) {
-        if (++scriptRunaway > SCRIPT_RUNAWAY_LIMIT) {
-          scriptRunaway = 0;
-          throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${fn.name??fn.objectName??'script'}`);
-        }
-        if (op === 0x06 || !rvNode(n.value,frame,instance)) frame.cursor = n.target;
-      } else evNode(n,frame,instance);
+      stepCompiled(frame, entry);
     }
     return frame.result;
   }
 
   const compiled = {
-    name: fn.entry.path, size: fn.size, decoded,
+    name: fn.entry.path, size: fn.size, decoded, script: fn,
+    displayName: fn.name??fn.objectName??'script',
+    // The Rust interpreter's JavaScript nodes and statements.
+    nodeValue: rvNode, nodeEffect: evNode, step: stepCompiled,
     createFrame(instance, locals = {}, services = {}, options = {}) {
       if (REFERENCE_ENGINE) return compiled.createReferenceFrame(instance, locals, services, options);
       const { offset = 0, state = false } = options;

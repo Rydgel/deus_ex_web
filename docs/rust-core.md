@@ -178,6 +178,54 @@ pointer slots of the 554 live imaged objects name their reference, struct
 members and fixed-array elements included. Digests are unchanged
 (`5496f30ee89033fc`, `04f77dc631509ae4`).
 
+**R1a-2 — Handles are the pointer storage (implemented).** An object or
+class pointer's handle bytes are now its only storage, so the Rust
+interpreter can store a pointer without leaving a stale JavaScript copy. A
+pointer cell (`POINTER` in `script-object-image.mjs`) reads the identity its
+handle names and writes `handleOf` of the value; it has no reference-array
+slot. Object, class-default and frame reference arrays keep only names,
+strings and dynamic arrays.
+
+* **Table.** `identityOfHandle` indexes a dense array, because handles are
+  consecutive small integers; the Map remains for identity to handle. A
+  released handle reads as None.
+* **Values.** A pointer holds an object or None. Any other value now throws on
+  write. Before, the reference array kept such a value while the bytes held 0.
+  The only writes of that kind came from `validate-object-image`'s struct
+  and fixed-array probes, which spelled the probed object as a string.
+* **Lifetime.** The handle table is now the only strong reference that an
+  image holds. It was already strong until release, so no identity ends
+  before its release point. After release, an image that still holds the
+  handle reads None, where the reference array returned the freed identity.
+  That case was traced over the unit tests, `validate-loadmap-gc`, Training
+  and Island bench runs and 19 lifecycle validators (DataLink, keypad, conversations, datacube, console,
+  crowbar, the Training conformance gate). There were 61 such reads. Every one
+  was the pre-read of an assignment that overwrites the pointer: read-merge-store
+  in `assignField` or `assignLocalOf`, or the whole-array read of a
+  fixed-array element store. That store discards the old pointer. Each pointer
+  named a window that XWindow's deleting destructor had ended:
+  `DataLinkPlay.datalink`, `InformationDevices.winText`,
+  `HUDConWindowFirst.nameWindow`, the popped `DeusExRootWindow.winStack`
+  element, and the locals `win` (`HUDConWindowFirst.DestroyChildren`) and
+  `itemWindow` (`HUDReceivedDisplay.RemoveItems`). A script that tested such
+  a pointer before overwriting it would now see None; none did.
+
+Verification: digests are unchanged under both VMs (`SCRIPT_VM=js` and
+`rust`): Training `04f77dc631509ae4` and Island `5496f30ee89033fc`, with
+render feedback. The 546 unit tests, `validate-script-vm-interp` and
+`validate-script-vm-x87` pass.
+`validate-loadmap-gc` keeps 2,727 live handles across 22 Player starts, and
+old space grew 0.72 MiB. `validate-object-image` checks its 45,770
+class-default pointers against the lazy default path rather than the stored
+value. It checks that the same 45,770 pointers reject a string and keep
+their handle, and that no reference array holds a pointer.
+`validate-object-handles` now checks that after 180 Training ticks, all
+20,303 pointer slots of 554 live objects, and the 7,401 of their 154 class
+default images, hold None or a live handle, and that each pointer property
+reads the identities the byte walk names. Island's JavaScript tick median
+is unchanged within noise: 25.2 ms before and 25.1 ms after, over the three
+quietest of eight interleaved pairs on a loaded machine.
+
 Names (the FName model's indices) and strings (FString `Data`/`Num`/`Max`)
 are the rest of R1.
 
@@ -255,21 +303,171 @@ The BigInt model is about 1.6 ms of a profiled Island tick. Its other users
 (physics, windows, lighting) keep the JavaScript model until their families
 move.
 
-**R2b-2 — The interpreter (design).** Counted on Island, one tick runs about
-12,100 statements and 41,300 node evaluations. The most frequent nodes are
-simple: literals (5,400), local and instance variable reads (5,100 and
-4,500), BoolVariable (2,650), assignments (2,350 plus 970 bool), `&&` and
-`||` (1,730 and 890), context `Other.X` (1,380), int and byte conversions,
-object `!=`, float compares and int increments. Script calls are about 860
-(`0x1b` virtual 490, `0x1c` final 370). The design:
+**R2b-2 — The interpreter (implemented, behind `SCRIPT_VM=rust`).** Counted
+on Island, one tick runs about 12,100 statements and 41,300 node evaluations.
+The most frequent nodes are simple: literals (5,400), local and instance
+variable reads (5,100 and 4,500), BoolVariable (2,650), assignments (2,350 plus
+970 bool), `&&` and `||` (1,730 and 890), context `Other.X` (1,380), int and byte
+conversions, object `!=`, float compares and int increments.
 
-* **Lowered code.** Each prepared function's decoded tree is lowered into a
-  word array in the runtime's arena: the node kind, then resolved operands
-  (a local's cell and frame offset, a field's cell and offset, a literal's
-  bits), then the children in evaluation order. Resolution stays in
-  JavaScript (`objects.operand`); a new operand epoch relowers.
-* **Per-node fallback.** A node kind Rust does not implement yet is lowered
-  to a fallback naming the node: Rust calls one JavaScript import, which runs
+* **Lowered code.** `script-vm-lower.mjs` lowers each compiled function, per
+  runtime and operand epoch, into a word array in the arena: a statement table,
+  then each statement's typed expression tree in evaluation order
+  (`native/script-vm/src/interp.rs` documents the format). Types come from the
+  original tokens and linked properties: a literal's token, a variable's
+  property type, an operator's Core signature. Lowered today: constants, scalar
+  locals and fields (int, byte, bool, float, object handles) and scalar struct
+  members at their linked offsets, `Self`, contexts, assignments of scalars,
+  Core's int, float, bool and object operators and the byte, int and float
+  conversions, jumps, typed returns and a foreach's IteratorNext and
+  IteratorPop.
+* **Per-node fallback.** Any other node becomes a JavaScript node of the kind
+  its position expects: Rust calls one import, and the compiled closure
+  evaluates that node on the same frame. The consumer's conversion is the
+  closure's own (`v | 0`, `Boolean(v)`, `+v`, the object's handle); a
+  JavaScript `undefined` in a float position is kept apart, because the float
+  store codec turns it into 0. Any other statement returns to the JavaScript
+  loop for exactly one step (`compiled.step`). Every function body runs, and
+  coverage grows kind by kind.
+* **Receivers.** A field is read in the image when its receiver has an image
+  in this arena, no poisoned value, and no host binding for that key; the
+  runtime keeps a table of the keys any binding uses. Bindings whose value
+  changes only through their setter (`Actor.Level`, `LevelInfo.NetMode`) keep a
+  copy in the image instead (`mirror`), which `SCRIPT_VM_CHECK=1` compares with
+  the binding before every Rust run.
+* **Shared state.** GRunaway crosses into the module around every run and
+  import; each run keeps its own hang budget; the shadow stack pointer is
+  restored after a JavaScript exception unwinds through Wasm frames.
+* **Verification.** `validate-script-vm-interp` runs every code kind against
+  the JavaScript expression it transcribes (130,000 checks, and deliberately
+  broken builds fail it). `SCRIPT_VM=rust` bench-sim runs match the JavaScript
+  VM's digest at all 30 checkpoints (every 10 ticks) on Training
+  (`04f77dc631509ae4`) and Island (`5496f30ee89033fc`), with the mirror check
+  on. Island: about 1,670 function bodies run in Rust per tick. In three
+  alternating headless A/B rounds on a loaded machine the median tick was 8%
+  and 13% lower in two and 9% higher in one; a quiet-machine measurement is
+  pending. In a CPU profile the VM, value and runtime field services fall
+  from 36 to 22 ms of a 57 ms profiled tick. The
+  remaining cost is what the fallbacks do: script calls (about 810 per tick),
+  object assignments (440), bound fields and natives.
+
+**R2b-3 — Calls (implemented).** A final call, or a virtual call on `Self`,
+whose function has only scalar or object parameters (no out parameters) and
+no locals that need destruction runs in Rust.
+
+* **Begin.** `js_call_begin` resolves the call as `runtime.invoke` and
+  `callFunction` do, applies their checks, and pushes the callee's frame
+  block on the FMemStack. The stack's state words live in the module
+  (`FRAMES`), shared with the JavaScript `FrameStack`. A call that must take
+  the JavaScript path is refused before any argument is evaluated, and
+  JavaScript then runs the whole call.
+* **Arguments and body.** Rust stores each argument, evaluated with the
+  caller's `Self`, before evaluating the next. It then runs the callee as a
+  nested run with its own hang budget. A callee statement left to JavaScript
+  runs through `js_step`. The result is converted as `copyValue` converts it.
+* **Runs.** `FRAMES` also holds the host's count of active runs, which is
+  the next run id. Rust restores it with the stack after each call, so a
+  callee whose arguments are still being evaluated keeps its id through
+  nested calls. A callee that throws unwinds past Rust. The host's run
+  therefore restores the stack, the budget and the shadow stack pointer, and
+  frees the code of replaced lowerings only when no run is active.
+* **Verification.** `validate-script-vm-interp` covers the call paths:
+  argument receivers and order, frame pushes and restores, recursion,
+  re-entry, budgets and bad kinds. Deliberately broken builds fail it,
+  including one that leaves the run count raised. `SCRIPT_VM=rust` digests
+  match the JavaScript VM at all 30 checkpoints on Training and Island.
+  Island runs about 745 calls per tick in Rust.
+
+**R2b-4 — Object stores and compound assignment (implemented).** Since
+R1a-2 an object assignment is a handle store: a local, a field of `Self`
+(except `Actor.Base`, whose store also bumps the base epoch in JavaScript) or
+a scalar struct member of either. Object parameters are stored the same way.
+Core's `<=`/`>=` on ints (152/153) and `<=` on floats (178, which reads an
+undefined operand as 0) join the operators. `+=`, `-=` and `*=` on floats
+(184/185/182) and `+=`/`-=` on ints (161/162) run as statements. As in
+JavaScript, the value is evaluated before the target is read. When both
+operands are NaN, the first one wins, explicitly, because Rust does not fix
+the operand order of a float add. A member store writes only the member's
+bytes, as the original's GPropAddr store does. JavaScript's member reference
+rewrites the whole struct; the two can differ only when another member holds
+a signaling NaN.
+Verification: `validate-script-vm-interp` (93 kinds, 170,604 checks; 49 of
+55 mutants caught; the six survivors are semantically identical). Digests
+match at all 30 checkpoints on both maps. On Island the per-tick fallbacks
+lost the object assignments (about 550) and nearly all compound assignments.
+
+**R3 — Hot families.** Move native and physics families into Rust as
+profiles rank them. Candidates are traces and the collision hash, walking and
+falling, AICanSee and alliance, and GetFrame/mesh lighting (already Rust).
+Each family keeps its native oracle validators, which run against the Rust
+implementation through the same JavaScript API.
+
+A September 29 CPU profile of Island ticks (`--cpu-prof`, 150 ticks after
+boot, profiler overhead included) splits the tick by module: the runtime's
+services 36%, the VM 18%, value copies and codecs 11%, physics and
+collision about 14%, the BigInt x87 model 3%. The largest single cluster,
+about 16 ms of a 57 ms profiled tick, is host code reading script
+properties by name (`readNamed` → `namedHandle` → `readInstanceField` →
+`instance`). Its callers are the per-actor native tick
+(`actorTickServices`), pawn physics, the per-tick CleanupDestroyed scan and
+AIGetLightLevel's scan of every actor's `LightType`. These are the R3
+families: in Rust they read the linked offsets directly.
+
+**R3-a — BSP traces (implemented).** UModel's half of LineCheck runs in Rust
+(`native/script-vm/src/trace.rs`): the zero-extent ray traversal (`traceRay`,
+with ExtraNodeFlags and owned-brush ToWorld coordinates) and the box trace
+(`traceExtent`: hull clipping, supplemental bounds, pair bevels). Each
+transcribes its JavaScript body (`traceRayFast`, `traceExtentJs`): the same
+double intermediates in the same order, `as f32` at every `Math.fround`, the
+same traversal order and visit guard. The JavaScript stays the reference, the
+path before loading, and the answer to every case the kernel hands back.
+
+* **Boundary.** Ported: the two model queries, storedSupport's exact 64-bit
+  midpoint sum (`u128` in place of BigInt) and `Math.sqrt`/`min`/`max`. The
+  Wasm instructions for these are unstable in Rust, so `sqrt` is a Newton
+  estimate that an exact integer residual corrects. Left in JavaScript:
+  SingleLineCheck's filter, MultiLineCheck's join and qsort, the collision hash
+  and the cylinder primitives (they read live actor state), and the point and
+  FastLineCheck queries.
+* **Model memory.** `trace-kernel.mjs` uploads each model object once into
+  the kernel's own ObjectArena: a 32-byte header, 64 bytes per node (the plane
+  as the four JavaScript doubles, front, back, ToInt32 flags, collisionBound,
+  vertexCount > 0), then the leaf-hull words. Island's BSP (13,212 nodes) is
+  1.05 MB, uploaded in 2.7 ms. A FinalizationRegistry frees the range with
+  the model. The scratch stacks (2,048 ray and 4,096 extent entries), the
+  64-plane hull and the result block are statics.
+* **Hand-backs.** A case the JavaScript throws on (an invalid link or hull
+  offset, a cyclic tree, a hull over 64 planes, non-finite inputs) or a
+  deeper traversal returns to the JavaScript. A model with non-number planes
+  is not uploaded.
+* **Loading.** `prepareFunction` awaits `loadTraceKernel()` after the VM
+  kernel. The instance is the script-vm module with a throwing stub for each
+  function it imports. `TRACE_KERNEL=js` keeps the JavaScript path;
+  `TRACE_DIFFERENTIAL=1` runs both and throws on any difference, key order
+  included.
+
+Verification: `validate-trace-kernel` compares the two on 1,530,665 seeded
+cases (1,065,877 rays, 464,788 extents) on the Training and Island BSPs and
+every mover brush of both maps, owned at key positions, rotated, scaled,
+sheared and through raw coordinates. The cases include plane-grazing,
+epsilon, zero-length, in-solid, huge, infinite and NaN inputs. All are
+identical, as are 24 million `sqrt` and 4 million storedSupport results (2
+million at constructed float32 midpoints). The native oracles pass with the
+kernel answering under `TRACE_DIFFERENTIAL=1`: rays (1,070 cases), brush rays
+(1,720), extents (3,420), collision (456), level (21,863 kernel rays), world
+fitting (6,878), the mover and far-move scenes, player sequence, tick order
+and both mesh-lighting validators. Digests are unchanged with no hand-back:
+Island `5496f30ee89033fc` (820,892 rays and 28,994 extents compared) and
+Training `04f77dc631509ae4` (245,594 and 4,532). The 546 unit tests pass, and
+a Chromium Island run shows the kernel in its profile with no runtime error.
+
+Cost: the Island tick median fell from 25.9 to 25.1 ms (three headless A/B
+pairs). Under `walking`, the traces fell from 0.83 to 0.24 ms of a profiled
+tick, and walking from 9.2 to 8.5 ms. Most of the rest is the JavaScript
+around the traces: SingleLineCheck and MultiLineCheck (about 1 ms), the
+collision hash, the primitives and property reads. They move once actor state
+is in the arena.
+
   that subtree with the existing compiled closures on the same frame object.
   Every function can then run in Rust from the start, and coverage grows kind
   by kind without an eligibility cliff.
@@ -288,23 +486,6 @@ object `!=`, float compares and int increments. Script calls are about 860
 * **Verification.** `SCRIPT_VM=rust` runs every function body in Rust. The
   bench-sim digests (`--digest-every`) on Training and Island must equal the
   JavaScript VM's at every checkpoint, and the full sweep runs in that mode.
-
-**R3 — Hot families.** Move native and physics families into Rust as
-profiles rank them. Candidates are traces and the collision hash, walking and
-falling, AICanSee and alliance, and GetFrame/mesh lighting (already Rust).
-Each family keeps its native oracle validators, which run against the Rust
-implementation through the same JavaScript API.
-
-A September 29 CPU profile of Island ticks (`--cpu-prof`, 150 ticks after
-boot, profiler overhead included) splits the tick by module: the runtime's
-services 36%, the VM 18%, value copies and codecs 11%, physics and
-collision about 14%, the BigInt x87 model 3%. The largest single cluster,
-about 16 ms of a 57 ms profiled tick, is host code reading script
-properties by name (`readNamed` → `namedHandle` → `readInstanceField` →
-`instance`). Its callers are the per-actor native tick
-(`actorTickServices`), pawn physics, the per-tick CleanupDestroyed scan and
-AIGetLightLevel's scan of every actor's `LightType`. These are the R3
-families: in Rust they read the linked offsets directly.
 
 New subsystems still missing (swimming, the remaining natives, rendering)
 are researched as before and implemented against this core. A new native

@@ -14,6 +14,8 @@ import { toView, fromView } from '../src/unreal/geometry.mjs';
 import { brushMatrix } from '../src/viewer/transforms.mjs';
 import { nativeModel } from './native-model.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), f = Math.fround, captureOnly = process.argv.includes('--capture-only');
 const files = [];

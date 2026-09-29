@@ -11,10 +11,12 @@ import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,d
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell } from './script-object-image.mjs';
+import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell, scalarCell } from './script-object-image.mjs';
 import { createFrameLocals, FrameStack, LocalCellStorage } from './script-frame-locals.mjs';
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
+import { loadTraceKernel } from './trace-kernel.mjs';
+import { RustScriptVm } from './script-vm-rust.mjs';
 import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
@@ -287,6 +289,12 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
  * A prepared function/state subset fails explicitly on an unprepared target. */
 // Mesh payloads the script-side mesh consumers (anim sequences, textures)
 // accept: ULodMesh, and a classic UMesh whose frames are not decoded.
+// SCRIPT_VM=rust runs function bodies in the Rust interpreter
+// (script-vm-rust.mjs, docs/rust-core.md R2b-2) while it is verified.
+// (In the browser, the page's ?scriptVm=rust sets DEUS_EX_SCRIPT_VM.)
+const scriptVmRust=()=>typeof process!=='undefined'&&process.env?.SCRIPT_VM==='rust'
+  ||globalThis.DEUS_EX_SCRIPT_VM==='rust';
+const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK==='1';
 const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
 // soundField names served from the level container or native graph.
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
@@ -659,8 +667,11 @@ export class ScriptRuntime {
     return null;
   }
   async prepareFunction(asset,index) {
-    // The Rust operator kernel is in place before any compiled body runs.
+    // The Rust operator and BSP trace kernels are in place before any
+    // compiled body runs.
     await loadScriptVmKernel();
+    await loadTraceKernel();
+    await this.scriptVmInstance();
     const record=await this.objects.resolve(asset,index);
     if(record.kind!=='Function')throw new Error(`Expected script function: ${record.key}`);
     if(record.function)return record;
@@ -2514,7 +2525,54 @@ export class ScriptRuntime {
   bindProperty(receiver,field,binding) {
     if(!field.metadata)throw new Error(`Property is not prepared: ${field.key}`);
     if(typeof binding.get!=='function'||typeof binding.set!=='function')throw new Error('Native property binding requires getter and setter');
-    this.instance(receiver).bindings.set(field.key,binding);
+    const instance=this.instance(receiver);
+    if(binding.mirror){
+      const mirrored=this.mirroredBinding(instance,field,binding);
+      if(mirrored){instance.bindings.set(field.key,mirrored);return;}
+    }
+    instance.bindings.set(field.key,binding);
+    this.noteBoundKey(field.key);
+  }
+  /** A binding whose value changes only through its setter keeps a copy in
+   * the object's image cell, written at binding and after every set, so the
+   * Rust interpreter reads the cell (its key is not a bound key). Reads in
+   * JavaScript still go through the binding. SCRIPT_VM_CHECK=1 compares each
+   * copy with its binding before every Rust run. */
+  mirroredBinding(instance,field,binding) {
+    const cell=instance.cells?.get(field.key);
+    if(!cell||!scalarCell(cell)||instance.poison?.has(field.key))return null;
+    const codec=propertyCodec(field);
+    const write=()=>writeCell(cell,instance.arena.view,instance.refs,codec.copy(binding.get()),instance.base);
+    write();
+    const mirrored={get:binding.get,set:value=>{binding.set(value);write();}};
+    if(SCRIPT_VM_CHECK)(this.mirrors??=[]).push({instance,field,cell,codec,binding:mirrored});
+    return mirrored;
+  }
+  /** SCRIPT_VM_CHECK: every mirrored cell equals its binding's value. */
+  checkMirrors() {
+    for(const {instance,field,cell,codec,binding} of this.mirrors??[]){
+      if(instance.imageToken?.released)continue;
+      const stored=readCell(cell,instance.arena.view,instance.refs,instance.base),value=codec.copy(binding.get());
+      if(!Object.is(stored,value))throw new Error(`Mirrored binding ${field.key} diverged: image ${String(stored)}, binding ${String(value)}`);
+    }
+  }
+  /** A property key some object's host binding serves: the Rust
+   * interpreter leaves that key to JavaScript on bound receivers. */
+  noteBoundKey(key) {
+    const keys=this.boundKeys??=new Set();
+    if(keys.has(key))return;
+    keys.add(key);
+    this.scriptVm?.markBound(key);
+  }
+  /** The runtime's Rust interpreter when SCRIPT_VM=rust, created once on
+   * the object arena before any compiled body runs. */
+  scriptVmInstance() {
+    if(!this.classLoader||!scriptVmRust())return null;
+    this.boundKeys??=new Set();
+    return this.scriptVmReady??=RustScriptVm.create(this).then(vm=>{
+      this.scriptVm=vm;this.services.scriptVm=vm;
+      return vm;
+    });
   }
   defaultReference(receiver,field) {
     // Inside execClassContext (`ClassExpr.default.Member`) the receiver is

@@ -1,4 +1,5 @@
 // Source-derived UModel nonzero-extent branch. See docs/extent-trace.md.
+import {traceKernel,TRACE_DIFFERENTIAL,checkTraceKernel} from './trace-kernel.mjs';
 const f=Math.fround;
 const dot=(a,b)=>a[2]*b[2]+a[1]*b[1]+a[0]*b[0];
 const xyz=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -8,7 +9,7 @@ const support=(p,e)=>Math.abs(p[2]*e[2])+Math.abs(p[1]*e[1])+Math.abs(p[0]*e[0])
 const view=new DataView(new ArrayBuffer(4));
 // Support103f6590 sums Z/Y then X with a 64-bit x87 significand.
 // Only a double exactly at a float32 midpoint can lose the deciding low bits.
-function storedSupport(p,e){
+export function storedSupport(p,e){
  const value=support(p,e),stored=f(value);
  if(value===stored||Math.abs(value-stored)!==2**(Math.floor(Math.log2(value))-24))return stored;
  const binary=v=>{view.setFloat32(0,Math.abs(v),true);const w=view.getUint32(0,true),ex=(w>>>23)&255;return {n:BigInt((w&0x7fffff)|(ex?0x800000:0)),e:ex?ex-150:-149};};
@@ -29,8 +30,19 @@ function intersect(a,b){
 }
 
 /** Returns native hit order/rounding for nonzero upright box extents.
- * Optional coordinates are original ABrush.ToWorld's12 floats, not ToLocal. */
+ * Optional coordinates are original ABrush.ToWorld's12 floats, not ToLocal.
+ * Once the Rust trace kernel is loaded (trace-kernel.mjs) it answers;
+ * traceExtentJs answers before that and every case the kernel hands back.
+ * TRACE_DIFFERENTIAL=1 checks each kernel answer against traceExtentJs. */
 export function traceExtent(model,start,end,extent,ownerCoords=null){
+ const result=traceKernel===null?undefined:traceKernel.extent(model,start,end,extent,ownerCoords);
+ if(result===undefined)return traceExtentJs(model,start,end,extent,ownerCoords);
+ if(TRACE_DIFFERENTIAL)checkTraceKernel('traceExtent',result,()=>traceExtentJs(model,start,end,extent,ownerCoords),{start,end,extent,ownerCoords});
+ return result;
+}
+
+/** The JavaScript reference the Rust kernel transcribes. */
+export function traceExtentJs(model,start,end,extent,ownerCoords=null){
  start=vector(start,'start');end=vector(end,'end');extent=vector(extent,'extent');
  if(extent.every(v=>v===0))throw Error('Zero extent requires the original traceRay branch');
  if(extent.some(v=>v<0))throw Error('Negative extents are unsupported');

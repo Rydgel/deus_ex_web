@@ -122,9 +122,12 @@ function makeBinding(runtime, record, field) {
   };
 
   const dynamic = {
+    // record.levelInfo and level.netMode change only through these setters,
+    // so the runtime keeps a copy in the image (mirror) for the Rust VM.
     level: {
       get: () => record.levelInfo,
       set: value => { record.levelInfo = value; },
+      mirror: true,
     },
     pawnlist: {
       get: () => record.level?.pawnList ?? null,
@@ -304,6 +307,7 @@ function makeBinding(runtime, record, field) {
     netmode: {
       get: () => record.level?.netMode ?? 0,
       set: value => { if (record.level) record.level.netMode = Number(value) | 0; },
+      mirror: true,
     },
   };
   if (dynamic[key]) return dynamic[key];

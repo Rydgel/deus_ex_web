@@ -9,6 +9,8 @@
 //! results are written to `RESULT`.
 #![no_std]
 
+mod interp;
+mod trace;
 mod x87;
 use x87::{Ext, INDEFINITE};
 

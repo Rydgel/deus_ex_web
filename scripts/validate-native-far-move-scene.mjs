@@ -3,6 +3,8 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {gameDirectory} from './game-directory.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const reuse=process.argv.includes('--reuse'),captureOnly=process.argv.includes('--capture-only');
 for(const name of ['00_Training','01_NYC_UNATCOIsland']){
  const dir=`reports/movement/native-far-move-scene/${name}`;await mkdir(dir,{recursive:true});let scene,cases;

@@ -1,6 +1,8 @@
 /** Source-ordered control/camera composition audit, not original Actor.Tick VM execution. */
 import assert from'node:assert/strict';import{readFile,readdir,mkdir,writeFile}from'node:fs/promises';import{spawnSync}from'node:child_process';
 import{AssetStore}from'../src/unreal/assets.mjs';import{decodeMap}from'../src/unreal/map.mjs';import{createGame}from'../src/viewer/game.mjs';import{runPlayerPhysics}from'../src/runtime/player-physics.mjs';import{walkingInput,healthyWalkingGroundSpeed}from'../src/runtime/player-input.mjs';import{handleWalkingControls,stanceCrouchRequested,afterStanceControls,afterJumpControls}from'../src/runtime/player-controls.mjs';import{gameDirectory}from'./game-directory.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const root=gameDirectory(),files=[];for(const dir of['System','Textures','Maps','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 const assets=new AssetStore(files),asset=await assets.get('00_Training'),map=decodeMap(asset.bytes),directory='reports/movement/player-tick-order';await mkdir(directory,{recursive:true});
 const repeat=(input,count)=>Array.from({length:count},()=>input),sequences=[{name:'forward-backward',inputs:[...repeat({forward:1},3),...repeat({forward:-1},3)]},{name:'jump',inputs:[{jump:true},...repeat({},5)]},{name:'hold-crouch',inputs:[...repeat({crouch:true},3),...repeat({},3)]},{name:'duck-plus-jump',inputs:[{crouch:true,jump:true},...repeat({crouch:true},3)]},{name:'release-duck-in-air',inputs:[{crouch:true},{crouch:true},{crouch:true,jump:true},{},{}]}];

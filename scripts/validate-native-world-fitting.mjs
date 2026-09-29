@@ -10,6 +10,8 @@ import { BspCollider } from '../src/runtime/collision.mjs';
 import { findSpot } from '../src/runtime/fitting.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { nativeModel } from './native-model.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const f = Math.fround, root = gameDirectory(), reports = [];
 let seed = 786401;

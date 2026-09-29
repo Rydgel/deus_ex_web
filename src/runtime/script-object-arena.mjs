@@ -10,14 +10,20 @@
  * A released range is not reused at once: a reference the VM built before the
  * release (a CellStorage) keeps reading the old bytes, as it read the old
  * per-object buffer. `reclaim()` makes released ranges reusable; the level
- * tick calls it before any actor runs, when no such reference is live. */
+ * tick calls it before any actor runs, when no such reference is live.
+ *
+ * The low 2 MiB are reserved for the Rust script VM (native/script-vm), which
+ * imports this memory: its 1 MiB shadow stack and its statics (build.rs,
+ * --stack-first) end below RESERVED, so images start there. */
 const PAGE = 65536, ALIGN = 16;
+export const RESERVED = 0x200000;
 
 export class ObjectArena {
   constructor(pages = 64) {
     this.memory = new WebAssembly.Memory({initial: pages});
-    // Base 0 is never handed out, so a zero base can mean "no image".
-    this.top = ALIGN;
+    // Nothing below RESERVED is handed out, so a zero base still means "no
+    // image".
+    this.top = RESERVED;
     this.free = new Map();
     this.released = [];
     this.refresh();

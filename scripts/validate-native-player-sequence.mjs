@@ -11,6 +11,8 @@ import{objectAt}from'../src/unreal/objects.mjs';
 import{ClassDefaults}from'../src/unreal/classes.mjs';
 import{gameDirectory}from'./game-directory.mjs';
 import{nativeLevelScene}from'./native-level-scene.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const root=gameDirectory(),files=[];for(const dir of['System','Textures','Maps','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
 let mismatches=0;
 const assets=new AssetStore(files),defaults=new ClassDefaults(assets),de=await assets.get('DeusEx');const jc=de.pkg.exports.findIndex((e,i)=>objectAt(de.pkg,i+1)?.name==='JCDentonMale');if(jc<0)throw Error('Missing JC class');const pawnValues=await defaults.get(de,jc+1);

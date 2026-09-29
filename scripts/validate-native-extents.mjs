@@ -11,6 +11,8 @@ import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {brushToWorld} from '../src/runtime/coords.mjs';
 import {nativeModel} from './native-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 const root=gameDirectory(),f=Math.fround,captureOnly=process.argv.includes('--capture-only'),reuse=process.argv.includes('--reuse');
 const files=[];
 for(const dir of ['Maps','System'])for(const name of await readdir(path.join(root,dir)))files.push({path:`${dir}/${name}`,read:()=>readFile(path.join(root,dir,name))});

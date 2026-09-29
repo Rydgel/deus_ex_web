@@ -12,10 +12,11 @@
  * (script-object-image.mjs), so a local reads and writes the same bytes an
  * object property of that type does.
  *
- * Values without a byte form yet (names, strings, object and class pointers,
- * dynamic arrays) sit in the frame's reference array, as for objects. A
- * function whose class the native loader has not linked has no offsets; its
- * frame keeps every value in a Map, the storage before R2a.
+ * Values without a byte form yet (names, strings, dynamic arrays) sit in the
+ * frame's reference array, as for objects; object and class pointers are
+ * handles in the block (R1a-2). A function whose class the native loader has
+ * not linked has no offsets; its frame keeps every value in a Map, the
+ * storage before R2a.
  */
 import {functionImageCells, readCell, writeCell, readFixedElement, isFixedCell} from './script-object-image.mjs';
 import {NO_ELEMENT, zeroValue} from './script-values.mjs';
@@ -24,15 +25,30 @@ const CHUNK = 1 << 18;
 
 /** FMemStack for frame blocks: LIFO ranges inside arena chunks. A caller
  * saves `index` and `top` before pushing and restores both when its call
- * ends, normally or by an exception. Chunks are kept for reuse. */
+ * ends, normally or by an exception. Chunks are kept for reuse.
+ *
+ * With the Rust interpreter attached (script-vm-rust.mjs), the three state
+ * words live in its FRAMES statics, so script calls in Rust push on the same
+ * stack; it calls back into `advance` for a new chunk. */
 export class FrameStack {
   constructor(arena) {
     this.arena = arena;
     this.chunks = [];
-    this.index = -1;
-    this.top = 0;
-    this.end = 0;
+    this.at = 0;
+    this.state = [-1, 0, 0];
   }
+  /** Keep index, top and end at `address` in the arena (Rust's FRAMES). */
+  attach(address) {
+    const [index, top, end] = [this.index, this.top, this.end];
+    this.at = address;
+    this.index = index; this.top = top; this.end = end;
+  }
+  get index() { return this.at ? this.arena.view.getInt32(this.at, true) : this.state[0]; }
+  set index(value) { if (this.at) this.arena.view.setInt32(this.at, value, true); else this.state[0] = value; }
+  get top() { return this.at ? this.arena.view.getUint32(this.at + 4, true) : this.state[1]; }
+  set top(value) { if (this.at) this.arena.view.setUint32(this.at + 4, value, true); else this.state[1] = value; }
+  get end() { return this.at ? this.arena.view.getUint32(this.at + 8, true) : this.state[2]; }
+  set end(value) { if (this.at) this.arena.view.setUint32(this.at + 8, value, true); else this.state[2] = value; }
   /** A zeroed block of `size` bytes; returns its base. */
   push(size) {
     const aligned = (size + 7) & ~7;

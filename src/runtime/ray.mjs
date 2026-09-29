@@ -1,3 +1,5 @@
+import { traceKernel, TRACE_DIFFERENTIAL, checkTraceKernel } from './trace-kernel.mjs';
+
 const f = Math.fround;
 const planeDistance = (p, v) => f(v[2] * p[2] + v[0] * p[0] + v[1] * p[1] - p[3]);
 const dotZYX = (a, b) => a[2] * b[2] + a[1] * b[1] + a[0] * b[0];
@@ -12,11 +14,15 @@ const transformVector = (v, rows) => rows.map(row => f(v[0] * row[0] + v[1] * ro
 // traversal beside the fast one and throws on any difference.
 const differential = typeof process !== 'undefined' && process.env?.RAY_DIFFERENTIAL === '1';
 
-/** traceRay without per-call temporaries: the same float stores, the same
- * double intermediates in the same order, the same traversal and errors.
- * Scratch stacks are module-level; a nested call (none occur) gets its own. */
+/** Once the Rust trace kernel is loaded (trace-kernel.mjs, native/script-vm
+ * src/trace.rs) it answers; traceRayFast answers before that and every case
+ * the kernel hands back. TRACE_DIFFERENTIAL=1 checks each kernel answer
+ * against traceRayFast. */
 export function traceRay(model, start, end, extraNodeFlags = 0, ownerCoords = null) {
-  const result = traceRayFast(model, start, end, extraNodeFlags, ownerCoords);
+  let result = traceKernel === null ? undefined : traceKernel.ray(model, start, end, extraNodeFlags, ownerCoords);
+  if (result === undefined) result = traceRayFast(model, start, end, extraNodeFlags, ownerCoords);
+  else if (TRACE_DIFFERENTIAL) checkTraceKernel('traceRay', result,
+    () => traceRayFast(model, start, end, extraNodeFlags, ownerCoords), { start, end, extraNodeFlags, ownerCoords });
   if (differential) {
     const reference = traceRayReference(model, start, end, extraNodeFlags, ownerCoords);
     if (!sameRayResult(result, reference))
@@ -44,11 +50,15 @@ function ownedPlanes(model, ownerCoords) {
   return entry;
 }
 
+/** traceRay without per-call temporaries: the same float stores, the same
+ * double intermediates in the same order, the same traversal and errors.
+ * Scratch stacks are module-level; a nested call (none occur) gets its own.
+ * The JavaScript reference the Rust kernel transcribes. */
 let scratch = null, scratchBusy = false;
 const newScratch = size => ({ size, index: new Int32Array(size), boundary: new Int32Array(size),
   outside: new Uint8Array(size), points: new Float64Array(size * 6) });
 
-function traceRayFast(model, start, end, extraNodeFlags, ownerCoords) {
+export function traceRayFast(model, start, end, extraNodeFlags = 0, ownerCoords = null) {
   const { nodes } = model;
   if (!nodes.length) return null;
   if (model.rootOutside === undefined) throw new Error('Ray traversal requires a compiled BSP root');

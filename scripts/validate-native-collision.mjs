@@ -9,6 +9,8 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { BspCollider } from '../src/runtime/collision.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { nativeModel } from './native-model.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 // A bounded original-binary comparison for training's entrance/stairs region.
 // This neither establishes whole-map compatibility nor substitutes internal tests.

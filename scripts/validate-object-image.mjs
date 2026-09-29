@@ -19,9 +19,10 @@
  *    their linked BitMask; a bool write leaves its dword neighbors intact.
  * 4. Unproducible values. A default or map-authored value that cannot be
  *    produced or copied throws at the same accesses as before.
- * 5. Handles (docs/rust-core.md, R1a). An object or class pointer's four bytes
- *    at its linked Offset name the identity the property holds, in class
- *    defaults and after writes; None is zero.
+ * 5. Handles (docs/rust-core.md, R1a and R1a-2). An object or class pointer's
+ *    four bytes at its linked Offset are its only storage: they hold the
+ *    handle of the class default the lazy path produces and of each written
+ *    probe; None is zero. The reference array keeps no pointer.
  */
 import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
@@ -92,7 +93,15 @@ function elementProbes(field, metadata) {
   return [];
 }
 
+// 'SELF' and 'CLASS' stand for the probed object and its class wherever a
+// pointer sits: top level, struct members and fixed-array elements.
+const substitute = (raw, object, cls) => raw === 'SELF' ? object : raw === 'CLASS' ? cls.record
+  : Array.isArray(raw) ? raw.map(value => substitute(value, object, cls))
+  : raw !== null && typeof raw === 'object'
+    ? Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, substitute(value, object, cls)])) : raw;
+
 let objects = 0, defaults = 0, defaultErrors = 0, writes = 0, byteChecks = 0, boolNeighbors = 0, handleDefaults = 0;
+let pointerRejects = 0;
 const pointer = entry => (entry.type === 'object' || entry.type === 'class') && entry.arrayDim === 1;
 for (const cls of classes) {
   const layout = linkedClassLayout(cls, {graph, identity});
@@ -112,13 +121,14 @@ for (const cls of classes) {
     if (expected.error) defaultErrors++;
   }
 
-  // 5. Handles of the class defaults.
+  // 5. Handles of the class defaults, against the lazy default path.
   const cells = instance.cells;
   for (const entry of layout.properties) {
     if (!pointer(entry) || !cells.has(entry.key)) continue;
-    const value = outcome(() => runtime.readField(object, entry.field));
-    if (value.error) continue;
-    assert.equal(identityOfHandle(instance.image.getUint32(entry.offset, true)), value.value ?? null,
+    const expected = outcome(() => propertyCodec(entry.field).read(runtime.defaultValue(cls, entry.field)));
+    if (expected.error) continue;
+    const handle = instance.image.getUint32(entry.offset, true);
+    assert.ok(identityOfHandle(handle) === (expected.value ?? null) && (handle === 0) === (expected.value == null),
       `${entry.key} default handle at +0x${entry.offset.toString(16)}`);
     handleDefaults++;
   }
@@ -128,7 +138,7 @@ for (const cls of classes) {
     const field = entry.field;
     if (!cells.has(field.key) || outcome(() => runtime.readField(object, field)).error) continue;
     for (const raw of probesFor(field)) {
-      const probe = raw === 'SELF' ? object : raw === 'CLASS' ? cls.record : raw;
+      const probe = substitute(raw, object, cls);
       const codec = propertyCodec(field);
       const returned = outcome(() => runtime.writeField(object, field, probe));
       const expected = outcome(() => codec.copy(probe));
@@ -144,7 +154,7 @@ for (const cls of classes) {
         case 'float': assert.ok(Object.is(image.getFloat32(at, true), value), `${field.key} float at +0x${at.toString(16)}`); break;
         case 'bool': assert.equal((image.getUint32(at, true) & entry.mask) !== 0, value, `${field.key} bit ${entry.mask.toString(16)} at +0x${at.toString(16)}`); break;
         case 'object': case 'class':
-          assert.equal(identityOfHandle(image.getUint32(at, true)), value ?? null, `${field.key} handle at +0x${at.toString(16)}`);
+          assert.ok(identityOfHandle(image.getUint32(at, true)) === (value ?? null), `${field.key} handle at +0x${at.toString(16)}`);
           assert.equal(image.getUint32(at, true) === 0, value === null, `${field.key} None is a zero pointer`);
           break;
         case 'struct':
@@ -157,7 +167,21 @@ for (const cls of classes) {
       }
       byteChecks++;
     }
+    // A pointer holds an object or None; any other value has no handle and
+    // is rejected before the bytes change (R1a-2).
+    if (pointer(entry)) {
+      const before = instance.image.getUint32(entry.offset, true);
+      const rejected = outcome(() => runtime.writeField(object, field, 'NotAnObject'));
+      assert.ok(String(rejected.error).startsWith('TypeError: An object or class property cannot hold a string'),
+        `${field.key} rejects a string`);
+      assert.ok(instance.image.getUint32(entry.offset, true) === before, `${field.key} keeps its handle after the rejected write`);
+      pointerRejects++;
+    }
   }
+  // The reference array holds names, strings and dynamic arrays, never a
+  // pointer (R1a-2), after every probe above.
+  for (const value of instance.refs ?? [])
+    assert.ok(value == null || typeof value === 'string' || Array.isArray(value), `${cls.record.key} reference array holds a ${typeof value}`);
   // A bool write changes only its own bit of the shared dword.
   const bools = layout.properties.filter(entry => entry.type === 'bool' && cells.has(entry.key));
   for (const entry of bools) {
@@ -224,4 +248,5 @@ assert.deepEqual(outcome(() => runtime.readField(reset, vectorField)), badCopy, 
 assert.deepEqual(outcome(() => runtime.readField(reset, intField)), unmapped, 'reset keeps the undecoded value');
 
 console.log(`validate-object-image: ${objects} objects, ${defaults} defaults (${defaultErrors} unproducible), ` +
-  `${writes} writes, ${byteChecks} byte placements, ${boolNeighbors} bool words, ${handleDefaults} default handles: ok`);
+  `${writes} writes, ${byteChecks} byte placements, ${boolNeighbors} bool words, ${handleDefaults} default handles, ` +
+  `${pointerRejects} non-object pointer writes rejected: ok`);

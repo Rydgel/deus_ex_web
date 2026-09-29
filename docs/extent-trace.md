@@ -37,6 +37,11 @@ node, captured through diagnostic instrumentation; it is not the original
 FCheckResult.Item (the native extent path does not write an item index).
 `penetrating` reports raw entry<=0 for caller convenience.
 
+Once Play has loaded the Rust trace kernel ([Rust core](rust-core.md) step
+R3-a), `traceExtent` runs its transcription in `native/script-vm/src/trace.rs`.
+The JavaScript body (`traceExtentJs`) stays the reference and answers every case
+the kernel hands back. `validate-native-extents` loads the kernel.
+
 World and owner traversal use full endpoints and visit the near branch first.
 No normalized-plane substitution is made. Supplemental bounds keep their double
 0.1 constants before the float store, while final backoff uses float32(.1).

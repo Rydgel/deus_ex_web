@@ -5,11 +5,12 @@
  * (script-object-layout.mjs) in one little-endian byte image of the class's
  * PropertiesSize. Bytes, ints, floats and packed bools are stored there, so f32
  * rounding, byte truncation and shared bool dwords follow from the storage.
- * FName, FString, object and class pointers and dynamic arrays have no
- * recovered byte form in the VM yet (docs/object-memory.md, Unresolved). Each
- * of those values sits in a per-object reference array instead. An object or
- * class pointer's bytes also hold the identity's handle
- * (script-object-handles.mjs); the other kinds' bytes stay zero.
+ * An object or class pointer's four bytes hold the identity's handle
+ * (script-object-handles.mjs), and those bytes are its only storage (R1a-2):
+ * a read resolves the handle, a write stores it. FName, FString and dynamic
+ * arrays have no recovered byte form in the VM yet (docs/object-memory.md,
+ * Unresolved). Each of those values sits in a per-object reference array
+ * instead, and its bytes stay zero.
  *
  * A cell reads and writes one property's logical VM value, the same value
  * script-values.mjs copies: a cell read equals `propertyCodec(field).read` of
@@ -18,21 +19,23 @@
  */
 import {linkedClassLayout, linkedFunctionLayout} from './script-object-layout.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
-import {handleOf} from './script-object-handles.mjs';
+import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 
-const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, ROTATOR = 8, STRUCT = 9, FIXED = 10;
-const REF_TYPES = new Set(['name', 'string', 'object', 'class']);
+const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, ROTATOR = 8, STRUCT = 9, FIXED = 10, POINTER = 11;
+const REF_TYPES = new Set(['name', 'string']);
 
 // One shape for every cell, so the reads and writes below see a single hidden
-// class. `ref` and `refCount` index the reference array; `members` (struct) and
-// `element`/`dim`/`stride` (fixed array) hold the parts of composite values.
+// class. `ref` and `refCount` index the reference array (a pointer cell uses
+// none); `members` (struct) and `element`/`dim`/`stride` (fixed array) hold the
+// parts of composite values.
 class Cell {
   constructor(tag, offset, refCount, {mask = 0, members = null, element = null, dim = 0, stride = 0} = {}) {
     this.tag = tag; this.offset = offset; this.mask = mask; this.ref = 0; this.refCount = refCount;
     this.key = null; this.members = members; this.element = element; this.dim = dim; this.stride = stride;
     // Actor.Base: writes advance the rider-scan epoch (base-epoch.mjs).
     this.actorBase = false;
-    // An object or class pointer: its bytes hold the identity's handle (R1a).
+    // An object or class pointer (a POINTER cell): its bytes hold the
+    // identity's handle (R1a), its only storage (R1a-2).
     this.handle = false;
   }
 }
@@ -64,12 +67,12 @@ function elementCell(entry, metadata, offset) {
         ? new Cell(ARRAY, offset, 1) : null;
     }
     case 'struct': return structCell(entry, metadata, offset);
-    default: {
-      if (!REF_TYPES.has(entry.type)) return null;
-      const cell = new Cell(REF, offset, 1);
-      cell.handle = entry.type === 'object' || entry.type === 'class';
+    case 'object': case 'class': {
+      const cell = new Cell(POINTER, offset, 0);
+      cell.handle = true;
       return cell;
     }
+    default: return REF_TYPES.has(entry.type) ? new Cell(REF, offset, 1) : null;
   }
 }
 
@@ -113,7 +116,60 @@ export function objectImageCells(cls, {graph, identity}) {
   if (result) return result;
   result = layoutCells(linkedClassLayout(cls, {graph, identity}));
   classCells.set(cls, result);
+  for (const [key, cell] of result.cells) registerFieldCell(key, cell);
   return result;
+}
+
+// A property's cell is the same in every class that has it: the declaring
+// class links its offset, subclasses append after it. The Rust interpreter
+// (script-vm-lower.mjs) addresses an instance field by key through this
+// registry; a key whose cells ever disagree is left to JavaScript.
+const fieldCells = new Map();
+let fieldCellVersion = 0;
+function registerFieldCell(key, cell) {
+  const known = fieldCells.get(key);
+  if (known === undefined) {
+    fieldCells.set(key, cell);
+    fieldCellVersion++;
+  } else if (known !== null && (known.tag !== cell.tag || known.offset !== cell.offset || known.mask !== cell.mask ||
+    known.handle !== cell.handle)) {
+    fieldCells.set(key, null);
+    fieldCellVersion++;
+  }
+}
+/** The image cell every class with the property `key` uses, or null. */
+export const fieldImageCell = key => fieldCells.get(key) ?? null;
+/** Changes whenever the registry gains or loses a key. */
+export const fieldImageCellVersion = () => fieldCellVersion;
+
+// A vector's or rotator's members by name, at 4-byte steps (structCell
+// checks the linked layout).
+const COMPONENTS = {[VECTOR]: ['core.object.vector', 'float', ['X', 'Y', 'Z']],
+  [ROTATOR]: ['core.object.rotator', 'int', ['Pitch', 'Yaw', 'Roll']]};
+/** The scalar member `member` (a linked struct member field) of a struct
+ * cell, as scalarCell describes it with the offset from the cell's image:
+ * the member runtime.structValue reads. Null for any other member. */
+export function structMemberCell(cell, member) {
+  if (!cell || !member?.key) return null;
+  const component = COMPONENTS[cell.tag];
+  if (component) {
+    const [structKey, kind, names] = component, index = names.indexOf(member.name);
+    if (member.key.slice(0, member.key.lastIndexOf('.')) !== structKey || index < 0) return null;
+    return {kind, offset: cell.offset + 4 * index, mask: 0};
+  }
+  if (cell.tag !== STRUCT) return null;
+  const inner = scalarCell(cell.members.find(item => item.key === member.key));
+  return inner && {...inner, offset: cell.offset + inner.offset};
+}
+
+const SCALAR_KINDS = {[BYTE]: 'byte', [INT]: 'int', [BOOL]: 'bool', [FLOAT]: 'float'};
+/** A scalar cell's kind (byte, int, bool, float, or object for an object or
+ * class pointer, whose bytes hold a handle), offset and bool mask; null for
+ * any other cell. */
+export function scalarCell(cell) {
+  if (!cell) return null;
+  const kind = cell.tag === POINTER ? 'object' : SCALAR_KINDS[cell.tag];
+  return kind ? {kind, offset: cell.offset, mask: cell.mask >>> 0} : null;
 }
 
 /** The frame cells of a prepared function's parameters and locals
@@ -147,6 +203,7 @@ export function readCell(cell, image, refs, at = 0, refAt = 0) {
     case INT: return image.getInt32(at + cell.offset, true);
     case BOOL: return (image.getUint32(at + cell.offset, true) & cell.mask) !== 0;
     case FLOAT: return image.getFloat32(at + cell.offset, true);
+    case POINTER: return identityOfHandle(image.getUint32(at + cell.offset, true));
     case REF: return refs[refAt + cell.ref];
     default: return readComposite(cell, image, refs, at + cell.offset, refAt);
   }
@@ -192,13 +249,21 @@ export function writeCell(cell, image, refs, value, at = 0, refAt = 0) {
       return;
     }
     case FLOAT: image.setFloat32(at + cell.offset, value, true); return;
-    case REF:
-      refs[refAt + cell.ref] = value;
-      if (cell.handle) image.setUint32(at + cell.offset, typeof value === 'object' ? handleOf(value) : 0, true);
+    case POINTER:
+      image.setUint32(at + cell.offset, pointerHandle(value), true);
       if (cell.actorBase) bumpBaseEpoch();
       return;
+    case REF: refs[refAt + cell.ref] = value; return;
     default: writeComposite(cell, image, refs, value, at + cell.offset, refAt);
   }
+}
+
+// The handle a pointer cell stores for a logical value (copyPointer's result):
+// 0 for None. Anything else that is not an object has no pointer form.
+function pointerHandle(value) {
+  if (value == null) return 0;
+  if (typeof value !== 'object') throw new TypeError(`An object or class property cannot hold a ${typeof value} value (${String(value)})`);
+  return handleOf(value);
 }
 
 function writeComposite(cell, image, refs, value, offset, refAt) {
@@ -228,20 +293,19 @@ function writeComposite(cell, image, refs, value, offset, refAt) {
 }
 
 /** Every object or class pointer inside the cells, struct members and fixed
- * array elements included: `[offset, refIndex]` pairs relative to the image
- * and its reference array (for handle validators). */
+ * array elements included: their byte offsets relative to the image, in
+ * cell order (for handle validators). */
 export function handleSlots(cells) {
   const slots = [];
-  const visit = (cell, at, refAt) => {
+  const visit = (cell, at) => {
     switch (cell.tag) {
-      case REF: if (cell.handle) slots.push([at + cell.offset, refAt + cell.ref]); return;
-      case STRUCT: for (const member of cell.members) visit(member, at + cell.offset, refAt + cell.ref); return;
+      case POINTER: slots.push(at + cell.offset); return;
+      case STRUCT: for (const member of cell.members) visit(member, at + cell.offset); return;
       case FIXED:
-        for (let index = 0; index < cell.dim; index++)
-          visit(cell.element, at + cell.offset + index * cell.stride, refAt + cell.ref + index * cell.element.refCount);
+        for (let index = 0; index < cell.dim; index++) visit(cell.element, at + cell.offset + index * cell.stride);
         return;
     }
   };
-  for (const cell of cells.values()) visit(cell, 0, 0);
+  for (const cell of cells.values()) visit(cell, 0);
   return slots;
 }

@@ -16,6 +16,8 @@ import { pointRegion } from '../src/runtime/zone.mjs';
 import { traceRay } from '../src/runtime/ray.mjs';
 import { worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
+await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
 
 const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System'])
