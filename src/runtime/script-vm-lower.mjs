@@ -17,20 +17,24 @@
  * convert it: int `v | 0`, bool `Boolean(v)`, float `+v` (undefined is kept
  * apart, since the float store codec turns it into 0), object its handle.
  */
-import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion} from './script-object-image.mjs';
+import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell} from './script-object-image.mjs';
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
+import {fixedArrayShape} from './script-values.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
   LIT_INT: 20, LIT_FLOAT: 21, LIT_BOOL: 23, LIT_NONE: 24,
   LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34},
   FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44},
+  FIELD_ELEM: {int: 25, byte: 26, bool: 27, float: 28, object: 29},
+  LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39},
+  DEFAULT: {int: 45, byte: 46, bool: 47, float: 48},
   JS: {int: 50, byte: 50, bool: 52, float: 53, object: 54}, JS_VOID: 55,
   SET_LOCAL: {int: 60, byte: 61, bool: 62, float: 63, object: 68},
   SET_FIELD: {int: 64, byte: 65, bool: 66, float: 67, object: 69},
   COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57,
-  CONTEXT: 70, SELF: 71, CALL: 72,
+  CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
   INC_LOCAL_PRE: 110, DEC_LOCAL_PRE: 111, INC_LOCAL_POST: 112,
@@ -151,6 +155,35 @@ export function fieldKeyId(key) {
   return id;
 }
 
+// Class records as small integers from 1, shared by every runtime: a cast's
+// target and the class rows of the handle class table (script-vm-rust.mjs)
+// name records by these ids, so equal ids are the same record.
+const recordIds = new WeakMap();
+let nextRecordId = 1;
+export function classRecordId(record) {
+  let id = recordIds.get(record);
+  if (id === undefined) recordIds.set(record, id = nextRecordId++);
+  return id;
+}
+
+// The record id of the linked class whose own properties (propertyOrder)
+// include `field`: a class's PropertyLink is its chain's propertyOrders, so
+// the field is in it exactly when that class is in its chain (the handle
+// class table checks the concatenation per class).
+const owners = new WeakMap();
+function ownerRecordId(field, runtime) {
+  let id = owners.get(field);
+  if (id !== undefined) return id;
+  for (const cls of runtime.linkedClasses ?? []) {
+    if (!cls.propertyOrder?.includes(field)) continue;
+    if (id !== undefined) return 0;
+    id = classRecordId(cls.record);
+  }
+  if (id === undefined) return 0;
+  owners.set(field, id);
+  return id;
+}
+
 const f32io = new DataView(new ArrayBuffer(4));
 const floatBits = v => (f32io.setFloat32(0, v, true), f32io.getUint32(0, true));
 
@@ -225,6 +258,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       if (cell.kind === 'bool') words.push(cell.mask);
       return typed(cell.kind, words);
     }
+    if (op === 0x1a) return element(n, n);
+    if (op === 0x36 && isNode(n.value) && n.value.op === 0x1a) return element(n.value, n);
+    if (op === 0x02) return defaultVariable(n);
+    if (op === 0x2e) return dynamicCast(n);
     // A scalar member of a struct variable (Location.X): the member's bytes
     // in the variable's cell. A field keeps the struct's key, so a bound
     // struct (and the JavaScript path) takes the whole member node.
@@ -288,6 +325,87 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     });
     return typed(CALL_KIND[signature.rkind],
       [K.CALL, nodeId(n), signature.rkind, signature.id, n.args.length, args.length, ...args]);
+  }
+
+  // EX_ArrayElement (0x1a) of a local or instance fixed array read as a
+  // value (`n` is `a`), or a scalar member of its element (`n` the 0x36 over
+  // `a`): the element's bytes in the variable's cell. The index must
+  // evaluate without an import (a literal or a local), since the JavaScript
+  // path (a field on it, an index out of range) evaluates it again.
+  function element(a, n) {
+    const rs = runtime.services;
+    if (services.arrayReference !== rs.arrayReference) return null;
+    if (n !== a && (services.structValue !== rs.structValue || services.structReference !== rs.structReference)) return null;
+    const variable = a.right;
+    if (!isNode(variable) || (variable.op !== 0x00 && variable.op !== 0x01)) return null;
+    const index = pureIndex(a.left);
+    if (!index) return null;
+    const field = operand(variable);
+    if (!field?.metadata) return null;
+    const cell = variable.op === 0x00 ? layout.cells.get(field.key) : fieldImageCell(field.key);
+    if (!cell) {
+      if (variable.op === 0x01) missingField = true;
+      return null;
+    }
+    const shape = fixedArrayShape(field);
+    if (!isFixedCell(cell) || !shape || shape.dimension !== cell.dim) return null;
+    let target;
+    if (n === a) target = scalarCell(cell.element);
+    else {
+      const member = operand(n);
+      if (!member?.metadata) return null;
+      target = structMemberCell(cell.element, member);
+    }
+    if (!target) return null;
+    const offset = cell.offset + target.offset, id = nodeId(n);
+    const words = variable.op === 0x00 ? [K.LOCAL_ELEM[target.kind], offset, cell.stride, cell.dim, id]
+      : [K.FIELD_ELEM[target.kind], offset, cell.stride, cell.dim, id, fieldKeyId(field.key)];
+    if (variable.op === 0x01) fieldNodes.add(id);
+    if (target.kind === 'bool') words.push(target.mask);
+    return typed(target.kind, [...words, ...index]);
+  }
+  // An int index with no effect and no import: a literal, a local, or a
+  // byte-to-int conversion of either.
+  function pureIndex(n) {
+    const lowered = natural(n);
+    if (!lowered || !accepts('int', lowered.kind)) return null;
+    const words = lowered.words;
+    const leaf = at => words[at] === K.LIT_INT || words[at] === K.LOCAL.int || words[at] === K.LOCAL.byte;
+    return words.length === 2 && leaf(0) || words.length === 3 && words[0] === K.BYTE_TO_INT && leaf(1) ? words : null;
+  }
+
+  // DefaultVariable (0x02) of a scalar property: the receiver's class
+  // default image (interp.rs DEFAULT_*). Object and array defaults and
+  // Object's header properties (classDefaultReference's special cases) stay
+  // in JavaScript.
+  function defaultVariable(n) {
+    if (services.defaultReference !== runtime.services.defaultReference) return null;
+    const field = operand(n);
+    if (!field?.metadata || typeof field.key !== 'string' || field.key.startsWith('core.object.')) return null;
+    const registered = fieldImageCell(field.key);
+    if (!registered) {
+      missingField = true;
+      return null;
+    }
+    const cell = scalarCell(registered);
+    if (!cell || cell.kind === 'object') return null;
+    const owner = ownerRecordId(field, runtime);
+    if (!owner) return null;
+    const words = [K.DEFAULT[cell.kind], cell.offset, nodeId(n), owner];
+    if (cell.kind === 'bool') words.push(cell.mask);
+    return typed(cell.kind, words);
+  }
+
+  // DynamicCast (0x2e) to a script class or None. A native-only class
+  // target (castToNativeClass) or a bad target stays in JavaScript. The
+  // target is the operand the closure resolves before the value.
+  function dynamicCast(n) {
+    const rs = runtime.services;
+    if (services.objectReference !== rs.objectReference || services.castObject !== rs.castObject) return null;
+    let target;
+    try { target = services.objectReference(fn, n.fieldIndex, n); } catch { return null; }
+    if (target !== null && target?.kind !== 'Class') return null;
+    return typed('object', [K.DYNAMIC_CAST, target === null ? 0 : classRecordId(target), nodeId(n), ...expr(n.value, 'object')]);
   }
 
   function native(n) {

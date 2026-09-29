@@ -44,6 +44,57 @@
 //! signed); FLOAT_LE 127 (native 178) `!(f(a ?? 0) > f(b ?? 0))`: UNDEF_F64
 //! counts as 0.0 before the fround (the raw compares 125/126/128 do not), a
 //! NaN stays NaN, so an unordered pair is true.
+//!
+//! Float operators (R2b-5): FLOAT_MUL/DIV/ADD/SUB return `f(a op b)` with a
+//! NaN operand's payload chosen explicitly (`nan_first`): the first NaN
+//! operand, quieted, as the FPU computes JavaScript's `a op b`.
+//!
+//! Handle classes (R2b-5). CLASSES = [table, capacity] is a per-runtime u32
+//! table indexed by handle: 0 (not described), RELEASED (the handle's
+//! identity ended; a pointer holding it reads None, as identityOfHandle's
+//! null does), or the address of the class row of the handle's attached
+//! instance (`instances.get(identity).cls`), written by js_class_row. A row
+//! is [default image, n, record id of cls, of cls.base, ...]. Its default
+//! image word is 0 when the host must look again (a class default or class
+//! image changed), UNREADABLE when DefaultVariable reads of that class stay
+//! in JavaScript, else the base of the class default image. Every released
+//! handle is below the capacity, so a handle at or above it is live.
+//! * Object reads from memory (LOCAL_OBJECT, FIELD_OBJECT, *_ELEM_OBJECT)
+//!   go through `live`: a released handle reads as None.
+//! * DYNAMIC_CAST 73 `rid, node`, then the object value (compileEv 0x2e,
+//!   castObject 'dynamic'): the value is evaluated with SELF; None or
+//!   undefined casts to None; rid 0 (target None) is the value; a described
+//!   handle is the value when its row lists `rid` (`cls.record === target`
+//!   along `cls.base`), else None; any other handle goes to js_cast, which
+//!   runs castObject itself (a released SELF handle included: the closure
+//!   casts `fr.instance`).
+//! * DEFAULT_INT/BYTE/BOOL/FLOAT 45-48 `off, node, owner, [mask]` (compileEv
+//!   0x02, defaultReference): the class default image of the receiver's class
+//!   at `off` when the receiver is not HOST, its row's image is readable and
+//!   the row lists `owner` (the record id of the class declaring the
+//!   property, so the property is in the class's PropertyLink); otherwise
+//!   `node` in JavaScript, which also raises the closure's errors.
+//! * FIELD_ELEM_INT/BYTE/BOOL/FLOAT/OBJECT 25-29 `off, stride, dim, node,
+//!   key, [mask]` and LOCAL_ELEM_* 35-39 `off, stride, dim, node, [mask]`,
+//!   then the index (EX_ArrayElement read, compileEv 0x1a, or a scalar member
+//!   of its element, 0x36 over 0x1a: `off` includes the member's offset).
+//!   The index is evaluated first with SELF, as the closure does; the
+//!   lowering admits only an index without imports (a literal or a local),
+//!   so evaluating it again on the JavaScript path is unobservable. Then the
+//!   storage: a field on the JavaScript path, or an index outside [0, dim)
+//!   (arrayReference's ArrayIndexOutOfBounds warning and clamp), evaluates
+//!   `node` in JavaScript; otherwise the element at `off + index * stride`.
+//!
+//! SCRIPT_VM_CHECK (CHECK nonzero): each of the R2b-5 reads above that Rust
+//! completes calls js_check with its value, and the host compares it with
+//! what the closure computes (castObject on the evaluated value for a cast).
+//!
+//! State code (R2b-5): `vm_statement` runs one lowered statement of a state
+//! frame (S_EXPR, S_JUMP, S_JUMP_IF_NOT, S_NOTHING) for the host's copy of
+//! resumeCompiled's loop, which counts the budget, advances the cursor and
+//! checks the latent action, the cursor and the iterators between
+//! statements. It returns 1 when a jump is taken (the host sets the cursor to
+//! the statement's target), else 0.
 
 use core::ptr::{addr_of, addr_of_mut, read_unaligned, write_unaligned};
 
@@ -68,16 +119,30 @@ const LIT_INT: u32 = 20;
 const LIT_FLOAT: u32 = 21;
 const LIT_BOOL: u32 = 23;
 const LIT_NONE: u32 = 24;
+const FIELD_ELEM_INT: u32 = 25;
+const FIELD_ELEM_BYTE: u32 = 26;
+const FIELD_ELEM_BOOL: u32 = 27;
+const FIELD_ELEM_FLOAT: u32 = 28;
+const FIELD_ELEM_OBJECT: u32 = 29;
 const LOCAL_INT: u32 = 30;
 const LOCAL_BYTE: u32 = 31;
 const LOCAL_BOOL: u32 = 32;
 const LOCAL_FLOAT: u32 = 33;
 const LOCAL_OBJECT: u32 = 34;
+const LOCAL_ELEM_INT: u32 = 35;
+const LOCAL_ELEM_BYTE: u32 = 36;
+const LOCAL_ELEM_BOOL: u32 = 37;
+const LOCAL_ELEM_FLOAT: u32 = 38;
+const LOCAL_ELEM_OBJECT: u32 = 39;
 const FIELD_INT: u32 = 40;
 const FIELD_BYTE: u32 = 41;
 const FIELD_BOOL: u32 = 42;
 const FIELD_FLOAT: u32 = 43;
 const FIELD_OBJECT: u32 = 44;
+const DEFAULT_INT: u32 = 45;
+const DEFAULT_BYTE: u32 = 46;
+const DEFAULT_BOOL: u32 = 47;
+const DEFAULT_FLOAT: u32 = 48;
 const JS_INT: u32 = 50;
 const JS_BOOL: u32 = 52;
 const JS_FLOAT: u32 = 53;
@@ -98,6 +163,7 @@ const SET_FIELD_OBJECT: u32 = 69;
 const CONTEXT: u32 = 70;
 const SELF_OBJECT: u32 = 71;
 const CALL: u32 = 72;
+const DYNAMIC_CAST: u32 = 73;
 const NOT: u32 = 80;
 const AND: u32 = 81;
 const OR: u32 = 82;
@@ -164,6 +230,17 @@ const C_INT_SUB: u32 = 5;
 // class receiver).
 const BOUND: u32 = 1;
 const HOST: u32 = 2;
+// A class table entry for a released handle; a class row's default image
+// word when DefaultVariable reads of that class stay in JavaScript. (Rows and
+// images are arena addresses, never 1.)
+const RELEASED: u32 = 1;
+const UNREADABLE: u32 = 1;
+// js_check value kinds.
+const CK_INT: u32 = 1;
+const CK_BOOL: u32 = 2;
+const CK_FLOAT: u32 = 3;
+const CK_OBJECT: u32 = 4;
+const CK_CAST: u32 = 5;
 
 // Errors raised through js_error, which throws the JavaScript VM's message.
 const ERR_HANG: u32 = 1;
@@ -209,6 +286,9 @@ extern "C" {
     fn js_call_begin(frame: u32, node: u32, receiver: u32, sig: u32) -> i32;
     fn js_step(frame: u32, index: u32) -> u32;
     fn js_frame_advance(size: u32);
+    fn js_class_row(handle: u32) -> u32;
+    fn js_cast(frame: u32, node: u32, handle: u32) -> u32;
+    fn js_check(frame: u32, node: u32, handle: u32, kind: u32, value: f64);
 }
 
 // The words the host synchronizes. RUNAWAY is the JavaScript VM's
@@ -220,7 +300,9 @@ extern "C" {
 // JavaScript FrameStack (script-frame-locals.mjs), then the host's count of
 // active runs (the next run id), restored with the stack after a call;
 // CALL_BLOCK [callee locals,
-// callee code, callee SELF], written by js_call_begin.
+// callee code, callee SELF], written by js_call_begin; CLASSES [table
+// address, capacity] of the handle class table; CHECK nonzero under
+// SCRIPT_VM_CHECK.
 static mut RUNAWAY: u32 = 0;
 static mut BUDGET: u32 = 0;
 static mut RESULT: f64 = 0.0;
@@ -228,6 +310,8 @@ static mut FLOAT_UNDEF: u32 = 0;
 static mut BOUND_KEYS: [u32; 2] = [0; 2];
 static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
+static mut CLASSES: [u32; 2] = [0; 2];
+static mut CHECK: u32 = 0;
 
 #[no_mangle]
 pub extern "C" fn vm_runaway_ptr() -> *mut u32 {
@@ -256,6 +340,14 @@ pub extern "C" fn vm_frames_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn vm_call_block_ptr() -> *mut u32 {
     addr_of_mut!(CALL_BLOCK) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_classes_ptr() -> *mut u32 {
+    addr_of_mut!(CLASSES) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_check_ptr() -> *mut u32 {
+    addr_of_mut!(CHECK)
 }
 
 #[inline(always)]
@@ -351,6 +443,44 @@ fn nan_first(x: f64, y: f64, r: f64) -> f64 {
     } else {
         r
     }
+}
+/// A handle's class table entry: 0, RELEASED or its class row (0 at or
+/// beyond the capacity, where every handle is live).
+#[inline(always)]
+fn class_entry(handle: u32) -> u32 {
+    let (table, capacity) = unsafe {
+        let classes = addr_of!(CLASSES) as *const u32;
+        (*classes, *classes.add(1))
+    };
+    if handle < capacity {
+        load32(table.wrapping_add(handle.wrapping_mul(4)))
+    } else {
+        0
+    }
+}
+/// A pointer cell's value as its JavaScript read yields it: a released
+/// handle names no identity (identityOfHandle's null), so it is None.
+#[inline(always)]
+fn live(handle: u32) -> u32 {
+    if class_entry(handle) == RELEASED {
+        0
+    } else {
+        handle
+    }
+}
+/// Whether class row `row` lists record id `rid`: castObject's `for (; cls;
+/// cls = cls.base) if (cls.record === target)`.
+#[inline(always)]
+fn chain_has(row: u32, rid: u32) -> bool {
+    let count = load32(row.wrapping_add(4));
+    let mut at = row.wrapping_add(8);
+    for _ in 0..count {
+        if load32(at) == rid {
+            return true;
+        }
+        at = at.wrapping_add(4);
+    }
+    false
 }
 /// FLOAT_LE's `v ?? 0`: an undefined float value is 0.
 #[inline(always)]
@@ -504,6 +634,116 @@ impl Run {
         Some((info & !15).wrapping_add(offset))
     }
 
+    /// SCRIPT_VM_CHECK: the host compares a value Rust computed for `node`
+    /// on receiver `r` with the closure's.
+    #[inline(always)]
+    fn verify(&self, node: u32, r: Recv, kind: u32, value: f64) {
+        if unsafe { CHECK } != 0 {
+            unsafe { js_check(self.frame, node, self.handle(r), kind, value) };
+        }
+    }
+
+    /// castObject(value, target, 'dynamic') for the evaluated value (a
+    /// handle, UNDEFINED for a JavaScript undefined); `rid` is the target's
+    /// record id, 0 for a None target.
+    fn cast(&mut self, value: u32, rid: u32, node: u32) -> u32 {
+        // `value == null`: None or undefined.
+        if value == 0 || value == UNDEFINED {
+            return 0;
+        }
+        let result = if rid == 0 {
+            // A None target: a dynamic cast is the value.
+            value
+        } else {
+            let mut row = class_entry(value);
+            if row == 0 {
+                // js_class_row runs no script: it describes an attached
+                // instance's class, or returns 0.
+                row = unsafe { js_class_row(value) };
+            }
+            if row <= RELEASED {
+                // Not described (or a released SELF handle, which the
+                // closure casts as `fr.instance`): castObject in JavaScript.
+                let result = unsafe { js_cast(self.frame, node, value) };
+                self.self_fresh = false;
+                return result;
+            }
+            if chain_has(row, rid) {
+                value
+            } else {
+                0
+            }
+        };
+        if unsafe { CHECK } != 0 {
+            unsafe { js_check(self.frame, node, value, CK_CAST, result as f64) };
+        }
+        result
+    }
+
+    /// The address of the property at `offset` in the class default image of
+    /// `r`'s class (defaultReference -> classDefaultReference), or None when
+    /// the JavaScript path must evaluate the node: a HOST receiver (not
+    /// attached here, released, a class), a handle the host does not
+    /// describe, a default image that cannot be read here, or a class whose
+    /// chain lacks `owner` (the property is not in its PropertyLink).
+    #[inline(always)]
+    fn default_addr(&mut self, r: Recv, owner: u32, offset: u32) -> Option<u32> {
+        let info = if r.handle == 0 { self.self_info() } else { r.info };
+        if info & HOST != 0 {
+            return None;
+        }
+        let handle = self.handle(r);
+        let mut row = class_entry(handle);
+        if row <= RELEASED {
+            row = unsafe { js_class_row(handle) };
+            if row == 0 {
+                return None;
+            }
+        }
+        let mut image = load32(row);
+        if image == 0 {
+            // A class default or image changed: the host validates the
+            // row's image again.
+            unsafe { js_class_row(handle) };
+            image = load32(row);
+        }
+        if image <= UNREADABLE || !chain_has(row, owner) {
+            return None;
+        }
+        Some(image.wrapping_add(offset))
+    }
+
+    /// A FIELD_ELEM_* or LOCAL_ELEM_* node (header): its element address,
+    /// None when `node` takes the JavaScript path, then `node` and the bool
+    /// mask.
+    #[inline(always)]
+    fn element(&mut self, r: Recv, kind: u32) -> (Option<u32>, u32, u32) {
+        let (offset, stride, dim, node) = (self.op(1), self.op(2), self.op(3), self.op(4));
+        let field = kind <= FIELD_ELEM_OBJECT;
+        let mut words = 5;
+        let key = if field {
+            words += 1;
+            self.op(5)
+        } else {
+            0
+        };
+        let mask = if kind == FIELD_ELEM_BOOL || kind == LOCAL_ELEM_BOOL {
+            words += 1;
+            self.op(words - 1)
+        } else {
+            0
+        };
+        self.skip(words);
+        // compileEv 0x1a: arrayReference(left.rv(fr, fr.instance), right.ev(fr,
+        // r)): the index first, with SELF.
+        let index = self.int(SELF) as u32;
+        let base = if field { self.field(r, key, offset) } else { Some(self.locals.wrapping_add(offset)) };
+        match base {
+            Some(base) if index < dim => (Some(base.wrapping_add(index.wrapping_mul(stride))), node, mask),
+            _ => (None, node, mask),
+        }
+    }
+
     /// Core's GRunaway count for a jump, before its condition is evaluated.
     #[inline(always)]
     fn runaway(&self) {
@@ -607,6 +847,41 @@ impl Run {
                 }
                 _ => self.fail(ERR_KIND, kind),
             }
+        }
+    }
+
+    /// Statement `index` of a state frame, for the host's loop, which has
+    /// counted the budget and advanced the cursor (stepCompiled's cases):
+    /// 1 when a jump is taken, else 0.
+    fn statement(&mut self, index: u32) -> i32 {
+        let code = self.code;
+        if index >= unsafe { *code } {
+            self.fail(ERR_OUTSIDE, 0);
+        }
+        self.pc = unsafe { code.add(*code.add(1 + 2 * index as usize) as usize) };
+        let kind = self.op(0);
+        match kind {
+            S_EXPR => {
+                self.skip(1);
+                self.effect();
+                0
+            }
+            // `if (++scriptRunaway > limit)` precedes the condition.
+            S_JUMP => {
+                self.runaway();
+                1
+            }
+            S_JUMP_IF_NOT => {
+                self.skip(2);
+                self.runaway();
+                if self.boolean(SELF) {
+                    0
+                } else {
+                    1
+                }
+            }
+            S_NOTHING => 0,
+            _ => self.fail(ERR_KIND, kind),
         }
     }
 
@@ -914,6 +1189,27 @@ impl Run {
                 self.skip(2);
                 self.host_int(node, r)
             }
+            DEFAULT_INT | DEFAULT_BYTE => {
+                let (offset, node, owner) = (self.op(1), self.op(2), self.op(3));
+                self.skip(4);
+                let v = match self.default_addr(r, owner, offset) {
+                    Some(addr) if kind == DEFAULT_INT => load32(addr) as i32,
+                    Some(addr) => load8(addr) as i32,
+                    None => return self.host_int(node, r),
+                };
+                self.verify(node, r, CK_INT, v as f64);
+                v
+            }
+            FIELD_ELEM_INT | FIELD_ELEM_BYTE | LOCAL_ELEM_INT | LOCAL_ELEM_BYTE => {
+                let (addr, node, _) = self.element(r, kind);
+                let v = match addr {
+                    Some(addr) if kind == FIELD_ELEM_INT || kind == LOCAL_ELEM_INT => load32(addr) as i32,
+                    Some(addr) => load8(addr) as i32,
+                    None => return self.host_int(node, r),
+                };
+                self.verify(node, r, CK_INT, v as f64);
+                v
+            }
             CONTEXT => match self.context(r) {
                 Some(object) => self.int(object),
                 None => 0,
@@ -1040,6 +1336,25 @@ impl Run {
                 self.skip(2);
                 self.host_float(node, r)
             }
+            DEFAULT_FLOAT => {
+                let (offset, node, owner) = (self.op(1), self.op(2), self.op(3));
+                self.skip(4);
+                let v = match self.default_addr(r, owner, offset) {
+                    Some(addr) => float_of(load32(addr)),
+                    None => return self.host_float(node, r),
+                };
+                self.verify(node, r, CK_FLOAT, v);
+                v
+            }
+            FIELD_ELEM_FLOAT | LOCAL_ELEM_FLOAT => {
+                let (addr, node, _) = self.element(r, kind);
+                let v = match addr {
+                    Some(addr) => float_of(load32(addr)),
+                    None => return self.host_float(node, r),
+                };
+                self.verify(node, r, CK_FLOAT, v);
+                v
+            }
             CONTEXT => match self.context(r) {
                 Some(object) => self.float(object),
                 None => 0.0,
@@ -1062,10 +1377,13 @@ impl Run {
                 let a = self.float(SELF);
                 let b = self.float(SELF);
                 match kind {
-                    FLOAT_MUL => fround(a * b),
-                    FLOAT_DIV => fround(a / b),
-                    FLOAT_ADD => fround(a + b),
-                    FLOAT_SUB => fround(a - b),
+                    // 171/172/174/175: f(a op b), a NaN operand's payload
+                    // chosen explicitly (nan_first), not by the compiler's
+                    // operand order.
+                    FLOAT_MUL => fround(nan_first(a, b, a * b)),
+                    FLOAT_DIV => fround(nan_first(a, b, a / b)),
+                    FLOAT_ADD => fround(nan_first(a, b, a + b)),
+                    FLOAT_SUB => fround(nan_first(a, b, a - b)),
                     // FMin (244): a > b ? b : a; FMax (245): a >= b ? a : b,
                     // on the raw values.
                     FLOAT_MIN => {
@@ -1113,6 +1431,25 @@ impl Run {
                 let node = self.op(1);
                 self.skip(2);
                 self.host_bool(node, r)
+            }
+            DEFAULT_BOOL => {
+                let (offset, node, owner, mask) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                self.skip(5);
+                let v = match self.default_addr(r, owner, offset) {
+                    Some(addr) => load32(addr) & mask != 0,
+                    None => return self.host_bool(node, r),
+                };
+                self.verify(node, r, CK_BOOL, v as i32 as f64);
+                v
+            }
+            FIELD_ELEM_BOOL | LOCAL_ELEM_BOOL => {
+                let (addr, node, mask) = self.element(r, kind);
+                let v = match addr {
+                    Some(addr) => load32(addr) & mask != 0,
+                    None => return self.host_bool(node, r),
+                };
+                self.verify(node, r, CK_BOOL, v as i32 as f64);
+                v
             }
             CONTEXT => match self.context(r) {
                 Some(object) => self.boolean(object),
@@ -1205,7 +1542,7 @@ impl Run {
                 0
             }
             LOCAL_OBJECT => {
-                let v = load32(self.locals.wrapping_add(self.op(1)));
+                let v = live(load32(self.locals.wrapping_add(self.op(1))));
                 self.skip(2);
                 v
             }
@@ -1213,14 +1550,30 @@ impl Run {
                 let (offset, node, key) = (self.op(1), self.op(2), self.op(3));
                 self.skip(4);
                 match self.field(r, key, offset) {
-                    Some(addr) => load32(addr),
+                    Some(addr) => live(load32(addr)),
                     None => self.host_object(node, r),
                 }
+            }
+            FIELD_ELEM_OBJECT | LOCAL_ELEM_OBJECT => {
+                let (addr, node, _) = self.element(r, kind);
+                let v = match addr {
+                    Some(addr) => live(load32(addr)),
+                    None => return self.host_object(node, r),
+                };
+                self.verify(node, r, CK_OBJECT, v as f64);
+                v
             }
             JS_OBJECT => {
                 let node = self.op(1);
                 self.skip(2);
                 self.host_object(node, r)
+            }
+            DYNAMIC_CAST => {
+                let (rid, node) = (self.op(1), self.op(2));
+                self.skip(3);
+                // compileEv 0x2e: the value with SELF, once, then the test.
+                let value = self.object(SELF);
+                self.cast(value, rid, node)
             }
             SELF_OBJECT => {
                 self.skip(1);
@@ -1244,4 +1597,13 @@ pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, e
     let code = code as usize as *const u32;
     let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_fresh: false, callee: false };
     run.statements(entry)
+}
+
+/// Run statement `index` of a lowered state body (see the header): 1 when a
+/// jump is taken, else 0.
+#[no_mangle]
+pub extern "C" fn vm_statement(code: u32, frame: u32, locals: u32, self_handle: u32, index: u32) -> i32 {
+    let code = code as usize as *const u32;
+    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_fresh: false, callee: false };
+    run.statement(index)
 }

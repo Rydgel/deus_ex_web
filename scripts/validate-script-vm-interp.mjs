@@ -12,16 +12,21 @@
 import assert from 'node:assert/strict';
 import {instantiateScriptVm, loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {ObjectArena, RESERVED} from '../src/runtime/script-object-arena.mjs';
+import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {classRecordId} from '../src/runtime/script-vm-lower.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
   LIT_INT: 20, LIT_FLOAT: 21, LIT_BOOL: 23, LIT_NONE: 24,
+  FIELD_ELEM_INT: 25, FIELD_ELEM_BYTE: 26, FIELD_ELEM_BOOL: 27, FIELD_ELEM_FLOAT: 28, FIELD_ELEM_OBJECT: 29,
   LOCAL_INT: 30, LOCAL_BYTE: 31, LOCAL_BOOL: 32, LOCAL_FLOAT: 33, LOCAL_OBJECT: 34,
+  LOCAL_ELEM_INT: 35, LOCAL_ELEM_BYTE: 36, LOCAL_ELEM_BOOL: 37, LOCAL_ELEM_FLOAT: 38, LOCAL_ELEM_OBJECT: 39,
   FIELD_INT: 40, FIELD_BYTE: 41, FIELD_BOOL: 42, FIELD_FLOAT: 43, FIELD_OBJECT: 44,
+  DEFAULT_INT: 45, DEFAULT_BYTE: 46, DEFAULT_BOOL: 47, DEFAULT_FLOAT: 48,
   JS_INT: 50, JS_BOOL: 52, JS_FLOAT: 53, JS_OBJECT: 54, JS_VOID: 55, COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57,
   SET_LOCAL_INT: 60, SET_LOCAL_BYTE: 61, SET_LOCAL_BOOL: 62, SET_LOCAL_FLOAT: 63,
   SET_FIELD_INT: 64, SET_FIELD_BYTE: 65, SET_FIELD_BOOL: 66, SET_FIELD_FLOAT: 67, SET_LOCAL_OBJECT: 68, SET_FIELD_OBJECT: 69,
-  CONTEXT: 70, SELF: 71, CALL: 72,
+  CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_ADD: 90, INT_SUB: 91, INT_MUL: 92, INT_LT: 93, INT_GT: 94, INT_DIV: 95, INT_LE: 96, INT_EQ: 97, INT_NE: 98,
   INT_AND: 99, INT_XOR: 100, INT_OR: 101, INT_NEG: 102, INT_NOT: 103, INT_SHL: 104, INT_SAR: 105,
@@ -37,6 +42,10 @@ const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4};
 const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
 const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
+// The handle class table (R2b-5): a released handle; a row's unreadable
+// default image; js_check value kinds.
+const RELEASED = 1, UNREADABLE = 1;
+const CK = {INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, CAST: 5};
 const RUNAWAY_LIMIT = 10_000_000;
 const f = Math.fround;
 
@@ -144,7 +153,22 @@ const imports = {
     wr32(FRAMES_AT + 4, chunk.base);
     wr32(FRAMES_AT + 8, chunk.base + chunk.size);
   },
+  // The host's handle class table (script-vm-rust.mjs classRow): a test
+  // installs `classRowHost` to describe handles; none describes nothing.
+  js_class_row(handle) {
+    calls.push({imp: 'classRow', receiver: handle});
+    return classRowHost ? classRowHost(handle) : 0;
+  },
+  // castObject in JavaScript on the evaluated value: the node's handler
+  // receives the value handle as its receiver.
+  js_cast(frame, n, handle) {
+    calls.push({imp: 'cast', frame, node: n, receiver: handle});
+    const v = evaluate(n, handle, frame);
+    return v === null ? 0 : v;
+  },
+  js_check(frame, n, handle, kind, v) { calls.push({imp: 'check', frame, node: n, receiver: handle, kind, value: v}); },
 };
+let classRowHost = null;
 const iterators = [];
 const CHUNK = 64, chunks = [], callSites = new Map(), frameInfo = new Map();
 let nextFrameId = 100;
@@ -154,6 +178,7 @@ assert.ok(x.__heap_base.value <= RESERVED, 'statics below the reserved boundary'
 const RUNAWAY_AT = x.vm_runaway_ptr(), BUDGET_AT = x.vm_budget_ptr(), RESULT_AT = x.vm_result_ptr();
 const UNDEF_AT = x.vm_float_undef_ptr(), KEYS_AT = x.vm_bound_keys_ptr();
 const FRAMES_AT = x.vm_frames_ptr(), CALL_BLOCK_AT = x.vm_call_block_ptr();
+const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -179,6 +204,11 @@ function reset() {
   wr32(FRAMES_AT + 8, 0);
   wr32(FRAMES_AT + 12, 0);
   for (const chunk of chunks) arena.bytes.fill(0xaa, chunk.base, chunk.base + chunk.size);
+  // No handle class table (every handle live, none described), CHECK off.
+  wr32(CLASSES_AT, 0);
+  wr32(CLASSES_AT + 4, 0);
+  wr32(CHECK_AT, 0);
+  classRowHost = null;
 }
 const count = (imp, receiver) => calls.filter(c => c.imp === imp && (receiver === undefined || c.receiver === receiver)).length;
 
@@ -1785,6 +1815,421 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
     same(value(R.INT, w(K.INT_ADD, E.int(1), call(site(U), R.INT))), 42, 'a call after the throw');
     same(x.__stack_pointer.value, sp0, 'stack pointer after the following call');
   }
+}
+
+// ---- R2b-5: float operators on NaN pairs, exact bits ---------------------------------------
+// native() computes f(a op b) in JavaScript: the FPU returns the first NaN
+// operand, quieted (a float operand's f32 widening already quieted it). The
+// result's f64 bits and the f32 bits a float store keeps must be the same in
+// Rust, whatever order the compiler evaluates the operation in. VM float
+// values are quiet (f32 widenings and arithmetic results), so the doubles
+// below are quiet NaNs; with a signaling operand the arm64 FPU prefers it
+// over an earlier quiet one, which no VM value exercises.
+{
+  const u64 = new DataView(new ArrayBuffer(8));
+  const bitsOf64 = v => (u64.setFloat64(0, v, true), `${u64.getUint32(4, true).toString(16)}:${u64.getUint32(0, true).toString(16)}`);
+  const double = (hi, lo) => (u64.setUint32(4, hi, true), u64.setUint32(0, lo, true), u64.getFloat64(0, true));
+  const resultBits = () => `${rd32(RESULT_AT + 4).toString(16)}:${rd32(RESULT_AT).toString(16)}`;
+  const jsDouble = v => () => ({words: w(K.JS_FLOAT, node(() => v)), js: v});
+  const operands = [
+    ...[0x7fc00000, 0xffc00000, 0x7fc00001, 0xffe12345, 0x7f800001, 0x7fa00000, 0xffbfffff, 0x7fffffff]
+      .map(b => () => floatBitsOperand(b)),
+    jsDouble(undefined), jsDouble(double(0x7ff81234, 0xabcd0000)), jsDouble(double(0xfff87654, 0x321)), jsDouble(double(0xfff80000, 0x1000)),
+    () => floatBitsOperand(bits(1.5)), jsDouble(0.1), jsDouble(Infinity), () => floatBitsOperand(0),
+  ];
+  let pairs = 0;
+  for (const [kind, reference] of FLOAT_BINARY) {
+    if (kind === K.FLOAT_MIN || kind === K.FLOAT_MAX) continue;
+    for (const makeA of operands) for (const makeB of operands) {
+      reset();
+      let a = makeA(), b = makeB();
+      const expected = reference(a.js, b.js);
+      if (!isNaN(expected)) continue;
+      assert.equal(run([S.ret(R.FLOAT, w(kind, a.words, b.words))]), -1);
+      same(resultBits(), bitsOf64(expected), `kind ${kind} NaN result bits (${bitsOf64(a.js)}, ${bitsOf64(b.js)})`);
+      reset();
+      a = makeA(); b = makeB();
+      run([S.expr(w(K.SET_LOCAL_FLOAT, 0x60, w(kind, a.words, b.words))), S.ret(R.VOID)]);
+      same(rd32(LOCALS + 0x60), floatStore(expected), `kind ${kind} NaN stored bits (${a.js}, ${b.js})`);
+      pairs++;
+    }
+  }
+  assert.ok(pairs > 400, 'the NaN pair sweep covers the four operators');
+}
+
+// ---- R2b-5: the handle class table and DynamicCast (compileEv 0x2e) -----------------------
+// castObject (script-runtime.mjs) is the reference, run on a runtime stand-in
+// whose instances and class chains the mock host also describes to Rust as
+// class rows [image, n, record ids...] (script-vm-rust.mjs classRow).
+// One word more than the capacity: that word (RELEASED) is not an entry.
+const TABLE_CAP = 64, TABLE = arena.alloc(4 * (TABLE_CAP + 1));
+const classRecord = name => ({kind: 'Class', key: `test.${name}`});
+const CR = {A: classRecord('a'), B: classRecord('b'), C: classRecord('c'), D: classRecord('d'), E: classRecord('e')};
+const CLS = {A: {record: CR.A, base: null}};
+CLS.B = {record: CR.B, base: CLS.A};
+CLS.C = {record: CR.C, base: CLS.B};
+CLS.D = {record: CR.D, base: CLS.A};
+CLS.E = {record: CR.E, base: null};
+const world = {instances: new Map(), castToNativeClass() { throw new Error('native class cast'); }};
+const castObject = (value, target) => ScriptRuntime.prototype.castObject.call(world, value, target, 'dynamic');
+const identities = new Map();
+const attach = (handle, cls) => {
+  const identity = {handle};
+  identities.set(handle, identity);
+  world.instances.set(identity, {cls});
+};
+attach(20, CLS.A); attach(21, CLS.B); attach(22, CLS.C); attach(23, CLS.D); attach(24, CLS.E);
+attach(SELF_H, CLS.C); attach(OTHER_H, CLS.D);
+identities.set(25, {handle: 25, objectClass: CLS.C});   // not attached: castObject walks objectClass
+identities.set(26, {handle: 26});                        // no class: castObject throws
+const identityOf = handle => identities.get(handle) ?? null;
+const handleOfIdentity = v => v === null ? null : v.handle;
+const rowAddresses = new Map();
+/** The host's class row of `cls`; its default image word as given. */
+function classRow(cls, image = 0) {
+  let address = rowAddresses.get(cls);
+  if (address === undefined) {
+    const chain = [];
+    for (let c = cls; c; c = c.base) chain.push(classRecordId(c.record));
+    address = arena.alloc(8 + 4 * chain.length);
+    wr32(address + 4, chain.length);
+    chain.forEach((id, i) => wr32(address + 8 + 4 * i, id));
+    rowAddresses.set(cls, address);
+  }
+  wr32(address, image);
+  return address;
+}
+/** js_class_row: an attached instance's row, entered in the table. */
+function describeHandle(handle) {
+  const instance = world.instances.get(identityOf(handle));
+  if (!instance) return 0;
+  const row = rowAddresses.get(instance.cls) ?? classRow(instance.cls);
+  wr32(TABLE + 4 * handle, row);
+  return row;
+}
+function classTable() {
+  arena.bytes.fill(0, TABLE, TABLE + 4 * TABLE_CAP);
+  wr32(TABLE + 4 * TABLE_CAP, RELEASED);
+  wr32(CLASSES_AT, TABLE);
+  wr32(CLASSES_AT + 4, TABLE_CAP);
+  classRowHost = describeHandle;
+}
+/** The js_cast node of a cast to `target`: castObject on the value's identity. */
+const castNode = target => node(handle => handleOfIdentity(castObject(identityOf(handle), target)));
+const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classRecordId(target), castNode(target), value);
+{
+  const TARGETS = [null, CR.A, CR.B, CR.C, CR.D, CR.E];
+  const VALUES = [20, 21, 22, 23, 24, 25, 26];
+  const sources = [
+    ['LOCAL_OBJECT', h => (wr32(LOCALS + 44, h), w(K.LOCAL_OBJECT, 44))],
+    ['FIELD_OBJECT', h => (wr32(SELF_IMG + 0x20, h), w(K.FIELD_OBJECT, 0x20, node(), 4))],
+    ['JS_OBJECT', h => w(K.JS_OBJECT, node(() => h))],
+  ];
+  for (const target of TARGETS) {
+    for (const handle of VALUES) {
+      for (const [source, make] of sources) {
+        reset();
+        classTable();
+        let expected, thrown = null;
+        try { expected = handleOfIdentity(castObject(identityOf(handle), target)) ?? 0; } catch (error) { thrown = error.message; }
+        const cast = castOf(target, make(handle));
+        if (thrown) {
+          assert.throws(() => objectOf(cast), {message: thrown}, `cast ${handle} throws as castObject does`);
+          checks++;
+          continue;
+        }
+        same(objectOf(cast), expected, `DYNAMIC_CAST ${source} ${handle} to ${target?.key ?? 'None'}`);
+        const attached = world.instances.has(identityOf(handle));
+        same(count('classRow'), target === null ? 0 : 1, 'the class row is looked up once, not for a None target');
+        same(count('cast'), target !== null && !attached ? 1 : 0, 'an undescribed handle runs castObject in JavaScript');
+        if (target !== null && attached) {
+          // The row is in the table now: a second cast asks nothing.
+          calls.length = 0;
+          same(objectOf(castOf(target, make(handle))), expected, 'second cast');
+          same(count('classRow') + count('cast'), 0, 'a described handle casts in Rust');
+        }
+      }
+    }
+  }
+  // None and undefined cast to None without looking anything up.
+  for (const value of [() => E.none(), () => w(K.JS_OBJECT, node(() => undefined)), () => w(K.JS_OBJECT, node(() => null))]) {
+    reset();
+    classTable();
+    same(objectOf(castOf(CR.A, value())), 0, 'a None or undefined value casts to None');
+    same(count('classRow') + count('cast'), 0, 'None needs no class');
+  }
+  // The value is evaluated once, with SELF, even as a context's value.
+  reset();
+  classTable();
+  wr32(LOCALS + 44, OTHER_H);
+  const probe = node(r => (calls.push({imp: 'probe', receiver: r}), 22));
+  same(value(R.INT, E.context(node(), castOf(CR.B, w(K.JS_OBJECT, probe)), w(K.JS_INT, node(r => r)))), 22,
+    'a cast as a context object');
+  reset();
+  classTable();
+  wr32(LOCALS + 44, OTHER_H);
+  const inner = node(r => (calls.push({imp: 'probe', receiver: r}), 21));
+  same(value(R.BOOL, w(K.OBJECT_EQ, E.context(node(), w(K.LOCAL_OBJECT, 44), castOf(CR.A, w(K.JS_OBJECT, inner))), E.none())),
+    false, 'a cast as a context value');
+  same(calls.filter(c => c.imp === 'probe').length, 1, 'the cast value is evaluated once');
+  same(calls.find(c => c.imp === 'probe').receiver, SELF_H, 'the cast value is evaluated with SELF');
+  // A released handle is None where it is read; a released SELF handle is
+  // cast by JavaScript (the closure casts fr.instance).
+  reset();
+  classTable();
+  wr32(TABLE + 4 * 22, RELEASED);
+  wr32(LOCALS + 44, 22);
+  wr32(SELF_IMG + 0x20, 22);
+  same(objectOf(w(K.LOCAL_OBJECT, 44)), 0, 'a released handle in a local reads None');
+  same(objectOf(w(K.FIELD_OBJECT, 0x20, node(), 4)), 0, 'a released handle in a field reads None');
+  same(value(R.BOOL, w(K.OBJECT_EQ, w(K.LOCAL_OBJECT, 44), E.none())), true, 'a released handle equals None');
+  same(objectOf(castOf(CR.A, w(K.LOCAL_OBJECT, 44))), 0, 'a released handle casts to None');
+  same(count('classRow') + count('cast'), 0, 'no lookup for a released handle');
+  wr32(TABLE + 4 * SELF_H, RELEASED);
+  same(objectOf(castOf(CR.B, E.self())), SELF_H, 'a released SELF handle casts in JavaScript');
+  same(count('cast'), 1, 'released SELF: js_cast');
+  wr32(LOCALS + 48, 200);
+  same(objectOf(w(K.LOCAL_OBJECT, 48)), 200, 'a handle beyond the table is live');
+  wr32(LOCALS + 48, TABLE_CAP);
+  same(objectOf(w(K.LOCAL_OBJECT, 48)), TABLE_CAP, 'the capacity is exclusive');
+  // CHECK: a cast Rust decides reports the value handle and its result.
+  reset();
+  classTable();
+  wr32(CHECK_AT, 1);
+  const checkedCast = castOf(CR.D, w(K.JS_OBJECT, node(() => 21)));
+  same(objectOf(checkedCast), 0, 'checked cast');
+  const check = calls.find(c => c.imp === 'check');
+  same(check?.receiver, 21, 'js_check gets the value handle');
+  same(check?.kind, CK.CAST, 'js_check kind CAST');
+  same(check?.value, 0, 'js_check value');
+  same(check?.node, checkedCast[2], 'js_check node');
+  reset();
+  classTable();
+  wr32(CHECK_AT, 1);
+  objectOf(castOf(CR.A, w(K.JS_OBJECT, node(() => 25))));
+  same(count('check'), 0, 'a JavaScript cast is not checked');
+}
+
+// ---- R2b-5: DefaultVariable (compileEv 0x02, defaultReference) ------------------------------
+// The class default image is what classImage writes (writeCell of each
+// defaultValue), so a read at the property's offset with the cell codec is
+// defaultReference's value while the image is current.
+{
+  const IMAGE = arena.alloc(256), OTHER_DEFAULTS = arena.alloc(256);
+  const defaultsOf = base => {
+    arena.bytes.fill(0, base, base + 256);
+    wr32(base + 0x10, -77);
+    wr32(base + 0x14, 0xc300);
+    wr32(base + 0x18, 0b1010);
+    wr32(base + 0x1c, bits(-2.75));
+  };
+  const READS = [
+    // [return kind, kind, offset, mask, value read, CK kind]
+    [R.INT, K.DEFAULT_INT, 0x10, 0, base => view().getInt32(base + 0x10, true), CK.INT],
+    [R.INT, K.DEFAULT_BYTE, 0x15, 0, base => view().getUint8(base + 0x15), CK.INT],
+    [R.BOOL, K.DEFAULT_BOOL, 0x18, 8, base => (view().getUint32(base + 0x18, true) & 8) !== 0, CK.BOOL],
+    [R.BOOL, K.DEFAULT_BOOL, 0x18, 4, base => (view().getUint32(base + 0x18, true) & 4) !== 0, CK.BOOL],
+    [R.FLOAT, K.DEFAULT_FLOAT, 0x1c, 0, base => view().getFloat32(base + 0x1c, true), CK.FLOAT],
+  ];
+  const expr = (kind, offset, mask, n, owner) => kind === K.DEFAULT_BOOL ? w(kind, offset, n, owner, mask) : w(kind, offset, n, owner);
+  const setup = () => {
+    reset();
+    classTable();
+    defaultsOf(IMAGE);
+    defaultsOf(OTHER_DEFAULTS);
+    wr32(OTHER_DEFAULTS + 0x10, 91);
+    wr32(OTHER_DEFAULTS + 0x1c, bits(0.5));
+  };
+  const own = classRecordId(CR.B), foreign = classRecordId(CR.E);
+  for (const [rkind, kind, offset, mask, read, ck] of READS) {
+    // Fast path: SELF's class C (chain A, B, C) declares B's property.
+    setup();
+    classRow(CLS.C, IMAGE);
+    wr32(TABLE + 4 * SELF_H, rowAddresses.get(CLS.C));
+    same(value(rkind, expr(kind, offset, mask, node(), own)), read(IMAGE), `DEFAULT kind ${kind} at ${offset}`);
+    same(count('classRow'), 0, 'a described receiver needs no lookup');
+    // Not described yet: js_class_row describes it.
+    setup();
+    classRow(CLS.C, IMAGE);
+    same(value(rkind, expr(kind, offset, mask, node(), own)), read(IMAGE), 'DEFAULT after js_class_row');
+    same(count('classRow'), 1, 'js_class_row once');
+    same(rd32(TABLE + 4 * SELF_H), rowAddresses.get(CLS.C), 'the row is in the table');
+    // A row whose image word is 0 is validated again by the host.
+    setup();
+    classRow(CLS.C, 0);
+    wr32(TABLE + 4 * SELF_H, rowAddresses.get(CLS.C));
+    classRowHost = handle => (wr32(rowAddresses.get(CLS.C), IMAGE), describeHandle(handle));
+    same(value(rkind, expr(kind, offset, mask, node(), own)), read(IMAGE), 'DEFAULT after the image is validated');
+    same(count('classRow'), 1, 'image 0 asks the host');
+    // Context receiver: OTHER_H (class D: A, D) with its own image; B's
+    // property is not in D's PropertyLink, A's is.
+    setup();
+    classRow(CLS.D, OTHER_DEFAULTS);
+    wr32(LOCALS + 44, OTHER_H);
+    same(value(rkind, E.context(node(), w(K.LOCAL_OBJECT, 44), expr(kind, offset, mask, node(), classRecordId(CR.A)))),
+      read(OTHER_DEFAULTS), 'DEFAULT on a context receiver');
+    // The JavaScript paths: the node on the current receiver.
+    for (const [why, prepare, receiver] of [
+      ['HOST receiver', () => infos.set(SELF_H, SELF_IMG | HOST), SELF_H],
+      ['undescribed receiver', () => { classRowHost = () => 0; }, SELF_H],
+      ['unreadable image', () => { classRow(CLS.C, UNREADABLE); wr32(TABLE + 4 * SELF_H, rowAddresses.get(CLS.C)); }, SELF_H],
+      ['owner outside the chain', () => { classRow(CLS.C, IMAGE); wr32(TABLE + 4 * SELF_H, rowAddresses.get(CLS.C)); }, SELF_H],
+      ['context owner outside the chain', () => { classRow(CLS.D, OTHER_DEFAULTS); wr32(LOCALS + 44, OTHER_H); }, OTHER_H],
+    ]) {
+      setup();
+      prepare();
+      const hostValue = rkind === R.BOOL ? 'yes' : rkind === R.FLOAT ? 0.25 : 1234;
+      const n = node(r => (calls.push({imp: 'default-host', receiver: r}), hostValue));
+      const owner = why.includes('owner') ? foreign : own;
+      const e = expr(kind, offset, mask, n, owner);
+      const result = value(rkind, receiver === OTHER_H ? E.context(node(), w(K.LOCAL_OBJECT, 44), e) : e);
+      same(result, rkind === R.BOOL ? true : rkind === R.FLOAT ? 0.25 : kind === K.DEFAULT_BYTE ? 1234 : 1234, `DEFAULT ${why}`);
+      same(calls.filter(c => c.imp === 'default-host').length, 1, `DEFAULT ${why}: the node in JavaScript`);
+      same(calls.find(c => c.imp === 'default-host').receiver, receiver, `DEFAULT ${why}: receiver`);
+      if (why === 'HOST receiver') same(count('classRow'), 0, 'a HOST receiver needs no row');
+    }
+    // CHECK: a read Rust completes reports its value.
+    setup();
+    classRow(CLS.C, IMAGE);
+    wr32(TABLE + 4 * SELF_H, rowAddresses.get(CLS.C));
+    wr32(CHECK_AT, 1);
+    const n = node();
+    value(rkind, expr(kind, offset, mask, n, own));
+    const check = calls.find(c => c.imp === 'check');
+    same(check?.node, n, 'DEFAULT check node');
+    same(check?.receiver, SELF_H, 'DEFAULT check receiver');
+    same(check?.kind, ck, 'DEFAULT check kind');
+    same(check?.value, ck === CK.BOOL ? Number(read(IMAGE)) : read(IMAGE), 'DEFAULT check value');
+  }
+}
+
+// ---- R2b-5: array elements (compileEv 0x1a) and members of elements (0x36 over 0x1a) -------
+// arrayReference: the index (evaluated first, with SELF) selects element
+// `index` of the fixed array when 0 <= index < dim; otherwise it warns and
+// clamps, which the JavaScript node does. A member read is the element's
+// member at its offset (structValue on the element reference).
+{
+  const ARRAY = 0x40, STRIDE = 12, DIM = 5;
+  const fill = base => {
+    for (let i = 0; i < DIM; i++) {
+      const at = base + ARRAY + i * STRIDE;
+      wr32(at, -1000 - i);
+      wr32(at + 4, bits(0.1 * (i + 1)));
+      wr32(at + 8, i % 2 ? 0x10 | (i << 8) : (0x80 + i) << 8 | 0x1e);
+    }
+  };
+  // [return kind, kinds (field, local), member offset, mask, reader]
+  const ELEMENTS = [
+    [R.INT, [K.FIELD_ELEM_INT, K.LOCAL_ELEM_INT], 0, 0, at => view().getInt32(at, true)],
+    [R.FLOAT, [K.FIELD_ELEM_FLOAT, K.LOCAL_ELEM_FLOAT], 4, 0, at => view().getFloat32(at, true)],
+    [R.INT, [K.FIELD_ELEM_BYTE, K.LOCAL_ELEM_BYTE], 9, 0, at => view().getUint8(at)],
+    [R.BOOL, [K.FIELD_ELEM_BOOL, K.LOCAL_ELEM_BOOL], 8, 0x100, at => (view().getUint32(at, true) & 0x100) !== 0],
+  ];
+  const elem = (kind, member, mask, n, key, index) => {
+    const field = kind <= K.FIELD_ELEM_OBJECT, parts = [kind, ARRAY + member, STRIDE, DIM, n];
+    if (field) parts.push(key);
+    if (mask) parts.push(mask);
+    return w(...parts, index);
+  };
+  const INDICES = [0, 1, DIM - 1, -1, DIM, 0x7fffffff, -0x80000000, 256];
+  const indexOperand = (v, i) => i % 2 ? E.int(v) : (wr32(LOCALS + 0x80, v), w(K.LOCAL_INT, 0x80));
+  for (const [rkind, kinds, member, mask, read] of ELEMENTS) {
+    for (const kind of kinds) {
+      const field = kind === kinds[0], base = field ? SELF_IMG : LOCALS;
+      INDICES.forEach((index, i) => {
+        reset();
+        fill(base);
+        const hostValue = rkind === R.BOOL ? 1 : rkind === R.FLOAT ? 0.75 : 4321;
+        const n = node(r => (calls.push({imp: 'elem-host', receiver: r}), hostValue));
+        const inRange = index >= 0 && index < DIM;
+        const expected = inRange ? read(base + ARRAY + index * STRIDE + member) : rkind === R.BOOL ? true : hostValue;
+        same(value(rkind, elem(kind, member, mask, n, 4, indexOperand(index, i))), expected, `element kind ${kind} [${index}]`);
+        same(calls.filter(c => c.imp === 'elem-host').length, inRange ? 0 : 1, `element kind ${kind} [${index}] JavaScript path`);
+        if (!inRange) same(calls.find(c => c.imp === 'elem-host').receiver, SELF_H, 'out of range: the node on the receiver');
+      });
+      // CHECK reports a Rust read.
+      reset();
+      fill(base);
+      wr32(CHECK_AT, 1);
+      const n = node();
+      value(rkind, elem(kind, member, mask, n, 4, E.int(2)));
+      const check = calls.find(c => c.imp === 'check');
+      same(check?.node, n, 'element check node');
+      same(check?.receiver, SELF_H, 'element check receiver');
+      same(check?.kind, rkind === R.INT ? CK.INT : rkind === R.BOOL ? CK.BOOL : CK.FLOAT, 'element check kind');
+      same(check?.value, Number(read(base + ARRAY + 2 * STRIDE + member)), 'element check value');
+    }
+  }
+  // Object elements go through `live`.
+  for (const kind of [K.FIELD_ELEM_OBJECT, K.LOCAL_ELEM_OBJECT]) {
+    reset();
+    classTable();
+    const base = kind === K.FIELD_ELEM_OBJECT ? SELF_IMG : LOCALS;
+    wr32(base + ARRAY + STRIDE, OTHER_H);
+    wr32(base + ARRAY + 2 * STRIDE, 22);
+    wr32(TABLE + 4 * 22, RELEASED);
+    same(objectOf(elem(kind, 0, 0, node(), 4, E.int(1))), OTHER_H, `object element kind ${kind}`);
+    same(objectOf(elem(kind, 0, 0, node(), 4, E.int(2))), 0, `released object element kind ${kind} is None`);
+    same(objectOf(elem(kind, 0, 0, node(() => THIRD_H), 4, E.int(DIM))), THIRD_H, `object element kind ${kind} out of range`);
+  }
+  // Field storage: BOUND (bound key) and HOST take the JavaScript path; a
+  // context receiver reads its own image; the index comes first, with SELF.
+  for (const [flags, key, jsPath] of [[BOUND, 3, true], [BOUND, 4, false], [HOST, 4, true], [0, 3, false]]) {
+    reset();
+    fill(SELF_IMG);
+    infos.set(SELF_H, SELF_IMG | flags);
+    const n = node(r => (calls.push({imp: 'elem-host', receiver: r}), 55));
+    const index = node(r => (calls.push({imp: 'index', receiver: r}), 3));
+    same(value(R.INT, elem(K.FIELD_ELEM_INT, 0, 0, n, key, w(K.JS_INT, index))), jsPath ? 55 : -1003, `field element flags ${flags} key ${key}`);
+    const order = calls.filter(c => c.imp === 'int' && c.node === index || c.imp === 'receiver').map(c => c.imp).join(',');
+    same(order, 'int,receiver', 'the index is evaluated before the storage is selected');
+    same(calls.filter(c => c.imp === 'elem-host').length, jsPath ? 1 : 0, `field element flags ${flags} key ${key} path`);
+  }
+  reset();
+  fill(OTHER_IMG);
+  wr32(LOCALS + 44, OTHER_H);
+  const index = node(r => (calls.push({imp: 'index', receiver: r}), 4));
+  same(value(R.INT, E.context(node(), w(K.LOCAL_OBJECT, 44), elem(K.FIELD_ELEM_INT, 0, 0, node(), 4, w(K.JS_INT, index)))), -1004,
+    'field element of a context receiver');
+  same(calls.find(c => c.imp === 'index').receiver, SELF_H, 'the index of a context value is evaluated with SELF');
+}
+
+// ---- R2b-5: state statements (vm_statement) --------------------------------------------------
+// stepCompiled's cases for one statement after the host's loop advanced the
+// cursor: an effect, a jump (1: the host sets the cursor to its target) or a
+// conditional jump, GRunaway counted before the condition; the loop's hang
+// budget is the host's.
+{
+  const statement = (statements, index, runaway = 0) => {
+    const code = assemble(statements);
+    wr32(RUNAWAY_AT, runaway);
+    wr32(BUDGET_AT, 777);
+    return enter(() => x.vm_statement(code, FRAME, LOCALS, SELF_H, index));
+  };
+  reset();
+  const body = [S.expr(w(K.SET_LOCAL_INT, 0x40, E.int(9))), S.jump(0), S.jumpIfNot(0, E.bool(0)), S.jumpIfNot(0, E.bool(1)), S.nothing(),
+    S.expr(w(K.JS_VOID, node(() => {}))), S.ret(R.VOID), S.yield()];
+  same(statement(body, 0), 0, 'S_EXPR continues');
+  same(rd32(LOCALS + 0x40), 9, 'S_EXPR effect');
+  same(rd32(BUDGET_AT), 777, 'the host counts the budget');
+  same(statement(body, 1, 5), 1, 'S_JUMP jumps');
+  same(rd32(RUNAWAY_AT), 6, 'S_JUMP counts GRunaway');
+  same(statement(body, 2, 5), 1, 'S_JUMP_IF_NOT false jumps');
+  same(statement(body, 3, 5), 0, 'S_JUMP_IF_NOT true continues');
+  same(rd32(RUNAWAY_AT), 6, 'S_JUMP_IF_NOT counts GRunaway');
+  same(statement(body, 4), 0, 'S_NOTHING');
+  calls.length = 0;
+  same(statement(body, 5), 0, 'S_EXPR JS_VOID');
+  same(count('eval'), 1, 'the effect runs in JavaScript');
+  const order = [];
+  const probe = node(() => (order.push(rd32(RUNAWAY_AT)), true));
+  statement([S.jumpIfNot(0, w(K.JS_BOOL, probe))], 0, 41);
+  same(order[0], 42, 'GRunaway is counted before the condition');
+  same(vmError(() => statement(body, 1, RUNAWAY_LIMIT)).code, ERR.RUNAWAY, 'runaway limit');
+  same(rd32(RUNAWAY_AT), 0, 'the runaway count resets');
+  same(vmError(() => statement(body, 6)).code, ERR.KIND, 'a Return is not a state statement here');
+  same(vmError(() => statement(body, 7)).code, ERR.KIND, 'a yield is not a state statement here');
+  same(vmError(() => statement(body, 8)).code, ERR.OUTSIDE, 'an index outside the body');
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

@@ -396,6 +396,100 @@ Verification: `validate-script-vm-interp` (93 kinds, 170,604 checks; 49 of
 match at all 30 checkpoints on both maps. On Island the per-tick fallbacks
 lost the object assignments (about 550) and nearly all compound assignments.
 
+**R2b-5 — Casts, class defaults, array elements and state code
+(implemented).** DynamicCast, DefaultVariable and fixed-array element reads
+were the largest value fallbacks left on Island (about 940 per tick). They
+now run in Rust, and state code runs its lowered statements there.
+
+* **Handle class table.** A cast needs the object's class chain without an
+  import per cast. Each interpreter keeps a u32 table in its arena indexed by
+  handle (`CLASSES`), because handles are global, dense and never reused. An
+  entry is 0 (not described), RELEASED, or the address of a class row:
+  the class default image word, then the record ids along `cls.base`.
+  `js_class_row` fills an entry the first time Rust needs it, for an instance
+  attached to this runtime (`instances.get(identity).cls`); it runs no
+  script. An entry never goes stale: attachment is permanent and a linked
+  class's chain is fixed. Record ids are small integers per class record,
+  shared with the lowering. The table starts with every handle released so
+  far, and `releaseHandle` now notifies each interpreter
+  (`onHandleRelease`).
+* **Released handles read None.** Object reads from memory (locals, fields,
+  elements) turn a RELEASED handle into None, as `identityOfHandle` does for
+  the JavaScript read. Before this, Rust passed the stale handle on. No
+  digest depended on it, but an `== None` test or a copy of such a pointer
+  differed from JavaScript.
+* **DynamicCast (0x2e).** The lowering resolves the target as the closure
+  does (`objectReference`, before the value). A script class target becomes
+  its record id, and a None target casts to the value. A native-only class
+  target (`castToNativeClass`) or an invalid one stays in JavaScript. Rust
+  evaluates the value once, with SELF. None or undefined is None. A
+  described handle is the value when its row lists the target's id, else
+  None. Any other handle runs castObject through `js_cast`, which also
+  raises its errors: a native object cast through its `objectClass`, a class
+  identity, an object of another runtime, or a released SELF handle (the
+  closure casts `fr.instance`). MetaCast (0x13, 0.1 per tick) stays in
+  JavaScript.
+* **DefaultVariable (0x02).** A scalar default (int, byte, bool, float) is
+  read in the receiver's class default image. `classImage` builds that image
+  from the same `defaultValue` the closure returns, so Rust reads it only
+  while it is current. `js_class_row` validates a row's image word: the
+  image must pass `sameDefaults`, be in this arena, have no default that
+  failed to build, and the class's `propertyLink` must be its chain's
+  `propertyOrder`s. The word is reset when a class default is written
+  (classDefaultReference's setter), when SaveConfig refreshes config
+  defaults, and when `classImage` builds an image. The property must be in
+  the class's PropertyLink, so the row must list its declaring class.
+  Anything else evaluates the node in JavaScript: a HOST receiver (not
+  attached, released, a class), a receiver without a readable image,
+  Object's own properties, and object or array defaults.
+* **Array elements (0x1a) and members of elements (0x36 over 0x1a).** These
+  cover a fixed-array local or field with an imaged cell whose element, or
+  the member read, is a scalar cell. The closure evaluates the index before
+  the array reference. The lowering admits only an index without imports (a
+  literal or a local), so Rust evaluates it first and the JavaScript path can
+  evaluate it again without effect. An index outside [0, dim), or a field on
+  the JavaScript path, evaluates the node in JavaScript, which logs
+  ArrayIndexOutOfBounds and clamps.
+* **Float operators.** `*`, `/`, `+` and `-` (171, 172, 174, 175) choose a
+  NaN operand's payload with `nan_first`, as the compound assignments do.
+  With a signaling NaN double, the arm64 FPU returns the signaling operand
+  even when it comes second. No VM value is one: floats are f32 widenings
+  and arithmetic results, which are quiet.
+* **State code.** A state has no parameters or locals, so its frame is
+  lowered with the empty layout. `resumeState` keeps JavaScript's loop: the
+  hang budget, the cursor lookup and advance, and the latent, cursor,
+  iterator and return checks between statements. Any statement may start a
+  latent action, go to a label or change state. A statement with lowered
+  work runs through `vm_statement`: an effect, or a condition not wholly
+  left to JavaScript. A taken jump returns 1, and the host sets the cursor to
+  the target after the condition, as stepCompiled does. Latent natives,
+  GotoLabel, Stop, foreach steps, unconditional jumps and wholly JavaScript
+  statements stay one compiled step.
+* **SCRIPT_VM_CHECK** now also checks the new reads. Each cast, default and
+  element read that Rust completes calls `js_check`. That import evaluates
+  the node with the closures, or castObject on the evaluated value for a
+  cast, and throws on a difference.
+
+Verification: `validate-script-vm-interp` (108 kinds, 173,434 checks) runs
+each new kind against the JavaScript it transcribes. Casts are compared with
+`castObject` itself on a class hierarchy, covering row caching,
+None/undefined/released values, the released-SELF path and castObject's
+error. The float operators' NaN pairs compare exact result (f64) and stored
+(f32) bits. 42 of 47 mutants are caught. The five survivors are in the float
+operators: add or multiply without `nan_first` or written `b op a` (the
+compiler emits the same operand order), and `nan_first` without the quiet
+bit (every VM NaN is already quiet). Digests match at all 30 checkpoints
+under both VMs on Training (`04f77dc631509ae4`) and Island
+(`5496f30ee89033fc`) with `SCRIPT_VM_CHECK=1`, so every new read Rust
+completed was also compared with the closures. The 546 unit tests,
+`validate-script-vm-x87` and `validate-trace-kernel` pass. On Island the
+per-tick value fallbacks lost DynamicCast (680), struct members of elements
+(157), DefaultVariable (121) and element reads (27). State code is small at
+steady state: about 2.5 state statements per Island tick after the warm-up,
+0.9 of them now in Rust (Training: 0.2). Across four interleaved headless
+pairs, the median `SCRIPT_VM=rust` Island tick was 20.6, 20.8, 20.0 and
+20.6 ms before, and 19.8, 20.3, 20.2 and 20.0 ms after.
+
 **R3 — Hot families.** Move native and physics families into Rust as
 profiles rank them. Candidates are traces and the collision hash, walking and
 falling, AICanSee and alliance, and GetFrame/mesh lighting (already Rust).

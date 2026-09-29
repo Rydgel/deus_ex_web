@@ -21,14 +21,19 @@
  * JavaScript frame object exists only once one of its nodes needs it.
  */
 import {instantiateScriptVm} from './script-vm-kernel.mjs';
-import {handleOf, identityOfHandle} from './script-object-handles.mjs';
+import {handleOf, identityOfHandle, onHandleRelease, handleLimit} from './script-object-handles.mjs';
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
-import {lowerFunction, fieldKeyId, functionSignature} from './script-vm-lower.mjs';
+import {lowerFunction, fieldKeyId, functionSignature, classRecordId} from './script-vm-lower.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
+// Handle class table words (interp.rs): a released handle, and a class
+// row's default image word when DefaultVariable reads stay in JavaScript.
+const RELEASED = 1, UNREADABLE = 1;
+// js_check value kinds (interp.rs).
+const CK_INT = 1, CK_BOOL = 2, CK_FLOAT = 3, CK_OBJECT = 4, CK_CAST = 5;
 const UNDEFINED = 0xffffffff, NEXT_NONE = 0xffffffff;
 const HANG_BUDGET = 200000000;
 // SCRIPT_VM_STATS=1: count runs, JavaScript nodes and JavaScript statements
@@ -40,11 +45,56 @@ const count = key => STATS.set(key, (STATS.get(key) ?? 0) + 1);
 // bench-sim clears its measurements after the warm-up ticks.
 if (STATS) globalThis.__scriptVmStatsReset = () => STATS.clear();
 if (STATS) process.on('exit', () => {
-  const rows = [...STATS].sort((a, b) => b[1] - a[1]).slice(0, 60);
+  const rows = [...STATS].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
   console.error(`script-vm stats:\n${rows.map(([key, n]) => `${String(n).padStart(10)}  ${key}`).join('\n')}`);
 });
 const RETURN_BOOL = 2, RETURN_FLOAT = 3, RETURN_OBJECT = 4;
 const RETURNED = 0xfffffffe;
+// Word kinds the state driver inspects (interp.rs).
+const S_EXPR = 1, S_JUMP_IF_NOT = 3, JS_BOOL = 52, JS_VOID = 55;
+// State code's frame layout: a state has no parameters or locals.
+const STATE_LAYOUT = Object.freeze({size: 0, refCount: 0, cells: new Map(), fields: new Map()});
+
+// Interpreters whose handle class tables follow handle releases and class
+// default changes, weakly held (an interpreter lives as long as its runtime).
+const interpreters = new Set();
+function eachInterpreter(fn) {
+  for (const ref of interpreters) {
+    const vm = ref.deref();
+    if (vm) fn(vm);
+    else interpreters.delete(ref);
+  }
+}
+onHandleRelease(handle => eachInterpreter(vm => vm.markReleased(handle)));
+/** A class default or a class default image changed (script-runtime.mjs):
+ * each class row's default image is validated again before Rust reads it. */
+export function classDefaultsChanged() {
+  eachInterpreter(vm => vm.invalidateDefaultImages());
+}
+/** Per statement of a lowered state body: whether it runs in Rust (an
+ * effect or a conditional jump with lowered work); a jump, Nothing, foreach
+ * step, Return, yield or wholly JavaScript statement is one compiled step. */
+function stateStatements(words) {
+  const count = words[0], inRust = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    const at = words[1 + 2 * i], kind = words[at];
+    inRust[i] = kind === S_EXPR && words[at + 1] !== JS_VOID || kind === S_JUMP_IF_NOT && words[at + 2] !== JS_BOOL ? 1 : 0;
+  }
+  return inRust;
+}
+/** Whether `cls.propertyLink` is its chain's propertyOrders in order, so a
+ * property is in it exactly when its declaring class is in the chain (the
+ * DEFAULT_* owner test). */
+function propertyLinkIsChain(cls) {
+  const link = cls.propertyLink;
+  if (!Array.isArray(link)) return false;
+  let i = 0;
+  for (let c = cls; c; c = c.base) {
+    if (!Array.isArray(c.propertyOrder)) return false;
+    for (const field of c.propertyOrder) if (link[i++] !== field) return false;
+  }
+  return i === link.length;
+}
 
 /** One function body running in Rust: an import's `frame` argument names
  * it. A body entered from JavaScript has its frame object; a callee of a
@@ -87,6 +137,10 @@ export class RustScriptVm {
     this.boundTable = 0;
     this.boundCapacity = 0;
     this.lowered = 0;
+    // The handle class table (interp.rs CLASSES) and its class rows by class.
+    this.classTable = 0;
+    this.classCapacity = 0;
+    this.rows = new Map();
   }
   attach() {
     const x = this.exports;
@@ -100,6 +154,92 @@ export class RustScriptVm {
     this.framesAt = x.vm_frames_ptr();
     this.runtime.frameStack().attach(this.framesAt);
     this.callAt = x.vm_call_block_ptr();
+    // R2b-5: the handle class table starts with every handle released so
+    // far; later releases arrive through onHandleRelease.
+    this.classesAt = x.vm_classes_ptr();
+    const limit = handleLimit();
+    this.growClassTable(limit);
+    for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
+    interpreters.add(new WeakRef(this));
+    if (CHECK) this.arena.view.setUint32(x.vm_check_ptr(), 1, true);
+  }
+  /** Make the class table cover `handle`. */
+  growClassTable(handle) {
+    if (handle < this.classCapacity) return;
+    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 4);
+    if (this.classTable) {
+      this.arena.bytes.copyWithin(base, this.classTable, this.classTable + this.classCapacity * 4);
+      this.arena.release(this.classTable, this.classCapacity * 4);
+    }
+    this.classTable = base;
+    this.classCapacity = capacity;
+    const view = this.arena.view;
+    view.setUint32(this.classesAt, base, true);
+    view.setUint32(this.classesAt + 4, capacity, true);
+  }
+  /** A handle was released: a pointer holding it reads None in Rust. */
+  markReleased(handle) {
+    this.growClassTable(handle);
+    this.arena.view.setUint32(this.classTable + 4 * handle, RELEASED, true);
+  }
+  invalidateDefaultImages() {
+    const view = this.arena.view;
+    for (const row of this.rows.values()) view.setUint32(row.address, 0, true);
+  }
+  /** js_class_row: the class row of `handle`'s attached instance (interp.rs
+   * header), entered in the table, or 0 for a handle that is not described
+   * (released, not attached to this runtime, a class identity), whose casts
+   * run castObject in JavaScript. A row whose default image word is 0 is
+   * validated again. Runs no script. */
+  classRow(handle) {
+    const identity = identityOfHandle(handle);
+    if (identity === null || typeof identity !== 'object' || identity.kind === 'Class') return 0;
+    const runtime = this.runtime, instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity);
+    const cls = instance?.cls;
+    if (!cls) return 0;
+    let row = this.rows.get(cls);
+    if (!row) {
+      // castObject walks cls.record along cls.base.
+      const chain = [];
+      for (let c = cls; c; c = c.base) {
+        if (!c.record || typeof c.record !== 'object') return 0;
+        chain.push(classRecordId(c.record));
+      }
+      const address = this.arena.alloc(8 + 4 * chain.length), view = this.arena.view;
+      view.setUint32(address + 4, chain.length, true);
+      chain.forEach((id, i) => view.setUint32(address + 8 + 4 * i, id, true));
+      row = {address, cls, linkIsChain: propertyLinkIsChain(cls)};
+      this.rows.set(cls, row);
+    }
+    if (this.arena.view.getUint32(row.address, true) === 0)
+      this.arena.view.setUint32(row.address, this.defaultImage(row), true);
+    this.growClassTable(handle);
+    this.arena.view.setUint32(this.classTable + 4 * handle, row.address, true);
+    return row.address;
+  }
+  /** A class row's default image word: the class default image's base when
+   * it is current (classImage would return it unchanged), in this arena and
+   * without a default that could not be produced, else UNREADABLE. */
+  defaultImage(row) {
+    if (!row.linkIsChain) return UNREADABLE;
+    const image = this.runtime.currentClassImage?.(row.cls);
+    return image && image.arena === this.arena && !image.poison ? image.base : UNREADABLE;
+  }
+  /** SCRIPT_VM_CHECK: a value Rust read for `node` against the closure's. */
+  check(frameId, node, handle, kind, value) {
+    const run = this.frames[frameId], n = run.nodes[node];
+    const object = handle === run.selfHandle ? run.self : identityOfHandle(handle);
+    let expected;
+    if (kind === CK_CAST) {
+      const s = run.services, target = s.objectReference(run.compiled.script, n.fieldIndex, n);
+      expected = handleOf(s.castObject(object, target, 'dynamic'));
+    } else {
+      const v = run.compiled.nodeValue(n, run.frame, object);
+      expected = kind === CK_INT ? v | 0 : kind === CK_BOOL ? (v ? 1 : 0) : kind === CK_FLOAT ? (v === undefined ? undefined : +v)
+        : kind === CK_OBJECT ? handleOf(v) : NaN;
+    }
+    if (!Object.is(expected, value))
+      throw new Error(`SCRIPT_VM_CHECK ${run.compiled.displayName} ${opName(n)} at ${n.offset}: Rust ${value}, JavaScript ${expected}`);
   }
   get depth() { return this.arena.view.getUint32(this.framesAt + 12, true); }
   set depth(value) { this.arena.view.setUint32(this.framesAt + 12, value, true); }
@@ -259,6 +399,23 @@ export class RustScriptVm {
       },
       // No script runs here: the stack takes (or creates) its next chunk.
       js_frame_advance: size => vm.runtime.frameStack().advance(size),
+      // No script runs here either: the row of an attached instance's class.
+      js_class_row: handle => vm.classRow(handle),
+      // A DYNAMIC_CAST Rust does not decide: the closure's castObject on the
+      // evaluated value (SELF is the frame's instance, as `fr.instance`).
+      js_cast(frame, node, handle) {
+        enter();
+        try {
+          const run = vm.frames[frame], n = run.nodes[node], s = run.services;
+          if (STATS) count('js cast (DynamicCast value in Rust)');
+          const target = s.objectReference(run.compiled.script, n.fieldIndex, n);
+          return handleOf(s.castObject(handle === run.selfHandle ? run.self : identityOfHandle(handle), target, 'dynamic'));
+        } finally { leave(); }
+      },
+      js_check(frame, node, handle, kind, value) {
+        enter();
+        try { vm.check(frame, node, handle, kind, value); } finally { leave(); }
+      },
       js_error(frame, code, node) {
         enter();
         const name = vm.frames[frame]?.compiled.displayName ?? 'script';
@@ -275,10 +432,12 @@ export class RustScriptVm {
     };
   }
   /** The lowering of `compiled` for a frame, or null when the frame runs in
-   * JavaScript (state code, a frame without an arena block). */
+   * JavaScript (a function frame without an arena block). State code has no
+   * parameters or locals, so it is lowered with the empty layout. */
   lowering(compiled, frame) {
-    if (frame.state || !(frame.locals instanceof FrameLocals)) {
-      if (STATS) count(frame.state ? 'frame state (js)' : 'frame without block (js)');
+    if (frame.state) return this.loweringFor(compiled, STATE_LAYOUT, frame.services, frame.instance);
+    if (!(frame.locals instanceof FrameLocals)) {
+      if (STATS) count('frame without block (js)');
       return null;
     }
     return this.loweringFor(compiled, frame.locals.layout, frame.services, frame.instance);
@@ -347,6 +506,59 @@ export class RustScriptVm {
         if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${compiled.displayName} (the original would not return)`);
         frame.cursor = entry.next;
         compiled.step(frame, entry);
+      }
+      return frame.result;
+    } finally {
+      this.frames.length = id;
+      this.depth = id;
+      this.arena.view.setUint32(this.budgetAt, outerBudget, true);
+      if (stack.top !== stackTop || stack.index !== stackIndex) stack.restore(stackIndex, stackTop);
+      if (!id && this.retired.length) {
+        for (const old of this.retired) this.arena.release(old.code, old.bytes);
+        this.retired.length = 0;
+      }
+    }
+  }
+  /** resumeCompiled for a state frame (R2b-5). The loop is JavaScript's:
+   * the hang budget, the cursor lookup and advance, and the latent action,
+   * cursor, iterator and return checks between statements, since any
+   * statement may start a latent action, go to a label or change state. A
+   * statement with lowered work (an effect or a condition not wholly left
+   * to JavaScript) runs in Rust through vm_statement; every other one is
+   * one step of the compiled loop, as before. */
+  resumeState(frame, compiled, lowered) {
+    if (CHECK) this.runtime.checkMirrors();
+    const x = this.exports, selfHandle = handleOf(frame.instance), id = this.depth, entries = lowered.entries;
+    const inRust = lowered.stateStatements ??= stateStatements(lowered.words);
+    const outerBudget = this.arena.view.getUint32(this.budgetAt, true);
+    const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top;
+    let budget = HANG_BUDGET;
+    this.frames[id] = new Run(this, compiled, lowered, frame.instance, frame.services, frame);
+    this.depth = id + 1;
+    try {
+      while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned) {
+        if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${compiled.displayName} (the original would not return)`);
+        const index = lowered.indexOf.get(frame.cursor);
+        if (index === undefined) throw new Error('VM instruction pointer outside script');
+        const entry = entries[index];
+        frame.cursor = entry.next;
+        if (!inRust[index]) {
+          if (STATS) count(`js statement ${opName(entry.node)} (state)`);
+          compiled.step(frame, entry);
+          continue;
+        }
+        if (STATS) count('state statement in rust');
+        const pointer = x.__stack_pointer.value;
+        this.arena.view.setUint32(this.runawayAt, scriptRunawayCount(), true);
+        let jumped;
+        try {
+          jumped = x.vm_statement(lowered.code, id, 0, selfHandle, index);
+        } finally {
+          x.__stack_pointer.value = pointer;
+          setScriptRunaway(this.arena.view.getUint32(this.runawayAt, true));
+        }
+        // stepCompiled's `frame.cursor = n.target` after the condition.
+        if (jumped) frame.cursor = entry.node.target;
       }
       return frame.result;
     } finally {

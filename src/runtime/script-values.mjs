@@ -443,6 +443,16 @@ export function zeroValue(field) {
   return zeroFromDescriptor(descriptor);
 }
 
+/** The dimension and element stride arrayReference checks for a fixed-array
+ * property, or null when arrayReference refuses it (not a fixed array, an
+ * unresolved stride, no descriptor). For the Rust interpreter's lowering. */
+export function fixedArrayShape(field) {
+  let descriptor;
+  try { descriptor = describe(field); } catch { return null; }
+  return descriptor.array && descriptor.elementSize !== null
+    ? {dimension: descriptor.dimension, elementSize: descriptor.elementSize} : null;
+}
+
 /** Copy a typed value using the original property value shape. */
 export function copyValue(field, value) {
   const descriptor = describe(field);

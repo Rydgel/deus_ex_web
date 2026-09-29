@@ -37,13 +37,23 @@ export function identityOfHandle(handle) {
   return identities[handle] ?? null;
 }
 
+// Called with each released handle: the Rust interpreter's class tables
+// (script-vm-rust.mjs) record it, so a pointer holding it reads None there.
+const releaseListeners = [];
+/** Call `listener(handle)` whenever a handle is released. */
+export const onHandleRelease = listener => { releaseListeners.push(listener); };
+
 /** End an identity's handle; images that still hold it now name nothing. */
 export function releaseHandle(identity) {
   const handle = handles.get(identity);
   if (handle === undefined) return;
   handles.delete(identity);
   identities[handle] = null;
+  for (const listener of releaseListeners) listener(handle);
 }
+
+/** One past the highest handle allocated so far. */
+export const handleLimit = () => identities.length;
 
 /** What a handle names, for validators: 'none' (0), 'live', 'released', or
  * 'unallocated' (never returned by handleOf). */

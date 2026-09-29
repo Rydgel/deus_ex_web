@@ -1170,9 +1170,9 @@ export function compileFunction(fn) {
   }
   function resumeCompiled(frame) {
     const vm = frame.services.scriptVm;
-    if (vm !== undefined && !frame.state) {
+    if (vm !== undefined) {
       const lowered = vm.lowering(compiled, frame);
-      if (lowered) return vm.resume(frame, compiled, lowered);
+      if (lowered) return frame.state ? vm.resumeState(frame, compiled, lowered) : vm.resume(frame, compiled, lowered);
     }
     let budget = 200000000;
     while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {

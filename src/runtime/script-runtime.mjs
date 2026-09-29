@@ -16,7 +16,7 @@ import { createFrameLocals, FrameStack, LocalCellStorage } from './script-frame-
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
 import { loadTraceKernel } from './trace-kernel.mjs';
-import { RustScriptVm } from './script-vm-rust.mjs';
+import { RustScriptVm, classDefaultsChanged } from './script-vm-rust.mjs';
 import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
@@ -755,7 +755,16 @@ export class ScriptRuntime {
     if(image)image.arena.release(image.base,image.layout.size);
     image={layout,defaults,arena,base,refs,poison};
     classImages.set(cls,image);
+    // The Rust interpreter reads DefaultVariable in class images (R2b-5).
+    classDefaultsChanged();
     return image;
+  }
+  /** The class's default image when it is current (classImage would return
+   * it unchanged), else null; nothing is built. The Rust interpreter reads
+   * DefaultVariable there (script-vm-rust.mjs). */
+  currentClassImage(cls) {
+    const image=classImages.get(cls);
+    return image&&sameDefaults(image.defaults,cls.defaults)?image:null;
   }
   /** The runtime's object arena (docs/rust-core.md, R0). Harnesses built with
    * Object.create(ScriptRuntime.prototype) get theirs on first use. */
@@ -2123,6 +2132,7 @@ export class ScriptRuntime {
       if(!child||!loaded.loadRecord?.defaults?.data)continue;
       loadObjectConfig(graph,config,defaultsObject(graph,loaded.loadRecord,loaded.loadRecord.defaults.data),{propagate:1});
       this.classLoader.refreshConfigDefaults(loaded);
+      classDefaultsChanged();
     }
     return undefined;
   }
@@ -2598,6 +2608,7 @@ export class ScriptRuntime {
         ?new Map(value.map((item,index)=>[index,item])):new Map([[0,value]]);
       if(cls.loadRecord)this.classLoader.writeDefault(cls,field,values);
       cls.defaults.set(field.key,values);
+      classDefaultsChanged();
     });
   }
   structReference(ref,member) {
