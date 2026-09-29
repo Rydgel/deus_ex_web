@@ -448,6 +448,25 @@ consumables, skills, augmentations/energy, lockpicking, electronics, and compute
 hacking. Support dialogue choices, trading, objectives, notes, mission flags, and
 scripted/cinematic events using original game data and behavior.
 
+**Open Liberty Island blockers, bypassed only for performance runs.** Within
+seconds of Player start, UNATCO Island reaches three unimplemented original
+paths, and Play pauses there by design. `bench-sim --bypass`,
+`profile-play-browser --bypass` and local timing copies rewrite them into early
+returns (`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior:
+frames after it are only a timing workload. Each bypass patch is removed when
+its behavior lands.
+
+1. **Swimming.** `APawn::performPhysics` with Physics=3: startSwimming
+   `0x103d2b70` and physSwimming `0x103d3cd0`. physWalking hands off to it at
+   `0x103cb3fd` and checks for it again at `0x103cb6d9` and `0x103cb97d`;
+   physFalling at `0x103d1cb6` ([ladder and flying](ladder-flying.md)).
+2. **aiPickSearch's waterMove service** `0x103c3ca0`, with waterReach
+   `0x103c15a0` ([pawn navigation](script-pawn-nav.md)).
+3. **Native 708, `AIDirectionReachable`.**
+
+Behind these, latent 506 `StrafeFacing` and `altMove` are the next
+boundaries ([Play frame cost](play-frame-cost.md)).
+
 Done when training and Liberty Island support representative combat, stealth,
 exploration, conversation, and alternate-route objectives, with the systems
 interacting correctly. Extend the same compatibility checks as later missions
