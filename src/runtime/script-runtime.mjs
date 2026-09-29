@@ -3748,7 +3748,8 @@ export class ScriptRuntime {
    * FootRegion zone reads, MoveActor(bTest=1,bIgnorePawns=1) probes through
    * the recovered test-move, and FarMoveActor(test=1,noCheck=1) restores. The
    * +0xd0 CollideFlag byte is Region.ZoneNumber; +0x444 is ReducedDamageType.
-   * Water zones reach the unported swimMove boundary explicitly. */
+   * Water zones run the recovered swimMove/swimReachable over the same seam;
+   * findWaterLine reads pointRegion and Region.Zone below. */
   pawnNavServices(receiver) {
     const base=this.pawnPhysicsServices(receiver),level=base.level;
     const view=pawnPhysicsView(receiver,base);

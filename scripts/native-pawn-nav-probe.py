@@ -31,6 +31,16 @@ fsin/fcos/fpatan/fptan/fyl2x/f2xm1 (verified by opcode scan); Unicorn is
 fully authoritative for their integer/vector/fsqrt math.  appSqrt and
 FVector::SafeNormal run as real imported bodies.
 
+Optional controlled-world scene keys (the swimming slice, docs/script-pawn-nav.md):
+  waterPlane {z, wet, dry}  PointRegion answers the wet zone strictly below z and
+                            the dry zone otherwise; after every MoveActor and
+                            FarMoveActor stub commit, Region.Zone follows the
+                            same rule (a SetActorZone stand-in).
+  moveNearlyZero            MoveActor's early return for a nearly-zero Delta with
+                            an unchanged Rotation (no move, Hit untouched).
+  coverage [[lo, hi], ...]  report executed instruction addresses in the ranges.
+  disasm {name: [lo, hi]}   return the instruction addresses instead of running.
+
 Input: a JSON scene on argv[1].  Output: JSON command/result capture.
 Optional research tool; inputs and results stay local.
 """
@@ -572,6 +582,10 @@ class NavProbe:
         # Boundary stub addresses -> op name, so the code hook can log which
         # call site (the return address at [esp] on stub entry) invoked each.
         self.stub_entry = {}
+        # Final `ret` of the MoveActor/FarMoveActor stubs: the location commit
+        # is done there, which is where the optional SetActorZone stand-in
+        # (scene 'waterPlane') refreshes Region.Zone.
+        self.stub_ret = {}
         for op, slot, builder in [
                 ('moveActor', self.vtable + 0x88, move_stub(MAIL_MV, self.rec_mv)),
                 ('farMoveActor', self.vtable + 0x8c, farmove_stub(MAIL_FM, self.rec_fm)),
@@ -579,6 +593,13 @@ class NavProbe:
             addr = self.deploy(builder)
             self.write(slot, 'I', addr)
             self.stub_entry[addr] = op
+            if op != 'singleLineCheck':
+                self.stub_ret[addr + len(builder) - 3] = op
+        # Per-scene controlled-world options (reset in run()).
+        self.water_plane = None
+        self.move_nearly_zero = False
+        self.coverage_ranges = []
+        self.covered = set()
         for op, thunk, builder in [
                 ('pointRegion', POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr)),
                 ('fastLineCheck', FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl)),
@@ -664,10 +685,26 @@ class NavProbe:
         self.trace.append(hex(address))
         if len(self.trace) > 200:
             self.trace.pop(0)
+        for lo, hi in self.coverage_ranges:
+            if lo <= address < hi:
+                self.covered.add(address)
+        if address in self.stub_ret and self.water_plane:
+            # SetActorZone stand-in: after the committed move, Region.Zone
+            # (+0xc8) follows the scene's water plane (FootRegion/HeadRegion
+            # and the +0xd0 ZoneNumber byte are left as fabricated).
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            actor = self.read(esp + 4, 'I')[0]
+            self.write(actor + 0xc8, 'I', self.plane_zone(self.read(actor + 0x11c, 'f')[0]))
         if address in self.stub_entry:
             esp = cpu.reg_read(UC_X86_REG_ESP)
             site = self.read(esp, 'I')[0]
             self.callsite_log.append((self.stub_entry[address], site))
+            op = self.stub_entry[address]
+            if op == 'moveActor' and self.move_nearly_zero and self.nearly_zero_move(cpu, esp):
+                return
+            if op == 'pointRegion' and self.water_plane:
+                self.plane_point_region(cpu, esp)
+                return
             if self.dump_stubs and self.stub_entry[address] == 'moveActor':
                 idx = self.read(MAIL_MV + 4, 'I')[0]
                 base = self.read(MAIL_MV + 8, 'I')[0]
@@ -711,6 +748,59 @@ class NavProbe:
                 address, ebx, lx, ly, lz,
                 ('%.3f' % self.read(ebp - 0x5c, 'f')[0]) if ebp else '?', ht, nz, extra, raw),
                 file=sys.stderr)
+
+    # --- controlled world (scene options) -------------------------------------
+    def plane_zone(self, z):
+        """Scene 'waterPlane' {z, wet, dry}: the water zone strictly below the
+        plane, the dry zone at or above it (NaN compares false: dry)."""
+        return self.water_plane['wet'] if z < self.water_plane['z'] else self.water_plane['dry']
+
+    def nearly_zero_move(self, cpu, esp):
+        """ULevel::MoveActor's early return (0x1039915a..0x103991c6, see
+        docs/swimming.md): every |Delta| component below the double 1e-4
+        (unordered counts as below) with NewRotation equal to the actor's
+        Rotation returns 1 before `Hit = FCheckResult(1)` -- no move, no zone
+        update, the caller's Hit untouched and no scripted result consumed.
+        The call is still recorded like the stub records it."""
+        actor = self.read(esp + 4, 'I')[0]
+        delta = self.read(esp + 8, '3f')
+        if not all(not (abs(c) >= 1e-4) for c in delta):
+            return False
+        if self.read(esp + 0x14, '3i') != self.read(actor + 0x120, '3i'):
+            return False
+        count = self.read(MAIL_MV, 'I')[0]
+        rec = self.rec_mv + count * 64
+        self.write(rec, 'I', cpu.reg_read(UC_X86_REG_ECX))
+        self.cpu.mem_write(rec + 4, bytes(self.cpu.mem_read(esp + 4, 0x30)))
+        self.write(MAIL_MV, 'I', count + 1)
+        cpu.reg_write(UC_X86_REG_EAX, 1)
+        cpu.reg_write(UC_X86_REG_EIP, self.read(esp, 'I')[0])
+        cpu.reg_write(UC_X86_REG_ESP, esp + 4 + 0x30)
+        return True
+
+    def plane_point_region(self, cpu, esp):
+        """UModel::PointRegion (thunk 0x1030391d) under the scene water plane:
+        records {model,out,world,point} like pointregion_stub, writes
+        {zone, 0, 0} to *out and returns out (ret 0x14)."""
+        out, world = self.read(esp + 4, '2I')
+        point = self.read(esp + 0xc, '3f')
+        count = self.read(MAIL_PR, 'I')[0]
+        rec = self.rec_pr + count * 32
+        self.write(rec, 'III', cpu.reg_read(UC_X86_REG_ECX), out, world)
+        self.cpu.mem_write(rec + 12, bytes(self.cpu.mem_read(esp + 0xc, 12)))
+        self.write(MAIL_PR, 'I', count + 1)
+        self.write(out, '3I', self.plane_zone(point[2]), 0, 0)
+        cpu.reg_write(UC_X86_REG_EAX, out)
+        cpu.reg_write(UC_X86_REG_EIP, self.read(esp, 'I')[0])
+        cpu.reg_write(UC_X86_REG_ESP, esp + 4 + 0x14)
+
+    def instructions(self, ranges):
+        """Instruction addresses of each named [lo, hi) body range (capstone),
+        for instruction-coverage reports."""
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        md = Cs(CS_ARCH_X86, CS_MODE_32)
+        return {name: ['%x' % i.address for i in md.disasm(bytes(self.cpu.mem_read(lo, hi - lo)), lo)]
+                for name, (lo, hi) in ranges.items()}
 
     # --- fabrication -------------------------------------------------------
     def class_object(self, super_class=0):
@@ -840,6 +930,13 @@ class NavProbe:
         # vtable/stub/record-buffer allocations) so batches stay bounded.
         self.free = self.heap_mark
         self.callsite_log = []
+        self.water_plane = None
+        self.move_nearly_zero = bool(scene.get('moveNearlyZero'))
+        self.coverage_ranges = [(int(lo, 16), int(hi, 16)) for lo, hi in scene.get('coverage', [])]
+        self.covered = set()
+        if 'disasm' in scene:
+            return {'instructions': self.instructions(
+                {name: (int(lo, 16), int(hi, 16)) for name, (lo, hi) in scene['disasm'].items()})}
         for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR, MAIL_SC):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
@@ -895,6 +992,9 @@ class NavProbe:
         # Zones (built before actors so region fields can reference them).
         zones = {name: self.zone(spec) for name, spec in scene.get('zones', {}).items()}
         refs = dict(zones)
+        if scene.get('waterPlane'):
+            plane = scene['waterPlane']
+            self.water_plane = {'z': plane['z'], 'wet': zones[plane['wet']], 'dry': zones[plane['dry']]}
 
         # PointRegion results carry zone pointers — resolve after zones exist.
         pr = pad(scene.get('pointRegion', []), {'zone': 0})
@@ -1169,6 +1269,7 @@ class NavProbe:
                 'flags318': self.read(pawn + 0x318, 'I')[0],
                 'physics': self.read(pawn + 0x30, 'B')[0],
                 'moveTarget': self.read(pawn + 0x34c, 'I')[0],
+                'regionZone': self.read(pawn + 0xc8, 'I')[0],
             },
             'probingUsed': self.probing_index,
             'found': '%08x' % self.read(refs['foundbuf'], 'I')[0],
@@ -1199,6 +1300,7 @@ class NavProbe:
             'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
             'levelAddress': lvl,
             'missedOracles': self.missed_oracles,
+            'coverage': ['%x' % a for a in sorted(self.covered)],
         }
 
 

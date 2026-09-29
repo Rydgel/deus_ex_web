@@ -449,8 +449,8 @@ hacking. Support dialogue choices, trading, objectives, notes, mission flags, an
 scripted/cinematic events using original game data and behavior.
 
 **Open Liberty Island blockers, bypassed only for performance runs.** Within
-seconds of Player start, UNATCO Island reaches unimplemented original paths,
-and Play pauses there by design. `bench-sim --bypass`,
+about 20 seconds of Player start, UNATCO Island reaches unimplemented original
+paths, and Play pauses there by design. `bench-sim --bypass`,
 `profile-play-browser --bypass` and local timing copies rewrite them into early
 returns (`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior:
 frames after it are only a timing workload. Each bypass patch is removed when
@@ -477,15 +477,36 @@ its behavior lands.
    boundary for pawns instead of a silent dry integration. Non-Pawn actors
    (five breakable crates in an Island water zone) still integrate dry
    ([swimming](swimming.md#unsupported-and-unresolved)).
-2. **aiPickSearch's waterMove service** `0x103c3ca0` (`APawn::swimMove`), with
-   waterReach `0x103c15a0` (`swimReachable`)
-   ([pawn navigation](script-pawn-nav.md)). This is the first boundary of the
-   bench workload, at tick 153 (2.55 s).
-3. **Native 708, `AIDirectionReachable`.** It is not reached in 400 ticks
-   while item 2 is stood in by bench-sim's early return.
-
-Behind these, latent 506 `StrafeFacing` and `altMove` are the next
-boundaries ([Play frame cost](play-frame-cost.md)).
+2. ~~**aiPickSearch's waterMove service**~~ Done
+   ([pawn navigation](script-pawn-nav.md#swimming-contract-recovered-2026-09-29--swimreachable--swimmove)):
+   `APawn::swimMove` `0x103c3ca0` and `APawn::swimReachable` `0x103c15a0`
+   are ported and wired into aiPickSearch mode 3, the reach dispatcher,
+   flyReachable and walkReach. `validate-pawn-swimming-reach` passes 360/360
+   original-DLL cases (0 mismatches, 9/9 mutants) with every instruction of
+   both bodies executed. Without any bypass the fish scouts' 20
+   AIPickRandomDestination calls all find water destinations and their
+   generators spawn 20 fish that swim. bench-sim's waterMove and
+   `performPhysics` default patches are removed (both maps report `errors {}`
+   without them; Training stays `04f77dc631509ae4`). The Island bench digest
+   is now `340b445c6e983b80`, JS and Rust VMs equal at all 30 checkpoints; it
+   first differs from `6a178ec7baf98078` at checkpoint 10 (tick 160), where
+   the tick-153/155 GeneratePawn calls have spawned Fish0 and Fish1 (first
+   differing field in digest order `LevelInfo0.PawnList`). Re-inserting the old
+   waterMove early return on the new source reproduces `6a178ec7baf98078`
+   exactly.
+3. **jumpArc `0x103c2f50`**, bench-sim's forward-walk workload with no bypass:
+   the first boundary is now tick 1221 (20.35 s). PaulDenton0 in `RunningTo`
+   calls `GetNextWaypoint` → `ActorReachable` (520) → actorWorker `0x103c0630`
+   → dispatcher `0x103c1000` → walkReach `0x103c1b70`, whose checkMove returns
+   -1 for a bCanJump pawn: `walkReach requires the original jumpArc service
+   (0x103c2f50)` (`validate-island-swimming`).
+4. **Native 708, `AIDirectionReachable`**, latent 506 `StrafeFacing`: not
+   reached in those 1221 unbypassed ticks. bench-sim keeps its 708 early
+   return (the only remaining patch); the unbypassed Play run passes the
+   360-tick bench window without reaching it.
+5. Non-Pawn actors falling through water still integrate dry (five breakable
+   crates in an Island water zone, [swimming](swimming.md#unsupported-and-unresolved));
+   this is a silent substitute, not a stopping boundary.
 
 Done when training and Liberty Island support representative combat, stealth,
 exploration, conversation, and alternate-route objectives, with the systems

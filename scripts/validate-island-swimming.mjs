@@ -1,23 +1,21 @@
-/** Play integration of PHYS_Swimming on UNATCO Island (docs/swimming.md).
+/** Play integration of PHYS_Swimming and swimming navigation on UNATCO Island
+ * (docs/swimming.md, docs/script-pawn-nav.md "Swimming contract").
  *
  * UNATCO Island reaches Physics=3 through PawnGenerator.GeneratePawn: the
  * fish generators' GeneratorScouts get Scout.SetPhysics(Fish.Default.Physics
  * = PHYS_Swimming) and then Scout.AIPickRandomDestination (native 709) in the
- * same call. Three child processes, one at a time, each boot the map through
- * Play's createGame and tick at 60 Hz with the original Actor.Tick scheduler:
+ * same call, whose band search runs APawn::swimMove (0x103c3ca0) in the water
+ * zone. Three child processes, one at a time, each boot the map through Play's
+ * createGame and tick at 60 Hz with the original Actor.Tick scheduler:
  *
  *  - unmodified: original Play, no bypass, with bench-sim's workload (the
  *    forward key held from the first tick; idle, the fish generators never
- *    call GeneratePawn within 30 s). It runs to the first runtime
- *    boundary, which is aiPickSearch's waterMove (0x103c3ca0) inside that
- *    GeneratePawn call, one statement after the scouts were set to swim; no
- *    swimming boundary is reached.
- *  - scouts: bench-sim's waterMove and native 708 early returns only (NOT
- *    original behavior; they stand in for the unported upstream services) and
- *    no physics patch. The scouts then run APawn::performPhysics case 3 into
- *    physSwimming every tick. Their Mass 0 / Buoyancy 0 / DesiredSpeed 0
- *    defaults make calcVelocity's lift NaN and the speed clamp zero, so they
- *    hold still (the Mass 0 cases of validate-native-swimming).
+ *    call GeneratePawn within 30 s). Every scout AIPickRandomDestination
+ *    completes through the original swimMove and finds a destination, the
+ *    fish generators spawn their fish, and scouts and fish run physSwimming.
+ *    The run ends at the first runtime boundary, which is no longer swimming
+ *    navigation: PaulDenton0's GetNextWaypoint asks actorReachable (native
+ *    520), whose walkReach needs the unported jumpArc (0x103c2f50).
  *  - exit and entry: original Play, no bypass, idle, with fixture setup at
  *    tick 20 (setup only). exit: GeneratorScout4 (no AI; its generator stays
  *    inactive while idle) placed in open water with Mass 100 / Buoyancy 150 /
@@ -30,34 +28,39 @@
  *    boundary (the fixture moved the NPC away from its HomeLoc).
  *
  * The swimming bodies are bit-exact against Engine.dll in
- * validate-native-swimming; this checks that Play reaches them. */
+ * validate-native-swimming and validate-pawn-swimming-reach; this checks that
+ * Play reaches them. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { register } from 'node:module';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const part = process.argv[2];
 if (!part) {
   const results = {};
-  for (const name of ['unmodified', 'scouts', 'exit', 'entry']) {
+  for (const name of ['unmodified', 'exit', 'entry']) {
     const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), name], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     if (child.status !== 0) throw new Error(`${name} part failed (${child.status}): ${child.stderr.split('\n').filter(l => !/Deprecation|trace-deprecation/.test(l)).slice(-12).join('\n')}`);
     results[name] = JSON.parse(child.stdout.trim().split('\n').at(-1));
   }
-  const { unmodified, scouts, exit: water, entry: dive } = results;
-  // 1. Unmodified Play: the first boundary is waterMove, in the tick where the
-  // scouts were set to PHYS_Swimming; swimming is not what stops Play.
-  assert.match(unmodified.firstError.message, /waterMove service \(0x103c3ca0\)/);
-  assert.ok(unmodified.scouts.some(s => s.physics === 3), 'GeneratePawn set a fish scout to PHYS_Swimming before AIPickRandomDestination');
-  assert.equal(unmodified.swimCalls, 0, 'no swimming physics ran before the waterMove boundary');
-  // 2. Scouts with the upstream nav stand-ins: case 3 runs physSwimming, no error.
-  assert.deepEqual(scouts.errors, {}, 'no runtime error with only the waterMove/708 stand-ins');
-  for (const scout of scouts.scouts) {
-    assert.equal(scout.physics, 3);
+  const { unmodified, exit: water, entry: dive } = results;
+  // 1. Unmodified Play: the scouts' band searches complete through the
+  // original swimMove; swimming navigation is no longer a boundary.
+  for (const scout of unmodified.scouts) {
+    assert.equal(scout.physics, 3, `${scout.name} swims`);
+    assert.ok(scout.picks.calls > 0 && scout.picks.found === scout.picks.calls,
+      `${scout.name}: every AIPickRandomDestination found a destination (${scout.picks.found}/${scout.picks.calls})`);
     assert.ok(scout.swimCalls > 150, `${scout.name} ran physSwimming every tick (${scout.swimCalls})`);
     assert.deepEqual(scout.velocity, [0, 0, 0], `${scout.name}: NaN lift and zero DesiredSpeed hold the original scout still`);
   }
+  assert.ok(unmodified.generators.filter(g => /0$/.test(g.name)).every(g => g.pawnCount > 0),
+    'both water generators near the player spawned fish');
+  assert.ok(unmodified.fishSwimCalls > 0, 'the spawned fish run physSwimming');
+  // 2. The first runtime boundary without any bypass.
+  assert.ok(unmodified.firstError.tick > 1000, `no boundary in the bench window (${unmodified.firstError.tick})`);
+  assert.match(unmodified.firstError.message, /jumpArc service \(0x103c2f50\)/);
+  const { index, receiver, function: caller } = unmodified.firstError.lastNavNative;
+  assert.deepEqual({ index, receiver, caller }, { index: 520, receiver: 'PaulDenton0', caller: 'GetNextWaypoint' });
   // 3. Real water: exit through findWaterLine/setPhysics(Falling), and entry
   // through ScriptedPawn.ZoneChange and the physFalling hand-off.
   const exit = water.exit;
@@ -71,11 +74,9 @@ if (!part) {
   assert.equal(entry.physics, 3);
   assert.equal(entry.regionWater, true);
   const summary = {
-    unmodified: { firstBoundary: unmodified.firstError.message, tick: unmodified.firstError.tick,
-      seconds: +(unmodified.firstError.tick / 60).toFixed(3), scoutsSetToSwim: unmodified.scouts.filter(s => s.physics === 3).map(s => s.name),
-      player: unmodified.player, generators: unmodified.generators },
-    scouts: { ticks: scouts.ticks, swimCalls: Object.fromEntries(scouts.scouts.map(s => [s.name, s.swimCalls])), bypassHits: scouts.bypassHits,
-      firstError: scouts.firstError },
+    unmodified: { firstBoundary: unmodified.firstError, seconds: +(unmodified.firstError.tick / 60).toFixed(3),
+      scouts: unmodified.scouts, generators: unmodified.generators, fishSwimCalls: unmodified.fishSwimCalls,
+      player: unmodified.player },
     exit: { ...exit, firstError: water.firstError }, entry: { ...entry, nextBoundary: dive.firstError },
     scope: 'Island Play reaches physSwimming/startSwimming/Swim/findWaterLine through Actor.Tick; first boundaries reported' };
   console.log(JSON.stringify(summary, null, 1));
@@ -83,31 +84,7 @@ if (!part) {
 }
 
 // ---------------------------------------------------------------------------
-// A child part. The scouts part installs only the waterMove/708 stand-ins.
-if (part === 'scouts') {
-  const hooks = new URL('./bench-sim-hooks.mjs', import.meta.url).href;
-  const source = `import { BYPASS_PATCHES } from ${JSON.stringify(hooks)};
-const from = re => BYPASS_PATCHES.find(([pattern]) => String(pattern) === String(re))[1];
-const PATCHES = [
-  [/\\/src\\/runtime\\/script-pawn-nav\\.mjs$/, from(/\\/src\\/runtime\\/script-pawn-nav\\.mjs$/),
-    "{globalThis.__bypassHit?.('waterMove 0x103c3ca0');return 0;}"],
-  [/\\/src\\/runtime\\/script-doors\\.mjs$/, from(/\\/src\\/runtime\\/script-doors\\.mjs$/),
-    "if(call.index===708){globalThis.__bypassHit?.('native 708');return false;}throw new Error(\`Unsupported original door native \${call.index} in \${path}\`);"],
-];
-export async function load(url, context, nextLoad) {
-  const result = await nextLoad(url, context);
-  const patch = PATCHES.find(([pattern]) => pattern.test(new URL(url).pathname));
-  if (!patch) return result;
-  const text = String(result.source);
-  if (!text.includes(patch[1])) throw new Error('island swimming stand-in no longer matches ' + url);
-  return { ...result, source: text.replace(patch[1], patch[2]) };
-}`;
-  register(`data:text/javascript,${encodeURIComponent(source)}`, import.meta.url);
-}
-const bypassHits = {};
-globalThis.__bypassHit = name => { bypassHits[name] = (bypassHits[name] ?? 0) + 1; };
-
-// Deterministic simulated clock, as bench-sim.
+// A child part. Deterministic simulated clock, as bench-sim.
 let simulatedMs = 0;
 const RealDate = Date, epoch = new RealDate(2001, 5, 23, 12, 0, 0).getTime();
 globalThis.Date = class extends RealDate {
@@ -149,39 +126,54 @@ const wrapViews = () => {
     }
   }
 };
+// The navigation natives' script context (receiver and calling function) and
+// each receiver's AIPickRandomDestination verdicts.
+const picks = {};
+let lastNative = null;
+const invokeNative = runtime.invokeNative.bind(runtime);
+runtime.invokeNative = call => {
+  const native = { index: call.index, receiver: call.receiver?.name ?? null, function: call.script?.name ?? null };
+  if (call.index === 520 || call.index === 521) {
+    const node = runtime.instance(call.receiver)?.state?.stateNode;
+    native.state = node?.record?.name ?? node?.name ?? null;
+    try { native.orders = read(call.receiver, 'Orders'); native.orderTag = read(call.receiver, 'OrderTag'); } catch { /* not a ScriptedPawn */ }
+  }
+  if ([517, 518, 520, 521, 525, 526, 708, 709].includes(call.index)) lastNative = native;
+  const result = invokeNative(call);
+  if (call.index === 709) {
+    const p = picks[native.receiver] ??= { calls: 0, found: 0 };
+    p.calls++; if (result) p.found++;
+  }
+  return result;
+};
 let tick = 0, firstError = null;
-const errors = {};
 const step = () => {
   wrapViews();
   simulatedMs += 1000 / 60; tick++;
+  lastNative = null;
   try { game.tick(1 / 60); }
   catch (error) {
-    const message = String(error?.message ?? error).split('\n')[0];
-    firstError ??= { tick, message };
-    errors[message] = (errors[message] ?? 0) + 1;
+    // lastNavNative: the last navigation native entered in the failing tick.
+    firstError ??= { tick, message: String(error?.message ?? error).split('\n')[0], lastNavNative: lastNative };
   }
 };
 const scoutNames = ['GeneratorScout4', 'GeneratorScout5'];
 const scoutState = () => scoutNames.map(name => ({ name, physics: read(actor(name), 'Physics'), velocity: read(actor(name), 'Velocity'),
-  swimCalls: calls.get(`${name}.swimming`) ?? 0 }));
+  swimCalls: calls.get(`${name}.swimming`) ?? 0, picks: picks[name] ?? { calls: 0, found: 0 } }));
 
-if (part === 'unmodified' || part === 'scouts') {
+if (part === 'unmodified') {
   // bench-sim's workload: the forward key held through the installed bindings.
   // Idle, the fish generators stay inactive and no scout is set to swim.
   const { createPlayerInputFixture } = await import('./player-input-fixture.mjs');
   createPlayerInputFixture(game).key('KeyW', true);
 }
 const generators = () => level.actors.filter(a => /^Fish2?Generator[01]$/.test(a?.name ?? '')).map(a => ({ name: a.name,
-  active: read(a, 'bActive'), triggered: read(a, 'bTriggered'), tag: read(a, 'Tag'),
-  triggers: level.actors.filter(t => t && t !== a && (() => { try { return read(t, 'Event') === read(a, 'Tag') && read(a, 'Tag') !== 'None'; } catch { return false; } })()).map(t => t.name) }));
+  active: read(a, 'bActive'), pawnCount: read(a, 'PawnCount'), scout: read(a, 'Scout')?.name ?? null }));
 if (part === 'unmodified') {
-  while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 400)) step();
-  const swimCalls = [...calls].filter(([k]) => k.endsWith('.swimming') || k.endsWith('.startSwimming')).reduce((s, [, n]) => s + n, 0);
-  console.log(JSON.stringify({ firstError, scouts: scoutState(), swimCalls, generators: generators(),
+  while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 1400)) step();
+  const fishSwimCalls = [...calls].filter(([k]) => /^Fish2?\d+\.swimming$/.test(k)).reduce((s, [, n]) => s + n, 0);
+  console.log(JSON.stringify({ firstError, scouts: scoutState(), fishSwimCalls, generators: generators(),
     player: read(game.player.collisionActor, 'Location').map(Math.round) }));
-} else if (part === 'scouts') {
-  while (tick < 400) step();
-  console.log(JSON.stringify({ ticks: tick, errors, firstError, bypassHits, scouts: scoutState() }));
 } else if (part === 'exit') {
   for (let i = 0; i < 20; i++) step();
   assert.equal(firstError, null);

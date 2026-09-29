@@ -26,10 +26,12 @@ other Island actor reaches Physics=3 in the bench workload.
   (1800 ticks), and nothing swims.
 - bench-sim's workload (the forward key held from the first tick): the first
   GeneratePawn runs at tick 153 (2.55 s at 60 Hz). It sets GeneratorScout5 to
-  PHYS_Swimming and, in the same call, reaches aiPickSearch's water service
-  (`APawn::swimMove`, `0x103c3ca0`), which is not ported. **In original Play
-  without a bypass, that is the first boundary; no swimming physics has run
-  yet.** The scouts would swim from the next tick on.
+  PHYS_Swimming and, in the same call, runs aiPickSearch's water mode through
+  the recovered `APawn::swimMove` (`0x103c3ca0`,
+  [pawn navigation](script-pawn-nav.md#swimming-contract-recovered-2026-09-29--swimreachable--swimmove)).
+  Every scout search finds a water destination and the two generators near
+  the player spawn their fish, which swim too. Until 2026-09-29 swimMove was
+  unported and this call was the first boundary.
 - GeneratorScout defaults are Mass 0, Buoyancy 0 and DesiredSpeed 0. In
   calcVelocity, `1 - Buoyancy/Mass` is 0/0 (NaN), and the speed clamp scales by
   `WaterSpeed * DesiredSpeed = 0`. The scouts therefore hold still while
@@ -258,13 +260,12 @@ result is discarded.
   include Mass 0 (inf and NaN lift), huge velocities and zone velocities, the
   4000 clamp near float max, and a 1e6-long water-line search.
 - `scripts/validate-island-swimming.mjs` checks Play integration on UNATCO
-  Island in four child processes:
-  - **unmodified**, no bypass, forward key: the first boundary is `waterMove`
-    at tick 153, and GeneratorScout5 is already Physics=3.
-  - **scouts**, with bench-sim's waterMove/708 early returns only (not
-    original) and no physics patch: GeneratorScout4/5 run physSwimming every
-    tick (246/248 calls in 400 ticks), hold still, and no error occurs. The
-    waterMove stand-in is hit 64 times; native 708 is not reached.
+  Island in three child processes:
+  - **unmodified**, no bypass, forward key: GeneratorScout4/5 run physSwimming
+    every tick and hold still, all 20 of their AIPickRandomDestination calls
+    find a destination through the original swimMove, and 20 spawned fish
+    swim. The first boundary is jumpArc at tick 1221 (PaulDenton0's
+    ActorReachable), not swimming.
   - **exit**, no bypass, fixture setup at tick 20: GeneratorScout4 is given
     Mass 100, Buoyancy 150 and DesiredSpeed 1 in open water. It swims up for
     41 ticks and leaves the water at Z -351.57 against a surface at -353: Swim
@@ -309,9 +310,8 @@ result is discarded.
   branch. The Island bench reaches this: CrateBreakableMedGeneral1, 2, 5 and 8
   and CrateBreakableMedCombat13 run physFalling in a water zone from its
   first tick and integrate dry.
-- **APawn::swimMove** (`0x103c3ca0`, aiPickSearch's water service) and
-  swimReachable (`0x103c15a0`) are not ported. They are the Island blocker
-  after this slice.
+- ~~APawn::swimMove and swimReachable~~ are ported and oracle-verified since
+  2026-09-29 ([pawn navigation](script-pawn-nav.md#swimming-contract-recovered-2026-09-29--swimreachable--swimmove)).
 - The player (JC) has no swimming path: runPlayerPhysics refuses water
   regions, the dry zone callbacks refuse water zone changes, and
   PlayerSwimming and breath effects are not linked.
@@ -322,7 +322,6 @@ result is discarded.
 - The oracle runs x87 control word 0x037f. Whether the game thread runs single
   precision under D3D is open (see the D3D FPUSETUP note). No transcendental
   is used by these bodies.
-- `scripts/bench-sim-hooks.mjs`'s `performPhysics` default rewrite is no
-  longer reached for Physics=3. It is not reached at all in 360-tick
-  Training or Island bench runs, so it can be dropped. It has not been
-  removed in this slice.
+- `scripts/bench-sim-hooks.mjs`'s `performPhysics` default rewrite was removed
+  on 2026-09-29: without it both maps' 360-tick bench runs report `errors {}`
+  and the Training digest is unchanged.

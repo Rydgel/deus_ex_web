@@ -47,7 +47,10 @@ Flying reach now has its own 30-case original-DLL comparison, including callers;
 see the contract and verification below.  `AIPickRandomDestination` (709) and
 `FindPathToward` (517) are dispatched live in Play mode.
 
-Not yet oracle-verified: swimming reach helpers, `jumpArc`, the
+Swimming reach (`swimReachable`/`swimMove`) has its own 360-case
+original-DLL comparison; see the swimming contract below.
+
+Not yet oracle-verified: `jumpArc`, the
 proximity-landing `appSqrt` arc, `FindRandomDest`, `FindPathTo`,
 `PickWallAdjust`, `FindStairRotation`.
 
@@ -153,12 +156,179 @@ now preserves both. The probe's per-operation buffers were already reset, but
 its callsite ordering log accumulated earlier scenes; it now resets per scene
 as well. Raw argument-bit captures preserve signed zero and integer Rotation.
 
-Still unresolved: waterReach and jumpArc translations, actual level collision/
+Still unresolved: the jumpArc translation, actual level collision/
 zone service composition, and VM navigation dispatch. Accepted swimming
 handoffs, non-finite inputs and dynamically changing zones are not covered by
-this flying corpus. An accepted water handoff requires an explicit service;
-none is invented. Passing scripted-boundary comparisons does not establish
+this flying corpus; the swimming corpus below covers flyReachable's water
+hand-off and swimReachable's hand-back to flight. Passing scripted-boundary comparisons does not establish
 original whole-scene flight.
+
+## Swimming contract recovered 2026-09-29 — `swimReachable` / `swimMove`
+
+Read from the hash-verified Engine.dll before translation. Thunk `0x10301406`
+jumps to `0x103c15a0` and thunk `0x10303f53` to `0x103c3ca0`; their SEH
+unwind strings (`0x10431064`, `0x104311d4`) name them `APawn::swimReachable`
+and `APawn::swimMove`. Local disassemblies: `.cache/nav-disasm/w_waterReach.txt`
+and `w_swimMove.txt`. A rel32 scan of the whole image finds exactly these
+callers:
+
+| Callee | Call site | Caller | Arguments |
+| --- | --- | --- | --- |
+| swimReachable | `0x103c1059` | dispatcher `0x103c1000` | `(point, radius, 0, target)` when `Region.Zone` is water (before the Physics byte is read) |
+| swimReachable | `0x103c13cd` | flyReachable | `(point, radius, reachFlags, target)` after a flyMove that left the pawn in water with bCanSwim and no mismatched pain zone; the result replaces reachFlags and success |
+| swimReachable | `0x103c1fb8` | walkReach `0x103c1b70` | `(point, radius, arg18, target)` from the same water/bCanSwim/pain gate; the result replaces arg18 and reached |
+| swimMove | `0x103c177a` | swimReachable | `(step, target, 8.0f or 4.1f, 0)` |
+| swimMove | `0x103c7c13` | aiPickSearch mode 3 | `(dirVec*stride, 0, 4.1f, 0)` |
+
+Nothing else in Engine.dll calls either body; pointReachable/actorReachable
+reach swimReachable only through the dispatcher and the two reach loops.
+
+### `APawn::swimMove(FVector Delta, AActor* GoalActor, FLOAT threshold, INT bAdjust)` `0x103c3ca0`
+
+`thiscall`, `ret 0x18`. The prologue and the in-water tail are
+instruction-for-instruction the flyMove body (a normalized diff of the two
+listings differs only in the inserted dry branch and jump targets):
+
+1. `Start = Location` (`[ebp-0x30..-0x28]`). `Down = (0.0f, 0.0f, M*-1)` with
+   `M = MaxStepHeight` (`+0x38c`) and `-1.0f` at `0x104298f0`; `Up` is each
+   component times `-1.0f`, stored: `(-0.0, -0.0, f32(M))`. A local
+   `FCheckResult Hit(1.f)` (`Time=1`, `Item=-1`, Actor 0).
+2. `MoveActor(Delta, Rotation, Hit, bTest=1, bIgnorePawns=1, 0, 0)`.
+   `GoalActor && Hit.Actor == GoalActor` returns **5** (`0x103c3dac`).
+3. **Dry branch** (`0x103c3dc4`): if `Region.Zone->bWaterZone` (`+0x388` bit 0,
+   read after the move) is clear, `End = Location`, `findWaterLine(Start, End)`
+   (thunk `0x1030227a`, body `0x103d3b10`, see [swimming](swimming.md)). If any
+   component differs (`fcomp; test ah,0x40`: equal or unordered counts as the
+   same), `MoveActor(f32(End - Location), Rotation, Hit, 1, 1, 0, 0)` — the
+   differences are extended, each stored once. Returns **0** in all cases,
+   without a restore and regardless of `bAdjust`.
+4. **Water** (`0x103c3eac`): when `Hit.Time < 1.0` (double; C0, unordered
+   included) `rem = f32(1.0 - Time)`, `Delta = f32(Delta_i * rem)`,
+   `MoveActor(Up)`, `MoveActor(Delta)`; only the second move's hit is tested
+   for GoalActor (**5**).
+5. `threshold² <= (dx²+dy²)+dz²` (`Location - Start`, all extended; `fcompp;
+   test ah,0x41`, unordered included) returns **1** (`[ebp-0x1c]`). Otherwise
+   `bAdjust` restores `FarMoveActor(Start, bTest=1, bNoCheck=1)` and it
+   returns **0**. Velocity is not touched; Rotation is re-read for every move.
+
+The one Hit buffer is shared by every MoveActor. `ULevel::MoveActor` returns
+before writing Hit when every Delta component is below `1e-4` and the rotation
+is unchanged ([swimming](swimming.md#moveactors-nearly-zero-return)); swimMove
+always passes the pawn's own Rotation, so for such a Delta the previous Hit —
+including a GoalActor hit by the up-step — is what the target test reads.
+
+### `APawn::swimReachable(FVector Dest, FLOAT intRadius, INT reachFlags, AActor* GoalActor)` `0x103c15a0`
+
+`thiscall`, `ret 0x18`; the loop shape is flyReachable's:
+
+1. `reachFlags |= 4` (R_SWIM). `closeSq = f32(intRadius²)`. A dead
+   `Direction = f32(Dest - Location)` store. Save `OriginalPos = Location`,
+   `realVel = Velocity`, `success = 0`. `stepsize = CollisionRadius` when
+   `200.0f < CR` or unordered (`0x10431444`), else `200.0f`;
+   `stepSq = f32(stepsize²)`. `ticks = 100`, `stillmoving = 1`.
+2. Each iteration: extended `d = Dest - Location`, `Direction = f32(d)`,
+   `distSq = (dx²+dy²)+dz²` kept extended and also stored.
+   - Arrival: retained `distSq <= closeSq` **and** `|dz| <= CollisionHeight`
+     (both `test ah,0x41`, unordered included) sets `success = 1` and stops.
+   - Otherwise stored `distSq < stepSq` (C0, unordered included) calls
+     `swimMove(Direction, GoalActor, 8.0f, 0)`; else
+     `swimMove(f32(SafeNormal(Direction)_i * stepsize), GoalActor, 4.1f, 0)`.
+     A return of 5 sets `success = 1, stillmoving = 0`.
+   - Then, for every result, `Region.Zone` is read again:
+     - **Not water** (`0x103c17a4`): `stillmoving = 0`. With bCanFly
+       (`+0x318 & 0x8000`): `success = reachFlags = flyReachable(Dest,
+       intRadius, reachFlags, GoalActor)`. Else with bCanWalk (`0x2000`) and
+       `(MaxStepHeight + Location.Z) + 50.0f > Dest.Z` (extended sum, float
+       `50.0` at `0x104314b4`, strictly greater and ordered): a fresh
+       `FCheckResult(1)` and `MoveActor((+0, +0, f32(max)), Rotation, Hit, 1,
+       1, 0, 0)` where `max` is `CollisionHeight + MaxStepHeight` (extended)
+       unless it is below the stored `f32(Dest.Z - Location.Z)` or unordered.
+       If `Hit.Time == 1.0` (C3, unordered included) `success =
+       flyReachable(Dest, intRadius, reachFlags, GoalActor)` and **reachFlags
+       becomes the constant 1** (R_WALK). Otherwise, and without either
+       capability, success is kept (a 5 from swimMove survives).
+     - **Water, pain zone** (`+0x388 & 0x20`) whose `DamageType` (`+0x350`)
+       differs from `ReducedDamageType` (`+0x444`): `stillmoving = 0`,
+       `success = 0` — also after a 5.
+   - `if (--ticks < 0) stillmoving = 0` (at most 101 swimMove calls).
+3. When `success == 0` and GoalActor is a WarpZoneMarker (class chain `+0x24`/
+   `+0x28` walk for `0x10575198`), `success = (Region.Zone ==
+   GoalActor->markedWarpZone +0x44c)`.
+4. `FarMoveActor(OriginalPos, 1, 1)`; `Velocity = realVel`; return
+   `success ? reachFlags : 0` (`neg; sbb; and`).
+
+Constants: `200.0f` `0x10431444`, `50.0f` `0x104314b4`, `4.1f` and `8.0f` as
+immediates, `1.0` double `0x104298a0`, `-1.0f` `0x104298f0`, `0.0f`
+`0x10426d54`. No transcendental is used; SafeNormal and the FVector
+constructor are Core imports (`0x10599b80`, `0x10599b28`).
+
+State writes: Location through MoveActor/FarMoveActor only, Velocity restored
+at exit, the `[ebp+0x18]` reachFlags slot, and nothing else on the pawn.
+
+Unresolved or unmodeled branches:
+
+- flyReachable and swimReachable can call each other (fly into water, swim
+  out of it); the native recursion has no depth limit beyond the geometry.
+  The translation recurses the same way and a runaway would end in a JS stack
+  error, not an original result.
+- findWaterLine's non-convergent midpoint remains the explicit boundary
+  recorded in [swimming](swimming.md#translation).
+- checkMove and flyMove share the Hit-retention rule above but their
+  translations do not model it; only swimMove does.
+- flyReachable and walkReach compare `Region.Zone` with a WarpZoneMarker's
+  `markedWarpZone` through the `WarpDestZone` service read; swimReachable does
+  the same. Play's pawnNavServices has no such field, so that fallback is only
+  established by the oracle's fabricated marker.
+
+### Verification (2026-09-29)
+
+The original cases were captured with
+`node scripts/validate-pawn-swimming-reach.mjs --original-only` before the
+translation existed; every hand-written expectation above matched the DLL on
+the first capture. `native-pawn-nav-probe.py` gained three controlled-world
+scene options, identical on both sides of the comparison: `waterPlane` (the
+PointRegion double answers the wet zone strictly below a plane, and after every
+MoveActor/FarMoveActor commit Region.Zone follows it — a SetActorZone
+stand-in), `moveNearlyZero` (MoveActor's early return: no move, no zone update,
+Hit untouched) and `coverage`.
+
+`scripts/validate-pawn-swimming-reach.mjs`: **360/360 original-DLL cases, 0
+mismatches** — 60 targeted and 300 seeded generated cases over swimMove,
+swimReachable, the dispatcher, pointReachable's worker, walkReach and
+flyReachable water hand-offs, aiPickSearch mode 3 and aiPickWorker in water —
+comparing 2622 ordered MoveActor/FarMoveActor/PointRegion/FastLineCheck calls
+with raw argument bits (signed zeros included), the return code, final
+Location/Velocity bits, final Region zone and the out vector. **Every
+instruction of both bodies executes** (swimMove 311/311, swimReachable
+355/355; the SEH unwind funclets from `0x103c402e` and `0x103c1a0d` are
+excluded). 9/9 targeted mutants are detected. Water-line crossings, partial
+exits, the End == Location skip, blocked moves, zero-size and nearly-zero
+steps, target hits before and after a pain zone or a water exit, the flight
+and walk exits, the 101-move budget and the WarpZoneMarker fallback are among
+the targeted cases.
+
+The generated corpus exposed a defect shared with the flying and walking
+translations: this module's FCOM model compared an arithmetic zero (the x87
+model leaves `sig 0, exp 0`) by magnitude exponent, so `+0` compared above a
+positive value below 2 (a pawn exactly on its destination with a small
+radius failed arrival). The compare now orders a zero significand as ±0. The
+existing 140-scene and 30-case corpora and the Training bench digest are
+unchanged. `script-pawn-locomotion.mjs` and `script-pawn-perception.mjs` keep
+their own copies of the same compare, not yet corrected.
+
+Play: `aiPickSearch` mode 3, the dispatcher, flyReachable and walkReach call
+the recovered bodies directly (no service seam; findWaterLine reads the nav
+services' `pointRegion` and `regionZone`). On UNATCO Island with bench-sim's
+forward-key workload and **no bypass**, GeneratorScout4 and GeneratorScout5
+run 10 AIPickRandomDestination calls each in 20 s and every one finds a water
+destination; Fish2Generator0 and FishGenerator0 then spawn their 10 fish each
+(the player is ~1100 units away, below ActiveArea 1200, and cannot see the
+spot), which swim through physSwimming. The first runtime boundary is now tick
+1221 (20.35 s): PaulDenton0, state `RunningTo`, `GetNextWaypoint` →
+`ActorReachable` (520) → actorWorker → dispatcher → walkReach, whose checkMove
+returns -1 for a bCanJump pawn → jumpArc `0x103c2f50`, reported as `walkReach
+requires the original jumpArc service (0x103c2f50)`
+(`scripts/validate-island-swimming.mjs`).
 
 ## The walk/swim helper `0x103c1b70`
 
@@ -457,7 +627,7 @@ mangling — the earlier `QBEH` lookup silently missed and let fabricated
 objects reach the real function).
 
 Remaining explicit boundaries: falling-target delegation (`landPredict` +
-the `findPathTo` worker) and `waterReach`/`waterMove`/`jumpArc` stay
+the `findPathTo` worker) and `jumpArc` stay
 unported service seams — they throw rather than guess.
 
 ## `AIPickRandomDestination` native 709 — `execAIPickRandomDestination` `0x103c86f0`
@@ -490,7 +660,7 @@ under Unicorn with a scripted `appFrand` queue):
   `checkMove`/`flyMove`/`swimMove` per step.  The init score associates
   `(dx²+dz²)+dy²` (`0x103c79bf`) while the in-loop score associates
   `(dx²+dy²)+dz²` (`0x103c7cc3`) — both preserved.  Mode: region water → 3
-  (unported `swimMove` boundary), Physics 1|3 → 1 (walk), 4 → 2 (fly), else
+  (`swimMove`, since 2026-09-29), Physics 1|3 → 1 (walk), 4 → 2 (fly), else
   early return before any restore/out write.  The pawn's Location/Velocity
   are snapshotted and `FarMoveActor(test=1,noCheck=1)`-restored; `*out`
   receives the last candidate.
@@ -545,8 +715,7 @@ Boundaries reached while wandering and their resolution:
   drops before Core `ProcessEvent` can dereference it.  The runtime now
   dispatches only on a real resolution — observable contract unchanged.
 
-Remaining explicit boundaries: `swimMove`/`waterMove`/`waterReach`,
-`jumpArc`, and the ReachSpec BFS path workers stay unported; bark speech and
+Remaining explicit boundaries: `jumpArc`, and the ReachSpec BFS path workers stay unported; bark speech and
 audible playback are Stage 4.
 
 ## Verification status
@@ -579,8 +748,9 @@ audible playback are Stage 4.
   below-step landing, blocked, ledge no-retry vs `CR>maxStep` clamp-retry,
   diagonal, pain gate, water-no-swim gate, velocity restore) plus 2 mutants.
   The flying corpus additionally checks the `bCanFly` fallback into flyReach.
-  Jump arc `0x103c2f50` and swimming `0x103c15a0` still require unported
-  services; the existing flag-free walking scenes do not establish them.
+  Swimming `0x103c15a0` is covered by the swimming corpus. Jump arc
+  `0x103c2f50` still requires an unported service; the flag-free walking
+  scenes do not establish it.
 - `pointReachable` worker `0x103c0d30` — **ported to JS, bit-exact vs oracle**
   across 11 scenes (dry-to-dry reach, 1e6 distance gate, editor-skip, water
   gate, water+canSwim, pain gate, pain-immune, blocked LOS, arg14 LOS skip,
@@ -610,8 +780,13 @@ audible playback are Stage 4.
   `invokeNative` → `pawnNavServices`; Training `Secretary0` patrols in Play
   mode (see the section above).  Falling-target delegation
   (`landPredict`/`findPathTo`) remains an explicit unported service.
-- The remaining helpers (`0x103c15a0` waterReach, `0x103c3ca0` waterMove and
-  `0x103c2f50` jumpArc) are mapped but unported;
+- `swimMove` `0x103c3ca0` and `swimReachable` `0x103c15a0` — **ported to
+  JS**, called by aiPickSearch mode 3, the dispatcher, flyReachable and
+  walkReach, with **360/360 original-DLL cases, 9/9 mutants and every
+  instruction of both bodies executed** in
+  `scripts/validate-pawn-swimming-reach.mjs` (see the swimming contract).
+- The remaining helper (`0x103c2f50` jumpArc) is mapped but unported; Play
+  reports it as `walkReach requires the original jumpArc service`;
   `FindRandomDest`/`FindPathTo` share the
   ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`)
   recovered at the field level — see the graph layout above.
@@ -619,13 +794,14 @@ audible playback are Stage 4.
   (`0x103fxxxx` via Core's `FVector::Rotation`) — integer math, no
   transcendentals; the Unicorn oracle is authoritative for it.
 
-Focused checkpoint (supersedes the 2026-09-20 note):
+Focused checkpoint (2026-09-29, supersedes the earlier notes):
 `validate-pawn-nav.mjs` passes 140/140 cases and 35/35 mutants, including
 15 original comparisons through VM/runtime dispatch;
 `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
-`npm test` passes 499/499. Natives 709 and 517 are live — the Training MIB
+`validate-pawn-swimming-reach.mjs` passes 360/360 cases, 9/9 mutants and full
+instruction coverage of swimMove/swimReachable; `npm test` passes 552/552. Natives 709 and 517 are live — the Training MIB
 wanders and `Secretary0` follows the PatrolPoint4↔PatrolPoint5 route in Play
 (`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
 Stage 3 remains unfinished. Remaining navigation implementation includes
-waterMove/waterReach, jumpArc and the ReachSpec path workers
+jumpArc and the ReachSpec path workers
 `FindRandomDest`/`FindPathTo`.

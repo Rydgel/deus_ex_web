@@ -19,6 +19,7 @@ import {
   x87storeDouble, x87sqrt, x87safeNormal, x87width, x87ftol,
 } from './script-vm.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
+import { findWaterLine } from './swimming.mjs';
 
 const f32 = Math.fround;
 
@@ -40,7 +41,7 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
   workers: Object.freeze({
     checkMove:   0x103c3290,  // thiscall(pawn; delta vec3, hit*, target, scale, flag) -> 5/1/0/-1
     walkReach:   0x103c1b70,  // ~100-step walking/swimming reach trace
-    waterReach:  0x103c15a0,
+    waterReach:  0x103c15a0,  // APawn::swimReachable (thunk 0x10301406)
     flyReach:    0x103c1190,
     flyMove:     0x103c3900,
     dispatch:    0x103c1000,  // physics reach dispatcher (thunk 0x1030353f)
@@ -50,7 +51,7 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     aiDirection: 0x1036d030,  // biased random rotator (thunk 0x10301f0f)
     aiPickSearch:0x103c78a0,  // stepped-move band search (thunk 0x103011d6)
     aiScore:     0x103c7f80,  // f32 range classifier (thunk 0x10303319)
-    waterMove:   0x103c3ca0,  // swim move (thunk 0x10303f53) — unported boundary
+    waterMove:   0x103c3ca0,  // APawn::swimMove (thunk 0x10303f53)
   }),
   // Level vtable slots the workers call.
   vtable: Object.freeze({
@@ -84,6 +85,8 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     climbCoeff:  Object.freeze({ address: 0x10431418, value: 0.8 }),     // double
     innerRadius: Object.freeze({ address: 0x104314b8, value: 15 }),      // float
     maxDistSq:   Object.freeze({ address: 0x104314a8, value: 1000000 }), // double
+    reachStep:   Object.freeze({ address: 0x10431444, value: 200 }),     // float (fly/swim reach)
+    swimWalkMargin: Object.freeze({ address: 0x104314b4, value: 50 }),   // float (swimReachable)
     // AIPickRandomDestination constants (709 chain).
     yawPosScale:  Object.freeze({ address: 0x1042ae00, value: 32767 }),    // float
     yawNegScale:  Object.freeze({ address: 0x1042ae04, value: -32768 }),   // float
@@ -126,7 +129,11 @@ const x87compare = (a, b) => {
     return a.inf ? { c0: a.neg ? 1 : 0, c3: 0 } : { c0: b.neg ? 0 : 1, c3: 0 };
   }
   let m;
+  // A zero significand is ±0 whatever its exponent field (x87add/x87mul leave
+  // arithmetic zeros at exp 0), so it must not enter the magnitude compare.
   if (a.sig === 0n && b.sig === 0n) m = 0;
+  else if (a.sig === 0n) m = b.neg ? 1 : -1;
+  else if (b.sig === 0n) m = a.neg ? -1 : 1;
   else if (a.neg !== b.neg) m = a.neg ? -1 : 1;
   else {
     const ea = a.exp + x87width(a.sig), eb = b.exp + x87width(b.sig);
@@ -345,10 +352,136 @@ export function flyMove(pawn, delta, target, scale, restoreOnFailure, services) 
   return 0;
 }
 
+/** ULevel::MoveActor's early return (0x1039915a..0x103991c6): every |Delta|
+ * component below the double 1e-4 (unordered counts as below) with an
+ * unchanged rotation returns before `Hit = FCheckResult(1)`, so the caller's
+ * Hit keeps its contents (docs/swimming.md). swimMove/swimReachable always
+ * pass the pawn's own Rotation, so only Delta decides. */
+const D1em4 = ld64(0.0001);
+const nearlyZero = delta => delta.every(c => {
+  const v = ld(c);
+  return ltU(ltU(v, D0) ? x87neg(v) : v, D1em4);
+});
+/** findWaterLine's world view over the nav services: PointRegion's water bit
+ * at a midpoint and the pawn's current Region.Zone water bit. */
+const waterView = (pawn, services) => ({
+  waterAt: point => services.pointRegion(point).water,
+  get regionWater() { return services.regionZone(pawn).water; },
+});
+
+/**
+ * APawn::swimMove 0x103c3ca0 (swimMove(Delta, GoalActor, threshold, bAdjust)).
+ * flyMove's body with a dry branch after the first move: out of the water,
+ * pull back to the water line (findWaterLine 0x103d3b10) and return 0.
+ * Returns 5 (GoalActor hit), 1 (moved at least threshold) or 0.
+ * Contract and evidence: docs/script-pawn-nav.md "Swimming contract".
+ */
+export function swimMove(pawn, delta, target, scale, restoreOnFailure, services) {
+  const start = services.location(pawn).map(f32);          // [ebp-0x30..-0x28]
+  // Up = -1 * ((0,0,-1)*MaxStepHeight): (-0, -0, f32(M)) as in flyMove.
+  const up = [-0, -0, st(x87mul(x87mul(ld(rd(services, pawn, 'MaxStepHeight')), ld(-1)), ld(-1)))];
+  // One FCheckResult Hit(1.f) shared by every MoveActor ([ebp-0x68]).
+  let hit = { time: 1, normal: [0, 0, 0], actor: 0, item: -1 };
+  const move = d => {
+    const h = moveActor(services, pawn, d, rd(services, pawn, 'Rotation'));
+    if (!nearlyZero(d)) hit = h;
+  };
+  move(delta);                                              // 0x103c3d9a
+  if (target && hit.actor === target) return 5;             // 0x103c3dac
+  if (!services.regionZone(pawn).water) {                   // 0x103c3dca
+    const location = services.location(pawn).map(f32);
+    const end = findWaterLine(waterView(pawn, services), start, location);  // 0x103c3e0c
+    // `fcomp; test ah,0x40` per component: equal or unordered is the same.
+    if (!end.every((v, i) => eqU(ld(v), ld(location[i]))))
+      move(end.map((v, i) => st(sub(ld(v), ld(location[i])))));           // 0x103c3e91
+    return 0;                                           // 0x103c3e97 dry
+  }
+  if (ltU(ld(hit.time), D1)) {                              // 0x103c3eaf
+    const remaining = st(sub(D1, ld(hit.time)));
+    const retry = delta.map(c => st(x87mul(ld(c), ld(remaining))));  // 0x103c3ed8
+    move(up);                                               // 0x103c3f2f
+    move(retry);                                            // 0x103c3f75
+    if (target && hit.actor === target) return 5;           // 0x103c3f87
+  }
+  const d = services.location(pawn).map((v, i) => sub(ld(v), ld(start[i])));
+  const movedSq = x87add(x87add(x87mul(d[0], d[0]), x87mul(d[1], d[1])), x87mul(d[2], d[2]));
+  if (leU(x87mul(ld(scale), ld(scale)), movedSq)) return 1; // 0x103c3fd8
+  if (restoreOnFailure) farMove(services, pawn, start);     // 0x103c400d
+  return 0;
+}
+
+/**
+ * APawn::swimReachable 0x103c15a0 (swimReachable(Dest, intRadius,
+ * reachFlags, GoalActor)). flyReachable's loop over swimMove; leaving the
+ * water hands over to flyReachable (bCanFly) or, for bCanWalk with Dest.Z
+ * below (MaxStepHeight + Location.Z) + 50, a step-up MoveActor and then
+ * flyReachable with reachFlags forced to 1. Returns success ? reachFlags : 0.
+ * Contract and evidence: docs/script-pawn-nav.md "Swimming contract".
+ */
+export function swimReach(pawn, point, radius, reachFlags, target, services) {
+  reachFlags |= 4;
+  const closeSq = st(x87mul(ld(radius), ld(radius)));       // [ebp-0x6c]
+  const origLoc = services.location(pawn).map(f32);         // [ebp-0x78..-0x70]
+  const origVel = services.velocity(pawn).map(f32);         // [ebp-0x5c..-0x54]
+  const CR = rd(services, pawn, 'CollisionRadius');
+  const stepsize = ltU(ld(200), ld(CR)) ? CR : 200;         // 0x103c162e
+  const stepSq = st(x87mul(ld(stepsize), ld(stepsize)));    // [ebp-0x34]
+  let success = 0, stillmoving = 1, ticks = 100;
+  while (stillmoving) {                                     // 0x103c1664
+    const loc = services.location(pawn);
+    const d = point.map((v, i) => sub(ld(v), ld(loc[i])));
+    const direction = d.map(st);
+    const distSq = x87add(x87add(x87mul(d[0], d[0]), x87mul(d[1], d[1])), x87mul(d[2], d[2]));
+    const storedDistSq = st(distSq);                        // [ebp-0x1c]
+    const absZ = ltU(d[2], D0) ? x87neg(d[2]) : d[2];
+    if (leU(distSq, ld(closeSq)) && leU(absZ, ld(rd(services, pawn, 'CollisionHeight')))) {
+      success = 1; stillmoving = 0;                         // 0x103c16e3
+    } else {
+      const near = ltU(ld(storedDistSq), ld(stepSq));       // 0x103c16fc
+      const move = near ? direction : x87safeNormal(direction).map(v => st(x87mul(ld(v), ld(stepsize))));
+      stillmoving = swimMove(pawn, move, target, near ? 8 : f32(4.1), 0, services);  // 0x103c177a
+      if (stillmoving === 5) { success = 1; stillmoving = 0; }
+      const zone = services.regionZone(pawn);               // 0x103c1790
+      if (!zone.water) {
+        stillmoving = 0;
+        const flags = rd(services, pawn, 'Flags318') >>> 0;
+        if (flags & 0x8000) {                               // bCanFly
+          success = reachFlags = flyReach(pawn, point, radius, reachFlags, target, services);
+        } else if (flags & 0x2000) {                        // bCanWalk
+          const at = services.location(pawn);
+          const maxStep = rd(services, pawn, 'MaxStepHeight');
+          const top = x87add(x87add(ld(maxStep), ld(at[2])), ld(50));
+          if (gtU(top, ld(point[2]))) {                     // 0x103c1805
+            const rise = x87add(ld(rd(services, pawn, 'CollisionHeight')), ld(maxStep));
+            const dz = st(sub(ld(point[2]), ld(at[2])));    // [ebp-0x2c]
+            const delta = [0, 0, ltU(rise, ld(dz)) ? dz : st(rise)];
+            let hitTime = 1;                                // fresh FCheckResult(1)
+            const h = moveActor(services, pawn, delta, rd(services, pawn, 'Rotation'));
+            if (!nearlyZero(delta)) hitTime = h.time;
+            if (eqU(ld(hitTime), D1)) {                     // 0x103c18fc
+              success = flyReach(pawn, point, radius, reachFlags, target, services);
+              reachFlags = 1;                                    // 0x103c192c
+            }
+          }
+        }
+      } else if (zone.pain && zone.damageType !== rd(services, pawn, 'ReducedDamageType')) {
+        stillmoving = 0; success = 0;                       // 0x103c194c
+      }
+    }
+    if (--ticks < 0) stillmoving = 0;                       // 0x103c195b
+  }
+  if (!success && target && services.isA(target, 'WarpZoneMarker'))
+    success = services.regionZone(pawn) === rd(services, target, 'WarpDestZone') ? 1 : 0;
+  farMove(services, pawn, origLoc);                         // 0x103c19d2
+  const velocity = services.velocity(pawn);
+  for (let i = 0; i < 3; i++) velocity[i] = origVel[i];
+  return success ? reachFlags : 0;
+}
+
 /**
  * APawn::flyReachable 0x103c1190. Original 3D reach loop; called by the
- * PHYS_Flying dispatcher and the bCanFly fallback inside walkReach.
- * Water reach remains an explicit, unported service boundary.
+ * PHYS_Flying dispatcher, the bCanFly fallback inside walkReach and
+ * swimReachable's exits from the water.
  */
 export function flyReach(pawn, point, radius, reachFlags, target, services) {
   const origLoc = services.location(pawn).map(f32);
@@ -379,9 +512,7 @@ export function flyReach(pawn, point, radius, reachFlags, target, services) {
     if (zone.water) {
       if ((rd(services, pawn, 'Flags318') & 0x4000) &&
           !(zone.pain && zone.damageType !== rd(services, pawn, 'ReducedDamageType'))) {
-        if (typeof services.waterReach !== 'function')
-          throw new Error('flyReach requires the original waterReach service');
-        reachFlags = services.waterReach(pawn, point, radius, reachFlags, target);
+        reachFlags = swimReach(pawn, point, radius, reachFlags, target, services);  // 0x103c13cd
         reached = reachFlags;
       }
       break;
@@ -406,8 +537,8 @@ export function flyReach(pawn, point, radius, reachFlags, target, services) {
  * and water gates, then a WarpZoneMarker fallback, restores Location+Velocity
  * through FarMoveActor, and returns `reached ? arg18 : 0`.
  *
- * Flying (0x103c1190) uses flyReach above. Jump arc (0x103c2f50) and swimming
- * (0x103c15a0) remain services.altMove / services.waterReach boundaries.
+ * Flying (0x103c1190) uses flyReach and swimming (0x103c15a0) swimReach
+ * above. Jump arc (0x103c2f50) remains the services.altMove boundary.
  */
 export function walkReach(pawn, point, radius, arg18, target, services) {
   const origLoc = services.location(pawn).map(f32);        // [ebp-0x58/-0x54/-0x50]
@@ -520,6 +651,8 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
           const d = [st(x87mul(ld(gs), ld(u[0]))),
                      st(x87mul(ld(gs), ld(u[1]))),
                      st(x87mul(ld(gs), ld(u[2])))];
+          if (typeof services.altMove !== 'function')
+            throw new Error('walkReach requires the original jumpArc service (0x103c2f50)');
           edi = services.altMove(pawn, d, point, gs);
         }
       } else if (edi === -1) {                             // ledge, no jump/swim
@@ -534,7 +667,7 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
     if (rz.water) {
       edi = 0;
       if (flags318 & 0x4000 && !(rz.pain && rz.damageType !== rdt)) {
-        const r = services.waterReach(pawn, point, radius, arg18, target);
+        const r = swimReach(pawn, point, radius, arg18, target, services);  // 0x103c1fb8
         arg18 = r; reached = r;
       }
     }
@@ -562,12 +695,11 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
  * Physics byte (+0x30):  water zone -> waterReach 0x103c15a0;  PHYS_Walking(1)
  * or PHYS_Swimming(3) -> walkReach 0x103c1b70;  PHYS_Flying(4) -> flyReach
  * 0x103c1190;  otherwise -> 0.  Every helper receives (pawn, point, radius, 0,
- * target). Walking and flying call their recovered bodies; waterReach remains
- * an explicit service boundary pending its own translation.
+ * target). Every helper is its recovered body (swimReach for water).
  */
 export function physicsReach(pawn, point, radius, target, services) {
   if (services.regionZone(pawn).water)                      // 0x103c102d
-    return services.waterReach(pawn, point, radius, 0, target);
+    return swimReach(pawn, point, radius, 0, target, services);  // 0x103c1059
   const phys = rd(services, pawn, 'Physics');               // ecx+0x30
   if (phys === 1 || phys === 3)                             // 0x103c1074/0x103c1078
     return walkReach(pawn, point, radius, 0, target, services);
@@ -829,7 +961,7 @@ export function aiDirection(frand, centralYaw, yawDist, centralPitch, pitchDist)
  * in-band position (or the band-crossing position) becomes the candidate; the
  * pawn is FarMoveActor-restored and its Velocity saved/restored on exit.
  * arg24 is pushed by callers but never read by the body.
- * Mode: regionZone water -> 3 (swimMove boundary); Physics 1|3 -> 1 (walk);
+ * Mode: regionZone water -> 3 (swimMove); Physics 1|3 -> 1 (walk);
  * 4 -> 2 (fly); anything else -> 0 early, before any restore/out write.
  */
 export function aiPickSearch(pawn, origin, yaw, pitch, minR, maxR, arg24, out, services) {
@@ -879,11 +1011,7 @@ export function aiPickSearch(pawn, origin, yaw, pitch, minR, maxR, arg24, out, s
     let code;
     if (mode === 1) code = checkMove(pawn, stepVec, 0, 4.1, 0, services);
     else if (mode === 2) code = flyMove(pawn, stepVec, 0, 4.1, 0, services);
-    else {                                                // mode 3 swimMove
-      if (typeof services.waterMove !== 'function')
-        throw new Error('aiPickSearch requires the original waterMove service (0x103c3ca0)');
-      code = services.waterMove(pawn, stepVec, 0, 4.1, 0);
-    }
+    else code = swimMove(pawn, stepVec, 0, 4.1, 0, services); // mode 3, 0x103c7c13
     cont = code;                                          // [ebp-0x18]
     if (code !== 1) {                                     // 0x103c7c25
       if (!rd(services, pawn, 'CollideFlag')) cont = 0;   // pawn+0xd0 byte
