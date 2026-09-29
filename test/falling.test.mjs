@@ -93,17 +93,31 @@ test('the bounce branch requires the explicit script HitWall dispatch', () => {
   assert.throws(() => falling(p, .1, 0, { nonPawn: true, bounce: true }), /hitWallEvent/);
 });
 
-test('a bobbing Decoration stops at the untranslated half-gravity branch (0x103d0f42), each substep', () => {
-  const host = bobbing => {
+test('a buoyant crate in a water zone rises (original water integration 0x103d125a)', () => {
+  // UNATCO Island crate values: Mass 50, Buoyancy 90, ZoneFluidFriction 1.2.
+  const moves = [], p = { position: [2340.889892578125, -10733.830078125, -843.9000244140625], velocity: [0, 0, 0],
+    acceleration: [0, 0, 0], gravity: [0, 0, -950], zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2,
+    regionWater: true, mass: 50, buoyancy: 90, fluidFriction: f(1.2),
+    move(delta) { moves.push(delta); p.position = p.position.map((v, i) => f(v + delta[i])); return { time: 1, normal: [0, 0, 0] }; } };
+  falling(p, f(1 / 60), 0, { nonPawn: true });
+  assert.deepEqual(moves, [[0, 0, 0.10555556416511536]]);
+  assert.deepEqual(p.position, [2340.889892578125, -10733.830078125, -843.7944946289062]);
+  assert.deepEqual(p.velocity, [0, 0, 12.663573265075684]);
+});
+
+test('the integration is chosen per substep and a water host must name Mass, Buoyancy and friction', () => {
+  const host = (changes, setBobbing = false) => {
     const moves = [], p = { position: [0, 0, 0], velocity: [0, 0, -10], acceleration: [0, 0, 0], gravity: [0, 0, -950],
-      zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, bobbing, moves,
-      move: delta => { moves.push(delta); p.bobbing = true; return { time: 1, normal: [0, 0, 0] }; } };
+      zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, bobbing: false, moves, ...changes,
+      move: delta => { moves.push(delta); if (setBobbing) p.bobbing = true; return { time: 1, normal: [0, 0, 0] }; } };
     return p;
   };
-  assert.throws(() => falling(host(true), .1, 0, { nonPawn: true }), /bBobbing integration/);
-  // The flag is re-read per substep: a 0.3 s step runs one dry substep, then
-  // stops when the move's events set bBobbing.
-  const p = host(false);
-  assert.throws(() => falling(p, .3, 0, { nonPawn: true }), /bBobbing integration/);
-  assert.equal(p.moves.length, 1);
+  // A 0.3 s step runs a dry substep, then the half-gravity bBobbing copy once
+  // the first move's events set bBobbing (re-read as the native does).
+  const dry = host({}), bobbing = host({}, true);
+  falling(dry, .3, 0, { nonPawn: true });
+  falling(bobbing, .3, 0, { nonPawn: true });
+  assert.deepEqual(bobbing.moves[0], dry.moves[0]);
+  assert.ok(bobbing.moves[1][2] > dry.moves[1][2], 'half gravity after bBobbing is set');
+  assert.throws(() => falling(host({ regionWater: true }), .1, 0, { nonPawn: true }), /water-zone integration requires mass/);
 });

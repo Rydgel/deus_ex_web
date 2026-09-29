@@ -205,6 +205,146 @@ swimming.mjs keeps the previous Hit for such moves at the Swim and
 startSwimming sites. Play's `pawn.move` returns `{time: 1}` there, and that
 result is discarded.
 
+## physFalling water paths (AActor::physFalling 0x103d0a50)
+
+Recovered from the hash-pinned Engine.dll before translation (disassembly of
+`0x103d0a50`–`0x103d2491`). physFalling is `AActor::physFalling`: Pawns,
+PlayerPawns, decorations, fragments and inventory all run the same body, so
+these branches apply to every actor kind.
+
+### Where the branches sit
+
+Each substep of the `remaining > 0 && Iterations < 8` loop (`0x103d0e49`):
+
+1. Step selection, `OldLocation = Location`, bJustTeleported cleared
+   (`0x103d0ee2`), `remaining = f(remaining - step)`,
+   `OldVelocity = Velocity` (`0x103d0f13`).
+2. **Integration**, selected in this order (`0x103d0f2f`):
+   1. `Region.Zone->bWaterZone` (`test byte [zone+0x388], 1` at `0x103d0f35`)
+      → the water integration `0x103d125a`, for **any** actor kind.
+   2. otherwise `IsA(ADecoration)` (class walk for `0x10578d48`) and
+      `bBobbing` (`test byte [actor+0x31c], 8`, the fourth Decoration bool
+      after bPushable, bOnlyTriggerable, bSplash) → `0x103d0f75`.
+   3. otherwise `IsA(APlayerPawn)` (class walk for `0x1058c160`; a plain
+      Pawn fails it), `FootRegion.Zone->bWaterZone` (`[actor+0x330]`) and
+      `OldVelocity.Z < 0` (`fcomp 0.0; test ah,1`: C0, so an unordered NaN
+      Z also takes it) → `0x103d1086`.
+   4. otherwise the dry integration `0x103d1157` (already translated).
+3. Apex subdivision (`0x103d13f0`): unchanged for every branch. When it
+   re-integrates it re-tests the same three conditions (`0x103d150e`) and
+   runs a **separate copy** of the chosen integration (`0x103d18dc` water,
+   `0x103d1558` bobbing, `0x103d168d` foot water, `0x103d17d6` dry) with
+   the shortened step. The copies do not all share the first integration's
+   store pattern (below).
+4. The rest of the substep is the same for every branch: the Pawn speed
+   limit, ZoneVelocity (read from Region.Zone at `0x103d1bb9`), MoveActor
+   (SetActorZone inside it dispatches `ZoneChange`, `ActorLeaving`,
+   `ActorEntered`, and the Pawn `FootZoneChange`/`HeadZoneChange`), the
+   bDeleteMe return, the Pawn startSwimming hand-off, the bounce / landing
+   (`processLanded`) / wall (`processHitWall`) handling, then the velocity
+   recomputation and the terminal clamp against `Region.Zone->
+   ZoneTerminalVelocity` read **after** the move (`0x103d23f7`). Water adds
+   no callback of its own and does not skip any of these.
+
+Region.Zone, ZoneGravity (`+0x31c`), ZoneVelocity (`+0x328`),
+ZoneFluidFriction (`+0x338`), Mass (`+0x1f4`), Buoyancy (`+0x1f8`) and
+bBobbing are read from the live actor/zone at each integration, so a script
+event during a previous substep's MoveActor (a ZoneChange that waterlogs
+Buoyancy, a zone crossing) is seen by the next substep.
+
+### Water integration (0x103d125a, apex copy 0x103d18dc)
+
+`Velocity = OldV*(1 - 2*F*dt) + 0.5*((1 - Buoyancy/max(1,Mass))*G + A)*dt`
+with F = Region.Zone->ZoneFluidFriction and G = Region.Zone->ZoneGravity. The
+x87 store pattern (both copies identical):
+
+- `m = Mass` when `fld Mass; fld 1.0f; fcomp st(1); test ah,1` sets C0, that
+  is `1.0f < Mass` **or a NaN Mass** (unordered sets C0); otherwise 1.0f, so
+  Mass 0 or negative divides by 1 while a NaN Mass stays NaN (a first
+  reading of this compare missed the unordered case; the oracle's NaN-Mass
+  case caught it).
+- `lift = ext(1.0 - ext(Buoyancy / m))` (`fdivr dword; fsubr qword 1.0`),
+  kept on the stack.
+- `Gl_i = f(lift * G_i)` (three `fld st0; fmul; fstp` into the FVector
+  constructor), `f(Gl_i + A_i)`, `f(*0.5f)`, `f(*dt)`: one float store per
+  operator (Core FVector constructor `[0x10599b28]`).
+- `k = ext(1.0f - ext(ext(dt*F) + ext(dt*F)))` (`fld dt; fmul F; fadd
+  st0,st0; fsubr dword 1.0`), then `f(k * OldV_i)` per component.
+- `V_i = f(term_i + f(k*OldV_i))`.
+
+Buoyancy greater than Mass makes `lift` negative: gravity pushes up.
+
+### Decoration bBobbing integration (0x103d0f75, apex copy 0x103d1558)
+
+`Velocity = OldV + 0.5*(0.5*G + A)*dt` (`[0x10426d74]` is 0.5f).
+
+- X/Y: `f(G_i*0.5f)`, `f(+A_i)`, `f(*0.5f)`, `f(*dt)`, `f(+OldV_i)`.
+- First copy, Z: `G.z*0.5f + A.z`, `*0.5f`, `*dt`, `+OldV.z` all stay on the
+  x87 stack; one store at the end.
+- Apex copy, Z: the same chain through `*dt` is stored (`fstp [esp]`), then
+  `f(+OldV.z)`.
+
+### PlayerPawn foot-water integration (0x103d1086, apex copy 0x103d168d)
+
+`Velocity = OldV*(1 - F_foot*dt) + 0.5*(G + A)*dt`, where F_foot is
+**FootRegion.Zone**->ZoneFluidFriction (`[actor+0x330]`, re-read by the apex
+copy) and G is still Region.Zone->ZoneGravity. There is no factor 2 and no
+buoyancy.
+
+- `k = ext(1.0f - ext(dt*F_foot))`; `f(k*OldV_i)` per component.
+- X/Y: `f(G_i+A_i)`, `f(*0.5f)`, `f(*dt)`, then `f(f(k*OldV_i) + term_i)`.
+- First copy, Z: `G.z+A.z`, `*0.5f`, `*dt` stay extended and add
+  `f(k*OldV.z)` before the one store.
+- Apex copy, Z: like X/Y (every operator stored).
+
+### Callbacks and hosts
+
+- `ZoneChange` and the zone `ActorEntered`/`ActorLeaving` come only from
+  MoveActor's SetActorZone (the host's `move`). The Pawn hand-off to
+  startSwimming (`0x103d1cb6`) is unchanged and Pawn-only; a decoration or
+  a non-swimming Pawn keeps falling with the water integration.
+- `Landed` (processLanded) and `HitWall` (processHitWall, or the direct
+  event while bBounce) are reached exactly as in a dry zone.
+
+### Decorations in water (script)
+
+The native branch is only the integration; the rest is UnrealScript
+(DeusEx.u / Engine.u embedded source):
+
+- `Decoration.ZoneChange(NewZone)` (singular), dispatched **before** Region
+  changes, so `Region.Zone` is still the old zone:
+  - entering water: if `bSplash && !Region.Zone.bWaterZone &&
+    Mass <= Buoyancy && (Abs(Velocity.Z) < 100 || Mass == 0) &&
+    FRand() < 0.05 && !PlayerCanSeeMe()` then `bSplash = false;
+    SetPhysics(PHYS_None)` (it stops at the surface); else if coming from a
+    dry zone with `Velocity.Z < -200` it plays NewZone.EntrySound and spawns
+    NewZone.EntryActor scaled by `FClamp(0.0001*Mass*(250 -
+    0.5*FMax(-600, Velocity.Z)), 1, 3)`. Then `bSplash = true`.
+  - leaving water while `Buoyancy > Mass`: waterlog, `Buoyancy *= 0.95` if
+    `Buoyancy > 1.1*Mass`, else `*= 0.99` if `> 1.03*Mass`. (The
+    `bBobbing = true` here is commented out: "removed (looked stupid) -
+    DEUS_EX CNN".)
+  - a pain zone with DamagePerSec > 0: `TakeDamage(100, ...)`.
+- `DeusExDecoration.ZoneChange` calls Super, then: leaving water while
+  bFloating clears bFloating and restores `origRot`; entering water calls
+  `ExtinguishFire()` and, when `!bFloating && Buoyancy > Mass`, sets
+  `bFloating = True; origRot = Rotation`.
+- `DeusExDecoration.Tick`: while bFloating, `SetRotation(origRot +
+  (Sin(a)*512, Sin(a)*256, Cos(a)*512))` (pitch, yaw, roll) with
+  `a = 2*Pi*Level.TimeSeconds/4`.
+- bBobbing is only ever cleared by script (Decoration.Landed, BaseChange,
+  Bump; DeusExDecoration.Landed/BaseChange). No DeusEx script sets it, so the
+  bBobbing integration is reachable only through authored map values.
+- `Containers`, `CrateBreakableMedGeneral` and `CrateBreakableMedCombat`
+  add nothing for water.
+
+The five UNATCO Island crates (`CrateBreakableMedGeneral1/2/5/8`,
+`CrateBreakableMedCombat13`) start in `WaterZone1` (bWaterZone,
+ZoneFluidFriction 1.2, ZoneGravity (0,0,-950), ZoneVelocity 0,
+ZoneTerminalVelocity 2500) in PHYS_Falling with Mass 50 and Buoyancy 60 (1, 2)
+or 90 (5, 8, 13); bFloating, bBobbing and bSplash are false. With Buoyancy >
+Mass the water integration lifts them.
+
 ## Native versus script
 
 - **Native**: every quantity above (WaterSpeed, Buoyancy, Mass,
@@ -234,7 +374,21 @@ result is discarded.
 - `src/runtime/walking.mjs`: the three checks call `pawn.startSwimming` and
   return. Other non-Walking physics after a move still throws, as before.
 - `src/runtime/falling.mjs`: `OldLocation = Location` at each substep, and
-  the `0x103d1cb6` hand-off (Pawns only).
+  the `0x103d1cb6` hand-off (Pawns only). Since 2026-09-30 also the water,
+  bBobbing and foot-water integrations and their apex copies
+  (`waterVelocity`, `bobbingVelocity`, `footWaterVelocity`) on the 80-bit
+  model, the branch order of `0x103d0f2f`, the apex subdivision's ratio and
+  step arithmetic on the 80-bit model, and per-substep reads of ZoneGravity
+  and ZoneVelocity (previously read once per call). A water or foot-water
+  host that lacks Mass, Buoyancy or the friction fails explicitly.
+- `src/runtime/script-actor-physics.mjs` (`runSpawnedActorFalling`, the
+  field-backed non-Pawn host for decorations, fragments and inventory): reads
+  ZoneGravity, ZoneVelocity, ZoneTerminalVelocity, ZoneFluidFriction and
+  bWaterZone from the actor's live Region.Zone (it used the zone at the
+  actor's position when the call started), Mass and Buoyancy live, and
+  passes the same live zone to processLanded's bBounceVelocity test.
+- `src/runtime/script-pawn-physics.mjs`: `footFluidFriction`
+  (FootRegion.Zone->ZoneFluidFriction) for the foot-water integration.
 
 ## Validation
 
@@ -272,46 +426,83 @@ result is discarded.
     Mass 100, Buoyancy 150 and DesiredSpeed 1 in open water. It swims up for
     41 ticks and leaves the water at Z -351.57 against a surface at -353: Swim
     and findWaterLine on the real BSP, then setPhysics(Falling). It falls back
-    in, and at tick 69 physFalling stops at the explicit water-zone boundary
-    below.
+    in. A plain Pawn has no ZoneChange that selects swimming, so it keeps
+    PHYS_Falling under physFalling's water integration; Buoyancy 150 over
+    Mass 100 lifts it again (66 of the next 90 ticks falling in water, no
+    boundary).
   - **entry**, no bypass: Terrorist0, placed above the water, falls in. The
     original ScriptedPawn.ZoneChange sets PHYS_Swimming inside MoveActor, and
     physFalling hands off to startSwimming. At tick 41 its Standing state asks
     `FindPathTo` (native 518). This follows from the fixture moving it away
     from its HomeLoc and is not claimed as an Island route.
 
+- `scripts/validate-native-falling.mjs` runs original physFalling
+  (`scripts/native-falling-oracle.py`) with 884 water cases added to the 1014
+  dry ones: **1898 cases, 0 mismatches, maxError 0** (NaN results travel as
+  float32 bit patterns). 593 run in a water Region.Zone (PlayerPawn, script
+  Pawn, null-class non-Pawn, Decoration with bBobbing on and off,
+  bouncing fragments with their HitWall doubles, inventory; Mass 0, 0.5, 1,
+  1.0000001, negative, NaN and ±inf; Buoyancy below and above Mass; friction
+  0 to 12; landing, wall, ceiling and bounce contacts; zone velocities and
+  small terminal velocities), 57 bobbing decorations in a dry zone, 82
+  PlayerPawns with only FootRegion in water (OldV.Z below, at and above 0,
+  rising gravity for the apex copy), plus a seeded mix of every kind. The
+  oracle records instruction coverage of physFalling: every instruction of
+  the three branch tests, the three integrations and their three apex copies
+  executes (the uncovered rest of the body is the zone-0 FellOutOfWorld
+  path, the non-player bIsPawn ZoneVelocity gate, the swimming hand-off
+  covered by validate-native-swimming, the Decoration numLandings decrement
+  and the two-wall ditch dot product). 14 mutants of the translation (no or
+  NaN-only Mass clamp, stored lift or friction factor, single friction,
+  bobbing before water, full gravity for bobbing, the four Z store patterns,
+  Region instead of FootRegion friction, `<= 0` foot test, any Pawn for the
+  foot branch, first copy used at the apex) are each detected by original
+  cases.
+- `scripts/validate-island-falling-water.mjs` checks the UNATCO Island crates
+  in Play, no bypass, idle (600 ticks) and with bench-sim's forward-key
+  workload (360 ticks):
+  - tick 1 of all five crates equals Engine.dll's physFalling run by the
+    oracle on the same Location, Velocity, Mass, Buoyancy, Region.Zone fields
+    and DeltaTime (Velocity.Z 3.167724370956421 for Buoyancy 60 and
+    12.663573265075684 for Buoyancy 90);
+  - CrateBreakableMedGeneral5, 8 and CrateBreakableMedCombat13 rise 6.44
+    units and from tick 15 stay pressed against the level geometry above
+    them (an upward extent line check hits BSP with normal (0,0,-1); their
+    tops start 17 units below the water surface), PHYS_Falling with zero
+    Velocity and a blocked move every tick, never leaving WaterZone1;
+  - CrateBreakableMedGeneral1 and 2 rise about 26 and 29 units and cross the
+    surface at ticks 50 and 54 (both runs): Decoration.ZoneChange waterlogs Buoyancy to
+    57 (0.95), re-entry sets bSplash and DeusExDecoration's bFloating, whose
+    Tick rocks the rotation. They keep bobbing between about -364 and -351
+    with Buoyancy decaying (0.95, then 0.99 above 1.03*Mass) to 51.496, still
+    above Mass, and stay PHYS_Falling in both runs (the 5% FRand settle
+    never fired). No runtime boundary in either run.
+
 ## Unsupported and unresolved
 
-- **physFalling in water**, now an explicit boundary in falling.mjs for hosts
-  that expose the flags (the script pawn view):
-  - Region.Zone->bWaterZone integration (`0x103d0f35` → `0x103d125a`):
-    `V = OldV*(1 - 2*F*dt) + 0.5*((1 - Buoyancy/max(1,Mass))*G + A)*dt`.
-  - PlayerPawn with FootRegion in water and `OldV.Z < 0` (`0x103d1039`).
-
-  Both repeat in the apex re-integration (`0x103d1514`) with their own store
-  patterns. Before this slice they were silently integrated as dry.
-- **physFalling's Decoration bBobbing branch**, now an explicit boundary.
-  After the water test, `0x103d0f42`–`0x103d0f6f` walks the class chain for
-  ADecoration (`0x10578d48`) and tests `byte [actor+0x31c] & 0x08`. The SDK
-  layout puts bBobbing at +0x31c bit 3, the fourth Decoration bool. Taken,
-  it integrates with half the zone gravity (`0x103d0f75`–`0x103d1034`):
-  `V = OldV + 0.5*(0.5*ZoneGravity + Acceleration)*dt`, where
-  `[0x10426d74]` is 0.5. This integration is not translated.
-  * `runSpawnedActorFalling` exposes `bobbing` for Decoration ancestry, and
-    `falling()` throws there, re-reading it every substep as the native does.
-  * DeusEx scripts only ever clear bBobbing (Decoration.uc comments out the
-    one `bBobbing = true`), and 300-tick Training and Island bench runs never
-    reach it.
-  * `decoration-physics.mjs`'s `runDecorationPhysics`, used only by unit
-    tests, does not expose `bobbing`.
-- **Non-Pawn falling in water is still dry.** `runSpawnedActorFalling`
-  (decorations, fragments, inventory) does not expose `regionWater`, so
-  physFalling's water-zone integration (`0x103d0f35` → `0x103d125a`) is not
-  guarded for them. A bobbing decoration in water would therefore stop at the
-  bBobbing boundary, where the native takes the (equally untranslated) water
-  branch. The Island bench reaches this: CrateBreakableMedGeneral1, 2, 5 and 8
-  and CrateBreakableMedCombat13 run physFalling in a water zone from its
-  first tick and integrate dry.
+- ~~physFalling in water~~ Translated 2026-09-30 for every actor kind: the
+  Region.Zone water integration, the Decoration bBobbing integration and the
+  PlayerPawn foot-water integration with their apex copies (see
+  "physFalling water paths"). Still open around them:
+  - MoveActor's SetActorZone/ZoneChange during a substep is a double in the
+    oracle (zones are static for a call); Play runs the real SetActorZone
+    and script events.
+  - The non-player bIsPawn ZoneVelocity gate (`0x103d1b39`: a Pawn that is
+    not a PlayerPawn ignores `ZoneVelocity` when its extended SizeSquared is
+    at most 40000) is still untranslated; the oracle never sets bIsPawn. It
+    matters for NPCs falling in slow currents; WaterZone1's ZoneVelocity is
+    zero.
+  - The Decoration numLandings decrement when Hit.Actor is a PlayerPawn
+    (`0x103d1d1c`) is still untranslated.
+  - The end-of-substep recomputation, terminal clamp and the Pawn air
+    control keep their double-precision expressions (`1/TimeTick`,
+    SizeSquared, SafeNormal): validated bit-exact by every case, but not yet
+    rewritten on the 80-bit model like the integrations.
+  - `decoration-physics.mjs`'s `runDecorationPhysics` (unit tests only) and
+    the JC player routes do not expose `regionWater`/`bobbing`: they promise
+    a dry zone (JC refuses water regions elsewhere).
+  - A NaN OldVelocity.Z takes the foot branch (C0 on unordered); the oracle
+    carries NaN results as bit patterns but no case feeds a NaN velocity.
 - ~~APawn::swimMove and swimReachable~~ are ported and oracle-verified since
   2026-09-29 ([pawn navigation](script-pawn-nav.md#swimming-contract-recovered-2026-09-29--swimreachable--swimmove)).
 - The player (JC) has no swimming path: runPlayerPhysics refuses water

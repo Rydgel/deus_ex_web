@@ -174,6 +174,9 @@ export function pawnPhysicsView(actor, services) {
   Object.defineProperty(pawn, 'regionWater', { get: () => water(pawn.region.zone) });
   Object.defineProperty(pawn, 'headWater', { get: () => water(pawn.headRegion.zone) });
   Object.defineProperty(pawn, 'footWater', { get: () => water(pawn.footRegion.zone) });
+  // physFalling's PlayerPawn foot-water integration (0x103d1086) damps with
+  // FootRegion.Zone->ZoneFluidFriction; it is read only while footWater holds.
+  Object.defineProperty(pawn, 'footFluidFriction', { get: () => f(services.zoneFields(pawn.footRegion.zone).ZoneFluidFriction ?? 1.2) });
   Object.defineProperty(pawn, 'waterAt', { value: position => water(level.pointRegion(position.map(f)).zone) });
 
   // The original collision-hash entries, Touching slots and IsBlockedBy bits

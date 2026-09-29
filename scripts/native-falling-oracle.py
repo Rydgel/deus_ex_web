@@ -9,6 +9,15 @@ bBounce cases (actor+0x1ec bit 0x10) reach the original direct script HitWall
 dispatch (ProcessEvent from 0x103d1dcf). Its script body is a named, controlled
 test double selected per case (`hitWallMode`): it does not prove UnrealScript VM
 arithmetic, only what physFalling does around the event.
+
+Water cases (docs/swimming.md "physFalling water paths") set Region.Zone's
+bWaterZone (ZoneInfo+0x388 bit 0) and ZoneFluidFriction (+0x338), Mass
+(+0x1f4) and Buoyancy (+0x1f8), a separate FootRegion.Zone (+0x330) with its
+own bWaterZone/ZoneFluidFriction, and Decoration.bBobbing (+0x31c bit 3) on a
+real Decoration ancestry (script classes chained to the DLL's ADecoration
+0x10578d48). The zones are static for the whole call: MoveActor's SetActorZone
+and its ZoneChange script event are not modeled. The oracle records which
+physFalling instructions execute (`uncovered` lists the rest).
 """
 import importlib.util
 import json
@@ -22,8 +31,37 @@ collision = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collision)
 f = lambda value: struct.unpack('<f', struct.pack('<f', value))[0]
 
+# physFalling 0x103d0a50 up to its SEH unwind funclets (0x103d2491), and the
+# water/bobbing/foot-water integration blocks inside it (first integration and
+# the apex re-integration), which must all execute in some case.
+PHYS_FALLING = (0x103d0a50, 0x103d2491)
+WATER_BRANCHES = {'bobbingTest': (0x103d0f42, 0x103d0f75), 'bobbing': (0x103d0f75, 0x103d1039),
+                  'footWaterTest': (0x103d1039, 0x103d1086), 'footWater': (0x103d1086, 0x103d1157),
+                  'water': (0x103d125a, 0x103d13f0),
+                  'apexBobbingTest': (0x103d150e, 0x103d1558), 'apexBobbing': (0x103d1558, 0x103d1640),
+                  'apexFootWaterTest': (0x103d1640, 0x103d168d), 'apexFootWater': (0x103d168d, 0x103d17d6),
+                  'apexWater': (0x103d18dc, 0x103d1a74)}
+
 
 class NativeFalling(collision.NativeCollision):
+    covered = set()
+
+    def uncovered(self, ranges):
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        md, result = Cs(CS_ARCH_X86, CS_MODE_32), {}
+        for name, (lo, hi) in ranges.items():
+            code = bytes(self.cpu.mem_read(lo, hi - lo))
+            instructions = [i.address for i in md.disasm(code, lo)]
+            missing = [a for a in instructions if a not in self.covered]
+            spans = []
+            for a in missing:
+                if spans and a - spans[-1][1] <= 16:
+                    spans[-1][1] = a
+                else:
+                    spans.append([a, a])
+            result[name] = {'instructions': len(instructions), 'uncovered': [f'{a:#x}-{b:#x}' for a, b in spans]}
+        return result
+
     def __init__(self, root):
         super().__init__(root)
         self.events = None
@@ -72,6 +110,14 @@ class NativeFalling(collision.NativeCollision):
         self.write(self.actor_class + 0x28, 'I', 0)
         self.ancestry = {'fragment': self.script_chain(self.projectile_class, 3),
                          'inventory': self.script_chain(self.inventory_class, 4)}
+        # CrateBreakableMedGeneral -> Containers -> DeusExDecoration -> the DLL's
+        # own ADecoration (0x10578d48) -> AActor; and a script Pawn chain
+        # (ScriptedPawn-like: IsA(Pawn) true, IsA(PlayerPawn) false).
+        self.ancestry['decoration'] = self.script_chain(0x10578d48, 3)
+        self.ancestry['pawn'] = self.script_chain(0x1058c660, 2)
+        # A second zone for FootRegion.Zone (+0x330) when a case separates it.
+        self.foot_zone = self.alloc(0x1000)
+        self.write(self.foot_zone + 0x24, 'I', 0x1057bf00)
         self.events = None
 
     def script_chain(self, native_parent, depth):
@@ -133,6 +179,8 @@ class NativeFalling(collision.NativeCollision):
         raise RuntimeError(f'Unknown hitWallMode {mode}')
 
     def on_instruction(self, cpu, address, size, data):
+        if self.events is not None and PHYS_FALLING[0] <= address < PHYS_FALLING[1]:
+            self.covered.add(address)
         if self.events is not None and address in [0x103cecc0, 0x103cef60]:
             stack = cpu.reg_read(collision.UC_X86_REG_ESP)
             normal = list(self.read(stack + 4, '3f'))
@@ -208,6 +256,8 @@ class NativeFalling(collision.NativeCollision):
         self.write(self.pawn + 0x1ec, 'I', 0x10 if case.get('bounce') else 0)
         self.write(self.pawn + 0x114, '3f', *case['position'])
         self.write(self.pawn + 0x144, '3f', *case['velocity'])
+        if 'velocityBits' in case:
+            self.write(self.pawn + 0x144, '3I', *case['velocityBits'])
         self.write(self.pawn + 0x150, '3f', *case['acceleration'])
         self.write(self.pawn + 0x378, 'f', case['groundSpeed'])
         self.write(self.pawn + 0x384, 'f', case['accelRate'])
@@ -215,6 +265,25 @@ class NativeFalling(collision.NativeCollision):
         self.write(self.zone + 0x31c, '3f', *case['gravity'])
         self.write(self.zone + 0x328, '3f', *case['zoneVelocity'])
         self.write(self.zone + 0x33c, 'f', case['terminalVelocity'])
+        # Water: Region.Zone bWaterZone/ZoneFluidFriction, Mass, Buoyancy,
+        # FootRegion.Zone (the same zone unless the case separates it), and
+        # Decoration.bBobbing (+0x31c bit 3; written only for cases that set it).
+        # Written only when the case names them, so the swimming/walking
+        # harnesses that reuse this entry keep their own zone and actor state.
+        if 'regionWater' in case:
+            self.write(self.zone + 0x388, 'I', 1 if case['regionWater'] else 0)
+        for key, offset, target in [('fluidFriction', 0x338, self.zone), ('mass', 0x1f4, self.pawn), ('buoyancy', 0x1f8, self.pawn)]:
+            if key in case:
+                self.write(target + offset, 'f', case[key])
+            if key + 'Bits' in case:  # NaN/infinity, which JSON cannot carry as numbers
+                self.write(target + offset, 'I', case[key + 'Bits'])
+        separate_foot = 'footWater' in case
+        self.write(self.pawn + 0x330, 'I', self.foot_zone if separate_foot else self.zone)
+        self.write(self.foot_zone + 0x388, 'I', 1 if case.get('footWater') else 0)
+        self.write(self.foot_zone + 0x338, 'f', case.get('footFriction', 1.2))
+        saved_flags = self.read(self.pawn + 0x31c, 'B')[0]
+        if 'bobbing' in case:
+            self.write(self.pawn + 0x31c, 'B', (saved_flags & ~8) | (8 if case['bobbing'] else 0))
         self.events = []
         self.call(0x103d0a50, self.pawn, struct.pack('<fi', case['dt'], 0))
         result = {'position': list(self.read(self.pawn + 0x114, '3f')),
@@ -224,6 +293,9 @@ class NativeFalling(collision.NativeCollision):
         if case.get('bounce') or case.get('ancestry'):
             flags = self.read(self.pawn + 0x1ec, 'I')[0]
             result['bounce'] = bool(flags & 0x10)
+        # The same actor memory serves every case: restore the byte that holds
+        # Decoration.bBobbing (a Pawn/Inventory field for other classes).
+        self.write(self.pawn + 0x31c, 'B', saved_flags)
         self.events = None
         return result
 
@@ -233,4 +305,15 @@ if __name__ == '__main__':
         sys.exit('Usage: native-falling-oracle.py GAME_ROOT CASES_JSON')
     native = NativeFalling(Path(sys.argv[1]))
     cases = json.loads(Path(sys.argv[2]).read_text())
-    print(json.dumps({'hashes': collision.HASHES, 'results': [native.falling(case) for case in cases]}))
+    def nan_bits(value):
+        # JSON has no NaN: a NaN float32 travels as its bit pattern.
+        if isinstance(value, float) and math.isnan(value):
+            return {'nan': struct.unpack('<I', struct.pack('<f', value))[0]}
+        if isinstance(value, list):
+            return [nan_bits(v) for v in value]
+        if isinstance(value, dict):
+            return {k: nan_bits(v) for k, v in value.items()}
+        return value
+    results = [nan_bits(native.falling(case)) for case in cases]
+    print(json.dumps({'hashes': collision.HASHES, 'results': results,
+                      'coverage': native.uncovered({'physFalling': PHYS_FALLING, **WATER_BRANCHES})}))

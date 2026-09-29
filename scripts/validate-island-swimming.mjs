@@ -22,8 +22,10 @@
  *    tick 20 (setup only). exit: GeneratorScout4 (no AI; its generator stays
  *    inactive while idle) placed in open water with Mass 100 / Buoyancy 150 /
  *    DesiredSpeed 1 rises, leaves the water through Swim's findWaterLine on the
- *    real BSP, is set to PHYS_Falling by physSwimming and falls back in, where
- *    physFalling's untranslated water-zone integration (0x103d125a) stops it.
+ *    real BSP, is set to PHYS_Falling by physSwimming and falls back in. A plain
+ *    Pawn has no ZoneChange that selects swimming, so it keeps falling under
+ *    physFalling's water-zone integration (0x103d125a), whose buoyancy lifts
+ *    it back to the surface (docs/swimming.md "physFalling water paths").
  *    entry: Terrorist0 placed above the water falls in; the original
  *    ScriptedPawn.ZoneChange sets PHYS_Swimming inside MoveActor and
  *    physFalling hands off to startSwimming. The run ends at the next runtime
@@ -70,7 +72,10 @@ if (!part) {
   assert.equal(exit.exitRegionWater, false, 'Swim left the pawn at the water line outside the water zone');
   assert.ok(exit.exitZ > exit.surfaceZ - exit.height, 'the exit is at the water surface');
   assert.ok(exit.fellBackIn, 'PHYS_Falling returned the pawn into the water');
-  assert.match(water.firstError?.message ?? '', /physFalling water-zone integration/, 'falling in water stops at the explicit boundary');
+  assert.equal(water.firstError, null, `exit: no boundary (${water.firstError?.tick}: ${water.firstError?.message})`);
+  assert.ok(exit.wetFallingTicks > 0 && exit.physicsAfterReentry.every(p => p === 2),
+    'back in the water the scout keeps PHYS_Falling under the water-zone integration');
+  assert.ok(exit.buoyantRise, 'Buoyancy 150 over Mass 100 lifts the falling scout in the water');
   const entry = dive.entry;
   assert.ok(entry.startSwimming >= 1, 'physFalling handed off to startSwimming');
   assert.equal(entry.physics, 3);
@@ -202,10 +207,17 @@ if (part === 'unmodified') {
   }
   exit.physSwimmingCalls = calls.get('GeneratorScout4.swimming') ?? 0;
   // Back in the water in PHYS_Falling (a plain Pawn has no ZoneChange that
-  // selects swimming), the next physFalling substep stops at the untranslated
-  // water-zone integration.
+  // selects swimming), physFalling integrates with the water zone's fluid
+  // friction and the scout's buoyancy (0x103d125a).
   const reentry = tick;
-  while (!firstError && tick < reentry + 5) step();
+  exit.wetFallingTicks = 0; exit.buoyantRise = false; exit.physicsAfterReentry = [];
+  while (!firstError && tick < reentry + 90) {
+    step();
+    const physics = read(scout, 'Physics'), wet = regionWater(scout);
+    if (!exit.physicsAfterReentry.includes(physics)) exit.physicsAfterReentry.push(physics);
+    if (physics === 2 && wet) { exit.wetFallingTicks++; if (read(scout, 'Velocity')[2] > 0) exit.buoyantRise = true; }
+  }
+  exit.finalZ = read(scout, 'Location')[2];
   console.log(JSON.stringify({ exit, firstError }));
 } else if (part === 'entry') {
   for (let i = 0; i < 20; i++) step();

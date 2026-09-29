@@ -1251,7 +1251,7 @@ export async function createScriptDoors({
   runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
     read: (target, name) => runtime.readNamed(target, name),
     write: (target, name, value) => runtime.writeNamed(target, name,value),
-    physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
+    physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
     physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physMovingBrush: (actor,delta)=>{
       // AMover::physMovingBrush returns when bInterpolating is clear. All

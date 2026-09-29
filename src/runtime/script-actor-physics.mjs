@@ -10,7 +10,7 @@ import {rolling} from './rolling.mjs';
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
-export function runSpawnedActorFalling(runtime,actor,seconds,zone,iterations=0) {
+export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
   // A serialized map actor already owns its collision/native surface; preserve
   // that identity and only link its hash cylinder to live Location. Spawned
   // actors expose the same members through installActorCollisionView.
@@ -33,10 +33,27 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone,iterations=0) 
     get:()=>get('numLandings'),set:value=>runtime.writeNamed(actor,'numLandings',value),
   });
   // physFalling's IsA(ADecoration) && bBobbing branch (0x103d0f42, Decoration
-  // +0x31c & 0x08): falling() stops at it. Other classes fail that IsA.
+  // +0x31c & 0x08), re-read at each integration. Other classes fail that IsA.
   if(isDecoration)Object.defineProperty(host,'bobbing',{get:()=>Boolean(get('bBobbing'))});
-  Object.assign(host,{gravity:zone.ZoneGravity??[0,0,-950],zoneVelocity:zone.ZoneVelocity??[0,0,0],
-    terminalVelocity:zone.ZoneTerminalVelocity??2500,
+  // physFalling and processLanded read the actor's live Region.Zone
+  // (actor+0xc8, kept by MoveActor's SetActorZone): ZoneGravity at each
+  // integration, ZoneVelocity per substep, bWaterZone/ZoneFluidFriction with
+  // Mass/Buoyancy for the water integration (0x103d125a), ZoneTerminalVelocity
+  // after the move, bBounceVelocity/ZoneVelocity when landing
+  // (docs/swimming.md "physFalling water paths").
+  const regionZone=()=>{
+    const zone=runtime.regionValue(actor).zone;
+    if(!zone)throw new Error('physFalling requires the actor Region.Zone (actor+0xc8)');
+    return zone;
+  };
+  const zoneField=name=>runtime.readNamed(regionZone(),name);
+  for(const [key,name] of Object.entries({gravity:'ZoneGravity',zoneVelocity:'ZoneVelocity',
+    terminalVelocity:'ZoneTerminalVelocity',fluidFriction:'ZoneFluidFriction',regionWater:'bWaterZone'}))
+    Object.defineProperty(host,key,{get:key==='regionWater'?()=>Boolean(zoneField(name)):()=>zoneField(name)});
+  for(const [key,name] of Object.entries({mass:'Mass',buoyancy:'Buoyancy'}))
+    Object.defineProperty(host,key,{get:()=>get(name)});
+  const zone={get bBounceVelocity(){return zoneField('bBounceVelocity');},get ZoneVelocity(){return zoneField('ZoneVelocity');}};
+  Object.assign(host,{
     zoneNumber:runtime.regionValue(actor).zoneNumber,
     move:delta=>{
       const result=playerMove(actor,delta,runtime.spawnedMoveServices(actor,level));
@@ -81,7 +98,7 @@ export function runActorRolling(runtime,actor,seconds,zone) {
     eventFalling:()=>dispatch(actor,'Falling',[]),
     setPhysics:(next,base)=>setActorPhysics(actor,next,world(base),{dispatch,
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
-    physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,zone,iterations),
+    physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,iterations),
     setBase:target=>setSupportBase(actor,world(target),dispatch),
   });
   return get('Physics');

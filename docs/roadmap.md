@@ -474,10 +474,9 @@ forward-walk workload runs unbypassed to tick 1872 (31.2 s, item 6).
    sets a scout to PHYS_Swimming and then reaches item 2 in the same call. The
    `performPhysics` default rewrite is no longer reached in either map's bench
    run. Falling *through* water (physFalling's water-zone integration
-   `0x103d125a` and PlayerPawn foot-water `0x103d1039`) is now an explicit
-   boundary for pawns instead of a silent dry integration. Non-Pawn actors
-   (five breakable crates in an Island water zone) still integrate dry
-   ([swimming](swimming.md#unsupported-and-unresolved)).
+   `0x103d125a` and PlayerPawn foot-water `0x103d1039`) became an explicit
+   boundary for pawns instead of a silent dry integration, and is now
+   translated for every actor kind (item 5).
 2. ~~**aiPickSearch's waterMove service**~~ Done
    ([pawn navigation](script-pawn-nav.md#swimming-contract-recovered-2026-09-29--swimreachable--swimmove)):
    `APawn::swimMove` `0x103c3ca0` and `APawn::swimReachable` `0x103c15a0`
@@ -528,9 +527,34 @@ forward-walk workload runs unbypassed to tick 1872 (31.2 s, item 6).
    360-tick bench workload never reached 708: both digests are unchanged
    (Training `04f77dc631509ae4`, Island `340b445c6e983b80`, JS and Rust VMs
    equal at all 30 checkpoints, `errors {}`).
-5. Non-Pawn actors falling through water still integrate dry (five breakable
-   crates in an Island water zone, [swimming](swimming.md#unsupported-and-unresolved));
-   this is a silent substitute, not a stopping boundary.
+5. ~~**physFalling in water**~~ Done 2026-09-30
+   ([swimming](swimming.md#physfalling-water-paths-aactorphysfalling-0x103d0a50)):
+   the Region.Zone water integration (`0x103d125a`), the Decoration bBobbing
+   integration (`0x103d0f75`) and the PlayerPawn foot-water integration
+   (`0x103d1086`), with their apex copies, run for every actor kind on the
+   80-bit model. `validate-native-falling` passes 1898/1898 original-DLL
+   cases (884 new, 0 mismatches, 14/14 mutants) with every instruction of the
+   three integrations, their apex copies and branch tests executed. The
+   non-Pawn host (`runSpawnedActorFalling`) now reads Region.Zone live, so
+   the five Island crates stop integrating dry: `validate-island-falling-water`
+   shows tick 1 of each equal to Engine.dll's physFalling on the same inputs;
+   CrateBreakableMedGeneral5/8 and CrateBreakableMedCombat13 (Buoyancy 90)
+   rise 6.44 units and stay pinned against the geometry above them, and
+   CrateBreakableMedGeneral1/2 (Buoyancy 60) surface, waterlog through the
+   original Decoration.ZoneChange, float (DeusExDecoration bFloating and its
+   Tick rocking) and bob at the surface. The Island bench digest is now
+   `7b23d044fafab37f` (JS and Rust VMs equal at all 30 checkpoints, two runs
+   identical, `errors {}`); Training stays `04f77dc631509ae4`. It first
+   differs from `340b445c6e983b80` at checkpoint 0 (tick 70), where only the
+   five crates differ (Physics, Base, Location, DistanceFromPlayer; for 1 and
+   2 also Velocity, Rotation, Buoyancy, bFloating, bSplash). Through
+   checkpoint 5 (tick 120) only crate fields differ; from checkpoint 6 (tick
+   130) other actors follow (first ElectricityEmitter5, LaserProxy6/7,
+   GeneratorScout9) because the crates' second water entries (ticks 124 and
+   125 in validate-island-falling-water's forward-key part) evaluate
+   Decoration.ZoneChange's `FRand() < 0.05` settle test, an extra draw from
+   the shared random stream. The unbypassed forward-walk
+   boundary is unchanged: native 2051 at tick 1872 (item 6).
 6. **Native 2051, `Conversation.CreateConCamera`** is now the first boundary
    without a bypass: tick 1872 (31.20 s). With PaulDenton0 about 180 units
    from the player, his conversation `MeetPaul` (`Conversation115`,

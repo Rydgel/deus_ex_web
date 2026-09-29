@@ -82,14 +82,14 @@ the floor-landing site (`0x103d1e0e`); both now use the exact x87 model
 `0x037f` as in the oracle) instead of a double expression. All previously
 validated cases are unchanged.
 
-### Other physFalling branches seen (not translated)
+### Other physFalling branches
 
 | Site | Behavior | Status |
 | --- | --- | --- |
 | `0x103d0aca` | `Region.ZoneNumber == 0`: log (Role Authority and IsA Inventory/Decoration/Pawn), `FellOutOfWorld` event, return | `pawn.zoneNumber === 0` throws an explicit boundary |
-| `0x103d0f35`→`0x103d125a` | water zone: `Velocity = OldV*(1 - 2*FluidFriction*dt) + 0.5*((1 - Buoyancy/max(1,Mass))*Gravity + Accel)*dt` | not translated; explicit boundary when the host exposes `regionWater` (script pawn view) |
-| `0x103d0f42` | `IsA(ADecoration) && bBobbing` (Decoration `byte +0x31c & 0x08`, bit 3): `V = OldV + 0.5*(0.5*Gravity + Accel)*dt` | not translated; explicit boundary when the host exposes `bobbing` (`runSpawnedActorFalling` for Decoration ancestry; [swimming](swimming.md)). This is the branch earlier notes called a "bounce class" branch |
-| `0x103d1039` | PlayerPawn with foot zone bWaterZone and `OldV.Z < 0` | not translated; explicit boundary when the host exposes `footWater` |
+| `0x103d0f35`→`0x103d125a` (apex `0x103d18dc`) | water zone, any actor kind: `Velocity = OldV*(1 - 2*FluidFriction*dt) + 0.5*((1 - Buoyancy/max(1,Mass))*Gravity + Accel)*dt` (a NaN Mass is kept) | translated 2026-09-30 ([swimming](swimming.md#physfalling-water-paths-aactorphysfalling-0x103d0a50)); the script pawn view and `runSpawnedActorFalling` expose `regionWater` |
+| `0x103d0f42`→`0x103d0f75` (apex `0x103d1558`) | `IsA(ADecoration) && bBobbing` (Decoration `byte +0x31c & 0x08`, bit 3): `V = OldV + 0.5*(0.5*Gravity + Accel)*dt` | translated 2026-09-30; `runSpawnedActorFalling` exposes `bobbing` for Decoration ancestry. This is the branch earlier notes called a "bounce class" branch |
+| `0x103d1039`→`0x103d1086` (apex `0x103d168d`) | IsA(PlayerPawn), FootRegion.Zone bWaterZone and `OldV.Z < 0`: `V = OldV*(1 - FootFluidFriction*dt) + 0.5*(Gravity + Accel)*dt` | translated 2026-09-30; the script pawn view exposes `footWater` and `footFluidFriction` |
 | `0x103d1b39` | bIsPawn and not PlayerPawn: ZoneVelocity ignored when `SizeSquared <= 40000` | not translated (fragments/inventory/player always add ZoneVelocity) |
 | `0x103d1cb6` | Pawn swimming transition | translated ([swimming](swimming.md)) |
 
@@ -120,6 +120,16 @@ included), the MoveActor deltas, and the ordered HitWall/processHitWall/
 processLanded events. 376 cases dispatch at least one HitWall, up to 7 per call;
 49 exceed the two-bounce refund cap; 82 end through PHYS_None. The original 562
 cases are unchanged and still exact.
+
+2026-09-30: 884 water, bBobbing and foot-water cases bring the corpus to
+**1898 cases, maxError 0, 0 mismatches**; the oracle adds `regionWater`,
+`fluidFriction`, `mass`, `buoyancy` (and `*Bits` for NaN/infinity),
+`footWater`/`footFriction` (a separate FootRegion zone), `bobbing` (+0x31c
+bit 3), `ancestry: 'decoration'` (script classes over the DLL's ADecoration
+`0x10578d48`) and `ancestry: 'pawn'` (a script Pawn, IsA(PlayerPawn) false),
+reports physFalling instruction coverage (every instruction of the water,
+bBobbing and foot-water blocks and apex copies executes) and 14 mutation
+checks. Details: [swimming](swimming.md#validation).
 
 Unverified: the script bodies (reflection arithmetic, `SetPhysics`) are doubles;
 the real ones run through the VM and native `setPhysics` at integration.

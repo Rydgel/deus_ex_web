@@ -1,8 +1,11 @@
 import { safeNormal, twoWallAdjust } from './steps.mjs';
-import { x87add, x87load, x87mul, x87neg, x87store } from './script-vm.mjs';
+import { x87add, x87cmp, x87div, x87double, x87load, x87mul, x87neg, x87store } from './script-vm.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 
 const f = Math.fround;
+const L = v => x87load(f(v)), S = x87store;
+const sub87 = (a, b) => x87add(a, x87neg(b));
+const ONE_F = L(1), HALF_F = L(.5), ZERO_F = L(0), ONE_D = x87double(1), D015 = x87double(.015);
 const add = (a, b) => a.map((v, i) => f(v + b[i]));
 const sub = (a, b) => a.map((v, i) => f(v - b[i]));
 const scale = (a, s) => a.map(v => f(v * s));
@@ -18,12 +21,69 @@ const X87_ONE = Object.freeze({ neg: 0, sig: 1n, exp: 0 });
 const refundTime = (remaining, time, step) => scriptVmKernel ? scriptVmKernel.refundTime(remaining, time, step) :
   x87store(x87add(x87mul(x87add(X87_ONE, x87neg(x87load(time))), x87load(step)), x87load(remaining)));
 
-/** AActor.physFalling (Engine.dll 0x103d0a50): the dry Pawn (player) path, the
- * non-Pawn path and the bBounce wall-hit branch. World movement/queries and the
- * reached engine/script events are supplied by the caller; this function does
- * not implement surface events or landing fitting. A Pawn that a MoveActor
- * left in PHYS_Swimming hands off to the caller's `startSwimming` service
- * (docs/swimming.md).
+const requireNumbers = (what, values) => {
+  for (const [name, value] of Object.entries(values))
+    if (typeof value !== 'number') throw new Error(`Original physFalling ${what} requires ${name} from the host`);
+};
+
+/** Region.Zone->bWaterZone integration, 0x103d125a (the apex copy 0x103d18dc
+ * has the same store pattern): V = OldV*(1 - 2*F*dt)
+ * + 0.5*((1 - Buoyancy/max(1,Mass))*G + A)*dt. `lift` and `k` stay on the x87
+ * stack; every FVector operator stores one float per component. */
+function waterVelocity(pawn, old, step, gravity, acceleration) {
+  requireNumbers('water-zone integration', { mass: pawn.mass, buoyancy: pawn.buoyancy, fluidFriction: pawn.fluidFriction });
+  const mass = L(pawn.mass);
+  // fld Mass; fld 1.0f; fcomp st(1); test ah,1: C0 (1.0 < Mass, or a NaN Mass)
+  // keeps Mass; Mass <= 1.0 divides by 1.0f.
+  const order = x87cmp(ONE_F, mass), divisor = order === 'lt' || order === 'un' ? mass : ONE_F;
+  const lift = sub87(ONE_D, x87div(L(pawn.buoyancy), divisor));   // fdivr m32; fsubr m64 1.0
+  const term = gravity.map((g, i) =>
+    S(x87mul(L(S(x87mul(L(S(x87add(L(S(x87mul(lift, L(g)))), L(acceleration[i])))), HALF_F))), L(step))));
+  // 0x103d135c re-reads Region.Zone: fld dt; fmul F; fadd st0,st0; fsubr m32 1.0.
+  const friction = x87mul(L(step), L(pawn.fluidFriction));
+  const k = sub87(ONE_F, x87add(friction, friction));
+  return old.map((v, i) => S(x87add(L(term[i]), L(S(x87mul(k, L(v)))))));
+}
+
+/** IsA(ADecoration) && bBobbing integration, 0x103d0f75 (apex 0x103d1558):
+ * V = OldV + 0.5*(0.5*G + A)*dt. X/Y store after every operator; the first
+ * copy keeps Z on the x87 stack until the final store, the apex copy stores Z
+ * once after `*dt` and again after `+OldV.Z`. */
+function bobbingVelocity(old, step, gravity, acceleration, apex) {
+  const xy = [0, 1].map(i =>
+    S(x87add(L(S(x87mul(L(S(x87mul(L(S(x87add(L(S(x87mul(L(gravity[i]), HALF_F))), L(acceleration[i])))), HALF_F))), L(step)))), L(old[i]))));
+  const z = x87mul(x87mul(x87add(x87mul(L(gravity[2]), HALF_F), L(acceleration[2])), HALF_F), L(step));
+  return [...xy, S(x87add(apex ? L(S(z)) : z, L(old[2])))];
+}
+
+/** PlayerPawn with FootRegion.Zone->bWaterZone and OldV.Z < 0, 0x103d1086 (apex
+ * 0x103d168d): V = OldV*(1 - F_foot*dt) + 0.5*(G + A)*dt, F_foot read from
+ * FootRegion.Zone, G from Region.Zone. The first copy keeps Z's gravity term
+ * extended into the final sum; the apex copy stores every operator. */
+function footWaterVelocity(pawn, old, step, gravity, acceleration, apex) {
+  requireNumbers('PlayerPawn foot-water integration', { footFluidFriction: pawn.footFluidFriction });
+  const k = sub87(ONE_F, x87mul(L(step), L(pawn.footFluidFriction)));   // fsubr m32 1.0
+  const damped = old.map(v => S(x87mul(k, L(v))));
+  const term = gravity.map((g, i) => L(S(x87mul(L(S(x87mul(L(S(x87add(L(g), L(acceleration[i])))), HALF_F))), L(step)))));
+  if (!apex) term[2] = x87mul(x87mul(x87add(L(gravity[2]), L(acceleration[2])), HALF_F), L(step));
+  return damped.map((d, i) => S(x87add(term[i], L(d))));
+}
+
+/** AActor.physFalling (Engine.dll 0x103d0a50): the Pawn (player) path, the
+ * non-Pawn path, the bBounce wall-hit branch, and the four integrations (water
+ * zone, Decoration bBobbing, PlayerPawn foot water, dry) with their apex
+ * copies. World movement/queries and the reached engine/script events are
+ * supplied by the caller; this function does not implement surface events or
+ * landing fitting. A Pawn that a MoveActor left in PHYS_Swimming hands off to
+ * the caller's `startSwimming` service (docs/swimming.md).
+ *
+ * Host fields read live at each integration (docs/swimming.md "physFalling
+ * water paths"): `gravity`, `zoneVelocity`, `terminalVelocity` and
+ * `regionWater` of Region.Zone; `mass`, `buoyancy` and Region.Zone's
+ * `fluidFriction` when `regionWater`; `bobbing` (IsA(ADecoration) &&
+ * bBobbing); `isPlayerPawn`, `footWater` and FootRegion.Zone's
+ * `footFluidFriction` for a Pawn. A host without `regionWater` guarantees a
+ * dry Region.Zone.
  *
  * `options` (all explicit; the defaults are the previously validated player path):
  *  - `nonPawn`: the source is not a Pawn (`IsA(APawn)` false at 0x103d0a7d). The
@@ -74,7 +134,6 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     return;
   }
   const savedAcceleration = pawn.acceleration.map(f);
-  const gravity = pawn.gravity.map(f), zoneVelocity = pawn.zoneVelocity.map(f);
   let speedLimit = 0;
   pawn.position = pawn.position.map(f); pawn.velocity = pawn.velocity.map(f);
   if (nonPawn) pawn.acceleration = [...savedAcceleration];
@@ -106,37 +165,50 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     pawn.oldLocation = [...origin];
     pawn.justTeleported = false;
     remaining = f(remaining - step);
-    // 0x103d0f2f: the integration branches on Region.Zone->bWaterZone (fluid
-    // friction and buoyancy, 0x103d125a) and, for a PlayerPawn falling with its
-    // FootRegion in water, on 0x103d1039. Neither is translated; hosts that
-    // expose the zone flags (the script pawn view) stop here explicitly.
-    if (pawn.regionWater === true)
-      throw new Error('Original physFalling water-zone integration (Region.Zone->bWaterZone, 0x103d0f35 -> 0x103d125a) is not translated');
-    // 0x103d0f42-0x103d0f6f: otherwise an IsA(ADecoration) source (class walk
-    // for 0x10578d48) with bBobbing set (`test byte [actor+0x31c], 8`)
-    // integrates half gravity at 0x103d0f75-0x103d1034. Not translated; hosts
-    // that expose `bobbing` (runSpawnedActorFalling, Decoration ancestry)
-    // stop here, re-read every substep as the native does.
-    if (pawn.bobbing === true)
-      throw new Error('Original physFalling Decoration bBobbing integration (IsA(ADecoration) && bBobbing, 0x103d0f42 -> 0x103d0f75) is not translated');
-    if (!nonPawn && pawn.isPlayerPawn && pawn.footWater === true && !(oldVelocity[2] >= 0))
-      throw new Error('Original physFalling PlayerPawn foot-in-water integration (0x103d1039) is not translated');
-    // Each integration re-reads the actor's Acceleration (actor+0x150), which the
-    // Pawn prelude stored clamped; a script event may have changed it since.
-    const integrate = () => add(oldVelocity, scale(scale(add(pawn.acceleration, gravity), .5), step));
-    pawn.velocity = integrate();
+    // 0x103d0f2f-0x103d1157: the integration, chosen per substep from the live
+    // actor and Region.Zone (docs/swimming.md "physFalling water paths"):
+    // Region.Zone->bWaterZone first (any actor kind), then IsA(ADecoration) &&
+    // bBobbing (hosts expose `bobbing` only for Decoration ancestry), then
+    // IsA(PlayerPawn) && FootRegion.Zone->bWaterZone && OldVelocity.Z < 0 (C0:
+    // NaN included), else dry. Hosts that never expose `regionWater` promise a
+    // dry Region.Zone. Each integration re-reads Acceleration (actor+0x150; the
+    // Pawn prelude stored it clamped, a script event may have changed it since)
+    // and ZoneGravity (Region.Zone+0x31c).
+    const integrate = apex => {
+      const acceleration = pawn.acceleration.map(f), gravity = pawn.gravity.map(f);
+      if (pawn.regionWater === true) return waterVelocity(pawn, oldVelocity, step, gravity, acceleration);
+      if (pawn.bobbing === true) return bobbingVelocity(oldVelocity, step, gravity, acceleration, apex);
+      if (!nonPawn && pawn.isPlayerPawn === true && pawn.footWater === true && !(oldVelocity[2] >= 0))
+        return footWaterVelocity(pawn, oldVelocity, step, gravity, acceleration, apex);
+      return add(oldVelocity, scale(scale(add(acceleration, gravity), .5), step));
+    };
+    pawn.velocity = integrate(false);
+    // 0x103d13f0-0x103d150b: apex subdivision. |OldV.Z| and |V.Z| (fchs on C0),
+    // ratio = |OldV.Z| / (|V.Z| + |OldV.Z|), first = ratio*dt and second =
+    // (1.0f - ratio)*dt all stay extended and compare against the double 0.015;
+    // TimeTick = f(first), RemainingTime = f(second + RemainingTime). The
+    // re-integration re-tests the branches (0x103d150e) and runs their apex copies.
     if (!apexSplit && (oldVelocity[2] > 0) !== (pawn.velocity[2] > 0) && Math.abs(oldVelocity[2]) > 5 && Math.abs(pawn.velocity[2]) > 5) {
       apexSplit = true;
-      const ratio = Math.abs(oldVelocity[2]) / (Math.abs(oldVelocity[2]) + Math.abs(pawn.velocity[2]));
-      const first = ratio * step, second = (1 - ratio) * step;
-      if (first > .015 && second > .015) {
-        remaining = f(remaining + second); step = f(first); pawn.velocity = integrate();
+      const magnitude = v => { const x = L(v); return x87cmp(x, ZERO_F) === 'lt' ? x87neg(x) : x; };
+      const ratio = x87div(magnitude(oldVelocity[2]), x87add(magnitude(pawn.velocity[2]), magnitude(oldVelocity[2])));
+      const first = x87mul(ratio, L(step));
+      if (x87cmp(first, D015) === 'gt') {
+        const second = x87mul(sub87(ONE_F, ratio), L(step));
+        if (x87cmp(second, D015) === 'gt') {
+          step = S(first); remaining = S(x87add(second, L(remaining)));
+          pawn.velocity = integrate(true);
+        }
       }
     } else apexSplit = false;
     if (speedLimit && pawn.velocity[0] ** 2 + pawn.velocity[1] ** 2 > speedLimit * speedLimit) {
       const limited = scale(safeNormal([pawn.velocity[0], pawn.velocity[1], 0]), speedLimit);
       pawn.velocity = [limited[0], limited[1], pawn.velocity[2]];
     }
+    // 0x103d1bb9: ZoneVelocity is read from Region.Zone each substep (the
+    // non-player bIsPawn gate at 0x103d1b39 is not translated) and reused by
+    // the end-of-substep velocity recomputation.
+    const zoneVelocity = pawn.zoneVelocity.map(f);
     const delta = scale(add(pawn.velocity, zoneVelocity), step);
     let hit = pawn.move(delta);
     // 0x103d1ca2: a MoveActor whose touch/bump events destroyed the actor
