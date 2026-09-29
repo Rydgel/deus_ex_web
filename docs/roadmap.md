@@ -494,16 +494,31 @@ its behavior lands.
    differing field in digest order `LevelInfo0.PawnList`). Re-inserting the old
    waterMove early return on the new source reproduces `6a178ec7baf98078`
    exactly.
-3. **jumpArc `0x103c2f50`**, bench-sim's forward-walk workload with no bypass:
-   the first boundary is now tick 1221 (20.35 s). PaulDenton0 in `RunningTo`
-   calls `GetNextWaypoint` → `ActorReachable` (520) → actorWorker `0x103c0630`
-   → dispatcher `0x103c1000` → walkReach `0x103c1b70`, whose checkMove returns
-   -1 for a bCanJump pawn: `walkReach requires the original jumpArc service
-   (0x103c2f50)` (`validate-island-swimming`).
-4. **Native 708, `AIDirectionReachable`**, latent 506 `StrafeFacing`: not
-   reached in those 1221 unbypassed ticks. bench-sim keeps its 708 early
-   return (the only remaining patch); the unbypassed Play run passes the
-   360-tick bench window without reaching it.
+3. ~~**jumpArc `0x103c2f50`**~~ Done
+   ([pawn navigation](script-pawn-nav.md#jumping-contract-recovered-2026-09-29--findbestjump--suggestjumpvelocity--jumplanding)):
+   the body is `APawn::FindBestJump`, with `APawn::SuggestJumpVelocity`
+   `0x103c2c80` and `APawn::jumpLanding` `0x103c2530`; all three are ported
+   and walkReach's −1 path calls them. `validate-pawn-jump-reach` passes
+   363/363 original-DLL cases (0 mismatches, 23/23 mutants) with every
+   instruction of the three bodies executed. In unbypassed Play PaulDenton0's
+   tick-1221 `ActorReachable(player)` now completes: the jump off the ledge
+   lands in the bay, swimReachable cannot climb out toward the player, the
+   verdict is false, and `GetNextWaypoint` takes FindPathToward's
+   `PatrolPoint17` in the same tick (`validate-island-jump-reach`). The
+   360-tick bench workload never reaches it: both maps' digests are unchanged
+   (Training `04f77dc631509ae4`, Island `340b445c6e983b80`, JS and Rust equal
+   at all 30 checkpoints, `errors {}`).
+4. **Native 708, `AIDirectionReachable`** is now the first boundary without a
+   bypass: tick 1375 (22.92 s), PaulDenton0 in `RunningTo`/`Follow`, after
+   `ActorReachable(player)` succeeds, calls `ScriptedPawn.GetNextVector` →
+   `AIDirectionReachable(Location, Yaw, Pitch, 0, 64, outVect)`:
+   `Unsupported original door native 708 in scriptedpawn.getnextvector`
+   (`validate-island-jump-reach`, `validate-island-swimming`). The exec
+   `0x103c8560` calls `APawn::AIDirectionReachable` `0x103c78a0` — the body
+   the navigation notes call `aiPickSearch`, already ported and verified in
+   the 709 chain — with a literal 15.0f; the exec and its binding are not.
+   Latent 506 `StrafeFacing` is not reached in those 1375 ticks. bench-sim
+   keeps its 708 early return (the only remaining patch).
 5. Non-Pawn actors falling through water still integrate dry (five breakable
    crates in an Island water zone, [swimming](swimming.md#unsupported-and-unresolved));
    this is a silent substitute, not a stopping boundary.

@@ -3749,15 +3749,22 @@ export class ScriptRuntime {
    * the recovered test-move, and FarMoveActor(test=1,noCheck=1) restores. The
    * +0xd0 CollideFlag byte is Region.ZoneNumber; +0x444 is ReducedDamageType.
    * Water zones run the recovered swimMove/swimReachable over the same seam;
-   * findWaterLine reads pointRegion and Region.Zone below. */
+   * findWaterLine reads pointRegion and Region.Zone below. A bCanJump pawn's
+   * walkReach runs the recovered FindBestJump, whose jumpLanding reads the
+   * Region zone's ZoneGravity/ZoneVelocity/ZoneFluidFriction and whose
+   * "FAILING FBJ" debugf goes to the GLog device as NAME_Log (0x2f8). */
   pawnNavServices(receiver) {
     const base=this.pawnPhysicsServices(receiver),level=base.level;
     const view=pawnPhysicsView(receiver,base);
     const navZone=zone=>{
       if(!zone)return {water:false,pain:false,damageType:'None',gravityZ:undefined};
       const read=name=>{try{return this.readNamed(zone,name);}catch{return zone?.values?.[name];}};
+      const vector=name=>{const v=read(name);return v&&v.length===3?Array.from(v,Math.fround):undefined;};
+      const friction=read('ZoneFluidFriction');
       return {water:Boolean(read('bWaterZone')),pain:Boolean(read('bPainZone')),
-        damageType:read('DamageType')??'None',gravityZ:read('ZoneGravity')?.[2]};
+        damageType:read('DamageType')??'None',gravityZ:read('ZoneGravity')?.[2],
+        gravity:vector('ZoneGravity'),velocity:vector('ZoneVelocity'),
+        fluidFriction:typeof friction==='number'?Math.fround(friction):undefined};
     };
     const zoneOf=(actor,name)=>this.readNamed(actor,name)?.['engine.actor.pointregion.zone']
       ??level.pointRegion(view.position).zone;
@@ -3848,6 +3855,17 @@ export class ScriptRuntime {
         return false;
       },
       gIsEditor:()=>false,
+      // GLog->Logf (Core 0x101453e0) serializes with NAME_Log, index 0x2f8
+      // (Core's name registration at 0x1014cd9d). The %f/%d text is JS
+      // formatting of the exact arguments, not MSVCRT's printf.
+      logf:event=>{
+        const device=typeof this.logDevice==='function'?this.logDevice
+          :typeof this.logDevice?.log==='function'?entry=>this.logDevice.log(entry):null;
+        if(!device)throw new Error(`${event.source} requires the original synchronous GLog output device`);
+        let next=0;
+        const text=event.format.replace(/%[fd]/g,spec=>{const v=event.args[next++];return spec==='%d'?String(v|0):v.toFixed(6);});
+        device(Object.freeze({text,tag:'Log',tagIndex:0x2f8,source:event.source,args:Object.freeze([...event.args])}));
+      },
       frand:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('AIPickRandomDestination requires the shared original RNG stream');
         return this.rng.frand();

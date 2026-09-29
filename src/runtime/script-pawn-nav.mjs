@@ -20,6 +20,7 @@ import {
 } from './script-vm.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
 import { findWaterLine } from './swimming.mjs';
+import { twoWallAdjust } from './steps.mjs';
 
 const f32 = Math.fround;
 
@@ -45,7 +46,10 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     flyReach:    0x103c1190,
     flyMove:     0x103c3900,
     dispatch:    0x103c1000,  // physics reach dispatcher (thunk 0x1030353f)
-    jumpArc:     0x103c2f50,
+    jumpArc:     0x103c2f50,  // APawn::FindBestJump (thunk 0x10303422)
+    findBestJump:        0x103c2f50,  // FindBestJump(Dest, vel, &Landing, moveActor)
+    suggestJumpVelocity: 0x103c2c80,  // thunk 0x103035a8
+    jumpLanding:         0x103c2530,  // thunk 0x103016ae
     reachMask:   0x10326d10,  // 7-bit capability gather (thiscall)
     directReach: 0x103dad20,  // NavigationPoint ReachSpec scan
     aiDirection: 0x1036d030,  // biased random rotator (thunk 0x10301f0f)
@@ -63,11 +67,11 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     location: 0x114, rotation: 0x120, velocity: 0x144,
     collisionRadius: 0x1d4, collisionHeight: 0x1d8,
     region: 0xc8, footRegion: 0x330, headRegion: 0x33c,
-    flags318: 0x318, maxStepHeight: 0x38c, baseEyeHeight: 0x3f4,
+    flags318: 0x318, groundSpeed: 0x378, jumpZ: 0x388, maxStepHeight: 0x38c, baseEyeHeight: 0x3f4,
     reducedDamageType: 0x444,
   }),
   flagBits: Object.freeze({
-    bCanJump: 0x00001000,     // pawn +0x318 bit 12 -> jumpArc 0x103c2f50
+    bCanJump: 0x00001000,     // pawn +0x318 bit 12 -> FindBestJump 0x103c2f50
     bCanFly:  0x00008000,     // pawn +0x318 bit 15 -> flyReach 0x103c1190
     bCanSwim: 0x00004000,     // +0x318 bit 14
     bReducedDamageType: 0x0,  // (pawn+0x444 compared raw, not a bit)
@@ -87,6 +91,14 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     maxDistSq:   Object.freeze({ address: 0x104314a8, value: 1000000 }), // double
     reachStep:   Object.freeze({ address: 0x10431444, value: 200 }),     // float (fly/swim reach)
     swimWalkMargin: Object.freeze({ address: 0x104314b4, value: 50 }),   // float (swimReachable)
+    // Jumping (FindBestJump / SuggestJumpVelocity / jumpLanding).
+    jumpTick:     Object.freeze({ address: 0, value: 0.10000000149011612 }), // 0x3dcccccd immediate
+    jumpMaxSpeedSq: Object.freeze({ address: 0x1042adb4, value: 2500000 }), // float
+    jumpMaxTicks: Object.freeze({ address: 0, value: 35 }),                // immediate
+    jumpStep:     Object.freeze({ address: 0x10426d58, value: 0.05 }),     // double
+    jumpNoGravity:Object.freeze({ address: 0, value: -100 }),              // 0xc2c80000 immediate
+    jumpMaxDrop:  Object.freeze({ address: 0x104314cc, value: 350 }),      // float
+    jumpMinGain:  Object.freeze({ address: 0x104314c0, value: 8 }),        // double
     // AIPickRandomDestination constants (709 chain).
     yawPosScale:  Object.freeze({ address: 0x1042ae00, value: 32767 }),    // float
     yawNegScale:  Object.freeze({ address: 0x1042ae04, value: -32768 }),   // float
@@ -527,6 +539,191 @@ export function flyReach(pawn, point, radius, reachFlags, target, services) {
   return reached ? reachFlags : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Jumping: APawn::SuggestJumpVelocity 0x103c2c80, APawn::jumpLanding 0x103c2530
+// and APawn::FindBestJump 0x103c2f50 (docs/script-pawn-nav.md "Jumping
+// contract"). walkReachable calls FindBestJump for a bCanJump pawn whose
+// checkMove returned -1.
+// ---------------------------------------------------------------------------
+
+const D005 = ld64(0.05), D8 = ld64(8);
+const JUMP_TICK = f32(0.1);                                   // 0x3dcccccd
+/** The original flight-time loop has no bound; a gravity whose 0.05 step no
+ * longer changes the stored Vel.Z would hang it. Stop explicitly instead. */
+const SUGGEST_JUMP_STEP_LIMIT = 100000;
+const FBJ_FORMAT = 'FAILING FBJ: nc %f from odS %f and dS %f and dz %f success %d';
+
+/** Region.Zone's ZoneGravity (+0x31c) and, for jumpLanding, ZoneVelocity
+ * (+0x328) and ZoneFluidFriction (+0x338), required rather than defaulted. */
+function jumpZone(services, pawn, reader, gravityOnly = false) {
+  const zone = services.regionZone(pawn);
+  if (!Array.isArray(zone?.gravity) || (!gravityOnly && (!Array.isArray(zone?.velocity) ||
+      typeof zone?.fluidFriction !== 'number')))
+    throw new Error(`${reader} requires the Region zone's ZoneGravity${gravityOnly ? '' : ', ZoneVelocity and ZoneFluidFriction'}`);
+  return zone;
+}
+
+/** A double-rounded x87 value as the binary64 number it stores. */
+const x87number = v => {
+  if (v.nan !== undefined) return NaN;
+  if (v.inf) return v.neg ? -Infinity : Infinity;
+  const x = Number(v.sig) * 2 ** v.exp;
+  return v.neg ? -x : x;
+};
+
+/**
+ * APawn::SuggestJumpVelocity 0x103c2c80 (SuggestJumpVelocity(Dest, FVector&
+ * Vel)). Vel.Z is the launch speed: step the arc in 0.05 s until it falls
+ * back through Dest.Z, correct the overshoot, then aim Vel's XY at Dest at
+ * min(XY / flightTime, GroundSpeed) and restore Vel.Z. Mutates `vel`.
+ */
+export function suggestJumpVelocity(pawn, dest, vel, services) {
+  let gravityZ = f32(jumpZone(services, pawn, 'SuggestJumpVelocity', true).gravity[2]);  // zone+0x324
+  if (!ltU(ld(gravityZ), ld(0))) gravityZ = -100;          // 0x103c2cc6 (0xc2c80000)
+  const loc = services.location(pawn);
+  const deltaZ = st(sub(ld(dest[2]), ld(loc[2])));          // [ebp-0x14]
+  const jumpZ = vel[2];                                     // [ebp-0x1c], raw bits
+  let flightTime = 0;                                       // [ebp+0x14]
+  let currentZ = ld(0);                                     // st0, never stored
+  let steps = 0;
+  while (gtU(currentZ, ld(deltaZ)) || gtU(ld(vel[2]), D0)) {  // 0x103c2cef / 0x103c2cfd
+    if (++steps > SUGGEST_JUMP_STEP_LIMIT)
+      throw new Error(`SuggestJumpVelocity flight-time loop passed ${SUGGEST_JUMP_STEP_LIMIT} steps (unbounded in the original)`);
+    const vz = x87add(x87mul(ld(gravityZ), D005), ld(vel[2]));  // 0x103c2e8d
+    vel[2] = st(vz);
+    flightTime = st(x87add(ld(flightTime), D005));
+    currentZ = x87add(x87mul(vz, D005), currentZ);          // the unstored sum
+  }
+  const vz = ld(vel[2]);
+  if (gtU(ltU(vz, ld(0)) ? x87neg(vz) : vz, D1))            // 0x103c2d23: |Vel.Z| > 1
+    flightTime = st(sub(ld(flightTime), x87div(sub(currentZ, ld(deltaZ)), vz)));
+  for (let i = 0; i < 3; i++) vel[i] = st(sub(ld(dest[i]), ld(loc[i])));  // 0x103c2d40
+  vel[2] = 0;                                               // 0x103c2d80
+  let speed;
+  if (gtU(ld(flightTime), D0)) {                            // 0x103c2d71
+    const xy = appSqrt(x87add(x87mul(ld(vel[1]), ld(vel[1])), x87mul(ld(vel[0]), ld(vel[0]))));
+    if (gtU(xy, ld(0))) {                                   // 0x103c2dad
+      const inv = x87div(D1, xy);                           // held extended
+      for (let i = 0; i < 3; i++) vel[i] = st(x87mul(inv, ld(vel[i])));
+    }
+    const ratio = x87div(xy, ld(flightTime));               // 0x103c2df0
+    const groundSpeed = ld(rd(services, pawn, 'GroundSpeed'));  // +0x378
+    speed = gtU(groundSpeed, ratio) ? ratio : groundSpeed;  // 0x103c2dfc
+  } else {
+    const n = x87safeNormal(vel);                           // 0x103c2e12
+    for (let i = 0; i < 3; i++) vel[i] = n[i];
+    speed = ld(rd(services, pawn, 'GroundSpeed'));
+  }
+  for (let i = 0; i < 3; i++) vel[i] = st(x87mul(speed, ld(vel[i])));  // 0x103c2e30
+  vel[2] = jumpZ;                                           // 0x103c2e48
+}
+
+/**
+ * APawn::jumpLanding 0x103c2530 (jumpLanding(testvel, FVector& Landing,
+ * moveActor)). Up to 36 test-moved 0.1 s ticks of zone gravity, fluid
+ * friction and zone velocity until a floor (Normal.Z > 0.7) or water; a
+ * wall slides once and a second wall runs TwoWallAdjust. Leaving the world
+ * (ZoneNumber 0), a 36th tick or speed² > 2500000 returns to the start.
+ * Writes Landing = Location; moveActor 0 restores the start afterwards.
+ */
+export function jumpLanding(pawn, testvel, landing, moveActorFlag, services) {
+  const origin = services.location(pawn).map(f32);         // [ebp-0x58..-0x50]
+  const t = ld(JUMP_TICK);                                  // [ebp-0x1c]
+  let v = testvel.map(f32), landed = 0, ticks = 0;
+  while (!landed) {                                         // 0x103c257f
+    const zone = jumpZone(services, pawn, 'jumpLanding');  // [esi+0xc8], read once
+    const g = zone.gravity.map(f32), zv = zone.velocity.map(f32);
+    const tgz = x87mul(t, ld(g[2]));                        // kept on the stack
+    const tgy = st(x87mul(t, ld(g[1]))), tgx = st(x87mul(t, ld(g[0])));
+    const k = sub(D1f, x87mul(t, ld(f32(zone.fluidFriction))));  // 1.0f - t*friction
+    const vzk = st(x87mul(ld(v[2]), k)), vyk = st(x87mul(ld(v[1]), k)), vxk = st(x87mul(ld(v[0]), k));
+    v = [st(x87add(ld(vxk), ld(tgx))), st(x87add(ld(vyk), ld(tgy))), st(x87add(ld(vzk), tgz))];
+    const adjusted = [                                      // [ebp-0x34..-0x2c]
+      st(x87mul(ld(st(x87add(ld(v[0]), ld(zv[0])))), t)),
+      st(x87mul(ld(st(x87add(ld(v[1]), ld(zv[1])))), t)),
+      st(x87mul(x87add(ld(v[2]), ld(zv[2])), t))];         // Z's sum unstored
+    // FCheckResult Hit(1.f), shared by the three moves; MoveActor's
+    // nearly-zero early return leaves it unwritten (as in swimMove).
+    let hit = { time: 1, normal: [0, 0, 0], actor: 0, item: -1 };
+    const move = delta => {
+      const result = moveActor(services, pawn, delta, rd(services, pawn, 'Rotation'));
+      if (!nearlyZero(delta)) hit = result;
+    };
+    move(adjusted);                                         // 0x103c26e4
+    if (services.regionZone(pawn).water) landed = 1;        // 0x103c26f0
+    else if (ltU(ld(hit.time), D1)) {                       // 0x103c2700
+      if (gtU(ld(hit.normal[2]), D07)) landed = 1;          // 0x103c2714
+      else {
+        const [ax, ay, az] = adjusted.map(ld);
+        const n = hit.normal.map(f32), oldNormal = n;       // [ebp-0xa0]
+        const dot = x87add(x87add(x87mul(ld(n[1]), ay), x87mul(ld(n[0]), ax)), x87mul(az, ld(n[2])));
+        const zS = st(sub(az, ld(st(x87mul(dot, ld(n[2]))))));
+        const yS = st(sub(ay, ld(st(x87mul(ld(n[1]), dot)))));
+        const xE = sub(ax, x87mul(dot, ld(n[0])));          // unstored
+        const rem = sub(D1, ld(hit.time));
+        const dz = st(x87mul(ld(zS), rem)), dy = st(x87mul(ld(yS), rem));
+        const dxE = x87mul(xE, rem);
+        let delta = [st(dxE), dy, dz];                      // [ebp-0x4c..-0x44]
+        const along = x87add(x87add(x87mul(az, ld(dz)), x87mul(ay, ld(dy))), x87mul(dxE, ax));
+        if (!ltU(along, ld(0))) {                           // 0x103c27c3
+          move(delta);                                      // 0x103c281f
+          if (ltU(ld(hit.time), D1)) {                      // 0x103c2828
+            if (gtU(ld(hit.normal[2]), D07)) landed = 1;    // 0x103c283c
+            delta = twoWallAdjust({ desired: x87safeNormal(adjusted), delta,
+              normal: hit.normal, oldNormal, time: hit.time });  // 0x103c287c
+            move(delta);                                    // 0x103c28c4
+            if (gtU(ld(hit.normal[2]), D07)) landed = 1;    // 0x103c28cd
+          }
+        }
+      }
+    }
+    ticks++;                                                // 0x103c28e1
+    const speedSq = x87add(x87add(x87mul(ld(v[0]), ld(v[0])), x87mul(ld(v[1]), ld(v[1]))),
+      x87mul(ld(v[2]), ld(v[2])));
+    if (!(rd(services, pawn, 'CollideFlag') & 0xff) || ticks > 35 || gtU(speedSq, ld(2500000))) {
+      farMove(services, pawn, origin);                      // 0x103c2945
+      landed = 1;
+    }
+  }
+  const at = services.location(pawn).map(f32);              // 0x103c2957
+  for (let i = 0; i < 3; i++) landing[i] = at[i];
+  if (!moveActorFlag) farMove(services, pawn, origin);      // 0x103c299e
+}
+
+/**
+ * APawn::FindBestJump 0x103c2f50 (FindBestJump(Dest, vel, FVector& Landing,
+ * moveActor)). Launch at JumpZ toward Dest, land through jumpLanding (the
+ * pawn stays there), and succeed when the jump gained more than 8 units of
+ * 3D distance to Dest without dropping 350 or more, landing in a mismatched
+ * pain zone, or in water without bCanSwim. Returns 0/1.
+ */
+export function findBestJump(pawn, dest, vel, landing, moveActorFlag, services) {
+  const real = services.location(pawn).map(f32);            // [ebp-0x40..-0x38]
+  const v = [f32(vel[0]), f32(vel[1]), f32(rd(services, pawn, 'JumpZ'))];  // vel.Z = +0x388
+  suggestJumpVelocity(pawn, dest, v, services);            // 0x103c2fb8
+  jumpLanding(pawn, v, landing, 1, services);              // 0x103c2fdb
+  const at = services.location(pawn).map(f32);
+  const old = [0, 1, 2].map(i => st(sub(ld(dest[i]), ld(real[i]))));
+  const dist = [0, 1, 2].map(i => st(sub(ld(dest[i]), ld(at[i]))));
+  const sizeSq = d => x87add(x87add(x87mul(ld(d[0]), ld(d[0])), x87mul(ld(d[1]), ld(d[1]))),
+    x87mul(ld(d[2]), ld(d[2])));
+  let success = 0;
+  const foot = services.footZone(pawn);                    // +0x330
+  if (foot.pain && foot.damageType !== rd(services, pawn, 'ReducedDamageType')) success = 0;
+  else if (!(rd(services, pawn, 'Flags318') & 0x4000) && services.regionZone(pawn).water) success = 0;
+  else {
+    const oldSize = st(appSqrt(sizeSq(old)));               // [ebp+0x20]
+    const netchange = st(sub(ld(oldSize), appSqrt(sizeSq(dist))));
+    if (ltU(sub(ld(real[2]), ld(at[2])), ld(350)))          // 0x103c30ce
+      success = gtU(ld(netchange), D8) ? 1 : 0;             // 0x103c30de
+    else services.logf?.({ source: 'APawn::FindBestJump', format: FBJ_FORMAT,  // 0x103c3156
+      args: [netchange, x87number(appSqrt(sizeSq(old))), st(appSqrt(sizeSq(dist))),
+        x87number(x87storeDouble(sub(ld(at[2]), ld(real[2])))), 0] });
+  }
+  if (!moveActorFlag) farMove(services, pawn, real);        // 0x103c3189
+  return success;
+}
+
 /**
  * walkReach worker 0x103c1b70.
  *   int walkReach(this=pawn; FVector point; float radius; int arg18; AActor* target)
@@ -537,8 +734,8 @@ export function flyReach(pawn, point, radius, reachFlags, target, services) {
  * and water gates, then a WarpZoneMarker fallback, restores Location+Velocity
  * through FarMoveActor, and returns `reached ? arg18 : 0`.
  *
- * Flying (0x103c1190) uses flyReach and swimming (0x103c15a0) swimReach
- * above. Jump arc (0x103c2f50) remains the services.altMove boundary.
+ * Flying (0x103c1190) uses flyReach, swimming (0x103c15a0) swimReach and
+ * jumping (0x103c2f50) findBestJump above.
  */
 export function walkReach(pawn, point, radius, arg18, target, services) {
   const origLoc = services.location(pawn).map(f32);        // [ebp-0x58/-0x54/-0x50]
@@ -643,7 +840,7 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
       else if (flags318 & 0x8000) {                        // bCanFly -> flyReach 0x103c1190
         const r = flyReach(pawn, point, radius, arg18, target, services);
         arg18 = r; reached = r; edi = 0;
-      } else if (flags318 & 0x1000) {                      // bCanJump -> arc 0x103c2f50
+      } else if (flags318 & 0x1000) {                      // bCanJump -> FindBestJump 0x103c2f50
         arg18 |= 8;
         if (edi === -1) {
           const u = x87safeNormal(flat);
@@ -651,9 +848,9 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
           const d = [st(x87mul(ld(gs), ld(u[0]))),
                      st(x87mul(ld(gs), ld(u[1]))),
                      st(x87mul(ld(gs), ld(u[2])))];
-          if (typeof services.altMove !== 'function')
-            throw new Error('walkReach requires the original jumpArc service (0x103c2f50)');
-          edi = services.altMove(pawn, d, point, gs);
+          // Landing ([ebp-0xcc]) is never read; the jump's moves use their
+          // own Hit, not the checkMove buffer behind hitbuf.
+          edi = findBestJump(pawn, point, d, [0, 0, 0], 1, services);  // 0x103c1f0a
         }
       } else if (edi === -1) {                             // ledge, no jump/swim
         if (gtU(ld(innerRadius), ld(maxStep))) { innerRadius = maxStep; edi = 1; }
@@ -1497,8 +1694,8 @@ function navSearchBFS(pawn, start, foundPtr, bSinglePath, mask, services) {
  * Entry: *found = 0; a null target, missing nav list (LevelInfo+0x548), or
  * an empty ReachSpec table (level+0x90) fails immediately.  A non-falling
  * pawn chasing a falling pawn (target IsA Pawn && target.Physics == 2)
- * delegates to the findPathTo worker through landPredict — an unported
- * boundary here.
+ * lands the target with jumpLanding and delegates to the findPathTo worker —
+ * an unported boundary here.
  *
  * The two candidate lists: `this` (pawn-side keys) and `other` (target-side
  * keys).  A NavigationPoint target pre-seeds `other`.  scoutA collects;
@@ -1523,12 +1720,13 @@ export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, 
   const pawnPhys = rd(services, pawn, 'Physics') | 0;       // pawn+0x30
   if (pawnPhys !== 4 && services.isA(target, 'Pawn') &&
       (rd(services, target, 'Physics') | 0) === 2) {        // PHYS_Falling
-    // 0x10303972: landPredict -> findPathTo worker (0x103dc1d0).
-    if (typeof services.landPredict !== 'function' ||
-        typeof services.findPathToWorker !== 'function')
-      throw new Error('FindPathToward falling-pawn delegation is unported (0x103c2530/0x103dc1d0)');
-    const out = [0, 0, 0];
-    services.landPredict(target, services.velocity(target), out);
+    // 0x103db4ec: Landing = target.Location; target->jumpLanding(
+    // target.Velocity, Landing, 0) (0x103db526), then the findPathTo worker
+    // (thunk 0x10303972 -> 0x103dc1d0) toward Landing, which is unported.
+    if (typeof services.findPathToWorker !== 'function')
+      throw new Error('FindPathToward falling-pawn delegation needs the unported findPathTo worker (0x103dc1d0)');
+    const out = services.location(target).map(f32);
+    jumpLanding(target, services.velocity(target), out, 0, services);
     return services.findPathToWorker(pawn, out, bSinglePath, found, bClearPaths);
   }
 

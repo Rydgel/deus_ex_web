@@ -190,8 +190,9 @@ boundary wait native 708 `AIDirectionReachable`, latent 506 `StrafeFacing` and
 `altMove`. Island is not playable past those seconds regardless of speed.
 Swimming physics (`APawn::performPhysics Physics=3`), once listed here, is now
 linked ([swimming](swimming.md)), and so is `waterMove` (`APawn::swimMove`,
-2026-09-29, [pawn navigation](script-pawn-nav.md)): the forward-walk workload
-now runs unbypassed until jumpArc at tick 1221 ([roadmap](roadmap.md)).
+2026-09-29, [pawn navigation](script-pawn-nav.md)), and so is the jump
+(`altMove`, `APawn::FindBestJump`): the forward-walk workload now runs
+unbypassed until native 708 at tick 1375 ([roadmap](roadmap.md)).
 
 To measure a *running* Island, two host tools apply the same measurement-only
 bypass (`scripts/bench-sim-hooks.mjs`): those throws become early returns. The

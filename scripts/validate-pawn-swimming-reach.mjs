@@ -327,7 +327,6 @@ function translatedSnapshot(s, mod) {
     fastLineCheck(model, end, start) {
       commands.push({op: 'fastLineCheck', end: end.map(bits), start: start.map(bits)}); return 1;
     },
-    altMove() { throw new Error('jumpArc is outside the verified swimming slice'); },
   };
   const point = t.point.map(f32), out = [0, 0, 0];
   const ret = s.body === 'waterMove' ? mod.swimMove(pawn, t.delta.map(f32), target, f32(t.scale), t.restore, services)

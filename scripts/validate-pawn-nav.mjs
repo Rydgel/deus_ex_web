@@ -1201,7 +1201,6 @@ function runJsWalk(scene, mod = module) {
       if (r) a.location = dest.map(f32);
       return r;
     },
-    altMove: () => { throw new Error('jumpArc is outside this corpus'); },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
   };
   const ret = scene.body === 'dispatch'
@@ -1349,9 +1348,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
       if (r) a.location = dest.map(f32);
       return r;
     },
-    altMove: () => { throw new Error('jumpArc is outside this corpus'); },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
-    landPredict: () => { throw new Error('landPredict is outside this corpus'); },
     findPathToWorker: () => { throw new Error('findPathToWorker is outside this corpus'); },
     pointRegion: pt => {
       const arr = prSeq || [{ zone: 'dry' }];

@@ -162,7 +162,6 @@ function translatedSnapshot(s, mod) {
       commands.push({op: 'fastLineCheck', end: end.map(bits), start: start.map(bits)}); return 1;
     },
     waterReach() { throw new Error('waterReach is outside the verified flying slice'); },
-    altMove() { throw new Error('jumpArc is outside the verified flying slice'); },
   };
   const point = t.point.map(f32);
   const ret = s.body === 'flyMove' ? mod.flyMove(pawn, t.delta.map(f32), target, f32(t.scale), t.restore, services)

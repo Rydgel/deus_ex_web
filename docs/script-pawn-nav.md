@@ -50,7 +50,10 @@ see the contract and verification below.  `AIPickRandomDestination` (709) and
 Swimming reach (`swimReachable`/`swimMove`) has its own 360-case
 original-DLL comparison; see the swimming contract below.
 
-Not yet oracle-verified: `jumpArc`, the
+Jumping (`FindBestJump`/`SuggestJumpVelocity`/`jumpLanding`) has its own
+363-case original-DLL comparison; see the jumping contract below.
+
+Not yet oracle-verified: the
 proximity-landing `appSqrt` arc, `FindRandomDest`, `FindPathTo`,
 `PickWallAdjust`, `FindStairRotation`.
 
@@ -97,7 +100,7 @@ Before implementing this slice, the installed, hash-verified Engine.dll was
 read again through `NavProbe`: thunk `0x10303c9c` jumps to `0x103c1190`, and
 thunk `0x1030326f` jumps to `0x103c3900`. The original unwind strings name
 these bodies `APawn::flyReachable` and `APawn::flyMove`. `0x10303422` instead
-jumps to the unported jump-arc worker `0x103c2f50`. The earlier notes calling
+jumps to `APawn::FindBestJump` `0x103c2f50` (see the jumping contract). The earlier notes calling
 `0x103c1190` a jump helper were wrong: Pawn.uc's packed flag order identifies
 `+0x318 & 0x8000` as `bCanFly`, `0x1000` as `bCanJump`, and `0x4000` as
 `bCanSwim`. Walk reach's blocked-flight branch calls the same flying body.
@@ -156,7 +159,7 @@ now preserves both. The probe's per-operation buffers were already reset, but
 its callsite ordering log accumulated earlier scenes; it now resets per scene
 as well. Raw argument-bit captures preserve signed zero and integer Rotation.
 
-Still unresolved: the jumpArc translation, actual level collision/
+Still unresolved (at the time): the jump translation, since done; actual level collision/
 zone service composition, and VM navigation dispatch. Accepted swimming
 handoffs, non-finite inputs and dynamically changing zones are not covered by
 this flying corpus; the swimming corpus below covers flyReachable's water
@@ -328,7 +331,220 @@ spot), which swim through physSwimming. The first runtime boundary is now tick
 `ActorReachable` (520) → actorWorker → dispatcher → walkReach, whose checkMove
 returns -1 for a bCanJump pawn → jumpArc `0x103c2f50`, reported as `walkReach
 requires the original jumpArc service (0x103c2f50)`
-(`scripts/validate-island-swimming.mjs`).
+(`scripts/validate-island-swimming.mjs`). The jumping contract below
+replaces that boundary.
+
+## Jumping contract recovered 2026-09-29 — `FindBestJump` / `SuggestJumpVelocity` / `jumpLanding`
+
+Read from the hash-verified Engine.dll before translation (listings:
+`.cache/nav-disasm/w_jumpArc.txt`, `w_suggestJumpVelocity.txt`, `w_jumpLanding.txt`,
+`w_jumpReachable.txt`, `w_findJumpUp.txt`). Thunk
+`0x10303422` jumps to `0x103c2f50`, the export
+`?FindBestJump@APawn@@QAEHVFVector@@0AAV2@H@Z`; its SEH unwind string
+`0x1043116c` reads `APawn::FindBestJump`. Its two callees are
+`?SuggestJumpVelocity@APawn@@QAEXVFVector@@AAV2@@Z` (thunk `0x103035a8` →
+`0x103c2c80`, unwind name `0x10431134`) and
+`?jumpLanding@APawn@@QAEXVFVector@@AAV2@H@Z` (thunk `0x103016ae` →
+`0x103c2530`, unwind name `0x104310e8`). The DX SDK 1112f `APawn.h` declares
+the same three signatures (`FindBestJump(FVector Dest, FVector vel, FVector
+&Landing, int moveActor)`, `jumpLanding(FVector testvel, FVector &Landing, int
+moveActor)`, `SuggestJumpVelocity(FVector Dest, FVector &Vel)`); `Reference/`
+has no `UnReach.cpp`, so every behavior below comes from the DLL. Earlier
+notes called `0x103c2f50` "jumpArc" and `0x103c2530` "landPredict".
+
+Callers: a rel32 scan of the whole image, a scan for the six addresses as
+data, and the import tables of every `System/*.dll`/`*.exe` (none imports
+them):
+
+| Callee | Call site | Caller | Arguments |
+| --- | --- | --- | --- |
+| FindBestJump | `0x103c1f0a` | walkReachable `0x103c1b70` | `(Dest, f32(GroundSpeed * SafeNormal(Direction)_i), &Landing, 1)` after checkMove returned −1 for a pawn with bCanJump and without bCanFly (Region.ZoneNumber nonzero); the result replaces the loop's `stillmoving`; Landing (`[ebp-0xcc]`) is never read |
+| SuggestJumpVelocity | `0x103c2fb8` | FindBestJump | `(Dest, &vel)` |
+| SuggestJumpVelocity | `0x103bc14e` | `execEAdjustJump` (native 523) `0x103bc110` | `(Destination +0x354, &v)` with `v = Velocity`; returns `v` |
+| jumpLanding | `0x103c2fdb` | FindBestJump | `(vel, Landing, 1)` |
+| jumpLanding | `0x103c23ed` | `jumpReachable` `0x103c2380` | `(Velocity, &Landing, 1)` |
+| jumpLanding | `0x103db526` | findPathToward worker `0x103db3f0` | `this` = a PHYS_Falling Pawn *target*: `(target.Velocity, Landing = target.Location, 0)`, then the findPathTo worker (thunk `0x10303972` → `0x103dc1d0`) toward Landing |
+| TwoWallAdjust `0x10323770` | `0x103c287c` | jumpLanding | `(DesiredDir, Delta, Hit.Normal, OldHitNormal, Hit.Time)` |
+
+`jumpReachable` (`0x103c2380`, thunk `0x103030f8`) and `FindJumpUp`
+(`0x103c2b20`, thunk `0x10303797`) are exported but never referenced; they are
+dead in this build and are not translated. (`jumpReachable` ORs R_JUMP, lands
+from Velocity with moveActor 1, returns 0 when Landing equals the start and
+otherwise walkReachable(Landing) plus a FarMoveActor(1,1) restore;
+`FindJumpUp` sets MaxStepHeight to 48 around one checkMove.)
+
+### `APawn::SuggestJumpVelocity(FVector Dest, FVector &Vel)` `0x103c2c80`
+
+`thiscall`, `ret 0x10`. No engine calls; Core `appSqrt` and
+`FVector::SafeNormal` only.
+
+1. `G = Region.Zone->ZoneGravity.Z` (`+0x324`); unless `G < 0.0f` (C0,
+   unordered included) `G = -100.0f`. `deltaZ = f32(Dest.Z - Location.Z)`,
+   `flightTime = 0.0f`, `jumpZ = Vel.Z` (raw bits), `currentZ = 0` held on the
+   x87 stack for the whole loop — never stored.
+2. While `currentZ > deltaZ` **or** `Vel.Z > 0.0` (both strictly greater and
+   ordered): `Vel.Z = f32(Vel.Z + G * 0.05)` (the extended sum stays on the
+   stack), `flightTime = f32(flightTime + 0.05)`, `currentZ += sum * 0.05`
+   using the unstored sum. `0.05` is the double at `0x10426d58`. There is no
+   iteration bound.
+3. When `|Vel.Z| > 1.0` (double, ordered): `flightTime = f32(flightTime -
+   (currentZ - deltaZ) / Vel.Z)` (overshoot correction; Vel.Z the stored f32).
+4. `Vel = f32(Dest - Location)` per component, then `Vel.Z = 0`.
+5. `flightTime > 0.0` (ordered): `XY = appSqrt(double(Vy² + Vx²))`; when
+   `XY > 0` (ordered) `inv = 1.0 / XY` stays extended and
+   `Vel_i = f32(inv * Vel_i)`. `ratio = XY / flightTime` (extended);
+   `speed = GroundSpeed > ratio` (ordered) `? ratio : GroundSpeed`.
+   Otherwise `Vel = SafeNormal(Vel)` and `speed = GroundSpeed` (`+0x378`).
+6. `Vel_i = f32(speed * Vel_i)`, then `Vel.Z = jumpZ` (the entry bits).
+
+So the incoming `Vel.X/Y` are ignored and `Vel.Z` is both the launch speed
+and the returned Z.
+
+### `APawn::jumpLanding(FVector testvel, FVector &Landing, int moveActor)` `0x103c2530`
+
+`thiscall`, `ret 0x14`. `OriginalPos = Location`, `landed = 0`, `ticks = 0`,
+`tickTime = 0.1f` (`0x3dcccccd`). While `!landed`:
+
+1. Read `Region.Zone` once: `g = ZoneGravity` (`+0x31c`), `zv = ZoneVelocity`
+   (`+0x328`), `f = ZoneFluidFriction` (`+0x338`). `k = 1.0f - t*f`
+   (extended). New velocity: `vx = f32(f32(vx*k) + f32(t*gx))`, `vy`
+   likewise, `vz = f32(f32(vz*k) + t*gz)` with `t*gz` **not** stored.
+   `Adjusted = (f32(f32(vx+zvx)*t), f32(f32(vy+zvy)*t), f32((vz+zvz)*t))`
+   — Z's sum again unstored.
+2. A fresh `FCheckResult Hit(1.f)`; `MoveActor(Adjusted, Rotation, Hit,
+   bTest=1, bIgnorePawns=1, 0, 0)`.
+3. Region.Zone water → `landed = 1`. Else, when `Hit.Time < 1.0` (C0,
+   unordered included): `Hit.Normal.Z > 0.7` (ordered) → `landed = 1`;
+   otherwise slide: `dot = (Ny*Ay + Nx*Ax) + Az*Nz`,
+   `Delta = (f32(dxE*rem), f32(f32(Ay - f32(Ny*dot))*rem),
+   f32(f32(Az - f32(dot*Nz))*rem))` with `dxE = Ax - dot*Nx` and
+   `rem = 1.0 - Hit.Time` extended; `OldHitNormal = Hit.Normal`. If
+   `(Az*Dz + Ay*Dy) + dxE*rem*Ax >= 0` (C0 clear; X uses the unstored
+   product) `MoveActor(Delta)`, and if that `Hit.Time < 1.0`:
+   `Normal.Z > 0.7` sets landed, then — landed or not —
+   `TwoWallAdjust(SafeNormal(Adjusted), Delta, Hit.Normal, OldHitNormal,
+   Hit.Time)`, `MoveActor(Delta)`, and `Normal.Z > 0.7` sets landed.
+   One Hit buffer serves the three moves (MoveActor's nearly-zero early
+   return leaves it unwritten, as in swimMove).
+4. `++ticks`; if `Region.ZoneNumber` (byte `+0xd0`) is 0, **or**
+   `ticks > 35`, **or** `(vx² + vy²) + vz² > 2500000.0f` (ordered; stored
+   components): `FarMoveActor(OriginalPos, 1, 1)` and `landed = 1` — even
+   when this tick had landed.
+5. After the loop `Landing = Location`; `moveActor == 0` adds
+   `FarMoveActor(OriginalPos, 1, 1)`. Velocity is never written.
+
+### `APawn::FindBestJump(FVector Dest, FVector vel, FVector &Landing, int moveActor)` `0x103c2f50`
+
+`thiscall`, `ret 0x20`:
+
+1. `realLocation = Location`; `vel.Z = JumpZ` (`+0x388`);
+   `SuggestJumpVelocity(Dest, vel)`; `jumpLanding(vel, Landing, 1)` — the
+   pawn stays at the landing spot.
+2. `olddist = f32(Dest - realLocation)`, `dist = f32(Dest - Location)`.
+3. `FootRegion.Zone` pain (`+0x388 & 0x20`) with `DamageType` (`+0x350`) ≠
+   `ReducedDamageType` (`+0x444`) → 0. Else no bCanSwim (`+0x318 & 0x4000`)
+   and `Region.Zone` water → 0.
+4. Else `odS = f32(appSqrt((ox²+oy²)+oz²))`, `dS = appSqrt((dx²+dy²)+dz²)`
+   (double), `netchange = f32(odS - dS)`. When `realLocation.Z - Location.Z
+   < 350.0f` (C0, unordered included) success is `netchange > 8.0` (double,
+   ordered). Otherwise success is 0 and `GLog->Logf("FAILING FBJ: nc %f from
+   odS %f and dS %f and dz %f success %d", netchange, appSqrt(old²),
+   f32(appSqrt(dist²)), Location.Z - realLocation.Z, 0)`.
+5. `moveActor == 0` restores `FarMoveActor(realLocation, 1, 1)`. Return
+   success (0/1).
+
+Constants: `0.1f` immediate, `1.0f` `0x10429c50`, `1.0` `0x104298a0`, `0.7`
+`0x1042adc0`, `0.0f` `0x10426d54`, `2500000.0f` `0x1042adb4`, `35`
+immediate; `-100.0f` immediate, `0.0` `0x10429838`, `0.05` `0x10426d58`;
+`350.0f` `0x104314cc`, `8.0` `0x104314c0`; format string `0x10481960`
+(UTF-16). No transcendental; `appSqrt`, SafeNormal, the FVector constructor
+and TwoWallAdjust run as original bodies in the oracle.
+
+State writes: Location only through MoveActor/FarMoveActor; the caller's
+`vel`/`Landing` buffers; no Velocity, Region or flag writes.
+
+Unresolved or unmodeled branches:
+
+- SuggestJumpVelocity's loop has no bound: a negative `G` whose `0.05` step
+  no longer changes the stored Vel.Z hangs the original. The translation
+  stops after 100000 iterations with an explicit error instead.
+- The `FAILING FBJ` line is a GLog side channel. Its arguments are compared
+  bit-exact; Play hands the event to the runtime log device, whose `%f` text
+  is JS `toFixed(6)`, not MSVCRT's printf (rounding ties unverified).
+- jumpLanding's TwoWallAdjust is the shared `steps.mjs` port, verified by
+  `validate-native-steps` and here only through the jump corpus.
+- The oracle's `+0xd0` ZoneNumber byte and FootRegion are static per scene;
+  Region.Zone follows the water plane. Non-finite inputs are not covered.
+- Native 523 `execEAdjustJump` and the findPathToward falling-target branch
+  (jumpLanding on a non-receiver target, then the unported findPathTo worker)
+  are not wired.
+
+### Verification (2026-09-29)
+
+The original cases were captured with
+`node scripts/validate-pawn-jump-reach.mjs --original-only` before the
+translation existed. `native-pawn-nav-probe.py` gained the three bodies, the
+ZoneInfo fields `ZoneGravity`/`ZoneVelocity`/`ZoneFluidFriction`, a
+`vecbufInit` in/out vector, and a capture of Core `FOutputDevice::Logf`
+(format string plus raw argument dwords, in the ordered call log). The
+probe's `jumpZ` scene key wrote `+0x408`; Pawn's `JumpZ` is `+0x388`
+(SDK `EngineClasses.h` order GroundSpeed, WaterSpeed, AirSpeed, AccelRate,
+JumpZ, MaxStepHeight at `+0x378..+0x38c`, and FindBestJump's read). No
+earlier scene used the key.
+
+`scripts/validate-pawn-jump-reach.mjs`: **363/363 original-DLL cases, 0
+mismatches** — 63 targeted and 300 seeded generated cases over
+SuggestJumpVelocity, jumpLanding, FindBestJump and their live callers
+(walkReach's −1 path, the dispatcher, pointReachable's and actorReachable's
+workers) — comparing 3729 ordered MoveActor/FarMoveActor/PointRegion/
+FastLineCheck/SingleLineCheck/Logf calls with raw argument bits, the return
+code, the out vector (Vel or Landing), final Location/Velocity bits and
+Region zone. **Every instruction of the three bodies executes**
+(FindBestJump 195/195, jumpLanding 359/359, SuggestJumpVelocity 163/163; the
+SEH funclets `0x103c31a4`, `0x103c29b7` and `0x103c2e5d..0x103c2e8d` are
+excluded). 23/23 targeted mutants are detected, among them the unstored
+`t*gz` and `currentZ` intermediates, the overshoot correction, the
+GroundSpeed/ratio choice, the 36th-tick restore, the speed² cap, the
+ZoneNumber gate, the slide gate, landing-without-stopping before
+TwoWallAdjust, Hit retention across a nearly-zero slide, JumpZ replacing
+vel.Z, the 350 drop limit, the 8.0 gain, both zone gates, both restores and
+the Logf argument bits. The translation, written from the contract above,
+matched all 359 cases of its first comparison.
+
+Play (`scripts/validate-island-jump-reach.mjs`, original Play, no bypass,
+bench-sim's forward-key workload): at tick 1221 PaulDenton0 (`RunningTo`,
+label `Follow`) asks `GetNextWaypoint(orderActor = the player)` →
+`ActorReachable` (520) → actorWorker → dispatcher → walkReach. Two
+128-unit checkMove steps succeed, the third runs off a ledge (−1), and
+FindBestJump launches toward the player at `[-4054, 10052, -256]`: six
+jumpLanding ticks fall from Z −256 to −373 into the bay's water zone, where
+jumpLanding stops (landed). FindBestJump returns 1 (a 117-unit gain toward
+the player, a 117-unit drop, water with bCanSwim); walkReach's water gate
+hands off to swimReachable, whose first swimMove (partial hit, up-step,
+blocked retry) leaves the water at Z −339; the walking exit fails its
+`(MaxStepHeight + Z) + 50 > Dest.Z` margin, so the verdict is **false**.
+`GetNextWaypoint` then calls FindPathToward (517) in the same tick →
+`PatrolPoint17`, Paul runs there, and at tick 1375 `ActorReachable(player)`
+is true without a jump. Island's next boundary is native 708 below.
+`pawnNavServices` reads the Region zone's `ZoneGravity`, `ZoneVelocity` and
+`ZoneFluidFriction` by name (missing fields throw rather than default) and
+hands the `FAILING FBJ` line to the runtime log device as `{text, tag: 'Log',
+tagIndex: 0x2f8}` — Core's `FOutputDevice::Logf` (`0x101453e0`) serializes
+with name 0x2f8, which Core registers as `Log` (`0x1014cd9d`). This run logs
+none. The findPathToward falling-target branch still throws, now naming only
+the unported findPathTo worker; once that worker exists, the branch lands the
+target through jumpLanding first, as the original does.
+
+Next boundary (not implemented): tick 1375 (22.92 s), PaulDenton0,
+`RunningTo`/`Follow` → `ScriptedPawn.GetNextVector(orderActor, useLoc)` →
+`AIDirectionReachable(Location, rot.Yaw, rot.Pitch, 0, 64, outVect)`, native
+708, reported by `script-doors.mjs` as `Unsupported original door native 708
+in scriptedpawn.getnextvector`. Its exec `?execAIDirectionReachable@APawn`
+(thunk `0x103022cf` → `0x103c8560`) evaluates six GNatives arguments and
+calls `?AIDirectionReachable@APawn` (thunk `0x103011d6` → `0x103c78a0`)
+with a literal `15.0f` — the body this document calls `aiPickSearch`,
+already ported and verified inside the 709 chain. The exec itself, its
+out-vector write and the Play binding are unverified.
 
 ## The walk/swim helper `0x103c1b70`
 
@@ -348,7 +564,7 @@ Per iteration, against `flat = (dx, dy, 0)` and `dz`:
   - Other results first test `pawn+0xd0`; a clear byte stops with failure.
     Otherwise `bCanFly` (`0x8000`) delegates to flyReach through `0x10303c9c`.
     Failing that, `bCanJump` (`0x1000`) accumulates reach bit 8 and, for return
-    `−1`, invokes `SafeNormal` + jumpArc through `0x10303422`. Without either
+    `−1`, invokes `SafeNormal` + FindBestJump through `0x10303422`. Without either
     capability, return `−1` retries only if the current step radius exceeds
     MaxStepHeight, clamping that radius to MaxStepHeight.
 - **Pain-zone gate** — `FootRegion.Zone` (`+0x330`) `+0x388` bit `0x20` set and
@@ -383,7 +599,7 @@ codes:
   `|loc−origLoc|²` reaches `scale²`; the caller keeps stepping.
 - **−1** — stepped/landed: the down-probe (`[0,0,−(maxStep+2)]`) came to rest
   on a floor (`hit.Normal.z ≥ 0.7`) or completed with the `flag` clear; the
-  walk helper then retries via the step-height/`jumpArc` alternate path.
+  walk helper then retries via the step-height/FindBestJump alternate path.
 - **0** — blocked and restored (`FarMoveActor` restore before return).
 
 `hit.Time == 1.0` (`qword [0x104298a0]`) selects the phase: a partial hit
@@ -517,7 +733,7 @@ Worker `0x103db3f0` (`thiscall pawn; target, bSinglePath, &found, bClearPaths`):
 
 1. Gates: `*found=0`; null target, absent `LevelInfo+0x548` nav list, or
    `ULevel+0x90 == 0` (empty ReachSpec table) → 0.  A falling target
-   (`Physics==2`) delegates through `landPredict` → the `findPathTo` worker
+   (`Physics==2`) lands the target through jumpLanding → the `findPathTo` worker
    `0x103dc1d0` — an explicit unported service boundary.
 2. `navScoutA` collects two sorted 32-slot candidate lists over the serialized
    nav chain: `listA` keyed by pawn-distSq (seeded by `MoveTarget` within
@@ -626,8 +842,8 @@ the real `?IsProbing@UObject@@QAEHVFName@@@Z` export (the `VFName` by-value
 mangling — the earlier `QBEH` lookup silently missed and let fabricated
 objects reach the real function).
 
-Remaining explicit boundaries: falling-target delegation (`landPredict` +
-the `findPathTo` worker) and `jumpArc` stay
+Remaining explicit boundaries: falling-target delegation (the `findPathTo`
+worker after jumpLanding; a non-receiver test move in Play) stays
 unported service seams — they throw rather than guess.
 
 ## `AIPickRandomDestination` native 709 — `execAIPickRandomDestination` `0x103c86f0`
@@ -715,7 +931,7 @@ Boundaries reached while wandering and their resolution:
   drops before Core `ProcessEvent` can dereference it.  The runtime now
   dispatches only on a real resolution — observable contract unchanged.
 
-Remaining explicit boundaries: `jumpArc`, and the ReachSpec BFS path workers stay unported; bark speech and
+Remaining explicit boundaries: the ReachSpec BFS path workers stay unported; bark speech and
 audible playback are Stage 4.
 
 ## Verification status
@@ -749,8 +965,8 @@ audible playback are Stage 4.
   diagonal, pain gate, water-no-swim gate, velocity restore) plus 2 mutants.
   The flying corpus additionally checks the `bCanFly` fallback into flyReach.
   Swimming `0x103c15a0` is covered by the swimming corpus. Jump arc
-  `0x103c2f50` still requires an unported service; the flag-free walking
-  scenes do not establish it.
+  `0x103c2f50` (FindBestJump) is covered by the jumping corpus, including
+  walkReach's −1 path.
 - `pointReachable` worker `0x103c0d30` — **ported to JS, bit-exact vs oracle**
   across 11 scenes (dry-to-dry reach, 1e6 distance gate, editor-skip, water
   gate, water+canSwim, pain gate, pain-immune, blocked LOS, arg14 LOS skip,
@@ -779,15 +995,19 @@ audible playback are Stage 4.
   140-scene corpus (35/35 mutants) and **dispatched live** through
   `invokeNative` → `pawnNavServices`; Training `Secretary0` patrols in Play
   mode (see the section above).  Falling-target delegation
-  (`landPredict`/`findPathTo`) remains an explicit unported service.
+  (jumpLanding on the target, then `findPathTo`) remains an explicit
+  unported service.
 - `swimMove` `0x103c3ca0` and `swimReachable` `0x103c15a0` — **ported to
   JS**, called by aiPickSearch mode 3, the dispatcher, flyReachable and
   walkReach, with **360/360 original-DLL cases, 9/9 mutants and every
   instruction of both bodies executed** in
   `scripts/validate-pawn-swimming-reach.mjs` (see the swimming contract).
-- The remaining helper (`0x103c2f50` jumpArc) is mapped but unported; Play
-  reports it as `walkReach requires the original jumpArc service`;
-  `FindRandomDest`/`FindPathTo` share the
+- `FindBestJump` `0x103c2f50`, `SuggestJumpVelocity` `0x103c2c80` and
+  `jumpLanding` `0x103c2530` — **ported to JS**, called by walkReach's −1
+  path in Play, with **363/363 original-DLL cases, 23/23 mutants and every
+  instruction of the three bodies executed** in
+  `scripts/validate-pawn-jump-reach.mjs` (see the jumping contract).
+- `FindRandomDest`/`FindPathTo` share the
   ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`)
   recovered at the field level — see the graph layout above.
 - `FindStairRotation` (524) is inline fp using the `GMath` sine table
@@ -799,9 +1019,12 @@ Focused checkpoint (2026-09-29, supersedes the earlier notes):
 15 original comparisons through VM/runtime dispatch;
 `validate-pawn-flying-reach.mjs` passes 30/30 cases and 6/6 mutants;
 `validate-pawn-swimming-reach.mjs` passes 360/360 cases, 9/9 mutants and full
-instruction coverage of swimMove/swimReachable; `npm test` passes 552/552. Natives 709 and 517 are live — the Training MIB
+instruction coverage of swimMove/swimReachable;
+`validate-pawn-jump-reach.mjs` passes 363/363 cases, 23/23 mutants and full
+instruction coverage of FindBestJump/SuggestJumpVelocity/jumpLanding;
+`npm test` passes 552/552. Natives 709 and 517 are live — the Training MIB
 wanders and `Secretary0` follows the PatrolPoint4↔PatrolPoint5 route in Play
 (`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
 Stage 3 remains unfinished. Remaining navigation implementation includes
-jumpArc and the ReachSpec path workers
+native 708's exec binding and the ReachSpec path workers
 `FindRandomDest`/`FindPathTo`.

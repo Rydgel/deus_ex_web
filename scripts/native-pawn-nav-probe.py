@@ -17,7 +17,8 @@ workers run zone gates, an optional eye trace, a test FarMoveActor, then
 dispatch on the destination zone / pawn Physics into three stepped-move
 helpers (walkReach 0x103c1b70, waterReach 0x103c15a0, flyReach 0x103c1190)
 that iterate up to 100 move-check probes (checkMove 0x103c3290,
-waterMove 0x103c3ca0, flyMove 0x103c3900, jumpArc 0x103c2f50).
+waterMove 0x103c3ca0, flyMove 0x103c3900, FindBestJump 0x103c2f50 with
+SuggestJumpVelocity 0x103c2c80 and jumpLanding 0x103c2530).
 
 Collision/movement subsystem is consumed, not reimplemented: every
 MoveActor (XLevel vtable +0x88), FarMoveActor (+0x8c) and SingleLineCheck
@@ -39,6 +40,11 @@ Optional controlled-world scene keys (the swimming slice, docs/script-pawn-nav.m
   moveNearlyZero            MoveActor's early return for a nearly-zero Delta with
                             an unchanged Rotation (no move, Hit untouched).
   coverage [[lo, hi], ...]  report executed instruction addresses in the ranges.
+  vecbufInit [x, y, z]      float32 contents of the 'vecbuf' scratch before the
+                            call (SuggestJumpVelocity's in/out FVector& Vel).
+Every GLog->Logf call (Core FOutputDevice::Logf, cdecl) is intercepted and
+recorded with its format string and the 9 raw argument dwords that follow it
+(FindBestJump's "FAILING FBJ" line); it is part of the ordered call log.
   disasm {name: [lo, hi]}   return the instruction addresses instead of running.
 
 Input: a JSON scene on argv[1].  Output: JSON command/result capture.
@@ -80,7 +86,10 @@ BODIES = {
     'walkReach': 0x103c1b70,
     'flyReach': 0x103c1190,
     'checkMove': 0x103c3290,
-    'jumpArc': 0x103c2f50,
+    'jumpArc': 0x103c2f50,             # APawn::FindBestJump (thunk 0x10303422)
+    'findBestJump': 0x103c2f50,
+    'jumpLanding': 0x103c2530,         # APawn::jumpLanding (thunk 0x103016ae)
+    'suggestJumpVelocity': 0x103c2c80, # APawn::SuggestJumpVelocity (thunk 0x103035a8)
     'flyMove': 0x103c3900,
     'waterMove': 0x103c3ca0,
     'FindRandomDest': 0x103bcb90,      # native 525 exec
@@ -614,6 +623,8 @@ class NavProbe:
         self.unwind_body = exports['core.dll'].get('?appUnwindf@@YAXPBGZZ')
         self.warnf_body = exports['core.dll'].get('?appWarnf@@YAXPBGZZ')
         self.probing_body = exports['core.dll'].get('?IsProbing@UObject@@QAEHVFName@@@Z')
+        self.logf_body = exports['core.dll'].get('?Logf@FOutputDevice@@QAAXPBGZZ')
+        self.logf_log = []
         if self.isa_body:
             cpu.mem_write(self.isa_body, isa_stub())
         self.missed_oracles = []
@@ -669,6 +680,25 @@ class NavProbe:
             raise ProbeError(f'appFailAssert fired; trace {self.trace[-12:]}')
         if address == self.unwind_body:
             raise ProbeError(f'appUnwindf fired; trace {self.trace[-12:]}')
+        if address == self.logf_body:
+            # FOutputDevice::Logf(this, fmt, ...) is cdecl: record the format
+            # string and the 9 dwords after it, then return to the caller.
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            site = self.read(esp, 'I')[0]
+            fmt = self.read(esp + 8, 'I')[0]
+            text, o = [], fmt
+            while len(text) < 256:
+                c = self.read(o, 'H')[0]
+                if not c:
+                    break
+                text.append(chr(c))
+                o += 2
+            self.logf_log.append({'site': '%x' % site, 'format': ''.join(text),
+                                  'args': ['%08x' % w for w in self.read(esp + 12, '9I')]})
+            self.callsite_log.append(('logf', site))
+            cpu.reg_write(UC_X86_REG_EIP, site)
+            cpu.reg_write(UC_X86_REG_ESP, esp + 4)
+            return
         if address == self.warnf_body or address == self.probing_body:
             # Variadic warn / IsProbing(FName): consume one stack arg, eax=scripted.
             esp = cpu.reg_read(UC_X86_REG_ESP)
@@ -816,14 +846,21 @@ class NavProbe:
     }
 
     def zone(self, spec):
-        """Fabricated ZoneInfo: +0x324 gravityZ, +0x350 damageType dword,
-        +0x388 flags byte (bit0 water, bit0x20 pain)."""
+        """Fabricated ZoneInfo: +0x31c ZoneGravity (gravityZ at +0x324),
+        +0x328 ZoneVelocity, +0x338 ZoneFluidFriction, +0x350 damageType
+        dword, +0x388 flags byte (bit0 water, bit0x20 pain)."""
         z = self.alloc(0x480)
         self.write(z + 0x388, 'B', spec.get('flags388', 0)
                  | (1 if spec.get('water') else 0)
                  | (0x20 if spec.get('pain') else 0))
         self.write(z + 0x350, 'I', spec.get('damageType', 0))
         self.write(z + 0x324, 'f', spec.get('gravityZ', -950.0))
+        if 'gravity' in spec:
+            self.write(z + 0x31c, '3f', *spec['gravity'])
+        if 'zoneVelocity' in spec:
+            self.write(z + 0x328, '3f', *spec['zoneVelocity'])
+        if 'fluidFriction' in spec:
+            self.write(z + 0x338, 'f', spec['fluidFriction'])
         return z
 
     def region(self, zone_addr, leaf=0, num=0):
@@ -854,7 +891,7 @@ class NavProbe:
                          ('desiredSpeed', 0x36c), ('maxDesiredSpeed', 0x370),
                          ('meleeRange', 0x374), ('groundSpeed', 0x378),
                          ('waterSpeed', 0x37c), ('airSpeed', 0x380),
-                         ('accelRate', 0x384), ('jumpZ', 0x408)]:
+                         ('accelRate', 0x384), ('jumpZ', 0x388)]:
             if key in spec:
                 self.write(obj + off, 'f', spec[key])
         for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
@@ -930,6 +967,7 @@ class NavProbe:
         # vtable/stub/record-buffer allocations) so batches stay bounded.
         self.free = self.heap_mark
         self.callsite_log = []
+        self.logf_log = []
         self.water_plane = None
         self.move_nearly_zero = bool(scene.get('moveNearlyZero'))
         self.coverage_ranges = [(int(lo, 16), int(hi, 16)) for lo, hi in scene.get('coverage', [])]
@@ -1090,6 +1128,8 @@ class NavProbe:
         # FVector outs).  Referenced from directArgs as e.g. 'hitbuf'.
         for name, size in [('hitbuf', 64), ('vecbuf', 64), ('scratch', 256), ('foundbuf', 16)]:
             refs[name] = self.alloc(size)
+        if 'vecbufInit' in scene:
+            self.write(refs['vecbuf'], '3f', *scene['vecbufInit'])
 
         # Deferred hit records — 'actor' resolves named refs now that every
         # object exists.  Resolve a name once so the padded tail shares it.
@@ -1300,6 +1340,7 @@ class NavProbe:
             'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
             'levelAddress': lvl,
             'missedOracles': self.missed_oracles,
+            'logf': self.logf_log,
             'coverage': ['%x' % a for a in sorted(self.covered)],
         }
 

@@ -14,8 +14,9 @@
  *    completes through the original swimMove and finds a destination, the
  *    fish generators spawn their fish, and scouts and fish run physSwimming.
  *    The run ends at the first runtime boundary, which is no longer swimming
- *    navigation: PaulDenton0's GetNextWaypoint asks actorReachable (native
- *    520), whose walkReach needs the unported jumpArc (0x103c2f50).
+ *    navigation (nor, since FindBestJump was translated, the jump at tick
+ *    1221; see validate-island-jump-reach): PaulDenton0's GetNextVector calls
+ *    the unwired native 708 AIDirectionReachable.
  *  - exit and entry: original Play, no bypass, idle, with fixture setup at
  *    tick 20 (setup only). exit: GeneratorScout4 (no AI; its generator stays
  *    inactive while idle) placed in open water with Mass 100 / Buoyancy 150 /
@@ -57,10 +58,10 @@ if (!part) {
     'both water generators near the player spawned fish');
   assert.ok(unmodified.fishSwimCalls > 0, 'the spawned fish run physSwimming');
   // 2. The first runtime boundary without any bypass.
-  assert.ok(unmodified.firstError.tick > 1000, `no boundary in the bench window (${unmodified.firstError.tick})`);
-  assert.match(unmodified.firstError.message, /jumpArc service \(0x103c2f50\)/);
+  assert.ok(unmodified.firstError.tick > 1221, `no boundary in the bench window or at the former jump (${unmodified.firstError.tick})`);
+  assert.match(unmodified.firstError.message, /native 708/);
   const { index, receiver, function: caller } = unmodified.firstError.lastNavNative;
-  assert.deepEqual({ index, receiver, caller }, { index: 520, receiver: 'PaulDenton0', caller: 'GetNextWaypoint' });
+  assert.deepEqual({ index, receiver, caller }, { index: 708, receiver: 'PaulDenton0', caller: 'GetNextVector' });
   // 3. Real water: exit through findWaterLine/setPhysics(Falling), and entry
   // through ScriptedPawn.ZoneChange and the physFalling hand-off.
   const exit = water.exit;

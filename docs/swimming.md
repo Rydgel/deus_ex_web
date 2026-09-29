@@ -264,8 +264,9 @@ result is discarded.
   - **unmodified**, no bypass, forward key: GeneratorScout4/5 run physSwimming
     every tick and hold still, all 20 of their AIPickRandomDestination calls
     find a destination through the original swimMove, and 20 spawned fish
-    swim. The first boundary is jumpArc at tick 1221 (PaulDenton0's
-    ActorReachable), not swimming.
+    swim. The first boundary is no longer swimming: it was the jump at tick
+    1221 (PaulDenton0's ActorReachable), now translated, and is native 708
+    at tick 1375 ([pawn navigation](script-pawn-nav.md)).
   - **exit**, no bypass, fixture setup at tick 20: GeneratorScout4 is given
     Mass 100, Buoyancy 150 and DesiredSpeed 1 in open water. It swims up for
     41 ticks and leaves the water at Z -351.57 against a surface at -353: Swim
