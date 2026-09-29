@@ -13,10 +13,11 @@
  *    call GeneratePawn within 30 s). Every scout AIPickRandomDestination
  *    completes through the original swimMove and finds a destination, the
  *    fish generators spawn their fish, and scouts and fish run physSwimming.
- *    The run ends at the first runtime boundary, which is no longer swimming
- *    navigation (nor, since FindBestJump was translated, the jump at tick
- *    1221; see validate-island-jump-reach): PaulDenton0's GetNextVector calls
- *    the unwired native 708 AIDirectionReachable.
+ *    No runtime boundary is reached in its 1400-tick window: not swimming
+ *    navigation, nor (since FindBestJump and native 708 were translated) the
+ *    tick-1221 jump or PaulDenton0's tick-1375 GetNextVector
+ *    AIDirectionReachable. The next boundary (tick 1872, ConSys native 2051)
+ *    is reported by validate-island-jump-reach.
  *  - exit and entry: original Play, no bypass, idle, with fixture setup at
  *    tick 20 (setup only). exit: GeneratorScout4 (no AI; its generator stays
  *    inactive while idle) placed in open water with Mass 100 / Buoyancy 150 /
@@ -57,11 +58,11 @@ if (!part) {
   assert.ok(unmodified.generators.filter(g => /0$/.test(g.name)).every(g => g.pawnCount > 0),
     'both water generators near the player spawned fish');
   assert.ok(unmodified.fishSwimCalls > 0, 'the spawned fish run physSwimming');
-  // 2. The first runtime boundary without any bypass.
-  assert.ok(unmodified.firstError.tick > 1221, `no boundary in the bench window or at the former jump (${unmodified.firstError.tick})`);
-  assert.match(unmodified.firstError.message, /native 708/);
-  const { index, receiver, function: caller } = unmodified.firstError.lastNavNative;
-  assert.deepEqual({ index, receiver, caller }, { index: 708, receiver: 'PaulDenton0', caller: 'GetNextVector' });
+  // 2. No runtime boundary without any bypass in the window: the former jump
+  // (tick 1221) and AIDirectionReachable (tick 1375) boundaries both run.
+  assert.equal(unmodified.firstError, null,
+    `no boundary within ${unmodified.ticks} ticks (${unmodified.firstError?.tick}: ${unmodified.firstError?.message})`);
+  assert.ok(unmodified.ticks > 1375, 'the window covers the former 708 boundary');
   // 3. Real water: exit through findWaterLine/setPhysics(Falling), and entry
   // through ScriptedPawn.ZoneChange and the physFalling hand-off.
   const exit = water.exit;
@@ -75,7 +76,7 @@ if (!part) {
   assert.equal(entry.physics, 3);
   assert.equal(entry.regionWater, true);
   const summary = {
-    unmodified: { firstBoundary: unmodified.firstError, seconds: +(unmodified.firstError.tick / 60).toFixed(3),
+    unmodified: { firstBoundary: unmodified.firstError, ticks: unmodified.ticks, seconds: +(unmodified.ticks / 60).toFixed(3),
       scouts: unmodified.scouts, generators: unmodified.generators, fishSwimCalls: unmodified.fishSwimCalls,
       player: unmodified.player },
     exit: { ...exit, firstError: water.firstError }, entry: { ...entry, nextBoundary: dive.firstError },
@@ -173,7 +174,7 @@ const generators = () => level.actors.filter(a => /^Fish2?Generator[01]$/.test(a
 if (part === 'unmodified') {
   while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 1400)) step();
   const fishSwimCalls = [...calls].filter(([k]) => /^Fish2?\d+\.swimming$/.test(k)).reduce((s, [, n]) => s + n, 0);
-  console.log(JSON.stringify({ firstError, scouts: scoutState(), fishSwimCalls, generators: generators(),
+  console.log(JSON.stringify({ firstError, ticks: tick, scouts: scoutState(), fishSwimCalls, generators: generators(),
     player: read(game.player.collisionActor, 'Location').map(Math.round) }));
 } else if (part === 'exit') {
   for (let i = 0; i < 20; i++) step();

@@ -36,7 +36,9 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     findStairRotation:Object.freeze({ index: 524, thunk: 0x10303111, body: 0x103bb880 }),
     findRandomDest:   Object.freeze({ index: 525, thunk: 0x103014f1, body: 0x103bcb90, worker: 0x103dc700 }),
     pickWallAdjust:   Object.freeze({ index: 526, thunk: 0x10303968, body: 0x103bb7e0, worker: 0x103c4150 }),
-    aiPickRandomDestination: Object.freeze({ index: 709, thunk: 0x1030181b, body: 0x103c86f0, worker: 0x103c7fc0 }),
+    aiDirectionReachable:    Object.freeze({ index: 708, thunk: 0x103022cf, body: 0x103c8560, worker: 0x103c78a0 }),
+    // 709's exec thunk; 0x1030181b is the worker's (APawn::AIPickRandomDestination).
+    aiPickRandomDestination: Object.freeze({ index: 709, thunk: 0x103029b9, body: 0x103c86f0, worker: 0x103c7fc0 }),
   }),
   // Shared workers beneath the exec bodies.
   workers: Object.freeze({
@@ -1100,7 +1102,7 @@ export function actorReachable(pawn, target, services) {
 }
 
 // ---------------------------------------------------------------------------
-// AIPickRandomDestination — native 709 (exec 0x103c86f0, thunk 0x1030181b).
+// AIPickRandomDestination — native 709 (exec 0x103c86f0, thunk 0x103029b9).
 // The exec evaluates nine args into 4-byte slots (Dir arrives as two ints,
 // not a rotator) and invokes worker 0x103c7fc0, which loops the random
 // direction helper 0x1036d030 + band search 0x103c78a0 up to `tries` times.
@@ -1307,6 +1309,28 @@ export function execAiPickRandomDestination(receiver, args, dest, services) {
     args[4] | 0, f32(args[5]), args[6] | 0, f32(args[7]), sink, services);
   if (sink && !Array.isArray(dest)) dest.set(sink);
   return found;
+}
+
+/**
+ * exec body 0x103c8560 — native(708) AIDirectionReachable (thunk 0x103022cf).
+ * The exec evaluates six slots in declaration order (vector focus, int yaw,
+ * int pitch, float minDist, float maxDist, out vector bestDest), steps over
+ * EX_EndFunctionParms and calls APawn::AIDirectionReachable 0x103c78a0 (the
+ * band search aiPickSearch) with the literal 15.0f, storing eax in *Result.
+ * `dest` is the evaluated out argument: a {reference, set} lvalue receives the
+ * body's write (the exec passes GPropAddr); any other value stands for the
+ * exec's temp, whose write is dead. The body's mode-0 early return leaves
+ * *bestDest untouched, so the lvalue is set only when the body wrote it.
+ * No receiver, null or GIsEditor check of its own (the body asserts !GIsEditor).
+ * Contract and evidence: docs/script-pawn-nav.md "AIDirectionReachable native 708".
+ */
+export function execAiDirectionReachable(receiver, focus, yaw, pitch, minDist, maxDist, dest, services) {
+  const sink = [undefined, undefined, undefined];         // *bestDest (GPropAddr or temp)
+  const found = aiPickSearch(receiver, focus.map(f32), yaw | 0, pitch | 0,
+    f32(minDist), f32(maxDist), 15.0, sink, services);
+  const written = sink[0] !== undefined;                  // 0x103c7dba, not 0x103c7b71
+  if (dest && typeof dest.set === 'function' && written) dest.set(sink);
+  return found !== 0;                                     // *(DWORD*)Result = eax
 }
 
 // ---------------------------------------------------------------------------

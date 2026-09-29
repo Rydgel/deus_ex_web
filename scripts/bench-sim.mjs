@@ -13,8 +13,8 @@
  *     [--digest-every 0] [--json out.json] [--dump fields.txt]
  *
  * --continue returns the declared zero value from unsupported natives (as the
- * census does) and --bypass skips the few non-native boundaries listed in
- * bench-sim-hooks.mjs. Both change behavior after the first boundary; use them
+ * census does) and --bypass skips the boundaries listed in bench-sim-hooks.mjs
+ * (currently none). Both change behavior after the first boundary; use them
  * only for timing and for A/B digests where both sides use the same flags.
  * Tick errors are counted and the run continues; they are part of the digest.
  */

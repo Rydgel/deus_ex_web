@@ -61,7 +61,7 @@ import {
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
 import { moveSmooth } from './move-smooth.mjs';
-import { execAiPickRandomDestination, execFindPathToward, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
+import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -3387,6 +3387,19 @@ export class ScriptRuntime {
       for(let i=0;i<8;i++)args.push(refValue(call.evaluateArgument(i)));
       return execAiPickRandomDestination(call.receiver,args,call.evaluateArgument(8),
         this.pawnNavServices(call.receiver));
+    }
+    if(call.index===708){
+      // execAIDirectionReachable 0x103c8560 (docs/script-pawn-nav.md): six
+      // slots evaluated in declaration order, then APawn::AIDirectionReachable
+      // 0x103c78a0 (the band search 709 uses) with the literal 15.0f. The exec
+      // has no receiver check of its own; bestDest keeps its reference
+      // (P_GET_VECTOR_REF's GPropAddr) so the body writes the caller's vector.
+      if(call.argumentCount!==6)throw new Error('AIDirectionReachable requires six arguments');
+      const [focus,yaw,pitch,minDist,maxDist]=[0,1,2,3,4].map(i=>refValue(call.evaluateArgument(i)));
+      const dest=call.evaluateArgument(5);
+      if(!Array.isArray(focus)||focus.length!==3)throw new Error('AIDirectionReachable requires an FVector focus');
+      return execAiDirectionReachable(call.receiver,focus,yaw|0,pitch|0,Math.fround(minDist),Math.fround(maxDist),
+        dest,this.pawnNavServices(call.receiver));
     }
     if(call.index===717){
       // execRandomBiasedRotation 0x1036dc90 evaluates (int centralYaw, float

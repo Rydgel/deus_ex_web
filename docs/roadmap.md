@@ -448,13 +448,14 @@ consumables, skills, augmentations/energy, lockpicking, electronics, and compute
 hacking. Support dialogue choices, trading, objectives, notes, mission flags, and
 scripted/cinematic events using original game data and behavior.
 
-**Open Liberty Island blockers, bypassed only for performance runs.** Within
-about 20 seconds of Player start, UNATCO Island reaches unimplemented original
-paths, and Play pauses there by design. `bench-sim --bypass`,
-`profile-play-browser --bypass` and local timing copies rewrite them into early
-returns (`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior:
-frames after it are only a timing workload. Each bypass patch is removed when
-its behavior lands.
+**Open Liberty Island blockers, bypassed only for performance runs.** UNATCO
+Island reaches unimplemented original paths after Player start, and Play
+pauses there by design. `bench-sim --bypass`, `profile-play-browser --bypass`
+and local timing copies rewrite listed ones into early returns
+(`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior: frames
+after it are only a timing workload. Each bypass patch is removed when its
+behavior lands; since native 708 (item 4) the list is empty, and the
+forward-walk workload runs unbypassed to tick 1872 (31.2 s, item 6).
 
 1. ~~**Swimming.**~~ Done ([swimming](swimming.md)): startSwimming
    `0x103d2b70`, physSwimming `0x103d3cd0`, Swim `0x103d3850` and
@@ -508,20 +509,55 @@ its behavior lands.
    360-tick bench workload never reaches it: both maps' digests are unchanged
    (Training `04f77dc631509ae4`, Island `340b445c6e983b80`, JS and Rust equal
    at all 30 checkpoints, `errors {}`).
-4. **Native 708, `AIDirectionReachable`** is now the first boundary without a
-   bypass: tick 1375 (22.92 s), PaulDenton0 in `RunningTo`/`Follow`, after
-   `ActorReachable(player)` succeeds, calls `ScriptedPawn.GetNextVector` →
-   `AIDirectionReachable(Location, Yaw, Pitch, 0, 64, outVect)`:
-   `Unsupported original door native 708 in scriptedpawn.getnextvector`
-   (`validate-island-jump-reach`, `validate-island-swimming`). The exec
-   `0x103c8560` calls `APawn::AIDirectionReachable` `0x103c78a0` — the body
-   the navigation notes call `aiPickSearch`, already ported and verified in
-   the 709 chain — with a literal 15.0f; the exec and its binding are not.
-   Latent 506 `StrafeFacing` is not reached in those 1375 ticks. bench-sim
-   keeps its 708 early return (the only remaining patch).
+4. ~~**Native 708, `AIDirectionReachable`**~~ Done
+   ([pawn navigation](script-pawn-nav.md#aidirectionreachable-native-708--execaidirectionreachable-0x103c8560)):
+   the exec `0x103c8560` evaluates `(vector focus, int yaw, int pitch, float
+   minDist, float maxDist, out vector bestDest)`, resolves `bestDest` through
+   GPropAddr, and calls `APawn::AIDirectionReachable` `0x103c78a0` — the band
+   search 709 already uses — with a literal 15.0f the body never reads, then
+   stores the verdict dword. `validate-pawn-direction-reach` passes 285/285
+   original-DLL cases through both the translated exec and Play's VM binding
+   (0 mismatches, 8/8 mutants), executing every reachable instruction of the
+   exec (111/111) and the band search (405/405). In unbypassed Play the
+   former boundary at tick 1375 (PaulDenton0's `GetNextVector` after
+   `ActorReachable(player)`) finds a step, and all eight GetNextVector calls
+   through tick 1810 succeed as Paul follows the player
+   (`validate-island-jump-reach`; `validate-island-swimming`'s 1400-tick run
+   reaches no boundary). bench-sim's 708 `return false`, the last bypass
+   patch, is removed; `--bypass` keeps its mechanism with an empty list. The
+   360-tick bench workload never reached 708: both digests are unchanged
+   (Training `04f77dc631509ae4`, Island `340b445c6e983b80`, JS and Rust VMs
+   equal at all 30 checkpoints, `errors {}`).
 5. Non-Pawn actors falling through water still integrate dry (five breakable
    crates in an Island water zone, [swimming](swimming.md#unsupported-and-unresolved));
    this is a silent substitute, not a stopping boundary.
+6. **Native 2051, `Conversation.CreateConCamera`** is now the first boundary
+   without a bypass: tick 1872 (31.20 s). With PaulDenton0 about 180 units
+   from the player, his conversation `MeetPaul` (`Conversation115`,
+   third-person: `bFirstPerson=False`) starts through
+   `ConPlay0.StartConversation`; after ConPlayBase's `BindEvents` (2052) the
+   third-person branch calls `con.CreateConCamera()`: `Unsupported original
+   door native 2051 in conplay.startconversation`
+   (`validate-island-jump-reach`). Research note: ConSys.dll (SHA-256
+   `f20c4d8904d17057318999c18673d82e2ccc3f7c1041eb3c0327eb731b3a8efa`)
+   registers `GRegisterNative(0x803, …)` at `0x10010760` to
+   `DConversation::execCreateConCamera` `0x100106f0` (30 instructions): P_FINISH,
+   `UObject::CreatePackage(NULL, L"DeusEx")`, `DConCamera::operator new`
+   (`0x10003d10`: `StaticAllocateObject(DConCamera::StaticClass()
+   0x1001e1d8, package, NAME_None, RF_Public, …)`, size `0x84`), the
+   constructor `DConCamera::DConCamera()` `0x10003ce0` (UObject ctor, vtable
+   `0x10013610`, `+0x28 = 0`), then `*Result` = the object (0 on a failed
+   allocation). The exec is thin, but it needs a package-outer, non-Actor
+   `StaticAllocateObject` with a generated `ConCamera<N>` name — outside the
+   recovered Spawn construction contract ([construction](script-construction.md)
+   covers Actor.Spawn's `StaticConstructObject`) — and it opens the
+   third-person conversation presentation: ConCamera's 1141-line script
+   (`InitializeCameraValues`, per-tick camera placement), `ConWindowActive`
+   and the HUD hide, which the Stage 3 census classifies as Stage 4
+   ("conversation camera behavior", [exit criteria](stage-3-exit-criteria.md)).
+   It is not a thin exec over ported navigation bodies, so it is not
+   implemented here. Latent 506 `StrafeFacing` is still not reached in these
+   1872 ticks.
 
 Done when training and Liberty Island support representative combat, stealth,
 exploration, conversation, and alternate-route objectives, with the systems

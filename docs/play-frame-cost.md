@@ -191,8 +191,10 @@ boundary wait native 708 `AIDirectionReachable`, latent 506 `StrafeFacing` and
 Swimming physics (`APawn::performPhysics Physics=3`), once listed here, is now
 linked ([swimming](swimming.md)), and so is `waterMove` (`APawn::swimMove`,
 2026-09-29, [pawn navigation](script-pawn-nav.md)), and so is the jump
-(`altMove`, `APawn::FindBestJump`): the forward-walk workload now runs
-unbypassed until native 708 at tick 1375 ([roadmap](roadmap.md)).
+(`altMove`, `APawn::FindBestJump`), and so is native 708
+(`AIDirectionReachable`): the forward-walk workload now runs unbypassed until
+ConSys native 2051 (the third-person conversation camera) at tick 1872, and
+the bypass list below is empty ([roadmap](roadmap.md)).
 
 To measure a *running* Island, two host tools apply the same measurement-only
 bypass (`scripts/bench-sim-hooks.mjs`): those throws become early returns. The

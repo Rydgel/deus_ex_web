@@ -11,6 +11,7 @@ Recovered bodies (Engine.dll image base 0x10300000):
   FindPathTo(518)       exec 0x103bc800 -> 0x103dc1d0
   PickWallAdjust(526)   exec 0x103bb7e0 -> 0x103c4150
   FindStairRotation(524) exec 0x103bb880 (inline fp)
+  AIDirectionReachable(708) exec 0x103c8560 -> band search 0x103c78a0
 
 The reachability core is a stepped-walk graph primitive: the point/actor
 workers run zone gates, an optional eye trace, a test FarMoveActor, then
@@ -46,6 +47,9 @@ Every GLog->Logf call (Core FOutputDevice::Logf, cdecl) is intercepted and
 recorded with its format string and the 9 raw argument dwords that follow it
 (FindBestJump's "FAILING FBJ" line); it is part of the ordered call log.
   disasm {name: [lo, hi]}   return the instruction addresses instead of running.
+  resultInit dword          sentinel in the exec's RESULT_DECL slot before the call.
+  gPropAddr ref|0           stale Core GPropAddr before the call (P_GET_*_REF resets it).
+Exec scenes also report codeConsumed, the script bytes the exec stepped over.
 
 Input: a JSON scene on argv[1].  Output: JSON command/result capture.
 Optional research tool; inputs and results stay local.
@@ -109,6 +113,9 @@ BODIES = {
     'aiPickWorker': 0x103c7fc0,        # thiscall(pawn; 9 args) -> bool
     'aiPickSearch': 0x103c78a0,        # stepped-move band search
     'aiDirection': 0x1036d030,         # biased random rotator helper
+    # AIDirectionReachable (708): exec -> the band search above, which is
+    # APawn::AIDirectionReachable (thunk 0x103011d6), with a literal 15.0f.
+    'aiDirectionReachableExec': 0x103c8560,  # native 708 exec (thunk 0x103022cf)
 }
 
 # Engine IAT slot for Core's appFrand — patched to a scripted queue for the
@@ -1191,6 +1198,15 @@ class NavProbe:
         self.write(frame + 0x8, 'I', pawn)
         self.write(frame + 0xc, 'I', code)
         result_out = self.alloc(16)
+        # Optional exec-frame state: a sentinel in the result slot (so an
+        # unwritten result is visible) and a stale Core GPropAddr value left by
+        # an earlier lvalue evaluation (a named ref, or 0).
+        if 'resultInit' in scene:
+            self.write(result_out, 'I', scene['resultInit'] & 0xffffffff)
+        if 'gPropAddr' in scene:
+            stale = scene['gPropAddr']
+            self.write(self.read(GPROPADDR, 'I')[0], 'I',
+                       refs.get(stale, 0) if isinstance(stale, str) else stale)
 
         body = BODIES[scene['body']]
         direct_args = scene.get('directArgs')
@@ -1290,6 +1306,8 @@ class NavProbe:
             'returned': self.cpu.reg_read(UC_X86_REG_EAX),
             'resultOut': '%08x' % self.read(result_out, 'I')[0],
             'resultOutValue': self.read(result_out, 'f')[0],
+            # Script bytes the exec consumed (its P_GETs plus P_FINISH).
+            'codeConsumed': self.read(frame + 0xc, 'I')[0] - code,
             'st0': st0_bits,
             'commands': commands,
             'counts': {op: self.read(mail, 'I')[0]

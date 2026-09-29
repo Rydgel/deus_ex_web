@@ -12,8 +12,9 @@
  * The raw .cpuprofile is written to .cache/perf/<tag>.cpuprofile (outside Git).
  * `phases` is deusExViewer.framePhases(): wall ms per animate() phase.
  * --bypass applies scripts/bench-sim-hooks.mjs BYPASS_PATCHES so a map whose
- * simulation reaches an explicit unimplemented boundary within seconds (UNATCO
- * Island) keeps running; frames after a bypass are a timing workload only.
+ * simulation reaches an explicit unimplemented boundary within seconds keeps
+ * running; frames after a bypass are a timing workload only. The list is
+ * currently empty, so --bypass serves every module unchanged.
  * Measurement stops early at a runtime error, reported as `stoppedAt`.
  */
 import {chromium} from '@playwright/test';

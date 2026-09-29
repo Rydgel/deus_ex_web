@@ -18,6 +18,7 @@ Pawn.uc             the native() declarations quoted below
 | 524 | `final function int FindStairRotation(float DeltaTime)` | thunk `0x10303111` | `0x103bb880` (inline fp) |
 | 525 | `final function actor FindRandomDest(optional bool bClearPaths)` | thunk `0x103014f1` | `0x103bcb90` → `0x103da050`+`0x103dc700` |
 | 526 | `final function bool PickWallAdjust()` | thunk `0x10303968` | `0x103bb7e0` → `0x103c4150` |
+| 708 | `final function bool AIDirectionReachable(vector focus, int yaw, int pitch, float minDist, float maxDist, out vector bestDest)` | thunk `0x103022cf` | `0x103c8560` → band search `0x103c78a0` |
 
 The Unicorn oracle is `scripts/native-pawn-nav-probe.py`.  It loads the real
 Engine/Core images, fabricates a pawn + zones + a `ULevel` whose vtable slots
@@ -52,6 +53,10 @@ original-DLL comparison; see the swimming contract below.
 
 Jumping (`FindBestJump`/`SuggestJumpVelocity`/`jumpLanding`) has its own
 363-case original-DLL comparison; see the jumping contract below.
+
+`AIDirectionReachable` (708: exec `0x103c8560` over the band search
+`0x103c78a0`) has its own 285-case original-DLL comparison through the
+translated exec and Play's VM binding, and is dispatched live.
 
 Not yet oracle-verified: the
 proximity-landing `appSqrt` arc, `FindRandomDest`, `FindPathTo`,
@@ -535,16 +540,11 @@ none. The findPathToward falling-target branch still throws, now naming only
 the unported findPathTo worker; once that worker exists, the branch lands the
 target through jumpLanding first, as the original does.
 
-Next boundary (not implemented): tick 1375 (22.92 s), PaulDenton0,
-`RunningTo`/`Follow` → `ScriptedPawn.GetNextVector(orderActor, useLoc)` →
+The next boundary was tick 1375 (22.92 s): PaulDenton0, `RunningTo`/`Follow`
+→ `ScriptedPawn.GetNextVector(orderActor, useLoc)` →
 `AIDirectionReachable(Location, rot.Yaw, rot.Pitch, 0, 64, outVect)`, native
-708, reported by `script-doors.mjs` as `Unsupported original door native 708
-in scriptedpawn.getnextvector`. Its exec `?execAIDirectionReachable@APawn`
-(thunk `0x103022cf` → `0x103c8560`) evaluates six GNatives arguments and
-calls `?AIDirectionReachable@APawn` (thunk `0x103011d6` → `0x103c78a0`)
-with a literal `15.0f` — the body this document calls `aiPickSearch`,
-already ported and verified inside the 709 chain. The exec itself, its
-out-vector write and the Play binding are unverified.
+708. It is translated and verified since (section "AIDirectionReachable native
+708" below); the run now continues to tick 1872.
 
 ## The walk/swim helper `0x103c1b70`
 
@@ -934,6 +934,153 @@ Boundaries reached while wandering and their resolution:
 Remaining explicit boundaries: the ReachSpec BFS path workers stay unported; bark speech and
 audible playback are Stage 4.
 
+## `AIDirectionReachable` native 708 — `execAIDirectionReachable` `0x103c8560`
+
+Recovered 2026-09-29 from the hash-verified Engine.dll before translation
+(capstone listing of `0x103c8560..0x103c869e`; the static initializer and
+exports below). Declaration, Engine.u `Pawn.uc`:
+
+```text
+native(708) final function bool AIDirectionReachable(vector focus, int yaw, int pitch,
+                                                     float minDist, float maxDist, out vector bestDest);
+```
+
+Binding: the static initializer `0x1037e650` calls Core
+`GRegisterNative(0x2c4, &intAPawnexecAIDirectionReachable)`; that member
+pointer (`0x1047cad0`) holds thunk `0x103022cf`, the export
+`?execAIDirectionReachable@APawn@@QAEXAAUFFrame@@QAX@Z`, which jumps to
+`0x103c8560`. The callee is `?AIDirectionReachable@APawn@@QAEHVFVector@@HHMMMPAV2@@Z`
+(thunk `0x103011d6` → `0x103c78a0`) — the body this document calls
+`aiPickSearch` (band search, 709 section above). So the "band search" is
+`int APawn::AIDirectionReachable(FVector focus, INT yaw, INT pitch, FLOAT
+minDist, FLOAT maxDist, FLOAT, FVector* bestDest)`, and 709's worker
+(`?AIPickRandomDestination@APawn@@…` thunk `0x1030181b` → `0x103c7fc0`) calls
+it too. (709's exec thunk is `0x103029b9`,
+`?execAIPickRandomDestination@APawn@@…`; `PAWN_NAV_CONTRACT` listed the
+worker's thunk `0x1030181b` for it until this recovery.)
+
+The exec (111 instructions, `ret 8`), `thiscall`: `ecx` = the context object
+the call is made on, kept in `edi`; stack `(FFrame& Stack, RESULT_DECL)`:
+
+1. Six `P_GET` steps in declaration order. Each reads one byte
+   `B = *Stack.Code++` (`+0xc`) and calls `(Stack.Object->*GNatives[B])(Stack,
+   &slot)` with `ecx = Stack.Object` (`+8`); `GNatives` is Core's array via
+   IAT `0x10599a38`:
+   - `focus` → a 12-byte local (`P_GET_VECTOR`, not pre-initialized);
+   - `yaw`, `pitch` → int locals zeroed first (`P_GET_INT`);
+   - `minDist` → float local zeroed first; `maxDist` → float zeroed first,
+     kept in the incoming `Stack` argument slot (`esi` already holds Stack);
+   - `bestDest` (`P_GET_VECTOR_REF`): `*GPropAddr = 0` (Core `GPropAddr`, IAT
+     `0x10599aa0`), evaluate into a 12-byte temp, then `out = GPropAddr ?
+     GPropAddr : &temp`. An lvalue argument (local, out parameter, instance or
+     struct member) leaves its storage address in `GPropAddr`, so the body
+     writes the caller's variable; any other expression writes the dead temp.
+2. `P_FINISH`: `Stack.Code++` without reading the byte (EX_EndFunctionParms).
+3. `eax = this->AIDirectionReachable(focus, yaw, pitch, minDist, maxDist,
+   15.0f, out)` — `push 0x41700000` is the literal `15.0f`; the callee pops
+   `0x24` bytes.
+4. `*(DWORD*)Result = eax` (the whole dword, 0 or 1), `ret 8`.
+
+The exec has no receiver class check, null check, GIsEditor gate or float
+conversion of its own; `out` is never null. A `final function` on Pawn is
+only bound on Pawn contexts by the script compiler, and a None context never
+reaches an exec (the VM's context-expression skip). All 17 call sites in the
+extracted Core/Engine/Extension/ConSys/DeusEx sources (`ScriptedPawn` 12
+including GetNextVector, `CleanerBot` 4, `Animal` 1) call it on `Self`.
+
+The body's arguments are `[ebp+8..0x10]` focus, `+0x14` yaw, `+0x18` pitch,
+`+0x1c` minDist, `+0x20` maxDist, `+0x24` the 15.0, `+0x28` bestDest; it ends
+with `ret 0x24` on both exits (`0x103c7b83`, `0x103c7de5`). No instruction of
+`0x103c78a0..0x103c7de8` addresses `[ebp+0x24]`: the 15.0 is never read, so
+its value is unobservable. Its contract (709 section, "Band search") applies
+unchanged, with `focus` as the scoring origin: both squared-distance sites
+(`0x103c79bf` initial, `0x103c7cc3` in-loop) subtract `focus`, not Location,
+so a caller can search the band around another actor (ScriptedPawn's
+backpedal passes `orderActor.Location`). On every exit except the mode-0 early
+return (Region not water and Physics not 1/3/4: `0x103c7b71`, `eax = 0`, no
+restore, no out write) `*bestDest` receives the candidate — the start Location
+when none was found — so GetNextVector's `outVect` becomes Location on a
+failed search, and keeps its previous value on the mode-0 return.
+
+State reads (body): Location, Velocity, CollisionRadius (`+0x1d4`, stride
+clamp 5..25), Region.Zone bWaterZone, Physics, MaxStepHeight, FootRegion.Zone
+pain bit/DamageType, ReducedDamageType (`+0x444`), Region.ZoneNumber (the
+`+0xd0` byte), GIsEditor, the GMath sine table; the step bodies checkMove/
+flyMove/swimMove as documented. State writes: Location only through the test
+MoveActor steps and the closing `FarMoveActor(start, test=1, noCheck=1)`;
+Velocity restored from its entry value; `*bestDest`; the result dword.
+
+Unresolved or unmodeled: the exec's GNatives evaluation is the VM's (the
+oracle scripts it with evaluator stubs that copy constants and, for an lvalue,
+set `GPropAddr`); argument expressions with side effects are evaluated in
+declaration order by both, which the oracle does not exercise.
+
+### Verification (2026-09-29)
+
+The original cases were captured with `node
+scripts/validate-pawn-direction-reach.mjs --original-only` before the
+translation existed. `native-pawn-nav-probe.py` runs the real exec
+(`aiDirectionReachableExec` `0x103c8560`) from a token stream: its six P_GET
+steps call GNatives evaluator stubs (a constant copies its operand; an lvalue
+also sets Core GPropAddr, as EX_LocalVariable does), and P_FINISH, the band
+search, the result store and `ret 8` run as original machine code. New probe
+scene keys preset the result dword (`resultInit`) and a stale GPropAddr
+(`gPropAddr`); exec scenes report `codeConsumed`. The collision boundary is the
+swimming/jumping corpora's controlled world: scripted MoveActor/FarMoveActor
+results, a water plane that Region.Zone follows after each committed move and
+that PointRegion answers, and MoveActor's nearly-zero early return.
+
+`scripts/validate-pawn-direction-reach.mjs`: **285/285 original-DLL cases, 0
+mismatches** — 45 targeted and 240 seeded generated cases over walking
+(Physics 1, and 3 in a dry zone), flying and swimming (Region water with
+Physics 1/2/3/4) searches, the mode-0 early return (Physics 0/2/5/6/7),
+focus away from Location (approach, backpedal, far side), inverted, negative
+and one-point bands, stride clamps, yaw/pitch wrap, ledge retry/stop, the
+ZoneNumber, foot-pain, water-entry and iteration-cap stops, the three out
+kinds (lvalue, vector constant, EX_Nothing) and a stale GPropAddr. Each case
+compares 6459 ordered MoveActor/FarMoveActor/PointRegion calls in all with raw
+argument bits, the result dword (preset to `0xa5a5a5a5`), the out vector
+(preset to a sentinel), final Location/Velocity bits and Region zone — **both
+through `execAiDirectionReachable` and through Play's binding**
+(`ScriptRuntime.invokeNative` reached from compiled bytecode `return
+AIDirectionReachable(<constants>, BestDest)` with a local out variable). On the
+original, every case steps over exactly its six expressions plus the P_FINISH
+byte, stores 0 or 1 as the whole result dword, and never writes a stale
+GPropAddr target; the editor case fails its `!GIsEditor` assert and the
+translation and binding refuse it too. **Instruction coverage: exec 111/111,
+band search 405/405, range score 16/16**, excluding the editor-only assert
+block `0x103c7977..0x103c798c` (5) and `0x103c7c5c`, the step switch's
+default arm, which is unreachable (mode is 1, 2 or 3 inside the loop). 8/8
+targeted mutants are detected: yaw/pitch swapped, min/max swapped, Location
+instead of focus (exec), an out write on the mode-0 return, the initial score's
+origin, the fell-back-into-band stop, and in the binding the out argument
+passed by value and a min/max argument shift. The translation matched all 285
+cases on its first comparison.
+
+Play: `invokeNative` index 708 evaluates the six arguments in order, passes
+`bestDest`'s reference and returns a boolean; there is no receiver check
+because the exec has none. In unbypassed Island Play
+(`scripts/validate-island-jump-reach.mjs`, bench-sim's forward-key workload)
+PaulDenton0's tick-1375 `GetNextVector` (after `ActorReachable(player)` is
+true) now finds a step (8 test moves, verdict true), and every one of its
+eight GetNextVector calls through tick 1810 returns true. Each writes
+GetNextVector's `outVect` through its reference: a point 60.00 units from
+Location toward the player (three strides; the fourth leaves the 64 band),
+which `MoveTo(useLoc)` follows. Paul follows the player until the next
+boundary at tick 1872.
+
+Next boundary (not navigation, not implemented): tick 1872 (31.20 s). With
+Paul at `[-3899, 10143, -256]`, about 180 units from the player (held at
+`[-4054, 10052, -256]` by the forward-walk workload), the conversation
+`MeetPaul` (`Conversation115`, owner `PaulDenton`, invoke actor PaulDenton0,
+`bFirstPerson=False`) starts through `ConPlay0.StartConversation`: ConPlayBase's
+`BindEvents` (2052) runs, then the third-person branch calls
+`con.CreateConCamera()`, ConSys native 2051, reported by `script-doors.mjs` as
+`Unsupported original door native 2051 in conplay.startconversation`. The
+invoking frames above ConPlay were not captured; by source the pawn-side radius
+invoker is `ScriptedPawn.Tick` → `DeusExPlayer.StartConversation(Self,
+IM_Radius)`. See [roadmap](roadmap.md) for the research note.
+
 ## Verification status
 
 - `reachMask` `0x10326d10` 7-bit gather — **ported to JS, bit-exact vs oracle**
@@ -1007,6 +1154,12 @@ audible playback are Stage 4.
   path in Play, with **363/363 original-DLL cases, 23/23 mutants and every
   instruction of the three bodies executed** in
   `scripts/validate-pawn-jump-reach.mjs` (see the jumping contract).
+- `AIDirectionReachable` exec `0x103c8560` (native 708) over the band search
+  `0x103c78a0` — **ported to JS and dispatched live**, with **285/285
+  original-DLL cases through both the translated exec and the VM binding,
+  8/8 mutants, and every reachable instruction of the exec (111/111), the
+  band search (405/405) and the range score (16/16) executed** in
+  `scripts/validate-pawn-direction-reach.mjs`.
 - `FindRandomDest`/`FindPathTo` share the
   ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`)
   recovered at the field level — see the graph layout above.
@@ -1022,9 +1175,12 @@ Focused checkpoint (2026-09-29, supersedes the earlier notes):
 instruction coverage of swimMove/swimReachable;
 `validate-pawn-jump-reach.mjs` passes 363/363 cases, 23/23 mutants and full
 instruction coverage of FindBestJump/SuggestJumpVelocity/jumpLanding;
-`npm test` passes 552/552. Natives 709 and 517 are live — the Training MIB
-wanders and `Secretary0` follows the PatrolPoint4↔PatrolPoint5 route in Play
-(`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`).
-Stage 3 remains unfinished. Remaining navigation implementation includes
-native 708's exec binding and the ReachSpec path workers
+`validate-pawn-direction-reach.mjs` passes 285/285 cases (exec and VM
+binding), 8/8 mutants and full reachable coverage of the 708 exec and band
+search; `npm test` passes 552/552. Natives 708, 709 and 517 are live — the
+Training MIB wanders, `Secretary0` follows the PatrolPoint4↔PatrolPoint5 route
+(`validate-mib-startup-boundary.mjs`, `validate-secretary-patrol.mjs`), and
+Island's PaulDenton0 follows the player through GetNextVector
+(`validate-island-jump-reach.mjs`). Stage 3 remains unfinished. Remaining
+navigation implementation includes the ReachSpec path workers
 `FindRandomDest`/`FindPathTo`.

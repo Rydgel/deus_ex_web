@@ -12,7 +12,15 @@
  * boundary, which it reports but does not implement.
  *
  * The bodies are bit-exact against Engine.dll in validate-pawn-jump-reach; this
- * checks that Play reaches them and that the former boundary now completes. */
+ * checks that Play reaches them and that the former boundary now completes.
+ *
+ * Native 708 AIDirectionReachable (exec 0x103c8560, bit-exact in
+ * validate-pawn-direction-reach) was the next boundary, at tick 1375: after
+ * actorReachable(player) succeeds, PaulDenton0's GetNextVector asks it for a
+ * step toward the player. It now runs, Paul follows the player, and the run
+ * continues to the next boundary, which is reported, not implemented: Paul's
+ * radius conversation MeetPaul is third-person, and ConPlay.StartConversation
+ * calls Conversation.CreateConCamera (ConSys native 2051). */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
@@ -40,16 +48,36 @@ if (process.argv[2] !== 'child') {
   assert.ok(jump > 0 && trace.slice(0, jump).some(t => t.op === 'MoveActor'), 'checkMove steps preceded the jump');
   const path = paul.calls.find(c => c.tick === 1221 && c.index === 517);
   assert.match(path?.result ?? '', /^PatrolPoint\d+$/, 'FindPathToward answers the failed reach check');
-  // 2. The next runtime boundary without any bypass (reported, not implemented):
-  // native 708 AIDirectionReachable from ScriptedPawn.GetNextVector, after a
-  // later actorReachable(player) succeeds.
+  // 2. The former 708 boundary: from tick 1375 PaulDenton0's GetNextVector
+  // runs AIDirectionReachable after actorReachable(player) succeeds, every
+  // call returns a verdict, and Paul closes on the player.
+  const directionCalls = paul.calls.filter(c => c.index === 708);
+  assert.equal(directionCalls[0]?.tick, 1375, 'the first AIDirectionReachable is the former boundary tick');
+  assert.deepEqual(paul.calls.filter(c => c.tick === 1375).map(c => [c.index, c.result ?? null]),
+    [[520, true], [708, true]], 'actorReachable(player) succeeds, then GetNextVector finds a step');
+  assert.ok(directionCalls.every(c => c.function === 'GetNextVector' && c.state === 'RunningTo' &&
+    typeof c.result === 'boolean' && c.moves > 0), 'every GetNextVector search completed with test moves');
+  // bestDest is GetNextVector's out parameter: the write reaches it, and a
+  // found step lies inside the [0, 64] band around Paul's Location.
+  assert.ok(directionCalls.every(c => c.outKind === 'lvalue' && c.out?.length === 3),
+    'every search wrote bestDest through its reference');
+  assert.ok(directionCalls.every(c => !c.result || Math.hypot(...c.out.map((v, i) => v - c.from[i])) <= 64),
+    'each found step is within maxDist of Location');
+  assert.ok(!run.firstError || run.firstError.tick > 1375, 'no boundary at the former 708 tick');
+  const distance = t => Math.hypot(t.location[0] - run.player[0], t.location[1] - run.player[1]);
+  const [atFirst, atLast] = [paul.track.find(t => t.tick >= 1380), paul.track.at(-1)];
+  assert.ok(distance(atLast) < distance(atFirst), 'Paul followed the player');
+  // 3. The next runtime boundary without any bypass (reported, not
+  // implemented): PaulDenton0's radius conversation MeetPaul is third-person,
+  // so ConPlay.StartConversation asks Conversation.CreateConCamera (ConSys
+  // native 2051, execCreateConCamera 0x100106f0) for its camera.
   assert.ok(run.firstError, 'a later boundary is reached within the window');
-  const { index, receiver, function: caller } = run.firstError.lastNavNative ?? {};
-  assert.deepEqual({ index, receiver, caller }, { index: 708, receiver: 'PaulDenton0', caller: 'GetNextVector' });
-  assert.match(run.firstError.message, /native 708/);
-  const before = paul.calls.filter(c => c.tick === run.firstError.tick);
-  assert.deepEqual(before.map(c => [c.index, c.result ?? null]), [[520, true], [708, null]],
-    'actorReachable(player) succeeds before GetNextVector');
+  assert.match(run.firstError.message, /native 2051 in conplay\.startconversation/);
+  const camera = run.conversation.find(c => c.index === 2051);
+  assert.deepEqual({ tick: camera?.tick, conName: camera?.conName, owner: camera?.owner, firstPerson: camera?.bFirstPerson },
+    { tick: run.firstError.tick, conName: 'MeetPaul', owner: 'PaulDenton', firstPerson: false });
+  assert.deepEqual(run.conversation.filter(c => c.tick === camera.tick).map(c => c.index), [2052, 2051],
+    'ConPlayBase binds the conversation events before the camera');
   const summary = {
     formerBoundary: former, jumpingCalls: jumpCalls.length,
     paulCalls: paul.calls.map(({ trace, ...c }) => c),
@@ -57,8 +85,11 @@ if (process.argv[2] !== 'child') {
     fbjLog: paul.log,
     reachVerdicts: paul.calls.filter(c => c.index === 520 || c.index === 521)
       .reduce((m, c) => (m[`${c.index}:${c.result}`] = (m[`${c.index}:${c.result}`] ?? 0) + 1, m), {}),
-    paulTrack: paul.track, nextBoundary: run.firstError, seconds: run.firstError && +(run.firstError.tick / 60).toFixed(3),
-    scope: 'Island Play reaches FindBestJump/SuggestJumpVelocity/jumpLanding through actorReachable; first boundary reported' };
+    directionCalls: directionCalls.map(({ trace, ...c }) => c), conversation: run.conversation,
+    paulTrack: paul.track, player: run.player, nextBoundary: run.firstError,
+    seconds: run.firstError && +(run.firstError.tick / 60).toFixed(3),
+    scope: 'Island Play reaches FindBestJump/SuggestJumpVelocity/jumpLanding through actorReachable and ' +
+      'AIDirectionReachable through GetNextVector; first boundary reported' };
   console.log(JSON.stringify(summary, null, 1));
   process.exit(0);
 }
@@ -121,17 +152,37 @@ runtime.pawnNavServices = receiver => {
     },
     logf: event => { log.push({ tick, format: event.format, args: event.args }); return services.logf(event); } };
 };
-const calls = [];
+const calls = [], conversation = [];
 let tick = 0, firstError = null, lastNative = null;
 const invokeNative = runtime.invokeNative.bind(runtime);
 runtime.invokeNative = call => {
   const native = { index: call.index, receiver: call.receiver?.name ?? null, function: call.script?.name ?? null };
+  // Conversation.BindEvents (2052) and CreateConCamera (2051): which
+  // conversation starts and whether it is third-person.
+  if (call.index === 2051 || call.index === 2052)
+    conversation.push({ tick, ...native, conName: read(call.receiver, 'conName'),
+      owner: read(call.receiver, 'conOwnerName'), bFirstPerson: read(call.receiver, 'bFirstPerson') });
   if ([517, 518, 520, 521, 525, 526, 708, 709].includes(call.index)) lastNative = native;
   if (call.receiver !== paulActor || ![517, 518, 520, 521, 525, 526, 708, 709].includes(call.index)) return invokeNative(call);
   const node = runtime.instance(call.receiver)?.state?.stateNode;
   const record = { tick, index: call.index, function: native.function, state: node?.record?.name ?? node?.name ?? null,
     jumps: 0, moves: 0, trace: [] };
   calls.push(record);
+  if (call.index === 708) {
+    // Observe AIDirectionReachable's bestDest: the evaluated out argument must
+    // be an lvalue whose set() carries the band search's write to useLoc.
+    record.from = read(paulActor, 'Location').map(v => +v.toFixed(3));
+    const evaluate = call.evaluateArgument;
+    call = { ...call, evaluateArgument: i => {
+      const value = evaluate(i);
+      if (i !== 5) return value;
+      record.outKind = typeof value?.set === 'function' ? 'lvalue' : typeof value;
+      if (record.outKind !== 'lvalue') return value;
+      const observed = Object.create(value);
+      observed.set = v => { record.out = Array.from(v, x => +x.toFixed(3)); return value.set(v); };
+      return observed;
+    } };
+  }
   const outer = active; active = record;
   try {
     const result = invokeNative(call);
@@ -153,5 +204,6 @@ while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 3000)) {
     physics: read(paulActor, 'Physics') });
 }
 const summary = calls.filter(c => c.tick >= 1200).map(({ trace, ...c }) => c.jumps ? { ...c, trace } : c);
-console.log(JSON.stringify({ firstError, paul: { calls: summary, log, track: track.filter(t => t.tick >= 1170) } }));
+console.log(JSON.stringify({ firstError, conversation, player: read(game.player.collisionActor, 'Location').map(Math.round),
+  paul: { calls: summary, log, track: track.filter(t => t.tick >= 1170) } }));
 process.exit(0);
