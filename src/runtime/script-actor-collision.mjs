@@ -21,6 +21,7 @@
  * See docs/script-datavault-image.md.
  */
 import {setBase,setSupportBase} from './walking-callbacks.mjs';
+import {identityOf} from './actor-touch.mjs';
 
 const f=Math.fround;
 
@@ -60,9 +61,11 @@ export function setActorCollisionSize(actor,radius,height,{level}){
 }
 
 /** AActor::IsBasedOn(0x1034c8d0): walks `actor`'s own +0xc4 (Base) chain
- * looking for `other`. */
+ * looking for `other`. Pointers compare, so a pawn physics view stands for its
+ * host (identityOf). */
 export function isBasedOn(actor,other){
- for(let base=actor;base;base=base.base)if(base===other)return true;
+ other=identityOf(other);
+ for(let base=identityOf(actor);base;base=base.base)if(base===other)return true;
  return false;
 }
 

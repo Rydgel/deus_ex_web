@@ -1,6 +1,8 @@
 import {moveQuery} from './move-query.mjs';
+import {identityOf} from './actor-touch.mjs';
 const f=Math.fround;
-function basedOn(actor,base){const seen=new Set();for(let a=actor;a;a=a.base){if(a===base)return true;if(seen.has(a))throw Error('Cyclic actor Base chain');seen.add(a);}return false;}
+// IsBasedOn over AActor pointers: a pawn physics view compares as its host.
+function basedOn(actor,base){const seen=new Set();base=identityOf(base);for(let a=identityOf(actor);a;a=a.base){if(a===base)return true;if(seen.has(a))throw Error('Cyclic actor Base chain');seen.add(a);}return false;}
 
 /** Original cylinder MoveActor with the recovered based-rider pass.
  * `newRotation` is the ULevel::MoveActor absolute rotation argument; callers

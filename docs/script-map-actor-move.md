@@ -90,8 +90,11 @@ be removed and re-added at the load position.
 Pawns keep their own move entry (`script-pawn-physics.mjs`), and movers keep
 the brush entry. Neither is admitted here.
 
-The pawn entry moves a field view of the pawn, but Touching slots must hold
-actor identities. BeginTouch `0x10369570` writes the source into the other
+## Pawn view identity
+
+The pawn entry moves a field view of the pawn (`pawnPhysicsView`), but the
+original stores and compares `AActor*`, so Touching slots must hold actor
+identities. BeginTouch `0x10369570` writes the source into the other
 actor's slot through the reciprocal AddTouch. DestroyActor's Touching scan
 and EndTouch `0x10369970` later match that slot against the registered actor.
 The pawn move services therefore pass the host (`pawn.self`) to BeginTouch
@@ -100,6 +103,77 @@ first ran the controlled player through this entry, and it exposed the
 earlier view identity: after `OrdersTrigger2.Touch` destroyed the trigger,
 its slot kept the view, and EndTouch could not clear it
 (`validate-world-destroy.mjs`).
+
+The pawn's FarMoveActor kept the view. FarMoveActor `0x10398ba0` calls
+CheckEncroachment with notify 1 ([relocation](relocation.md), step 3), and
+its EndTouch/BeginTouch pass (`0x1039a7e7`–`0x1039a8d6`,
+[check-encroachment](check-encroachment.md)) ran on
+`checkActorEncroachment`'s default touch services, with the view as the
+source. On Island, `ScriptedPawn.Sitting.Tick` calls `SetLocation` (native
+267) every tick to slide UNATCOTroop6 onto OfficeChair0. At bench tick 271
+(after the 60 warm ticks) the first overlap wrote the view into
+`OfficeChair0.Touching[3]`. The path was execSetLocation →
+`ScriptRuntime.farMoveActor` → `pawn.farMove` → `farMoveActor` →
+`farLevel.checkEncroachment` → `beginTouch(view, OfficeChair0)`. Touch
+events were right, because the pawn's dispatch maps the view, but the slot
+was wrong. Neither DestroyActor(UNATCOTroop6) nor the EndTouch from a later
+MoveActor could match it, so the chair would never get its UnTouch, and
+bench-sim's digest walked the view's getters. `farLevel` now passes the host
+to BeginTouch and EndTouch.
+
+Two guards keep views out:
+
+* The view carries its host under `ACTOR_IDENTITY` (a symbol, so not one of
+  the view's keys). `beginTouch`/`endTouch` throw on a view
+  (`actor-touch.mjs`).
+* `identityOf` maps a view to its host where the original compares
+  pointers:
+  * IsBasedOn `0x1034c8d0` in MoveActor's candidate and touch filters
+    (`move-query.mjs`, `player-move.mjs`) and in FindBase
+    (`findActorBase`);
+  * SetBase `0x10369c80`'s guard, which walks NewBase's chain for `this`
+    ([actor queries](script-actor-queries.md) 298).
+
+  The view never matched there before, so:
+  * an actor based on a moving pawn could block it or receive its BeginTouch;
+  * SetBase could build a Base cycle;
+  * FindBase could send SupportActor to a floor riding the pawn.
+
+  Throwaway counters over 300-tick Training and Island bench runs found no
+  comparison that differs:
+  * Island: 12,756 pawn MoveActors past the tiny-delta gate and 3,347
+    move-query candidates;
+  * Training: 1,302 MoveActors and 617 candidates;
+  * in neither map did SetBase or FindBase run on a view.
+
+  This part does not move either digest.
+
+SingleLineCheck's owner chain (`line-filter.mjs`, the kernel's `accept` in
+`collision-kernel.mjs`) still starts at the view, the plan's third view
+comparison. It is the same bug class, and it is left:
+
+* Only its first link, the pawn itself, differs. In the same runs the pawn's
+  own cylinder was a candidate only in flags-6 queries (Island 8,950,
+  Training 5,266). There the Pawn class test (flags bit 1 clear) rejects the
+  pawn anyway.
+* The pawn's Pawn-flag queries start at its own center: FindBase 0x17, the
+  walking floor probe 0x17 and processLanded 0x37. From there,
+  `primitiveLineHit` returns no hit on its own cylinder.
+* Passing the host would lose the view's live `Owner` link. A map host's
+  `owner` is the serialized load-time Owner (`game.mjs`), not the script
+  field.
+
+`test/pawn-view-identity.test.mjs` fails on the previous sources and covers
+the slot, the guards and the three IsBasedOn/SetBase sites.
+
+The Island bench digest moved from `babe023941d42a3c` to `6a178ec7baf98078`.
+Checkpoints 10–270 are unchanged. Per-field digests at 280, 290 and 300
+differ only in `OfficeChair0.Touching`: the slot now records
+`@UNATCOTroop6`, where it used to walk the view. The touch sequence is
+identical. The troop re-enters BeginTouch each tick, finds itself present,
+and dispatches nothing, and no EndTouch falls in the window. Training
+(`04f77dc631509ae4`) is unchanged. The JavaScript and Rust VMs agree at all
+30 checkpoints of both maps, with no errors.
 
 ## Batch 6 stacked-decoration rotation contract
 

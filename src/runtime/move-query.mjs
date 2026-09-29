@@ -1,8 +1,11 @@
+import {identityOf} from './actor-touch.mjs';
 const f=Math.fround;
 const flags=actor=>actor.flags??0;
+// AActor::IsBasedOn (0x1034c8d0) walks +0xc4 Base pointers from the actor
+// itself: a pawn physics view compares as its host (identityOf).
 function basedOn(actor,source){
-  const seen=new Set();
-  for(let current=actor;current;current=current.base){
+  const seen=new Set();source=identityOf(source);
+  for(let current=identityOf(actor);current;current=current.base){
     if(current===source)return true;
     if(seen.has(current))throw new Error('Cyclic actor Base chain');
     seen.add(current);

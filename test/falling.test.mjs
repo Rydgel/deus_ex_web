@@ -92,3 +92,18 @@ test('the bounce branch requires the explicit script HitWall dispatch', () => {
     zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, move: () => ({ time: 1, normal: [0, 0, 0] }) };
   assert.throws(() => falling(p, .1, 0, { nonPawn: true, bounce: true }), /hitWallEvent/);
 });
+
+test('a bobbing Decoration stops at the untranslated half-gravity branch (0x103d0f42), each substep', () => {
+  const host = bobbing => {
+    const moves = [], p = { position: [0, 0, 0], velocity: [0, 0, -10], acceleration: [0, 0, 0], gravity: [0, 0, -950],
+      zoneVelocity: [0, 0, 0], terminalVelocity: 2500, physics: 2, bobbing, moves,
+      move: delta => { moves.push(delta); p.bobbing = true; return { time: 1, normal: [0, 0, 0] }; } };
+    return p;
+  };
+  assert.throws(() => falling(host(true), .1, 0, { nonPawn: true }), /bBobbing integration/);
+  // The flag is re-read per substep: a 0.3 s step runs one dry substep, then
+  // stops when the move's events set bBobbing.
+  const p = host(false);
+  assert.throws(() => falling(p, .3, 0, { nonPawn: true }), /bBobbing integration/);
+  assert.equal(p.moves.length, 1);
+});

@@ -464,13 +464,19 @@ its behavior lands.
    `0x103cb97d`) and physFalling (`0x103d1cb6`) hand-offs are covered too.
    `validate-island-swimming` shows the fish GeneratorScouts running
    physSwimming in Play. The Island bench digest changed to `babe023941d42a3c`
-   (JS and Rust VM agree at all 30 checkpoints). Swimming was never the first
+   (JS and Rust VM agree at all 30 checkpoints). It is now `6a178ec7baf98078`:
+   the pawn view's Touching identity fix changed only `OfficeChair0.Touching`
+   from checkpoint 280 on
+   ([pawn view identity](script-map-actor-move.md#pawn-view-identity)).
+   Swimming was never the first
    boundary: in the forward-walk workload, the first GeneratePawn (tick 153)
    sets a scout to PHYS_Swimming and then reaches item 2 in the same call. The
    `performPhysics` default rewrite is no longer reached in either map's bench
    run. Falling *through* water (physFalling's water-zone integration
    `0x103d125a` and PlayerPawn foot-water `0x103d1039`) is now an explicit
-   boundary instead of a silent dry integration.
+   boundary for pawns instead of a silent dry integration. Non-Pawn actors
+   (five breakable crates in an Island water zone) still integrate dry
+   ([swimming](swimming.md#unsupported-and-unresolved)).
 2. **aiPickSearch's waterMove service** `0x103c3ca0` (`APawn::swimMove`), with
    waterReach `0x103c15a0` (`swimReachable`)
    ([pawn navigation](script-pawn-nav.md)). This is the first boundary of the

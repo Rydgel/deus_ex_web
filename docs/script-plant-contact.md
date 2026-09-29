@@ -168,7 +168,7 @@ being built on the recovered movement primitives:
   The general integration is `Velocity = OldVelocity + 0.5*(Gravity + Acceleration)*step`
   (`0x103d1157`, taken by any non-PlayerPawn; Path A at `0x103d1039` is
   PlayerPawn-only, and the half-gravity branch at `0x103d0f42` is gated by
-  `IsA(ADecoration 0x10578d48) && bBobbing` — Decoration `+0x31c` bit 8, not
+  `IsA(ADecoration 0x10578d48) && bBobbing` — Decoration `+0x31c & 0x08`, not
   bBounce; see [actor-physics.md](actor-physics.md)). That is exactly `falling()`'s integration, and the
   existing player oracle already ran that path (zone flag `+0x388=0`). The oracle
   now runs a **non-Pawn** actor (`native-falling-oracle.py`, `nonPawn:true`, a

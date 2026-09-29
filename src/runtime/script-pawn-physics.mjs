@@ -38,7 +38,7 @@ import { playerMove } from './player-move.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { moveQuery } from './move-query.mjs';
 import { actorBlockedBy, checkActorEncroachment } from './check-encroachment.mjs';
-import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
+import { ACTOR_IDENTITY, beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { setActorZone } from './zone.mjs';
 import { linkDecorationCollision } from './decoration-physics.mjs';
@@ -96,6 +96,10 @@ export function pawnPhysicsView(actor, services) {
     get controlledPlayer() { return Boolean(services.isA(actor, 'engine.playerpawn') && get('Player') != null); },
     decoration: false, movingBrush: false,
     projectile: false, model: actor.model ?? null };
+  // The view stands for `actor` in the IsBasedOn/SetBase walks, and
+  // BeginTouch/EndTouch refuse it (actor-touch.mjs). A symbol key: not one of
+  // the view's enumerable keys.
+  Object.defineProperty(pawn, ACTOR_IDENTITY, { value: actor });
   const bind = (prop, name, read = v => v, write = v => v) =>
     Object.defineProperty(pawn, prop, { get: () => read(get(name)), set: v => set(name, write(v)), enumerable: true });
   bind('position', 'Location'); bind('rotation', 'Rotation');
@@ -398,10 +402,17 @@ function farLevel(pawn, actor, services, dispatch) {
   hash.addActor = a => services.level.hash.addActor(a === pawn ? actor : a);
   // The base level's `hash` is an accessor; shadow it with an own property.
   Object.defineProperty(level, 'hash', { value: hash, enumerable: true });
+  // FarMoveActor 0x10398ba0 calls CheckEncroachment with notify 1
+  // (docs/relocation.md step 3), so its EndTouch/BeginTouch pass
+  // (0x1039a7e7-0x1039a8d6, docs/check-encroachment.md) writes and matches
+  // Touching slots. As in moveActor, those slots hold actor identities
+  // (AActor*): pass the host, never the view.
   level.checkEncroachment = (a, position, rotation, notify) =>
     checkActorEncroachment(a, position, rotation, notify, {
       worldActor: services.worldActor, dispatch,
-      encroachmentCheck: (s, p, r, e) => services.level.hash.actorEncroachmentCheck(s === pawn ? actor : s, p, r, e) });
+      encroachmentCheck: (s, p, r, e) => services.level.hash.actorEncroachmentCheck(s === pawn ? actor : s, p, r, e),
+      beginTouch: (a, b) => beginTouch(a === pawn ? actor : a, b, dispatch),
+      endTouch: (a, b, suppress) => endTouch(a === pawn ? actor : a, b, suppress, dispatch) });
   level.setActorZone = (a, test, force) => a === pawn ? pawn.setActorZone(test, force)
     : unsupported('FarMoveActor zone update for a non-pawn source');
   // 0x10398e10 region: a non-test far move of a pawn with StandingCount!=0

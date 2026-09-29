@@ -88,7 +88,7 @@ validated cases are unchanged.
 | --- | --- | --- |
 | `0x103d0aca` | `Region.ZoneNumber == 0`: log (Role Authority and IsA Inventory/Decoration/Pawn), `FellOutOfWorld` event, return | `pawn.zoneNumber === 0` throws an explicit boundary |
 | `0x103d0f35`→`0x103d125a` | water zone: `Velocity = OldV*(1 - 2*FluidFriction*dt) + 0.5*((1 - Buoyancy/max(1,Mass))*Gravity + Accel)*dt` | not translated; explicit boundary when the host exposes `regionWater` (script pawn view) |
-| `0x103d0f42` | `IsA(ADecoration) && bBobbing` (Decoration `+0x31c` bit 8): half gravity | not translated; this is the branch earlier notes called a "bounce class" branch |
+| `0x103d0f42` | `IsA(ADecoration) && bBobbing` (Decoration `byte +0x31c & 0x08`, bit 3): `V = OldV + 0.5*(0.5*Gravity + Accel)*dt` | not translated; explicit boundary when the host exposes `bobbing` (`runSpawnedActorFalling` for Decoration ancestry; [swimming](swimming.md)). This is the branch earlier notes called a "bounce class" branch |
 | `0x103d1039` | PlayerPawn with foot zone bWaterZone and `OldV.Z < 0` | not translated; explicit boundary when the host exposes `footWater` |
 | `0x103d1b39` | bIsPawn and not PlayerPawn: ZoneVelocity ignored when `SizeSquared <= 40000` | not translated (fragments/inventory/player always add ZoneVelocity) |
 | `0x103d1cb6` | Pawn swimming transition | translated ([swimming](swimming.md)) |

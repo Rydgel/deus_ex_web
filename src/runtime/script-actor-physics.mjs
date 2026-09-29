@@ -32,6 +32,9 @@ export function runSpawnedActorFalling(runtime,actor,seconds,zone,iterations=0) 
   if(isDecoration)Object.defineProperty(host,'landingCounter',{
     get:()=>get('numLandings'),set:value=>runtime.writeNamed(actor,'numLandings',value),
   });
+  // physFalling's IsA(ADecoration) && bBobbing branch (0x103d0f42, Decoration
+  // +0x31c & 0x08): falling() stops at it. Other classes fail that IsA.
+  if(isDecoration)Object.defineProperty(host,'bobbing',{get:()=>Boolean(get('bBobbing'))});
   Object.assign(host,{gravity:zone.ZoneGravity??[0,0,-950],zoneVelocity:zone.ZoneVelocity??[0,0,0],
     terminalVelocity:zone.ZoneTerminalVelocity??2500,
     zoneNumber:runtime.regionValue(actor).zoneNumber,

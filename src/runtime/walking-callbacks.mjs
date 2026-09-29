@@ -1,11 +1,15 @@
 import {safeNormal} from './steps.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
+import {identityOf} from './actor-touch.mjs';
 const f=Math.fround;
 
 /** Original SetBase10369c80. dispatch(target,event,args) runs synchronously;
- * script event effects belong to the caller. worldActor retains Level identity. */
+ * script event effects belong to the caller. worldActor retains Level identity.
+ * The guard walks NewBase's +0xc4 chain for `this` (docs/script-actor-queries.md
+ * 298): a pawn physics view compares as its host. */
 export function setBase(pawn,target,dispatch,notify=true){
- for(let base=target;base;base=base.base)if(base===pawn)return;
+ const self=identityOf(pawn);
+ for(let base=target;base;base=base.base)if(base===self)return;
  if(target===pawn.base)return;
  const old=pawn.base;
  if(old && old!==pawn.worldActor){

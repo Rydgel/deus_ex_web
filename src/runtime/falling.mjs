@@ -112,6 +112,13 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     // expose the zone flags (the script pawn view) stop here explicitly.
     if (pawn.regionWater === true)
       throw new Error('Original physFalling water-zone integration (Region.Zone->bWaterZone, 0x103d0f35 -> 0x103d125a) is not translated');
+    // 0x103d0f42-0x103d0f6f: otherwise an IsA(ADecoration) source (class walk
+    // for 0x10578d48) with bBobbing set (`test byte [actor+0x31c], 8`)
+    // integrates half gravity at 0x103d0f75-0x103d1034. Not translated; hosts
+    // that expose `bobbing` (runSpawnedActorFalling, Decoration ancestry)
+    // stop here, re-read every substep as the native does.
+    if (pawn.bobbing === true)
+      throw new Error('Original physFalling Decoration bBobbing integration (IsA(ADecoration) && bBobbing, 0x103d0f42 -> 0x103d0f75) is not translated');
     if (!nonPawn && pawn.isPlayerPawn && pawn.footWater === true && !(oldVelocity[2] >= 0))
       throw new Error('Original physFalling PlayerPawn foot-in-water integration (0x103d1039) is not translated');
     // Each integration re-reads the actor's Acceleration (actor+0x150), which the

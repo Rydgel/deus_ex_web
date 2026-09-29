@@ -286,9 +286,29 @@ result is discarded.
   - PlayerPawn with FootRegion in water and `OldV.Z < 0` (`0x103d1039`).
 
   Both repeat in the apex re-integration (`0x103d1514`) with their own store
-  patterns. Before this slice they were silently integrated as dry. The
-  Decoration bBobbing branch (`0x103d0f42`) is still untranslated and
-  unguarded. That is pre-existing and not swimming.
+  patterns. Before this slice they were silently integrated as dry.
+- **physFalling's Decoration bBobbing branch**, now an explicit boundary.
+  After the water test, `0x103d0f42`–`0x103d0f6f` walks the class chain for
+  ADecoration (`0x10578d48`) and tests `byte [actor+0x31c] & 0x08`. The SDK
+  layout puts bBobbing at +0x31c bit 3, the fourth Decoration bool. Taken,
+  it integrates with half the zone gravity (`0x103d0f75`–`0x103d1034`):
+  `V = OldV + 0.5*(0.5*ZoneGravity + Acceleration)*dt`, where
+  `[0x10426d74]` is 0.5. This integration is not translated.
+  * `runSpawnedActorFalling` exposes `bobbing` for Decoration ancestry, and
+    `falling()` throws there, re-reading it every substep as the native does.
+  * DeusEx scripts only ever clear bBobbing (Decoration.uc comments out the
+    one `bBobbing = true`), and 300-tick Training and Island bench runs never
+    reach it.
+  * `decoration-physics.mjs`'s `runDecorationPhysics`, used only by unit
+    tests, does not expose `bobbing`.
+- **Non-Pawn falling in water is still dry.** `runSpawnedActorFalling`
+  (decorations, fragments, inventory) does not expose `regionWater`, so
+  physFalling's water-zone integration (`0x103d0f35` → `0x103d125a`) is not
+  guarded for them. A bobbing decoration in water would therefore stop at the
+  bBobbing boundary, where the native takes the (equally untranslated) water
+  branch. The Island bench reaches this: CrateBreakableMedGeneral1, 2, 5 and 8
+  and CrateBreakableMedCombat13 run physFalling in a water zone from its
+  first tick and integrate dry.
 - **APawn::swimMove** (`0x103c3ca0`, aiPickSearch's water service) and
   swimReachable (`0x103c15a0`) are not ported. They are the Island blocker
   after this slice.

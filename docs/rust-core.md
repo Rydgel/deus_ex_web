@@ -818,9 +818,13 @@ back.
   * `script-pawn-physics.mjs` defines the pawn view's `surfaceScan`. It is
     non-enumerable, like `decorate`. An enumerable property changed Island's
     digest from tick 280 without changing the simulation:
-    `OfficeChair0.Touching` holds UNATCOTroop6's physics *view*, and the
-    digest walks a view by its keys. That view-versus-host leak is the plan's
-    risk 1, and it is still open.
+    `OfficeChair0.Touching` held UNATCOTroop6's physics *view*, and the
+    digest walks a view by its keys. That view-versus-host leak (the plan's
+    risk 1) is fixed: see
+    [the pawn view's identity](script-map-actor-move.md#pawn-view-identity).
+    With it, an enumerable `surfaceScan` leaves Island's digest unchanged
+    (`6a178ec7baf98078`), so the digest no longer depends on the view's
+    shape. `surfaceScan` stays non-enumerable, like any helper.
   * `instantiateScriptVm` stubs the new imports in interpreter instances.
 * **Quick wins (B0).** AvgPhysicsTime (`script-pawn-physics.mjs`) and
   physFalling's refund (`falling.mjs`) use the x87 kernel's `Ext` model
