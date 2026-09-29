@@ -13,7 +13,9 @@ import assert from 'node:assert/strict';
 import {instantiateScriptVm, loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {ObjectArena, RESERVED} from '../src/runtime/script-object-arena.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
-import {classRecordId} from '../src/runtime/script-vm-lower.mjs';
+import {classRecordId, nameId, foldedNameId} from '../src/runtime/script-vm-lower.mjs';
+import {f32bits, f32num} from '../src/runtime/script-vm.mjs';
+import {executeMoverPrimitive} from '../src/runtime/script-mover-primitives.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -36,16 +38,25 @@ const K = {
   FLOAT_GT: 126, FLOAT_LE: 127, FLOAT_GE: 128, FLOAT_EQ: 129, FLOAT_NE: 130, FLOAT_NEAR: 131, FLOAT_MIN: 132, FLOAT_MAX: 133,
   OBJECT_EQ: 140, OBJECT_NE: 141,
   BYTE_TO_INT: 150, INT_TO_BYTE: 151, INT_TO_FLOAT: 152, BYTE_TO_FLOAT: 153, FLOAT_TO_INT: 154, FLOAT_TO_BYTE: 155,
+  // R2b-6
+  S_RETURN_ITER: 9, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
+  LIT_VECTOR: 160, LOCAL_VECTOR: 161, FIELD_VECTOR: 162, JS_VECTOR: 163, VECTOR_ADD: 164, VECTOR_SUB: 165,
+  VECTOR_SCALE: 166, SCALE_VECTOR: 167, VECTOR_DIVIDE: 168, VECTOR_NEG: 169, VECTOR_MUL: 170, VECTOR_NORMAL: 171,
+  VECTOR_MIRROR: 172, VECTOR_ROTATE: 173, LIT_ROTATOR: 175, LOCAL_ROTATOR: 176, FIELD_ROTATOR: 177, JS_ROTATOR: 178,
+  ROTATOR_ADD: 179, ROTATOR_SUB: 180, ROTATOR_SCALE: 181, SCALE_ROTATOR: 182, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184,
+  VECTOR_SIZE: 185, VECTOR_DOT: 186, VECTOR_EQ: 187, VECTOR_NE: 188, ROTATOR_EQ: 189, ROTATOR_NE: 190,
+  NAME_EQ: 191, NAME_NE: 192, IS_A: 193, LIT_NAME: 194, JS_NAME: 195,
+  SET_LOCAL_VECTOR: 196, SET_FIELD_VECTOR: 197, SET_LOCAL_ROTATOR: 198, SET_FIELD_ROTATOR: 199,
 };
-const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, FLOAT_TO_INT: 6, FLOAT_TO_BYTE: 7};
-const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4};
+const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, FLOAT_TO_INT: 6, FLOAT_TO_BYTE: 7, RETURN_ITERATOR: 8};
+const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
 const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
 const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
 // The handle class table (R2b-5): a released handle; a row's unreadable
 // default image; js_check value kinds.
 const RELEASED = 1, UNREADABLE = 1;
-const CK = {INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, CAST: 5};
+const CK = {INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, CAST: 5, VECTOR: 6, ROTATOR: 7, OP: 8};
 const RUNAWAY_LIMIT = 10_000_000;
 const f = Math.fround;
 
@@ -166,8 +177,42 @@ const imports = {
     const v = evaluate(n, handle, frame);
     return v === null ? 0 : v;
   },
-  js_check(frame, n, handle, kind, v) { calls.push({imp: 'check', frame, node: n, receiver: handle, kind, value: v}); },
+  js_check(frame, n, handle, kind, v) {
+    // CHECK_VALUES as Rust wrote them for this report (R2b-6), as float64
+    // bit strings (an Array of doubles may lose a NaN payload in V8).
+    const values = Array.from({length: 9}, (_, i) =>
+      `${rd32(CHECK_VALUES_AT + 8 * i + 4).toString(16)}:${rd32(CHECK_VALUES_AT + 8 * i).toString(16)}`);
+    calls.push({imp: 'check', frame, node: n, receiver: handle, kind, value: v, values});
+  },
+  // R2b-6, the host protocol (script-vm-rust.mjs): a proper vector (three
+  // float32 numbers) or rotator (three int32 words) into VECTOR_IO, else a
+  // host fault; a name as nameId; the iterator count runs no script.
+  js_vector(frame, n, receiver) {
+    calls.push({imp: 'vector', frame, node: n, receiver});
+    const v = evaluate(n, receiver, frame);
+    if (!Array.isArray(v) || v.length !== 3 || !v.every(c => typeof c === 'number' && (c !== c || Math.fround(c) === c)))
+      throw new Error(`Script VM vector position holds ${String(v)}`);
+    for (let i = 0; i < 3; i++) view().setFloat32(VECTOR_IO_AT + 4 * i, v[i], true);
+  },
+  js_rotator(frame, n, receiver) {
+    calls.push({imp: 'rotator', frame, node: n, receiver});
+    const v = evaluate(n, receiver, frame);
+    if (!Array.isArray(v) || v.length !== 3 || !v.every(c => Object.is(c | 0, c)))
+      throw new Error(`Script VM rotator position holds ${String(v)}`);
+    for (let i = 0; i < 3; i++) view().setInt32(VECTOR_IO_AT + 4 * i, v[i], true);
+  },
+  js_name(frame, n, receiver) {
+    calls.push({imp: 'name', frame, node: n, receiver});
+    return nameId(evaluate(n, receiver, frame));
+  },
+  js_iterators(frame) {
+    calls.push({imp: 'iterators', frame});
+    return iteratorCount(frame);
+  },
 };
+// The frame's active iterator count as js_iterators reports it (a test
+// installs `iteratorCount`).
+let iteratorCount = () => 0;
 let classRowHost = null;
 const iterators = [];
 const CHUNK = 64, chunks = [], callSites = new Map(), frameInfo = new Map();
@@ -179,6 +224,7 @@ const RUNAWAY_AT = x.vm_runaway_ptr(), BUDGET_AT = x.vm_budget_ptr(), RESULT_AT 
 const UNDEF_AT = x.vm_float_undef_ptr(), KEYS_AT = x.vm_bound_keys_ptr();
 const FRAMES_AT = x.vm_frames_ptr(), CALL_BLOCK_AT = x.vm_call_block_ptr();
 const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
+const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHECK_VALUES_AT = x.vm_check_values_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -209,6 +255,7 @@ function reset() {
   wr32(CLASSES_AT + 4, 0);
   wr32(CHECK_AT, 0);
   classRowHost = null;
+  iteratorCount = () => 0;
 }
 const count = (imp, receiver) => calls.filter(c => c.imp === imp && (receiver === undefined || c.receiver === receiver)).length;
 
@@ -1186,7 +1233,7 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
   same(vmError(() => run([S.nothing()], {entry: 1, budget: 0})).code, ERR.HANG, 'no budget outside the script');
   // Bad code words.
   for (const [statement, kind] of [
-    [[9], 9], [S.expr(E.int(1)), K.LIT_INT], [S.ret(R.INT, E.float(0)), K.LIT_FLOAT], [S.ret(9, E.int(1)), 9],
+    [[10], 10], [S.expr(E.int(1)), K.LIT_INT], [S.ret(R.INT, E.float(0)), K.LIT_FLOAT], [S.ret(9, E.int(1)), 9],
     [S.ret(R.BOOL, E.int(1)), K.LIT_INT], [S.ret(R.FLOAT, E.bool(1)), K.LIT_BOOL],
     [S.ret(R.BOOL, w(K.OBJECT_EQ, E.int(1), E.none())), K.LIT_INT],
   ]) {
@@ -1863,7 +1910,7 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
 // class rows [image, n, record ids...] (script-vm-rust.mjs classRow).
 // One word more than the capacity: that word (RELEASED) is not an entry.
 const TABLE_CAP = 64, TABLE = arena.alloc(4 * (TABLE_CAP + 1));
-const classRecord = name => ({kind: 'Class', key: `test.${name}`});
+const classRecord = name => ({kind: 'Class', key: `test.${name}`, name: name.toUpperCase()});
 const CR = {A: classRecord('a'), B: classRecord('b'), C: classRecord('c'), D: classRecord('d'), E: classRecord('e')};
 const CLS = {A: {record: CR.A, base: null}};
 CLS.B = {record: CR.B, base: CLS.A};
@@ -1885,15 +1932,21 @@ identities.set(26, {handle: 26});                        // no class: castObject
 const identityOf = handle => identities.get(handle) ?? null;
 const handleOfIdentity = v => v === null ? null : v.handle;
 const rowAddresses = new Map();
-/** The host's class row of `cls`; its default image word as given. */
+/** The host's class row of `cls`; its default image word as given. The
+ * R2b-6 name list follows the record ids (IsA's lower(cls.record.name)). */
 function classRow(cls, image = 0) {
   let address = rowAddresses.get(cls);
   if (address === undefined) {
-    const chain = [];
-    for (let c = cls; c; c = c.base) chain.push(classRecordId(c.record));
-    address = arena.alloc(8 + 4 * chain.length);
-    wr32(address + 4, chain.length);
+    const chain = [], names = [];
+    for (let c = cls; c; c = c.base) {
+      chain.push(classRecordId(c.record));
+      names.push(foldedNameId(String(c.record.name).toLowerCase()));
+    }
+    const n = chain.length;
+    address = arena.alloc(8 + 8 * n);
+    wr32(address + 4, n);
     chain.forEach((id, i) => wr32(address + 8 + 4 * i, id));
+    names.forEach((id, i) => wr32(address + 8 + 4 * (n + i), id));
     rowAddresses.set(cls, address);
   }
   wr32(address, image);
@@ -2230,6 +2283,700 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   same(vmError(() => statement(body, 6)).code, ERR.KIND, 'a Return is not a state statement here');
   same(vmError(() => statement(body, 7)).code, ERR.KIND, 'a yield is not a state statement here');
   same(vmError(() => statement(body, 8)).code, ERR.OUTSIDE, 'an index outside the body');
+}
+
+// ---- R2b-6: vectors, rotators and names ----------------------------------------------------
+// Each operator against the native() case it transcribes (script-vm.mjs), the
+// mover primitives (214/225) through executeMoverPrimitive itself, the x87
+// kernel bodies through the kernel the JavaScript VM calls, IsA through
+// ScriptRuntime.invokeNative itself.
+//
+// NaN payloads. V8 does not keep them stable in two places, measured with the
+// probes in .work/logs/r2b6: (1) for `x op y` with two NaN operands the
+// tier running the closure picks the NaN (Ignition and TurboFan the first,
+// Maglev the second: nan-add-probe2.mjs); (2) an optimized closure may store
+// a NaN into a double-elements Array canonically (0x7fe00000 became
+// 0x7fc00000 in this validator's own OSR code), and may fold a float32
+// widening with a narrowing, keeping a signaling NaN (snan-probe.mjs). The
+// JavaScript VM's vector NaN payloads therefore depend on JIT state. Rust
+// keeps one rule: loads quiet a signaling NaN (getFloat32's widening in the
+// interpreter), arithmetic returns the first NaN operand quieted (the
+// interpreter's and TurboFan's order), kernel bodies return the kernel's
+// words. The references below compute each component as a scalar from
+// quiet float32 words (bit operations, never a NaN inside an Array), compare
+// every non-NaN component exactly with the JavaScript VM's own code, and a
+// NaN component with that rule, checking that JavaScript's result is a NaN
+// (one of the operands' when two are NaN).
+{
+  const kernel = await loadScriptVmKernel();
+  const isNaNBits = b => (b & 0x7f800000) === 0x7f800000 && (b & 0x7fffff) !== 0;
+  const quietBits = b => (isNaNBits(b) ? b | 0x400000 : b) >>> 0;
+  const cellValue = b => num(quietBits(b));             // a float32 cell as the closures hold it
+  const f64bits = v => { const d = new DataView(new ArrayBuffer(8)); d.setFloat64(0, v, true); return `${d.getUint32(4, true).toString(16)}:${d.getUint32(0, true).toString(16)}`; };
+  const sameNumber = (actual, expected, message) => {
+    assert.ok(typeof actual === 'number' && typeof expected === 'number' && f64bits(actual) === f64bits(expected),
+      `${message}: Rust ${actual} (${f64bits(actual)}), JavaScript ${expected} (${typeof expected === 'number' ? f64bits(expected) : '-'})`);
+    checks++;
+  };
+  const result3 = () => [rd32(RESULT3_AT), rd32(RESULT3_AT + 4), rd32(RESULT3_AT + 8)];
+  /** A vector expression's value: its three float32 words (RESULT3). */
+  const vectorOf = (expr, options) => (assert.equal(run([S.ret(R.VECTOR, expr)], options), -1), result3());
+  const rotatorOf = (expr, options) => (assert.equal(run([S.ret(R.ROTATOR, expr)], options), -1), result3().map(v => v | 0));
+  const sameRotator = (actual, expected, message) => { for (let i = 0; i < 3; i++) same(actual[i], expected[i], `${message} [${i}]`); };
+  const f32 = f;
+  let nanPairs = 0, nanComponents = 0;
+  /** One component of JavaScript float arithmetic: `js` the closure's value
+   * of `x op y` (scalars), `actual` Rust's word. */
+  const sameArithmetic = (actual, js, x, y, message) => {
+    actual >>>= 0;
+    if (Number.isNaN(js)) {
+      assert.ok(Number.isNaN(num(actual)), `${message}: Rust ${actual.toString(16)} is not NaN`);
+      if (Number.isNaN(x) && Number.isNaN(y)) {
+        assert.ok(bits(js) === bits(x) || bits(js) === bits(y), `${message}: JavaScript ${bits(js).toString(16)} is neither NaN operand`);
+        nanPairs++;
+      }
+      same(actual, Number.isNaN(x) ? bits(x) : Number.isNaN(y) ? bits(y) : bits(js), `${message} NaN`);
+      nanComponents++;
+    } else same(actual, bits(js), message);
+    same(isNaNBits(actual) ? (actual & 0x400000) !== 0 : true, true, `${message} quiet`);
+  };
+  /** A kernel vector body: the JavaScript VM's value for non-NaN components,
+   * the kernel's own words (in this instance) for NaN ones. */
+  const sameKernel = (actual, js, raw, message) => {
+    for (let i = 0; i < 3; i++) {
+      if (Number.isNaN(js[i])) {
+        same(actual[i] >>> 0, quietBits(raw[i]), `${message} [${i}] NaN`);
+        nanComponents++;
+      } else same(actual[i] >>> 0, bits(js[i]), `${message} [${i}]`);
+    }
+  };
+  const rawKernel = (fn, ...args) => (fn(...args), [rd32(x.result_ptr()), rd32(x.result_ptr() + 4), rd32(x.result_ptr() + 8)]);
+
+  const VEC_BITS = [0, 0x80000000, bits(1), bits(-1), bits(0.1), bits(-2.5), bits(3.5), bits(1e-7), 0x00000001, 0x80000001,
+    0x007fffff, 0x00800000, 0x7f7fffff, 0xff7fffff, 0x7f800000, 0xff800000, 0x7fc00000, 0xffc00000, 0x7fc00001, 0xffe12345,
+    0x7f800001, 0x7fa00000, 0xffbfffff, bits(16777216), bits(12345.678), bits(-0.001), bits(2 ** 64), bits(2 ** -64)];
+  const vectorCases = [];
+  const n = VEC_BITS.length;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+    vectorCases.push([[VEC_BITS[i], VEC_BITS[j], VEC_BITS[(i + j) % n]], [VEC_BITS[j], VEC_BITS[(i * 7 + 3) % n], VEC_BITS[i]]]);
+  const randomBits = () => random() % 6 ? (random() % 3 ? bits((random() / 2 ** 32 - 0.5) * 2 ** ((random() % 60) - 30)) : random()) : VEC_BITS[random() % n];
+  for (let i = 0; i < 1500; i++) vectorCases.push([[randomBits(), randomBits(), randomBits()], [randomBits(), randomBits(), randomBits()]]);
+  const VEC_LOCAL = [0xc0, 0xcc, 0xd8, 0xe4, 0xf0], VEC_FIELD = [0x80, 0x8c, 0x98, 0xa4, 0xb0], VEC_KEY = 1;
+  let vectorSlot = 0;
+  /** A vector operand holding raw words `b` (memory keeps a signaling NaN).
+   * `q` are the quiet words, `v(i)` a component as the closures hold it. A
+   * JavaScript operand is used only without NaN components (an Array may
+   * lose a payload, above). */
+  function vectorOperand(b) {
+    const slot = vectorSlot++ % VEC_LOCAL.length, q = b.map(quietBits), v = i => num(q[i]);
+    let mode = operandIndex++ % 4;
+    if (mode === 3 && q.some(isNaNBits)) mode = 0;
+    switch (mode) {
+      case 0: return {words: w(K.LIT_VECTOR, q), q, v};
+      case 1: b.forEach((c, k) => wr32(LOCALS + VEC_LOCAL[slot] + 4 * k, c)); return {words: w(K.LOCAL_VECTOR, VEC_LOCAL[slot], node()), q, v};
+      case 2: b.forEach((c, k) => wr32(SELF_IMG + VEC_FIELD[slot] + 4 * k, c)); return {words: w(K.FIELD_VECTOR, VEC_FIELD[slot], node(), VEC_KEY), q, v};
+      default: return {words: w(K.JS_VECTOR, node(r => (same(r, SELF_H, 'operator operands evaluate with SELF'), [v(0), v(1), v(2)]))), q, v};
+    }
+  }
+  /** The JavaScript VM's Array of a vector operand (NaN-free, or only for
+   * comparing non-NaN components). */
+  const arrayOf = a => [a.v(0), a.v(1), a.v(2)];
+  const vectorOperandOf = b => { const q = b.map(quietBits); return {q, v: i => num(q[i])}; };
+  // 225 (finishVectorSize, doubles and Math.sqrt): exact for NaN-free
+  // vectors; with a NaN component Rust keeps the source order z*z, y*y, x*x
+  // (the first NaN), and JavaScript's result must be a NaN.
+  const sameSize = (actual, a, message) => {
+    const expected = executeMoverPrimitive(225, [arrayOf(a)]), nans = [a.v(2), a.v(1), a.v(0)].filter(Number.isNaN);
+    if (nans.length) {
+      assert.ok(Number.isNaN(expected), `${message}: JavaScript ${expected} is not NaN`);
+      sameNumber(actual, nans[0], `${message} keeps the first NaN in source order`);
+      if (nans.length > 1) nanPairs++;
+      nanComponents++;
+    } else sameNumber(actual, expected, message);
+  };
+  const ROT_INTS = [0, 1, -1, 16384, -16384, 32768, 65535, 65536, 0x7fffffff, -0x80000000, 12345, -54321, 0x40000000];
+  const rotatorCases = [];
+  for (const a of ROT_INTS) for (const b of ROT_INTS) rotatorCases.push([[a, b, a ^ b], [b, a, (a + b) | 0]]);
+  for (let i = 0; i < 1000; i++) rotatorCases.push([[random() | 0, random() | 0, random() | 0], [random() | 0, (random() % 70000) - 35000, random() | 0]]);
+  function rotatorOperand(v) {
+    const i = operandIndex++, slot = vectorSlot++ % VEC_LOCAL.length;
+    switch (i % 4) {
+      case 0: return {words: w(K.LIT_ROTATOR, v.map(c => c >>> 0)), js: v};
+      case 1: v.forEach((c, k) => wr32(LOCALS + VEC_LOCAL[slot] + 4 * k, c)); return {words: w(K.LOCAL_ROTATOR, VEC_LOCAL[slot], node()), js: v};
+      case 2: v.forEach((c, k) => wr32(SELF_IMG + VEC_FIELD[slot] + 4 * k, c)); return {words: w(K.FIELD_ROTATOR, VEC_FIELD[slot], node(), VEC_KEY), js: v};
+      default: return {words: w(K.JS_ROTATOR, node(r => (same(r, SELF_H, 'operator operands evaluate with SELF'), v.slice()))), js: v};
+    }
+  }
+
+  // 215/216: a.map((v, i) => f(v op b[i])), per component.
+  for (const [kind, op] of [[K.VECTOR_ADD, (x, y) => x + y], [K.VECTOR_SUB, (x, y) => x - y]]) {
+    for (const [ab, bb] of vectorCases) {
+      reset();
+      const a = vectorOperand(ab), b = vectorOperand(bb), actual = vectorOf(w(kind, node(), a.words, b.words));
+      for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f32(op(a.v(i), b.v(i))), a.v(i), b.v(i), `vector kind ${kind} ${ab} ${bb} [${i}]`);
+    }
+  }
+  // The kernel bodies (296, 300, 226, 211's sign flip is plain).
+  // Signed zeros compare equal (FCOMP), a NaN on either side too.
+  for (const [ab, bb, equal] of [[[0, bits(1), bits(2)], [0x80000000, bits(1), bits(2)], true], [[bits(1), 0x80000000, 0], [bits(1), 0, 0x80000000], true],
+    [[bits(1), 0x7fc00000, 0], [bits(1), bits(5), 0], true], [[0, bits(1), bits(2)], [0x80000000, bits(1), bits(3)], false]]) {
+    for (const [kind, expected] of [[K.VECTOR_EQ, equal], [K.VECTOR_NE, !equal]]) {
+      reset();
+      const a = vectorOperand(ab), b = vectorOperand(bb);
+      same(value(R.BOOL, w(kind, node(), a.words, b.words)), expected, `vector compare ${kind} ${ab} ${bb}`);
+    }
+  }
+  for (const [ab, bb] of vectorCases) {
+    reset();
+    let a = vectorOperand(ab), b = vectorOperand(bb);
+    sameKernel(vectorOf(w(K.VECTOR_MUL, node(), a.words, b.words)), kernel.multiplyVectorVector(arrayOf(a), arrayOf(b)),
+      rawKernel(x.op_multiply_vector_vector, ...a.q, ...b.q), `296 ${ab} ${bb}`);
+    reset();
+    a = vectorOperand(ab); b = vectorOperand(bb);
+    sameKernel(vectorOf(w(K.VECTOR_MIRROR, node(), a.words, b.words)), kernel.mirrorVectorByNormal(arrayOf(a), arrayOf(b)),
+      rawKernel(x.op_mirror_vector_by_normal, ...a.q, ...b.q), `300 ${ab} ${bb}`);
+    reset();
+    a = vectorOperand(ab);
+    sameKernel(vectorOf(w(K.VECTOR_NORMAL, node(), a.words)), kernel.normal(arrayOf(a)), rawKernel(x.op_normal, ...a.q), `226 ${ab}`);
+    reset();
+    a = vectorOperand(ab);
+    const neg = vectorOf(w(K.VECTOR_NEG, node(), a.words));
+    // 211: f32num(f32bits(v) ^ 0x80000000), a sign flip of the quiet word.
+    for (let i = 0; i < 3; i++) same(neg[i] >>> 0, bits(f32num(f32bits(a.v(i)) ^ 0x80000000)), `211 ${ab} [${i}]`);
+    reset();
+    a = vectorOperand(ab);
+    sameSize(value(R.FLOAT, w(K.VECTOR_SIZE, node(), a.words)), a, `225 ${ab}`);
+    reset();
+    a = vectorOperand(ab); b = vectorOperand(bb);
+    sameNumber(value(R.FLOAT, w(K.VECTOR_DOT, node(), a.words, b.words)), kernel.dot(arrayOf(a), arrayOf(b)), `219 ${ab} ${bb}`);
+    for (const [kind, reference] of [
+      [K.VECTOR_EQ, (x, y) => { x = x.map(f32); y = y.map(f32); return x.every((v, i) => Number.isNaN(v) || Number.isNaN(y[i]) || v === y[i]); }],
+      [K.VECTOR_NE, (x, y) => { x = x.map(f32); y = y.map(f32); return x.some((v, i) => !Number.isNaN(v) && !Number.isNaN(y[i]) && v !== y[i]); }],
+    ]) {
+      reset();
+      const p = vectorOperand(ab), q = vectorOperand(bb);
+      same(value(R.BOOL, w(kind, node(), p.words, q.words)), reference(arrayOf(p), arrayOf(q)), `vector compare ${kind} ${ab} ${bb}`);
+      reset();
+      const e = vectorOperand(ab), e2 = vectorOperand(ab);
+      same(value(R.BOOL, w(kind, node(), e.words, e2.words)), reference(arrayOf(e), arrayOf(e2)), `vector compare ${kind} with itself ${ab}`);
+    }
+  }
+  // 212/214 (vector, float) and 213 (float, vector).
+  const floatCases = [];
+  for (const [ab] of vectorCases.slice(0, 200)) for (const make of floatOperands()) floatCases.push([ab, make]);
+  for (let i = 0; i < 1500; i++) floatCases.push([vectorCases[random() % vectorCases.length][0], randomFloatOperand]);
+  for (const [ab, make] of floatCases) {
+    reset();
+    let a = vectorOperand(ab), s = make();
+    const fs = f32(s.js);
+    let actual = vectorOf(w(K.VECTOR_SCALE, node(), a.words, s.words));
+    // 212: a.map(v => f(f(v) * f(b))).
+    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f32(f32(a.v(i)) * fs), a.v(i), fs, `212 ${ab} by ${s.js} [${i}]`);
+    reset();
+    a = vectorOperand(ab); s = make();
+    actual = vectorOf(w(K.VECTOR_DIVIDE, node(), a.words, s.words));
+    // 214, executeMoverPrimitive: v * (1 / f(Number(divisor))) in doubles.
+    const moved = executeMoverPrimitive(214, [arrayOf(a), s.js]), reciprocal = 1 / f32(Number(s.js));
+    for (let i = 0; i < 3; i++) {
+      sameArithmetic(actual[i], f32(a.v(i) * reciprocal), a.v(i), reciprocal, `214 ${ab} by ${s.js} [${i}]`);
+      if (!Number.isNaN(moved[i])) same(actual[i] >>> 0, bits(moved[i]), `214 ${ab} by ${s.js} [${i}] (executeMoverPrimitive)`);
+    }
+    reset();
+    s = make(); a = vectorOperand(ab);
+    const ft = f32(s.js);
+    actual = vectorOf(w(K.SCALE_VECTOR, node(), s.words, a.words));
+    // 213: b.map(v => f(f(a) * f(v))), the float evaluated first.
+    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f32(ft * f32(a.v(i))), ft, a.v(i), `213 ${s.js} by ${ab} [${i}]`);
+  }
+  // Rotate (276): the vector against the rotator cases.
+  for (let i = 0; i < 3000; i++) {
+    reset();
+    const a = vectorOperand(vectorCases[i % vectorCases.length][0]), b = rotatorOperand(rotatorCases[i % rotatorCases.length][0]);
+    sameKernel(vectorOf(w(K.VECTOR_ROTATE, node(), a.words, b.words)), kernel.rotate(arrayOf(a), b.js),
+      rawKernel(x.op_rotate, ...a.q, ...b.js), `276 ${a.q} by ${b.js}`);
+  }
+  for (const [av, bv] of rotatorCases) {
+    for (const [kind, reference] of [
+      [K.ROTATOR_ADD, (x, y) => x.map((v, i) => ((v | 0) + (y[i] | 0)) | 0)],     // 316
+      [K.ROTATOR_SUB, (x, y) => x.map((v, i) => ((v | 0) - (y[i] | 0)) | 0)],     // 317
+    ]) {
+      reset();
+      const a = rotatorOperand(av), b = rotatorOperand(bv);
+      sameRotator(rotatorOf(w(kind, node(), a.words, b.words)), reference(a.js, b.js), `rotator kind ${kind} ${av} ${bv}`);
+    }
+    for (const [kind, reference] of [
+      [K.ROTATOR_EQ, (x, y) => x.every((v, i) => (v | 0) === (y[i] | 0))],        // 142
+      [K.ROTATOR_NE, (x, y) => x.some((v, i) => (v | 0) !== (y[i] | 0))],         // 203
+    ]) {
+      for (const other of [bv, av, [av[0], av[1], av[2] ^ 1]]) {
+        reset();
+        const a = rotatorOperand(av), b = rotatorOperand(other);
+        same(value(R.BOOL, w(kind, node(), a.words, b.words)), reference(a.js, b.js), `rotator compare ${kind} ${av} ${other}`);
+      }
+    }
+  }
+  // 287/288: the kernel's FILD/FMUL/_ftol. The lowering admits only a float
+  // operand that cannot be undefined (native() claims only a number).
+  const DEFINED_FLOATS = FLOATS.filter(v => v !== undefined);
+  for (const [av] of rotatorCases) {
+    for (const v of [DEFINED_FLOATS[random() % DEFINED_FLOATS.length], (random() / 2 ** 32 - 0.5) * 2 ** ((random() % 40) - 20)]) {
+      reset();
+      const a = rotatorOperand(av), s = {words: E.float(bits(v)), js: f(v)};
+      sameRotator(rotatorOf(w(K.ROTATOR_SCALE, node(), a.words, s.words)), kernel.multiplyRotatorFloat(a.js, s.js), `287 ${av} by ${v}`);
+      reset();
+      const b = rotatorOperand(av), t = floatOperand(v);
+      if (t.words[0] === K.JS_FLOAT) continue;
+      sameRotator(rotatorOf(w(K.SCALE_ROTATOR, node(), t.words, b.words)), kernel.multiplyRotatorFloat(b.js, t.js), `288 ${v} by ${av}`);
+    }
+  }
+  // Explicit edges.
+  reset();
+  vectorOf(w(K.VECTOR_SCALE, node(), w(K.LIT_VECTOR, [bits(1), 0x80000000, 0x7fe00000]), w(K.JS_FLOAT, node(() => undefined))));
+  same(result3().join(), [0x7fc00000, 0x7fc00000, 0x7fe00000].join(), '212 by undefined: NaN, the vector NaN first');
+  reset();
+  vectorOf(w(K.SCALE_VECTOR, node(), w(K.JS_FLOAT, node(() => undefined)), w(K.LIT_VECTOR, [bits(2), 0x7fe00000, 0])));
+  same(result3().join(), [0x7fc00000, 0x7fc00000, 0x7fc00000].join(), '213 undefined by a vector: the float NaN first');
+  reset();
+  vectorOf(w(K.VECTOR_SCALE, node(), w(K.LIT_VECTOR, [0x80000000, bits(1), 0x7f800000]), E.float(0)));
+  same(result3().join(), [0x80000000, 0, 0x7fc00000].join(), '212: -0 * 0 is -0, inf * 0 the default NaN');
+  reset();
+  vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(-3), 0]), E.float(0)));
+  same(result3().join(), [0x7f800000, 0xff800000, 0x7fc00000].join(), '214 by zero: infinities, 0 * inf the default NaN');
+  reset();
+  vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(3), 0x7fd00000]), E.float(0x7fe00001)));
+  same(result3().join(), [0x7fe00001, 0x7fe00001, 0x7fd00000].join(), '214 by a NaN: the reciprocal NaN, after a NaN component');
+  reset();
+  vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(3), 0x3f800001]), E.float(bits(3))));
+  same(result3().join(), executeMoverPrimitive(214, [[1, 3, num(0x3f800001)], 3]).map(bits).join(), '214 multiplies by the double reciprocal');
+  for (const [words, message] of [
+    [[0x7fa00000, 0xffe12345, 0], 'two NaN components: y*y + x*x keeps y'],
+    [[0xffe12345, 0x7fa00000, 0x7fc00001], 'z*z first'],
+    [[0x7f800000, 0x7fc00001, 0], 'infinity plus NaN'],
+    [[0x80000000, 0x80000000, 0x80000000], '-0'],
+    [[0x00000001, 0, 0], 'subnormal'],
+    [[0x7f7fffff, 0x7f7fffff, 0x7f7fffff], 'huge'],
+    [[bits(3), bits(4), 0], '3-4-5'],
+    [[0x3f800001, 0x3f800001, 0x3f800001], 'rounding'],
+  ]) {
+    reset();
+    for (let k = 0; k < 3; k++) wr32(LOCALS + 0xc0 + 4 * k, words[k]);
+    sameSize(value(R.FLOAT, w(K.VECTOR_SIZE, node(), w(K.LOCAL_VECTOR, 0xc0, node()))), vectorOperandOf(words), `225 ${message}`);
+  }
+  // A signaling NaN in memory reads quiet, as getFloat32 widens it.
+  reset();
+  for (const [k, b] of [[0, 0x7f800001], [1, 0xffa00000], [2, 0x7fc00000]]) wr32(LOCALS + 0xc0 + 4 * k, b);
+  same(vectorOf(w(K.LOCAL_VECTOR, 0xc0, node())).join(), [0x7fc00001, 0xffe00000, 0x7fc00000].join(), 'LOCAL_VECTOR quiets signaling NaNs');
+  wr32(SELF_IMG + 0x80, 0x7f800001);
+  same(vectorOf(w(K.FIELD_VECTOR, 0x80, node(), VEC_KEY))[0], 0x7fc00001, 'FIELD_VECTOR quiets signaling NaNs');
+  // ---- JavaScript vector values and fields: the JS path, receivers, host faults
+  for (const [flags, key, jsPath] of [[0, VEC_KEY, false], [HOST, VEC_KEY, true], [BOUND, 3, true], [BOUND, VEC_KEY, false]]) {
+    reset();
+    infos.set(SELF_H, SELF_IMG | flags);
+    [bits(1), bits(2), bits(3)].forEach((b, k) => wr32(SELF_IMG + 0x80 + 4 * k, b));
+    const vn = node(r => (same(r, SELF_H, 'FIELD_VECTOR JS path receiver'), [4, 5, 6]));
+    same(vectorOf(w(K.FIELD_VECTOR, 0x80, vn, key)).map(num).join(), jsPath ? '4,5,6' : '1,2,3', `FIELD_VECTOR flags ${flags} key ${key}`);
+    same(calls.filter(c => c.node === vn).length, jsPath ? 1 : 0, 'FIELD_VECTOR import');
+    reset();
+    infos.set(SELF_H, SELF_IMG | flags);
+    [7, -8, 9].forEach((v, k) => wr32(SELF_IMG + 0x80 + 4 * k, v));
+    same(rotatorOf(w(K.FIELD_ROTATOR, 0x80, node(() => [1, 2, 3]), key)).join(), jsPath ? '1,2,3' : '7,-8,9', `FIELD_ROTATOR flags ${flags}`);
+  }
+  // A context's value: the object with the current receiver, the field on the object.
+  reset();
+  [bits(0.5), bits(-0.5), 0].forEach((b, k) => wr32(OTHER_IMG + 0x80 + 4 * k, b));
+  wr32(LOCALS + 44, OTHER_H);
+  same(vectorOf(E.context(node(), w(K.LOCAL_OBJECT, 44), w(K.FIELD_VECTOR, 0x80, node(), VEC_KEY))).map(num).join(), '0.5,-0.5,0', 'vector context');
+  same(vectorOf(E.context(node(), E.none(), w(K.FIELD_VECTOR, 0x80, node(), VEC_KEY))).join(), '0,0,0', 'vector context None is zero');
+  same(count('none'), 1, 'vector context None reports Accessed None');
+  same(rotatorOf(E.context(node(), E.none(), w(K.JS_ROTATOR, node()))).join(), '0,0,0', 'rotator context None is zero');
+  // A JavaScript vector or rotator node evaluates with the current receiver.
+  for (const kind of [K.JS_VECTOR, K.JS_ROTATOR]) {
+    reset();
+    wr32(LOCALS + 44, OTHER_H);
+    const receivers = [];
+    const expr = E.context(node(), w(K.LOCAL_OBJECT, 44), w(kind, node(r => (receivers.push(r), [1, 2, 3]))));
+    kind === K.JS_VECTOR ? vectorOf(expr) : rotatorOf(expr);
+    same(receivers.join(), String(OTHER_H), `${kind} evaluates with the context object`);
+  }
+  // Operands inside a context value still evaluate with SELF.
+  reset();
+  wr32(LOCALS + 44, OTHER_H);
+  const seen = [];
+  value(R.FLOAT, E.context(node(), w(K.LOCAL_OBJECT, 44), w(K.VECTOR_SIZE, node(), w(K.JS_VECTOR, node(r => (seen.push(r), [3, 4, 0]))))));
+  same(seen.join(), String(SELF_H), 'an operator in a context evaluates its operands with SELF');
+  // js_vector marks SELF stale (it runs JavaScript).
+  reset();
+  wr32(SELF_IMG + 0x10, 5);
+  same(value(R.INT, w(K.INT_ADD, w(K.FIELD_INT, 0x10, node(), 1),
+    w(K.INT_ADD, w(K.FLOAT_TO_INT, w(K.VECTOR_SIZE, node(), w(K.JS_VECTOR, node(() => [3, 4, 0])))), w(K.FIELD_INT, 0x10, node(), 1)))), 15,
+    'fields around a JavaScript vector');
+  same(count('receiver', SELF_H), 2, 'SELF info refetched after js_vector');
+  // Host faults: a JavaScript value that is not three float32 numbers.
+  for (const bad of [undefined, null, [1, 2], [1, 2, 0.1], [1, '2', 3], {}]) {
+    reset();
+    assert.throws(() => vectorOf(w(K.JS_VECTOR, node(() => bad))), /vector position holds/, `js_vector rejects ${String(bad)}`);
+    checks++;
+  }
+  for (const bad of [[1, 2, 0.5], [1, 2, -0], [1, 2, 2 ** 31], undefined]) {
+    reset();
+    assert.throws(() => rotatorOf(w(K.JS_ROTATOR, node(() => bad))), /rotator position holds/, `js_rotator rejects ${String(bad)}`);
+    checks++;
+  }
+
+  // ---- Members of vector and rotator values (structValue over a value)
+  for (const [ab] of vectorCases.slice(0, 400)) {
+    for (let index = 0; index < 3; index++) {
+      reset();
+      const a = vectorOperand(ab);
+      // structValue: copyFloat of the component, Math.fround(Number(v ?? 0)).
+      sameNumber(value(R.FLOAT, w(K.VECTOR_MEMBER, node(), index, a.words)), f(Number(a.v(index) ?? 0)), `VECTOR_MEMBER ${index} of ${ab}`);
+    }
+  }
+  for (const [av] of rotatorCases.slice(0, 200)) {
+    for (let index = 0; index < 3; index++) {
+      reset();
+      const a = rotatorOperand(av);
+      same(value(R.INT, w(K.ROTATOR_MEMBER, node(), index, a.words)), Number(a.js[index] ?? 0) | 0, `ROTATOR_MEMBER ${index} of ${av}`);
+    }
+  }
+  // The member's value is evaluated with the member's receiver.
+  reset();
+  wr32(LOCALS + 44, OTHER_H);
+  [bits(1.5), bits(2.5), bits(3.5)].forEach((b, k) => wr32(OTHER_IMG + 0x80 + 4 * k, b));
+  same(value(R.FLOAT, E.context(node(), w(K.LOCAL_OBJECT, 44), w(K.VECTOR_MEMBER, node(), 2, w(K.FIELD_VECTOR, 0x80, node(), VEC_KEY)))), 3.5,
+    'VECTOR_MEMBER reads the context object\'s field');
+  const memberReceivers = [];
+  value(R.INT, E.context(node(), w(K.LOCAL_OBJECT, 44), w(K.ROTATOR_MEMBER, node(), 1, w(K.JS_ROTATOR, node(r => (memberReceivers.push(r), [1, 2, 3]))))));
+  same(memberReceivers.join(), String(OTHER_H), 'ROTATOR_MEMBER evaluates its value with the member\'s receiver');
+  for (const kind of [K.VECTOR_MEMBER, K.ROTATOR_MEMBER]) {
+    reset();
+    const error = vmError(() => value(kind === K.VECTOR_MEMBER ? R.FLOAT : R.INT, w(kind, node(), 3, w(K.JS_VECTOR, node()))));
+    same(error.code, ERR.KIND, 'member index 3');
+    same(error.node, 3, 'member index error node');
+  }
+
+  // ---- Names (254/255): the folded spelling's id
+  const NAMES = ['None', 'none', 'NONE', '', undefined, null, 0, false, 'Pawn', 'pawn', 'PAWN', 'ScriptedPawn', 'Attacking',
+    'attacking', 'Attacking ', 'İstanbul', 'i̇stanbul', 'straße', 'STRASSE', 'Straße', 'ÉCOLE', 'école', 'a', 'A', 'Z_9', 'z_9'];
+  const nameOperand = v => {
+    const i = operandIndex++;
+    if (typeof v === 'string' && i % 2 === 0) return w(K.LIT_NAME, nameId(v));
+    return w(K.JS_NAME, node(r => (same(r, SELF_H, 'name operands evaluate with SELF'), v)));
+  };
+  for (const a of NAMES) for (const b of NAMES) {
+    const expected = String(a || 'None').toLowerCase() === String(b || 'None').toLowerCase();  // native 254
+    reset();
+    same(value(R.BOOL, w(K.NAME_EQ, node(), nameOperand(a), nameOperand(b))), expected, `254 ${String(a)} ${String(b)}`);
+    reset();
+    same(value(R.BOOL, w(K.NAME_NE, node(), nameOperand(a), nameOperand(b))), !expected, `255 ${String(a)} ${String(b)}`);
+  }
+  reset();
+  same(value(R.BOOL, w(K.NAME_EQ, node(), E.context(node(), E.none(), w(K.JS_NAME, node())), w(K.LIT_NAME, nameId('None')))), true,
+    'a None context\'s name is None');
+  same(count('none'), 1, 'name context None reports Accessed None');
+  reset();
+  const nameOrder = [];
+  value(R.BOOL, w(K.NAME_EQ, node(), w(K.JS_NAME, node(() => (nameOrder.push('a'), 'x'))), w(K.JS_NAME, node(() => (nameOrder.push('b'), 'y')))));
+  same(nameOrder.join(), 'a,b', 'name operands left to right');
+
+  // ---- IsA (invokeNative 303) with a name literal
+  // The reference: ScriptRuntime.invokeNative on the class-table world.
+  // The fields invokeNative reads on its way to 303 for every native.
+  world.boundaryNatives = new Set();
+  world.collisionViewActors = new WeakSet();
+  world.instance = ScriptRuntime.prototype.instance;
+  const isA = (identity, arg) => ScriptRuntime.prototype.invokeNative.call(world,
+    {index: 303, receiver: identity, argumentCount: 1, evaluateArgument: () => arg});
+  const ISA_NAMES = ['A', 'a', 'B', 'b', 'C', 'D', 'E', 'None', '', 'Actor'];
+  for (const handle of [20, 21, 22, 23, 24, SELF_H, OTHER_H]) {
+    for (const arg of ISA_NAMES) {
+      reset();
+      classTable();
+      for (const h of [20, 21, 22, 23, 24]) infos.set(h, THIRD_IMG);
+      const jsNode = node(() => { throw new Error('IsA must not run in JavaScript here'); });
+      const expected = isA(identityOf(handle), arg);
+      const expr = w(K.IS_A, jsNode, nameId(arg));
+      const got = handle === SELF_H ? value(R.BOOL, expr) : value(R.BOOL, E.context(node(), (wr32(LOCALS + 44, handle), w(K.LOCAL_OBJECT, 44)), expr));
+      same(got, expected, `IsA(${arg}) on ${handle}`);
+    }
+  }
+  // The JavaScript path: a HOST receiver, an undescribed handle, a released one.
+  for (const [why, setup, handle] of [
+    ['HOST receiver', () => infos.set(SELF_H, HOST), SELF_H],
+    ['undescribed receiver', () => { classRowHost = () => 0; }, SELF_H],
+    ['undescribed context receiver', () => { classRowHost = () => 0; }, 21],
+  ]) {
+    reset();
+    classTable();
+    infos.set(21, THIRD_IMG);
+    setup();
+    let evaluated = 0;
+    const jsNode = node(r => (evaluated++, same(r, handle, `IsA ${why} receiver`), isA(identityOf(r), 'B')));
+    const expr = w(K.IS_A, jsNode, nameId('B'));
+    const got = handle === SELF_H ? value(R.BOOL, expr) : value(R.BOOL, E.context(node(), (wr32(LOCALS + 44, handle), w(K.LOCAL_OBJECT, 44)), expr));
+    same(got, isA(identityOf(handle), 'B'), `IsA ${why}`);
+    same(evaluated, 1, `IsA ${why} runs once in JavaScript`);
+  }
+  // A released SELF is HOST to js_receiver (identityOfHandle's null); a
+  // RELEASED table entry asks the host, which describes nothing.
+  for (const flags of [HOST, 0]) {
+    reset();
+    classTable();
+    wr32(TABLE + 4 * SELF_H, RELEASED);
+    infos.set(SELF_H, flags === HOST ? HOST : SELF_IMG);
+    classRowHost = () => 0;
+    let releasedIsA = 0;
+    value(R.BOOL, w(K.IS_A, node(() => (releasedIsA++, false)), nameId('A')));
+    same(releasedIsA, 1, `IsA on a released SELF runs in JavaScript (${flags})`);
+  }
+  // A released handle read from memory is None: the context skips IsA.
+  reset();
+  classTable();
+  wr32(TABLE + 4 * 21, RELEASED);
+  value(R.BOOL, E.context(node(), (wr32(LOCALS + 44, 21), w(K.LOCAL_OBJECT, 44)), w(K.IS_A, node(), nameId('A'))));
+  same(count('none'), 1, 'IsA on a released pointer reports Accessed None');
+  // A row is described once, then read from the table.
+  reset();
+  classTable();
+  value(R.BOOL, w(K.AND, w(K.IS_A, node(), nameId('b')).length, w(K.IS_A, node(), nameId('b')), w(K.IS_A, node(), nameId('c'))));
+  same(count('classRow'), 1, 'IsA enters the row once');
+  // SCRIPT_VM_CHECK reports IsA as a bool.
+  reset();
+  classTable();
+  wr32(CHECK_AT, 1);
+  const checkedIsA = node();
+  value(R.BOOL, w(K.IS_A, checkedIsA, nameId('A')));
+  const isaCheck = calls.find(c => c.imp === 'check');
+  same(isaCheck?.node, checkedIsA, 'IsA check node');
+  same(isaCheck?.kind, CK.BOOL, 'IsA check kind');
+  same(isaCheck?.value, 1, 'IsA check value');
+
+  // ---- Stores
+  for (const [ab] of vectorCases.slice(0, 300)) {
+    reset();
+    const a = vectorOperand(ab);
+    run([S.expr(w(K.SET_LOCAL_VECTOR, 0x60, a.words)), S.ret(R.VOID)]);
+    // assignLocalOf: codec copy (Math.fround(Number(c ?? 0))), then
+    // setFloat32 of each component: the component's quiet word.
+    const stored = [0, 1, 2].map(i => bits(f(Number(a.v(i) ?? 0))));
+    for (let i = 0; i < 3; i++) if (Number.isNaN(a.v(i))) stored[i] = a.q[i];
+    same([rd32(LOCALS + 0x60), rd32(LOCALS + 0x64), rd32(LOCALS + 0x68)].join(), stored.join(), `SET_LOCAL_VECTOR ${ab}`);
+    reset();
+    const b = vectorOperand(ab), setNode = node(() => { throw new Error('the store must not run in JavaScript'); });
+    run([S.expr(w(K.SET_FIELD_VECTOR, 0x40, setNode, 4, b.words.length, b.words)), S.ret(R.VOID)]);
+    same([rd32(SELF_IMG + 0x40), rd32(SELF_IMG + 0x44), rd32(SELF_IMG + 0x48)].join(), stored.join(), `SET_FIELD_VECTOR ${ab}`);
+  }
+  for (const [av] of rotatorCases.slice(0, 200)) {
+    reset();
+    const a = rotatorOperand(av);
+    run([S.expr(w(K.SET_LOCAL_ROTATOR, 0x60, a.words)), S.ret(R.VOID)]);
+    same([rd32(LOCALS + 0x60) | 0, rd32(LOCALS + 0x64) | 0, rd32(LOCALS + 0x68) | 0].join(), a.js.map(v => Number(v ?? 0) | 0).join(), `SET_LOCAL_ROTATOR ${av}`);
+    reset();
+    const b = rotatorOperand(av);
+    run([S.expr(w(K.SET_FIELD_ROTATOR, 0x40, node(), 4, b.words.length, b.words)), S.ret(R.VOID)]);
+    same([rd32(SELF_IMG + 0x40) | 0, rd32(SELF_IMG + 0x44) | 0, rd32(SELF_IMG + 0x48) | 0].join(), b.js.map(v => v | 0).join(), `SET_FIELD_ROTATOR ${av}`);
+  }
+  // A field on the JavaScript path runs the whole Let node; the value is skipped.
+  for (const kind of [K.SET_FIELD_VECTOR, K.SET_FIELD_ROTATOR]) {
+    for (const [flags, key] of [[HOST, 4], [BOUND, 3]]) {
+      reset();
+      infos.set(SELF_H, SELF_IMG | flags);
+      let ran = 0;
+      const letNode = node(r => { ran++; same(r, SELF_H, 'store JS path receiver'); });
+      const valueWords = kind === K.SET_FIELD_VECTOR ? w(K.JS_VECTOR, node()) : w(K.JS_ROTATOR, node());
+      run([S.expr(w(kind, 0x40, letNode, key, valueWords.length, valueWords)), S.ret(R.VOID)]);
+      same(ran, 1, `store ${kind} JS path runs the Let node`);
+      same(count('vector') + count('rotator'), 0, `store ${kind} JS path skips the value`);
+    }
+  }
+
+  // ---- The out natives as statements (VCOMPOUND): storage, value, target, store
+  const VOP = {MUL_FLOAT: 1, DIV_FLOAT: 2, ADD: 3, SUB: 4, MUL: 5, R_ADD: 6, R_SUB: 7};
+  // The kernel bodies with the JavaScript wrapper and the raw export.
+  const VCOMPOUND_KERNEL = new Map([
+    [VOP.MUL_FLOAT, [(a, b) => kernel.multiplyEqualVectorFloat(a, b), (q, s) => rawKernel(x.op_multiply_equal_vector_float, ...q, bits(f(s)))]],  // 221
+    [VOP.DIV_FLOAT, [(a, b) => kernel.divideEqualVectorFloat(a, b), (q, s) => rawKernel(x.op_divide_equal_vector_float, ...q, bits(f(s)))]],      // 222
+    [VOP.SUB, [(a, b) => kernel.subtractEqualVectorVector(a, arrayOf(b)), (q, b) => rawKernel(x.op_subtract_equal_vector_vector, ...q, ...b.q)]],   // 224
+    [VOP.MUL, [(a, b) => kernel.multiplyEqualVectorVector(a, arrayOf(b)), (q, b) => rawKernel(x.op_multiply_equal_vector_vector, ...q, ...b.q)]],   // 297
+    [VOP.ADD, null],                                                                     // 223
+  ]);
+  const TARGET = 0x60, TARGET_FIELD = 0x40;
+  const vcompound = (op, onField, valueWords, n = node(() => { throw new Error('the out native must not run in JavaScript'); }), key = 4) =>
+    onField ? w(K.VCOMPOUND_FIELD, op, TARGET_FIELD, n, key, valueWords.length, valueWords) : w(K.VCOMPOUND_LOCAL, op, TARGET, n, valueWords);
+  const at = onField => onField ? SELF_IMG + TARGET_FIELD : LOCALS + TARGET;
+  const read3 = base => [rd32(base), rd32(base + 4), rd32(base + 8)];
+  for (const [op, reference] of VCOMPOUND_KERNEL) {
+    const cases = op <= VOP.DIV_FLOAT ? floatCases.slice(0, 1500) : vectorCases.slice(0, 1500).map(([a, b]) => [a, () => vectorOperand(b)]);
+    for (const [target, make] of cases) {
+      for (const onField of [false, true]) {
+        reset();
+        const operand = make();
+        target.forEach((b, k) => wr32(at(onField) + 4 * k, b));
+        run([S.expr(vcompound(op, onField, operand.words)), S.ret(R.VOID)]);
+        // The reference's get: getFloat32 then the codec; the store: the
+        // codec then setFloat32 (the float32 of each result component).
+        const t = vectorOperandOf(target), actual = read3(at(onField));
+        const message = `vcompound ${op} ${onField ? 'field' : 'local'} ${target} by ${operand.js ?? operand.q}`;
+        if (!reference) {
+          // 223: a.map((v, i) => f(f(v) + f(b[i]))).
+          for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f(f(t.v(i)) + f(operand.v(i))), t.v(i), operand.v(i), `${message} [${i}]`);
+          continue;
+        }
+        const [js, raw] = reference;
+        const value = op <= VOP.DIV_FLOAT ? operand.js : operand;
+        sameKernel(actual, js(arrayOf(t), value).map(v => f(Number(v ?? 0))), raw(t.q, value), message);
+      }
+    }
+  }
+  for (const [av, bv] of rotatorCases) {
+    for (const [op, reference] of [[VOP.R_ADD, (a, b) => a.map((v, i) => ((v | 0) + (b[i] | 0)) | 0)], [VOP.R_SUB, (a, b) => a.map((v, i) => ((v | 0) - (b[i] | 0)) | 0)]]) {
+      for (const onField of [false, true]) {
+        reset();
+        av.forEach((v, k) => wr32(at(onField) + 4 * k, v));
+        const operand = rotatorOperand(bv);
+        run([S.expr(vcompound(op, onField, operand.words)), S.ret(R.VOID)]);
+        same(read3(at(onField)).map(v => v | 0).join(), reference(av, operand.js).join(), `vcompound ${op} ${onField ? 'field' : 'local'} ${av} by ${bv}`);
+      }
+    }
+  }
+  // The value is evaluated before the target is read.
+  for (const onField of [false, true]) {
+    reset();
+    [bits(1), bits(2), bits(3)].forEach((b, k) => wr32(at(onField) + 4 * k, b));
+    const writer = node(() => { wr32(at(onField), bits(10)); return [1, 1, 1]; });
+    run([S.expr(vcompound(VOP.ADD, onField, w(K.JS_VECTOR, writer))), S.ret(R.VOID)]);
+    same(num(rd32(at(onField))), 11, `vcompound reads the target after the value (${onField ? 'field' : 'local'})`);
+  }
+  // The field JavaScript path runs the whole out native; bad ops fail first.
+  for (const [flags, key] of [[HOST, 4], [BOUND, 3]]) {
+    reset();
+    infos.set(SELF_H, SELF_IMG | flags);
+    let ran = 0;
+    run([S.expr(vcompound(VOP.ADD, true, w(K.JS_VECTOR, node()), node(r => { ran++; same(r, SELF_H, 'vcompound JS path receiver'); }), key)), S.ret(R.VOID)]);
+    same(ran, 1, 'vcompound JS path runs the native');
+    same(count('vector'), 0, 'vcompound JS path skips the value');
+  }
+  for (const op of [0, 8, 0xffffffff]) {
+    for (const onField of [false, true]) {
+      reset();
+      const error = vmError(() => run([S.expr(vcompound(op, onField, w(K.JS_VECTOR, node()))), S.ret(R.VOID)]));
+      same(error.code, ERR.KIND, `vcompound bad op ${op}`);
+      same(error.node >>> 0, op >>> 0, 'vcompound bad op node');
+      same(count('vector'), 0, 'a bad op evaluates nothing');
+    }
+  }
+
+  // ---- Returns: vector and rotator values, and Returns in a body with a foreach
+  reset();
+  same(run([S.ret(R.VECTOR, w(K.LIT_VECTOR, [bits(1), 0x80000000, 0x7fc00001]))]), -1, 'vector Return');
+  same(result3().join(), [bits(1), 0x80000000, 0x7fc00001].join(), 'RESULT3 holds the vector');
+  same(rd32(RESULT_AT) === 0 && rd32(RESULT_AT + 4) === 0, true, 'RESULT is 0.0 after a vector Return');
+  same(run([S.ret(R.ROTATOR, w(K.LIT_ROTATOR, [1, -2 >>> 0, 0x7fffffff]))]), -1, 'rotator Return');
+  same(result3().map(v => v | 0).join(), '1,-2,2147483647', 'RESULT3 holds the rotator');
+  same(rd32(RESULT_AT) === 0 && rd32(RESULT_AT + 4) === 0, true, 'RESULT is 0.0 after a rotator Return');
+  for (const [rkind, expr, expected] of [[R.VOID, [], undefined], [R.INT, E.int(7), 7], [R.BOOL, E.bool(1), true],
+    [R.VECTOR, w(K.LIT_VECTOR, [bits(1), bits(2), bits(3)]), '1,2,3']]) {
+    reset();
+    const order = [];
+    iteratorCount = frame => (order.push('iterators'), same(frame, FRAME, 'js_iterators frame'), 0);
+    const statements = [w(K.S_RETURN_ITER, rkind, rkind === R.VOID ? [] : w(K.INT_ADD, E.int(0), E.int(0)).length && expr)];
+    const valueNode = node(() => (order.push('value'), 1));
+    if (rkind === R.INT) statements[0] = w(K.S_RETURN_ITER, rkind, w(K.INT_ADD, expr, w(K.JS_INT, valueNode)));
+    same(run(statements), -1, `S_RETURN_ITER ${rkind}`);
+    const got = rkind === R.VECTOR ? result3().map(num).join() : result(rkind);
+    same(got, rkind === R.INT ? 8 : expected, `S_RETURN_ITER ${rkind} value`);
+    if (rkind === R.INT) same(order.join(), 'iterators,value', 'the iterator count precedes the value');
+    reset();
+    iteratorCount = () => 1;
+    const error = vmError(() => run([w(K.S_RETURN_ITER, R.INT, w(K.JS_INT, node(() => { throw new Error('evaluated'); })))]));
+    same(error.code, ERR.RETURN_ITERATOR, 'a Return with an active iterator');
+    same(count('int'), 0, 'the value is not evaluated');
+  }
+  reset();
+  same(vmError(() => run([w(K.S_RETURN_ITER, 9, E.int(1))])).code, ERR.KIND, 'S_RETURN_ITER bad rkind');
+  same(vmError(() => x.vm_statement(assemble([w(K.S_RETURN_ITER, R.VOID)]), FRAME, LOCALS, SELF_H, 0)).code, ERR.KIND,
+    'S_RETURN_ITER is not a state statement');
+  assert.ok(nanPairs > 200, 'the sweeps cover NaN operand pairs');
+
+  // ---- SCRIPT_VM_CHECK reports (R2b-6)
+  reset();
+  wr32(CHECK_AT, 1);
+  [bits(1), 0x7f800001, 0x80000000].forEach((b, k) => wr32(LOCALS + 0xc0 + 4 * k, b));
+  const localNode = node();
+  vectorOf(w(K.LOCAL_VECTOR, 0xc0, localNode));
+  let report = calls.find(c => c.imp === 'check');
+  same(report?.node, localNode, 'CK_VECTOR node');
+  same(report?.kind, CK.VECTOR, 'CK_VECTOR kind');
+  same(report.values.slice(6).join(), [f64bits(1), f64bits(num(0x7fc00001)), f64bits(-0)].join(), 'CK_VECTOR value (widened, quiet)');
+  reset();
+  wr32(CHECK_AT, 1);
+  [3, -4, 5].forEach((v, k) => wr32(SELF_IMG + 0x80 + 4 * k, v));
+  rotatorOf(w(K.FIELD_ROTATOR, 0x80, node(), VEC_KEY));
+  report = calls.find(c => c.imp === 'check');
+  same(report?.kind, CK.ROTATOR, 'CK_ROTATOR kind');
+  same(report.values.slice(6).join(), [f64bits(3), f64bits(-4), f64bits(5)].join(), 'CK_ROTATOR value');
+  reset();
+  wr32(CHECK_AT, 1);
+  infos.set(SELF_H, SELF_IMG | HOST);
+  vectorOf(w(K.FIELD_VECTOR, 0x80, node(() => [1, 2, 3]), VEC_KEY));
+  same(count('check'), 0, 'a JavaScript vector is not reported');
+  reset();
+  wr32(CHECK_AT, 1);
+  const opNode = node();
+  vectorOf(w(K.VECTOR_SCALE, opNode, w(K.LIT_VECTOR, [bits(1), bits(2), bits(3)]), w(K.JS_FLOAT, node(() => undefined))));
+  report = calls.find(c => c.imp === 'check' && c.node === opNode);
+  same(report?.kind, CK.OP, 'CK_OP kind');
+  same(report.values.slice(0, 3).join(), [f64bits(1), f64bits(2), f64bits(3)].join(), 'CK_OP first operand');
+  same(report.values[3], '7ff80000:1', 'CK_OP reports an undefined float as UNDEF_F64');
+  same(report.values.slice(6).join(), [NaN, NaN, NaN].map(f64bits).join(), 'CK_OP result');
+  reset();
+  wr32(CHECK_AT, 1);
+  const nameNode = node();
+  value(R.BOOL, w(K.NAME_NE, nameNode, w(K.LIT_NAME, nameId('Pawn')), w(K.JS_NAME, node(() => 'PAWN'))));
+  report = calls.find(c => c.imp === 'check' && c.node === nameNode);
+  same(report.values[0], f64bits(nameId('pawn')), 'CK_OP name operand a');
+  same(report.values[3], f64bits(nameId('pawn')), 'CK_OP name operand b');
+  same(report.values[6], f64bits(0), 'CK_OP name result');
+  reset();
+  wr32(CHECK_AT, 1);
+  const sizeNode = node();
+  value(R.FLOAT, w(K.VECTOR_SIZE, sizeNode, w(K.LIT_VECTOR, [bits(3), bits(4), 0])));
+  report = calls.find(c => c.imp === 'check' && c.node === sizeNode);
+  same(report.values[6], f64bits(5), 'CK_OP float result');
+  // A member of a value, and an out native's target, value and result.
+  reset();
+  wr32(CHECK_AT, 1);
+  const memberNode = node();
+  value(R.FLOAT, w(K.VECTOR_MEMBER, memberNode, 1, w(K.LIT_VECTOR, [bits(1), bits(-2), bits(3)])));
+  report = calls.find(c => c.imp === 'check' && c.node === memberNode);
+  same(report?.kind, CK.OP, 'member check kind');
+  same(report.values.slice(0, 3).join(), [1, -2, 3].map(f64bits).join(), 'member check value');
+  same(report.values[6], f64bits(-2), 'member check result');
+  reset();
+  wr32(CHECK_AT, 1);
+  const rotMember = node();
+  value(R.INT, w(K.ROTATOR_MEMBER, rotMember, 2, w(K.LIT_ROTATOR, [7, 8, 9])));
+  report = calls.find(c => c.imp === 'check' && c.node === rotMember);
+  same(report.values.slice(0, 3).join() + '|' + report.values[6], [7, 8, 9].map(f64bits).join() + '|' + f64bits(9), 'rotator member check');
+  reset();
+  wr32(CHECK_AT, 1);
+  [bits(1), bits(2), bits(3)].forEach((b, k) => wr32(LOCALS + 0x60 + 4 * k, b));
+  const outNode = node();
+  run([S.expr(w(K.VCOMPOUND_LOCAL, 3, 0x60, outNode, w(K.LIT_VECTOR, [bits(10), bits(20), bits(30)]))), S.ret(R.VOID)]);
+  report = calls.find(c => c.imp === 'check' && c.node === outNode);
+  same(report?.kind, CK.OP, 'out native check kind');
+  same(report.values.join(), [1, 2, 3, 10, 20, 30, 11, 22, 33].map(f64bits).join(), 'out native check: target, value, result');
+  reset();
+  wr32(CHECK_AT, 1);
+  [5, 6, 7].forEach((v, k) => wr32(SELF_IMG + 0x40 + 4 * k, v));
+  const outField = node(() => { throw new Error('the out native must not run in JavaScript'); });
+  const rotValue = w(K.LIT_ROTATOR, [1, 1, 1]);
+  run([S.expr(w(K.VCOMPOUND_FIELD, 7, 0x40, outField, 4, rotValue.length, rotValue)), S.ret(R.VOID)]);
+  report = calls.find(c => c.imp === 'check' && c.node === outField);
+  same(report.values.join(), [5, 6, 7, 1, 1, 1, 4, 5, 6].map(f64bits).join(), 'rotator out native check');
+  reset();
+  vectorOf(w(K.VECTOR_ADD, node(), w(K.LIT_VECTOR, [0, 0, 0]), w(K.LOCAL_VECTOR, 0xc0, node())));
+  same(count('check'), 0, 'no reports without CHECK');
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

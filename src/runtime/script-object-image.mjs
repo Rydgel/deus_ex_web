@@ -162,6 +162,15 @@ export function structMemberCell(cell, member) {
   return inner && {...inner, offset: cell.offset + inner.offset};
 }
 
+/** A Core vector or rotator cell (three float32 or int32 words at 4-byte
+ * steps, structCell checks the linked layout): its kind ('vector' or
+ * 'rotator') and offset, for the Rust interpreter's lowering. Null for any
+ * other cell. */
+export function vectorCell(cell) {
+  if (!cell || (cell.tag !== VECTOR && cell.tag !== ROTATOR)) return null;
+  return {kind: cell.tag === VECTOR ? 'vector' : 'rotator', offset: cell.offset};
+}
+
 const SCALAR_KINDS = {[BYTE]: 'byte', [INT]: 'int', [BOOL]: 'bool', [FLOAT]: 'float'};
 /** A scalar cell's kind (byte, int, bool, float, or object for an object or
  * class pointer, whose bytes hold a handle), offset and bool mask; null for

@@ -17,23 +17,25 @@
  * convert it: int `v | 0`, bool `Boolean(v)`, float `+v` (undefined is kept
  * apart, since the float store codec turns it into 0), object its handle.
  */
-import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell} from './script-object-image.mjs';
+import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell} from './script-object-image.mjs';
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {fixedArrayShape} from './script-values.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
+  S_RETURN_ITER: 9,
   LIT_INT: 20, LIT_FLOAT: 21, LIT_BOOL: 23, LIT_NONE: 24,
-  LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34},
-  FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44},
+  LOCAL: {int: 30, byte: 31, bool: 32, float: 33, object: 34, vector: 161, rotator: 176},
+  FIELD: {int: 40, byte: 41, bool: 42, float: 43, object: 44, vector: 162, rotator: 177},
   FIELD_ELEM: {int: 25, byte: 26, bool: 27, float: 28, object: 29},
   LOCAL_ELEM: {int: 35, byte: 36, bool: 37, float: 38, object: 39},
   DEFAULT: {int: 45, byte: 46, bool: 47, float: 48},
-  JS: {int: 50, byte: 50, bool: 52, float: 53, object: 54}, JS_VOID: 55,
-  SET_LOCAL: {int: 60, byte: 61, bool: 62, float: 63, object: 68},
-  SET_FIELD: {int: 64, byte: 65, bool: 66, float: 67, object: 69},
-  COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57,
+  JS: {int: 50, byte: 50, bool: 52, float: 53, object: 54, vector: 163, rotator: 178, name: 195}, JS_VOID: 55,
+  SET_LOCAL: {int: 60, byte: 61, bool: 62, float: 63, object: 68, vector: 196, rotator: 198},
+  SET_FIELD: {int: 64, byte: 65, bool: 66, float: 67, object: 69, vector: 197, rotator: 199},
+  COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
+  LIT_VECTOR: 160, LIT_ROTATOR: 175, LIT_NAME: 194, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184, IS_A: 193,
   CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
@@ -42,9 +44,9 @@ const K = {
   BYTE_TO_INT: 150, INT_TO_BYTE: 151, INT_TO_FLOAT: 152, BYTE_TO_FLOAT: 153, FLOAT_TO_INT: 154, FLOAT_TO_BYTE: 155,
 };
 const NEXT_NONE = 0xffffffff;
-const RETURN_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4};
+const RETURN_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4, vector: 5, rotator: 6};
 // A context's value width (EX_Context's valueSize) per kind.
-const WIDTH = {int: 4, byte: 1, bool: 4, float: 4, object: 4};
+const WIDTH = {int: 4, byte: 1, bool: 4, float: 4, object: 4, vector: 12, rotator: 12, name: 4};
 
 // Core operator natives by index: [kind code, operand kinds, result kind].
 // Each transcribes its case in script-vm.mjs native().
@@ -95,9 +97,46 @@ const OPERATORS = new Map([
 const INCREMENTS = new Map([[163, K.INC_LOCAL_PRE], [164, K.DEC_LOCAL_PRE], [165, K.INC_LOCAL_POST]]);
 // Out-operand assignments (+=, -=, *=) as statements: [op, operand kind].
 const COMPOUNDS = new Map([[184, [1, 'float']], [185, [2, 'float']], [182, [3, 'float']], [161, [4, 'int']], [162, [5, 'int']]]);
+// R2b-6: Core's vector, rotator and name operators (native() cases, and the
+// mover primitives 214/225): [kind code, operand kinds, result kind]. The
+// node carries the call node after its kind.
+const COMPOSITE_OPERATORS = new Map([
+  [215, [164, ['vector', 'vector'], 'vector']],
+  [216, [165, ['vector', 'vector'], 'vector']],
+  [212, [166, ['vector', 'float'], 'vector']],
+  [213, [167, ['float', 'vector'], 'vector']],
+  [214, [168, ['vector', 'float'], 'vector']],
+  [211, [169, ['vector'], 'vector']],
+  [296, [170, ['vector', 'vector'], 'vector']],
+  [226, [171, ['vector'], 'vector']],
+  [300, [172, ['vector', 'vector'], 'vector']],
+  [276, [173, ['vector', 'rotator'], 'vector']],
+  [316, [179, ['rotator', 'rotator'], 'rotator']],
+  [317, [180, ['rotator', 'rotator'], 'rotator']],
+  [287, [181, ['rotator', 'float'], 'rotator']],
+  [288, [182, ['float', 'rotator'], 'rotator']],
+  [225, [185, ['vector'], 'float']],
+  [219, [186, ['vector', 'vector'], 'float']],
+  [217, [187, ['vector', 'vector'], 'bool']],
+  [218, [188, ['vector', 'vector'], 'bool']],
+  [142, [189, ['rotator', 'rotator'], 'bool']],
+  [203, [190, ['rotator', 'rotator'], 'bool']],
+  [254, [191, ['name', 'name'], 'bool']],
+  [255, [192, ['name', 'name'], 'bool']],
+]);
+// native() claims 287/288 only for a number operand (`typeof b === 'number'`).
+const NUMBER_CLAIMS = new Set([287, 288]);
+// The out vector and rotator natives as statements: [op, target kind, value kind].
+const VCOMPOUNDS = new Map([[221, [1, 'vector', 'float']], [222, [2, 'vector', 'float']], [223, [3, 'vector', 'vector']],
+  [224, [4, 'vector', 'vector']], [297, [5, 'vector', 'vector']], [318, [6, 'rotator', 'rotator']], [319, [7, 'rotator', 'rotator']]]);
 const primitives = new Set(primitiveNativeIndices);
-for (const index of [...OPERATORS.keys(), ...INCREMENTS.keys(), ...COMPOUNDS.keys()])
+for (const index of [...OPERATORS.keys(), ...INCREMENTS.keys(), ...COMPOUNDS.keys(), ...COMPOSITE_OPERATORS.keys(), ...VCOMPOUNDS.keys()])
   if (!primitives.has(index)) throw new Error(`Lowered operator ${index} is not a VM primitive`);
+const STRUCT_KEYS = {vector: 'core.object.vector', rotator: 'core.object.rotator'};
+const COMPONENTS = {vector: ['X', 'Y', 'Z'], rotator: ['Pitch', 'Yaw', 'Roll']};
+// Float words that can be JavaScript's undefined in Rust (UNDEF_F64): a
+// JavaScript leaf, or FMin/FMax/a context handing one back.
+const MAYBE_UNDEFINED = new Set([K.JS.float, 132, 133, K.CONTEXT]);
 
 // Cast tokens: [kind code, operand kind, result kind].
 const CASTS = new Map([
@@ -155,6 +194,30 @@ export function fieldKeyId(key) {
   return id;
 }
 
+// Names as small integers from 1, shared by every runtime (R2b-6): the id of
+// a name value's folded spelling `String(v || 'None').toLowerCase()`, which is
+// what 254/255 and IsA compare; `none` is id 1. Class rows list their chain's
+// `String(name).toLowerCase()` ids (script-vm-rust.mjs).
+const nameKeys = new Map([['none', 1]]), nameSpellings = [null, 'none'];
+export function foldedNameId(folded) {
+  let id = nameKeys.get(folded);
+  if (id === undefined) {
+    nameKeys.set(folded, id = nameSpellings.length);
+    nameSpellings.push(folded);
+  }
+  return id;
+}
+// A string's id by its exact spelling, so a name seen again is not folded again.
+const spellingIds = new Map();
+export function nameId(value) {
+  if (typeof value !== 'string') return foldedNameId(String(value || 'None').toLowerCase());
+  let id = spellingIds.get(value);
+  if (id === undefined) spellingIds.set(value, id = foldedNameId((value || 'None').toLowerCase()));
+  return id;
+}
+/** The folded spelling of a name id. */
+export const nameSpelling = id => nameSpellings[id];
+
 // Class records as small integers from 1, shared by every runtime: a cast's
 // target and the class rows of the handle class table (script-vm-rust.mjs)
 // name records by these ids, so equal ids are the same record.
@@ -208,6 +271,16 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   const hasIterator = entries.some(entry => entry.node.op === 0x2f);
   const version = fieldImageCellVersion();
   let missingField = false, rustStatements = 0, inContext = false;
+  // Imports the lowered code is expected to make (JavaScript leaves, fields
+  // whose key a binding uses): R2b-6 kinds are lowered only when their
+  // operands need at most one, the cost of leaving the node to JavaScript.
+  let imports = 0;
+  const boundKey = key => Boolean(runtime.boundKeys?.has(key));
+  // The runtime's own read services copy every value through its codec.
+  const rs = runtime.services;
+  const runtimeReads = services.fieldValueOf === rs.fieldValueOf && services.localValueOf === rs.localValueOf &&
+    services.structValue === rs.structValue && services.arrayReference === rs.arrayReference &&
+    services.defaultReference === rs.defaultReference;
   const returnKinds = new Set(), fieldNodes = new Set();
 
   const operand = n => {
@@ -224,6 +297,22 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     if (!field?.metadata) return null;
     const cell = scalarCell(fieldImageCell(field.key));
     if (!cell) { missingField = true; return null; }
+    if (boundKey(field.key)) imports++;
+    return {...cell, key: fieldKeyId(field.key), name: field.key};
+  };
+  // A local's or instance field's vector or rotator cell (R2b-6).
+  const localVectorCell = n => {
+    const field = operand(n);
+    return field?.metadata ? vectorCell(layout.cells.get(field.key)) : null;
+  };
+  const fieldVectorCell = n => {
+    const field = operand(n);
+    if (!field?.metadata) return null;
+    const registered = fieldImageCell(field.key);
+    if (!registered) { missingField = true; return null; }
+    const cell = vectorCell(registered);
+    if (!cell) return null;
+    if (boundKey(field.key)) imports++;
     return {...cell, key: fieldKeyId(field.key), name: field.key};
   };
 
@@ -240,17 +329,41 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         case 0x1e: return typed('float', [K.LIT_FLOAT, floatBits(n.value)]);
         case 0x27: case 0x28: return typed('bool', [K.LIT_BOOL, n.value ? 1 : 0]);
         case 0x2a: return typed('object', [K.LIT_NONE]);
+        // VectorConst / RotationConst: the closure hands out a copy of the
+        // decoded float32 / int32 numbers.
+        case 0x23: {
+          const v = n.value;
+          if (!Array.isArray(v) || v.length !== 3 || !v.every(c => typeof c === 'number' && (Number.isNaN(c) || Object.is(Math.fround(c), c))))
+            return null;
+          return typed('vector', [K.LIT_VECTOR, ...v.map(floatBits)]);
+        }
+        case 0x22: {
+          const v = n.value;
+          if (!Array.isArray(v) || v.length !== 3 || !v.every(c => Object.is(c | 0, c))) return null;
+          return typed('rotator', [K.LIT_ROTATOR, ...v.map(c => c >>> 0)]);
+        }
         default: return null;
       }
     }
+    // NameConst: the closure's value is the name's spelling.
+    if (op === 0x21) return typed('name', [K.LIT_NAME, nameId(n.name)]);
     if (op === 0x20 && !n.objectIndex) return typed('object', [K.LIT_NONE]);
     if (op === 0x17) return typed('object', [K.SELF]);
     if (op === 0x00) {
       const cell = localCell(n);
-      if (!cell) return null;
+      if (!cell) {
+        const vector = localVectorCell(n);
+        return vector && typed(vector.kind, [K.LOCAL[vector.kind], vector.offset, nodeId(n)]);
+      }
       return typed(cell.kind, cell.kind === 'bool' ? [K.LOCAL.bool, cell.offset, cell.mask] : [K.LOCAL[cell.kind], cell.offset]);
     }
     if (op === 0x01) {
+      const field = operand(n), registered = field?.metadata ? fieldImageCell(field.key) : null;
+      if (vectorCell(registered)) {
+        const vector = fieldVectorCell(n);
+        fieldNodes.add(nodeId(n));
+        return typed(vector.kind, [K.FIELD[vector.kind], vector.offset, nodeId(n), vector.key]);
+      }
       const cell = fieldCell(n);
       if (!cell) return null;
       const words = [K.FIELD[cell.kind], cell.offset, nodeId(n), cell.key];
@@ -282,6 +395,9 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       fieldNodes.add(nodeId(n));
       return typed(cell.kind, words);
     }
+    // EX_StructMember over a vector or rotator value that is not a variable
+    // (R2b-6): structValue's member of the value, with the member's receiver.
+    if (op === 0x36 && isNode(n.value)) return structMember(n);
     // BoolVariable around a variable reads that variable as a bool.
     if (op === 0x2d && isNode(n.value) && (n.value.op === 0x00 || n.value.op === 0x01)) {
       const inner = natural(n.value);
@@ -303,6 +419,55 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return null;
   }
   const typed = (kind, words, canonical = true) => ({kind, words, canonical});
+
+  // structValue(value.ev(fr, r), member) over a lowered vector or rotator
+  // value: the component, as copyFloat / copyInt read it.
+  function structMember(n) {
+    const rs = runtime.services;
+    if (services.structValue !== rs.structValue || services.structReference !== rs.structReference) return null;
+    const member = operand(n);
+    if (!member?.metadata || typeof member.key !== 'string') return null;
+    const struct = member.key.slice(0, member.key.lastIndexOf('.'));
+    const kind = struct === STRUCT_KEYS.vector ? 'vector' : struct === STRUCT_KEYS.rotator ? 'rotator' : null;
+    const index = kind ? COMPONENTS[kind].indexOf(member.name) : -1;
+    if (index < 0) return null;
+    const value = natural(n.value);
+    if (value?.kind !== kind) return null;
+    return typed(kind === 'vector' ? 'float' : 'int', [kind === 'vector' ? K.VECTOR_MEMBER : K.ROTATOR_MEMBER, nodeId(n), index, ...value.words]);
+  }
+
+  // Whether a JavaScript node in a vector or rotator position yields a codec
+  // copy of that type (an Array of three float32 numbers or int32 words):
+  // a variable, a default, a fixed-array element or struct member of that
+  // type, or a context of one. Any other node's value is left unconverted
+  // by the closures, so its consumer stays in JavaScript.
+  function codecCopy(n, kind) {
+    if (!isNode(n) || !runtimeReads) return false;
+    if (n.op === 0x19 || n.op === 0x12) return n.valueSize === 12 && codecCopy(n.value, kind);
+    if (n.op !== 0x00 && n.op !== 0x01 && n.op !== 0x02 && n.op !== 0x36 && n.op !== 0x1a) return false;
+    const field = operand(n.op === 0x1a ? n.right : n);
+    const m = field?.metadata;
+    if (!m || m.type !== 'struct' || String(m.structKey ?? '').toLowerCase() !== STRUCT_KEYS[kind]) return false;
+    return n.op === 0x1a ? (m.arrayDim ?? 1) > 1 : (m.arrayDim ?? 1) === 1;
+  }
+
+  /** Code for `n` in a vector, rotator or name position, or null when its
+   * consumer must stay in JavaScript. */
+  function valueExpr(n, want) {
+    const lowered = natural(n);
+    if (lowered && lowered.kind === want) return lowered.words;
+    if (isNode(n) && n.op === 0x19 && WIDTH[want] === n.valueSize) {
+      const mark = imports, value = valueExpr(n.value, want);
+      if (value) return context(n, want, value, false).words;
+      imports = mark;
+    }
+    // A name's closure value is any JavaScript value: the name id folds it.
+    if (want !== 'name' && !codecCopy(n, want)) return null;
+    imports++;
+    return [K.JS[want], nodeId(n)];
+  }
+  /** Code for an operand of an R2b-6 operator. */
+  const operandExpr = (n, want) => want === 'vector' || want === 'rotator' || want === 'name' ? valueExpr(n, want) : expr(n, want);
 
   // A script call whose function is known here: final calls by operand,
   // virtual calls on SELF by name from the running object (an override has
@@ -410,6 +575,9 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
 
   function native(n) {
     const index = n.index, args = n.args;
+    const composite = COMPOSITE_OPERATORS.get(index);
+    if (composite) return compositeOperator(n, composite);
+    if (index === 303) return isA(n);
     if (index === 130 || index === 132) {
       if (args.length !== 2 || !isNode(args[1]) || args[1].op !== 0x18) return null;
       const first = expr(args[0], 'bool'), second = expr(args[1].value, 'bool');
@@ -429,6 +597,36 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return typed(operator[2], words, index !== 244 && index !== 245);
   }
 
+  // A vector, rotator or name operator (R2b-6), when its operands need at
+  // most one import.
+  function compositeOperator(n, [code, kinds, result]) {
+    const args = n.args;
+    if (args.length !== kinds.length) return null;
+    const mark = imports, words = [code, nodeId(n)];
+    for (let i = 0; i < kinds.length; i++) {
+      const operandWords = operandExpr(args[i], kinds[i]);
+      if (!operandWords || kinds[i] === 'float' && NUMBER_CLAIMS.has(n.index) && MAYBE_UNDEFINED.has(operandWords[0])) {
+        imports = mark;
+        return null;
+      }
+      words.push(...operandWords);
+    }
+    if (imports - mark > 1) {
+      imports = mark;
+      return null;
+    }
+    return typed(result, words);
+  }
+
+  // IsA (invokeNative 303) with a name literal: nothing to evaluate, so the
+  // JavaScript path may evaluate the whole node.
+  function isA(n) {
+    const args = n.args;
+    if (args.length !== 1 || !isNode(args[0]) || args[0].op !== 0x21) return null;
+    if (services.invokeNative !== runtime.services.invokeNative || runtime.boundaryNatives?.has(303)) return null;
+    return typed('bool', [K.IS_A, nodeId(n), nameId(args[0].name)]);
+  }
+
   // EX_Context: the object against the current receiver, then the value
   // against that object; None logs Accessed None and yields the zero.
   function context(n, kind, valueWords, canonical) {
@@ -443,6 +641,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     // object here; the value's closure runs against the context object.
     if (isNode(n) && n.op === 0x19 && WIDTH[want] === n.valueSize)
       return context(n, want, expr(n.value, want), false).words;
+    imports++;
     return [K.JS[want], nodeId(n)];
   }
 
@@ -466,11 +665,31 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
   }
   const isLocal = target => target.op === 0x00 || target.op === 0x36 && target.value.op === 0x00;
 
+  // A vector or rotator store (R2b-6) to a local or a field of SELF, when
+  // it needs at most one import (the value's, or the field's JS path).
+  function vectorAssignment(n) {
+    const target = n.left;
+    if (!isNode(target) || (target.op !== 0x00 && target.op !== 0x01)) return null;
+    const mark = imports;
+    const cell = target.op === 0x00 ? localVectorCell(target) : fieldVectorCell(target);
+    if (!cell) return null;
+    const value = valueExpr(n.right, cell.kind);
+    if (!value || imports - mark > 1) {
+      imports = mark;
+      return null;
+    }
+    if (target.op === 0x00) return [K.SET_LOCAL[cell.kind], cell.offset, ...value];
+    fieldNodes.add(nodeId(n));
+    return [K.SET_FIELD[cell.kind], cell.offset, nodeId(n), cell.key, value.length, ...value];
+  }
+
   function assignment(n, bool) {
     let target = n.left;
     if (bool && isNode(target) && target.op === 0x2d && isNode(target.value) &&
       (target.value.op === 0x00 || target.value.op === 0x01)) target = target.value;
     else if (bool) return null;
+    if (!bool && isNode(target) && (target.op === 0x00 ? localVectorCell(target)
+      : target.op === 0x01 && vectorCell(fieldImageCell(operand(target)?.key)))) return vectorAssignment(n);
     const cell = storeTarget(target);
     if (!cell || (bool && cell.kind !== 'bool')) return null;
     const value = expr(n.right, cell.kind);
@@ -482,6 +701,24 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     fieldNodes.add(nodeId(n));
     if (cell.kind === 'bool') head.push(cell.mask);
     return [...head, ...value];
+  }
+
+  // An out vector or rotator native as a statement (R2b-6): V is evaluated
+  // before X is read, as for compound().
+  function vectorCompound(n) {
+    const [op, targetKind, valueKind] = VCOMPOUNDS.get(n.index);
+    const target = n.args[0];
+    if (n.args.length !== 2 || !isNode(target) || (target.op !== 0x00 && target.op !== 0x01)) return null;
+    const mark = imports;
+    const cell = target.op === 0x00 ? localVectorCell(target) : fieldVectorCell(target);
+    const value = cell?.kind === targetKind ? operandExpr(n.args[1], valueKind) : null;
+    if (!value || imports - mark > 1) {
+      imports = mark;
+      return null;
+    }
+    if (target.op === 0x00) return [K.VCOMPOUND_LOCAL, op, cell.offset, nodeId(n), ...value];
+    fieldNodes.add(nodeId(n));
+    return [K.VCOMPOUND_FIELD, op, cell.offset, nodeId(n), cell.key, value.length, ...value];
   }
 
   // `X += V` and the like as a statement: V is evaluated before X is read.
@@ -501,12 +738,14 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       case 0x06: return [K.S_JUMP, indexOf.get(n.target)];
       case 0x07: return [K.S_JUMP_IF_NOT, indexOf.get(n.target), ...expr(n.value, 'bool')];
       case 0x04: {
-        if (hasIterator) return null;
-        if (isNode(n.value) && n.value.op === 0x0b) return [K.S_RETURN, 0];
+        // In a body with a foreach, the host's iterator count is checked
+        // first (stepCompiled's iterator unwind error).
+        const kind = hasIterator ? K.S_RETURN_ITER : K.S_RETURN;
+        if (isNode(n.value) && n.value.op === 0x0b) return [kind, 0];
         const value = natural(n.value);
         if (!value || !value.canonical || !RETURN_KIND[value.kind]) return null;
         returnKinds.add(RETURN_KIND[value.kind]);
-        return [K.S_RETURN, RETURN_KIND[value.kind], ...value.words];
+        return [kind, RETURN_KIND[value.kind], ...value.words];
       }
       case 0x0b: return [K.S_NOTHING];
       case 0x0f: case 0x14: {
@@ -525,6 +764,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         }
         if (n.op === 'native' && COMPOUNDS.has(n.index)) {
           const words = compound(n);
+          if (words) return [K.S_EXPR, ...words];
+        }
+        if (n.op === 'native' && VCOMPOUNDS.has(n.index)) {
+          const words = vectorCompound(n);
           if (words) return [K.S_EXPR, ...words];
         }
         if (n.op === 0x1b || n.op === 0x1c) {
@@ -546,7 +789,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       words[2 + 2 * i] = indexOf.get(next) ?? NEXT_NONE;
       let code = isNode(node) ? statement(node) : null;
       // The host converts a typed result by one kind per function.
-      if (code?.[0] === K.S_RETURN && code[1] && returnKinds.size > 1) code = null;
+      if ((code?.[0] === K.S_RETURN || code?.[0] === K.S_RETURN_ITER) && code[1] && returnKinds.size > 1) code = null;
       if (code) {
         if (!(code[0] === K.S_EXPR && code[1] === K.JS_VOID)) rustStatements++;
         words.push(...code);

@@ -25,7 +25,7 @@ import {handleOf, identityOfHandle, onHandleRelease, handleLimit} from './script
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
-import {lowerFunction, fieldKeyId, functionSignature, classRecordId} from './script-vm-lower.mjs';
+import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -33,7 +33,38 @@ const BOUND = 1, HOST = 2;
 // row's default image word when DefaultVariable reads stay in JavaScript.
 const RELEASED = 1, UNREADABLE = 1;
 // js_check value kinds (interp.rs).
-const CK_INT = 1, CK_BOOL = 2, CK_FLOAT = 3, CK_OBJECT = 4, CK_CAST = 5;
+const CK_INT = 1, CK_BOOL = 2, CK_FLOAT = 3, CK_OBJECT = 4, CK_CAST = 5, CK_VECTOR = 6, CK_ROTATOR = 7, CK_OP = 8;
+// CK_OP (R2b-6): each checked native's operand kinds, in the order Rust
+// reports them (CHECK_VALUES[0..3], [3..6]); a float or name operand is the
+// first slot of its group.
+const CHECKED_OPERANDS = new Map([
+  [215, ['vector', 'vector']], [216, ['vector', 'vector']], [212, ['vector', 'float']], [213, ['float', 'vector']],
+  [214, ['vector', 'float']], [211, ['vector']], [296, ['vector', 'vector']], [226, ['vector']], [300, ['vector', 'vector']],
+  [276, ['vector', 'rotator']], [316, ['rotator', 'rotator']], [317, ['rotator', 'rotator']], [287, ['rotator', 'float']],
+  [288, ['float', 'rotator']], [225, ['vector']], [219, ['vector', 'vector']], [217, ['vector', 'vector']],
+  [218, ['vector', 'vector']], [142, ['rotator', 'rotator']], [203, ['rotator', 'rotator']], [254, ['name', 'name']],
+  [255, ['name', 'name']],
+  // The out natives (VCOMPOUND): argument 0 is the target's reference.
+  [221, ['vector', 'float']], [222, ['vector', 'float']], [223, ['vector', 'vector']], [224, ['vector', 'vector']],
+  [297, ['vector', 'vector']], [318, ['rotator', 'rotator']], [319, ['rotator', 'rotator']],
+]);
+const OUT_NATIVES = new Set([221, 222, 223, 224, 297, 318, 319]);
+const UNDEF_BITS_HI = 0x7ff80000, UNDEF_BITS_LO = 1;
+const f64io = new DataView(new ArrayBuffer(8));
+/** Whether two JavaScript numbers have the same float64 bits, any NaN
+ * matching any NaN: V8 does not keep a NaN payload stably inside an Array
+ * (an optimized store may canonicalize it) or across tiers (two NaN
+ * operands), so the JavaScript VM's own vector NaN payloads depend on JIT
+ * state (docs/rust-core.md R2b-6); validate-script-vm-interp checks Rust's
+ * payload rules. */
+const sameBits = (a, b) => {
+  if (typeof a !== 'number' || typeof b !== 'number') return Object.is(a, b);
+  if (a !== a || b !== b) return a !== a && b !== b;
+  f64io.setFloat64(0, a, true);
+  const lo = f64io.getUint32(0, true), hi = f64io.getUint32(4, true);
+  f64io.setFloat64(0, b, true);
+  return lo === f64io.getUint32(0, true) && hi === f64io.getUint32(4, true);
+};
 const UNDEFINED = 0xffffffff, NEXT_NONE = 0xffffffff;
 const HANG_BUDGET = 200000000;
 // SCRIPT_VM_STATS=1: count runs, JavaScript nodes and JavaScript statements
@@ -41,14 +72,33 @@ const HANG_BUDGET = 200000000;
 const STATS = typeof process !== 'undefined' && process.env?.SCRIPT_VM_STATS === '1' ? new Map() : null;
 const opName = n => n?.op === 'native' ? `native ${n.index}` : typeof n?.op === 'number' ? `0x${n.op.toString(16)}` : String(n?.op);
 const CHECK = typeof process !== 'undefined' && process.env?.SCRIPT_VM_CHECK === '1';
+// SCRIPT_VM_STATS_DETAIL=1: JavaScript nodes and Returns keyed by their
+// operand shapes (op, property type) instead of their op alone.
+const DETAIL = STATS && process.env.SCRIPT_VM_STATS_DETAIL === '1';
 const count = key => STATS.set(key, (STATS.get(key) ?? 0) + 1);
+function shape(run, n, depth = 2) {
+  if (n === null || typeof n !== 'object') return String(n);
+  let type = '';
+  if (n.op === 0x00 || n.op === 0x01 || n.op === 0x36 || n.op === 0x02) {
+    try {
+      const field = run.frame.services.operand(run.compiled.script, n), m = field?.metadata;
+      type = `:${m?.type ?? '?'}${m?.structKey ? `/${String(m.structKey).split('.').pop()}` : ''}${n.op === 0x01 ? `=${field.key}` : ''}`;
+    } catch { type = ':?'; }
+  } else if (n.op === 'literal') type = `:${n.token?.toString(16)}`;
+  if (depth <= 0) return opName(n) + type;
+  const kids = n.op === 'native' ? n.args : n.op === 0x19 || n.op === 0x12 ? [n.context, n.value]
+    : n.op === 0x0f || n.op === 0x14 ? [n.left, n.right]
+    : n.op === 0x1a ? [n.right, n.left] : n.op === 0x1b || n.op === 0x1c ? [] : 'value' in n && typeof n.value === 'object' ? [n.value] : [];
+  const name = n.op === 0x1b || n.op === 0x1c ? ` ${n.name ?? ''}` : '';
+  return `${opName(n)}${type}${name}${kids?.length ? `(${kids.map(k => shape(run, k, depth - 1)).join(', ')})` : ''}`;
+}
 // bench-sim clears its measurements after the warm-up ticks.
 if (STATS) globalThis.__scriptVmStatsReset = () => STATS.clear();
 if (STATS) process.on('exit', () => {
   const rows = [...STATS].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
   console.error(`script-vm stats:\n${rows.map(([key, n]) => `${String(n).padStart(10)}  ${key}`).join('\n')}`);
 });
-const RETURN_BOOL = 2, RETURN_FLOAT = 3, RETURN_OBJECT = 4;
+const RETURN_BOOL = 2, RETURN_FLOAT = 3, RETURN_OBJECT = 4, RETURN_VECTOR = 5, RETURN_ROTATOR = 6;
 const RETURNED = 0xfffffffe;
 // Word kinds the state driver inspects (interp.rs).
 const S_EXPR = 1, S_JUMP_IF_NOT = 3, JS_BOOL = 52, JS_VOID = 55;
@@ -157,6 +207,11 @@ export class RustScriptVm {
     // R2b-5: the handle class table starts with every handle released so
     // far; later releases arrive through onHandleRelease.
     this.classesAt = x.vm_classes_ptr();
+    // R2b-6: vector and rotator values from JavaScript, vector and rotator
+    // Returns, and SCRIPT_VM_CHECK's operator reports.
+    this.vectorAt = x.vm_vector_io_ptr();
+    this.result3At = x.vm_result3_ptr();
+    this.checkValuesAt = x.vm_check_values_ptr();
     const limit = handleLimit();
     this.growClassTable(limit);
     for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
@@ -199,15 +254,18 @@ export class RustScriptVm {
     if (!cls) return 0;
     let row = this.rows.get(cls);
     if (!row) {
-      // castObject walks cls.record along cls.base.
-      const chain = [];
+      // castObject walks cls.record along cls.base; IsA compares
+      // lower(cls.record.name) along the same chain (R2b-6).
+      const chain = [], names = [];
       for (let c = cls; c; c = c.base) {
         if (!c.record || typeof c.record !== 'object') return 0;
         chain.push(classRecordId(c.record));
+        names.push(foldedNameId(String(c.record.name).toLowerCase()));
       }
-      const address = this.arena.alloc(8 + 4 * chain.length), view = this.arena.view;
-      view.setUint32(address + 4, chain.length, true);
+      const n = chain.length, address = this.arena.alloc(8 + 8 * n), view = this.arena.view;
+      view.setUint32(address + 4, n, true);
       chain.forEach((id, i) => view.setUint32(address + 8 + 4 * i, id, true));
+      names.forEach((id, i) => view.setUint32(address + 8 + 4 * (n + i), id, true));
       row = {address, cls, linkIsChain: propertyLinkIsChain(cls)};
       this.rows.set(cls, row);
     }
@@ -229,6 +287,7 @@ export class RustScriptVm {
   check(frameId, node, handle, kind, value) {
     const run = this.frames[frameId], n = run.nodes[node];
     const object = handle === run.selfHandle ? run.self : identityOfHandle(handle);
+    if (kind === CK_VECTOR || kind === CK_ROTATOR || kind === CK_OP) return this.checkComposite(run, n, object, kind);
     let expected;
     if (kind === CK_CAST) {
       const s = run.services, target = s.objectReference(run.compiled.script, n.fieldIndex, n);
@@ -240,6 +299,47 @@ export class RustScriptVm {
     }
     if (!Object.is(expected, value))
       throw new Error(`SCRIPT_VM_CHECK ${run.compiled.displayName} ${opName(n)} at ${n.offset}: Rust ${value}, JavaScript ${expected}`);
+  }
+  /** SCRIPT_VM_CHECK (R2b-6): a vector or rotator Rust read from memory
+   * against the closure's value, or an operator's result against the
+   * JavaScript VM's body (compiled.primitive) on the operands Rust used. */
+  checkComposite(run, n, object, kind) {
+    const view = this.arena.view, at = this.checkValuesAt, slot = i => view.getFloat64(at + 8 * i, true);
+    const group = base => [slot(base), slot(base + 1), slot(base + 2)];
+    const fail = (rust, js) => {
+      throw new Error(`SCRIPT_VM_CHECK ${run.compiled.displayName} ${opName(n)} at ${n.offset}: Rust ${String(rust)}, JavaScript ${String(js)}`);
+    };
+    const result = group(6);
+    if (kind !== CK_OP) {
+      const expected = run.compiled.nodeValue(n, run.frame, object);
+      if (!Array.isArray(expected) || expected.length !== 3 || !expected.every((v, i) => sameBits(v, result[i]))) fail(result, expected);
+      return;
+    }
+    // A member of a vector or rotator value: structValue on the value Rust used.
+    if (n.op === 0x36) {
+      const expected = run.services.structValue(group(0), run.compiled.script, n);
+      if (!sameBits(expected, result[0])) fail(`${result[0]} from ${group(0)}`, expected);
+      return;
+    }
+    const kinds = CHECKED_OPERANDS.get(n.index);
+    if (!kinds) fail(result, `no check for native ${n.index}`);
+    const operand = (kind, base) => {
+      if (kind === 'vector' || kind === 'rotator') return group(base);
+      const v = slot(base);
+      if (kind === 'name') return nameSpelling(v);
+      f64io.setFloat64(0, v, true);
+      return f64io.getUint32(4, true) === UNDEF_BITS_HI && f64io.getUint32(0, true) === UNDEF_BITS_LO ? undefined : v;
+    };
+    const values = kinds.map((kind, i) => operand(kind, 3 * i));
+    // An out native writes its target through the reference (assign).
+    if (OUT_NATIVES.has(n.index)) {
+      const target = values[0];
+      values[0] = {reference: true, get: () => target, set: value => value};
+    }
+    const expected = run.compiled.primitive(n.index, values);
+    const same = Array.isArray(expected) ? expected.length === 3 && expected.every((v, i) => sameBits(v, result[i]))
+      : typeof expected === 'boolean' ? (expected ? 1 : 0) === result[0] : sameBits(expected, result[0]);
+    if (!same) fail(`${result} from ${JSON.stringify(values)}`, expected);
   }
   get depth() { return this.arena.view.getUint32(this.framesAt + 12, true); }
   set depth(value) { this.arena.view.setUint32(this.framesAt + 12, value, true); }
@@ -321,7 +421,7 @@ export class RustScriptVm {
     const receiver = (run, handle) => handle === run.selfHandle ? run.self : vm.identity(handle);
     const value = (frame, node, handle) => {
       const run = vm.frames[frame];
-      if (STATS) count(`js value ${opName(run.nodes[node])}${vm.why(run, node, handle)}`);
+      if (STATS) count(`js value ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.why(run, node, handle)}`);
       return run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle));
     };
     return {
@@ -354,7 +454,7 @@ export class RustScriptVm {
         enter();
         try {
           const run = vm.frames[frame];
-          if (STATS) count(`js effect ${opName(run.nodes[node])}${vm.whyEffect(run, node, handle)}`);
+          if (STATS) count(`js effect ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.whyEffect(run, node, handle)}`);
           run.compiled.nodeEffect(run.nodes[node], run.frame, receiver(run, handle));
         } finally { leave(); }
       },
@@ -414,7 +514,44 @@ export class RustScriptVm {
       },
       js_check(frame, node, handle, kind, value) {
         enter();
+        if (STATS) count(`SCRIPT_VM_CHECK kind ${kind}`);
         try { vm.check(frame, node, handle, kind, value); } finally { leave(); }
+      },
+      // R2b-6: a vector or rotator in JavaScript. The lowering admits only
+      // nodes whose closure value is a codec copy; anything else is a host
+      // fault, as a non-object in an object position is.
+      js_vector(frame, node, handle) {
+        enter();
+        try {
+          const v = value(frame, node, handle), view = vm.arena.view, at = vm.vectorAt;
+          if (!Array.isArray(v) || v.length !== 3 || !v.every(c => typeof c === 'number' && (c !== c || Math.fround(c) === c)))
+            throw new Error(`Script VM vector position holds ${String(v)}`);
+          view.setFloat32(at, v[0], true);
+          view.setFloat32(at + 4, v[1], true);
+          view.setFloat32(at + 8, v[2], true);
+        } finally { leave(); }
+      },
+      js_rotator(frame, node, handle) {
+        enter();
+        try {
+          const v = value(frame, node, handle), view = vm.arena.view, at = vm.vectorAt;
+          if (!Array.isArray(v) || v.length !== 3 || !v.every(c => Object.is(c | 0, c)))
+            throw new Error(`Script VM rotator position holds ${String(v)}`);
+          view.setInt32(at, v[0], true);
+          view.setInt32(at + 4, v[1], true);
+          view.setInt32(at + 8, v[2], true);
+        } finally { leave(); }
+      },
+      // A name: the id of its folded spelling, as 254/255 and IsA fold it.
+      js_name(frame, node, handle) {
+        enter();
+        try { return nameId(value(frame, node, handle)); } finally { leave(); }
+      },
+      // No script runs here: the frame's active iterators (a callee's frame
+      // object exists once one of its statements ran in JavaScript).
+      js_iterators(frame) {
+        const run = vm.frames[frame];
+        return run.frameObject?.iterators.length ?? 0;
       },
       js_error(frame, code, node) {
         enter();
@@ -426,6 +563,7 @@ export class RustScriptVm {
           case 5: throw new Error('Original Divide_IntInt signed overflow (x86 divide exception) is unsupported');
           case 6: throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
           case 7: throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
+          case 8: throw new Error('Return requires compiled iterator unwind');
           default: throw new Error(`Script VM code error ${code} (${node})`);
         }
       },
@@ -502,7 +640,7 @@ export class RustScriptVm {
         // A statement the lowering left to JavaScript: exactly one step of
         // the compiled loop, which advances the cursor before dispatch.
         const entry = lowered.entries[status];
-        if (STATS) count(`js statement ${opName(entry.node)}`);
+        if (STATS) count(`js statement ${DETAIL ? shape(this.frames[id], entry.node) : opName(entry.node)}`);
         if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${compiled.displayName} (the original would not return)`);
         frame.cursor = entry.next;
         compiled.step(frame, entry);
@@ -577,6 +715,11 @@ export class RustScriptVm {
   result(kind) {
     const view = this.arena.view, at = this.resultAt;
     if (view.getUint32(at, true) === 1 && view.getUint32(at + 4, true) === 0x7ff80000) return undefined;
+    // R2b-6: a fresh Array, as the closures' vector and rotator values are.
+    if (kind === RETURN_VECTOR || kind === RETURN_ROTATOR) {
+      const r = this.result3At, read = kind === RETURN_VECTOR ? i => view.getFloat32(r + 4 * i, true) : i => view.getInt32(r + 4 * i, true);
+      return [read(0), read(1), read(2)];
+    }
     const value = view.getFloat64(at, true);
     return kind === RETURN_BOOL ? value !== 0 : kind === RETURN_OBJECT ? identityOfHandle(value) : value;
   }
@@ -617,7 +760,7 @@ export class RustScriptVm {
    * marker), else the statement to continue at. */
   step(run, index) {
     const frame = run.frame, entry = run.entries[index];
-    if (STATS) count(`js statement ${opName(entry.node)} (callee)`);
+    if (STATS) count(`js statement ${DETAIL ? shape(run, entry.node) : opName(entry.node)} (callee)`);
     frame.cursor = entry.next;
     run.compiled.step(frame, entry);
     if (frame.returned || frame.cursor === null) {

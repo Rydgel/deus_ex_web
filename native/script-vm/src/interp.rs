@@ -95,6 +95,60 @@
 //! checks the latent action, the cursor and the iterators between
 //! statements. It returns 1 when a jump is taken (the host sets the cursor to
 //! the statement's target), else 0.
+//!
+//! Vectors, rotators and names (R2b-6, `.work/notes/r2b6-spec.md`).
+//! * Values. A vector is `[u32; 3]`, the float32 bit patterns of X, Y, Z, each
+//!   NaN quiet: the JavaScript value is an Array of three float32 numbers
+//!   (codec copies and operator results), and a float32 cell read quiets a
+//!   signaling NaN (`getFloat32` widens), so memory loads set the quiet bit
+//!   explicitly (`quiet`). A rotator is `[i32; 3]`. A name is the id of its
+//!   folded spelling `String(v || 'None').toLowerCase()`, interned for every
+//!   runtime by the host (id 1 = `none`): exactly what 254/255 and IsA
+//!   compare, and no Rust consumer needs the spelling.
+//! * JavaScript values: js_vector / js_rotator write the closure's value to
+//!   VECTOR_IO (the host throws on a value that is not three float32 numbers
+//!   or three int32 words; the lowering only admits JavaScript nodes whose
+//!   value is a codec copy); js_name returns the name id.
+//! * Kinds (operator nodes carry the native call's `node`; operands evaluate
+//!   left to right with SELF). Vector: LIT_VECTOR 160 `x, y, z`, LOCAL_VECTOR
+//!   161 `off, node`, FIELD_VECTOR 162 `off, node, key`, JS_VECTOR 163,
+//!   VECTOR_ADD/SUB 164/165 (215/216 `f(a_i op b_i)`), VECTOR_SCALE 166 (212
+//!   `f(f(a_i) * f(s))`), SCALE_VECTOR 167 (213 `f(f(s) * f(b_i))`),
+//!   VECTOR_DIVIDE 168 (214, doubles: `r = 1 / f(s)`, `f(a_i * r)`),
+//!   VECTOR_NEG 169 (211, sign flip), and the x87 kernel bodies VECTOR_MUL 170
+//!   (296), VECTOR_NORMAL 171 (226), VECTOR_MIRROR 172 (300), VECTOR_ROTATE 173
+//!   (276). Rotator: LIT_ROTATOR 175, LOCAL_ROTATOR 176, FIELD_ROTATOR 177,
+//!   JS_ROTATOR 178, ROTATOR_ADD/SUB 179/180 (316/317), ROTATOR_SCALE 181
+//!   (287) and SCALE_ROTATOR 182 (288, kernel). Scalars: VECTOR_MEMBER 183
+//!   `node, index` (float) and ROTATOR_MEMBER 184 `node, index` (int),
+//!   EX_StructMember over a value evaluated with the member's receiver; VECTOR_SIZE 185 (225,
+//!   doubles and a correctly rounded sqrt), VECTOR_DOT 186 (219, kernel),
+//!   VECTOR_EQ/NE 187/188 (217/218), ROTATOR_EQ/NE 189/190 (142/203),
+//!   NAME_EQ/NE 191/192 (254/255), IS_A 193 `node, name` (303 with a literal).
+//!   Names: LIT_NAME 194 `id`, JS_NAME 195. A float operand that is UNDEF_F64
+//!   is JavaScript's undefined, whose fround is NaN. A NaN result keeps the
+//!   first NaN operand, as the FPU does (`nan_first`).
+//! * Stores: SET_LOCAL_VECTOR 196 / SET_LOCAL_ROTATOR 198 `off`;
+//!   SET_FIELD_VECTOR 197 / SET_FIELD_ROTATOR 199 `off, node, key, len` (as
+//!   set_field); VCOMPOUND_LOCAL 156 `op, off, node` and VCOMPOUND_FIELD 157
+//!   `op, off, node, key, len` (the out natives 221, 222, 223, 224, 297, 318,
+//!   319 as statements, ordered as COMPOUND: storage, value, target, store;
+//!   `node` is the native call).
+//! * CONTEXT with a None object yields [0, 0, 0] (vector, rotator) or the
+//!   name `none`.
+//! * S_RETURN_ITER 9: a Return in a body with a foreach; js_iterators first
+//!   (a nonzero count fails with ERR_RETURN_ITERATOR, stepCompiled's 'Return
+//!   requires compiled iterator unwind'), then S_RETURN. R_VECTOR 5 and
+//!   R_ROTATOR 6 return through RESULT3 (RESULT = 0.0).
+//! * IS_A: a HOST receiver or a handle the class table does not describe
+//!   evaluates `node` in JavaScript; otherwise whether the class row's name
+//!   list (`[image, n, rids.., names..]`) holds `name`.
+//! * SCRIPT_VM_CHECK: a vector or rotator read from memory reports CK_VECTOR /
+//!   CK_ROTATOR with the value in CHECK_VALUES[6..9]; an operator, a member
+//!   of a value and an out native report CK_OP with the operands in
+//!   CHECK_VALUES[0..3] and [3..6] and the result in [6..9], and the host runs
+//!   the JavaScript VM's own code on those operands (the native() body,
+//!   structValue); IS_A reports CK_BOOL.
 
 use core::ptr::{addr_of, addr_of_mut, read_unaligned, write_unaligned};
 
@@ -114,6 +168,8 @@ const S_YIELD: u32 = 6;
 // JavaScript: the host keeps the frame's iterator stack.
 const S_ITER_NEXT: u32 = 7;
 const S_ITER_POP: u32 = 8;
+// A Return in a body with a foreach (R2b-6).
+const S_RETURN_ITER: u32 = 9;
 // Expression kinds.
 const LIT_INT: u32 = 20;
 const LIT_FLOAT: u32 = 21;
@@ -215,6 +271,48 @@ const INT_TO_FLOAT: u32 = 152;
 const BYTE_TO_FLOAT: u32 = 153;
 const FLOAT_TO_INT: u32 = 154;
 const FLOAT_TO_BYTE: u32 = 155;
+// R2b-6: vectors, rotators and names.
+const VCOMPOUND_LOCAL: u32 = 156;
+const VCOMPOUND_FIELD: u32 = 157;
+const LIT_VECTOR: u32 = 160;
+const LOCAL_VECTOR: u32 = 161;
+const FIELD_VECTOR: u32 = 162;
+const JS_VECTOR: u32 = 163;
+const VECTOR_ADD: u32 = 164;
+const VECTOR_SUB: u32 = 165;
+const VECTOR_SCALE: u32 = 166;
+const SCALE_VECTOR: u32 = 167;
+const VECTOR_DIVIDE: u32 = 168;
+const VECTOR_NEG: u32 = 169;
+const VECTOR_MUL: u32 = 170;
+const VECTOR_NORMAL: u32 = 171;
+const VECTOR_MIRROR: u32 = 172;
+const VECTOR_ROTATE: u32 = 173;
+const LIT_ROTATOR: u32 = 175;
+const LOCAL_ROTATOR: u32 = 176;
+const FIELD_ROTATOR: u32 = 177;
+const JS_ROTATOR: u32 = 178;
+const ROTATOR_ADD: u32 = 179;
+const ROTATOR_SUB: u32 = 180;
+const ROTATOR_SCALE: u32 = 181;
+const SCALE_ROTATOR: u32 = 182;
+const VECTOR_MEMBER: u32 = 183;
+const ROTATOR_MEMBER: u32 = 184;
+const VECTOR_SIZE: u32 = 185;
+const VECTOR_DOT: u32 = 186;
+const VECTOR_EQ: u32 = 187;
+const VECTOR_NE: u32 = 188;
+const ROTATOR_EQ: u32 = 189;
+const ROTATOR_NE: u32 = 190;
+const NAME_EQ: u32 = 191;
+const NAME_NE: u32 = 192;
+const IS_A: u32 = 193;
+const LIT_NAME: u32 = 194;
+const JS_NAME: u32 = 195;
+const SET_LOCAL_VECTOR: u32 = 196;
+const SET_FIELD_VECTOR: u32 = 197;
+const SET_LOCAL_ROTATOR: u32 = 198;
+const SET_FIELD_ROTATOR: u32 = 199;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -222,6 +320,14 @@ const C_FLOAT_SUB: u32 = 2;
 const C_FLOAT_MUL: u32 = 3;
 const C_INT_ADD: u32 = 4;
 const C_INT_SUB: u32 = 5;
+// VCOMPOUND_LOCAL / VCOMPOUND_FIELD ops (the out natives).
+const V_MUL_FLOAT: u32 = 1;
+const V_DIV_FLOAT: u32 = 2;
+const V_ADD: u32 = 3;
+const V_SUB: u32 = 4;
+const V_MUL: u32 = 5;
+const R_ADD: u32 = 6;
+const R_SUB: u32 = 7;
 
 // Receiver info: the image base with flags in the low bits (bases are
 // 16-byte aligned). BOUND: the instance has host bindings, so a field whose
@@ -241,6 +347,11 @@ const CK_BOOL: u32 = 2;
 const CK_FLOAT: u32 = 3;
 const CK_OBJECT: u32 = 4;
 const CK_CAST: u32 = 5;
+const CK_VECTOR: u32 = 6;
+const CK_ROTATOR: u32 = 7;
+const CK_OP: u32 = 8;
+/// The name id of `none` (the host interns it first).
+const NAME_NONE: u32 = 1;
 
 // Errors raised through js_error, which throws the JavaScript VM's message.
 const ERR_HANG: u32 = 1;
@@ -250,6 +361,7 @@ const ERR_KIND: u32 = 4;
 const ERR_DIV_OVERFLOW: u32 = 5;
 const ERR_FLOAT_TO_INT: u32 = 6;
 const ERR_FLOAT_TO_BYTE: u32 = 7;
+const ERR_RETURN_ITERATOR: u32 = 8;
 
 // CALL result kinds (also S_RETURN's) and argument kinds.
 const R_VOID: u32 = 0;
@@ -257,6 +369,8 @@ const R_INT: u32 = 1;
 const R_BOOL: u32 = 2;
 const R_FLOAT: u32 = 3;
 const R_OBJECT: u32 = 4;
+const R_VECTOR: u32 = 5;
+const R_ROTATOR: u32 = 6;
 const P_SKIP: u32 = 0;
 const P_INT: u32 = 1;
 const P_BOOL: u32 = 2;
@@ -289,6 +403,10 @@ extern "C" {
     fn js_class_row(handle: u32) -> u32;
     fn js_cast(frame: u32, node: u32, handle: u32) -> u32;
     fn js_check(frame: u32, node: u32, handle: u32, kind: u32, value: f64);
+    fn js_vector(frame: u32, node: u32, receiver: u32);
+    fn js_rotator(frame: u32, node: u32, receiver: u32);
+    fn js_name(frame: u32, node: u32, receiver: u32) -> u32;
+    fn js_iterators(frame: u32) -> u32;
 }
 
 // The words the host synchronizes. RUNAWAY is the JavaScript VM's
@@ -312,6 +430,12 @@ static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
 static mut CLASSES: [u32; 2] = [0; 2];
 static mut CHECK: u32 = 0;
+// R2b-6: VECTOR_IO, a vector or rotator js_vector/js_rotator wrote;
+// RESULT3, a vector or rotator Return's value; CHECK_VALUES, the operands
+// and result of a CK_OP / CK_VECTOR / CK_ROTATOR report.
+static mut VECTOR_IO: [u32; 3] = [0; 3];
+static mut RESULT3: [u32; 3] = [0; 3];
+static mut CHECK_VALUES: [f64; 10] = [0.0; 10];
 
 #[no_mangle]
 pub extern "C" fn vm_runaway_ptr() -> *mut u32 {
@@ -348,6 +472,18 @@ pub extern "C" fn vm_classes_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn vm_check_ptr() -> *mut u32 {
     addr_of_mut!(CHECK)
+}
+#[no_mangle]
+pub extern "C" fn vm_vector_io_ptr() -> *mut u32 {
+    addr_of_mut!(VECTOR_IO) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_result3_ptr() -> *mut u32 {
+    addr_of_mut!(RESULT3) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_check_values_ptr() -> *mut f64 {
+    addr_of_mut!(CHECK_VALUES) as *mut f64
 }
 
 #[inline(always)]
@@ -519,6 +655,92 @@ fn merge_bool(word: u32, mask: u32, value: bool) -> u32 {
     }
 }
 
+/// A float32 cell's value as JavaScript holds it: `getFloat32` widens, which
+/// quiets a signaling NaN (an explicit bit operation: LLVM may fold a
+/// widening followed by a narrowing).
+#[inline(always)]
+fn quiet(bits: u32) -> u32 {
+    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
+        bits | 0x0040_0000
+    } else {
+        bits
+    }
+}
+/// A VECTOR cell read (readCell's three getFloat32).
+#[inline(always)]
+fn load_vector(addr: u32) -> [u32; 3] {
+    [quiet(load32(addr)), quiet(load32(addr.wrapping_add(4))), quiet(load32(addr.wrapping_add(8)))]
+}
+/// A ROTATOR cell read (three getInt32).
+#[inline(always)]
+fn load_rotator(addr: u32) -> [i32; 3] {
+    [load32(addr) as i32, load32(addr.wrapping_add(4)) as i32, load32(addr.wrapping_add(8)) as i32]
+}
+#[inline(always)]
+fn store3(addr: u32, words: [u32; 3]) {
+    store32(addr, words[0]);
+    store32(addr.wrapping_add(4), words[1]);
+    store32(addr.wrapping_add(8), words[2]);
+}
+#[inline(always)]
+fn rotator_words(v: [i32; 3]) -> [u32; 3] {
+    [v[0] as u32, v[1] as u32, v[2] as u32]
+}
+/// A vector component as the JavaScript number (`f32num`).
+#[inline(always)]
+fn widen(bits: u32) -> f64 {
+    f32::from_bits(bits) as f64
+}
+/// Math.fround's float32 bits.
+#[inline(always)]
+fn narrow(v: f64) -> u32 {
+    (v as f32).to_bits()
+}
+/// `Math.fround(s)` of a float operand: JavaScript's undefined (UNDEF_F64)
+/// converts to NaN, V8's 0x7ff8_0000_0000_0000.
+#[inline(always)]
+fn fround_operand(s: f64) -> f64 {
+    if s.to_bits() == UNDEF_F64_BITS {
+        f64::from_bits(0x7ff8_0000_0000_0000)
+    } else {
+        fround(s)
+    }
+}
+/// The x87 kernel's three-word result (lib.rs RESULT), read right after the
+/// kernel body wrote it.
+#[inline(always)]
+fn kernel3() -> [u32; 3] {
+    unsafe { *addr_of!(crate::RESULT) }
+}
+/// A kernel vector result as JavaScript receives it (`num` widens each word).
+#[inline(always)]
+fn kernel_vector() -> [u32; 3] {
+    let v = kernel3();
+    [quiet(v[0]), quiet(v[1]), quiet(v[2])]
+}
+#[inline(always)]
+fn widen3(v: [u32; 3]) -> [f64; 3] {
+    [widen(v[0]), widen(v[1]), widen(v[2])]
+}
+#[inline(always)]
+fn ints3(v: [i32; 3]) -> [f64; 3] {
+    [v[0] as f64, v[1] as f64, v[2] as f64]
+}
+/// Whether class row `row` lists name id `name` in its name list (after the
+/// record ids).
+#[inline(always)]
+fn row_has_name(row: u32, name: u32) -> bool {
+    let count = load32(row.wrapping_add(4));
+    let mut at = row.wrapping_add(8).wrapping_add(count.wrapping_mul(4));
+    for _ in 0..count {
+        if load32(at) == name {
+            return true;
+        }
+        at = at.wrapping_add(4);
+    }
+    false
+}
+
 /// An expression's receiver. `handle` 0 is SELF, whose info the run caches;
 /// any other handle is a context object (never None or undefined), with the
 /// info fetched when that object became known.
@@ -603,6 +825,51 @@ impl Run {
     fn host_eval(&mut self, node: u32, r: Recv) {
         unsafe { js_eval(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
+    }
+    fn host_vector(&mut self, node: u32, r: Recv) -> [u32; 3] {
+        unsafe { js_vector(self.frame, node, self.handle(r)) };
+        self.self_fresh = false;
+        unsafe { *addr_of!(VECTOR_IO) }
+    }
+    fn host_rotator(&mut self, node: u32, r: Recv) -> [i32; 3] {
+        unsafe { js_rotator(self.frame, node, self.handle(r)) };
+        self.self_fresh = false;
+        let v = unsafe { *addr_of!(VECTOR_IO) };
+        [v[0] as i32, v[1] as i32, v[2] as i32]
+    }
+    fn host_name(&mut self, node: u32, r: Recv) -> u32 {
+        let v = unsafe { js_name(self.frame, node, self.handle(r)) };
+        self.self_fresh = false;
+        v
+    }
+
+    /// SCRIPT_VM_CHECK: a vector or rotator read (CK_VECTOR, CK_ROTATOR) with
+    /// its value in CHECK_VALUES[6..9].
+    #[inline(always)]
+    fn verify3(&self, node: u32, r: Recv, kind: u32, value: [f64; 3]) {
+        if unsafe { CHECK } != 0 {
+            self.report(node, r, kind, [0.0; 3], [0.0; 3], value);
+        }
+    }
+    /// SCRIPT_VM_CHECK: an operator's operands and result (CK_OP).
+    #[inline(always)]
+    fn verify_op(&self, node: u32, r: Recv, a: [f64; 3], b: [f64; 3], result: [f64; 3]) {
+        if unsafe { CHECK } != 0 {
+            self.report(node, r, CK_OP, a, b, result);
+        }
+    }
+    #[cold]
+    #[inline(never)]
+    fn report(&self, node: u32, r: Recv, kind: u32, a: [f64; 3], b: [f64; 3], result: [f64; 3]) {
+        unsafe {
+            let values = addr_of_mut!(CHECK_VALUES) as *mut f64;
+            for i in 0..3 {
+                *values.add(i) = a[i];
+                *values.add(3 + i) = b[i];
+                *values.add(6 + i) = result[i];
+            }
+            js_check(self.frame, node, self.handle(r), kind, 0.0);
+        }
     }
 
     /// SELF's receiver info, refetched after any import other than
@@ -820,7 +1087,12 @@ impl Run {
                         cursor = target;
                     }
                 }
-                S_RETURN => {
+                S_RETURN | S_RETURN_ITER => {
+                    // stepCompiled: `if (frame.iterators.length) throw`
+                    // before the value (a body with a foreach).
+                    if kind == S_RETURN_ITER && unsafe { js_iterators(self.frame) } != 0 {
+                        self.fail(ERR_RETURN_ITERATOR, 0);
+                    }
                     let rkind = self.op(1);
                     self.skip(2);
                     let value = match rkind {
@@ -831,6 +1103,17 @@ impl Run {
                         R_BOOL => self.boolean(SELF) as i32 as f64,
                         R_FLOAT => self.float(SELF),
                         R_OBJECT => self.object(SELF) as f64,
+                        // The host builds the Array from RESULT3.
+                        R_VECTOR => {
+                            let v = self.vector(SELF);
+                            unsafe { *addr_of_mut!(RESULT3) = v };
+                            0.0
+                        }
+                        R_ROTATOR => {
+                            let v = self.rotator(SELF);
+                            unsafe { *addr_of_mut!(RESULT3) = rotator_words(v) };
+                            0.0
+                        }
                         _ => self.fail(ERR_KIND, rkind),
                     };
                     unsafe { RESULT = value };
@@ -925,7 +1208,46 @@ impl Run {
                 let v = self.object(SELF);
                 store32(addr, pointer_word(v));
             }
-            SET_FIELD_INT | SET_FIELD_BYTE | SET_FIELD_BOOL | SET_FIELD_FLOAT | SET_FIELD_OBJECT => self.set_field(kind),
+            SET_FIELD_INT | SET_FIELD_BYTE | SET_FIELD_BOOL | SET_FIELD_FLOAT | SET_FIELD_OBJECT | SET_FIELD_VECTOR
+            | SET_FIELD_ROTATOR => self.set_field(kind),
+            SET_LOCAL_VECTOR => {
+                // assignLocalOf: the codec copy of a vector is its float32
+                // components, stored by setFloat32.
+                let addr = self.locals.wrapping_add(self.op(1));
+                self.skip(2);
+                let v = self.vector(SELF);
+                store3(addr, v);
+            }
+            SET_LOCAL_ROTATOR => {
+                let addr = self.locals.wrapping_add(self.op(1));
+                self.skip(2);
+                let v = self.rotator(SELF);
+                store3(addr, rotator_words(v));
+            }
+            VCOMPOUND_LOCAL => {
+                let (op, node) = (self.op(1), self.op(3));
+                let addr = self.locals.wrapping_add(self.op(2));
+                if op.wrapping_sub(V_MUL_FLOAT) > R_SUB - V_MUL_FLOAT {
+                    self.fail(ERR_KIND, op);
+                }
+                self.skip(4);
+                self.vcompound(op, addr, node);
+            }
+            VCOMPOUND_FIELD => {
+                let (op, offset, node, key) = (self.op(1), self.op(2), self.op(3), self.op(4));
+                let length = self.op(5) as usize;
+                if op.wrapping_sub(V_MUL_FLOAT) > R_SUB - V_MUL_FLOAT {
+                    self.fail(ERR_KIND, op);
+                }
+                self.skip(6);
+                let Some(addr) = self.field(SELF, key, offset) else {
+                    // The JavaScript path runs the whole out-native call.
+                    self.skip(length);
+                    self.host_eval(node, SELF);
+                    return;
+                };
+                self.vcompound(op, addr, node);
+            }
             COMPOUND_LOCAL => {
                 let op = self.op(1);
                 let addr = self.locals.wrapping_add(self.op(2));
@@ -1094,10 +1416,80 @@ impl Run {
                 let v = self.float(SELF);
                 store32(addr, float_bits(v));
             }
+            SET_FIELD_VECTOR => {
+                let v = self.vector(SELF);
+                store3(addr, v);
+            }
+            SET_FIELD_ROTATOR => {
+                let v = self.rotator(SELF);
+                store3(addr, rotator_words(v));
+            }
             _ => {
                 let v = self.object(SELF);
                 store32(addr, pointer_word(v));
             }
+        }
+    }
+
+    /// An out vector or rotator native as a statement, `X op= V`, through
+    /// storage `addr` already selected: V (argument 1) is evaluated with
+    /// SELF, then native() reads X (`args.map(refValue)`), computes, and
+    /// `assign(args[0], out)` stores the codec copy (the same words).
+    fn vcompound(&mut self, op: u32, addr: u32, node: u32) {
+        match op {
+            V_MUL_FLOAT | V_DIV_FLOAT => {
+                let s = self.float(SELF);
+                let a = load_vector(addr);
+                let b = narrow(fround_operand(s));
+                // 221 / 222: the kernel bodies.
+                if op == V_MUL_FLOAT {
+                    crate::op_multiply_equal_vector_float(a[0], a[1], a[2], b);
+                } else {
+                    crate::op_divide_equal_vector_float(a[0], a[1], a[2], b);
+                }
+                let v = kernel_vector();
+                self.verify_op(node, SELF, widen3(a), [s, 0.0, 0.0], widen3(v));
+                store3(addr, v);
+            }
+            V_ADD | V_SUB | V_MUL => {
+                let b = self.vector(SELF);
+                let a = load_vector(addr);
+                let v = match op {
+                    // 223: a.map((v, i) => f(f(v) + f(b[i]))).
+                    V_ADD => {
+                        let (x, y) = (widen3(a), widen3(b));
+                        [
+                            narrow(nan_first(x[0], y[0], x[0] + y[0])),
+                            narrow(nan_first(x[1], y[1], x[1] + y[1])),
+                            narrow(nan_first(x[2], y[2], x[2] + y[2])),
+                        ]
+                    }
+                    // 224 / 297: the kernel bodies.
+                    V_SUB => {
+                        crate::op_subtract_equal_vector_vector(a[0], a[1], a[2], b[0], b[1], b[2]);
+                        kernel_vector()
+                    }
+                    _ => {
+                        crate::op_multiply_equal_vector_vector(a[0], a[1], a[2], b[0], b[1], b[2]);
+                        kernel_vector()
+                    }
+                };
+                self.verify_op(node, SELF, widen3(a), widen3(b), widen3(v));
+                store3(addr, v);
+            }
+            R_ADD | R_SUB => {
+                // 318/319: ((v|0) ± (b[i]|0)) | 0 per word.
+                let b = self.rotator(SELF);
+                let a = load_rotator(addr);
+                let v = if op == R_ADD {
+                    [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1]), a[2].wrapping_add(b[2])]
+                } else {
+                    [a[0].wrapping_sub(b[0]), a[1].wrapping_sub(b[1]), a[2].wrapping_sub(b[2])]
+                };
+                self.verify_op(node, SELF, ints3(a), ints3(b), ints3(v));
+                store3(addr, rotator_words(v));
+            }
+            _ => self.fail(ERR_KIND, op),
         }
     }
 
@@ -1155,6 +1547,270 @@ impl Run {
             return None;
         }
         Some(Recv { handle: object, info: unsafe { js_receiver(object) } })
+    }
+
+    /// A vector value (R2b-6): three quiet float32 bit patterns.
+    fn vector(&mut self, r: Recv) -> [u32; 3] {
+        let kind = self.op(0);
+        match kind {
+            LIT_VECTOR => {
+                let v = [self.op(1), self.op(2), self.op(3)];
+                self.skip(4);
+                v
+            }
+            LOCAL_VECTOR => {
+                let (offset, node) = (self.op(1), self.op(2));
+                self.skip(3);
+                let v = load_vector(self.locals.wrapping_add(offset));
+                self.verify3(node, r, CK_VECTOR, widen3(v));
+                v
+            }
+            FIELD_VECTOR => {
+                let (offset, node, key) = (self.op(1), self.op(2), self.op(3));
+                self.skip(4);
+                match self.field(r, key, offset) {
+                    Some(addr) => {
+                        let v = load_vector(addr);
+                        self.verify3(node, r, CK_VECTOR, widen3(v));
+                        v
+                    }
+                    None => self.host_vector(node, r),
+                }
+            }
+            JS_VECTOR => {
+                let node = self.op(1);
+                self.skip(2);
+                self.host_vector(node, r)
+            }
+            CONTEXT => match self.context(r) {
+                Some(object) => self.vector(object),
+                None => [0; 3],
+            },
+            VECTOR_ADD | VECTOR_SUB | VECTOR_MUL | VECTOR_MIRROR => {
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let b = self.vector(SELF);
+                let (x, y) = (widen3(a), widen3(b));
+                let v = match kind {
+                    // 215/216: a.map((v, i) => f(v op b[i])).
+                    VECTOR_ADD => [
+                        narrow(nan_first(x[0], y[0], x[0] + y[0])),
+                        narrow(nan_first(x[1], y[1], x[1] + y[1])),
+                        narrow(nan_first(x[2], y[2], x[2] + y[2])),
+                    ],
+                    VECTOR_SUB => [
+                        narrow(nan_first(x[0], y[0], x[0] - y[0])),
+                        narrow(nan_first(x[1], y[1], x[1] - y[1])),
+                        narrow(nan_first(x[2], y[2], x[2] - y[2])),
+                    ],
+                    // 296 / 300: the x87 kernel bodies.
+                    VECTOR_MUL => {
+                        crate::op_multiply_vector_vector(a[0], a[1], a[2], b[0], b[1], b[2]);
+                        kernel_vector()
+                    }
+                    _ => {
+                        crate::op_mirror_vector_by_normal(a[0], a[1], a[2], b[0], b[1], b[2]);
+                        kernel_vector()
+                    }
+                };
+                self.verify_op(node, r, x, y, widen3(v));
+                v
+            }
+            VECTOR_SCALE | VECTOR_DIVIDE => {
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let s = self.float(SELF);
+                let x = widen3(a);
+                let fs = fround_operand(s);
+                let v = if kind == VECTOR_SCALE {
+                    // 212: a.map(v => f(f(v) * f(b))).
+                    [
+                        narrow(nan_first(x[0], fs, x[0] * fs)),
+                        narrow(nan_first(x[1], fs, x[1] * fs)),
+                        narrow(nan_first(x[2], fs, x[2] * fs)),
+                    ]
+                } else {
+                    // 214 (script-mover-primitives.mjs divideVector):
+                    // reciprocal = 1 / f(Number(divisor)) in doubles (a NaN
+                    // divisor is the only NaN operand), then
+                    // f(component * reciprocal).
+                    let q = 1.0 / fs;
+                    [
+                        narrow(nan_first(x[0], q, x[0] * q)),
+                        narrow(nan_first(x[1], q, x[1] * q)),
+                        narrow(nan_first(x[2], q, x[2] * q)),
+                    ]
+                };
+                self.verify_op(node, r, x, [s, 0.0, 0.0], widen3(v));
+                v
+            }
+            SCALE_VECTOR => {
+                // 213: b.map(v => f(f(a) * f(v))).
+                let node = self.op(1);
+                self.skip(2);
+                let s = self.float(SELF);
+                let b = self.vector(SELF);
+                let y = widen3(b);
+                let fs = fround_operand(s);
+                let v = [
+                    narrow(nan_first(fs, y[0], fs * y[0])),
+                    narrow(nan_first(fs, y[1], fs * y[1])),
+                    narrow(nan_first(fs, y[2], fs * y[2])),
+                ];
+                self.verify_op(node, r, [s, 0.0, 0.0], y, widen3(v));
+                v
+            }
+            VECTOR_NEG | VECTOR_NORMAL => {
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let v = if kind == VECTOR_NEG {
+                    // 211: FCHS, a sign flip of each float32.
+                    [a[0] ^ 0x8000_0000, a[1] ^ 0x8000_0000, a[2] ^ 0x8000_0000]
+                } else {
+                    // 226: FVector::SafeNormal (the kernel).
+                    crate::op_normal(a[0], a[1], a[2]);
+                    kernel_vector()
+                };
+                self.verify_op(node, r, widen3(a), [0.0; 3], widen3(v));
+                v
+            }
+            VECTOR_ROTATE => {
+                // 276: Rotate_VectorRotator (the kernel).
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let b = self.rotator(SELF);
+                crate::op_rotate(a[0], a[1], a[2], b[0], b[1], b[2]);
+                let v = kernel_vector();
+                self.verify_op(node, r, widen3(a), ints3(b), widen3(v));
+                v
+            }
+            _ => self.fail(ERR_KIND, kind),
+        }
+    }
+
+    /// A rotator value (R2b-6): the three int32 words.
+    fn rotator(&mut self, r: Recv) -> [i32; 3] {
+        let kind = self.op(0);
+        match kind {
+            LIT_ROTATOR => {
+                let v = [self.op(1) as i32, self.op(2) as i32, self.op(3) as i32];
+                self.skip(4);
+                v
+            }
+            LOCAL_ROTATOR => {
+                let (offset, node) = (self.op(1), self.op(2));
+                self.skip(3);
+                let v = load_rotator(self.locals.wrapping_add(offset));
+                self.verify3(node, r, CK_ROTATOR, ints3(v));
+                v
+            }
+            FIELD_ROTATOR => {
+                let (offset, node, key) = (self.op(1), self.op(2), self.op(3));
+                self.skip(4);
+                match self.field(r, key, offset) {
+                    Some(addr) => {
+                        let v = load_rotator(addr);
+                        self.verify3(node, r, CK_ROTATOR, ints3(v));
+                        v
+                    }
+                    None => self.host_rotator(node, r),
+                }
+            }
+            JS_ROTATOR => {
+                let node = self.op(1);
+                self.skip(2);
+                self.host_rotator(node, r)
+            }
+            CONTEXT => match self.context(r) {
+                Some(object) => self.rotator(object),
+                None => [0; 3],
+            },
+            ROTATOR_ADD | ROTATOR_SUB => {
+                // 316/317: ((v|0) ± (b[i]|0)) | 0 per word.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.rotator(SELF);
+                let b = self.rotator(SELF);
+                let v = if kind == ROTATOR_ADD {
+                    [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1]), a[2].wrapping_add(b[2])]
+                } else {
+                    [a[0].wrapping_sub(b[0]), a[1].wrapping_sub(b[1]), a[2].wrapping_sub(b[2])]
+                };
+                self.verify_op(node, r, ints3(a), ints3(b), ints3(v));
+                v
+            }
+            ROTATOR_SCALE | SCALE_ROTATOR => {
+                // 287 (rotator, float) / 288 (float, rotator): the kernel's
+                // FILD, FMUL by the float32 and _ftol per word.
+                let node = self.op(1);
+                self.skip(2);
+                let (a, s) = if kind == ROTATOR_SCALE {
+                    let a = self.rotator(SELF);
+                    (a, self.float(SELF))
+                } else {
+                    let s = self.float(SELF);
+                    (self.rotator(SELF), s)
+                };
+                crate::op_multiply_rotator_float(a[0], a[1], a[2], narrow(fround_operand(s)));
+                let w = kernel3();
+                let v = [w[0] as i32, w[1] as i32, w[2] as i32];
+                if kind == ROTATOR_SCALE {
+                    self.verify_op(node, r, ints3(a), [s, 0.0, 0.0], ints3(v));
+                } else {
+                    self.verify_op(node, r, [s, 0.0, 0.0], ints3(a), ints3(v));
+                }
+                v
+            }
+            _ => self.fail(ERR_KIND, kind),
+        }
+    }
+
+    /// A name value (R2b-6): the id of its folded spelling.
+    fn name(&mut self, r: Recv) -> u32 {
+        let kind = self.op(0);
+        match kind {
+            LIT_NAME => {
+                let v = self.op(1);
+                self.skip(2);
+                v
+            }
+            JS_NAME => {
+                let node = self.op(1);
+                self.skip(2);
+                self.host_name(node, r)
+            }
+            CONTEXT => match self.context(r) {
+                Some(object) => self.name(object),
+                None => NAME_NONE,
+            },
+            _ => self.fail(ERR_KIND, kind),
+        }
+    }
+
+    /// IsA (invokeNative 303) with a name literal on receiver `r`.
+    fn is_a(&mut self, r: Recv) -> bool {
+        let (node, name) = (self.op(1), self.op(2));
+        self.skip(3);
+        let info = if r.handle == 0 { self.self_info() } else { r.info };
+        if info & HOST != 0 {
+            return self.host_bool(node, r);
+        }
+        let handle = self.handle(r);
+        let mut row = class_entry(handle);
+        if row <= RELEASED {
+            row = unsafe { js_class_row(handle) };
+            if row == 0 {
+                return self.host_bool(node, r);
+            }
+        }
+        // `for (cls = instance.cls; cls; cls = cls.base) if (lower(cls.record.name) === name)`.
+        let v = row_has_name(row, name);
+        self.verify(node, r, CK_BOOL, v as i32 as f64);
+        v
     }
 
     fn int(&mut self, r: Recv) -> i32 {
@@ -1294,6 +1950,19 @@ impl Run {
                 self.skip(1);
                 !self.int(SELF)
             }
+            ROTATOR_MEMBER => {
+                // structValue over a rotator value: copyInt of the word, with
+                // the member's receiver.
+                let (node, index) = (self.op(1), self.op(2));
+                if index > 2 {
+                    self.fail(ERR_KIND, index);
+                }
+                self.skip(3);
+                let a = self.rotator(r);
+                let v = a[index as usize];
+                self.verify_op(node, r, ints3(a), [0.0; 3], [v as f64, 0.0, 0.0]);
+                v
+            }
             INC_LOCAL_PRE | DEC_LOCAL_PRE | INC_LOCAL_POST => {
                 let addr = self.locals.wrapping_add(self.op(1));
                 self.skip(2);
@@ -1367,6 +2036,44 @@ impl Run {
             BYTE_TO_FLOAT => {
                 self.skip(1);
                 (self.int(SELF) & 255) as f32 as f64
+            }
+            VECTOR_MEMBER => {
+                // structValue over a vector value: copyFloat of the float32
+                // component, with the member's receiver.
+                let (node, index) = (self.op(1), self.op(2));
+                if index > 2 {
+                    self.fail(ERR_KIND, index);
+                }
+                self.skip(3);
+                let a = self.vector(r);
+                let v = widen(a[index as usize]);
+                self.verify_op(node, r, widen3(a), [0.0; 3], [v, 0.0, 0.0]);
+                v
+            }
+            VECTOR_SIZE => {
+                // 225 (finishVectorSize): f(Math.sqrt((z*z + y*y) + x*x)) in
+                // doubles; Math.sqrt is correctly rounded and returns a NaN
+                // operand itself.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let [x, y, z] = widen3(a);
+                let (xx, yy, zz) = (x * x, y * y, z * z);
+                let s = nan_first(zz, yy, zz + yy);
+                let s = nan_first(s, xx, s + xx);
+                let v = fround(if s.is_nan() { s } else { crate::trace::sqrt(s) });
+                self.verify_op(node, r, [x, y, z], [0.0; 3], [v, 0.0, 0.0]);
+                v
+            }
+            VECTOR_DOT => {
+                // 219: the kernel's px + (py + pz), one store.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let b = self.vector(SELF);
+                let v = widen(crate::op_dot(a[0], a[1], a[2], b[0], b[1], b[2]));
+                self.verify_op(node, r, widen3(a), widen3(b), [v, 0.0, 0.0]);
+                v
             }
             FLOAT_NEG => {
                 self.skip(1);
@@ -1530,6 +2237,45 @@ impl Run {
                 let b = self.object(SELF);
                 (a == b) == (kind == OBJECT_EQ)
             }
+            VECTOR_EQ | VECTOR_NE => {
+                // 217/218 FCOMP each component, testing C3 only: a NaN on
+                // either side compares equal, as do +0 and -0.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.vector(SELF);
+                let b = self.vector(SELF);
+                let (x, y) = (widen3(a), widen3(b));
+                let mut equal = true;
+                for i in 0..3 {
+                    if !(x[i].is_nan() || y[i].is_nan() || x[i] == y[i]) {
+                        equal = false;
+                    }
+                }
+                let v = equal == (kind == VECTOR_EQ);
+                self.verify_op(node, r, x, y, [v as i32 as f64, 0.0, 0.0]);
+                v
+            }
+            ROTATOR_EQ | ROTATOR_NE => {
+                // 142/203: three dword compares.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.rotator(SELF);
+                let b = self.rotator(SELF);
+                let v = (a == b) == (kind == ROTATOR_EQ);
+                self.verify_op(node, r, ints3(a), ints3(b), [v as i32 as f64, 0.0, 0.0]);
+                v
+            }
+            NAME_EQ | NAME_NE => {
+                // 254/255: the folded spellings' ids.
+                let node = self.op(1);
+                self.skip(2);
+                let a = self.name(SELF);
+                let b = self.name(SELF);
+                let v = (a == b) == (kind == NAME_EQ);
+                self.verify_op(node, r, [a as f64, 0.0, 0.0], [b as f64, 0.0, 0.0], [v as i32 as f64, 0.0, 0.0]);
+                v
+            }
+            IS_A => self.is_a(r),
             _ => self.fail(ERR_KIND, kind),
         }
     }

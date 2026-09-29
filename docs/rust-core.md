@@ -490,6 +490,155 @@ steady state: about 2.5 state statements per Island tick after the warm-up,
 pairs, the median `SCRIPT_VM=rust` Island tick was 20.6, 20.8, 20.0 and
 20.6 ms before, and 19.8, 20.3, 20.2 and 20.0 ms after.
 
+**R2b-6 — Vectors, rotators, names, IsA and iterator Returns
+(implemented).** Operand-shape statistics (`SCRIPT_VM_STATS_DETAIL=1`) came
+first. On Island, the 156 callee Returns per tick left to JavaScript were
+not unlowerable values. They were Returns in bodies with a foreach, all of
+which the lowering refused. IsA (88 per tick) always had a name literal. Most
+vector operands were bound Actor fields (Location, Velocity, Rotation), whose
+read stays one import until stage 1e images them. The word code is specified
+in `interp.rs`'s header.
+
+* **Values.** A vector is three float32 bit patterns, each NaN quiet. The
+  JavaScript value is an Array of three float32 numbers (a codec copy or an
+  operator result). A load sets the quiet bit of a signaling NaN, as
+  `getFloat32`'s widening does. A rotator is three int32 words. A name is
+  the id of its folded spelling `String(v || 'None').toLowerCase()`, interned
+  once for every runtime (`nameId`, `none` = 1). This is exactly the string
+  that 254/255 and IsA compare. No Rust consumer needs the spelling: name
+  stores, Returns, conversions and switches stay in JavaScript, because names
+  have no byte form yet (R1).
+* **Kinds.** Vector and rotator locals and fields, literals, contexts,
+  JavaScript nodes (`js_vector`, `js_rotator` fill a scratch cell), stores
+  and Returns (`RESULT3`). The Core operators are:
+  * 215/216/212/213: the `f(a op b)` doubles of `native()`.
+  * 214 and VSize (225): the mover primitives' doubles and V8's correctly
+    rounded `Math.sqrt`, through `trace::sqrt` with a NaN passed through.
+  * 211: a sign flip.
+  * 217/218 and 142/203: compares.
+  * 316/317: wrapping adds.
+  * The x87 kernel bodies for 219, 226, 276, 287/288, 296 and 300.
+  * The out natives 221 to 224, 297, 318 and 319, as statements ordered like
+    COMPOUND.
+
+  A member of a vector or rotator value that is not a variable
+  (`Other.Location.X`) is read like `structValue`. Name literals and name
+  JavaScript nodes (`js_name`) feed 254/255.
+* **JavaScript vectors.** A JavaScript node in a vector or rotator position
+  is admitted only when its closure value is a codec copy (a variable, a
+  default, an element, a struct member, or a context of one). An operator's
+  own result is not converted, so for any other node the consumer stays in
+  JavaScript. `js_vector` throws on a value that is not three float32
+  numbers, as `js_object` does on a non-object.
+* **IsA (303).** Class rows gain a second list, the ids of
+  `String(cls.record.name).toLowerCase()` along `cls.base`. A HOST receiver,
+  or a handle the table does not describe, evaluates the native in
+  JavaScript. The literal argument has no effect. The runtime's own
+  `invokeNative` must be in the services, and 303 must not be a boundary
+  native.
+* **Returns with a foreach.** `S_RETURN_ITER` asks the host for the frame's
+  iterator count (`js_iterators`, which runs no script) before the value.
+  A nonzero count raises stepCompiled's error.
+* **Lowering policy.** A new vector, rotator or name node, or a store, is
+  lowered only when its operands need at most one import (a JavaScript
+  leaf, or a field whose key a binding uses). Two imports cost more than
+  leaving the node to JavaScript. For example, `VSize(Location -
+  Other.Location)` stays whole.
+* **V8 NaN instability.** Probes while validating (`.work/logs/r2b6`) found
+  that the JavaScript VM's own vector NaN payloads depend on JIT state:
+  * With two NaN operands, `x op y` returns the first under Ignition and
+    TurboFan and the second under Maglev.
+  * Optimized code may store a NaN into a double-elements Array canonically.
+  * Optimized code may fold a float32 widening with a later narrowing,
+    keeping a signaling NaN.
+
+  Rust keeps one rule: quiet loads, the first NaN operand, the kernel's
+  words. The validator checks that rule with references computed as scalars
+  from quiet words. `SCRIPT_VM_CHECK` treats any NaN as equal to any NaN.
+  The same instability applies to the scalar float operators of R2b-5.
+* **SCRIPT_VM_CHECK** compares every new value Rust completes:
+  * Vector and rotator reads from memory (against the closure).
+  * Operators, members and out natives: the JavaScript VM's own code
+    (`compiled.primitive`, the `native()` body; `structValue`) runs on the
+    operands Rust used, so operand subtrees are not evaluated twice.
+  * IsA (against the closure).
+
+Verification: `validate-script-vm-interp` covers 150 kinds with 583,674
+checks. Each operator is checked against the `native()` expression, and the
+mover primitives and `ScriptRuntime.invokeNative` (IsA) are called directly.
+The checks cover NaN payload pairs, signed zeros, signaling NaNs in memory,
+the JavaScript paths, receivers, evaluation order, the host faults and the
+check reports. 65 of 67 mutants are caught. The two survivors are
+semantically identical:
+* 214 dividing directly instead of multiplying by the double reciprocal. For
+  float32 operands the quotient is never within 2^-48 of a float32 midpoint,
+  and a search of 1.8×10^8 pairs found no difference.
+* The kernel's vector words quieted a second time.
+
+Digests match the JavaScript VM at all 30 checkpoints under both VMs on
+Training (`04f77dc631509ae4`) and Island (`5496f30ee89033fc`), with
+`SCRIPT_VM_CHECK=1` and no errors. The 300 timed Island ticks made these
+comparisons:
+
+| Check | Count |
+|---|---|
+| Operator, member and out-native | 99,225 |
+| Vector read | 26,179 |
+| Rotator read | 7,978 |
+| IsA (bool check) | 26,506 |
+
+The 546 unit tests, `validate-script-vm-x87` and `validate-trace-kernel`
+pass. `validate-loadmap-gc` under `SCRIPT_VM=rust` grows old space by 0.73
+to 1.00 MiB over 19 resets (before: 0.80 to 0.82). Per Island tick, the
+JavaScript imports fell from 1,744 to 1,455:
+
+| Import | Before | After |
+|---|---|---|
+| Statements | 234 | 57 |
+| Callee Returns | 156 | 0 |
+| VSize | 115 | 3 |
+| IsA | 88 | 0 |
+| Name compares | 96 | 1 |
+| Vector/rotator `!=` | 37 | 0 |
+| Struct stores | 80 | 12 |
+
+The bound field reads those nodes contained are now separate imports:
+Location 110, Velocity 57 and Rotation 22 per tick. So are the name reads:
+GetStateName 50 and name fields 39. The machine was loaded, so the change in
+time is small and noisy. Across twelve interleaved headless pairs, the median
+`SCRIPT_VM=rust` Island tick was:
+
+| Pair | Before (ms) | After (ms) |
+|---|---|---|
+| 1 | 24.9 | 23.8 |
+| 2 | 46.5 | 23.3 |
+| 3 | 21.5 | 20.6 |
+| 4 | 22.6 | 25.0 |
+| 5 | 24.7 | 19.5 |
+| 6 | 20.0 | 19.9 |
+| 7 | 20.6 | 20.0 |
+| 8 | 19.8 | 18.4 |
+| 9 | 19.6 | 18.8 |
+| 10 | 19.4 | 19.0 |
+| 11 | 20.0 | 19.7 |
+| 12 | 20.1 | 20.4 |
+
+The tick was lower after in 10 of the 12 pairs. In the four quietest pairs
+(9 to 12), the medians fell from about 19.8 to 19.4 ms.
+
+Left in JavaScript, by cause:
+* **Engine natives with native oracles:** LastRendered (723), GetPlayerPawn
+  (720), InStasis (721), AICanSee (705), the alliance natives (2105) and
+  GetStateName (284).
+* **Bound Actor fields:** stage 1e.
+* **No byte form yet (R1):** names in variables, strings, generic structs
+  (Color, PointRegion) and their Returns.
+* **Iterator natives:** a foreach statement.
+* **Casts and GetAxes:** vector/rotator casts (0x39, 0x50) and GetAxes (229).
+* **Unlowered vector forms:** vector call parameters and results, vector
+  array elements and defaults.
+* **The one-import policy:** operators that would need two imports.
+
 **R3 — Hot families.** Move native and physics families into Rust as
 profiles rank them. Candidates are traces and the collision hash, walking and
 falling, AICanSee and alliance, and GetFrame/mesh lighting (already Rust).

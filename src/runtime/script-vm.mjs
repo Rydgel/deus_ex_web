@@ -457,6 +457,8 @@ const STRING_COMPARE_NATIVES=new Set([115,120,121]);
 const UNARY_FLOAT_NATIVES=new Set([188,189,190]);
 const VECTOR_PAIR_NATIVES=new Set([142,203,276,297,317,318,319]);
 
+const NO_SERVICES = Object.freeze({});
+
 const REFERENCE_ENGINE = typeof process !== 'undefined' && process.env?.SCRIPT_VM_REFERENCE === '1';
 
 export function compileFunction(fn) {
@@ -1189,6 +1191,10 @@ export function compileFunction(fn) {
     displayName: fn.name??fn.objectName??'script',
     // The Rust interpreter's JavaScript nodes and statements.
     nodeValue: rvNode, nodeEffect: evNode, step: stepCompiled,
+    // SCRIPT_VM_CHECK (script-vm-rust.mjs): a primitive operator's native()
+    // body on the operand values the Rust interpreter used (an out native's
+    // target as a reference the caller supplies), without services.
+    primitive: (index, values) => native(index, values, undefined, NO_SERVICES, undefined),
     createFrame(instance, locals = {}, services = {}, options = {}) {
       if (REFERENCE_ENGINE) return compiled.createReferenceFrame(instance, locals, services, options);
       const { offset = 0, state = false } = options;
