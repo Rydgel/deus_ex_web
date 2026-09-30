@@ -36,7 +36,7 @@ assert.equal(preview.root.visible,false);
 for(const actor of preview.actors) {
   let triangles=0;
   actor.root.traverse(object=>{
-    if(!object.isMesh)return;
+    if(!object.isMesh||object.userData.twinOf)return; // a two-sided group's front-face twin shares its geometry
     const positions=object.geometry.getAttribute('position'),uv=object.geometry.getAttribute('uv');
     assert.ok(positions.count>0);assert.equal(positions.count,uv.count);
     assert.ok([...positions.array,...uv.array].every(Number.isFinite));

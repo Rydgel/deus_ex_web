@@ -68,7 +68,7 @@ for(const prop of scene.propActors){
   let triangles=0;
   assert.equal(prop.summary.animation,'None',`${prop.summary.actor} is a static prop`);
   prop.root.traverse(object=>{
-    if(!object.isMesh)return;
+    if(!object.isMesh||object.userData.twinOf)return; // a two-sided group's front-face twin shares its geometry
     const position=object.geometry.getAttribute('position'),uv=object.geometry.getAttribute('uv');
     assert.ok(position.count>0,`${prop.summary.actor} has empty geometry`);
     assert.equal(position.count,uv.count);

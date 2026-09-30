@@ -375,8 +375,6 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         // resource is shared, synchronously, at its former allocation point.
         textureLease=gpuTextures.acquire(data,flags);textureLeases.push(textureLease);
         const texture=textureLease.texture,first=data.mips[0];
-        const material=new THREE.MeshBasicMaterial({map:texture,
-          side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
         // Keep texture sampling and recovered vertex lighting in the same
         // display-encoded space for the main framebuffer and mirror target.
         // D3D modulates the display-encoded texel by the vertex diffuse
@@ -386,32 +384,45 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         // modulated display ramp (displayRampGlsl) is a uniform branch.
         const modulatedUniform={value:!(flags&POLY.Translucent)&&flags&POLY.Modulated?1:0};
         const environmentGroup=Boolean(group.flags&POLY.Environment);
-        material.customProgramCacheKey=gpuHandle?()=>`deus-ex-mesh-gpu-v1:${environmentGroup?1:0}`
-          :()=>'deus-ex-mesh-display-color-v3';
-        material.onBeforeCompile=shader=>{
-          shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
-          if(gpuHandle){
-            Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
-            shader.vertexShader=shader.vertexShader.replace('#include <common>',
-              `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${DRAW_VERTEX_DECLARATIONS}`)
-              .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup));
-          } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
-            '#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;')
-            .replace('#include <begin_vertex>','#include <begin_vertex>\nvDeusLight = deusLight;');
-          shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
-            '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
-            .replace('#include <colorspace_fragment>',
-              'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
-              `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
-              `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+        const makeMaterial=side=>{
+          const material=new THREE.MeshBasicMaterial({map:texture,side,alphaTest:flags&POLY.Masked?.5:0});
+          material.customProgramCacheKey=gpuHandle?()=>`deus-ex-mesh-gpu-v1:${environmentGroup?1:0}`
+            :()=>'deus-ex-mesh-display-color-v3';
+          material.onBeforeCompile=shader=>{
+            shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
+            if(gpuHandle){
+              Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
+              shader.vertexShader=shader.vertexShader.replace('#include <common>',
+                `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${DRAW_VERTEX_DECLARATIONS}`)
+                .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup));
+            } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
+              '#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;')
+              .replace('#include <begin_vertex>','#include <begin_vertex>\nvDeusLight = deusLight;');
+            shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
+              '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
+              .replace('#include <colorspace_fragment>',
+                'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
+                `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
+                `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+          };
+          materials.push(material);
+          if(flags&(POLY.Translucent|POLY.Modulated)) {
+            material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
+            material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
+            material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+          }
+          material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length,modulatedUniform};
+          return material;
         };
-        materials.push(material);
-        if(flags&(POLY.Translucent|POLY.Modulated)) {
-          material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
-          material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
-          material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
-        }
-        material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length,modulatedUniform};
+        const material=makeMaterial(flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide);
+        // A transparent double-sided material is drawn by three.js as a
+        // back-face then a front-face draw of the same object, flipping its
+        // side and marking it dirty twice per draw, which re-derives its
+        // program every frame. Two-sided groups instead keep a back-side and
+        // a front-side material and a twin mesh, used while the material is
+        // transparent: the same two draws, back first, with no dirty material.
+        const sided=flags&POLY.TwoSided?{double:material,back:makeMaterial(THREE.BackSide),
+          front:makeMaterial(THREE.FrontSide)}:null;
         const geometry=new THREE.BufferGeometry();
         const positions=new Float32Array(group.indices.length*3);
         if(mode==='cpu')copyPositions(positions,group.indices);
@@ -439,8 +450,15 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         const mesh=new THREE.Mesh(geometry,material);
         mesh.onAfterRender=rendered;
         if(gpuHandle)mesh.frustumCulled=false;
-        group.mesh=mesh;
+        group.mesh=mesh;group.sided=sided;group.split=false;
         mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
+        if(sided){
+          // Created right after its mesh: the adjacent id keeps the pair
+          // consecutive in three.js's transparent sort (equal depth).
+          const twin=new THREE.Mesh(geometry,sided.front);
+          twin.onAfterRender=rendered;twin.frustumCulled=mesh.frustumCulled;twin.visible=false;
+          twin.userData={...mesh.userData,twinOf:mesh};group.twin=twin;root.add(twin);
+        }
       } catch(error) {
         textureLease?.release();
         // Skip a single undecodable face group (e.g. a procedural FireTexture
@@ -459,6 +477,12 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
         shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original',
         path:mode,gpuFallback};
+    /** A group's visibility for the coming pass; a split two-sided group
+     * draws its twin (front faces) with it. */
+    function showGroup(group,visible){
+      group.mesh.visible=visible;
+      if(group.twin)group.twin.visible=visible&&group.split;
+    }
     const updateView=cameraPosition=>{
       if(disposed||!root.visible||!hasEnvironment||!cameraPosition||mode!=='cpu')return false;
       const relative=[0,0,0],normal=[0,0,0];
@@ -521,10 +545,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     let mainCamera=null;
     function passVisibility(camera){
       if(mode!=='gpu'||disposed||!root.visible)return;
-      if(camera===mainCamera){for(const group of groups.values())group.mesh.visible=group.mainVisible;return;}
+      if(camera===mainCamera){for(const group of groups.values())showGroup(group,group.mainVisible);return;}
       passFrustum.setFromProjectionMatrix(passMatrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
         THREE.WebGLCoordinateSystem,camera.reversedDepth);
-      decideGroups(passFrustum,(group,visible)=>{group.mesh.visible=visible;});
+      decideGroups(passFrustum,showGroup);
     }
     /** Leave the GPU path for good: the CPU cache is replayed to the current
      * pose and the geometry takes the CPU path's attributes again. */
@@ -537,7 +561,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         const positions=group.geometry.getAttribute('position');
         copyPositions(positions.array,group.indices);positions.needsUpdate=true;
         setMeshBounds(group.geometry,positions.array);
-        group.mesh.frustumCulled=true;group.mesh.visible=true;
+        group.mesh.frustumCulled=true;if(group.twin)group.twin.frustumCulled=true;showGroup(group,true);
       }
       gpu.release(gpuHandle);gpuHandle=null;
     }
@@ -605,6 +629,12 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
           material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
         }
+        if(!materialStateApplied||!Object.is(glow,lastGlow)||!Object.is(style,lastStyle))for(const group of groups.values()){
+          if(!group.sided)continue;
+          group.split=group.sided.double.transparent;
+          group.mesh.material=group.split?group.sided.back:group.sided.double;
+          showGroup(group,group.mesh.visible);
+        }
         lastGlow=glow;lastStyle=style;materialStateApplied=true;
         const current=pose();
         const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
@@ -624,7 +654,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         if(mode==='gpu'){
           mainCamera=view.camera??null;
           mainVisible=false;
-          const assign=(group,visible)=>{group.mainVisible=visible;group.mesh.visible=visible;mainVisible||=visible;};
+          const assign=(group,visible)=>{group.mainVisible=visible;showGroup(group,visible);mainVisible||=visible;};
           if(view.frustum)decideGroups(view.frustum,assign);else for(const group of groups.values())assign(group,true);
         }
         const environmentUpload=updateView(cameraPosition);
