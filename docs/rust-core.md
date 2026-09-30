@@ -1145,6 +1145,195 @@ callers are Barrel1's radioactive Tick, Cloud, Gray and AutoTurret, and
 counting every iterator native over the run finds 304, 306, 309, 310, 1000
 and 1002, never 311.
 
+**1e-2 — Scalar and vector mirrors in the image (implemented).** This is
+step 2 of stage 1e ([object memory](object-memory.md#stages)). script-doors'
+`makeBinding` bound these properties of every attached map actor, and of the
+controlled player, onto plain host members. The physics, pawn-list and mover
+code wrote the members, and the image cell under each binding went stale:
+
+| Class | Offset | Field | Host member |
+|---|---|---|---|
+| AActor | `+0x030` | Physics (byte) | `physics` |
+| AActor | `+0x0d8` | StandingCount (byte) | `standingCount` |
+| AActor | `+0x144`, `+0x150` | Velocity, Acceleration | `velocity`, `acceleration` |
+| APawn | `+0x45c`, `+0x498` | SpecialGoal, nextPawn | `specialGoal`, `nextPawn` |
+| AInventory | `+0x398` | MyMarker | `marker` |
+| AMover | `+0x4dc`, `+0x4e8` | myMarker, WaitingPawn | `marker`, `waitingPawn` |
+| AMover | `+0x4f4` … `+0x530` | SimOldPos, SimOldRotPitch/Yaw/Roll, SimInterpolate, RealPosition, RealRotation, ClientUpdate | `simOldPosition`, `simOldRot*`, `simInterpolate`, `realPosition`, `realRotation`, `clientUpdate` |
+| ALevelInfo | `+0x54c` | PawnList | the scene level's `pawnList` |
+
+The members are now accessors over those cells (`actor-mirror-fields.mjs`),
+and the bindings are gone.
+
+* **Install.** script-doors' `attach` runs `installMirrorFields` right after
+  it snapshots the actor's initial storage, and the Login path does the same
+  for each player identity. Each cell first takes the member's current value,
+  or the binding's fallback (`values.X`, or None for a pointer) while the
+  member is absent. The host member was the field's storage until then, and
+  the image cell had been hidden behind the binding. The snapshot comes first,
+  so a reset still restores the map's serialized values.
+* **Layout evidence.** Each field must be linked at its retail offset
+  (`sdk-layouts.mjs` AActor, APawn, AInventory, AMover, ALevelInfo) with its
+  kind: byte, int, vector, rotator or pointer. This is checked once per class
+  cell, and a different placement throws.
+* **Access.** A read goes through the arena's current view, and a vector read
+  returns a fresh array, as the binding's getter did. A write stores through
+  the field's codec: float32 components, a byte, an int32 or a handle. The
+  accessors are non-configurable, so a leftover `delete` throws instead of
+  splitting the storage again.
+* **Resets.** The `delete actor.velocity`-style resets (resetProperties'
+  Acceleration, resetNpcs' NPC_HOST_PROPS, the pickup and decoration
+  restores) are `resetMirrorField`, which writes the value the binding showed
+  once its host copy was gone. resetProperties keeps LevelInfo.PawnList as the
+  host's collidable rebuild left it, since clearStartupPawnList walks that
+  list, as before.
+* **In-place writes.** The native reach workers restore Velocity component by
+  component (`script-pawn-nav.mjs`, `vel[i] = …`). The pawn-nav `velocity`
+  service now returns `liveVector`, an array whose element setters store the
+  component; before, it returned the live host array. Player.tick's jump
+  (`this.velocity[2] = JumpZ`) is a whole-vector store.
+* **The Player.** `Player.velocity` is the linked identity's Velocity cell
+  (`linkVelocity`, like 1e-1's motion word): the placeholder and each Login
+  identity link when they attach, and `detachPlayerIdentity` unlinks before the
+  retired identity's image is purged. Linking checks that both agree. The
+  player identities' Acceleration, StandingCount, nextPawn and SpecialGoal are
+  ordinary mirrors.
+* **Bound keys.** `boundKeys` lost 17 keys (347 to 330 in both maps):
+  every key in the table except `engine.actor.physics`. The Rust interpreter
+  now reads and writes Velocity, Acceleration, StandingCount and the pointers
+  as cells. The pawn physics views read them through `readNamed`, which now
+  goes straight to the cell.
+
+Not moved, and why:
+
+* **The controlled player's Physics** is the movement port's state
+  (`player.mjs`): `physicsPawn.physics`, `spawnPhysics` and `grounded`. The
+  legacy Player.tick's physics pawn resets it from `grounded` at every call
+  (`validate-gameplay` runs that path on a scripted game), and a script write
+  sets `grounded`. Making it one storage is step 6. Its binding keeps
+  `engine.actor.physics` a bound key, so the Rust interpreter still sends
+  Physics reads on bound receivers to JavaScript. That covers every map actor
+  until step 3 removes their Location bindings. Map actors' Physics is
+  nonetheless their cell.
+* Location, Rotation, the collision size, OldLocation (step 3), Base and
+  Touching (step 4) and the mover interpolation fields (step 5) keep their
+  bindings.
+
+Shadow mode came first (`MIRROR_FIELDS_SHADOW=1`; the scaffolding was removed
+after the proof, and its version is `.work/logs/1e2/shadow-version.diff`):
+
+* The host member stayed the source, and the bindings stayed. Each member
+  became an accessor over a host slot that also wrote the image, including the
+  install adoption and the fallback write of `resetMirrorField`.
+* Every host read, every installed member after each tick and after each
+  reset, and every player identity's Velocity binding read compared the
+  binding's value with the cell.
+* Every host write was checked for exactness in its cell: float32
+  components, int32 rotator components, a byte, an int32 or an object.
+* Every read of an absent member was counted, and its fallback compared with
+  the zero default. Some host readers default to `[0, 0, 0]` rather than
+  `values.X`.
+* Reads and writes of a released image were counted too.
+
+| Run | Hosts | Mirrors | Host reads | Host writes | Fallback writes | Tick checks | Reset checks |
+|---|---|---|---|---|---|---|---|
+| Training, 360 ticks | 314 | 1,552 | 270,460 | 58,215 | 494 | 558,720 | 0 |
+| Island, 360 ticks | 2,240 | 9,326 | 1,131,351 | 176,880 | 2,972 | 3,357,360 | 0 |
+| Island, Player start every 100 ticks | 2,242 | 9,334 | 1,172,751 | 194,576 | 8,918 | 3,358,560 | 18,664 |
+| validate-loadmap-gc (22 Player starts) | 336 | 1,640 | 415,409 | 130,688 | 11,384 | 1,054,680 | 35,156 |
+| validate-gameplay (legacy Player.tick) | 4,795 | 20,081 | 809,853 | 157,359 | 6,934 | 4,501,428 | 1,547 |
+
+The validate-gameplay row is from the first shadow version, before
+Inventory.MyMarker joined the table; the other rows include it.
+
+Results:
+
+* **Writers.** No host write was inexact, in Play or in validate-gameplay's
+  legacy Player.tick on a linked identity. The float64 writers the scoping
+  report named (`player.mjs`'s `groundVelocity` and its `(position - origin)
+  / dt` re-derivation) run only in the synthetic no-collision-queries path,
+  whose Player has no identity, so they never reach an image.
+* **Other checks.** No mirror was read or written after its image was
+  released. Every absent-member read had a fallback equal to the zero
+  default. The linked player velocity never differed from its cell
+  (12,754 to 83,696 checks per run).
+* **Early runs.** The first Training run found one mismatch. The property
+  reset restored LevelInfo.PawnList to None while clearStartupPawnList read the
+  host's rebuilt list. resetProperties now keeps the list (above).
+* **After a Player start.** The only mismatches are reads inside a
+  whole-value store: `PropertyReference.set` reads the old value, then
+  discards it for a non-bool. The reset restores the serialized values of
+  non-selected movers' RealPosition/RealRotation and Island's map GasGrenades'
+  Velocity, where the host copy kept the previous session's. The first read
+  after the reset is the store that overwrites it: Mover.BeginPlay's
+  `RealPosition = Location` and ThrownProjectile.BeginPlay's
+  `Velocity = Speed * Vector(Rotation)`. There were 40 such reads
+  over two Island resets and 88 over 22 Training resets. Nothing else reads
+  them in between, so the restored value is never observed, and it matches
+  what a reload holds.
+
+Verification:
+
+* **Digests.** Unchanged at all 30 checkpoints, both VMs, `SCRIPT_VM_CHECK=1`,
+  errors `{}`: Training `c8eebff5786adf55` and Island `b767a7e417fe5968`.
+  A bench variant with a Player start every 100 ticks also matches the
+  unmodified tree at all 30 checkpoints: Training `7d6b963bf807a9bf` and
+  Island `fe9b9fa4099571c9`, both VMs.
+* **Validators.** `validate-script-vm-interp`, `validate-collision-kernel`,
+  `validate-object-image` and `validate-object-handles`.
+* **Native oracles.** falling, landing, walking, walking-callbacks, rolling,
+  flying, velocity, steps, actor-physics, pawn-list, mover-finish,
+  mover-scene, mover-move, mover-interpolation, mover-blocking, set-base,
+  relocation and far-move-scene.
+* **Play validators.** `validate-decoration-settle-roll`,
+  `validate-script-decoration`, `validate-pawn-locomotion`,
+  `validate-pawn-nav`, `validate-pawn-perception`, `validate-world-destroy`,
+  `validate-loadmap-gc`, `validate-island-swimming`,
+  `validate-island-jump-reach`, `validate-island-falling-water`,
+  `validate-training-ladder`, `validate-mover-frob`,
+  `validate-script-lifecycle` and `validate-script-spawn`.
+  `validate-gameplay`'s output is byte-identical to the unmodified tree's.
+* **Unit tests.** The 560 unit tests (three new) pass.
+  `test/actor-mirror-fields.test.mjs` checks, on Engine's real layouts, the cells at the retail offsets, script and host
+  writes as one storage, fresh vector reads, `liveVector`, codec stores, the
+  refused `delete`, the reset fallbacks, Inventory.MyMarker,
+  LevelInfo.PawnList on the scene level and the Player's velocity link.
+* **Browser.** A 240-frame Chromium Island walk had no page or runtime error.
+
+Cost, from bench-sim `--bound-reads` (host binding calls per timed tick):
+
+| Run | Before | After | Mirrored keys |
+|---|---|---|---|
+| Island, JavaScript VM | 7,276 | 4,596 | 2,694 → 15 |
+| Island, Rust VM | 6,791 | 4,112 | 2,694 → 15 |
+| Training, Rust VM | 1,789 | 1,043 | 758 → 13 |
+
+What is left of the mirrored keys is the controlled player's Physics.
+
+* **Rust interpreter.** Its `[bound engine.actor.velocity]` (57.8 per Island
+  tick) and `[bound engine.actor.acceleration]` (2.3) fallbacks are gone.
+  `[bound engine.actor.physics]` (6.8) stays, and `js value 0x36 [of 0x1]`
+  (a struct member of a field) fell by 51 over the run. No other stats row
+  changed. Two window rows only entered the printed top 60.
+* **Call counts.** `readNamed` per Island tick is unchanged at 30,369: the
+  same calls, now without a binding. `instance` went from 58,550 to 58,486.
+* **Handles.** After 180 Training ticks, `validate-object-handles` counts
+  3,085 non-None image pointers instead of 3,067, and 2,732 live handles
+  instead of 2,731. The cells now hold the pawn-list, SpecialGoal and marker
+  pointers the host members held, and one identity that only a host member
+  referenced gets its handle.
+
+The median `SCRIPT_VM=rust` Island tick over four interleaved pairs:
+
+| Pair | Before (ms) | After (ms) |
+|---|---|---|
+| 1 | 19.41 | 18.60 |
+| 2 | 19.39 | 18.97 |
+| 3 | 19.12 | 18.70 |
+| 4 | 19.15 | 18.39 |
+
+The tick was lower in all four pairs, by about 0.6 ms on average.
+
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming
 ([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;

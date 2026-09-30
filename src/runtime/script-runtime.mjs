@@ -36,6 +36,7 @@ import { moveActorRiders } from './move-riders.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { isMapMoveHost, linkLiveCollision } from './map-actor-native.mjs';
 import { actorWordOf, flagWord, MOTION_WORD } from './actor-flag-words.mjs';
+import { liveVector } from './actor-mirror-fields.mjs';
 import { saveConfig, configRoot, loadConfig as loadObjectConfig, defaultsObject } from './script-config.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
@@ -3857,8 +3858,12 @@ export class ScriptRuntime {
       isProbing:(actor,name)=>this.isProbing(actor,name),
       location:actor=>this.readNamed(actor,'Location'),
       velocity:actor=>{
-        // The workers restore Velocity by mutating the returned vector; bind
-        // it to a live host array (the field binding's get copies).
+        // The workers restore Velocity by mutating the returned vector. A map
+        // actor's velocity member is its image field (actor-mirror-fields.mjs),
+        // whose element-writable view stores each component; otherwise bind
+        // it to a live host array (a field read copies).
+        const live=liveVector(actor,'velocity');
+        if(live)return live;
         if(!Array.isArray(actor.velocity))actor.velocity=this.readNamed(actor,'Velocity');
         return actor.velocity;
       },

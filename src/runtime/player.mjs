@@ -31,6 +31,7 @@ export class Player {
     this.radius = defaults.CollisionRadius;
     this.standingHeight = defaultPawnCollisionHeight(defaults.CollisionHeight);
     this.motionWord = null;
+    this.velocityField = null;
     this.motionFlags = defaults.bJustTeleported ? 0x100 : 0;
     const player = this;
     this.collisionActor = { controlledPlayer: true, static: Boolean(defaults.bStatic), movable: defaults.bMovable ?? true,
@@ -136,6 +137,25 @@ export class Player {
       throw new Error(`Player bJustTeleported 0x${((this.hostMotionFlags ?? 0) >>> 0).toString(16)} differs from its image word 0x${word.get().toString(16)}`);
     this.motionWord = word;
   }
+  /** Actor.Velocity (+0x144): while an attached identity is linked
+   * (script-doors.mjs installMirrors) it is that identity's image field, so
+   * the script field, the physics pawn view and this member are one storage;
+   * before attach, between identities and in fixtures it is host state. A
+   * linked read returns a fresh array (docs/rust-core.md 1e-2). */
+  get velocity() { return this.velocityField ? this.velocityField.get() : this.hostVelocity; }
+  set velocity(value) { if (this.velocityField) this.velocityField.set(value); else this.hostVelocity = value; }
+  /** Link the velocity to an attached identity's Velocity field (an
+   * imageField), or unlink it (null) before that identity's image is
+   * released, keeping its value as host state. Both agree when linked. */
+  linkVelocity(field) {
+    if (this.velocityField) this.hostVelocity = this.velocityField.get();
+    if (field) {
+      const image = field.get(), host = this.hostVelocity;
+      if (!Array.isArray(host) || host.length !== 3 || host.some((value, index) => !Object.is(value, image[index])))
+        throw new Error(`Player velocity ${JSON.stringify(host)} differs from its image field ${JSON.stringify(image)}`);
+    }
+    this.velocityField = field;
+  }
   get extent() { return [this.radius, this.radius, this.height]; }
   get traceEye() { return add(this.position, [0, 0, this.baseEyeHeight]); }
   get eye() { return add(add(this.position, [0, 0, this.eyeHeight]), this.walkBob); }
@@ -214,7 +234,8 @@ export class Player {
     const zone = this.zoneAt(this.position);
     const gravity = zone.ZoneGravity ?? [0, 0, -950], friction = zone.ZoneGroundFriction ?? 8;
     if (input.jump && !this.jumpHeld && this.grounded && !this.forceDuck) {
-      this.velocity[2] = this.defaults.JumpZ; this.grounded = false; this.jumps++;
+      // A whole-vector store: a linked velocity is the identity's image field.
+      this.velocity = [this.velocity[0], this.velocity[1], this.defaults.JumpZ]; this.grounded = false; this.jumps++;
     }
     this.jumpHeld = Boolean(input.jump);
     if (this.collision.queries) {
