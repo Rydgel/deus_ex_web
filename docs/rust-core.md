@@ -112,6 +112,15 @@ below hold the evidence for each stage.
   can read higher than the median: the first NPC bark creates the
   AudioContext, a one-off frame of about 170 ms. 120 fps means 8.3 ms per
   frame, so even a free tick leaves the frame near 20 ms.
+
+  The rAF interval is quantized to the display's vsync (16.7 ms steps at
+  60 Hz), so its median stays at 33.3 ms until the whole frame fits under
+  16.7 ms. Compare tick gains with `phases.tick` and the headless A/B
+  medians, not with the frame interval.
+* **After R3-e (September 30, headless profile, ms per Island tick):**
+  pawn physics 5.1 (walking 3.4: MoveActor 1.2, the surface prelude 1.1,
+  of which 0.64 is the Rust scan itself), Tick events 4.4, state code 1.7,
+  rider moves 0.5. The A/B median is about 12.3 ms.
 * **What the tick costs (September 30).** Under the actor tick, Rust runs
   about 1.6 ms; the other 12 ms is JavaScript, spread thinly (no function
   above 0.9 ms of self time). Crossings are not the cost: R2b-7 removed
@@ -155,9 +164,20 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
 2. **The SetActorZone family: done (R3-e).** The common case runs in Rust
    on the runtime's arena, with its own copy of the zone BSP; calls that
    change a zone keep the JavaScript body and its events. About 0.6 ms.
-3. **Iterators in Rust** (AllActors, RadiusActors, VisibleActors). The
-   perception host's Level.Actors list and class rows are the
-   infrastructure.
+3. **CycleActors in Rust.** The iterator workload on Island is almost all
+   CycleActors (1002) from ScriptedPawn: `CycleActors(Class'Pawn',
+   candidate, CycleIndex)` in its enemy check (`ScriptedPawn.uc` 1875) and
+   `CycleActors(Class'DeusExCarcass', body, BodyIndex)` in its carcass
+   check (2032). Per Island tick: about 37 iterators, 340 steps and 10,600
+   class tests over Level.Actors (Terrorists 8,400, ThugMale2 1,500); the
+   scan costs about 0.4 ms in JavaScript, where each class test is an
+   instance lookup and a class-chain walk. AllActors, RadiusActors and
+   VisibleActors are negligible there. The out variables are one shape: a
+   local actor and an int field of SELF. The design question: a foreach's
+   Iterator statement runs in JavaScript and nested loops share one
+   iterator stack, so a Rust CycleActors needs Rust-owned entries on that
+   stack. Its class test is then a class-table row lookup, and Level.Actors
+   comes from the perception host's list.
 4. **R3-b B4–B7: MoveActor, walking and falling in Rust.** B3's numeric
    kernels are done (below). MoveActor's own body is cheap; its cost is in
    SetActorZone, the move query, the hash updates and the rider moves, which
@@ -2365,6 +2385,9 @@ Verification:
   `-set-rotation-riders`, `validate-script-spawn`,
   `-script-scripted-actor-spawn`, `-inventory-spawn` and
   `-script-pawn-spawn-binding` pass, and the 566 unit tests.
+* The hand-back path runs in Play: on Island, 16 of the calls in 300
+  ticks changed zone and ran the JavaScript body with its events, and about
+  4 calls per tick were declined (receivers the host does not admit).
 * Mutation pass (`.work/tools/mutate-zone.py`): 9 mutants, 6 killed. Two
   are equivalent (the visit bound, since a path without a cycle is shorter
   than the node count; `next < -1` after -1 is handled). One is not
