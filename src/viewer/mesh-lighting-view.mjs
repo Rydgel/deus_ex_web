@@ -80,11 +80,10 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const dx = point[0] - origin[0], dy = point[1] - origin[1], dz = point[2] - origin[2];
       return axes.map(axis => f(dx * axis[0] + dy * axis[1] + dz * axis[2]));
     },
-    /** One DrawLodMesh lighting pass. `points` are GetFrame's world-space
-     * vertices, `faces` the mesh faces in draw order ({vertices, flags}).
-     * Returns per-face corner diffuse colours in [0,1], three corners per face
-     * in face-vertex order, as D3D's FISTP bytes. */
-    lightMesh(actor, points, faces, faceWords = null) {
+    /** SetupForActor for one DrawLodMesh pass of `actor`: the selected
+     * lights, ambient and ScaleGlow, the actor poly flags and the unlit
+     * colour. Mutates the light manager's caches exactly once per call. */
+    setupMesh(actor) {
       if (!frame) return null;
       const zoneActor = (() => {
         const region = read(actor, 'Region');
@@ -121,12 +120,21 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         worldToCamera: point => view.toCamera(point),
       });
       const flags = polyFlags | setup.flags;
+      return { setup, flags, unlit: unlitColor(read(actor, 'AmbientGlow') ?? 0, f(read(actor, 'ScaleGlow') ?? 1)) };
+    },
+    /** One DrawLodMesh lighting pass. `points` are GetFrame's world-space
+     * vertices, `faces` the mesh faces in draw order ({vertices, flags}).
+     * Returns per-face corner diffuse colours in [0,1], three corners per face
+     * in face-vertex order, as D3D's FISTP bytes. `prepared` is a setupMesh
+     * result already taken for this draw (SetupForActor runs once). */
+    lightMesh(actor, points, faces, faceWords = null, prepared = view.setupMesh(actor)) {
+      if (!prepared) return null;
+      const { setup, flags } = prepared;
       if(view.kernel&&ArrayBuffer.isView(points)){
         if(!(faceWords instanceof Uint32Array)||faceWords.length!==faces.length*4)
           throw new TypeError('Wasm mesh lighting requires packed face topology');
         const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,
-          ambient:setup.ambient,scaleGlow:setup.scaleGlow,
-          unlit:unlitColor(read(actor,'AmbientGlow')??0,f(read(actor,'ScaleGlow')??1)),lights:setup.lights,flags});
+          ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit:prepared.unlit,lights:setup.lights,flags});
         return {colors,setup,flags,vertices:null};
       }
       if(ArrayBuffer.isView(points))points=Array.from({length:points.length/3},(_,i)=>Array.from(points.subarray(i*3,i*3+3)));
@@ -149,7 +157,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const vertexLight = light.slice();
       // The face helper (0x10b0bab0) overwrites PF_Unlit faces' vertex light
       // with the unlit colour in draw order; later faces see the new value.
-      const unlit = unlitColor(read(actor, 'AmbientGlow') ?? 0, f(read(actor, 'ScaleGlow') ?? 1));
+      const unlit = prepared.unlit;
       const colors = new Float32Array(faces.length * 9);
       faces.forEach((face, i) => {
         const faceFlags = face.flags | flags;

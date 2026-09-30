@@ -2,12 +2,14 @@ import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
 import {ActorMeshTextures} from './actor-mesh-textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
-import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
+import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
+import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
+import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh-bounds.mjs';
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
@@ -16,7 +18,7 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
  * runtime's pose fields change, so original startup/animation is visible in
  * ordinary Play without preview controls. Contracts and captured cache
  * identity: docs/npc-mesh-preview.md; lighting: docs/mesh-lighting.md. */
-export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma,texturePool=null}={}) {
+export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma,texturePool=null,gpu=null}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   let kernelError=null;
   if(kernel===undefined) {
@@ -30,7 +32,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
       if(runtime.readNamed(actor,'bHidden'))continue;
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma,texturePool:textures});
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma,texturePool:textures,gpu});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
@@ -52,7 +54,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
  * identities keep their captured index for animation-history fidelity. */
 /** `player` is the player actor or a getter for it: Player start logs a new
  * player in, so the viewer passes a getter. */
-export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma}={}) {
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma,gpu=null}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -64,7 +66,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   let npc=null;
   if(asset.name.toLowerCase()==='00_training') {
     try {
-      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma,texturePool:textures});
+      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma,texturePool:textures,gpu});
       root.add(npc.root);npc.root.visible=true;
       npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
@@ -91,7 +93,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   let synthetic=0x40000000,disposed=false;
   const actors=[...npcActors],bindings=new Map(npcActors.map(preview=>[preview.actor,preview]));
   const pending=new Map(),failed=new WeakMap();
-  const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,
+  const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,gpu:Boolean(gpu),
     npcs:npcActors.length,props:0,skipped:[],triangles:0,
     shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
   const refreshSummary=()=>{
@@ -106,7 +108,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
-      lighting,displayGamma,texturePool:textures})
+      lighting,displayGamma,texturePool:textures,gpu})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
         preview.root.visible=drawnInWorld(actor);root.add(preview.root);
@@ -138,11 +140,25 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   return {root,actors,npcActors,propActors,summary,kernel,
     /** `view.lit` marks the main viewport frame, whose drawn actors get one
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
-    update(cameraPosition,view={}){reconcile();for(const actor of actors)actor.update(cameraPosition,view);},
+    update(cameraPosition,view={}){
+      reconcile();
+      if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+      for(const actor of actors)actor.update(cameraPosition,view);
+      // The GPU path's passes (docs/gpu-mesh.md) run once per main frame,
+      // after every actor planned its pose and lighting.
+      if(gpu){const frame=lighting?.frame;if(frame)gpu.setCamera(frame.origin,frame.axes);gpu.run();}
+    },
     /** Mirror child frames change only camera-relative environment UVs.  The
      * main-frame update immediately before them already reconciled actors,
-     * sampled poses, applied styles and lit the geometry. */
-    updateView(cameraPosition){for(const actor of actors)if(actor.viewDependent)actor.updateView(cameraPosition);},
+     * sampled poses, applied styles and lit the geometry. GPU-path groups
+     * also take this pass's frustum decision (`camera`, the pass camera). */
+    updateView(cameraPosition,camera=null){
+      if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+      for(const actor of actors){
+        if(actor.viewDependent)actor.updateView(cameraPosition);
+        if(camera)actor.passVisibility?.(camera);
+      }
+    },
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
     dispose(){disposed=true;for(const actor of actors)actor.dispose();textures.dispose();},
@@ -175,7 +191,7 @@ function setMeshBounds(geometry,array){
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  lighting=null,displayGamma={value:1},texturePool=null}) {
+  lighting=null,displayGamma={value:1},texturePool=null,gpu=null}) {
   const read=(object,name)=>runtime.readNamed(object,name);
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
@@ -189,7 +205,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
     return originalObjectIndex;
   }};
-  const frame=getLodMeshFrame(payload,actor,coords,services);
+  const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets),gpuTextures=texturePool??new ActorMeshTextures();
+  const faceWords=new Uint32Array(faces.length*4);
+  faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
+  const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  // GPU path (docs/gpu-mesh.md): GetFrame is planned here and evaluated on
+  // the GPU, which also lights the mesh. The CPU path below stays the
+  // reference and the fallback; `gpuFallback` records why an actor left it.
+  let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false;
+  if(gpu){
+    try{gpuHandle=gpu.allocate(payload,faceWords,{environment:hasEnvironment});mode='gpu';}
+    catch(error){gpuFallback=error.message;}
+  }
+  const frame=mode==='gpu'?planFirst():getLodMeshFrame(payload,actor,coords,services);
+  function planFirst(){
+    lastPlan=planLodMeshFrame(payload,actor,coords,services);
+    return {output:lastPlan.context.output,vertexCount:lastPlan.vertexCount};
+  }
   // Host culling bound, never drawn geometry: the farthest vertex of every
   // animation frame from the mesh origin, plus the origin offset, in mesh
   // units. update() scales it by the mesh Scale and DrawScale around
@@ -206,10 +238,6 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     return (Math.sqrt(farthest)+Math.hypot(origin[0],origin[1],origin[2]))*Math.max(...payload.scale.map(Math.abs));
   })();
   const cullSphere=new THREE.Sphere();
-  const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets),gpuTextures=texturePool??new ActorMeshTextures();
-  const faceWords=new Uint32Array(faces.length*4);
-  faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
-  const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
   // The posed x,y,z floats (GetFrame's 12-byte stride) and their
   // environment normals, recomputed whenever the pose changes.
   let points=null,normals=null;
@@ -219,7 +247,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     normals??=new Float32Array(points.length);
     meshVertexNormalsInto(points,faceIndices,normals);
   }
-  if(hasEnvironment)updateNormals();
+  if(hasEnvironment&&mode==='cpu')updateNormals();
   const environmentTexture=()=>{
     const direct=read(actor,'Texture');if(direct)return direct;
     const region=read(actor,'Region'),zone=region['engine.actor.pointregion.zone'];
@@ -231,6 +259,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   };
   const root=new THREE.Group(),materials=[],textureLeases=[],groups=new Map(),skipped=[];
   let disposed=false,lastPose=null,lastStyle,lastGlow,materialStateApplied=false;
+  const gpuUniform={value:mode==='gpu'?1:0};
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
   const dispose=()=>{
     if(disposed)return;disposed=true;
@@ -239,6 +268,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     for(const lease of textureLeases)lease.release();
     if(!texturePool)gpuTextures.dispose();
     kernel?.releaseLightingMesh?.(faceWords);
+    if(gpuHandle)gpu.release(gpuHandle);
     // A failed pose may have left an internal lease outstanding; disposal
     // still releases this private cache and must not mask the original error.
     cache.entries.clear();
@@ -262,10 +292,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   };
   // One DrawLodMesh lighting pass (docs/mesh-lighting.md) over every face in
   // draw order; each group's corners take their face's colours.
-  let previousColors=null,colorWords=null;
-  function relight(){
+  let previousColors=null,colorWords=null,lastSetup=null,lastLitFrame=-1;
+  function relight(prepared){
     const points=new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
-    const result=lighting.lightMesh(actor,points,faces,faceWords);
+    const result=lighting.lightMesh(actor,points,faces,faceWords,prepared);
     if(!result)return null;
     const colors=result.colors;
     if(colors!==previousColors){
@@ -285,11 +315,12 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       const reference=face.flags&POLY.Environment?environmentTexture():runtime.getActorMeshTexture(actor,face.texture);
       if(!reference)throw new Error(`${actorName} skin slot ${face.texture} is empty`);
       const key=`${reference.key}:${face.flags}`;
-      if(!groups.has(key))groups.set(key,{reference,flags:face.flags,indices:[],uvs:[],faces:[]});
+      if(!groups.has(key))groups.set(key,{reference,flags:face.flags,indices:[],uvs:[],faces:[],corners:[]});
       const group=groups.get(key);
       for(const corner of [0,2,1]) {
         group.indices.push(face.vertices[corner]);
         group.uvs.push(...face.uv[corner].map(value=>value/256));
+        group.corners.push(faceIndex*3+corner);
       }
       group.faces.push(faceIndex);
     }
@@ -318,10 +349,17 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         // Style can switch a material to PF_Modulated at run time, so the
         // modulated display ramp (displayRampGlsl) is a uniform branch.
         const modulatedUniform={value:!(flags&POLY.Translucent)&&flags&POLY.Modulated?1:0};
-        material.customProgramCacheKey=()=>'deus-ex-mesh-display-color-v3';
+        const environmentGroup=Boolean(group.flags&POLY.Environment);
+        material.customProgramCacheKey=gpuHandle?()=>`deus-ex-mesh-gpu-v1:${environmentGroup?1:0}`
+          :()=>'deus-ex-mesh-display-color-v3';
         material.onBeforeCompile=shader=>{
           shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
-          shader.vertexShader=shader.vertexShader.replace('#include <common>',
+          if(gpuHandle){
+            Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
+            shader.vertexShader=shader.vertexShader.replace('#include <common>',
+              `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${DRAW_VERTEX_DECLARATIONS}`)
+              .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup));
+          } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
             '#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;')
             .replace('#include <begin_vertex>','#include <begin_vertex>\nvDeusLight = deusLight;');
           shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
@@ -339,18 +377,33 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         }
         material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length,modulatedUniform};
         const geometry=new THREE.BufferGeometry();
-        const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
+        const positions=new Float32Array(group.indices.length*3);
+        if(mode==='cpu')copyPositions(positions,group.indices);
         geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
         geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
         const lightColors=new Float32Array(group.indices.length*3).fill(1);
         group.lightWords=new Uint32Array(lightColors.buffer);
         geometry.setAttribute('deusLight',new THREE.BufferAttribute(lightColors,3)
           .setUsage(THREE.DynamicDrawUsage));
+        if(gpuHandle){
+          geometry.setAttribute('deusVertexTexel',new THREE.BufferAttribute(
+            Float32Array.from(group.indices,index=>gpuHandle.vbase+index),1));
+          geometry.setAttribute('deusCornerTexel',new THREE.BufferAttribute(
+            Float32Array.from(group.corners,corner=>gpuHandle.cbase+corner),1));
+          group.vertices=[...new Set(group.indices)].sort((a,b)=>a-b);
+          group.boxes=keyframeBoxes(payload,group.vertices);
+          group.channelBoxes=Array.from({length:5},()=>new Float64Array(6).fill(NaN));
+          group.viewBox=new Float64Array(6).fill(NaN);
+          group.exact={boundingBox:null,boundingSphere:null};
+          group.mainVisible=true;
+        }
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();
         group.geometry=geometry;
         const mesh=new THREE.Mesh(geometry,material);
         mesh.onAfterRender=rendered;
+        if(gpuHandle)mesh.frustumCulled=false;
+        group.mesh=mesh;
         mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
       } catch(error) {
         textureLease?.release();
@@ -368,9 +421,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         triangles:[...groups.values()].reduce((total,group)=>total+group.faces.length,0),
         textures:[...new Set([...groups.values()].map(group=>group.reference.key))],
         animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),
-        shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
+        shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original',
+        path:mode,gpuFallback};
     const updateView=cameraPosition=>{
-      if(disposed||!root.visible||!hasEnvironment||!cameraPosition)return false;
+      if(disposed||!root.visible||!hasEnvironment||!cameraPosition||mode!=='cpu')return false;
       const relative=[0,0,0],normal=[0,0,0];
       for(const group of groups.values())if(group.flags&POLY.Environment){
         const uv=group.geometry.getAttribute('uv');
@@ -385,8 +439,87 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       }
       return true;
     };
+
+    // ---- GPU path: bounds, exact fallback and per-pass visibility.
+    const scratchBounds=new Map();
+    /** The exact CPU pose of the current plan and three.js's exact spheres. */
+    function exactSpheres(){
+      if(exactValid)return;
+      materializeLodMeshFrame(lastPlan);
+      for(const group of groups.values()){
+        let positions=scratchBounds.get(group);
+        if(!positions)scratchBounds.set(group,positions=new Float32Array(group.indices.length*3));
+        copyPositions(positions,group.indices);
+        setMeshBounds(group.exact,positions);
+        // Transparent sorting uses the exact centre when it is known.
+        group.geometry.boundingSphere.copy(group.exact.boundingSphere);
+      }
+      exactValid=true;
+    }
+    function boxSphere(group){
+      const box=group.viewBox,sphere=group.geometry.boundingSphere;
+      if(box.some(Number.isNaN))return;
+      sphere.center.set((box[0]+box[3])/2,(box[1]+box[4])/2,(box[2]+box[5])/2);
+      sphere.radius=Math.hypot(box[3]-box[0],box[4]-box[1],box[5]-box[2])/2;
+    }
+    function groupVisible(group,frustum){
+      const certain=certifyFrustum(frustum,group.viewBox);
+      if(certain>=0)return certain===1;
+      exactSpheres();
+      return frustum.intersectsSphere(group.exact.boundingSphere);
+    }
+    const passFrustum=new THREE.Frustum(),passMatrix=new THREE.Matrix4();
+    let mainCamera=null;
+    function passVisibility(camera){
+      if(mode!=='gpu'||disposed||!root.visible)return;
+      if(camera===mainCamera){for(const group of groups.values())group.mesh.visible=group.mainVisible;return;}
+      passFrustum.setFromProjectionMatrix(passMatrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
+        THREE.WebGLCoordinateSystem,camera.reversedDepth);
+      for(const group of groups.values())group.mesh.visible=groupVisible(group,passFrustum);
+    }
+    /** Leave the GPU path for good: the CPU cache is replayed to the current
+     * pose and the geometry takes the CPU path's attributes again. */
+    function toCpu(reason){
+      if(mode!=='gpu')return;
+      mode='cpu';gpuFallback=reason;summary.path=mode;summary.gpuFallback=reason;gpuUniform.value=0;
+      if(lastPlan){materializeLodMeshFrame(lastPlan);lastPlan=null;}
+      if(hasEnvironment)updateNormals();
+      for(const group of groups.values()){
+        const positions=group.geometry.getAttribute('position');
+        copyPositions(positions.array,group.indices);positions.needsUpdate=true;
+        setMeshBounds(group.geometry,positions.array);
+        group.mesh.frustumCulled=true;group.mesh.visible=true;
+      }
+      gpu.release(gpuHandle);gpuHandle=null;
+    }
+    function planGpu(){
+      lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output});
+      exactValid=false;
+      try{gpu.setPose(gpuHandle,lastPlan);}
+      catch(error){toCpu(error.message);return;}
+      for(const group of groups.values()){
+        for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
+        viewBox(lastPlan,group.channelBoxes,group.viewBox);
+        boxSphere(group);
+      }
+    }
+    if(mode==='gpu'){
+      // The first plan (above) is this preview's first GetFrame call.
+      try{gpu.setPose(gpuHandle,lastPlan);
+        for(const group of groups.values()){
+          for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
+          viewBox(lastPlan,group.channelBoxes,group.viewBox);boxSphere(group);
+        }
+      }catch(error){toCpu(error.message);}
+    }
     lastPose=pose();
-    return {actor,root,dispose,mesh:meshReference,viewDependent:hasEnvironment,updateView,
+    return {actor,root,dispose,mesh:meshReference,get viewDependent(){return hasEnvironment&&mode==='cpu';},updateView,
+      passVisibility,get path(){return mode;},
+      /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
+       * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
+       * shadow to the exact CPU pose. Never used by Play. */
+      gpuState:()=>({handle:gpuHandle,plan:lastPlan,setup:lastSetup,litFrame:lastLitFrame,faces,faceWords,groups,hasEnvironment,
+        exactOutput:()=>{exactSpheres();return frame.output;}}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition,view={}){
         if(disposed)return false;
@@ -422,8 +555,11 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         lastGlow=glow;lastStyle=style;materialStateApplied=true;
         const current=pose();
         const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
-        if(poseChanged){
-          getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
+        let posed=false;
+        if(poseChanged&&mode==='gpu'){planGpu();posed=true;}
+        if(poseChanged&&mode==='cpu'){
+          // A plan evaluated for this frame before a fallback already posed it.
+          if(!posed)getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
           if(hasEnvironment)updateNormals();
           for(const group of groups.values()){
             const positions=group.geometry.getAttribute('position');
@@ -431,14 +567,56 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
             setMeshBounds(group.geometry,positions.array);
           }
         }
+        let mainVisible;
+        if(mode==='gpu'){
+          mainCamera=view.camera??null;
+          mainVisible=false;
+          for(const group of groups.values()){
+            group.mainVisible=view.frustum?groupVisible(group,view.frustum):true;
+            group.mesh.visible=group.mainVisible;mainVisible||=group.mainVisible;
+          }
+        }
         const environmentUpload=updateView(cameraPosition);
-        if(lighting&&view.lit&&lighting.frame&&(!view.frustum||[...groups.values()].some(group=>
-          group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))
-          summary.lighting=relight()??summary.lighting;
+        if(lighting&&view.lit&&lighting.frame&&(!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
+          group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))){
+          if(mode==='gpu'){
+            const prepared=lighting.setupMesh(actor);
+            if(prepared){
+              lastSetup=prepared;lastLitFrame=gpu.frame+1;
+              summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
+              if(!gpu.setLighting(gpuHandle,{flags:prepared.flags,ambient:prepared.setup.ambient,
+                scaleGlow:prepared.setup.scaleGlow,unlit:prepared.unlit,lights:prepared.setup.lights})){
+                toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
+                summary.lighting=relight(prepared)??summary.lighting;
+              }
+            }
+          } else summary.lighting=relight()??summary.lighting;
+        }
         lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
         // True when a buffer was re-uploaded: pose positions, or the
         // camera-relative environment UVs, which change with the viewer.
         return poseChanged||environmentUpload;
       },summary};
   } catch(error) {dispose();throw error;}
+}
+
+/** The GPU draw path's begin_vertex (docs/gpu-mesh.md): the corner's pose
+ * texel with the viewer reflection, its corner colour and, for environment
+ * groups, the environment UV from the pass camera. `deusGpu` 0 keeps the
+ * CPU path's attributes for an actor that fell back. */
+function gpuBeginVertex(environment){
+  return `vec3 transformed;
+if (deusGpu > 0.5) {
+  int deusV = int(deusVertexTexel), deusC = int(deusCornerTexel);
+  vec3 deusP = texelFetch(deusPose, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
+  transformed = vec3(deusP.y, deusP.z, -deusP.x);
+  uvec4 deusBytes = texelFetch(deusCorners, ivec2(deusC & 1023, deusC >> 10), 0);
+  vDeusLight = vec3(texelFetch(deusByteColors, ivec2(int(deusBytes.x), 0), 0).x,
+    texelFetch(deusByteColors, ivec2(int(deusBytes.y), 0), 0).x, texelFetch(deusByteColors, ivec2(int(deusBytes.z), 0), 0).x);
+${environment?`  vec3 deusN = texelFetch(deusEnvironmentNormals, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
+  vMapUv = ( mapTransform * vec3( environmentUV(deusP, deusN, deusCameraHi, deusCameraLo), 1 ) ).xy;
+`:''}} else {
+  transformed = vec3( position );
+  vDeusLight = deusLight;
+}`;
 }

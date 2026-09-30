@@ -8,6 +8,7 @@ import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
+import { createGpuMesh } from './gpu-mesh.mjs';
 import { createWeaponViewModel } from './weapon-view-model.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
@@ -40,6 +41,10 @@ let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
+// ?gpuMesh=1: actor mesh animation and lighting on the GPU (docs/gpu-mesh.md);
+// the CPU kernels stay the reference and the fallback.
+const gpuMeshParam=new URLSearchParams(location.search).get('gpuMesh');
+let gpuMesh=null;
 let weaponViewModel=null;
 let meshLighting=null;
 let infoLinkAudioContext=null;
@@ -174,7 +179,7 @@ async function loadMap(name) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel, nextMeshLighting;
+  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel, nextMeshLighting, nextGpuMesh = null;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -207,7 +212,11 @@ async function loadMap(name) {
         const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
         nextMeshLighting=createMeshLightingView(meshRuntime,()=>meshRuntime.levelFor(nextGame.player.collisionActor),
           {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
-        nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{
+        if(gpuMeshParam==='1'){
+          try{nextGpuMesh=createGpuMesh(renderer);}
+          catch(error){nextWorld.notes.push(`GPU mesh path unavailable: ${error.message}`);}
+        }
+        nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{gpu:nextGpuMesh,
           // Player start logs in a new player; follow the current one.
           player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
@@ -223,6 +232,7 @@ async function loadMap(name) {
     hudRenderer?.dispose();hudRenderer=nextHud;
     weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
+    gpuMesh?.dispose();gpuMesh=nextGpuMesh;
     npcPreview=nextNpcPreview??null;
     if(npcPreview){npcPreview.root.visible=true;scene.add(npcPreview.root);}
     $('npc-focus').replaceChildren(...((npcPreview?.npcActors??npcPreview?.actors??[]).map(actor=>{
@@ -247,6 +257,7 @@ async function loadMap(name) {
   } catch (error) {
     if(nextWeaponViewModel&&nextWeaponViewModel!==weaponViewModel)nextWeaponViewModel.dispose();
     if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();
+    if(nextGpuMesh&&nextGpuMesh!==gpuMesh)nextGpuMesh.dispose();
     if (nextWorld && nextWorld !== world) nextWorld.dispose();
     busy('Could not load this map', error.message);
     throw error;
@@ -716,7 +727,7 @@ function animate(time) {
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
-      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,
+      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,camera,
         cull:!world.mirrors.mayRender(camera)});}catch(error){pauseForRuntimeError(error);}
     }
     phase('actors');
@@ -724,7 +735,7 @@ function animate(time) {
     gpuBegin();
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
-      updateActors: npcPreview && !runtimeError ? position => npcPreview.updateView(position) : null });
+      updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
     phase('mirrors');
     let calls = drawCalls(); framePhases.mirrorCalls += calls;
     renderer.setClearColor('#06101b', 1); renderer.clear();

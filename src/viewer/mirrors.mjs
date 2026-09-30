@@ -118,7 +118,7 @@ export function createMirrors(notes, displayGamma) {
         camera.matrixWorld.multiply(submissionHandedness);
         camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
         camera.position.setFromMatrixPosition(camera.matrixWorld);
-        updateActors?.(fromView(camera.position.toArray()));
+        updateActors?.(fromView(camera.position.toArray()), camera);
         renderer.setRenderTarget(group.target); renderer.setClearColor(0, 1);
         renderer.setScissor(bounds.x,bounds.y,bounds.width,bounds.height);renderer.setScissorTest(true);
         renderer.clear();
@@ -137,7 +137,7 @@ export function createMirrors(notes, displayGamma) {
       renderer.clippingPlanes = clippingPlanes;
       renderer.setScissor(oldScissor);renderer.setScissorTest(oldScissorTest);
       renderer.setRenderTarget(target); renderer.setClearColor(clearColor, clearAlpha);
-      updateActors?.(fromView(source.position.toArray()));
+      updateActors?.(fromView(source.position.toArray()), source);
     }
   }
   return { stats, surface, render, mayRender, dispose() { for (const p of planes.values()) p.target.dispose(); } };
