@@ -9,6 +9,12 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {readObject} from '../src/unreal/objects.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
+// This validator records original call order by replacing the runtime's
+// callFunction/executeScript/invokeNative hooks. The Rust interpreter
+// (the default engine) runs calls and natives such as IsA without those
+// JavaScript entry points, so the trace is taken on the JavaScript VM; Rust's
+// equivalence is checked by validate-script-vm-interp and SCRIPT_VM_CHECK.
+process.env.SCRIPT_VM = 'js';
 
 // A fresh Play host for each bot preserves startup and modal state isolation.
 if(!process.argv[2]){

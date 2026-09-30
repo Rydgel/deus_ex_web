@@ -53,6 +53,12 @@ import {
   inventorySelection,
 } from '../src/runtime/script-spawn.mjs';
 import {gameDirectory} from './game-directory.mjs';
+// This validator records original call order by replacing the runtime's
+// callFunction/executeScript/invokeNative hooks. The Rust interpreter
+// (the default engine) runs calls and natives such as IsA without those
+// JavaScript entry points, so the trace is taken on the JavaScript VM; Rust's
+// equivalence is checked by validate-script-vm-interp and SCRIPT_VM_CHECK.
+process.env.SCRIPT_VM = 'js';
 
 const root = gameDirectory();
 const {engineInventory, engineWeapon, nativeRoots} = INVENTORY_CONSTRUCTION;

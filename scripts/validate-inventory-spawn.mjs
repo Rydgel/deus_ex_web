@@ -51,6 +51,12 @@ import {SCRIPT_BOOL_PROPERTY_LINK} from '../src/runtime/script-bool-property-lin
 import {SCRIPT_STR_PROPERTY_LINK} from '../src/runtime/script-str-property-link.mjs';
 import {SCRIPT_STRUCT_PROPERTY_LINK} from '../src/runtime/script-struct-property-link.mjs';
 import {gameDirectory} from './game-directory.mjs';
+// This validator records original call order by replacing the runtime's
+// callFunction/executeScript/invokeNative hooks. The Rust interpreter
+// (the default engine) runs calls and natives such as IsA without those
+// JavaScript entry points, so the trace is taken on the JavaScript VM; Rust's
+// equivalence is checked by validate-script-vm-interp and SCRIPT_VM_CHECK.
+process.env.SCRIPT_VM = 'js';
 
 const root = gameDirectory();
 const {engineInventory, dataVaultImage, image02NycWarehouse, layout, startup} = INVENTORY_CONSTRUCTION;
