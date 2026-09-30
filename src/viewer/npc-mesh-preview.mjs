@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
+import {ActorMeshTextures} from './actor-mesh-textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
@@ -14,7 +15,7 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
  * runtime's pose fields change, so original startup/animation is visible in
  * ordinary Play without preview controls. Contracts and captured cache
  * identity: docs/npc-mesh-preview.md; lighting: docs/mesh-lighting.md. */
-export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma}={}) {
+export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma,texturePool=null}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   let kernelError=null;
   if(kernel===undefined) {
@@ -23,18 +24,18 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
   }
   // Measured GObjObjects identities from the same original Training capture.
   // These select fixtures and cache keys, never character-specific drawing.
-  const root=new THREE.Group(),actors=[],errors=[];root.visible=false;
+  const root=new THREE.Group(),actors=[],errors=[],textures=texturePool??new ActorMeshTextures();root.visible=false;
   for(const [name,originalObjectIndex] of Object.entries(TRAINING_NPC_IDENTITIES)) {
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
       if(runtime.readNamed(actor,'bHidden'))continue;
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma});
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma,texturePool:textures});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
-  if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));
+  if(!actors.length){if(!texturePool)textures.dispose();throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; '));}
   return {root,actors,update(cameraPosition,view={}){for(const actor of actors)actor.update(cameraPosition,view);},
-    dispose(){for(const actor of actors)actor.dispose();},
+    dispose(){for(const actor of actors)actor.dispose();if(!texturePool)textures.dispose();},
     summary:{actors:actors.map(actor=>actor.summary),errors,poseBackend:kernel?.name??'javascript',kernelError,
       triangles:actors.reduce((total,actor)=>total+actor.summary.triangles,0),
       shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'}};
@@ -57,12 +58,12 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     try{kernel=await loadLodMeshKernel();}
     catch(error){kernel=null;kernelError=error.message;}
   }
-  const root=new THREE.Group();root.visible=false;
+  const root=new THREE.Group(),textures=new ActorMeshTextures();root.visible=false;
   const npcActors=[],propActors=[],errors=[];
   let npc=null;
   if(asset.name.toLowerCase()==='00_training') {
     try {
-      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma});
+      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma,texturePool:textures});
       root.add(npc.root);npc.root.visible=true;
       npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
@@ -103,7 +104,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
-      lighting,displayGamma})
+      lighting,displayGamma,texturePool:textures})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
         preview.root.visible=drawnInWorld(actor);root.add(preview.root);
@@ -131,7 +132,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     for(const actor of live)admit(actor);
   };
   reconcile();await Promise.all(pending.values());refreshSummary();
-  if(!actors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
+  if(!actors.length){textures.dispose();throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');}
   return {root,actors,npcActors,propActors,summary,kernel,
     /** `view.lit` marks the main viewport frame, whose drawn actors get one
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
@@ -142,7 +143,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     updateView(cameraPosition){for(const actor of actors)if(actor.viewDependent)actor.updateView(cameraPosition);},
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
-    dispose(){disposed=true;for(const actor of actors)actor.dispose();},
+    dispose(){disposed=true;for(const actor of actors)actor.dispose();textures.dispose();},
   };
 }
 
@@ -172,7 +173,7 @@ function setMeshBounds(geometry,array){
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  lighting=null,displayGamma={value:1}}) {
+  lighting=null,displayGamma={value:1},texturePool=null}) {
   const read=(object,name)=>runtime.readNamed(object,name);
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
@@ -203,7 +204,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     return (Math.sqrt(farthest)+Math.hypot(origin[0],origin[1],origin[2]))*Math.max(...payload.scale.map(Math.abs));
   })();
   const cullSphere=new THREE.Sphere();
-  const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets);
+  const faces=runtime.getActorMeshSurfaces(actor),textures=new TextureStore(assets),gpuTextures=texturePool??new ActorMeshTextures();
   const faceWords=new Uint32Array(faces.length*4);
   faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
   const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
@@ -226,14 +227,15 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     for(let i=0;i<payload.objectReferences.length;i++)fallback=runtime.getActorMeshTexture(actor,i)??fallback;
     return fallback;
   };
-  const root=new THREE.Group(),materials=[],gpuTextures=[],groups=new Map(),skipped=[];
-  let disposed=false,lastPose=null;
+  const root=new THREE.Group(),materials=[],textureLeases=[],groups=new Map(),skipped=[];
+  let disposed=false,lastPose=null,lastStyle,lastGlow,materialStateApplied=false;
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
   const dispose=()=>{
     if(disposed)return;disposed=true;
     root.traverse(object=>object.geometry?.dispose());
     for(const material of materials)material.dispose();
-    for(const texture of gpuTextures)texture.dispose();
+    for(const lease of textureLeases)lease.release();
+    if(!texturePool)gpuTextures.dispose();
     kernel?.releaseLightingMesh?.(faceWords);
     // A failed pose may have left an internal lease outstanding; disposal
     // still releases this private cache and must not mask the original error.
@@ -296,6 +298,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     }
     const failed=[];
     for(const [key,group] of groups) {
+      let textureLease;
       try {
         let flags=group.flags;
         let data=await textures.get(group.reference.asset,group.reference.index,Boolean(flags&POLY.Masked));
@@ -304,15 +307,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))
           if(data.values[name])flags|=flag;
         if(flags&POLY.Masked&&!data.masked)data=await textures.get(group.reference.asset,group.reference.index,true);
-        const first=data.mips[0],texture=new THREE.DataTexture(first.data,first.width,first.height,THREE.RGBAFormat);
-        gpuTextures.push(texture);texture.colorSpace=THREE.SRGBColorSpace;texture.flipY=false;
-        texture.wrapS=texture.wrapT=THREE.RepeatWrapping;
-        texture.magFilter=flags&POLY.NoSmooth?THREE.NearestFilter:THREE.LinearFilter;
-        const last=data.mips.at(-1),complete=last.width===1&&last.height===1;
-        if(complete&&data.mips.length>1)texture.mipmaps=data.mips;
-        texture.generateMipmaps=!complete;
-        texture.minFilter=flags&POLY.NoSmooth?THREE.NearestMipmapNearestFilter:THREE.LinearMipmapLinearFilter;
-        texture.needsUpdate=true;
+        // Keep the original private decoder/await sequence: only the GPU
+        // resource is shared, synchronously, at its former allocation point.
+        textureLease=gpuTextures.acquire(data,flags);textureLeases.push(textureLease);
+        const texture=textureLease.texture,first=data.mips[0];
         const material=new THREE.MeshBasicMaterial({map:texture,
           side:flags&POLY.TwoSided?THREE.DoubleSide:THREE.FrontSide,alphaTest:flags&POLY.Masked?.5:0});
         // Keep texture sampling and recovered vertex lighting in the same
@@ -356,6 +354,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         mesh.onAfterRender=rendered;
         mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
       } catch(error) {
+        textureLease?.release();
         // Skip a single undecodable face group (e.g. a procedural FireTexture
         // effect face) and keep drawing the mesh's solid faces. Animated and
         // procedural mesh skins stay unsupported; the drawn faces are exact.
@@ -409,7 +408,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
         // the unlit inspection path applies it to the texture directly.
         const glow=lighting?1:Math.min(1,read(actor,'ScaleGlow')),style=read(actor,'Style');
-        for(const material of materials){
+        if(!materialStateApplied||!Object.is(glow,lastGlow)||!Object.is(style,lastStyle))for(const material of materials){
           material.color.setRGB(glow,glow,glow);
           const flags=material.userData.flags;
           const translucent=style===3||Boolean(flags&POLY.Translucent);
@@ -421,6 +420,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
           material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
         }
+        lastGlow=glow;lastStyle=style;materialStateApplied=true;
         const current=pose();
         const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
         if(poseChanged){

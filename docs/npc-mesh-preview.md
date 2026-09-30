@@ -14,6 +14,10 @@ stop drawing. It supplies no separate animation clock — the script runtime's
 tick advances poses in Play and leaves them frozen in Inspect; see the
 [startup contract and live results](script-npc-startup-animation.md).
 
+Static GPU skin textures are now [shared within each actor scene](actor-mesh-texture-sharing.md).
+Private decoding/await order, materials, animation caches and render feedback
+remain per actor; unchanged Style/ScaleGlow no longer rewrites material state.
+
 ## Evidence established before the draw adapter
 
 The prepared `JaimeReyes0` actor references `DeusExCharacters.GM_Trench_F`,

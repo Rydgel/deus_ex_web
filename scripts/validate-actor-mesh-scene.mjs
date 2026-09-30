@@ -80,6 +80,14 @@ for(const prop of scene.propActors){
 }
 assert.ok(propTriangles>0);
 
+// Static texture/sampler variants share one GPU resource, while materials
+// and their live Style/ScaleGlow state remain private to each actor.
+const drawMeshes=scene.actors.flatMap(preview=>preview.root.children);
+const gpuTextures=new Set(drawMeshes.map(mesh=>mesh.material.map));
+assert.ok(gpuTextures.size<drawMeshes.length,'repeated original skins share GPU textures');
+assert.equal(new Set(drawMeshes.map(mesh=>mesh.material)).size,drawMeshes.length,'actor materials stay independent');
+console.log(`Training actor textures: ${drawMeshes.length} draw groups, ${gpuTextures.size} shared GPU textures.`);
+
 // A static prop's synthetic cache key is stable frame-to-frame: re-sampling an
 // unchanged pose leaves the exact same vertex positions, exactly like the
 // captured NPC contract. Non-environment props also report no re-upload at all;
@@ -121,11 +129,25 @@ assert.equal(scene.actors.includes(cratePreview),false,'removed actor leaves the
 level.actors[slot]=crate;scene.update();await scene.ready();scene.update();
 const restored=scene.propActors.find(p=>p.actor===crate);
 assert.ok(restored,'a newly encountered live identity acquires its mesh');
+let colorWrites=0;
+for(const mesh of restored.root.children){
+  const setRGB=mesh.material.color.setRGB;
+  mesh.material.color.setRGB=function(...args){colorWrites++;return setRGB.apply(this,args);};
+}
+restored.update();
+assert.equal(colorWrites,0,'unchanged actor material state is not rewritten');
 const glow=get(crate,'ScaleGlow'),style=get(crate,'Style'),deleted=get(crate,'bDeleteMe');
 runtime.namedReference(crate,'ScaleGlow').set(Math.fround(.46));
 restored.update();
 assert.ok(restored.root.children.every(mesh=>mesh.material.color.r===Math.fround(.46)),
   'damage ScaleGlow reaches every material');
+assert.equal(colorWrites,restored.root.children.length);
+const sibling=propByName.get('CrateBreakableMedGeneral1');
+for(const mesh of restored.root.children){
+  const shared=sibling.root.children.find(other=>other.material.map===mesh.material.map);
+  assert.ok(shared,'sibling crates share the skin resource');
+  assert.notEqual(shared.material.color.r,mesh.material.color.r,'one actor glow cannot change a sibling');
+}
 runtime.namedReference(crate,'Style').set(3);restored.update();
 assert.ok(restored.root.children.every(mesh=>mesh.material.transparent&&!mesh.material.depthWrite),
   'fragment STY_Translucent reaches live materials');
