@@ -12,16 +12,17 @@ static mut FIELDS: [u32; 33] = [0; 33];
 pub extern "C" fn move_rider_fields_ptr() -> *mut u32 {
     core::ptr::addr_of_mut!(FIELDS) as *mut u32
 }
+// The pawn MoveActor (move_pawn.rs, B4) reads the same table.
 #[inline(always)]
-fn field(i: usize) -> u32 { unsafe { (*core::ptr::addr_of!(FIELDS))[i] } }
+pub(crate) fn field(i: usize) -> u32 { unsafe { (*core::ptr::addr_of!(FIELDS))[i] } }
 #[inline(always)]
-fn address(base: u32, index: usize) -> u32 { base + field(index * 2) }
+pub(crate) fn address(base: u32, index: usize) -> u32 { base + field(index * 2) }
 #[inline(always)]
-fn flag(base: u32, index: usize) -> bool { load32(address(base, index)) & field(index * 2 + 1) != 0 }
+pub(crate) fn flag(base: u32, index: usize) -> bool { load32(address(base, index)) & field(index * 2 + 1) != 0 }
 #[inline(always)]
-fn float(at: u32) -> f32 { f32::from_bits(load32(at)) }
+pub(crate) fn float(at: u32) -> f32 { f32::from_bits(load32(at)) }
 #[inline(always)]
-fn store(at: u32, word: u32) { unsafe { core::ptr::write_unaligned(at as usize as *mut u32, word) } }
+pub(crate) fn store(at: u32, word: u32) { unsafe { core::ptr::write_unaligned(at as usize as *mut u32, word) } }
 
 /// 0: unchanged hand-back; 1: tiny rotation-only return; 2: complete move.
 /// There are no imports and no callbacks while image pointers are live.

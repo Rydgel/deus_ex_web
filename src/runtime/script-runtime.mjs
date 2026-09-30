@@ -3789,6 +3789,9 @@ export class ScriptRuntime {
       // The MoveActor based-rider section recurses into MoveActor for each
       // based child; only spawned collision-view actors are admitted there.
       moveRider:(other,delta,rotation)=>this.moveSpawnedActor(other,delta,rotation),
+      // The pawn's MoveActor body in Rust (move-pawn-kernel.mjs, B4): the
+      // result, or undefined when the JavaScript body must run.
+      movePawn:(pawn,delta,rotation,ignoreBases,ops)=>this.scriptVm?.movePawn?.move(pawn,delta,rotation,ignoreBases,ops),
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
         return Math.fround(this.rng.frand());

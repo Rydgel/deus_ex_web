@@ -337,7 +337,7 @@ export function pawnPhysicsView(actor, services) {
 function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn.decorate, ignoreBases = false) {
   const { level, worldActor } = services;
   const readOther = (other, name) => services.read ? services.read(other, name) : services.field(other, name).get();
-  return playerMove(pawn, delta, {
+  const ops = {
     worldActor,
     multiLineCheck: query => level.hash.multiLineCheck(query).map(h => (decorate(h.actor), h)),
     removeActor: () => level.hash.removeActor(pawn.self),
@@ -376,7 +376,14 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn
       actorRotation: () => pawn.rotation,
     }),
     ignoreBases,
-  }, newRotation);
+  };
+  // The body runs in Rust on the pawn's image when the interpreter admits
+  // the source (move-pawn-kernel.mjs, docs/rust-core.md B4), with these same
+  // services as its effects; otherwise, or when Rust hands the call back
+  // before any store, the JavaScript body runs.
+  const completed = services.movePawn?.(pawn, delta, newRotation, ignoreBases, ops);
+  if (completed !== undefined) return completed;
+  return playerMove(pawn, delta, ops, newRotation);
 }
 
 /** ULevel::MoveActor with bTest=1 (vtable +0x88, Engine.dll 0x103990e0): the

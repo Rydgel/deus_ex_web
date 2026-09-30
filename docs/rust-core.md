@@ -91,8 +91,10 @@ below hold the evidence for each stage.
   * R3-c (IsValidEnemy, GetPawnAllianceType, AICanSee).
   * R3-d (the actor tick body and the animation phase).
   * R3-e (SetActorZone's common case).
-  * 1e-1 to 1e-3: actor flags, the physics mirror fields, Location,
-    Rotation, collision size and OldLocation now live in the image.
+  * R3-b B4 (the pawn MoveActor body, September 30).
+  * 1e-1 to 1e-4: actor flags, the physics mirror fields, Location,
+    Rotation, collision size, OldLocation, Base and Touching now live in
+    the image.
 * **Headless timing.** On UNATCO Island (bench-sim, 300 ticks), the median
   tick is about 13.5 to 14 ms under Rust (interleaved A/B pairs, September
   30) and about 25 ms under JavaScript. `BYPASS_PATCHES` is empty. Island
@@ -255,12 +257,13 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
    Base and Touching become image cells (the 1e-2/1e-3 pattern), so the
    IsBasedOn walks and the Touching slots are image loads and `boundKeys`
    loses both keys. The plan:
-   * **B4.** MoveActor for pawn views: playerMove, touches, bump, zone, and
-     remove/add with primitive bounds. Riders and the per-candidate decorate
-     step start as imports.
-     The [noncolliding spawned rider slice](rider-move-kernel.md) now runs
-     against the image with an unchanged-zone preflight; this does not
-     complete B4 or replace the colliding pawn/callback path.
+   * **B4: done (September 30, "R3-b B4" below).** MoveActor for pawn
+     views runs in Rust on the pawn's image; the query, the candidate
+     tests, riders, touches, bumps, the hash and the zone update are the
+     reference's functions behind one import each. The
+     [noncolliding spawned rider slice](rider-move-kernel.md) already ran
+     against the image. **B4b**, next: the rider pass (`moveActorRiders`,
+     about 1.3 ms per Island tick) in Rust, then the Touching slot logic.
    * **B5.** The walking loop for NPC map pawns, implementing B3's
      `PawnOps` on the image. Falling and flying return as tail calls.
    * **B6.** Falling, landing, rotation and the pawn tail.
@@ -1310,67 +1313,100 @@ Verification:
 Left for stage B4, where their inputs come from actor images: the move
 query's candidate selection, IsOverlapping, processHitWall and SetBase.
 
-**R3-b B4 — Pawn MoveActor on the image (design, September 30).** The
-import attribution puts about 6 ms of each Island tick behind
+**R3-b B4 — Pawn MoveActor on the image (implemented, September 30).**
+The import attribution puts about 6 ms of each Island tick behind
 `js_tick_physics`, the pawn physics family; MoveActor is the body every
 walking, falling and rotation step calls (about 2.3 ms of it, 1.3 ms in
-the rider pass). B4 moves `playerMove` (`player-move.mjs`, ULevel::MoveActor
-`0x103990e0` with test 0, ignorePawns 0, noFail 0, ignoreBases per caller)
-for a **Pawn source** into Rust, on the pawn's image. It follows 1e-4, so
-Base and Touching are image loads. Non-pawn sources (`moveMapRider`,
-`rotateMapActor`, the spawned rider kernel) keep their JavaScript bodies.
+the rider pass). `native/script-vm/src/move_pawn.rs` transcribes
+`playerMove` (`player-move.mjs`, ULevel::MoveActor `0x103990e0` with test 0,
+ignorePawns 0, noFail 0, ignoreBases per caller) over `moveQuery`
+(`move-query.mjs`) for a **Pawn source**, on the pawn's image; the host is
+`move-pawn-kernel.mjs` (`MovePawnHost` on the interpreter), reached from
+the map pawn view's `moveActor` (`script-pawn-physics.mjs`) through the
+`movePawn` physics service. It follows 1e-4, so Base and Touching are image
+loads. Non-pawn sources (`moveMapRider`, `rotateMapActor`, the spawned
+rider kernel), `testMoveActor` and FarMoveActor keep their JavaScript
+bodies, which stay the references.
 
-* **Reads, all image loads or class rows:** the source's collision word
-  `+0x1dc`, actor word `+0x28` (bStatic, bMovable), Location, Rotation,
-  CollisionRadius and CollisionHeight, StandingCount, Base and the four
-  Touching slots; for each candidate the same words, its Base chain
-  (IsBasedOn `0x1034c8d0`, with the reference's cyclic-chain error), its
-  Physics byte, bIsPlayer, and its class row's ancestry (Pawn, Decoration,
-  Brush, PlayerPawn, Projectile: the tests the reference makes through
-  `lineage`, `movingBrush`, `projectile` and `pushableDecoration`). The
-  controlled player's identity comes from the host as a handle
-  (`controlledPlayer` is a host notion). The differential checks that each
-  Rust ancestry test agrees with the host property it replaces.
-* **Effects, one import each, at the reference's point in the body:**
-  `js_move_hits` runs `level.hash.multiLineCheck` in the trace kernel's
-  instance and copies its hits (handle, time, normal, location, item, kind,
-  at most 64) into the interpreter's arena; `js_move_hash` removes or adds
-  the source; `js_move_riders` runs `moveActorRiders` (its inner moves
-  already reach the rider kernel; a Rust rider pass is B4b);
-  `js_move_event` dispatches BumpWall, Bump, Touch and UnTouch (the
-  Touching slot stores themselves are image stores in Rust, with
-  BeginTouch's last-empty-slot choice and eviction order and EndTouch's
-  clear-before-event order); SetActorZone runs `zone_update` in the same
-  module and, on its hand-back, `js_move_zone` runs the JavaScript body
-  with its events. Every import may Spawn, Destroy, SetLocation or
-  SetCollision anything, so the body re-reads the source after each one and
-  holds no Rust borrow across it.
+* **Reads of the source are image loads** through the move field table
+  shared with the rider kernel (move-actor-kernel.mjs MOVE_FIELDS): the
+  bStatic and bMovable bits, the four collision bits of `+0x1dc` (the
+  reference's `source.flags`, bProjTarget never tested), StandingCount,
+  Location, Rotation, CollisionRadius and CollisionHeight, and the four
+  Touching slots (released handles read None, as `identityOfHandle`).
+  Every read after an import is a fresh load, as the reference reads
+  `source.flags`, `source.position` and `source.touching[i]` again.
+* **Effects and candidate tests are the reference's own functions, called
+  from one import each at the reference's point:** `js_move_hits` runs the
+  same `multiLineCheck` service (with `decorate` on each hit's actor),
+  keeps the hit objects on the host and hands Rust only their times;
+  `js_move_cand` makes, per candidate and in the reference's order, the
+  `ignoreBases` IsBasedOn test, the IsBasedOn(other, source) test and the
+  type tests (world, moving brush, controlled player or projectile) and
+  returns the candidate's collision word, so Rust makes the block decision
+  and the displacement arithmetic; `js_move_eligible` is `hits.some(h =>
+  !basedOn(h.actor, source))`; `js_move_riders`, `js_move_hash` (remove or
+  add), `js_move_bump` (BumpWall with the hit's location and normal, or the
+  Bump pair after the reference's IsBasedOn test), `js_move_touch_facts`
+  (IsBasedOn, then `isBlockedBy` only when that failed, as the reference
+  short-circuits) and `js_move_begin_touch`, `js_move_overlap` and
+  `js_move_end_touch` per occupied slot, and `js_move_zone`
+  (`setActorZone(false, false)`, the zone kernel first). Rust makes the
+  Location and Rotation stores itself. Nested moves (an event that moves
+  another pawn) get their own host context by depth.
 * **Order kept:** query, tiny-delta short path (rotation store only), the
   rider pass before the commit, hash remove, Location then Rotation, hash
-  add, BumpWall or Bump pair, the Touch pass over the hits in order while
-  `f(hit.time) < query.time`, the EndTouch pass over the four slots,
-  SetActorZone(false, false). The reference's `{...query}` result object
-  is built by the host from an IO block.
+  add, BumpWall or the Bump pair, the Touch pass over the hits in order
+  while `f(hit.time) < query.time`, the EndTouch pass over the four slots,
+  SetActorZone(false, false). The result object is the reference's: the
+  host builds `{success, delta, position, time, hit}` from an IO block, with
+  `hit` the spread copy of the selected hit object and the adjusted time.
 * **Hand-backs, before the first store:** a source the host does not admit
-  (a bound or poisoned required field, no image, not a Pawn), non-finite
-  inputs, the reference's pre-store errors (a cyclic Base chain in the
-  query, "changed rotation with riders and nonzero sub-threshold Delta").
-  The JavaScript body then runs the whole move; the query is pure, so the
-  repeated `js_move_hits` is not observable. An error after the commit (a
-  cyclic chain in the Touch pass) is raised through `js_move_error` with
-  the reference's message at the same point.
-* **Verification:** the pure prefix (hits, per-candidate filters, the
-  selected hit and displacement) compared with `moveQuery` on every call
-  under `MOVE_PAWN_DIFFERENTIAL=1`; the effect sequence checked by the R3-d
-  method (Rust logs each callback and field store, a JavaScript replay of
-  `playerMove` runs against the logged answers and the pre-move snapshot,
-  and the two end states are compared); digests unchanged on both maps
-  under both engines; the native oracles `validate-native-move`,
-  `-player-move`, `-walking-callbacks`, `-set-rotation-riders` and
-  `-far-move-scene` on the Rust path; `MOVE_PAWN_KERNEL=js` for A/B.
-* **Then:** B4b the rider pass, B5 the walking loop (B3's kernels on the
-  image, calling this MoveActor directly), B6 falling, landing and
-  rotation.
+  (not a Pawn, a brush, no image, a poisoned or bound MOVE_FIELDS key: on
+  Island and Training only the controlled player, whose Base and Touching
+  stay bound until 1e-6), malformed arguments, a nonfinite start, delta or
+  extent (the reference's error) and the reference's "changed rotation with
+  riders and nonzero sub-threshold Delta" error. The JavaScript body then
+  runs the whole move; the query is pure, so a repeated `js_move_hits` is
+  not observable. An error thrown by an import (a cyclic Base chain, a
+  script error in an event) propagates through the Rust frames at the
+  reference's point, and the host puts the shadow stack back.
+* **Arithmetic:** `length` as a double square root of the float32
+  products in the reference's order, `size` and `reciprocal` as float32,
+  `direction` and `extended` per component as float32, the `distance <= 2`
+  test in double, the displacement `f(f(extended*time) - f(direction*2))`
+  and `time = f((storedDistance - 2) / size)`; the commit adds each delta
+  component to the float32 Location and rounds.
+* **Switches.** `MOVE_PAWN_KERNEL=js` (Node) or
+  `DEUS_EX_MOVE_PAWN_KERNEL='js'` (browser) keeps every call in JavaScript.
+  `MOVE_PAWN_DIFFERENTIAL=1` compares each completed Rust move's time,
+  displacement, success and selected hit (actor, location, normal, item)
+  with `moveQuery` on the same hits, and counts calls, tiny moves, blocked
+  moves, hand-backs and declines by reason and actor.
+
+Verification (September 30):
+
+* `MOVE_PAWN_DIFFERENTIAL=1`, 60 warm and 120 measured ticks with
+  headless render feedback: Island 8,459 Rust moves (3,252 tiny, 52
+  blocked), Training 268 (27 tiny, 19 blocked), no mismatch, no hand-back;
+  every declined call is JCDentonMale0's (123 of 5,977 calls in a 60-tick
+  Island run).
+* Digests equal at every checkpoint with the kernel on and off
+  (`MOVE_PAWN_KERNEL=js`): Island `ed406143f3137782`, Training
+  `f997e8d935cae886` (120 ticks, 12 checkpoints); and with the documented
+  300-tick command under `SCRIPT_VM_CHECK=1`, Island `b767a7e417fe5968`
+  and Training `c8eebff5786adf55`, unchanged from before 1e-4.
+  `validate-pawn-move-kernel` repeats the 120-tick comparison on both
+  maps for the sweep.
+* The native oracles on this path, with `NATIVE_PROBE_PYTHON`:
+  `validate-native-move`, `-player-move`, `-walking`,
+  `-walking-callbacks`, `-set-rotation-riders`, `-far-move-scene`,
+  `-steps`, `-move-smooth`, `-based-actors`, `-actor-physics` and
+  `validate-rider-move-kernel` pass; and the 578 unit tests.
+* Cost: see the A/B table below.
+* **Then:** B4b the rider pass in Rust, B5 the walking loop (B3's kernels
+  on the image, calling this MoveActor directly instead of through the
+  pawn view), B6 falling, landing and rotation.
 
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script

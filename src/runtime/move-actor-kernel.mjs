@@ -38,6 +38,8 @@ export class MoveActorHost {
     this.version = version;
     this.classes.clear();
     this.instances = new WeakMap();
+    this.pawnClasses?.clear();
+    this.pawnInstances = new WeakMap();
     this.vm.zone.table();
     this.members = this.vm.zone.members;
     this.cells = MOVE_FIELDS.map(([, key, kind]) => {
@@ -80,6 +82,40 @@ export class MoveActorHost {
     if (!entry || entry.info !== info || entry.bindings !== instance.bindings.size) {
       const ok = MOVE_FIELDS.every(([, key]) => !instance.bindings.has(key));
       this.instances.set(instance, entry = {info, bindings: instance.bindings.size, ok});
+    }
+    return entry.ok;
+  }
+  /** The same field-table admission for the pawn MoveActor
+   * (move-pawn-kernel.mjs, B4): the source must be a Pawn and not a Brush,
+   * and every MOVE_FIELDS spelling must resolve to the table's cell with no
+   * binding on the receiver. */
+  eligiblePawn(instance) {
+    const {cls, cells, fieldTable: names} = instance;
+    this.pawnClasses ??= new Map();
+    this.pawnInstances ??= new WeakMap();
+    let info = this.pawnClasses.get(cls);
+    if (!info || info.names !== names.size) {
+      let ok = this.valid, pawn = false;
+      for (let c = cls; c; c = c.base) {
+        if (c.record?.key === 'engine.pawn') pawn = true;
+        if (c.record?.key === 'engine.brush') ok = false;
+      }
+      if (!pawn) ok = false;
+      for (let i = 0; ok && i < MOVE_FIELDS.length; i++) {
+        const [name, key] = MOVE_FIELDS[i];
+        let field;
+        try { field = this.runtime.lookupMember(cls, 'fields', name); } catch { ok = false; break; }
+        const cached = names.get(name);
+        const cell = cached === undefined ? cells.get(key) : cached?.field === field ? cached.cell : null;
+        if (field?.key !== key || !sameCell(cell, this.cells[i])) ok = false;
+      }
+      this.pawnClasses.set(cls, info = {names: names.size, ok});
+    }
+    if (!info.ok) return false;
+    let entry = this.pawnInstances.get(instance);
+    if (!entry || entry.info !== info || entry.bindings !== instance.bindings.size) {
+      const ok = MOVE_FIELDS.every(([, key]) => !instance.bindings.has(key));
+      this.pawnInstances.set(instance, entry = {info, bindings: instance.bindings.size, ok});
     }
     return entry.ok;
   }

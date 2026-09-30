@@ -11,6 +11,7 @@
 
 mod hash;
 mod move_actor;
+mod move_pawn;
 mod interp;
 mod percep;
 mod tick;
