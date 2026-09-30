@@ -370,6 +370,16 @@ in the git-ignored `reports/`, absent in a fresh worktree) and
 pressure; exit 0 alone). The Island digest after the sweep is still
 `b767a7e417fe5968`.
 
+**Browser specs** (`npx playwright test`, run from the worktree with its own
+servers): 10 of 18 pass; the same 8 fail identically on master in this
+environment. Playwright's default headless Chromium renders with SwiftShader
+(software GL), where Training runs at about 4 fps (median frame 250 ms with
+the CPU path, 267 ms with the GPU path), so movement- and timing-bound specs
+time out on both. Because the passes are slower than the kernels on a
+software implementation, the viewer keeps the CPU path when the WebGL
+renderer is SwiftShader, llvmpipe or another software renderer, unless
+`?gpuMesh=1` forces the GPU path.
+
 **Known differences and limits:**
 
 * Transparent groups sort by their box centre when no exact sphere was
@@ -379,6 +389,12 @@ pressure; exit 0 alone). The Island digest after the sweep is still
   and stays there; `summary.gpuFallback` records why. None occurred in the
   validated runs.
 * The GPU's subnormal handling was not exercised by any compared value.
+* The validator compares only **main-pass** group decisions with the exact
+  sphere test. Mirror passes use the same certificate and fallback code
+  with a frustum built from the mirror camera's projection and inverse
+  world matrices (as three.js builds it), and Training's mirror floors
+  exercise that path heavily (most of its certified decisions), but no
+  check samples a mirror pass's decisions or its stamps.
 * Validation samples frames between two animation frames; an actor admitted
   after the frame's GPU run is posed by the next run before it is drawn
   and is skipped by the sampler (`pending` in the report).

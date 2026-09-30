@@ -43,8 +43,17 @@ let hudRenderer=null;
 let npcPreview=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
 // default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
-// selects the CPU kernels, which stay the reference and the fallback.
+// selects the CPU kernels, which stay the reference and the fallback. A
+// software WebGL implementation (headless Chromium's SwiftShader) runs the
+// passes on the CPU, far slower than the kernels, so it keeps the CPU path
+// unless ?gpuMesh=1 forces the GPU path.
 const gpuMeshParam=new URLSearchParams(location.search).get('gpuMesh');
+function softwareRenderer(){
+  try{
+    const gl=renderer.getContext(),info=gl.getExtension('WEBGL_debug_renderer_info');
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(gl.getParameter(info?info.UNMASKED_RENDERER_WEBGL:gl.RENDERER)));
+  }catch{return false;}
+}
 let gpuMesh=null;
 let weaponViewModel=null;
 let meshLighting=null;
@@ -213,7 +222,7 @@ async function loadMap(name) {
         const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
         nextMeshLighting=createMeshLightingView(meshRuntime,()=>meshRuntime.levelFor(nextGame.player.collisionActor),
           {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
-        if(gpuMeshParam!=='0'){
+        if(gpuMeshParam==='1'||gpuMeshParam!=='0'&&!softwareRenderer()){
           try{nextGpuMesh=createGpuMesh(renderer);}
           catch(error){nextWorld.notes.push(`GPU mesh path unavailable: ${error.message}`);}
         }
