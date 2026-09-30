@@ -7,6 +7,7 @@ import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
+import {copyMeshLightColors} from './mesh-light-colors.mjs';
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
@@ -99,8 +100,9 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
   };
   const admit=actor=>{
+    if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor))return;
     const mesh=read(actor,'Mesh');
-    if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor)||failed.get(actor)===mesh)return;
+    if(failed.get(actor)===mesh)return;
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
@@ -260,25 +262,20 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   };
   // One DrawLodMesh lighting pass (docs/mesh-lighting.md) over every face in
   // draw order; each group's corners take their face's colours.
+  let previousColors=null,colorWords=null;
   function relight(){
     const points=new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
     const result=lighting.lightMesh(actor,points,faces,faceWords);
     if(!result)return null;
     const colors=result.colors;
+    if(colors!==previousColors){
+      previousColors=colors;colorWords=new Uint32Array(colors.buffer,colors.byteOffset,colors.length);
+    }
     for(const group of groups.values()){
-      const attribute=group.geometry.getAttribute('deusLight'),array=attribute.array;
-      // Avoid short-lived typed-array views and per-face iterator arrays.
-      // Island has thousands of drawn mesh faces, so those objects alone
-      // accounted for several MiB of sampled allocation every frame.
-      for(let k=0;k<group.faces.length;k++){
-        const source=group.faces[k]*9,destination=k*9;
-        array[destination]=colors[source];array[destination+1]=colors[source+1];array[destination+2]=colors[source+2];
-        array[destination+3]=colors[source+6];array[destination+4]=colors[source+7];
-        array[destination+5]=colors[source+8];
-        array[destination+6]=colors[source+3];array[destination+7]=colors[source+4];
-        array[destination+8]=colors[source+5];
-      }
-      attribute.needsUpdate=true;
+      // The returned colors are FISTP-byte/255 Float32 values. Compare their
+      // exact words before scattering; unchanged GPU data needs no upload.
+      if(copyMeshLightColors(group.lightWords,colorWords,group.faces))
+        group.geometry.getAttribute('deusLight').needsUpdate=true;
     }
     return {lights:result.setup.lights.length,flags:result.flags};
   }
@@ -345,7 +342,9 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         const positions=new Float32Array(group.indices.length*3);copyPositions(positions,group.indices);
         geometry.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
         geometry.setAttribute('uv',new THREE.Float32BufferAttribute(group.uvs,2));
-        geometry.setAttribute('deusLight',new THREE.BufferAttribute(new Float32Array(group.indices.length*3).fill(1),3)
+        const lightColors=new Float32Array(group.indices.length*3).fill(1);
+        group.lightWords=new Uint32Array(lightColors.buffer);
+        geometry.setAttribute('deusLight',new THREE.BufferAttribute(lightColors,3)
           .setUsage(THREE.DynamicDrawUsage));
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();

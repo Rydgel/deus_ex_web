@@ -10,7 +10,7 @@ import {readFile,readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
-import {createActorMeshScene,TRAINING_NPC_IDENTITIES} from '../src/viewer/npc-mesh-preview.mjs';
+import {createActorMeshPreview,createActorMeshScene,TRAINING_NPC_IDENTITIES} from '../src/viewer/npc-mesh-preview.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
 
@@ -148,6 +148,36 @@ for(const mesh of restored.root.children){
   assert.ok(shared,'sibling crates share the skin resource');
   assert.notEqual(shared.material.color.r,mesh.material.color.r,'one actor glow cannot change a sibling');
 }
+
+// GPU upload boundary: lighting is still called every drawn frame, including
+// when its exact final colors already reside in an attribute. Use controlled
+// lighting outputs here; validate-mesh-lighting-play establishes the original
+// color computation separately. A replacement output models Wasm view renewal.
+const lightFaces=runtime.getActorMeshSurfaces(crate);
+let lightColors=new Float32Array(lightFaces.length*9).fill(1),lightCalls=0;
+const lightView=await createActorMeshPreview(runtime,assets,crate,{originalObjectIndex:0x40000001,kernel:scene.kernel,
+  lighting:{frame:{},lightMesh(){lightCalls++;return {colors:lightColors,setup:{lights:[]},flags:0};}}});
+const lightAttributes=lightView.root.children.map(mesh=>mesh.geometry.getAttribute('deusLight'));
+const versions=()=>lightAttributes.map(attribute=>attribute.version);
+const firstVersions=versions();
+lightView.update(null,{lit:true});lightView.update(null,{lit:true});
+assert.equal(lightCalls,2,'unchanged colors cannot skip lighting setup or calculation');
+assert.deepEqual(versions(),firstVersions,'initial white colors need no replacement upload');
+lightColors.fill(Math.fround(.25));lightView.update(null,{lit:true});
+assert.deepEqual(versions(),firstVersions.map(version=>version+1),'changed colors upload once per group');
+lightView.update(null,{lit:true});
+const changedVersions=versions();
+assert.ok(lightAttributes.every(attribute=>attribute.array.every(value=>value===Math.fround(.25))));
+lightColors=new Float32Array(lightColors);lightView.update(null,{lit:true});
+assert.deepEqual(versions(),changedVersions,'a renewed output view with equal words needs no upload');
+for(let i=0;i<lightColors.length;i++)lightColors[i]=Math.fround((i%256)/255);
+lightView.update(null,{lit:true});
+for(const mesh of lightView.root.children){
+  const expected=mesh.userData.faces.flatMap(face=>[0,1,2,6,7,8,3,4,5].map(corner=>lightColors[face*9+corner]));
+  assert.deepEqual([...mesh.geometry.getAttribute('deusLight').array],expected,'each reflected corner retains its exact color');
+}
+assert.equal(lightCalls,6);lightView.dispose();
+
 runtime.namedReference(crate,'Style').set(3);restored.update();
 assert.ok(restored.root.children.every(mesh=>mesh.material.transparent&&!mesh.material.depthWrite),
   'fragment STY_Translucent reaches live materials');

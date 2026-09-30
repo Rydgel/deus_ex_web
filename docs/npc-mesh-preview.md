@@ -1,5 +1,8 @@
 # Training NPC mesh inspection
 
+Host update and exact unchanged-upload work is recorded in
+[actor mesh updates](actor-mesh-updates.md).
+
 These meshes are **live bindings to the script-attached map actors, visible in
 Play and Inspect**. The runtime resolves each actor to the same object the VM
 mutates, so `update()` resamples the original `GetFrame` path whenever
