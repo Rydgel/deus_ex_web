@@ -82,8 +82,8 @@ function regionBinding(field, actor, name) {
  * Base/MoveTimer/...), the native collision bitfields derive from the bool
  * fields exactly like installActorCollisionView, the +0x1ec motion word is the
  * actor's own (`actor.motionFlags`, an accessor over its object image), and
- * host-only physics state (hitSlopedWall, pawnFlags) lives on the actor's host
- * props. Cached on the actor as `_pawnPhysics`. */
+ * host-only physics state (pawnFlags) lives on the actor's host props. Cached
+ * on the actor as `_pawnPhysics`. */
 export function pawnPhysicsView(actor, services) {
   if (actor._pawnPhysics) return actor._pawnPhysics;
   const { field, level, worldActor } = services;
@@ -180,7 +180,10 @@ export function pawnPhysicsView(actor, services) {
   Object.defineProperty(pawn, 'justTeleported', {
     get: () => Boolean(pawn.motionFlags & 0x100),
     set: v => { pawn.motionFlags = ((pawn.motionFlags & ~0x100) | (v ? 0x100 : 0)) >>> 0; }, enumerable: true });
-  Object.defineProperty(pawn, 'hitSlopedWall', { get: () => actor.hitSlopedWall ?? false, set: v => { actor.hitSlopedWall = v; }, enumerable: true });
+  // bHitSlopedWall is a declared Pawn bool (Pawn.uc, "used by Physics"): the
+  // +0x318 word's 0x20 bit (script-runtime.mjs Flags318, the walking oracle's
+  // case field). One storage for the Rust loop and this reference.
+  bind('hitSlopedWall', 'bHitSlopedWall', Boolean, Boolean);
   // Zone-derived fields read through the actor's stored Region.Zone — the same
   // field the original physics reads after every SetActorZone update.
   Object.defineProperty(pawn, 'gravity', { get: () => (zone().ZoneGravity ?? [0, 0, -950]).map(f), enumerable: true });
@@ -297,7 +300,15 @@ export function pawnPhysicsView(actor, services) {
   pawn.hitWall = hit => processPlayerHitWall(pawn, hit.normal, hit.actor,
     { isProbing: (target, name) => services.isProbing(actor, name), dispatch });
   pawn.landed = (hit, remaining, iterations) => processLanded(pawn, hit, remaining, iterations);
-  pawn.walking = (seconds, iterations) => walking(pawn, seconds, iterations);
+  // The dry walking loop runs in Rust on the pawn's image when the
+  // interpreter admits the pawn (walk-loop-kernel.mjs, docs/rust-core.md
+  // B5), with MoveActor's services for the moves it makes there; otherwise,
+  // or when Rust hands the call back before any effect, the body runs here.
+  let walkOps = null;
+  pawn.walking = (seconds, iterations = 0) => {
+    walkOps ??= { level, worldActor, move: moveOps(pawn, services, dispatch, decorate, false) };
+    if (!services.walkLoop?.(pawn, seconds, iterations, walkOps)) walking(pawn, seconds, iterations);
+  };
   pawn.falling = (seconds, iterations) => falling(pawn, seconds, iterations);
   pawn.flying = (seconds, iterations) => physFlying(pawn, seconds, iterations);
   pawn.swimming = (seconds, iterations) => physSwimming(pawn, seconds, iterations);
@@ -335,9 +346,23 @@ export function pawnPhysicsView(actor, services) {
  * rotation-update path physicsRotation reaches). Hash slots and Touch events
  * act on the registered host identity, not the field view. */
 function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn.decorate, ignoreBases = false) {
+  const ops = moveOps(pawn, services, dispatch, decorate, ignoreBases);
+  // The body runs in Rust on the pawn's image when the interpreter admits
+  // the source (move-pawn-kernel.mjs, docs/rust-core.md B4), with these same
+  // services as its effects; otherwise, or when Rust hands the call back
+  // before any store, the JavaScript body runs.
+  const completed = services.movePawn?.(pawn, delta, newRotation, ignoreBases, ops);
+  if (completed !== undefined) return completed;
+  return playerMove(pawn, delta, ops, newRotation);
+}
+
+/** MoveActor's services for `pawn`: the effects the body reaches, in the
+ * shape player-move.mjs takes. The walking loop in Rust (walk-loop-kernel.mjs)
+ * takes the same set for the moves it makes directly. */
+function moveOps(pawn, services, dispatch, decorate, ignoreBases) {
   const { level, worldActor } = services;
   const readOther = (other, name) => services.read ? services.read(other, name) : services.field(other, name).get();
-  const ops = {
+  return {
     worldActor,
     multiLineCheck: query => level.hash.multiLineCheck(query).map(h => (decorate(h.actor), h)),
     removeActor: () => level.hash.removeActor(pawn.self),
@@ -377,13 +402,6 @@ function moveActor(pawn, delta, newRotation, services, dispatch, decorate = pawn
     }),
     ignoreBases,
   };
-  // The body runs in Rust on the pawn's image when the interpreter admits
-  // the source (move-pawn-kernel.mjs, docs/rust-core.md B4), with these same
-  // services as its effects; otherwise, or when Rust hands the call back
-  // before any store, the JavaScript body runs.
-  const completed = services.movePawn?.(pawn, delta, newRotation, ignoreBases, ops);
-  if (completed !== undefined) return completed;
-  return playerMove(pawn, delta, ops, newRotation);
 }
 
 /** ULevel::MoveActor with bTest=1 (vtable +0x88, Engine.dll 0x103990e0): the

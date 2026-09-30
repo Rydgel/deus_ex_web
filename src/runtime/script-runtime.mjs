@@ -3792,6 +3792,9 @@ export class ScriptRuntime {
       // The pawn's MoveActor body in Rust (move-pawn-kernel.mjs, B4): the
       // result, or undefined when the JavaScript body must run.
       movePawn:(pawn,delta,rotation,ignoreBases,ops)=>this.scriptVm?.movePawn?.move(pawn,delta,rotation,ignoreBases,ops),
+      // The dry walking loop in Rust (walk-loop-kernel.mjs, B5): whether it
+      // ran there; otherwise the JavaScript body runs.
+      walkLoop:(pawn,seconds,iterations,ops)=>this.scriptVm?.walkLoop?.walk(pawn,seconds,iterations,ops)??false,
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
         return Math.fround(this.rng.frand());

@@ -17,6 +17,7 @@ mod percep;
 mod tick;
 mod trace;
 mod walk;
+mod walk_loop;
 mod zone;
 mod x87;
 use x87::{Ext, INDEFINITE};

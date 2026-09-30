@@ -11,6 +11,7 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
+ *     [--scenario file.mjs]
  *
  * --continue returns the declared zero value from unsupported natives (as the
  * census does) and --bypass skips the boundaries listed in bench-sim-hooks.mjs
@@ -22,6 +23,8 @@ import {register} from 'node:module';
 import {createHash} from 'node:crypto';
 import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {writeSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
@@ -109,6 +112,14 @@ const bootMs = realNow() - bootStart;
 log(`booted in ${Math.round(bootMs)} ms`);
 const runtime = game.doors.scriptRuntime.runtime;
 const fixture = createPlayerInputFixture(game);
+// --scenario file.mjs: a scripted workload for differential runs. The module's
+// default export, called with {game, runtime}, returns a function run before
+// each tick with the tick index (warm ticks first). It drives inputs the map
+// alone would not produce (validate-walk-loop-branches.mjs); same-mode digests
+// only, never a claim about the original game.
+const scenarioPath = flag('scenario', null);
+const scenario = scenarioPath ? (await import(pathToFileURL(resolve(scenarioPath)).href)).default({game, runtime}) : null;
+let tickIndex = 0;
 
 // --render-feedback: Play's actor-mesh layer copies TimeSeconds to the
 // LastRenderTime of every drawn mesh actor (actor-render-feedback.mjs), and
@@ -143,6 +154,8 @@ function stampRendered() {
 const errors = new Map();
 const step = () => {
   simulatedMs += 1000 / 60;
+  if (scenario) scenario(tickIndex);
+  tickIndex++;
   try { game.tick(1 / 60); if (renderFeedback) stampRendered(); }
   catch (error) {
     const message = String(error?.message ?? error).split('\n')[0];

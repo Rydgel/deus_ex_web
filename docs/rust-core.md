@@ -264,8 +264,10 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
      [noncolliding spawned rider slice](rider-move-kernel.md) already ran
      against the image. **B4b**, next: the rider pass (`moveActorRiders`,
      about 1.3 ms per Island tick) in Rust, then the Touching slot logic.
-   * **B5.** The walking loop for NPC map pawns, implementing B3's
-     `PawnOps` on the image. Falling and flying return as tail calls.
+   * **B5: done (September 30, "R3-b B5" below).** The dry walking loop
+     runs in Rust on the pawn's image over B3's kernels and calls B4's
+     MoveActor directly; Island's median tick 13.13 → 11.66 ms. Falling
+     and swimming return as tail calls.
    * **B6.** Falling, landing, rotation and the pawn tail.
    * **B7.** The player. It needs 1e-6.
 
@@ -1428,11 +1430,12 @@ Verification (September 30):
   value is structural: B5 can call `move_pawn` directly from the walking
   loop on the image instead of building the view and the services per
   call, and B4b can move the rider pass next to it.
-* **Then:** B4b the rider pass in Rust, B5 the walking loop (B3's kernels
-  on the image, calling this MoveActor directly instead of through the
-  pawn view), B6 falling, landing and rotation.
+* **Then:** B5 (done, next section), B4b the rider pass in Rust
+  (`js_move_riders` is the largest single import behind `js_tick_physics`
+  once the loop is in Rust), B6 falling, landing and rotation.
 
-**R3-b B5 — The walking loop on the image (design, September 30).** B4's
+**R3-b B5 — The walking loop on the image (designed and implemented,
+September 30).** B4's
 A/B shows that MoveActor's own body was not the cost; the pawn view is.
 `walking()` (walking.mjs, APawn::physWalking's dry path) reads about 30
 view properties per iteration through `pawn.position`, `pawn.velocity`,
@@ -1475,6 +1478,123 @@ except for its effects.
   digests on both maps, the native oracles `validate-native-walking`,
   `-walking-callbacks`, `-walking-surface`, `-steps` and `-velocity` on
   the Rust path, and the interleaved A/B, which is what B4 lacked.
+
+**R3-b B5 — implemented (September 30).** `walk_loop.rs` is walking.mjs
+line for line over an `ImagePawn`: walk-loop-kernel.mjs's 22-row field
+table holds the 19 Pawn and Actor cells the loop reads or writes and the
+zone actor's ZoneGravity, ZoneVelocity and ZoneGroundFriction, read from
+that actor's image (a zone actor without one falls back to the view's
+`zoneFields`; no run has taken it). B3's `ground_velocity`, `safe_normal`
+and `step_up` run over its `PawnOps`; `move_by` is `move_pawn` on the pawn
+MoveActor host's context at the same depth (a MoveActor nested in an event
+gets the next one), falling back to the view's `move` where that body
+hands the call back (no run has). The 16 imports are the reference's
+effects and reads at its points: the surface prelude, the line checks, the
+fallback move, HitWall, stepUp's two reads on the hit actor
+(`pushableDecoration` and Mass), the Falling and MayFall events,
+SetSupportBase, setPhysics, FarMoveActor, the physFalling and
+startSwimming tail calls, the two zone fallbacks and the error throws. Two changes to the reference itself: the pawn view's
+`hitSlopedWall` is an accessor over the bHitSlopedWall bit (Pawn +0x318,
+0x20; `Pawn.uc` "used by Physics"), so both paths read one storage and
+the host member left the NPC reset list; and `move_pawn` calls
+`js_move_eligible` only when the call ran the query, which is the
+reference's `hits = []` and lets one host context serve a whole walking
+call. `moveOps` is MoveActor's service builder, shared with the walking
+hook, and `pawn.walking` tries `services.walkLoop` first.
+
+* **Admission:** B4's (`eligiblePawn`) plus the walk table on the class
+  and no binding on its 19 pawn keys. The controlled player is the only
+  decline on both maps (its Base and Touching stay bound until 1e-6).
+* **Verification** (what ran, in place of the design's bullet above):
+  * `validate-walk-loop-kernel`: both maps as they are, the kernel with
+    `WALK_LOOP_DIFFERENTIAL=1` against `WALK_LOOP_KERNEL=js`, 120 ticks:
+    digests equal at 12 checkpoints and equal to the digests before this
+    change (Island `ed406143f3137782`, Training `f997e8d935cae886`);
+    9,012 and 2,842 Rust walking calls, no hand-back, no error. Island at
+    300 ticks `b767a7e417fe5968` on both paths (6 checkpoints); Battery
+    Park at 300 ticks `527070c787cd1d8e` on both.
+  * **Branch coverage is counted, not assumed.** Six Rust counters in the
+    loop's state block (direct MoveActor bodies, the sloped-wall re-probe,
+    the floor nudge, the friction slide, the retreat, stepUp) and a count
+    per effect import are printed by the validators. The maps as they are
+    reach only the flat-ground path in 300 ticks: moves, floor nudges,
+    line checks and one SetSupportBase (Training). So
+    `validate-walk-loop-branches` runs both maps under the walk-branches
+    scenario (bench-sim `--scenario`, scripts/scenarios/walk-branches.mjs):
+    every walking pawn is pushed along a heading that rotates over time
+    into walls, steps, other pawns and off ledges, jumping is forbidden on
+    a third of the phases, and the sloped-wall flag is raised
+    periodically. The inputs are the same on both paths and say nothing
+    about the original game; the digests must agree, and do, at 12
+    checkpoints on both maps. Training reaches stepUp 2,201 times,
+    HitWall 2,450, the slope re-probe 103, the retreat 19 (with its
+    FarMoveActor), the fall transition 4 (MayFall, Falling, setPhysics)
+    and the nudge 39, with no boundary. Island reaches stepUp 753, HitWall
+    923, the slope re-probe 56, the nudge 125 and the fall transition
+    twice; its one retreat ends in a boundary that is not the kernel's:
+    FarMoveActor's encroachment check dispatches `EncroachingOn`, a
+    return-value event the runtime cannot dispatch from native code yet
+    (`Return-value ProcessEvent requires a caller result reference`, the
+    same 250 ticks on both paths, digests still equal). Still at zero in
+    every run, and therefore covered only by the reference's own oracles,
+    not by a Rust differential: the physFalling tail call (`remaining >
+    0.01` after a fall does not occur at 60 Hz), startSwimming (no pawn
+    walked into water), the friction slide (it needs `0.7 <= normal.z < 1`
+    and `normal.z * friction < 3.3`, so ZoneGroundFriction below 4.71;
+    every zone here has 8), the zone fallback, and a MoveActor hand-back
+    inside the loop.
+  * The reference is unchanged where the oracles look: `validate-native-
+    walking`, `-walking-callbacks` (102 cases), `-walking-surface` (17),
+    `-steps`, `-velocity` and `validate-walk-kernel` pass; 581 unit tests,
+    three of them the ABI checks in `test/walk-loop-kernel.test.mjs`
+    (field table order, import names, record widths). `validate-pawn-move-kernel` after the
+    `queried` change: digests equal; 3,768 Rust moves on Island, since
+    the loop's moves no longer pass through that host.
+  * Full sweep on the final tree: 442 of 443 validators pass.
+    `validate-player-tick-order` was killed at the runner's 6 GiB
+    footprint cap (exit 137, no assertion) while a browser tab held
+    Island in Play. Solo it passes four times, peak RSS 2.9 to 3.8 GB with
+    the kernels on and 3.2 to 3.4 GB with them off, inside its own
+    run-to-run spread; Island's heap after a forced GC is the same 517 MB
+    on both paths, so B5 retains nothing.
+  * Browser, kernel live on the dev server: Training to HUD health 100
+    with no runtime error; Island plays to the StrafeFacing boundary at
+    76 s, Player start resets, and the player then moves 677 units in
+    10 s with no second error (headless Chromium,
+    `.work/tools/player-start-check.mjs`).
+* **Cost: a stable gain.** Island, 300 measured ticks with headless
+  render feedback, medians in ms per tick, interleaved pairs on an idle
+  machine (measured before the branch counters were added; those are six
+  stores per walking call):
+
+  | Pair | `WALK_LOOP_KERNEL=js` | kernel on |
+  |---|---|---|
+  | 1 | 13.27 | 11.52 |
+  | 2 | 12.95 | 12.48 |
+  | 3 | 13.13 | 11.75 |
+  | 4 | 14.44 | 11.66 |
+
+  The kernel side is lower in every pair; medians 13.13 against 11.66,
+  a 1.5 ms tick. This is the first pawn-physics step with a measured
+  gain, and it is the design's prediction: the per-iteration view getters
+  and the per-call services were the cost, not MoveActor's body.
+* **Browser, Island walk profile** (300 frames, `--walk --no-profile`,
+  idle): tick phase 12.85 ms, against 13.5 after B4 and 14.1 before it
+  on the same tree; actors 9.65, render 3.33, HUD 2.57, 29.4 ms of host
+  work per frame in all, no error.
+* **Attribution with the loop in Rust** (Island, 300 ticks,
+  `SCRIPT_VM_IMPORT_TIME=1`, idle), self ms per tick: `js_tick_physics`
+  2.31 (100 calls, 23 µs each; 5.97 before B4), `js_tick_event` 2.14,
+  `js_eval` 1.86, `js_walk_prelude` 1.36 (52 calls, 26 µs each: the
+  surface prelude, still JavaScript), `js_tick_state` 1.25,
+  `js_move_riders` 1.18 (27 calls, 44 µs each: the rider pass),
+  `js_iterator_next` 0.94, `js_object` 0.80, `js_move_hash` 0.22,
+  `js_walk_line` 0.18. The instrument wraps 5,004 calls per tick, so its
+  own cost inflates the high-count rows; read the split. What is left of
+  the pawn-physics family is the tick body outside the walking loop
+  (physicsRotation, falling, flying, swimming, the player), the surface
+  prelude and the rider pass: B4b (riders) and the prelude are the next
+  targets, then B6.
 
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script

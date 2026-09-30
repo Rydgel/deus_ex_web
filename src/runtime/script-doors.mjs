@@ -1577,7 +1577,7 @@ export async function createScriptDoors({
   // (actor-pose-fields.mjs), and resetLinkField for `base` and `touching`
   // (actor-link-fields.mjs).
   const NPC_HOST_PROPS = Object.freeze(['position', 'rotation', 'physics', 'base', 'velocity',
-    'standingCount', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
+    'standingCount', 'pawnFlags', 'touching', 'waitingPawn',
     'marker', 'specialGoal', 'clientUpdate', 'simOldPosition', 'simOldRotYaw', 'simOldRotPitch',
     'simOldRotRoll', 'simInterpolate', 'realPosition', 'realRotation', 'ambientSound',
     'nextPawn', 'collisionValues', '_pawnPhysics']);

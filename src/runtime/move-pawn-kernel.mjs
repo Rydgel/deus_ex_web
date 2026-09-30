@@ -24,6 +24,7 @@
  */
 import {moveQuery} from './move-query.mjs';
 import {basedOn} from './player-move.mjs';
+import {handleOf} from './script-object-handles.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.MOVE_PAWN_KERNEL === 'js' || globalThis.DEUS_EX_MOVE_PAWN_KERNEL === 'js';
@@ -38,6 +39,8 @@ if (DIFFERENTIAL) process.on('exit', () => process.stderr.write(`pawn move diffe
 const f = Math.fround;
 const int32 = v => Number.isInteger(v) && v >= -0x80000000 && v <= 0x7fffffff;
 const C_SKIP = 1, C_WORLD = 2, C_BRUSH = 4, C_PLAYER_OR_PROJECTILE = 8;
+// The ABI with move_pawn.rs: words per hit record (HIT_WORDS) and in MP_IO.
+export const HIT_WORDS = 5, IO_WORDS = 13;
 
 export class MovePawnHost {
   constructor(vm) {
@@ -83,7 +86,7 @@ export class MovePawnHost {
       this.contexts.pop();
     }
     if (code === 0) { counts.handedBack++; return undefined; }
-    const io = new Float64Array(this.vm.arena.memory.buffer, this.ioAt, 9);
+    const io = new Float64Array(this.vm.arena.memory.buffer, this.ioAt, IO_WORDS);
     const time = io[0], index = io[1], success = io[2] !== 0;
     const queryDelta = [io[3], io[4], io[5]], position = [io[6], io[7], io[8]];
     let hit = null;
@@ -125,16 +128,23 @@ export class MovePawnHost {
       return c;
     };
     return {
-      js_move_hits(depth, times, sx, sy, sz, ex, ey, ez, rx, ry, rz, checkActors, world) {
+      js_move_hits(depth, records, sx, sy, sz, ex, ey, ez, rx, ry, rz, checkActors, world) {
         const c = context(depth), ops = c.ops;
         c.start = [sx, sy, sz]; c.extent = [rx, ry, rz];
         const hits = ops.multiLineCheck({end: [ex, ey, ez], start: [sx, sy, sz], extent: [rx, ry, rz],
           checkActors: Boolean(checkActors), worldActor: world ? ops.worldActor : null, extra: 0});
         if (!Array.isArray(hits) || hits.length > 64) return -1;
         c.hits = hits;
-        const view = new Float64Array(host.vm.arena.memory.buffer, times, 64);
+        // Per hit: time, the normal and the actor's handle (move_pawn.rs
+        // HIT_WORDS), for the selection and for the walking loop's result.
+        const view = new Float64Array(host.vm.arena.memory.buffer, records, 64 * HIT_WORDS);
         c.times = hits.map(h => h.time);
-        for (let i = 0; i < hits.length; i++) view[i] = hits[i].time;
+        for (let i = 0; i < hits.length; i++) {
+          const h = hits[i], at = i * HIT_WORDS;
+          view[at] = h.time;
+          view[at + 1] = h.normal?.[0] ?? 0; view[at + 2] = h.normal?.[1] ?? 0; view[at + 3] = h.normal?.[2] ?? 0;
+          view[at + 4] = h.actor ? handleOf(h.actor) : 0;
+        }
         return hits.length;
       },
       js_move_cand(depth, index, ignoreBases) {

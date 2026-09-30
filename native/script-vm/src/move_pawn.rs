@@ -28,7 +28,11 @@ use crate::trace::{abs, f, sqrt};
 
 const HANDBACK: u32 = 0;
 const DONE: u32 = 1;
+pub(crate) const MP_DONE: u32 = DONE;
 const MAX_HITS: usize = 64;
+// A hit record the host writes per hit: time, the normal and the actor's
+// handle (the world actor's for a world hit).
+const HIT_WORDS: usize = 5;
 
 // The move field table's rows (move-actor-kernel.mjs MOVE_FIELDS).
 const F_STATIC: usize = 0;
@@ -54,17 +58,23 @@ const C_PLAYER_OR_PROJECTILE: u32 = 8;
 
 // MP_IO, written at the end of a completed call: [0] the query's time,
 // [1] the selected hit's index (or -1), [2] success (0/1), [3..6] the
-// query's delta, [6..9] the source's Location after the move.
-static mut MP_IO: [f64; 9] = [0.0; 9];
+// query's delta, [6..9] the source's Location after the move, [9..12] the
+// selected hit's normal and [12] its actor's handle (0 without a hit).
+static mut MP_IO: [f64; 13] = [0.0; 13];
 
 #[no_mangle]
 pub extern "C" fn move_pawn_io_ptr() -> *mut f64 {
     core::ptr::addr_of_mut!(MP_IO) as *mut f64
 }
+/// The last completed call's IO block (the walking loop reads it directly).
+#[inline(always)]
+pub(crate) fn mp_io() -> &'static [f64; 13] {
+    unsafe { &*core::ptr::addr_of!(MP_IO) }
+}
 
 #[link(wasm_import_module = "env")]
 extern "C" {
-    fn js_move_hits(depth: u32, times: *mut f64, sx: f64, sy: f64, sz: f64, ex: f64, ey: f64, ez: f64,
+    fn js_move_hits(depth: u32, records: *mut f64, sx: f64, sy: f64, sz: f64, ex: f64, ey: f64, ez: f64,
                     rx: f64, ry: f64, rz: f64, check_actors: u32, world: u32) -> i32;
     fn js_move_cand(depth: u32, hit: u32, ignore_bases: u32) -> u32;
     fn js_move_eligible(depth: u32) -> u32;
@@ -106,13 +116,19 @@ fn standing_count(base: u32) -> u32 {
     load8(address(base, F_STANDING_COUNT)) as u32
 }
 
-fn finish(time: f64, hit: i32, success: bool, delta: [f64; 3], position: [f64; 3]) -> u32 {
+fn finish(time: f64, hit: i32, success: bool, delta: [f64; 3], position: [f64; 3], records: &[f64]) -> u32 {
     let io = unsafe { &mut *core::ptr::addr_of_mut!(MP_IO) };
     io[0] = time;
     io[1] = hit as f64;
     io[2] = success as u32 as f64;
     io[3] = delta[0]; io[4] = delta[1]; io[5] = delta[2];
     io[6] = position[0]; io[7] = position[1]; io[8] = position[2];
+    if hit >= 0 {
+        let r = hit as usize * HIT_WORDS;
+        io[9] = records[r + 1]; io[10] = records[r + 2]; io[11] = records[r + 3]; io[12] = records[r + 4];
+    } else {
+        io[9] = 0.0; io[10] = 0.0; io[11] = 0.0; io[12] = 0.0;
+    }
     DONE
 }
 
@@ -139,12 +155,16 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
     }
     // `if(source.static||source.movable===false)return {success:false,...}`:
     // playerMove returns that query without a store.
+    let mut records = [0.0f64; MAX_HITS * HIT_WORDS];
     if flag(base, F_STATIC) || !flag(base, F_MOVABLE) {
-        return finish(1.0, -1, false, [0.0; 3], start);
+        return finish(1.0, -1, false, [0.0; 3], start, &records);
     }
     let tiny = requested.iter().all(|v| abs(*v) < 0.0001);
     let source_flags = collision_flags(base);
-    let mut times = [0.0f64; MAX_HITS];
+    // The query runs only for a non-tiny delta of a colliding source; the
+    // reference's `hits` is [] otherwise (the context's may be an earlier
+    // call's when the walking loop calls this body directly).
+    let queried = !tiny && source_flags & 3 != 0;
     let mut count: usize = 0;
     let mut hit: i32 = -1;
     let mut hit_world = false;
@@ -161,7 +181,7 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
         displacement = delta;
         if source_flags & 3 != 0 {
             let end = [f(start[0] + extended[0]), f(start[1] + extended[1]), f(start[2] + extended[2])];
-            let n = unsafe { js_move_hits(depth, times.as_mut_ptr(), start[0], start[1], start[2],
+            let n = unsafe { js_move_hits(depth, records.as_mut_ptr(), start[0], start[1], start[2],
                 end[0], end[1], end[2], extent[0], extent[1], extent[2],
                 source_flags & 1, (source_flags >> 1) & 1) };
             if n < 0 || n as usize > MAX_HITS { return HANDBACK; }
@@ -184,7 +204,7 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
             }
         }
         if hit >= 0 {
-            time = f(times[hit as usize]);
+            time = f(records[hit as usize * HIT_WORDS]);
             if time < 1.0 {
                 let distance = (size + 2.0) * time;
                 let stored_distance = f(distance);
@@ -207,10 +227,10 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
     let same_rotation = rotation == source_rotation;
     if tiny && (same_rotation || standing_count(base) == 0) {
         store_rotator(rotation_at, rotation);
-        return finish(query_time, hit, query_time > 0.0, query_delta, query_position);
+        return finish(query_time, hit, query_time > 0.0, query_delta, query_position, &records);
     }
     if tiny && requested.iter().any(|v| *v != 0.0) { return HANDBACK; }
-    let eligible_scanned = source_flags & 14 != 0 && unsafe { js_move_eligible(depth) } != 0;
+    let eligible_scanned = queried && source_flags & 14 != 0 && unsafe { js_move_eligible(depth) } != 0;
     if standing_count(base) != 0 {
         unsafe { js_move_riders(depth, query_delta[0], query_delta[1], query_delta[2], rotation[0], rotation[1], rotation[2]) };
     }
@@ -225,7 +245,7 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
     let flags_now = collision_flags(base);
     if eligible_scanned || flags_now & 4 == 0 || flags_now & 8 == 0 {
         for i in 0..count {
-            if !(f(times[i]) < query_time) { break; }
+            if !(f(records[i * HIT_WORDS]) < query_time) { break; }
             if unsafe { js_move_touch_facts(depth, i as u32) } == 0 {
                 unsafe { js_move_begin_touch(depth, i as u32) };
             }
@@ -239,5 +259,5 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
         }
     }
     unsafe { js_move_zone(depth) };
-    finish(query_time, hit, query_time > 0.0, query_delta, vector(location))
+    finish(query_time, hit, query_time > 0.0, query_delta, vector(location), &records)
 }
