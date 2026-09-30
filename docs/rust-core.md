@@ -1689,6 +1689,7 @@ The options that change the equation, each the user's call:
    in a different order and must be validated against the CPU reference
    to a stated tolerance per vertex. It is a rendering substitute of the
    kind AGENTS.md admits for visuals when the reference stays beside it.
+   Design, tolerances and results: [GPU mesh](gpu-mesh.md).
 3. **Continue the tick in Rust, in blocks not families.** Event and
    state dispatch (3.3 ms, step 3 of the next-steps list) and the
    JavaScript-valued natives (3.3 ms) are the remaining tick blocks; each
