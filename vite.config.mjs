@@ -6,8 +6,10 @@ import { gameDirectory } from './scripts/game-directory.mjs';
 export default defineConfig({
   publicDir: false,
   server: { host: '127.0.0.1', port: 5173, strictPort: true,
-    watch: { ignored: ['**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**'] },
-    fs: { deny: ['.env', '.env.*', '**/.git/**', '**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**'] } },
+    // .work/ (git-ignored scratch worktrees and logs) and .claude/worktrees/
+    // hold whole repository copies: watching them keeps vite busy.
+    watch: { ignored: ['**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**', '**/.work/**', '**/.claude/worktrees/**'] },
+    fs: { deny: ['.env', '.env.*', '**/.git/**', '**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**', '**/.work/**', '**/.claude/worktrees/**'] } },
   preview: { host: '127.0.0.1', port: 5174, strictPort: true },
   plugins: [{
     name: 'local-deus-ex-data',
