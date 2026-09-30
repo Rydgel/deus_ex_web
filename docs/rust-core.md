@@ -72,6 +72,149 @@ warned. The data has to move first.
 * **Presentation stays JavaScript.** three.js, the HUD renderer, audio and
   input stay in JavaScript. They read actor state from the shared memory.
 
+## Status and next steps (2026-09-30)
+
+This section is the entry point for continuing the port. The step sections
+below hold the evidence for each stage.
+
+### Where it stands
+
+* **The Rust interpreter is the default engine.** `SCRIPT_VM=js`, or
+  `?scriptVm=js` in the browser, selects the JavaScript VM, which stays the
+  reference (see "Default engine" under R2b).
+* **Implemented stages:**
+  * R0 (arena), R1a and R1a-2 (handles), R2a (frames).
+  * R2b-1 to R2b-6 (the interpreter).
+  * R3-a (BSP traces), R3-b B0–B2 (collision hash, line checks and the
+    walking-surface scan).
+  * R3-c (IsValidEnemy, GetPawnAllianceType, AICanSee).
+  * R3-d (the actor tick body and the animation phase).
+  * 1e-1 to 1e-3: actor flags, the physics mirror fields, Location,
+    Rotation, collision size and OldLocation now live in the image.
+* **Headless timing.** On UNATCO Island (bench-sim, 300 ticks), the median
+  tick is about 14.4 ms under Rust and about 25 ms under JavaScript.
+  `BYPASS_PATCHES` is empty. Island Play now runs about 31 s (tick 1872 of
+  the forward-walk workload) before its first unimplemented original code,
+  ConSys native 2051 `CreateConCamera` (Stage 4). The 360-tick bench window
+  does not reach it.
+* **Browser timing.** Headless Chromium, Island forward walk, through
+  `profile-play-browser`:
+
+  | Engine | Tick | Frame | Rate |
+  | --- | --- | --- | --- |
+  | Rust | 15–18 ms | 34–39 ms | about 30 fps |
+  | JavaScript | 26–33 ms | 46–57 ms | about 20 fps |
+
+  The rest of the frame does not depend on the engine: actor meshes about
+  9.8 ms, render about 4.7, HUD about 3.7, lighting about 1.6.
+  120 fps means 8.3 ms per frame.
+* **Remaining tick cost.** From the latest Island profiles, approximate:
+  * About 4 ms of host code still reads script properties by name
+    (`readNamed` and its callees). About 1 ms of that is bench-sim's own
+    render-feedback reads, which are not game work.
+  * Pawn walking physics is about 4 ms, with the walking-surface scan at
+    1.1 ms.
+  * Natives that still run in JavaScript: SetLocation about 0.3 ms,
+    AttachDecal about 0.18, ScriptSpawn about 0.18.
+  * The level loop, DistanceFromPlayer and actor compaction are about 0.5 ms
+    together.
+
+### Next steps, in recommended order
+
+1. **R3-b B3–B7: walking and falling in Rust.** Pawn physics is the largest
+   remaining simulation cost. The plan:
+   * **B3.** Pure kernels: groundVelocity, stepUp via a `PawnOps` trait,
+     moveQuery, isOverlapping, processPlayerHitWall and the setBase logic,
+     plus a hosted build so the walking, steps, velocity, move-query,
+     walking-callbacks and set-base oracles run against Rust.
+   * **B4.** MoveActor for pawn views: playerMove, touches, bump, zone, and
+     remove/add with primitive bounds. Riders and the per-candidate decorate
+     step stay imports. Its gain needs 1e-4.
+   * **B5.** The walking loop for NPC map pawns. Falling and flying return
+     as tail calls.
+   * **B6.** Falling, landing, rotation and the pawn tail.
+   * **B7.** The player. It needs 1e-6.
+
+   Keep these rules:
+   * No Rust borrow and no bucket iteration across an import. Callbacks can
+     SetCollision, Destroy, Spawn or SetLocation mid-move.
+   * Copy trace results out at once, because nested script traces reuse the
+     static buffers.
+   * Re-derive JavaScript views after any import, since a Spawn can grow the
+     arena.
+   * Keep every order dependency:
+     * hash prepend, x→y→z cell order and the final reverse;
+     * the unstable qsort and its NaN comparator, and the 64-hit cap;
+     * BeginTouch's last-empty-slot choice and eviction order;
+     * `level.actors` order and the zone event order.
+   * Match V8 numerics exactly: `Math.hypot`, `Math.min`/`Math.max` with NaN
+     and −0, and reductions starting from +0.
+
+   **Design question for B4–B5.** The collision hash and the traces live in
+   the trace kernel's own Wasm instance (R3-b), while the interpreter and the
+   images live in the runtime's arena (R3-c). Either merge the two
+   instances, or keep one import per query, as R3-c measured for AICanSee.
+   Measure before choosing.
+2. **1e-4 to 1e-7.** Move the rest of the host fields into the image:
+   * **1e-4, Base and Touching.** `actor-touch` writes the slots explicitly.
+     Spawned actors get the same Touching storage. Verify with
+     `RIDER_VERIFY=1`, and commit this step alone, since the digest may
+     change.
+   * **1e-5, movers.** The interpolation object becomes a view of the image,
+     with all 8 KeyPos and KeyRot. The binding keeps only 2 of the 8 today.
+   * **1e-6, the player.** Player becomes a controller over the image; this
+     removes the Login rebinding. It also covers the view fields, Regions
+     and the controlled player's Physics, the last bound step-2 key.
+   * **1e-7, cleanup.** Plain image cells for Level and NetMode.
+3. **A per-object bound-field rule in the interpreter.** R3-d's tick kernel
+   masks bound fields per object. The interpreter still hands a bound key to
+   JavaScript on every object that has any binding, so NPC reads such as
+   BaseEyeHeight still go to JavaScript.
+4. **Natives called from scripts that still run in JavaScript:**
+   SetLocation/FarMoveActor, AttachDecal and ScriptSpawn. Profile first.
+5. **The level loop, DistanceFromPlayer and compaction.** They need a
+   Level.Actors list cached on the base epoch. The net gain is about 0.3 ms.
+6. **The render side (no plan yet).** Actor meshes, render, HUD and lighting
+   are about 20 ms of the browser frame, so 120 fps is out of reach until
+   they are profiled and planned. The mesh posing kernel is already in Rust
+   ([lodmesh Wasm](lodmesh-wasm.md)).
+
+### How each step is verified
+
+* **Build and kernel validators.** Run `node scripts/build-wasm.mjs`, then
+  `validate-script-vm-interp`, `-x87`, `validate-trace-kernel`,
+  `validate-collision-kernel`, `validate-perception-kernel` and
+  `validate-actor-tick-kernel`. Add a kernel validator and a mutation pass
+  for each new Rust body.
+* **Digests.** Run bench-sim on both maps under both engines, with
+  `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
+  `--bypass --continue --render-feedback --warm 60 --ticks 300
+  --digest-every 10 --json`.
+  * The references at this commit are Training `c8eebff5786adf55` and
+    Island `b767a7e417fe5968`.
+  * A representation step must not change them.
+  * A fidelity fix may change them, but only with the first differing
+    checkpoint explained, and as its own commit.
+* **Differential modes.** Each Rust family has a mode that compares every
+  call against the JavaScript path: `HASH_DIFFERENTIAL`,
+  `TRACE_DIFFERENTIAL`, `RAY_DIFFERENTIAL`, `PERCEPTION_DIFFERENTIAL` and
+  `ACTOR_TICK_DIFFERENTIAL` (each `=1`). The JavaScript paths stay behind
+  `TRACE_KERNEL=js`, `HASH_KERNEL=js`, `SCAN_KERNEL=js`,
+  `ACTOR_TICK_KERNEL=js` and `SCRIPT_VM=js`.
+* **Full sweep.** Run `npm run validate -- --jobs 4` before merging.
+  Validators that trace call order through runtime hooks run on the
+  JavaScript VM, because Rust calls bypass those hooks
+  (`validate-inventory-spawn`, `-weapon-construction`,
+  `-window-baseline-play`).
+* **Browser check.** Walk Island through `profile-play-browser`: headless
+  digests have missed browser-only breakage before. Compare browser timings
+  within one session and one measurement method; separate runs can differ by
+  a few milliseconds.
+* **Working copy.** Work in a separate worktree. Give it a local `.cache`,
+  where validators write oracle output, and a local copy of the git-ignored
+  `reports/` reference data. Oracle validators need `NATIVE_PROBE_PYTHON` (the
+  sweep sets it).
+
 ## Steps
 
 **R0 — Arena (implemented).** Every object image is a range of one
