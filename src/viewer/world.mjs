@@ -122,6 +122,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       geometry.setAttribute('lightLayer', new THREE.Float32BufferAttribute(batch.lightLayer, 1));
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, batch.material);
+      // World-space geometry: an identity local matrix, never moved itself (a
+      // mover's group carries the transform and forces its children).
+      mesh.matrixAutoUpdate = false;
       mesh.userData = { actor: actorName, faces: batch.faces, model: model.entry.name };
       parent.add(mesh);
       batch.mirror?.meshes.push(mesh);

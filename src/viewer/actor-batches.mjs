@@ -37,7 +37,7 @@ export function createActorBatches(root,{makeMaterial}) {
     texture.needsUpdate=true;
     const material=makeMaterial(template,{value:texture});
     const mesh=new THREE.Mesh(new THREE.BufferGeometry(),material);
-    mesh.frustumCulled=false;mesh.visible=false;mesh.name=`actor batch ${key}`;
+    mesh.frustumCulled=false;mesh.visible=false;mesh.name=`actor batch ${key}`;mesh.matrixAutoUpdate=false;
     batch={key,members,data,texture,material,mesh,rows:1};
     mesh.onAfterRender=()=>{
       if(!stamping)return;

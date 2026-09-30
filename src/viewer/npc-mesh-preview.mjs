@@ -64,7 +64,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     try{kernel=await loadLodMeshKernel();}
     catch(error){kernel=null;kernelError=error.message;}
   }
-  const root=new THREE.Group(),textures=new ActorMeshTextures();root.visible=false;
+  const root=new THREE.Group(),textures=new ActorMeshTextures();root.visible=false;root.matrixAutoUpdate=false;
   // Opaque GPU-path groups that share a material state draw as one batch
   // (actor-batches.mjs); only with original lighting, where every actor's
   // material colour is the same.
@@ -300,7 +300,9 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     for(let i=0;i<payload.objectReferences.length;i++)fallback=runtime.getActorMeshTexture(actor,i)??fallback;
     return fallback;
   };
-  const root=new THREE.Group(),materials=[],textureLeases=[],groups=new Map(),skipped=[];
+  // Actor meshes hold world-space positions: their transforms stay identity,
+  // so three.js need not recompose their local matrices every traversal.
+  const root=new THREE.Group(),materials=[],textureLeases=[],groups=new Map(),skipped=[];root.matrixAutoUpdate=false;
   let disposed=false,lastPose=null,lastStyle,lastGlow,materialStateApplied=false;
   const gpuUniform={value:mode==='gpu'?1:0};
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
@@ -457,7 +459,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();
         group.geometry=geometry;
-        const mesh=new THREE.Mesh(geometry,material);
+        const mesh=new THREE.Mesh(geometry,material);mesh.matrixAutoUpdate=false;
         mesh.onAfterRender=rendered;
         if(gpuHandle)mesh.frustumCulled=false;
         group.mesh=mesh;group.sided=sided;group.split=false;group.material=material;group.texture=texture;
@@ -466,7 +468,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         if(sided){
           // Created right after its mesh: the adjacent id keeps the pair
           // consecutive in three.js's transparent sort (equal depth).
-          const twin=new THREE.Mesh(geometry,sided.front);
+          const twin=new THREE.Mesh(geometry,sided.front);twin.matrixAutoUpdate=false;
           twin.onAfterRender=rendered;twin.frustumCulled=mesh.frustumCulled;twin.visible=false;
           twin.userData={...mesh.userData,twinOf:mesh};group.twin=twin;root.add(twin);
         }

@@ -90,7 +90,11 @@ export function createMirrors(notes, displayGamma) {
   function render(renderer, scene, source, { markers, updateActors, sky } = {}) {
     stats.renderedPlanes = 0;stats.scissorPixels=0;
     if (!planes.size) return;
-    source.updateMatrixWorld(); scene.updateMatrixWorld();
+    // The plane test below needs the planes' world matrices; each
+    // renderer.render call updates the whole scene itself (auto-update), so
+    // only the plane meshes and their ancestors are updated here.
+    source.updateMatrixWorld();
+    for (const group of planes.values()) for (const mesh of group.meshes) mesh.updateWorldMatrix(true, false);
     frustum.setFromProjectionMatrix(projection.multiplyMatrices(source.projectionMatrix, source.matrixWorldInverse));
     const visible = [...planes.values()].filter(group => {
       group.active.value = 0;
