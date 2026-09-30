@@ -1,5 +1,5 @@
 import { groundVelocity } from './velocity.mjs';
-import { bumpBaseEpoch } from './base-epoch.mjs';
+import { noteBaseChange } from './base-epoch.mjs';
 import { safeNormal, stepUp } from './steps.mjs';
 import { falling } from './falling.mjs';
 import { updateWalkingBob, updateEyeHeight, decayWalkBob } from './camera.mjs';
@@ -43,7 +43,11 @@ export class Player {
       get radius() { return player.radius; }, set radius(value) { player.radius = value; },
       get height() { return player.height; }, set height(value) { player.height = value; },
       get base() { return player.physicsPawn ? player.physicsPawn.base : player.spawnBase ?? null; },
-      set base(value) { if (player.physicsPawn) player.physicsPawn.base = value; else player.spawnBase = value; bumpBaseEpoch(); },
+      set base(value) {
+        const old = player.physicsPawn ? player.physicsPawn.base : player.spawnBase ?? null;
+        if (player.physicsPawn) player.physicsPawn.base = value; else player.spawnBase = value;
+        noteBaseChange(old ?? null, value ?? null);
+      },
       get rotation() { return player.bodyRotation; }, set rotation(value) { player.bodyRotation = value; },
       get baseEyeHeight() { return player.baseEyeHeight; }, set baseEyeHeight(value) { player.baseEyeHeight = value; },
       // The viewer's camera integrates look input (the original UpdateRotation

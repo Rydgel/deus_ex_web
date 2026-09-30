@@ -21,7 +21,7 @@
  * copied through that property's codec.
  */
 import {linkedClassLayout, linkedFunctionLayout} from './script-object-layout.mjs';
-import {bumpBaseEpoch} from './base-epoch.mjs';
+import {noteBaseChange} from './base-epoch.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {nameCellWord} from './script-name-ids.mjs';
 
@@ -287,10 +287,16 @@ export function writeCell(cell, image, refs, value, at = 0, refAt = 0) {
       return;
     }
     case FLOAT: image.setFloat32(at + cell.offset, value, true); return;
-    case POINTER:
-      image.setUint32(at + cell.offset, pointerHandle(value), true);
-      if (cell.actorBase) bumpBaseEpoch();
+    case POINTER: {
+      const offset = at + cell.offset, handle = pointerHandle(value);
+      if (!cell.actorBase) { image.setUint32(offset, handle, true); return; }
+      // An Actor.Base store: the rider lists of the old and the new base
+      // change (base-epoch.mjs).
+      const before = image.getUint32(offset, true);
+      image.setUint32(offset, handle, true);
+      if (before !== handle) noteBaseChange(identityOfHandle(before), value ?? null);
       return;
+    }
     case REF: refs[refAt + cell.ref] = value; return;
     case NAME:
       refs[refAt + cell.ref] = value;

@@ -22,7 +22,7 @@
  */
 import {rotatorSin} from './coords.mjs';
 import {x87load, x87add, x87neg, x87mul, x87store} from './script-vm.mjs';
-import {baseEpoch} from './base-epoch.mjs';
+import {baseEpoch, riderEpochOf} from './base-epoch.mjs';
 
 const ld = x87load;
 const st = x87store;
@@ -81,13 +81,21 @@ function unitCoordsTimesYaw(pitch, yaw, roll) {
  */
 // Rider lists from full scans, per scan flavour (services.riderCacheKey,
 // whose baseOf reads Base the same way each time) and mover. An entry is
-// reused only while baseEpoch() equals the value recorded when the full scan
-// that produced it started and finished without a bump (base-epoch.mjs).
+// reused only while baseEpoch() and the mover's own Base-change count
+// (riderEpochOf, base-epoch.mjs) equal the values recorded when the full
+// scan that produced it started and finished without a change. A Base
+// write elsewhere in the level does not touch this mover's list.
 const riderCaches = new Map();
 // Host development switches (Node only): RIDER_VERIFY=1 compares every cached
 // list with a full scan; RIDER_NOCACHE=1 always scans.
 const verifyRiders = typeof process !== 'undefined' && process.env?.RIDER_VERIFY === '1';
 const disableRiderCache = typeof process !== 'undefined' && process.env?.RIDER_NOCACHE === '1';
+// RIDER_STATS=1 (Node): counts calls, cache hits, resumed and full scans,
+// actors read and riders visited, printed at exit.
+const riderStats = typeof process !== 'undefined' && process.env?.RIDER_STATS === '1'
+  ? {calls: 0, hits: 0, resumed: 0, scans: 0, scansEpoch: 0, scansRider: 0, scanned: 0, visited: 0, epochBumpsSeen: 0, lastEpoch: -1, scanMs: 0, visitMs: 0, rotMs: 0} : null;
+const now = riderStats ? () => Number(process.hrtime.bigint()) / 1e6 : null;
+if (riderStats) process.on('exit', () => process.stderr.write(`rider stats: ${JSON.stringify(riderStats)}\n`));
 
 /** The rider indices a full scan of `actors` would visit now, read-only. */
 function scanRiders(actor, actors, baseOf) {
@@ -104,6 +112,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
     moveActor, actorLocation, actorRotation} = services;
   if (typeof moveActor !== 'function')
     throw new Error('MoveActor based passengers require the recovered rider MoveActor service');
+  if (riderStats) { riderStats.calls++; const e = baseEpoch(); if (e !== riderStats.lastEpoch) { riderStats.epochBumpsSeen++; riderStats.lastEpoch = e; } }
   const actorPos = actorLocation();
   const actorRot = actorRotation().map(v => v | 0);
   const rot = newRotation.map(v => v | 0);
@@ -114,6 +123,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
   // 0x10399930: the reduced rotation keeps only the &0xfffc-masked yaw.
   const reducedYaw = ((rot[1] & 0xfffc) - (actorRot[1] & 0xfffc)) | 0;
   const visit = other => {
+    const t0 = riderStats ? now() : 0;
     let rotMotion = [0, 0, 0];
     if (rotationChanged) {
       // 0x10399939: v = Actor->Location - Other->Location, f32 stores.
@@ -126,6 +136,7 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
       const t = [dot3(v.map(ld), coords[1]), dot3(v.map(ld), coords[2]), dot3(v.map(ld), coords[3])];
       // 0x10399a27: RotMotion = v - t, per-component f32 stores.
       rotMotion = [sub32(v[0], t[0]), sub32(v[1], t[1]), sub32(v[2], t[2])];
+      if (riderStats) riderStats.rotMs += now() - t0;
     }
     const otherRot = rotation(other).map(vv => vv | 0);
     // 0x10399ad1: delta = FinalDelta + RotMotion, three f32 adds.
@@ -137,18 +148,22 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
     moveActor(other, delta, newRot);
     // 0x10399b57: pawn riders keep their ViewRotation aligned with the yaw.
     if (isPawn(other)) addViewRotationYaw(other, dyaw);
+    if (riderStats) riderStats.visitMs += now() - t0;
   };
   // The original loop (0x103998a0..): every Level.Actors index in order, each
   // Base read at that point. A cached list replaces the reads only while no
-  // Base or array change can have happened; after any change (a rider's move
-  // may run events) the loop continues by reading, from the next index.
+  // array change, and no Base change to or from this mover, can have
+  // happened; after one (a rider's move may run events) the loop continues
+  // by reading, from the next index.
   const cacheKey = disableRiderCache ? undefined : services.riderCacheKey;
   let byMover = null, start = 0;
   if (cacheKey !== undefined) {
     byMover = riderCaches.get(cacheKey);
     if (!byMover) riderCaches.set(cacheKey, byMover = new WeakMap());
     const entry = byMover.get(actor);
-    if (entry && entry.epoch === baseEpoch() && entry.actors === actors) {
+    const current = () => entry.epoch === baseEpoch() && entry.riderEpoch === riderEpochOf(actor);
+    if (riderStats && entry && !current()) { if (entry.epoch !== baseEpoch()) riderStats.scansEpoch++; else riderStats.scansRider++; }
+    if (entry && current() && entry.actors === actors) {
       if (verifyRiders) {
         const expected = scanRiders(actor, actors, baseOf);
         if (expected.join() !== entry.riders.join()) {
@@ -159,24 +174,37 @@ export function moveActorRiders(actor, finalDelta, newRotation, services) {
         }
       }
       let last = -1;
+      if (riderStats) riderStats.hits++;
       for (const index of entry.riders) {
-        if (entry.epoch !== baseEpoch()) break;
+        if (!current()) break;
         last = index;
-        visit(actors[index]);
+        // A slot DestroyActor nulled since the scan: skipped, as the scan
+        // skips it (its Base changes were counted when they happened).
+        const other = actors[index];
+        if (!other) continue;
+        if (riderStats) riderStats.visited++;
+        visit(other);
       }
-      if (entry.epoch === baseEpoch()) return;
+      if (current()) return;
+      if (riderStats) riderStats.resumed++;
       // A visited rider's move changed a Base or the array: resume the
       // original reads after the last visited index.
       start = last + 1;
     }
   }
-  const epoch = baseEpoch(), found = [];
+  const epoch = baseEpoch(), riderEpoch = riderEpochOf(actor), found = [];
+  if (riderStats) { riderStats.scans++; riderStats.scanned += actors.length - start; }
+  const tScan = riderStats ? now() : 0;
   for (let i = start; i < actors.length; i++) {
     const other = actors[i];
     if (!other || baseOf(other) !== actor) continue;
     found.push(i);
+    if (riderStats) { riderStats.visited++; riderStats.scanMs += now() - tScan; }
     visit(other);
+    if (riderStats) riderStats.scanMs -= now() - tScan;
   }
+  if (riderStats) riderStats.scanMs += now() - tScan;
   // Record a complete, undisturbed scan only.
-  if (byMover && start === 0 && epoch === baseEpoch()) byMover.set(actor, {epoch, actors, riders: found});
+  if (byMover && start === 0 && epoch === baseEpoch() && riderEpoch === riderEpochOf(actor))
+    byMover.set(actor, {epoch, riderEpoch, actors, riders: found});
 }

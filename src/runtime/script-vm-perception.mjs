@@ -19,7 +19,7 @@ import {foldedNameId, nameSpelling} from './script-name-ids.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {execPawnAlliance} from './script-pawn-alliance.mjs';
 import {execAICanSee} from './script-pawn-perception.mjs';
-import {baseEpoch} from './base-epoch.mjs';
+import {actorsEpoch} from './base-epoch.mjs';
 
 /** The fields the Rust bodies read (percep.rs F_*), in index order:
  * [the spelling the JavaScript bodies read, key, cell kind]. */
@@ -242,18 +242,18 @@ export class PerceptionHost {
   /** js_level_actors: Level.Actors of the actor's level as (handle,
    * receiver info) pairs, 0 for an empty slot.
    *
-   * The list is kept while the array, its length and the base epoch
-   * (base-epoch.mjs) are unchanged. The epoch advances on every structural
-   * change of a Level.Actors array and on every storage event that changes a
-   * receiver info from readable to HOST or BOUND: poisoning, bulk restores,
-   * releases (the collection's freeObject), and host bindings
-   * (bindProperty). A change the other way (a poison cleared, an object
+   * The list is kept while the array, its length and the actors epoch
+   * (base-epoch.mjs) are unchanged. That epoch advances on every structural
+   * change of a Level.Actors array (SpawnActor's append and DestroyActor's
+   * removal included) and on every storage event that changes a receiver
+   * info from readable to HOST or BOUND: poisoning, bulk restores, releases
+   * (the collection's freeObject), and host bindings (bindProperty). A change the other way (a poison cleared, an object
    * attached later) leaves a stale HOST entry, whose fields Rust then reads
    * through JavaScript: slower, never different. PERCEPTION_DIFFERENTIAL
    * compares every reused list with a fresh build. */
   levelActors(run, handle) {
     const services = this.perceptionServices(), actor = this.receiver(run, handle);
-    const actors = services.levelActors(services.level(actor)), count = actors.length, epoch = baseEpoch();
+    const actors = services.levelActors(services.level(actor)), count = actors.length, epoch = actorsEpoch();
     const key = this.scanKey;
     if (key && key.actors === actors && key.count === count && key.epoch === epoch) {
       if (DIFFERENTIAL) this.checkScan(actors, count);

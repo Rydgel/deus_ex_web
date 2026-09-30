@@ -105,8 +105,8 @@ export function installLinkFields(host, instance, fields) {
         get() { check(instance); return readCell(cell, instance.arena.view, instance.refs, instance.base); },
         set(value) {
           check(instance);
+          // writeCell counts the Base change for the rider lists.
           writeCell(cell, instance.arena.view, instance.refs, codec.copy(pointer(value)), instance.base);
-          bumpBaseEpoch();
         },
       };
     } else {

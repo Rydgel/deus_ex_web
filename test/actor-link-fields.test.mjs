@@ -4,7 +4,7 @@ import {readFile, readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {installLinkFields, linksField, hasLinkField, isLinkProp, resetLinkField} from '../src/runtime/actor-link-fields.mjs';
-import {baseEpoch} from '../src/runtime/base-epoch.mjs';
+import {baseEpoch, riderEpochOf} from '../src/runtime/base-epoch.mjs';
 import {handleOf} from '../src/runtime/script-object-handles.mjs';
 
 // Stage 1e step 4 (docs/rust-core.md "1e-4"): an attached map actor's Base
@@ -64,9 +64,12 @@ test('a map actor\'s Base and Touching members are its image cells at the retail
   // The script field and the host member are one storage, both ways.
   assert.equal(runtime.readNamed(host, 'Base'), floor);
   assert.deepEqual(runtime.readNamed(host, 'Touching'), [other, null, third, null]);
-  const before = baseEpoch();
+  // A Base store counts on the old and the new base (base-epoch.mjs), not
+  // on the global epoch.
+  const before = baseEpoch(), counts = [riderEpochOf(floor), riderEpochOf(other)];
   host.base = other;
-  assert.ok(baseEpoch() > before, 'a host Base store bumps the base epoch');
+  assert.equal(baseEpoch(), before, 'a host Base store leaves the base epoch');
+  assert.deepEqual([riderEpochOf(floor), riderEpochOf(other)], counts.map(c => c + 1), 'a host Base store counts on both bases');
   assert.equal(runtime.readNamed(host, 'Base'), other);
   assert.equal(word(host, 0xc4), handleOf(other));
   runtime.writeNamed(host, 'Base', null);

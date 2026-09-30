@@ -49,7 +49,7 @@ import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
-import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
 import { bumpReceiverEpoch } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
@@ -2573,8 +2573,9 @@ export class ScriptRuntime {
     const instance=this.instance(receiver);
     // A binding makes the receiver BOUND for the Rust core: the perception
     // natives' Level.Actors list (script-vm-perception.mjs) is rebuilt, and
-    // the receiver table computes the receiver again.
-    bumpBaseEpoch();
+    // the receiver table computes the receiver again. Only a binding of
+    // Actor.Base changes what a rider scan reads (base-epoch.mjs).
+    if(field.key==='engine.actor.base')bumpBaseEpoch();else bumpActorsEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
       if(mirrored){instance.bindings.set(field.key,mirrored);bumpReceiverEpoch();return;}

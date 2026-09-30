@@ -262,8 +262,10 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
      tests, riders, touches, bumps, the hash and the zone update are the
      reference's functions behind one import each. The
      [noncolliding spawned rider slice](rider-move-kernel.md) already ran
-     against the image. **B4b**, next: the rider pass (`moveActorRiders`,
-     about 1.3 ms per Island tick) in Rust, then the Touching slot logic.
+     against the image. **B4b: done (September 30, "R3-b B4b" below).**
+     The rider pass's cost was its scan cache's global invalidation, not
+     the pass: the invalidation is per mover now and the scans are gone;
+     the pass stays in JavaScript over the rider kernel.
    * **B5: done (September 30, "R3-b B5" below).** The dry walking loop
      runs in Rust on the pawn's image over B3's kernels and calls B4's
      MoveActor directly; Island's median tick 13.13 → 11.66 ms. Falling
@@ -722,7 +724,8 @@ no locals that need destruction runs in Rust.
 
 **R2b-4 — Object stores and compound assignment (implemented).** Since
 R1a-2 an object assignment is a handle store: a local, a field of `Self`
-(except `Actor.Base`, whose store also bumps the base epoch in JavaScript) or
+(except `Actor.Base`, whose store also counts the change for the rider lists
+in JavaScript, base-epoch.mjs) or
 a scalar struct member of either. Object parameters are stored the same way.
 Core's `<=`/`>=` on ints (152/153) and `<=` on floats (178, which reads an
 undefined operand as 0) join the operators. `+=`, `-=` and `*=` on floats
@@ -1430,9 +1433,8 @@ Verification (September 30):
   value is structural: B5 can call `move_pawn` directly from the walking
   loop on the image instead of building the view and the services per
   call, and B4b can move the rider pass next to it.
-* **Then:** B5 (done, next section), B4b the rider pass in Rust
-  (`js_move_riders` is the largest single import behind `js_tick_physics`
-  once the loop is in Rust), B6 falling, landing and rotation.
+* **Then:** B5 and B4b (done, next sections); B6 falling, landing and
+  rotation waits for the rethink recorded after B4b.
 
 **R3-b B5 — The walking loop on the image (designed and implemented,
 September 30).** B4's
@@ -1593,8 +1595,110 @@ hook, and `pawn.walking` tries `services.walkLoop` first.
   own cost inflates the high-count rows; read the split. What is left of
   the pawn-physics family is the tick body outside the walking loop
   (physicsRotation, falling, flying, swimming, the player), the surface
-  prelude and the rider pass: B4b (riders) and the prelude are the next
-  targets, then B6.
+  prelude and the rider pass: B4b (riders, next section) and the prelude
+  were the next targets.
+
+**R3-b B4b — The rider pass (implemented, September 30).** The plan had
+the rider pass (`moveActorRiders`, move-riders.mjs) going to Rust. The
+measurement said otherwise. `RIDER_STATS=1` on Island (60 warm and 300
+measured ticks): 10,373 calls, about 29 per tick, visiting 85 riders per
+tick; 1,372 full `Level.Actors` scans reading 3.55 million Base cells,
+1.06 ms per tick, against 0.25 ms per tick in the visits (the rider
+kernel's entry and the x87 rotation term). The pass was the scan, and the
+scan ran because the cache's one global epoch advanced on events that
+cannot change a rider list: every Base write anywhere (a pawn changing
+base invalidated the lists of all 28 movers), every SpawnActor append and
+DestroyActor removal, and every host binding of any property
+(`bindNativeObject` on a spawned native object binds five). Each
+invalidation cost about nine scans of 2,590 actors.
+
+* **The change** (base-epoch.mjs, move-riders.mjs, and the Base storage
+  paths). A Base write counts on the old and the new base only
+  (`noteBaseChange`), from the four places a Base is stored: the image
+  cell (`writeCell`, so a script store, a native store and the map actor's
+  `base` accessor all count), the host binding's setter (script-doors), the
+  player's movement port, and the recovered SetBase. A mover's rider list
+  records that count beside the epoch, so a Base change elsewhere leaves it
+  in use. The epoch keeps the events that can move an index or change what
+  a read returns: compaction, a reinsertion, a slot written from script,
+  bulk restores, poisoning, releases, a binding of Actor.Base. SpawnActor's
+  append and DestroyActor's removal move no index, and the cached pass
+  skips a nulled slot as the original loop does (the removed actor's Base
+  changes were counted when they happened), so they advance only a second
+  counter, `actorsEpoch`, that the perception natives' Level.Actors list
+  follows (it must see every spawn and every binding). Exactness holds: a
+  list is the list a scan would produce while no index moved and no actor's
+  Base changed to or from the mover, and every Base store passes through a
+  counting path.
+* **Result** (same run, same digest `b767a7e417fe5968`): 90 scans instead
+  of 1,372, 229 thousand Base reads instead of 3.55 million, 0.10 ms per
+  tick in scans instead of 1.06; 45 of the remaining scans are first calls
+  of a mover and 45 follow the two epoch advances of the run. The visits
+  stay at 0.25 ms. `RIDER_VERIFY=1` finds no cached list different from a
+  scan on Island (300 ticks) or Training (120); `PERCEPTION_DIFFERENTIAL=1`
+  finds all 157 reused perception lists equal to a fresh build; the digests
+  are unchanged on both maps; `test/rider-cache.test.mjs` fixes the
+  invalidation rules.
+* **Cost, interleaved A/B** (Island, 300 measured ticks, `.work/base` at
+  f006def against this tree, medians in ms per tick): 13.19/13.01,
+  12.22/10.85, 11.99/14.04, 13.30/11.64 (base/tree). Three pairs favour
+  the tree by 0.2 to 1.7 ms; the third reverses with an 83 ms maximum on
+  the tree side, an outside disturbance. Four pairs were the budget at
+  this gate, so the gain is recorded as about 1 ms with that reservation,
+  consistent with the 0.96 ms the scan counters removed.
+* **Why not Rust.** The original scans Level.Actors linearly on every
+  rider pass; a Rust scan of 2,590 image Base cells would still cost about
+  30 µs per call, 0.8 ms per tick over 29 calls, more than the cache it
+  would replace. What the family has left is the 0.25 ms of visits, most
+  of it already in the rider kernel. The family is closed at 0.35 ms.
+
+**Where the frame stands after B4b, and the question for the rethink
+(September 30, evening).** The per-family Rust moves of R3-b returned
+about 1.5 ms per tick each (B5) or less (B4, B4b), for about a day each.
+The target is 8.3 ms of host work per frame; the Island walk profile
+(idle, `--walk --no-profile`, 300 frames) is 29.4 ms:
+
+| Phase | ms per frame | What it is |
+|---|---:|---|
+| tick | 12.9 (11.9 with B4b) | the script tick: Rust interpreter about 3, JavaScript behind imports about 9 (dispatch plumbing 3.3, JavaScript-valued natives 3.3, pawn physics tail 2.3, surface prelude 1.4) |
+| actors | 9.7 | the NPC mesh update: per-vertex lighting 2.35 and GetFrame 1.44 in the lodmesh Wasm kernel, about 3.5 of JavaScript around them (npc-mesh-preview 2.0, mesh-lighting-view 1.1, mesh-environment 0.35), about 2 of three.js state and buffer uploads |
+| render | 3.3 | three.js draw submission (642 main calls) |
+| HUD | 2.6 | the original window system's per-frame draw |
+| lighting, mirrors, rest | 1.0 | moving lights, mirror planes, animate |
+
+The GPU is idle at 1.46 ms per frame (the timer instrument above). No
+family is larger than 4 ms, and the frame must shrink 3.5 times, so the
+family-by-family path reaches about 60 fps (a 16.7 ms frame) and not 120.
+The options that change the equation, each the user's call:
+
+1. **The tick on a worker.** The frame becomes max(tick, the rest) instead
+   of the sum: about max(12, 17) = 17 ms today, so 60 fps at once, and the
+   render side then needs its own halving for 120. Cost: the render side
+   reads actor state (Location, Rotation, Mesh, AnimFrame, lighting) that
+   the tick writes, so the tick must publish a frame snapshot (a copy of
+   the image cells the renderer reads, one memcpy per frame from the
+   arena) and input must be queued to the worker. The original game is
+   single-threaded; a snapshot boundary is host structure, not behaviour.
+2. **Mesh animation and lighting on the GPU.** GetFrame's keyframe
+   interpolation and FLightManager's per-vertex lighting are vertex-shader
+   work; the GPU has 15 ms of idle time per frame. Removes most of the
+   9.7 ms actors phase (the kernel's 3.8, the JavaScript glue and the
+   uploads) and leaves the per-actor decisions (visibility, style, light
+   selection) in JavaScript. Fidelity: the CPU kernels are oracle-exact
+   against Render.dll's x87 arithmetic; a GPU version computes in float32
+   in a different order and must be validated against the CPU reference
+   to a stated tolerance per vertex. It is a rendering substitute of the
+   kind AGENTS.md admits for visuals when the reference stays beside it.
+3. **Continue the tick in Rust, in blocks not families.** Event and
+   state dispatch (3.3 ms, step 3 of the next-steps list) and the
+   JavaScript-valued natives (3.3 ms) are the remaining tick blocks; each
+   is a multi-day step and each is worth about 2 to 3 ms. With B6 and the
+   prelude the tick could reach about 5 ms; without 1 or 2 the frame stays
+   above 20 ms.
+4. **A 60 fps target.** 16.7 ms per frame is reachable on the current path
+   (about 3 ms of tick work away after B4b), with no structural change.
+
+A rethink decides between these before B6.
 
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script
@@ -2292,8 +2396,8 @@ checked once per class cell against the linked layout).
   `slots()` in actor-touch.mjs (Array.isArray, length, indexOf, element
   stores, `fill`) and the binding-era `host.touching = [...]` assignments
   (the Player start reload, `prepareActor`) store into the cells. Every
-  `base` store bumps the base epoch, as the binding's setter did; a store
-  through `writeNamed` bumps it in `writeInstanceField`.
+  `base` store counts the Base change for the rider lists (`noteBaseChange`
+  in `writeCell`, base-epoch.mjs), as the binding's setter does.
 * **Bindings.** makeBinding returns null for both keys on every attached
   actor except the controlled player, whose `base` is the movement port's
   (player.mjs) and stays bound with its Touching until 1e-6. `boundKeys`

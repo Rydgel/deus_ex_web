@@ -645,12 +645,19 @@ validators and a browser run.
   reads skip the second struct copy (`structValue`).
 * **Rider scan cache** (`move-riders.mjs`, `base-epoch.mjs`). The MoveActor
   rider pass reuses a mover's rider list from a full `Level.Actors` scan while
-  a global epoch is unchanged. The epoch advances on every Base write (image
-  cell, slot, host binding and record), every structural `Level.Actors`
-  change, bulk restores, poisoning and releases. If a rider's move advances
-  it, the original loop resumes reading from the next index.
-  `RIDER_VERIFY=1` compares each cached list with a full scan (no mismatch
-  over the Island, Training and Battery Park runs). Tick: about 2.5–3 ms less.
+  the base epoch and the mover's own Base-change count are unchanged. The
+  epoch advances on every `Level.Actors` change that moves an index, on
+  bulk restores, poisoning, releases and a binding of Actor.Base; a Base
+  write counts on the old and the new base only (`noteBaseChange`, from the
+  image cell, the host binding, the player's port and SetBase), so a Base
+  change elsewhere leaves a mover's list in use; SpawnActor's append and
+  DestroyActor's removal move no index and the pass skips a nulled slot as
+  the scan does. If a rider's move changes either counter, the original loop
+  resumes reading from the next index. `RIDER_VERIFY=1` compares each cached
+  list with a full scan (no mismatch over the Island, Training and Battery
+  Park runs); `RIDER_STATS=1` counts calls, hits, scans and their time.
+  Tick: about 2.5–3 ms less for the cache; the per-mover count took the
+  remaining scans from 1.06 to 0.10 ms per Island tick (rust-core.md B4b).
 * **Iterator and event paths.**
   * `classIsA` memoizes class-chain tests per class for the actor iterators.
   * `ConBindEvents` reloads its object array only after a candidate.

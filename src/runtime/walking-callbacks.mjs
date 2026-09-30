@@ -1,5 +1,5 @@
 import {safeNormal} from './steps.mjs';
-import {bumpBaseEpoch} from './base-epoch.mjs';
+import {noteBaseChange} from './base-epoch.mjs';
 import {identityOf} from './actor-touch.mjs';
 const f=Math.fround;
 
@@ -16,7 +16,7 @@ export function setBase(pawn,target,dispatch,notify=true){
   old.standingCount=(old.standingCount-1)&255;
   dispatch(old,'Detach',[pawn]);
  }
- pawn.base=target;bumpBaseEpoch();
+ pawn.base=target;noteBaseChange(old,target);
  if(target && target!==pawn.worldActor){
   target.standingCount=(target.standingCount+1)&255;
   dispatch(target,'Attach',[pawn]);

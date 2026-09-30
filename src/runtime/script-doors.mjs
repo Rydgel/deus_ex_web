@@ -22,7 +22,7 @@ import { installMirrorFields, mirrorsField, resetMirrorField, imageField, PLAYER
 import { installPoseFields, posesField, resetPoseField, isPoseProp, keepLivePose, imagePoseField } from './actor-pose-fields.mjs';
 import { installLinkFields, linksField, isLinkProp, resetLinkField } from './actor-link-fields.mjs';
 import { setBase } from './walking-callbacks.mjs';
-import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpBaseEpoch, noteBaseChange } from './base-epoch.mjs';
 import { setActorZone } from './zone.mjs';
 import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
@@ -175,7 +175,7 @@ function makeBinding(runtime, record, field) {
     },
     base: {
       get: () => host.base ?? null,
-      set: value => { host.base = value; bumpBaseEpoch(); },
+      set: value => { const old = host.base ?? null; host.base = value; noteBaseChange(old, value ?? null); },
     },
     // The live four `Touching` slots (Actor.uc:186) are kept on the host actor
     // by the recovered BeginTouch/EndTouch pair (actor-touch.mjs). Script reads
