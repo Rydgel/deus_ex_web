@@ -8,6 +8,9 @@
  *     [--map 01_NYC_UNATCOIsland] [--walk] [--frames 300] [--tag name] [--alloc] [--counts]
  *     [--no-mirrors] [--no-mesh-lighting] [--no-sky] [--no-simulation]
  *     [--size 1440x960] [--dpr 1] [--settle 3000] [--bypass]
+ *     [--no-profile] (wall-clock phases without CPU sampling overhead)
+ *     [--draw-counts] (count submitted mesh groups after timing)
+ *     [--fixed-dt seconds] (explicit fixed-step comparison workload, not live FPS)
  *
  * The raw .cpuprofile is written to .cache/perf/<tag>.cpuprofile (outside Git).
  * `phases` is deusExViewer.framePhases(): wall ms per animate() phase.
@@ -26,6 +29,11 @@ const url=option('url','http://127.0.0.1:5173'),frames=Number(option('frames',30
 const map=option('map',null);
 const [width,height]=option('size','1440x960').split('x').map(Number),dpr=Number(option('dpr',1));
 const walk=process.argv.includes('--walk'),alloc=process.argv.includes('--alloc'),counts=process.argv.includes('--counts');
+const profiled=!process.argv.includes('--no-profile');
+const drawCounts=process.argv.includes('--draw-counts');
+const fixedDt=Number(option('fixed-dt',0));
+if(!Number.isFinite(fixedDt)||fixedDt<0||process.argv.includes('--fixed-dt')&&fixedDt===0)
+  throw new Error('--fixed-dt must be a finite positive number');
 const noMirrors=process.argv.includes('--no-mirrors'),noMeshLighting=process.argv.includes('--no-mesh-lighting');
 const noSky=process.argv.includes('--no-sky'),noSimulation=process.argv.includes('--no-simulation');
 const bypass=process.argv.includes('--bypass'),settle=Number(option('settle',3000));
@@ -37,8 +45,13 @@ const browser=await chromium.launch({args:['--use-angle=metal']});
 try {
   const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:dpr});
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-  if(noMirrors||noMeshLighting||noSky||noSimulation)await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/,async route=>{
+  if(noMirrors||noMeshLighting||noSky||noSimulation||fixedDt)await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/,async route=>{
     const response=await route.fetch();let body=await response.text();
+    if(fixedDt){
+      const original='const dt = Math.max(0, (time - lastTime) / 1000);';
+      if(!body.includes(original))throw new Error('Fixed-step measurement patch no longer matches animate()');
+      body=body.replace(original,`const dt = ${fixedDt};`);
+    }
     if(noMirrors)body=body.replace('world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,',
       'false && world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,');
     if(noMeshLighting)body=body.replace('if(meshLighting&&!runtimeError){','if(false&&meshLighting&&!runtimeError){');
@@ -65,9 +78,11 @@ try {
   if(walk)await page.keyboard.down('KeyW');
   await page.evaluate(()=>window.deusExViewer.framePhases(true));
   const cdp=await page.context().newCDPSession(page);
-  await cdp.send('Profiler.enable');
-  await cdp.send('Profiler.setSamplingInterval',{interval:200});
-  await cdp.send('Profiler.start');
+  if(profiled){
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval',{interval:200});
+    await cdp.send('Profiler.start');
+  }
   const intervals=await page.evaluate(async frames=>{
     const samples=[];let last=performance.now();
     for(let i=0;i<frames;i++){const now=await new Promise(requestAnimationFrame);samples.push(now-last);last=now;
@@ -76,16 +91,18 @@ try {
   },frames);
   const phaseTotals=await page.evaluate(()=>window.deusExViewer.framePhases(true));
   perFrameCount=Math.max(1,intervals.length);
-  const {profile}=await cdp.send('Profiler.stop');
-  await mkdir('.cache/perf',{recursive:true});
-  await writeFile(`.cache/perf/${tag}.cpuprofile`,JSON.stringify(profile));
+  const profile=profiled?(await cdp.send('Profiler.stop')).profile:null;
+  if(profile){
+    await mkdir('.cache/perf',{recursive:true});
+    await writeFile(`.cache/perf/${tag}.cpuprofile`,JSON.stringify(profile));
+  }
 
   // Inclusive time per animate() callee; samples outside animate keep their
   // top-level frame, e.g. (garbage collector) or (program).
-  const byId=new Map(profile.nodes.map(node=>[node.id,node])),parent=new Map();
-  for(const node of profile.nodes)for(const child of node.children??[])parent.set(child,node.id);
+  const byId=new Map((profile?.nodes??[]).map(node=>[node.id,node])),parent=new Map();
+  for(const node of profile?.nodes??[])for(const child of node.children??[])parent.set(child,node.id);
   const buckets=new Map();let sampled=0;
-  for(let i=0;i<profile.samples.length;i++){
+  for(let i=0;i<(profile?.samples.length??0);i++){
     const ms=profile.timeDeltas[i]/1000,path=[];sampled+=ms;
     for(let id=profile.samples[i];id!==undefined;id=parent.get(id))path.unshift(byId.get(id));
     const at=path.findIndex(node=>node.callFrame.functionName==='animate'&&node.callFrame.url.includes('main.mjs'));
@@ -94,14 +111,14 @@ try {
   }
   const sorted=intervals.toSorted((a,b)=>a-b),pct=p=>+sorted[Math.min(sorted.length-1,Math.floor(p*sorted.length))].toFixed(1);
   const measured=intervals.length;
-  const report={tag,url,map,walk,frames:measured,stoppedAt:phaseTotals.runtimeError,bypass,
-    size:`${width}x${height}`,dpr,noMirrors,noMeshLighting,noSky,noSimulation,
+  const report={tag,url,map,walk,frames:measured,profiled,stoppedAt:phaseTotals.runtimeError,bypass,
+    size:`${width}x${height}`,dpr,noMirrors,noMeshLighting,noSky,noSimulation,fixedDt:fixedDt||null,
     intervalMs:{mean:+(intervals.reduce((a,b)=>a+b,0)/measured).toFixed(2),median:pct(.5),p95:pct(.95),max:pct(1),
       missedVsync:intervals.filter(ms=>ms>20).length},
     phases:Object.fromEntries(Object.entries(phaseTotals).filter(([key,value])=>typeof value==='number'&&key!=='frames')
       .map(([key,value])=>[key,+(value/Math.max(1,phaseTotals.frames)).toFixed(2)])),
-    cpuMsPerFrame:{sampled:perFrame(sampled),...Object.fromEntries([...buckets].sort((a,b)=>b[1]-a[1])
-      .filter(([,ms])=>perFrame(ms)>=.05).map(([key,ms])=>[key,perFrame(ms)]))}};
+    cpuMsPerFrame:profile?{sampled:perFrame(sampled),...Object.fromEntries([...buckets].sort((a,b)=>b[1]-a[1])
+      .filter(([,ms])=>perFrame(ms)>=.05).map(([key,ms])=>[key,perFrame(ms)]))}:null};
 
   if(alloc){
     await cdp.send('HeapProfiler.enable');
@@ -133,8 +150,39 @@ try {
       return Object.fromEntries(Object.entries(calls).map(([name,count])=>[name,Math.round(count/60)]));
     });
   }
+  if(drawCounts){
+    // Inspect actual submissions after timing; this diagnostic callback must
+    // not inflate the measured render cost. A double-sided transparent mesh
+    // can produce two WebGL calls for one onBeforeRender callback.
+    report.meshSubmissions=await page.evaluate(async()=>{
+      const source=performance.getEntriesByType('resource').map(entry=>entry.name)
+        .find(name=>/\/three(?:\.js|\/)/.test(name));
+      if(!source)throw new Error('Cannot locate the renderer module for draw counts');
+      const {Mesh}=await import(source),original=Mesh.prototype.onBeforeRender;
+      const totals={};let frames=0;
+      Mesh.prototype.onBeforeRender=function(renderer,scene,camera,geometry,material,group){
+        const kind=camera.isOrthographicCamera?'hud':this.userData.model?
+          (this.userData.actor?'movers':'world'):this.userData.actor?'actors':'other';
+        const row=totals[kind]??={groups:0,triangles:0};row.groups++;
+        row.triangles+=Math.min(geometry.drawRange.count,group?.count??Infinity,
+          geometry.index?.count??geometry.attributes.position.count)/3;
+        return original.apply(this,arguments);
+      };
+      try{while(frames<30){
+        await new Promise(requestAnimationFrame);frames++;
+        if(window.deusExViewer.framePhases(false).runtimeError)break;
+      }}finally{Mesh.prototype.onBeforeRender=original;}
+      return {frames,...Object.fromEntries(Object.entries(totals).map(([kind,row])=>[kind,
+        Object.fromEntries(Object.entries(row).map(([key,total])=>[key,+(total/Math.max(1,frames)).toFixed(1)]))]))};
+    });
+  }
   if(walk)await page.keyboard.up('KeyW');
   const state=await page.evaluate(()=>{const s=window.deusExViewer.status();
-    return {mode:s.mode,paused:s.paused,runtimeError:s.runtimeError,drawCalls:s.calls,mirrors:s.mirrors};});
+    const gl=document.getElementById('scene').getContext('webgl2'),debug=gl.getExtension('WEBGL_debug_renderer_info');
+    return {mode:s.mode,paused:s.paused,runtimeError:s.runtimeError,drawCalls:s.calls,mirrors:s.mirrors,
+      gpu:debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER)};});
   console.log(JSON.stringify({...report,state,errors},null,1));
+  // Keep partial diagnostics, but do not let a stopped/paused workload pass
+  // as a successful performance check (a frozen simulation can look fast).
+  if(errors.length||state.runtimeError||state.paused||state.mode!=='play'||measured!==frames)process.exitCode=1;
 } finally {await browser.close();}
