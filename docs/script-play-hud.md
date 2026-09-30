@@ -71,6 +71,34 @@ identity against the original rasterizer is not established. Original 3D mesh
 lighting also remains separate from this HUD work. Window audio requests are
 recorded at their native call boundary until a playback backend is connected.
 
+## Compositor batching boundary
+
+The recovered native GC and Window traversal determine the ordered tile/glyph
+command stream; the compositor must retain its texture, draw style, clipping,
+source extents, tint and triangle order. A consecutive run of commands using
+the same GPU material can share one vertex buffer and submission: depth tests
+and writes are disabled for every HUD material, and the ordered triangles use
+the same blend factors. A material change ends the run, including a return to
+an earlier texture after an intervening command. No window script or GC command
+is skipped or cached. This is a host submission change, not a change to native
+window behavior or evidence of original rasterizer pixel identity.
+
+`node --test test/hud-compositor.test.mjs` compares the emitted Float32
+positions, UVs and tints and ordered styles against the previous individual
+tile adapter, including clipping, texture changes, overlapping blend styles,
+buffer growth and reuse. The original-window integration validator below
+continues to cover the command source.
+
+An isolated Chromium/Metal render comparison against the individual-tile
+adapter at `1a17e36` found no differences across 1,536,000 RGBA channels in five
+320×240 frames. The frames cover masked, opaque, translucent and modulated
+styles, overlapping tiles, clipping, interleaved materials, empty output and
+buffer reuse/growth. A 151-command fixture became three submissions and a
+257-command glyph run became one; a 90-command interleaved-material fixture
+retained all 90 submissions. Local check sources are `.work/hud-pixels.mjs`
+and `.work/hud-reference.mjs`, outside Git. This is adapter equivalence,
+not an additional claim about the original rasterizer.
+
 ## Focused validation
 
 `node scripts/validate-play-hud.mjs` exercises the live original HUD tree,
