@@ -47,6 +47,22 @@ mutates the fade caches, so it stays a per-frame translation of the
 original; moving it to the Rust core over the object image is the next
 step for this phase.
 
+Render-side follow-ups the same night, each an interleaved Island A/B of
+3 pairs against the preceding commit (medians, ms per frame):
+
+| Change | Phase | Before | After | Frame after |
+|---|---|---:|---:|---:|
+| two-sided groups as back/front twins | render | 3.04 | 2.51 | 20.94 |
+| Level.Actors name map on `actorsEpoch` | lighting | 0.68 | 0.49 | |
+| draw batches for opaque GPU-path groups | render | 2.53 | 1.75 | 19.98 |
+
+A three.js program census explained the first: 138 `getProgram` calls per
+frame, all from transparent double-sided materials that three.js dirties
+twice per draw (its back-then-front pass); 12 remain on world lightmap
+surfaces. Batching halves the main-pass draw calls (642 → 325). Both are
+pixel-identical in same-frame comparisons and keep render feedback
+unchanged; details in [GPU mesh](gpu-mesh.md#draw-batches-and-two-sided-groups).
+
 ## September 30: GPU time isolated
 
 `scripts/profile-play-browser.mjs --gpu` sets the viewer's `?gpuTimer=1`,

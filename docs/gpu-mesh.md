@@ -261,6 +261,36 @@ by the box centre, so two translucent or modulated groups at nearly equal
 depth can draw in a different order than on the CPU path. This changes no
 visibility decision or render feedback.
 
+## Draw batches and two-sided groups
+
+With positions and colours fetched from these textures, a group's draw no
+longer needs its own vertex buffers, so opaque and masked groups of
+different actors that share one material state (texture, side, alpha test,
+environment flag, original lighting on) are drawn by one three.js mesh
+(`src/viewer/actor-batches.mjs`). Each member keeps the per-group, per-pass
+decision above as a flag in a small texture; a hidden member's vertices are
+placed beyond the far plane. After a batch is drawn, every member visible in
+that pass stamps its actor's `LastRenderTime`, exactly the groups whose own
+meshes three.js would have drawn and whose `onAfterRender` would have run.
+Translucent and modulated groups keep their own meshes and their sort.
+Opaque draw order between different actors changes; only exactly coplanar
+overlapping faces of two actors could resolve their depth tie differently.
+
+three.js draws a transparent double-sided material as a back-face and a
+front-face draw, flipping `material.side` and marking the material dirty
+twice per draw, which re-derives its program every frame. Two-sided groups
+instead keep back-side and front-side materials and a twin mesh sharing the
+geometry, created right after the group's mesh (adjacent ids keep the pair
+consecutive in the transparent sort): the same two draws, back first.
+
+Evidence (same-frame comparisons, one callback, headless Chromium/Metal):
+batches vs the members' own meshes differ in 0 bytes on Training (186
+groups in 71 batches) and Island (464 groups in 123 batches); twins vs
+three.js's own two-pass differ in 0 bytes at four NPC close-ups. Over 120
+walking frames, every GPU-path actor's `LastRenderTime` equals the frame's
+`TimeSeconds` exactly when one of its groups was decided visible (26,400
+checks on Island, 7,679 on Training).
+
 ## Tolerances
 
 Stated before implementation; the validator fails beyond them.
@@ -368,7 +398,9 @@ pass solo: `validate-native-mover-scene` (report race),
 in the git-ignored `reports/`, absent in a fresh worktree) and
 `validate-player-tick-order` (killed at the runner's 6 GB cap under memory
 pressure; exit 0 alone). The Island digest after the sweep is still
-`b767a7e417fe5968`.
+`b767a7e417fe5968`. A second sweep after the render-side follow-ups (branch
+head `f436336`) passed 443 of 444; the one failure was again
+`validate-player-tick-order` at the memory cap, which passes alone.
 
 **Browser specs** (`npx playwright test`, run from the worktree with its own
 servers): 10 of 18 pass; the same 8 fail identically on master in this
@@ -379,6 +411,12 @@ time out on both. Because the passes are slower than the kernels on a
 software implementation, the viewer keeps the CPU path when the WebGL
 renderer is SwiftShader, llvmpipe or another software renderer, unless
 `?gpuMesh=1` forces the GPU path.
+
+**Render-side follow-ups** (interleaved Island A/B, 3 pairs each, medians):
+twins instead of the per-draw side flip cut three.js program re-checks from
+138 to 12 per frame, render 3.04 → 2.51 ms; draw batches cut main-pass draw
+calls from 642 to 325, render 2.53 → 1.75 ms. The frame is then about
+20 ms (tick about 11.4, actors about 3.8, HUD about 2.1, render about 1.8).
 
 **Known differences and limits:**
 
