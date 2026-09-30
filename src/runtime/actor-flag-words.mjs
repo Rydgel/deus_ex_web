@@ -1,0 +1,144 @@
+/**
+ * AActor's native flag words as the actor's object-image bytes (stage 1e
+ * step 1, docs/rust-core.md "1e-1").
+ *
+ * Retail AActor (sdk-layouts.mjs, checked against the GOTY DLLs) packs these
+ * script bools into three dwords that native code reads as members:
+ *   +0x028  bStatic 0x1, bDeleteMe 0x80, bCollideWhenPlacing 0x20000,
+ *           bMovable 0x80000 (with bHidden, bNoDelete, ... in other bits)
+ *   +0x1dc  bCollideActors 0x1, bCollideWorld 0x2, bBlockActors 0x4,
+ *           bBlockPlayers 0x8, bProjTarget 0x10
+ *   +0x1ec  bSpecialLit 0x1 ... bBounce 0x10, bFixedRotationDir 0x20,
+ *           bRotateToDesired 0x40, bInterpolating 0x80, bJustTeleported 0x100
+ *
+ * The linker places the script bools at exactly these offsets and masks
+ * (validated per class below), so a host member that reads the dword is the
+ * same storage as the script fields. A map actor's `flags`, `actorFlags` and
+ * `motionFlags` are accessors over its image; the script fields need no host
+ * binding, and the Rust interpreter reads them from memory.
+ *
+ * Each accessor keeps the bits the host model used before:
+ *   `flags`       the whole +0x1dc word (bits 0-4);
+ *   `actorFlags`  bStatic | bDeleteMe | bCollideWhenPlacing | bMovable, the
+ *                 bits the level-load host word carried (the spawned-actor
+ *                 view composes the same four), so bHidden (0x2) still reads
+ *                 as clear (script-iterators.mjs VisibleActors);
+ *   `motionFlags` the whole +0x1ec word (bits 0-8).
+ * The per-bit members the collision code reads (`collisionBits`,
+ * `collideActors`, `collideWorld`, `blockActors`, `blockPlayers`,
+ * `blocking`, `static`, `movable`) derive from the same words.
+ *
+ * The image range is fixed for the object's life, and every access re-reads
+ * the arena's current view, so no view outlives a memory growth.
+ */
+import {scalarCell} from './script-object-image.mjs';
+
+export const COLLISION_WORD = Object.freeze({name: 'collision', offset: 0x1dc, mask: 0x1f,
+  bits: Object.freeze({bcollideactors: 0x1, bcollideworld: 0x2, bblockactors: 0x4, bblockplayers: 0x8, bprojtarget: 0x10})});
+export const ACTOR_WORD = Object.freeze({name: 'actor', offset: 0x28, mask: 0xa0081,
+  bits: Object.freeze({bstatic: 0x1, bdeleteme: 0x80, bcollidewhenplacing: 0x20000, bmovable: 0x80000})});
+export const MOTION_WORD = Object.freeze({name: 'motion', offset: 0x1ec, mask: 0x1ff,
+  bits: Object.freeze({bspeciallit: 0x1, bactorshadows: 0x2, bcorona: 0x4, blensflare: 0x8, bbounce: 0x10,
+    bfixedrotationdir: 0x20, brotatetodesired: 0x40, binterpolating: 0x80, bjustteleported: 0x100})});
+const WORDS = [COLLISION_WORD, ACTOR_WORD, MOTION_WORD];
+
+// The installed words of a host (non-enumerable, so no host walk sees it).
+const FLAG_WORDS = Symbol('actorFlagWords');
+
+// Classes whose linked cells were checked against the words above.
+const checkedClasses = new WeakSet();
+/** Every bool of the three words must be linked at its native offset and
+ * mask; a class whose layout differs has no flag-word storage here. */
+function checkLayout(instance) {
+  const cls = instance.cls;
+  if (checkedClasses.has(cls)) return;
+  if (!instance.cells || !instance.base) throw new Error(`Actor flag words need an object image: ${cls?.record?.key}`);
+  for (const word of WORDS) for (const [name, mask] of Object.entries(word.bits)) {
+    const cell = scalarCell(instance.cells.get(`engine.actor.${name}`));
+    if (!cell || cell.kind !== 'bool' || cell.offset !== word.offset || cell.mask !== mask)
+      throw new Error(`Actor ${name} is not linked at +0x${word.offset.toString(16)} mask 0x${mask.toString(16)}: ${JSON.stringify(cell)}`);
+  }
+  checkedClasses.add(cls);
+}
+
+/** One flag word of one actor image: the masked dword at its offset. */
+class FlagWord {
+  constructor(instance, word) {
+    this.instance = instance; this.offset = word.offset; this.mask = word.mask;
+  }
+  get() {
+    const instance = this.instance;
+    if (instance.imageToken?.released) throw new Error('Script object allocation has been released');
+    return (instance.arena.view.getUint32(instance.base + this.offset, true) & this.mask) >>> 0;
+  }
+  set(value) {
+    const instance = this.instance;
+    if (instance.imageToken?.released) throw new Error('Script object allocation has been released');
+    const view = instance.arena.view, at = instance.base + this.offset;
+    view.setUint32(at, ((view.getUint32(at, true) & ~this.mask) | (value & this.mask)) >>> 0, true);
+  }
+}
+
+/** The instance's flag word (validated layout), for hosts outside the
+ * installer (the Player's motion word). */
+export function flagWord(instance, word) {
+  checkLayout(instance);
+  return new FlagWord(instance, word);
+}
+
+/** Whether `host` carries image-backed flag words, and which. */
+export const flagWordsOf = host => host?.[FLAG_WORDS] ?? null;
+
+const accessor = (get, set) => ({get, set, enumerable: true, configurable: false});
+const getter = get => ({get, enumerable: true, configurable: false});
+
+/** Replace a map host's flag members by accessors over its image. The
+ * host's current values must already equal the image (level load writes
+ * both from the same serialized properties); a difference is an error, not
+ * something to reconcile. */
+export function installActorFlagWords(host, instance, {collision = false, actor = false, motion = false}) {
+  checkLayout(instance);
+  if (host[FLAG_WORDS]) throw new Error(`Actor flag words are already installed: ${host.name}`);
+  const words = {collision: null, actor: null, motion: null};
+  const expect = (prop, word, value) => {
+    const stored = word.get();
+    if ((value >>> 0) !== stored)
+      throw new Error(`${host.name}.${prop} 0x${(value >>> 0).toString(16)} differs from its image word 0x${stored.toString(16)}`);
+  };
+  if (collision) {
+    const word = words.collision = new FlagWord(instance, COLLISION_WORD);
+    expect('flags', word, host.flags);
+    const flags = () => word.get();
+    Object.defineProperties(host, {
+      flags: accessor(flags, value => word.set(value >>> 0)),
+      collisionBits: getter(() => flags() & ~0x2),
+      collideActors: getter(() => Boolean(flags() & 0x1)),
+      collideWorld: getter(() => Boolean(flags() & 0x2)),
+      blockActors: getter(() => Boolean(flags() & 0x4)),
+      blockPlayers: getter(() => Boolean(flags() & 0x8)),
+      blocking: getter(() => Boolean(flags() & 0x8)),
+    });
+  }
+  if (actor) {
+    const word = words.actor = new FlagWord(instance, ACTOR_WORD);
+    expect('actorFlags', word, host.actorFlags);
+    if (host.static !== undefined && host.static !== Boolean(word.get() & 0x1)) throw new Error(`${host.name}.static differs from bStatic`);
+    if (host.movable !== undefined && host.movable !== Boolean(word.get() & 0x80000)) throw new Error(`${host.name}.movable differs from bMovable`);
+    Object.defineProperties(host, {
+      actorFlags: accessor(() => word.get(), value => word.set(value >>> 0)),
+      static: getter(() => Boolean(word.get() & 0x1)),
+      movable: getter(() => Boolean(word.get() & 0x80000)),
+    });
+  }
+  if (motion) {
+    const word = words.motion = new FlagWord(instance, MOTION_WORD);
+    if (host.motionFlags !== undefined) expect('motionFlags', word, host.motionFlags);
+    // A reset returns bJustTeleported to the serialized value
+    // (player-scene.mjs prepareActor), which is where the image starts.
+    if (Boolean(word.get() & 0x100) !== Boolean(host.values?.bJustTeleported))
+      throw new Error(`${host.name}.bJustTeleported image differs from its serialized value`);
+    Object.defineProperty(host, 'motionFlags', accessor(() => word.get(), value => word.set(value >>> 0)));
+  }
+  Object.defineProperty(host, FLAG_WORDS, {value: Object.freeze(words)});
+  return words;
+}

@@ -4,10 +4,11 @@
  *
  * A spawned actor carries a field-backed collision view
  * (script-actor-collision.mjs installActorCollisionView). A map actor is the
- * level-load host object itself: its `flags`, `position`, `radius`, `height`,
+ * level-load host object itself: its `position`, `radius`, `height`,
  * `rotation`, `base`, `standingCount` and `touching` are the native members,
- * and script-doors.mjs binds the matching script fields onto them. See
- * docs/script-map-actor-move.md.
+ * and script-doors.mjs binds the matching script fields onto them. Its flag
+ * words (`flags`, `actorFlags`, `motionFlags`) are accessors over its object
+ * image (actor-flag-words.mjs). See docs/script-map-actor-move.md.
  *
  * Retail AActor layout (sdk-layouts.mjs, checked against the GOTY DLLs):
  *   +0x1dc bit0 bCollideActors, bit1 bCollideWorld, bit2 bBlockActors,
@@ -16,10 +17,7 @@
  *   +0x12c OldLocation                                 -> host `oldLocation`
  */
 
-/** Script field name (lowercase) -> AActor +0x1dc bit. */
-export const COLLISION_FIELD_BITS = Object.freeze({
-  bcollideactors: 0x1, bcollideworld: 0x2, bblockactors: 0x4, bblockplayers: 0x8, bprojtarget: 0x10,
-});
+import { flagWordsOf } from './actor-flag-words.mjs';
 
 /** The +0x1dc word from serialized/default property values. */
 export function collisionFlagsFrom(values) {
@@ -35,6 +33,9 @@ export function collisionFlagsFrom(values) {
  * a stale bit. The hash is not touched: that is the caller's native body. */
 export function writeCollisionFlags(host, flags) {
   flags >>>= 0;
+  // An attached map actor's word is its image (actor-flag-words.mjs); the
+  // per-bit members derive from it.
+  if (flagWordsOf(host)?.collision) { host.flags = flags; return; }
   host.flags = flags;
   host.collisionBits = flags & ~0x2;
   host.collideActors = Boolean(flags & 0x1);

@@ -10,7 +10,7 @@
  *
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
- *     [--digest-every 0] [--json out.json] [--dump fields.txt]
+ *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
  *
  * --continue returns the declared zero value from unsupported natives (as the
  * census does) and --bypass skips the boundaries listed in bench-sim-hooks.mjs
@@ -77,6 +77,19 @@ if (argv.includes('--tickstats')) {
       const entry = tickStats.get(key) ?? {calls: 0, ms: 0};
       entry.calls++; entry.ms += realNow() - start; tickStats.set(key, entry);
     }
+  };
+}
+// --bound-reads: host binding get/set calls per tick by property key, over the
+// timed ticks (the reads stage 1e moves into the object image).
+const boundReads = new Map();
+if (argv.includes('--bound-reads')) {
+  const bindProperty = ScriptRuntime.prototype.bindProperty;
+  ScriptRuntime.prototype.bindProperty = function (receiver, field, binding) {
+    const count = kind => { const key = `${kind} ${field.key}`; boundReads.set(key, (boundReads.get(key) ?? 0) + 1); };
+    const {get, set} = binding;
+    return bindProperty.call(this, receiver, field, {...binding,
+      get: () => { if (globalThis.__boundReadsOn) count('get'); return get(); },
+      set: value => { if (globalThis.__boundReadsOn) count('set'); return set(value); }});
   };
 }
 const root = gameDirectory(), files = [];
@@ -330,7 +343,9 @@ const times = [], digests = [];
 globalThis.__callerOn?.(true);
 const cpuStart = process.cpuUsage();
 for (let i = 0; i < ticks; i++) {
+  globalThis.__boundReadsOn = true;
   const start = realNow(); step(); times.push(realNow() - start);
+  globalThis.__boundReadsOn = false;
   if (digestEvery && (i + 1) % digestEvery === 0) digests.push(digest());
 }
 const cpuUsed = process.cpuUsage(cpuStart);
@@ -362,6 +377,12 @@ if (counts.size) {
   for (const [key, n] of counts) { const label = key.split(' ')[1]; total.set(label, (total.get(label) ?? 0) + n); }
   report.countsPerTick = Object.fromEntries([...total].sort((a, b) => b[1] - a[1]).map(([key, n]) => [key, Math.round(n / ticks)]));
   report.countsByClass = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([key, n]) => `${(n / ticks).toFixed(0)} ${key}`);
+}
+if (argv.includes('--bound-reads')) {
+  report.boundReadsPerTick = Object.fromEntries([...boundReads].sort((a, b) => b[1] - a[1])
+    .map(([key, n]) => [key, +(n / ticks).toFixed(2)]));
+  // The keys the Rust interpreter leaves to JavaScript on bound receivers.
+  report.boundKeys = [...runtime.boundKeys ?? []].sort();
 }
 if (tickStats.size) report.tickStats = [...tickStats].sort((a, b) => b[1].ms - a[1].ms).slice(0, 25)
   .map(([key, e]) => `${(e.ms / ticks).toFixed(3)} ms ${(e.calls / ticks).toFixed(1)}/tick ${(e.ms / e.calls * 1000).toFixed(0)} us ${key}`);

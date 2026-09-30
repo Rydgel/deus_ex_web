@@ -903,6 +903,150 @@ What remains in the scan is Rust arithmetic: the world ray, the cell
 conversions (about 60 ns a query) and the software `sqrt` (about 25 ns),
 plus about 2.4 candidate reads per scan.
 
+**1e-1 — Actor flag words in the image (implemented).** This is step 1 of
+stage 1e ([object memory](object-memory.md#stages)). AActor packs its script
+bools into three dwords that native code reads as members (`sdk-layouts.mjs`
+AActor):
+
+| Word | Bits the host used | Host members |
+|---|---|---|
+| `+0x028` | bStatic 0x1, bDeleteMe 0x80, bCollideWhenPlacing 0x20000, bMovable 0x80000 | `actorFlags`, `static`, `movable` |
+| `+0x1dc` | bCollideActors, bCollideWorld, bBlockActors, bBlockPlayers, bProjTarget (bits 0-4) | `flags`, `collisionBits`, `collideActors`, `collideWorld`, `blockActors`, `blockPlayers`, `blocking` |
+| `+0x1ec` | bSpecialLit … bJustTeleported (bits 0-8; bJustTeleported 0x100) | `motionFlags` |
+
+Before this step a map actor kept these as host copies, and script-doors bound
+the script fields onto them (bDeleteMe mirrored its bit into `actorFlags`).
+The words are now the image's bytes.
+
+* **Map actors.** `installActorFlagWords` (`actor-flag-words.mjs`) runs when
+  script-doors attaches a level export. Every export with a host word gets
+  accessors over its image dwords: collidable and non-colliding actors,
+  movers, map pawns' hosts, decorations and pickups.
+  * `flags` and `motionFlags` are the whole words (masks 0x1f and 0x1ff).
+  * `actorFlags` keeps the four bits the level-load word carried (mask
+    0xa0081). The spawned-actor view composes the same four. So bHidden
+    (0x2) still reads as clear where VisibleActors tests `actorFlags & 2`.
+  * The per-bit members are getters.
+  * Only a non-pawn, non-brush map actor (`isMapMoveHost`) gets the motion
+    word, as only it had the bJustTeleported binding.
+  * The accessors are non-configurable. A leftover `delete` or an assignment
+    to a derived member throws instead of splitting the storage again.
+* **Layout evidence.** The installer checks each class once. The linker must
+  have placed all 18 bools of the three words at the SDK offset and mask. At
+  install, the host's values must equal the image (level load writes both
+  from the same serialized properties). A difference throws; it is not
+  reconciled. For a motion word, the image must also start at the
+  serialized bJustTeleported.
+* **Bindings removed.** bDeleteMe, the five collision bools and bJustTeleported
+  (map move hosts and the controlled player) no longer have bindings.
+  `boundKeys` no longer holds them, so the Rust interpreter reads and writes
+  them as bool cells.
+  * `writeCollisionFlags` writes only `flags` on an imaged host.
+  * Player start's `prepareActor` restores bJustTeleported in the image
+    instead of deleting the host copy. It no longer assigns `static` and
+    `movable`, which read the image.
+  * OldLocation keeps its binding (step 3).
+* **The Player.** `Player.motionFlags` is the +0x1ec word of the linked
+  identity (`linkMotionFlags`). The placeholder and each Login identity link
+  when they attach. `detachPlayerIdentity` unlinks before the old identity's
+  image is purged, keeping the value as host state until the next identity
+  links. Linking checks that both agree on bJustTeleported. The physics pawn's
+  `justTeleported` and the collision identity's `motionFlags` already went
+  through `Player.motionFlags`.
+* **Pawn physics views.** A map pawn's view reads `flags`, `collisionBits`,
+  `actorFlags`, `deleted` and `collideWorld` from the host's image words.
+  Before, it made one `readNamed` per bool.
+
+Not moved, and why:
+
+* **A map pawn's motion word.** Its image word starts at 0x140. That is
+  bRotateToDesired (Pawn default) plus bJustTeleported (Actor's
+  `bJustTeleported=True` default). The pawn view's host word starts at 0.
+  It then holds only what physicsRotation (0x40 set, 0x20 clear),
+  FarMoveActor and the physics bodies write. The pawn physics reads
+  bJustTeleported from this host word. The original reads the actor's own
+  +0x1ec, so this is a fidelity divergence, and moving the word would change
+  the simulation. It is recorded here and needs its own evidence and digest
+  change.
+* **The player's collision and actor words** stay the movement port's host
+  state (step 6). Player start assigns the retired identity a composed
+  `actorFlags` without bDeleteMe and re-registers it in the hash before
+  LoadMap's collection. With the image as the word, that registration would
+  follow the destroyed identity's bDeleteMe. In both maps' shadow runs the
+  player's words equalled its image at every tick.
+* **The collision kernel** still reads a candidate's `collisionBits` through
+  `lc_accept` and `lc_candidate`. The hash kernel lives in the trace
+  kernel's own instance and memory, not a runtime arena (R3-b B0), so it
+  cannot address the image. Rust reads it there only once the kernel runs on
+  the runtime's arena.
+* VisibleActors (`script-iterators.mjs`) tests bHidden through `actorFlags &
+  2`, a bit no host word ever carried. This is unchanged and noted for its own
+  fidelity check.
+
+Shadow mode came first (`FLAG_WORDS_SHADOW=1`; the scaffolding was removed
+after the proof, and its version is `.work/logs/1e1/shadow-version.diff`):
+
+* The host value stayed the source, and the old bindings stayed.
+* Every host write was also written into the image, masked to the bits the
+  host modeled (0x100 for a motion word).
+* Every host read, and every installed host after each tick and each reset,
+  compared the two. The derived members were compared with `flags` and
+  `actorFlags`.
+
+| Map | Hosts | Host reads compared | Writes through | Per-tick host checks |
+|---|---|---|---|---|
+| Training | 311 | 96,826 | 11,810 | 111,960 |
+| Island | 2,237 | 907,254 | 39,515 | 805,320 |
+
+The collision and actor words, the map move hosts' and the player's
+bJustTeleported, and the derived members had no mismatch. No write had a bit
+outside its word, and no host read a released image. Digests were unchanged
+under both VMs at all 30 checkpoints. An early short run reported one
+mismatch, inside the shadow bDeleteMe binding itself: it wrote the image and
+then read the host word. Reading the host word first removed it. The pawn
+motion words differed on every pawn, as described above.
+
+Verification:
+
+* Digests are unchanged at all 30 checkpoints under both VMs with
+  `SCRIPT_VM_CHECK=1`, with no errors: Training `04f77dc631509ae4`, Island
+  `7b23d044fafab37f`.
+* Validators: `validate-script-vm-interp`, `validate-collision-kernel`,
+  `validate-object-image` and `validate-object-handles`.
+* Native oracles: hash, collision, set-collision-size, check-encroachment,
+  encroachment, relocation, far-move-scene, line-filter, mover-scene,
+  mover-move and player-sequence.
+* Play validators: `validate-world-destroy`, `validate-script-lifecycle`,
+  `validate-island-falling-water`, `validate-island-swimming`,
+  `validate-loadmap-gc` (22 Player starts), `validate-mover-frob`,
+  `validate-decoration-settle-roll` and `validate-script-spawn`.
+* The 553 unit tests pass.
+* A 240-frame Chromium Island walk had no page or runtime error.
+
+Cost, from bench-sim's new `--bound-reads` (host binding calls per timed
+tick):
+
+| Run | Before | After | Flag keys |
+|---|---|---|---|
+| Island, JavaScript VM | 9,504 | 7,276 | 2,229 → 0 |
+| Island, Rust VM | 9,020 | 6,792 | 2,229 → 0 |
+| Training, Rust VM | 2,117 | 1,789 | 328 → 0 |
+
+The Rust interpreter's `[bound engine.actor.bdeleteme]` fallback (55.7 per
+Island tick) is gone; no other stats row changed. Per Island tick, `readNamed`
+fell from 31,660 to 30,369 and `instance` from 61,316 to 58,550. The median
+`SCRIPT_VM=rust` Island tick over four interleaved pairs:
+
+| Pair | Before (ms) | After (ms) |
+|---|---|---|
+| 1 | 19.41 | 18.99 |
+| 2 | 20.00 | 19.25 |
+| 3 | 19.80 | 19.29 |
+| 4 | 19.28 | 19.63 |
+
+The tick was lower in three of the four pairs, by about 0.3 ms on average,
+which is within noise.
+
   that subtree with the existing compiled closures on the same frame object.
   Every function can then run in Rust from the start, and coverage grows kind
   by kind without an eligibility cliff.

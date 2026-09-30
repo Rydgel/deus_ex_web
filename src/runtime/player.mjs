@@ -30,6 +30,7 @@ export class Player {
     this.startYaw = startYaw;
     this.radius = defaults.CollisionRadius;
     this.standingHeight = defaultPawnCollisionHeight(defaults.CollisionHeight);
+    this.motionWord = null;
     this.motionFlags = defaults.bJustTeleported ? 0x100 : 0;
     const player = this;
     this.collisionActor = { controlledPlayer: true, static: Boolean(defaults.bStatic), movable: defaults.bMovable ?? true,
@@ -118,6 +119,22 @@ export class Player {
     if (!spawn) throw new Error('No valid collision placement near player start');
     this.position = spawn;
     this.spawnOldLocation = spawn.slice();
+  }
+  /** The +0x1ec word (bJustTeleported 0x100) that the physics pawn and
+   * FarMoveActor share. While an attached identity is linked
+   * (script-doors.mjs installFlagWords) it is that identity's image word, so
+   * the script field and this member are one storage; before attach, between
+   * identities and in fixtures it is host state. */
+  get motionFlags() { return this.motionWord ? this.motionWord.get() : this.hostMotionFlags; }
+  set motionFlags(value) { if (this.motionWord) this.motionWord.set(value); else this.hostMotionFlags = value; }
+  /** Link the motion word to an attached identity's image (a FlagWord), or
+   * unlink it (null) before that identity's image is released. The host
+   * copy and the image agree on bJustTeleported when linked. */
+  linkMotionFlags(word) {
+    if (this.motionWord) this.hostMotionFlags = this.motionWord.get();
+    if (word && ((this.hostMotionFlags ?? 0) & 0x100) !== (word.get() & 0x100))
+      throw new Error(`Player bJustTeleported 0x${((this.hostMotionFlags ?? 0) >>> 0).toString(16)} differs from its image word 0x${word.get().toString(16)}`);
+    this.motionWord = word;
   }
   get extent() { return [this.radius, this.radius, this.height]; }
   get traceEye() { return add(this.position, [0, 0, this.baseEyeHeight]); }

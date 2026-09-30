@@ -118,7 +118,9 @@ field, but the registered map identity previously retained its initial
 `actorFlags` word. A subsequent physics registration could therefore reinsert
 the destroyed standing pawn. Bind bDeleteMe writes to that same host word as
 well as script storage, preserving the native hash gate; do not filter it out
-only in the interaction trace or change the recovered tick order.
+only in the interaction trace or change the recovered tick order. Since stage
+1e step 1 the host word is the image's `+0x28` dword itself
+([Rust core](rust-core.md) 1e-1), so no binding is needed.
 Player start restores that bit from the serialized map before re-registering
 each collider; otherwise one-shot triggers destroyed in the previous session
 would remain absent from the rebuilt hash.

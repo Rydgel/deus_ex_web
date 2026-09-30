@@ -16,7 +16,8 @@ import { createPlayerAugmentationStartup } from './script-player-startup.mjs';
 import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionArguments } from './script-actor-collision.mjs';
-import { COLLISION_FIELD_BITS, writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
+import { writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
+import { installActorFlagWords, flagWord, MOTION_WORD } from './actor-flag-words.mjs';
 import { setBase } from './walking-callbacks.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { setActorZone } from './zone.mjs';
@@ -311,36 +312,21 @@ function makeBinding(runtime, record, field) {
     },
   };
   if (dynamic[key]) return dynamic[key];
-  // Hash AddActor/RemoveActor read Actor+0x28 bit 0x80 on the registered
-  // map identity. Actor.Tick can finish physics after its state destroys
-  // the pawn, so this word must see the same bDeleteMe as the VM; otherwise
-  // that physics tail re-registers a destroyed pawn's collision cylinder.
-  if (key === 'bdeleteme' && !host.controlledPlayer && Number.isInteger(host.actorFlags)) return {
-    get: stored,
-    set: value => {
-      runtime.writeStoredField(host, field, value);
-      host.actorFlags = (value ? host.actorFlags | 0x80 : host.actorFlags & ~0x80) >>> 0;
-    },
-  };
-  // The AActor +0x1dc collision bools are bits of the native word the
-  // collision hash, line filter and move bodies read (map-actor-native.mjs),
-  // so a script write such as DeusExPlayer's `bCollideWorld = False` on a
-  // carried decoration changes that word, as it does in the original. Every
-  // collidable map export has the word from level load; the controlled player
-  // keeps its own movement port.
-  const collisionBit = COLLISION_FIELD_BITS[key];
-  if (collisionBit && !host.controlledPlayer && Number.isInteger(host.flags)) return {
-    get: () => Boolean(host.flags & collisionBit),
-    set: value => writeCollisionFlags(host, value ? host.flags | collisionBit : host.flags & ~collisionBit),
-  };
-  // FarMoveActor writes bJustTeleported (+0x1ed bit0, the +0x1ec word's 0x100)
-  // and OldLocation (+0x12c) on the native actor. A non-pawn map actor's move
-  // bodies run on this host, so those fields are its members once written.
-  if ((key === 'bjustteleported' || key === 'oldlocation') && (isMapMoveHost(host) || host.controlledPlayer)) {
-    if (key === 'bjustteleported') return {
-      get: () => host.motionFlags === undefined ? stored() : Boolean(host.motionFlags & 0x100),
-      set: value => { host.motionFlags = (((host.motionFlags ?? (stored() ? 0x100 : 0)) & ~0x100) | (value ? 0x100 : 0)) >>> 0; },
-    };
+  // bDeleteMe, the +0x1dc collision bools and bJustTeleported need no
+  // binding: they are bits of the native flag words (+0x28, +0x1dc, +0x1ec)
+  // whose host members are accessors over the image (actor-flag-words.mjs,
+  // installed by attach). A script write such as DeusExPlayer's
+  // `bCollideWorld = False` on a carried decoration changes the native word
+  // the collision hash, line filter and move bodies read, as in the original.
+  // Hash AddActor/RemoveActor read bDeleteMe (+0x28 bit 0x80) on the
+  // registered identity, and Actor.Tick can finish physics after its state
+  // destroys the pawn: that word is the bDeleteMe the VM wrote, so the
+  // physics tail cannot re-register a destroyed pawn's cylinder.
+  //
+  // FarMoveActor writes OldLocation (+0x12c) on the native actor. A non-pawn
+  // map actor's move bodies run on this host, so that field is its member
+  // once written.
+  if (key === 'oldlocation' && (isMapMoveHost(host) || host.controlledPlayer)) {
     return {
       get: () => host.oldLocation === undefined ? stored() : vector(host.oldLocation),
       set: value => { host.oldLocation = vector(value); },
@@ -816,6 +802,21 @@ export async function createScriptDoors({
     runtime.restoreStorage(record.object, record.initialStorage);
   }
 
+  // A map actor's native flag words become its image's bytes: the members a
+  // level-load host carries (`flags`, `actorFlags`, a map move host's
+  // `motionFlags`) turn into accessors (actor-flag-words.mjs). The controlled
+  // player's movement port keeps its collision members (stage 1e step 6);
+  // its motion word, which bJustTeleported reads, is the attached identity's.
+  function installFlagWords(host) {
+    if (host.controlledPlayer) {
+      playerController.linkMotionFlags(flagWord(runtime.instance(host), MOTION_WORD));
+      return;
+    }
+    const collision = Number.isInteger(host.flags), actor = Number.isInteger(host.actorFlags);
+    const motion = isMapMoveHost(host);
+    if (collision || actor || motion) installActorFlagWords(host, runtime.instance(host), {collision, actor, motion});
+  }
+
   async function attach(identity, cls, role) {
     if (!identity || typeof identity !== 'object') return null;
     const existing = identities.get(identity);
@@ -833,6 +834,7 @@ export async function createScriptDoors({
       const binding = makeBinding(runtime, record, field);
       if (binding) runtime.bindProperty(identity, field, binding);
     }
+    installFlagWords(identity);
     // A reset returns the actor's properties to these initial values.
     record.initialStorage = runtime.snapshotStorage(identity);
     // Core UObject identity for a pre-placed map export. Actor.Destroy's
@@ -1991,6 +1993,7 @@ export async function createScriptDoors({
       const binding=makeBinding(runtime,record,field);
       if(binding)runtime.bindProperty(actor,field,binding);
     }
+    installFlagWords(actor);
     playerActor=actor;
     triggerActions.bindPlayerFlagBase(runtime,actor);
     playerLogs?.bindPlayer(actor);windowHost?.bindPlayer(actor);

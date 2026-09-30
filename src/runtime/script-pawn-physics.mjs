@@ -42,6 +42,7 @@ import { ACTOR_IDENTITY, beginTouch, endTouch, isOverlapping } from './actor-tou
 import { farMoveActor } from './relocation.mjs';
 import { setActorZone } from './zone.mjs';
 import { linkDecorationCollision } from './decoration-physics.mjs';
+import { flagWordsOf } from './actor-flag-words.mjs';
 import { x87add, x87double, x87load, x87mul, x87store } from './script-vm.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 
@@ -118,9 +119,13 @@ export function pawnPhysicsView(actor, services) {
     ['mass', 'Mass'], ['buoyancy', 'Buoyancy'], ['airSpeed', 'AirSpeed'], ['waterSpeed', 'WaterSpeed'], ['desiredSpeed', 'DesiredSpeed'],
     ['viewRotation', 'ViewRotation'], ['playerReplicationInfo', 'PlayerReplicationInfo']])
     Object.defineProperty(pawn, prop, { get: () => get(name), enumerable: true });
+  // A map pawn's flag members read its image's flag words
+  // (actor-flag-words.mjs), the storage of the bool fields themselves.
+  const words = flagWordsOf(actor), imaged = Boolean(words?.collision && words.actor);
   for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
     ['collideWorld', 'bCollideWorld'], ['bounce', 'bBounce']])
-    Object.defineProperty(pawn, prop, { get: () => Boolean(get(name)), enumerable: true });
+    Object.defineProperty(pawn, prop, { get: imaged && prop === 'deleted' ? () => Boolean(actor.actorFlags & 0x80)
+      : imaged && prop === 'collideWorld' ? () => Boolean(actor.flags & 0x2) : () => Boolean(get(name)), enumerable: true });
   // The ladder branch (0x103cc5ed) sets bIsWalking before physFlying.
   bind('isWalking', 'bIsWalking', Boolean, Boolean);
   // calcVelocity/physFlying test the class chain for PlayerPawn (0x1058c160).
@@ -132,25 +137,38 @@ export function pawnPhysicsView(actor, services) {
     const ref = regionBinding(field, actor, name);
     Object.defineProperty(pawn, prop, { get: () => ref.get(), set: v => ref.set(v), enumerable: true });
   }
-  // The native +0x1dc bitfield and the actor-flag word derive from the bool
-  // fields exactly as installActorCollisionView encodes them (evidence:
-  // AActor::SetCollision 0x10369200 flag writes, native 262/283).
-  Object.defineProperty(pawn, 'collisionBits', {
-    get: () => (get('bCollideActors') ? 1 : 0) | (get('bBlockActors') ? 4 : 0) |
-      (get('bBlockPlayers') ? 8 : 0) | (get('bProjTarget') ? 0x10 : 0), enumerable: true });
-  Object.defineProperty(pawn, 'flags', {
-    get: () => pawn.collisionBits | (get('bCollideWorld') ? 2 : 0),
-    set(v) { set('bCollideActors', Boolean(v & 1)); set('bBlockActors', Boolean(v & 4)); set('bBlockPlayers', Boolean(v & 8)); },
-    enumerable: true });
-  Object.defineProperty(pawn, 'actorFlags', {
-    get: () => (get('bStatic') ? 1 : 0) | (get('bDeleteMe') ? 0x80 : 0) |
-      (get('bCollideWhenPlacing') ? 0x20000 : 0) | (get('bMovable') ? 0x80000 : 0), enumerable: true });
+  // The native +0x1dc bitfield and the actor-flag word: a map pawn's image
+  // words, else derived from the bool fields exactly as
+  // installActorCollisionView encodes them (evidence: AActor::SetCollision
+  // 0x10369200 flag writes, native 262/283). The `flags` setter writes
+  // bCollideActors, bBlockActors and bBlockPlayers.
+  if (imaged) {
+    Object.defineProperty(pawn, 'collisionBits', { get: () => actor.collisionBits, enumerable: true });
+    Object.defineProperty(pawn, 'flags', {
+      get: () => actor.flags, set(v) { actor.flags = ((actor.flags & ~0xd) | (v & 0xd)) >>> 0; }, enumerable: true });
+    Object.defineProperty(pawn, 'actorFlags', { get: () => actor.actorFlags, enumerable: true });
+  } else {
+    Object.defineProperty(pawn, 'collisionBits', {
+      get: () => (get('bCollideActors') ? 1 : 0) | (get('bBlockActors') ? 4 : 0) |
+        (get('bBlockPlayers') ? 8 : 0) | (get('bProjTarget') ? 0x10 : 0), enumerable: true });
+    Object.defineProperty(pawn, 'flags', {
+      get: () => pawn.collisionBits | (get('bCollideWorld') ? 2 : 0),
+      set(v) { set('bCollideActors', Boolean(v & 1)); set('bBlockActors', Boolean(v & 4)); set('bBlockPlayers', Boolean(v & 8)); },
+      enumerable: true });
+    Object.defineProperty(pawn, 'actorFlags', {
+      get: () => (get('bStatic') ? 1 : 0) | (get('bDeleteMe') ? 0x80 : 0) |
+        (get('bCollideWhenPlacing') ? 0x20000 : 0) | (get('bMovable') ? 0x80000 : 0), enumerable: true });
+  }
   Object.defineProperty(pawn, 'static', { get() { return Boolean(this.actorFlags & 1); }, enumerable: true });
   Object.defineProperty(pawn, 'movable', { get() { return Boolean(this.actorFlags & 0x80000); }, enumerable: true });
   // Host collision/identity props (registration entries are values-keyed).
   for (const prop of ['lineage', 'values', 'touching'])
     Object.defineProperty(pawn, prop, { get: () => actor[prop], enumerable: true });
   Object.defineProperty(pawn, 'pawnFlags', { get: () => actor.pawnFlags ?? 0, set: v => { actor.pawnFlags = v; }, enumerable: true });
+  // A map pawn's motion word stays a host word for now: its image starts at
+  // the serialized 0x140 (bRotateToDesired, bJustTeleported) while this word
+  // starts at 0, and the pawn physics reads bJustTeleported here (see
+  // docs/rust-core.md 1e-1).
   Object.defineProperty(pawn, 'motionFlags', { get: () => actor.motionFlags ?? 0, set: v => { actor.motionFlags = v; }, enumerable: true });
   Object.defineProperty(pawn, 'justTeleported', {
     get: () => Boolean(actor.motionFlags & 0x100),

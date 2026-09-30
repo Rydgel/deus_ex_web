@@ -13,6 +13,7 @@ import { moveActorRiders } from './move-riders.mjs';
 import { setBase as setActorBase } from './walking-callbacks.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
+import { flagWordsOf } from './actor-flag-words.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
@@ -185,7 +186,10 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     actor.isPawn=actor.lineage?.includes('engine.pawn')??false;
     actor.radius=v.CollisionRadius??0;actor.height=v.CollisionHeight??0;actor.rotation=v.Rotation??[0,0,0];
     actor.physics=v.Physics??0;actor.pawnFlags=v.bIsPlayer?2:0;actor.standingCount=v.StandingCount??0;
-    actor.static=Boolean(v.bStatic);actor.movable=Boolean(v.bMovable);
+    // An attached map actor's `static`/`movable` read its image's +0x28 word
+    // (actor-flag-words.mjs); bStatic and bMovable never change.
+    const words=flagWordsOf(actor);
+    if(!words?.actor){actor.static=Boolean(v.bStatic);actor.movable=Boolean(v.bMovable);}
     // Reload restores bDeleteMe before changeActor re-adds this map export;
     // AddActor otherwise correctly skips the previous session's dead actor.
     actor.actorFlags=((actor.actorFlags&~0x80)|(v.bDeleteMe?0x80:0))>>>0;
@@ -194,7 +198,14 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     // matches it; FarMoveActor's bJustTeleported/OldLocation return to the
     // serialized fields.
     writeCollisionFlags(actor,collisionFlagsFrom(v));
-    if(!actor.isPawn&&!actor.movingBrush){delete actor.motionFlags;delete actor.oldLocation;}
+    if(!actor.isPawn&&!actor.movingBrush){
+      // An image-backed motion word returns bJustTeleported to its
+      // serialized value (actor-flag-words.mjs checks at attach that the
+      // image started there); a host copy is dropped.
+      if(words?.motion)actor.motionFlags=((actor.motionFlags&~0x100)|(v.bJustTeleported?0x100:0))>>>0;
+      else delete actor.motionFlags;
+      delete actor.oldLocation;
+    }
     actor.waitingPawn=actors.find(a=>a.index===v.WaitingPawn)??null;
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
     // LoadMap's SetActorZone(actor, test=1, force=1) (0x1038da02): regions
@@ -206,6 +217,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     // SpawnActor allocates its replacement. Preserve map-export array slots.
     detachPlayerIdentity(){
       const old=source;
+      // The retired identity's image is purged with the old level; the
+      // Player's motion word is host state until the next identity links.
+      player.linkMotionFlags(null);
       collision.queries.removeActor(old);player.actorRegistered=false;
       removePawn(level,old);
       for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old){level.actors[i]=null;bumpBaseEpoch();}

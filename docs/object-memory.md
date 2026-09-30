@@ -59,8 +59,8 @@ their linked offsets. Host state still owns some fields through bindings:
    one: map actors, spawned actors, loaded objects, windows and plain objects.
 2. `instance.bindings`: getter/setter pairs over host state, which take
    precedence over the image. Map actors bind only the host-owned fields
-   through `makeBinding` in `script-doors.mjs` (position, collision word,
-   Touching, regions, player view state). A binding whose host state is absent
+   through `makeBinding` in `script-doors.mjs` (position, Touching, regions,
+   player view state). A binding whose host state is absent
    falls back to the image. Extension windows bind their native members to the
    native heap (`script-window-host.mjs`). Constructed and loaded objects bind
    their UObject header fields.
@@ -73,7 +73,9 @@ their linked offsets. Host state still owns some fields through bindings:
    Extension windows, GC and fonts, already at original offsets, with strings
    and names in a side table.
 5. Host actor objects used directly by collision and physics (`position`,
-   `flags` for `+0x1dc`, `motionFlags` for `+0x1ec`, …).
+   `radius`, `touching`, …). A map actor's flag words (`flags` for `+0x1dc`,
+   `actorFlags` for `+0x28`, `motionFlags` for `+0x1ec`) are accessors over
+   its image since stage 1e step 1 ([Rust core](rust-core.md) 1e-1).
 
 ## Stages
 
@@ -221,7 +223,8 @@ Since [Rust core](rust-core.md) step R0, the images are ranges of one
 What 1d does not do: the images are not addresses on the native heap. The Extension windows' native members stay in the native heap
 image the window natives address. Sharing one address space is part of 1e.
 
-**1e: host-owned fields move into the image (next).** Physics, collision
+**1e: host-owned fields move into the image (in progress).** Step 1, the
+actor flag words, is implemented ([Rust core](rust-core.md) 1e-1). Physics, collision
 and presentation read the original offsets directly, and the corresponding
 bindings disappear. After this step a Rust kernel can share the image as
 `WebAssembly.Memory` with no marshaling. It was deferred until a measured
