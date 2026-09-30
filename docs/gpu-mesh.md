@@ -319,4 +319,57 @@ The simulation digest must be unchanged, since the path is render-only:
 
 ## Results
 
-Pending.
+Implemented in `src/viewer/gpu-mesh.mjs` (resources and passes),
+`src/viewer/gpu-mesh-glsl.mjs` (shaders), `src/viewer/gpu-mesh-bounds.mjs`
+(certificates) and the GPU mode of `src/viewer/npc-mesh-preview.mjs`;
+`planLodMeshFrame` and `materializeLodMeshFrame` in
+`src/runtime/lodmesh-frame.mjs` (their bit-equality with `getLodMeshFrame`
+is `test/lodmesh-plan.test.mjs`). On by default; `?gpuMesh=0` selects the
+CPU kernels.
+
+**Validation** (`node scripts/validate-gpu-mesh.mjs`, dev server with the
+worktree, headless Chromium/ANGLE Metal on the M2 Pro, ten captures per map
+while walking):
+
+| | 00_Training | 01_NYC_UNATCOIsland |
+|---|---:|---:|
+| position components compared | all bit-exact | all bit-exact |
+| drawn corners compared | 169,362 | 538,170 |
+| colour-byte differences | 0 | 0 |
+| drawn-test disagreements | 0 | 0 |
+| environment normal / UV error | 0 / 0 | 0 / 0 |
+| visibility mismatches | 0 | 0 |
+| certified / exact-fallback group decisions | 381,610 / 11,880 | 179,490 / 1,465 |
+
+Coverage across both maps: translucent, modulated, masked and
+environment-mapped faces, mixed `PF_Unlit` meshes, blend slots, tweens and
+moving lights. The measured errors are zero, below the stated tolerances
+(1 ulp, 2 ulp in tweens, 1/255, 2^-20); the float-float emulation made the
+GPU results agree with the kernels' f32 stores in every compared case. With
+`--device cpu` the same harness compares the JavaScript lighting path with
+the Wasm kernel (0 differences) and checks the certificate logic against
+exact spheres.
+
+**Play checks with the GPU path:** Training reaches HUD health 100 with no
+runtime error; Island plays to its known StrafeFacing (native 506)
+boundary, and Player start resumes with the player moving. The simulation
+digest is unchanged (`b767a7e417fe5968`); the path is render-only.
+
+**Cost:** see [play frame cost](play-frame-cost.md) ("September 30, night"):
+Island actors phase 9.04 → 3.75 ms and frame 27.21 → 21.48 ms (interleaved
+A/B, 4 pairs); GPU time 1.44 → 2.91 ms. The 2 ms actors-phase target is not
+met; the remainder is SetupForActor, the admission scan and GetFrame
+planning in JavaScript.
+
+**Known differences and limits:**
+
+* Transparent groups sort by their box centre when no exact sphere was
+  computed (documented above; no visibility or feedback change).
+* A GPU-path actor that hits an unsupported case (tween count expansion,
+  more than 32 selected lights, capacity) converts to the CPU path exactly
+  and stays there; `summary.gpuFallback` records why. None occurred in the
+  validated runs.
+* The GPU's subnormal handling was not exercised by any compared value.
+* Validation samples frames between two animation frames; an actor admitted
+  after the frame's GPU run is posed by the next run before it is drawn
+  and is skipped by the sampler (`pending` in the report).

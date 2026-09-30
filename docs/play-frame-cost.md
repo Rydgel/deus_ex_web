@@ -1,5 +1,52 @@
 # Play frame cost from first principles
 
+## September 30, night: mesh animation and lighting on the GPU
+
+The actor meshes' GetFrame interpolation and DrawLodMesh lighting now run
+as WebGL2 passes by default; the CPU kernels stay the reference and are
+selected with `?gpuMesh=0`. Design, arithmetic evidence and tolerances are
+in [GPU mesh](gpu-mesh.md). `scripts/validate-gpu-mesh.mjs` compares the
+GPU pose, face, corner and environment targets with the CPU kernels on the
+same inputs in the same page: on Training and Island every position
+component is bit-exact, no drawn corner's colour byte differs, environment
+normals and UVs are exact, and every group's visibility decision matches
+three.js's test on the exact CPU sphere.
+
+Interleaved A/B, same dev server, Island forward walk
+(`profile-play-browser --walk --no-profile --frames 300 --bypass`),
+4 pairs, medians, ms per frame:
+
+| Phase | `?gpuMesh=0` | `?gpuMesh=1` |
+|---|---:|---:|
+| total | 27.21 | 21.48 |
+| tick | 11.59 | 11.50 |
+| lighting | 0.68 | 0.69 |
+| actors | 9.04 | 3.75 |
+| mirrors | 0.34 | 0.35 |
+| render | 3.21 | 3.11 |
+| HUD | 2.31 | 2.13 |
+
+GPU time (`--gpu`, the timer now also spans the actor layer's passes,
+2 pairs): 1.44 ms per frame with `?gpuMesh=0`, 2.91 ms with `?gpuMesh=1`.
+The passes add about 1.5 ms of GPU work; the frame stays CPU-bound.
+
+Against the reference profile that motivated the change (29.4 ms total,
+9.7 ms actors, 12.85 ms tick, September 30 evening), the frame is now
+21.5 ms with 3.75 ms in the actors phase. Both columns above include the
+actor-layer lookups trimmed in the same series (fewer property lookups,
+membership rebuilt only when `actorsEpoch` advances), which is why the CPU
+column is below 9.7 ms. The actors phase target of 2 ms is **not met**:
+its remaining cost is JavaScript that selects rather than computes. A CPU
+profile of the GPU path (Node bench of the Island actor layer, GPU stubbed)
+puts SetupForActor at about 1.5 ms (220 calls per frame considering about
+2,200 candidate lights), the Level.Actors admission scan at about 0.5,
+GetFrame planning (its x87-exact matrix and cache scalars) at about 0.4,
+and pose change detection, visibility certificates and property reads at
+about 1. SetupForActor reads live light fields, performs line checks and
+mutates the fade caches, so it stays a per-frame translation of the
+original; moving it to the Rust core over the object image is the next
+step for this phase.
+
 ## September 30: GPU time isolated
 
 `scripts/profile-play-browser.mjs --gpu` sets the viewer's `?gpuTimer=1`,
