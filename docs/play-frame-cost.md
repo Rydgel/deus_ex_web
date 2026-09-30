@@ -62,6 +62,29 @@ twice per draw (its back-then-front pass); 12 remain on world lightmap
 surfaces. Batching halves the main-pass draw calls (642 → 325). Both are
 pixel-identical in same-frame comparisons and keep render feedback
 unchanged; details in [GPU mesh](gpu-mesh.md#draw-batches-and-two-sided-groups).
+Two smaller ones followed: `mirrors.render` no longer updates the whole
+scene's matrices before testing its planes (three.js's own render does it),
+and never-moving objects (actor meshes, batches, the static world) skip
+three.js's per-traversal local matrix recomposition (mirrors 0.43 → 0.01
+ms, frame 19.70 → 19.10 ms against `bbe88bd`).
+
+End of the night, interleaved Island walk A/B of master (`7df2225`, what
+Play ran before) against the branch head (`0b0fa41`), 4 pairs, medians, ms
+per frame:
+
+| Phase | master | branch |
+|---|---:|---:|
+| total | 27.40 | 19.32 |
+| tick | 11.57 | 11.35 |
+| lighting | 0.68 | 0.49 |
+| actors | 9.30 | 3.63 |
+| mirrors | 0.31 | 0.01 |
+| render | 3.16 | 1.83 |
+| HUD | 2.33 | 2.00 |
+
+The tick is now 59 % of the frame. The phase means include one-off frames:
+the first NPC bark creates the AudioContext inside the tick (about 170 ms
+once, about 0.6 ms of the 300-frame tick mean).
 
 ## September 30: GPU time isolated
 

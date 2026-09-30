@@ -415,8 +415,10 @@ renderer is SwiftShader, llvmpipe or another software renderer, unless
 **Render-side follow-ups** (interleaved Island A/B, 3 pairs each, medians):
 twins instead of the per-draw side flip cut three.js program re-checks from
 138 to 12 per frame, render 3.04 → 2.51 ms; draw batches cut main-pass draw
-calls from 642 to 325, render 2.53 → 1.75 ms. The frame is then about
-20 ms (tick about 11.4, actors about 3.8, HUD about 2.1, render about 1.8).
+calls from 642 to 325, render 2.53 → 1.75 ms. Against master (before this
+work) the branch head's Island frame is 27.40 → 19.32 ms (4 interleaved
+pairs; actors 9.30 → 3.63, render 3.16 → 1.83); see
+[play frame cost](play-frame-cost.md).
 
 **Known differences and limits:**
 
