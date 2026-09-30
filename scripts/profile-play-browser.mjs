@@ -11,6 +11,7 @@
  *     [--no-profile] (wall-clock phases without CPU sampling overhead)
  *     [--draw-counts] (count submitted mesh groups after timing)
  *     [--fixed-dt seconds] (explicit fixed-step comparison workload, not live FPS)
+ *     [--query gpuMesh=1] (viewer URL switches, e.g. the GPU mesh path)
  *
  * The raw .cpuprofile is written to .cache/perf/<tag>.cpuprofile (outside Git).
  * `phases` is deusExViewer.framePhases(): wall ms per animate() phase.
@@ -71,6 +72,8 @@ try {
       await route.fulfill({response,body:body.replace(from,to)});
     });
   const target=new URL(url);if(gpu)target.searchParams.set('gpuTimer','1');
+  // --query gpuMesh=1: extra viewer switches (A/B of a render path).
+  for(const [key,value] of new URLSearchParams(option('query','')))target.searchParams.set(key,value);
   await page.goto(target.href);
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:180000});
   if(map){await page.locator('#map').selectOption(map);

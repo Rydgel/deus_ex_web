@@ -41,8 +41,9 @@ let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
-// ?gpuMesh=1: actor mesh animation and lighting on the GPU (docs/gpu-mesh.md);
-// the CPU kernels stay the reference and the fallback.
+// Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
+// default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
+// selects the CPU kernels, which stay the reference and the fallback.
 const gpuMeshParam=new URLSearchParams(location.search).get('gpuMesh');
 let gpuMesh=null;
 let weaponViewModel=null;
@@ -212,7 +213,7 @@ async function loadMap(name) {
         const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
         nextMeshLighting=createMeshLightingView(meshRuntime,()=>meshRuntime.levelFor(nextGame.player.collisionActor),
           {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
-        if(gpuMeshParam==='1'){
+        if(gpuMeshParam!=='0'){
           try{nextGpuMesh=createGpuMesh(renderer);}
           catch(error){nextWorld.notes.push(`GPU mesh path unavailable: ${error.message}`);}
         }
@@ -649,8 +650,8 @@ const framePhases = { frames: 0, tick: 0, lighting: 0, actors: 0, mirrors: 0, re
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
 const phase = name => { const now = performance.now(); framePhases[name] += now - phaseMark; phaseMark = now; };
-// GPU time per frame (?gpuTimer=1): a TIME_ELAPSED query spans the mirrors,
-// sky, main scene, weapon and HUD draws. Results arrive asynchronously, so
+// GPU time per frame (?gpuTimer=1): a TIME_ELAPSED query spans the actor
+// mesh passes, mirrors, sky, main scene, weapon and HUD draws. Results arrive asynchronously, so
 // finished queries are collected at the next frame's start; a GPU_DISJOINT
 // report discards the pending ones. `gpu` sums milliseconds over `gpuFrames`
 // frames with a result; `gpuSupported` counts frames where the extension
@@ -723,6 +724,9 @@ function animate(time) {
       catch(error){pauseForRuntimeError(error);}
     }
     phase('lighting');
+    // The GPU timer starts before the actor layer, whose mesh passes
+    // (docs/gpu-mesh.md) are GPU work submitted during this phase.
+    gpuBegin();
     if(npcPreview&&!runtimeError){
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
@@ -732,7 +736,6 @@ function animate(time) {
     }
     phase('actors');
     renderer.info.reset();
-    gpuBegin();
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
