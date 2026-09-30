@@ -11,6 +11,7 @@ import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
 import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
+import {createActorBatches,BATCH_VERTEX_DECLARATIONS,BATCH_VERTEX_TAIL} from './actor-batches.mjs';
 import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh-bounds.mjs';
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
@@ -20,7 +21,7 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
  * runtime's pose fields change, so original startup/animation is visible in
  * ordinary Play without preview controls. Contracts and captured cache
  * identity: docs/npc-mesh-preview.md; lighting: docs/mesh-lighting.md. */
-export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma,texturePool=null,gpu=null}={}) {
+export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting=null,displayGamma,texturePool=null,gpu=null,batches=null}={}) {
   if(asset.name.toLowerCase()!=='00_training')throw new Error('NPC preview requires Training');
   let kernelError=null;
   if(kernel===undefined) {
@@ -34,7 +35,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
     try {
       const actor=await runtime.objects.resolve(asset,asset.exportsByPath.get(name.toLowerCase()));
       if(runtime.readNamed(actor,'bHidden'))continue;
-      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma,texturePool:textures,gpu});
+      const preview=await createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel,lighting,displayGamma,texturePool:textures,gpu,batches});
       preview.root.visible=true;root.add(preview.root);actors.push(preview);
     } catch(error) {errors.push({actor:name,message:error.message});}
   }
@@ -64,11 +65,16 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     catch(error){kernel=null;kernelError=error.message;}
   }
   const root=new THREE.Group(),textures=new ActorMeshTextures();root.visible=false;
+  // Opaque GPU-path groups that share a material state draw as one batch
+  // (actor-batches.mjs); only with original lighting, where every actor's
+  // material colour is the same.
+  const batches=gpu&&lighting?createActorBatches(root,{makeMaterial:(template,members)=>
+    batchMaterial(template,members,gpu,displayGamma)}):null;
   const npcActors=[],propActors=[],errors=[];
   let npc=null;
   if(asset.name.toLowerCase()==='00_training') {
     try {
-      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma,texturePool:textures,gpu});
+      npc=await createTrainingNpcPreview(runtime,assets,asset,{kernel,lighting,displayGamma,texturePool:textures,gpu,batches});
       root.add(npc.root);npc.root.visible=true;
       npcActors.push(...npc.actors);errors.push(...npc.summary.errors);
     } catch(error) {errors.push({actor:'NPCs',message:error.message});}
@@ -118,7 +124,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
-      lighting,displayGamma,texturePool:textures,gpu})
+      lighting,displayGamma,texturePool:textures,gpu,batches})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
         preview.root.visible=drawnInWorld(actor);root.add(preview.root);
@@ -176,6 +182,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
       // The GPU path's passes (docs/gpu-mesh.md) run once per main frame,
       // after every actor planned its pose and lighting.
       if(gpu){const frame=lighting?.frame;if(frame)gpu.setCamera(frame.origin,frame.axes);gpu.run();}
+      batches?.flush();
     },
     /** Mirror child frames change only camera-relative environment UVs.  The
      * main-frame update immediately before them already reconciled actors,
@@ -187,10 +194,12 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
         if(actor.viewDependent)actor.updateView(cameraPosition);
         if(camera)actor.passVisibility?.(camera);
       }
+      batches?.flush();
     },
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
-    dispose(){disposed=true;for(const actor of actors)actor.dispose();textures.dispose();},
+    batchStats:()=>batches?.stats()??null,
+    dispose(){disposed=true;for(const actor of actors)actor.dispose();batches?.dispose();textures.dispose();},
   };
 }
 
@@ -220,7 +229,7 @@ function setMeshBounds(geometry,array){
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  lighting=null,displayGamma={value:1},texturePool=null,gpu=null}) {
+  lighting=null,displayGamma={value:1},texturePool=null,gpu=null,batches=null}) {
   // This actor's per-frame reads through pre-resolved accessors
   // (actor-fields.mjs); any other object or name reads through readNamed.
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
@@ -302,6 +311,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     for(const lease of textureLeases)lease.release();
     if(!texturePool)gpuTextures.dispose();
     kernel?.releaseLightingMesh?.(faceWords);
+    for(const group of groups.values())if(group.batchEntry){batches.remove(group.batchEntry);group.batchEntry=null;}
     if(gpuHandle)gpu.release(gpuHandle);
     // A failed pose may have left an internal lease outstanding; disposal
     // still releases this private cache and must not mask the original error.
@@ -450,7 +460,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         const mesh=new THREE.Mesh(geometry,material);
         mesh.onAfterRender=rendered;
         if(gpuHandle)mesh.frustumCulled=false;
-        group.mesh=mesh;group.sided=sided;group.split=false;
+        group.mesh=mesh;group.sided=sided;group.split=false;group.material=material;group.texture=texture;
+        group.environment=environmentGroup;group.batchEntry=null;
         mesh.userData={actor:`${actorName} (mesh inspection)`,faces:group.faces};root.add(mesh);
         if(sided){
           // Created right after its mesh: the adjacent id keeps the pair
@@ -480,9 +491,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     /** A group's visibility for the coming pass; a split two-sided group
      * draws its twin (front faces) with it. */
     function showGroup(group,visible){
+      if(group.batchEntry){batches.set(group.batchEntry,visible);group.mesh.visible=false;return;}
       group.mesh.visible=visible;
       if(group.twin)group.twin.visible=visible&&group.split;
     }
+    /** Batch membership follows the group's material state: an opaque
+     * GPU-path group joins the batch of its texture, side, alpha test and
+     * environment flag; a transparent one draws its own mesh. */
+    function rebatch(group){
+      const material=group.material,want=batches&&mode==='gpu'&&!material.transparent
+        ?`${group.texture.uuid}:${material.side}:${material.alphaTest>0?1:0}:${group.environment?1:0}`:null;
+      if(group.batchEntry&&group.batchEntry.key===want)return;
+      if(group.batchEntry){batches.remove(group.batchEntry);group.batchEntry=null;}
+      if(want){group.batchEntry={key:want,group,rendered,visible:false};batches.add(want,material,group.batchEntry);
+        group.mesh.visible=false;}
+    }
+    /** An actor that is not drawn this frame: its batched groups too. */
+    function hideBatched(){for(const group of groups.values())if(group.batchEntry)batches.set(group.batchEntry,false);}
     const updateView=cameraPosition=>{
       if(disposed||!root.visible||!hasEnvironment||!cameraPosition||mode!=='cpu')return false;
       const relative=[0,0,0],normal=[0,0,0];
@@ -561,6 +586,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         const positions=group.geometry.getAttribute('position');
         copyPositions(positions.array,group.indices);positions.needsUpdate=true;
         setMeshBounds(group.geometry,positions.array);
+        if(group.batchEntry){batches.remove(group.batchEntry);group.batchEntry=null;}
         group.mesh.frustumCulled=true;if(group.twin)group.twin.frustumCulled=true;showGroup(group,true);
       }
       gpu.release(gpuHandle);gpuHandle=null;
@@ -601,7 +627,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       update(cameraPosition,view={}){
         if(disposed)return false;
         root.visible=visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
-        if(!root.visible)return false;
+        if(!root.visible){hideBatched();return false;}
         // Render.dll only draws, and so only calls GetFrame for, actors in
         // the view. Outside the frustum even a conservative bound of every
         // pose is culled here; three.js would cull each group anyway, so
@@ -610,7 +636,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           const location=own.Location(),pivot=own.PrePivot();
           cullSphere.center.set(location[1]+pivot[1],location[2]+pivot[2],-(location[0]+pivot[0]));
           cullSphere.radius=cullRadius*Math.max(1,Math.abs(own.DrawScale()))*1.01+1;
-          if(!view.frustum.intersectsSphere(cullSphere)){root.visible=false;return false;}
+          if(!view.frustum.intersectsSphere(cullSphere)){root.visible=false;hideBatched();return false;}
         }
         if(own.Mesh()!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
@@ -630,10 +656,11 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
         }
         if(!materialStateApplied||!Object.is(glow,lastGlow)||!Object.is(style,lastStyle))for(const group of groups.values()){
+          rebatch(group);
           if(!group.sided)continue;
           group.split=group.sided.double.transparent;
           group.mesh.material=group.split?group.sided.back:group.sided.double;
-          showGroup(group,group.mesh.visible);
+          if(!group.batchEntry)showGroup(group,group.mesh.visible);
         }
         lastGlow=glow;lastStyle=style;materialStateApplied=true;
         const current=pose();
@@ -700,4 +727,29 @@ ${environment?`  vec3 deusN = texelFetch(deusEnvironmentNormals, ivec2(deusV & 1
   transformed = vec3( position );
   vDeusLight = deusLight;
 }`;
+}
+
+/** A batch's material (actor-batches.mjs): the members' shared material state
+ * with the GPU draw code, reading each vertex's member flag. */
+function batchMaterial(template,members,gpu,displayGamma){
+  const environment=Boolean(template.userData.flags&POLY.Environment);
+  const material=new THREE.MeshBasicMaterial({map:template.map,side:template.side,alphaTest:template.alphaTest});
+  material.color.copy(template.color);
+  material.userData={...template.userData,members};
+  material.customProgramCacheKey=()=>`deus-ex-mesh-gpu-batch-v1:${environment?1:0}`;
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated={value:0};
+    Object.assign(shader.uniforms,gpu.shared,{deusGpu:{value:1},deusMembers:members});
+    shader.vertexShader=shader.vertexShader.replace('#include <common>',
+      `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${DRAW_VERTEX_DECLARATIONS}${BATCH_VERTEX_DECLARATIONS}`)
+      .replace('#include <begin_vertex>',gpuBeginVertex(environment))
+      .replace('#include <project_vertex>',`#include <project_vertex>\n${BATCH_VERTEX_TAIL}`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
+      '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
+      .replace('#include <colorspace_fragment>',
+        'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
+        `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
+        `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+  };
+  return material;
 }
