@@ -28,9 +28,13 @@ Keep delivery local. Do not deploy or push hosting updates unless the user asks.
 Keep original assets, extracted script sources, native binaries and local captures
 outside Git.
 
-Prioritize runtime implementation over performance optimization. Retain
-JavaScript unless later measurements identify a specific bottleneck that
-justifies WebAssembly; performance work is limited to basic playability for now.
+Performance target (set 2026-09-30): 120 fps in Play, that is 8.3 ms of host
+work per frame on the reference machine (Apple M2 Pro, 1440×960). The Rust
+core (WebAssembly over the object image) is where hot work moves. Move a
+family only after a measurement names it, keep its JavaScript body as the
+reference, and judge each change by interleaved A/B medians and browser
+phase timings, never by isolated counts. Fidelity rules above take precedence
+over any performance change.
 
 Focus current reverse engineering on single-player. Multiplayer is the last
 priority and may remain explicitly unsupported or incomplete.

@@ -150,10 +150,36 @@ below hold the evidence for each stage.
   timing with `.work/tools/ab.sh` (interleaved medians against a HEAD
   worktree), never with instrumented runs.
 
+* **Bound-read census (September 30, Island, 120 ticks, `--bound-reads`).**
+  Host bindings served about 500 get/set calls per tick in all: 293 of
+  `engine.actor.level`, 61 of `engine.actor.base`, 27 of
+  `engine.pawn.viewrotation`, 22 of `engine.decal.surflist`, 19 of
+  `engine.actor.binterpolating`, 13 each of the player's Physics and Region,
+  and the rest below 10. `boundKeys` holds 325 keys, 293 of them window
+  classes. So the 4.7 ms object-model cost is not binding service: it is
+  JavaScript reading image cells by name (`readNamed` about 30,000 and
+  `instance` about 58,000 per tick), which only moving the reading code to
+  Rust removes. Report: `.work/logs/census-bound-reads.json`.
+* **Two checks for the 120 fps target (September 30).** Chrome 152 on the
+  reference machine's built-in display (120 Hz mode) delivers
+  requestAnimationFrame at a median 8.30 ms, so the target is measurable
+  in the browser the user plays in. `EXT_disjoint_timer_query_webgl2` is
+  present under ANGLE Metal, so GPU time per frame can be isolated; it has
+  not been measured yet.
+
 ### Next steps, in recommended order
 
-The order changed on September 30, after the crossing calibration and the
-rider census. Judge each step by A/B tick medians, not by crossings removed.
+The order changed on September 30, after the crossing calibration, the
+rider census and the bound-read census. Judge each step by A/B tick medians,
+not by crossings removed. The target is the whole browser frame (AGENTS.md:
+8.3 ms), so simulation steps and presentation steps interleave.
+
+0. **Two instruments before the next port.** Inclusive JavaScript time per
+   import name in the Rust VM host (which decides whether "Tick events
+   5.0 ms" is natives or interpreter plumbing such as `js_call_begin`,
+   `js_eval` and `js_step`), and GPU time per frame through the timer query
+   (which decides whether presentation work is CPU-bound). Neither is
+   measured today.
 
 1. **LastRendered (723) and InStasis (721): deferred.** All the small
    natives still in JavaScript (these two, GetStateName, GetPlayerPawn and
@@ -183,7 +209,10 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
    kernels are done (below). MoveActor's own body is cheap; its cost is in
    SetActorZone, the move query, the hash updates and the rider moves, which
    are the families to port. Keep separate Wasm instances with one import
-   per query: imports are cheap (R2b-7). The plan:
+   per query: imports are cheap (R2b-7). B4 starts with 1e-4: a map actor's
+   Base and Touching become image cells (the 1e-2/1e-3 pattern), so the
+   IsBasedOn walks and the Touching slots are image loads and `boundKeys`
+   loses both keys. The plan:
    * **B4.** MoveActor for pawn views: playerMove, touches, bump, zone, and
      remove/add with primitive bounds. Riders and the per-candidate decorate
      step start as imports.
@@ -209,9 +238,13 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
      * `level.actors` order and the zone event order.
    * Match V8 numerics exactly: `Math.hypot`, `Math.min`/`Math.max` with NaN
      and −0, and reductions starting from +0.
-5. **1e-4 to 1e-7.** Move the rest of the host fields into the image. None
-   is a prerequisite for the steps above any more, since those can read
-   host fields through imports.
+5. **1e-4 to 1e-7.** Move the rest of the host fields into the image. Only
+   1e-4 is a prerequisite for the steps above: B4's IsBasedOn walks and
+   Touching slots must be image loads. 1e-5 and 1e-6 are needed by B7 and
+   the mover paths, not by NPC movement. The September 30 census below shows
+   that host bindings serve few reads; what costs is the JavaScript that
+   reads image cells through `readNamed`, which each B stage removes for its
+   family.
    * **1e-4, Base and Touching.** `decorate`
      creates a host `touching` array lazily (`??=`), and whether it exists
      gates `isMapMoveHost`. The spawned actor's stale script copy is now
