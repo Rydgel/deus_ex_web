@@ -13,7 +13,7 @@
  * -player-move, -walking, -walking-callbacks, -steps, -set-rotation-riders,
  * -far-move-scene) exercise the same path through the pawn view. */
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {spawnSync} from 'node:child_process';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -22,10 +22,11 @@ const dir = mkdtempSync(join(tmpdir(), 'pawn-move-kernel-'));
 const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '60', '--ticks', '120', '--digest-every', '10'];
 function run(map, tag, env) {
   const out = join(dir, `${map}-${tag}.json`);
-  const stderr = execFileSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--json', out],
+  const child = spawnSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--json', out],
     {env: {...process.env, ...env}, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 64 << 20});
+  assert.equal(child.status, 0, `${map} ${tag}: bench-sim exited ${child.status}\n${child.stderr?.slice(-2000)}`);
   const report = JSON.parse(readFileSync(out, 'utf8'));
-  const line = stderr.split('\n').find(l => l.startsWith('pawn move differential:'));
+  const line = child.stderr.split('\n').find(l => l.startsWith('pawn move differential:'));
   return {report, differential: line ? JSON.parse(line.slice(line.indexOf('{'))) : null};
 }
 try {

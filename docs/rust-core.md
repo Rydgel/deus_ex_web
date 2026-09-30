@@ -1403,10 +1403,78 @@ Verification (September 30):
   `-walking-callbacks`, `-set-rotation-riders`, `-far-move-scene`,
   `-steps`, `-move-smooth`, `-based-actors`, `-actor-physics` and
   `validate-rider-move-kernel` pass; and the 578 unit tests.
-* Cost: see the A/B table below.
+* Browser, with the kernel live on the dev server: Training reaches HUD
+  health 100 headlessly with no runtime error; Island plays to its first
+  unimplemented boundary (the latent native 506 StrafeFacing in
+  `ScriptedPawn.Attacking`, a known Stage 4 item, not a kernel error), and
+  after Player start the pawn moves on with no second error; the Island
+  walk profile (300 frames, `--no-profile`) runs with no error at a 13.5 ms
+  tick phase, against 14.1 ms measured before B4 on the same tree.
+* **Cost: no stable whole-tick change.** Island, 300 measured ticks with
+  headless render feedback, medians in ms per tick, interleaved pairs:
+
+  | Pair | `MOVE_PAWN_KERNEL=js` | kernel on |
+  |---|---|---|
+  | 1 | 13.23 | 13.24 |
+  | 2 | 12.93 | 12.41 |
+
+  and HEAD before 1e-4 (`.work/base` at 69c8ca2) against the tree with
+  1e-4 and B4: 13.27/13.81, 12.58/12.49, 13.19/13.16 (base/main). This
+  is the expected result of the design: the hits, the candidate tests, the
+  touches, the riders and the zone are still JavaScript behind imports, so
+  what B4 removes is the source side of one call (the pawn view's getters
+  and the result and service allocations), well under 1 ms across the
+  roughly 100 MoveActors per tick and inside the run-to-run noise. Its
+  value is structural: B5 can call `move_pawn` directly from the walking
+  loop on the image instead of building the view and the services per
+  call, and B4b can move the rider pass next to it.
 * **Then:** B4b the rider pass in Rust, B5 the walking loop (B3's kernels
   on the image, calling this MoveActor directly instead of through the
   pawn view), B6 falling, landing and rotation.
+
+**R3-b B5 — The walking loop on the image (design, September 30).** B4's
+A/B shows that MoveActor's own body was not the cost; the pawn view is.
+`walking()` (walking.mjs, APawn::physWalking's dry path) reads about 30
+view properties per iteration through `pawn.position`, `pawn.velocity`,
+`pawn.acceleration`, the zone fields and the flags, each a `readNamed` and
+an array, and builds the move services per call; stepUp and the floor
+queries do the same. B5 runs the loop in Rust on the pawn's image, with
+B3's kernels (`ground_velocity`, `safe_normal`, `step_up`, `two_wall_adjust`,
+`js_hypot`) implemented over an image `PawnOps` whose `move_by` is
+`move_pawn` called directly, so a walking tick makes no JavaScript call
+except for its effects.
+
+* **Entry.** `runScriptPawnPhysics`'s `case 1` (`pawn.walking(delta, 0)`)
+  tries the kernel first, with the same admission as B4 plus the Pawn
+  fields the loop reads (GroundSpeed, AccelRate, MaxStepHeight, bCanJump,
+  bIsWalking, MoveTimer, Destination, Base, Region and the motion word's
+  bJustTeleported), the level's zone fields for the pawn's Region.Zone
+  (gravity, zone velocity, friction), and bHitSlopedWall. That last one is
+  a declared Pawn field (`Pawn.uc` 21, `var const bool bHitSlopedWall`, "used
+  by Physics"), so it has an image bit; the host `hitSlopedWall` member
+  script-pawn-physics.mjs keeps beside it is a stale copy, and B5 makes the
+  member an accessor over the bit (the 1e pattern) so the Rust loop and the
+  JavaScript reference read one storage.
+* **Effects as imports at the reference's points:** the surface prelude
+  (`walkingPrelude`, already one Rust scan plus its WalkTexture callback
+  and the ladder branch), `lineCheck` for the stopped-pawn floor probe and
+  the floor query (the trace kernel's instance), `setSupportBase`,
+  `setPhysics`, `farMove`, `fallingEvent`, `mayFall`, `hitWall`
+  (processPlayerHitWall, with its IsProbing read), `landed`, `falling` and
+  `startSwimming` as tail calls. Each may change Physics, so the loop
+  re-reads the Physics byte where the reference reads `pawn.physics`.
+* **Kept exactly:** the iteration and time-step arithmetic (`remaining >
+  .05 ? f(min(remaining*.5, f(.05)))`), the `hitSlopedWall` re-probe with
+  its three directions, the `Math.hypot` progress ratios, the
+  `distance` floor tests (4.1..4.6, 2.4, 1.9, 2.1), the slide when
+  `normal.z * friction < 3.3`, bCanJump and MayFall once per call, the
+  velocity recomputation from `(position - old) / dt` unless
+  bJustTeleported, and every `f` placement of walking.mjs.
+* **Verification:** `validate-walk-kernel` extended to the loop on a
+  scripted image pawn (the R3-d log-and-replay method for the effects),
+  digests on both maps, the native oracles `validate-native-walking`,
+  `-walking-callbacks`, `-walking-surface`, `-steps` and `-velocity` on
+  the Rust path, and the interleaved A/B, which is what B4 lacked.
 
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script
