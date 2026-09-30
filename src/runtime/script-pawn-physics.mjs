@@ -80,9 +80,10 @@ function regionBinding(field, actor, name) {
 /** Persistent pawn view over a script-attached map actor: script-visible
  * fields route through `field(name)` bindings (Location/Velocity/Physics/
  * Base/MoveTimer/...), the native collision bitfields derive from the bool
- * fields exactly like installActorCollisionView, and host-only physics state
- * (motionFlags, hitSlopedWall, pawnFlags) lives on the actor's host props like
- * the player path's motionFlags. Cached on the actor as `_pawnPhysics`. */
+ * fields exactly like installActorCollisionView, the +0x1ec motion word is the
+ * actor's own (`actor.motionFlags`, an accessor over its object image), and
+ * host-only physics state (hitSlopedWall, pawnFlags) lives on the actor's host
+ * props. Cached on the actor as `_pawnPhysics`. */
 export function pawnPhysicsView(actor, services) {
   if (actor._pawnPhysics) return actor._pawnPhysics;
   const { field, level, worldActor } = services;
@@ -122,6 +123,7 @@ export function pawnPhysicsView(actor, services) {
   // A map pawn's flag members read its image's flag words
   // (actor-flag-words.mjs), the storage of the bool fields themselves.
   const words = flagWordsOf(actor), imaged = Boolean(words?.collision && words.actor);
+  if (words && !words.motion) throw new Error(`Map pawn ${actor.name} has no +0x1ec image word (actor-flag-words.mjs)`);
   for (const [prop, name] of [['canJump', 'bCanJump'], ['isPlayer', 'bIsPlayer'], ['deleted', 'bDeleteMe'],
     ['collideWorld', 'bCollideWorld'], ['bounce', 'bBounce']])
     Object.defineProperty(pawn, prop, { get: imaged && prop === 'deleted' ? () => Boolean(actor.actorFlags & 0x80)
@@ -165,14 +167,19 @@ export function pawnPhysicsView(actor, services) {
   for (const prop of ['lineage', 'values', 'touching'])
     Object.defineProperty(pawn, prop, { get: () => actor[prop], enumerable: true });
   Object.defineProperty(pawn, 'pawnFlags', { get: () => actor.pawnFlags ?? 0, set: v => { actor.pawnFlags = v; }, enumerable: true });
-  // A map pawn's motion word stays a host word for now: its image starts at
-  // the serialized 0x140 (bRotateToDesired, bJustTeleported) while this word
-  // starts at 0, and the pawn physics reads bJustTeleported here (see
-  // docs/rust-core.md 1e-1).
+  // The +0x1ec word the original physics reads and writes on the actor
+  // itself: bJustTeleported (0x100) cleared at the top of physWalking
+  // 0x103ca83e, physFalling 0x103d0f04, physFlying 0x103d3177 and
+  // physSwimming 0x103d3d76, set by FarMoveActor 0x10398db7 and stepUp
+  // 0x103ce64e, tested before each Velocity recompute; bRotateToDesired
+  // (0x40) set and bFixedRotationDir (0x20) cleared by APawn::physicsRotation
+  // 0x103c9faa. A map pawn's and a spawned pawn's `motionFlags` are accessors
+  // over that image word (actor-flag-words.mjs, script-actor-collision.mjs),
+  // the storage of the script bools; there is no separate host copy.
   Object.defineProperty(pawn, 'motionFlags', { get: () => actor.motionFlags ?? 0, set: v => { actor.motionFlags = v; }, enumerable: true });
   Object.defineProperty(pawn, 'justTeleported', {
-    get: () => Boolean(actor.motionFlags & 0x100),
-    set: v => { actor.motionFlags = ((actor.motionFlags & ~0x100) | (v ? 0x100 : 0)) >>> 0; }, enumerable: true });
+    get: () => Boolean(pawn.motionFlags & 0x100),
+    set: v => { pawn.motionFlags = ((pawn.motionFlags & ~0x100) | (v ? 0x100 : 0)) >>> 0; }, enumerable: true });
   Object.defineProperty(pawn, 'hitSlopedWall', { get: () => actor.hitSlopedWall ?? false, set: v => { actor.hitSlopedWall = v; }, enumerable: true });
   // Zone-derived fields read through the actor's stored Region.Zone — the same
   // field the original physics reads after every SetActorZone update.

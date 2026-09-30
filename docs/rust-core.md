@@ -927,8 +927,9 @@ The words are now the image's bytes.
     0xa0081). The spawned-actor view composes the same four. So bHidden
     (0x2) still reads as clear where VisibleActors tests `actorFlags & 2`.
   * The per-bit members are getters.
-  * Only a non-pawn, non-brush map actor (`isMapMoveHost`) gets the motion
-    word, as only it had the bJustTeleported binding.
+  * A non-pawn, non-brush map actor (`isMapMoveHost`) gets the motion word,
+    as only it had the bJustTeleported binding. Map pawns followed in a
+    separate change ("Pawn motion word" below).
   * The accessors are non-configurable. A leftover `delete` or an assignment
     to a derived member throws instead of splitting the storage again.
 * **Layout evidence.** The installer checks each class once. The linker must
@@ -959,15 +960,6 @@ The words are now the image's bytes.
 
 Not moved, and why:
 
-* **A map pawn's motion word.** Its image word starts at 0x140. That is
-  bRotateToDesired (Pawn default) plus bJustTeleported (Actor's
-  `bJustTeleported=True` default). The pawn view's host word starts at 0.
-  It then holds only what physicsRotation (0x40 set, 0x20 clear),
-  FarMoveActor and the physics bodies write. The pawn physics reads
-  bJustTeleported from this host word. The original reads the actor's own
-  +0x1ec, so this is a fidelity divergence, and moving the word would change
-  the simulation. It is recorded here and needs its own evidence and digest
-  change.
 * **The player's collision and actor words** stay the movement port's host
   state (step 6). Player start assigns the retired identity a composed
   `actorFlags` without bDeleteMe and re-registers it in the hash before
@@ -1004,7 +996,7 @@ outside its word, and no host read a released image. Digests were unchanged
 under both VMs at all 30 checkpoints. An early short run reported one
 mismatch, inside the shadow bDeleteMe binding itself: it wrote the image and
 then read the host word. Reading the host word first removed it. The pawn
-motion words differed on every pawn, as described above.
+motion words differed on every pawn; "Pawn motion word" below fixes that.
 
 Verification:
 
@@ -1046,6 +1038,75 @@ fell from 31,660 to 30,369 and `instance` from 61,316 to 58,550. The median
 
 The tick was lower in three of the four pairs, by about 0.3 ms on average,
 which is within noise.
+
+**Pawn motion word (after 1e-1).** A map pawn's physics view kept its own
+`motionFlags` host word, which started at 0 while the image (the script
+bools) started at the class's 0x140. The physics' writes never reached the
+bools. The original reads and writes the pawn's own +0x1ec. Scanning
+Engine.dll's `.text` for every `+0x1ec`/`+0x1ed` operand gives the pawn
+accesses below. The rest are copy constructors, net replication, non-pawn
+physics, the interpolation bit 0x80, execParabolicTrace's bBounce read,
+ABrush::PostLoad, and execMoveSmooth's clear (`0x103c8e45`; native 3969,
+called only by PlayerPawn's PlayerWaiting and PlayerSpectating states and
+not implemented by the port).
+
+| Address | Function | Access |
+|---|---|---|
+| `0x103ca83e` | physWalking | clears bJustTeleported with `OldLocation = Location`, before the substeps |
+| `0x103cbbed`, `0x103cbd3c` | physWalking | test it before each Velocity recompute |
+| `0x103ce64e` | stepUp | sets it |
+| `0x103d0f04` | physFalling | clears it at each substep |
+| `0x103d22ce` | physFalling | tests bBounce, then bJustTeleported |
+| `0x103d2d3b` | startSwimming | tests bBounce, then bJustTeleported |
+| `0x103d3177`, `0x103d35fb` | physFlying | clears it, then tests it |
+| `0x103d3d76`, `0x103d424f` | physSwimming | clears it, then tests it |
+| `0x10398db7` | FarMoveActor | sets it when not a test move |
+| `0x103c9faa` | APawn::physicsRotation | clears bFixedRotationDir (0x20), sets bRotateToDesired (0x40), after the PlayerPawn ancestry return |
+| `0x103c9dde` | fixedTurn | reads 0x20 and 0x40 to pick its mode |
+
+DeusEx.dll touches the word only in AScriptedPawn's copy constructor and
+assignment. In the scripts, bJustTeleported is `const` (`Actor.uc:416`), and
+only `WarpZoneInfo.Touch` reads it.
+
+The fix:
+
+* script-doors' `installFlagWords` installs the motion word on map pawns
+  (`runtime.isMapPawn`) as well as map move hosts. `resetNpcs` no longer
+  deletes `motionFlags`: `resetProperties` restores it with the image.
+* The pawn view forwards `motionFlags` and `justTeleported` to the host's
+  accessor. A map host with installed flag words but no motion word throws
+  in `pawnPhysicsView`, so the install cannot silently regress.
+* The spawned-actor view's `motionFlags` is the whole image word
+  (`flagWord`), not the bJustTeleported bit alone. A spawned pawn's
+  physicsRotation write now reaches bRotateToDesired and bFixedRotationDir.
+  FarMoveActor's `| 0x100` keeps the word's other bits. A class without
+  linked offsets (the isolated harnesses, such as `validate-script-spawn`)
+  has no image, so its view composes the same nine bools from their fields.
+
+The physics itself is unchanged. Each body that tests bJustTeleported clears
+it first itself, so the old host word's 0 start and the image's 0x100 start
+lead to the same moves. What changes is the state scripts, and the digest,
+read:
+
+* Digests change from the first checkpoint, under both VMs, which agree at
+  all 30 checkpoints with no errors: Training `04f77dc631509ae4` to
+  `c8eebff5786adf55`, Island `7b23d044fafab37f` to `b767a7e417fe5968`.
+* A per-field dump of every script property of every Level.Actors entry at
+  ticks 10, 20, 30, 50, 100 and 300 shows one differing property,
+  bJustTeleported. It was True before and is False after on every map pawn
+  a physics body ran for: 18 in Training (17 from tick 100, after
+  UNATCOTroop2 dies and is replaced by its carcass), 52 on Island (51
+  walking and 1 flying).
+* Six Island map pawns at PHYS_None keep True, because no physics body runs
+  for them. The spawned pawns (22 swimming and 11 flying on Island) and the
+  player were already False through their image, and no pawn's
+  bRotateToDesired or bFixedRotationDir changed.
+
+`test/pawn-motion-word.test.mjs` runs on Engine's real Pawn layout. It checks
+that the view's clear, the physicsRotation mode write and FarMoveActor's set
+are the script bools, and that a test move leaves bJustTeleported alone. It
+also checks that the word cannot be deleted, that a map pawn without the word
+is refused, and that a spawned pawn view writes the whole word.
 
   that subtree with the existing compiled closures on the same frame object.
   Every function can then run in Rust from the start, and coverage grows kind

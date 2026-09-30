@@ -35,6 +35,7 @@ import { playerMove } from './player-move.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { isMapMoveHost, linkLiveCollision } from './map-actor-native.mjs';
+import { flagWord, MOTION_WORD } from './actor-flag-words.mjs';
 import { saveConfig, configRoot, loadConfig as loadObjectConfig, defaultsObject } from './script-config.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
@@ -162,6 +163,10 @@ import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
 import {execRotRand} from './script-rot-rand.mjs';
 import {parseToken} from './script-console-command.mjs';
+// A spawned actor's +0x1ec word over its object image (actor-flag-words.mjs);
+// null for a class without linked offsets (an isolated harness), whose
+// collision view composes the same bools from their fields.
+const imagedMotionWord=instance=>instance.cells&&instance.base?flagWord(instance,MOTION_WORD):null;
 
 const lower=name=>String(name).toLowerCase();
 // Event and function names are a small fixed vocabulary: keep their lowercase.
@@ -2460,7 +2465,7 @@ export class ScriptRuntime {
           read:(a,name)=>this.readNamed(a,name),
           write:(a,name,value)=>this.writeNamed(a,name,value),
           bind:(a,name)=>this.boundField(a,name),
-          worldActor:level.actors[0],lineage});
+          worldActor:level.actors[0],lineage,motionWord:imagedMotionWord(this.instance(actor))});
         this.collisionViewActors.add(actor);
         return actor;
       },

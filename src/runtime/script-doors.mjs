@@ -803,17 +803,22 @@ export async function createScriptDoors({
   }
 
   // A map actor's native flag words become its image's bytes: the members a
-  // level-load host carries (`flags`, `actorFlags`, a map move host's
-  // `motionFlags`) turn into accessors (actor-flag-words.mjs). The controlled
-  // player's movement port keeps its collision members (stage 1e step 6);
-  // its motion word, which bJustTeleported reads, is the attached identity's.
+  // level-load host carries (`flags`, `actorFlags`, a map move host's or map
+  // pawn's `motionFlags`) turn into accessors (actor-flag-words.mjs). The
+  // controlled player's movement port keeps its collision members (stage 1e
+  // step 6); its motion word, which bJustTeleported reads, is the attached
+  // identity's. A map pawn's physics (script-pawn-physics.mjs) reads and
+  // writes the +0x1ec word the original reads: physWalking, physFalling,
+  // physFlying and physSwimming clear bJustTeleported, FarMoveActor and
+  // stepUp set it, APawn::physicsRotation sets bRotateToDesired and clears
+  // bFixedRotationDir (docs/rust-core.md 1e-1).
   function installFlagWords(host) {
     if (host.controlledPlayer) {
       playerController.linkMotionFlags(flagWord(runtime.instance(host), MOTION_WORD));
       return;
     }
     const collision = Number.isInteger(host.flags), actor = Number.isInteger(host.actorFlags);
-    const motion = isMapMoveHost(host);
+    const motion = isMapMoveHost(host) || runtime.isMapPawn(host);
     if (collision || actor || motion) installActorFlagWords(host, runtime.instance(host), {collision, actor, motion});
   }
 
@@ -1478,8 +1483,10 @@ export async function createScriptDoors({
     level.pawnList = null;
   }
 
+  // `motionFlags` is not a host prop: it is the +0x1ec image word
+  // (installFlagWords), which resetProperties restores with the image.
   const NPC_HOST_PROPS = Object.freeze(['position', 'rotation', 'physics', 'base', 'velocity',
-    'standingCount', 'motionFlags', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
+    'standingCount', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
     'marker', 'specialGoal', 'clientUpdate', 'simOldPosition', 'simOldRotYaw', 'simOldRotPitch',
     'simOldRotRoll', 'simInterpolate', 'realPosition', 'realRotation', 'ambientSound',
     'nextPawn', 'collisionValues', '_pawnPhysics']);

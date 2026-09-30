@@ -38,11 +38,13 @@ copies (`collisionBits`, `collideActors`, `collideWorld`, `blockActors`,
 `blockPlayers`, `blocking`), so no reader sees a stale bit.
 
 Since stage 1e step 1 ([Rust core](rust-core.md) 1e-1) the flag members are
-the image itself. `flags`, `actorFlags` and a non-pawn map actor's
-`motionFlags` are accessors over the actor's `+0x1dc`, `+0x28` and `+0x1ec`
-dwords (`actor-flag-words.mjs`), and the per-bit copies derive from them. The
+the image itself. `flags`, `actorFlags` and a map actor's `motionFlags` are
+accessors over the actor's `+0x1dc`, `+0x28` and `+0x1ec` dwords
+(`actor-flag-words.mjs`), and the per-bit copies derive from them. The
 collision bools, bDeleteMe and bJustTeleported therefore need no binding.
-`OldLocation` keeps its binding.
+`OldLocation` keeps its binding. A map pawn's `motionFlags` is the same image
+accessor; its physics view reads and writes it (see
+[Rust core](rust-core.md) 1e-1, "Pawn motion word").
 
 Batch 5 joins the map actor's `Acceleration` to the same native surface as
 `Velocity`. The recovered `AActor::setPhysics` zeroes both members at
