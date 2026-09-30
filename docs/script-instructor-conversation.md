@@ -256,6 +256,81 @@ A Player start follows the original reload
 
 This is not save/load or map-travel flag/history persistence.
 
+### Open follow-up (2026-09-30): radius greeting and the browser test
+
+An uncommitted September 23 change in the old
+`.claude/worktrees/goofy-elgamal-33a397` worktree was never merged. Master has
+since moved on, so it does not apply as it stands. This note keeps what is
+still useful.
+
+**Stale in master.** Use is right mouse (F centres the view) since `38034a2`,
+and the preview is the toolbar **Preview → Instructor** entry since `9c08f77`.
+Two places still describe the old flow:
+
+* The intro of this document ("**Instructor preview** button", "press
+  **F**").
+* `browser-tests/instructor-conversation.spec.mjs`, which still presses `KeyF`
+  after fixed wall-clock waits (300 ms, 1200 ms).
+
+Those waits race the original gates below at the browser's frame rate.
+
+**Original behavior it recorded.** These points come from the embedded
+script sources. Re-check each line reference against
+`.cache/reference/*.uc` when implementing.
+
+* **The greeting plays without a key.** Every `ScriptedPawn.Tick` with
+  `bDoLowPriority` calls `player.StartConversation(Self, IM_Radius)`
+  (ScriptedPawn.uc 7372–7377). JC placed 80 units from the instructor is
+  inside MunitionsTrooperFrob's `radiusDistance` 160, and MaxFrobDistance 112
+  always is. So once CanConverse holds, the greeting starts on its own. It
+  took about 1.6 s in the September 23 browser flow.
+* **Use is refused at two points.**
+  * While that conversation is playing (DeusExPlayer.uc 7780–7781).
+  * In the first second after it ends (7922–7923, the gate described above).
+
+  In both cases FrobTarget is the instructor.
+* **Radius replays are held out afterwards.** ConPlayBase.SetPlayedFlag sets
+  `con.lastPlayedTime` and the player's `lastFirstPersonConvoTime` at the end.
+  They keep radius replays out for 10 s and 5 s (7996–7999).
+* **Take can start by radius too.** MunitionsTrooperTake (`radiusDistance`
+  350) can start by radius once natural movement sets Ready. A later use then
+  finds it playing. Either way Take is selected.
+* **`IM_Frob` changes the conversation's radius.** It replaces
+  `con.radiusDistance` with the invoke distance (DeusExPlayer.uc 7855–7858),
+  and ConPlayBase.StartConversation re-saves it. After the first use,
+  MunitionsTrooperFrob therefore stays at about 80 instead of 160.
+* **`bNPCHighlighting` is not loaded.** The installed User.ini sets
+  `bNPCHighlighting=True`, but Play uses the class default False, so the
+  original IsHighlighted hides frob brackets for pawns. Loading DeusExPlayer
+  globalconfig beyond `bSubtitles` is unsupported.
+
+**Obsolete part.** The change also reset the player's
+`last{First,Third}PersonConvo{Actor,Time}` on Player start. A stale
+`lastFirstPersonConvoTime` had held the greeting out for about 40 s after the
+level clock restarted. That is no longer needed. Player start is now the
+original `LoadMap` plus a second Login ([Player start
+collection](script-loadmap-gc.md)), and it spawns a fresh player whose
+non-travel vars start at their defaults. Confirm this once in the browser: the
+greeting should play promptly after Player start.
+
+**To do.**
+
+1. Update this document's intro to the Preview menu and right-click use.
+2. Add the behavior above, verified against the sources.
+3. Rewrite the browser test to use right-click. Wait in level time for the
+   window where use can only start the instructor's own `IM_Frob`
+   conversation:
+   * FrobTarget is the instructor;
+   * no active `conPlay`;
+   * `LastConEndTime > 0`;
+   * 1 s ≤ `TimeSeconds − LastConEndTime` < 4 s.
+
+   Observe the radius greeting first.
+4. Run that browser test, which is not part of the validator sweep.
+5. Delete the old worktree and its branch `claude/goofy-elgamal-33a397`. Its
+   commits are all in master. Its uncommitted diff is also kept locally,
+   outside Git, as `.work/notes/goofy-elgamal-instructor.patch`.
+
 ### Host service inputs vs original evidence
 
 The installed conversation graph, ConPlay scripts, original native constructors,
