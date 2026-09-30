@@ -361,6 +361,15 @@ A/B, 4 pairs); GPU time 1.44 → 2.91 ms. The 2 ms actors-phase target is not
 met; the remainder is SetupForActor, the admission scan and GetFrame
 planning in JavaScript.
 
+**Full sweep** (`npm run validate -- --jobs 4`, branch head `349b875`):
+441 of 444 passed. The three failures are the known non-regressions and
+pass solo: `validate-native-mover-scene` (report race),
+`validate-native-level-points` (it reads a report another validator leaves
+in the git-ignored `reports/`, absent in a fresh worktree) and
+`validate-player-tick-order` (killed at the runner's 6 GB cap under memory
+pressure; exit 0 alone). The Island digest after the sweep is still
+`b767a7e417fe5968`.
+
 **Known differences and limits:**
 
 * Transparent groups sort by their box centre when no exact sphere was
