@@ -10,7 +10,7 @@
  *   - environment: meshVertexNormalsInto and writeMeshEnvironmentUV;
  *   - visibility: three.js's own sphere test on the exact CPU spheres.
  *
- *   node scripts/validate-gpu-mesh.mjs [--url http://127.0.0.1:5175]
+ *   node scripts/validate-gpu-mesh.mjs [--url http://127.0.0.1:5173] (default: its own server)
  *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,90,120,160,200,250,300,360]
  *     [--device cpu]   (CPU substitutes for the GPU readbacks: JavaScript
  *                       lighting path, CPU positions; checks the harness)
@@ -18,9 +18,26 @@
  * Exits nonzero when a tolerance is exceeded or coverage is missing.
  */
 import {chromium} from '@playwright/test';
+import {createServer} from 'vite';
+import {fileURLToPath} from 'node:url';
+import {gameDirectory} from './game-directory.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
-const url=option('url','http://127.0.0.1:5175'),device=option('device','gpu');
+const device=option('device','gpu');
+try{gameDirectory();}catch{console.log('SKIP validate-gpu-mesh: no installed game data');process.exit(0);}
+// Without --url, a bounded dev server of this checkout with the repository's
+// configuration (game-data middleware included) on a free port. A checkout
+// under .work/ keeps its own files servable.
+let server=null,url=option('url',null);
+if(!url){
+  const root=fileURLToPath(new URL('..',import.meta.url));
+  const {default:base}=await import('../vite.config.mjs');
+  const deny=base.server.fs.deny.filter(pattern=>!(pattern.includes('.work')&&root.includes('/.work/')));
+  server=await createServer({...base,configFile:false,root,logLevel:'error',
+    server:{...base.server,port:0,strictPort:false,fs:{...base.server.fs,deny},watch:null}});
+  await server.listen();
+  url=server.resolvedUrls.local[0].replace(/\/$/,'');
+}
 const maps=option('maps','00_Training,01_NYC_UNATCOIsland').split(',');
 const frames=option('frames','5,30,60,90,120,160,200,250,300,360').split(',').map(Number);
 const TOLERANCE={ulp:1,tweenUlp:2,byte:1,edgeOn:2**-20,uv:2**-20};
@@ -213,12 +230,16 @@ try {
       bitExactFraction:+(report.exact/Math.max(1,report.components)).toFixed(6),...report},null,1));
     await page.close();
   }
-} finally {await browser.close();}
+} finally {await browser.close();await server?.close();}
 // Face flags, animation modes and moving lights must all be exercised by the
 // maps compared in this run.
 const required=['translucent','modulated','masked','environment','mixedUnlit','blend','tween','movingLights'];
 const missing=required.filter(name=>!(coverage[name]>0));
 console.log(JSON.stringify({coverage,missing}));
-if(device==='gpu'&&missing.length)failed=true;
+// Coverage is a property of the full run over both maps (Training alone has
+// no moving mesh lights or tweens in its captured frames).
+const fullRun=['00_Training','01_NYC_UNATCOIsland'].every(map=>maps.includes(map));
+if(device==='gpu'&&fullRun&&missing.length)failed=true;
+else if(missing.length)console.log(`coverage not required for a partial run: missing ${missing.join(', ')}`);
 if(failed){console.error('validate-gpu-mesh: FAIL');process.exit(1);}
 console.log('validate-gpu-mesh: PASS');
