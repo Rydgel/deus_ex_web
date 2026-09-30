@@ -1,6 +1,6 @@
 import { getAxes } from '../runtime/camera.mjs';
 import { traceRay } from '../runtime/ray.mjs';
-import { isMovingLightCandidate, movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, lightVertex, setupForActor,
   unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
 
@@ -62,8 +62,12 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       // Filter prepends each onto the leaves it reaches.
       for (const actor of level.actors) {
         if (!actor || !read(actor, 'LightType') || read(actor, 'bDeleteMe')) continue;
+        // SetupDynamics 0x10b230e8..0x10b2311c rejects these before
+        // constructing a dynamic light. Static-light records are created
+        // lazily by lightOf/current if SetupForActor actually needs them.
+        if ((read(actor, 'bStatic') || read(actor, 'bNoDelete')) && !read(actor, 'bDynamicLight')) continue;
+        if (!read(actor, 'LightBrightness') || !read(actor, 'LightRadius')) continue;
         const record = lightRecord(actor);
-        if (!isMovingLightCandidate(record.values)) continue;
         for (const leaf of movingLightLeaves(frame.model, record.location, worldLightRadius(record.values))) {
           const list = frame.leafLights.get(leaf) ?? [];
           list.unshift(record);

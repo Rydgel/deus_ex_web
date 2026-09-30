@@ -67,6 +67,35 @@ DrawLodMesh ORs `PF_Flat` itself.
 `0x10b0f6d2`: `c = AmbientGlow·(1/256) + ScaleGlow·0.5`, clamped to `[0, 1]`,
 the same for R, G and B. All `PF_Unlit` faces use it.
 
+## Moving-light collection and deferred records (September 30)
+
+Before SetupForActor, SetupDynamics `0x10b230e8..0x10b2311c` rejects
+LightType zero, then `(bStatic || bNoDelete) && !bDynamicLight`, then zero
+LightBrightness or LightRadius. These gates precede radius calculation and
+dynamic-light allocation; [the recovered light contract](dynamic-lighting.md#recovered-call-order)
+records the original instructions. Static lights remain available through
+the mesh's BSP-leaf permeating run during SetupForActor.
+
+The host's per-frame mesh-light view previously constructed a full
+light record for every non-deleted actor with a nonzero LightType, even when
+the native moving-light gate rejected it. Apply that gate first and defer
+the full static-light record until SetupForActor actually requests it. This
+changes allocation/read work within a synchronous render phase; it does not
+cache light state across frames, omit a selected light, or change BSP list
+order. A live field edit is reconsidered next frame, including changing a
+static light to bDynamicLight. Original view-plane rejection and BSP span
+visibility retain their existing unsupported scope.
+
+Verification: the real Island collection retains all 285 leaf entries in
+the same order while eager full records fall from 436 to 16 and property
+reads from 9,392 to 3,996. Three interleaved 300-frame Node samples after
+warm-up measured collection at 1.92–2.05 ms before and 0.68–0.79 ms after.
+This measures collection only: a static light subsequently requested for
+mesh lighting still incurs its record construction then. The focused live
+mutation test passes; `validate-mesh-lighting-play.mjs` passes all 24 cases
+covering 12 actors, 100 selected lights and 2,512 vertices, with zero diffuse
+byte differences against either Wasm or the original native Light routine.
+
 ## SetupForActor (`0x10b08c70`)
 
 State: `Actor` is the light sink. `Zone` is `Actor.Region.Zone`, or the
