@@ -1145,25 +1145,6 @@ callers are Barrel1's radioactive Tick, Cloud, Gray and AutoTurret, and
 counting every iterator native over the run finds 304, 306, 309, 310, 1000
 and 1002, never 311.
 
-  that subtree with the existing compiled closures on the same frame object.
-  Every function can then run in Rust from the start, and coverage grows kind
-  by kind without an eligibility cliff.
-* **Frames.** JavaScript still creates each frame (`FrameLocals`: the arena
-  block and its reference array). Rust reads and writes scalar locals in the
-  block and follows object handles; name, string and object writes go
-  through an import until R1b and R1c.
-* **Objects.** An arena table maps a handle to its object's image base and
-  flags (bindings, poisoned values, pending kill). A field of an object with
-  bindings, or with a poisoned value, takes the JavaScript path.
-* **Calls and natives.** Rust calls one import for a script call or a
-  non-primitive native. `evaluateArgument(i)` calls back into Rust to
-  evaluate argument `i`'s lowered subtree. A reference comes back as a
-  descriptor (frame block or object image, offset, cell), and JavaScript
-  wraps it in the same storage classes (`LocalCellStorage`, `CellStorage`).
-* **Verification.** `SCRIPT_VM=rust` runs every function body in Rust. The
-  bench-sim digests (`--digest-every`) on Training and Island must equal the
-  JavaScript VM's at every checkpoint, and the full sweep runs in that mode.
-
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming
 ([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;
