@@ -186,7 +186,9 @@ the linked offsets (`script-object-image.mjs`):
   linked offsets. FName, FString, object and class pointers and dynamic
   arrays keep their logical value in a per-object reference array; their
   bytes stay zero (see Unresolved). Since [Rust core](rust-core.md) step
-  R1a-2, object and class pointers are handles in their bytes instead.
+  R1a-2, object and class pointers are handles in their bytes instead, and
+  since step R3-c a name's bytes hold a host id of its value (0 for None)
+  beside the reference, which stays the value JavaScript reads.
 * **Construction.** Each class has a default image holding every imaged
   property's default value, the block InitProperties copies. It is rebuilt
   when a class default changes, so a new object sees the defaults at its

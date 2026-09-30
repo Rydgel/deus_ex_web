@@ -21,6 +21,7 @@ import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isF
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {fixedArrayShape} from './script-values.mjs';
+import {nameId} from './script-name-ids.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -36,6 +37,7 @@ const K = {
   SET_FIELD: {int: 64, byte: 65, bool: 66, float: 67, object: 69, vector: 197, rotator: 199},
   COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
   LIT_VECTOR: 160, LIT_ROTATOR: 175, LIT_NAME: 194, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184, IS_A: 193,
+  PAWN_ENEMY: 200, PAWN_ALLIANCE: 201, AI_CAN_SEE: 202,
   CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
@@ -138,6 +140,12 @@ const COMPONENTS = {vector: ['X', 'Y', 'Z'], rotator: ['Pitch', 'Yaw', 'Roll']};
 // JavaScript leaf, or FMin/FMax/a context handing one back.
 const MAYBE_UNDEFINED = new Set([K.JS.float, 132, 133, K.CONTEXT]);
 
+// R3-c perception natives: [kind code, result kind, argument kinds].
+const PERCEPTION = new Map([
+  [2105, [200, 'bool', ['object', 'bool']]],
+  [2107, [201, 'byte', ['object']]],
+  [705, [202, 'float', ['object', 'float', 'bool', 'bool', 'bool', 'bool']]],
+]);
 // Cast tokens: [kind code, operand kind, result kind].
 const CASTS = new Map([
   [0x3a, [K.BYTE_TO_INT, 'byte', 'int']],
@@ -197,26 +205,9 @@ export function fieldKeyId(key) {
 // Names as small integers from 1, shared by every runtime (R2b-6): the id of
 // a name value's folded spelling `String(v || 'None').toLowerCase()`, which is
 // what 254/255 and IsA compare; `none` is id 1. Class rows list their chain's
-// `String(name).toLowerCase()` ids (script-vm-rust.mjs).
-const nameKeys = new Map([['none', 1]]), nameSpellings = [null, 'none'];
-export function foldedNameId(folded) {
-  let id = nameKeys.get(folded);
-  if (id === undefined) {
-    nameKeys.set(folded, id = nameSpellings.length);
-    nameSpellings.push(folded);
-  }
-  return id;
-}
-// A string's id by its exact spelling, so a name seen again is not folded again.
-const spellingIds = new Map();
-export function nameId(value) {
-  if (typeof value !== 'string') return foldedNameId(String(value || 'None').toLowerCase());
-  let id = spellingIds.get(value);
-  if (id === undefined) spellingIds.set(value, id = foldedNameId((value || 'None').toLowerCase()));
-  return id;
-}
-/** The folded spelling of a name id. */
-export const nameSpelling = id => nameSpellings[id];
+// `String(name).toLowerCase()` ids (script-vm-rust.mjs). The table lives in
+// script-name-ids.mjs, which the object image uses too (R3-c).
+export {foldedNameId, nameId, nameSpelling} from './script-name-ids.mjs';
 
 // Class records as small integers from 1, shared by every runtime: a cast's
 // target and the class rows of the handle class table (script-vm-rust.mjs)
@@ -578,6 +569,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     const composite = COMPOSITE_OPERATORS.get(index);
     if (composite) return compositeOperator(n, composite);
     if (index === 303) return isA(n);
+    if (PERCEPTION.has(index)) return perception(n);
     if (index === 130 || index === 132) {
       if (args.length !== 2 || !isNode(args[1]) || args[1].op !== 0x18) return null;
       const first = expr(args[0], 'bool'), second = expr(args[1].value, 'bool');
@@ -625,6 +617,31 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     if (args.length !== 1 || !isNode(args[0]) || args[0].op !== 0x21) return null;
     if (services.invokeNative !== runtime.services.invokeNative || runtime.boundaryNatives?.has(303)) return null;
     return typed('bool', [K.IS_A, nodeId(n), nameId(args[0].name)]);
+  }
+
+  // R3-c: IsValidEnemy (2105), GetPawnAllianceType (2107) and AICanSee (705)
+  // in Rust (percep.rs), when the runtime's own invokeNative would run their
+  // bodies (not a boundary native, and no host has replaced the runtime's
+  // invokeNative, as validators that observe native calls do) and the field
+  // table has every field they read. Each argument is a presence word (0 for
+  // EX_Nothing, whose value is undefined) and its code, evaluated in order
+  // before the body, as evaluateArgument is.
+  function perception(n) {
+    const [code, result, kinds] = PERCEPTION.get(n.index), args = n.args;
+    if (services.invokeNative !== runtime.services.invokeNative || Object.hasOwn(runtime, 'invokeNative') ||
+      runtime.boundaryNatives?.has(n.index)) return null;
+    if (!Array.isArray(args) || args.length < 1 || args.length > kinds.length || !runtime.scriptVm?.perceptionReady(n.index))
+      return null;
+    const words = [code, nodeId(n), args.length];
+    for (let i = 0; i < args.length; i++) {
+      if (isNode(args[i]) && args[i].op === 0x0b) { words.push(0); continue; }
+      const value = expr(args[i], kinds[i]);
+      // IsValidEnemy reads an undefined optional as true, which a JavaScript
+      // leaf's bool conversion would lose.
+      if (n.index === 2105 && i === 1 && value[0] === K.JS.bool) return null;
+      words.push(1, ...value);
+    }
+    return typed(result, words);
   }
 
   // EX_Context: the object against the current receiver, then the value

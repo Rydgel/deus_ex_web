@@ -16,6 +16,11 @@
  *    reads and handleSlots agree on every offset.
  * 3. The reference array holds no pointer: only names, strings and dynamic
  *    arrays.
+ * 4. Each name, struct members and fixed-array elements included, holds its
+ *    value's id in its four bytes (nameCellWord, R3-c): the id the Rust
+ *    perception natives compare.
+ *
+ * `--map NAME` runs another map (default 00_Training).
  *
  * validate-object-image checks the class defaults and direct writes against
  * the value codec; validate-loadmap-gc checks that handles end with their
@@ -28,7 +33,8 @@ import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
-import {handleSlots, scalarCell, isFixedCell} from '../src/runtime/script-object-image.mjs';
+import {handleSlots, nameSlots, scalarCell, isFixedCell} from '../src/runtime/script-object-image.mjs';
+import {nameCellWord} from '../src/runtime/script-name-ids.mjs';
 import {identityOfHandle, handleState, liveHandleCount} from '../src/runtime/script-object-handles.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
@@ -36,7 +42,8 @@ const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(path.join(root, directory)))
     files.push({path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name))});
-const assets = new AssetStore(files), asset = await assets.get('00_Training');
+const mapArg = process.argv.indexOf('--map'), mapName = mapArg < 0 ? '00_Training' : process.argv[mapArg + 1];
+const assets = new AssetStore(files), asset = await assets.get(mapName);
 const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
 const runtime = game.doors.scriptRuntime.runtime;
 for (let frame = 0; frame < 180; frame++) game.tick(1 / 60);
@@ -61,6 +68,18 @@ const slotsOf = (key, cell) => {
 };
 const label = identity => String(identity?.name ?? identity?.key ?? identity?.record?.key ?? '?');
 
+// 4. Every name slot of an image holds its value's id.
+const nameCache = new Map();
+function checkNames(what, cells, view, base, refs) {
+  let slots = nameCache.get(cells);
+  if (!slots) nameCache.set(cells, slots = nameSlots(cells));
+  for (const {offset, ref} of slots) {
+    const word = view.getUint32(base + offset, true), expected = nameCellWord(refs[ref]);
+    assert.equal(word, expected, `${what} name at +0x${offset.toString(16)} (${String(refs[ref])}): bytes ${word}, id ${expected}`);
+  }
+  return slots.length;
+}
+
 // 1. Every pointer slot of an image holds None or a live handle.
 function checkSlots(what, cells, view, base) {
   let slots = 0, nonNull = 0;
@@ -73,7 +92,7 @@ function checkSlots(what, cells, view, base) {
   return {slots, nonNull};
 }
 
-let objects = 0, pointerCount = 0, nonNull = 0, reads = 0, refValues = 0;
+let objects = 0, pointerCount = 0, nonNull = 0, reads = 0, refValues = 0, names = 0;
 const classes = new Set();
 for (const identity of identities) {
   let instance;
@@ -99,6 +118,8 @@ for (const identity of identities) {
     reads++;
   }
 
+  names += checkNames(name, instance.cells, view, instance.base, instance.refs);
+
   // 3. No pointer in the reference array.
   for (const value of instance.refs ?? []) {
     assert.ok(value == null || typeof value === 'string' || Array.isArray(value),
@@ -113,10 +134,11 @@ let defaultPointers = 0;
 for (const cls of classes) {
   const source = runtime.classImage(cls);
   defaultPointers += checkSlots(`${cls.record.key} default`, source.layout.cells, source.arena.view, source.base).slots;
+  names += checkNames(`${cls.record.key} default`, source.layout.cells, source.arena.view, source.base, source.refs);
 }
 
 assert.ok(objects > 400 && nonNull > 2000, `the scan reached the level (${objects} objects, ${nonNull} pointers)`);
-console.log(`validate-object-handles: after 180 Training ticks, ${objects} live objects hold ${pointerCount} pointers ` +
+console.log(`validate-object-handles: after 180 ${mapName} ticks, ${objects} live objects hold ${pointerCount} pointers ` +
   `(${nonNull} non-None) and their ${classes.size} class default images ${defaultPointers}, all None or live handles; ` +
   `${reads} pointer properties read their handles; ${refValues} reference-array values, no pointers; ` +
-  `${liveHandleCount()} live handles: ok`);
+  `${liveHandleCount()} live handles; ${names} names hold their ids: ok`);

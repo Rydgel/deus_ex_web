@@ -290,3 +290,16 @@ original-DLL helper/LOS comparisons and linked Training script/BSP checks.
 See [the recovered helper contract](script-pawn-tick-visibility.md). These
 helpers do not supply NPC startup; AICanSee's separate lighting subsystem is
 documented in [AI lighting](script-ai-visibility.md).
+
+## Rust interpreter
+
+Under `SCRIPT_VM=rust`, AICanSee (705) runs in the interpreter, with the
+AIVisibility and AIGetLightLevel it calls ([Rust core](rust-core.md) step
+R3-c, `native/script-vm/src/percep.rs`). The Rust body transcribes
+`execAICanSee`, `actorVisibilityExtended` and `actorLightLevelExtended`. Its
+SingleLineCheck traces stay JavaScript imports into the trace kernel, and
+appAtan and FVector::Rotation use `Math.atan` and `Math.atan2`, as the
+runtime's JavaScript does (the hardware tables are this validator's seam
+only). `scripts/validate-perception-kernel.mjs` and
+`PERCEPTION_DIFFERENTIAL=1` compare the two; the JavaScript here remains the
+reference, and the oracle validators above test it.

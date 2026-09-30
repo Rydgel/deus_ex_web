@@ -54,7 +54,8 @@
 //! identity ended; a pointer holding it reads None, as identityOfHandle's
 //! null does), or the address of the class row of the handle's attached
 //! instance (`instances.get(identity).cls`), written by js_class_row. A row
-//! is [default image, n, record id of cls, of cls.base, ...]. Its default
+//! is [default image, n, record id of cls, of cls.base, ...] (then R2b-6's
+//! name ids and R3-c's two perception words, percep.rs). Its default
 //! image word is 0 when the host must look again (a class default or class
 //! image changed), UNREADABLE when DefaultVariable reads of that class stay
 //! in JavaScript, else the base of the class default image. Every released
@@ -149,11 +150,16 @@
 //!   CHECK_VALUES[0..3] and [3..6] and the result in [6..9], and the host runs
 //!   the JavaScript VM's own code on those operands (the native() body,
 //!   structValue); IS_A reports CK_BOOL.
+//!
+//! Perception natives (R3-c, percep.rs): PAWN_ENEMY 200 (bool, 2105),
+//! PAWN_ALLIANCE 201 (int, 2107) and AI_CAN_SEE 202 (float, 705), each
+//! `node, argc`, then per argument a presence word (0 for EX_Nothing) and,
+//! when present, its code; the receiver is the node's receiver.
 
 use core::ptr::{addr_of, addr_of_mut, read_unaligned, write_unaligned};
 
-const UNDEFINED: u32 = u32::MAX;
-const UNDEF_F64_BITS: u64 = 0x7ff8_0000_0000_0001;
+pub(crate) const UNDEFINED: u32 = u32::MAX;
+pub(crate) const UNDEF_F64_BITS: u64 = 0x7ff8_0000_0000_0001;
 /// js_step: the callee returned in JavaScript (RESULT written there).
 const RETURNED: u32 = 0xffff_fffe;
 
@@ -313,6 +319,10 @@ const SET_LOCAL_VECTOR: u32 = 196;
 const SET_FIELD_VECTOR: u32 = 197;
 const SET_LOCAL_ROTATOR: u32 = 198;
 const SET_FIELD_ROTATOR: u32 = 199;
+// R3-c: the perception natives (percep.rs).
+const PAWN_ENEMY: u32 = 200;
+const PAWN_ALLIANCE: u32 = 201;
+const AI_CAN_SEE: u32 = 202;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -334,12 +344,12 @@ const R_SUB: u32 = 7;
 // key is marked in the bound-keys table takes the JavaScript path. HOST:
 // every field does (no image, a poisoned value, a released allocation, a
 // class receiver).
-const BOUND: u32 = 1;
-const HOST: u32 = 2;
+pub(crate) const BOUND: u32 = 1;
+pub(crate) const HOST: u32 = 2;
 // A class table entry for a released handle; a class row's default image
 // word when DefaultVariable reads of that class stay in JavaScript. (Rows and
 // images are arena addresses, never 1.)
-const RELEASED: u32 = 1;
+pub(crate) const RELEASED: u32 = 1;
 const UNREADABLE: u32 = 1;
 // js_check value kinds.
 const CK_INT: u32 = 1;
@@ -351,7 +361,7 @@ const CK_VECTOR: u32 = 6;
 const CK_ROTATOR: u32 = 7;
 const CK_OP: u32 = 8;
 /// The name id of `none` (the host interns it first).
-const NAME_NONE: u32 = 1;
+pub(crate) const NAME_NONE: u32 = 1;
 
 // Errors raised through js_error, which throws the JavaScript VM's message.
 const ERR_HANG: u32 = 1;
@@ -392,7 +402,7 @@ extern "C" {
     fn js_bool(frame: u32, node: u32, receiver: u32) -> i32;
     fn js_object(frame: u32, node: u32, receiver: u32) -> u32;
     fn js_eval(frame: u32, node: u32, receiver: u32);
-    fn js_receiver(handle: u32) -> u32;
+    pub(crate) fn js_receiver(handle: u32) -> u32;
     fn js_accessed_none(frame: u32, node: u32);
     fn js_error(frame: u32, code: u32, node: u32);
     fn js_iterator_next(frame: u32) -> u32;
@@ -400,7 +410,7 @@ extern "C" {
     fn js_call_begin(frame: u32, node: u32, receiver: u32, sig: u32) -> i32;
     fn js_step(frame: u32, index: u32) -> u32;
     fn js_frame_advance(size: u32);
-    fn js_class_row(handle: u32) -> u32;
+    pub(crate) fn js_class_row(handle: u32) -> u32;
     fn js_cast(frame: u32, node: u32, handle: u32) -> u32;
     fn js_check(frame: u32, node: u32, handle: u32, kind: u32, value: f64);
     fn js_vector(frame: u32, node: u32, receiver: u32);
@@ -425,7 +435,7 @@ static mut RUNAWAY: u32 = 0;
 static mut BUDGET: u32 = 0;
 static mut RESULT: f64 = 0.0;
 static mut FLOAT_UNDEF: u32 = 0;
-static mut BOUND_KEYS: [u32; 2] = [0; 2];
+pub(crate) static mut BOUND_KEYS: [u32; 2] = [0; 2];
 static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
 static mut CLASSES: [u32; 2] = [0; 2];
@@ -514,15 +524,15 @@ pub extern "C" fn vm_frame_push(size: u32) -> u32 {
 }
 
 #[inline(always)]
-fn load32(addr: u32) -> u32 {
+pub(crate) fn load32(addr: u32) -> u32 {
     unsafe { read_unaligned(addr as usize as *const u32) }
 }
 #[inline(always)]
-fn store32(addr: u32, value: u32) {
+pub(crate) fn store32(addr: u32, value: u32) {
     unsafe { write_unaligned(addr as usize as *mut u32, value) }
 }
 #[inline(always)]
-fn load8(addr: u32) -> u8 {
+pub(crate) fn load8(addr: u32) -> u8 {
     unsafe { *(addr as usize as *const u8) }
 }
 #[inline(always)]
@@ -583,7 +593,7 @@ fn nan_first(x: f64, y: f64, r: f64) -> f64 {
 /// A handle's class table entry: 0, RELEASED or its class row (0 at or
 /// beyond the capacity, where every handle is live).
 #[inline(always)]
-fn class_entry(handle: u32) -> u32 {
+pub(crate) fn class_entry(handle: u32) -> u32 {
     let (table, capacity) = unsafe {
         let classes = addr_of!(CLASSES) as *const u32;
         (*classes, *classes.add(1))
@@ -629,7 +639,7 @@ fn undef_zero(v: f64) -> f64 {
 }
 /// ToInt32, as copyValue's int `Number(value) | 0` applies it to a result.
 #[inline(always)]
-fn to_int32(v: f64) -> i32 {
+pub(crate) fn to_int32(v: f64) -> i32 {
     if v > -2_147_483_649.0 && v < 2_147_483_648.0 {
         return v as i32;
     }
@@ -688,7 +698,7 @@ fn rotator_words(v: [i32; 3]) -> [u32; 3] {
 }
 /// A vector component as the JavaScript number (`f32num`).
 #[inline(always)]
-fn widen(bits: u32) -> f64 {
+pub(crate) fn widen(bits: u32) -> f64 {
     f32::from_bits(bits) as f64
 }
 /// Math.fround's float32 bits.
@@ -729,7 +739,7 @@ fn ints3(v: [i32; 3]) -> [f64; 3] {
 /// Whether class row `row` lists name id `name` in its name list (after the
 /// record ids).
 #[inline(always)]
-fn row_has_name(row: u32, name: u32) -> bool {
+pub(crate) fn row_has_name(row: u32, name: u32) -> bool {
     let count = load32(row.wrapping_add(4));
     let mut at = row.wrapping_add(8).wrapping_add(count.wrapping_mul(4));
     for _ in 0..count {
@@ -745,23 +755,23 @@ fn row_has_name(row: u32, name: u32) -> bool {
 /// any other handle is a context object (never None or undefined), with the
 /// info fetched when that object became known.
 #[derive(Clone, Copy)]
-struct Recv {
-    handle: u32,
-    info: u32,
+pub(crate) struct Recv {
+    pub(crate) handle: u32,
+    pub(crate) info: u32,
 }
-const SELF: Recv = Recv { handle: 0, info: 0 };
+pub(crate) const SELF: Recv = Recv { handle: 0, info: 0 };
 
-struct Run {
-    code: *const u32,
-    pc: *const u32,
-    frame: u32,
-    locals: u32,
-    self_handle: u32,
-    self_info: u32,
-    self_fresh: bool,
+pub(crate) struct Run {
+    pub(crate) code: *const u32,
+    pub(crate) pc: *const u32,
+    pub(crate) frame: u32,
+    pub(crate) locals: u32,
+    pub(crate) self_handle: u32,
+    pub(crate) self_info: u32,
+    pub(crate) self_fresh: bool,
     /// A CALL's callee: an S_YIELD statement runs through js_step here
     /// instead of returning to the host.
-    callee: bool,
+    pub(crate) callee: bool,
 }
 
 #[cold]
@@ -774,11 +784,11 @@ fn fail(frame: u32, code: u32, node: u32) -> ! {
 impl Run {
     /// Operand word `i` of the node at pc.
     #[inline(always)]
-    fn op(&self, i: usize) -> u32 {
+    pub(crate) fn op(&self, i: usize) -> u32 {
         unsafe { *self.pc.add(i) }
     }
     #[inline(always)]
-    fn skip(&mut self, words: usize) {
+    pub(crate) fn skip(&mut self, words: usize) {
         self.pc = unsafe { self.pc.add(words) };
     }
     #[inline(always)]
@@ -786,7 +796,7 @@ impl Run {
         fail(self.frame, code, node)
     }
     #[inline(always)]
-    fn handle(&self, r: Recv) -> u32 {
+    pub(crate) fn handle(&self, r: Recv) -> u32 {
         if r.handle == 0 {
             self.self_handle
         } else {
@@ -875,7 +885,7 @@ impl Run {
     /// SELF's receiver info, refetched after any import other than
     /// js_receiver ran.
     #[inline(always)]
-    fn self_info(&mut self) -> u32 {
+    pub(crate) fn self_info(&mut self) -> u32 {
         if !self.self_fresh {
             self.self_info = unsafe { js_receiver(self.self_handle) };
             self.self_fresh = true;
@@ -1813,7 +1823,7 @@ impl Run {
         v
     }
 
-    fn int(&mut self, r: Recv) -> i32 {
+    pub(crate) fn int(&mut self, r: Recv) -> i32 {
         let kind = self.op(0);
         match kind {
             LIT_INT => {
@@ -1963,6 +1973,7 @@ impl Run {
                 self.verify_op(node, r, ints3(a), [0.0; 3], [v as f64, 0.0, 0.0]);
                 v
             }
+            PAWN_ALLIANCE => self.pawn_alliance(r, false),
             INC_LOCAL_PRE | DEC_LOCAL_PRE | INC_LOCAL_POST => {
                 let addr = self.locals.wrapping_add(self.op(1));
                 self.skip(2);
@@ -1979,9 +1990,10 @@ impl Run {
         }
     }
 
-    fn float(&mut self, r: Recv) -> f64 {
+    pub(crate) fn float(&mut self, r: Recv) -> f64 {
         let kind = self.op(0);
         match kind {
+            AI_CAN_SEE => self.ai_can_see(r),
             LIT_FLOAT => {
                 let v = float_of(self.op(1));
                 self.skip(2);
@@ -2113,7 +2125,7 @@ impl Run {
         }
     }
 
-    fn boolean(&mut self, r: Recv) -> bool {
+    pub(crate) fn boolean(&mut self, r: Recv) -> bool {
         let kind = self.op(0);
         match kind {
             LIT_BOOL => {
@@ -2276,11 +2288,12 @@ impl Run {
                 v
             }
             IS_A => self.is_a(r),
+            PAWN_ENEMY => self.pawn_alliance(r, true) != 0,
             _ => self.fail(ERR_KIND, kind),
         }
     }
 
-    fn object(&mut self, r: Recv) -> u32 {
+    pub(crate) fn object(&mut self, r: Recv) -> u32 {
         let kind = self.op(0);
         match kind {
             LIT_NONE => {

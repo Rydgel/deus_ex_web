@@ -66,3 +66,14 @@ destination-search helper `103011d6` -> `103c78a0` are ported and oracle-verifie
 in [pawn navigation](script-pawn-nav.md). The search's collision test moves run
 the recovered test-mode `MoveActor` contract (`bTest=1, bIgnorePawns=1`) against
 the live collision hash, with `FarMoveActor` restore after each search.
+
+## Rust interpreter
+
+Under `SCRIPT_VM=rust`, IsValidEnemy (2105) and GetPawnAllianceType (2107)
+run in the interpreter ([Rust core](rust-core.md) step R3-c,
+`native/script-vm/src/percep.rs`). The Rust body transcribes
+`execPawnAlliance` over the pawns' images; names are compared by the ids a
+name cell's bytes hold (the `nameKey` fold). A call whose reads are not all
+in the image runs this JavaScript body on the evaluated arguments.
+`scripts/validate-perception-kernel.mjs` and `PERCEPTION_DIFFERENTIAL=1`
+compare the two; the JavaScript here remains the reference.

@@ -11,6 +11,7 @@
 
 mod hash;
 mod interp;
+mod percep;
 mod trace;
 mod x87;
 use x87::{Ext, INDEFINITE};
@@ -44,7 +45,7 @@ fn outi3(values: [i32; 3]) {
 fn load3(x: u32, y: u32, z: u32) -> [Ext; 3] {
     [Ext::load(x), Ext::load(y), Ext::load(z)]
 }
-fn rotator_sin(angle: i32) -> u32 {
+pub(crate) fn rotator_sin(angle: i32) -> u32 {
     unsafe { (*core::ptr::addr_of!(SINE))[((angle >> 2) & 0x3fff) as usize] }
 }
 const ONE: u32 = 0x3f80_0000;
@@ -138,7 +139,7 @@ pub extern "C" fn op_subtract_equal_vector_vector(a0: u32, a1: u32, a2: u32, b0:
 }
 
 /// FVector::SafeNormal (Normal, 226).
-fn safe_normal(v: [u32; 3]) -> [u32; 3] {
+pub(crate) fn safe_normal(v: [u32; 3]) -> [u32; 3] {
     let [x, y, z] = load3(v[0], v[1], v[2]);
     let s = x.mul(x).add(y.mul(y)).add(z.mul(z));
     if s.nan() || s.below_1em8() {
@@ -240,7 +241,7 @@ pub extern "C" fn op_mirror_vector_by_normal(a0: u32, a1: u32, a2: u32, b0: u32,
 }
 
 /// FLD m64 of a finite binary64 constant (script-vm.mjs `x87double`).
-fn load_double(v: f64) -> Ext {
+pub(crate) fn load_double(v: f64) -> Ext {
     let bits = v.to_bits();
     let e = ((bits >> 52) & 0x7ff) as i32;
     let m = bits & ((1u64 << 52) - 1);

@@ -1573,6 +1573,228 @@ Left bound or on the host, and why:
   its live pose across a Player start, where the original's reload would
   restore it. That is a fidelity question for its own change.
 
+**R3-c — Perception natives (implemented).** ScriptedPawn's IsValidEnemy
+(2105) and GetPawnAllianceType (2107), and Pawn's AICanSee (705) with the
+AIVisibility and AIGetLightLevel it calls, run in the interpreter
+(`native/script-vm/src/percep.rs`; host half `script-vm-perception.mjs`).
+Each body transcribes its JavaScript function (`execPawnAlliance`,
+`execAICanSee`, `actorVisibilityExtended`, `actorLightLevelExtended`): the
+same reads in the same order, the x87 model's operations with its operand
+order, `Math.fround` where it rounds. The JavaScript stays the reference, the
+path under `SCRIPT_VM=js`, and the answer to every call Rust hands back.
+
+The profile at 17722b8 (Island, `SCRIPT_VM=rust`, 20.8 ms per tick) put the
+interpreter's natives at 3.36 ms per tick. AICanSee took 1.07 ms, of which
+0.75 ms was AIGetLightLevel's scan: its 0.5 queries per tick each read
+LightType and LightBrightness of all 2,618 Level.Actors through `soundField`,
+about 580 ns per actor. IsValidEnemy took 0.65 ms over 340 calls per tick;
+0.28 ms of it built the 16 AlliancesEx struct objects of each pawn it
+compared.
+
+* **The two instances.** The bodies read about 30 fields of up to 2,600
+  actors, so they run in the interpreter's instance, on the runtime arena
+  where the images are. Their traces stay in the trace kernel's instance
+  (R3-b B0), which holds the BSP and the collision hash, through one import
+  per check:
+  * `js_light_trace`: AIGetLightLevel's SingleLineCheck for a static light
+    in range (flags 6);
+  * `js_los_trace`: AICanSee's SingleLineCheck wrapper, its hit filter
+    included (owner chain, bBlockSight, bHidden).
+
+  Both are small: 0.016 ms per tick of line of sight and about 0.05 ms of
+  light traces in the profiles. Moving the hash and the BSP into each
+  runtime's arena would save less than that, at the cost of a second copy
+  of the queries' memory. So the trace part stays where it is and the rest
+  runs in Rust.
+* **Names in the image.** The alliance bodies compare names: Pawn.Alliance
+  (+0x5c4) and each AllianceInfoEx.AllianceName (+0x7ec, stride 16). A name
+  cell (`NAME` in `script-object-image.mjs`) keeps its value in the
+  reference array, as before, and now also writes the value's host id into
+  its four bytes (`script-name-ids.mjs` `nameCellWord`). None is 0, so a
+  zeroed image or frame block reads as None and FrameLocals' zero-bytes
+  check still holds. The id is `nameKeyId`, the fold
+  `String(v ?? 'None').toLowerCase()` that `nameKey` compares. R2b-6's
+  `nameId` folds `String(v || 'None')`; the two differ for the empty name,
+  which scripts do store (`PotentialEnemyAlliance = ''`). Snapshots, restores
+  and class-image copies move bytes and references together.
+* **Reads.** A field is read in the image exactly when `readNamed` reads
+  that cell:
+  * the object's receiver info is not HOST (attached here, an image, no
+    poison, not released);
+  * on a BOUND receiver, the field's key is not a bound key (the
+    interpreter's own rule);
+  * its class row's new field word has the field's bit.
+
+  The host writes the field table once (`P_FIELDS`: offset, bool mask and
+  key id from the cell registry, with the cell kind the Rust body reads,
+  checked). Each class row gets two more words after its names: a field
+  word, whose bit is set when `lookupMember` resolves the spelling to that
+  key and the class's cell equals the table's (`sameCell`: tag, offset,
+  mask, element and members), and a flag word (ScriptedPawn by record key,
+  as the alliance `isA` compares). `js_class_fields` computes them on first
+  use.
+* **Alliance.** The bodies only read. A read that cannot be made in the
+  image hands the whole call to `execPawnAlliance`, with the arguments Rust
+  evaluated (`P_ARGS`), before any effect. In the Island run no call was
+  handed back.
+* **AICanSee.** AIVisibility writes the target's cache (VisUpdateTime,
+  CurrentVisibility, LastVisibility) halfway through, between the light
+  scan's traces. So Rust makes the writes and the imports in the
+  JavaScript order, and an import that throws leaves the same state. A read
+  that is not in the image goes through `js_pread`/`js_pread3` (the body's
+  own read service at the same point, with script-ai-visibility's
+  undefined check where it has one), and a write through `js_pwrite`. The
+  call is handed back (`js_aicansee`) only before the first write:
+  * a NaN clock, or a NaN CurrentVisibility copied into LastVisibility. The
+    stored NaN's bits would be V8's. LLVM folds the float32 widening and
+    narrowing and keeps a signaling NaN, and the mutation pass shows JS
+    storing `0x7fe…` where Rust stored `0x7fa…`;
+  * a nonfinite rotation argument or arc tangent, where the JavaScript
+    throws;
+  * a host lighting seam (`perceptionLighting`).
+* **Transcendentals and tables.** Math.atan (appAtan) and Math.atan2
+  (vectorToRotator) are imported directly, so they are V8's. The
+  validator's hardware tables (`.cache/pawn-percep`) are a `services` seam
+  only the oracle validator sets; the runtime never does. `Math.sqrt` is
+  `trace::sqrt`. FCoords uses the sine table the kernel already holds.
+* **Level.Actors.** `js_level_actors` builds the list the scan walks, as
+  (handle, receiver info) pairs. The list is reused while the array, its
+  length and the base epoch (`base-epoch.mjs`) are unchanged. That epoch
+  already advances on every structural change of a Level.Actors array and
+  on poisoning, bulk restores and releases. `bindProperty` now advances it
+  too, since a binding makes a receiver BOUND. A reused HOST entry whose
+  object has since become readable only sends its reads to JavaScript.
+* **Lowering.** PAWN_ENEMY 200, PAWN_ALLIANCE 201 and AI_CAN_SEE 202 carry
+  the call's node, the argument count, and per argument a presence word (0
+  for EX_Nothing) and its code. Rust evaluates the arguments in order
+  before the body, as `evaluateArgument` does. A call is lowered only when:
+  * `runtime.invokeNative` would run the body (the services' invokeNative
+    is the runtime's, the native is not a boundary native, and no host has
+    replaced `invokeNative` on the runtime instance, as
+    `validate-mib-startup-boundary` does to count calls);
+  * the table has every field the body reads;
+  * IsValidEnemy's optional bool is not a JavaScript leaf, whose undefined
+    the body reads as true.
+* **PERCEPTION_DIFFERENTIAL=1.** After every call Rust completes:
+  * the host restores AICanSee's target cache from a snapshot taken when
+    the call began, and runs the JavaScript body on the same arguments;
+  * it compares the result bits, the three cache fields and every trace
+    (kind, endpoints, answer), and throws on a difference;
+  * every reused Level.Actors list is compared with a fresh build.
+
+Exactness hazards met:
+
+* The two name folds (above).
+* EX_Nothing arguments: `AICanSee(beamActor, , false, …)` evaluates
+  `Number(undefined)`, NaN, and returns 0. `Boolean(undefined)` is false for
+  a flag, not its default. Rust does what the JavaScript does.
+* `viewRot = f32(base + add)` rounds the integer sum to a float32 before
+  fcoordsAxes' `| 0`, which matters for rotators beyond 2^24.
+* The JavaScript's `x87sqrt` throws on NaN. The angular-size gate returns
+  first for every NaN it could see, and appAtan's finiteness check would
+  hand such a call back.
+* The FCOM model: a signed zero compares as zero, and unordered sets both
+  flags.
+* Engine.pawn.baseeyeheight is a bound key (the controlled player's view
+  bindings), and every map actor is BOUND, so a viewer's BaseEyeHeight is
+  read through JavaScript: 24 reads per Island tick.
+
+Verification:
+
+* `scripts/validate-perception-kernel.mjs` runs each lowered native in Rust
+  on random worlds with mock imports, then the JavaScript body on the same
+  arguments. It checks result bits, every image byte, host-side values,
+  traces and errors. The worlds include HOST and BOUND objects,
+  class-less rows and missing field bits, JavaScript leaves and EX_Nothing
+  arguments, NaNs with payloads, signed zeros and infinities, a missing
+  zone or LevelInfo, and the lighting seam. There are also boundary cases:
+  * MinAngularSize equal to the angular size;
+  * a yaw on the plateau edge of a zero-extent trapezoid;
+  * lights at exactly their radius;
+  * a light at distanceSq 275,593 against radiusSq 275,625, where the
+    double store before appSqrt changes the attenuation;
+  * visibility caches of negative zeros.
+
+  With 100,000 cases (40,000 IsValidEnemy, 20,000 GetPawnAllianceType,
+  40,000 AICanSee), all are identical. 81,674 completed in Rust and 18,326
+  were handed back. When every field a call reads is in the image, the
+  validator requires that an alliance call is not handed back and that
+  AICanSee makes no JavaScript read or write (6,118 such AICanSee cases).
+* A mutation pass broke `percep.rs` 73 ways (`.work/logs/percep/mutate.mjs`);
+  68 fail the validator. The five survivors:
+  * the wrap loop's `<=` against `<`, which the following absolute value
+    makes equivalent;
+  * reading LastVisibility back instead of using the value just written,
+    which is the same value;
+  * the explicit EX_Nothing test on the target, whose UNDEF bits convert to
+    handle 0 anyway;
+  * appAtan's finiteness check, unreachable because Math.atan of a non-NaN
+    double is finite;
+  * the CurrentVisibility NaN hand-back, which the payloads tested store the
+    same way in both, and which stays as a guard.
+* Under `PERCEPTION_DIFFERENTIAL=1` on Island (360 ticks) the host compared:
+  * 118,954 alliance calls and 8,847 AICanSee calls;
+  * 1,958 traces and 26,541 cache fields;
+  * 151 reused Level.Actors lists (24 were built).
+
+  There was no difference, and the digest is unchanged.
+* Digests are unchanged at all 30 checkpoints under both VMs with
+  `SCRIPT_VM_CHECK=1`, errors `{}`: Training `c8eebff5786adf55` and Island
+  `b767a7e417fe5968`.
+* `validate-object-handles` now checks that every name holds its id: 10,165
+  names on Training and 40,623 on Island (its new `--map` option).
+* Native oracles: pawn-alliance (31 cases), pawn-perception (55 scenes and
+  13 mutations), ai-visibility (41), ai-visibility-runtime, pawn-locomotion
+  (103 scenes, 21 mutants), pawn-nav (15 scenes, 35 mutants), based-actors,
+  set-base and set-rotation-riders.
+* `validate-mib-startup-boundary` gives the same output under both VMs, and
+  `validate-gm-trench-play-anim` passes under `SCRIPT_VM=rust`.
+* `validate-script-vm-interp`, `validate-script-vm-x87`,
+  `validate-trace-kernel` and `validate-collision-kernel` pass.
+* `validate-loadmap-gc` under `SCRIPT_VM=rust` keeps 2,729 handles across
+  its Player starts; old space grew 1.00 MiB over 19 resets.
+* The 566 unit tests pass. The new `test/name-cell-ids.test.mjs` checks the
+  two folds and, on DeusEx's real ScriptedPawn layout, the Alliance and
+  AlliancesEx name bytes through writes, snapshots and restores.
+* A 240-frame Chromium Island walk under `?scriptVm=rust` had no page or
+  runtime error.
+
+Cost: the median `SCRIPT_VM=rust` Island tick over four interleaved pairs
+(HEAD 17722b8 against this change):
+
+| Pair | Before (ms) | After (ms) | CPU before | CPU after |
+|---|---|---|---|---|
+| 1 | 18.67 | 16.22 | 24.08 | 22.59 |
+| 2 | 18.02 | 16.41 | 23.33 | 21.46 |
+| 3 | 18.02 | 16.51 | 25.30 | 21.52 |
+| 4 | 18.15 | 16.38 | 23.51 | 21.20 |
+
+The tick was lower in all four pairs, by about 1.7 ms. In a `--cpu-prof`
+window of 300 Island ticks (after: a build with Wasm names):
+
+| ms per profiled tick | Before | After |
+|---|---|---|
+| AICanSee | 1.07 | 0.19 |
+| AIGetLightLevel | 0.75 | 0.16 (0.03 building the Level.Actors list, 0.05 light traces) |
+| IsValidEnemy | 0.65 | 0.05 |
+
+The interpreter's `js value native 2105` (340 per tick) and `native 705`
+(24 per tick) fallbacks are gone. What is left of the scan is the list
+build when the epoch moved, the light traces and the x87 model's u128
+arithmetic.
+
+Left in JavaScript, and why:
+
+* **GetAllianceType (2106)**: no call in the bench runs, and its name
+  argument would need the `??` fold for a JavaScript leaf.
+* **The other perception natives**: LineOfSightTo, CanSee, PlayerCanSeeMe,
+  PickTarget and PickAnyTarget, AIGetLightLevel and AIVisibility called
+  from script, and Actor.Tick's ShowSelf and CheckEnemyVisible. None is hot
+  in the profiles.
+* **The traces**: they stay in the trace kernel's instance (above).
+* **Reads of bound keys** on BOUND receivers, until the bound-key rule is
+  per object.
+
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming
 ([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;

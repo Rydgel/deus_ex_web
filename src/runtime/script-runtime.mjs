@@ -1746,6 +1746,20 @@ export class ScriptRuntime {
     };
     return services;
   }
+  /** DeusEx ScriptedPawn alliance services (2105-2107, script-pawn-alliance.mjs).
+   * The Rust interpreter's JavaScript path for these natives uses the same
+   * services (script-vm-perception.mjs). */
+  allianceServices() {
+    return {
+      read:(actor,name)=>this.readNamed(actor,name),
+      elements:(actor,name)=>this.readNamedElements(actor,name),
+      isA:(actor,key)=>{
+        for(let cls=this.instance(actor).cls;cls;cls=cls.base)
+          if(cls.record.key===key)return true;
+        return false;
+      },
+    };
+  }
   /** Native Actor/Pawn perception services (514/531/532/533/534/700/701/705) per
    * docs/script-pawn-perception.md: the shared LOS worker, the two target
    * pickers and the AICanSee visibility worker. Field reads come through the
@@ -2542,6 +2556,9 @@ export class ScriptRuntime {
     if(!field.metadata)throw new Error(`Property is not prepared: ${field.key}`);
     if(typeof binding.get!=='function'||typeof binding.set!=='function')throw new Error('Native property binding requires getter and setter');
     const instance=this.instance(receiver);
+    // A binding makes the receiver BOUND for the Rust core: the perception
+    // natives' Level.Actors list (script-vm-perception.mjs) is rebuilt.
+    bumpBaseEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
       if(mirrored){instance.bindings.set(field.key,mirrored);return;}
@@ -3507,15 +3524,7 @@ export class ScriptRuntime {
       if(call.argumentCount!==0)throw new Error('ConBindEvents accepts no arguments');
       return this.bindConversationEvents(call.receiver);
     }
-    if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,{
-      read:(actor,name)=>this.readNamed(actor,name),
-      elements:(actor,name)=>this.readNamedElements(actor,name),
-      isA:(actor,key)=>{
-        for(let cls=this.instance(actor).cls;cls;cls=cls.base)
-          if(cls.record.key===key)return true;
-        return false;
-      },
-    });
+    if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,this.allianceServices());
     if(call.index===113){
       if(call.argumentCount>2)throw new Error('GotoState accepts at most two name arguments');
       const name=call.argumentCount?refValue(call.evaluateArgument(0)):'None';

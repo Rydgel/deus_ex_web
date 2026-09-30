@@ -26,6 +26,7 @@ import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './scri
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
+import {PerceptionHost} from './script-vm-perception.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -191,6 +192,8 @@ export class RustScriptVm {
     this.classTable = 0;
     this.classCapacity = 0;
     this.rows = new Map();
+    // R3-c: the perception natives' tables and imports.
+    this.perception = new PerceptionHost(this);
   }
   attach() {
     const x = this.exports;
@@ -212,6 +215,7 @@ export class RustScriptVm {
     this.vectorAt = x.vm_vector_io_ptr();
     this.result3At = x.vm_result3_ptr();
     this.checkValuesAt = x.vm_check_values_ptr();
+    this.perception.attach(x);
     const limit = handleLimit();
     this.growClassTable(limit);
     for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
@@ -262,7 +266,9 @@ export class RustScriptVm {
         chain.push(classRecordId(c.record));
         names.push(foldedNameId(String(c.record.name).toLowerCase()));
       }
-      const n = chain.length, address = this.arena.alloc(8 + 8 * n), view = this.arena.view;
+      // The row, then (R3-c) its field and flag words for the perception
+      // natives, 0 until js_class_fields computes them (the arena zeroes).
+      const n = chain.length, address = this.arena.alloc(8 + 8 * n + 8), view = this.arena.view;
       view.setUint32(address + 4, n, true);
       chain.forEach((id, i) => view.setUint32(address + 8 + 4 * i, id, true));
       names.forEach((id, i) => view.setUint32(address + 8 + 4 * (n + i), id, true));
@@ -282,6 +288,10 @@ export class RustScriptVm {
     if (!row.linkIsChain) return UNREADABLE;
     const image = this.runtime.currentClassImage?.(row.cls);
     return image && image.arena === this.arena && !image.poison ? image.base : UNREADABLE;
+  }
+  /** Whether perception native `index` runs in Rust (script-vm-lower.mjs). */
+  perceptionReady(index) {
+    return this.perception.ready(index);
   }
   /** SCRIPT_VM_CHECK: a value Rust read for `node` against the closure's. */
   check(frameId, node, handle, kind, value) {
@@ -425,6 +435,7 @@ export class RustScriptVm {
       return run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle));
     };
     return {
+      ...vm.perception.imports(enter, leave, STATS ? count : null),
       js_int(frame, node, handle) {
         enter();
         try { return value(frame, node, handle) | 0; } finally { leave(); }

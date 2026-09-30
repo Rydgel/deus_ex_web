@@ -10,7 +10,10 @@
  * a read resolves the handle, a write stores it. FName, FString and dynamic
  * arrays have no recovered byte form in the VM yet (docs/object-memory.md,
  * Unresolved). Each of those values sits in a per-object reference array
- * instead, and its bytes stay zero.
+ * instead. A string's or array's bytes stay zero; a name's four bytes hold
+ * the host id of its value (script-name-ids.mjs `nameCellWord`, 0 for None),
+ * written with the reference, so the Rust core can compare names in memory
+ * (docs/rust-core.md R3-c). The reference stays the value JavaScript reads.
  *
  * A cell reads and writes one property's logical VM value, the same value
  * script-values.mjs copies: a cell read equals `propertyCodec(field).read` of
@@ -20,9 +23,10 @@
 import {linkedClassLayout, linkedFunctionLayout} from './script-object-layout.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
+import {nameCellWord} from './script-name-ids.mjs';
 
-const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, ROTATOR = 8, STRUCT = 9, FIXED = 10, POINTER = 11;
-const REF_TYPES = new Set(['name', 'string']);
+const BYTE = 1, INT = 2, BOOL = 3, FLOAT = 4, REF = 5, ARRAY = 6, VECTOR = 7, ROTATOR = 8, STRUCT = 9, FIXED = 10, POINTER = 11,
+  NAME = 12;
 
 // One shape for every cell, so the reads and writes below see a single hidden
 // class. `ref` and `refCount` index the reference array (a pointer cell uses
@@ -72,7 +76,10 @@ function elementCell(entry, metadata, offset) {
       cell.handle = true;
       return cell;
     }
-    default: return REF_TYPES.has(entry.type) ? new Cell(REF, offset, 1) : null;
+    // A name keeps its value in the reference array and its id in its bytes.
+    case 'name': return new Cell(NAME, offset, 1);
+    case 'string': return new Cell(REF, offset, 1);
+    default: return null;
   }
 }
 
@@ -171,6 +178,20 @@ export function vectorCell(cell) {
   return {kind: cell.tag === VECTOR ? 'vector' : 'rotator', offset: cell.offset};
 }
 
+// A cell's storage kind (R3-c's field table), and whether two cells store a
+// value the same way: tag, offset, mask, and the same element or members.
+const CELL_KINDS = {[BYTE]: 'byte', [INT]: 'int', [BOOL]: 'bool', [FLOAT]: 'float', [REF]: 'string', [NAME]: 'name',
+  [ARRAY]: 'array', [VECTOR]: 'vector', [ROTATOR]: 'rotator', [STRUCT]: 'struct', [FIXED]: 'fixed', [POINTER]: 'pointer'};
+export const cellKind = cell => cell ? CELL_KINDS[cell.tag] ?? null : null;
+export function sameCell(a, b) {
+  if (a === b) return true;
+  if (!a || !b || a.tag !== b.tag || a.offset !== b.offset || a.mask !== b.mask || a.dim !== b.dim ||
+    a.stride !== b.stride || a.key !== b.key || a.handle !== b.handle) return false;
+  if (a.tag === FIXED) return sameCell(a.element, b.element);
+  if (a.tag !== STRUCT) return true;
+  return a.members.length === b.members.length && a.members.every((member, index) => sameCell(member, b.members[index]));
+}
+
 const SCALAR_KINDS = {[BYTE]: 'byte', [INT]: 'int', [BOOL]: 'bool', [FLOAT]: 'float'};
 /** A scalar cell's kind (byte, int, bool, float, or object for an object or
  * class pointer, whose bytes hold a handle), offset and bool mask; null for
@@ -213,7 +234,7 @@ export function readCell(cell, image, refs, at = 0, refAt = 0) {
     case BOOL: return (image.getUint32(at + cell.offset, true) & cell.mask) !== 0;
     case FLOAT: return image.getFloat32(at + cell.offset, true);
     case POINTER: return identityOfHandle(image.getUint32(at + cell.offset, true));
-    case REF: return refs[refAt + cell.ref];
+    case REF: case NAME: return refs[refAt + cell.ref];
     default: return readComposite(cell, image, refs, at + cell.offset, refAt);
   }
 }
@@ -263,6 +284,10 @@ export function writeCell(cell, image, refs, value, at = 0, refAt = 0) {
       if (cell.actorBase) bumpBaseEpoch();
       return;
     case REF: refs[refAt + cell.ref] = value; return;
+    case NAME:
+      refs[refAt + cell.ref] = value;
+      image.setUint32(at + cell.offset, nameCellWord(value), true);
+      return;
     default: writeComposite(cell, image, refs, value, at + cell.offset, refAt);
   }
 }
@@ -299,6 +324,25 @@ function writeComposite(cell, image, refs, value, offset, refAt) {
     }
     default: throw new Error(`Unknown object image cell ${cell.tag}`);
   }
+}
+
+/** Every name inside the cells, struct members and fixed array elements
+ * included: its byte offset relative to the image and its reference-array
+ * index, in cell order (for validators of the name bytes, R3-c). */
+export function nameSlots(cells) {
+  const slots = [];
+  const visit = (cell, at, refAt) => {
+    switch (cell.tag) {
+      case NAME: slots.push({offset: at + cell.offset, ref: refAt + cell.ref}); return;
+      case STRUCT: for (const member of cell.members) visit(member, at + cell.offset, refAt + cell.ref); return;
+      case FIXED:
+        for (let index = 0; index < cell.dim; index++)
+          visit(cell.element, at + cell.offset + index * cell.stride, refAt + cell.ref + index * cell.element.refCount);
+        return;
+    }
+  };
+  for (const cell of cells.values()) visit(cell, 0, 0);
+  return slots;
 }
 
 /** Every object or class pointer inside the cells, struct members and fixed
