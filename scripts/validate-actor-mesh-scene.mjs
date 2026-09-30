@@ -5,6 +5,7 @@
  * every Training prop is AnimSequence None, so the drawn pose is exact and a
  * static prop's update() must report no re-upload. Building the layer must not
  * move, tick or mutate the shared runtime actors. See docs/npc-mesh-preview.md. */
+import {bumpActorsEpoch} from '../src/runtime/base-epoch.mjs';
 import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';
@@ -124,9 +125,11 @@ again.dispose();
 // This is a display fixture only; SpawnActor/destruction are tested separately.
 const crate=level.actors.find(a=>a?.name==='CrateBreakableMedGeneral2');
 const cratePreview=propByName.get(crate.name),slot=level.actors.indexOf(crate);
-level.actors[slot]=null;scene.update();
+// A direct slot write stands in for DestroyActor, which also advances
+// actorsEpoch (base-epoch.mjs); the actor layer rebuilds membership on it.
+level.actors[slot]=null;bumpActorsEpoch();scene.update();
 assert.equal(scene.actors.includes(cratePreview),false,'removed actor leaves the scene');
-level.actors[slot]=crate;scene.update();await scene.ready();scene.update();
+level.actors[slot]=crate;bumpActorsEpoch();scene.update();await scene.ready();scene.update();
 const restored=scene.propActors.find(p=>p.actor===crate);
 assert.ok(restored,'a newly encountered live identity acquires its mesh');
 let colorWrites=0;

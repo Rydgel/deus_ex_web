@@ -5,6 +5,8 @@ import {POLY} from '../unreal/geometry.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
+import {actorsEpoch} from '../runtime/base-epoch.mjs';
+import {fieldAccessors} from './actor-fields.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
@@ -79,16 +81,23 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   // own (IsOwnedBy walks Owner +0x3c) or sees from behind, and a bOwnerNoSee
   // actor it owns in first person. The view actor itself is never admitted.
   // SkilledTool's DownItem unhides the held tool, so it is drawn here too.
-  const drawnInWorld=actor=>{
-    if(read(actor,'bHidden')||read(actor,'bDeleteMe'))return false;
+  // The viewer's fields, read once per update (no script runs while the
+  // actor layer updates); asynchronous admission reads them afresh.
+  let frameViewer=null;
+  const viewer=()=>{
+    if(frameViewer)return frameViewer;
     const player=currentPlayer();
+    return player?{player,behind:Boolean(read(player,'bBehindView')),viewTarget:read(player,'ViewTarget')}:{player:null};
+  };
+  const drawnInWorld=(actor,own=null)=>{
+    if(own?(own.bHidden()||own.bDeleteMe()):(read(actor,'bHidden')||read(actor,'bDeleteMe')))return false;
+    const {player,behind,viewTarget}=viewer();
     if(!player)return true;
-    const behind=Boolean(read(player,'bBehindView'));
-    if(!behind&&read(player,'ViewTarget')===actor)return false;
+    if(!behind&&viewTarget===actor)return false;
     let owned=false;
-    for(let owner=actor;owner;owner=read(owner,'Owner'))if(owner===player){owned=true;break;}
-    if(read(actor,'bOnlyOwnerSee')&&(!owned||behind))return false;
-    return !(owned&&read(actor,'bOwnerNoSee')&&!behind);
+    for(let owner=actor;owner;owner=own&&owner===actor?own.Owner():read(owner,'Owner'))if(owner===player){owned=true;break;}
+    if((own?own.bOnlyOwnerSee():read(actor,'bOnlyOwnerSee'))&&(!owned||behind))return false;
+    return !(owned&&(own?own.bOwnerNoSee():read(actor,'bOwnerNoSee'))&&!behind);
   };
   let synthetic=0x40000000,disposed=false;
   const actors=[...npcActors],bindings=new Map(npcActors.map(preview=>[preview.actor,preview]));
@@ -123,9 +132,13 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     for(const list of [actors,propActors,npcActors]){const at=list.indexOf(preview);if(at>=0)list.splice(at,1);}
     refreshSummary();
   };
+  // Level.Actors membership only changes with actorsEpoch (base-epoch.mjs),
+  // so the membership set is rebuilt only then.
+  let live=null,liveEpoch=-1;
   const reconcile=()=>{
     if(disposed||!level)return;
-    const live=new Set(level.actors);
+    const epoch=actorsEpoch();
+    if(epoch!==liveEpoch||!live){live=new Set(level.actors);liveEpoch=epoch;}
     for(const [actor,preview] of bindings){
       if(!live.has(actor))retire(actor,preview);
       // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
@@ -141,9 +154,12 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     /** `view.lit` marks the main viewport frame, whose drawn actors get one
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
     update(cameraPosition,view={}){
-      reconcile();
-      if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
-      for(const actor of actors)actor.update(cameraPosition,view);
+      frameViewer=null;frameViewer=viewer();
+      try{
+        reconcile();
+        if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+        for(const actor of actors)actor.update(cameraPosition,view);
+      }finally{frameViewer=null;}
       // The GPU path's passes (docs/gpu-mesh.md) run once per main frame,
       // after every actor planned its pose and lighting.
       if(gpu){const frame=lighting?.frame;if(frame)gpu.setCamera(frame.origin,frame.axes);gpu.run();}
@@ -192,7 +208,12 @@ function setMeshBounds(geometry,array){
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
   lighting=null,displayGamma={value:1},texturePool=null,gpu=null}) {
-  const read=(object,name)=>runtime.readNamed(object,name);
+  // This actor's per-frame reads through pre-resolved accessors
+  // (actor-fields.mjs); any other object or name reads through readNamed.
+  const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
+    'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
+    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee']);
+  const read=(object,name)=>object===actor&&Object.hasOwn(own,name)?own[name]():runtime.readNamed(object,name);
   const rendered=actorRenderFeedback(runtime,actor);
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');
@@ -274,11 +295,13 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     cache.entries.clear();
   };
   const pose=()=>{
-    const animationActor=read(actor,'bAnimByOwner')?(read(actor,'Owner')??actor):actor;
-    return [animationActor,read(animationActor,'bParticles'),read(actor,'DrawScale'),
-      ...read(actor,'Location'),...read(actor,'Rotation'),...read(actor,'PrePivot'),
-      read(animationActor,'AnimSequence'),read(animationActor,'AnimFrame'),
-      ...read(animationActor,'BlendAnimSequence'),...read(animationActor,'BlendAnimFrame')];
+    const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
+    const self=animationActor===actor;
+    return [animationActor,self?own.bParticles():read(animationActor,'bParticles'),own.DrawScale(),
+      ...own.Location(),...own.Rotation(),...own.PrePivot(),
+      self?own.AnimSequence():read(animationActor,'AnimSequence'),self?own.AnimFrame():read(animationActor,'AnimFrame'),
+      ...(self?own.BlendAnimSequence():read(animationActor,'BlendAnimSequence')),
+      ...(self?own.BlendAnimFrame():read(animationActor,'BlendAnimFrame'))];
   };
   const copyPositions=(positions,indices)=>{
     const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
@@ -523,23 +546,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition,view={}){
         if(disposed)return false;
-        root.visible=visible?visible(actor):(drawActor||!read(actor,'bHidden'))&&!read(actor,'bDeleteMe');
+        root.visible=visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
         if(!root.visible)return false;
         // Render.dll only draws, and so only calls GetFrame for, actors in
         // the view. Outside the frustum even a conservative bound of every
         // pose is culled here; three.js would cull each group anyway, so
         // render feedback is unchanged. Mirror frames disable this (view.cull).
         if(view.cull&&view.frustum){
-          const location=read(actor,'Location'),pivot=read(actor,'PrePivot');
+          const location=own.Location(),pivot=own.PrePivot();
           cullSphere.center.set(location[1]+pivot[1],location[2]+pivot[2],-(location[0]+pivot[0]));
-          cullSphere.radius=cullRadius*Math.max(1,Math.abs(read(actor,'DrawScale')))*1.01+1;
+          cullSphere.radius=cullRadius*Math.max(1,Math.abs(own.DrawScale()))*1.01+1;
           if(!view.frustum.intersectsSphere(cullSphere)){root.visible=false;return false;}
         }
-        if(read(actor,'Mesh')!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
+        if(own.Mesh()!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
         // the unlit inspection path applies it to the texture directly.
-        const glow=lighting?1:Math.min(1,read(actor,'ScaleGlow')),style=read(actor,'Style');
+        const glow=lighting?1:Math.min(1,own.ScaleGlow()),style=own.Style();
         if(!materialStateApplied||!Object.is(glow,lastGlow)||!Object.is(style,lastStyle))for(const material of materials){
           material.color.setRGB(glow,glow,glow);
           const flags=material.userData.flags;
@@ -592,7 +615,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
             }
           } else summary.lighting=relight()??summary.lighting;
         }
-        lastPose=current;summary.animation=read(actor,'AnimSequence');summary.frame=read(actor,'AnimFrame');
+        lastPose=current;summary.animation=own.AnimSequence();summary.frame=own.AnimFrame();
         // True when a buffer was re-uploaded: pose positions, or the
         // camera-relative environment UVs, which change with the viewer.
         return poseChanged||environmentUpload;

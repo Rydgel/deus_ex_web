@@ -18,10 +18,24 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
   const manager = createMeshLightManager();
   let frame = null, frameCount = 0, lastTime = null;
+  // A light's fields are read at most once per frame, when first used: no
+  // script runs during the render phase, so a later read in the same frame
+  // returns the same value (the record is rebuilt every frame, so a live edit
+  // is still seen next frame). Candidates the radius test rejects need only
+  // the fields that test reads.
+  class LightValues {
+    constructor(actor) { this.actor = actor; this.read = new Map(); }
+    field(name) {
+      let value = this.read.get(name);
+      if (value === undefined && !this.read.has(name)) this.read.set(name, value = read(this.actor, name));
+      return value;
+    }
+  }
+  for (const name of LIGHT_FIELDS) Object.defineProperty(LightValues.prototype, name, { get() { return this.field(name); } });
   const lightRecord = actor => {
     let record = frame.lights.get(actor);
     if (record) return record;
-    const values = Object.fromEntries(LIGHT_FIELDS.map(name => [name, read(actor, name)]));
+    const values = new LightValues(actor);
     // SetupForActor staggers visibility re-traces by (light.Index ^
     // FrameCount) & 15. Play uses the measured GObjObjects index or a
     // spawn's modeled slot; a pre-placed light without a capture falls back
@@ -56,7 +70,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const byName = new Map(), levelInfo = level.actors[0];
       frame = { level, model: level.model, axes, origin, viewport, lights: new Map(), leafLights: new Map(),
         levelInfo, byName, timeSeconds: read(levelInfo, 'TimeSeconds') ?? 0,
-        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1) };
+        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live: null };
       for (const actor of level.actors) if (actor) byName.set(actor.name, actor);
       // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
       // Filter prepends each onto the leaves it reaches.
@@ -85,18 +99,20 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
      * colour. Mutates the light manager's caches exactly once per call. */
     setupMesh(actor) {
       if (!frame) return null;
-      const zoneActor = (() => {
-        const region = read(actor, 'Region');
-        return region?.['engine.actor.pointregion.zone'] ?? null;
-      })();
       const region = read(actor, 'Region') ?? {};
+      const zoneActor = region['engine.actor.pointregion.zone'] ?? null;
       const zoneNumber = region['engine.actor.pointregion.zonenumber'] ?? 0;
       const values = { Style: read(actor, 'Style'), bNoSmooth: read(actor, 'bNoSmooth'), bSelected: false,
         bMeshEnviroMap: read(actor, 'bMeshEnviroMap'), bMeshCurvy: read(actor, 'bMeshCurvy'),
         bUnlit: read(actor, 'bUnlit'), ZoneNumber: zoneNumber };
       const polyFlags = actorPolyFlags(values) | PF.Flat;
-      const ambientOf = zone => [read(zone, 'AmbientBrightness') ?? 0, read(zone, 'AmbientHue') ?? 0,
-        read(zone, 'AmbientSaturation') ?? 0];
+      // Zone and LevelInfo ambient fields do not change within a frame.
+      const ambientOf = zone => {
+        let ambient = frame.ambients.get(zone);
+        if (!ambient) frame.ambients.set(zone, ambient = [read(zone, 'AmbientBrightness') ?? 0, read(zone, 'AmbientHue') ?? 0,
+          read(zone, 'AmbientSaturation') ?? 0]);
+        return ambient;
+      };
       const location = (read(actor, 'Location') ?? [0, 0, 0]).map(f);
       const iLeaf = region['engine.actor.pointregion.ileaf'] ?? -1;
       const setup = setupForActor(manager, {
@@ -116,7 +132,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         current: record => lightRecord(record.actor),
         lineCheck: light => traceRay(frame.model, location, light.location) === null,
         viewport: frame.viewport, rendMap: 5, noLighting: false,
-        alive: light => !read(light.actor, 'bDeleteMe') && frame.level.actors.includes(light.actor),
+        alive: light => !read(light.actor, 'bDeleteMe') && (frame.live ??= new Set(frame.level.actors)).has(light.actor),
         worldToCamera: point => view.toCamera(point),
       });
       const flags = polyFlags | setup.flags;
