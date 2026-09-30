@@ -86,52 +86,87 @@ below hold the evidence for each stage.
   * R0 (arena), R1a and R1a-2 (handles), R2a (frames).
   * R2b-1 to R2b-7 (the interpreter and its receiver table).
   * R3-a (BSP traces), R3-b B0–B2 (collision hash, line checks and the
-    walking-surface scan).
+    walking-surface scan), and B3 part 1 (walking's numeric kernels, hosted
+    for validation and not yet called by Play).
   * R3-c (IsValidEnemy, GetPawnAllianceType, AICanSee).
   * R3-d (the actor tick body and the animation phase).
   * 1e-1 to 1e-3: actor flags, the physics mirror fields, Location,
     Rotation, collision size and OldLocation now live in the image.
 * **Headless timing.** On UNATCO Island (bench-sim, 300 ticks), the median
-  tick is about 14.4 ms under Rust and about 25 ms under JavaScript.
-  `BYPASS_PATCHES` is empty. Island Play now runs about 31 s (tick 1872 of
-  the forward-walk workload) before its first unimplemented original code,
-  ConSys native 2051 `CreateConCamera` (Stage 4). The 360-tick bench window
-  does not reach it.
+  tick is about 13.5 to 14 ms under Rust (interleaved A/B pairs, September
+  30) and about 25 ms under JavaScript. `BYPASS_PATCHES` is empty. Island
+  Play now runs about 31 s (tick 1872 of the forward-walk workload) before
+  its first unimplemented original code, ConSys native 2051
+  `CreateConCamera` (Stage 4). The 360-tick bench window does not reach it.
 * **Browser timing.** Headless Chromium, Island forward walk, through
   `profile-play-browser`:
 
   | Engine | Tick | Frame | Rate |
   | --- | --- | --- | --- |
-  | Rust | 15–18 ms | 34–39 ms | about 30 fps |
+  | Rust | 14–17 ms | 33 ms median | about 30 fps |
   | JavaScript | 26–33 ms | 46–57 ms | about 20 fps |
 
   The rest of the frame does not depend on the engine: actor meshes about
-  9.8 ms, render about 4.7, HUD about 3.7, lighting about 1.6.
-  120 fps means 8.3 ms per frame.
-* **Remaining tick cost.** From the latest Island profiles, approximate:
-  * About 4 ms of host code still reads script properties by name
-    (`readNamed` and its callees). About 1 ms of that is bench-sim's own
-    render-feedback reads, which are not game work.
-  * Pawn walking physics is about 4 ms, with the walking-surface scan at
-    1.1 ms.
-  * Natives that still run in JavaScript: SetLocation about 0.3 ms,
-    AttachDecal about 0.18, ScriptSpawn about 0.18.
-  * The level loop, DistanceFromPlayer and actor compaction are about 0.5 ms
-    together.
+  10 ms, render about 5, HUD about 3.8, lighting about 1.6. The frame mean
+  can read higher than the median: the first NPC bark creates the
+  AudioContext, a one-off frame of about 170 ms. 120 fps means 8.3 ms per
+  frame, so even a free tick leaves the frame near 20 ms.
+* **What the tick costs (September 30).** Under the actor tick, Rust runs
+  about 1.6 ms; the other 12 ms is JavaScript, spread thinly (no function
+  above 0.9 ms of self time). Crossings are not the cost: R2b-7 removed
+  3,450 of 9,000 Wasm→JavaScript calls per tick and the tick did not change,
+  so a bare import costs well under 0.1 µs. What costs is the JavaScript
+  behind the imports. Headless profile, Island, ms per tick:
+  * Pawn physics about 5.9: walking 4.0, of which MoveActor 2.3 (the rider
+    pass 1.3 of it) and the walking-surface prelude 1.1.
+  * Tick events about 5.0: interpreter plumbing around JavaScript natives
+    and nodes; no native above 0.2.
+  * State code about 1.8: resuming state code, and pollPawnLocomotion 0.7.
+  * The host object model (readInstanceField, instance, copyScalar,
+    readComposite, readNamed and their callees) is about 4.7 of the above,
+    spread over many callers.
+  * Two costs exist only headless: bench-sim's `--continue` wrapper of
+    `invokeNative` (about 0.4) and its render-feedback reads (about 1).
+* **The rider moves are original.** About 100 rider MoveActors run per
+  Island tick: NPCs carry their initial weapons and ammo with `Base` set to
+  themselves (`ScriptedPawn.uc` 594 and 615, `inv.SetBase(Self)`), so every
+  NPC move moves them. Each costs about 9.5 µs, mostly SetActorZone (about
+  2.6 µs a move, both call sites about 0.65 ms per tick) and the move query
+  (about 1.4 µs).
+* **Measurement traps.** bench-sim's `--counts` wraps `runtime.invokeNative`
+  as an own property, which makes the lowering refuse the Rust perception
+  natives. A `SCRIPT_VM_STATS` run with `--counts` therefore shows about 330
+  `js value native 2105` per tick that a normal run does not have. Measure
+  timing with `.work/tools/ab.sh` (interleaved medians against a HEAD
+  worktree), never with instrumented runs.
 
 ### Next steps, in recommended order
 
-1. **R3-b B3–B7: walking and falling in Rust.** Pawn physics is the largest
-   remaining simulation cost. The plan:
-   * **B3.** Pure kernels: groundVelocity, stepUp via a `PawnOps` trait,
-     moveQuery, isOverlapping, processPlayerHitWall and the setBase logic,
-     plus a hosted build so the walking, steps, velocity, move-query,
-     walking-callbacks and set-base oracles run against Rust.
+The order changed on September 30, after the crossing calibration and the
+rider census. Judge each step by A/B tick medians, not by crossings removed.
+
+1. **LastRendered (723) and InStasis (721) in the interpreter**, the R3-c
+   way: a lowering gate and a differential mode. LastRendered reads the
+   level's double clock, which the host writes where the level tick advances
+   it. GetStateName (284) and GetPlayerPawn (720) wait: the state node and
+   the viewport have no image home yet.
+2. **The SetActorZone family.** A BSP point walk (the model is already in
+   the trace kernel's instance, so one export and one import per query), the
+   three region writes, and zone events as imports when the zone changes.
+   `validate-native-zone` is its oracle. About 0.6 ms.
+3. **Iterators in Rust** (AllActors, RadiusActors, VisibleActors). The
+   perception host's Level.Actors list and class rows are the
+   infrastructure.
+4. **R3-b B4–B7: MoveActor, walking and falling in Rust.** B3's numeric
+   kernels are done (below). MoveActor's own body is cheap; its cost is in
+   SetActorZone, the move query, the hash updates and the rider moves, which
+   are the families to port. Keep separate Wasm instances with one import
+   per query: imports are cheap (R2b-7). The plan:
    * **B4.** MoveActor for pawn views: playerMove, touches, bump, zone, and
      remove/add with primitive bounds. Riders and the per-candidate decorate
-     step stay imports. Its gain needs 1e-4.
-   * **B5.** The walking loop for NPC map pawns. Falling and flying return
-     as tail calls.
+     step start as imports.
+   * **B5.** The walking loop for NPC map pawns, implementing B3's
+     `PawnOps` on the image. Falling and flying return as tail calls.
    * **B6.** Falling, landing, rotation and the pawn tail.
    * **B7.** The player. It needs 1e-6.
 
@@ -149,35 +184,71 @@ below hold the evidence for each stage.
      * `level.actors` order and the zone event order.
    * Match V8 numerics exactly: `Math.hypot`, `Math.min`/`Math.max` with NaN
      and −0, and reductions starting from +0.
-
-   **Design question for B4–B5.** The collision hash and the traces live in
-   the trace kernel's own Wasm instance (R3-b), while the interpreter and the
-   images live in the runtime's arena (R3-c). Either merge the two
-   instances, or keep one import per query, as R3-c measured for AICanSee.
-   Measure before choosing.
-2. **1e-4 to 1e-7.** Move the rest of the host fields into the image:
-   * **1e-4, Base and Touching.** `actor-touch` writes the slots explicitly.
-     Spawned actors get the same Touching storage. Verify with
-     `RIDER_VERIFY=1`, and commit this step alone, since the digest may
-     change.
+5. **1e-4 to 1e-7.** Move the rest of the host fields into the image. None
+   is a prerequisite for the steps above any more, since those can read
+   host fields through imports.
+   * **1e-4, Base and Touching.** Two behaviors decide whether this is a
+     pure representation step, and both need a decision first. `decorate`
+     creates a host `touching` array lazily (`??=`), and whether it exists
+     gates `isMapMoveHost`. A spawned actor keeps a host-only `touching`
+     array while `script-destroy` reads the image's Touching. A comparison
+     of the host arrays with the image slots comes first (see "Touching
+     comparison" below); any mismatch is a fidelity question.
    * **1e-5, movers.** The interpolation object becomes a view of the image,
      with all 8 KeyPos and KeyRot. The binding keeps only 2 of the 8 today.
    * **1e-6, the player.** Player becomes a controller over the image; this
      removes the Login rebinding. It also covers the view fields, Regions
      and the controlled player's Physics, the last bound step-2 key.
    * **1e-7, cleanup.** Plain image cells for Level and NetMode.
-3. **A per-object bound-field rule in the interpreter.** R3-d's tick kernel
+6. **A per-object bound-field rule in the interpreter.** R3-d's tick kernel
    masks bound fields per object. The interpreter still hands a bound key to
    JavaScript on every object that has any binding, so NPC reads such as
    BaseEyeHeight still go to JavaScript.
-4. **Natives called from scripts that still run in JavaScript:**
+7. **Natives called from scripts that still run in JavaScript:**
    SetLocation/FarMoveActor, AttachDecal and ScriptSpawn. Profile first.
-5. **The level loop, DistanceFromPlayer and compaction.** They need a
+8. **The level loop, DistanceFromPlayer and compaction.** They need a
    Level.Actors list cached on the base epoch. The net gain is about 0.3 ms.
-6. **The render side (no plan yet).** Actor meshes, render, HUD and lighting
+9. **The render side (no plan yet).** Actor meshes, render, HUD and lighting
    are about 20 ms of the browser frame, so 120 fps is out of reach until
-   they are profiled and planned. The mesh posing kernel is already in Rust
-   ([lodmesh Wasm](lodmesh-wasm.md)).
+   they are profiled and planned. The mesh posing and lighting kernels are
+   already in Rust ([lodmesh Wasm](lodmesh-wasm.md)); most of the actor
+   mesh time is the JavaScript around them.
+10. **Moving the simulation off the render thread.** Only this changes the
+   ceiling rather than the slope: the frame would cost the larger of the
+   tick and the render instead of their sum. It needs a decision on render
+   feedback (LastRenderTime is an input the original reads from the
+   previous frame) and on `SharedArrayBuffer`, which needs COOP/COEP headers
+   on the dev server and the host.
+
+### Touching comparison (September 30)
+
+`.work/tools/touching-compare.mjs` (a bench-sim preload) compared, after
+every level tick, each actor's host `touching` array (the slots
+`actor-touch.mjs` writes) with the Touching slots in its image and with what
+script reads. Both maps, 360 ticks each:
+
+| | Training | Island |
+|---|---|---|
+| Actor-ticks with a host array | 156,580 | 935,124 |
+| Image differs from the host, bound map actors | 491 | 1,749 |
+| Image differs from the host, spawned actors | 559 | 122 |
+| Script read differs from the host | 222 (spawned) | 22 (spawned) |
+
+* **Bound map actors.** makeBinding's `touching` entry serves script
+  reads from the host array, so script sees the live slots and only the
+  image is stale. 1e-4 can install image slots that adopt the host values,
+  as 1e-3 did for Location.
+* **Spawned actors: a divergence to decide.** `installActorCollisionView`
+  gives a spawned actor a host-only `touching` array
+  (`script-actor-collision.mjs`), while its script field, and so the
+  DestroyActor scan (`script-destroy.mjs` `touchSlot`), reads the image,
+  which never changes. The script-visible cases were Island's Fish12 and
+  Fish16 touching each other (11 ticks) and Training's UNATCOTroopCarcass0
+  touching UNATCOTroop2 (222 ticks); script reads and a Destroy of those
+  actors see empty slots where the original holds the other actor. Making
+  the spawned actor's slots the image's is a fidelity fix: it may change
+  the digests, and it belongs in its own commit with the first differing
+  checkpoint explained.
 
 ### How each step is verified
 
