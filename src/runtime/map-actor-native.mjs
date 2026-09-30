@@ -5,16 +5,21 @@
  * A spawned actor carries a field-backed collision view
  * (script-actor-collision.mjs installActorCollisionView). A map actor is the
  * level-load host object itself: its `position`, `radius`, `height`,
- * `rotation`, `base`, `standingCount` and `touching` are the native members,
- * and script-doors.mjs binds the matching script fields onto them. Its flag
- * words (`flags`, `actorFlags`, `motionFlags`) are accessors over its object
- * image (actor-flag-words.mjs). See docs/script-map-actor-move.md.
+ * `rotation`, `base`, `standingCount` and `touching` are the native members.
+ * `base` and `touching` are host state that script-doors.mjs binds the
+ * matching script fields onto. The others are accessors over its object
+ * image: the flag words (`flags`, `actorFlags`, `motionFlags`,
+ * actor-flag-words.mjs), `standingCount` (actor-mirror-fields.mjs) and the
+ * pose (`position`, `rotation`, `radius`, `height`, a map move host's
+ * `oldLocation`, actor-pose-fields.mjs). See docs/script-map-actor-move.md.
  *
  * Retail AActor layout (sdk-layouts.mjs, checked against the GOTY DLLs):
  *   +0x1dc bit0 bCollideActors, bit1 bCollideWorld, bit2 bBlockActors,
  *          bit3 bBlockPlayers, bit4 bProjTarget        -> host `flags`
  *   +0x1ec bit8 (+0x1ed bit0) bJustTeleported          -> host `motionFlags`
+ *   +0x114 Location, +0x120 Rotation                   -> host `position`, `rotation`
  *   +0x12c OldLocation                                 -> host `oldLocation`
+ *   +0x1d4 CollisionRadius, +0x1d8 CollisionHeight     -> host `radius`, `height`
  */
 
 import { flagWordsOf } from './actor-flag-words.mjs';

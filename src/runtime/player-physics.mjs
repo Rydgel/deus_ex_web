@@ -17,7 +17,12 @@ export function runPlayerPhysics(player,dt,{acceleration,groundSpeed,isWalking,z
  const pawn=player.physicsPawn??={base:player.spawnBase??null,hitSlopedWall:false,moveTimer:0,pawnFlags:0,destination:[0,0,0],
   // Actor+0x1ec is shared by physics and FarMoveActor; preserve every other bit.
   get justTeleported(){return Boolean(player.motionFlags&0x100);},
-  set justTeleported(value){player.motionFlags=((player.motionFlags&~0x100)|(value?0x100:0))>>>0;}};
+  set justTeleported(value){player.motionFlags=((player.motionFlags&~0x100)|(value?0x100:0))>>>0;},
+  // Actor+0x12c OldLocation: the Player's member, linked to the identity's
+  // image cell (player.mjs linkPose). Before this pawn's first store the
+  // collision identity read spawnOldLocation, which this storage continues.
+  get oldLocation(){return player.spawnOldLocation;},
+  set oldLocation(value){player.spawnOldLocation=value;}};
  Object.assign(pawn,{position:player.position.map(f),velocity:player.velocity.map(f),acceleration:acceleration.map(f),
   physics:player.grounded?1:2,worldActor:queries.levelInfo,radius:player.radius,height:player.height,
   rotation:player.bodyRotation,groundSpeed,accelRate:defaults.AccelRate,airControl:defaults.AirControl,

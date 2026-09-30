@@ -59,8 +59,8 @@ their linked offsets. Host state still owns some fields through bindings:
    one: map actors, spawned actors, loaded objects, windows and plain objects.
 2. `instance.bindings`: getter/setter pairs over host state, which take
    precedence over the image. Map actors bind only the host-owned fields
-   through `makeBinding` in `script-doors.mjs` (position, Touching, regions,
-   player view state, the player's Physics). A binding whose host state is absent
+   through `makeBinding` in `script-doors.mjs` (Base, Touching, regions, the
+   mover interpolation fields, player view state, the player's Physics). A binding whose host state is absent
    falls back to the image. Extension windows bind their native members to the
    native heap (`script-window-host.mjs`). Constructed and loaded objects bind
    their UObject header fields.
@@ -79,7 +79,11 @@ their linked offsets. Host state still owns some fields through bindings:
    `physics`, `velocity`, `acceleration`, `standingCount`, pawn-list and
    navigation pointers and mover replication fields are accessors over their
    cells since step 2 (1e-2), and the Player's `velocity` is its identity's
-   Velocity cell.
+   Velocity cell. Its `position`, `rotation`, `radius`, `height` and (a map
+   move host's) `oldLocation` are accessors over Location, Rotation, the
+   collision size and OldLocation since step 3 (1e-3), and the Player's
+   position, body rotation, collision size and OldLocation are its
+   identity's cells.
 
 ## Stages
 
@@ -228,8 +232,9 @@ What 1d does not do: the images are not addresses on the native heap. The Extens
 image the window natives address. Sharing one address space is part of 1e.
 
 **1e: host-owned fields move into the image (in progress).** Step 1, the
-actor flag words, and step 2, the scalar and vector mirrors, are implemented
-([Rust core](rust-core.md) 1e-1, 1e-2). Physics, collision
+actor flag words, step 2, the scalar and vector mirrors, and step 3,
+Location, Rotation, the collision size and OldLocation, are implemented
+([Rust core](rust-core.md) 1e-1, 1e-2, 1e-3). Physics, collision
 and presentation read the original offsets directly, and the corresponding
 bindings disappear. After this step a Rust kernel can share the image as
 `WebAssembly.Memory` with no marshaling. It was deferred until a measured

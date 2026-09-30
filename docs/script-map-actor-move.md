@@ -42,9 +42,13 @@ the image itself. `flags`, `actorFlags` and a map actor's `motionFlags` are
 accessors over the actor's `+0x1dc`, `+0x28` and `+0x1ec` dwords
 (`actor-flag-words.mjs`), and the per-bit copies derive from them. The
 collision bools, bDeleteMe and bJustTeleported therefore need no binding.
-`OldLocation` keeps its binding. A map pawn's `motionFlags` is the same image
-accessor; its physics view reads and writes it (see
-[Rust core](rust-core.md) 1e-1, "Pawn motion word").
+A map pawn's `motionFlags` is the same image accessor; its physics view
+reads and writes it (see [Rust core](rust-core.md) 1e-1, "Pawn motion word").
+Since step 3 (1e-3) `position`, `rotation`, `radius`, `height` and a map
+move host's `oldLocation` are accessors over the actor's `+0x114`, `+0x120`,
+`+0x1d4`, `+0x1d8` and `+0x12c` cells (`actor-pose-fields.mjs`), so
+`Location`, `Rotation`, the collision size and `OldLocation` need no binding
+either.
 
 Batch 5 joins the map actor's `Acceleration` to the same native surface as
 `Velocity`. The recovered `AActor::setPhysics` zeroes both members at
@@ -237,8 +241,8 @@ runs the original exec.
 
 The original reloads the map. The host restores the collision word in
 `prepareActor` from the serialized fields, because the rebuilt hash
-registers every serialized collider. It also drops FarMoveActor's
-`motionFlags`/`oldLocation` so the serialized values return. A picked-up
+registers every serialized collider. It also returns FarMoveActor's
+`motionFlags`/`oldLocation` to the serialized values. A picked-up
 item returns to its serialized `Location` and `Base` inside the hash's
 remove/re-add, as decorations already did. The player's `CarriedDecoration`
 is cleared with the other in-hand fields.

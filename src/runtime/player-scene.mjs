@@ -14,6 +14,7 @@ import { setBase as setActorBase } from './walking-callbacks.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { collisionFlagsFrom, writeCollisionFlags } from './map-actor-native.mjs';
 import { flagWordsOf } from './actor-flag-words.mjs';
+import { resetPoseField } from './actor-pose-fields.mjs';
 
 /** Compose independently evidenced routines for the declared dry player/door
  * scene. Unsupported script, RNG and startup branches remain explicit. */
@@ -204,7 +205,10 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       // image started there); a host copy is dropped.
       if(words?.motion)actor.motionFlags=((actor.motionFlags&~0x100)|(v.bJustTeleported?0x100:0))>>>0;
       else delete actor.motionFlags;
-      delete actor.oldLocation;
+      // A map move host's OldLocation member is its image cell
+      // (actor-pose-fields.mjs): it returns to the serialized value the
+      // binding showed once the host copy was gone.
+      resetPoseField(actor,'oldLocation');
     }
     actor.waitingPawn=actors.find(a=>a.index===v.WaitingPawn)??null;
     actor.marker=actors.find(a=>a.index===v.MyMarker)??null;
@@ -218,10 +222,12 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     detachPlayerIdentity(){
       const old=source;
       // The retired identity's image is purged with the old level; the
-      // Player's motion word and velocity are host state until the next
-      // identity links.
+      // Player's motion word, velocity and pose (position, body rotation,
+      // collision size, OldLocation) are host state until the next identity
+      // links.
       player.linkMotionFlags(null);
       player.linkVelocity(null);
+      player.linkPose(null);
       collision.queries.removeActor(old);player.actorRegistered=false;
       removePawn(level,old);
       for(let i=0;i<level.actors.length;i++)if(level.actors[i]===old){level.actors[i]=null;bumpBaseEpoch();}

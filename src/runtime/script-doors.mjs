@@ -19,6 +19,7 @@ import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionAr
 import { writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
 import { installActorFlagWords, flagWord, MOTION_WORD } from './actor-flag-words.mjs';
 import { installMirrorFields, mirrorsField, resetMirrorField, imageField, PLAYER_BOUND, PLAYER_PORT } from './actor-mirror-fields.mjs';
+import { installPoseFields, posesField, resetPoseField, isPoseProp, keepLivePose, imagePoseField } from './actor-pose-fields.mjs';
 import { setBase } from './walking-callbacks.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
 import { setActorZone } from './zone.mjs';
@@ -129,11 +130,23 @@ function makeBinding(runtime, record, field) {
   // which Player.velocity links to; its Physics stays the movement port's
   // (docs/rust-core.md 1e-2).
   if (mirrorsField(host, runtime.instance(host), field, { exclude: host.controlledPlayer ? PLAYER_BOUND : null })) return null;
+  // Location, Rotation and the collision size are the image's cells too, and
+  // so is OldLocation, which the entry below bound only for a map move host
+  // and the controlled player: their host members are accessors over the
+  // cells (actor-pose-fields.mjs, installed by attach; `poseOldLocation`
+  // marks the hosts whose OldLocation member exists), and the player's are
+  // Player members linked to them (docs/rust-core.md 1e-3).
+  if (posesField(runtime.instance(host), field)) {
+    if (field.key === 'engine.actor.oldlocation' && (isMapMoveHost(host) || host.controlledPlayer)) record.poseOldLocation = true;
+    return null;
+  }
 
   // The entries for mirrored fields (pawnlist, nextpawn, specialgoal,
   // waitingpawn, mymarker, standingcount, physics, velocity, acceleration,
-  // clientupdate, sim*, real*) serve only a host whose class has no image cell
-  // for them (isolated fixtures) and the controlled player's Physics.
+  // clientupdate, sim*, real*) and pose fields (location, rotation,
+  // collisionradius, collisionheight, the oldlocation entry below) serve only
+  // a host whose class has no image cell for them (isolated fixtures) and the
+  // controlled player's Physics.
   const dynamic = {
     // record.levelInfo and level.netMode change only through these setters,
     // so the runtime keeps a copy in the image (mirror) for the Rust VM.
@@ -334,7 +347,7 @@ function makeBinding(runtime, record, field) {
   //
   // FarMoveActor writes OldLocation (+0x12c) on the native actor. A non-pawn
   // map actor's move bodies run on this host, so that field is its member
-  // once written.
+  // once written (an imaged host's member is the cell itself, above).
   if (key === 'oldlocation' && (isMapMoveHost(host) || host.controlledPlayer)) {
     return {
       get: () => host.oldLocation === undefined ? stored() : vector(host.oldLocation),
@@ -811,7 +824,13 @@ export async function createScriptDoors({
     // collidable rebuild (player-scene reset) owns until clearStartupPawnList
     // evicts it; the property reset leaves it as the rebuild left it.
     const pawnList = record.role === 'level' ? level.pawnList : undefined;
+    // Location, Rotation and the collision size were host members the
+    // property reset never touched: the reset code below restores each
+    // actor's own, inside the hash's remove/re-add where it is registered
+    // (actor-pose-fields.mjs keepLivePose).
+    const keepPose = keepLivePose(record.object);
     runtime.restoreStorage(record.object, record.initialStorage);
+    keepPose();
     if (record.role === 'level') level.pawnList = pawnList;
     resetMirrorField(record.object, 'acceleration');
   }
@@ -832,6 +851,20 @@ export async function createScriptDoors({
     }
     installMirrorFields(host, instance, fields, { values });
     if (record.level) installMirrorFields(host, instance, fields, { values, target: record.level });
+  }
+
+  // The image cells behind a map actor's Location, Rotation, collision size
+  // and (a map move host's) OldLocation members (actor-pose-fields.mjs): each
+  // takes the member's current value. The controlled player's are Player
+  // members (position, bodyRotation, radius, height, spawnOldLocation),
+  // linked to its identity's cells.
+  function installPoses(record) {
+    const host = record.object, instance = runtime.instance(host), fields = classFields(record.cls);
+    if (host.controlledPlayer) {
+      playerController.linkPose(fields.map(field => imagePoseField(instance, field)).filter(Boolean));
+      return;
+    }
+    installPoseFields(host, instance, fields, { values: host.values ?? {}, oldLocation: Boolean(record.poseOldLocation) });
   }
 
   // A map actor's native flag words become its image's bytes: the members a
@@ -875,6 +908,7 @@ export async function createScriptDoors({
     // A reset returns the actor's properties to these initial values.
     record.initialStorage = runtime.snapshotStorage(identity);
     installMirrors(record);
+    installPoses(record);
     // Core UObject identity for a pre-placed map export. Actor.Destroy's
     // ConditionalDestroy -> AActor::Destroy -> UObject::Destroy chain reads this
     // record, and the export table supplies its measured Name/ObjectFlags
@@ -1520,7 +1554,9 @@ export async function createScriptDoors({
   // (installFlagWords), which resetProperties restores with the image. The
   // mirrored members among these (physics, velocity, standingCount, nextPawn,
   // specialGoal, ...) are image accessors too; resetMirrorField returns each to
-  // the value the old binding showed once its host copy was deleted.
+  // the value the old binding showed once its host copy was deleted, and
+  // resetPoseField does the same for `position` and `rotation`
+  // (actor-pose-fields.mjs).
   const NPC_HOST_PROPS = Object.freeze(['position', 'rotation', 'physics', 'base', 'velocity',
     'standingCount', 'pawnFlags', 'hitSlopedWall', 'touching', 'waitingPawn',
     'marker', 'specialGoal', 'clientUpdate', 'simOldPosition', 'simOldRotYaw', 'simOldRotPitch',
@@ -1566,7 +1602,7 @@ export async function createScriptDoors({
         // the pawn unregistered.
         level.hash?.removeActor(actor);
         resetProperties(identities.get(actor));
-        for (const prop of NPC_HOST_PROPS) resetMirrorField(actor, prop);
+        for (const prop of NPC_HOST_PROPS) (isPoseProp(prop) ? resetPoseField : resetMirrorField)(actor, prop);
         if (actor.values?.Location) actor.position = [...actor.values.Location];
         actor.isPawn = true; actor.pawnFlags = 0;
         // Restore serialized Touching refs before LoadMap clears all four.
@@ -2038,6 +2074,7 @@ export async function createScriptDoors({
     }
     installFlagWords(actor);
     installMirrors(record);
+    installPoses(record);
     playerActor=actor;
     triggerActions.bindPlayerFlagBase(runtime,actor);
     playerLogs?.bindPlayer(actor);windowHost?.bindPlayer(actor);

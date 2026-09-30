@@ -32,6 +32,7 @@ export class Player {
     this.standingHeight = defaultPawnCollisionHeight(defaults.CollisionHeight);
     this.motionWord = null;
     this.velocityField = null;
+    this.poseFields = null;
     this.motionFlags = defaults.bJustTeleported ? 0x100 : 0;
     const player = this;
     this.collisionActor = { controlledPlayer: true, static: Boolean(defaults.bStatic), movable: defaults.bMovable ?? true,
@@ -155,6 +156,32 @@ export class Player {
         throw new Error(`Player velocity ${JSON.stringify(host)} differs from its image field ${JSON.stringify(image)}`);
     }
     this.velocityField = field;
+  }
+  /** Link Location, Rotation, CollisionRadius, CollisionHeight and
+   * OldLocation to an attached identity's image cells (imagePoseField, from
+   * script-doors.mjs installPoses), or unlink them (null) before that
+   * identity's image is released, keeping their values as host state. Each
+   * cell takes the member's value: the member was that field's storage until
+   * now (the browser placeholder's image never held the spawn spot or the
+   * crouch-derived height; a Login identity's already agrees). The value
+   * must be exact in the cell (docs/rust-core.md 1e-3). */
+  linkPose(fields) {
+    if (this.poseFields)
+      for (const [member, field] of Object.entries(this.poseFields)) this[POSE_HOST[member]] = field.get();
+    let linked = null;
+    if (fields) {
+      linked = {};
+      for (const field of fields) {
+        const member = POSE_MEMBER[field.spec.key];
+        if (!member) continue;
+        const host = this[POSE_HOST[member]];
+        field.set(host);
+        if (!samePose(host, field.get()))
+          throw new Error(`Player ${member} ${JSON.stringify(host)} is not exact in its image field ${JSON.stringify(field.get())}`);
+        linked[member] = field;
+      }
+    }
+    this.poseFields = linked;
   }
   get extent() { return [this.radius, this.radius, this.height]; }
   get traceEye() { return add(this.position, [0, 0, this.baseEyeHeight]); }
@@ -352,6 +379,30 @@ export class Player {
       steps: this.steps, jumps: this.jumps, lastHit: this.lastHit, eyeHeight: this.eyeHeight, walkBob: [...this.walkBob] };
   }
 }
+
+// Actor.Location, Rotation, CollisionRadius, CollisionHeight and OldLocation
+// (+0x114, +0x120, +0x1d4, +0x1d8, +0x12c): while an attached identity is
+// linked (linkPose) each Player member is that identity's image cell, so the
+// script field, the movement port and the collision identity's members are
+// one storage; before attach, between identities and in fixtures it is host
+// state. A linked read returns a fresh array (docs/rust-core.md 1e-3).
+const POSE_MEMBER = Object.freeze({ 'engine.actor.location': 'position', 'engine.actor.rotation': 'bodyRotation',
+  'engine.actor.collisionradius': 'radius', 'engine.actor.collisionheight': 'height',
+  'engine.actor.oldlocation': 'spawnOldLocation' });
+const POSE_HOST = Object.freeze({ position: 'hostPosition', bodyRotation: 'hostBodyRotation', radius: 'hostRadius',
+  height: 'hostHeight', spawnOldLocation: 'hostSpawnOldLocation' });
+const samePose = (a, b) => Array.isArray(b) ? Array.isArray(a) && a.length === 3 && a.every((value, index) => Object.is(value, b[index]))
+  : Object.is(a, b);
+for (const [member, host] of Object.entries(POSE_HOST)) Object.defineProperty(Player.prototype, member, {
+  get() {
+    const field = this.poseFields?.[member];
+    return field ? field.get() : this[host];
+  },
+  set(value) {
+    const field = this.poseFields?.[member];
+    if (field) field.set(value); else this[host] = value;
+  },
+});
 
 // Retained for synthetic movement fixtures. Play uses the original level
 // frame delta (level-tick.mjs), not this former 120 Hz catch-up accumulator.

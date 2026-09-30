@@ -1334,6 +1334,245 @@ The median `SCRIPT_VM=rust` Island tick over four interleaved pairs:
 
 The tick was lower in all four pairs, by about 0.6 ms on average.
 
+**1e-3 — Location, Rotation, collision size and OldLocation in the image
+(implemented).** This is step 3 of stage 1e ([object memory](object-memory.md#stages)).
+script-doors' `makeBinding` bound these properties of every attached map
+actor, and of the controlled player, onto host members, and the image cell
+under each binding went stale:
+
+| Offset | Field | Map actor member | Player member |
+|---|---|---|---|
+| `+0x114` | Location (vector) | `position` | `position` |
+| `+0x120` | Rotation (rotator) | `rotation` | `bodyRotation` |
+| `+0x12c` | OldLocation (vector) | `oldLocation` (map move hosts only) | `spawnOldLocation` |
+| `+0x1d4` | CollisionRadius (float) | `radius` | `radius` |
+| `+0x1d8` | CollisionHeight (float) | `height` | `height` |
+
+The members are now accessors over those cells (`actor-pose-fields.mjs`), and
+the bindings are gone.
+
+* **Install.** script-doors' `attach` runs `installPoseFields` after the
+  initial-storage snapshot and `installMirrors`. Each cell first takes the
+  member's current value, or the binding's fallback while the member is
+  absent: a mover's interpolation state, then `values.X`, then zero; for
+  OldLocation, the image cell itself. The accessors are non-configurable, so a
+  leftover `delete` throws. OldLocation is installed only where the binding
+  existed (`isMapMoveHost` at attach). Elsewhere it already was the image's:
+  pawns' physics views, movers and every other map actor read and wrote the
+  cell.
+* **Layout evidence.** Each field must be linked at its retail offset
+  (`sdk-layouts.mjs` AActor) with its kind: vector, rotator or float. This is
+  checked once per class cell, and a different placement throws.
+* **Access.** A read goes through the arena's current view and returns a
+  fresh array. A write stores through the field's codec: float32 components,
+  int32 rotator words, a float32. No code mutated these arrays in place. A
+  scan for element stores, `push`/`splice`/`fill`, identity comparisons and
+  `in` checks on them found none; every writer replaces the whole value. So
+  the aliases the old members allowed carry no state:
+  * `player-physics.mjs` `player.position = pawn.position`: the physics
+    pawn's array is reassigned, never mutated, before its next use.
+  * `decoration-physics.mjs` `host.position = pawn.position`: the falling
+    pawn is local to the step.
+  * `mover-move.mjs` swaps `mover.position` for the reverse push
+    (`0x1039a6f6`–`0x1039a773` writes only Location, +0x114). The swap now
+    writes the cell, which is the original's store, and script reads during
+    the push saw the swapped value through the binding before too.
+  * `prepareActor` assigned `actor.rotation = v.Rotation`, sharing the
+    serialized array with `values`, and `doors.mjs` gives a mover's
+    interpolation state the same array. The cell is a copy. Neither array is
+    ever mutated.
+  * The `collisionValues` getters (`linkLiveCollision`,
+    `linkDecorationCollision`, game.mjs's mover values, the player identity's
+    values) read the members, now the cells, so the collision hash, line
+    checks and `lc_candidate` see the same live values.
+* **Resets.** `resetProperties` restores the whole image. Location, Rotation
+  and the collision size were host members that restore never touched: each
+  reset path restores its own actors' pose afterwards, inside the hash's
+  remove/re-add for a registered actor. `keepLivePose` puts those four cells
+  back after the restore. Otherwise `changeActor`'s removal would find a
+  pickup or decoration at its serialized place while the hash still holds it
+  at the live one ("Remove actor before changing its registered location").
+  OldLocation is restored with the image, as before: prepareActor's `delete
+  actor.oldLocation` is now `resetPoseField`, which writes the serialized
+  value the binding showed after the delete. resetNpcs' `delete` of a pawn's
+  `position` and `rotation` is `resetPoseField` too.
+* **The Player.** `Player.position`, `bodyRotation`, `radius`, `height` and
+  `spawnOldLocation` are the linked identity's cells (`linkPose`, like
+  1e-2's velocity). The placeholder and each Login identity link when they
+  attach, and `detachPlayerIdentity` unlinks before the retired identity's
+  image is purged, keeping the values as host state. Linking stores the
+  members' values into the cells and refuses a value the cell cannot hold
+  exactly. The placeholder's image never held the spawn spot, the
+  crouch-derived height 43 or the start yaw. Its cells read zero for
+  Location, OldLocation and Rotation, and 47.5 for the height, hidden behind
+  the binding, which showed the Player's members. Each Login identity's image
+  already agrees, because `bindCollisionIdentity` copies it.
+  The legacy physics pawn's `oldLocation` forwards to `spawnOldLocation`.
+  Before, it was a separate member that the collision identity read once the
+  pawn existed. The pawn is created without one and assigns it in the same
+  call before any read, so the values seen are the same.
+* **Movers.** The Location and Rotation bindings also wrote a mover's
+  `interpolation.position` and `.rotation`. Only a write through the script
+  field ran that code, and none reaches a mover:
+  * Location and Rotation are `const` in `Actor.uc`.
+  * SetRotation takes MoveActor for a brush.
+  * The map-actor move entries (`mapMoveLevel`) require `isMapMoveHost`,
+    which excludes brushes.
+
+  The shadow runs counted zero such writes. `doors.mjs`'s move callback keeps
+  `interpolation.position` in step with the moved mover as before. The
+  interpolation object itself is step 5.
+* **Bound keys.** `boundKeys` lost `engine.actor.location`, `rotation`,
+  `collisionradius`, `collisionheight` and `oldlocation` (330 to 325 in both
+  maps). The Rust interpreter reads Location, Rotation and the collision size
+  of every receiver from its image, the player included.
+
+Shadow mode came first (`POSE_FIELDS_SHADOW=1`; the scaffolding was removed
+after the proof, and its version is `.work/logs/1e3/shadow-version.diff`):
+
+* The host member stayed the source, and the bindings stayed. Each member
+  became an accessor over a host slot that also wrote the image, including the
+  install adoption, the resets' fallback writes and `keepLivePose`. The
+  Player's members wrote through to their linked cells.
+* Every host read compared the member with its cell, as did every installed
+  member after each tick and after each reset. So did every binding read,
+  comparing what the script saw with the cell.
+* Every host write, and every write of a linked Player member, was checked for
+  exactness in its cell: float32 components, int32 rotator words, a float32.
+* Absent members were emulated. A read of one was classified as either
+  through the binding, which showed the fallback, or direct. A later store
+  into one was compared with the fallback.
+
+| Run | Hosts | Members | Host reads | Host writes | Binding reads | Tick checks | Reset checks | Player checks |
+|---|---|---|---|---|---|---|---|---|
+| Training, 360 ticks | 312 | 1,516 | 411,082 | 7,280 | 328,073 | 545,760 | 0 | 55,030 |
+| Island, 360 ticks | 2,238 | 11,112 | 2,362,417 | 54,069 | 1,705,516 | 4,000,320 | 0 | 70,019 |
+| Training, Player start every 100 ticks | 312 | 1,516 | 406,550 | 10,968 | 331,525 | 545,760 | 3,032 | 37,056 |
+| Island, Player start every 100 ticks | 2,238 | 11,112 | 2,730,945 | 82,015 | 1,938,134 | 4,000,320 | 22,224 | 44,703 |
+| validate-gameplay (legacy Player.tick) | 4,788 | 23,740 | 1,349,328 | 28,627 | 945,294 | 4,662,576 | 1,516 | 264,042 |
+| validate-loadmap-gc (22 Player starts) | 312 | 1,516 | 737,879 | 46,900 | 490,768 | 1,000,560 | 33,352 | 49,578 |
+
+Both VMs gave the same counts, and every digest equalled the reference.
+
+Results:
+
+* **Writers.** No host write and no linked Player write was inexact. The
+  float64 writers in `player.mjs` are the synthetic no-collision-queries path
+  (`add(this.position, scale(delta, time))`, the stance target, `adjustFloor`'s
+  moves). Their Player has no identity, so they never reach a cell. The
+  original stores float32 there (FVector), which only matters for a fixture.
+* **Consistency.** No member or binding read ever differed from its cell, no
+  member was read or written after its image was released, and the reset
+  checks found none either.
+* **Absent members.** Only LevelInfo0 had no pose member. Every read of it
+  went through the binding and showed the fallback, which equalled the image:
+  [0, 0, 0] and a radius and height of 22 on Training; on Island, its
+  serialized Location. It gets accessors like any other host. The map move
+  hosts' OldLocation was absent until FarMoveActor wrote it; those reads
+  showed the attach's image.
+* **Pawn resets.** After resetNpcs' deletes, the only direct read of an
+  absent member was the pawn view's `actor.rotation ??= get('Rotation')`
+  (174 in the Island Player-start run, 414 in validate-loadmap-gc). It
+  stored the fallback it would now read, and so did every other store into
+  an absent member.
+* **Kept across resets.** `keepLivePose` found the restore would have moved
+  208 cells in the Island Player-start run (116 pawns, 92 other actors) and
+  420 in validate-loadmap-gc (378 and 42). All were Locations. The recorded
+  examples were pawns that had walked, and pickups and decorations that had
+  settled. The reset paths restore these actors themselves, inside the hash's
+  remove/re-add.
+* **Player links.** Only the placeholder's cells took a different value
+  (above). Every Login link agreed: each run's initial Login, three Player
+  starts per Player-start bench run, and 22 in validate-loadmap-gc.
+* validate-gameplay's output is byte-identical to the unmodified tree's.
+
+Verification:
+
+* **Digests.** Unchanged at all 30 checkpoints, both VMs, `SCRIPT_VM_CHECK=1`,
+  errors `{}`: Training `c8eebff5786adf55` and Island `b767a7e417fe5968`.
+  The Player-start-every-100-ticks variant matches the unmodified tree at all
+  30 checkpoints: Training `7d6b963bf807a9bf` and Island `fe9b9fa4099571c9`,
+  both VMs. Island is unchanged under `HASH_DIFFERENTIAL=1` (829,611 line
+  checks and scans and 831,255 visit orders compared, none handed back) and
+  under `RAY_DIFFERENTIAL=1`.
+* **Validators.** `validate-script-vm-interp`, `validate-collision-kernel`,
+  `validate-trace-kernel`, `validate-object-image` and
+  `validate-object-handles`. `build-wasm` rebuilds byte-identical modules.
+* **Native oracles.** move, move-query, move-smooth, actor-rotation,
+  set-rotation-riders, based-actors, zone, player-move, mover-scene,
+  mover-move, far-move-scene, relocation, walking and falling;
+  `validate-script-set-location` and `validate-pawn-nav`.
+* **Play validators.** `validate-world-destroy`, `validate-loadmap-gc`,
+  `validate-island-swimming`, `validate-island-jump-reach`,
+  `validate-island-falling-water` and `validate-training-ladder`.
+  `validate-gameplay`'s output is byte-identical to the unmodified tree's.
+* **Unit tests.** The 564 unit tests (four new) pass.
+  `test/actor-pose-fields.test.mjs` checks, on Engine's real layouts:
+  * the cells at the retail offsets, with script and host writes as one
+    storage;
+  * fresh reads and codec stores;
+  * the refused `delete`;
+  * the reset fallbacks, including a mover's interpolation state;
+  * OldLocation installed only where it was bound;
+  * `keepLivePose` across a restore;
+  * the Player's links, including adoption and the refusal of an inexact
+    value.
+* **Browser.** A 240-frame Chromium Island walk had no page or runtime error.
+
+Cost, from bench-sim `--bound-reads` (host binding calls per timed tick):
+
+| Run | Before | After | Pose keys |
+|---|---|---|---|
+| Island, JavaScript VM | 4,596 | 1,000 | 3,596 → 0 |
+| Island, Rust VM | 4,112 | 516 | 3,596 → 0 |
+| Training, Rust VM | 1,043 | 255 | 789 → 0 |
+
+`boundKeys` holds 325 keys at the end of each run, 330 before.
+
+* **Rust interpreter.** Its bound-field fallbacks are gone: Location (110.4
+  per Island tick), Rotation (22.2), CollisionRadius (16.7) and
+  CollisionHeight (15.7). `VSize` (native 225, 3.5 per tick) now runs in
+  Rust, because its operands became memory reads under the one-import
+  policy. Five new rows of 1.1 to 1.2 per tick each appear, from statements
+  the lowering now admits: natives 193 and 715, a context struct member, a
+  local variable and a bound float field fallback. The top 60 JavaScript import rows
+  fell from 1,389 to 1,224 per tick.
+* **Call counts.** `readNamed` per Island tick is unchanged at 30,369: the
+  same calls, now without a binding. `instance` went from 58,486 to 58,303.
+
+The median `SCRIPT_VM=rust` Island tick over four interleaved pairs:
+
+| Pair | Before (ms) | After (ms) |
+|---|---|---|
+| 1 | 18.40 | 17.99 |
+| 2 | 18.49 | 18.59 |
+| 3 | 18.64 | 18.57 |
+| 4 | 18.64 | 18.28 |
+
+The tick was lower in three of the four pairs, by about 0.2 ms on average,
+which is within noise. CPU time per tick fell in all four pairs, from 23.6 to
+26.1 ms before to 23.5 to 23.8 ms after.
+
+Left bound or on the host, and why:
+
+* **The collision kernel** still reads a candidate's Location, radius and
+  height through `lc_candidate` (`valuesOf(actor)`). It lives in the trace
+  kernel's instance, not a runtime arena (R3-b B0). The values it reads are
+  now the cells.
+* **Map actors without `collisionValues`** register in the hash with their
+  serialized `values.Location`. Their cylinder does not follow the live
+  position until a native body links it (`linkLiveCollision`,
+  `linkDecorationCollision`). This is unchanged, and it is not a binding.
+* **The mover interpolation object** (`interpolation.position`, `.rotation`
+  and the KeyPos/KeyRot, OldPos and BasePos bindings) is step 5.
+* **Base and Touching** are step 4. **The player's view fields, regions and
+  Physics** are step 6.
+* **Player start** still restores Location only for the actors its reset
+  paths name: pawns, patrol points, pickups, decorations and movers.
+  `keepLivePose` keeps that exactly. Any other map actor that moves keeps
+  its live pose across a Player start, where the original's reload would
+  restore it. That is a fidelity question for its own change.
+
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming
 ([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;
