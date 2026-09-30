@@ -924,8 +924,9 @@ The words are now the image's bytes.
   movers, map pawns' hosts, decorations and pickups.
   * `flags` and `motionFlags` are the whole words (masks 0x1f and 0x1ff).
   * `actorFlags` keeps the four bits the level-load word carried (mask
-    0xa0081). The spawned-actor view composes the same four. So bHidden
-    (0x2) still reads as clear where VisibleActors tests `actorFlags & 2`.
+    0xa0081). The spawned-actor view composes the same four. A native test
+    of another +0x28 bit reads the whole image word instead ("VisibleActors
+    bHidden" below).
   * The per-bit members are getters.
   * A non-pawn, non-brush map actor (`isMapMoveHost`) gets the motion word,
     as only it had the bJustTeleported binding. Map pawns followed in a
@@ -933,10 +934,10 @@ The words are now the image's bytes.
   * The accessors are non-configurable. A leftover `delete` or an assignment
     to a derived member throws instead of splitting the storage again.
 * **Layout evidence.** The installer checks each class once. The linker must
-  have placed all 18 bools of the three words at the SDK offset and mask. At
-  install, the host's values must equal the image (level load writes both
-  from the same serialized properties). A difference throws; it is not
-  reconciled. For a motion word, the image must also start at the
+  have placed all 18 bools of the three words, and bHidden, at the SDK
+  offset and mask. At install, the host's values must equal the image (level
+  load writes both from the same serialized properties). A difference throws;
+  it is not reconciled. For a motion word, the image must also start at the
   serialized bJustTeleported.
 * **Bindings removed.** bDeleteMe, the five collision bools and bJustTeleported
   (map move hosts and the controlled player) no longer have bindings.
@@ -971,9 +972,8 @@ Not moved, and why:
   kernel's own instance and memory, not a runtime arena (R3-b B0), so it
   cannot address the image. Rust reads it there only once the kernel runs on
   the runtime's arena.
-* VisibleActors (`script-iterators.mjs`) tests bHidden through `actorFlags &
-  2`, a bit no host word ever carried. This is unchanged and noted for its own
-  fidelity check.
+* VisibleActors tested bHidden through `actorFlags & 2`, a bit no host word
+  ever carried. "VisibleActors bHidden" below fixes that.
 
 Shadow mode came first (`FLAG_WORDS_SHADOW=1`; the scaffolding was removed
 after the proof, and its version is `.work/logs/1e1/shadow-version.diff`):
@@ -1107,6 +1107,43 @@ that the view's clear, the physicsRotation mode write and FarMoveActor's set
 are the script bools, and that a test move leaves bJustTeleported alone. It
 also checks that the word cannot be deleted, that a map pawn without the word
 is refused, and that a spawned pawn view writes the whole word.
+
+**VisibleActors bHidden (after 1e-1).** execVisibleActors (`0x103e5260`)
+skips a candidate with `test byte ptr [edi+0x28], 2` at `0x103e5394`, where
+`edi` is the candidate from `Level->Actors`. Bit 1 of +0x28 is bHidden (SDK
+AActor `+0x028:1-1`). The port tested the host `actorFlags`. That word never
+carried bit 1: level load composed only bStatic, bDeleteMe,
+bCollideWhenPlacing and bMovable, and so do the spawned-actor view and the
+1e-1 accessor (mask 0xa0081). A hidden candidate was therefore yielded.
+
+* `actorWordOf` (`actor-flag-words.mjs`) returns a candidate image's whole
+  +0x28 dword. The layout check now also requires bHidden at +0x28 mask 0x2.
+* The runtime passes it to `createVisibleActorsIterator` as `actorWord`,
+  which the iterator requires.
+* No other `actorFlags &` test reads a bit outside the four the host word
+  carries: collision-hash, relocation, move-query, encroachment-query,
+  check-encroachment and the decoration and pawn views test only 0x1, 0x80,
+  0x20000 and 0x80000.
+* Scanning Engine.dll for `test byte ptr [reg+0x28], 2` finds bHidden tests
+  in AActor::Tick (`0x103a2983`; actor-tick.mjs reads the script field),
+  GetOptimizedRepList (replication, not ported) and execVisibleCollidingActors
+  (native 312, not implemented).
+
+`validate-native-visible-actors` now gives each fixture actor a real
+Engine.Actor image holding the oracle's word, and a host `actorFlags` masked
+as Play's is. The iterator's direct path reads the oracle word. The runtime
+path (`createIterator(311)`) reads the image. With the old `actorFlags & 2`
+test, both paths yield the hidden candidate and the validator fails (2
+mismatches). `test/visible-actors-hidden.test.mjs` checks on Engine's Actor
+layout that a candidate hidden through its script field is skipped before
+FastLineCheck, while its host word reads bit 1 clear.
+
+Digests are unchanged: Training `c8eebff5786adf55` and Island
+`b767a7e417fe5968` with the pawn motion word, under both VMs at all 30
+checkpoints. Neither map calls VisibleActors in the 360 bench ticks. Its
+callers are Barrel1's radioactive Tick, Cloud, Gray and AutoTurret, and
+counting every iterator native over the run finds 304, 306, 309, 310, 1000
+and 1002, never 311.
 
   that subtree with the existing compiled closures on the same frame object.
   Every function can then run in Rust from the start, and coverage grows kind

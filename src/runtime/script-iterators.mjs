@@ -301,7 +301,10 @@ export function createRadiusActorsIterator({
 /** Original execVisibleActors 0x103e5260 (native index 311). Same argument
  * skeleton as RadiusActors plus a pre-stored zero Radius buffer evaluated
  * before the Loc default copy. Each candidate is skipped on a null slot,
- * actor flag +0x28 bit 0x02 or a failed Class ancestry walk; the distance
+ * actor flag +0x28 bit 0x02 (bHidden, `test byte ptr [edi+0x28], 2` at
+ * 0x103e5394; `actorWord(actor)` is that whole dword from the candidate's
+ * object image, actor-flag-words.mjs actorWordOf, since a host `actorFlags`
+ * carries only four other bits) or a failed Class ancestry walk; the distance
  * gate runs only when Radius is ordered-nonzero against the double constant
  * 0.0 (strict Radius^2 > sum(d^2), no CollisionRadius term). Survivors call
  * Level->Model->FastLineCheck(candidate.Location, Loc) and yield on a
@@ -313,10 +316,12 @@ export function createVisibleActorsIterator({
   actorClass,
   levelFor,
   isA,
+  actorWord,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('VisibleActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('VisibleActors requires levelFor');
   if (typeof isA !== 'function') throw new TypeError('VisibleActors requires isA');
+  if (typeof actorWord !== 'function') throw new TypeError('VisibleActors requires actorWord');
   // Radius/Loc are optional: valid calls carry two to four argument
   // expressions (the exec pre-stores a zero Radius before the Loc default).
   if (argumentCount < 2 || argumentCount > 4) throw new RangeError(`VisibleActors takes two to four arguments; got ${String(argumentCount)}`);
@@ -339,7 +344,7 @@ export function createVisibleActorsIterator({
       while (index < actors.length) {
         const actor = actors[index++];
         if (actor === null || actor === undefined) continue;
-        if ((actor.actorFlags ?? 0) & 2) continue;
+        if (actorWord(actor) & 2) continue;
         if (!isA(actor, baseClass)) continue;
         const p = actor.position;
         if (radius < 0 || radius > 0) {

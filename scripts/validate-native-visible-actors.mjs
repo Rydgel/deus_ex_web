@@ -1,8 +1,10 @@
-import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {readFile,readdir,writeFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {createVisibleActorsIterator} from '../src/runtime/script-iterators.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {AssetStore} from '../src/unreal/assets.mjs';
+import {ACTOR_WORD} from '../src/runtime/actor-flag-words.mjs';
 import {gameDirectory} from './game-directory.mjs';
 const directory='.cache/actor-queries';await mkdir(directory,{recursive:true});
 // The oracle fabricates native Class chains (Mover->Brush->Actor, Pawn->Actor,
@@ -44,12 +46,28 @@ if(!process.argv.includes('--reuse')){
 }
 const reference=JSON.parse(await readFile(`${directory}/visible-actors.json`,'utf8'));let mismatches=0;
 const isA=(actor,base)=>{for(let cls=actor?.cls;cls;cls=cls.base)if(cls.record===base)return true;return false;};
+// The bound path reads each candidate's whole +0x28 dword from its object
+// image (actor-flag-words.mjs actorWordOf), never the host `actorFlags`,
+// which in Play keeps only bStatic/bDeleteMe/bCollideWhenPlacing/bMovable.
+// Each fixture actor borrows a real Engine.Actor image holding the oracle's
+// word, and its host `actorFlags` is masked as Play's is.
+const system=`${gameDirectory()}/System`,packages=[];
+for(const name of await readdir(system))if(/\.u$/i.test(name))packages.push({path:`System/${name}`,read:()=>readFile(`${system}/${name}`)});
+const imageAssets=new AssetStore(packages),imageRuntime=new ScriptRuntime(imageAssets,{nativeClassLoading:true});
+const enginePackage=await imageAssets.get('Engine');
+const actorImageClass=await imageRuntime.loadClass(enginePackage,enginePackage.exportsByPath.get('actor'));
+const imageOf=(cls,word)=>{
+ const holder={};imageRuntime.attach(holder,actorImageClass);
+ const {cells,base,arena}=imageRuntime.instance(holder);
+ arena.view.setUint32(base+ACTOR_WORD.offset,word>>>0,true);
+ return {cls,cells,base,arena};
+};
 for(const [index,c] of cases.entries()){
  const source={id:'self',position:c.sourcePosition??[10,20,30],actorFlags:0,cls:CHAIN.Actor};
  const objects={self:source},byPosition=new Map();
  for(const a of c.actors??[]){
   const position=a.position??[0,0,0];
-  const object={id:a.id,position,actorFlags:a.flags??0,cls:CHAIN[a.kind??'Actor']};
+  const object={id:a.id,position,word:a.flags??0,actorFlags:(a.flags??0)&ACTOR_WORD.mask,cls:CHAIN[a.kind??'Actor']};
   objects[a.id]=object;byPosition.set(position.map(f32).join(),a.id);
  }
  byPosition.set(source.position.map(f32).join(),'self');
@@ -63,7 +81,7 @@ for(const [index,c] of cases.entries()){
   const base=c.baseClass?RECORD[c.baseClass.toLowerCase()]:null;
   const args=[base,sink,c.radius,c.loc];
   const iterator=createVisibleActorsIterator({receiver:source,argumentCount:4,
-   evaluateArgument:i=>{evalOrder.push(i);return args[i];},actorClass:ACTOR,levelFor:()=>level,isA});
+   evaluateArgument:i=>{evalOrder.push(i);return args[i];},actorClass:ACTOR,levelFor:()=>level,isA,actorWord:a=>a.word});
   while(iterator.next()){yields.push(out.actor.id);if(yields.length===c.breakAfter)break;}
   return {yields,queries,finalActor:out.actor?.id??null,evalOrder};
  };
@@ -77,7 +95,7 @@ for(const [index,c] of cases.entries()){
  const runtime=Object.create(ScriptRuntime.prototype);
  runtime.actorClass={record:ACTOR};runtime.levelFor=()=>level;
  runtime.instances=new WeakMap();
- for(const o of level.actors)if(o)runtime.instances.set(o,{cls:o.cls});
+ for(const o of level.actors)if(o)runtime.instances.set(o,imageOf(o.cls,o.word));
  runtime.instances.set(source,{cls:source.cls});
  const base=c.baseClass?RECORD[c.baseClass.toLowerCase()]:null;
  const bound=runtime.createIterator({index:311,receiver:source,argumentCount:4,
@@ -96,7 +114,7 @@ for(const [index,c] of cases.entries()){
   fastLineCheck:(model,first,second)=>{shortChecks.push({first,second});return 1;}};
  const shortOut={actor:null},shortSink={reference:true,get:()=>shortOut.actor,set:v=>{shortOut.actor=v;}};
  const short=createVisibleActorsIterator({receiver:{position:[10,20,30],actorFlags:0,cls:CHAIN.Actor},argumentCount:2,
-  evaluateArgument:i=>[null,shortSink][i],actorClass:ACTOR,levelFor:()=>shortLevel,isA});
+  evaluateArgument:i=>[null,shortSink][i],actorClass:ACTOR,levelFor:()=>shortLevel,isA,actorWord:a=>a.actorFlags});
  try{assert.equal(short.next(),true);assert.equal(shortOut.actor.id,'far');
   assert.deepEqual(shortChecks,[{first:[9999,0,0],second:[10,20,30]}]);}
  catch{mismatches++;console.log('short-call defaults mismatch');}

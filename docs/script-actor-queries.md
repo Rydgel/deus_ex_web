@@ -119,6 +119,15 @@ class filtering, negative `Radius` (squared), and early-break out
 retention. Mutations dropping the hidden skip, applying the distance gate
 at `Radius == 0` or swapping the `FastLineCheck` arguments are caught.
 
+The hidden skip tests the candidate's whole `+0x28` dword, read from its
+object image (`actorWordOf` in `actor-flag-words.mjs`, passed as the
+iterator's `actorWord`). A host's `actorFlags` carries only bStatic,
+bDeleteMe, bCollideWhenPlacing and bMovable, never bHidden. The validator's
+runtime path therefore runs each fixture actor over a real Engine.Actor
+image holding the oracle's word, with a masked host `actorFlags`. Testing
+`actorFlags & 2` instead fails it ([Rust core](rust-core.md), "VisibleActors
+bHidden").
+
 Both iterator factories accept the legal `required..max` argument range:
 trailing `optional` parameters evaluate only when their expression is
 emitted, so a short call leaves `Radius`/`Loc` at the pre-stored defaults —

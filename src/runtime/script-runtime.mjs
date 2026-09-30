@@ -35,7 +35,7 @@ import { playerMove } from './player-move.mjs';
 import { moveActorRiders } from './move-riders.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { isMapMoveHost, linkLiveCollision } from './map-actor-native.mjs';
-import { flagWord, MOTION_WORD } from './actor-flag-words.mjs';
+import { actorWordOf, flagWord, MOTION_WORD } from './actor-flag-words.mjs';
 import { saveConfig, configRoot, loadConfig as loadObjectConfig, defaultsObject } from './script-config.mjs';
 import {
   installActorCollisionView, findActorBase, setCollisionArguments,
@@ -3921,8 +3921,10 @@ export class ScriptRuntime {
           levelFor:this.levelFor,isA,baseOf:actor=>this.fieldReference(actor,baseField).get()});
       }
       if(call.index===1002)return createCycleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
-      const create=call.index===310?createRadiusActorsIterator:createVisibleActorsIterator;
-      return create({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
+      if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
+      // VisibleActors tests the candidate's whole +0x28 word for bHidden.
+      return createVisibleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
+        actorWord:actor=>actorWordOf(this.instance(actor))});
     }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');

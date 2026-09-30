@@ -4,8 +4,8 @@
  *
  * Retail AActor (sdk-layouts.mjs, checked against the GOTY DLLs) packs these
  * script bools into three dwords that native code reads as members:
- *   +0x028  bStatic 0x1, bDeleteMe 0x80, bCollideWhenPlacing 0x20000,
- *           bMovable 0x80000 (with bHidden, bNoDelete, ... in other bits)
+ *   +0x028  bStatic 0x1, bHidden 0x2, bDeleteMe 0x80, bCollideWhenPlacing
+ *           0x20000, bMovable 0x80000 (with bNoDelete, ... in other bits)
  *   +0x1dc  bCollideActors 0x1, bCollideWorld 0x2, bBlockActors 0x4,
  *           bBlockPlayers 0x8, bProjTarget 0x10
  *   +0x1ec  bSpecialLit 0x1 ... bBounce 0x10, bFixedRotationDir 0x20,
@@ -21,8 +21,9 @@
  *   `flags`       the whole +0x1dc word (bits 0-4);
  *   `actorFlags`  bStatic | bDeleteMe | bCollideWhenPlacing | bMovable, the
  *                 bits the level-load host word carried (the spawned-actor
- *                 view composes the same four), so bHidden (0x2) still reads
- *                 as clear (script-iterators.mjs VisibleActors);
+ *                 view composes the same four). A native test of another
+ *                 +0x28 bit reads the whole image word (`actorWordOf`), as
+ *                 execVisibleActors does for bHidden;
  *   `motionFlags` the whole +0x1ec word (bits 0-8).
  * The per-bit members the collision code reads (`collisionBits`,
  * `collideActors`, `collideWorld`, `blockActors`, `blockPlayers`,
@@ -35,8 +36,11 @@ import {scalarCell} from './script-object-image.mjs';
 
 export const COLLISION_WORD = Object.freeze({name: 'collision', offset: 0x1dc, mask: 0x1f,
   bits: Object.freeze({bcollideactors: 0x1, bcollideworld: 0x2, bblockactors: 0x4, bblockplayers: 0x8, bprojtarget: 0x10})});
+// `mask` is the host `actorFlags` accessor's; `bits` are the bools whose
+// linked cells are checked, bHidden (SDK AActor +0x028 bit 1) included for
+// actorWordOf.
 export const ACTOR_WORD = Object.freeze({name: 'actor', offset: 0x28, mask: 0xa0081,
-  bits: Object.freeze({bstatic: 0x1, bdeleteme: 0x80, bcollidewhenplacing: 0x20000, bmovable: 0x80000})});
+  bits: Object.freeze({bstatic: 0x1, bhidden: 0x2, bdeleteme: 0x80, bcollidewhenplacing: 0x20000, bmovable: 0x80000})});
 export const MOTION_WORD = Object.freeze({name: 'motion', offset: 0x1ec, mask: 0x1ff,
   bits: Object.freeze({bspeciallit: 0x1, bactorshadows: 0x2, bcorona: 0x4, blensflare: 0x8, bbounce: 0x10,
     bfixedrotationdir: 0x20, brotatetodesired: 0x40, binterpolating: 0x80, bjustteleported: 0x100})});
@@ -84,6 +88,16 @@ class FlagWord {
 export function flagWord(instance, word) {
   checkLayout(instance);
   return new FlagWord(instance, word);
+}
+
+/** The whole +0x28 dword of an actor image, unmasked: what a native body
+ * reads as `[actor+0x28]` (execVisibleActors 0x103e5394 `test byte ptr
+ * [edi+0x28], 2` skips a bHidden candidate). Any actor with an image,
+ * installed host or not; the host `actorFlags` keeps only its four bits. */
+export function actorWordOf(instance) {
+  checkLayout(instance);
+  if (instance.imageToken?.released) throw new Error('Script object allocation has been released');
+  return instance.arena.view.getUint32(instance.base + ACTOR_WORD.offset, true) >>> 0;
 }
 
 /** Whether `host` carries image-backed flag words, and which. */
