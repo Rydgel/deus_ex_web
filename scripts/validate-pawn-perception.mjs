@@ -565,6 +565,14 @@ const scenes = [
     level: {},
     actors: { t: { ...TGT_ACTOR, location: [300, 0, 0], inLevel: true } },
     args: [outf(0), outf(0), vec(1, 0, 0), vec(0, 0, 40)], fastLine: [1] },
+  // 0x103bb2a4 `fst dword` keeps the 80-bit dot for the FCOMP 0.0: FireDir .
+  // delta = 0.6*2^-149 is below the 2^-148 magnitude of the loaded zero yet
+  // ranks above it, so the candidate is kept (score stores 0 > seed -1).
+  { name: 'pat-tiny-dot', body: 'PickAnyTarget',
+    pawn: { ...NPC, location: [0, 0, 0] },
+    level: {},
+    actors: { t: { ...TGT_ACTOR, location: [2 ** -149, 0, 1000], inLevel: true } },
+    args: [outf(-1), outf(0), vec(0.6, 0.8, 0), vec(0, 0, 0)], fastLine: [1] },
   // Non-pawn candidate without bProjTarget is filtered out (no winner).
   { name: 'pat-noproj', body: 'PickAnyTarget',
     pawn: { ...NPC, location: [0, 0, 0] },
@@ -799,6 +807,9 @@ const MUTATIONS = [
     replacement: "if (false) continue;",
     expect: ['pt-nogame'] },
   // --- PickAnyTarget (534) ---
+  { name: 'fcom-one-sided-zero', pattern: '  else if (a.sig === 0n) m = b.neg ? 1 : -1;\n  else if (b.sig === 0n) m = a.neg ? -1 : 1;\n',
+    replacement: '',
+    expect: ['pat-tiny-dot'] },
   { name: 'pat-pawn-excl', pattern: "if (services.isA(cand, 'Pawn')) continue;",
     replacement: 'if (false) continue;',
     expect: ['pat-skips-pawn'] },

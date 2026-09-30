@@ -206,9 +206,9 @@ Inputs with no table row raise `RotationOracleMiss` rather than approximating.
 `scripts/validate-pawn-locomotion.mjs` compares per scene: the latent code,
 bytecode cursor advance, every mutated field at float32 **bit-pattern**
 precision (`-0`/NaN payloads included), object references, and the ordered
-event list including the Touch `parms[0]` payload. 103/103 scenes are
-bit-exact; 21/21 targeted mutants (physics gates, tolerance boundaries, flag
-bits, store order, timer formula) are detected.
+event list including the Touch `parms[0]` payload. 108/108 scenes are
+bit-exact; 22/22 targeted mutants (physics gates, tolerance boundaries, flag
+bits, store order, timer formula, FCOM zero ordering) are detected.
 
 `vectorToRotator` (the runtime's `FVector::Rotation` model) was itself swept
 against 3080 hardware rows bit-exactly — `Math.atan2` + f64 multiply + trunc
@@ -229,6 +229,15 @@ distinction matters:
 - `steerArrive200` keeps `d.z`/`v̂z` in 80-bit while x/y round through f32.
 - The move-timer helper compares the product `base*DesiredSpeed` against zero
   with `test ah,0x40` — unordered (NaN) takes the `0.5` fallback.
+- FCOM orders an exact 80-bit zero below every positive and above every
+  negative operand. Four `steerArrive200` compares can meet a computed zero
+  (exponent field 0) against a nonzero operand: the falling air-control gate
+  (`DefaultGravityZ*0.9`), the falling resume (`Location.Z+100`), and the
+  Inventory Touch height (`dz`) and radius (`CollisionRadius²` vs `d2`, either
+  side zero). `pmt-touch-same-z-thin`, `pmt-touch-same-xy-thin`,
+  `pmt-touch-zero-radius`, `pmt-fall-resume-zero-sum` and
+  `pmt-fall-zero-default-grav` pin them; mutant `fcom-one-sided-zero` flips
+  all five.
 - All embedded doubles (`1.3`, `0.8`, `1.4`, `0.2`, `0.5`, `0.7`, `0.9`, `1`)
   load through the exact qword-widening path, not float literals.
 

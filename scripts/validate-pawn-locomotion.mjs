@@ -386,6 +386,22 @@ const scenes = [
   // Flying pawn target: the adjusted dest (z += CollisionHeight*0.7) differs
   // from the live location, so the post-helper re-snapshot is observable.
   { name: 'pmtw-resnapshot', body: PMW, pawn: { physics: 4, moveTarget: 'target', moveTimer: 5, desiredSpeed: 1, destination: [999, 999, 999], focus: [888, 888, 888], ...GLIDE }, target: { cls: 'pawn', location: [40, 20, 0], collisionRadius: 30, collisionHeight: 44 }, latent: 503 },
+
+  // -- One-sided arithmetic zero at an FCOM ----------------------------------
+  // An 80-bit result of exactly 0 (x87add/x87mul leave it at exp 0) against a
+  // nonzero operand below 1: FCOM orders +0 under every positive value, the
+  // magnitude compare alone ordered it above.  Each FCOM in 0x103be200 whose
+  // operand can be such a zero gets one scene.
+  // Inventory Touch height gate: |Location.Z - target Z| = 0 < CollisionHeight 0.5.
+  { name: 'pmt-touch-same-z-thin', body: PMT, pawn: { physics: 1, destination: [30, 0, 0], moveTarget: 'target', moveTimer: 5, collisionRadius: 40, collisionHeight: 0.5 }, target: { cls: 'inventory', location: [10, 0, 0] }, latent: 501 },
+  // Inventory Touch radius gate, zero on the right: dx=dy=0 so d2 = 0 < CollisionRadius^2 0.25.
+  { name: 'pmt-touch-same-xy-thin', body: PMT, pawn: { physics: 1, destination: [30, 0, 0], moveTarget: 'target', moveTimer: 5, collisionRadius: 0.5, collisionHeight: 60 }, target: { cls: 'inventory', location: [0, 0, 5] }, latent: 501 },
+  // Inventory Touch radius gate, zero on the left: CollisionRadius^2 = 0 <= d2 0.25, no Touch.
+  { name: 'pmt-touch-zero-radius', body: PMT, pawn: { physics: 1, destination: [30, 0, 0], moveTarget: 'target', moveTimer: 5, collisionRadius: 0, collisionHeight: 60 }, target: { cls: 'inventory', location: [0.5, 0, 5] }, latent: 501 },
+  // Falling resume: Location.Z + 100 = 0 < Destination.Z 0.5.
+  { name: 'pmt-fall-resume-zero-sum', body: PMT, pawn: { physics: 2, destination: [10, 0, 0.5], velocity: [0, 0, -50], location: [0, 0, -100] }, pawnZone: LOW_GRAV, latent: 501 },
+  // Air-control gate: DefaultGravityZ*0.9 = 0 < ZoneGravity.Z 0.5, so it steers.
+  { name: 'pmt-fall-zero-default-grav', body: PMT, pawn: { physics: 2, destination: [100, 0, 50], velocity: [0, 0, -50] }, pawnZone: { gravityZ: 0.5, defaultGravityZ: 0 }, latent: 501 },
 ];
 
 // --------------------------------------------------------------------------
@@ -514,6 +530,10 @@ const MUTATIONS = [
     replacement: 'x87div(x87mul(ld(dist), D14), eff)', expect: ['mt-basic', 'mtw-inventory'] },
   { name: 'glide-axes-field', pattern: 'if (glide) d = fcoordsAxes(p.rotation)[1].slice();',
     replacement: 'if (glide) d = fcoordsAxes(p.rotation)[2].slice();', expect: ['pmt-glide-far'] },
+  { name: 'fcom-one-sided-zero', pattern: '  else if (a.sig === 0n) m = b.neg ? 1 : -1;\n  else if (b.sig === 0n) m = a.neg ? -1 : 1;\n',
+    replacement: '',
+    expect: ['pmt-touch-same-z-thin', 'pmt-touch-same-xy-thin', 'pmt-touch-zero-radius',
+      'pmt-fall-resume-zero-sum', 'pmt-fall-zero-default-grav'] },
 ];
 
 const src = readFileSync(modulePath, 'utf8');

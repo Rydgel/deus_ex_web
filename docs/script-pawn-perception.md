@@ -26,8 +26,15 @@ six-argument `GNative` exec wrapper.
 
 The port is `src/runtime/script-pawn-perception.mjs`; the Unicorn oracle is
 `scripts/native-pawn-perception-probe.py`; the JS-twin comparator and mutation
-corpus live in `scripts/validate-pawn-perception.mjs` (55 scenes + 13
+corpus live in `scripts/validate-pawn-perception.mjs` (56 scenes + 14
 mutations, all bit-exact against the oracle).
+
+No perception FCOM meets a computed zero: every zero operand is the loaded
+`0.0` constant. The only compare where the zero-ordering rule is observable is
+PickAnyTarget's `FCOMP 0.0` at `0x103bb2ae`, which tests the retained 80-bit
+dot (`fst dword` at `0x103bb2a4`). A dot below 2^-148 still ranks above zero
+there (`pat-tiny-dot`, mutant `fcom-one-sided-zero`). PickTarget stores the dot
+(`fstp dword` at `0x103baf4a`) before its compare.
 
 ## Field layout the bodies dereference
 
