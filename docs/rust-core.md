@@ -84,7 +84,7 @@ below hold the evidence for each stage.
   reference (see "Default engine" under R2b).
 * **Implemented stages:**
   * R0 (arena), R1a and R1a-2 (handles), R2a (frames).
-  * R2b-1 to R2b-6 (the interpreter).
+  * R2b-1 to R2b-7 (the interpreter and its receiver table).
   * R3-a (BSP traces), R3-b B0–B2 (collision hash, line checks and the
     walking-surface scan).
   * R3-c (IsValidEnemy, GetPawnAllianceType, AICanSee).
@@ -197,8 +197,8 @@ below hold the evidence for each stage.
     checkpoint explained, and as its own commit.
 * **Differential modes.** Each Rust family has a mode that compares every
   call against the JavaScript path: `HASH_DIFFERENTIAL`,
-  `TRACE_DIFFERENTIAL`, `RAY_DIFFERENTIAL`, `PERCEPTION_DIFFERENTIAL` and
-  `ACTOR_TICK_DIFFERENTIAL` (each `=1`). The JavaScript paths stay behind
+  `TRACE_DIFFERENTIAL`, `RAY_DIFFERENTIAL`, `PERCEPTION_DIFFERENTIAL`,
+  `ACTOR_TICK_DIFFERENTIAL` and `RECEIVER_VERIFY` (each `=1`). The JavaScript paths stay behind
   `TRACE_KERNEL=js`, `HASH_KERNEL=js`, `SCAN_KERNEL=js`,
   `ACTOR_TICK_KERNEL=js` and `SCRIPT_VM=js`.
 * **Full sweep.** Run `npm run validate -- --jobs 4` before merging.
@@ -791,6 +791,33 @@ Left in JavaScript, by cause:
 * **Unlowered vector forms:** vector call parameters and results, vector
   array elements and defaults.
 * **The one-import policy:** operators that would need two imports.
+
+**R2b-7 — Receiver table (implemented).** A context expression (`a.b`)
+and SELF after any import asked JavaScript for the receiver's info
+(`js_receiver`: the image base, BOUND or HOST). On Island that was about
+3,200 of the 9,000 Wasm→JavaScript calls per tick. Its inputs change only at
+a few host events, so the answer is now cached in Wasm memory.
+
+* **Table.** `RECEIVERS` in `interp.rs` holds [table, capacity, epoch,
+  verify]. The table has two u32 per handle: the info `js_receiver` returned
+  and the receiver epoch it returned it under. Rust uses an entry whose
+  epoch is current and asks `js_receiver` otherwise; `js_receiver` enters
+  its answer.
+* **Epoch.** `receiver-epoch.mjs` counts events that can change a live
+  handle's info: an instance attaches (`linkInstance`), a host binding is
+  added (`bindProperty`, the window host's `bindNativeFields`), a field is
+  poisoned or its last poison cleared, storage is restored (`copyStorage`),
+  or an object is freed (the three `freeObject` services). A handle's release
+  clears its own entry. An image base never moves after construction.
+* **Verification.** `RECEIVER_VERIFY=1` makes Rust ask `js_receiver` on
+  every lookup; each answer is compared with a current entry and a mismatch
+  throws. Training and Island matched the reference digests at all 30
+  checkpoints under `RECEIVER_VERIFY=1 SCRIPT_VM_CHECK=1`, with no mismatch.
+* **Result.** Island imports fell from about 9,000 to 5,550 per tick, but the
+  tick time did not change measurably (A/B medians 13.5 to 14 ms on both
+  sides). A crossing that does little work costs well under 0.1 µs. The
+  remaining tick cost is the JavaScript work behind the physics, event and
+  state imports, not the crossings themselves.
 
 **R3 — Hot families.** Move native and physics families into Rust as
 profiles rank them. Candidates are traces and the collision hash, walking and

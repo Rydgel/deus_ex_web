@@ -28,6 +28,7 @@ import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {ActorTickHost} from './actor-tick-kernel.mjs';
+import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -74,6 +75,9 @@ const HANG_BUDGET = 200000000;
 const STATS = typeof process !== 'undefined' && process.env?.SCRIPT_VM_STATS === '1' ? new Map() : null;
 const opName = n => n?.op === 'native' ? `native ${n.index}` : typeof n?.op === 'number' ? `0x${n.op.toString(16)}` : String(n?.op);
 const CHECK = typeof process !== 'undefined' && process.env?.SCRIPT_VM_CHECK === '1';
+// RECEIVER_VERIFY=1: Rust asks js_receiver for every receiver, and each
+// answer is compared with the receiver table's entry when that is current.
+const RECEIVER_VERIFY = typeof process !== 'undefined' && process.env?.RECEIVER_VERIFY === '1';
 // SCRIPT_VM_STATS_DETAIL=1: JavaScript nodes and Returns keyed by their
 // operand shapes (op, property type) instead of their op alone.
 const DETAIL = STATS && process.env.SCRIPT_VM_STATS_DETAIL === '1';
@@ -118,6 +122,7 @@ function eachInterpreter(fn) {
   }
 }
 onHandleRelease(handle => eachInterpreter(vm => vm.markReleased(handle)));
+onReceiverEpoch(epoch => eachInterpreter(vm => vm.setReceiverEpoch(epoch)));
 /** A class default or a class default image changed (script-runtime.mjs):
  * each class row's default image is validated again before Rust reads it. */
 export function classDefaultsChanged() {
@@ -193,6 +198,9 @@ export class RustScriptVm {
     this.classTable = 0;
     this.classCapacity = 0;
     this.rows = new Map();
+    // The receiver table (interp.rs RECEIVERS): [info, epoch] per handle.
+    this.receiverTable = 0;
+    this.receiverCapacity = 0;
     // R3-c: the perception natives' tables and imports.
     this.perception = new PerceptionHost(this);
     // R3-d: Actor.Tick's bookkeeping (actor-tick-kernel.mjs).
@@ -213,6 +221,9 @@ export class RustScriptVm {
     // R2b-5: the handle class table starts with every handle released so
     // far; later releases arrive through onHandleRelease.
     this.classesAt = x.vm_classes_ptr();
+    // The receiver table starts empty: every entry's epoch word is 0, below
+    // the first epoch.
+    this.receiversAt = x.vm_receivers_ptr();
     // R2b-6: vector and rotator values from JavaScript, vector and rotator
     // Returns, and SCRIPT_VM_CHECK's operator reports.
     this.vectorAt = x.vm_vector_io_ptr();
@@ -222,6 +233,9 @@ export class RustScriptVm {
     this.actorTick.attach(x);
     const limit = handleLimit();
     this.growClassTable(limit);
+    this.growReceiverTable(limit);
+    this.setReceiverEpoch(receiverEpoch());
+    if (RECEIVER_VERIFY) this.arena.view.setUint32(this.receiversAt + 12, 1, true);
     for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
     interpreters.add(new WeakRef(this));
     if (CHECK) this.arena.view.setUint32(x.vm_check_ptr(), 1, true);
@@ -240,10 +254,30 @@ export class RustScriptVm {
     view.setUint32(this.classesAt, base, true);
     view.setUint32(this.classesAt + 4, capacity, true);
   }
-  /** A handle was released: a pointer holding it reads None in Rust. */
+  /** Make the receiver table cover `handle`. */
+  growReceiverTable(handle) {
+    if (handle < this.receiverCapacity) return;
+    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 8);
+    if (this.receiverTable) {
+      this.arena.bytes.copyWithin(base, this.receiverTable, this.receiverTable + this.receiverCapacity * 8);
+      this.arena.release(this.receiverTable, this.receiverCapacity * 8);
+    }
+    this.receiverTable = base;
+    this.receiverCapacity = capacity;
+    const view = this.arena.view;
+    view.setUint32(this.receiversAt, base, true);
+    view.setUint32(this.receiversAt + 4, capacity, true);
+  }
+  /** The receiver epoch advanced: every table entry is computed again. */
+  setReceiverEpoch(epoch) {
+    this.arena.view.setUint32(this.receiversAt + 8, epoch >>> 0, true);
+  }
+  /** A handle was released: a pointer holding it reads None in Rust, and
+   * its receiver entry is computed again (HOST). */
   markReleased(handle) {
     this.growClassTable(handle);
     this.arena.view.setUint32(this.classTable + 4 * handle, RELEASED, true);
+    if (handle < this.receiverCapacity) this.arena.view.setUint32(this.receiverTable + 8 * handle + 4, 0, true);
   }
   invalidateDefaultImages() {
     const view = this.arena.view;
@@ -378,7 +412,21 @@ export class RustScriptVm {
   /** The receiver info word of a handle: its image base, BOUND when it has
    * host bindings, or HOST when field accesses must take the JavaScript
    * path (no image here, a poisoned value, a released or class receiver). */
+  /** js_receiver: `handle`'s receiver info, entered in the receiver table
+   * under the current epoch. Runs no script. */
   receiverInfo(handle) {
+    const info = this.computeReceiverInfo(handle);
+    if (handle > 0 && handle < handleLimit()) {
+      this.growReceiverTable(handle);
+      const view = this.arena.view, at = this.receiverTable + 8 * handle, epoch = receiverEpoch() >>> 0;
+      if (RECEIVER_VERIFY && view.getUint32(at + 4, true) === epoch && view.getUint32(at, true) !== info)
+        throw new Error(`Receiver table entry of handle ${handle} is stale: ${view.getUint32(at, true)}, now ${info}`);
+      view.setUint32(at, info, true);
+      view.setUint32(at + 4, epoch, true);
+    }
+    return info;
+  }
+  computeReceiverInfo(handle) {
     const identity = identityOfHandle(handle);
     if (identity === null || typeof identity !== 'object') return HOST;
     const runtime = this.runtime;
@@ -397,7 +445,7 @@ export class RustScriptVm {
     let field = null;
     try { field = run.frame.services.operand(run.compiled.script, target); } catch {}
     const where = target.op === 0x00 ? 'local' : run.fieldNodes?.has(node) ? 'field fallback' : 'field';
-    const why = where === 'field fallback' ? (this.receiverInfo(handle) & HOST ? ' host' : ' bound') : '';
+    const why = where === 'field fallback' ? (this.computeReceiverInfo(handle) & HOST ? ' host' : ' bound') : '';
     return ` [${where} ${field?.metadata?.type ?? '?'}${why}]`;
   }
   /** SCRIPT_VM_STATS: why an instance variable read is in JavaScript. */
@@ -415,7 +463,7 @@ export class RustScriptVm {
     const type = field?.metadata?.type ?? '?';
     const lowered = run.fieldNodes?.has(node);
     if (!lowered) return ` [unlowered ${type}]`;
-    const info = this.receiverInfo(handle);
+    const info = this.computeReceiverInfo(handle);
     if (!(info & HOST)) return ` [bound ${field.key}]`;
     const identity = identityOfHandle(handle), runtime = this.runtime;
     const instance = identity && (identity[runtime.instanceKey] ?? runtime.instances.get(identity));

@@ -15,6 +15,7 @@ import { collectLoadMapGarbage } from './script-loadmap-gc.mjs';
 import { destructScriptObject, freeScriptObject } from './script-object-release.mjs';
 import { releaseConversationItem } from './script-conversation-item-lifecycle.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpReceiverEpoch } from './receiver-epoch.mjs';
 import { releaseTextParserObject } from './script-text-parser-natives.mjs';
 import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
 
@@ -79,7 +80,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     // The host's FStateFrame is the ScriptState record; freeing it releases
     // nothing beyond the object record itself.
     freeStateFrame: () => {},
-    freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpoch(); },
+    freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpoch(); bumpReceiverEpoch(); },
     warning: runtime.warning,
   };
   function finalDelete(record, flags) {

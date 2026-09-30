@@ -50,6 +50,7 @@ import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpReceiverEpoch } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
@@ -1100,6 +1101,7 @@ export class ScriptRuntime {
    * spares the hash lookup on every property access (attachment is permanent). */
   linkInstance(receiver,instance) {
     this.instances.set(receiver,instance);
+    bumpReceiverEpoch();
     // An object the collection model never frees (it was unreachable, so the
     // host's own GC reclaimed it) returns its image range when collected.
     if(instance.imageToken)imageFinalizer.register(receiver,instance.imageToken,instance.imageToken);
@@ -1404,14 +1406,16 @@ export class ScriptRuntime {
     instance.arena.bytes.set(bytes instanceof Uint8Array?bytes:new Uint8Array(bytes),instance.base);
     for(let index=0;index<refs.length;index++)instance.refs[index]=refs[index];
     instance.poison=poison?.size?new Map(poison):null;
+    bumpReceiverEpoch();
   }
   poisonField(instance,key,entry) {
     bumpBaseEpoch();
     (instance.poison??=new Map()).set(key,entry);
+    bumpReceiverEpoch();
   }
   clearPoison(instance,key) {
     instance.poison.delete(key);
-    if(!instance.poison.size)instance.poison=null;
+    if(!instance.poison.size){instance.poison=null;bumpReceiverEpoch();}
   }
   async prepareResource(reference) {
     if(!reference)return null;
@@ -2564,13 +2568,14 @@ export class ScriptRuntime {
     if(typeof binding.get!=='function'||typeof binding.set!=='function')throw new Error('Native property binding requires getter and setter');
     const instance=this.instance(receiver);
     // A binding makes the receiver BOUND for the Rust core: the perception
-    // natives' Level.Actors list (script-vm-perception.mjs) is rebuilt.
+    // natives' Level.Actors list (script-vm-perception.mjs) is rebuilt, and
+    // the receiver table computes the receiver again.
     bumpBaseEpoch();
     if(binding.mirror){
       const mirrored=this.mirroredBinding(instance,field,binding);
-      if(mirrored){instance.bindings.set(field.key,mirrored);return;}
+      if(mirrored){instance.bindings.set(field.key,mirrored);bumpReceiverEpoch();return;}
     }
-    instance.bindings.set(field.key,binding);
+    instance.bindings.set(field.key,binding);bumpReceiverEpoch();
     this.noteBoundKey(field.key);
   }
   /** A binding whose value changes only through its setter keeps a copy in

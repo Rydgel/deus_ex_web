@@ -16,6 +16,7 @@
  * Evidence: docs/script-native-conversation-list.md,
  * docs/script-object-release.md, scripts/validate-conversation-binding.mjs. */
 import { bumpBaseEpoch } from './base-epoch.mjs';
+import { bumpReceiverEpoch } from './receiver-epoch.mjs';
 export async function prepareConversationBinding(runtime, level) {
   if (typeof runtime?.prepareConversations !== 'function' ||
       typeof runtime?.loadPreparedDynamicObject !== 'function')
@@ -97,7 +98,7 @@ export async function prepareConversationBinding(runtime, level) {
       gates: { [0x102a2644]: 1, [0x101e5550]: 0 },
       registry, isValid: object => registry.objects[object.index] === object,
       freeStateFrame: () => { throw new Error('ConListItem release reached an unexpected state frame'); },
-      freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpoch(); },
+      freeObject: object => { runtime.releaseObjectImage?.(object.identity); object.released = true; bumpBaseEpoch(); bumpReceiverEpoch(); },
     },
   };
   return { list, nativeOuter };

@@ -46,8 +46,8 @@
 //! snapshot first) and compares the result, the writes and the traces.
 
 use crate::interp::{
-    class_entry, js_class_row, js_receiver, load32, load8, row_has_name, store32, to_int32, widen, Recv, Run,
-    BOUND, BOUND_KEYS, HOST, NAME_NONE, RELEASED, SELF, UNDEFINED, UNDEF_F64_BITS,
+    class_entry, js_class_row, load32, load8, receiver_info, row_has_name, store32, to_int32, widen,
+    Recv, Run, BOUND, BOUND_KEYS, HOST, NAME_NONE, RELEASED, SELF, UNDEFINED, UNDEF_F64_BITS,
 };
 use crate::trace::{f, pow2, sqrt};
 use crate::x87::Ext;
@@ -478,12 +478,13 @@ impl Run {
 
     // ---- Objects and reads -------------------------------------------------
 
-    /// Receiver info of a handle: SELF's cached one, else js_receiver.
+    /// Receiver info of a handle: SELF's cached one, else the receiver
+    /// table's.
     fn info_of(&mut self, handle: u32) -> u32 {
         if handle == self.self_handle {
             self.self_info()
         } else {
-            unsafe { js_receiver(handle) }
+            receiver_info(handle)
         }
     }
     fn describe(&mut self, handle: u32) -> Obj {

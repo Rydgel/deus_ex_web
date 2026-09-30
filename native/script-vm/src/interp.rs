@@ -60,6 +60,16 @@
 //! image changed), UNREADABLE when DefaultVariable reads of that class stay
 //! in JavaScript, else the base of the class default image. Every released
 //! handle is below the capacity, so a handle at or above it is live.
+//!
+//! Receiver table. RECEIVERS = [table, capacity, epoch, verify] is a
+//! per-runtime table of two u32 per handle, [info, epoch]: the receiver info
+//! js_receiver returned for the handle and the host's receiver epoch when it
+//! did (receiver-epoch.mjs). An entry whose epoch is the current one is the
+//! info js_receiver would return now, because the host advances the epoch
+//! on every event that can change it and clears a released handle's entry;
+//! any other entry, a handle at or beyond the capacity, and every lookup
+//! while `verify` is set (RECEIVER_VERIFY=1) ask js_receiver, which enters
+//! the answer.
 //! * Object reads from memory (LOCAL_OBJECT, FIELD_OBJECT, *_ELEM_OBJECT)
 //!   go through `live`: a released handle reads as None.
 //! * DYNAMIC_CAST 73 `rid, node`, then the object value (compileEv 0x2e,
@@ -429,7 +439,8 @@ extern "C" {
 // active runs (the next run id), restored with the stack after a call;
 // CALL_BLOCK [callee locals,
 // callee code, callee SELF], written by js_call_begin; CLASSES [table
-// address, capacity] of the handle class table; CHECK nonzero under
+// address, capacity] of the handle class table; RECEIVERS [table address,
+// capacity, epoch, verify] of the receiver table; CHECK nonzero under
 // SCRIPT_VM_CHECK.
 static mut RUNAWAY: u32 = 0;
 static mut BUDGET: u32 = 0;
@@ -439,6 +450,7 @@ pub(crate) static mut BOUND_KEYS: [u32; 2] = [0; 2];
 static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
 static mut CLASSES: [u32; 2] = [0; 2];
+static mut RECEIVERS: [u32; 4] = [0; 4];
 static mut CHECK: u32 = 0;
 // R2b-6: VECTOR_IO, a vector or rotator js_vector/js_rotator wrote;
 // RESULT3, a vector or rotator Return's value; CHECK_VALUES, the operands
@@ -478,6 +490,10 @@ pub extern "C" fn vm_call_block_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn vm_classes_ptr() -> *mut u32 {
     addr_of_mut!(CLASSES) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_receivers_ptr() -> *mut u32 {
+    addr_of_mut!(RECEIVERS) as *mut u32
 }
 #[no_mangle]
 pub extern "C" fn vm_check_ptr() -> *mut u32 {
@@ -603,6 +619,22 @@ pub(crate) fn class_entry(handle: u32) -> u32 {
     } else {
         0
     }
+}
+/// A handle's receiver info: its receiver table entry when that was entered
+/// under the current epoch, else js_receiver's answer (which enters it).
+#[inline(always)]
+pub(crate) fn receiver_info(handle: u32) -> u32 {
+    let (table, capacity, epoch, verify) = unsafe {
+        let receivers = addr_of!(RECEIVERS) as *const u32;
+        (*receivers, *receivers.add(1), *receivers.add(2), *receivers.add(3))
+    };
+    if verify == 0 && handle < capacity {
+        let at = table.wrapping_add(handle.wrapping_mul(8));
+        if load32(at.wrapping_add(4)) == epoch {
+            return load32(at);
+        }
+    }
+    unsafe { js_receiver(handle) }
 }
 /// A pointer cell's value as its JavaScript read yields it: a released
 /// handle names no identity (identityOfHandle's null), so it is None.
@@ -882,12 +914,12 @@ impl Run {
         }
     }
 
-    /// SELF's receiver info, refetched after any import other than
+    /// SELF's receiver info, looked up again after any import other than
     /// js_receiver ran.
     #[inline(always)]
     pub(crate) fn self_info(&mut self) -> u32 {
         if !self.self_fresh {
-            self.self_info = unsafe { js_receiver(self.self_handle) };
+            self.self_info = receiver_info(self.self_handle);
             self.self_fresh = true;
         }
         self.self_info
@@ -1556,7 +1588,7 @@ impl Run {
             self.self_fresh = false;
             return None;
         }
-        Some(Recv { handle: object, info: unsafe { js_receiver(object) } })
+        Some(Recv { handle: object, info: receiver_info(object) })
     }
 
     /// A vector value (R2b-6): three quiet float32 bit patterns.
