@@ -1,5 +1,143 @@
 # Play frame cost from first principles
 
+## September 30: the 120 fps budget after the Rust port
+
+The current Island investigation supersedes the earlier stopping point below.
+The workload is original-data Play at 1440×960, DPR 1, Chromium/Metal on an
+Apple M2 Pro, walking forward. No original boundaries were bypassed and Play
+remained active without runtime errors. The reference code is `1a17e36`
+(`0de223c` has identical executable code). The new submission counters run
+after the timed window; CPU sampling can now be disabled with `--no-profile`.
+
+The initial 180-frame profiled run's wall timers measure 16.83 ms in simulation,
+9.90 ms in actor meshes, 1.54 ms in lighting setup, 4.84 ms in the render phase
+(sky, main scene and weapon), 3.35 ms in the HUD and 0.38 ms in mirror setup
+(no child mirror was drawn).
+The mean host frame work is 36.84 ms. These are host measurements, not a
+benchmark of the original executable. The 120 fps budget is **8.33 ms for
+everything**, not 8.33 ms for each subsystem.
+
+The actor-mesh profile is particularly useful: 4.64 ms is relighting (2.62 ms
+inside the Rust lighting kernel), 2.16 ms is GetFrame/its adapter, about
+0.9 ms is normals/position copies/bounds, and 0.82 ms is scene reconciliation.
+The earlier statement that most mesh time is JavaScript around the kernels
+is incomplete: significant numeric cost is already in Rust. Further Rust
+ports do not eliminate poses, light evaluations or submissions.
+
+An after-timing submission census at the end of the Island walking route
+found 336 static-world groups/30,852 triangles, 20 mover groups/120 triangles,
+and 495 actor-mesh groups/32,011 triangles per frame. These include the sky
+pass. A mesh group is not always one WebGL call (double-sided transparency
+can use two); the timed main pass reported about 913–916 WebGL calls plus
+10 in the sky. It is not accurate to call all of those world-BSP draws.
+
+### Verified change: consecutive HUD batches
+
+The previous compositor populated and submitted one retained mesh for every
+tile or glyph, allocating temporary vertex/UV/color arrays per draw.
+`e3484a0` concatenates only consecutive equal-material commands
+in reusable buffers. It preserves command, triangle and blend order. It does
+not cache or skip the original HUD/window scripts. The exact boundary and
+pixel checks are in [Play HUD](script-play-hud.md#compositor-batching-boundary).
+
+The first exploratory unprofiled walking pair reduced the HUD/weapon-overlay
+submission counter from
+185.86 to 58.12 and HUD phase time from 3.34 to 2.30 ms. Total host work was
+39.79 versus 33.33 ms, but simulation and other phases also varied; that whole
+6.46 ms difference must not be credited to HUD batching. Both median display
+intervals were still about 33.3 ms. This is a useful reduction, not 120 fps.
+
+Two further interleaved A/B pairs, without concurrent project validation jobs,
+used `--fixed-dt 0.008333333333333333`, 180 measured frames, the same walk,
+viewport and backend, and no CPU sampler. This fixes simulation step length;
+it does not pin browser startup timing, the viewport clock or JIT/GC stalls.
+
+| Per-frame metric (range of two run means) | Reference | Reworked |
+| --- | ---: | ---: |
+| HUD phase | 2.18–2.21 ms | 1.87–2.08 ms |
+| HUD/weapon-overlay submissions | 146.24–146.59 | 53.77–53.83 |
+| Main scene submissions | 939.95–940.12 | 939.91–940.12 |
+| Simulation | 13.97–14.11 ms | 13.84–15.95 ms |
+| Actor preparation | 9.58–10.01 ms | 9.68–10.49 ms |
+| Total host work | 32.07–32.66 ms | 31.61–35.56 ms |
+
+The submission reduction is repeatable, and the HUD phase improves in both
+pairs, but **there is no stable total-frame speedup demonstrated by these
+short runs**. The slower second reworked run rises across simulation, actors
+and rendering too. Both builds remain near a 33.3 ms median display interval.
+Do not present the earlier exploratory total reduction as a benchmark win.
+The retained change has exact adapter equivalence and removes measured
+submission work; the dominant costs still need the work below. Local reports
+are `sept30-fixed-{base,after}{1,2}.json` in `.cache/perf/`.
+
+### What should happen next
+
+1. **Recover the original visibility path.** The current renderer batches
+   whole-world surfaces and uses host frustum checks for actor meshes. It
+   lacks original BSP/span/portal visibility, so occluded actors can still
+   be posed, lit and submitted. Recover Render.dll OccludeBsp/SetupDynamics,
+   the dynamic-actor filters and their ordering, with original visible actor
+   and zone reference cases before implementation. This also affects
+   LastRenderTime/zone feedback and thus simulation behavior; it is not safe
+   to substitute line-of-sight rays or arbitrary distance throttling.
+   [Existing timestamp evidence and gaps](script-loadmap-startup.md#renderer-feedback)
+   explain why the renderer and simulation must be verified together.
+2. **Remove submission splits that carry no distinct draw state.** The
+   static Island map census has 14 lightmap pages and about 403
+   texture/all-flags/page groups before texture-property flags and movers.
+   Grouping by actual rendering flags gives 302 candidates; removing page
+   splits with texture-array lightmaps gives about 160 uncanonicalized
+   texture/flags candidates. These are construction counts, not promised
+   frame-time gains. Actor groups also create their own materials/textures.
+   Verify resource sharing, opaque ordering, transparent order, gamma,
+   filtering, mirrors and dynamic atlas updates before changing these paths.
+3. **Finish movement as a whole memory-backed family.** Pawn physics,
+   walking, rider moves, collision updates and their host field adapters
+   still occupy several milliseconds. The 37-trace walking scan is already
+   one Rust call, so another scalar port is not the answer. R3-b B4–B6 must
+   retain original callback order/reentrancy and operate on the live image.
+   CycleActors/resumption is a smaller secondary candidate. The
+   [simulation investigation](rust-core.md#september-30-choosing-the-next-simulation-change)
+   also records why another class cache and a per-object field bitmap were
+   rejected as the next changes.
+4. **Consider concurrency after those boundaries are explicit.** A worker
+   can overlap simulation and presentation, but neither currently fits
+   8.33 ms alone. Moving work off-thread cannot by itself produce 120 fps;
+   previous-frame render feedback, synchronous events, input and snapshot
+   timing need a fidelity contract first.
+
+The original game executes native property loads, arithmetic and visibility
+traversal. This port still pays for host field adapters, exact numeric
+translation, per-mesh CPU preparation and hundreds of WebGL submissions.
+The small original workload does not make those per-unit costs disappear.
+There is no evidence here that a modern GPU's triangle throughput is the
+primary limit; CPU submission and preparation are measured, while GPU frame
+time has not been isolated.
+
+Reproduce without sampling overhead:
+
+```sh
+node scripts/profile-play-browser.mjs --map 01_NYC_UNATCOIsland --walk \
+  --frames 180 --settle 500 --no-profile --draw-counts --tag island
+# Optional fixed-step comparison; this is an artificial timing workload,
+# not proof of interactive/display FPS:
+node scripts/profile-play-browser.mjs --map 01_NYC_UNATCOIsland --walk \
+  --frames 180 --settle 500 --no-profile --fixed-dt 0.008333333333333333 --tag island-120
+```
+
+Reports identify the GPU, sampler use and fixed-step override. They retain
+partial diagnostics but exit unsuccessfully if Play stops, pauses or errors.
+Use interleaved runs on an otherwise idle machine; a 60 Hz display quantizes
+frame intervals, so compare the host phases as well. Raw profiles and
+captures remain outside Git in `.cache/perf/` and `.work/`.
+
+Verification for this rework: all 567 unit tests and the production build
+pass; the original Play HUD integration and compositor pixel/attribute
+checks pass. The separate [spawned Touching correction](script-spawn-touching.md)
+passes six original-DLL cases and both-engine/both-map checkpoint checks.
+These focused checks do not claim completion of original renderer visibility
+or the 120 fps milestone.
+
 This September 26, 2026 investigation (commit `5978bf3`) measures real Play in
 the Training map, where the user reported an average of about 34 fps with
 occasional drops. It replaces the earlier headless CPU numbers in

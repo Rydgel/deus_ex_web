@@ -171,7 +171,8 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
    check (2032). Per Island tick: about 37 iterators, 340 steps and 10,600
    class tests over Level.Actors (Terrorists 8,400, ThugMale2 1,500); the
    scan costs about 0.4 ms in JavaScript, where each class test is an
-   instance lookup and a class-chain walk. AllActors, RadiusActors and
+   instance lookup and cached class-membership lookup (`classIsA` already
+   caches the fixed ancestry result). AllActors, RadiusActors and
    VisibleActors are negligible there. The out variables are one shape: a
    local actor and an int field of SELF. The design question: a foreach's
    Iterator statement runs in JavaScript and nested loops share one
@@ -208,35 +209,38 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
 5. **1e-4 to 1e-7.** Move the rest of the host fields into the image. None
    is a prerequisite for the steps above any more, since those can read
    host fields through imports.
-   * **1e-4, Base and Touching.** Two behaviors decide whether this is a
-     pure representation step, and both need a decision first. `decorate`
+   * **1e-4, Base and Touching.** `decorate`
      creates a host `touching` array lazily (`??=`), and whether it exists
-     gates `isMapMoveHost`. A spawned actor keeps a host-only `touching`
-     array while `script-destroy` reads the image's Touching. A comparison
-     of the host arrays with the image slots comes first (see "Touching
-     comparison" below); any mismatch is a fidelity question.
+     gates `isMapMoveHost`. The spawned actor's stale script copy is now
+     corrected separately in `125e401` (see "Touching comparison" below).
+     Bound map/player arrays still need migration to the image, preserving
+     their already-live script view and the admission predicate.
    * **1e-5, movers.** The interpolation object becomes a view of the image,
      with all 8 KeyPos and KeyRot. The binding keeps only 2 of the 8 today.
    * **1e-6, the player.** Player becomes a controller over the image; this
      removes the Login rebinding. It also covers the view fields, Regions
      and the controlled player's Physics, the last bound step-2 key.
    * **1e-7, cleanup.** Plain image cells for Level and NetMode.
-6. **A per-object bound-field rule in the interpreter.** R3-d's tick kernel
+6. **A per-object bound-field rule in the interpreter: low priority.** R3-d's tick kernel
    masks bound fields per object. The interpreter still hands a bound key to
    JavaScript on every object that has any binding, so NPC reads such as
-   BaseEyeHeight still go to JavaScript.
+   BaseEyeHeight still go to JavaScript. The focused September 30 census
+   below finds too few such accesses to justify another per-object table
+   before the larger physics and presentation costs.
 7. **Natives called from scripts that still run in JavaScript:**
    SetLocation/FarMoveActor, AttachDecal and ScriptSpawn. Profile first.
 8. **The level loop, DistanceFromPlayer and compaction.** They need a
    Level.Actors list cached on the base epoch. The net gain is about 0.3 ms.
-9. **The render side (no plan yet).** Actor meshes, render, HUD and lighting
+9. **The render side (work alongside simulation).** Actor meshes, render, HUD and lighting
    are about 20 ms of the browser frame, so 120 fps is out of reach until
-   they are profiled and planned. The mesh posing and lighting kernels are
-   already in Rust ([lodmesh Wasm](lodmesh-wasm.md)); most of the actor
-   mesh time is the JavaScript around them.
-10. **Moving the simulation off the render thread.** Only this changes the
-   ceiling rather than the slope: the frame would cost the larger of the
-   tick and the render instead of their sum. It needs a decision on render
+   they improve. The [September 30 profile and priorities](play-frame-cost.md#september-30-the-120-fps-budget-after-the-rust-port)
+   quantify the remaining kernel cost and submissions. HUD batching is
+   verified; original visibility and resource/batch fragmentation are the
+   next larger renderer opportunities.
+10. **Moving the simulation off the render thread.** This could overlap
+   simulation and presentation: ideally the frame
+   would cost the larger of tick and render, plus handoff overhead, instead
+   of their sum. Both still exceed 8.33 ms today. It needs a contract for render
    feedback (LastRenderTime is an input the original reads from the
    previous frame) and on `SharedArrayBuffer`, which needs COOP/COEP headers
    on the dev server and the host.
@@ -270,6 +274,15 @@ script reads. Both maps, 360 ticks each:
   the spawned actor's slots the image's is a fidelity fix: it may change
   the digests, and it belongs in its own commit with the first differing
   checkpoint explained.
+
+**Corrected September 30:** spawned collision views now read and write the
+same four slots as scripts. The focused original-DLL checks, DestroyActor
+integration, and both-map comparison are recorded in
+[spawned Touching](script-spawn-touching.md). Script/host mismatches are zero
+on both maps. Island checkpoint 230 changes only the two fish's Touching
+fields; Training's dead-troop reference is now cleared during DestroyActor,
+so its script digest stays unchanged. Bound map/player image mirrors remain
+the separate representation step above.
 
 ### How each step is verified
 
@@ -2404,6 +2417,48 @@ researched as before and implemented against this core. Swimming
 its Rust port is a later performance step. A new native
 written in JavaScript during the transition uses shared-memory field access,
 so it stays valid until its family moves.
+
+## September 30: choosing the next simulation change
+
+A focused census (`SCRIPT_VM_STATS=1 node scripts/bench-sim.mjs --warm 60
+--ticks 60 --render-feedback`) helps distinguish opportunities from labels in
+the plan. It is an instrumented workload count, not an A/B timing result.
+The Island run completed with no runtime errors.
+
+* The interpreter handed **328 Physics reads to JavaScript over 60 ticks**
+  (5.5 per tick). That is an upper bound on the reads a per-object bound-key
+  rule could remove: the controlled player's Physics really is bound.
+  Base had 480 reads (8 per tick), but Base is still host-owned. The
+  perception kernel's separate BaseEyeHeight path made 1,602 JavaScript
+  reads (26.7 per tick); changing the interpreter alone would not remove
+  them. A proposed bitmap per binding set therefore was not retained:
+  refreshing those tables on receiver epochs adds work, and the candidate
+  saving is small. There is no claimed speedup from this investigation.
+* **CycleActors is still a better simulation candidate**, but it should be
+  treated as an iterator-family change, including resume and out-parameter
+  publication. In the existing `island-zone.cpuprofile` browser capture,
+  `next` and iterator creation account for about 0.56 sampled ms/frame,
+  with another 0.32 in `js_iterator_next`. These are attribution estimates,
+  not an additive guaranteed saving. `classIsA` already caches ancestry;
+  adding another ancestry cache does not remove the scan or its lvalue and
+  iterator-stack work. A replacement must retain the original cursor,
+  shrinking-array bound, wrap, null entries and out-slot write order from
+  execCycleActors `0x1036e9d0` ([actor queries](script-actor-queries.md)).
+* **Walking is a family, not one expensive formula.** The same capture
+  attributes about 3.9 ms/frame to walking, including about 0.9 to its
+  surface prelude, about 2 to the main move path, plus step-up and floor
+  queries. The prelude already batches its 37 original traces in Rust.
+  Its remaining cost is not grounds to skip traces or reuse results across
+  frames: moving actors and doors can change them. The next substantial
+  simulation step remains B4–B6 above, preserving callbacks and the live
+  object image while removing the surrounding host field and view work.
+
+These smaller opportunities do not change the browser budget stated above:
+simulation alone already exceeds 8.3 ms, and presentation exceeds it again.
+Moving another isolated scalar helper to Rust cannot produce 120 fps. Measure
+and remove repeated presentation work alongside the physics-family work;
+only consider a worker once render feedback and deterministic handoff have
+an explicit contract.
 
 ## Risks
 
