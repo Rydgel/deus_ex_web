@@ -11,7 +11,7 @@
  *   - visibility: three.js's own sphere test on the exact CPU spheres.
  *
  *   node scripts/validate-gpu-mesh.mjs [--url http://127.0.0.1:5175]
- *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,120,200,300]
+ *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,90,120,160,200,250,300,360]
  *     [--device cpu]   (CPU substitutes for the GPU readbacks: JavaScript
  *                       lighting path, CPU positions; checks the harness)
  *
@@ -22,7 +22,7 @@ import {chromium} from '@playwright/test';
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const url=option('url','http://127.0.0.1:5175'),device=option('device','gpu');
 const maps=option('maps','00_Training,01_NYC_UNATCOIsland').split(',');
-const frames=option('frames','5,30,60,120,200,300').split(',').map(Number);
+const frames=option('frames','5,30,60,90,120,160,200,250,300,360').split(',').map(Number);
 const TOLERANCE={ulp:1,tweenUlp:2,byte:1,edgeOn:2**-20,uv:2**-20};
 
 const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){return gpuMesh;},
@@ -32,6 +32,8 @@ async function capture(page,{frames,device,tolerance}) {
   return page.evaluate(async({frames,device,tolerance})=>{
     const {accumulateFaceNormal}=await import('/src/runtime/mesh-lighting.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
+    const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
+    const certifiedBefore=certificateStats.certified,ambiguousBefore=certificateStats.ambiguous;
     const v=window.__deusValidation,f32=Math.fround,THREE=v.THREE;
     const bits=new DataView(new ArrayBuffer(4));
     const ulp=x=>{bits.setFloat32(0,Math.abs(x),true);const e=(bits.getUint32(0,true)>>>23)&255;return 2**(Math.max(e,1)-150);};
@@ -50,8 +52,10 @@ async function capture(page,{frames,device,tolerance}) {
       for(const actor of npc.actors){
         if(actor.path!=='gpu'){const key=actor.summary.gpuFallback??'cpu';report.fallbacks[key]=(report.fallbacks[key]??0)+1;continue;}
         if(!actor.root.visible)continue;
-        const state=actor.gpuState();
-        if(!state.handle||!state.plan)continue;
+        const state=actor.gpuState();const exactBefore=state.exactValid;
+        // An actor admitted after this frame's GPU run is posed and updated
+        // by the next frame before it is drawn; nothing of it is drawn yet.
+        if(!state.handle||!state.plan||state.plannedFrame>gpu.frame||!state.updated){report.pending=(report.pending??0)+1;continue;}
         report.actors++;
         const {handle,plan,faces,faceWords,groups}=state,V=handle.mesh.V,F=handle.mesh.F;
         const tween=plan.channels.some(op=>op.tween&&op.alpha>0);
@@ -60,7 +64,9 @@ async function capture(page,{frames,device,tolerance}) {
         for(const group of groups.values()){
           report.groups++;
           const exact=frustum.intersectsSphere(group.exact.boundingSphere);
-          if(exact!==group.mainVisible)report.visibilityMismatches++;
+          if(exact!==group.mainVisible){report.visibilityMismatches++;(report.badVisibility??=[]).push({capture:report.captures,
+            actor:actor.summary.actor,exact,main:group.mainVisible,box:[...group.viewBox].map(x=>+x.toFixed(2)),
+            sphere:[...group.exact.boundingSphere.center.toArray().map(x=>+x.toFixed(2)),+group.exact.boundingSphere.radius.toFixed(2)]});}
         }
         // Positions.
         const gpuPose=device==='cpu'?null:gpu.read('pose',handle.vbase,V);
@@ -70,6 +76,9 @@ async function capture(page,{frames,device,tolerance}) {
           if(Object.is(c,g)||c===g){report.exact++;continue;}
           const error=Math.abs(g-c)/ulp(c);
           if(tween)report.maxUlpTween=Math.max(report.maxUlpTween,error);else report.maxUlp=Math.max(report.maxUlp,error);
+          if(error>tolerance.tweenUlp){const key=`${report.captures}:${actor.summary.actor}`;
+            report.badActors??={};report.badActors[key]??={count:0,V,channels:plan.channels.map(op=>[op.channel,op.tween,op.first,op.second,op.alpha]),
+              exactValidAtCapture:exactBefore,slot:handle.slot,vbase:handle.vbase};report.badActors[key].count++;}
           if(!report.worstPosition||error>report.worstPosition.ulp)
             report.worstPosition={actor:actor.summary.actor,vertex:i,axis:k,cpu:c,gpu:g,ulp:error,tween};
         }
@@ -156,12 +165,15 @@ async function capture(page,{frames,device,tolerance}) {
         throw new Error(`runtime error: ${window.deusExViewer.framePhases(false).runtimeError}`);
       if(frame===frames[captured]){try{compare();}catch(error){report.errors.push(error.stack??String(error));}captured++;}
     }
+    // Decisions Play made during the captured run (not the checks above).
+    report.certified=certificateStats.certified-certifiedBefore;report.ambiguous=certificateStats.ambiguous-ambiguousBefore;
     return report;
   },{frames,device,tolerance});
 }
 
 const browser=await chromium.launch({args:['--use-angle=metal']});
 let failed=false;
+const coverage={};
 try {
   for(const map of maps){
     const page=await browser.newPage({viewport:{width:1440,height:960}});
@@ -194,10 +206,7 @@ try {
       ['no errors',!report.errors.length&&!errors.length],
       ['compared actors',report.actors>0&&report.corners>0],
     ];
-    const coverage=report.coverage;
-    const covered=[['translucent',coverage.translucent],['modulated',coverage.modulated],['masked',coverage.masked],
-      ['environment',coverage.environment],['blend',coverage.blend]];
-    for(const [name,count] of covered)checks.push([`coverage: ${name}`,count>0]);
+    for(const [name,count] of Object.entries(report.coverage))coverage[name]=(coverage[name]??0)+count;
     const failures=checks.filter(([,ok])=>!ok).map(([name])=>name);
     failed||=failures.length>0;
     console.log(JSON.stringify({map,device,tolerance:TOLERANCE,failures,
@@ -205,5 +214,11 @@ try {
     await page.close();
   }
 } finally {await browser.close();}
+// Face flags, animation modes and moving lights must all be exercised by the
+// maps compared in this run.
+const required=['translucent','modulated','masked','environment','mixedUnlit','blend','tween','movingLights'];
+const missing=required.filter(name=>!(coverage[name]>0));
+console.log(JSON.stringify({coverage,missing}));
+if(device==='gpu'&&missing.length)failed=true;
 if(failed){console.error('validate-gpu-mesh: FAIL');process.exit(1);}
 console.log('validate-gpu-mesh: PASS');

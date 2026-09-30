@@ -5,6 +5,8 @@
  * report the rest as ambiguous so the caller computes the exact sphere. */
 
 const boxCache=new WeakMap();
+/** Diagnostic counts of certified and ambiguous group decisions. */
+export const certificateStats=globalThis.__gpuMeshCertificateStats??={certified:0,ambiguous:0};
 
 /** Per keyframe, the i16 box of `vertices` (unique mesh vertex indices of a
  * draw group) and the box of their differences from frame 0, which is what a
@@ -88,7 +90,7 @@ export function viewBox(plan,channelBoxes,out) {
  * when every such sphere of radius at most the half-diagonal fails it, -1
  * when the exact sphere is needed. */
 export function certifyFrustum(frustum,box) {
-  if(box.some(Number.isNaN))return -1;
+  if(box.some(Number.isNaN)){certificateStats.ambiguous++;return -1;}
   const hx=(box[3]-box[0])/2,hy=(box[4]-box[1])/2,hz=(box[5]-box[2])/2;
   const cx=box[0]+hx,cy=box[1]+hy,cz=box[2]+hz,half=Math.hypot(hx,hy,hz);
   let inside=true;
@@ -96,8 +98,9 @@ export function certifyFrustum(frustum,box) {
     const n=plane.normal,center=n.x*cx+n.y*cy+n.z*cz+plane.constant;
     const extent=Math.abs(n.x)*hx+Math.abs(n.y)*hy+Math.abs(n.z)*hz;
     const epsilon=1e-6*(Math.abs(plane.constant)+Math.abs(center)+extent+1);
-    if(center+extent+half<-epsilon)return 0;
+    if(center+extent+half<-epsilon){certificateStats.certified++;return 0;}
     if(center-extent<epsilon)inside=false;
   }
-  return inside?1:-1;
+  if(inside){certificateStats.certified++;return 1;}
+  certificateStats.ambiguous++;return -1;
 }

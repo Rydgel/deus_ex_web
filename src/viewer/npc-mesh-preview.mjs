@@ -212,7 +212,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   // GPU path (docs/gpu-mesh.md): GetFrame is planned here and evaluated on
   // the GPU, which also lights the mesh. The CPU path below stays the
   // reference and the fallback; `gpuFallback` records why an actor left it.
-  let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false;
+  let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false,plannedFrame=-1;
   if(gpu){
     try{gpuHandle=gpu.allocate(payload,faceWords,{environment:hasEnvironment});mode='gpu';}
     catch(error){gpuFallback=error.message;}
@@ -494,7 +494,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     }
     function planGpu(){
       lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output});
-      exactValid=false;
+      exactValid=false;plannedFrame=gpu.frame+1;
       try{gpu.setPose(gpuHandle,lastPlan);}
       catch(error){toCpu(error.message);return;}
       for(const group of groups.values()){
@@ -505,7 +505,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     }
     if(mode==='gpu'){
       // The first plan (above) is this preview's first GetFrame call.
-      try{gpu.setPose(gpuHandle,lastPlan);
+      try{plannedFrame=gpu.frame+1;gpu.setPose(gpuHandle,lastPlan);
         for(const group of groups.values()){
           for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
           viewBox(lastPlan,group.channelBoxes,group.viewBox);boxSphere(group);
@@ -518,8 +518,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
        * shadow to the exact CPU pose. Never used by Play. */
-      gpuState:()=>({handle:gpuHandle,plan:lastPlan,setup:lastSetup,litFrame:lastLitFrame,faces,faceWords,groups,hasEnvironment,
-        exactOutput:()=>{exactSpheres();return frame.output;}}),
+      gpuState:()=>({handle:gpuHandle,plan:lastPlan,plannedFrame,updated:mainCamera!==null,setup:lastSetup,litFrame:lastLitFrame,faces,faceWords,groups,hasEnvironment,
+        exactOutput:()=>{exactSpheres();return frame.output;},get exactValid(){return exactValid;}}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition,view={}){
         if(disposed)return false;
