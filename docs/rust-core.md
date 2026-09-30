@@ -267,6 +267,15 @@ reference (`script-vm.mjs`). A lockstep mode runs both VMs and compares the
 digest every tick. `SCRIPT_VM=js|rust` selects the engine for the validator
 sweep until the JavaScript VM is retired.
 
+**Default engine (2026-09-30).** The Rust interpreter is the default: with
+`SCRIPT_VM` unset, Play, bench-sim and the validators run lowered bodies in
+Rust, as does the browser without a query parameter. `SCRIPT_VM=js` (in the
+browser, `?scriptVm=js`) keeps the JavaScript VM. Any other value throws. The
+JavaScript VM stays the reference: it evaluates every node Rust does not
+lower, `SCRIPT_VM_CHECK=1` compares Rust against it, and the digest gates run
+both engines. Hosts without a class loader (unit tests that compile a body
+directly) use the closures, as before.
+
 Bound host fields do not block this step. On Island, one tick's VM makes
 about 8,900 field accesses (4,500 values, 3,600 references, 840
 assignments), and about 1,070 of them reach a binding: `Level.NetMode` 300,
@@ -303,7 +312,8 @@ The BigInt model is about 1.6 ms of a profiled Island tick. Its other users
 (physics, windows, lighting) keep the JavaScript model until their families
 move.
 
-**R2b-2 — The interpreter (implemented, behind `SCRIPT_VM=rust`).** Counted
+**R2b-2 — The interpreter (implemented; the default engine since
+2026-09-30, `SCRIPT_VM=js` for the JavaScript VM).** Counted
 on Island, one tick runs about 12,100 statements and 41,300 node evaluations.
 The most frequent nodes are simple: literals (5,400), local and instance
 variable reads (5,100 and 4,500), BoolVariable (2,650), assignments (2,350 plus

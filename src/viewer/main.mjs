@@ -13,9 +13,10 @@ import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 
-// ?scriptVm=rust runs script function bodies in the Rust interpreter
-// (docs/rust-core.md R2b-2) while it is being verified.
-if(new URLSearchParams(location.search).get('scriptVm')==='rust')globalThis.DEUS_EX_SCRIPT_VM='rust';
+// Script function bodies run in the Rust interpreter by default
+// (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
+const scriptVmParam=new URLSearchParams(location.search).get('scriptVm');
+if(scriptVmParam)globalThis.DEUS_EX_SCRIPT_VM=scriptVmParam;
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });

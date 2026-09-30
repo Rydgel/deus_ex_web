@@ -295,14 +295,19 @@ const writeSlot=value=>value?.reference&&typeof value.set==='function'?value:{se
 /** Linked, synchronous original script calls. Loading/linking remains async;
  * an event never suspends halfway through an original call to fetch an asset.
  * A prepared function/state subset fails explicitly on an unprepared target. */
+// Function bodies run in the Rust interpreter (script-vm-rust.mjs,
+// docs/rust-core.md R2b) by default. SCRIPT_VM=js keeps the JavaScript VM,
+// the reference every Rust kind is validated against; in the browser the
+// page's ?scriptVm=js sets DEUS_EX_SCRIPT_VM. Any other value is an error.
+const scriptVmSetting=()=>{
+  const value=(typeof process!=='undefined'&&process.env?.SCRIPT_VM)||globalThis.DEUS_EX_SCRIPT_VM||'rust';
+  if(value!=='rust'&&value!=='js')throw new Error(`SCRIPT_VM must be 'rust' or 'js', not '${value}'`);
+  return value;
+};
+const scriptVmRust=()=>scriptVmSetting()==='rust';
+const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK==='1';
 // Mesh payloads the script-side mesh consumers (anim sequences, textures)
 // accept: ULodMesh, and a classic UMesh whose frames are not decoded.
-// SCRIPT_VM=rust runs function bodies in the Rust interpreter
-// (script-vm-rust.mjs, docs/rust-core.md R2b-2) while it is verified.
-// (In the browser, the page's ?scriptVm=rust sets DEUS_EX_SCRIPT_VM.)
-const scriptVmRust=()=>typeof process!=='undefined'&&process.env?.SCRIPT_VM==='rust'
-  ||globalThis.DEUS_EX_SCRIPT_VM==='rust';
-const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK==='1';
 const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
 // soundField names served from the level container or native graph.
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
@@ -2599,8 +2604,9 @@ export class ScriptRuntime {
     keys.add(key);
     this.scriptVm?.markBound(key);
   }
-  /** The runtime's Rust interpreter when SCRIPT_VM=rust, created once on
-   * the object arena before any compiled body runs. */
+  /** The runtime's Rust interpreter (the default engine; null under
+   * SCRIPT_VM=js or without a class loader), created once on the object
+   * arena before any compiled body runs. */
   scriptVmInstance() {
     if(!this.classLoader||!scriptVmRust())return null;
     this.boundKeys??=new Set();
