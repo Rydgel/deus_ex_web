@@ -246,6 +246,14 @@ export function readFixedElement(cell, image, refs, index, at = 0) {
   const element = cell.element;
   return readCell(element, image, refs, at + cell.offset + index * cell.stride, cell.ref + index * element.refCount);
 }
+/** Store one element of a fixed-array cell at `index`: the store writeCell's
+ * FIXED branch makes for that element, for a host member that is an
+ * accessor over one slot (actor-link-fields.mjs Touching). */
+export function writeFixedElement(cell, image, refs, index, value, at = 0) {
+  if (cell.tag !== FIXED) throw new Error('writeFixedElement requires a fixed-array cell');
+  const element = cell.element;
+  writeCell(element, image, refs, value, at + cell.offset + index * cell.stride, cell.ref + index * element.refCount);
+}
 export const isFixedCell = cell => cell.tag === FIXED;
 
 function readComposite(cell, image, refs, offset, refAt) {

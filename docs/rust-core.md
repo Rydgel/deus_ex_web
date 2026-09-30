@@ -160,12 +160,41 @@ below hold the evidence for each stage.
   JavaScript reading image cells by name (`readNamed` about 30,000 and
   `instance` about 58,000 per tick), which only moving the reading code to
   Rust removes. Report: `.work/logs/census-bound-reads.json`.
+* **JavaScript time behind each import (September 30, Island, 300 ticks,
+  `SCRIPT_VM_IMPORT_TIME=1`).** The instrument wraps every import of the
+  Rust VM with the real clock (bench-sim publishes it as
+  `globalThis.__realNow` before pinning `performance.now`) and reports self
+  time, that is with nested imports taken out. The instrumented tick was
+  16.9 ms median, of which 15.5 ms self time inside imports over 4,699
+  calls per tick, so the JavaScript behind the imports is the tick. Self ms
+  per tick, top rows: `js_tick_physics` 5.97 (100 calls, 60 µs each: the
+  pawn physics family, R3-b B4–B6), `js_tick_event` 1.97 (382 script events
+  dispatched from the tick, 5.1 µs of JavaScript plumbing each before the
+  body runs), `js_eval` 1.93 (257 statements the lowering leaves to
+  JavaScript, 7.5 µs each), `js_tick_state` 1.31 (702 state-code resumes,
+  1.9 µs each), `js_object` 0.86 (164 object-valued JavaScript nodes),
+  `js_iterator_next` 0.85 (309 iterator steps), `js_call_begin` 0.59 (849
+  calls, 0.7 µs each), `js_step` 0.37, `js_tick_far_move` 0.33, `js_float`
+  0.29, `js_bool` 0.23, `js_tick_probing` 0.20; everything else is below
+  0.15. Three families therefore hold the tick: pawn physics (about 6 ms),
+  event and state dispatch plumbing (about 3.3 ms, `js_tick_event` self plus
+  `js_tick_state`), and the JavaScript-valued nodes and natives
+  (`js_eval`, `js_object`, `js_float`, `js_bool`: about 3.3 ms). Report:
+  `.work/logs/import-time-island.json`. The wrapper itself costs about
+  4 ms per tick (two clock reads per call), so its rows rank families; they
+  are not A/B savings.
 * **Two checks for the 120 fps target (September 30).** Chrome 152 on the
   reference machine's built-in display (120 Hz mode) delivers
   requestAnimationFrame at a median 8.30 ms, so the target is measurable
   in the browser the user plays in. `EXT_disjoint_timer_query_webgl2` is
-  present under ANGLE Metal, so GPU time per frame can be isolated; it has
-  not been measured yet.
+  present under ANGLE Metal, and `profile-play-browser --gpu` (the viewer's
+  `?gpuTimer=1`) measured the Island walk at **1.46 ms of GPU time per
+  frame** (300 frames, a result for every frame, no disjoint event) against
+  30.6 ms of host work (tick 14.1, actors 9.6, render 3.3, HUD 2.6). The
+  frame is CPU-bound on both halves: the presentation cost is preparation
+  and submission, not GPU load, so the render-side work is CPU work
+  (relighting, poses, HUD tree, draw submission), and moving the vertex
+  lighting to the GPU would trade CPU time for a GPU that is idle.
 
 ### Next steps, in recommended order
 
@@ -174,12 +203,15 @@ rider census and the bound-read census. Judge each step by A/B tick medians,
 not by crossings removed. The target is the whole browser frame (AGENTS.md:
 8.3 ms), so simulation steps and presentation steps interleave.
 
-0. **Two instruments before the next port.** Inclusive JavaScript time per
-   import name in the Rust VM host (which decides whether "Tick events
-   5.0 ms" is natives or interpreter plumbing such as `js_call_begin`,
-   `js_eval` and `js_step`), and GPU time per frame through the timer query
-   (which decides whether presentation work is CPU-bound). Neither is
-   measured today.
+0. **Two instruments before the next port: done (September 30).**
+   `SCRIPT_VM_IMPORT_TIME=1` (bench-sim `importTimes`) attributes the
+   JavaScript behind each import; `profile-play-browser --gpu` reads the
+   frame's GPU time through `EXT_disjoint_timer_query_webgl2`
+   (`phases.gpu`). Their results are under "Where it stands". The
+   attribution sets the simulation order below: pawn physics (about 6 ms),
+   then event and state dispatch plumbing (about 3.3 ms), then the
+   JavaScript-valued nodes and natives (about 3.3 ms), then iterators
+   (about 0.85 ms).
 
 1. **LastRendered (723) and InStasis (721): deferred.** All the small
    natives still in JavaScript (these two, GetStateName, GetPlayerPawn and
@@ -190,7 +222,17 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
 2. **The SetActorZone family: done (R3-e).** The common case runs in Rust
    on the runtime's arena, with its own copy of the zone BSP; calls that
    change a zone keep the JavaScript body and its events. About 0.6 ms.
-3. **CycleActors in Rust.** The iterator workload on Island is almost all
+3. **Event and state dispatch in Rust (after B4–B6).** `js_tick_event`
+   spends 5.1 µs of JavaScript per script event before the body runs, and
+   `js_tick_state` 1.9 µs per state-code resume: together about 3.3 ms per
+   Island tick of plumbing (`host.callback` → `services.dispatch` →
+   `runtime.invoke` → frame setup → the interpreter's run entry). The
+   interpreter already resolves final and virtual calls (R2b-3); a Rust
+   ProcessEvent for an event whose function the class row resolves, and a
+   Rust state resume, would keep those 1,084 calls per tick inside the
+   module. The JavaScript dispatch stays the reference and the path for
+   events the row cannot resolve.
+3b. **CycleActors in Rust.** The iterator workload on Island is almost all
    CycleActors (1002) from ScriptedPawn: `CycleActors(Class'Pawn',
    candidate, CycleIndex)` in its enemy check (`ScriptedPawn.uc` 1875) and
    `CycleActors(Class'DeusExCarcass', body, BodyIndex)` in its carcass
@@ -1268,6 +1310,68 @@ Verification:
 Left for stage B4, where their inputs come from actor images: the move
 query's candidate selection, IsOverlapping, processHitWall and SetBase.
 
+**R3-b B4 — Pawn MoveActor on the image (design, September 30).** The
+import attribution puts about 6 ms of each Island tick behind
+`js_tick_physics`, the pawn physics family; MoveActor is the body every
+walking, falling and rotation step calls (about 2.3 ms of it, 1.3 ms in
+the rider pass). B4 moves `playerMove` (`player-move.mjs`, ULevel::MoveActor
+`0x103990e0` with test 0, ignorePawns 0, noFail 0, ignoreBases per caller)
+for a **Pawn source** into Rust, on the pawn's image. It follows 1e-4, so
+Base and Touching are image loads. Non-pawn sources (`moveMapRider`,
+`rotateMapActor`, the spawned rider kernel) keep their JavaScript bodies.
+
+* **Reads, all image loads or class rows:** the source's collision word
+  `+0x1dc`, actor word `+0x28` (bStatic, bMovable), Location, Rotation,
+  CollisionRadius and CollisionHeight, StandingCount, Base and the four
+  Touching slots; for each candidate the same words, its Base chain
+  (IsBasedOn `0x1034c8d0`, with the reference's cyclic-chain error), its
+  Physics byte, bIsPlayer, and its class row's ancestry (Pawn, Decoration,
+  Brush, PlayerPawn, Projectile: the tests the reference makes through
+  `lineage`, `movingBrush`, `projectile` and `pushableDecoration`). The
+  controlled player's identity comes from the host as a handle
+  (`controlledPlayer` is a host notion). The differential checks that each
+  Rust ancestry test agrees with the host property it replaces.
+* **Effects, one import each, at the reference's point in the body:**
+  `js_move_hits` runs `level.hash.multiLineCheck` in the trace kernel's
+  instance and copies its hits (handle, time, normal, location, item, kind,
+  at most 64) into the interpreter's arena; `js_move_hash` removes or adds
+  the source; `js_move_riders` runs `moveActorRiders` (its inner moves
+  already reach the rider kernel; a Rust rider pass is B4b);
+  `js_move_event` dispatches BumpWall, Bump, Touch and UnTouch (the
+  Touching slot stores themselves are image stores in Rust, with
+  BeginTouch's last-empty-slot choice and eviction order and EndTouch's
+  clear-before-event order); SetActorZone runs `zone_update` in the same
+  module and, on its hand-back, `js_move_zone` runs the JavaScript body
+  with its events. Every import may Spawn, Destroy, SetLocation or
+  SetCollision anything, so the body re-reads the source after each one and
+  holds no Rust borrow across it.
+* **Order kept:** query, tiny-delta short path (rotation store only), the
+  rider pass before the commit, hash remove, Location then Rotation, hash
+  add, BumpWall or Bump pair, the Touch pass over the hits in order while
+  `f(hit.time) < query.time`, the EndTouch pass over the four slots,
+  SetActorZone(false, false). The reference's `{...query}` result object
+  is built by the host from an IO block.
+* **Hand-backs, before the first store:** a source the host does not admit
+  (a bound or poisoned required field, no image, not a Pawn), non-finite
+  inputs, the reference's pre-store errors (a cyclic Base chain in the
+  query, "changed rotation with riders and nonzero sub-threshold Delta").
+  The JavaScript body then runs the whole move; the query is pure, so the
+  repeated `js_move_hits` is not observable. An error after the commit (a
+  cyclic chain in the Touch pass) is raised through `js_move_error` with
+  the reference's message at the same point.
+* **Verification:** the pure prefix (hits, per-candidate filters, the
+  selected hit and displacement) compared with `moveQuery` on every call
+  under `MOVE_PAWN_DIFFERENTIAL=1`; the effect sequence checked by the R3-d
+  method (Rust logs each callback and field store, a JavaScript replay of
+  `playerMove` runs against the logged answers and the pre-move snapshot,
+  and the two end states are compared); digests unchanged on both maps
+  under both engines; the native oracles `validate-native-move`,
+  `-player-move`, `-walking-callbacks`, `-set-rotation-riders` and
+  `-far-move-scene` on the Rust path; `MOVE_PAWN_KERNEL=js` for A/B.
+* **Then:** B4b the rider pass, B5 the walking loop (B3's kernels on the
+  image, calling this MoveActor directly), B6 falling, landing and
+  rotation.
+
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script
 bools into three dwords that native code reads as members (`sdk-layouts.mjs`
@@ -1930,13 +2034,96 @@ Left bound or on the host, and why:
   `linkDecorationCollision`). This is unchanged, and it is not a binding.
 * **The mover interpolation object** (`interpolation.position`, `.rotation`
   and the KeyPos/KeyRot, OldPos and BasePos bindings) is step 5.
-* **Base and Touching** are step 4. **The player's view fields, regions and
-  Physics** are step 6.
+* **Base and Touching** are step 4 (1e-4, below). **The player's view
+  fields, regions and Physics** are step 6.
 * **Player start** still restores Location only for the actors its reset
   paths name: pawns, patrol points, pickups, decorations and movers.
   `keepLivePose` keeps that exactly. Any other map actor that moves keeps
   its live pose across a Player start, where the original's reload would
   restore it. That is a fidelity question for its own change.
+
+**1e-4 — Base and Touching in the image (implemented).** This is step 4
+of stage 1e, and the first part of R3-b B4: the recovered IsBasedOn walks
+(`move-query.mjs`, `player-move.mjs`), the rider pass (`move-riders.mjs`),
+SetBase (`walking-callbacks.mjs`, `decoration-physics.mjs`) and
+BeginTouch/EndTouch (`actor-touch.mjs`) read and write a map actor's `base`
+member and `touching` array, which script-doors' makeBinding served to
+script as `Base` and `Touching`, while the image cells under the bindings
+went stale (the "Touching comparison" above: 1,749 stale actor-ticks on
+Island). `actor-link-fields.mjs` makes the two host members accessors over
+the cells, at the retail AActor offsets `+0xc4` Base (object pointer) and
+`+0xe8` Touching[4] (four object pointers, 4-byte stride; sdk-layouts.mjs,
+checked once per class cell against the linked layout).
+
+* **Install.** `attach` installs the links after the mirrors and poses, so
+  the property snapshot a reset restores is taken before the host values
+  move in, as for 1e-2 and 1e-3. `base` adopts the member's current value,
+  or None while the member is absent: makeBinding read `host.base ?? null`,
+  so the script-visible value is unchanged. `touching` is installed only
+  where the host already carries its four live slots (every level-load
+  actor: `prepareActor` builds them from the serialized Touching before
+  attach), and the slots move into the cells; `isMapMoveHost`'s admission
+  predicate (`Array.isArray(host.touching)`) is therefore unchanged. The
+  array is one Array of length 4 per host with accessor elements, so
+  `slots()` in actor-touch.mjs (Array.isArray, length, indexOf, element
+  stores, `fill`) and the binding-era `host.touching = [...]` assignments
+  (the Player start reload, `prepareActor`) store into the cells. Every
+  `base` store bumps the base epoch, as the binding's setter did; a store
+  through `writeNamed` bumps it in `writeInstanceField`.
+* **Bindings.** makeBinding returns null for both keys on every attached
+  actor except the controlled player, whose `base` is the movement port's
+  (player.mjs) and stays bound with its Touching until 1e-6. `boundKeys`
+  therefore still holds `engine.actor.base` and `engine.actor.touching` for
+  the player's sake, so the Rust interpreter reads them in the image on
+  receivers without bindings and hands them to JavaScript on bound
+  receivers, as for the player's Physics (1e-2).
+* **Resets.** `restoreStorage` now returns Base and Touching to the
+  property snapshot (the serialized values), where the host members were
+  untouched by the restore before; the NPC and decoration reset paths then
+  re-seed both from the serialized values through the accessors, as they
+  did on the host members. Any other map actor that was SetBase'd during
+  play now returns to its serialized Base on a Player start, where it kept
+  the live Base before; that is the original reload's result.
+* **Open, not changed here: serialized Base at first load.** A map actor
+  whose serialized Base is set reads None until a Player start reload,
+  because makeBinding read the absent host member (`prepareActor` builds
+  `touching` but never `base`) and this step preserves that value; the
+  reload paths then seed `base` from the serialized value. The original
+  keeps the serialized Base from load. On Island 71 of 3,658 actors carry
+  one, every one `LevelInfo0` (export 1): 29 Terrorists, 5 ThugMales, 4
+  UNATCOTroops, Gunther, Paul, 7 SecurityCameras, 2 SecurityBots, 2
+  AutoTurrets, the boat, the buoys, the trees and bushes, the statue
+  parts; Training has none. For a pawn, physWalking's stopped-floor
+  shortcut compares the floor hit's actor with Base, so the first ticks
+  differ until SetBase lands on the world. The fix is one line here (adopt
+  the image cell, which `applyInitialProperties` filled, instead of None
+  when the member is absent); it is its own change, with its first
+  differing Island checkpoint explained.
+
+Verification (`.work/tools/verify-1e4.sh`, September 30):
+
+* `test/actor-link-fields.test.mjs` (the cells at the retail offsets, both
+  ways of access, the array surface, the NPC startup reset, the refusals),
+  and the 578 unit tests.
+* Digests unchanged on both maps under both engines with the documented
+  command (`--bypass --continue --render-feedback --warm 60 --ticks 300
+  --digest-every 10`, 30 checkpoints): Island `b767a7e417fe5968`, Training
+  `c8eebff5786adf55`, errors `{}`, with `SCRIPT_VM_CHECK=1`.
+* `touching-compare.mjs`, 360 ticks per map: image and host slots differ
+  on no map actor (1,749 and 491 stale actor-ticks before), and script
+  reads differ from the host nowhere. The only remaining image/host
+  difference is the controlled player's (100 actor-ticks on Island, 337 on
+  Training, its Touching bound until 1e-6).
+* `validate-rider-move-kernel`, `-native-zone`, `-native-based-actors`,
+  `-native-set-rotation-riders`, `-script-spawn-touching`,
+  `-native-far-move-scene`, `-zone-kernel` and `-native-walking-callbacks`
+  (102 cases, with `NATIVE_PROBE_PYTHON`) pass.
+* Bound reads per Island tick fell from 501 to 441: the 61 `Base` reads
+  are image reads now. `boundKeys` keeps both keys for the player.
+* The first Play run after the install paused Training at the NPC startup
+  reset (`delete actor.base` on the new accessor); `resetLinkField` now
+  returns the member to the binding-era value, and Training runs to HUD
+  health 100 headlessly.
 
 **R3-c — Perception natives (implemented).** ScriptedPawn's IsValidEnemy
 (2105) and GetPawnAllianceType (2107), and Pawn's AICanSee (705) with the
