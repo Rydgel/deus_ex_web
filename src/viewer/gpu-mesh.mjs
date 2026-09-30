@@ -248,9 +248,13 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
     slotParamsU[u+8]=flags>>>0;slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=frame+1;
     slotParamsU[u+12+1]=lights.length;
-    slotParamsF.set([...ambient,scaleGlow],fl+40);slotParamsF.set(unlit,fl+44);
+    slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=scaleGlow;
+    slotParamsF[fl+44]=unlit[0];slotParamsF[fl+45]=unlit[1];slotParamsF[fl+46]=unlit[2];
     for(const light of lights){
-      lightData.set([...light.location,light.rradius,...light.color,0],lightCount*8);lightCount++;
+      const at=lightCount*8,{location,color}=light;
+      lightData[at]=location[0];lightData[at+1]=location[1];lightData[at+2]=location[2];lightData[at+3]=light.rradius;
+      lightData[at+4]=color[0];lightData[at+5]=color[1];lightData[at+6]=color[2];lightData[at+7]=0;
+      lightCount++;
     }
     touch(slot);
     return true;

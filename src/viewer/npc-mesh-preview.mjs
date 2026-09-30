@@ -121,7 +121,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     let mesh;
     if(readMesh){try{mesh=readMesh();}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
     if(failed.get(actor)===mesh)return;
-    if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
+    if(!mesh||(mesh.kind!=='LodMesh'&&mesh.kind!=='Mesh')||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
       lighting,displayGamma,texturePool:textures,gpu,batches})
