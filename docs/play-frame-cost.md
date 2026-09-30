@@ -1,8 +1,83 @@
 # Play frame cost from first principles
 
-## September 30: the 120 fps budget after the Rust port
+## September 30 follow-up: verified reductions in rendering work
 
-The current Island investigation supersedes the earlier stopping point below.
+Three runtime changes are committed on master:
+
+- `60c587e` applies the recovered moving-light gate before constructing full
+  light records. Island's collection builds 16 instead of 436 records; a live
+  Play-start frame ends with 273 after actor lighting requests the static lights
+  it needs. The whole frame avoids 163 records, not 420. See
+  [lighting evidence and focused checks](mesh-lighting.md#moving-light-collection-and-deferred-records-september-30).
+- `1d8486c` shares immutable GPU actor skins while retaining private materials,
+  decode awaits and material allocation order. The complete Island actor scene
+  uses 128 textures instead of 739; associated RGBA mip payload falls from
+  51,673,564 to 12,354,928 bytes. Unchanged Style/ScaleGlow also avoids redundant
+  material assignments. [Resource and state verification](actor-mesh-texture-sharing.md)
+  includes every group, sampler and texel, plus resource lifetime checks.
+- `eb04aab` merges consecutive compatible opaque world draws in their existing
+  material order. Up to eight separate base samplers and array lightmaps preserve
+  filtering, depth ties, transparency and mirrors. The final shader retains the
+  original vertex varying layout and decodes its packed indices with integer
+  arithmetic. [Geometry and GPU checks](lighting.md#ordered-world-submission-boundary)
+  cover 57,574 original-map triangles, 17,868,096 real-map pixel channels and
+  3,538,944 synthetic channels, including context restoration.
+
+### Final Play measurement and its limits
+
+The reference is `96d0203`, which already includes the HUD batching and spawned
+Touching fix. The final run uses `eb04aab`. All runs use Island walking,
+1440×960/DPR 1, Chromium/Metal on the M2 Pro, 300 measured frames, 1,500 ms
+settling, fixed `dt=1/120`, and no CPU sampler or bypass. Simulation remains
+active with no runtime errors. This is a controlled workload, not a claim of
+120 fps interaction. Two baseline runs and one final retained-code run give:
+
+| Per-frame metric | Reference (two run means) | Final run |
+| --- | ---: | ---: |
+| World mesh submissions, including sky | 336 | 65 |
+| Main scene WebGL calls | 932.46–932.47 | 660.95 |
+| Render phase | 4.09–4.61 ms | 3.50 ms |
+| Light collection phase | 1.45–1.51 ms | 0.74 ms |
+| Actor preparation | 9.34–9.94 ms | 9.81 ms |
+| Simulation | 12.72–14.20 ms | 12.88 ms |
+| HUD phase | 1.87–2.09 ms | 1.85 ms |
+| Total host work | 29.80–32.71 ms | 29.10 ms |
+| Median display interval | 33.3 ms | 33.3 ms |
+
+The submission/resource reductions are repeatable. Earlier interleaved runs
+of the batching candidate reduced render and collection time but did not show
+a stable total-frame gain: simulation and actor time moved enough to erase it
+in one pair. The final run is encouraging but does not establish a stable FPS
+improvement. Some light-record work moves from collection into actor preparation;
+the collection timer alone overstates the saved work. Raw reports are
+`.cache/perf/renderer-{base1,base2,committed}.json`; exploratory reports retain
+their `after1`, `after2` and `final` suffixes outside Git.
+
+World triangles submitted increase from 30,852 to 33,544 because merged bounds
+are coarser; clipping preserves the checked pixels. Actor submissions remain
+about 494 groups and movers remain 20. Batching also performs extra GPU texture
+fetches, and layers still used by unbatched surfaces retain separate GPU page
+storage. These trades are explicit; neither total VRAM nor final whole-frame
+GPU busy time was measured.
+
+The 8.33 ms target remains unmet. Simulation plus actor preparation alone is
+22.69 ms in the final run. The next substantial work remains original
+bounds/BSP/span visibility and the complete memory-backed movement family,
+not another isolated scalar Rust port. `78331fd` recovers and validates the
+[early native visibility gates](render-visibility.md), but deliberately leaves
+them outside Play: all 220 currently visible Island-start previews pass them,
+so those gates alone would save no draws in that capture.
+
+Verification: all 574 unit tests and the production build pass. Focused native
+mesh-lighting, actor-scene, original-map geometry, GPU and visibility-oracle
+checks pass. These results establish the changed boundaries, not completion
+of original renderer fidelity or the 120 fps milestone. The temporary baseline
+server was stopped and its managed worktree archived; the working preview and
+all commits remain local.
+
+## Initial September 30 investigation: the 120 fps budget after the Rust port
+
+The initial Island investigation supersedes the older stopping point below.
 The workload is original-data Play at 1440×960, DPR 1, Chromium/Metal on an
 Apple M2 Pro, walking forward. No original boundaries were bypassed and Play
 remained active without runtime errors. The reference code is `1a17e36`
@@ -82,15 +157,15 @@ are `sept30-fixed-{base,after}{1,2}.json` in `.cache/perf/`.
    to substitute line-of-sight rays or arbitrary distance throttling.
    [Existing timestamp evidence and gaps](script-loadmap-startup.md#renderer-feedback)
    explain why the renderer and simulation must be verified together.
-2. **Remove submission splits that carry no distinct draw state.** The
-   static Island map census has 14 lightmap pages and about 403
+2. **Remove submission splits that carry no distinct draw state.** This
+   investigation led to the verified ordered world batches and actor texture
+   sharing above. The initial static Island census had 14 lightmap pages and about 403
    texture/all-flags/page groups before texture-property flags and movers.
-   Grouping by actual rendering flags gives 302 candidates; removing page
-   splits with texture-array lightmaps gives about 160 uncanonicalized
-   texture/flags candidates. These are construction counts, not promised
-   frame-time gains. Actor groups also create their own materials/textures.
-   Verify resource sharing, opaque ordering, transparent order, gamma,
-   filtering, mirrors and dynamic atlas updates before changing these paths.
+   Grouping by actual rendering flags gave 302 candidates; removing page
+   splits gave about 160 texture/flags candidates. Subsequent depth-order
+   analysis ruled out freely regrouping those meshes: only consecutive
+   compatible runs may merge. The retained change verifies order, gamma,
+   filtering, mirrors and dynamic atlas updates as described above.
 3. **Finish movement as a whole memory-backed family.** Pawn physics,
    walking, rider moves, collision updates and their host field adapters
    still occupy several milliseconds. The 37-trace walking scan is already

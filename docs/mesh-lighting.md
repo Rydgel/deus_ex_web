@@ -95,6 +95,11 @@ mesh lighting still incurs its record construction then. The focused live
 mutation test passes; `validate-mesh-lighting-play.mjs` passes all 24 cases
 covering 12 actors, 100 selected lights and 2,512 vertices, with zero diffuse
 byte differences against either Wasm or the original native Light routine.
+A separate Island Play-start census ends the complete render frame with 273
+light records: 257 were requested after the initial 16. Thus the collection
+count is not the total lighting work. The live frame avoids 163 of the original
+436 eager records, while moving the needed static-record work into actor
+preparation. Whole-frame timing must include both phases.
 
 ## SetupForActor (`0x10b08c70`)
 
