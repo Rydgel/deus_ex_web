@@ -144,12 +144,14 @@ export function lodMeshFrameMatrix(mesh,coords,scaleFactor,value) {
   return matrix;
 }
 
-/** Evaluate the original vertex pose into the caller's strided buffer.
- * Count excludes mesh special vertices; the output includes them. `coords`
- * contains original FCoords origin/X/Y/Z vectors, flattened (12 f32 values).
- * Actor state is read-only; cache/header state and vertexCount are outputs. */
-export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.frameVertexCount-(mesh.scalarBits.get(0x184)|0),
-  stride=12,output=new Uint8Array(mesh.frameVertexCount*stride)}={}) {
+/** GetFrame's per-call setup shared by the full evaluation and the plan:
+ * Load, the four-slot cache leases, the coordinate matrix and the vertex
+ * operations. `decide` applies one channel's cache-scalar updates in the
+ * original order and returns its vertex operation; `execute` runs that
+ * operation's vertex loop (tween fill, interpolation into the cache pose
+ * and, when `publish`, publication into the output). The split changes no
+ * order of observable effects: the scalars never depend on vertex data. */
+function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
   const vertices=mesh.arrays.get(0x60).load(); // Original virtual Load is first.
   const source=new DataView(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength);
   const cache=services.cache;
@@ -167,14 +169,14 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
   // call. Reuse their exact x87 loads; retain every original store/order.
   const kernel=services.kernel;
   const loadedMatrix=kernel?null:matrix.map(row=>row.map(ld)),loadedOrigin=kernel?null:mesh.origin.map(ld);
-  const runKernel=options=>kernel.run({source,frameVertexCount:mesh.frameVertexCount,
-    output,stride,matrix,origin:mesh.origin,...options});
   const frameVertex=(frame,i)=>{
     const at=(frame*mesh.frameVertexCount+i)*8;
     if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
     return [0,1,2].map(axis=>source.getInt16(at+axis*2,true));
   };
-  function evaluate(channel,lease) {
+  const context={mesh,source,cache,kernel,matrix,special,animationActor,main,output,stride,
+    get vertexCount(){return vertexCount;}};
+  context.decide=function decide(channel,lease) {
     const name=channel<0?read(services,animationActor,'AnimSequence'):read(services,animationActor,'BlendAnimSequence')[channel];
     const frame=f(channel<0?read(services,animationActor,'AnimFrame'):read(services,animationActor,'BlendAnimFrame')[channel]);
     const sequence=findSequence(mesh,name),{entry,existing}=lease;
@@ -190,37 +192,65 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
       }
       const completion=x87add(x87mul(sub(ld(1),ld(entry.completion)),ld(alpha)),ld(entry.completion));
       entry.completion=st(completion);
+      let fill=null;
       if(above(completion,f(0.97))) {
         alpha=0;
         if(count<available){
-          for(let i=count;i<available;i++)entry.vertices.set(frameVertex(targetFrame,i),i*3);
+          fill=[count,available];
           count=available;vertexCount=count-special;entry.valid=count;
         }
       }
-      if(kernel)runKernel({count,entry,second:targetFrame,alpha,tween:true,blend:channel>=0});
-      else for(let i=0;i<count;i++) {
-        if(alpha>0)entry.vertices.set(interpolate(vectorAt(entry.vertices,i),frameVertex(targetFrame,i),alpha),i*3);
-        publish(i,vectorAt(entry.vertices,i),channel>=0);
-      }
-      // Only the tween path writes the cached frame at its end.
-      entry.frame=f(channel<0?read(services,animationActor,'AnimFrame'):read(services,animationActor,'BlendAnimFrame')[channel]);
-    }else {
-      vertexCount=count-special;entry.valid=count;
-      let first=0,second=0,fraction=0;
-      if(sequence) {
-        const phase=st(x87mul(ld(frame>=0?frame:0),ld(sequence.numFrames))),integer=frameInteger(phase);
-        fraction=st(sub(ld(phase),ld(integer)));
-        first=sequence.startFrame+integer%sequence.numFrames;second=sequence.startFrame+((integer+1)|0)%sequence.numFrames;
-      }
-      if(kernel)runKernel({count,entry,first,second,alpha:fraction,blend:channel>=0});
-      else for(let i=0;i<count;i++) {
-        const pose=fraction>0?interpolate(frameVertex(first,i),frameVertex(second,i),fraction):frameVertex(first,i);
-        entry.vertices.set(pose,i*3);publish(i,pose,channel>=0);
-      }
+      // Only the tween path writes the cached frame, at its end (finish).
+      const endFrame=f(channel<0?read(services,animationActor,'AnimFrame'):read(services,animationActor,'BlendAnimFrame')[channel]);
+      return {channel,blend:channel>=0,tween:true,entry,count,fill,first:0,second:targetFrame,alpha,endFrame};
     }
-    cache.unlock(entry);
-  }
-  function publish(i,pose,blend) {
+    vertexCount=count-special;entry.valid=count;
+    let first=0,second=0,fraction=0;
+    if(sequence) {
+      const phase=st(x87mul(ld(frame>=0?frame:0),ld(sequence.numFrames))),integer=frameInteger(phase);
+      fraction=st(sub(ld(phase),ld(integer)));
+      first=sequence.startFrame+integer%sequence.numFrames;second=sequence.startFrame+((integer+1)|0)%sequence.numFrames;
+    }
+    return {channel,blend:channel>=0,tween:false,entry,count,fill:null,first,second,alpha:fraction};
+  };
+  /** The vertex loop of one decided operation. Without `publish` the output
+   * is untouched (a scratch buffer receives the kernel's publication). */
+  context.execute=function execute(op,publish=true) {
+    const {entry,count,alpha,blend}=op;
+    if(op.fill)for(let i=op.fill[0];i<op.fill[1];i++)entry.vertices.set(frameVertex(op.second,i),i*3);
+    if(kernel) {
+      const target=publish?output:scratchOutput(count*stride);
+      kernel.run({source,frameVertexCount:mesh.frameVertexCount,output:target,stride,matrix,origin:mesh.origin,
+        count,entry,...(op.tween?{second:op.second,alpha,tween:true}:{first:op.first,second:op.second,alpha}),blend});
+      return;
+    }
+    if(op.tween)for(let i=0;i<count;i++) {
+      if(alpha>0)entry.vertices.set(interpolate(vectorAt(entry.vertices,i),frameVertex(op.second,i),alpha),i*3);
+      if(publish)publishVertex(i,vectorAt(entry.vertices,i),blend);
+    }
+    else for(let i=0;i<count;i++) {
+      const pose=alpha>0?interpolate(frameVertex(op.first,i),frameVertex(op.second,i),alpha):frameVertex(op.first,i);
+      entry.vertices.set(pose,i*3);if(publish)publishVertex(i,pose,blend);
+    }
+  };
+  /** Apply a cache entry's planned operations that were not executed on the
+   * CPU (planLodMeshFrame), in order, to its cache pose only. */
+  context.replay=function replay(entry,keep=0) {
+    const log=entry.log;
+    if(!log?.length)return;
+    const pending=log.splice(0,log.length-keep);
+    for(const op of pending)context.execute(op,false);
+  };
+  /** Planned operations must stay inside the loaded vertex records exactly
+   * as the loops would require, so the plan throws where they would. */
+  context.check=function check(op) {
+    if(op.count<=0)return;
+    const frames=op.tween?[op.second]:[op.first,...(op.alpha>0?[op.second]:[])];
+    if(op.blend)frames.push(0);
+    for(const frame of frames)frameVertex(frame,op.count-1);
+    if(op.fill)frameVertex(op.second,op.fill[1]-1);
+  };
+  function publishVertex(i,pose,blend) {
     const origin=blend?frameVertex(0,i).map(ld):loadedOrigin;
     const vector=pose.map((v,j)=>{
       const component=ld(st(sub(ld(v),origin[j])));
@@ -233,11 +263,77 @@ export function getLodMeshFrame(mesh,actor,coords,services,{vertexCount=mesh.fra
       out.setFloat32(at,blend?st(x87add(ld(result[j]),ld(out.getFloat32(at,true)))):result[j],true);
     }
   }
-  evaluate(-1,main);
-  for(let slot=0;slot<4;slot++) {
-    if(!named(read(services,animationActor,'BlendAnimSequence')[slot]))continue;
+  context.blendLease=slot=>{
+    if(!named(read(services,animationActor,'BlendAnimSequence')[slot]))return null;
     const key=(BigInt(index(services,animationActor))<<32n)+BigInt((slot+1)*0x10000+0x1d);
-    evaluate(slot,acquire(mesh,key,cache));
+    return acquire(mesh,key,cache);
+  };
+  return context;
+}
+let scratch=new Uint8Array(0);
+const scratchOutput=size=>scratch.byteLength>=size?scratch.subarray(0,size):(scratch=new Uint8Array(size));
+const frameDefaults=(mesh,{vertexCount=mesh.frameVertexCount-(mesh.scalarBits.get(0x184)|0),
+  stride=12,output=new Uint8Array(mesh.frameVertexCount*stride)}={})=>({vertexCount,stride,output});
+
+/** Evaluate the original vertex pose into the caller's strided buffer.
+ * Count excludes mesh special vertices; the output includes them. `coords`
+ * contains original FCoords origin/X/Y/Z vectors, flattened (12 f32 values).
+ * Actor state is read-only; cache/header state and vertexCount are outputs. */
+export function getLodMeshFrame(mesh,actor,coords,services,options={}) {
+  const context=frameContext(mesh,actor,coords,services,frameDefaults(mesh,options));
+  const evaluate=lease=>{
+    const op=context.decide(lease.channel,lease);
+    // A cache pose planned for the GPU is brought up to date first.
+    context.replay(op.entry);
+    context.execute(op);
+    if(op.tween)op.entry.frame=op.endFrame;
+    context.cache.unlock(op.entry);
+  };
+  evaluate({...context.main,channel:-1});
+  for(let slot=0;slot<4;slot++) {
+    const lease=context.blendLease(slot);
+    if(lease)evaluate({...lease,channel:slot});
   }
-  return {output,vertexCount};
+  return {output:context.output,vertexCount:context.vertexCount};
+}
+
+/** GetFrame without its vertex loops, for the GPU path (docs/gpu-mesh.md):
+ * the same Load, leases, matrix and cache-scalar updates in the same order,
+ * returning each channel's vertex operation. Each operation is also logged on
+ * its cache entry (a keyframe operation replaces the log) so the CPU cache
+ * pose can be replayed exactly on demand. */
+export function planLodMeshFrame(mesh,actor,coords,services,options={}) {
+  const context=frameContext(mesh,actor,coords,services,frameDefaults(mesh,options));
+  const channels=[];
+  const plan=lease=>{
+    const op=context.decide(lease.channel,lease);
+    context.check(op);
+    if(op.tween)op.entry.frame=op.endFrame;
+    const log=op.entry.log??=[];
+    if(!op.tween)log.length=0;
+    log.push(op);channels.push(op);
+    context.cache.unlock(op.entry);
+  };
+  plan({...context.main,channel:-1});
+  for(let slot=0;slot<4;slot++) {
+    const lease=context.blendLease(slot);
+    if(lease)plan({...lease,channel:slot});
+  }
+  return {matrix:context.matrix,origin:mesh.origin,channels,vertexCount:context.vertexCount,
+    special:context.special,context};
+}
+
+/** The exact CPU output of a plan's frame: replays each channel's earlier
+ * logged operations into its cache pose, then executes the planned one with
+ * publication, in channel order, into `plan.context.output`. This is the
+ * output getLodMeshFrame would have produced for the same frame. */
+export function materializeLodMeshFrame(plan) {
+  const {context,channels}=plan;
+  for(const op of channels) {
+    if(op.entry.log?.at(-1)!==op)throw new LodMeshError('GetFrame plan is no longer current for its cache entry');
+    context.replay(op.entry,1);
+    op.entry.log.length=0;
+    context.execute(op);
+  }
+  return context.output;
 }
