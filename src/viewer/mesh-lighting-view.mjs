@@ -1,5 +1,6 @@
 import { getAxes } from '../runtime/camera.mjs';
 import { traceRay } from '../runtime/ray.mjs';
+import { actorsEpoch } from '../runtime/base-epoch.mjs';
 import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, lightVertex, setupForActor,
   unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
@@ -18,6 +19,16 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
   const manager = createMeshLightManager();
   let frame = null, frameCount = 0, lastTime = null;
+  // Level.Actors' name map and membership set change only when actorsEpoch
+  // advances (base-epoch.mjs); they are rebuilt only then.
+  let membership = null;
+  const levelMembership = level => {
+    const epoch = actorsEpoch();
+    if (membership?.level === level && membership.actors === level.actors && membership.epoch === epoch) return membership;
+    const byName = new Map();
+    for (const actor of level.actors) if (actor) byName.set(actor.name, actor);
+    return membership = { level, actors: level.actors, epoch, byName, live: new Set(level.actors) };
+  };
   // A light's fields are read at most once per frame, when first used: no
   // script runs during the render phase, so a later read in the same frame
   // returns the same value (the record is rebuilt every frame, so a live edit
@@ -67,11 +78,10 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const viewport = { currentTime: seconds, lastUpdateTime: lastTime ?? seconds, frameCount };
       lastTime = seconds;
       // Level->Actors(0) is the LevelInfo (SetupForActor asserts it).
-      const byName = new Map(), levelInfo = level.actors[0];
+      const { byName, live } = levelMembership(level), levelInfo = level.actors[0];
       frame = { level, model: level.model, axes, origin, viewport, lights: new Map(), leafLights: new Map(),
         levelInfo, byName, timeSeconds: read(levelInfo, 'TimeSeconds') ?? 0,
-        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live: null };
-      for (const actor of level.actors) if (actor) byName.set(actor.name, actor);
+        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live };
       // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
       // Filter prepends each onto the leaves it reaches.
       for (const actor of level.actors) {
@@ -132,7 +142,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         current: record => lightRecord(record.actor),
         lineCheck: light => traceRay(frame.model, location, light.location) === null,
         viewport: frame.viewport, rendMap: 5, noLighting: false,
-        alive: light => !read(light.actor, 'bDeleteMe') && (frame.live ??= new Set(frame.level.actors)).has(light.actor),
+        alive: light => !read(light.actor, 'bDeleteMe') && frame.live.has(light.actor),
         worldToCamera: point => view.toCamera(point),
       });
       const flags = polyFlags | setup.flags;
