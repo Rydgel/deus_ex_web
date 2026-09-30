@@ -7,8 +7,11 @@ See docs/render-visibility.md. This optional local research tool never ships
 original code or assets and is not imported by the browser.
 """
 import importlib.util
+import hashlib
 import json
+import math
 from pathlib import Path
+import struct
 import sys
 
 from unicorn import UC_HOOK_CODE
@@ -108,6 +111,73 @@ class Oracle(light_oracle.Oracle):
         return {'route': route, 'depthBits': self.read(sprite + 8, 'I')[0]}
 
 
+class BoundsOracle(light_oracle.native.NativeCollision):
+    """Complete original mesh-box and perspective BoundVisible calls.
+
+    Fixtures supply serialized mesh boxes and actor/frame fields. Original
+    GetAnimSeq, Core rotation/box math and every renderer branch execute;
+    unknown imports retain the common probe's trap.
+    """
+    def __init__(self, root):
+        super().__init__(Path(root), {'Render.dll': light_oracle.RENDER_HASH})
+        table = b''.join(struct.pack('<f', math.sin(i * 0.0003834951969714103)) for i in range(16384))
+        assert hashlib.sha256(table).hexdigest() == '9893d14bd21e5c4194832659571b30363ddfb08d468ed662a4b6d5ae172262dc'
+        self.cpu.mem_write(0x101b32a4, table)
+
+    def box(self, address, value):
+        self.write(address, '6fB', *value['min'], *value['max'], int(value.get('valid', True)))
+
+    def mesh_bounds(self, case):
+        mesh, actor, result, vtable = self.alloc(0x140), self.alloc(0x800), self.alloc(28), self.alloc(0x100)
+        self.write(mesh, 'I', vtable)
+        self.write(vtable + 0x68, 'I', 0x10301e29)
+        self.box(mesh + 0x28, case['box'])
+        self.write(mesh + 0x100, '3f', *case.get('scale', [1, 1, 1]))
+        self.write(mesh + 0x10c, '3f', *case.get('origin', [0, 0, 0]))
+        self.write(mesh + 0x118, '3i', *case.get('rotation', [0, 0, 0]))
+        boxes = case.get('boxes', [])
+        data = self.alloc(max(1, len(boxes)) * 28)
+        for i, box in enumerate(boxes):
+            self.box(data + i * 28, box)
+        self.write(mesh + 0xa8, '3I', data, len(boxes), len(boxes))
+        sequences = case.get('sequences', [])
+        data = self.alloc(max(1, len(sequences)) * 32)
+        for i, seq in enumerate(sequences):
+            self.write(data + i * 32, '5I', seq['name'], 0, seq['startFrame'], seq['numFrames'], 0)
+        self.write(mesh + 0x84, '3I', data, len(sequences), len(sequences))
+        fields = case.get('actor', {})
+        self.write(actor + 0x54, 'If', fields.get('sequence', 0), fields.get('frame', 0))
+        self.write(actor + 0x114, '3f', *fields.get('location', [0, 0, 0]))
+        self.write(actor + 0x120, '3i', *fields.get('rotation', [0, 0, 0]))
+        self.write(actor + 0x17c, 'f', fields.get('drawScale', 1))
+        self.write(actor + 0x180, '3f', *fields.get('prePivot', [0, 0, 0]))
+        self.write(actor + 0x194, 'I', 4 if fields.get('particles') else 0)
+        self.call(0x103a6850, mesh, struct.pack('<3I', result, actor, int(case.get('exact', False))))
+        return {'bits': list(self.read(result, '6I')), 'valid': self.read(result + 24, 'B')[0],
+                'min': list(self.read(result, '3f')), 'max': list(self.read(result + 12, '3f'))}
+
+    def bound_visible(self, case):
+        frame, viewport, actor = self.alloc(0x200), self.alloc(0x100), self.alloc(0x800)
+        bound, screen = self.alloc(28), self.alloc(20)
+        self.write(frame, 'I', viewport)
+        self.write(viewport + 0x30, 'I', actor)
+        self.write(actor + 0x600, 'I', 5)
+        self.box(bound, case['box'])
+        value = case['frame']
+        if 'coordsBits' in value:
+            self.write(frame + 0x34, '12I', *value['coordsBits'])
+        else:
+            self.write(frame + 0x34, '12f', *value['coords'])
+        self.write(frame + 0xa8, '2i', value['width'], value['height'])
+        self.write(frame + 0xb8, '2f', value['width'], value['height'])
+        self.write(frame + 0xc8, '2f', *value['center'])
+        self.write(frame + 0xdc, 'f', value['projectionZ'])
+        self.write(frame + 0xec, '4f', *value['clip'])
+        visible = self.call(0x10b162e0, 0, struct.pack('<4I', frame, bound, 0, screen))
+        return {'visible': bool(visible), 'bits': list(self.read(screen, '5I')),
+                'screen': list(self.read(screen, '5f'))}
+
+
 if __name__ == '__main__':
     root = sys.argv[1]
     word = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
@@ -118,5 +188,25 @@ if __name__ == '__main__':
         result['admission'] = [oracle.admission(case) for case in request['admission']]
     if 'meshSetup' in request:
         result['meshSetup'] = [oracle.mesh_setup(case) for case in request['meshSetup']]
+    if 'meshBounds' in request or 'boundVisible' in request:
+        if word != 0x037f:
+            raise ValueError('Bounds oracle currently admits only the established 0x037f control word')
+        bounds = BoundsOracle(root)
+        if 'meshBounds' in request:
+            result['meshBounds'] = [bounds.mesh_bounds(case) for case in request['meshBounds']]
+        if 'boundVisible' in request:
+            result['boundVisible'] = [bounds.bound_visible(case) for case in request['boundVisible']]
+    if 'sceneFrames' in request:
+        scene_spec = importlib.util.spec_from_file_location('scene', Path(__file__).with_name('native-window-scene-frame-oracle.py'))
+        scene = importlib.util.module_from_spec(scene_spec)
+        scene_spec.loader.exec_module(scene)
+        producer = scene.Probe(root, request['tangents'])
+        frames = []
+        for case in request['sceneFrames']:
+            address = producer.free
+            frame = producer.run(case)
+            frame['clipBits'] = list(producer.read(address + 0xec, '4I'))
+            frames.append(frame)
+        result['sceneFrames'] = frames
     json.dump(result, sys.stdout, separators=(',', ':'))
     print()

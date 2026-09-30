@@ -76,8 +76,68 @@ Only after that gate does the renderer call
 `Mesh.GetRenderBoundingBox(Actor, Exact=0)` (virtual slot `0x5c`), followed
 by `URender::BoundVisible(Frame, box, SpanBuffer=null, screenBounds)`
 (slot `0x80`). False rejects the sprite. Successful screen bounds are
-converted to integers, and `Y1 < Y2` is required. Translation of those
-bounds routines is not part of the admission gate.
+converted to integers, and `Y1 < Y2` is required. Those bounds routines are translated separately from the admission gate
+below; they are not yet wired into Play.
+
+## Mesh bounds and perspective screen rectangle
+
+`src/runtime/render-mesh-bounds.mjs` translates the complete Engine
+`UMesh.GetRenderBoundingBox` body at `0x103a6850–0x103a6b9b` and the
+perspective, null-SpanBuffer branch of Render `URender.BoundVisible` at
+`0x10b162e0–0x10b170d0`. Engine and Core hashes are the pinned originals
+already enforced by `native-collision-oracle.py`; Render's hash is above.
+
+The mesh body calls the original virtual `GetAnimSeq` with **this actor's**
+AnimSequence. Native names are interned FName identifiers; the string adapter
+uses the already recovered ASCII C-locale name folding and zero terminator
+from [script-names.md](script-names.md). If the sequence exists and AnimFrame
+is nonnegative, the body unions two stored frame boxes: the float32 phase
+is `(AnimFrame + 1) * NumFrames`, converted by x87 nearest-even after
+subtracting `0.5`, then wrapped modulo NumFrames and offset by StartFrame.
+The second index uses that integer plus one. At integer phase this is not
+universally equivalent to floor. Negative tween frames and unknown sequences
+use the mesh's all-animation UPrimitive box. The Exact argument is not read;
+neither the owner-animation flag nor blend slots are read during selection.
+
+The selected box has Mesh.Origin subtracted and Mesh.Scale times DrawScale
+applied; bParticles uses the native constant `1.5` instead of DrawScale.
+Minimum components and maximum X/Y have float32 subtraction/scale stores;
+maximum Z retains both intermediates in x87 through their product. The body
+expands each side by one unit. UnitCoords is inverse-rotated by mesh RotOrigin,
+then actor Rotation; its origin becomes the float32 Location + PrePivot.
+Core `FCoords.Transpose` (`0x1011a140`) and `FBox.TransformBy`
+(`0x101198f0`) then transform all eight corners. The helper preserves those
+x87 operation and float-store boundaries rather than substituting a Three
+bounding box or the mesh's all-animation sphere.
+
+The perspective BoundVisible contract is:
+
+1. A camera origin inside the world box returns the full viewport and depth
+   zero. Otherwise, an initial six-product depth test can reject the box.
+2. Eight camera-space corners produce four-plane outcodes. A nonzero AND
+   rejects the box; the OR selects which screen edges need clipping. Corner
+   arithmetic retains some products and stores others, including partial
+   stores for the final two corners; the translation records these explicitly.
+3. Each projected X uses retained `ProjZ/Z`; projected Y uses its float32
+   store. Screen floats are converted with nearest-even after subtracting
+   `0.5`. After initializing from corner zero, the original loop repeats
+   corner zero and processes through corner six. Corner seven affects
+   outcodes/minimum depth but **is not projected by that loop**.
+4. X/Y bounds are clamped to the viewport. Minimum depth compares the
+   retained x87 value before storing the winning float32 value; a negative
+   final minimum becomes zero. Ordered comparison preserves signed-zero
+   behavior, including tiny negative retained depths that store as `-0`.
+5. Setup subsequently requires `Y1 < Y2`. BoundVisible returning true is
+   therefore insufficient to admit a zero-height screen rectangle.
+
+`buildBoundsSceneFrame` reuses the already native-verified scene frame in
+[script-window-scene-frame.md](script-window-scene-frame.md), adding
+ComputeRenderSize's four float32 outcode coefficients from frame offsets
+`0xec–0xf8`. It does not derive the original camera matrix from Three.
+The supported inputs remain finite original map boxes, the existing measured
+perspective FOVs, and the established x87 control word `0x037f`.
+Orthographic projection, non-null span buffers, RenderIterator, mirror frame
+production and BSP/span visibility are not implemented by this helper.
 
 ## BSP and visible actor order: unresolved integration
 
@@ -132,3 +192,44 @@ Future integration must evaluate child frames too: an actor excluded by
 the main frame may be visible in a mirror. The admission helper does not
 replace Play's actor lifecycle checks, claim to implement RenderIterator,
 or claim that passing admission means an actor was drawn.
+
+## Bounds verification and measured integration limit
+
+The native oracle also executes the complete original mesh-box and
+perspective BoundVisible bodies, including original GetAnimSeq, Core
+rotations and box transforms. Unknown imports trap. Its scene-frame cases
+execute the original producer with the existing real-x87 tangent captures.
+`node scripts/validate-render-mesh-bounds.mjs` compares **17 mesh boxes,
+24 perspective bounds and three frame producers** against those bodies;
+every returned float32 bit matches. Cases cover frame wrapping, negative
+tween selection, odd frame-count rounding, particles, mesh/actor rotations,
+negative scale, near/view-plane intersections, tiny projected boxes, and
+signed-zero/retained-underflow minimum depth. Two raw string name spellings
+also match the same original numeric FName lookup.
+
+An Island capture contains 291 prepared meshes (220 visible under the host
+sphere), using the native main-frame camera and actual 1440×839 canvas.
+All 291 translated world boxes, screen rectangles and decisions match the
+original native calls bit for bit. Original setup admits 203 of the 220
+host-visible actors. The 17 additional rejections all have zero integer
+screen height: two crowbars, three flares, a medkit, candy bar, multitool,
+button, two laser triggers, LAM, lockpick, two data cubes, pepper gun and
+hide-a-gun. No wall occlusion or distance heuristic is involved. Captures
+`.work/render-bounds-island.json` and `.work/render-bounds-native-island.json`
+stay outside Git.
+
+This does **not** justify adding the helper to each Play frame yet. An
+isolated warm Node workload using the captured fields measured the complete
+291-box transform plus projection at **9.32 ms median** (30 samples;
+p10–p90 8.77–10.45 ms), or **7.20 ms** for the 220 host-visible actors.
+Projection of already cached boxes cost **0.47 ms** for all 291, or
+**0.41 ms** for the visible 220 (100 samples each). These are helper timings,
+not a browser FPS measurement, and do not include property reads or cache
+invalidation. The exact x87 box transform currently dominates. Avoided work
+for 17 tiny static items has not been shown to exceed even the cached path.
+
+Future integration therefore needs a native-equivalent cheaper transform or
+bounds reuse with complete frame-selection/transform invalidation, evidence
+of a net workload reduction, and native child-frame handling so mirrors can
+admit actors rejected by the main frame. The standalone recovery supplies
+that original boundary; it deliberately adds no per-frame Play work.
