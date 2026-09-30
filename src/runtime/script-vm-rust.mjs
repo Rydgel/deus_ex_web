@@ -27,6 +27,7 @@ import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
+import {ActorTickHost} from './actor-tick-kernel.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -194,6 +195,8 @@ export class RustScriptVm {
     this.rows = new Map();
     // R3-c: the perception natives' tables and imports.
     this.perception = new PerceptionHost(this);
+    // R3-d: Actor.Tick's bookkeeping (actor-tick-kernel.mjs).
+    this.actorTick = new ActorTickHost(this);
   }
   attach() {
     const x = this.exports;
@@ -216,6 +219,7 @@ export class RustScriptVm {
     this.result3At = x.vm_result3_ptr();
     this.checkValuesAt = x.vm_check_values_ptr();
     this.perception.attach(x);
+    this.actorTick.attach(x);
     const limit = handleLimit();
     this.growClassTable(limit);
     for (let handle = 1; handle < limit; handle++) if (identityOfHandle(handle) === null) this.markReleased(handle);
@@ -436,6 +440,7 @@ export class RustScriptVm {
     };
     return {
       ...vm.perception.imports(enter, leave, STATS ? count : null),
+      ...vm.actorTick.imports(),
       js_int(frame, node, handle) {
         enter();
         try { return value(frame, node, handle) | 0; } finally { leave(); }

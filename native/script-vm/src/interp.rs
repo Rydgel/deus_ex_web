@@ -580,7 +580,7 @@ fn pointer_word(handle: u32) -> u32 {
 /// from non-NaN operands (inf - inf, 0 * inf) stays the FPU's default NaN,
 /// as it is in JavaScript on the same machine.
 #[inline(always)]
-fn nan_first(x: f64, y: f64, r: f64) -> f64 {
+pub(crate) fn nan_first(x: f64, y: f64, r: f64) -> f64 {
     const QUIET: u64 = 0x0008_0000_0000_0000;
     if x.is_nan() {
         f64::from_bits(x.to_bits() | QUIET)
@@ -607,7 +607,7 @@ pub(crate) fn class_entry(handle: u32) -> u32 {
 /// A pointer cell's value as its JavaScript read yields it: a released
 /// handle names no identity (identityOfHandle's null), so it is None.
 #[inline(always)]
-fn live(handle: u32) -> u32 {
+pub(crate) fn live(handle: u32) -> u32 {
     if class_entry(handle) == RELEASED {
         0
     } else {
@@ -669,7 +669,7 @@ fn merge_bool(word: u32, mask: u32, value: bool) -> u32 {
 /// quiets a signaling NaN (an explicit bit operation: LLVM may fold a
 /// widening followed by a narrowing).
 #[inline(always)]
-fn quiet(bits: u32) -> u32 {
+pub(crate) fn quiet(bits: u32) -> u32 {
     if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
         bits | 0x0040_0000
     } else {

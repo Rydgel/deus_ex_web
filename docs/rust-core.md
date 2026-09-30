@@ -1795,6 +1795,229 @@ Left in JavaScript, and why:
 * **Reads of bound keys** on BOUND receivers, until the bound-key rule is
   per object.
 
+**R3-d — Actor tick bookkeeping (implemented).** The per-actor body of
+Actor.Tick runs in the interpreter (`native/script-vm/src/tick.rs`; host half
+`actor-tick-kernel.mjs`): `tickStandaloneActor` with `actorInStasis`, the
+owner test, bTicked, the timer phase (`updateActorTimer`), LifeSpan, the
+physics gate and the Pawn tail, and `tickActorAnimation`'s main and blend
+loops over the animation tick view ([actor tick](script-actor-tick.md),
+[animation tick](script-animation-tick.md)). Each body is transcribed step
+for step, as in R3-c: the same reads, writes and callbacks in the same order,
+the same double arithmetic, `Math.fround` where it rounds. The JavaScript
+stays the reference, the path under `SCRIPT_VM=js` and under
+`ACTOR_TICK_KERNEL=js`, and the answer to every tick Rust hands back.
+
+Scope. A `--cpu-prof` window at 3e8d78b (Island, `SCRIPT_VM=rust`, 300
+ticks, 19.6 ms per profiled tick) put 3.79 ms per tick in the level tick
+outside script, physics and the other services:
+
+| ms per profiled tick | |
+|---|---|
+| `tickStandaloneActor` (prelude, pawn tail, reads) | 1.11 |
+| `tickActorAnimation` and `processActorAnimation` with the view | 1.27 |
+| `actorInStasis` | 0.31 |
+| `scriptAndTimer` and `updateActorTimer` | 0.24 |
+| `compactScriptActors` | 0.31 |
+| `tickStandaloneLevel` (the loop and DistanceFromPlayer) | 0.25 |
+
+An Island tick ticks about 770 actors (Level.Actors from FirstDynamicActor),
+each with about 15 `readNamed` calls; 700 run the animation phase (630 of
+them inactive), 380 get a Tick event and 700 ProcessState. The `readNamed`
+cluster was 6.52 ms per tick, 1.92 ms of it inside these bodies. The slice is
+the whole per-actor body with its animation phase: it removes those reads
+and leaves one call per actor plus one import per callback. The level loop,
+DistanceFromPlayer and the compaction stay JavaScript (below).
+
+* **The actor.** `ActorTickHost.run` passes the image base, a 42-bit field
+  mask and class flags (Pawn, PlayerPawn, Weapon by record key, as the tick's
+  `isA` compares). Field i is set exactly when `readNamed` reads the cell the
+  table (`T_FIELDS`: offset, bool mask or fixed-array stride, from the cell
+  registry) describes:
+  * the class resolves the spelling to the table's key, and the handle
+    `readNamed` uses (the class's cached `namedHandle`, which the first
+    resolving instance fills, or the cell it will cache) is the table's cell;
+  * the instance has no binding for that key. This is per object, not R3-c's
+    bound-key rule: `engine.actor.physics` is a bound key (the controlled
+    player's binding) and every map actor is BOUND (its remaining host
+    bindings, the mirrored Level among them), so that rule would send about
+    770 Physics reads per tick to JavaScript;
+  * the receiver is not HOST (image here, no poison, not released).
+
+  The mask is cached on the instance (`tickDesc`) while its bindings' count,
+  its class's resolved names and the table are unchanged. Bindings are only
+  ever added (`bindProperty`), so an unchanged count is an unchanged key set.
+* **Hand-back.** Up to the first effect (the bTicked write) every read must be
+  in the image; otherwise Rust hands the whole tick back and the JavaScript
+  body runs it, errors included (a Role other than 4, a zone render time that
+  is not a number). Those reads have no effect. PlayerPawns (the controlled
+  player's input and view-target branches) are handed back by the host
+  before the call. Owner-deferred ticks return DEFER, and the host allocates
+  and links the node as the body does, after the same reads.
+* **Callbacks.** Each callback is an import that calls the same service at
+  the same point: ProcessState, the events (Tick, Timer, Expired,
+  UpdateEyeHeight, PainTimer, SpeechTimer, UpdateTactics, AnimEnd and
+  notifies), performPhysics, DestroyActor, FarMoveActor of the weapon,
+  ShowSelf and CheckEnemyVisible. A callback can change anything, so it
+  writes the actor's fresh receiver info, mask and the level's DemoRecDriver
+  test into `T_STATE`, which Rust reads back. Reads without effects are
+  imports too: IsProbing, the zone render time, the owner's bTicked, the
+  latent action and the notify selection (`selectAnimNotify`, shared with
+  the JavaScript body, over the mesh). replicateCompletion's plane write
+  stays JavaScript (`js_anim_sim`, with the frame and rate Rust computed).
+* **After the first effect**, a field outside the mask is read and written
+  through JavaScript at the same point: the tick's `services.read`/`write`,
+  or the animation view's accessor (`js_tick_get`/`js_tick_set`,
+  `animFlags` as one value). Where a statement uses such a field (the
+  ViewRotation copy, the weapon's FarMoveActor) the statement runs in
+  JavaScript. If an animation field is outside the mask when the phase
+  starts, the whole phase runs in JavaScript (`js_tick_animation`).
+* **Shared state.** The kernel keeps nothing in statics across imports;
+  nested ticks (a callback that ticks another actor) get their own context.
+  An import that throws unwinds past the Rust frames (`tick_actor` keeps the
+  actor in the shadow stack), and the host puts back the shadow stack
+  pointer. At the top level (no tick in progress and no interpreter run
+  active, `vm.depth` 0) no frame of this instance is on the stack, so the
+  pointer is the stack's top, read once at attach; nested ticks read the
+  global. Reading `WebAssembly.Global.value` per call cost 0.1 ms per Island
+  tick (`resume` could use the same shortcut). The trace and x87 kernels are
+  other instances with their own stacks.
+* **JavaScript refactors** (behavior unchanged): `selectAnimNotify` and
+  `named` are exported from `animation-tick.mjs`; `processActorAnimation`
+  uses `animationTick`, `animationFunction` and `animationEvent`, which the
+  imports share.
+
+Exactness hazards met:
+
+* The namedHandle cache is per class and filled by whichever instance
+  resolves first; the mask follows it (above).
+* A blend element write is `arrayReference(...).set`: the whole float array
+  is read and written back, so the other elements pass through getFloat32
+  and setFloat32, which quiets a signaling NaN. Rust rewrites them quieted.
+* Loads quiet signaling NaNs explicitly, since LLVM folds a float32 widening
+  with a later narrowing (the mutation pass shows a copied sNaN otherwise);
+  binary operations take the first NaN operand (`nan_first`).
+* `Math.trunc` of the timer's period count is emulated; a NaN count is
+  `!== 0`, as in JavaScript.
+* `remainder`'s operand order matters: `(end - stop) * rem / (end - start)`
+  and `(end - stop) / (end - start) * rem` round to different float32 values
+  for inputs a search found (validator case family `tween remainder`).
+* The blend passes run only while the main sequence is active.
+* The simulated-pawn test is kept, though Role is 4 there on this route.
+* ACTOR_TICK_DIFFERENTIAL's replay must take FindFunction and isA as they
+  answered during the tick (the state and the release can change after it):
+  the first mutation pass was void because its baseline failed on that, and
+  the harness now requires a passing baseline.
+
+**ACTOR_TICK_DIFFERENTIAL=1** records every callback with the actor's fields
+(`readNamed` of the 42 fields and the SimAnim planes) before and after it,
+and every read of state outside the actor. After each tick Rust completes,
+the JavaScript body runs again on a virtual copy of the fields, with those
+callbacks and reads served from the record: its callbacks must be Rust's, in
+order and with the same arguments, its fields must equal the real ones
+before each callback and at the end, and its result must be Rust's. A
+hand-back must come before any callback and leave the fields as they were.
+`ACTOR_TICK_STATS=1` prints the kernel's counters.
+
+Verification:
+
+* `scripts/validate-actor-tick-kernel.mjs` boots a map with
+  `SCRIPT_VM=rust`, plays 40 ticks under the differential, then runs cases
+  on real actors of every ticked class twice from the same state (through
+  the kernel, then the JavaScript body) with scripted services. The cases set
+  stasis thresholds (±1 ulp around 5 s, 1200 and the zone clock), timers
+  crossing their rate, LifeSpan at 0.0001, NaN payloads, signaling NaNs,
+  signed zeros, infinities, AnimRate NaN, 0 and negative (velocity-scaled),
+  tweens, notifies, loops and blends; owners ticked, unticked, not attached,
+  released and dangling; fields bound or poisoned before or during the tick;
+  callbacks that write fields, release the actor, install a DemoRecDriver or
+  throw. Results, errors, callbacks with bit-exact arguments, the deferred
+  list, every image byte, the reference array and the shadow stack pointer
+  must be identical. Training: 14,299 cases on 181 actors of 140 classes;
+  Island: 28,914 cases on 366 actors of 224 classes. The JavaScript paths
+  ran 6,290 reads, 162 writes, 31 statements and 911 animation phases on
+  Island. It joins the validator sweep (about 20 s, one map boot).
+* A mutation pass broke `tick.rs` 123 ways
+  (`.work/logs/actortick/mutate.mjs`, which first requires the unmutated
+  build to pass); 117 fail the validator. The pass ran before the
+  constructed cases existed; they are appended after the seeded cases and
+  consume no random numbers, so the validator only grew, and the 14
+  survivors were run again with them (4 more fail). The six survivors are
+  equivalent:
+  * the `live()` checks on the owner and weapon handles, which the imports
+    repeat (`identityOfHandle` is null, so JavaScript reads None);
+  * the PlayerPawn hand-back in Rust, which the host makes first;
+  * `less` against `<` on a negative SightCounter: for NaN both write NaN
+    and the next store overwrites it before any callback;
+  * the explicit quiet on loads, where no reachable path copies a loaded NaN
+    to a store without arithmetic;
+  * `nan_first` on add, where the current code generation keeps the operand
+    order.
+* Digests are unchanged at all 30 checkpoints under both VMs with
+  `SCRIPT_VM_CHECK=1`, errors `{}`: Training `c8eebff5786adf55` and Island
+  `b767a7e417fe5968`.
+* Under `ACTOR_TICK_DIFFERENTIAL=1`, Island replayed 279,620 ticks and
+  compared 718,237 field states (Training 89,071 and 227,899), with no
+  mismatch and the same digest. The kernel handed back only the player's 360
+  ticks; no field was read or written through JavaScript. Under
+  `PERCEPTION_DIFFERENTIAL=1` the counts are R3-c's (118,954 alliance and
+  8,847 AICanSee calls), with no difference.
+* `validate-script-vm-interp`, `-x87`, `validate-trace-kernel`,
+  `validate-collision-kernel`, `validate-perception-kernel`,
+  `validate-object-image` and `validate-object-handles` (also under
+  `SCRIPT_VM=rust` and on Island) pass. So do the native oracles
+  actor-tick (37 cases), animation-tick (38), animation-controls (37) and
+  level-tick (31), and `validate-script-cleanup`, `validate-get-anim-group`,
+  `validate-native-finish-anim`, `validate-window-scroll-cleanup`,
+  `validate-window-timer-diff`, `validate-mission-timer` (both VMs) and
+  `validate-gm-trench-play-anim` (`SCRIPT_VM=rust`).
+* `validate-world-destroy`, `validate-loadmap-gc`, `validate-island-jump-reach`
+  and `validate-training-ladder` pass under `SCRIPT_VM=rust`; the first two
+  also under the JavaScript VM. `validate-loadmap-gc` under
+  `SCRIPT_VM=rust` keeps 2,729 handles; old space grew 0.88 MiB over 19
+  resets.
+* The 566 unit tests pass.
+* A 240-frame Chromium Island walk under `?scriptVm=rust` had no page or
+  runtime error.
+
+Cost: the median `SCRIPT_VM=rust` Island tick over four interleaved pairs
+(HEAD 3e8d78b against this change) on a loaded machine (load average about
+6):
+
+| Pair | Before (ms) | After (ms) | CPU before | CPU after |
+|---|---|---|---|---|
+| 1 | 16.49 | 14.36 | 22.06 | 19.15 |
+| 2 | 18.73 | 14.86 | 25.03 | 19.55 |
+| 3 | 15.96 | 14.16 | 21.21 | 18.80 |
+| 4 | 20.34 | 15.33 | 29.87 | 19.79 |
+
+The tick was lower in all four pairs; in the two quietest (1 and 3) by about
+1.9 ms. In a `--cpu-prof` window of 300 Island ticks (after: a build with Wasm
+names):
+
+| ms per profiled tick | Before | After |
+|---|---|---|
+| Level tick outside script, physics and services | 3.79 | 1.24 |
+| of it the actor body and animation (JavaScript, or `tick_actor`, the host and its imports) | 3.06 | 0.68 |
+| `readNamed` cluster inside that body | 1.92 | 0.13 |
+| `readNamed` cluster (all callers) | 6.52 | 4.14 |
+
+`tick_actor` itself is 0.1 ms per tick (about 130 ns per actor), `run` 0.06.
+The rest of the actor share is the imports: IsProbing, the owner's bTicked,
+the notify selection and the zone clock.
+
+Left in JavaScript, and why:
+
+* **The level loop, DistanceFromPlayer and the compaction scan** (about
+  0.27, 0.18 and 0.07 ms per tick after this step). A Rust pass needs the
+  Level.Actors list with each entry's mask; rebuilt when the base epoch moves
+  (0.6 times per tick on Island, 2,600 entries), it would save about 0.3 ms.
+* **PlayerPawn ticks**: one per tick; their input and view-target branches
+  call the viewport and the input system.
+* **The callbacks themselves** and the reads with host state (IsProbing's
+  probe mask, the zone clock, the notify's mesh, the latent action), and
+  the SimAnim plane writes (structs).
+* **Under `SCRIPT_VM=js`**, which has no interpreter instance.
+
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming
 ([swimming](swimming.md)) landed in JavaScript on the x87 model, like flying;

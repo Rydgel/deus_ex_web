@@ -8,7 +8,7 @@ const f=Math.fround;
 const less=(a,b)=>a<b||Number.isNaN(a)||Number.isNaN(b); // x87 C0
 const nonzero=value=>value!==0&&!Number.isNaN(value); // !x87 C3 against zero
 // 'None' (the unset FName) is answered without building a lowercase copy.
-const named=value=>value!=='None'&&value!=null&&String(value).toLowerCase()!=='none'&&value!=='';
+export const named=value=>value!=='None'&&value!=null&&String(value).toLowerCase()!=='none'&&value!=='';
 const active=actor=>named(actor.AnimSequence)&&nonzero(less(actor.AnimFrame,0)?actor.TweenRate:actor.AnimRate);
 
 function scaledRate(actor,rate,minimum,blend=false) {
@@ -16,6 +16,21 @@ function scaledRate(actor,rate,minimum,blend=false) {
   const [x,y,z]=actor.Velocity;
   const product=-Math.sqrt(x*x+y*y+z*z)*rate,scaled=blend?f(product):product;
   return less(minimum,scaled)?scaled:minimum;
+}
+
+/** The notify of the main sequence that AnimFrame crossed since oldFrame
+ * (the nearest ahead of oldFrame), or null. Also the Rust tick kernel's
+ * selection (docs/rust-core.md R3-d). */
+export function selectAnimNotify(actor,oldFrame,mesh) {
+  const sequence=findAnimSeq(mesh(),actor.AnimSequence);
+  let notify=null,distance=100000;
+  for(const candidate of sequence?.notifies??[]) {
+    if(!less(oldFrame,candidate.time)||less(actor.AnimFrame,candidate.time))continue;
+    const delta=candidate.time-oldFrame;
+    if(notify&&!less(delta,distance))continue;
+    notify=candidate;distance=f(delta);
+  }
+  return notify;
 }
 
 function replicateCompletion(actor,animation) {
@@ -49,14 +64,7 @@ export function tickActorAnimation(actor,seconds,{mesh,simulatedPawn,findFunctio
     }
     actor.AnimFrame=f(oldFrame+remainingSeconds*scaledRate(actor,actor.AnimRate,actor.AnimMinRate));
     if(actor.animFlags&0x20) {
-      const sequence=findAnimSeq(mesh(),actor.AnimSequence);
-      let notify=null,distance=100000;
-      for(const candidate of sequence?.notifies??[]) {
-        if(!less(oldFrame,candidate.time)||less(actor.AnimFrame,candidate.time))continue;
-        const delta=candidate.time-oldFrame;
-        if(notify&&!less(delta,distance))continue;
-        notify=candidate;distance=f(delta);
-      }
+      const notify=selectAnimNotify(actor,oldFrame,mesh);
       if(notify) {
         remainingSeconds=remainder(actor.AnimFrame,oldFrame,notify.time);
         actor.AnimFrame=notify.time;

@@ -12,6 +12,7 @@
 mod hash;
 mod interp;
 mod percep;
+mod tick;
 mod trace;
 mod x87;
 use x87::{Ext, INDEFINITE};

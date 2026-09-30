@@ -133,6 +133,12 @@ ShowSelf/CheckEnemyVisible by default, including their LOS worker. Native
 validity, clock/BSP/RNG bindings and prepared events are still required when
 reached. The focused checks and build pass; no new full sweep is claimed.
 
+Under `SCRIPT_VM=rust` the same body, with its animation phase, runs in the
+Rust interpreter on the actor's image ([rust core R3-d](rust-core.md)),
+transcribed from `tickStandaloneActor` and validated against it
+(`validate-actor-tick-kernel`, `ACTOR_TICK_DIFFERENTIAL=1`). The JavaScript
+body stays the reference and handles every tick Rust hands back.
+
 ## Batch 5 InStasis script entry
 
 A full Level.Actors tick reaches `Shadow.Tick` and its `Owner.InStasis()`.

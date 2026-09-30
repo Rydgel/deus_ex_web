@@ -218,6 +218,8 @@ class ScriptInstance {
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
     this.nativeObject=undefined;this.globalIndex=undefined;this.textParser=undefined;this.randomLabels=undefined;
     this.receiver=null;this.deleteMe=null;this.pendingKillValue=false;
+    // The Rust actor tick's field mask and class flags (actor-tick-kernel.mjs).
+    this.tickDesc=undefined;
     // The image range's release token (arena, base, size); see releaseObjectImage.
     this.imageToken=storage.base?{arena:storage.arena,base:storage.base,size:storage.size,released:false}:null;
   }
@@ -3616,21 +3618,31 @@ export class ScriptRuntime {
   /** Original animation phase, before the script Tick/ProcessState phases.
    * Caller owns Actor.Tick admission/order and prepares reachable callbacks. */
   processActorAnimation(receiver,seconds) {
-    // The tick view only forwards to the actor's fields, and this phase
-    // writes through its accessors alone, so one view serves every tick of
-    // an attached instance.
+    const animation=this.animationTick(receiver);
+    return tickActorAnimation(animation,seconds,{
+      mesh:()=>this.meshPayload(receiver),simulatedPawn:animation.simulatedPawn,
+      findFunction:(name,checked)=>this.animationFunction(receiver,name,checked),
+      processEvent:record=>this.animationEvent(receiver,record),
+    });
+  }
+  /** The animation phase's view of an attached actor. It only forwards to
+   * the actor's fields, and the phase writes through its accessors alone,
+   * so one view serves every tick of an instance. */
+  animationTick(receiver) {
     const instance=this.instance(receiver);
     let animation=animationTickViews.get(instance);
     if(!animation)animationTickViews.set(instance,animation=animationTickView(this,receiver));
-    return tickActorAnimation(animation,seconds,{
-      mesh:()=>this.meshPayload(receiver),simulatedPawn:animation.simulatedPawn,
-      findFunction:(name,checked)=>{
-        const record=this.lookup(receiver,name);
-        if(!record&&checked)throw new Error(`Original animation event was not found: ${name}`);
-        return record;
-      },
-      processEvent:record=>this.processEvent(receiver,record.name,[],null,record),
-    });
+    return animation;
+  }
+  /** The animation phase's FindFunction (checked: FindFunctionChecked). */
+  animationFunction(receiver,name,checked) {
+    const record=this.lookup(receiver,name);
+    if(!record&&checked)throw new Error(`Original animation event was not found: ${name}`);
+    return record;
+  }
+  /** The animation phase's ProcessEvent of a found function. */
+  animationEvent(receiver,record) {
+    return this.processEvent(receiver,record.name,[],null,record);
   }
   /** Recovered standalone per-actor Tick. The level scheduler supplies its
    * clock/tag/deferred list and reached native physics/input/visibility services.
@@ -3643,6 +3655,13 @@ export class ScriptRuntime {
     if(!entry){
       entry=this.actorTickServices(options);
       if(shared)(this.levelTickActorServices??=new WeakMap()).set(options,entry);
+    }
+    // R3-d: the Rust interpreter runs the body on the actor's image
+    // (actor-tick-kernel.mjs); undefined hands the tick to JavaScript.
+    const kernel=this.scriptVm?.actorTick;
+    if(kernel?.enabled){
+      const result=kernel.run(receiver,seconds,entry);
+      if(result!==undefined)return result;
     }
     return tickStandaloneActor(receiver,seconds,entry.tickType,entry.services);
   }
