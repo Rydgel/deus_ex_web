@@ -110,6 +110,15 @@ export function installActorCollisionView(actor,{read,write,bind=null,worldActor
  const fieldWrite=bind?name=>{let entry=null;return value=>(entry??=access(name)).set(value);}:name=>value=>write(actor,name,value);
  const get=bind?name=>access(name).get():name=>read(actor,name);
  const put=bind?(name,value)=>access(name).set(value):(name,value)=>write(actor,name,value);
+ // Native AddTouch/EndTouch and script Touching address the same four
+ // pointers (+0xe8..+0xf4), including during synchronous event dispatch.
+ // Keep the array surface the collision bodies mutate, but put its entries
+ // in the real field storage instead of a host-only list. Resolve storage
+ // on every access so an arena growth or a script write stays visible.
+ const touching=new Array(4);
+ for(let index=0;index<4;index++)Object.defineProperty(touching,index,{enumerable:true,
+  get:()=>get('Touching')[index],
+  set:value=>{const slots=get('Touching');slots[index]=value;put('Touching',slots);}});
  const bit=(mask,name)=>()=>Boolean(get(name)?mask:0);
  const values={};
  for(const name of ['Tag','Location','Rotation','CollisionRadius','CollisionHeight','Physics'])
@@ -125,7 +134,7 @@ export function installActorCollisionView(actor,{read,write,bind=null,worldActor
   // selects its original MoveActor tail (skipping non-pawn encroachment).
   scriptView:{value:true},pawn:{value:isPawn},decoration:{value:false},
   standingCount:{get:field('StandingCount'),set:fieldWrite('StandingCount')},
-  touching:{value:[null,null,null,null]},
+  touching:{value:touching},
   actorFlags:{get:()=>(get('bStatic')?1:0)|(get('bDeleteMe')?0x80:0)|
    (get('bCollideWhenPlacing')?0x20000:0)|(get('bMovable')?0x80000:0)},
   collisionBits:{get:()=>(get('bCollideActors')?1:0)|(get('bBlockActors')?4:0)|
