@@ -117,6 +117,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     // FarMoveActor detaches based children (the key ring) through SetBase(child, None).
     setBase:(child,target,notify)=>setActorBase(child,target,dispatch,notify),setActorZone:updateZone,
   };
+  // pointRegion's inputs, for the Rust SetActorZone (zone-kernel.mjs). Not
+  // enumerable: nothing that walks the level's keys sees it.
+  Object.defineProperty(level,'zoneModel',{value:Object.freeze({model,levelInfo:worldActor,zoneActors})});
   collision.playerActor=source;
   collision.doorCallbacks={dispatch,
     playSound:(door,name)=>{player.unimplementedPhysicsEffects.add(`${door.actor.name}.${name} audio`);},

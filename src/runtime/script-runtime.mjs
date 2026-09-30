@@ -2214,6 +2214,8 @@ export class ScriptRuntime {
   setSpawnActorZone(receiver,test,force) {
     const level=this.levelFor(receiver);
     if(typeof level?.pointRegion!=='function')throw new Error('SpawnActor requires the original BSP PointRegion service');
+    // The common case in Rust (zone-kernel.mjs), before any store.
+    if(this.scriptVm?.zone?.update(receiver,level,test,force))return;
     let isPawn=false;
     for(let cls=this.instance(receiver).cls;cls;cls=cls.base)
       if(cls.record.key==='engine.pawn'){isPawn=true;break;}
@@ -3779,6 +3781,9 @@ export class ScriptRuntime {
         return this.processEvent(target,name,args);
       },
       isProbing:(actor,name)=>this.isProbing(actor,name),
+      // SetActorZone's common case in Rust (zone-kernel.mjs): whether it
+      // completed there; otherwise the JavaScript body runs.
+      zoneUpdate:(actor,test,force)=>this.scriptVm?.zone?.update(actor,level,test,force)??false,
       // The MoveActor based-rider section recurses into MoveActor for each
       // based child; only spawned collision-view actors are admitted there.
       moveRider:(other,delta,rotation)=>this.moveSpawnedActor(other,delta,rotation),

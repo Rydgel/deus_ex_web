@@ -90,6 +90,7 @@ below hold the evidence for each stage.
     for validation and not yet called by Play).
   * R3-c (IsValidEnemy, GetPawnAllianceType, AICanSee).
   * R3-d (the actor tick body and the animation phase).
+  * R3-e (SetActorZone's common case).
   * 1e-1 to 1e-3: actor flags, the physics mirror fields, Location,
     Rotation, collision size and OldLocation now live in the image.
 * **Headless timing.** On UNATCO Island (bench-sim, 300 ticks), the median
@@ -145,15 +146,15 @@ below hold the evidence for each stage.
 The order changed on September 30, after the crossing calibration and the
 rider census. Judge each step by A/B tick medians, not by crossings removed.
 
-1. **LastRendered (723) and InStasis (721) in the interpreter**, the R3-c
-   way: a lowering gate and a differential mode. LastRendered reads the
-   level's double clock, which the host writes where the level tick advances
-   it. GetStateName (284) and GetPlayerPawn (720) wait: the state node and
-   the viewport have no image home yet.
-2. **The SetActorZone family.** A BSP point walk (the model is already in
-   the trace kernel's instance, so one export and one import per query), the
-   three region writes, and zone events as imports when the zone changes.
-   `validate-native-zone` is its oracle. About 0.6 ms.
+1. **LastRendered (723) and InStasis (721): deferred.** All the small
+   natives still in JavaScript (these two, GetStateName, GetPlayerPawn and
+   the like) cost at most about 0.3 ms per tick together, bench-sim's
+   wrapper included. LastRendered needs the level clock, which Play keeps
+   in a closure that the Player start resets directly, so a Rust copy would
+   have to be scoped to the actor tick. Not worth it yet.
+2. **The SetActorZone family: done (R3-e).** The common case runs in Rust
+   on the runtime's arena, with its own copy of the zone BSP; calls that
+   change a zone keep the JavaScript body and its events. About 0.6 ms.
 3. **Iterators in Rust** (AllActors, RadiusActors, VisibleActors). The
    perception host's Level.Actors list and class rows are the
    infrastructure.
@@ -269,7 +270,8 @@ script reads. Both maps, 360 ticks each:
 * **Differential modes.** Each Rust family has a mode that compares every
   call against the JavaScript path: `HASH_DIFFERENTIAL`,
   `TRACE_DIFFERENTIAL`, `RAY_DIFFERENTIAL`, `PERCEPTION_DIFFERENTIAL`,
-  `ACTOR_TICK_DIFFERENTIAL` and `RECEIVER_VERIFY` (each `=1`). The JavaScript paths stay behind
+  `ACTOR_TICK_DIFFERENTIAL`, `ZONE_DIFFERENTIAL` and `RECEIVER_VERIFY`
+  (each `=1`). The JavaScript paths stay behind
   `TRACE_KERNEL=js`, `HASH_KERNEL=js`, `SCAN_KERNEL=js`,
   `ACTOR_TICK_KERNEL=js` and `SCRIPT_VM=js`.
 * **Full sweep.** Run `npm run validate -- --jobs 4` before merging.
@@ -2311,6 +2313,67 @@ Left in JavaScript, and why:
   probe mask, the zone clock, the notify's mesh, the latent action), and
   the SimAnim plane writes (structs).
 * **Under `SCRIPT_VM=js`**, which has no interpreter instance.
+
+**R3-e — SetActorZone's common case (implemented).** Every MoveActor ends
+with SetActorZone, about 180 calls per Island tick counting the rider moves
+(see "The rider moves are original" above). In JavaScript each call built an
+adapter object, walked the BSP and read and wrote the PointRegion structs
+through the generic struct path, about 2.6 µs.
+
+* **Rust.** `native/script-vm/src/zone.rs` transcribes zone.mjs
+  `pointRegion` (the side test in the reference's z, y, x order, `>= 0`, the
+  `zoneActors[zoneNumber] || levelInfo` fallback, the visit bound and its
+  errors) and the no-event path of `setActorZone`. `zone_update` reads
+  bDeleteMe, Location, CollisionHeight, EyeHeight, the three regions and
+  PlayerReplicationInfo from the image. It completes a call only when the
+  body would make no event, no PlayerReplicationInfo store and no error:
+  the actor is deleted, or no region changes zone (or `test` is set). Then
+  its only effects are the region stores, which it makes. Anything else
+  returns before the first store, and the JavaScript body runs the call;
+  its point queries are pure.
+* **Host.** `zone-kernel.mjs` (the `ZoneHost` on the interpreter) admits a
+  call when every field is the image cell `readNamed` and the field
+  references use: the R3-c/R3-d rule (registry cell, name resolution per
+  class, no bound key on the receiver, not HOST). `force` always runs the
+  JavaScript. The level's zone model (`level.zoneModel`, player-scene.mjs,
+  not enumerable) is uploaded once per level into the runtime's arena: a
+  header, the zone handles and 40-byte nodes (float32 planes; a plane that
+  is not a float32, or a child, leaf or zone of the wrong width, keeps the
+  level in JavaScript). A zone actor released later hands every call back.
+* **Call sites.** `ScriptRuntime.setSpawnActorZone` (spawned actors,
+  including the rider moves) and the map pawn view's `setActorZone`
+  (`services.zoneUpdate`). The LoadMap pass keeps the JavaScript.
+* **Switches.** `ZONE_KERNEL=js` keeps every call in JavaScript.
+  `ZONE_DIFFERENTIAL=1` checks each call completed in Rust: the stored
+  regions against the JavaScript point queries, no zone change without
+  `test`, no PlayerReplicationInfo, and a deleted actor's regions
+  untouched.
+
+Verification:
+
+* `validate-zone-kernel`: 480,090 points on the Training and Island BSPs
+  with four zone lists each (all zones, every third missing, half, none)
+  and on synthetic models (empty, a leaf, an invalid or negative child, a
+  cycle, a deep chain), identical to `pointRegion`, errors included. The
+  points sit around the maps' actors, on node planes, within a few float32
+  steps of oblique planes, far outside, and at specials.
+* Digests are unchanged on both maps under both engines (Training
+  `c8eebff5786adf55`, Island `b767a7e417fe5968`, 30 checkpoints, errors
+  `{}`), with `ZONE_DIFFERENTIAL=1 SCRIPT_VM_CHECK=1`: 1,271 (Training)
+  and 65,525 (Island) Rust calls, all matching.
+* `validate-native-zone`, `-based-actors`, `-far-move-scene`,
+  `-set-rotation-riders`, `validate-script-spawn`,
+  `-script-scripted-actor-spawn`, `-inventory-spawn` and
+  `-script-pawn-spawn-binding` pass, and the 566 unit tests.
+* Mutation pass (`.work/tools/mutate-zone.py`): 9 mutants, 6 killed. Two
+  are equivalent (the visit bound, since a path without a cycle is shorter
+  than the node count; `next < -1` after -1 is handled). One is not
+  reachable: the side test summed x, y, z instead of z, y, x. A search of
+  48 million float32 points within four steps of the two maps' 6,907
+  oblique planes found no point whose side depends on the order.
+
+Cost: Island tick medians 12.92/13.01/13.01 ms at HEAD against
+12.58/12.16/12.28 with the kernel (three interleaved pairs), about 0.6 ms.
 
 New subsystems still missing (the remaining natives, rendering) are
 researched as before and implemented against this core. Swimming

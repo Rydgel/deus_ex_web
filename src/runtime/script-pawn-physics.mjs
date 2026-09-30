@@ -243,7 +243,8 @@ export function pawnPhysicsView(actor, services) {
     zoneChange: (a, z) => dispatch(a, 'ZoneChange', [z]),
     footZoneChange: (a, z) => dispatch(a, 'FootZoneChange', [z]),
     headZoneChange: (a, z) => dispatch(a, 'HeadZoneChange', [z]) };
-  pawn.setActorZone = (test, force) => setActorZone(pawn, zoneWorld, test, force);
+  // The common case runs in Rust (zone-kernel.mjs) on the actor's image.
+  pawn.setActorZone = (test, force) => services.zoneUpdate?.(actor, test, force) || setActorZone(pawn, zoneWorld, test, force);
   // The native MoveActor entry for script Move/SetBasedPawnSize: an equal
   // NewRotation takes the same path as none (0x1039915a).
   pawn.moveActorHit = (delta, rotation = null, ignoreBases = false) => {
