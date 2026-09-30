@@ -14,6 +14,7 @@ mod interp;
 mod percep;
 mod tick;
 mod trace;
+mod walk;
 mod x87;
 use x87::{Ext, INDEFINITE};
 

@@ -1083,6 +1083,49 @@ What remains in the scan is Rust arithmetic: the world ray, the cell
 conversions (about 60 ns a query) and the software `sqrt` (about 25 ns),
 plus about 2.4 candidate reads per scan.
 
+**R3-b B3, part 1 — Walking's numeric kernels (implemented, not wired
+into Play).** `native/script-vm/src/walk.rs` transcribes the JavaScript
+bodies that physWalking calls between moves:
+
+* `js_hypot`: V8's two-argument Math.hypot (`builtins/math.tq`
+  MathHypot: normalize by the larger magnitude, Kahan-sum the squares, scale
+  the root back). Walking uses it for its progress ratios.
+* `safe_normal`, `two_wall_adjust`, `step_projection` and `step_up`
+  (`steps.mjs`).
+* `ground_velocity` (`velocity.mjs`, calcVelocity's walking path).
+
+`step_up` reaches the world only through a `PawnOps` trait, one method per
+pawn view access in the reference's order: MaxStepHeight, the moves,
+HitWall, Physics, the player and pushable-decoration tests, the masses and
+the velocity. `walk-kernel.mjs` hosts the kernels on their own instance, with
+one import per view access, for validation. Play still runs the JavaScript;
+stage B5 will implement `PawnOps` on the pawn's image and MoveActor.
+
+Verification:
+
+* `validate-walk-kernel` compares each kernel with its reference. It covers
+  6 million `hypot` pairs (against V8's own, in a hot loop, including
+  subnormals, huge exponents and specials), 1 million each of safeNormal,
+  twoWallAdjust and groundVelocity (1 in 16 is an error case, compared by
+  message), and 200,000 stepUp scenarios. Each scenario has a scripted pawn
+  whose moves answer from a seeded script. The same accesses get the same
+  answers, and all 1.44 million logged accesses, the returned hit, the final
+  pawn state and every error (scripted MoveActor and HitWall errors, the
+  1,024-call recursion budget) are identical.
+* The native oracles run on the Rust kernel with `WALK_KERNEL=rust`:
+  `validate-native-velocity` (820 cases) and `validate-native-steps` (1,486
+  cases) match exactly.
+* Mutation pass: 24 mutants (`.work/tools/mutate-walk.py`, built into a
+  separate module through `WALK_KERNEL_WASM`), of which 17 are killed. Four
+  of the rest are equivalent: the Kahan compensation after the last term,
+  `> 0.03` against a float32 that never equals 0.03, `2 * friction * dt`
+  regrouped, and `>=` on an equal maximum. Three are exact-equality
+  boundaries the inputs do not reach: a squared length of exactly 1e-8, a
+  zero dot product during braking, and a braked speed of exactly 10.
+
+Left for stage B4, where their inputs come from actor images: the move
+query's candidate selection, IsOverlapping, processHitWall and SetBase.
+
 **1e-1 — Actor flag words in the image (implemented).** This is step 1 of
 stage 1e ([object memory](object-memory.md#stages)). AActor packs its script
 bools into three dwords that native code reads as members (`sdk-layouts.mjs`

@@ -4,9 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { groundVelocity } from '../src/runtime/velocity.mjs';
+import { groundVelocity as groundVelocityJs } from '../src/runtime/velocity.mjs';
+import { loadWalkKernel } from '../src/runtime/walk-kernel.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
+// WALK_KERNEL=rust compares the Rust kernel (walk.rs, R3-b B3) instead.
+const groundVelocity = process.env.WALK_KERNEL === 'rust' ? (await loadWalkKernel()).groundVelocity : groundVelocityJs;
 const cases = [], f = Math.fround;
 const addCase = (velocity, acceleration, dt, walking, friction = 8, maxSpeed = 320, accelRate = 1000) => {
   acceleration = acceleration.map(f);

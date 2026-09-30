@@ -4,9 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { twoWallAdjust, safeNormal, stepUp } from '../src/runtime/steps.mjs';
+import { twoWallAdjust as twoWallAdjustJs, safeNormal, stepUp as stepUpJs } from '../src/runtime/steps.mjs';
+import { loadWalkKernel } from '../src/runtime/walk-kernel.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
+// WALK_KERNEL=rust compares the Rust kernel (walk.rs, R3-b B3) instead.
+const kernel = process.env.WALK_KERNEL === 'rust' ? await loadWalkKernel() : null;
+const twoWallAdjust = kernel ? kernel.twoWallAdjust : twoWallAdjustJs, stepUp = kernel ? kernel.stepUp : stepUpJs;
 const cases = [], f = Math.fround;
 const addCase = (delta, normal, oldNormal, time, desired = safeNormal(delta)) => {
   cases.push({ delta: delta.map(f), normal: normal.map(f), oldNormal: oldNormal.map(f), time: f(time), desired: desired.map(f) });
