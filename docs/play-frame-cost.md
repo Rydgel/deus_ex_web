@@ -1,5 +1,90 @@
 # Play frame cost from first principles
 
+## September 30 continuation: movement, lighting and upload costs
+
+The next pass targets measured work inside the existing contracts:
+
+- `971320e` makes [noncolliding rider MoveActor](rider-move-kernel.md) use authoritative
+  actor image cells and the existing zone kernel. Zone changes, collisions,
+  Touching, standing riders, host bindings and unsupported image layouts
+  fall back before any store. Two paired real Island workloads execute the
+  same 23,905 rider calls and retain the same state digest. Instrumented
+  rider-entry cost is 0.567/0.561 ms per tick in JavaScript versus
+  0.081/0.088 ms in the image path: approximately 0.48 ms saved within that
+  family. Total tick measurements do not establish a whole-tick speedup.
+- `976edab` removes formatted strings and temporary arrays from the
+  [mesh-light constant memo lookup](mesh-lighting.md#constant-cache-lookup-cost).
+  Two paired setup-only workloads over 304 nonhidden Island mesh actors
+  measure 2.69 to 2.46 ms and 2.85 to 2.60 ms. All 64 compared frames retain
+  exact selected lights, traces, colors and fade records. This workload
+  includes actors outside the viewport and is not a browser FPS result.
+- `b643085` avoids redundant Mesh reads and identical
+  [actor color-buffer uploads](actor-mesh-updates.md). The walking census
+  finds 45.5% of group updates already equal, about 239 graphics-buffer
+  updates per frame and 14.1% of the color bytes. Lighting calculations and
+  state updates still execute. Scatter CPU timing is effectively unchanged.
+
+### Browser comparison
+
+Reference `ef47f61` and the retained candidate were run in alternating order,
+twice each, with the same Island walk, 1440×960/DPR 1, Chromium/Metal M2 Pro,
+300 measured frames, 1,500 ms settling and fixed `dt=1/120`. There is no CPU
+sampler, bypass or concurrent project validation job in the timed windows.
+Every run remains in active Play with no runtime/page errors.
+
+| Per-frame metric | Reference, two run means | Retained candidate, two run means |
+| --- | ---: | ---: |
+| Simulation | 12.15 / 12.62 ms | 12.74 / 12.64 ms |
+| Light collection | 0.68 / 0.70 ms | 0.74 / 0.69 ms |
+| Actor preparation | 9.56 / 9.80 ms | 9.91 / 9.71 ms |
+| Render | 3.32 / 3.37 ms | 3.51 / 3.43 ms |
+| HUD | 1.81 / 1.87 ms | 1.99 / 1.96 ms |
+| Total host work | 27.81 / 28.68 ms | 29.23 / 28.74 ms |
+| Median display interval | 33.3 / 33.3 ms | 33.3 / 33.3 ms |
+
+These browser runs **do not establish an overall speedup**; candidate means
+are slightly higher. Several unchanged phases vary as well. The isolated
+work reductions above must not be presented as achieved FPS. Main-scene
+calls stay near 661 and HUD calls near 55. Raw reports are
+`.cache/perf/runtime-{base,after}{1,2}.json`, outside Git. The candidate is
+still far from the 8.33 ms total budget for 120 fps.
+The browser captures precede the final conservative hand-back for a
+nonfinite resulting position. Final real-data differentials and the isolated
+rider timings include that guard; it rejected no moves in those workloads.
+
+### Why the next change needs a larger boundary
+
+The fresh sampled profile attributes about 5.5 ms to actor relighting,
+2.0 ms to poses and 0.8 ms to scene reconciliation. About 2.75 ms of lighting
+is already inside Wasm. Most meshes in the lighting census have active
+lights; broad unlit/modulated shortcuts would remove little work. On the
+simulation side, the Rust actor-tick loop still calls back into the existing
+physics and event families. Completing a small loop's port does not remove
+the work those callbacks perform.
+
+`5452a0b` recovers the original
+[mesh bounds and raster admission rules](render-visibility.md) and compares
+them with native code. At Island start, they
+reject 17 of the 220 host-visible previews because their native projected
+integer Y range is empty. No guessed distance threshold is involved. The
+standalone exact box transform plus projection costs 7.20 ms for those 220
+actors (9.32 ms for all 291 prepared actors); projection alone with cached
+boxes costs 0.41 ms (0.47 ms for all 291). No net avoided-work gain is
+established, so this is deliberately outside Play. A practical integration
+needs cheap bounds invalidation/transforms, native child-frame inputs and
+the remaining BSP/span visibility contract. Full movement B4–B6 and that
+visibility work remain the substantial targets; the 120 fps milestone is
+not complete.
+
+All 576 unit tests and the production build pass. Focused native movement,
+lighting and bounds comparisons, real-data movement differentials, and the
+actor-scene/upload boundary checks pass. These checks verify the changed
+boundaries; they do not establish complete renderer fidelity. The previous
+spawned Touching fix remains in place, and the new movement path explicitly
+rejects actors with nonempty Touching before any write.
+The temporary comparison server is stopped and its managed baseline worktree
+archived. All changes and captures remain local.
+
 ## September 30 follow-up: verified reductions in rendering work
 
 Three runtime changes are committed on master:
