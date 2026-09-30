@@ -400,7 +400,9 @@ in the git-ignored `reports/`, absent in a fresh worktree) and
 pressure; exit 0 alone). The Island digest after the sweep is still
 `b767a7e417fe5968`. A second sweep after the render-side follow-ups (branch
 head `f436336`) passed 443 of 444; the one failure was again
-`validate-player-tick-order` at the memory cap, which passes alone.
+`validate-player-tick-order` at the memory cap, which passes alone. A third
+sweep at the final head (`ae49c67`, after the static-matrix and mirrors
+change) gave the same 443 of 444.
 
 **Browser specs** (`npx playwright test`, run from the worktree with its own
 servers): 10 of 18 pass; the same 8 fail identically on master in this
@@ -429,6 +431,12 @@ pairs; actors 9.30 → 3.63, render 3.16 → 1.83); see
   and stays there; `summary.gpuFallback` records why. None occurred in the
   validated runs.
 * The GPU's subnormal handling was not exercised by any compared value.
+* Actor meshes, batches and the static world's meshes have
+  `matrixAutoUpdate` off (identity local transforms). A mesh added under a
+  mover's group relies on the group being flagged (`matrixWorldNeedsUpdate`,
+  which `syncMovers` sets every Play frame) to receive its world matrix; code
+  that adds such children at run time outside that cycle must flag the group
+  itself. Nothing does that today (world meshes are built at load).
 * The validator compares only **main-pass** group decisions with the exact
   sphere test. Mirror passes use the same certificate and fallback code
   with a frustum built from the mirror camera's projection and inverse
