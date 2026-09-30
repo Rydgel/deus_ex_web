@@ -10,6 +10,7 @@
 #![no_std]
 
 mod hash;
+mod move_actor;
 mod interp;
 mod percep;
 mod tick;

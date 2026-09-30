@@ -55,15 +55,15 @@ fn store8(address: u32, value: u8) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct Region {
-    zone: u32,
-    leaf: i32,
-    number: u32,
+pub(crate) struct Region {
+    pub(crate) zone: u32,
+    pub(crate) leaf: i32,
+    pub(crate) number: u32,
 }
 
 /// zone.mjs `pointRegion`: None where the JavaScript throws (an invalid or
 /// cyclic BSP).
-fn point_region(model: u32, p: [f64; 3]) -> Option<Region> {
+pub(crate) fn point_region(model: u32, p: [f64; 3]) -> Option<Region> {
     let count = load32(model);
     let zones = load32(model + 4);
     let fallback = load32(model + 8);
@@ -100,7 +100,7 @@ fn point_region(model: u32, p: [f64; 3]) -> Option<Region> {
 
 /// A pointer read as JavaScript sees it: a released handle is None.
 #[inline(always)]
-fn live(handle: u32) -> u32 {
+pub(crate) fn live(handle: u32) -> u32 {
     if class_entry(handle) == RELEASED {
         0
     } else {
@@ -113,11 +113,13 @@ fn zone_of(base: u32, region: u32) -> u32 {
 }
 
 fn store_region(base: u32, region: u32, value: Region) {
-    let at = base + region;
-    store32(at + io(12), value.zone);
-    store32(at + io(13), value.leaf as u32);
-    let mask = io(15);
-    let byte = at + io(14);
+    store_region_at(base + region, [io(12), io(13), io(14)], io(15), value);
+}
+
+pub(crate) fn store_region_at(at: u32, members: [u32; 3], mask: u32, value: Region) {
+    store32(at + members[0], value.zone);
+    store32(at + members[1], value.leaf as u32);
+    let byte = at + members[2];
     // The ZoneNumber byte: a whole byte cell, or bits of a shared word.
     if mask == 0xff {
         store8(byte, value.number as u8);
@@ -125,6 +127,16 @@ fn store_region(base: u32, region: u32, value: Region) {
         let old = load32(byte);
         store32(byte, (old & !mask) | ((value.number << mask.trailing_zeros()) & mask));
     }
+}
+
+/// All encoded zone identities still resolve as when the model was built.
+pub(crate) fn model_live(model: u32) -> bool {
+    let zones = load32(model + 4);
+    for i in 0..zones {
+        let handle = load32(load32(model + 12) + 4 * i);
+        if handle != 0 && class_entry(handle) == RELEASED { return false; }
+    }
+    class_entry(load32(model + 8)) != RELEASED
 }
 
 /// SetActorZone(test) on the actor at IO[0]: DONE when completed here,
@@ -139,18 +151,7 @@ pub extern "C" fn zone_update() -> u32 {
     if load32(base + io(3)) & io(4) != 0 {
         return DONE;
     }
-    // A zone actor released since the model was built reads as None in
-    // JavaScript, which the model's handles no longer describe.
-    let zones = load32(model + 4);
-    for i in 0..zones {
-        let handle = load32(load32(model + 12) + 4 * i);
-        if handle != 0 && class_entry(handle) == RELEASED {
-            return HANDBACK;
-        }
-    }
-    if class_entry(load32(model + 8)) == RELEASED {
-        return HANDBACK;
-    }
+    if !model_live(model) { return HANDBACK; }
     let location = base + io(5);
     let p = [f32_at(location), f32_at(location + 4), f32_at(location + 8)];
     let region = match point_region(model, p) {

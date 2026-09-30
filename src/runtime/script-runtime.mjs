@@ -2323,6 +2323,8 @@ export class ScriptRuntime {
       return this.moveMapRider(view,delta,rotation);
     const level=this.levelFor(view);
     if(!level?.hash)throw new Error('Spawned MoveActor requires the level collision hash');
+    const completed=this.scriptVm?.moveActor?.rider(view,level,delta,rotation);
+    if(completed!==undefined)return completed;
     // The only caller is the recovered based-rider MoveActor (vtable +0x88)
     // which passes bIgnoreBases=1 — a riding item must not be blocked by the
     // base carrying it.

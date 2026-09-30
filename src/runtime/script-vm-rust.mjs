@@ -29,6 +29,7 @@ import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, fol
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {ActorTickHost} from './actor-tick-kernel.mjs';
 import {ZoneHost} from './zone-kernel.mjs';
+import {MoveActorHost} from './move-actor-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 
 // Receiver info flags (interp.rs).
@@ -208,6 +209,7 @@ export class RustScriptVm {
     this.actorTick = new ActorTickHost(this);
     // R3-e: SetActorZone's common case (zone-kernel.mjs).
     this.zone = new ZoneHost(this);
+    this.moveActor = new MoveActorHost(this);
   }
   attach() {
     const x = this.exports;
@@ -235,6 +237,7 @@ export class RustScriptVm {
     this.perception.attach(x);
     this.actorTick.attach(x);
     this.zone.attach(x);
+    this.moveActor.attach(x);
     const limit = handleLimit();
     this.growClassTable(limit);
     this.growReceiverTable(limit);

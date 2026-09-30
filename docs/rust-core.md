@@ -187,6 +187,9 @@ rider census. Judge each step by A/B tick medians, not by crossings removed.
    * **B4.** MoveActor for pawn views: playerMove, touches, bump, zone, and
      remove/add with primitive bounds. Riders and the per-candidate decorate
      step start as imports.
+     The [noncolliding spawned rider slice](rider-move-kernel.md) now runs
+     against the image with an unchanged-zone preflight; this does not
+     complete B4 or replace the colliding pawn/callback path.
    * **B5.** The walking loop for NPC map pawns, implementing B3's
      `PawnOps` on the image. Falling and flying return as tail calls.
    * **B6.** Falling, landing, rotation and the pawn tail.
