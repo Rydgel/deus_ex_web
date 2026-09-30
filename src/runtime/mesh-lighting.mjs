@@ -158,7 +158,7 @@ export function sortLightCandidates(items) {
 
 // FGetHSV and the per-light constants are pure functions of a few bytes and
 // floats; the 80-bit model is exact but slow, so results are memoized.
-const hsvCache = new Map(), constantCache = new Map();
+const hsvCache = new Map(), constantCache = new WeakMap();
 function cachedHsv(hue, saturation, value) {
   const key = (hue & 255) << 16 | (saturation & 255) << 8 | value & 255;
   let hsv = hsvCache.get(key);
@@ -166,9 +166,15 @@ function cachedHsv(hue, saturation, value) {
   return hsv;
 }
 function cachedConstants(values, levelBrightness, hsv) {
-  const key = `${values.LightRadius & 255}:${values.LightBrightness & 255}:${bitsOf(levelBrightness)}:${hsv.map(bitsOf)}`;
-  let constants = constantCache.get(key);
-  if (!constants) constantCache.set(key, constants = movingLightConstants(values, levelBrightness, hsv));
+  // cachedHsv owns immutable arrays, so their identity retains all three
+  // channels. The remaining 32 + 8 + 8 bits fit exactly in a JS number.
+  // Keep the float bits (including signed zero), without building a string
+  // and a temporary HSV-bit array for every selected light on every actor.
+  let entries = constantCache.get(hsv);
+  if (!entries) constantCache.set(hsv, entries = new Map());
+  const key = bitsOf(levelBrightness) * 65536 + ((values.LightRadius & 255) << 8 | values.LightBrightness & 255);
+  let constants = entries.get(key);
+  if (!constants) entries.set(key, constants = movingLightConstants(values, levelBrightness, hsv));
   return constants;
 }
 

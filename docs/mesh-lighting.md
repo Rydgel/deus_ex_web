@@ -273,6 +273,27 @@ lights and 2,512 vertices, with zero diffuse-float bit differences. The
 JavaScript path in that same validator remains the bridge to the original
 native reference; JS/Wasm agreement by itself is not fidelity evidence.
 
+### Constant-cache lookup cost
+
+The September 30 Island profile attributes 0.18 ms/frame to looking up the
+memoized `ComputeFromActor` constants. The lookup used a formatted string
+containing two bytes, the level-brightness float bits, and a temporary array
+of the three HSV float words. It now partitions by the internally cached,
+immutable HSV array and packs the remaining 32+8+8 bits into one exact
+48-bit integer. Signed-zero and nonfinite level-brightness patterns retain
+distinct keys. The original numeric functions and all per-draw selection,
+visibility, fade and light-type state updates still run as before.
+
+A local paired Island workload at baseline `ef47f61` repeats SetupForActor
+for 304 nonhidden mesh actors, including actors outside the viewport. All
+64 frames have identical selected lights, traces, ambient, light constants,
+colors and persistent visibility/fade records. Two alternating-block runs
+measure 2.69 to 2.46 ms and 2.85 to 2.60 ms per complete setup workload.
+These are isolated setup costs, not whole-frame FPS results. Native
+validation still passes 52 setup cases and the 24 live Training passes
+above, with zero diffuse-byte differences. Local captures are under
+`.cache/perf/mesh-light-setup-memo*` and remain outside Git.
+
 ## Not reproduced / open
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.
