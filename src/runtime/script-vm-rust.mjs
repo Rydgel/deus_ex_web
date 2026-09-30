@@ -106,6 +106,35 @@ if (STATS) process.on('exit', () => {
   const rows = [...STATS].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
   console.error(`script-vm stats:\n${rows.map(([key, n]) => `${String(n).padStart(10)}  ${key}`).join('\n')}`);
 });
+// SCRIPT_VM_IMPORT_TIME=1 (Node): wall time of the JavaScript behind each
+// import, by import name. `self` leaves out the imports nested inside a
+// call (a JavaScript native that calls back into Rust, which calls another
+// import); `ms` is inclusive. bench-sim pins performance.now to its
+// simulated clock before this module loads and publishes the real clock as
+// `globalThis.__realNow`; it clears the table after its warm-up ticks and
+// reports it per tick (measurement only; docs/rust-core.md "Next steps"
+// step 0).
+const IMPORT_TIME = typeof process !== 'undefined' && process.env?.SCRIPT_VM_IMPORT_TIME === '1';
+const fallbackNow = typeof performance !== 'undefined' ? performance.now.bind(performance) : null;
+const importClock = fallbackNow && (() => (globalThis.__realNow ?? fallbackNow)());
+let importNested = 0;
+function timedImports(imports) {
+  if (!IMPORT_TIME || !importClock) return imports;
+  const table = globalThis.__scriptVmImportTime ??= new Map();
+  const timed = {};
+  for (const [name, fn] of Object.entries(imports)) timed[name] = function (...args) {
+    const start = importClock(), outer = importNested;
+    importNested = 0;
+    try { return fn.apply(this, args); }
+    finally {
+      const total = importClock() - start, entry = table.get(name) ?? {calls: 0, ms: 0, self: 0};
+      entry.calls++; entry.ms += total; entry.self += total - importNested;
+      table.set(name, entry);
+      importNested = outer + total;
+    }
+  };
+  return timed;
+}
 const RETURN_BOOL = 2, RETURN_FLOAT = 3, RETURN_OBJECT = 4, RETURN_VECTOR = 5, RETURN_ROTATOR = 6;
 const RETURNED = 0xfffffffe;
 // Word kinds the state driver inspects (interp.rs).
@@ -176,7 +205,7 @@ export class RustScriptVm {
   /** One interpreter instance on `runtime`'s object arena. */
   static async create(runtime) {
     const vm = new RustScriptVm(runtime);
-    vm.exports = await instantiateScriptVm(vm.arena.memory, vm.imports());
+    vm.exports = await instantiateScriptVm(vm.arena.memory, timedImports(vm.imports()));
     vm.attach();
     return vm;
   }

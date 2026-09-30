@@ -37,6 +37,10 @@ if(!Number.isFinite(fixedDt)||fixedDt<0||process.argv.includes('--fixed-dt')&&fi
 const noMirrors=process.argv.includes('--no-mirrors'),noMeshLighting=process.argv.includes('--no-mesh-lighting');
 const noSky=process.argv.includes('--no-sky'),noSimulation=process.argv.includes('--no-simulation');
 const bypass=process.argv.includes('--bypass'),settle=Number(option('settle',3000));
+// --gpu: the viewer's ?gpuTimer=1 (EXT_disjoint_timer_query_webgl2 around the
+// frame's GL work); phases.gpu is then GPU ms per measured frame, valid when
+// phases.gpuFrames is near 1 and phases.gpuDisjoint is 0.
+const gpu=process.argv.includes('--gpu');
 const label=frame=>`${frame.functionName||'(anon)'} ${frame.url.split('/').at(-1).split('?')[0]}:${frame.lineNumber+1}`;
 let perFrameCount=frames;
 const perFrame=ms=>+(ms/perFrameCount).toFixed(2);
@@ -66,7 +70,8 @@ try {
       if(!body.includes(from))throw new Error(`Bypass patch no longer matches ${route.request().url()}`);
       await route.fulfill({response,body:body.replace(from,to)});
     });
-  await page.goto(url);
+  const target=new URL(url);if(gpu)target.searchParams.set('gpuTimer','1');
+  await page.goto(target.href);
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:180000});
   if(map){await page.locator('#map').selectOption(map);
     await page.waitForFunction(map=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===map;},map,{timeout:180000});}

@@ -33,6 +33,9 @@ if (argv.includes('--bypass')) register('./bench-sim-hooks.mjs', import.meta.url
 // window host / appSeconds read performance.now. Pin both to a simulated clock
 // that advances 1/60 s per tick; timing uses the saved real clock.
 const realNow = performance.now.bind(performance);
+// Instruments in modules loaded after the pin (script-vm-rust.mjs
+// SCRIPT_VM_IMPORT_TIME) time with the real clock through this global.
+globalThis.__realNow = realNow;
 let simulatedMs = 0;
 const RealDate = Date, epoch = new RealDate(2001, 5, 23, 12, 0, 0).getTime();
 globalThis.Date = class extends RealDate {
@@ -338,7 +341,7 @@ fixture.key('KeyW', true);
 log('warming');
 for (let i = 0; i < warm; i++) step();
 log('timing');
-tickStats.clear(); counts.clear(); scriptProfile.clear(); globalThis.__scriptVmStatsReset?.(); if (argv.includes('--vm-counts')) { globalThis.__stmtCounts = new Map(); globalThis.__exprCounts = new Map(); }
+tickStats.clear(); counts.clear(); scriptProfile.clear(); globalThis.__scriptVmStatsReset?.(); globalThis.__scriptVmImportTime?.clear(); if (argv.includes('--vm-counts')) { globalThis.__stmtCounts = new Map(); globalThis.__exprCounts = new Map(); }
 const times = [], digests = [];
 globalThis.__callerOn?.(true);
 const cpuStart = process.cpuUsage();
@@ -386,6 +389,17 @@ if (argv.includes('--bound-reads')) {
 }
 if (tickStats.size) report.tickStats = [...tickStats].sort((a, b) => b[1].ms - a[1].ms).slice(0, 25)
   .map(([key, e]) => `${(e.ms / ticks).toFixed(3)} ms ${(e.calls / ticks).toFixed(1)}/tick ${(e.ms / e.calls * 1000).toFixed(0)} us ${key}`);
+// SCRIPT_VM_IMPORT_TIME=1 (script-vm-rust.mjs timedImports): JavaScript wall
+// time behind each Rust VM import per tick, self (nested imports excluded)
+// and inclusive. An instrumented run: not an A/B timing.
+const importTime = globalThis.__scriptVmImportTime;
+if (importTime?.size) {
+  let self = 0, incl = 0, calls = 0;
+  for (const e of importTime.values()) { self += e.self; incl += e.ms; calls += e.calls; }
+  report.importTimeTotals = {selfMsPerTick: +(self / ticks).toFixed(3), inclusiveMsPerTick: +(incl / ticks).toFixed(3), callsPerTick: +(calls / ticks).toFixed(1)};
+  report.importTimes = [...importTime].sort((a, b) => b[1].self - a[1].self).slice(0, 40)
+    .map(([key, e]) => `${(e.self / ticks).toFixed(3)} ms self ${(e.ms / ticks).toFixed(3)} ms incl ${(e.calls / ticks).toFixed(1)}/tick ${(e.self / e.calls * 1e6).toFixed(0)} ns ${key}`);
+}
 if (dumpLines) await writeFile(flag('dump'), dumpLines.join('\n'));
 if (flag('json', null)) await writeFile(flag('json'), JSON.stringify(report, null, 1));
 console.log(JSON.stringify(report, null, 1));

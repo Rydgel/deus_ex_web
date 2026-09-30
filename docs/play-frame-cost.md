@@ -1,5 +1,20 @@
 # Play frame cost from first principles
 
+## September 30: GPU time isolated
+
+`scripts/profile-play-browser.mjs --gpu` sets the viewer's `?gpuTimer=1`,
+which wraps the frame's GL work (the mirror, sky, main scene, weapon and HUD
+draws) in one `EXT_disjoint_timer_query_webgl2` TIME_ELAPSED query and reads
+the results frames later; `phases.gpu` is GPU milliseconds per measured frame,
+valid when `phases.gpuFrames` is near 1 and `phases.gpuDisjoint` is 0. The
+Island walk (1440×960, DPR 1, ANGLE Metal on the M2 Pro, 300 frames) measured
+**1.46 ms of GPU time per frame**, one result per frame and no disjoint event,
+against 30.6 ms of host work (tick 14.1, actors 9.6, render 3.3, HUD 2.6). The
+frame is CPU-bound on both halves: the presentation cost is preparation and
+submission, not GPU load, so GPU vertex lighting would move work onto a GPU
+that is idle rather than remove it. This closes the "GPU frame time has not
+been isolated" caveat below. The 120 fps target is not met.
+
 ## September 30 continuation: movement, lighting and upload costs
 
 The next pass targets measured work inside the existing contracts:

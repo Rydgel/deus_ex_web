@@ -17,6 +17,10 @@ import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
 const scriptVmParam=new URLSearchParams(location.search).get('scriptVm');
 if(scriptVmParam)globalThis.DEUS_EX_SCRIPT_VM=scriptVmParam;
+// ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
+// the frame's GL work, read back frames later (docs/play-frame-cost.md).
+// Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
+const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -630,10 +634,44 @@ window.deusExViewer = { status, framePhases(reset = true) {
 // Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
 // phase, read and reset by deusExViewer.framePhases(). Measurement only.
 const framePhases = { frames: 0, tick: 0, lighting: 0, actors: 0, mirrors: 0, render: 0, hud: 0, total: 0,
-  mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0 };
+  mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0, gpu: 0, gpuFrames: 0, gpuDisjoint: 0, gpuSupported: 0 };
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
 const phase = name => { const now = performance.now(); framePhases[name] += now - phaseMark; phaseMark = now; };
+// GPU time per frame (?gpuTimer=1): a TIME_ELAPSED query spans the mirrors,
+// sky, main scene, weapon and HUD draws. Results arrive asynchronously, so
+// finished queries are collected at the next frame's start; a GPU_DISJOINT
+// report discards the pending ones. `gpu` sums milliseconds over `gpuFrames`
+// frames with a result; `gpuSupported` counts frames where the extension
+// exists. Measurement only, off unless the URL flag is set.
+let gpuTimer = null;
+function gpuBegin() {
+  if (!gpuTimerParam) return;
+  if (gpuTimer === null) {
+    const gl = renderer.getContext(), ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    gpuTimer = ext ? { gl, ext, pending: [], active: null } : false;
+  }
+  if (!gpuTimer) return;
+  framePhases.gpuSupported++;
+  const { gl, ext, pending } = gpuTimer;
+  const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+  while (pending.length) {
+    const query = pending[0];
+    if (!disjoint && !gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) break;
+    pending.shift();
+    if (disjoint) framePhases.gpuDisjoint++;
+    else { framePhases.gpu += gl.getQueryParameter(query, gl.QUERY_RESULT) / 1e6; framePhases.gpuFrames++; }
+    gl.deleteQuery(query);
+  }
+  gpuTimer.active = gl.createQuery();
+  gl.beginQuery(ext.TIME_ELAPSED_EXT, gpuTimer.active);
+}
+function gpuEnd() {
+  if (!gpuTimer?.active) return;
+  gpuTimer.gl.endQuery(gpuTimer.ext.TIME_ELAPSED_EXT);
+  gpuTimer.pending.push(gpuTimer.active);
+  gpuTimer.active = null;
+}
 function animate(time) {
   requestAnimationFrame(animate);
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
@@ -683,6 +721,7 @@ function animate(time) {
     }
     phase('actors');
     renderer.info.reset();
+    gpuBegin();
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? position => npcPreview.updateView(position) : null });
@@ -707,6 +746,7 @@ function animate(time) {
       hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
       updateInfoLinkAccessibility();
     }
+    gpuEnd();
     framePhases.hudCalls += drawCalls() - calls;
     phase('hud');
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
