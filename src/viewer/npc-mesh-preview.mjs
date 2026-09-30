@@ -6,7 +6,7 @@ import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodM
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
-import {fieldAccessors} from './actor-fields.mjs';
+import {fieldAccessor,fieldAccessors} from './actor-fields.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
@@ -110,9 +110,10 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     summary.skipped=actors.flatMap(actor=>actor.summary.skipped.map(s=>({actor:actor.summary.actor,...s})));
     summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
   };
-  const admit=actor=>{
+  const admit=(actor,readMesh=null)=>{
     if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor))return;
-    const mesh=read(actor,'Mesh');
+    let mesh;
+    if(readMesh){try{mesh=readMesh();}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
     if(failed.get(actor)===mesh)return;
     if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind)||!drawnInWorld(actor)||!read(actor,'Location'))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
@@ -134,19 +135,31 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   };
   // Level.Actors membership only changes with actorsEpoch (base-epoch.mjs),
   // so the membership set is rebuilt only then.
-  let live=null,liveEpoch=-1;
+  // Every actor's Mesh is read every update through an accessor
+  // (actor-fields.mjs) kept in Level.Actors order.
+  let live=null,liveEpoch=-1,liveList=[],meshReaders=[];
+  const meshAccessors=new Map();
   const reconcile=()=>{
     if(disposed||!level)return;
     const epoch=actorsEpoch();
-    if(epoch!==liveEpoch||!live){live=new Set(level.actors);liveEpoch=epoch;}
+    if(epoch!==liveEpoch||!live){
+      live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
+      const next=new Map();
+      meshReaders=liveList.map(actor=>{
+        if(!actor)return null;
+        const reader=meshAccessors.get(actor)??fieldAccessor(runtime,actor,'Mesh');
+        next.set(actor,reader);return reader;
+      });
+      meshAccessors.clear();for(const [actor,reader] of next)meshAccessors.set(actor,reader);
+    }
     for(const [actor,preview] of bindings){
       if(!live.has(actor))retire(actor,preview);
       // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
       // mesh is admitted like a newly visible actor; its resources decode
       // asynchronously, so it appears once they are ready.
-      else if(read(actor,'Mesh')!==preview.mesh){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
+      else if(preview.readMesh()!==preview.mesh){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
     }
-    for(const actor of live)admit(actor);
+    for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);
   };
   reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length){textures.dispose();throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');}
@@ -485,6 +498,19 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       sphere.center.set((box[0]+box[3])/2,(box[1]+box[4])/2,(box[2]+box[5])/2);
       sphere.radius=Math.hypot(box[3]-box[0],box[4]-box[1],box[5]-box[2])/2;
     }
+    // The union of the group boxes: a certain result for it holds for
+    // every group (each group box lies inside it).
+    const unionBox=new Float64Array(6);
+    function updateUnion(){
+      unionBox[0]=unionBox[1]=unionBox[2]=Infinity;unionBox[3]=unionBox[4]=unionBox[5]=-Infinity;
+      for(const group of groups.values())for(let k=0;k<3;k++){
+        unionBox[k]=Math.min(unionBox[k],group.viewBox[k]);unionBox[3+k]=Math.max(unionBox[3+k],group.viewBox[3+k]);
+      }
+    }
+    function decideGroups(frustum,assign){
+      const whole=certifyFrustum(frustum,unionBox);
+      for(const group of groups.values())assign(group,whole>=0?whole===1:groupVisible(group,frustum));
+    }
     function groupVisible(group,frustum){
       const certain=certifyFrustum(frustum,group.viewBox);
       if(certain>=0)return certain===1;
@@ -498,7 +524,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       if(camera===mainCamera){for(const group of groups.values())group.mesh.visible=group.mainVisible;return;}
       passFrustum.setFromProjectionMatrix(passMatrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
         THREE.WebGLCoordinateSystem,camera.reversedDepth);
-      for(const group of groups.values())group.mesh.visible=groupVisible(group,passFrustum);
+      decideGroups(passFrustum,(group,visible)=>{group.mesh.visible=visible;});
     }
     /** Leave the GPU path for good: the CPU cache is replayed to the current
      * pose and the geometry takes the CPU path's attributes again. */
@@ -525,6 +551,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         viewBox(lastPlan,group.channelBoxes,group.viewBox);
         boxSphere(group);
       }
+      updateUnion();
     }
     if(mode==='gpu'){
       // The first plan (above) is this preview's first GetFrame call.
@@ -533,10 +560,13 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
           viewBox(lastPlan,group.channelBoxes,group.viewBox);boxSphere(group);
         }
+        updateUnion();
       }catch(error){toCpu(error.message);}
     }
     lastPose=pose();
     return {actor,root,dispose,mesh:meshReference,get viewDependent(){return hasEnvironment&&mode==='cpu';},updateView,
+      /** The actor's current Mesh (undefined where readNamed would throw). */
+      readMesh(){try{return own.Mesh();}catch{return undefined;}},
       passVisibility,get path(){return mode;},
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
@@ -594,10 +624,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         if(mode==='gpu'){
           mainCamera=view.camera??null;
           mainVisible=false;
-          for(const group of groups.values()){
-            group.mainVisible=view.frustum?groupVisible(group,view.frustum):true;
-            group.mesh.visible=group.mainVisible;mainVisible||=group.mainVisible;
-          }
+          const assign=(group,visible)=>{group.mainVisible=visible;group.mesh.visible=visible;mainVisible||=visible;};
+          if(view.frustum)decideGroups(view.frustum,assign);else for(const group of groups.values())assign(group,true);
         }
         const environmentUpload=updateView(cameraPosition);
         if(lighting&&view.lit&&lighting.frame&&(!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
