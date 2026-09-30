@@ -22,7 +22,7 @@ for(const sequence of sequences){
   reference.controls=controls;reference.updateBob(dt);const rotation=[...reference.bodyRotation];
   reference.crouchInput=controls.isCrouching;reference.stance(stanceCrouchRequested(controls));controls=afterStanceControls(controls,reference.forceDuck);reference.controls=controls;
   const forward=input.forward??0,right=input.right??0,groundSpeed=healthyWalkingGroundSpeed(reference.defaults.GroundSpeed,forward);reference.bobState.GroundSpeed=groundSpeed;
-  if(input.jump&&!jumpHeld&&reference.grounded&&!controls.forceDuck){reference.velocity[2]=reference.defaults.JumpZ;reference.grounded=false;}
+  if(input.jump&&!jumpHeld&&reference.grounded&&!controls.forceDuck){const v=reference.velocity;reference.velocity=[v[0],v[1],reference.defaults.JumpZ];reference.grounded=false;}
   jumpHeld=Boolean(input.jump);controls=afterJumpControls(controls,reference.grounded?1:2).state;reference.controls=controls;reference.crouchInput=controls.isCrouching;
   const {newAccel}=walkingInput({rotation,aForward:forward*6000,aStrafe:right*6000});const oldZ=runPlayerPhysics(reference,dt,{acceleration:newAccel,groundSpeed,isWalking:controls.isWalking,zone:reference.zoneAt(reference.position)});reference.updateView(dt,oldZ);
   const a=snapshot(actual),b=snapshot(reference);let mismatch=false;try{assert.deepEqual(a,b);}catch{mismatch=true;}

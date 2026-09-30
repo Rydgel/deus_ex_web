@@ -297,7 +297,8 @@ export class Player {
     const walkingPhysics = this.grounded;
     let justTeleported = false;
     if (this.grounded) {
-      this.velocity[2] = 0;
+      // A whole-vector store: a linked velocity reads as a fresh array.
+      { const v = this.velocity; this.velocity = [v[0], v[1], 0]; }
       const delta = horizontal.map(Math.fround), { time } = this.move(delta);
       if (time < 1) {
         // physWalking at 0x103cb196–0x103cb23c calls stepUp from the first
