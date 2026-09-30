@@ -15,7 +15,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
   async function imageFor(ref){
     if(!ref)return null;if(images.has(ref.key))return images.get(ref.key);
     if(!pending.has(ref.key))pending.set(ref.key,(async()=>{
-      const data=await store.get(ref.asset,ref.index,true),image={key:ref.key,...data.mips[0]};images.set(ref.key,image);return image;
+      const data=await store.get(ref.asset,ref.index,'point'),image={key:ref.key,...data.mips[0]};images.set(ref.key,image);return image;
     })());return pending.get(ref.key);
   }
   const gc={};runtime.attach(gc,host.classes.get('extension.gc'));

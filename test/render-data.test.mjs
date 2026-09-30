@@ -58,7 +58,8 @@ test('palette serialization keeps RGBA order; P8 surface masking uses index zero
   const asset = assetFor(Uint8Array.of(0, 2, 10, 20, 30, 0, 100, 110, 120, 0), 'Palette');
   const palette = readPalette(asset, 1), mip = { width: 2, height: 1, data: Uint8Array.of(0, 1) };
   assert.deepEqual([...decodePixels(mip, 0, palette).data], [10, 20, 30, 255, 100, 110, 120, 255]);
-  assert.deepEqual([...decodePixels(mip, 0, palette, true).data], [10, 20, 30, 0, 100, 110, 120, 255]);
+  assert.deepEqual([...decodePixels(mip, 0, palette, true).data], [0, 0, 0, 0, 100, 110, 120, 255]);
+  assert.deepEqual([...decodePixels(mip, 0, palette, 'point').data], [10, 20, 30, 0, 100, 110, 120, 255]);
   assert.throws(() => decodePixels(mip, 0, palette.subarray(0, 4)), /out of range/);
   assert.throws(() => decodePixels(mip, 0), /no palette/);
   assert.throws(() => decodePixels({ ...mip, width: 4 }, 0, palette), /size mismatch/);

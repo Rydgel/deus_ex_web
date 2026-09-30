@@ -94,7 +94,7 @@ export async function loadInfoLinkPreviewContent(assets){
       format:reference.portraitFormat,masked:false}),
     decodedTexture(textures,assets,{packageName:reference.iconPackage,path:reference.iconPath,
       index:reference.iconExport,width:reference.iconWidth,height:reference.iconHeight,
-      format:reference.iconFormat,masked:true}),
+      format:reference.iconFormat,masked:'point'}),
   ]);
   return freeze({conversationName:conversation.conName,speakerBindName:name.bindName,
     speakerDisplayName:name.displayName,speech:speech.Speech,soundId:speech.soundID,

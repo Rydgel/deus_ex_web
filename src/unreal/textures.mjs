@@ -45,7 +45,15 @@ export function readTexture(asset, index) {
   };
 }
 
-/** Palette alpha is not surface alpha: P8 masking is specifically palette index zero. */
+/** Palette alpha is not surface alpha: P8 masking is specifically palette index zero.
+ * `masked === true` is the D3D masked upload: D3DDrv.dll's P8 fillers
+ * (FTexFiller8888_P8::BeginUpload 0x10002363, FTexFiller1555_P8::BeginUpload
+ * 0x100028f4) store 0 into AlphaPalette[0] under PF_Masked, so index zero is
+ * transparent black and filtering blends edge texels toward black, not toward
+ * the palette's (often magenta) entry. `masked === 'point'` keeps the palette
+ * colour with index-zero alpha for point-sampled HUD tiles: masked styles
+ * discard those texels, and the unmasked styles sharing the texture see the
+ * unmasked colour. */
 export function decodePixels(mip, format, palette, masked = false) {
   const { width, height, data } = mip;
   const stride = { 0: 1, 2: 2, 4: 3, 5: 4 }[format];
@@ -58,6 +66,7 @@ export function decodePixels(mip, format, palette, masked = false) {
     if (format === 0) {
       const index = data[input], pal = index * 4;
       if (pal + 3 >= palette.length) throw new Error(`Palette index out of range: ${index}`);
+      if (masked === true && index === 0) continue;
       rgba[out] = palette[pal]; rgba[out + 1] = palette[pal + 1]; rgba[out + 2] = palette[pal + 2];
       rgba[out + 3] = masked && index === 0 ? 0 : 255;
     } else if (format === 2) {

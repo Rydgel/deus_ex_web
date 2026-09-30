@@ -21,8 +21,18 @@ only the viewer code and requires the user to choose an installed game directory
   are explicitly unsupported. Lighting now resolves inherited scalar and struct
   class defaults. This does not instantiate the general gameplay object runtime.
 
-Invisible faces are omitted. Masked P8 surfaces make palette index zero transparent;
-palette alpha is otherwise ignored. Two-sided, no-smoothing, translucent screen
+Invisible faces are omitted. Masked P8 surfaces make palette index zero transparent
+black; palette alpha is otherwise ignored. D3DDrv.dll (`9e0f8a42…d8ac9f`) builds a
+per-upload palette in both P8 fillers and, under `PF_Masked`, stores `0` into its
+entry zero: `FTexFiller8888_P8::BeginUpload` at `0x10002363` and
+`FTexFiller1555_P8::BeginUpload` at `0x100028f4` (`test PolyFlags,2; mov
+[AlphaPalette],0`). The colour is therefore black as well as the alpha, so
+bilinear filtering darkens masked edges instead of blending in the palette's
+own index-zero colour (magenta in most DeusExDeco and fence textures). The
+alpha test is `ALPHAREF 127`, `ALPHAFUNC D3DCMP_GREATER` (`0x1000c83a`). The
+point-sampled HUD keeps index zero's palette colour with zero alpha instead
+(`TextureStore` mode `'point'`): masked HUD styles discard those texels, and
+the unmasked styles that share the texture draw the unmasked colour. Two-sided, no-smoothing, translucent screen
 blend, and modulated blend flags affect materials. Fake-backdrop openings reveal
 an initial pass from the original SkyZoneInfo location. Static lightmaps and shadow
 masks are reconstructed as described in [lighting.md](lighting.md). Moving

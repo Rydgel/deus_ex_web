@@ -46,7 +46,7 @@ export async function createHudText(assets,names){
       const ref=r.compact(),count=r.compact();
       if(count!==decoded.pages[p].chars.length)throw new Error('Original font glyph count mismatch');
       r.take(count*16);
-      const data=await textures.get(asset,ref,true),image={key:data.key,...data.mips[0]};images.set(data.key,image);
+      const data=await textures.get(asset,ref,'point'),image={key:data.key,...data.mips[0]};images.set(data.key,image);
       let pointer=texturePointers.get(data.key);
       if(!pointer){pointer=mem.allocRaw(0x60);const vt=mem.allocRaw(0x80);put(pointer,0,vt);put(vt,0x54,1);put(vt,0x58,2);
         put(pointer,0x34,image.width,'i32');put(pointer,0x38,image.height,'i32');texturePointers.set(data.key,pointer);}
