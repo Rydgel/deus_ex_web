@@ -2,8 +2,12 @@ import * as THREE from 'three';
 
 /** Padded lightmap tiles share texture pages; sample bounds prevent atlas bleeding. */
 export class LightAtlas {
-  constructor(size = 1024) { this.size = size; this.pages = []; this.tiles = new WeakMap(); this.addPage(); }
+  constructor(size = 1024) {
+    this.size = size; this.pages = []; this.tiles = new WeakMap();
+    this.arrayUniform = { value: null }; this.arrayUploaded = false; this.addPage();
+  }
   addPage() {
+    if (this.arrayUniform.value) throw new Error('Cannot grow a sealed lightmap texture array');
     const pixels = new Uint8Array(this.size * this.size * 4);
     const texture = new THREE.DataTexture(pixels, this.size, this.size, THREE.RGBAFormat);
     texture.minFilter = texture.magFilter = THREE.LinearFilter;
@@ -15,6 +19,34 @@ export class LightAtlas {
     const page = { index: this.pages.length, texture, staging, pixels, x: 0, y: 0, rowHeight: 0, uploaded: false, dirty: [] };
     texture.onUpdate = () => { page.uploaded = true; };
     this.pages.push(page); return page;
+  }
+  /** Seal the finished world's pages as array layers. Page textures and
+   * staging views keep the same bytes for unbatched surfaces and updates. */
+  sealArray() {
+    if (this.arrayUniform.value) return this.arrayUniform;
+    if (this.pages.some(page => page.uploaded)) throw new Error('Seal lightmap layers before the first draw');
+    const stride = this.size * this.size * 4, pixels = new Uint8Array(stride * this.pages.length);
+    for (const page of this.pages) {
+      pixels.set(page.pixels, page.index * stride);
+      page.pixels = pixels.subarray(page.index * stride, (page.index + 1) * stride);
+      page.texture.image.data = page.staging.image.data = page.pixels;
+    }
+    const texture = new THREE.DataArrayTexture(pixels, this.size, this.size, this.pages.length);
+    texture.minFilter = texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false; texture.flipY = false; texture.colorSpace = THREE.NoColorSpace;
+    texture.onUpdate = () => { this.arrayUploaded = true; };
+    texture.needsUpdate = true; this.arrayUniform.value = texture;
+    return this.arrayUniform;
+  }
+  dirtyPage(page) {
+    page.texture.needsUpdate = true;
+    const array = this.arrayUniform.value;
+    if (array) {
+      // A full upload includes every layer. Three can reallocate the GPU
+      // array after context loss without resetting our upload flags; queued
+      // layerUpdates would leave the other freshly allocated layers empty.
+      array.needsUpdate = true;
+    }
   }
   add(lightmap) {
     if (!lightmap) return { page: this.pages[0], enabled: false };
@@ -50,8 +82,8 @@ export class LightAtlas {
       for (let c = 0; c < 3; c++) page.pixels[dst + c] = Math.round(Math.max(0, Math.min(1, lightmap.pixels[src + c])) * 255);
       page.pixels[dst + 3] = 255;
     }
-    if (partial && page.uploaded) page.dirty.push([x + left, y + top, right - left + 1, bottom - top + 1]);
-    else page.texture.needsUpdate = true;
+    if (partial && (page.uploaded || this.arrayUploaded)) page.dirty.push([x + left, y + top, right - left + 1, bottom - top + 1]);
+    else this.dirtyPage(page);
     return tile;
   }
   /** Send deferred tile rectangles; without a renderer the pages re-upload. */
@@ -59,10 +91,12 @@ export class LightAtlas {
     for (const page of this.pages) {
       if (!page.dirty.length) continue;
       const rects = page.dirty; page.dirty = [];
-      if (!renderer || rects.length > 256) { page.texture.needsUpdate = true; continue; }
+      if (!renderer || rects.length > 256) { this.dirtyPage(page); continue; }
       for (const [x, y, width, height] of rects) {
         const region = new THREE.Box2(new THREE.Vector2(x, y), new THREE.Vector2(x + width, y + height));
-        renderer.copyTextureToTexture(page.staging, page.texture, region, new THREE.Vector2(x, y));
+        if (page.uploaded) renderer.copyTextureToTexture(page.staging, page.texture, region, new THREE.Vector2(x, y));
+        if (this.arrayUploaded) renderer.copyTextureToTexture(page.staging, this.arrayUniform.value, region,
+          new THREE.Vector3(x, y, page.index));
       }
     }
   }
@@ -71,13 +105,17 @@ export class LightAtlas {
     const uv = tile.lightmap.uv(point);
     return [(tile.x + uv[0]) / this.size, (tile.y + uv[1]) / this.size, 1];
   }
-  dispose() { for (const page of this.pages) page.texture.dispose(); }
+  dispose() {
+    for (const page of this.pages) { page.texture.dispose(); page.staging.dispose(); }
+    this.arrayUniform.value?.dispose();
+  }
 }
 
-export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false) {
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v3:${Boolean(mirror)}:${Boolean(modulated)}`;
+export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false, array = null) {
+  const stride = array ? array.value.image.depth + 1 : 0;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${Boolean(mirror)}:${Boolean(modulated)}:${stride}`;
   material.onBeforeCompile = shader => {
-    shader.uniforms.deusLightAtlas = { value: page.texture };
+    shader.uniforms.deusLightAtlas = array ?? { value: page.texture };
     shader.uniforms.deusLightingEnabled = enabled;
     shader.uniforms.deusDisplayGamma = gamma;
     if (mirror) {
@@ -93,7 +131,7 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       vDeusLightUV = lightUV;
       vDeusLightBounds = lightBounds;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      uniform sampler2D deusLightAtlas;
+      uniform ${array ? 'highp sampler2DArray' : 'sampler2D'} deusLightAtlas;
       uniform float deusLightingEnabled;
       uniform float deusDisplayGamma;
       ${mirror ? 'uniform sampler2D deusMirror; uniform vec2 deusMirrorSize; uniform float deusMirrorActive;' : ''}
@@ -103,9 +141,10 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       // framebuffer; Three normally leaves render-target colours linear.
       gl_FragColor = sRGBTransferOETF(gl_FragColor);
       // The original fixed-function renderer modulates display-encoded texture colours.
-      if (deusLightingEnabled > 0.5 && vDeusLightUV.z > 0.5) {
+      ${array ? `highp int deusLightLayer = int(floor(vDeusLightUV.z + 0.5)) % ${stride};` : ''}
+      if (deusLightingEnabled > 0.5 && ${array ? 'deusLightLayer > 0' : 'vDeusLightUV.z > 0.5'}) {
         vec2 lm = clamp(vDeusLightUV.xy, vDeusLightBounds.xy, vDeusLightBounds.zw);
-        gl_FragColor.rgb *= texture2D(deusLightAtlas, lm).rgb * 2.0;
+        gl_FragColor.rgb *= ${array ? 'texture(deusLightAtlas, vec3(lm, float(deusLightLayer - 1)))' : 'texture2D(deusLightAtlas, lm)'}.rgb * 2.0;
       }
       ${mirror ? `if (deusMirrorActive > 0.5) {
         vec2 mirrorUV = gl_FragCoord.xy / deusMirrorSize;

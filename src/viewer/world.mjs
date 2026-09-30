@@ -8,8 +8,9 @@ import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
 import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
+import { batchWorldMeshes } from './world-batches.mjs';
 
-export async function createWorld(map, asset, assets, onProgress = () => {}) {
+export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
@@ -96,12 +97,13 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
         const g = buildSurfaceGeometry(model, ts, surfaceIndex, material.userData.width, material.userData.height);
         counts.degenerate += g.degenerate; counts.corrected += g.corrected;
         if (!g.positions.length) continue;
-        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], faces: [] });
+        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], lightLayer: [], faces: [] });
         const batch = batches.get(key);
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
         for (let i = 0; i < g.positions.length; i += 3) {
           batch.lightUV.push(...(lit ? lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))) : [0, 0, 0]));
           batch.lightBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
+          batch.lightLayer.push(tile.page.index);
         }
         for (let i = 0; i < g.positions.length / 9; i++) batch.faces.push(surfaceIndex);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
@@ -117,6 +119,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       geometry.setAttribute('uv', new THREE.Float32BufferAttribute(batch.uvs, 2));
       geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(batch.lightUV, 3));
       geometry.setAttribute('lightBounds', new THREE.Float32BufferAttribute(batch.lightBounds, 4));
+      geometry.setAttribute('lightLayer', new THREE.Float32BufferAttribute(batch.lightLayer, 1));
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, batch.material);
       mesh.userData = { actor: actorName, faces: batch.faces, model: model.entry.name };
@@ -138,6 +141,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
+  const submissionBatches = batchOpaque ? batchWorldMeshes(root, lightAtlas, lightingEnabled, displayGamma) : null;
   const markerPositions = map.actors.filter(a => a.values.Location && a.className !== 'Brush').flatMap(a => toView(a.values.Location));
   const markerGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(markerPositions, 3));
   const markerMaterial = new THREE.PointsMaterial({ color: '#efc176', size: 5, sizeAttenuation: false, depthTest: false });
@@ -154,7 +158,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}) {
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
     return { ...update, uploaded: update.lightmaps.length };
   }
-  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, notes: [...notes], errors, sky,
+  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, submissionBatches, notes: [...notes], errors, sky,
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;

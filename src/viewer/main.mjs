@@ -713,7 +713,8 @@ function animate(time) {
     if ($('inspect').checked && time - lastInspect > 150) {
       lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);
       const hit = raycaster.intersectObjects(world.root.children, true).find(h => h.object.isMesh);
-      $('surface-info').textContent = hit ? `${hit.object.material.userData.key}\n${hit.object.material.userData.width} × ${hit.object.material.userData.height} · ${hit.object.material.userData.mipCount} mips\nSurface ${hit.object.userData.faces[hit.faceIndex]} · ${hit.object.userData.actor ?? 'world'}\nFlags 0x${hit.object.material.userData.flags.toString(16)}` : 'No surface under the crosshair.';
+      const surface = hit && (hit.object.userData.faceMaterials?.[hit.faceIndex] ?? hit.object.material.userData);
+      $('surface-info').textContent = hit ? `${surface.key}\n${surface.width} × ${surface.height} · ${surface.mipCount} mips\nSurface ${hit.object.userData.faces[hit.faceIndex]} · ${hit.object.userData.actor ?? 'world'}\nFlags 0x${surface.flags.toString(16)}` : 'No surface under the crosshair.';
     }
   }
   framePhases.frames++; framePhases.total += performance.now() - frameStart;

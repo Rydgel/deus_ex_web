@@ -112,6 +112,100 @@ recovered native mirror path; see [mirror surfaces](mirror-surfaces.md).
 Diagnostics explicitly report the remaining limits. Other maps remain outside
 visual acceptance, even when they decode successfully.
 
+## Ordered world submission boundary
+
+The source lightmap texels, conversion, padded page placement, clamped sample
+coordinates, base-texture mip/filter state and display-colour multiplication
+remain the contracts above and in [moving lights](dynamic-lighting.md).
+Submitting several original opaque meshes together is a browser representation
+change; it must not change their order. Equal depth is observable, including
+different surfaces that quantize to the same depth, so opaque meshes cannot be
+freely regrouped by texture or lightmap page.
+
+Three.js r186 `WebGLRenderLists.painterSortStable` orders opaque objects by
+group order, render order, material ID, material variant, camera depth and object
+ID. World static meshes use group/render order zero and ordinary Mesh variant
+zero. Only consecutive static meshes with materials used nowhere else in the
+world can merge; a mover, shared material or mirror is a barrier. A merged run
+retains the first material ID and concatenates the exact old triangle sequence.
+Other actor materials are created after the world. Thus neither shader program
+creation nor changing a run's bounds can move it across another submission.
+Transparent, modulated and mirror submissions keep their existing boundaries.
+
+Within a run, at most eight original base textures remain separate samplers,
+with a constant per-triangle selector. The original implicit texture lookup runs
+for every sampler before selection, keeping derivatives in uniform control
+flow. Explicit `textureGrad` was rejected: its mip choice differed at masked
+edges on Metal. Sampling only the selected texture inside the branch matched
+there, but GLSL ES 3.00 does not guarantee implicit derivatives in nonuniform
+control flow ([sections 3.10.2 and 8.8](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf)).
+Identical fixed state (side and alpha test included) is required.
+Lightmap pages become equally sized texture-array layers, retaining every byte,
+UV, clamp bound and filter; moving-light rectangles update the same layer and
+coordinates. Per-face material metadata preserves surface inspection.
+
+The layer and texture selector share the existing `lightUV.z`: with stride
+`pageCount + 1`, the integer is `selector * stride + (lit ? layer + 1 : 0)`.
+The fragment shader rounds to a high-precision integer, then uses integer
+division and remainder; floating division near multiples of the stride can
+round across an integer boundary. Zero in the layer field still means unlit.
+The maximum is 2,055 with eight textures and 256 pages; worlds above the
+WebGL2 minimum of 256 array layers retain the old submissions. Position, base
+UV, light UV xy and bounds remain unchanged, and the vertex shader retains its
+original varying layout. This matters numerically: on Island's turned start
+view, introducing either one flat layer varying or one flat selector varying
+changed 258 lit channels by at most two, even without merging geometry. The
+same array sampler with a uniform layer matched exactly, as did sealed CPU
+storage with the original shader. Packing both indices in the existing varying
+removed every difference, including raw unlit output. The evidence isolates
+the drift to the extra vertex varying layout rather than atlas filtering,
+texture selection, triangle order or light multiplication.
+
+This optimization does not implement original BSP/portal visibility, reorder
+the existing opaque stream, or establish whole-renderer pixel identity with the
+original rasterizer. Translation and GPU equivalence checks for this boundary
+are recorded alongside the implementation.
+
+`node scripts/validate-world-batches.mjs` hashes every ordered triangle's
+position, normal, base UV, decoded light UV/bounds/layer, fixed material state and
+inspection identity from the original maps with batching on and off. Training's
+24,427 triangles match; its opaque world/mover submissions fall from 269 to 104.
+Island's 33,147 triangles match; its submissions fall from 422 to 85. Training
+retains zero renderer errors, and Island retains the same six existing errors.
+These are complete geometry-stream checks, not camera-dependent pixel samples.
+
+`node scripts/validate-world-batch-gpu.mjs` starts an isolated local Vite server
+and Chromium, using generated textures without original assets. Its coplanar
+overlaps, masked cutoffs, nearest/linear mip filters, repeated UVs, atlas edge
+clamps, clipping, a large-coordinate oblique camera, full/partial light updates
+and forced context restore compare
+the original individual submissions with the batched shader. On Chromium/Metal
+all 3,538,944 RGBA channels matched in nine 384×256 frames; submissions fell from
+32 to five. The focused `test/world-batches.test.mjs` also checks order barriers,
+the eight-sampler limit, inspection metadata and update rectangles.
+The additional GPU frames exercise strides 41 and 257 with all eight sampler
+choices visibly separated, an unlit code exactly equal to the stride, and code
+2,055 selecting the distinct last layer of a 256-layer atlas.
+
+The final packed shader also matched all 17,868,096 channels in eight native-map
+926×603 frames on Chromium/Metal. Training used location
+`(-1149.24353, 825.84393, -40.199997)` with rotations `(65524,31,0)` and
+`(65501,2496,0)`, including four reflected mirror planes; draw counts fell
+1,348→576 and 1,143→511. Island used its start plus 40 eye-height units at
+`(-4760.569824,10430.811523,-240.674988)`, then yaw +16,384. Start and turned
+view fell 367→92 and 23→18 draws. The turned view additionally matched with sky
+disabled, lighting disabled, display gamma one, and both lighting disabled and
+gamma one. These are comparisons against the pre-batch browser representation;
+they do not expand original-game visual acceptance beyond the evidence above.
+
+This exchanges CPU submissions for extra GPU texture fetches, which must be
+judged by live frame measurements. CPU atlas bytes are shared, but any layers
+also used by unbatched surfaces retain separate GPU page textures. Full light
+updates upload the whole array; moving-light rectangles keep their sub-image
+path. Selective full-layer uploads are deliberately avoided because WebGL
+context restoration can allocate fresh storage while host upload flags remain
+set, leaving untouched layers empty if only queued layers were uploaded.
+
 ## Research references
 
 SurrealEngine revision `7bc5a89cbc22254f89d18b040b94ef0c37d44cf2` was used to
