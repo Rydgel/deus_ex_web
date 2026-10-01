@@ -53,9 +53,17 @@ identities in `src/runtime/<map>-npc-identities.mjs` and add the map to the
 
 ## All maps
 
-Repeat the open/dump pair per map in one session (about a minute each with
-the 30-second wait; 88 maps in `Maps/`). Restart the game between maps if the
-dump of a later map shows objects of the previous one that a fresh open would
-not hold (the convention above is a fresh open from the boot map). Not done
-yet; the table would grow to one module per map, or one generated module
-keyed by map.
+`scripts/capture-object-indices.mjs` runs the procedure for every map in
+`Maps/` (or `--maps a,b`): a fresh `DeusEx.exe` per map on `00_Training.dx`,
+`open <map>`, the 30-second wait, the dump to
+`.cache/original-gobjects-<date>-<map>-open.txt`, then `exit` (a forced
+`wineserver -k` if the console is unavailable, whose "Recovery Mode" wizard the
+next launch dismisses). A process per map keeps every capture the same
+convention as Island's, whatever the order; about 70 s per map.
+
+On the Linux host (plain Wine, docs/linux-host.md) the driver takes
+`DX_WINE=/usr/bin/wine`, `DX_GAME=$WINEPREFIX/drive_c/Deus Ex GOTY Edition`
+and an exported `WINEPREFIX`; `ad/tools/dxinput.exe` is built with
+`i686-w64-mingw32-gcc -O2 -o dxinput.exe dxinput.c`. Run there on 2026-10-01,
+Island reproduced the Mac (CrossOver) capture: all 58 pawn identities equal,
+PaulDenton0 = 35713.

@@ -14,9 +14,11 @@ import {fileURLToPath} from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const adRoot = path.resolve(here, '..');
+// Plain Wine (the Linux host, docs/linux-host.md): DX_WINE=/usr/bin/wine and
+// DX_GAME=$WINEPREFIX/drive_c/Deus Ex GOTY Edition, with WINEPREFIX exported.
 export const WINE = process.env.DX_WINE || '/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine';
 export const BOTTLE = process.env.DX_BOTTLE || 'DeusEx';
-export const GAME = path.join(process.env.HOME, 'Library/Application Support/CrossOver/Bottles', BOTTLE,
+export const GAME = process.env.DX_GAME || path.join(process.env.HOME, 'Library/Application Support/CrossOver/Bottles', BOTTLE,
   'drive_c/Deus Ex GOTY Edition');
 export const SYSTEM = path.join(GAME, 'System');
 const WIDTH = Number(process.env.DX_WIDTH || 1280), HEIGHT = Number(process.env.DX_HEIGHT || 720);
