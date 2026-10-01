@@ -205,8 +205,8 @@ scripts 165 cases:
 - equal volumes and a ViewTarget listener;
 - 160 seeded random sequences (with NoteDestroy and StopSoundId).
 
-All 1,954 calls match: every return, the 100 voice starts
-and 166 voice controls (index, sample, frequency, volume, pan), the stops and
+All 1,954 calls match: every return, the 110 voice starts
+and 144 voice controls (index, sample, frequency, volume, pan), the stops and
 status queries, each FastLineCheck and GlobalLighting request, and every bit
 of every channel record (the idle channels' uninitialized words masked).
 
