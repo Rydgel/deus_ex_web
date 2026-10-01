@@ -4,8 +4,8 @@ Play plays only speech today (DataLink and conversations through Web Audio).
 Sound effects, ambient sounds and music reach the engine's `PlaySound`
 bookkeeping (channel ids, [script-sound](script-sound.md)) and the instant
 volumes ([galaxy-volumes](galaxy-volumes.md)) but no browser voice. This note
-records the original subsystem before any translation, following AGENTS.md.
-Nothing here is implemented yet.
+records the original subsystem, then its translation
+(`src/runtime/galaxy-audio.mjs`); Play does not use it yet.
 
 The audio device is `UGalaxyAudioSubsystem` (`DeusEx.ini`
 `AudioDevice=Galaxy.GalaxyAudioSubsystem`), Galaxy.dll SHA256
@@ -164,6 +164,51 @@ scale), `0.1` (`0x1063d768`), `1/π` (`0x1063d758`), `16383.0`
 `28671.125` (`0x1063d764`), `127.0`. Imports: Core `appSqrt`, `appAtan2`,
 `appSecondsSlow`, `appStricmp`, `UObject::IsValid`, `appFailAssert`; Engine
 `APawn::PrivateStaticClass`.
+
+Init (`0x10605580`) clamps Latency to 10..250, EffectsChannels to 0..32 and
+DopplerSpeed to at least 1.0, and stops every channel, so an idle channel
+holds zeros and `-1.0f` at `+0x38`. StopSound copies a 16-dword stack buffer
+whose words 5-10 (Location, Volume, Radius, Pitch) it never writes; an idle
+channel keeps stack garbage there, which nothing reads before PlaySound
+overwrites it.
+
+## Translation
+
+`createGalaxyAudio(config, services)` holds the channel records and the slot-0
+counter and translates PlaySound, StopSound and Update steps 2-11 and 13 on
+the x87 model (extended sums, float stores, Core `appSqrt` as FSQRT of the
+stored double, Galaxy's `_ftol`). The Galaxy library's voices are services:
+`startVoice(index, sample, frequency, volume, pan)` (the 2D start),
+`controlVoice`, `voicePlaying` and `stopVoice`. So are the world's reads,
+`fastLineCheck`, `globalLighting`, `sample(sound)` (`{rate}`), `index(actor)`
+and `atan2`. FPATAN is a transcendental: `atan2` is the host's double, which
+can differ from the hardware's extended result in its last bits before the
+float store (the oracle runs it in double too). Not translated: the music
+transition, the zone reverb, the 3D hardware voices and the lip-sync
+sampling (step 12).
+
+## Validation
+
+`scripts/native-galaxy-audio-oracle.py` runs the original PlaySound and Update
+on a subsystem buffer with the case's config. Init's StopSound loop runs
+first, so idle channels hold what Init leaves. The voice library calls, the
+FastLineCheck and GlobalLighting imports, IsValid and appSecondsSlow are
+recording or answering leaves; Core's appSqrt, appAtan2, appStricmp (over a
+`_wcsicmp` leaf) and SafeNormal execute. `scripts/validate-native-galaxy-audio.mjs`
+scripts 165 cases:
+
+- a basic play, start, control and finished voice;
+- channel stealing over four channels, with NoOverride and slot-0 ids;
+- ambient scan and refresh with light scaling (GlobalLighting), Doppler and
+  leaving range;
+- occlusion ramping up and down, the speech ratio, ReverseStereo and surround;
+- equal volumes and a ViewTarget listener;
+- 160 seeded random sequences.
+
+All 1,948 PlaySound/Update calls match: every return, the 100 voice starts
+and 166 voice controls (index, sample, frequency, volume, pan), the stops and
+status queries, each FastLineCheck and GlobalLighting request, and every bit
+of every channel record (the idle channels' uninitialized words masked).
 
 Remaining: StopSoundId, NoteDestroy, RegisterSound (sample decoding and
 loop points), the Galaxy library's voice functions and mixer (how a volume,
