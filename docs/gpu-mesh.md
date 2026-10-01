@@ -189,8 +189,10 @@ update's plan overtakes the creation plan, which then never runs on the GPU.
 Its cache entries exist only on the CPU, and a tween in the new plan would
 read a cache pose the GPU never wrote (zeros): the actor grows from a point
 over the tween. This is what the player looked like when MeetPaul admitted him
-mid-animation in behind view. The original's first GetFrame happens when the
-actor is first drawn, so until the slot's first run (`gpu.frame <
+mid-animation in behind view. The original's GetFrame runs only from
+Render.DrawLodMesh (`10b0ea80`, call at `10b0ee0f`;
+docs/script-lodmesh-materials.md), so its first one happens when the actor is
+first drawn, and until the slot's first run (`gpu.frame <
 firstPassFrame`) a new plan flushes the preview's CPU cache first and is
 itself the first GetFrame.
 
