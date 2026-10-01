@@ -658,10 +658,14 @@ fn tick_body(
 }
 
 /// actor-tick.mjs `scriptAndTimer`: ProcessState, then updateActorTimer on
-/// the TimerRate/TimerCounter/bTimerLoop accessors.
+/// the TimerRate/TimerCounter/bTimerLoop accessors. A ProcessState whose
+/// frame word says it returns at once (script-state.mjs `process`: no
+/// execution, or a null cursor) is not called.
 fn script_and_timer(a: &mut Actor, delta: f64) {
-    unsafe { js_tick_state(a.ctx, delta) };
-    a.refresh();
+    if !(crate::dispatch::state_skip_enabled() && crate::natives::state_frame(a.handle) == crate::natives::FRAME_NONE) {
+        unsafe { js_tick_state(a.ctx, delta) };
+        a.refresh();
+    }
     if !(fround(a.num(F_TIMERRATE)) > 0.0) {
         return;
     }

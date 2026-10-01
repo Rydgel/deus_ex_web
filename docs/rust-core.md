@@ -488,6 +488,56 @@ and `-pawn-perception` pass. On Island the JavaScript values for
 resolve the change: other work on the machine (load average 5 to 7) spread
 paired medians by ±3.5 ms.
 
+### October 1: Sleep in LatentFloat, the frame word (implemented)
+
+The plan was to stop the 650 `js_tick_state` crossings per Island tick
+whose ProcessState has no code to run. A CPU profile of 300 Island ticks
+priced them first: `process`, `instance` and the refresh under them are
+about 0.07 ms per tick together. The other ~1 ms under `js_tick_state` is
+the latent polls: `pawnView` alone is 0.23 ms self, because each
+MoveToward/MoveTo/TurnTo poll defines 29 accessors over `namedReference`,
+and the locomotion bodies run the BigInt x87 model. So the skip went in
+as the plumbing the Rust polls need, not as a speed step.
+
+* **Sleep stores Actor.LatentFloat (fidelity fix, its own commit).**
+  execSleep and PollSleep address `AActor+0xe0`, which the SDK layout names
+  `LatentFloat` ([Sleep](script-sleep.md)). The runtime kept the value in a
+  `ScriptInstance` member, so the property never changed. Sleep's remaining
+  time is now in the image, where a Rust poll can read it. Digests changed
+  at checkpoint 0 on both maps; with `BENCH_DIGEST_SKIP=LatentFloat` all 30
+  checkpoints equal the commit before.
+* **The frame word.** The state table entry is now `[row, probe lo, probe
+  hi, frame]` (16 bytes). The frame word is what `ScriptState.process`
+  would do first: `FRAME_NONE` (no execution or a null cursor: return),
+  `FRAME_UNSET` (LatentAction never written: throw), `FRAME_NO_STATE`
+  (no ScriptState: processState throws), else the LatentAction (0: run
+  state code). `ScriptState.latent` is an accessor, and a state frame's
+  `cursor` is one too (beside its existing `latent` accessor). A changed
+  LatentAction, a cursor moving between null and an offset, or a new
+  execution reports `onFrameChange`, which rewrites the word of a filled
+  entry in place (`StateTable.frame`) without clearing the row.
+* **The skip.** EVENTS[3] (the tick word) is now a bit set: bit 1, events
+  dispatch in Rust as before; bit 2, `script_and_timer` skips
+  `js_tick_state` when the frame word is `FRAME_NONE`. The host sets bit 2
+  for the runtime's own tick services (`runtimeEvents`) with
+  `ScriptState.prototype.process` unwrapped, never under the differential
+  log; `RUST_STATE=0` keeps every call.
+
+**Verification.** Digests match at all 30 checkpoints on both maps and
+engines with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1`; under
+`STATE_VERIFY` every read recomputes the entry and compares the frame word,
+so a missed report fails at the next tick. `validate-script-vm-interp`
+passes (the state bit alone leaves event dispatch off). Island:
+`js_tick_state` 702 → 52 crossings per tick, `js_state` 0. Not timed: the
+machine's load average was 7.
+
+**Next.** Sleep (22.3 polls per Island tick) is the first poll to move: the
+frame word gives Rust the latent action, LatentFloat is in the image, and
+a cleared poll crosses only to resume the state code. Then the locomotion
+polls (503 20.6, 501 5.6, 509 1.5 per tick), after a census of the
+branches Island reaches; every branch it does not reach hands the poll
+back before any write.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

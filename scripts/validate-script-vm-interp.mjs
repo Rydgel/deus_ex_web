@@ -3083,9 +3083,9 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
 
 // ---- October 1: GetStateName, LastRendered, InStasis (natives.rs) -------------------------
 {
-  // The state table: [row, probe lo, probe hi] per handle; a row is
+  // The state table: [row, probe lo, probe hi, frame] per handle; a row is
   // [node id, n, name ids] (script-vm-states.mjs).
-  const ENTRY = 12, CAPACITY = 64, STATE_TABLE = arena.alloc(ENTRY * CAPACITY);
+  const ENTRY = 16, CAPACITY = 64, STATE_TABLE = arena.alloc(ENTRY * CAPACITY);
   const rowOf = names => {
     const a = arena.alloc(8 + 4 * names.length);
     wr32(a, 77);
@@ -3291,7 +3291,7 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
 // event cache (resolved by the host per class row, state row and event),
 // pendingKill from bDeleteMe, then the body as a callee run.
 {
-  const ENTRY = 12, CAP = 64, STATE_TABLE = arena.alloc(ENTRY * CAP), SLOTS = 16, EV_TABLE = arena.alloc(48 * SLOTS);
+  const ENTRY = 16, CAP = 64, STATE_TABLE = arena.alloc(ENTRY * CAP), SLOTS = 16, EV_TABLE = arena.alloc(48 * SLOTS);
   const stateRow = n => { const a = arena.alloc(8 + 4 * n); wr32(a, 5); wr32(a + 4, n); for (let i = 0; i < n; i++) wr32(a + 8 + 4 * i, 1); return a; };
   const ROW = {state: stateRow(1), other: stateRow(2), none: stateRow(0)};
   const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
@@ -3333,6 +3333,10 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   wr32(EVENTS_AT + 12, 0);
   same(dispatch(), -1, 'dispatch disabled');
   same(calls.length, 0, 'disabled dispatch makes no import');
+  // The word's state bit (2) alone does not enable events (bit 1).
+  wr32(EVENTS_AT + 12, 2);
+  same(dispatch(), -1, 'dispatch disabled with only the state bit');
+  same(calls.length, 0, 'state bit alone makes no import');
   for (const [gate, expected] of [[0, 0], [-1, -1], [7, -1]]) {
     setup();
     nativeHost.gate = () => gate;
@@ -3459,7 +3463,7 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
 // with the decision; a hit pushes the callee's zeroed block and records its
 // run (RUNS) without an import.
 {
-  const ENTRY = 12, STATE_TABLE = arena.alloc(ENTRY * 64), SIG = 3, K_JS = 1, K_RUN = 3;
+  const ENTRY = 16, STATE_TABLE = arena.alloc(ENTRY * 64), SIG = 3, K_JS = 1, K_RUN = 3;
   const stateRow = arena.alloc(12);
   wr32(stateRow, 9); wr32(stateRow + 4, 1); wr32(stateRow + 8, 1);
   const otherRow = arena.alloc(12);

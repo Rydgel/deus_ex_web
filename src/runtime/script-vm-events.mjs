@@ -28,6 +28,8 @@ import {functionSignature, fieldKeyId} from './script-vm-lower.mjs';
 import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-object-image.mjs';
 import {probeNames} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
+import {STATE_ENTRY} from './script-vm-states.mjs';
+import {ScriptState, originalProcess} from './script-state.mjs';
 
 const DISPATCH_VERIFY = typeof process !== 'undefined' && process.env?.DISPATCH_VERIFY === '1';
 // RUST_EVENTS=0 keeps every tick event in JavaScript (the reference path).
@@ -35,6 +37,11 @@ const DISABLED = typeof process !== 'undefined' && process.env?.RUST_EVENTS === 
 const SLOTS = 1024, SLOT = 48, CALL_SLOTS = 4096, CALL_SLOT = 48;
 // RUST_CALLS=0 keeps every CALL's begin in JavaScript (js_call_begin).
 const CALLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_CALLS === '0';
+// RUST_STATE=0 crosses to ProcessState for every ticked actor (tick.rs).
+const STATE_DISABLED = typeof process !== 'undefined' && process.env?.RUST_STATE === '0';
+/** The tick word's bits (EVENTS[3], tick.rs): events dispatch in Rust; a
+ * ProcessState with no code to run is skipped. */
+export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2;
 const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
 export const MAX_RUNS = 256;
 /** The Actor.Tick events (tick.rs E_*): [name, takes the delta]. */
@@ -102,16 +109,22 @@ export class EventHost {
   }
   get enabled() { return this.at ? this.vm.arena.view.getUint32(this.at + 12, true) : 0; }
   set enabled(value) { if (this.at) this.vm.arena.view.setUint32(this.at + 12, value, true); }
-  /** Whether an actor tick with these services may dispatch in Rust: the
-   * runtime's own processEvent behind them, with processEvent,
-   * executeScript, eventLevelGate and lookup as script-runtime.mjs defines
-   * them (not wrapped on the prototype or the runtime), and the Rust
-   * interpreter running script bodies. */
+  /** The tick word of an actor tick with these services, which must be
+   * the runtime's own (actorTickServices' `runtimeEvents`) under the Rust
+   * interpreter. TICK_EVENTS_BIT: events may dispatch in Rust, with
+   * processEvent, executeScript, eventLevelGate and lookup as
+   * script-runtime.mjs defines them (not wrapped on the prototype or the
+   * runtime). TICK_STATE_BIT: ProcessState may be skipped when the state
+   * table's frame word says it would return at once, with
+   * ScriptState.prototype.process unwrapped. */
   allowed(services) {
     const runtime = this.vm.runtime, m = runtime.constructor.originalMethods;
-    return !DISABLED && services?.runtimeEvents === true && runtime.services?.scriptVm === this.vm && m !== undefined &&
+    if (services?.runtimeEvents !== true || runtime.services?.scriptVm !== this.vm) return 0;
+    const events = !DISABLED && m !== undefined &&
       runtime.processEvent === m.processEvent && runtime.executeScript === m.executeScript &&
-      runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup ? 1 : 0;
+      runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup;
+    const state = !STATE_DISABLED && ScriptState.prototype.process === originalProcess;
+    return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0);
   }
   /** js_event_gate. */
   gate(handle) {
@@ -140,7 +153,7 @@ export class EventHost {
   /** Whether the slot holds the current key for this dispatch (verify). */
   sameKey(handle, which, slot) {
     const vm = this.vm, view = vm.arena.view, row = vm.classRow(handle);
-    const states = vm.states, entry = states.table + 12 * handle;
+    const states = vm.states, entry = states.table + STATE_ENTRY * handle;
     const state = handle < states.capacity ? view.getUint32(entry, true) : 0;
     return view.getUint32(slot, true) === row && view.getUint32(slot + 4, true) === state &&
       view.getUint32(slot + 8, true) === which && view.getUint32(slot + 12, true) === view.getUint32(this.at + 8, true);
@@ -196,7 +209,7 @@ export class EventHost {
     const decision = this.callDecision(frame, node, handle, sig), view = this.vm.arena.view;
     if (DISPATCH_VERIFY && view.getUint32(slot + 20, true) !== 0 && view.getUint32(slot, true) === this.vm.run(frame).lowered.code &&
       view.getUint32(slot + 4, true) === node && view.getUint32(slot + 8, true) === this.vm.classRow(handle) &&
-      view.getUint32(slot + 12, true) === (handle < this.vm.states.capacity ? view.getUint32(this.vm.states.table + 12 * handle, true) : 0) &&
+      view.getUint32(slot + 12, true) === (handle < this.vm.states.capacity ? view.getUint32(this.vm.states.table + STATE_ENTRY * handle, true) : 0) &&
       view.getUint32(slot + 16, true) === view.getUint32(this.at + 8, true)) {
       const words = [20, 24, 28, 32].map(at => view.getUint32(slot + at, true));
       const fresh = [decision.kind, decision.code, decision.size, decision.template];

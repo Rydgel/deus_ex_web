@@ -88,6 +88,16 @@ extern "C" {
     fn js_event_resolve(handle: u32, which: u32, slot: u32);
 }
 
+/// The enable word's bits (script-vm-events.mjs): events dispatch in Rust;
+/// a ProcessState with no code to run is skipped (tick.rs).
+const TICK_EVENTS_BIT: u32 = 1;
+const TICK_STATE_BIT: u32 = 2;
+
+/// Whether the actor tick may skip a ProcessState with no code to run.
+pub(crate) fn state_skip_enabled() -> bool {
+    events()[3] & TICK_STATE_BIT != 0
+}
+
 /// Set EVENTS' enable word; returns the previous one.
 pub(crate) fn set_events_enabled(value: u32) -> u32 {
     unsafe {
@@ -149,7 +159,7 @@ fn find<const N: usize>(table: u32, count: u32, size: u32, h: u32, key: &[u32; N
 /// takes one (`has_delta`); see the header for the results.
 pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: bool) -> i32 {
     let e = events();
-    if e[3] == 0 {
+    if e[3] & TICK_EVENTS_BIT == 0 {
         return -1;
     }
     // 1. scriptability and the Level gate.

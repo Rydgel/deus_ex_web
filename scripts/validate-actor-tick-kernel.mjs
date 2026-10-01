@@ -129,7 +129,9 @@ function save(actor) {
   return {actor, instance, bytes: instance.arena.bytes.slice(instance.base, instance.base + instance.size),
     refs: instance.refs ? instance.refs.slice() : null, bindings: new Set(instance.bindings.keys()),
     poison: instance.poison, nativeObject: instance.nativeObject,
-    latent: instance.state && Object.hasOwn(instance.state, 'latent') ? instance.state.latent : undefined};
+    // ScriptState.latent is an accessor (script-state.mjs), so the state is
+    // asked, not its own properties.
+    state: instance.state, latent: instance.state ? instance.state.latent : undefined};
 }
 function restore(saved) {
   const {instance} = saved;
@@ -143,7 +145,7 @@ function restore(saved) {
   }
   instance.poison = saved.poison;
   instance.nativeObject = saved.nativeObject;
-  if (saved.latent !== undefined) instance.state.latent = saved.latent;
+  if (saved.state) saved.state.latent = saved.latent;
 }
 const imageOf = instance => ({bytes: instance.arena.bytes.slice(instance.base, instance.base + instance.size),
   refs: instance.refs ? instance.refs.slice() : null});

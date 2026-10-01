@@ -35,7 +35,7 @@ import {WalkLoopHost} from './walk-loop-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 import {StateTable} from './script-vm-states.mjs';
 import {EventHost, MAX_RUNS} from './script-vm-events.mjs';
-import {onStateChange} from './script-state.mjs';
+import {onStateChange, onFrameChange} from './script-state.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -163,6 +163,11 @@ onReceiverEpoch(epoch => eachInterpreter(vm => vm.setReceiverEpoch(epoch)));
 onStateChange(identity => {
   const handle = existingHandle(identity);
   if (handle) eachInterpreter(vm => vm.states.clear(handle));
+});
+// Its frame alone changed: the entry's frame word is rewritten.
+onFrameChange(identity => {
+  const handle = existingHandle(identity);
+  if (handle) eachInterpreter(vm => vm.states.frame(handle));
 });
 /** A class default or a class default image changed (script-runtime.mjs):
  * each class row's default image is validated again before Rust reads it. */

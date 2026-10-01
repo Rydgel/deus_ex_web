@@ -32,7 +32,10 @@ use core::ptr::{addr_of, addr_of_mut};
 static mut STATES: [u32; 3] = [0; 3];
 /// Set by a clock import whose value the body would not use.
 static mut NATIVE_FAULT: u32 = 0;
-const ENTRY: u32 = 12;
+const ENTRY: u32 = 16;
+/// The frame word of a ProcessState that returns at once (no execution, or
+/// a null cursor): script-vm-states.mjs FRAME_NONE.
+pub(crate) const FRAME_NONE: u32 = 0xffff_ffff;
 
 #[no_mangle]
 pub extern "C" fn vm_states_ptr() -> *mut u32 {
@@ -55,7 +58,7 @@ extern "C" {
     fn js_level_standalone(handle: u32) -> i32;
 }
 
-/// The address of `handle`'s state entry [row, probe lo, probe hi], computed
+/// The address of `handle`'s state entry [row, probe lo, probe hi, frame], computed
 /// by the host when it is not filled (or always, under STATE_VERIFY), or 0
 /// when the host does not describe the handle.
 pub(crate) fn state_entry(handle: u32) -> u32 {
@@ -73,6 +76,15 @@ pub(crate) fn state_entry(handle: u32) -> u32 {
     // js_state entered the handle, growing the table if it had to.
     let table = unsafe { *states };
     table.wrapping_add(ENTRY.wrapping_mul(handle))
+}
+
+/// `handle`'s frame word (script-vm-states.mjs), or 0 (state code to run,
+/// which makes the caller cross) when the host does not describe it.
+pub(crate) fn state_frame(handle: u32) -> u32 {
+    match state_entry(handle) {
+        0 => 0,
+        at => load32(at.wrapping_add(12)),
+    }
 }
 
 /// A fault a clock import reported, cleared.

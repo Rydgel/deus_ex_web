@@ -13,11 +13,21 @@ export const onStateChange=listener=>{stateListeners.push(listener);};
 export function stateChanged(identity) {
   for(const listener of stateListeners)listener(identity);
 }
+// The same table's frame word: whether `process` has code to run (an
+// execution with a cursor) and the latent action it would poll. Every
+// LatentAction write that changes it, every cursor write between null and
+// an offset, and every new execution report the object's identity.
+const frameListeners=[];
+/** Call `listener(identity)` after each change of `identity`'s frame word. */
+export const onFrameChange=listener=>{frameListeners.push(listener);};
+function frameChanged(identity) {
+  for(const listener of frameListeners)listener(identity);
+}
 
 export class ScriptState {
   constructor(instance, services = {}) {
     this.instance=instance;this.services=services;this.stateNode=null;
-    this.execution=null;this.codeNode=null;this.latent=0;this.locals={};
+    this.execution=null;this.codeNode=null;this.latentAction=0;this.locals={};
     this.probeMask=[0,0];this.endingState=false;this.changedState=false;
   }
   /** A linked node has {compiled, labels:Map<lowercase name,offset>, base}. */
@@ -25,6 +35,13 @@ export class ScriptState {
     if(this.execution)this.execution.cursor=null;
     this.stateNode=node;this.execution=null;this.codeNode=null;this.latent=0;
     stateChanged(this.instance);
+  }
+  /** FStateFrame+0x24 LatentAction. */
+  get latent() { return this.latentAction; }
+  set latent(value) {
+    if(value===this.latentAction)return;
+    this.latentAction=value;
+    frameChanged(this.instance);
   }
   get probeMask() { return this.probeWords; }
   /** ProbeMask is replaced, never written in place (the words are frozen),
@@ -73,9 +90,17 @@ export class ScriptState {
         this.execution.cursor=offset;this.execution.returned=false;
       }else{
         if(this.execution)this.execution.cursor=null;
-        this.execution=node.compiled.createFrame(this.instance,this.locals,this.services,{offset,state:true});
+        const execution=node.compiled.createFrame(this.instance,this.locals,this.services,{offset,state:true});
+        this.execution=execution;
         this.codeNode=node;
-        Object.defineProperty(this.execution,'latent',{get:()=>this.latent,set:value=>{this.latent=value;},configurable:true});
+        Object.defineProperty(execution,'latent',{get:()=>this.latent,set:value=>{this.latent=value;},configurable:true});
+        let cursor=execution.cursor;
+        Object.defineProperty(execution,'cursor',{get:()=>cursor,set:value=>{
+          const was=cursor===null;
+          cursor=value;
+          if(was!==(value===null))frameChanged(this.instance);
+        },configurable:true,enumerable:true});
+        frameChanged(this.instance);
       }
       return true;
     }
@@ -103,3 +128,6 @@ export class ScriptState {
     }
   }
 }
+/** ScriptState.prototype.process as defined here: the Rust actor tick skips
+ * a ProcessState with no code to run only while it is unwrapped. */
+export const originalProcess=ScriptState.prototype.process;

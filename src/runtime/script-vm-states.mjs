@@ -4,8 +4,8 @@
  * Rust reads it without an import. Host bookkeeping, not an original
  * structure.
  *
- * STATES = [table, capacity, verify] (interp.rs). An entry is three u32 per
- * handle: [row, probe lo, probe hi]. Row 0 means not computed: Rust asks
+ * STATES = [table, capacity, verify] (natives.rs). An entry is four u32 per
+ * handle: [row, probe lo, probe hi, frame]. Row 0 means not computed: Rust asks
  * js_state, which computes the entry and enters it. A state row is
  * [node id, n, name ids along the node's base chain], where the node is what
  * the state queries read (script-runtime.mjs, natives 281/284):
@@ -15,6 +15,17 @@
  * GetStateName's value. The probe words are the ScriptState's ProbeMask (0
  * without one).
  *
+ * The frame word is what ScriptState.process would do first: FRAME_NONE
+ * when it returns at once (no execution, or its cursor is null),
+ * FRAME_UNSET when it would throw on an uninitialized LatentAction,
+ * FRAME_NO_STATE for an instance without a ScriptState (processState
+ * throws), and otherwise the LatentAction it polls, 0 when it runs state
+ * code. The Rust actor tick skips the ProcessState call when it is
+ * FRAME_NONE (tick.rs). A change of the frame alone (script-state.mjs
+ * onFrameChange: a LatentAction write, a cursor write between null and an
+ * offset, a new execution) rewrites the word of a filled entry; the row and
+ * probe words stay.
+ *
  * js_state returns 0 for a handle it does not describe (released, a class
  * identity, not attached to this runtime, a chain whose names
  * scriptNameToString rejects): the native then runs in JavaScript, which
@@ -23,13 +34,16 @@
  * attachment, InitExecution, a restored StateFrame) and when its handle is
  * released. STATE_VERIFY=1 sets `verify`: Rust asks js_state on every read,
  * and js_state compares a filled entry with what it computes, so a change
- * that missed stateChanged fails at the next read.
+ * that missed stateChanged or onFrameChange fails at the next read.
  */
 import {identityOfHandle} from './script-object-handles.mjs';
 import {nameId} from './script-name-ids.mjs';
 
 const STATE_VERIFY = typeof process !== 'undefined' && process.env?.STATE_VERIFY === '1';
-const ENTRY = 12;
+/** Bytes per handle of the table. */
+export const STATE_ENTRY = 16;
+const ENTRY = STATE_ENTRY;
+export const FRAME_NONE = 0xffffffff, FRAME_UNSET = 0xfffffffe, FRAME_NO_STATE = 0xfffffffd;
 
 // State nodes (and class sentinels) as small integers from 1, shared by
 // every runtime: a row's first word.
@@ -39,6 +53,15 @@ export function stateNodeId(node) {
   let id = nodeIds.get(node);
   if (id === undefined) nodeIds.set(node, id = nextNodeId++);
   return id;
+}
+
+/** The frame word of an instance's state (null: none). */
+function frameWord(state) {
+  if (!state) return FRAME_NO_STATE;
+  const execution = state.execution;
+  if (!execution || execution.cursor === null) return FRAME_NONE;
+  const latent = state.latent;
+  return latent === undefined ? FRAME_UNSET : latent >>> 0;
 }
 
 export class StateTable {
@@ -76,31 +99,48 @@ export class StateTable {
   clear(handle) {
     if (handle > 0 && handle < this.capacity) this.arena.view.setUint32(this.table + ENTRY * handle, 0, true);
   }
+  /** `handle`'s frame changed: a filled entry takes its new frame word. */
+  frame(handle) {
+    if (handle <= 0 || handle >= this.capacity) return;
+    const view = this.arena.view, at = this.table + ENTRY * handle;
+    if (view.getUint32(at, true) === 0) return;
+    const instance = this.instance(handle);
+    if (instance) view.setUint32(at + 12, frameWord(instance.state), true);
+    else view.setUint32(at, 0, true);
+  }
   /** js_state: `handle`'s row, with its entry filled, or 0. Runs no script. */
   state(handle) {
     const entry = this.compute(handle);
     if (!entry) return 0;
     this.grow(handle);
     const view = this.arena.view, at = this.table + ENTRY * handle;
-    if (STATE_VERIFY && view.getUint32(at, true) !== 0 &&
-      (view.getUint32(at, true) !== entry.row || view.getUint32(at + 4, true) !== entry.lo || view.getUint32(at + 8, true) !== entry.hi))
-      throw new Error(`State table entry of handle ${handle} is stale: [${view.getUint32(at, true)}, ${view.getUint32(at + 4, true)}, ${view.getUint32(at + 8, true)}], now [${entry.row}, ${entry.lo}, ${entry.hi}]`);
+    if (STATE_VERIFY && view.getUint32(at, true) !== 0) {
+      const words = [0, 4, 8, 12].map(offset => view.getUint32(at + offset, true));
+      if (words[0] !== entry.row || words[1] !== entry.lo || words[2] !== entry.hi || words[3] !== entry.frame)
+        throw new Error(`State table entry of handle ${handle} is stale: [${words}], now [${entry.row}, ${entry.lo}, ${entry.hi}, ${entry.frame}]`);
+    }
     view.setUint32(at, entry.row, true);
     view.setUint32(at + 4, entry.lo, true);
     view.setUint32(at + 8, entry.hi, true);
+    view.setUint32(at + 12, entry.frame, true);
     return entry.row;
   }
-  compute(handle) {
+  /** The attached instance `handle` names, or null. */
+  instance(handle) {
     const identity = identityOfHandle(handle);
     if (identity === null || typeof identity !== 'object' || identity.kind === 'Class') return null;
-    const runtime = this.vm.runtime, instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity);
+    const runtime = this.vm.runtime;
+    return identity[runtime.instanceKey] ?? runtime.instances.get(identity) ?? null;
+  }
+  compute(handle) {
+    const instance = this.instance(handle);
     if (!instance) return null;
     const state = instance.state;
-    if (!state) return {row: this.noneRow(), lo: 0, hi: 0};
+    if (!state) return {row: this.noneRow(), lo: 0, hi: 0, frame: FRAME_NO_STATE};
     const row = this.row(state.stateNode ?? instance.cls);
     if (!row) return null;
     const mask = state.probeMask;
-    return {row, lo: mask[0] >>> 0, hi: mask[1] >>> 0};
+    return {row, lo: mask[0] >>> 0, hi: mask[1] >>> 0, frame: frameWord(state)};
   }
   noneRow() {
     if (!this.none) {
