@@ -108,8 +108,12 @@ ticks or mutates the shared runtime actors.
 Which actors this layer draws follows Render.dll's level-actor pass
 (`0x10b22e27`–`0x10b22ef8`) for the player's first-person frame. That pass
 skips:
-* the view actor and, unless `bBehindView` (`+0x318`), its `ViewTarget`
-  (`+0x60c`);
+* the actor its caller excludes (`0x10b1a161`–`0x10b1a18e`): none when the
+  view actor has `bBehindView` (`+0x318` bit 0) or the frame has a parent,
+  otherwise its `ViewTarget` (`+0x60c`) or, without one, the view actor itself.
+  The player is therefore drawn in behind view, which a third-person
+  conversation sets ([conversation camera](conversation-camera.md));
+* unless `bBehindView`, the view actor's `ViewTarget`;
 * hidden actors (`bHidden`, `+0x28` bit 2);
 * a `bOnlyOwnerSee` actor (`+0x1a0` bit 4) that the view actor does not
   own, or owns but sees from behind (IsOwnedBy walks `Owner`, `+0x3c`);

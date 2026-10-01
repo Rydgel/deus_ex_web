@@ -235,6 +235,17 @@ runtime.namedReference(tool,'bOnlyOwnerSee').set(false);runtime.namedReference(t
 assert.equal(drawn(),false);
 for(const [name,value] of saved)runtime.namedReference(tool,name).set(value);
 runtime.namedReference(player,'bBehindView').set(behind);
+// The pass's caller excludes the view actor only in first person
+// (0x10b1a161-0x10b1a18e): in behind view, as a third-person conversation
+// sets, the player's own mesh is admitted and drawn, and hidden again after.
+const playerPreview=()=>live.actors.find(p=>p.actor===player);
+assert.equal(playerPreview(),undefined,'the player is not admitted in first person');
+runtime.namedReference(player,'bBehindView').set(true);
+live.update([0,0,0]);await live.ready();live.update([0,0,0]);
+assert.equal(playerPreview()?.root.visible,true,'behind view draws the player');
+runtime.namedReference(player,'bBehindView').set(false);live.update([0,0,0]);
+assert.equal(playerPreview()?.root.visible,false,'first person hides it again');
+runtime.namedReference(player,'bBehindView').set(behind);
 live.dispose();
 
 console.log(`actor mesh scene: ${scene.summary.npcs} NPC + ${scene.summary.props} prop meshes, `+

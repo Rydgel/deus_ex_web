@@ -82,11 +82,14 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   const level=currentPlayer()?runtime.levelFor(currentPlayer()):null;
   const read=(actor,name)=>{try{return runtime.readNamed(actor,name);}catch{return undefined;}};
   // Render.dll's level-actor pass (0x10b22e27-0x10b22ef8), for the player's
-  // first-person frame: skip the view actor's ViewTarget (+0x60c) unless
-  // bBehindView, a hidden actor, a bOnlyOwnerSee actor the view actor does not
-  // own (IsOwnedBy walks Owner +0x3c) or sees from behind, and a bOwnerNoSee
-  // actor it owns in first person. The view actor itself is never admitted.
-  // SkilledTool's DownItem unhides the held tool, so it is drawn here too.
+  // main frame: skip the actor its caller excludes (0x10b1a161-0x10b1a18e:
+  // none when bBehindView, +0x318 bit 0, else the ViewTarget, +0x60c, or the
+  // view actor itself), the ViewTarget unless bBehindView, a hidden actor, a
+  // bOnlyOwnerSee actor the view actor does not own (IsOwnedBy walks Owner
+  // +0x3c) or sees from behind, and a bOwnerNoSee actor it owns in first
+  // person. So the player is drawn in behind view (a third-person
+  // conversation). SkilledTool's DownItem unhides the held tool, so it is
+  // drawn here too.
   // The viewer's fields, read once per update (no script runs while the
   // actor layer updates); asynchronous admission reads them afresh.
   let frameViewer=null;
@@ -99,6 +102,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     if(own?(own.bHidden()||own.bDeleteMe()):(read(actor,'bHidden')||read(actor,'bDeleteMe')))return false;
     const {player,behind,viewTarget}=viewer();
     if(!player)return true;
+    if(!behind&&actor===(viewTarget??player))return false;
     if(!behind&&viewTarget===actor)return false;
     let owned=false;
     for(let owner=actor;owner;owner=own&&owner===actor?own.Owner():read(owner,'Owner'))if(owner===player){owned=true;break;}
@@ -117,7 +121,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
   };
   const admit=(actor,readMesh=null)=>{
-    if(disposed||!actor||actor===currentPlayer()||bindings.has(actor)||pending.has(actor))return;
+    if(disposed||!actor||bindings.has(actor)||pending.has(actor))return;
     let mesh;
     if(readMesh){try{mesh=readMesh();}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
     if(failed.get(actor)===mesh)return;

@@ -149,6 +149,17 @@ GC colour dwords, whose planes take bytes 0–2. No shipped script reads `.A` or
 compares those colours (`AugmentationDisplayWindow` saves and restores a tile
 colour with GetTileColor). Alpha 0 is used.
 
+## The player in behind view
+
+DeusExPlayer's Conversation state sets `bBehindView` for a third-person
+conversation (and clears it in EndState). Render.dll's caller of the
+level-actor pass excludes no actor in behind view (`0x10b1a161`–`0x10b1a18e`),
+so JC's own mesh is drawn in the conversation shots. The actor layer used to
+skip the player unconditionally; it now admits the player and applies the
+original exclusion each frame ([actor layer](npc-mesh-preview.md)), so the
+mesh appears with the first behind-view frame and is hidden again in first
+person.
+
 ## Open
 
 * The 3D view still renders full screen behind the bars. The original renders
