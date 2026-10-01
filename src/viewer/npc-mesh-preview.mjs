@@ -259,7 +259,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   // GPU path (docs/gpu-mesh.md): GetFrame is planned here and evaluated on
   // the GPU, which also lights the mesh. The CPU path below stays the
   // reference and the fallback; `gpuFallback` records why an actor left it.
-  let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false,plannedFrame=-1;
+  let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false,plannedFrame=-1,firstPassFrame=-1;
   if(gpu){
     try{gpuHandle=gpu.allocate(payload,faceWords,{environment:hasEnvironment});mode='gpu';}
     catch(error){gpuFallback=error.message;}
@@ -598,6 +598,13 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       gpu.release(gpuHandle);gpuHandle=null;
     }
     function planGpu(){
+      // A slot's plans take effect when its GPU pass runs. Until the first
+      // one has run (the creation plan above is still pending), the actor
+      // has not been drawn and the GPU holds none of its cache poses; a new
+      // plan would overwrite that first one, and a tween in it would start
+      // from an empty state. The original's first GetFrame happens when the
+      // actor is first drawn, so the cache restarts: this plan is the first.
+      if(gpu.frame<firstPassFrame)for(const key of [...cache.entries.keys()])cache.flush(key);
       lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output});
       exactValid=false;plannedFrame=gpu.frame+1;
       try{gpu.setPose(gpuHandle,lastPlan);}
@@ -611,7 +618,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     }
     if(mode==='gpu'){
       // The first plan (above) is this preview's first GetFrame call.
-      try{plannedFrame=gpu.frame+1;gpu.setPose(gpuHandle,lastPlan);
+      try{plannedFrame=firstPassFrame=gpu.frame+1;gpu.setPose(gpuHandle,lastPlan);
         for(const group of groups.values()){
           for(const op of lastPlan.channels)advanceChannelBox(group.channelBoxes[op.channel+1],op,group.boxes);
           viewBox(lastPlan,group.channelBoxes,group.viewBox);boxSphere(group);

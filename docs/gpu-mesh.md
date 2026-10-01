@@ -181,6 +181,19 @@ publishes the current operation, which is by construction the output
 switching an actor between paths is exact. `script-runtime.mjs`'s own GetFrame
 caches never hold a log and are unaffected.
 
+**First pass.** A slot's plan takes effect when the next `run()` evaluates
+it (its stamp is `frame + 1`), and a later `setPose` before that run replaces
+it. A preview plans its first GetFrame when it is created, which is
+asynchronous; if the simulation moves the actor before the next run, the
+update's plan overtakes the creation plan, which then never runs on the GPU.
+Its cache entries exist only on the CPU, and a tween in the new plan would
+read a cache pose the GPU never wrote (zeros): the actor grows from a point
+over the tween. This is what the player looked like when MeetPaul admitted him
+mid-animation in behind view. The original's first GetFrame happens when the
+actor is first drawn, so until the slot's first run (`gpu.frame <
+firstPassFrame`) a new plan flushes the preview's CPU cache first and is
+itself the first GetFrame.
+
 ## Face, vertex and corner passes: DrawLodMesh lighting on the GPU
 
 These reproduce `light_mesh_job` in `native/lodmesh-kernel/src/lib.rs`:
@@ -341,6 +354,10 @@ ulps, the maximum colour error in bytes, the environment UV error and the
 visibility agreement per map, and exits nonzero past the tolerances. The
 compared set must include environment-mapped, translucent, modulated and
 masked faces, blend slots and tweens, and frames with moving lights.
+On Island the walk continues into MeetPaul after the sampled frames: once
+the conversation sets bBehindView and the player's mesh is admitted, every
+frame for 90 frames is compared, and at least one of them must tween the
+player (the first-pass case above).
 
 The simulation digest must be unchanged, since the path is render-only:
 `node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue

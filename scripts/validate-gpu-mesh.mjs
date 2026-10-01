@@ -9,6 +9,10 @@
  *     used this frame, on the exact CPU pose;
  *   - environment: meshVertexNormalsInto and writeMeshEnvironmentUV;
  *   - visibility: three.js's own sphere test on the exact CPU spheres.
+ * On Island the walk then continues into MeetPaul: the player's mesh is
+ * admitted mid-animation when the conversation turns on bBehindView, and
+ * every frame after that is compared, so a slot whose first GPU pass a
+ * second plan overtakes (the player growing from a point) fails.
  *
  *   node scripts/validate-gpu-mesh.mjs [--url http://127.0.0.1:5173] (default: its own server)
  *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,90,120,160,200,250,300,360]
@@ -43,10 +47,10 @@ const frames=option('frames','5,30,60,90,120,160,200,250,300,360').split(',').ma
 const TOLERANCE={ulp:1,tweenUlp:2,byte:1,edgeOn:2**-20,uv:2**-20};
 
 const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){return gpuMesh;},
-  get lighting(){return meshLighting;},get camera(){return camera;},THREE};\n`;
+  get lighting(){return meshLighting;},get camera(){return camera;},get game(){return game;},THREE};\n`;
 
-async function capture(page,{frames,device,tolerance}) {
-  return page.evaluate(async({frames,device,tolerance})=>{
+async function capture(page,{frames,device,tolerance,admission}) {
+  return page.evaluate(async({frames,device,tolerance,admission})=>{
     const {accumulateFaceNormal}=await import('/src/runtime/mesh-lighting.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
     const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
@@ -59,6 +63,7 @@ async function capture(page,{frames,device,tolerance}) {
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0},fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
+    let focus=null;
     function compare(){
       const {npc,gpu,lighting,camera}=v;
       if(!npc||!gpu)throw new Error('GPU mesh path is not active');
@@ -76,6 +81,7 @@ async function capture(page,{frames,device,tolerance}) {
         report.actors++;
         const {handle,plan,faces,faceWords,groups}=state,V=handle.mesh.V,F=handle.mesh.F;
         const tween=plan.channels.some(op=>op.tween&&op.alpha>0);
+        if(focus&&actor.actor===focus){report.admission.captures++;if(tween)report.admission.tweenCaptures++;}
         // Visibility first: the exact spheres come from the CPU shadow.
         const output=state.exactOutput(),cpu=new Float32Array(output.buffer,output.byteOffset,V*3);
         for(const group of groups.values()){
@@ -182,10 +188,27 @@ async function capture(page,{frames,device,tolerance}) {
         throw new Error(`runtime error: ${window.deusExViewer.framePhases(false).runtimeError}`);
       if(frame===frames[captured]){try{compare();}catch(error){report.errors.push(error.stack??String(error));}captured++;}
     }
+    if(admission){
+      // Keep walking until the conversation shows the player, then compare
+      // every frame from its admission on.
+      const game=v.game,runtime=game.doors.scriptRuntime.runtime;
+      report.admission={behindFrame:-1,admittedFrame:-1,captures:0,tweenCaptures:0};
+      for(let frame=0;frame<admission.maxFrames;frame++){
+        await new Promise(requestAnimationFrame);
+        const error=window.deusExViewer.framePhases(false).runtimeError;
+        if(error)throw new Error(`runtime error: ${error}`);
+        const player=game.player.collisionActor;
+        if(report.admission.behindFrame<0&&runtime.readNamed(player,'bBehindView'))report.admission.behindFrame=frame;
+        if(report.admission.behindFrame<0)continue;
+        if(!focus&&v.npc.actors.some(actor=>actor.actor===player)){focus=player;report.admission.admittedFrame=frame;}
+        if(focus){try{compare();}catch(error){report.errors.push(error.stack??String(error));}}
+        if(focus&&frame-report.admission.admittedFrame>=admission.frames)break;
+      }
+    }
     // Decisions Play made during the captured run (not the checks above).
     report.certified=certificateStats.certified-certifiedBefore;report.ambiguous=certificateStats.ambiguous-ambiguousBefore;
     return report;
-  },{frames,device,tolerance});
+  },{frames,device,tolerance,admission});
 }
 
 const browser=await chromium.launch({args:['--use-angle=metal']});
@@ -210,7 +233,8 @@ try {
     await page.locator('#scene').click({position:{x:600,y:350}});
     await page.waitForTimeout(1500);
     await page.keyboard.down('KeyW');
-    const report=await capture(page,{frames,device,tolerance:TOLERANCE});
+    const admission=map==='01_NYC_UNATCOIsland'?{frames:90,maxFrames:20000}:null;
+    const report=await capture(page,{frames,device,tolerance:TOLERANCE,admission});
     await page.keyboard.up('KeyW');
     report.pageErrors=errors;
     const checks=[
@@ -222,6 +246,7 @@ try {
       ['visibility',report.visibilityMismatches===0],
       ['no errors',!report.errors.length&&!errors.length],
       ['compared actors',report.actors>0&&report.corners>0],
+      ...(admission?[['player admitted in behind view and compared while tweening',report.admission?.tweenCaptures>0]]:[]),
     ];
     for(const [name,count] of Object.entries(report.coverage))coverage[name]=(coverage[name]??0)+count;
     const failures=checks.filter(([,ok])=>!ok).map(([name])=>name);
