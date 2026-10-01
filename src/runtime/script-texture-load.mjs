@@ -103,7 +103,9 @@ export function loadTextureLazyBytes(lazy, services) {
   });
 }
 
-function serializeLazyBytes(lazy, archive, services) {
+/** FArchive operator<<(TLazyArray<BYTE>&) 0x103039ef, loading (shared by
+ * texture mips and UMusic.Data). */
+export function serializeLazyBytes(lazy, archive, services) {
   let end;
   if (archive.ar04 > 61) {
     end = archive.readU32();

@@ -134,7 +134,8 @@ export const ENGINE_CLASSES = freeze({
   Decal:                row({staticClass: 0x10570208, internalCtor: 0x10303a26, super: 0x1057cdf0, instanceSize: 0x32c}),
   SpawnNotify:          row({staticClass: 0x1056fd10, internalCtor: 0x103038dc, super: 0x1057cdf0, instanceSize: 0x320}),
   Sound:                row({staticClass: 0x10580868, internalCtor: 0x10303891, super: 0x1029e0d0, instanceSize: 0x54}),
-  Music:                row({staticClass: 0x10580368, internalCtor: 0x103036a7, instanceSize: 0x4c}),
+  // Initializer 0x10370eb0 pushes Super = Within = UObject (IAT 0x105999f8).
+  Music:                row({staticClass: 0x10580368, internalCtor: 0x103036a7, super: 0x1029e0d0, instanceSize: 0x4c}),
   AudioSubsystem:       row({staticClass: 0x1057fe68, internalCtor: 0x10370f70, instanceSize: 0x2c}),
   // 0x103723a1 pushes Within=Client; 0x103723a6 pushes Super=Player.
   Viewport:             row({staticClass: 0x10581068, internalCtor: null, super: 0x1058cd68, instanceSize: 0xf8}),

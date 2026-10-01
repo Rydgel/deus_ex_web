@@ -1533,13 +1533,37 @@ export class ScriptRuntime {
     for(const node of decoded.expressions.values()){
       if(node?.op!==0x1c||bindings.get(node.functionIndex)?.key!=='core.object.dynamicloadobject')continue;
       const name=node.args?.[0];
-      if(name?.op!=='literal'||typeof name.value!=='string'||!name.value.includes('.'))continue;
-      const packageName=name.value.split('.')[0];
-      if(this.classLoader.graph.packageAssets.has(lower(packageName)))continue;
-      let asset;
-      try{asset=await this.objects.assets.get(packageName);}catch{continue;} // absent: the call reaches file lookup
-      await this.classLoader.prepare(asset);
+      if(name?.op==='literal'&&typeof name.value==='string')await this.prefetchDynamicLoadPackage(name.value);
+      // An instance-variable path (CreditsScrollWindow.StartMusic's
+      // ScrollMusicString): the values its declaring class and that class's
+      // subclasses in the same package give it by default. Another runtime
+      // value still reaches the first-load boundary.
+      else if(name?.op===0x01)for(const value of await this.defaultStringValues(bindings.get(name.fieldIndex)))
+        await this.prefetchDynamicLoadPackage(value);
     }
+  }
+  async prefetchDynamicLoadPackage(path){
+    if(typeof path!=='string'||!path.includes('.'))return;
+    const packageName=path.split('.')[0];
+    if(this.classLoader.graph.packageAssets.has(lower(packageName)))return;
+    let asset;
+    try{asset=await this.objects.assets.get(packageName);}catch{return;} // absent: the call reaches file lookup
+    await this.classLoader.prepare(asset);
+  }
+  /** A string property's default values in its declaring class and in every
+   * subclass the same package exports. */
+  async defaultStringValues(field){
+    const asset=field?.asset,owner=field?.entry?.outer;
+    if(!asset||!(owner>0)||!/^strproperty$/i.test(field.entry.className??''))return [];
+    const exports=asset.pkg.exports,values=new Set();
+    const descends=index=>{for(let i=index;i>0;i=exports[i-1].superIndex)if(i===owner)return true;return false;};
+    for(let index=1;index<=exports.length;index++){
+      if(exports[index-1].className!=='Class'||!descends(index))continue;
+      const cls=await this.loadClass(asset,index),member=this.lookupMember(cls,'fields',field.entry.name??field.name);
+      if(!member)continue;
+      try{const value=this.defaultValue(cls,member);if(typeof value==='string'&&value)values.add(value);}catch{}
+    }
+    return [...values];
   }
   /** Engine's inlined IsA over a natively loaded object's Class/SuperField
    * chain, for a native-only class target (Font, Sound...). */

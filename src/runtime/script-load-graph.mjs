@@ -21,6 +21,7 @@ import {createScriptPackage} from './script-package-construction.mjs';
 import {attachLinkerLazyLoader, detachLinkerLazyLoader} from './script-linker-lazy-loader.mjs';
 import {constructTexture, constructPalette, serializeTexture, serializePalette,
   postLoadTexture, loadTextureLazyBytes, removeResourceArray} from './script-texture-load.mjs';
+import {MUSIC_NATIVE, constructMusic, serializeMusic} from './script-music-load.mjs';
 import {constructSoundNative} from './script-sound-construction.mjs';
 import {FONT_NATIVE, constructFont, serializeFont} from './script-font-load.mjs';
 import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray, constructMesh, serializeMesh} from './script-mesh-load.mjs';
@@ -350,6 +351,18 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     fontClass.defaults = {data: new Map(), num: FONT_NATIVE.instanceSize, max: FONT_NATIVE.instanceSize};
     for (let offset = 0x28; offset < FONT_NATIVE.instanceSize; offset += 4) fontClass.defaults.data.set(offset, 0);
     fontClass.defaultsSource = 'original-native-font-registration';
+    // Music is native-only too: initializer 0x10370eb0 registers size 0x4c,
+    // raw flags 0x40 (registered 0x52), Super/Within Core.Object, config
+    // System and UObject's static constructor (docs/script-music-load.md).
+    const musicClass = staticRecords.get('Engine.Music');
+    writeSlot(musicClass, 0x3c, MUSIC_NATIVE.instanceSize);
+    writeSlot(musicClass, 0x484, MUSIC_NATIVE.registeredClassFlags);
+    writeSlot(musicClass, 0x49c, objectStatic);
+    writeSlot(musicClass, 0x4a0, intern('System'));
+    writeSlot(musicClass, 0x4e4, MUSIC_NATIVE.staticConstructor);
+    musicClass.defaults = {data: new Map(), num: MUSIC_NATIVE.instanceSize, max: MUSIC_NATIVE.instanceSize};
+    for (let offset = 0x28; offset < MUSIC_NATIVE.instanceSize; offset += 4) musicClass.defaults.data.set(offset, 0);
+    musicClass.defaultsSource = 'original-native-music-registration';
   }
   if (meshLoadServices) {
     // Engine native-only initializers + original UClass::Register. Defaults
@@ -666,7 +679,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   function initializeResource(object) {
     const kind = fullName(classRecordOf(object));
     if (kind === 'Engine.LodMesh' || kind === 'Engine.Mesh' ? !meshLoadServices :
-      !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound', 'Engine.Font'].includes(kind)) return;
+      !resourceServices || !['Engine.Texture', 'Engine.Palette', 'Engine.Sound', 'Engine.Font', 'Engine.Music'].includes(kind)) return;
     const source = classRecordOf(object)?.defaults?.data;
     if (!(source instanceof Map)) throw new Error(`Resource construction requires loaded class defaults: ${kind}`);
     object.instanceValues = new Map([...source].filter(([offset]) => offset >= 0x28)
@@ -687,6 +700,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       }
       constructSoundNative(object, soundServices);
     } else if (kind === 'Engine.Font') constructFont(object, fontServices);
+    else if (kind === 'Engine.Music') constructMusic(object, musicServices);
     else (kind === 'Engine.Texture' ? constructTexture : constructPalette)(object, textureServices);
     object.resourceConstructed = kind;
   }
@@ -786,6 +800,14 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     getLazyLoad: () => meshLoadServices.getLazyLoad(),
     attach: (archive, lazy) => attachLinkerLazyLoader(archive, lazy, textureServices),
   };
+  // UMusic: its Data is the same TLazyArray<BYTE> the texture mips hold.
+  const musicServices = {
+    ...textureServices,
+    read: (object, offset) => object.instanceValues.get(offset),
+    write: (object, offset, value) => { object.instanceValues.set(offset, value); },
+    writeVtable: (object, vtable) => writeSlot(object, 0, vtable),
+    uobjectSerialize: (object, archive) => serializeLoadedObject(object, archive, preloadServices, {events}),
+  };
   const soundByteServices = {
     read: (object, key) => object[key],
     write: (object, key, value) => { object[key] = value; },
@@ -827,6 +849,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     if (object.resourceConstructed === 'Engine.Palette') return serializePalette(object, archive, textureServices);
     if (object.resourceConstructed === 'Engine.Sound') return serializeSoundLifecycle(object, archive, soundServices);
     if (object.resourceConstructed === 'Engine.Font') return serializeFont(object, archive, fontServices);
+    if (object.resourceConstructed === 'Engine.Music') return serializeMusic(object, archive, musicServices);
     if (object.resourceConstructed === 'Engine.LodMesh') {
       serializeLodMesh(object, archive, meshServices);
       const linker = slotOf(object, 0x10), index = slotOf(object, 0x14);
@@ -1164,6 +1187,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     metadataPostLoad.set('Engine.Palette', postLoadObject);
     metadataPostLoad.set('Engine.Sound', postLoadObject); // Engine 0x1036fb20 forwards only to UObject
     metadataPostLoad.set('Engine.Font', postLoadObject); // vtable +0x20 -> 0x1040c72e -> Core UObject::PostLoad
+    metadataPostLoad.set('Engine.Music', postLoadObject); // UMusic::PostLoad 0x10370df0 forwards only to UObject
   }
   if (meshLoadServices) {
     metadataPostLoad.set('Engine.LodMesh', postLoadObject); // original vtable +20 -> 0x1040c72e -> Core
