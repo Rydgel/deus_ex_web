@@ -8,6 +8,8 @@ import {resolveNameNative} from './script-resolve-name.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
 import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
+import {createGalaxyVolumes} from './galaxy-volumes.mjs';
+import {msvcrtWtoi} from './script-text-parser.mjs';
 
 /** A loaded package (DeusEx.u, loaded since boot) as the registered Core.Package
  * object StaticFindObject finds: the same record the DeusExConText package has
@@ -29,6 +31,18 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   const get=(o,k)=>runtime.readNamed(o,k);
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const [deus,conSys,engine]=await Promise.all(['DeusEx','ConSys','Engine'].map(x=>assets.get(x)));
+  // The engine's audio subsystem is Galaxy (DeusEx.ini AudioDevice), whose
+  // MusicVolume/SoundVolume/SpeechVolume config bytes the SetInstant*Volume
+  // natives read and replace (galaxy-volumes.mjs). It outlives Player-start
+  // reloads, as the subsystem outlives levels. A missing key is not guessed.
+  const config=await runtime.classLoader?.prepareConfig?.();
+  const galaxyByte=key=>{
+    const text=config?.getString('Galaxy.GalaxyAudioSubsystem',key);
+    if(text==null)throw new Error(`Galaxy ${key} is not in DeusEx.ini [Galaxy.GalaxyAudioSubsystem]`);
+    return msvcrtWtoi(text)&255; // UByteProperty::ImportText: appAtoi, low byte.
+  };
+  const galaxy=config?createGalaxyVolumes({musicVolume:galaxyByte('MusicVolume'),
+    soundVolume:galaxyByte('SoundVolume'),speechVolume:galaxyByte('SpeechVolume')}):null;
   const load=(asset,path)=>runtime.loadClass(asset,asset.exportsByPath.get(path));
   const [playClass,historyClass,historyEventClass,cameraClass,lightClass]=await Promise.all([
     load(deus,'conplay'),load(conSys,'conhistory'),load(conSys,'conhistoryevent'),
@@ -227,6 +241,17 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};
     }
+    // Actor.SetInstantSoundVolume/SpeechVolume/MusicVolume (268/269/270, exec
+    // 0x103e2850/0x103e28d0/0x103e2950): the byte, P_FINISH, then the engine's
+    // audio subsystem vtable +0x90/+0x94/+0x98 (docs/galaxy-volumes.md).
+    if(call.index>=268&&call.index<=270&&galaxy){
+      if(call.argumentCount!==1)throw new Error('SetInstant*Volume requires one byte');
+      const value=refValue(call.evaluateArgument(0))&255;
+      if(call.index===268)galaxy.setInstantSoundVolume(value);
+      else if(call.index===269)galaxy.setInstantSpeechVolume(value);
+      else galaxy.setInstantMusicVolume(value);
+      return {handled:true,value:undefined};
+    }
     if(call.index===2051){
       if(runtime.instance(call.receiver).cls.record.key!=='consys.conversation'||call.argumentCount!==0)
         throw new Error('CreateConCamera requires a Conversation and no arguments');
@@ -264,7 +289,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   function reset(){
     for(const id of activeAudio.keys())onSpeech?.({kind:'stop',id});activeAudio.clear();soundRequests.length=0;
   }
-  return {handleNative,reset,spawned,sounds,soundRequests,
+  return {handleNative,reset,spawned,sounds,soundRequests,galaxy,
     // Call reset against the old player before adopting the next Login result.
     bindPlayer(next){runtime.instance(next);player=next;},
     withLifecycle:fn=>shell.withLifecycle(fn),
