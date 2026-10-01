@@ -1,5 +1,6 @@
 import {TRAINING_NPC_IDENTITIES} from './training-npc-identities.mjs';
 import {ISLAND_NPC_IDENTITIES} from './island-npc-identities.mjs';
+import {MAP_NPC_IDENTITIES} from './map-npc-identities.mjs';
 import {staticLoadObject} from './script-static-load-object.mjs';
 import {resolveNameNative} from './script-resolve-name.mjs';
 /** Live ConPlay services; gameplay and scheduling execute the original bytecode.
@@ -58,8 +59,9 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     *[Symbol.iterator](){for(const actor of [...level.actors])if(isPlay(actor))yield actor;},
   };
   // Reuse the original per-map object-index captures (Training's is also used
-  // by GetFrame). Channel IDs are computed by execPlaySound from these indices.
-  const captured={'00_training':TRAINING_NPC_IDENTITIES,'01_nyc_unatcoisland':ISLAND_NPC_IDENTITIES};
+  // by GetFrame; the other maps' come from scripts/build-npc-identities.mjs).
+  // Channel IDs are computed by execPlaySound from these indices.
+  const captured={...MAP_NPC_IDENTITIES,'00_training':TRAINING_NPC_IDENTITIES,'01_nyc_unatcoisland':ISLAND_NPC_IDENTITIES};
   for(const object of level.actors){
     const table=captured[object?.asset?.name?.toLowerCase()];
     const index=table?.[object.name];

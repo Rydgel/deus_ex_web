@@ -12,10 +12,11 @@ running original and kept in a per-map table:
 | --- | --- | --- |
 | 00_Training | `src/runtime/training-npc-identities.mjs` | `original-gobjects-20260912-training-start.txt` |
 | 01_NYC_UNATCOIsland | `src/runtime/island-npc-identities.mjs` | `original-gobjects-20261001-island-open.txt` |
+| the other 81 single-player maps | `src/runtime/map-npc-identities.mjs` (generated) | `original-gobjects-20261001-<map>-open.txt` |
 
-`script-conplay-live.mjs` assigns them (`globalIndex`) when Play starts. A map
-without a table plays until its first speech, which stops at "PlaySound
-requires the registered global UObject index". Everything else in
+`script-conplay-live.mjs` assigns them (`globalIndex`) when Play starts. A
+pawn without an index (only 04_NYC_NSFHQ's UNATCOTroop27, below) stops its
+first speech at "PlaySound requires the registered global UObject index". Everything else in
 conversations (camera, letterbox, gestures, lip sync) is shared code and
 needs nothing per map.
 
@@ -67,3 +68,16 @@ and an exported `WINEPREFIX`; `ad/tools/dxinput.exe` is built with
 `i686-w64-mingw32-gcc -O2 -o dxinput.exe dxinput.c`. Run there on 2026-10-01,
 Island reproduced the Mac (CrossOver) capture: all 58 pawn identities equal,
 PaulDenton0 = 35713.
+
+Done on the Linux host on 2026-10-01: all 88 maps captured (none needed more
+than the one retry). `scripts/build-npc-identities.mjs` turned the 81
+single-player maps other than Training and Island into
+`src/runtime/map-npc-identities.mjs`: 1,425 pawn indices, every pre-placed
+Pawn matched except 04_NYC_NSFHQ's `UNATCOTroop27`. The original loaded it
+(index 34917 lies between Troop26's and Troop28's) and destroyed it before
+the dump, so it never speaks there. The multiplayer maps (`DXMP_*`) are
+captured but not tabled: multiplayer is deferred, and Play does not boot
+DXMP_Cathedral. `scripts/validate-map-npc-identities.mjs` checks every entry
+against its capture file; `build-npc-identities.mjs --check` rebuilds the
+module from the captures and compares (it loads every map, so it is not part
+of the sweep).
