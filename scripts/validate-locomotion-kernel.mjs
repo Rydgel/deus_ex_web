@@ -177,7 +177,7 @@ for (let n = 0; n < CASES; n++) {
   write(pawn, 'bCanStrafe', chance(0.3));
   write(pawn, 'bReducedSpeed', chance(0.4));
   write(pawn, 'bAdvancedTactics', chance(0.1));
-  write(pawn, 'bCanGlide', chance(0.15));
+  write(pawn, 'bCanGlide', chance(0.35));
   write(pawn, 'MoveTarget', moveTarget);
   write(pawn, 'FaceTarget', faceTarget);
   const before = touched.map(a => [a, image(a), refsOf(a)]);

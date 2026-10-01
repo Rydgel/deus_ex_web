@@ -16,7 +16,6 @@
 //! write, decided from reads alone:
 //! * Physics PHYS_Falling (steerArrive's air control reads the zone) and
 //!   PHYS_Spider (turnSetup returns early; MoveToward offsets along Floor);
-//! * a gliding pawn (bCanGlide, not bCanStrafe, swimming or flying);
 //! * the bAdvancedTactics walking SpawnNotification lookup;
 //! * an Inventory MoveTarget close enough for steerArrive's Touch event;
 //! * MoveToward with a Pawn target (it reads the target's zone);
@@ -246,7 +245,7 @@ impl Pawn {
 }
 
 /// The pawn, when every poll field is in the image and finite, it is not
-/// spider, falling or gliding and takes no tactics branch.
+/// spider or falling and takes no tactics branch.
 fn pawn(handle: u32) -> Option<Pawn> {
     if unsafe { (*addr_of!(L_NAMES))[2] } == 0 {
         return None;
@@ -256,7 +255,7 @@ fn pawn(handle: u32) -> Option<Pawn> {
         return None;
     }
     let p = Pawn { o, physics: o.byte(L_PHYSICS) };
-    if p.physics == 0xa || p.physics == 2 || p.gliding() || !p.finite_inputs() {
+    if p.physics == 0xa || p.physics == 2 || !p.finite_inputs() {
         return None;
     }
     // tacticsEvent's FindFunction runs in JavaScript.
@@ -286,6 +285,20 @@ fn vector_to_rotator(v: [u32; 3]) -> [i32; 3] {
     let yaw = unsafe { js_atan2(y, x) } * SCALE;
     let pitch = unsafe { js_atan2(z, crate::trace::sqrt(x * x + y * y)) } * SCALE;
     [pitch as i32, yaw as i32, 0]
+}
+
+/// FCoords(Rotation)'s X axis as float32 words (fcoordsAxes(...)[1]).
+fn x_axis(p: &Pawn) -> [u32; 3] {
+    let r = p.o.vec(L_ROTATION);
+    let x = crate::percep::fcoords_axes([r[0] as i32, r[1] as i32, r[2] as i32])[1];
+    [(x[0] as f32).to_bits(), (x[1] as f32).to_bits(), (x[2] as f32).to_bits()]
+}
+
+/// glideAcceleration: Acceleration = X axis * AccelRate.
+fn glide_acceleration(p: &Pawn) {
+    let ar = ld(p.o.word(L_ACCELRATE));
+    let x = x_axis(p);
+    p.o.set_vec(L_ACCELERATION, [ld(x[0]).mul(ar).store(), ld(x[1]).mul(ar).store(), ld(x[2]).mul(ar).store()]);
 }
 
 /// Whether turnSetup980's direction toward `dest` is finite and small.
@@ -346,11 +359,11 @@ fn steer_target(p: &Pawn) -> Result<Option<Obj>, ()> {
     Ok(Some(o))
 }
 
-/// Helper 0x103be200, steerArrive200, for a pawn that is neither falling
-/// nor gliding, with its MoveTarget checked by `steer_target`: whether it
-/// arrived.
+/// Helper 0x103be200, steerArrive200, for a pawn that is not falling, with
+/// its MoveTarget checked by `steer_target`: whether it arrived.
 fn steer_arrive(p: &Pawn, target: Option<Obj>, dest: [u32; 3]) -> bool {
     let o = &p.o;
+    let glide = p.gliding();
     let loc = o.vec(L_LOCATION);
     let mut d = [sub32(dest[0], loc[0]), sub32(dest[1], loc[1]), sub32(dest[2], loc[2])];
     if p.physics == 1 {
@@ -367,11 +380,15 @@ fn steer_arrive(p: &Pawn, target: Option<Obj>, dest: [u32; 3]) -> bool {
         let ch = ld(o.word(L_CHEIGHT));
         let bound = if lt_u(int(48.0), ch) { ch } else { int(48.0) };
         if lt_u(az, bound) {
-            o.set_vec(L_ACCELERATION, [0, 0, 0]);
+            if !glide {
+                o.set_vec(L_ACCELERATION, [0, 0, 0]);
+            }
             return true;
         }
     }
-    if !le_u(ld(dist), zero) {
+    if glide {
+        d = x_axis(p);
+    } else if !le_u(ld(dist), zero) {
         let s80 = ld(dist).recip();
         let s32 = s80.store();
         d = [ld(s32).mul(dl[0]).store(), ld(s32).mul(dl[1]).store(), s80.mul(dl[2]).store()];
@@ -391,7 +408,7 @@ fn steer_arrive(p: &Pawn, target: Option<Obj>, dest: [u32; 3]) -> bool {
     }
     let v = o.vec(L_VELOCITY);
     let speed = app_sqrt32(ld(v[0]).mul(ld(v[0])).add(ld(v[1]).mul(ld(v[1]))).add(ld(v[2]).mul(ld(v[2]))));
-    if !le_u(ld(speed), int(100.0)) {
+    if !glide && !le_u(ld(speed), int(100.0)) {
         let s80 = ld(speed).recip();
         let svx = s80.mul(ld(v[0])).store();
         let svy = s80.mul(ld(v[1])).store();
@@ -421,7 +438,7 @@ fn steer_arrive(p: &Pawn, target: Option<Obj>, dest: [u32; 3]) -> bool {
             o.set_word(L_DESIREDSPEED, cap.store());
         }
     }
-    false
+    glide
 }
 
 /// Engine 0x103bd060, pollMoveTo.
@@ -468,6 +485,9 @@ fn poll_turn_to(p: &Pawn) -> Poll {
     if !facing_ok(p, focus) {
         return Poll::Js;
     }
+    if p.gliding() {
+        glide_acceleration(p);
+    }
     if turn_setup(p, focus) { Poll::Done } else { Poll::Wait }
 }
 
@@ -486,6 +506,9 @@ fn poll_turn_toward(p: &Pawn) -> Poll {
     let focus = target.vec(L_LOCATION);
     if !facing_ok(p, focus) {
         return Poll::Js;
+    }
+    if p.gliding() {
+        glide_acceleration(p);
     }
     p.o.set_vec(L_FOCUS, focus);
     if turn_setup(p, focus) { Poll::Done } else { Poll::Wait }

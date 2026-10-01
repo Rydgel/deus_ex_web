@@ -570,7 +570,7 @@ poll when LatentAction is 0). A poll Rust does not take crosses to
 * **Hand-backs, decided from reads before any write:** a field outside the
   image; a float that is not finite or not below 2^60 in magnitude (the
   JavaScript model throws where an intermediate becomes infinite); a facing
-  direction that is not; PHYS_Falling and PHYS_Spider; a gliding pawn; the
+  direction that is not; PHYS_Falling and PHYS_Spider; the
   bAdvancedTactics walking branch (its SpawnNotification lookup); an
   Inventory MoveTarget close enough to fire Touch; MoveToward with a Pawn
   target (its zone read); WaitForLanding's LongFall.
@@ -582,8 +582,12 @@ poll when LatentAction is 0). A poll Rust does not take crosses to
 **Census** (Island, 360 ticks, per tick, all polls in JavaScript):
 MoveToward walking to a non-Pawn target 20.24, MoveTo walking 2.73,
 MoveTo/TurnTo swimming while gliding (fish) 3.24, WaitForLanding falling
-0.92, TurnTo walking 0.30, the bAdvancedTactics branch 0.28. Gliding is
-the one uncovered family worth adding (glideAcceleration over FCoords).
+0.92, TurnTo walking 0.30, the bAdvancedTactics branch 0.28. Gliding was
+added the same day: glideAcceleration over percep.rs's `fcoords_axes` in
+the TurnTo/TurnToward polls, and steerArrive's glide branches (no zeroing
+on arrival, the X axis as direction, no deceleration, 1 past the brake
+check); 8 of 8 glide mutants caught. Island `js_tick_state` is then 2
+crossings per tick.
 
 **Verification.** New `validate-locomotion-kernel`: on real pawns, cases
 aimed at every compare (arrival at horizontal 16 and the height bound,

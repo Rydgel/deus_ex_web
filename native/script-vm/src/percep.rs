@@ -323,7 +323,7 @@ fn sin_of(angle: i32) -> f64 {
 
 /// FCoords(FRotator) (script-pawn-locomotion.mjs fcoordsAxes): roll, pitch,
 /// then yaw passes over the unit coords, each field's components stored.
-fn fcoords_axes(rotation: [i32; 3]) -> [[f64; 3]; 4] {
+pub(crate) fn fcoords_axes(rotation: [i32; 3]) -> [[f64; 3]; 4] {
     let [pitch, yaw, roll] = rotation;
     let c = |a: i32| sin_of(a.wrapping_add(0x4000));
     let s = sin_of;
