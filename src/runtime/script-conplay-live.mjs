@@ -1,4 +1,5 @@
 import {TRAINING_NPC_IDENTITIES} from './training-npc-identities.mjs';
+import {ISLAND_NPC_IDENTITIES} from './island-npc-identities.mjs';
 import {staticLoadObject} from './script-static-load-object.mjs';
 import {resolveNameNative} from './script-resolve-name.mjs';
 /** Live ConPlay services; gameplay and scheduling execute the original bytecode.
@@ -10,8 +11,7 @@ import {refValue} from './script-vm.mjs';
 /** A loaded package (DeusEx.u, loaded since boot) as the registered Core.Package
  * object StaticFindObject finds: the same record the DeusExConText package has
  * (script-conversation-startup.mjs). The level collection keeps it as a
- * persistent package, like that one. Conversation.CreateConCamera's
- * CreatePackage(NULL,"DeusEx") finds it (docs/conversation-camera.md). */
+ * persistent package, like that one. */
 export function registerLoadedPackage(runtime,asset){
   const construction=runtime.actorLifecycle.construction;
   const existing=construction.findObject(null,asset.name);
@@ -29,20 +29,27 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const [deus,conSys,engine]=await Promise.all(['DeusEx','ConSys','Engine'].map(x=>assets.get(x)));
   const load=(asset,path)=>runtime.loadClass(asset,asset.exportsByPath.get(path));
-  const [playClass,historyClass,historyEventClass]=await Promise.all([
-    load(deus,'conplay'),load(conSys,'conhistory'),load(conSys,'conhistoryevent')]);
+  const [playClass,historyClass,historyEventClass,cameraClass,lightClass]=await Promise.all([
+    load(deus,'conplay'),load(conSys,'conhistory'),load(conSys,'conhistoryevent'),
+    load(conSys,'concamera'),load(conSys,'conlight')]);
   const paths=new Set(['deusexplayer.endconversation','deusexplayer.createhistoryobject',
     'deusexplayer.createhistoryevent','deusexplayer.getdisplayname','conhistory.addevent',
     'conlistitem.findconversationbyname']);
   for(const asset of [deus,conSys,engine])for(const [path,index] of asset.exportsByPath){
     const kind=asset.pkg.exports[index-1].className;
-    if(!(path.startsWith('conplay.')||path.startsWith('conplaybase.')||path.startsWith('conversation.')||paths.has(path)))continue;
+    if(!(path.startsWith('conplay.')||path.startsWith('conplaybase.')||path.startsWith('conversation.')||
+      path.startsWith('concamera.')||path.startsWith('conlight.')||paths.has(path)))continue;
     if(kind==='Function')await runtime.prepareFunction(asset,index);
     else if(kind==='State')await runtime.prepareState(asset,index);
   }
   if(playClass.base?.record.key!=='deusex.conplaybase'||playClass.base.base?.record.key!=='engine.actor'||
     playClass.metadata.classFlags!==0x32||runtime.classLoader.graph.slotOf(playClass.loadRecord,0x3c)!==0x404)
     throw new Error('ConPlay original script-only construction layout changed');
+  // ConCamera.CreateHighlights spawns two ConLights from the ConPlay actor.
+  await prepareClass(lightClass);
+  // CreateConCamera's CreatePackage(NULL,"DeusEx") finds the package record
+  // registerLoadedPackage put in the live registry.
+  const construction=runtime.actorLifecycle.construction;
   // ConPlay actors are whatever the original Spawn(class'ConPlay') placed in
   // Level.Actors through the general SpawnActor; this view lists them there.
   const isPlay=actor=>{try{return Boolean(actor)&&runtime.instance(actor).cls===playClass;}catch{return false;}};
@@ -50,11 +57,12 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     has:isPlay,
     *[Symbol.iterator](){for(const actor of [...level.actors])if(isPlay(actor))yield actor;},
   };
-  // Reuse the original Training object-index capture already used by GetFrame.
-  // Channel IDs are computed by execPlaySound from the same captured indices.
+  // Reuse the original per-map object-index captures (Training's is also used
+  // by GetFrame). Channel IDs are computed by execPlaySound from these indices.
+  const captured={'00_training':TRAINING_NPC_IDENTITIES,'01_nyc_unatcoisland':ISLAND_NPC_IDENTITIES};
   for(const object of level.actors){
-    if(!object||object.asset?.name?.toLowerCase()!=='00_training')continue;
-    const index=TRAINING_NPC_IDENTITIES[object.name];
+    const table=captured[object?.asset?.name?.toLowerCase()];
+    const index=table?.[object.name];
     if(Number.isInteger(index))runtime.instance(object).globalIndex=index;
   }
   const sounds=new Map();
@@ -189,12 +197,38 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     };
     return object;
   }
+  // ConSys execCreateConCamera 0x100106f0 (docs/conversation-camera.md): P_FINISH,
+  // CreatePackage(NULL,"DeusEx"), then DConCamera's operator new 0x10003d10 =
+  // StaticAllocateObject(ConCamera 0x1001e1d8, that package, NAME_None,
+  // RF_Public, no template) and constructor 0x10003ce0: UObject(), vtable
+  // 0x10013610, cameraActor (+0x28) = None. A null allocation returns None.
+  function camera(){
+    const outer=construction.findObject(null,'DeusEx');
+    if(!outer)throw new Error('CreateConCamera: CreatePackage would create DeusEx (not implemented)');
+    const object=runtime.allocateObject(cameraClass,{outer,name:'None',flags:4,template:null},{
+      ...runtime.actorLifecycle.construction,
+      validate:args=>args.cls===cameraClass&&args.outer===outer&&args.template===null,
+      initNativeProperties:()=>{},
+    });
+    const native=runtime.instance(object).nativeObject;
+    native.nativeVtable=0x10179dfc;
+    native.nativeVtable=0x10013610;
+    set(object,'cameraActor',null);
+    // Vtable 0x10013610 slot +0x24 is thunk 0x100110c2, UObject::Destroy.
+    native.destroy=receiver=>runtime.destroyObjectBase(receiver);
+    return object;
+  }
   const activeAudio=new Map(),soundRequests=[];
   function handleNative(call){
     const scriptPath=String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase();
     if(call.index===3002||call.index===3003){
       if(call.receiver!==player||call.argumentCount!==0)throw new Error('History creation requires the live player');
       return {handled:true,value:history(call.index===3003)};
+    }
+    if(call.index===2051){
+      if(runtime.instance(call.receiver).cls.record.key!=='consys.conversation'||call.argumentCount!==0)
+        throw new Error('CreateConCamera requires a Conversation and no arguments');
+      return {handled:true,value:camera()};
     }
     if(call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation'].includes(scriptPath)){
       const services=runtime.soundServices(call);

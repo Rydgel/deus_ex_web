@@ -17,10 +17,13 @@
  * Native 708 AIDirectionReachable (exec 0x103c8560, bit-exact in
  * validate-pawn-direction-reach) was the next boundary, at tick 1375: after
  * actorReachable(player) succeeds, PaulDenton0's GetNextVector asks it for a
- * step toward the player. It now runs, Paul follows the player, and the run
- * continues to the next boundary, which is reported, not implemented: Paul's
- * radius conversation MeetPaul is third-person, and ConPlay.StartConversation
- * calls Conversation.CreateConCamera (ConSys native 2051). */
+ * step toward the player. It now runs, Paul follows the player, and his
+ * radius conversation MeetPaul starts at tick 1872. It is third-person, so
+ * ConPlay.StartConversation calls Conversation.CreateConCamera (ConSys native
+ * 2051), formerly the boundary and now implemented; validate-island-conversation
+ * follows MeetPaul to its first choice. Play paints the HUD every frame (the
+ * conversation's speech window reads the viewport size through GetCurrentRes),
+ * so this run does too. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
@@ -67,15 +70,13 @@ if (process.argv[2] !== 'child') {
   const distance = t => Math.hypot(t.location[0] - run.player[0], t.location[1] - run.player[1]);
   const [atFirst, atLast] = [paul.track.find(t => t.tick >= 1380), paul.track.at(-1)];
   assert.ok(distance(atLast) < distance(atFirst), 'Paul followed the player');
-  // 3. The next runtime boundary without any bypass (reported, not
-  // implemented): PaulDenton0's radius conversation MeetPaul is third-person,
-  // so ConPlay.StartConversation asks Conversation.CreateConCamera (ConSys
-  // native 2051, execCreateConCamera 0x100106f0) for its camera.
-  assert.ok(run.firstError, 'a later boundary is reached within the window');
-  assert.match(run.firstError.message, /native 2051 in conplay\.startconversation/);
+  // 3. PaulDenton0's radius conversation MeetPaul is third-person, so
+  // ConPlay.StartConversation asks Conversation.CreateConCamera (ConSys native
+  // 2051, execCreateConCamera 0x100106f0) for its camera, with no boundary.
+  assert.equal(run.firstError, null, 'no boundary through the conversation start');
   const camera = run.conversation.find(c => c.index === 2051);
   assert.deepEqual({ tick: camera?.tick, conName: camera?.conName, owner: camera?.owner, firstPerson: camera?.bFirstPerson },
-    { tick: run.firstError.tick, conName: 'MeetPaul', owner: 'PaulDenton', firstPerson: false });
+    { tick: 1872, conName: 'MeetPaul', owner: 'PaulDenton', firstPerson: false });
   assert.deepEqual(run.conversation.filter(c => c.tick === camera.tick).map(c => c.index), [2052, 2051],
     'ConPlayBase binds the conversation events before the camera');
   const summary = {
@@ -87,9 +88,9 @@ if (process.argv[2] !== 'child') {
       .reduce((m, c) => (m[`${c.index}:${c.result}`] = (m[`${c.index}:${c.result}`] ?? 0) + 1, m), {}),
     directionCalls: directionCalls.map(({ trace, ...c }) => c), conversation: run.conversation,
     paulTrack: paul.track, player: run.player, nextBoundary: run.firstError,
-    seconds: run.firstError && +(run.firstError.tick / 60).toFixed(3),
-    scope: 'Island Play reaches FindBestJump/SuggestJumpVelocity/jumpLanding through actorReachable and ' +
-      'AIDirectionReachable through GetNextVector; first boundary reported' };
+    seconds: +(camera.tick / 60).toFixed(3),
+    scope: 'Island Play reaches FindBestJump/SuggestJumpVelocity/jumpLanding through actorReachable, ' +
+      'AIDirectionReachable through GetNextVector and MeetPaul\'s CreateConCamera' };
   console.log(JSON.stringify(summary, null, 1));
   process.exit(0);
 }
@@ -192,10 +193,10 @@ runtime.invokeNative = call => {
 };
 createPlayerInputFixture(game).key('KeyW', true);
 const track = [];
-while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 3000)) {
+while (!firstError && tick < Number(process.env.ISLAND_TICKS ?? 1900)) {
   simulatedMs += 1000 / 60; tick++;
   lastNative = null;
-  try { game.tick(1 / 60); }
+  try { game.tick(1 / 60); game.hud.commands(1440, 960, game.view()); }
   catch (error) {
     firstError = { tick, message: String(error?.message ?? error).split('\n')[0], lastNavNative: lastNative,
       paulState: runtime.instance(paulActor)?.state?.stateNode?.record?.name ?? null };

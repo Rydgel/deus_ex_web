@@ -18,6 +18,16 @@ import {isKeyDownNative} from './script-window-is-key-down.mjs';
 import {setTextColorsNative} from './script-window-set-text-colors.mjs';
 
 const packed = c => ['r','g','b','a'].reduce((word,k,i)=>word|((c?.[`core.object.color.${k}`]??0)&255)<<(8*i),0)>>>0;
+// ButtonWindow.SetButtonColors/SetTextColors execs (0x100087b0/0x10008940)
+// preset each omitted Color to R=G=B=0xff (SetButtonColors) or R=0, G=0xff,
+// B=0 (SetTextColors) and never write its alpha:
+// the first parameter's temporary is a stale stack byte, the others reuse the
+// exec's FFrame* argument slot, so their alpha is that pointer's top byte.
+// Neither is recoverable, and neither is observable: the colours reach only the
+// style table, curTileColor/curTextColor (read by no shipped script) and the
+// GC colour dwords, whose planes take bytes 0-2 and which no shipped script
+// compares or reads .A from (docs/conversation-camera.md). Alpha 0 is used.
+const omittedColor = fallback => c => c === null ? fallback : packed(c);
 export function dispatchWindowHostNative(W, call) {
   const win=call.receiver;
   const arg=(i,fallback)=>i<call.argumentCount?(refValue(call.evaluateArgument(i))??fallback):fallback;
@@ -140,16 +150,14 @@ export function dispatchWindowHostNative(W, call) {
     case 1522: bits(0x5a4,8,arg(0,true));break;                   // ShowCursor 0x1003a310
     case 1592: setButtonTexturesNative(win,...Array.from({length:6},(_,i)=>arg(i,null)),{
       read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
-    case 1593: {
+    case 1593: { // ButtonWindow.SetButtonColors: omitted colours as in 1594.
       const colors=Array.from({length:6},(_,i)=>arg(i,null));
-      if(colors.some(v=>v===null))W.boundary('SetButtonColors omitted-color stack alpha is not modeled');
-      setButtonColorsNative(win,...colors.map(packed),{
+      setButtonColorsNative(win,...colors.map(omittedColor(0x00ffffff)),{
         read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
     }
-    case 1594: { // ButtonWindow.SetTextColors exec 0x10008940: omitted colours are {0,0xff,0,stale alpha}, as in 1593.
+    case 1594: { // ButtonWindow.SetTextColors exec 0x10008940.
       const colors=Array.from({length:6},(_,i)=>arg(i,null));
-      if(colors.some(v=>v===null))W.boundary('SetTextColors omitted-color stack alpha is not modeled');
-      setTextColorsNative(win,...colors.map(packed),{
+      setTextColorsNative(win,...colors.map(omittedColor(0x0000ff00)),{
         read:(o,off,kind)=>W.heap.read(o,off,kind),write:(o,off,kind,v)=>W.heap.write(o,off,kind,v)});break;
     }
     case 1840: { // CheckboxWindow.SetCheckboxTextures exec 0x1000afb0 -> 0x1000a840

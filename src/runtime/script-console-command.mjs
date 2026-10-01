@@ -370,10 +370,21 @@ export function createConsoleCommands({runtime, input, services}) {
     }
   }
 
-  /** UWindowsViewport::Exec 0x11106d90. */
+  /** UWindowsViewport::Exec 0x11106d90. Its `this` is the viewport's FExec
+   * subobject (+0x2c). GetCurrentRes (0x11106e23-0x11106e63) is
+   * Ar.Logf("%ix%i", SizeX +0x78, SizeY +0x7c, ...): the third argument,
+   * ColorBytes +0x80 (2 when 0) times 8, has no conversion in the format. */
   function viewportExec(cmd, ar) {
     if (uviewportExec(cmd, ar)) return true;
-    claims('UWindowsViewport::Exec', cmd);
+    for (const keyword of EXEC_KEYWORDS['UWindowsViewport::Exec']) {
+      if (parseCommand(cmd, keyword) === null) continue;
+      if (keyword !== 'GetCurrentRes')
+        throw new UnsupportedConsoleCommandError(`UWindowsViewport::Exec ${keyword} is not implemented: ${cmd}`,
+          {body: 'UWindowsViewport::Exec', keyword});
+      const {sizeX, sizeY} = services.viewportSize();
+      ar.log(`${sizeX | 0}x${sizeY | 0}`);
+      return true;
+    }
     return false;
   }
 

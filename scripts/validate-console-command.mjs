@@ -187,6 +187,11 @@ assert.equal(commands.state.flushes, 2);
 assert.equal(commands.consoleCommand(player, 'KEYNAME 27'), 'Escape');
 assert.equal(commands.consoleCommand(player, 'KEYBINDING Escape'), 'ShowMainMenu');
 assert.equal(commands.consoleCommand(player, 'NoSuchCommand 1'), '');
+// UWindowsViewport::Exec GetCurrentRes (0x11106e23): Logf("%ix%i") of the
+// viewport size, the drawing buffer the last frame painted (1432x1268 above).
+assert.equal(commands.consoleCommand(player, 'GetCurrentRes'), '1432x1268');
+assert.throws(() => commands.consoleCommand(player, 'GetCurrentColorDepth'),
+  error => error instanceof UnsupportedConsoleCommandError && error.body === 'UWindowsViewport::Exec', 'GetCurrentColorDepth');
 for (const [command, body] of [['OPEN 00_Training', 'UGameEngine::Exec'],
   ['obj list', 'UObject::StaticExec'], ['stat fps', 'URender::Exec']])
   assert.throws(() => commands.consoleCommand(player, command),

@@ -455,7 +455,8 @@ and local timing copies rewrite listed ones into early returns
 (`scripts/bench-sim-hooks.mjs`). That rewrite is NOT original behavior: frames
 after it are only a timing workload. Each bypass patch is removed when its
 behavior lands; since native 708 (item 4) the list is empty, and the
-forward-walk workload runs unbypassed to tick 1872 (31.2 s, item 6).
+forward-walk workload runs unbypassed to MeetPaul's first choice at tick 4720
+(78.7 s, item 6).
 
 1. ~~**Swimming.**~~ Done ([swimming](swimming.md)): startSwimming
    `0x103d2b70`, physSwimming `0x103d3cd0`, Swim `0x103d3850` and
@@ -555,33 +556,15 @@ forward-walk workload runs unbypassed to tick 1872 (31.2 s, item 6).
    Decoration.ZoneChange's `FRand() < 0.05` settle test, an extra draw from
    the shared random stream. The unbypassed forward-walk
    boundary is unchanged: native 2051 at tick 1872 (item 6).
-6. **Native 2051, `Conversation.CreateConCamera`** is now the first boundary
-   without a bypass: tick 1872 (31.20 s). With PaulDenton0 about 180 units
-   from the player, his conversation `MeetPaul` (`Conversation115`,
-   third-person: `bFirstPerson=False`) starts through
-   `ConPlay0.StartConversation`; after ConPlayBase's `BindEvents` (2052) the
-   third-person branch calls `con.CreateConCamera()`: `Unsupported original
-   door native 2051 in conplay.startconversation`
-   (`validate-island-jump-reach`). Research note: ConSys.dll (SHA-256
-   `f20c4d8904d17057318999c18673d82e2ccc3f7c1041eb3c0327eb731b3a8efa`)
-   registers `GRegisterNative(0x803, …)` at `0x10010760` to
-   `DConversation::execCreateConCamera` `0x100106f0` (30 instructions): P_FINISH,
-   `UObject::CreatePackage(NULL, L"DeusEx")`, `DConCamera::operator new`
-   (`0x10003d10`: `StaticAllocateObject(DConCamera::StaticClass()
-   0x1001e1d8, package, NAME_None, RF_Public, …)`, size `0x84`), the
-   constructor `DConCamera::DConCamera()` `0x10003ce0` (UObject ctor, vtable
-   `0x10013610`, `+0x28 = 0`), then `*Result` = the object (0 on a failed
-   allocation). The exec is thin, but it needs a package-outer, non-Actor
-   `StaticAllocateObject` with a generated `ConCamera<N>` name — outside the
-   recovered Spawn construction contract ([construction](script-construction.md)
-   covers Actor.Spawn's `StaticConstructObject`) — and it opens the
-   third-person conversation presentation: ConCamera's 1141-line script
-   (`InitializeCameraValues`, per-tick camera placement), `ConWindowActive`
-   and the HUD hide, which the Stage 3 census classifies as Stage 4
-   ("conversation camera behavior", [exit criteria](stage-3-exit-criteria.md)).
-   It is not a thin exec over ported navigation bodies, so it is not
-   implemented here. Latent 506 `StrafeFacing` is still not reached in these
-   1872 ticks.
+6. ~~**Native 2051, `Conversation.CreateConCamera`**~~ Done 2026-10-01
+   ([conversation camera](conversation-camera.md)): execCreateConCamera
+   `0x100106f0`, `GetCurrentRes` (WinDrv `0x11106d90`), the letterbox's raw
+   background (Extension `0x1003c720`/`0x1003c5f0`/`0x1003c1d0`, bit-exact in
+   `validate-root-raw-background`), Island's captured speaker indices, choice
+   graphs and omitted button colours. MeetPaul now runs from tick 1872 to its
+   first choice at tick 4720 (`validate-island-conversation`), where ConPlay
+   waits for the player's input. The 3D view is not yet clipped to the render
+   viewport, and choosing is not yet exercised headless.
 
 Done when training and Liberty Island support representative combat, stealth,
 exploration, conversation, and alternate-route objectives, with the systems

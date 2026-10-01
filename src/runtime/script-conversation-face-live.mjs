@@ -61,6 +61,28 @@ export async function prepareConversationGraph(runtime, conversation, objects = 
     }
     event = runtime.readNamed(event, 'nextEvent');
   }
+  // Every other authored object an event reaches (ConEventChoice.ChoiceList and
+  // its ConChoice.nextChoice/flagRef chains, and any further ObjectProperty of
+  // the conversation package): the original reads them through the same
+  // fields, so each is attached before the bytecode can read its properties.
+  const queue = [conversation, ...seenFlags, ...seenEvents];
+  for (const event of seenEvents) {
+    const speech = readMaybe(runtime, event, 'conSpeech');
+    if (speech) queue.push(speech);
+    for (let flag = readMaybe(runtime, event, 'flagRef'); flag; flag = runtime.readNamed(flag, 'nextFlagRef')) queue.push(flag);
+  }
+  while (queue.length) {
+    const object = queue.pop();
+    for (const field of runtime.instance(object).cls.propertyLink) {
+      if (field.metadata?.type !== 'object' || field.key.startsWith('core.object.')) continue;
+      const value = runtime.fieldReference(object, field).get();
+      for (const target of Array.isArray(value) ? value : [value]) {
+        if (!target || target.asset !== conversation.asset || objects.has(target)) continue;
+        await runtime.prepareObject(target); objects.add(target); prepared++;
+        queue.push(target);
+      }
+    }
+  }
   return prepared;
 }
 

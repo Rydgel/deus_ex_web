@@ -159,7 +159,20 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const isA=(object,key)=>{for(let cls=runtime.instance(object).cls;cls;cls=cls.base)if(cls.record.key===key)return true;return false;};
   const input={hostBinding:()=>false,flushRenderDevice:null,platformKeys:new Uint8Array(255),mouseDeltaX:0,mouseDeltaY:0};
   let updatePlatformInput=()=>boundary('UWindowsViewport::UpdateInput has no browser key snapshot adapter');
+  // UViewport SizeX/SizeY (+0x78/+0x7c): the browser drawing buffer the root
+  // canvas is painted at, set by each HUD frame (UWindowsViewport::ResizeViewport's
+  // place). Unknown until the first frame or an explicit resizeViewport.
+  let viewportSize=null;
+  const resizeViewport=(sizeX,sizeY)=>{
+    if(!Number.isInteger(sizeX)||!Number.isInteger(sizeY)||sizeX<0||sizeY<0)
+      throw new TypeError('Viewport size must be two non-negative integers');
+    viewportSize={sizeX,sizeY};
+  };
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
+    viewportSize(){
+      if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
+      return viewportSize;
+    },
     viewport(){
       const viewport=runtime.readNamed(player,'Player');
       if(!viewport)throw new Error('Console commands require the local UViewport');
@@ -1470,7 +1483,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if(key!==null&&action!==null)Input.rootProcess(W,root,key,action);
       return true;
     },
+    resizeViewport,
+    get viewportSize(){return viewportSize;},
     draw(root,width,height,view){
+      resizeViewport(width,height);
       if(view){writeWindowSceneFrame(W,node,{...view,width,height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);

@@ -22,6 +22,7 @@
  * scripts/native-window-tree-oracle.py, scripts/validate-window-tree-natives.mjs.
  */
 
+import {drawRawBackground} from './script-root-raw-background.mjs';
 const f = Math.fround;
 export const O = Object.freeze({
   type: 0x28, flags: 0x30, lock: 0x34, surface: 0x38, backgroundStyle: 0x3c,
@@ -449,7 +450,8 @@ export function paintWindows(W, root, canvas) {
   const saved = W.gc.push(gc);
   W.gc.setCanvas(gc, canvas);
   W.gc.setMultipliers(gc, W.i32(root, ROOT.hMultiplier), W.i32(root, ROOT.vMultiplier));
-  drawRawBackground(W, root, gc, W.ptr(root, ROOT.rawBackground), W.u32(root, ROOT.rawColor));
+  // 0x1003ab5c: DrawRawBackground(gc, rawBackground, rawColor) (script-root-raw-background.mjs).
+  drawRawBackground(W, root, gc, W.u32(root, ROOT.rawBackground), W.u32(root, ROOT.rawColor));
   const debugTexture = (W.u32(root, ROOT.debugFlags) & 2) ? W.ptr(root, ROOT.debugTexture) : null;
   const frameTimer = f(W.f32(root, ROOT.frameTimer) / 1);
   drawTree(W, root, canvas, debugTexture, frameTimer, W.i32(root, ROOT.hMultiplier), W.i32(root, ROOT.vMultiplier));
@@ -467,15 +469,3 @@ export function paintWindows(W, root, canvas) {
   W.gc.cleanUp();
 }
 
-/**
- * 0x1003c720 DrawRawBackground: raw backgrounds fill the unrendered area
- * outside the 3D view. Play renders the whole viewport (bRender set, no
- * render clip) and DeusExRootWindow leaves rawBackground unset, so the body
- * returns before its clip-list work; any other configuration is a boundary.
- */
-function drawRawBackground(W, root, gc, texture) {
-  // GetRawBackgroundClipList 1003c5f0: bRender && !bClipRender subtracts
-  // the null clip (1003c6b3), emptying the list. No DrawPattern is emitted.
-  if ((W.u32(root, ROOT.renderFlags)&3)===1) return;
-  W.boundary('XRootWindow::DrawRawBackground with a raw background texture (0x1003c720)');
-}
