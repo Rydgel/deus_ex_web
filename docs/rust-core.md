@@ -348,6 +348,13 @@ the Run from that record on first use. A run JavaScript begins clears the
 record's serial (`own`), so a stale record is never used. Every import now
 looks its run up through `run(id)` instead of indexing `frames`.
 
+**Per tick.** `tick_actor` takes the events word as an argument, sets it
+for its tick and puts the previous one back, and records the frame stack,
+hang budget and events word it found; when an import throws through the
+tick the host calls `tick_unwind(ctx)`, which restores them (up to 32
+nested tick contexts). The first version did both in JavaScript per actor
+through DataView accessors, about 0.12 ms per Island tick.
+
 **Runaway count.** `js_event_gate` hands JavaScript's runaway count to
 RUNAWAY before the body, and `js_tick_refresh` hands it back after (the
 interpreter's imports keep the two in step in between), so a body's jumps

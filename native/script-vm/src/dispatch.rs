@@ -88,6 +88,16 @@ extern "C" {
     fn js_event_resolve(handle: u32, which: u32, slot: u32);
 }
 
+/// Set EVENTS' enable word; returns the previous one.
+pub(crate) fn set_events_enabled(value: u32) -> u32 {
+    unsafe {
+        let words = addr_of_mut!(EVENTS) as *mut u32;
+        let previous = *words.add(3);
+        *words.add(3) = value;
+        previous
+    }
+}
+
 #[inline(always)]
 fn events() -> [u32; 5] {
     unsafe { *addr_of!(EVENTS) }

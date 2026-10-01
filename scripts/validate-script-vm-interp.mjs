@@ -3429,6 +3429,30 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   same(rd32(FRAMES_AT + 12), 256, 'run count untouched');
 }
 
+// ---- October 1: tick_actor's events word and tick_unwind (tick.rs) ------------------------
+// tick_actor sets the events word for its tick and puts the previous one
+// back; it also records the frame stack, budget and events word it found,
+// which tick_unwind restores after an import threw through the tick. A
+// PlayerPawn (class flag 2) is handed back (-1) before any read.
+{
+  reset();
+  for (const [ctx, events] of [[0, 1], [3, 0], [31, 1]]) {
+    wr32(FRAMES_AT, 2); wr32(FRAMES_AT + 4, 0x1000); wr32(FRAMES_AT + 8, 0x2000); wr32(FRAMES_AT + 12, 5);
+    wr32(BUDGET_AT, 777); wr32(EVENTS_AT + 12, 9);
+    same(x.tick_actor(ctx, SELF_H, SELF_IMG, 0, 0, 2, 0.1, 0, 1, 0, events), -1, `tick_actor ${ctx} hands a PlayerPawn back`);
+    same(rd32(EVENTS_AT + 12), 9, `tick_actor ${ctx} puts the events word back`);
+    // An import threw: the stack, budget and events word are elsewhere.
+    wr32(FRAMES_AT, 7); wr32(FRAMES_AT + 4, 0x5000); wr32(FRAMES_AT + 8, 0x6000); wr32(FRAMES_AT + 12, 11);
+    wr32(BUDGET_AT, 1); wr32(EVENTS_AT + 12, events);
+    x.tick_unwind(ctx);
+    same(framesKey(), '2,4096,8192', `tick_unwind ${ctx} frame stack`);
+    same(rd32(FRAMES_AT + 12), 5, `tick_unwind ${ctx} run count`);
+    same(rd32(BUDGET_AT), 777, `tick_unwind ${ctx} budget`);
+    same(rd32(EVENTS_AT + 12), 9, `tick_unwind ${ctx} events word`);
+  }
+  reset();
+}
+
 // ---- October 1: the call cache (dispatch.rs begin_call) --------------------------------
 // beginCall from a 4-way cache keyed by (caller code, node, receiver class
 // row, receiver state row) under EVENTS' epoch; js_call_resolve fills a slot

@@ -309,25 +309,21 @@ export class ActorTickHost {
     // Events may run in Rust (dispatch.rs) when processEvent behind these
     // services is the runtime's own; never under the differential log,
     // which records each event as a callback.
-    const events = this.vm.events, eventsBefore = events.enabled;
-    events.enabled = c.log ? 0 : events.allowed(services);
-    // A body Rust began that throws unwinds past its frame and budget.
-    const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top, runs = this.vm.depth;
-    const view = this.vm.arena.view, budget = view.getUint32(this.vm.budgetAt, true);
+    const events = c.log ? 0 : this.vm.events.allowed(services);
+    if (ctx >= 32) throw new Error('Actor.Tick nesting beyond the tick kernel\'s 32 contexts');
     let result;
     try {
-      result = x.tick_actor(ctx, d.handle, instance.base, d.lo, d.hi, d.flags, seconds, tickType, level.timeSeconds, level.tickTag);
+      result = x.tick_actor(ctx, d.handle, instance.base, d.lo, d.hi, d.flags, seconds, tickType, level.timeSeconds, level.tickTag, events);
     } catch (error) {
-      // An import that throws unwinds past the Rust frames.
+      // An import that throws unwinds past the Rust frames: the shadow
+      // stack, then the frame stack, hang budget and events word as the
+      // tick found them (tick_unwind).
       x.__stack_pointer.value = pointer;
-      stack.restore(stackIndex, stackTop);
-      this.vm.depth = runs;
-      this.vm.arena.view.setUint32(this.vm.budgetAt, budget, true);
+      x.tick_unwind(ctx);
       c.clear();
       throw error;
     } finally {
       this.depth = ctx;
-      events.enabled = eventsBefore;
     }
     if (DIFFERENTIAL) this.verify(c, before, result);
     c.clear();

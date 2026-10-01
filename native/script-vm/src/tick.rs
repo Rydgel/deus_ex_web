@@ -494,6 +494,44 @@ pub extern "C" fn tick_actor(
     tick_type: u32,
     time_seconds: f64,
     tick_tag: u32,
+    events: u32,
+) -> i32 {
+    // Whether events dispatch in Rust during this tick (dispatch.rs), and
+    // what an import that throws through this tick unwinds (tick_unwind).
+    let previous = crate::dispatch::set_events_enabled(events);
+    unsafe {
+        (*addr_of_mut!(TICK_SAVE))[(ctx & 31) as usize] = (crate::interp::frames_save(), crate::interp::BUDGET, previous);
+    }
+    let result = tick_body(ctx, handle, base, mask_lo, mask_hi, flags, seconds, tick_type, time_seconds, tick_tag);
+    crate::dispatch::set_events_enabled(previous);
+    result
+}
+
+/// Per tick context: the frame stack, hang budget and events word at its
+/// entry, restored by tick_unwind when an import throws through the tick.
+static mut TICK_SAVE: [([u32; 4], u32, u32); 32] = [([0; 4], 0, 0); 32];
+
+/// The host's recovery after an import threw through tick context `ctx`.
+#[no_mangle]
+pub extern "C" fn tick_unwind(ctx: u32) {
+    let (frames, budget, events) = unsafe { (*addr_of!(TICK_SAVE))[(ctx & 31) as usize] };
+    crate::interp::frames_restore(frames);
+    unsafe { crate::interp::BUDGET = budget };
+    crate::dispatch::set_events_enabled(events);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tick_body(
+    ctx: u32,
+    handle: u32,
+    base: u32,
+    mask_lo: u32,
+    mask_hi: u32,
+    flags: u32,
+    seconds: f64,
+    tick_type: u32,
+    time_seconds: f64,
+    tick_tag: u32,
 ) -> i32 {
     let mut a = Actor { ctx, handle, base, host: false, mask: (mask_hi as u64) << 32 | mask_lo as u64, flags, demo: false };
     if flags & C_PLAYERPAWN != 0 {
