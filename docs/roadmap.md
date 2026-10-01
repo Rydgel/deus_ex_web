@@ -459,10 +459,22 @@ Doppler and the 2D voice calls. Every pre-placed actor now has its measured
 GObjObjects index ([object-index captures](object-index-captures.md)). Play
 runs Update after each frame, and the browser plays the ambient voices
 through Web Audio with each WAV's own loop. The volume and pan law there is
-a host mapping; Galaxy's mixer is not translated. Script PlaySound (effects,
-footsteps, weapons) still stops at its recorded channel-0 boundary, and
-routing it through ClientHearSound into Galaxy is the next audio step.
-Music, zone reverb and the lip-sync branch of Update remain.
+a host mapping; Galaxy's mixer is not translated. Script PlaySound now runs
+the original execPlaySound, ProcessEvent's ProcessRemoteFunction gate and
+APawn::execClientHearSound into Galaxy for every emitter with a measured
+index, the player included; StopSound runs execStopSound
+([galaxy audio](galaxy-audio.md#play)). Runtime spawns keep the recorded
+channel-0 boundary until the seeded spawn registry gives them original
+indices. Music, zone reverb and the lip-sync branch of Update remain.
+
+**Animated textures (2026-10-02).** BSP surfaces with AnimNext chains
+(screens, LED pads, flashing lights) now advance through Engine.dll's
+UTexture Get, Update, Tick and ConstantTimeTick, oracle-exact over 309
+fabricated chains, with PostLoad's start state and UViewport::Lock's clock
+([texture animation](texture-animation.md)). Without recovered BSP occlusion
+every animated texture advances each frame, not only the drawn ones.
+Render.dll's auto-panning formula is recovered but not wired; animated mesh
+skins and the Fire.dll procedural textures remain.
 
 ## 5. Implement the full gameplay systems
 

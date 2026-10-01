@@ -25,7 +25,8 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
   meshes.sort((a, b) => a.material.id - b.material.id);
   const eligible = mesh => {
     const material = mesh.material;
-    return mesh.parent === root && mesh.userData.actor === null && uses.get(material) === 1 &&
+    // An animated texture swaps the material's map each frame.
+    return mesh.parent === root && mesh.userData.actor === null && uses.get(material) === 1 && !material.userData.animated &&
       !mesh.isInstancedMesh && !mesh.isSkinnedMesh &&
       !(material.userData.flags & (POLY.Mirrored | POLY.Modulated | POLY.Translucent)) &&
       material.blending === THREE.NormalBlending && material.depthTest && material.depthWrite &&

@@ -9,6 +9,7 @@ import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
 import { batchWorldMeshes } from './world-batches.mjs';
+import { get as textureFrame } from '../runtime/texture-animation.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
@@ -23,6 +24,59 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const flagProperties = { bInvisible: 1, bMasked: 2, bTranslucent: 4, bTwoSided: 256,
     bNoSmooth: 2048, bUnlit: POLY.Unlit, bModulated: POLY.Modulated };
 
+  function gpuTexture(data, flags) {
+    const texKey = `${data.key}:${Boolean(flags & POLY.Masked)}:${Boolean(flags & POLY.NoSmooth)}`;
+    if (!textureGPU.has(texKey)) {
+      const first = data.mips[0];
+      const tex = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
+      tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.magFilter = flags & POLY.NoSmooth ? THREE.NearestFilter : THREE.LinearFilter;
+      const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
+      if (complete && data.mips.length > 1) tex.mipmaps = data.mips;
+      tex.generateMipmaps = !complete;
+      tex.minFilter = flags & POLY.NoSmooth ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      tex.needsUpdate = true;
+      textureGPU.set(texKey, tex);
+    }
+    return textureGPU.get(texKey);
+  }
+
+  // Animated textures (docs/texture-animation.md): one record per texture
+  // object with UTexture::PostLoad's state (Accumulator 0, LastUpdateTime the
+  // load-time clock; AnimCur and PrimeCurrent are transient zeros) and its
+  // AnimNext record. The clock is the host's (appSeconds is the CPU's
+  // timestamp counter; only differences reach the animation).
+  const animated = new Map(), animatedHeads = new Set();
+  const clock = () => performance.now() / 1000;
+  async function animationRecord(data) {
+    if (animated.has(data.key)) return animated.get(data.key);
+    const v = data.values;
+    const record = { key: data.key, data: new Map([[data.masked, data]]), animNext: null,
+      primeCount: (v.PrimeCount ?? 0) & 255, minFrameRate: Math.fround(v.MinFrameRate ?? 0), maxFrameRate: Math.fround(v.MaxFrameRate ?? 0),
+      animCur: null, primeCurrent: 0, accumulator: 0, lastUpdateTime: clock(), shown: null, uses: [], load: null };
+    animated.set(data.key, record);
+    if (v.AnimNext) {
+      const load = masked => textures.get(data.asset, v.AnimNext, masked);
+      const next = await animationRecord(await load(data.masked));
+      next.load ??= load;
+      record.animNext = next;
+    }
+    return record;
+  }
+  // Every frame of the chain as a GPU texture of this material's variant.
+  async function animationFrames(head, data, flags) {
+    const masked = Boolean(flags & POLY.Masked), frames = new Map();
+    for (let frame = head; frame && !frames.has(frame); frame = frame.animNext) {
+      let decoded = frame.data.get(masked);
+      if (!decoded) { decoded = await frame.load(masked); frame.data.set(masked, decoded); }
+      if (decoded.mips[0].width !== data.mips[0].width || decoded.mips[0].height !== data.mips[0].height)
+        notes.add(`${decoded.key}: animation frame size differs from ${data.key}; its UVs keep the first frame's scale.`);
+      frames.set(frame, gpuTexture(decoded, flags));
+    }
+    return frames;
+  }
+
   async function materialFor(surface, tile, mirror) {
     let flags = surface.flags;
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
@@ -32,21 +86,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     textureNames.add(data.key);
     const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}`;
     if (!materials.has(key)) {
-      const texKey = `${data.key}:${Boolean(flags & POLY.Masked)}:${Boolean(flags & POLY.NoSmooth)}`;
-      if (!textureGPU.has(texKey)) {
-        const first = data.mips[0];
-        const tex = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-        tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.magFilter = flags & POLY.NoSmooth ? THREE.NearestFilter : THREE.LinearFilter;
-        const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
-        if (complete && data.mips.length > 1) tex.mipmaps = data.mips;
-        tex.generateMipmaps = !complete;
-        tex.minFilter = flags & POLY.NoSmooth ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
-        tex.needsUpdate = true;
-        textureGPU.set(texKey, tex);
-      }
-      const material = new THREE.MeshBasicMaterial({ map: textureGPU.get(texKey),
+      const material = new THREE.MeshBasicMaterial({ map: gpuTexture(data, flags),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
       applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror,
@@ -63,6 +103,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
       }
       material.userData = { key: data.key, flags, width: data.mips[0].width, height: data.mips[0].height, mipCount: data.mips.length };
+      if (data.values.AnimNext) {
+        // The surface's texture is the chain head; Render draws its Get(Time).
+        const head = await animationRecord(data);
+        head.data.set(data.masked, data);
+        head.uses.push({ material, frames: await animationFrames(head, data, flags) });
+        animatedHeads.add(head);
+        material.userData.animated = true;
+      }
       materials.set(key, material);
     }
     return { material: materials.get(key), flags, key };
@@ -155,6 +203,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   if (mirrors.stats.surfaces) notes.add('Static translucent mirror floors render reflected world and actor views. Recursive mirrors and mirror/sky combinations remain unverified.');
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
+  if (animatedHeads.size) notes.add(`${animatedHeads.size} animated surface textures advance every frame; the original advances only those its BSP occlusion draws.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
   function updateLighting(changes) {
     const update = lighting.invalidate(changes);
@@ -193,6 +242,27 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
       return { lightmaps: changed.length, surfaces: movingLights.surfaces };
     },
+    /** URender's Texture->Get(Viewport->CurrentTime) for every animated
+     * surface texture, once per drawn frame (UViewport::Lock's clock). The
+     * original updates only the textures of surfaces in its draw list; BSP
+     * occlusion is not recovered, so every animated texture of the world
+     * advances each frame here. */
+    updateTextureAnimation(time = clock()) {
+      for (const head of animatedHeads) {
+        const frame = textureFrame(head, time);
+        if (frame === head.shown) continue;
+        head.shown = frame;
+        for (const { material, frames } of head.uses) material.map = frames.get(frame);
+      }
+    },
+    animatedTextures: () => [...animatedHeads].map(head => {
+      const chain = [];
+      let frame = head;
+      for (; frame && !chain.includes(frame.key); frame = frame.animNext) chain.push(frame.key);
+      // ConstantTimeTick wraps to the head when AnimNext is None.
+      return { key: head.key, frame: head.shown?.key ?? null, chain, wrap: frame?.key ?? head.key,
+        drawn: head.uses.every(({ material, frames }) => material.map === frames.get(head.shown ?? head)) };
+    }),
     flushLighting(renderer) { lightAtlas.flush(renderer); },
     movingLightRecords: () => movingLights.records(),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,

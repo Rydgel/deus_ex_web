@@ -169,6 +169,23 @@ against the live capture and fed through the PlaySound channel-id formula).
   (spawns are currently gated to CameraPoint) and a distilled, shippable
   load-time index table for the browser (the `.cache` capture is local evidence).
 
+### Play's registry against the capture (2026-10-02)
+
+After a Training boot, Play's object registry lists, from the player on, the
+same classes in the same order as the capture's contiguous tail from
+`JCDentonMale1` (41639): FlagBase, PlayerReplicationInfo, Shadow,
+BarkManager, the 50 color themes, AugmentationManager and its 24
+augmentations, the skills, NanoKeyRing, DumpLocation — 167 objects. The
+names differ only by the Entry map's counter (Play's `AugSpeed0`, the
+original's `AugSpeed1`). The original then creates `DeusExRootWindow1`, its
+`GC*` graphics contexts and every HUD window (360 more objects up to the
+capture); Play keeps windows host-owned outside the registry, so the
+sequences part there. Giving runtime spawns their original indices needs the
+window objects in the registry in this order, then the capture's tail
+(the one freed slot 42156 reused first, then appends from 42167). Until then
+Play uses measured indices only for pre-placed actors and the player
+([galaxy audio](galaxy-audio.md#play)).
+
 ## Harness replay progress (2026-09-10)
 
 `scripts/native-boot-replay.py` executes the original DLL bootstrap in the

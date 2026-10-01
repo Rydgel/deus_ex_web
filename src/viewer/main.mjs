@@ -826,6 +826,7 @@ function animate(time) {
     }
     phase('actors');
     renderer.info.reset();
+    world.updateTextureAnimation();
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });

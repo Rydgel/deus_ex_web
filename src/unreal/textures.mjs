@@ -94,7 +94,7 @@ export class TextureStore {
         const texture = readTexture(object.asset, object.index);
         if (texture.values.SourceTexture && texture.mips.every(mip => mip.data.length === 0)) {
           const source = await this.get(object.asset, texture.values.SourceTexture, masked, [...ancestry, object.key]);
-          return { ...texture, mips: source.mips, key: object.key, masked,
+          return { ...texture, mips: source.mips, key: object.key, asset: object.asset, masked,
             procedural: `Static source image: ${source.key}` };
         }
         let palette;
@@ -104,7 +104,7 @@ export class TextureStore {
         }
         if (!texture.mips.length) throw new Error(`No stored mip data: ${object.key}`);
         const mips = texture.mips.map(mip => decodePixels(mip, texture.format, palette, masked));
-        return { ...texture, mips, key: object.key, masked };
+        return { ...texture, mips, key: object.key, asset: object.asset, masked };
       })();
       this.cache.set(key, pending);
       pending.catch(() => this.cache.delete(key));
