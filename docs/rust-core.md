@@ -447,6 +447,18 @@ The full sweep at `02a096b` (before this step) passed 443 of 444; the one
 failure, `validate-player-tick-order`, crossed the runner's 6 GiB cap with
 four jobs running and passes alone (3.7 GB peak).
 
+**Bug found by the next sweep (fixed October 1).** The sweep at `3b48b0e`
+failed `validate-training-cadet` and the Training conformance gate: the
+cadet's carcass, dropped on the medical table, no longer fired Trigger0.
+`vm.run(id)` built a cached callee's JavaScript Run with a null result
+field, where `beginCall` passes `fn.result`. A callee whose Return runs in
+JavaScript (`js_step`) then returned undefined: Trigger.IsRelevant's
+`return ClassIsChildOf(Other.Class, ClassProximityType)` read as false.
+The Run now takes the template's `resultField`. Neither the digests nor
+`SCRIPT_VM_CHECK`/`DISPATCH_VERIFY` reached it (the values Rust read and
+the decisions were right; the return marshalling was not). Bisected with
+`RUST_CALLS=0` and by excluding callees from the cache.
+
 ### October 1: per-object binding sets (implemented)
 
 Step 6 of the plan below. A BOUND receiver's field reads used to take the

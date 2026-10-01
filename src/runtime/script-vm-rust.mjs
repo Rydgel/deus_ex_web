@@ -930,7 +930,7 @@ export class RustScriptVm {
     if (run !== undefined && run.serial === serial) return run;
     const template = this.events.templates[view.getUint32(at, true)], handle = view.getUint32(at + 4, true);
     const built = new Run(this, template.compiled, template.lowered, this.identity(handle), template.services, null,
-      template.layout, view.getUint32(at + 8, true), null);
+      template.layout, view.getUint32(at + 8, true), template.resultField);
     built.serial = serial;
     this.frames[id] = built;
     return built;
