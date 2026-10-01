@@ -191,6 +191,13 @@ These are real-time in the original and differ run to run there too:
 
 ## Not done
 
+* Cost: one analysis takes about 2.4 ms (the Wasm kernel on the reference
+  M2 Pro, Node), once per 0.1 s of a speaking channel: a spike every sixth
+  frame or so at 60 fps during speech, against the 8.3 ms frame budget. Most
+  of it is the 80-bit model's u128 arithmetic in the FFT; a faster exact path
+  (float products are exact in f64, only the extended sums need care) is
+  future work, measured against this kernel.
+
 * Galaxy's MP3 decoder is not translated; the host's decode and its float to
   16-bit rounding are unverified against it.
 * Whether the decoder stays at least 1024 samples ahead of the mixer, so the
