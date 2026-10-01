@@ -1,4 +1,4 @@
-"""Research harness: execute original mover MoveActor and hash encroachment."""
+"""Research harness: execute original mover MoveActor and FarMoveActor with hash encroachment."""
 import importlib.util,json,struct,sys
 from pathlib import Path
 s=importlib.util.spec_from_file_location('level',Path(__file__).with_name('native-level-oracle.py'));m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
@@ -14,7 +14,8 @@ class Native(m.NativeLevel):
   self.cpu.mem_write(self.event,bytes.fromhex('c2 0c 00'));self.cpu.mem_write(self.find,bytes.fromhex('c2 08 00'));self.cpu.mem_write(self.zone,bytes.fromhex('c2 0c 00'))
   self.write(0x10599a88,'I',self.find);self.write(self.level_table+0xac,'I',self.zone)
   self.names={}
-  for i,(address,name) in enumerate([(0x105836d4,'EncroachingOn'),(0x105836d0,'EncroachedBy'),(0x105836fc,'Bump'),(0x105835b0,'BumpWall'),(0x10583714,'HitWall')]):
+  for i,(address,name) in enumerate([(0x105836d4,'EncroachingOn'),(0x105836d0,'EncroachedBy'),(0x105836fc,'Bump'),(0x105835b0,'BumpWall'),(0x10583714,'HitWall'),
+    (0x10583704,'Touch'),(0x10583700,'UnTouch')]):
    self.write(address,'I',i+1);self.names[i+1]=name
   for actor in self.actor_ptrs.values():
    table=self.read(actor,'I')[0]
@@ -53,6 +54,17 @@ class Native(m.NativeLevel):
   # (+0xc4 Base, mover +0xd8 StandingCount); an explicit NewRotation.
   if c.get('collideWorld'):self.write(actor+0x1dc,'I',self.read(actor+0x1dc,'I')[0]|2)
   if c.get('rider'):self.write(self.actor_ptrs[c['rider']]+0xc4,'I',actor);self.write(actor+0xd8,'B',1)
+  # FarMoveActor (0x10398ba0, DeusExMover.BlowItUp's SetLocation): the same
+  # scene through its CheckEncroachment with notify 1, run to the end. Optional
+  # pre-existing touches fill the mover's and the other's +0xe8 slots.
+  if 'destination' in c:
+   for index,other in enumerate(c.get('touching',[])):
+    q=self.actor_ptrs[other];self.write(actor+0xe8+4*index,'I',q);self.write(q+0xe8,'I',actor)
+   result=self.call(0x10398ba0,self.level,struct.pack('<I3fII',actor,*c['destination'],c.get('test',0),c.get('noCheck',0)))
+   slots=lambda p:[self.actor_ids.get(x) for x in self.read(p+0xe8,'4I')]
+   return {'result':result,'position':self.read(actor+0x114,'3f'),'oldLocation':self.read(actor+0x12c,'3f'),'motion':self.read(actor+0x1ec,'I')[0],
+           'trace':self.mover_trace,'touching':{k:slots(p) for k,p in self.actor_ptrs.items()},
+           'actors':{k:self.read(p+0x114,'3f') for k,p in self.actor_ptrs.items()}}
   rotation=c.get('rotation') or list(self.read(actor+0x120,'3i'))
   result=self.call(0x103990e0,self.level,struct.pack('<I3f3iI4I',actor,*c['delta'],*rotation,hit,0,0,0,0))
   return {'result':result,'position':self.read(actor+0x114,'3f'),'rotation':list(self.read(actor+0x120,'3i')),'trace':self.mover_trace,
@@ -61,7 +73,9 @@ if __name__=='__main__':
  scene=json.loads(Path(sys.argv[2]).read_text());results=[]
  for case in json.loads(Path(sys.argv[3]).read_text()):
   n=Native(Path(sys.argv[1]),scene)
-  if 'pawnPosition' in case:
-   p=n.actor_ptrs['$pawn'];n.call(0x103583a0,n.hash,struct.pack('<I',p));n.write(p+0x114,'3f',*case['pawnPosition']);n.call(0x103580b0,n.hash,struct.pack('<I',p))
+  positions=dict(case.get('positions',{}))
+  if 'pawnPosition' in case:positions['$pawn']=case['pawnPosition']
+  for name,position in positions.items():
+   p=n.actor_ptrs[name];n.call(0x103583a0,n.hash,struct.pack('<I',p));n.write(p+0x114,'3f',*position);n.call(0x103580b0,n.hash,struct.pack('<I',p))
   results.append(n.capture(case))
  print(json.dumps({'results':results,'hashes':m.base.HASHES}))

@@ -96,3 +96,55 @@ export function moverBlockedBy(source,other,worldActor=source.worldActor){
  if(other.movingBrush)return Boolean(flags&2)&&Boolean(otherFlags&4);
  return Boolean(otherFlags&2)&&Boolean(flags&(other.controlledPlayer?8:4));
 }
+
+/** Original CheckEncroachment1039a350 for a moving-brush source (a mover),
+ * with its notify argument: MoveActor passes 0 (mover-move.mjs) and
+ * FarMoveActor 1 (DeusExMover.BlowItUp's SetLocation). Returns true on
+ * rejection.
+ *
+ * 0x1039a39a: with no collision bits in 0x0d only a non-static Brush goes on.
+ * The query (hash +0x1c) is at the proposed position and NewRotation. The
+ * first pass skips self and Level.Actors[0]; for each blocking hit
+ * (moverBlockedBy) a non-static Brush source pushes the other actor
+ * (0x1039a53a: other.moveSmooth of the float-stored proposed-minus-current
+ * offset), re-queries at the same proposed pose and NewRotation, skips an
+ * actor that is clear, and otherwise pushes it back with Location
+ * temporarily at the proposed position (0x1039a6f6, the offset times float
+ * -1). A blocking non-static Brush is not pushed. Then
+ * source.EncroachingOn(other); true rejects at once. With notify, each of
+ * the four Touching slots no longer overlapping gets EndTouch
+ * (0x1039a7e7). The second pass over the first query's hits dispatches
+ * EncroachedBy on blocking actors, or BeginTouch when notify is set
+ * (0x1039a81f). `moveSmooth(actor, delta)` must commit that actor's original
+ * movement; it throws for an actor class whose moveSmooth is not linked. */
+export function checkMoverEncroachment(source,position,rotation,notify,{worldActor=source.worldActor,encroachmentCheck,moveSmooth,dispatch,
+ beginTouch:begin=(a,b)=>beginTouch(a,b,dispatch),endTouch:end=(a,b,suppress)=>endTouch(a,b,suppress,dispatch),isOverlapping:overlap=isOverlapping}){
+ if(!source?.movingBrush)throw Error('Brush CheckEncroachment requires a moving-brush source');
+ const isStatic=actor=>Boolean((actor.actorFlags??0)&1)||Boolean(actor.static);
+ if(!((source.flags??0)&0x0d)&&isStatic(source))return false;
+ const proposed=position.map(f),newRotation=rotation.map(v=>v|0);
+ const hits=encroachmentCheck(source,proposed,newRotation,0)??[];
+ const valid=other=>other&&other!==source&&other!==worldActor&&!other.world;
+ for(const other of hits){
+  if(!valid(other)||!moverBlockedBy(source,other,worldActor))continue;
+  if(!isStatic(source)&&!(other.movingBrush&&!isStatic(other))){
+   const pushed=proposed.map((v,i)=>f(v-f(source.position[i])));
+   moveSmooth(other,pushed);
+   if(!(encroachmentCheck(source,proposed,newRotation,0)??[]).includes(other))continue;
+   // 0x1039a6f6-0x1039a773 writes only Location (+0x114) for the reverse push.
+   const saved=[...source.position];source.position=[...proposed];
+   try{moveSmooth(other,pushed.map(v=>f(-v)));}finally{source.position=saved;}
+  }
+  if(dispatch(source,'EncroachingOn',[other]))return true;
+ }
+ if(notify){
+  if(!Array.isArray(source.touching)||source.touching.length!==4)throw Error('Original Touching requires four explicit slots');
+  for(let i=0;i<4;i++){const other=source.touching[i];if(other&&!overlap(source,other))end(source,other,false);}
+ }
+ for(const other of hits){
+  if(!valid(other))continue;
+  if(moverBlockedBy(source,other,worldActor))dispatch(other,'EncroachedBy',[source]);
+  else if(notify)begin(source,other);
+ }
+ return false;
+}

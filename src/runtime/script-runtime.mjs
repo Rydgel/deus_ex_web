@@ -2479,7 +2479,42 @@ export class ScriptRuntime {
     if(this.collisionViewActors.has(actor))return this.relocateSpawnedActor(actor,destination,test,noCheck);
     if(this.isMapPawn(actor))
       return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).farMove(destination,test,noCheck);
+    if(actor?.movingBrush)return this.relocateMover(actor,destination,test,noCheck);
     return this.relocateMapActor(actor,destination,test,noCheck);
+  }
+  /** FarMoveActor for a map mover (DeusExMover.BlowItUp's SetLocation): the
+   * recovered relocation over a field view of the mover, whose OldLocation
+   * and bJustTeleported are script fields, with the brush CheckEncroachment
+   * (notify 1) and the hash and zone services acting on the mover itself
+   * (docs/relocation.md, check-encroachment.mjs). */
+  relocateMover(mover,destination,test,noCheck) {
+    const level=this.levelFor(mover);
+    if(!level?.hash||typeof level.checkMoverEncroachment!=='function')
+      throw new Error('Mover FarMoveActor requires the scene level');
+    const read=name=>this.readNamed(mover,name),write=(name,value)=>this.writeNamed(mover,name,value);
+    const view={self:mover,
+      get actorFlags(){return mover.actorFlags;},get flags(){return mover.flags;},
+      get radius(){return mover.radius;},get height(){return mover.height;},
+      get rotation(){return mover.rotation;},get standingCount(){return mover.standingCount;},
+      get position(){return mover.position;},set position(value){mover.position=value;},
+      get oldLocation(){return read('OldLocation');},set oldLocation(value){write('OldLocation',value);},
+      // FarMoveActor only ORs in bJustTeleported (+0x1ec bit 0x100).
+      get motionFlags(){return read('bJustTeleported')?0x100:0;},
+      set motionFlags(value){write('bJustTeleported',Boolean(value&0x100));}};
+    const adapter=Object.create(level);
+    const hash=Object.create(level.hash);
+    hash.removeActor=a=>level.hash.removeActor(a===view?mover:a);
+    hash.addActor=a=>level.hash.addActor(a===view?mover:a);
+    for(const [key,value] of [['hash',hash],['editor',level.editor],['netMode',level.netMode??0],['actors',level.actors]])
+      Object.defineProperty(adapter,key,{value,enumerable:true,writable:true});
+    adapter.checkEncroachment=(_actor,position,rotation,notify)=>level.checkMoverEncroachment(mover,position,rotation,notify);
+    adapter.setActorZone=(_actor,test,force)=>level.setActorZone(mover,test,force);
+    const moved=farMoveActor(adapter,view,destination,test,noCheck);
+    // The renderer and the host collider follow the mover's offset from its
+    // authored Location, as after its MoveActor.
+    if(mover.collider&&mover.values?.Location)
+      mover.collider.offset=mover.position.map((value,axis)=>Math.fround(value-mover.values.Location[axis]));
+    return moved;
   }
   /** ULevel::SpawnActor for any linked Actor class (script-spawn.mjs). The
    * lifecycle host supplies only world bindings — the live level, its Outer

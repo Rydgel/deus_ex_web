@@ -104,3 +104,51 @@ not established by either component corpus alone. Moving-brush source pushing
 belongs to the mover helper. General non-player source blocking, arbitrary
 script bodies, object lifetime/destruction, and unbounded x87 overlap edge
 arithmetic are outside this controlled-player evidence scope.
+
+## Moving-brush source
+
+`checkMoverEncroachment(source, position, rotation, notify, services)` is the
+same native for a mover source, with its notify argument: MoveActor passes 0
+(`mover-move.mjs`) and FarMoveActor 1 (DeusExMover.BlowItUp's
+`SetLocation(Location + vect(0,0,20000))` on a destroyed door or pane).
+
+- `0x1039a39a`: a source with no collision bits in `0x0d` goes on only as a
+  non-static Brush (Brush primitive at `+0x178`, IsA Brush, bStatic clear).
+- The hash query (`+0x1c`) is at the proposed position and NewRotation.
+  The first pass skips self and `Level.Actors[0]`. A blocking hit
+  (`moverBlockedBy`) from a non-static Brush source is pushed unless it is
+  itself a non-static Brush (a static brush is pushed):
+  `other.moveSmooth(proposed - Location)` with float-stored components
+  (`0x1039a53a`), then a re-query at the same proposed position **and
+  NewRotation**; an actor no longer in the list is skipped; otherwise
+  Location is set to the proposed position while `other.moveSmooth` takes the
+  offset times float -1 (`0x1039a6f6`), and Location is restored. Then
+  `source.EncroachingOn(other)`; true rejects at once.
+- With notify, each Touching slot that no longer overlaps gets
+  `EndTouch(other, false)` (`0x1039a7e7`). IsOverlapping is false for a
+  Brush, so a mover ends every touch it holds.
+- The second pass over the first query's hits dispatches
+  `other.EncroachedBy(source)` on blocking hits and, with notify,
+  `BeginTouch(other)` on the rest (`0x1039a81f`).
+
+`moveTranslatingMover` now runs this body; before, its re-query passed the
+mover's current rotation instead of NewRotation, which only mattered once
+movers rotated (`physMovingBrush`).
+
+FarMoveActor for a map mover (`ScriptRuntime.relocateMover`) runs the
+recovered relocation over a field view of the mover (OldLocation and
+bJustTeleported are script fields), with this CheckEncroachment and the hash
+and SetActorZone acting on the mover, then updates the renderer offset.
+
+`scripts/validate-native-mover-move.mjs` executes the original FarMoveActor
+of Training's DeusExMover16 for 11 cases next to its 26 MoveActor cases:
+BlowItUp's lift with no touches, with a held toucher and with toucher and
+pawn (UnTouch pairs), into the overlapping pawn (pushed and pushed back;
+accepted and rejected by EncroachingOn), onto a non-blocking toucher
+(Touch pair, last empty slot), the same with the pawn (EncroachingOn,
+Touch, then EncroachedBy), an existing touch ended then begun again, and the
+test and noCheck branches. All 37 match: every boundary in order, result,
+Location, OldLocation, bJustTeleported, every actor's Location and Touching.
+`scripts/validate-island-blowitup.mjs` destroys Island's DeusExMover13 and
+BreakableGlass0 through their original TakeDamage and checks BlowItUp to its
+end.

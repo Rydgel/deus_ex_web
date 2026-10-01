@@ -1,4 +1,4 @@
-import {moverBlockedBy} from './check-encroachment.mjs';
+import {checkMoverEncroachment} from './check-encroachment.mjs';
 const f=Math.fround;
 
 /** Moving-brush MoveActor orchestration (Engine.dll 0x103990e0 with a brush
@@ -23,23 +23,14 @@ export function moveTranslatingMover(mover,delta,{encroachmentCheck,moveSmooth,d
   moveRiders(delta,newRotation);
  }
  const proposed=mover.position.map((v,i)=>f(f(v)+delta[i]));
- const hits=encroachmentCheck(mover,proposed,newRotation,0);
- const blocking=actor=>{
-  if(actor===mover || actor.world)return false;
-  return moverBlockedBy(mover,actor);
- };
- for(const actor of hits){
-  if(!blocking(actor))continue;
-  if(!actor.isPawn)throw Error('Unsupported blocking non-Pawn mover push');
-  const pushedDelta=proposed.map((v,i)=>f(v-f(mover.position[i])));
-  moveSmooth(actor,pushedDelta);
-  if(!encroachmentCheck(mover,proposed,mover.rotation,0).includes(actor))continue;
-  // 0x1039a6f6-0x1039a773 writes only Location (+0x114) for the reverse push.
-  const saved=[...mover.position];mover.position=[...proposed];
-  try{moveSmooth(actor,pushedDelta.map(v=>f(-v)));}finally{mover.position=saved;}
-  if(dispatch(mover,'EncroachingOn',[actor]))return false;
- }
- for(const actor of hits)if(blocking(actor))dispatch(actor,'EncroachedBy',[mover]);
+ // CheckEncroachment(notify 0) for the brush source (check-encroachment.mjs):
+ // the push, its re-query at the proposed pose and NewRotation, EncroachingOn
+ // and EncroachedBy. Pushing a non-Pawn needs its own moveSmooth.
+ if(checkMoverEncroachment(mover,proposed,newRotation,0,{worldActor:mover.worldActor,encroachmentCheck,dispatch,
+  moveSmooth:(actor,pushed)=>{
+   if(!actor.isPawn)throw Error('Unsupported blocking non-Pawn mover push');
+   return moveSmooth(actor,pushed);
+  }}))return false;
  // The original branches on current bCollideActors at each hash operation.
  if(mover.collideActors)removeActor(mover);
  mover.position=mover.position.map((v,i)=>f(f(v)+delta[i]));

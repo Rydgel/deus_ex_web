@@ -1,7 +1,7 @@
 import { playerMove } from './player-move.mjs';
 import { moveSmooth } from './move-smooth.mjs';
 import { moveTranslatingMover } from './mover-move.mjs';
-import { playerBlockedBy, checkPlayerEncroachment } from './check-encroachment.mjs';
+import { playerBlockedBy, checkPlayerEncroachment, checkMoverEncroachment } from './check-encroachment.mjs';
 import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
 import { farMoveActor } from './relocation.mjs';
 import { pointRegion, setActorZone, dryPlayerZoneCallbacks } from './zone.mjs';
@@ -137,20 +137,24 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     pawn.position=player.position.slice();pawn.justTeleported=Boolean(source.motionFlags&0x100);
     return success;
   };
+  // A mover's CheckEncroachment services (check-encroachment.mjs): the hash
+  // query and AActor::moveSmooth for the actor it pushes.
+  const moverEncroachmentCheck=(actor,position,rotation,extra)=>collision.queries.actorEncroachmentCheck(actor,position,rotation,extra).map(h=>h.actor);
+  const pushedMoveSmooth=(actor,requested)=>{
+    if(actor!==source&&actor.isPawn){
+      if(typeof hooks.moveSmoothPawn!=='function')throw Error('map pawn moveSmooth is not linked');
+      return hooks.moveSmoothPawn(actor,requested);
+    }
+    if(actor!==source)unsupported(`${actor.name}.moveSmooth`);
+    return moveSmooth(actor,requested,{dispatch,moveActor:(target,movement)=>{
+      const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
+    }});
+  };
   const moveMover=(mover,delta,rotation=null)=>{
     const result=moveTranslatingMover(mover,delta,{rotation,
       moveRiders:(riderDelta,riderRotation)=>moveActorRiders(mover,riderDelta,riderRotation,ridersFor(mover)),
-      encroachmentCheck:(actor,position,rotation,extra)=>collision.queries.actorEncroachmentCheck(actor,position,rotation,extra).map(h=>h.actor),
-      moveSmooth(actor,requested){
-        if(actor!==source&&actor.isPawn){
-          if(typeof hooks.moveSmoothPawn!=='function')throw Error('map pawn moveSmooth is not linked');
-          return hooks.moveSmoothPawn(actor,requested);
-        }
-        if(actor!==source)unsupported(`${actor.name}.moveSmooth`);
-        return moveSmooth(actor,requested,{dispatch,moveActor:(target,movement)=>{
-          const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
-        }});
-      },dispatch,removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
+      encroachmentCheck:moverEncroachmentCheck,moveSmooth:pushedMoveSmooth,
+      dispatch,removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
     });
     if(result&&!delta.every(v=>Math.abs(f(v))<.0001)){
       for(let i=0;i<4;i++){const other=mover.touching[i];if(other&&!isOverlapping(mover,other))untouch(mover,other,false);}
@@ -160,6 +164,9 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     return result;
   };
   collision.moveMover=moveMover;
+  // FarMoveActor's CheckEncroachment(notify 1) for a mover source.
+  level.checkMoverEncroachment=(mover,position,rotation,notify)=>checkMoverEncroachment(mover,position,rotation,notify,
+    {worldActor,encroachmentCheck:moverEncroachmentCheck,moveSmooth:pushedMoveSmooth,dispatch,beginTouch:touch,endTouch:untouch});
   // execMove forwards the live ULevel::MoveActor slot. The recovered brush
   // entry handles translations; rotation-changing/flagged branches stay explicit.
   level.moveActor=(actor,delta,rotation,hit,test,ignorePawns,ignoreBases,noFail)=>{
