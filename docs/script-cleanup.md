@@ -72,3 +72,38 @@ Malformed linked lists, invalid object identities, unsupported native overrides,
 editor transactions and non-null unbound event managers fail explicitly in the
 host. Ordinary cleanup does not infer an early tick call site, claim full GC,
 or drop a pending actor before its original reference cleanup and release order.
+
+## Play wiring
+
+Level.Tick ends with `CleanupDestroyed(0)`, so Play reaches the reference
+pass as soon as 128 destroyed actors wait on the Deleted chain (09_NYC_Dockyard's
+conversations did). The level collection (`script-level-collection.mjs`)
+supplies its services:
+
+- `isValid`: a record in the host registry must hold its slot and not be
+  released. A pre-placed export carries `null` for its unmeasured slot and is
+  registered with its level. Host-owned natives the registry does not track
+  (the root window and its windows, the client viewport behind Player) and
+  package resources (textures, sounds, meshes, classes; a host object with
+  its export key) stay registered for the host's life, as the persistent
+  packages are never unloaded. Anything else is invalid and keeps the
+  explicit error.
+- `isPendingKill`: bDeleteMe on an actor, false otherwise (UObject's zero
+  return; AActor's override is the only one in the SDK headers).
+- `release(actor, flags)`: the deleting destructor. A runtime-created actor
+  goes through the collection's final delete (~UObject unhash, slot free to the
+  LIFO free list, operator delete). A pre-placed export is outside the host
+  registry, which models only runtime-created objects. Its ConditionalDestroy
+  is a no-op after DestroyActor's. Its GObjObjects slot and FName hash have no
+  host counterpart. Its storage stays with the level reload, which replaces
+  every map export in place; the reference pass has already cleared every
+  reference to it. Not modelling the original's push of that slot onto the
+  free list only affects runtime spawn indices, which Play does not take
+  from the original's index space (its registry starts at the host's own
+  objects).
+
+`scripts/validate-cleanup-destroyed-live.mjs` destroys 130 spawned Tracers and
+a pre-placed crate on a booted Island, with a crate's Target pointing at one
+Tracer, and checks one tick: the chain is released, Target is None, every
+Tracer is released with its slot freed onto the free list, and the crate left
+the actor array while keeping its export for the reload.

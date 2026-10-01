@@ -98,8 +98,55 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
     }
   }
 
+  // A loaded package resource (texture, sound, mesh, class): a host object
+  // with its export key, registered for the host's life since the persistent
+  // packages are never unloaded.
+  const isResource = value => typeof value?.key === 'string' && Boolean(value.record || value.asset || value.linkedClass);
   return {
     engine,
+    /** UObject::IsValid (registered at its GObjObjects index) and
+     * IsPendingKill (UObject 0x1010ab80 returns 0; AActor 0x1030df80 reads
+     * bDeleteMe, the only override in the SDK headers) for ULevel's
+     * CleanupDestroyed reference pass (docs/script-cleanup.md). */
+    references: {
+      isValid: identity => {
+        const record = recordOf(identity);
+        if (record) {
+          if (record.released) return false;
+          // A pre-placed map export is registered with its level; `null` is
+          // its unmeasured slot (ScriptRuntime.bindNativeObject).
+          return record.index === null || registry.objects[record.index] === record;
+        }
+        // Host-owned natives the registry has no record for (the root window
+        // and its windows, the client viewport behind Player): registered in
+        // the original until the GC purges them, which the host does not.
+        if (attached(identity) || viewports.includes(identity)) return true;
+        return isResource(identity);
+      },
+      isPendingKill: identity => {
+        const record = recordOf(identity);
+        return Boolean(record && isActor(record) && runtime.readNamed(identity, 'bDeleteMe'));
+      },
+    },
+    /** ULevel::CleanupDestroyed's final release (0x103967a7): the pending
+     * actor's deleting destructor, virtual +0x0c with `flags`, through the
+     * same final delete as the collection. A pre-placed export is outside the
+     * host registry, which models only runtime-created objects (its slot in
+     * the original GObjObjects is unmeasured and it has no FName hash entry
+     * here): ~UObject's ConditionalDestroy is a no-op after DestroyActor's,
+     * the slot release and unhash have no host counterpart, and its storage
+     * stays with the level's reload, which replaces every map export in place
+     * (the reference pass has already cleared every reference to it;
+     * docs/script-cleanup.md). */
+    release(identity, flags) {
+      const record = recordOf(identity);
+      if (!record) throw new Error('CleanupDestroyed release requires the actor native record');
+      const live = registry.objects.filter(object => object && !object.released);
+      if (record.index === null) release.conditionalDestroy(record);
+      else finalDelete(record, flags);
+      for (const object of live) if (object.released) onReleased?.(object.identity);
+      runtime.reclaimReleased?.();
+    },
     /** LoadMap 0x1038d0ee..0x1038d1e1 after the level reload. */
     collect() {
       // A Destroy override can delete other objects during the purge (e.g.

@@ -2170,6 +2170,9 @@ export async function createScriptDoors({
     transientPackage:runtime.actorLifecycle.construction.transientPackage,
     packages:[runtime.conversationLifecycle?.packageRecord,deusExPackage].filter(Boolean),
     onReleased:identity=>{identities.delete(identity);windowHost.heap.forget(identity);}});
+  // ULevel::CleanupDestroyed's reference pass, once 128 actors await deletion.
+  runtime.actorLifecycle={...runtime.actorLifecycle,references:levelCollection.references,
+    release:(actor,flags)=>levelCollection.release(actor,flags)};
   // UViewport::Input (+0x60) exists before SpawnPlayActor; TravelPostAccept's
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
