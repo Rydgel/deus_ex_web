@@ -60,6 +60,7 @@ const C_CYLINDER: i32 = 0;
 const C_BRUSH_OWNED: i32 = 1;
 const C_BRUSH: i32 = 2;
 
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn lc_candidate(id: u32) -> i32;
     fn lc_mover(id: u32) -> i32;
