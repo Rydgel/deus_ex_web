@@ -55,7 +55,8 @@ const ACTOR_BASE_KEY='engine.actor.base';
 import { tickStandaloneLevel } from './level-tick.mjs';
 import { dispatchFinishAnim, pollFinishAnim } from './finish-anim.mjs';
 import { ScriptResourceRegistry } from './script-resources.mjs';
-import { execActorPlaySound } from './script-sound.mjs';
+import { execActorPlaySound, execPawnClientHearSound } from './script-sound.mjs';
+import { actorProcessRemoteFunction } from './process-remote-function.mjs';
 import { execMove } from './script-move.mjs';
 import {
   dispatchMoveTo, dispatchMoveToward, dispatchTurnTo, dispatchTurnToward,
@@ -332,6 +333,13 @@ const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK
 // accept: ULodMesh, and a classic UMesh whose frames are not decoded.
 const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
 // soundField names served from the level container or native graph.
+// Native function bodies Core ProcessEvent reaches through UFunction::Func
+// (1013f936) for a FUNC_Native event, keyed by function record key; `this` is
+// the ScriptRuntime and `args` the copied parameter block.
+const NATIVE_EVENT_BODIES=Object.freeze({
+  // APawn::execClientHearSound 0x103dfc40 (docs/galaxy-audio.md "Play").
+  'engine.pawn.clienthearsound'(receiver,args){execPawnClientHearSound(receiver,args,this.audioServices());},
+});
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
@@ -2084,11 +2092,48 @@ export class ScriptRuntime {
       if(name==='DemoRecDriver')return level?.demoRecDriver??null;
       if(name==='Model')return level?.model??null;
       if(name==='Engine')return level?.engine??null;
+      // The level's engine container: UEngine::Client (+0x44),
+      // UClient::Viewports and UPlayer::Actor (+0x30) as Play links them
+      // (level.engine.client.viewports[i].actor).
+      if(name==='Client'&&actor===level?.engine)return actor.client??null;
+      if(name==='Viewports'&&actor===level?.engine?.client)return actor.viewports??null;
+      if(name==='Actor'&&level?.engine?.client?.viewports?.includes(actor))return actor.actor??null;
       throw new Error(`Original sound native graph field is not bound: ${name}`);
     }
     const value=reflected(name);
     if(value===undefined)throw new Error(`Original sound field is not linked: ${name}`);
     return value;
+  }
+  /** UObject vtable +0x18 ProcessRemoteFunction for ProcessEvent's native
+   * path: AActor's (0x103e5d90, process-remote-function.mjs) for actors, and
+   * Core's UObject base (0x1013fa30) returns 0 for everything else. */
+  processRemoteFunction(receiver,functionFlags) {
+    let actor=false;
+    try{for(let cls=this.instance(receiver).cls;cls;cls=cls.base)if(cls.record.key==='engine.actor'){actor=true;break;}}
+    catch{return 0;}
+    if(!actor)return 0;
+    return actorProcessRemoteFunction(receiver,functionFlags>>>0,{read:(object,name)=>this.soundField(object,name)});
+  }
+  /** XLevel->Engine->Audio reads for the audio natives (execStopSound,
+   * execClientHearSound): the level container's engine carries the host's
+   * UAudioSubsystem facade (Play links Galaxy there), else null. */
+  audioServices() {
+    const services=this.soundServices(null);
+    const read=services.read;
+    services.read=(object,name)=>name==='Audio'?(object?.audio??null):read(object,name);
+    return services;
+  }
+  /** The measured global UObject index of `receiver` (a map table, pawn table
+   * or capture-provider value), or null. Unlike soundField('ObjectIndex') this
+   * never falls back to the host registry slot of a runtime spawn, which is
+   * not the original index (docs/boot-replay.md: the seeded spawn registry is
+   * not wired into Play). */
+  measuredObjectIndex(receiver) {
+    let instance;
+    try{instance=this.instance(receiver);}catch{return null;}
+    if(Number.isInteger(instance.globalIndex))return instance.globalIndex;
+    const captured=this.resolveOriginalObjectIndex(receiver,instance);
+    return Number.isInteger(captured)?(instance.globalIndex=captured):null;
   }
   /** Native event dispatch ownership (docs/script-sound.md). Script events run
    * through ProcessEvent; native events without a script body reach the hook
@@ -3484,7 +3529,9 @@ export class ScriptRuntime {
     }
     if(call.index===264){
       if(call.argumentCount>6)throw new Error('PlaySound accepts at most six arguments');
-      return execActorPlaySound(call,this.soundServices(call));
+      // A null Sound leaves the caller's result storage untouched.
+      const result=execActorPlaySound(call,this.soundServices(call));
+      return result.resultWritten?result.result:undefined;
     }
     if(call.index===1013)return execGetMeshTexture(call,this.meshTextureServices());
     if(call.index===266)return execMove(call,this.moveServices(call));
@@ -4111,7 +4158,17 @@ export class ScriptRuntime {
     // 1013f850 first rejects any nonzero IsPendingKill result. Only then does
     // 1013f858 compare its zero low word with iNative.
     if(instance.pendingKill||(fn.script.nativeIndex&0xffff)!==0)return false;
-    if(fn.script.functionFlags&0x400)throw new Error(`Native ProcessEvent hook is not implemented: ${record.key}`);
+    if(fn.script.functionFlags&0x400){
+      // 1013f862: a FUNC_Native function first goes to ProcessRemoteFunction
+      // (vtable +0x18), which absorbs it when nonzero; otherwise 1013f936
+      // calls UFunction::Func with the copied parameter block.
+      if(this.processRemoteFunction(receiver,fn.script.functionFlags))return false;
+      const body=NATIVE_EVENT_BODIES[record.key];
+      if(!body)throw new Error(`Native ProcessEvent hook is not implemented: ${record.key}`);
+      if(fn.result||args.length!==fn.parameters.length)throw new Error(`Native ProcessEvent parameter block mismatch: ${record.key}`);
+      body.call(this,receiver,args.map((value,index)=>copyValue(fn.parameters[index],value)));
+      return true;
+    }
     if(fn.result&&(!resultReference?.reference||typeof resultReference.get!=='function'||typeof resultReference.set!=='function'))
       throw new Error(`Return-value ProcessEvent requires a caller result reference: ${record.key}`);
     if(args.length!==fn.parameters.length)throw new Error(`Incomplete ProcessEvent parameter block: ${record.key}`);

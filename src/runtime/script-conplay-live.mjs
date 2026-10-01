@@ -1,7 +1,4 @@
-import {TRAINING_NPC_IDENTITIES} from './training-npc-identities.mjs';
-import {ISLAND_NPC_IDENTITIES} from './island-npc-identities.mjs';
-import {MAP_NPC_IDENTITIES} from './map-npc-identities.mjs';
-import {mapObjectIndex} from './map-object-indices.mjs';
+import {assignMeasuredObjectIndices} from './measured-object-indices.mjs';
 import {staticLoadObject} from './script-static-load-object.mjs';
 import {resolveNameNative} from './script-resolve-name.mjs';
 /** Live ConPlay services; gameplay and scheduling execute the original bytecode.
@@ -73,18 +70,8 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     has:isPlay,
     *[Symbol.iterator](){for(const actor of [...level.actors])if(isPlay(actor))yield actor;},
   };
-  // Reuse the original per-map object-index captures (Training's is also used
-  // by GetFrame; the other maps' come from scripts/build-npc-identities.mjs).
-  // Channel IDs are computed by execPlaySound from these indices.
-  const captured={...MAP_NPC_IDENTITIES,'00_training':TRAINING_NPC_IDENTITIES,'01_nyc_unatcoisland':ISLAND_NPC_IDENTITIES};
-  for(const object of level.actors){
-    const map=object?.asset?.name?.toLowerCase();
-    // The pawn tables first; then every other pre-placed actor measured in the
-    // same map's capture (scripts/build-map-object-indices.mjs).
-    let index=captured[map]?.[object.name];
-    if(!Number.isInteger(index)&&Number.isInteger(object?.index))index=mapObjectIndex(map,object.index);
-    if(Number.isInteger(index))runtime.instance(object).globalIndex=index;
-  }
+  // Channel IDs are computed by execPlaySound from the measured indices.
+  assignMeasuredObjectIndices(runtime,level.actors);
   const sounds=new Map();
   async function prepareSound(sound,id=null){
     if(sounds.has(sound))return;

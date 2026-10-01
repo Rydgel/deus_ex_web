@@ -104,15 +104,18 @@ for (const light of lights) {
 const dirs = () => lights.map(l => ref(l, 'Direction'));
 assert.equal(ref(lightSwitch, 'bOn'), false, 'switch starts off');
 const before = dirs();
-const deferredBefore = new Set(game.player.unimplementedPhysicsEffects);
-
 input.aim(lightSwitch);
 assert.deepEqual(game.use(), { ok: true, message: '' }, 'game.use() runs the full LightSwitch.Frob');
 assert.equal(ref(lightSwitch, 'bOn'), true, 'the switch toggled on');
 assert.equal(ref(lightSwitch, 'AnimSequence'), 'On', 'the real PlayAnim native set the switch animation');
 assert.deepEqual(dirs(), before.map(d => -d), 'the cratelight fanout reversed every TriggerLight (state Trigger ran)');
-const switchSound = [...game.player.unimplementedPhysicsEffects].filter(e => !deferredBefore.has(e));
-assert.ok(switchSound.some(e => /LightSwitch0\.SwitchSound/.test(e)), `switch click recorded as a Stage-4 audio boundary: ${switchSound.join(', ')}`);
+// The click is the original PlaySound: execPlaySound's channel id from the
+// measured index (34242, SLOT_Misc; docs/script-sound.md), heard by the
+// player through ClientHearSound and started on a Galaxy channel.
+const clickChannel = runtime.audio.galaxy.state.channels.find(channel => channel.actor === lightSwitch);
+assert.equal(clickChannel?.id, (34242 << 4) + (1 << 1),
+  `switch click on a Galaxy channel: ${JSON.stringify(runtime.audio.galaxy.state.channels.filter(c => c.actor).map(c => c.id))}`);
+assert.equal(clickChannel.sound?.name, 'Switch4ClickOn');
 
 // A second frob reverses it: bOn, the lights, and the animation all toggle back.
 assert.deepEqual(await input.frob(lightSwitch), { ok: true, message: '' });

@@ -30,6 +30,9 @@ import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
 import { createLiveAudio } from './script-audio-live.mjs';
+import { execActorPlaySound, execActorStopSound } from './script-sound.mjs';
+import { mapPlayerIndex } from './map-object-indices.mjs';
+import { assignMeasuredObjectIndices } from './measured-object-indices.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
@@ -468,6 +471,11 @@ export async function createScriptDoors({
     try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
     finally{loggingIn=false;}
     playerStartup=preparedPlayerStartup.complete(playerActor);
+    // The player's global UObject index as measured in this map's open
+    // capture (build-map-object-indices.mjs): the channel ids of its sounds.
+    const playerIndex=mapPlayerIndex(asset?.name);
+    if(Number.isInteger(playerIndex)&&runtime.instance(playerActor).cls?.record.key==='deusex.jcdentonmale')
+      runtime.registerGlobalObjectIndex(playerActor,playerIndex);
     liveMission.beginFreshMission(playerActor);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
@@ -476,7 +484,7 @@ export async function createScriptDoors({
   // ring for diagnostics rather than leaving it an explicit boundary throw.
   const scriptLog=[];
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
-    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264],
+    conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();} });
   // LoadMap startup (Mover.BeginPlay's Move/SetRotation) and Login already
   // move actors and cross zones. Bind the scene's event, rider, map-rotation
@@ -680,6 +688,15 @@ export async function createScriptDoors({
     const decoration = path.startsWith('deusexdecoration.');
     const lightSwitch = path.startsWith('lightswitch.');
     if (call.index === 264) {
+      // execPlaySound (103e1f60) -> CheckHearSound -> the player's native
+      // ClientHearSound -> Galaxy PlaySound, for an emitter whose global
+      // UObject index is measured (map/pawn tables, the player's capture).
+      // A runtime spawn's index is not (the seeded spawn registry is not wired
+      // into Play), so its sound stays the recorded boundary below.
+      if (runtime.measuredObjectIndex(call.receiver) !== null) {
+        const result = execActorPlaySound(call, runtime.soundServices(call));
+        return result.resultWritten ? result.result : undefined;
+      }
       if (decoration) { decorationEffect(call, path.endsWith('.bump') ? 'PushSound' : 'LandedSound'); return 0; }
       // LightSwitch.Frob's Switch4ClickOn/Off is a Stage-4 audio boundary (recorded,
       // no audible playback until ClientHearSound). Channel id 0 (docs/script-light-switch.md).
@@ -726,11 +743,11 @@ export async function createScriptDoors({
       return soundBoundary(call);
     }
     if (call.index === 713) { decorationEffect(call, 'AISendEvent'); return undefined; }
+    // execStopSound (103e27d0): XLevel->Engine->Audio's StopSoundId. The
+    // player's speech-channel stops were consumed by liveConPlay above. A
+    // recorded PlaySound's placeholder id 0 matches only an idle channel.
     if (call.index === 265) {
-      if (decoration) decorationEffect(call, 'StopSound');
-      // DataLinkPlay/ConPlayBase stop the player speech channel at termination.
-      // Browser audio is driven by the same recovered duration and has already
-      // ended on the supported path; there is no native channel id to stop here.
+      execActorStopSound(call, runtime.audioServices());
       return undefined;
     }
     if (call.index === 714) { decorationEffect(call, 'AIStartEvent'); return null; }
@@ -2141,6 +2158,19 @@ export async function createScriptDoors({
     return true;
   };
   playerScene.detachPlayerIdentity();
+  // The pre-placed actors' measured global indices, before any startup sound.
+  assignMeasuredObjectIndices(runtime,level.actors);
+  // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
+  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
+  // XLevel->Engine->Audio, Galaxy's UAudioSubsystem, linked before the map's
+  // startup and Login run: PlaySound (+0x74) from ClientHearSound,
+  // StopSoundId (+0x78) from execStopSound, and ULevel::DestroyActor's
+  // NoteDestroy (script-destroy.mjs).
+  level.engine.audio={
+    playSound:(...args)=>runtime.audio.galaxy.playSound(...args),
+    stopSoundId:id=>runtime.audio.galaxy.stopSoundId(id),
+    noteDestroy:actor=>runtime.audio.galaxy.noteDestroy(actor),
+  };
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
   loadMapGame.reload();
   await prepareShadowStartup(runtime,assets,level);
@@ -2196,10 +2226,6 @@ export async function createScriptDoors({
   liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:nativeWindowFacade,
     conversations:faceConversations.conversations,dataLinkConversations:liveDataLink.conversations,prepareClass:prepareNpcClass,
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
-  // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
-  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
-  // XLevel->Engine->Audio: ULevel::DestroyActor's NoteDestroy (script-destroy.mjs).
-  level.engine.audio={noteDestroy:actor=>runtime.audio.galaxy.noteDestroy(actor)};
 
   // Prepare the newly initialized player subsystem graph for subsequent ticks.
   await prepareNpcs();

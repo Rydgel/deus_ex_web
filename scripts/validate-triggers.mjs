@@ -100,6 +100,9 @@ desiredFlashFog.set([0,0,0]);
 // at TimeSeconds ~= 1.0, so pin LastPainSound far in the past to keep the gate
 // deterministic instead of leaving the boundary on an RNG draw.
 runtime.namedReference(player,'LastPainSound').set(-100);
+// XLevel->Engine->Audio is Galaxy's subsystem; record its PlaySound calls.
+const galaxyPlays=[],audio=runtime.levelFor(player).engine.audio,playSound=audio.playSound;
+audio.playSound=(...args)=>{galaxyPlays.push({actor:args[0],id:args[1],sound:args[2]?.name});return playSound(...args);};
 assert.ok(augmentationSystem.get(),'Player startup creates AugmentationSystem before damage interaction');
 const unwrappedCallFunction=runtime.callFunction;
 const unwrappedInvokeNative=runtime.invokeNative;
@@ -182,11 +185,14 @@ assert.equal(liveWaitingTween.sequence,'BreatheLight','Human.TweenToWaiting sele
 assert.equal(liveWaitingTween.caller,'Human.TweenToWaiting');
 assert.equal(ref(player,'AnimSequence'),'BreatheLight','the player ends the interval in the Waiting tween');
 assert.ok(!game.player.unimplementedPhysicsEffects.has('DamageTrigger1.Timer mission script'));
-assert.ok(game.player.unimplementedPhysicsEffects.has(`${player.name}.PlaySound audio`));
+// Human.PlayTakeHitSound's original PlaySound(SLOT_Pain) reaches Galaxy
+// through the player's ClientHearSound, with the measured index's channel id.
+assert.ok(galaxyPlays.some(play=>play.actor===player&&play.id===(runtime.measuredObjectIndex(player)<<4)+(2<<1)&&/^MalePain/.test(play.sound)),
+  `pain sound on Galaxy: ${JSON.stringify(galaxyPlays.map(play=>[play.id,play.sound]))}`);
 dispatch(damage,'UnTouch',[player]);
 assert.equal(ref(damage,'damagee'),null);
 
 console.log('Play Trigger dispatch passed: base relevance, OrdersTrigger -> original pawn order queue, ' +
   'FlagTrigger set/inverse through native FlagBase, and DamageTrigger scheduling/UnTouch cleanup. ' +
   'Damage Timer runs the Radiation10 chain through body health=98 and GM_Trench HitLegLeft PlayAnim state, then ' +
-  'records deferred Human.PlayTakeHitSound audio and returns; DataLink enters the live Training lifecycle.');
+  'plays Human.PlayTakeHitSound through Galaxy and returns; DataLink enters the live Training lifecycle.');

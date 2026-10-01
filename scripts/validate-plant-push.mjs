@@ -48,6 +48,9 @@ game.collision.queries.changeActor(player, () => {
 game.player.velocity = [120, -30, 18];
 assert.deepEqual(ref(player, 'Velocity').get(), [120, -30, 18], 'live pawn velocity reaches the runtime');
 const deferredBefore = new Set(game.player.unimplementedPhysicsEffects);
+// XLevel->Engine->Audio is Galaxy's subsystem; record its StopSoundId calls.
+const audio = runtime.levelFor(plant).engine.audio, stops = [], stopSoundId = audio.stopSoundId;
+audio.stopSoundId = id => { stops.push(id); return stopSoundId(id); };
 
 // Dispatch exactly as player-move does: the hit actor's Bump first, player as
 // its argument. This must NOT throw "Unsupported original scene event".
@@ -63,9 +66,12 @@ assert.equal(ref(plant, 'bPushSoundPlaying').get(), true);
 const yaw = ref(plant, 'Rotation').get();
 assert.ok(Array.isArray(yaw) && Number.isInteger(yaw[1]), 'a yaw rotation was computed');
 
-// The push sound and AI loud-noise event are recorded deferred boundaries.
+// The push sound is the original PlaySound(PushSound, SLOT_Misc,,, 128): its
+// channel id comes from Plant7's measured index. The AI loud-noise event is
+// still a recorded Stage 5 boundary.
+const pushId = ref(plant, 'pushSoundId').get();
+assert.equal(pushId, (runtime.measuredObjectIndex(plant) << 4) + (1 << 1), 'pushSoundId is execPlaySound\'s channel id');
 const newDeferred = [...game.player.unimplementedPhysicsEffects].filter(effect => !deferredBefore.has(effect));
-assert.ok(newDeferred.some(effect => /Plant7\.PushSound/.test(effect)), `push sound recorded: ${newDeferred.join(', ')}`);
 assert.ok(newDeferred.some(effect => /Plant7\.AIStartEvent/.test(effect)), `AI loud-noise recorded: ${newDeferred.join(', ')}`);
 
 // The SetTimer(0.2) push-sound lifetime clears bPushSoundPlaying once the
@@ -94,9 +100,9 @@ assert.ok(clearedAt !== null, 'Timer cleared the push sound');
 const lifetime = clearedAt - bumpTimes.at(-1);
 assert.ok(lifetime >= 0.2 - 1e-6 && lifetime <= 0.25 + 1e-6,
   `Timer cleared the push sound 0.2s after the last Bump (lifetime ${lifetime})`);
-const afterTimer = [...game.player.unimplementedPhysicsEffects].filter(effect => !deferredBefore.has(effect));
-assert.ok(afterTimer.some(effect => /Plant7\.StopSound/.test(effect)), 'StopSound recorded by Timer');
+assert.ok(stops.includes(pushId), `Timer's StopSound(pushSoundId) reached Galaxy StopSoundId: ${stops}`);
+assert.ok(!runtime.audio.galaxy.state.channels.some(channel => ((channel.id ^ pushId) & ~1) === 0), 'the push channel stopped');
 
 console.log(`Plant push validated in the Play host: Plant7.Bump runs the real DeusExDecoration.Bump ` +
-  `(velocity ${JSON.stringify(ref(plant, 'Velocity').get())}, Instigator JC, push sound + AI recorded), ` +
+  `(velocity ${JSON.stringify(ref(plant, 'Velocity').get())}, Instigator JC, push sound on Galaxy, AI recorded), ` +
   `and its SetTimer(0.2) lifetime clears bPushSoundPlaying. No scene-adapter pause.`);

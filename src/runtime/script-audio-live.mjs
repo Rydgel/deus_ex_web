@@ -6,8 +6,8 @@ import {lightTypeBrightness, LIGHT_TYPE_UNSUPPORTED} from './mesh-lighting.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 
 /** Galaxy's channel logic (galaxy-audio.mjs) over the live level: ambient
- * sounds today; PlaySound's ClientHearSound route stays the existing boundary
- * (docs/galaxy-audio.md "Play"). Voices are host records with a clock, and
+ * sounds from Update's scan, and PlaySound through execPlaySound and the
+ * player's ClientHearSound (docs/galaxy-audio.md "Play"). Voices are host records with a clock, and
  * each start/control/stop goes to `onVoice` for the browser's Web Audio.
  *
  * Host contract (not Galaxy's mixer, which is not translated): a voice plays
@@ -84,13 +84,9 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
   // SpeechVolume on 0..127 (galaxy-volumes.mjs).
   let nextVoice = 1, last = null;
   let digital = Math.trunc(Math.max(galaxyConfig.soundVolume, galaxyConfig.speechVolume) / 255 * 127);
-  const index = actor => {
-    let instance;
-    try { instance = runtime.instance(actor); } catch { return null; }
-    if (Number.isInteger(instance.globalIndex)) return instance.globalIndex;
-    const record = instance.nativeObject;
-    return Number.isInteger(record?.index) ? record.index : null;
-  };
+  // Measured global indices only: a runtime spawn's host registry slot is not
+  // the original index (ScriptRuntime.measuredObjectIndex).
+  const index = actor => runtime.measuredObjectIndex(actor);
   const galaxy = createGalaxyAudio(galaxyConfig, {
     listener: () => ({actor: player(), viewTarget: player() ? read(player(), 'ViewTarget') : null}),
     read, atan2: Math.atan2, isValid: () => true,

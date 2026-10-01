@@ -232,36 +232,33 @@ assert.equal(runtime.soundField(sampleLight, 'ObjectIndex'),
 
 // Native 264 now runs its full listener traversal against the live host graph:
 // the emitter's XLevel (ULevel), its Actors(0) LevelInfo and the LevelInfo's
-// PawnList. Capture the PlaySound descriptor while the wrapper runs.
-const soundCalls = [];
-const invokeNative = runtime.invokeNative.bind(runtime);
+// PawnList. Capture its result and every ClientHearSound it dispatches.
+const soundCalls = [], hearings = [];
+const invokeNative = runtime.invokeNative.bind(runtime), processNativeEvent = runtime.processNativeEvent;
 runtime.invokeNative = call => { const result = invokeNative(call); if (call.index === 264) soundCalls.push(result); return result; };
+runtime.processNativeEvent = function (receiver, name, ...rest) {
+  if (name === 'ClientHearSound') hearings.push(receiver);
+  return processNativeEvent.call(this, receiver, name, ...rest);
+};
 const switchFrob = await runtime.prepareFunction(deusEx, deusEx.exportsByPath.get('lightswitch.frob'));
 runtime.callFunction(switchFrob, lightSwitch, 2, index => index === 0 ? player : null);
 runtime.invokeNative = invokeNative;
+runtime.processNativeEvent = processNativeEvent;
 
-// LightSwitch.Frob plays Switch4ClickOn on slot 1; the channel id derives from
-// the measured global index through (Index << 4) + (Slot << 1) + bNoOverride.
-assert.equal(soundCalls.length, 1);
-const [play] = soundCalls;
-assert.ok(play.resultWritten);
-const [playSound, slot, , noOverride] = play.arguments;
-assert.equal(playSound.name, 'Switch4ClickOn');
-assert.equal(play.result, ((switchGlobalIndex << 4) + (slot << 1) + noOverride) | 0);
-assert.equal(play.result, 547874); // (34242 << 4) + (1 << 1) + 0
+// LightSwitch.Frob plays Switch4ClickOn on the default slot 1 (SLOT_Misc); the
+// channel id derives from the measured global index through
+// (Index << 4) + (Slot << 1) + bNoOverride.
+assert.deepEqual(soundCalls, [((switchGlobalIndex << 4) + (1 << 1)) | 0]);
+assert.equal(soundCalls[0], 547874); // (34242 << 4) + (1 << 1) + 0
 
 // The traversal walked the live PawnList; the player (JCDentonMale) sits at its
-// spawn, far from the switch, so the original distance gate leaves every listener
-// unheard here -- reaching ClientHearSound (audible playback) is Stage 4.
-const jc = play.listeners.find(entry => entry.listener === player);
-assert.ok(jc, 'the player pawn is traversed as a listener');
-assert.equal(jc.heard, false);
-assert.equal(jc.reason, 'distance');
-assert.ok(play.listeners.every(entry => entry.heard === false));
+// spawn, far from the switch, so the original distance gate leaves every
+// listener unheard: no ClientHearSound is dispatched.
+assert.deepEqual(hearings, []);
 
 // Past PlaySound, the wrapper runs its own PlayAnim('On').
 assert.equal(runtime.namedReference(lightSwitch, 'AnimSequence').get(), 'On');
 
 console.log('Original 00_Training TriggerLight BeginPlay -> Actor.SetInitialState -> TriggerToggle.Trigger -> Actor.Tick reversal, byte brightness and corona branches passed.');
 console.log('Native PlayAnim (259) against the original LightSwitch LodMesh payload: sequence lookup, animation stores and SimAnim tail passed.');
-console.log(`LightSwitch.Frob runs end-to-end: Super.Frob + StartConversation, native 264 PlaySound(Switch4ClickOn) -> channel id ${play.result} from measured global index ${switchGlobalIndex}, live PawnList traversal (${play.listeners.length} listeners, none in range), then PlayAnim('On'). Remaining boundary: ClientHearSound audio playback (Stage 4).`);
+console.log(`LightSwitch.Frob runs end-to-end: Super.Frob + StartConversation, native 264 PlaySound(Switch4ClickOn) -> channel id ${soundCalls[0]} from measured global index ${switchGlobalIndex}, live PawnList traversal (no listener in range), then PlayAnim('On'). An in-range listener's ClientHearSound reaches Galaxy (validate-frob).`);

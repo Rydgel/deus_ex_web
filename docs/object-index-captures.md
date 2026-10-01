@@ -10,7 +10,7 @@ running original and kept in a per-map table:
 
 | Map | Table | Capture (local, `.cache/`) |
 | --- | --- | --- |
-| 00_Training | `src/runtime/training-npc-identities.mjs` | `original-gobjects-20260912-training-start.txt` |
+| 00_Training | `src/runtime/training-npc-identities.mjs` | `original-gobjects.txt` (2026-09-11; checked by validate-npc-mesh-preview) |
 | 01_NYC_UNATCOIsland | `src/runtime/island-npc-identities.mjs` | `original-gobjects-20261001-island-open.txt` |
 | the other 81 single-player maps | `src/runtime/map-npc-identities.mjs` (generated) | `original-gobjects-20261001-<map>-open.txt` |
 
@@ -90,14 +90,22 @@ writes `src/runtime/map-object-indices.mjs`: per map, the (export index,
 global index) pairs as base-64 VLQ zigzag deltas (172 KB for all maps), with
 `mapObjectIndex(map, exportIndex)`. Only a Class.Name that is unique in the
 capture counts, as for pawns. A map whose pawn table came from another
-capture session is left out rather than mixing two index spaces: Training's
-table matches neither Training capture (JaimeReyes0 is 34333 in the table,
-34339 in `training-start` and 34327 in `00_training-open`), so Training keeps
-only its pawn table. The other 82 maps' pawn entries all agree with the
-table (1,425 of 1,425).
+capture session would be left out rather than mixing two index spaces.
+Training's pawn table and LightSwitch0's 34242 come from the 2026-09-11
+capture of the map itself (`original-gobjects.txt`), which the builder reads
+for Training; its later captures are separate sessions whose free-slot reuse
+differs (JaimeReyes0 is 34333 there, 34339 in `training-start` and 34327 in
+`00_training-open`, and the offsets vary per actor). Every map's pawn entries
+agree with the table.
 
-Coverage: 52,713 of 53,546 non-Brush actors (98.4%) and 1,775 of 1,795
-actors with an AmbientSound. The unmeasured ones are mostly CSG Brushes, which
+`MAP_PLAYER_INDICES` holds, per map, the one JCDentonMale instance of the same
+capture (JCDentonMale1: the Entry map's player took 0), 82 maps; Play gives it
+to the player each Login spawns (`mapPlayerIndex`, script-doors.mjs), so the
+player's sounds form their original channel ids (galaxy-audio.md "Play").
+
+Coverage: 53,018 of 53,862 non-Brush actors (98.4%; Training 305 of 316),
+and, before Training was added, 1,775 of 1,795 actors with an AmbientSound. The unmeasured ones are mostly CSG Brushes, which
 are not resident in the running game's level, and 20 Lights whose names are
-ambiguous in their capture. `script-conplay-live.mjs` gives every measured
-actor its `globalIndex` when Play starts; the pawn tables take precedence.
+ambiguous in their capture. `measured-object-indices.mjs` gives every
+measured actor its `globalIndex` before the map's startup runs; the pawn
+tables take precedence.

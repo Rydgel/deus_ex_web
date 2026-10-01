@@ -216,10 +216,12 @@ of every channel record (the idle channels' uninitialized words masked).
 from `DeusEx.ini [Galaxy.GalaxyAudioSubsystem]` with Init's clamps
 (Use3dHardware True would be refused: its voices are not translated). The
 world services read the live actors. The listener is the player and its
-ViewTarget. `index` is the actor's measured `globalIndex`
-(object-index-captures.md), or a runtime-created object's registry slot; an
-ambient actor without either is left out of the scan and noted rather than
-given an invented id. `fastLineCheck` is the translated UModel::FastLineCheck.
+ViewTarget. `index` is the actor's measured global index
+(`ScriptRuntime.measuredObjectIndex`: the map, pawn and player tables of
+object-index-captures.md). A runtime spawn's host registry slot is not the
+original index (the seeded spawn registry is not wired into Play,
+boot-replay.md), so an ambient actor without a measured index is left out of
+the scan and noted rather than given an invented id (Island's LaserEmitters). `fastLineCheck` is the translated UModel::FastLineCheck.
 `globalLighting` follows Render.dll's `URender::GlobalLighting`
 (`0x10b05e90`): the light type's function (mesh-lighting.mjs; Steady when not
 realtime; Pulse, Flicker, SubtlePulse and the palette types are noted, as for
@@ -247,13 +249,55 @@ Galaxy's sample loader and mixer are not translated. The browser
 `volume/32767 · digital/127`. That volume and pan law is the host's mapping
 of Galaxy's units, not a measured mixer.
 
-What reaches Galaxy today: ambient sounds (Update's scan). PlaySound from
-scripts still stops at its existing boundary: most sites record the call and
-return channel 0. Routing it through execPlaySound, ClientHearSound
-(`APawn::execClientHearSound 0x103dfc40`: Volume `Parameters.X·0.01`, Radius
-`Parameters.Y` or 1600, Pitch `Parameters.Z·0.01`, a pending-kill Actor
-passed as None, only for a PlayerPawn whose Player is a UViewport) and
-PlaySound is the next step. Speech keeps its own transport.
+What reaches Galaxy: ambient sounds (Update's scan), and script PlaySound
+through its original chain. `XLevel->Engine->Audio` is linked before the map's
+startup and Login (script-doors.mjs `level.engine.audio`):
+
+1. `execPlaySound` (`0x103e1f60`, script-sound.mjs) for an emitter whose
+   global index is measured: the pre-placed actors of the map table and the
+   player, whose index is the one JCDentonMale instance of the same map's
+   open capture (`mapPlayerIndex`; JCDentonMale1 there, 41639 on Training,
+   47368 on Island). CheckHearSound walks the PawnList, or the viewports for a
+   simulated function, and dispatches `ClientHearSound` to each listener in
+   range.
+2. Core ProcessEvent sends a native function to the receiver's
+   `ProcessRemoteFunction` (vtable +0x18) first (`0x1013f862`).
+   `AActor::ProcessRemoteFunction` (`0x103e5d90`) returns 0 for a static
+   function, a bDeleteMe actor, and at NM_Standalone without a demo driver, so
+   the native runs (`UFunction::Func`, `0x1013f936`). With a demo driver and a
+   ServerConnection it returns Absorb (Role <= SimulatedProxy without
+   FUNC_Simulated). The demo-recording and networked paths are not translated
+   and throw (process-remote-function.mjs).
+3. `APawn::execClientHearSound` (`0x103dfc40`): Volume `f32(X·0.01)` and Pitch
+   `f32(Z·0.01)` (an x87 fmul by the qword 0.01 at `0x10429858`), Radius `Y`,
+   or 1600 when it compares equal to 0.0 or unordered. Only a PlayerPawn whose
+   Player is a UViewport, with Audio set, plays; an Actor with bDeleteMe goes as
+   None. Then Galaxy's PlaySound (vtable +0x74).
+4. `execStopSound` (`0x103e27d0`, native 265) reads Id and calls Audio's
+   StopSoundId (+0x78) when Audio is set. Conversation speech stops are
+   consumed by the speech transport first.
+
+A runtime spawn (a fragment, a projectile, a LaserEmitter) has no measured
+index, so its PlaySound stays the recorded boundary that returns the
+placeholder channel 0; StopSound(0) can only match an idle channel, because a
+real id carries a nonzero object index and slot-0 sounds take Galaxy's
+counter ids. Speech keeps its own transport.
+
+`scripts/validate-native-client-hear-sound.mjs` runs the original
+execClientHearSound, execStopSound and ProcessRemoteFunction on fabricated
+objects (`native-client-hear-sound-oracle.py`; a replaced GNatives evaluator
+and recording vtable stubs): 702 cases cover every gate, 400 random parameter
+vectors (bits, with NaN, infinities, denormals and ±0) and the standalone
+remote-function branches, and match as bits. A signaling NaN in SoundLocation
+survives the native's integer copies but not a JS number, so those 18 inputs
+expect the quieted word; the runtime's floats never carry an sNaN.
+
+In Play, Training's LightSwitch click lands on a Galaxy channel with id 547874
+(validate-frob), Plant7's push sound returns `pushSoundId` from its measured
+index and its Timer's StopSound reaches StopSoundId (validate-plant-push), the
+Radiation10 pain sound and the bot arm sounds return the original ids
+(validate-trigger-actions, validate-triggers, validate-window-baseline-play),
+and booted Training and Island start the player's footstep voices.
 
 A booted UNATCO Island run of 180 frames starts six ambient voices (boat idle,
 strong and harbour wind, ...) with their WAV loops, and controls them every
@@ -267,7 +311,8 @@ Location. Both are in the oracle's random sequences. Play links ULevel's
 `XLevel->Engine->Audio` (`level.engine.audio`) so DestroyActor's NoteDestroy
 reaches Galaxy (script-destroy.mjs).
 
-Remaining: RegisterSound (sample decoding and
-loop points), the Galaxy library's voice functions and mixer (how a volume,
-pan and frequency become samples), music (RegisterMusic, the tracker player),
-then the oracle cases and the Web Audio mapping.
+Remaining: runtime spawns' global indices (the seeded spawn registry), the
+demo-recording and networked ProcessRemoteFunction paths, RegisterSound
+(sample decoding and loop points), the Galaxy library's voice functions and
+mixer (how a volume, pan and frequency become samples), music (RegisterMusic,
+the tracker player), then the oracle cases and the Web Audio mapping.

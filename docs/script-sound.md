@@ -187,6 +187,18 @@ Float32 stores and native branch order are retained. JS number arithmetic is
 used for retained x87 intermediates, following the existing bounded scene math
 translation; this does not claim arbitrary extended-precision bit identity.
 
+### Play runs the native for measured emitters — 2026-10-02
+
+Play now runs `execActorPlaySound` for every emitter whose global index is
+measured (`ScriptRuntime.measuredObjectIndex`: the map, pawn and player
+tables), and its listeners' `ClientHearSound` reaches Galaxy through the
+recovered `APawn::execClientHearSound` and ProcessEvent's
+`ProcessRemoteFunction` gate ([galaxy audio](galaxy-audio.md#play)). Native
+265 runs `execStopSound`. The recorded seam below remains only for a runtime
+spawn, whose host registry slot is not the original index. The runtime's own
+264 body now returns the channel id (or leaves the result untouched for a null
+Sound) instead of its descriptor.
+
 ### Discarded-result family admission — 2026-09-25
 
 Contract recorded before implementation: retail Core `ProcessInternal`

@@ -798,8 +798,15 @@ the separate representation step above.
   `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
   `--bypass --continue --render-feedback --warm 60 --ticks 300
   --digest-every 10 --json`.
-  * The references at this commit are Training `bc332ff7595aae8a` and
-    Island `42e0401534a54b3a`. They were Training `7d5804dd8ad9a9d4` and
+  * The references at this commit are Training `44267cb4460ab7b3` and
+    Island `fcd924498a0882c8` (JavaScript and Rust agree). They were
+    Training `bc332ff7595aae8a` and Island `42e0401534a54b3a` until the
+    player took its measured global index from the map's capture (October 2,
+    [galaxy audio](galaxy-audio.md#play)): the DataLink speech
+    `playingSoundId` is now the original channel id (41639·16 + slot on
+    Training) instead of the host registry slot's; with that one assignment
+    disabled, all 30 checkpoints of both maps equal the earlier references.
+    They were Training `7d5804dd8ad9a9d4` and
     Island `d99a97de6f21893f` until every mover's native interpolation
     fields were seeded from its own storage (October 1, [doors](doors.md#play-wiring)):
     OldPos and OldRot now read the serialized values rather than Location

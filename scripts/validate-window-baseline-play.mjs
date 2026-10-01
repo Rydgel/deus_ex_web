@@ -79,12 +79,12 @@ const effectsBefore=new Set(game.player.unimplementedPhysicsEffects);
 const lowEnergy=10;
 if(target==='RepairBot')runtime.namedReference(player,'Energy').set(lowEnergy);
 // Run the original Frob. SetMedicalBot/SetRepairBot discard PlaySound's channel
-// id, so the live host records the one-shot effect and continues the script.
+// id: the bot's measured index forms it (SLOT_None) and the script continues.
 assert.doesNotThrow(()=>runtime.processEvent(bot,'Frob',[player,null]));
 assert.deepEqual(botSounds,[{receiver:bot,
-  path:target==='MedicalBot'?'hudmedbothealthscreen.setmedicalbot':'hudrechargewindow.setrepairbot',value:0}]);
-assert.deepEqual([...game.player.unimplementedPhysicsEffects].filter(effect=>!effectsBefore.has(effect)),
-  [`${bot.name}.BotRaiseArmSound audio`]);
+  path:target==='MedicalBot'?'hudmedbothealthscreen.setmedicalbot':'hudrechargewindow.setrepairbot',
+  value:runtime.measuredObjectIndex(bot)<<4}]);
+assert.deepEqual([...game.player.unimplementedPhysicsEffects].filter(effect=>!effectsBefore.has(effect)),[]);
 assert.deepEqual(runtime.namedReference(bot,'Acceleration').get(),[0,0,0],
   'original StandStill clears bot acceleration before raising the arm');
 assert.equal(String(runtime.namedReference(bot,'AnimSequence').get()).toLowerCase(),'start',

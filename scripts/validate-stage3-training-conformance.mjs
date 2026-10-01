@@ -57,8 +57,8 @@ const UNPROBED = Object.freeze([]);
 // body on host-owned state (the evidence is named); anything else, including
 // an unlisted native, is a substitute that keeps the gate open.
 const HOST_NATIVES = Object.freeze({
-  264: {allowed: 4, reason: 'PlaySound: recorded audio, channel 0 (criterion 2 / Stage 4)'},
-  265: {allowed: 4, reason: 'StopSound: recorded audio (Stage 4)'},
+  264: {allowed: 4, reason: 'PlaySound: execPlaySound -> ClientHearSound -> Galaxy for a measured emitter; a runtime spawn without a measured index is recorded (channel 0) until the seeded spawn registry (docs/boot-replay.md)'},
+  265: {recovered: 'StopSound: execStopSound 103e27d0 -> Galaxy StopSoundId (script-sound.mjs)'},
   713: {allowed: 5, reason: 'AISendEvent: UEventManager propagation (Stage 5 perception)'},
   714: {allowed: 5, reason: 'AIStartEvent: UEventManager propagation (Stage 5 perception)'},
   715: {allowed: 5, reason: 'AIEndEvent: UEventManager propagation (Stage 5 perception)'},

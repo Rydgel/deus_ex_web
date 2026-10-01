@@ -1,10 +1,12 @@
-import {refValue} from './script-vm.mjs';
+import {refValue,x87load,x87double,x87mul,x87store} from './script-vm.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';
 
 const f=Math.fround;
 const HEARING_RADIUS=0.7692307829856873;
 const OCCLUDED_RADIUS=0.6000000238418579;
 const OCCLUDED_VOLUME=0.3499999940395355;
+// execClientHearSound's scale (qword 0x10429858 = 0.01, an fmul qword).
+const HUNDREDTH=x87double(0.01);
 
 function service(services,name,...args) {
   if(typeof services?.[name]!=='function')throw new Error(`Original sound service is not linked: ${name}`);
@@ -125,4 +127,46 @@ export function execActorPlaySound(call,services) {
     }
   }
   return {resultWritten:true,result:id,arguments:[sound,slot,volume,noOverride,radius,pitch],listeners};
+}
+
+/** Engine.dll APawn::execClientHearSound 103dfc40: Pawn's `native simulated
+ * event ClientHearSound(Actor, Id, S, SoundLocation, Parameters)`, reached
+ * through ProcessEvent (`args` is its parameter block). Volume and Pitch are
+ * f32(Parameters.X·0.01) and f32(Parameters.Z·0.01) (x87 fmul by the qword
+ * 0.01); Radius is Parameters.Y, replaced by 1600 when it compares equal to
+ * 0.0 or unordered (fcomp/C3). Only a PlayerPawn whose Player is a UViewport,
+ * with XLevel->Engine->Audio set, plays; an Actor with bDeleteMe (+0x28 bit 7)
+ * goes as None. Then Audio's PlaySound (vtable +0x74); its result is unused.
+ * Oracle: validate-native-client-hear-sound. */
+export function execPawnClientHearSound(pawn,args,services) {
+  if(!Array.isArray(args)||args.length!==5)throw new Error('ClientHearSound requires its five parameters');
+  let [actor,id,sound,location,parameters]=args;
+  const params=vector(parameters);
+  const volume=x87store(x87mul(x87load(params[0]),HUNDREDTH));
+  let radius=params[1];
+  const pitch=x87store(x87mul(x87load(params[2]),HUNDREDTH));
+  if(!service(services,'isA',pawn,'Engine.PlayerPawn'))return {played:false,reason:'PlayerPawn'};
+  const player=read(services,pawn,'Player');
+  if(player===null||!service(services,'isA',player,'Engine.Viewport'))return {played:false,reason:'Viewport'};
+  const audio=read(services,read(services,read(services,pawn,'XLevel'),'Engine'),'Audio');
+  if(audio===null)return {played:false,reason:'Audio'};
+  if(actor!==null&&read(services,actor,'bDeleteMe'))actor=null;
+  if(radius===0||Number.isNaN(radius))radius=f(1600);
+  const call=[actor,id|0,sound,vector(location),volume,radius,pitch];
+  if(typeof audio.playSound!=='function')throw new Error('Original audio subsystem PlaySound is not linked');
+  audio.playSound(...call);
+  return {played:true,call};
+}
+
+/** Engine.dll AActor::execStopSound 103e27d0 (native 265): Id (zeroed, then
+ * P_GET_INT), P_FINISH, then XLevel->Engine->Audio's StopSoundId (vtable
+ * +0x78) when Audio is set. XLevel and Engine are not null-checked. */
+export function execActorStopSound(call,services) {
+  if(call.argumentCount!==1)throw new Error('StopSound requires one int argument');
+  const id=refValue(call.evaluateArgument(0))|0;
+  const audio=read(services,read(services,read(services,call.receiver,'XLevel'),'Engine'),'Audio');
+  if(audio===null)return {id,stopped:false};
+  if(typeof audio.stopSoundId!=='function')throw new Error('Original audio subsystem StopSoundId is not linked');
+  audio.stopSoundId(id);
+  return {id,stopped:true};
 }
