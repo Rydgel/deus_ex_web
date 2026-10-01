@@ -460,6 +460,9 @@ pub(crate) static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
 static mut CLASSES: [u32; 2] = [0; 2];
 static mut RECEIVERS: [u32; 4] = [0; 4];
+/// js_receiver's binding set for the handle it answered (for a handle the
+/// receiver table does not cover).
+static mut RECEIVER_BIND: u32 = 0;
 static mut CHECK: u32 = 0;
 // R2b-6: VECTOR_IO, a vector or rotator js_vector/js_rotator wrote;
 // RESULT3, a vector or rotator Return's value; CHECK_VALUES, the operands
@@ -503,6 +506,10 @@ pub extern "C" fn vm_classes_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn vm_receivers_ptr() -> *mut u32 {
     addr_of_mut!(RECEIVERS) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn vm_receiver_bind_ptr() -> *mut u32 {
+    addr_of_mut!(RECEIVER_BIND)
 }
 #[no_mangle]
 pub extern "C" fn vm_check_ptr() -> *mut u32 {
@@ -633,17 +640,26 @@ pub(crate) fn class_entry(handle: u32) -> u32 {
 /// under the current epoch, else js_receiver's answer (which enters it).
 #[inline(always)]
 pub(crate) fn receiver_info(handle: u32) -> u32 {
+    receiver(handle).0
+}
+/// A handle's receiver info and binding set: the address of `[length,
+/// bytes...]`, one byte per field key id, nonzero for each key the object
+/// itself binds (0 when it binds none, or when the host gave no set: then a
+/// BOUND receiver's bound keys are the global table's). The receiver table
+/// holds [info, epoch, binding set, 0] per handle.
+pub(crate) fn receiver(handle: u32) -> (u32, u32) {
     let (table, capacity, epoch, verify) = unsafe {
         let receivers = addr_of!(RECEIVERS) as *const u32;
         (*receivers, *receivers.add(1), *receivers.add(2), *receivers.add(3))
     };
     if verify == 0 && handle < capacity {
-        let at = table.wrapping_add(handle.wrapping_mul(8));
+        let at = table.wrapping_add(handle.wrapping_mul(16));
         if load32(at.wrapping_add(4)) == epoch {
-            return load32(at);
+            return (load32(at), load32(at.wrapping_add(8)));
         }
     }
-    unsafe { js_receiver(handle) }
+    let info = unsafe { js_receiver(handle) };
+    (info, unsafe { RECEIVER_BIND })
 }
 /// A pointer cell's value as its JavaScript read yields it: a released
 /// handle names no identity (identityOfHandle's null), so it is None.
@@ -796,18 +812,28 @@ pub(crate) fn row_has_name(row: u32, name: u32) -> bool {
 /// whose info is `info`, or None when the field takes the JavaScript path
 /// (a HOST receiver, or a bound key on a BOUND receiver).
 #[inline(always)]
-pub(crate) fn field_addr(info: u32, key: u32, offset: u32) -> Option<u32> {
+pub(crate) fn field_addr(info: u32, bind: u32, key: u32, offset: u32) -> Option<u32> {
     if info & (HOST | BOUND) != 0 {
         if info & HOST != 0 {
             return None;
         }
-        let keys = addr_of!(BOUND_KEYS) as *const u32;
-        let (table, length) = unsafe { (*keys, *keys.add(1)) };
-        if key < length && load8(table.wrapping_add(key)) != 0 {
+        if bound_key(bind, key) {
             return None;
         }
     }
     Some((info & !15).wrapping_add(offset))
+}
+/// Whether a BOUND receiver with binding set `bind` binds field key `key`:
+/// its own set, or the global bound-key table when it has none.
+#[inline(always)]
+pub(crate) fn bound_key(bind: u32, key: u32) -> bool {
+    let (table, length) = if bind != 0 {
+        (bind.wrapping_add(4), load32(bind))
+    } else {
+        let keys = addr_of!(BOUND_KEYS) as *const u32;
+        unsafe { (*keys, *keys.add(1)) }
+    };
+    key < length && load8(table.wrapping_add(key)) != 0
 }
 
 /// An expression's receiver. `handle` 0 is SELF, whose info the run caches;
@@ -817,8 +843,9 @@ pub(crate) fn field_addr(info: u32, key: u32, offset: u32) -> Option<u32> {
 pub(crate) struct Recv {
     pub(crate) handle: u32,
     pub(crate) info: u32,
+    pub(crate) bind: u32,
 }
-pub(crate) const SELF: Recv = Recv { handle: 0, info: 0 };
+pub(crate) const SELF: Recv = Recv { handle: 0, info: 0, bind: 0 };
 
 pub(crate) struct Run {
     pub(crate) code: *const u32,
@@ -827,6 +854,8 @@ pub(crate) struct Run {
     pub(crate) locals: u32,
     pub(crate) self_handle: u32,
     pub(crate) self_info: u32,
+    /// SELF's binding set, fetched with self_info.
+    pub(crate) self_bind: u32,
     pub(crate) self_fresh: bool,
     /// A CALL's callee: an S_YIELD statement runs through js_step here
     /// instead of returning to the host.
@@ -946,18 +975,28 @@ impl Run {
     #[inline(always)]
     pub(crate) fn self_info(&mut self) -> u32 {
         if !self.self_fresh {
-            self.self_info = receiver_info(self.self_handle);
+            (self.self_info, self.self_bind) = receiver(self.self_handle);
             self.self_fresh = true;
         }
         self.self_info
+    }
+    /// `r`'s receiver info and binding set.
+    #[inline(always)]
+    pub(crate) fn recv_info(&mut self, r: Recv) -> (u32, u32) {
+        if r.handle == 0 {
+            let info = self.self_info();
+            (info, self.self_bind)
+        } else {
+            (r.info, r.bind)
+        }
     }
 
     /// The address of `r`'s field at `offset` with key id `key`, or None
     /// when the field takes the JavaScript path.
     #[inline(always)]
     pub(crate) fn field(&mut self, r: Recv, key: u32, offset: u32) -> Option<u32> {
-        let info = if r.handle == 0 { self.self_info() } else { r.info };
-        field_addr(info, key, offset)
+        let (info, bind) = self.recv_info(r);
+        field_addr(info, bind, key, offset)
     }
 
     /// SCRIPT_VM_CHECK: the host compares a value Rust computed for `node`
@@ -1426,6 +1465,7 @@ impl Run {
             locals,
             self_handle: callee_self,
             self_info: 0,
+            self_bind: 0,
             self_fresh: false,
             callee: true,
         };
@@ -1612,7 +1652,8 @@ impl Run {
             self.self_fresh = false;
             return None;
         }
-        Some(Recv { handle: object, info: receiver_info(object) })
+        let (info, bind) = receiver(object);
+        Some(Recv { handle: object, info, bind })
     }
 
     /// A vector value (R2b-6): three quiet float32 bit patterns.
@@ -2413,7 +2454,7 @@ impl Run {
 #[no_mangle]
 pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, entry: u32) -> i32 {
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_fresh: false, callee: false };
+    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
     run.statements(entry)
 }
 
@@ -2422,6 +2463,6 @@ pub extern "C" fn vm_run(code: u32, frame: u32, locals: u32, self_handle: u32, e
 #[no_mangle]
 pub extern "C" fn vm_statement(code: u32, frame: u32, locals: u32, self_handle: u32, index: u32) -> i32 {
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_fresh: false, callee: false };
+    let mut run = Run { code, pc: code, frame, locals, self_handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
     run.statement(index)
 }

@@ -276,8 +276,9 @@ export class RustScriptVm {
     // far; later releases arrive through onHandleRelease.
     this.classesAt = x.vm_classes_ptr();
     // The receiver table starts empty: every entry's epoch word is 0, below
-    // the first epoch.
+    // the first epoch. Entries are [info, epoch, binding set, 0].
     this.receiversAt = x.vm_receivers_ptr();
+    this.receiverBindAt = x.vm_receiver_bind_ptr();
     // R2b-6: vector and rotator values from JavaScript, vector and rotator
     // Returns, and SCRIPT_VM_CHECK's operator reports.
     this.vectorAt = x.vm_vector_io_ptr();
@@ -318,10 +319,11 @@ export class RustScriptVm {
   /** Make the receiver table cover `handle`. */
   growReceiverTable(handle) {
     if (handle < this.receiverCapacity) return;
-    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 8);
+    const capacity = Math.max(4096, (handle + 1) * 2), base = this.arena.alloc(capacity * 16);
+    this.arena.bytes.fill(0, base + this.receiverCapacity * 16, base + capacity * 16);
     if (this.receiverTable) {
-      this.arena.bytes.copyWithin(base, this.receiverTable, this.receiverTable + this.receiverCapacity * 8);
-      this.arena.release(this.receiverTable, this.receiverCapacity * 8);
+      this.arena.bytes.copyWithin(base, this.receiverTable, this.receiverTable + this.receiverCapacity * 16);
+      this.arena.release(this.receiverTable, this.receiverCapacity * 16);
     }
     this.receiverTable = base;
     this.receiverCapacity = capacity;
@@ -338,7 +340,7 @@ export class RustScriptVm {
   markReleased(handle) {
     this.growClassTable(handle);
     this.arena.view.setUint32(this.classTable + 4 * handle, RELEASED, true);
-    if (handle < this.receiverCapacity) this.arena.view.setUint32(this.receiverTable + 8 * handle + 4, 0, true);
+    if (handle < this.receiverCapacity) this.arena.view.setUint32(this.receiverTable + 16 * handle + 4, 0, true);
     this.states.clear(handle);
   }
   invalidateDefaultImages() {
@@ -477,16 +479,42 @@ export class RustScriptVm {
   /** js_receiver: `handle`'s receiver info, entered in the receiver table
    * under the current epoch. Runs no script. */
   receiverInfo(handle) {
-    const info = this.computeReceiverInfo(handle);
+    const info = this.computeReceiverInfo(handle), bind = info & BOUND ? this.bindingSet(handle) : 0;
+    this.arena.view.setUint32(this.receiverBindAt, bind, true);
     if (handle > 0 && handle < handleLimit()) {
       this.growReceiverTable(handle);
-      const view = this.arena.view, at = this.receiverTable + 8 * handle, epoch = receiverEpoch() >>> 0;
-      if (RECEIVER_VERIFY && view.getUint32(at + 4, true) === epoch && view.getUint32(at, true) !== info)
-        throw new Error(`Receiver table entry of handle ${handle} is stale: ${view.getUint32(at, true)}, now ${info}`);
+      const view = this.arena.view, at = this.receiverTable + 16 * handle, epoch = receiverEpoch() >>> 0;
+      if (RECEIVER_VERIFY && view.getUint32(at + 4, true) === epoch &&
+        (view.getUint32(at, true) !== info || view.getUint32(at + 8, true) !== bind))
+        throw new Error(`Receiver table entry of handle ${handle} is stale: ${view.getUint32(at, true)}/${view.getUint32(at + 8, true)}, now ${info}/${bind}`);
       view.setUint32(at, info, true);
       view.setUint32(at + 4, epoch, true);
+      view.setUint32(at + 8, bind, true);
     }
     return info;
+  }
+  /** A BOUND object's binding set (interp.rs `receiver`): `[length,
+   * bytes...]`, a nonzero byte per field key id the object binds, except
+   * mirrored bindings, whose image cell holds the binding's value
+   * (script-runtime.mjs mirroredBinding; their keys are never bound keys).
+   * Sets are shared by every object with the same keys; an object's
+   * bindings only grow, and each addition advances the receiver epoch. */
+  bindingSet(handle) {
+    const identity = identityOfHandle(handle), runtime = this.runtime;
+    const instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity), ids = [];
+    for (const [field, binding] of instance.bindings) if (binding.mirrored !== true) ids.push(fieldKeyId(field));
+    ids.sort((a, b) => a - b);
+    const key = ids.join(',');
+    let address = (this.bindingSets ??= new Map()).get(key);
+    if (address === undefined) {
+      const length = ids.length ? ids.at(-1) + 1 : 0;
+      address = this.arena.alloc(4 + length);
+      this.arena.bytes.fill(0, address, address + 4 + length);
+      this.arena.view.setUint32(address, length, true);
+      for (const id of ids) this.arena.bytes[address + 4 + id] = 1;
+      this.bindingSets.set(key, address);
+    }
+    return address;
   }
   computeReceiverInfo(handle) {
     const identity = identityOfHandle(handle);

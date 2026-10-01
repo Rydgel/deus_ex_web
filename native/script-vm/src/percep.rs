@@ -46,8 +46,8 @@
 //! snapshot first) and compares the result, the writes and the traces.
 
 use crate::interp::{
-    class_entry, js_class_row, load32, load8, receiver_info, row_has_name, store32, to_int32, widen,
-    Recv, Run, BOUND, BOUND_KEYS, HOST, NAME_NONE, RELEASED, SELF, UNDEFINED, UNDEF_F64_BITS,
+    bound_key, class_entry, js_class_row, load32, load8, receiver, row_has_name, store32, to_int32, widen,
+    Recv, Run, BOUND, HOST, NAME_NONE, RELEASED, SELF, UNDEFINED, UNDEF_F64_BITS,
 };
 use crate::trace::{f, pow2, sqrt};
 use crate::x87::Ext;
@@ -187,13 +187,6 @@ fn pfield(field: usize) -> [u32; 3] {
 fn check() -> bool {
     unsafe { P_CHECK != 0 }
 }
-/// Whether field key `key` is a bound key (interp.rs `field`).
-#[inline(always)]
-fn bound(key: u32) -> bool {
-    let keys = addr_of!(BOUND_KEYS) as *const u32;
-    let (table, length) = unsafe { (*keys, *keys.add(1)) };
-    key < length && load8(table.wrapping_add(key)) != 0
-}
 /// A name cell's id: its nameKeyId, None stored as 0.
 #[inline(always)]
 fn name_word(addr: u32) -> u32 {
@@ -211,6 +204,8 @@ fn name_word(addr: u32) -> u32 {
 struct Obj {
     handle: u32,
     info: u32,
+    /// Its binding set (interp.rs `receiver`), 0 for the global table.
+    bind: u32,
     row: u32,
     fields: u32,
     flags: u32,
@@ -224,7 +219,7 @@ impl Obj {
             return None;
         }
         let [offset, _, key] = pfield(field);
-        if self.info & BOUND != 0 && bound(key) {
+        if self.info & BOUND != 0 && bound_key(self.bind, key) {
             return None;
         }
         Some((self.info & !15).wrapping_add(offset))
@@ -480,22 +475,23 @@ impl Run {
 
     /// Receiver info of a handle: SELF's cached one, else the receiver
     /// table's.
-    fn info_of(&mut self, handle: u32) -> u32 {
+    fn info_of(&mut self, handle: u32) -> (u32, u32) {
         if handle == self.self_handle {
-            self.self_info()
+            let info = self.self_info();
+            (info, self.self_bind)
         } else {
-            receiver_info(handle)
+            receiver(handle)
         }
     }
     fn describe(&mut self, handle: u32) -> Obj {
-        let info = self.info_of(handle);
+        let (info, bind) = self.info_of(handle);
         let mut row = class_entry(handle);
         if row <= RELEASED {
             // js_class_row runs no script.
             row = unsafe { js_class_row(handle) };
         }
         if row == 0 {
-            return Obj { handle, info, row: 0, fields: 0, flags: 0 };
+            return Obj { handle, info, bind, row: 0, fields: 0, flags: 0 };
         }
         let at = row.wrapping_add(8).wrapping_add(load32(row.wrapping_add(4)).wrapping_mul(8));
         if load32(at.wrapping_add(4)) == 0 {
@@ -503,7 +499,7 @@ impl Run {
             unsafe { js_class_fields(handle) };
         }
         let fields = if info & HOST != 0 { 0 } else { load32(at) };
-        Obj { handle, info, row, fields, flags: load32(at.wrapping_add(4)) }
+        Obj { handle, info, bind, row, fields, flags: load32(at.wrapping_add(4)) }
     }
     /// soundServices' isA(actor, name): the row's name list, or JavaScript.
     fn obj_is_a(&mut self, o: &Obj, which: usize) -> bool {
@@ -925,14 +921,14 @@ impl Run {
             row = unsafe { js_class_row(handle) };
         }
         if row == 0 {
-            return Obj { handle, info, row: 0, fields: 0, flags: 0 };
+            return Obj { handle, info, bind: 0, row: 0, fields: 0, flags: 0 };
         }
         let at = row.wrapping_add(8).wrapping_add(load32(row.wrapping_add(4)).wrapping_mul(8));
         if load32(at.wrapping_add(4)) == 0 {
             unsafe { js_class_fields(handle) };
         }
         let fields = if info & HOST != 0 { 0 } else { load32(at) };
-        Obj { handle, info, row, fields, flags: load32(at.wrapping_add(4)) }
+        Obj { handle, info, bind: 0, row, fields, flags: load32(at.wrapping_add(4)) }
     }
 
     /// losCheckAICanSee: SingleLineCheck traces from the eye.

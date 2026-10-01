@@ -78,7 +78,7 @@ assert.equal(CODE[0], RESERVED, 'the first arena allocation is at the reserved b
 class VmError extends Error {
   constructor(frame, code, node) { super(`js_error ${code} (node ${node})`); Object.assign(this, {frame, code, node}); }
 }
-const handlers = new Map(), infos = new Map(), calls = [];
+const handlers = new Map(), infos = new Map(), binds = new Map(), calls = [];
 let nextNode = 1000;
 /** A node id whose JS evaluation is `fn(receiver, frame)`. */
 const node = (fn = () => { throw new Error(`node evaluated unexpectedly: ${JSON.stringify(calls.slice(-6))}`); }) => {
@@ -110,7 +110,13 @@ const imports = {
     return v === undefined ? UNDEFINED : v === null ? 0 : v;
   },
   js_eval(frame, n, receiver) { calls.push({imp: 'eval', frame, node: n, receiver}); evaluate(n, receiver, frame); },
-  js_receiver(handle) { calls.push({imp: 'receiver', receiver: handle}); return infos.get(handle) ?? HOST; },
+  js_receiver(handle) {
+    calls.push({imp: 'receiver', receiver: handle});
+    // The host protocol (script-vm-rust.mjs receiverInfo): the binding set
+    // into RECEIVER_BIND, 0 for none.
+    wr32(RECEIVER_BIND_AT, binds.get(handle) ?? 0);
+    return infos.get(handle) ?? HOST;
+  },
   js_accessed_none(frame, n) { calls.push({imp: 'none', frame, node: n}); },
   js_error(frame, code, n) { calls.push({imp: 'error', frame, code, node: n}); throw new VmError(frame, code, n); },
   // The host's iterator stack (script-vm-rust.mjs): each entry scripts its
@@ -269,7 +275,7 @@ const UNDEF_AT = x.vm_float_undef_ptr(), KEYS_AT = x.vm_bound_keys_ptr();
 const FRAMES_AT = x.vm_frames_ptr(), CALL_BLOCK_AT = x.vm_call_block_ptr();
 const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
 const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHECK_VALUES_AT = x.vm_check_values_ptr();
-const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr();
+const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr(), RECEIVER_BIND_AT = x.vm_receiver_bind_ptr();
 const EVENTS_AT = x.vm_events_ptr(), DELETE_ME_AT = x.vm_delete_me_ptr(), ENAMES_AT = x.vm_enames_ptr();
 const RUNS_AT = x.vm_runs_ptr(), SERIAL_AT = x.vm_serial_ptr(), CALLS_AT = x.vm_calls_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
@@ -283,6 +289,7 @@ function reset() {
   nextNode = 1000;
   calls.length = 0;
   infos.clear();
+  binds.clear();
   infos.set(SELF_H, SELF_IMG).set(OTHER_H, OTHER_IMG).set(THIRD_H, THIRD_IMG).set(INNER_H, INNER_IMG);
   wr32(UNDEF_AT, 0);
   for (const base of [LOCALS, INNER_LOCALS, SELF_IMG, OTHER_IMG, THIRD_IMG, INNER_IMG]) arena.bytes.fill(0, base, base + 256);
@@ -3033,6 +3040,45 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   reset();
   vectorOf(w(K.VECTOR_ADD, node(), w(K.LIT_VECTOR, [0, 0, 0]), w(K.LOCAL_VECTOR, 0xc0, node())));
   same(count('check'), 0, 'no reports without CHECK');
+}
+
+// ---- October 1: per-object binding sets (interp.rs `receiver`, `bound_key`) ---------------
+// A BOUND receiver's fields take the JavaScript path for the keys its own
+// binding set marks; with no set (0), for the global bound-key table's.
+{
+  const bindSet = keys => {
+    const length = Math.max(0, ...keys) + 1, a = arena.alloc(4 + length);
+    arena.bytes.fill(0, a, a + 4 + length);
+    wr32(a, keys.length ? length : 0);
+    for (const k of keys) arena.bytes[a + 4 + k] = 1;
+    return a;
+  };
+  // Global table: keys 3 (and 20, beyond its length 16) bound.
+  for (const [keys, key, jsPath] of [[[4], 4, true], [[4], 3, false], [[3], 3, true], [[2, 9], 9, true], [[2, 9], 10, false],
+    [[2, 9], 30, false], [[], 3, false], [null, 3, true], [null, 4, false]]) {
+    for (const where of ['self', 'context']) {
+      reset();
+      fieldImage(SELF_IMG);
+      fieldImage(OTHER_IMG);
+      const handle = where === 'self' ? SELF_H : OTHER_H;
+      infos.set(handle, (handle === SELF_H ? SELF_IMG : OTHER_IMG) | BOUND);
+      if (keys) binds.set(handle, bindSet(keys));
+      const n = node(() => 77);
+      const read = w(K.FIELD_INT, 0x10, n, key);
+      wr32(LOCALS + 44, OTHER_H);
+      const got = where === 'self' ? value(R.INT, read) : value(R.INT, E.context(node(), w(K.LOCAL_OBJECT, 44), read));
+      same(got, jsPath ? 77 : -123, `binding set ${JSON.stringify(keys)} key ${key} on ${where}`);
+    }
+  }
+  // SELF's set is fetched with its info, again after an import.
+  reset();
+  fieldImage(SELF_IMG);
+  infos.set(SELF_H, SELF_IMG | BOUND);
+  binds.set(SELF_H, bindSet([5]));
+  const before = w(K.FIELD_INT, 0x10, node(() => 1), 4);
+  const effect = w(K.JS_INT, node(() => (binds.set(SELF_H, bindSet([4])), 0)));
+  const after = w(K.FIELD_INT, 0x10, node(() => 2), 4);
+  same(value(R.INT, w(K.INT_ADD, w(K.INT_ADD, before, effect), after)), -123 + 0 + 2, 'SELF binding set refreshed after an import');
 }
 
 // ---- October 1: GetStateName, LastRendered, InStasis (natives.rs) -------------------------

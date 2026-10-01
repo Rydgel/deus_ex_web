@@ -440,6 +440,47 @@ The full sweep at `02a096b` (before this step) passed 443 of 444; the one
 failure, `validate-player-tick-order`, crossed the runner's 6 GiB cap with
 four jobs running and passes alone (3.7 GB peak).
 
+### October 1: per-object binding sets (implemented)
+
+Step 6 of the plan below. A BOUND receiver's field reads used to take the
+JavaScript path for every key any object binds (the global bound-key
+table). On Island this sent each NPC's `HeadRegion.Zone` (57 reads per
+tick), InStasis's Physics (41) and AICanSee's BaseEyeHeight (24) to
+JavaScript, because the controlled player and moving brushes bind those
+keys. Census of September 30 missed HeadRegion: it is read as a struct
+member, which `SCRIPT_VM_STATS` filed under `0x36 [of 0x1]`.
+
+* **Binding sets.** The receiver table entry is now `[info, epoch, binding
+  set, 0]` (16 bytes). A binding set is `[length, bytes...]`, one byte per
+  field key id, set for each key the object binds, shared by every object
+  with the same keys (`RustScriptVm.bindingSet`), and 0 when the host gives
+  none (the global table then decides, as before). `js_receiver` also
+  writes the set to `RECEIVER_BIND` for a handle the table does not cover.
+  Bindings only grow, and each addition advances the receiver epoch, so a
+  set cached under the current epoch is the object's set.
+* **Mirrored bindings stay out.** A binding made through `mirroredBinding`
+  (Level, LevelInfo.NetMode) keeps the binding's value in the image cell
+  and was never a bound key; the first version put them in the sets, which
+  sent 189 Level and 296 NetMode reads per tick to JavaScript. The mirrored
+  wrapper is now marked (`mirrored: true`) and left out.
+* **Rust.** `Recv` carries `bind` with `info`, SELF's set is fetched with
+  its info (`self_info`), `field_addr(info, bind, key, offset)` tests the
+  receiver's own set (`bound_key`), and percep.rs's objects carry theirs.
+  The level-actor scan's objects (`describe_known`) keep the global table.
+
+**Verification.** `validate-script-vm-interp`: sets on SELF and a context
+receiver (own key, a globally bound key the set lacks, keys beyond the
+set's length, an empty set, no set) and SELF's set refreshed after an
+import; 4 mutants caught. Digests match at all 30 checkpoints on both maps
+and engines with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1
+RECEIVER_VERIFY=1` (which compares each cached set with a fresh one).
+`validate-perception-kernel`, `-actor-tick-kernel`, `-walk-loop-kernel`
+and `-pawn-perception` pass. On Island the JavaScript values for
+`HeadRegion.Zone`, InStasis and AICanSee's BaseEyeHeight are gone (`0x36
+[of 0x1]` 69.6 → 8.0 per tick, native 721 41.1 → 0). The A/B could not
+resolve the change: other work on the machine (load average 5 to 7) spread
+paired medians by ±3.5 ms.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

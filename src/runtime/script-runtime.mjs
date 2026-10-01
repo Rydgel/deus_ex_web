@@ -2616,7 +2616,8 @@ export class ScriptRuntime {
     const codec=propertyCodec(field);
     const write=()=>writeCell(cell,instance.arena.view,instance.refs,codec.copy(binding.get()),instance.base);
     write();
-    const mirrored={get:binding.get,set:value=>{binding.set(value);write();}};
+    // `mirrored`: the Rust receiver's binding set leaves this key out.
+    const mirrored={get:binding.get,set:value=>{binding.set(value);write();},mirrored:true};
     if(SCRIPT_VM_CHECK)(this.mirrors??=[]).push({instance,field,cell,codec,binding:mirrored});
     return mirrored;
   }

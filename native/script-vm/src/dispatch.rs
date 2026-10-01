@@ -33,7 +33,7 @@
 //! ran, -1 when the caller must dispatch in JavaScript.
 
 use crate::interp::{
-    class_entry, field_addr, float_bits, frames_restore, frames_save, js_class_row, load32, receiver_info, store32,
+    class_entry, field_addr, float_bits, frames_restore, frames_save, js_class_row, load32, receiver, store32,
     vm_frame_push, Run, BUDGET, FRAMES, HANG_BUDGET, RELEASED,
 };
 use crate::natives::state_entry;
@@ -184,7 +184,8 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
     }
     // 4. pendingKill.
     let d = unsafe { *addr_of!(DELETE_ME) };
-    let Some(deleted) = field_addr(receiver_info(handle), d[1], d[0]) else {
+    let (info, bind) = receiver(handle);
+    let Some(deleted) = field_addr(info, bind, d[1], d[0]) else {
         return -1;
     };
     if load32(deleted) & d[2] != 0 {
@@ -212,7 +213,7 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
     let outer_budget = unsafe { BUDGET };
     unsafe { BUDGET = HANG_BUDGET };
     let code = code as usize as *const u32;
-    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_fresh: false, callee: true };
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
     run.statements(0);
     unsafe { BUDGET = outer_budget };
     frames_restore(saved);
