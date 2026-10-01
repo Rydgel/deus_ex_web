@@ -310,6 +310,24 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
+    /** The pawn fields Galaxy's lip-sync update reads and writes
+     * (galaxy-lipsync-channels.mjs): IsA Pawn, bIsSpeaking, nextPhoneme. A
+     * destroyed actor counts as none (UGalaxyAudioSubsystem::NoteDestroy
+     * clears the channel's Actor). */
+    lipSyncServices() {
+      const runtime = () => doors.scriptRuntime.runtime;
+      const pawn = actor => {
+        let instance;
+        try { instance = runtime().instance(actor); if (runtime().readNamed(actor, 'bDeleteMe')) return false; } catch { return false; }
+        for (let cls = instance.cls; cls; cls = cls.base) if (cls.record.key === 'engine.pawn') return true;
+        return false;
+      };
+      return {
+        isPawn: pawn,
+        speaking: actor => Boolean(runtime().readNamed(actor, 'bIsSpeaking')),
+        setPhoneme: (actor, letter) => runtime().writeNamed(actor, 'nextPhoneme', letter),
+      };
+    },
     /** Where the 3D view draws in a width x height drawing buffer: the root
      * window's render viewport (letterboxed conversations clip it). */
     renderViewport(width, height) { return hud?.renderViewport(width, height) ?? { render: true, x: 0, y: 0, width, height }; },

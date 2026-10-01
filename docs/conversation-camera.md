@@ -201,6 +201,14 @@ rect is exactly the band between the two raw-background bars.
 
 ## Open
 
+* With the browser's render feedback the terrorists near the dock can fight
+  the security bots before MeetPaul; a fired `DeusEx.Tracer` then pauses Play
+  at "Non-Pawn performPhysics physProjectile (0x103d4600) is not linked"
+  (projectile physics for non-pawns is not translated yet). Seen once in three
+  headless browser walks on October 1; headless validators without render
+  feedback do not reach it.
+* Lip sync is implemented ([lip sync](lip-sync.md)); other maps need their
+  object-index capture first ([captures](object-index-captures.md)).
 * The choice waits for input (`ConPlay` in `WaitForInput`). Choosing through
   the original ConChoiceWindow input path, the weapon transfer and the
   conversation's end are not yet exercised headless.

@@ -108,5 +108,25 @@ export function createScriptVmKernel(instance, memory) {
     // AvgPhysicsTime and falling.mjs refundTime.
     avgPhysicsTime: (avg, dt) => num(x.phys_avg_time(bits(avg), bits(dt))),
     refundTime: (remaining, time, step) => num(x.phys_refund_time(bits(remaining), bits(time), bits(step))),
+    // Galaxy.dll's lip-sync analysis (lipsync.rs, docs/lip-sync.md): 1024
+    // little-endian int16 samples at the mixer position, `available` of them
+    // before the ring end, at `rate` Hz; returns the phoneme letter.
+    lipsync: Object.freeze({
+      analyze(samples, available, rate) {
+        new Uint8Array(memory.buffer, x.lipsync_input_ptr(), 2048).set(samples.subarray(0, 2048));
+        const code = x.lipsync_analyze(available >>> 0, rate | 0);
+        if (!code) throw new Error(`Galaxy lip sync: rate ${rate} puts 300 Hz outside the 1024 bins`);
+        return String.fromCharCode(code);
+      },
+      /** Validation only: the classifier over 1024 float32 bin bit patterns. */
+      classify(bins, rate) {
+        new Uint32Array(memory.buffer, x.lipsync_real_ptr(), 1024).set(bins);
+        const code = x.lipsync_classify(rate | 0);
+        return code ? String.fromCharCode(code) : null;
+      },
+      window: () => new Uint32Array(memory.buffer, x.lipsync_window_ptr(), 1024).slice(),
+      real: () => new Uint32Array(memory.buffer, x.lipsync_real_ptr(), 1024).slice(),
+      imag: () => new Uint32Array(memory.buffer, x.lipsync_imag_ptr(), 1024).slice(),
+    }),
   });
 }

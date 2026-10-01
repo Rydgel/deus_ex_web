@@ -13,6 +13,8 @@ import { createWeaponViewModel } from './weapon-view-model.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { actorRenderFeedback } from './actor-render-feedback.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
+import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
+import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
 
 // Script function bodies run in the Rust interpreter by default
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
@@ -59,15 +61,19 @@ let weaponViewModel=null;
 let meshLighting=null;
 let infoLinkAudioContext=null;
 const conversationAudio=new Map();
+// Galaxy's lip-sync channels for the speech being played (docs/lip-sync.md).
+let lipSync=null;
 const audioTransport={requests:0,starts:0,failures:0,lastRequest:null,lastStarted:null,lastError:null};
 function stopConversationAudio(id){
   for(const [key,entry] of conversationAudio)if(id===undefined||id===key){
     entry.cancelled=true;entry.source?.stop();conversationAudio.delete(key);
   }
+  if(id===undefined)lipSync?.clear();else lipSync?.stop(id);
 }
 async function playConversationSpeech(event){
   stopConversationAudio(event.id);
   if(event.kind==='stop')return;
+  lipSync?.start(event);
   const sound=event.audio.sound?.key??event.audio.soundObject;
   audioTransport.requests++;audioTransport.lastRequest={id:event.id,sound};
   const entry={cancelled:false,source:null,sound};conversationAudio.set(event.id,entry);
@@ -79,9 +85,17 @@ async function playConversationSpeech(event){
     source.playbackRate.value=event.parameters[2]/100;
     const gain=context.createGain();gain.gain.value=event.parameters[0]/100;
     source.connect(gain);gain.connect(context.destination);
-    source.onended=()=>{if(conversationAudio.get(event.id)===entry)conversationAudio.delete(event.id);};
-    source.start();
+    source.onended=()=>{if(conversationAudio.get(event.id)===entry){conversationAudio.delete(event.id);lipSync?.stop(event.id);}};
+    source.start();const startedAt=context.currentTime;
     audioTransport.starts++;audioTransport.lastStarted={id:event.id,sound};
+    // Lip sync analyses the speech at its own rate (the MP3 header's, Galaxy's
+    // record +0x3c); the realtime decode above may be resampled.
+    const rate=mp3SampleRate(bytes);
+    if(rate&&lipSync){
+      const offline=new OfflineAudioContext(1,Math.max(1,Math.ceil(buffer.duration*rate)),rate);
+      const pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
+      if(!entry.cancelled)lipSync.attach(event.id,{pcm,rate,position:()=>(context.currentTime-startedAt)*rate*source.playbackRate.value});
+    }
   }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);
     audioTransport.failures++;audioTransport.lastError=String(error.message);pauseForRuntimeError(error);}
 }
@@ -265,8 +279,10 @@ async function loadMap(name) {
     })));
     $('npc-status').hidden=!npcPreview;
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
+    const lipSyncKernel = nextGame ? (await loadScriptVmKernel()).lipsync : null;
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
+    lipSync = nextGame ? createLipSyncChannels({kernel: lipSyncKernel, ...nextGame.lipSyncServices()}) : null;
     game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
@@ -718,7 +734,7 @@ function animate(time) {
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
       if (!paused && !runtimeError && !document.hidden) {
-        try { game.tick(dt); }
+        try { game.tick(dt); lipSync?.update(dt); }
         catch(error) { pauseForRuntimeError(error); }
       }
       world.syncMovers(game.collision.movers);

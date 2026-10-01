@@ -14,6 +14,7 @@ mod move_actor;
 mod move_pawn;
 mod dispatch;
 mod interp;
+mod lipsync;
 mod loco;
 mod natives;
 mod percep;
