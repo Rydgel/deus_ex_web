@@ -356,8 +356,13 @@ count on the same GRunaway as before.
 **When it is off.** `RUST_EVENTS=0`; the actor tick's differential log
 (`ACTOR_TICK_DIFFERENTIAL`, which records events as callbacks); services
 whose processEvent is not the runtime's own (`runtimeEvents`); a runtime
-with `processEvent`, `executeScript`, `eventLevelGate` or `lookup` replaced
-by an own property; and the JavaScript VM. `DISPATCH_VERIFY=1` resolves
+whose `processEvent`, `executeScript`, `eventLevelGate` or `lookup` is not
+the function script-runtime.mjs defined (`ScriptRuntime.originalMethods`,
+captured when the module loads), so a wrapper on the prototype, as
+validate-loadmap-gc and training-probe-lib install, or on the runtime keeps
+every event in JavaScript; and the JavaScript VM. (The first version tested
+only own properties, which missed prototype wrappers, with `Object.hasOwn`
+on every actor tick, 0.12 ms per Island tick.) `DISPATCH_VERIFY=1` resolves
 every dispatch again and throws when a filled slot differs.
 
 **Verification.** `validate-script-vm-interp` drives `vm_dispatch_event`

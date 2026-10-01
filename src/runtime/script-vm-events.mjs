@@ -103,13 +103,15 @@ export class EventHost {
   get enabled() { return this.at ? this.vm.arena.view.getUint32(this.at + 12, true) : 0; }
   set enabled(value) { if (this.at) this.vm.arena.view.setUint32(this.at + 12, value, true); }
   /** Whether an actor tick with these services may dispatch in Rust: the
-   * runtime's own processEvent behind them, not wrapped, and the Rust
+   * runtime's own processEvent behind them, with processEvent,
+   * executeScript, eventLevelGate and lookup as script-runtime.mjs defines
+   * them (not wrapped on the prototype or the runtime), and the Rust
    * interpreter running script bodies. */
   allowed(services) {
-    const runtime = this.vm.runtime;
-    return !DISABLED && services?.runtimeEvents === true && runtime.services?.scriptVm === this.vm &&
-      !Object.hasOwn(runtime, 'processEvent') && !Object.hasOwn(runtime, 'executeScript') &&
-      !Object.hasOwn(runtime, 'eventLevelGate') && !Object.hasOwn(runtime, 'lookup') ? 1 : 0;
+    const runtime = this.vm.runtime, m = runtime.constructor.originalMethods;
+    return !DISABLED && services?.runtimeEvents === true && runtime.services?.scriptVm === this.vm && m !== undefined &&
+      runtime.processEvent === m.processEvent && runtime.executeScript === m.executeScript &&
+      runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup ? 1 : 0;
   }
   /** js_event_gate. */
   gate(handle) {
