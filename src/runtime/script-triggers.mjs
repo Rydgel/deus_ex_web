@@ -11,6 +11,7 @@
  */
 
 import { scriptStringEqual } from './script-string-operations.mjs';
+import { hashScriptName } from './script-names.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
@@ -82,6 +83,11 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   SetExpiration: 1122,
   DeleteExpiredFlags: 1124,
   SetDefaultExpiration: 1125,
+  CreateIterator: 1126,
+  GetNextFlagName: 1127,
+  GetNextFlag: 1128,
+  DestroyIterator: 1129,
+  DeleteAllFlags: 1130,
 });
 
 /**
@@ -114,6 +120,21 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
   }
 
   const current = name => entries.get(lower(name));
+  // The native table order the iterators walk (docs/script-flagbase-iterators.md):
+  // 64 buckets by the FName CRC (hashScriptName) & 63, each chain ascending by
+  // the signed full hash (FindName 0x10024e60's JG walk; AddFlag 0x10023b20
+  // links a new flag there), a new flag after equal-hash flags of other names.
+  // `entries` keeps insertion order (an update keeps its node, a delete and
+  // re-add appends), so a stable sort by signed hash is each chain.
+  const chainOf = bucket => [...entries.entries()]
+    .filter(([key]) => (hashScriptName(key) & 63) === bucket)
+    .sort(([a], [b]) => (hashScriptName(a) | 0) - (hashScriptName(b) | 0))
+    .map(([key]) => key);
+  // XFlagBase::CreateIterator 0x10024bb0 GMallocs {type, current, bucket};
+  // its address is the script's int. A counter stands in for the address,
+  // which scripts only pass back.
+  const iterators = new Map();
+  let nextIterator = 1;
 
   return {
     entries,
@@ -197,6 +218,57 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       calls.push({method:'SetDefaultExpiration',expiration:currentDefaultExpiration});
     },
     get defaultExpiration(){return currentDefaultExpiration;},
+    /** XFlagBase::CreateIterator 0x10024bb0(flagType): {type, current NULL,
+     * bucket -1}. */
+    createIterator(type) {
+      const id = nextIterator++;
+      iterators.set(id, { type: type | 0, current: null, bucket: -1 });
+      calls.push({ method: 'CreateIterator', type: type | 0, iterator: id });
+      return id;
+    },
+    /** XFlagBase::GetNextFlag 0x10024c50(iterator, &name, &type): from the
+     * current flag's next link, else the next nonempty bucket, the first flag
+     * whose type matches (an iterator type < 0 or >= 7 matches every type);
+     * the iterator keeps that flag and bucket. Exhausted, or for a null
+     * iterator: false, None, type 0. This store holds only bools (type 0). */
+    getNextFlag(id) {
+      const iterator = iterators.get(id);
+      let found = null;
+      if (iterator) {
+        const matches = () => iterator.type >= 7 || iterator.type < 0 || iterator.type === 0;
+        let bucket = iterator.bucket, chain = bucket >= 0 && bucket < 64 ? chainOf(bucket) : [], at = 0;
+        if (iterator.current !== null) {
+          at = chain.indexOf(iterator.current);
+          // The native reads current->next: a flag deleted since the last call
+          // was freed, and its link is gone.
+          if (at < 0) throw new Error('FlagBase.GetNextFlag after its current flag was deleted (the native reads freed memory)');
+          at++;
+        } else at = chain.length;
+        while (bucket < 64) {
+          if (at < chain.length && matches()) { found = chain[at]; break; }
+          if (at < chain.length) { at++; continue; }
+          bucket++; at = 0;
+          chain = bucket < 64 ? chainOf(bucket) : [];
+        }
+        iterator.bucket = bucket;
+        iterator.current = found;
+      }
+      const entry = found === null ? null : entries.get(found);
+      const result = { found: Boolean(entry), name: entry ? entry.name : 'None', type: 0 };
+      calls.push({ method: 'GetNextFlag', iterator: id, ...result });
+      return result;
+    },
+    /** XFlagBase::DestroyIterator 0x10024d00: GMalloc free. */
+    destroyIterator(id) {
+      iterators.delete(id);
+      calls.push({ method: 'DestroyIterator', iterator: id });
+    },
+    /** XFlagBase::DeleteAllFlags 0x10024900: each bucket's head deleted until
+     * the bucket is empty. */
+    deleteAllFlags() {
+      entries.clear();
+      calls.push({ method: 'DeleteAllFlags' });
+    },
     getEntry(name) {
       const entry = current(name);
       return entry ? { ...entry } : null;
@@ -285,6 +357,36 @@ export function createScriptTriggers({
       if (call.receiver !== flagBase || call.argumentCount !== 2) throw new Error('FlagBase.CheckFlag receiver/arguments');
       if (typeof flagBase.checkFlag !== 'function') throw new Error('FlagBase.CheckFlag is unsupported for this store');
       return { handled: true, value: flagBase.checkFlag(evaluateValue(call, 0), evaluateValue(call, 1)) };
+    }
+    // FlagBase iterators (exec 0x10025e20/0x10025e90/0x10025f40/0x10026050/
+    // 0x100260c0, docs/script-flagbase-iterators.md).
+    if (index === TRIGGER_NATIVE_INDICES.CreateIterator) {
+      if (call.receiver !== flagBase || call.argumentCount > 1) throw new Error('FlagBase.CreateIterator receiver/arguments');
+      // P_GET_BYTE_OPTX(flagType, 7): FLAG_MAX, every type.
+      const type = call.argumentCount ? evaluateValue(call, 0) & 255 : 7;
+      return { handled: true, value: flagBase.createIterator(type) };
+    }
+    if (index === TRIGGER_NATIVE_INDICES.GetNextFlag || index === TRIGGER_NATIVE_INDICES.GetNextFlagName) {
+      const withType = index === TRIGGER_NATIVE_INDICES.GetNextFlag;
+      if (call.receiver !== flagBase || call.argumentCount !== (withType ? 3 : 2)) throw new Error('FlagBase.GetNextFlag receiver/arguments');
+      const iterator = evaluateValue(call, 0);
+      // The out name and type arrive through GPropAddr; a non-lvalue gets the
+      // stack temporary.
+      const name = call.evaluateArgument(1), type = withType ? call.evaluateArgument(2) : null;
+      const result = flagBase.getNextFlag(iterator);
+      if (name?.reference) name.set(result.name);
+      if (type?.reference) type.set(result.type);
+      return { handled: true, value: result.found };
+    }
+    if (index === TRIGGER_NATIVE_INDICES.DestroyIterator) {
+      if (call.receiver !== flagBase || call.argumentCount !== 1) throw new Error('FlagBase.DestroyIterator receiver/arguments');
+      flagBase.destroyIterator(evaluateValue(call, 0));
+      return { handled: true, value: undefined };
+    }
+    if (index === TRIGGER_NATIVE_INDICES.DeleteAllFlags) {
+      if (call.receiver !== flagBase || call.argumentCount !== 0) throw new Error('FlagBase.DeleteAllFlags receiver/arguments');
+      flagBase.deleteAllFlags();
+      return { handled: true, value: undefined };
     }
     if (index === TRIGGER_NATIVE_INDICES.GetBool) {
       if (call.receiver !== flagBase) throw new Error('FlagBase.GetBool reached with an unbound receiver');
