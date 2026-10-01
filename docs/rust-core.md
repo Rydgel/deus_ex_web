@@ -198,6 +198,48 @@ below hold the evidence for each stage.
   (relighting, poses, HUD tree, draw submission), and moving the vertex
   lighting to the GPU would trade CPU time for a GPU that is idle.
 
+### October 1: where the tick's JavaScript goes
+
+The GPU mesh merge (`d2e493b`) left the tick at about 59 % of the browser
+frame (11.35 of 19.3 ms), so the simulation is the larger half again.
+
+**Instrument.** `bench-sim --cpu-profile FILE` records a V8 CPU profile
+(`node:inspector`, 100 µs sampling) of the timed ticks only. A whole-run
+`node --cpu-prof` also samples the 60 warm-up ticks, whose spawns and
+lowering inflate some rows: `js_object` read 1.21 ms per tick over the
+whole run and 0.48 over the timed ticks. `.work/tools/prof-imports.mjs FILE
+TICKS` attributes each sample under `tickStandaloneLevel` to its innermost
+`js_*` import (`[wasm]` marks samples whose leaf is Rust), and
+`prof-import-self.mjs FILE TICKS IMPORT [DEPTH]` splits one import's
+JavaScript by leaf function or by call path. Unlike `SCRIPT_VM_IMPORT_TIME`,
+sampling adds no clock reads per import.
+
+**Island, 300 timed ticks at `d2e493b`** (profiled tick 10.5 ms; JavaScript
+behind each import, ms per tick):
+
+| Family | ms | What it is |
+|---|---:|---|
+| JavaScript-valued nodes | 2.1 | `js_eval` 0.95, `js_object` 0.48, `js_step` 0.23, `js_float` 0.20, `js_bool` 0.14, `js_name` 0.08 |
+| Event dispatch | 1.35 | `js_tick_event` 0.95 (2.5 µs per event), `js_call_begin` 0.39 |
+| Level loop | 1.16 | outside any import: the Level.Actors loop, DistanceFromPlayer, the cleanup scan |
+| Actor physics outside walking | 1.3 | actor falling 0.33, swimming 0.29, flying 0.19, glue 0.25, interpolation 0.06 |
+| Locomotion latent polls | 0.74 | `js_tick_state` → `pollLatent` → `pollPawnLocomotion` (`pawnView` 0.17) |
+| Iterators | 0.65 | `js_iterator_next` (CycleActors) |
+| Walking prelude | 0.52 | JavaScript around the Rust scan (the scan itself 0.55) |
+| Moves | 0.55 | riders 0.23, FarMoveActor 0.19, hash 0.12 |
+
+The JavaScript-valued nodes by count (`SCRIPT_VM_STATS`, per tick):
+LastRendered 723 167.5, struct member of an instance variable 69.6,
+GetPlayerPawn 720 66.8, GetStateName 284 65.1, VirtualFunction effects 52.9,
+InStasis 721 41.1, unlowered name variables 40.3, string field lets 36.3,
+Context effects 35.2, SetRotation 299 20.0, GlobalFunction 19.8,
+SetLocation 267 14.6, Trace 277 14.5.
+
+Order chosen from this: per-handle state words in the arena (needed by
+GetStateName, IsInState and any Rust dispatch), then natives 723, 720,
+284/281 and 721 in the interpreter, then tick-event dispatch in Rust, then
+the locomotion polls, the level loop and CycleActors.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

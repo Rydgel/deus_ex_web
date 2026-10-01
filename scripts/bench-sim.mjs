@@ -11,7 +11,10 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
- *     [--scenario file.mjs]
+ *     [--scenario file.mjs] [--cpu-profile out.cpuprofile]
+ *
+ * --cpu-profile records a V8 CPU profile (node:inspector, 100 us sampling) of
+ * the timed ticks only, so warm-up spawns and compilation stay out of it.
  *
  * --continue returns the declared zero value from unsupported natives (as the
  * census does) and --bypass skips the boundaries listed in bench-sim-hooks.mjs
@@ -356,6 +359,15 @@ for (let i = 0; i < warm; i++) step();
 log('timing');
 tickStats.clear(); counts.clear(); scriptProfile.clear(); globalThis.__scriptVmStatsReset?.(); globalThis.__scriptVmImportTime?.clear(); if (argv.includes('--vm-counts')) { globalThis.__stmtCounts = new Map(); globalThis.__exprCounts = new Map(); }
 const times = [], digests = [];
+const profilePath = flag('cpu-profile', null);
+let profiler = null;
+if (profilePath) {
+  const {Session} = await import('node:inspector');
+  profiler = new Session(); profiler.connect();
+  const post = (method, params) => new Promise((ok, fail) => profiler.post(method, params, (e, r) => e ? fail(e) : ok(r)));
+  profiler.call = post;
+  await post('Profiler.enable'); await post('Profiler.setSamplingInterval', {interval: 100}); await post('Profiler.start');
+}
 globalThis.__callerOn?.(true);
 const cpuStart = process.cpuUsage();
 for (let i = 0; i < ticks; i++) {
@@ -365,6 +377,7 @@ for (let i = 0; i < ticks; i++) {
   if (digestEvery && (i + 1) % digestEvery === 0) digests.push(digest());
 }
 const cpuUsed = process.cpuUsage(cpuStart);
+if (profiler) await writeFile(profilePath, JSON.stringify((await profiler.call('Profiler.stop')).profile));
 globalThis.__callerOn?.(false);
 fixture.key('KeyW', false);
 log('digest');
