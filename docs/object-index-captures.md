@@ -81,3 +81,23 @@ DXMP_Cathedral. `scripts/validate-map-npc-identities.mjs` checks every entry
 against its capture file; `build-npc-identities.mjs --check` rebuilds the
 module from the captures and compares (it loads every map, so it is not part
 of the sweep).
+
+## Every pre-placed actor
+
+`scripts/build-map-object-indices.mjs` reads the same captures for every
+pre-placed actor of each map (the Level's actor list), not only pawns, and
+writes `src/runtime/map-object-indices.mjs`: per map, the (export index,
+global index) pairs as base-64 VLQ zigzag deltas (172 KB for all maps), with
+`mapObjectIndex(map, exportIndex)`. Only a Class.Name that is unique in the
+capture counts, as for pawns. A map whose pawn table came from another
+capture session is left out rather than mixing two index spaces: Training's
+table matches neither Training capture (JaimeReyes0 is 34333 in the table,
+34339 in `training-start` and 34327 in `00_training-open`), so Training keeps
+only its pawn table. The other 82 maps' pawn entries all agree with the
+table (1,425 of 1,425).
+
+Coverage: 52,713 of 53,546 non-Brush actors (98.4%) and 1,775 of 1,795
+actors with an AmbientSound. The unmeasured ones are mostly CSG Brushes, which
+are not resident in the running game's level, and 20 Lights whose names are
+ambiguous in their capture. `script-conplay-live.mjs` gives every measured
+actor its `globalIndex` when Play starts; the pawn tables take precedence.
