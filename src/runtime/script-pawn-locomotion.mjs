@@ -1,7 +1,8 @@
 /**
  * Recovered APawn latent locomotion natives — MoveTo (native 500), MoveToward
- * (502), TurnTo (508), TurnToward (510), WaitForLanding (527) — and their
- * per-tick latent polls (501, 503, 509, 511, 528), plus the three shared
+ * (502), StrafeTo (504), StrafeFacing (506), TurnTo (508), TurnToward (510),
+ * WaitForLanding (527) — and their per-tick latent polls (501, 503, 505, 507,
+ * 509, 511, 528), plus the three shared
  * Engine helpers every body reaches: the move-timer setter 0x103be160 (thunk
  * 0x10301226), the steer/arrive helper 0x103be200 (thunk 0x103024fa), and the
  * facing helper 0x103be980 (thunk 0x10303aa3).
@@ -37,6 +38,8 @@ export const PAWN_LOCOMOTION_CONTRACT = Object.freeze({
     moveTo:        Object.freeze({ index: 500, poll: 501, setup: 0x103bceb0, pollBody: 0x103bd060,
       setupBytes: [0x83, 0xec, 0x10, 0x53, 0x55, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x24, 0x33],
       pollBytes:  [0x83, 0xec, 0x0c, 0x53, 0x56, 0x8b, 0xf1, 0x57, 0x8d, 0xbe, 0x54, 0x03] }),
+    strafeTo:      Object.freeze({ index: 504, poll: 505, setup: 0x103bd5f0, pollBody: 0x103bd7d0 }),
+    strafeFacing:  Object.freeze({ index: 506, poll: 507, setup: 0x103bd8c0, pollBody: 0x103bdad0 }),
     moveToward:    Object.freeze({ index: 502, poll: 503, setup: 0x103bd150, pollBody: 0x103bd370,
       setupBytes: [0x83, 0xec, 0x14, 0x56, 0x8b, 0x74, 0x24, 0x1c, 0x33, 0xd2, 0xc7, 0x44],
       pollBytes:  [0x83, 0xec, 0x20, 0x56, 0x8b, 0xf1, 0x8b, 0x8e, 0x4c, 0x03, 0x00, 0x00] }),
@@ -497,6 +500,68 @@ export function execMoveToward({ pawn, frame, state, args, services, operandByte
 export const dispatchMoveToward = ({ pawn, state, args, services } = {}) =>
   execMoveToward({ pawn, frame: { code: 0 }, state, args, services });
 
+/** StrafeTo/StrafeFacing speed: bReducedSpeed clears; a bIsPlayer pawn
+ * (+0x318 bit 1, tested on the dword read before the clear) copies
+ * MaxDesiredSpeed, any other clamps like MoveTo (Deus Ex's added speed). */
+function strafeDesiredSpeed(p, speed) {
+  const isPlayer = p.bIsPlayer;
+  p.bReducedSpeed = false;
+  if (isPlayer) p.desiredSpeed = p.maxDesiredSpeed;
+  else setupDesiredSpeed(p, speed);
+}
+const moveDistance = (p, dest) => {
+  // Dest − Location stays on the 80-bit stack; the size sums z², y², x².
+  const d = [sub(ld(dest[0]), ld(p.location[0])), sub(ld(dest[1]), ld(p.location[1])),
+    sub(ld(dest[2]), ld(p.location[2]))];
+  return appSqrt32(x87add(x87add(x87mul(d[2], d[2]), x87mul(d[1], d[1])), x87mul(d[0], d[0])));
+};
+
+/** Engine 0x103bd5f0 — StrafeTo(NewDestination, NewFocus, optional Speed=1)
+ * setup: MoveTarget clears, DesiredSpeed, the move timer from the distance,
+ * latent 505, Destination and Focus, then the facing and steer helpers. */
+export function execStrafeTo({ pawn, frame, state, args, services, operandBytes = [12, 12, 4] } = {}) {
+  const p = requirePawn(pawn), s = requireServices(services);
+  advanceFrameCode(frame, operandBytes.reduce((n, bytes) => n + 1 + bytes, 0) + 1);
+  const dest = fieldVector(args[0], 'StrafeTo NewDestination');
+  const focus = fieldVector(args[1], 'StrafeTo NewFocus');
+  const speed = args[2] === undefined ? 1 : f32(args[2]);
+  const dist = moveDistance(p, dest);
+  p.moveTarget = null;
+  strafeDesiredSpeed(p, speed);
+  setMoveTimer160(p, dist);
+  state.latent = 505;
+  p.destination = dest;
+  p.focus = focus;
+  turnSetup980(p, p.focus, s);
+  steerArrive200(p, p.destination, s);
+}
+export const dispatchStrafeTo = ({ pawn, state, args, services } = {}) =>
+  execStrafeTo({ pawn, frame: { code: 0 }, state, args, services });
+
+/** Engine 0x103bd8c0 — StrafeFacing(NewDestination, NewTarget, optional
+ * Speed=1) setup.  A null target returns after P_FINISH with no write; else
+ * as StrafeTo but MoveTarget is untouched, FaceTarget takes the target, Focus
+ * its Location, and the latent is 507. */
+export function execStrafeFacing({ pawn, frame, state, args, services, operandBytes = [12, 4, 4] } = {}) {
+  const p = requirePawn(pawn), s = requireServices(services);
+  advanceFrameCode(frame, operandBytes.reduce((n, bytes) => n + 1 + bytes, 0) + 1);
+  const dest = fieldVector(args[0], 'StrafeFacing NewDestination');
+  const target = args[1] ?? null;
+  const speed = args[2] === undefined ? 1 : f32(args[2]);
+  if (!target) return;
+  const dist = moveDistance(p, dest);
+  strafeDesiredSpeed(p, speed);
+  setMoveTimer160(p, dist);
+  p.destination = dest;
+  p.faceTarget = target;
+  p.focus = fieldVector(s.readField(target, 'Location'), 'StrafeFacing target Location');
+  state.latent = 507;
+  turnSetup980(p, p.focus, s);
+  steerArrive200(p, p.destination, s);
+}
+export const dispatchStrafeFacing = ({ pawn, state, args, services } = {}) =>
+  execStrafeFacing({ pawn, frame: { code: 0 }, state, args, services });
+
 // ---------------------------------------------------------------------------
 // Latent polls — each receives (pawn, state, dt, services) and clears
 // state.latent exactly when the original writes 0 to StateFrame+0x24.
@@ -555,6 +620,34 @@ export function pollMoveTo({ pawn, state, services } = {}) {
   turnSetup980(p, dest, s);
   if (steerArrive200(p, dest, s)) state.latent = 0;
   p.destination = dest;
+}
+
+/** Engine 0x103bd7d0 — StrafeTo poll: Destination is saved, the tactics
+ * event, facing on the live Focus, steering on the live Destination (arrival
+ * resumes), then Destination is restored. */
+export function pollStrafeTo({ pawn, state, services } = {}) {
+  const p = requirePawn(pawn), s = requireServices(services);
+  const saved = fieldVector(p.destination, 'Pawn Destination');
+  tacticsEvent(p, s);
+  turnSetup980(p, fieldVector(p.focus, 'Pawn Focus'), s);
+  if (steerArrive200(p, fieldVector(p.destination, 'Pawn Destination'), s)) state.latent = 0;
+  p.destination = saved;
+}
+
+/** Engine 0x103bdad0 — StrafeFacing poll: FaceTarget==0 resumes.  Focus
+ * re-copies the target's Location and Destination is saved; facing runs
+ * before the tactics event here, then steering on the live Destination, then
+ * Destination is restored. */
+export function pollStrafeFacing({ pawn, state, services } = {}) {
+  const p = requirePawn(pawn), s = requireServices(services);
+  const target = p.faceTarget;
+  if (!target) { state.latent = 0; return; }
+  p.focus = fieldVector(s.readField(target, 'Location'), 'FaceTarget Location');
+  const saved = fieldVector(p.destination, 'Pawn Destination');
+  turnSetup980(p, fieldVector(p.focus, 'Pawn Focus'), s);
+  tacticsEvent(p, s);
+  if (steerArrive200(p, fieldVector(p.destination, 'Pawn Destination'), s)) state.latent = 0;
+  p.destination = saved;
 }
 
 /** Engine 0x103bd370 — MoveToward poll.  MoveTarget==0 resumes.  The

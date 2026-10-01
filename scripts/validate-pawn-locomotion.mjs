@@ -53,7 +53,7 @@ const B = n => n.toString(2).padStart(8, '0');
 
 // -- Flag bits the bodies test (pawn +0x318 / +0x31c dwords) -----------------
 const FLAGS = {
-  bCanStrafe: [0x318, 0x00000200], bReducedSpeed: [0x318, 0x00000800],
+  bCanStrafe: [0x318, 0x00000200], bReducedSpeed: [0x318, 0x00000800], bIsPlayer: [0x318, 0x00000002],
   bCanSwim: [0x318, 0x00004000], bAdvancedTactics: [0x318, 0x80000000],
   bCanGlide: [0x31c, 0x02],
 };
@@ -165,6 +165,10 @@ function runJs(scene, mod = module) {
     MoveToward: () => mod.execMoveToward({ pawn, frame, state, args, services, operandBytes }),
     TurnTo: () => mod.execTurnTo({ pawn, frame, state, args, services, operandBytes: operandBytes[0] }),
     TurnToward: () => mod.execTurnToward({ pawn, frame, state, args, services, operandBytes: operandBytes[0] }),
+    StrafeTo: () => mod.execStrafeTo({ pawn, frame, state, args, services, operandBytes }),
+    StrafeFacing: () => mod.execStrafeFacing({ pawn, frame, state, args, services, operandBytes }),
+    pollStrafeTo: () => mod.pollStrafeTo({ pawn, state, services }),
+    pollStrafeFacing: () => mod.pollStrafeFacing({ pawn, state, services }),
     WaitForLanding: () => mod.execWaitForLanding({ pawn, frame, state }),
     pollMoveTo: () => mod.pollMoveTo({ pawn, state, services }),
     pollMoveToward: () => mod.pollMoveToward({ pawn, state, services }),
@@ -234,6 +238,7 @@ function compare(name, oracle, js) {
 const W = 'WaitForLanding', PW = 'pollWaitForLanding';
 const MT = 'MoveTo', PMT = 'pollMoveTo', MW = 'MoveToward', PMW = 'pollMoveToward';
 const TT = 'TurnTo', PTT = 'pollTurnTo', TTD = 'TurnToward', PTTD = 'pollTurnToward';
+const ST = 'StrafeTo', PST = 'pollStrafeTo', SF = 'StrafeFacing', PSF = 'pollStrafeFacing';
 const vec = (x, y, z) => ({ kind: 'vector', value: [x, y, z] });
 const flt = v => ({ kind: 'float', value: v });
 const obj = v => ({ kind: 'object', value: v });
@@ -253,6 +258,44 @@ const BASE_PAWN = {
 };
 
 const scenes = [
+  // -- StrafeTo setup (504): MoveTarget clears, bIsPlayer speed, Focus arg ----
+  { name: 'st-basic', body: ST, pawn: { physics: 1, moveTarget: 'target' }, target: { cls: 'pawn', location: [0, 0, 0] }, args: [vec(100, 40, 0), vec(0, 200, 0), flt(0.7)] },
+  { name: 'st-speed-omitted', body: ST, pawn: { physics: 1 }, args: [vec(100, 0, 0), vec(50, 50, 0), nothing] },
+  { name: 'st-speed-clamped', body: ST, pawn: { physics: 1, maxDesiredSpeed: 1 }, args: [vec(100, 0, 0), vec(50, 50, 0), flt(5)] },
+  { name: 'st-speed-negative', body: ST, pawn: { physics: 1 }, args: [vec(100, 0, 0), vec(50, 50, 0), flt(-2)] },
+  { name: 'st-player', body: ST, pawn: { physics: 1, flags318: 0x2, maxDesiredSpeed: 0.9 }, args: [vec(100, 0, 0), vec(50, 50, 0), flt(0.3)] },
+  { name: 'st-player-reduced', body: ST, pawn: { physics: 1, flags318: 0x802, maxDesiredSpeed: 3 }, args: [vec(100, 0, 0), vec(50, -50, 0), flt(0.3)] },
+  { name: 'st-reduced-preset', body: ST, pawn: { physics: 1, flags318: 0x800 }, args: [vec(100, 0, 0), vec(50, 50, 0), flt(1)] },
+  { name: 'st-fly', body: ST, pawn: { physics: 4 }, args: [vec(100, 50, 20), vec(0, 100, 30), flt(0.8)] },
+  { name: 'st-swim', body: ST, pawn: { physics: 3 }, args: [vec(100, 50, -20), vec(-10, 100, 0), flt(0.8)] },
+  { name: 'st-spider', body: ST, pawn: { physics: 0xa }, args: [vec(100, 0, 0), vec(50, 50, 0), flt(1)] },
+  { name: 'st-arrived', body: ST, pawn: { physics: 1 }, args: [vec(10, 0, 0), vec(0, 100, 0), flt(1)] },
+  { name: 'st-fall-low-grav', body: ST, pawn: { physics: 2, velocity: [0, 0, -50] }, pawnZone: LOW_GRAV, args: [vec(100, 0, 50), vec(0, 100, 0), flt(1)] },
+  // -- StrafeFacing setup (506): null target returns after P_FINISH --------
+  { name: 'sf-basic', body: SF, pawn: { physics: 1 }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(100, 40, 0), obj('target'), flt(0.7)] },
+  { name: 'sf-null-target', body: SF, pawn: { physics: 1, moveTarget: 'pawn' }, latent: 777, args: [vec(100, 40, 0), none, flt(0.7)] },
+  { name: 'sf-speed-omitted', body: SF, pawn: { physics: 1 }, target: { cls: 'inventory', location: [-80, 60, 0] }, args: [vec(100, 0, 0), obj('target'), nothing] },
+  { name: 'sf-speed-clamped', body: SF, pawn: { physics: 1, maxDesiredSpeed: 1 }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(100, 0, 0), obj('target'), flt(5)] },
+  { name: 'sf-speed-negative', body: SF, pawn: { physics: 1 }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(100, 0, 0), obj('target'), flt(-2)] },
+  { name: 'sf-player', body: SF, pawn: { physics: 1, flags318: 0x2, maxDesiredSpeed: 0.9 }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(100, 0, 0), obj('target'), flt(0.3)] },
+  { name: 'sf-keeps-movetarget', body: SF, pawn: { physics: 1, moveTarget: 'target' }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(100, 0, 0), obj('target'), flt(1)] },
+  { name: 'sf-fly', body: SF, pawn: { physics: 4 }, target: { cls: 'pawn', location: [0, 150, 60] }, args: [vec(100, 50, 20), obj('target'), flt(0.8)] },
+  { name: 'sf-arrived', body: SF, pawn: { physics: 1 }, target: { cls: 'pawn', location: [0, 150, 10] }, args: [vec(10, 0, 0), obj('target'), flt(1)] },
+  // -- StrafeTo poll (505) ----------------------------------------------------
+  { name: 'pst-moving', body: PST, pawn: { physics: 1, destination: [100, 0, 0], focus: [0, 100, 0], moveTimer: 5 }, latent: 505 },
+  { name: 'pst-arrived', body: PST, pawn: { physics: 1, destination: [10, 0, 0], focus: [0, 100, 0] }, latent: 505 },
+  { name: 'pst-tactics', body: PST, pawn: { physics: 1, destination: [100, 0, 0], focus: [0, 100, 0], flags318: 0x80000000, moveTimer: 5 }, latent: 505 },
+  { name: 'pst-tactics-swim', body: PST, pawn: { physics: 3, destination: [100, 0, 0], focus: [0, 100, 0], flags318: 0x80000000, moveTimer: 5 }, latent: 505 },
+  { name: 'pst-timer-negative', body: PST, pawn: { physics: 1, destination: [100, 0, 0], focus: [0, 100, 0], moveTimer: -0.5 }, latent: 505 },
+  { name: 'pst-fall-steer', body: PST, pawn: { physics: 2, destination: [100, 0, 50], focus: [0, 100, 0], velocity: [0, 0, -50] }, pawnZone: LOW_GRAV, latent: 505 },
+  { name: 'pst-brake', body: PST, pawn: { physics: 1, destination: [30, 0, 0], focus: [0, 100, 0], velocity: [50, 0, 0], avgPhysicsTime: 10, moveTimer: 5, desiredSpeed: 1 }, latent: 505 },
+  // -- StrafeFacing poll (507) ------------------------------------------------
+  { name: 'psf-no-target', body: PSF, pawn: { physics: 1, destination: [100, 0, 0], focus: [0, 100, 0] }, latent: 507 },
+  { name: 'psf-moving', body: PSF, pawn: { physics: 1, destination: [100, 0, 0], focus: [0, 0, 0], faceTarget: 'target', moveTimer: 5 }, target: { cls: 'pawn', location: [-40, 120, 10] }, latent: 507 },
+  { name: 'psf-arrived', body: PSF, pawn: { physics: 1, destination: [10, 0, 0], faceTarget: 'target' }, target: { cls: 'pawn', location: [-40, 120, 10] }, latent: 507 },
+  { name: 'psf-tactics', body: PSF, pawn: { physics: 1, destination: [100, 0, 0], faceTarget: 'target', flags318: 0x80000000, moveTimer: 5 }, target: { cls: 'pawn', location: [-40, 120, 10] }, latent: 507 },
+  { name: 'psf-touch-inventory', body: PSF, pawn: { physics: 1, destination: [30, 0, 0], faceTarget: 'target', moveTarget: 'target', moveTimer: 5, collisionRadius: 40, collisionHeight: 60 }, target: { cls: 'inventory', location: [10, 0, 5] }, latent: 507 },
+  { name: 'psf-fly', body: PSF, pawn: { physics: 4, destination: [100, 0, 30], faceTarget: 'target', moveTimer: 5 }, target: { cls: 'pawn', location: [-40, 120, 60] }, latent: 507 },
   // -- WaitForLanding setup: latent only while PHYS_Falling ------------------
   { name: 'wfl-falling', body: W, pawn: { physics: 2 } },
   { name: 'wfl-walking', body: W, pawn: { physics: 1 }, latent: 777 },
@@ -478,6 +521,17 @@ if (failures) process.exit(1);
 // the suite proves sensitivity by requiring the listed scenes to flip.
 // --------------------------------------------------------------------------
 const MUTATIONS = [
+  { name: 'st-latent-code', pattern: 'state.latent = 505;', replacement: 'state.latent = 507;', expect: ['st-basic'] },
+  { name: 'st-movetarget-kept', pattern: '  p.moveTarget = null;\n  strafeDesiredSpeed(p, speed);',
+    replacement: '  strafeDesiredSpeed(p, speed);', expect: ['st-basic'] },
+  { name: 'strafe-player-speed', pattern: 'if (isPlayer) p.desiredSpeed = p.maxDesiredSpeed;',
+    replacement: 'if (false) p.desiredSpeed = p.maxDesiredSpeed;', expect: ['st-player', 'sf-player'] },
+  { name: 'strafe-player-reduced', pattern: 'const isPlayer = p.bIsPlayer;\n  p.bReducedSpeed = false;',
+    replacement: 'const isPlayer = p.bIsPlayer;\n  if (!isPlayer) p.bReducedSpeed = false;', expect: ['st-player-reduced'] },
+  { name: 'sf-null-gate', pattern: '  if (!target) return;\n  const dist = moveDistance(p, dest);',
+    replacement: '  if (!target) { state.latent = 0; return; }\n  const dist = moveDistance(p, dest);', expect: ['sf-null-target'] },
+  { name: 'psf-focus-refresh', pattern: "  p.focus = fieldVector(s.readField(target, 'Location'), 'FaceTarget Location');\n  const saved",
+    replacement: '  const saved', expect: ['psf-moving'] },
   { name: 'wfl-physics-gate', pattern: 'if (p.physics === 2) state.latent = 528;',
     replacement: 'if (p.physics !== 2) state.latent = 528;',
     expect: ['wfl-falling', 'wfl-walking'] },

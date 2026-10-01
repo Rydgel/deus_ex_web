@@ -48,6 +48,8 @@ BODIES = {
     'MoveToward': 0x103bd150,     'pollMoveToward': 0x103bd370,
     'TurnToward': 0x103bdbf0,     'pollTurnToward': 0x103bdd60,
     'TurnTo': 0x103bdec0,         'pollTurnTo': 0x103be020,
+    'StrafeTo': 0x103bd5f0,       'pollStrafeTo': 0x103bd7d0,
+    'StrafeFacing': 0x103bd8c0,   'pollStrafeFacing': 0x103bdad0,
 }
 
 # Fixed original globals.

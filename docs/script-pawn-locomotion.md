@@ -40,6 +40,8 @@ same table at the poll index — `ProcessState` calls
 | --- | ---: | ---: | ---: | ---: |
 | MoveTo | 500 | 501 (`0x1f5`) | `0x103bceb0` | `0x103bd060` |
 | MoveToward | 502 | 503 (`0x1f7`) | `0x103bd150` | `0x103bd370` |
+| StrafeTo | 504 | 505 (`0x1f9`) | `0x103bd5f0` | `0x103bd7d0` |
+| StrafeFacing | 506 | 507 (`0x1fb`) | `0x103bd8c0` | `0x103bdad0` |
 | TurnTo | 508 | 509 (`0x1fd`) | `0x103bdec0` | `0x103be020` |
 | TurnToward | 510 | 511 (`0x1ff`) | `0x103bdbf0` | `0x103bdd60` |
 | WaitForLanding | 527 | 528 (`0x210`) | `0x103bb6f0` | `0x103bb730` |
@@ -146,6 +148,42 @@ consumes no operand). `MoveTo`/`MoveToward` clamp `DesiredSpeed` to
   `DesiredSpeed` plus force `MoveTimer=-1` when the target's
   `Region.Zone+0x388&1` water flag is set and the pawn lacks `bCanSwim`
   (null zone reads `*0x388==0`, i.e. not water).
+
+## StrafeTo and StrafeFacing (added 2026-10-01)
+
+Deus Ex declares both with a trailing `optional float speed` (Pawn.uc,
+"DEUS_EX STM - added new param"); the execs read it with a default of 1.0.
+UNATCO Island's terrorists reach StrafeFacing from ScriptedPawn's Attacking
+state within twenty seconds when Play draws them (render feedback), so it
+was the first boundary of a player who stands near the dock.
+
+* **StrafeTo setup** (`0x103bd5f0`): NewDestination, NewFocus, Speed; P_FINISH;
+  `Dest − Location` on the 80-bit stack; bReducedSpeed (`+0x318` bit 11)
+  clears and MoveTarget is cleared; a **bIsPlayer** pawn (bit 1, tested on the
+  dword read before the clear) copies MaxDesiredSpeed into DesiredSpeed, any
+  other pawn clamps like MoveTo (`min(Max, Speed)` by FCOM, then `max(0, ·)`);
+  the move timer from `appSqrt((dz²+dy²)+dx²)`; latent 505; Destination and
+  Focus; then the facing helper on Focus and steer/arrive on Destination.
+  MoveTo has no bIsPlayer branch.
+* **StrafeFacing setup** (`0x103bd8c0`): NewDestination, NewTarget, Speed;
+  P_FINISH; a None target returns with no write. Otherwise as StrafeTo except
+  that MoveTarget is untouched, FaceTarget takes the target, Focus copies its
+  Location, and the latent is 507.
+* **StrafeTo poll** (`0x103bd7d0`): Destination saved; the bAdvancedTactics
+  walking SpawnNotification event; facing on Focus; steer/arrive on
+  Destination (arrival clears the latent); Destination restored.
+* **StrafeFacing poll** (`0x103bdad0`): FaceTarget None clears the latent;
+  Focus re-copies the target's Location; Destination saved; facing **before**
+  the tactics event (MoveTo's poll has the event first); steer/arrive;
+  Destination restored. Both polls pass the helpers live `&Focus` and
+  `&Destination` pointers.
+
+`validate-pawn-locomotion` runs the four bodies in the same Unicorn probe:
+34 new scenes (speed default, clamps, bIsPlayer with and without
+bReducedSpeed, flying, swimming, spider, falling, arrival, the None target,
+MoveTarget kept, tactics, Touch, braking), 142/142 bit-exact with 6 new
+mutants among 28/28 detected. The two polls also run in the Rust tick
+(`loco.rs`), checked against these bodies by `validate-locomotion-kernel`.
 
 ## Steer/arrive helper (`0x103be200`) — return conditions
 

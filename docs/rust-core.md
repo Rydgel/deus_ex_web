@@ -546,8 +546,11 @@ machine's load average was 7.
 ### October 1: latent polls in Rust (implemented)
 
 `process_state` (tick.rs) reads the frame word and polls Sleep (384) and
-the pawn locomotion latent actions (MoveTo 501, MoveToward 503, TurnTo 509,
-TurnToward 511, WaitForLanding 528) in Rust. A poll that keeps its latent
+the pawn locomotion latent actions (MoveTo 501, MoveToward 503, StrafeTo
+505, StrafeFacing 507, TurnTo 509, TurnToward 511, WaitForLanding 528) in
+Rust. StrafeTo and StrafeFacing joined on October 1 with their JavaScript
+bodies (same hand-backs; Training 3,000 and Island 4,000 kernel cases
+identical, about 150 to 270 of each completing in Rust). A poll that keeps its latent
 action needs no crossing; one that clears it crosses to `js_tick_resume`,
 which writes LatentAction 0 and calls ProcessState, so the state code runs
 in the same ProcessState call as before (the JavaScript `process` skips the

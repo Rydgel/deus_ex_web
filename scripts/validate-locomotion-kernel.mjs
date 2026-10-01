@@ -2,8 +2,9 @@
 /**
  * The Rust latent polls (native/script-vm/src/loco.rs, docs/rust-core.md
  * "October 1: latent polls") against the JavaScript bodies they transcribe:
- * script-pawn-locomotion.mjs pollMoveTo 501, pollMoveToward 503, pollTurnTo
- * 509, pollTurnToward 511 and pollWaitForLanding 528, through the runtime's
+ * script-pawn-locomotion.mjs pollMoveTo 501, pollMoveToward 503, pollStrafeTo
+ * 505, pollStrafeFacing 507, pollTurnTo 509, pollTurnToward 511 and
+ * pollWaitForLanding 528, through the runtime's
  * pollLatent service.
  *
  * Boots a map (SCRIPT_VM=rust), plays a few ticks, then runs cases on real
@@ -89,7 +90,7 @@ const read = (actor, name) => runtime.readNamed(actor, name);
 const write = (actor, name, value) => runtime.writeNamed(actor, name, value);
 
 // ---- Cases ----------------------------------------------------------------
-const POLLS = [501, 503, 509, 511, 528];
+const POLLS = [501, 503, 505, 507, 509, 511, 528];
 const outcomes = new Map();
 const count = key => outcomes.set(key, (outcomes.get(key) ?? 0) + 1);
 for (let n = 0; n < CASES; n++) {
@@ -150,8 +151,12 @@ for (let n = 0; n < CASES; n++) {
   write(pawn, 'Acceleration', [around(0, 500), around(0, 500), around(0, 10)]);
   // Rotation: random, or with its yaw at the facing cone's edges from the
   // goal's direction (the JavaScript vectorToRotator gives that yaw).
-  const goal = index === 509 ? focus : index === 511 ? (faceTarget ? read(faceTarget, 'Location') : focus)
-    : index === 503 ? (targetLoc ?? destination) : destination;
+  // The facing goal (StrafeTo faces Focus, StrafeFacing its FaceTarget) and
+  // the steering goal (Destination, or MoveToward's target).
+  const goal = index === 509 || index === 505 ? focus
+    : index === 511 || index === 507 ? (faceTarget ? read(faceTarget, 'Location') : focus)
+      : index === 503 ? (targetLoc ?? destination) : destination;
+  const steerGoal = index === 503 ? (targetLoc ?? destination) : destination;
   let yaw = Math.floor(random() * 200000) - 100000;
   if (chance(0.5) && [0, 1, 2].every(i => Number.isFinite(Math.fround(goal[i] - at[i])))) {
     const toward = vectorToRotator([0, 1, 2].map(i => Math.fround(goal[i] - (at[i] ?? 0))))[1] & 0xffff;
@@ -164,7 +169,7 @@ for (let n = 0; n < CASES; n++) {
   write(pawn, 'AccelRate', pick([0, 500, 2048, Math.fround(random() * 3000)]));
   // AvgPhysicsTime: spread, or such that AvgPhysicsTime*speed*1.4 is near
   // the goal's distance.
-  const distance = Math.hypot(goal[0] - at[0], goal[1] - at[1], physics === 1 ? 0 : goal[2] - at[2]);
+  const distance = Math.hypot(steerGoal[0] - at[0], steerGoal[1] - at[1], physics === 1 ? 0 : steerGoal[2] - at[2]);
   write(pawn, 'AvgPhysicsTime', speed && chance(0.5)
     ? Math.fround(distance / (speed * 1.4) * (1 + pick([0, 1e-6, -1e-6, 0.01, -0.01])))
     : pick([0, 0.016, 0.05, 0.4]));

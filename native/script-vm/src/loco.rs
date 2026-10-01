@@ -1,6 +1,6 @@
 //! The pawn locomotion latent polls in the interpreter (docs/rust-core.md
-//! "October 1: latent polls"): MoveTo 501, MoveToward 503, TurnTo 509,
-//! TurnToward 511 and WaitForLanding 528 of
+//! "October 1: latent polls"): MoveTo 501, MoveToward 503, StrafeTo 505,
+//! StrafeFacing 507, TurnTo 509, TurnToward 511 and WaitForLanding 528 of
 //! src/runtime/script-pawn-locomotion.mjs, with the helpers they reach
 //! (turnSetup980, steerArrive200). Each body is transcribed step for step:
 //! the same reads, writes and x87 model operations (`Ext`, with the
@@ -514,6 +514,50 @@ fn poll_turn_toward(p: &Pawn) -> Poll {
     if turn_setup(p, focus) { Poll::Done } else { Poll::Wait }
 }
 
+/// Engine 0x103bd7d0, pollStrafeTo: facing on the live Focus, steering on
+/// Destination, Destination restored (the tactics event is handed back by
+/// `pawn`).
+fn poll_strafe_to(p: &Pawn) -> Poll {
+    let target = match steer_target(p) {
+        Ok(t) => t,
+        Err(()) => return Poll::Js,
+    };
+    let dest = p.o.vec(L_DESTINATION);
+    let focus = p.o.vec(L_FOCUS);
+    if !facing_ok(p, focus) || !facing_ok(p, dest) {
+        return Poll::Js;
+    }
+    turn_setup(p, focus);
+    let done = steer_arrive(p, target, dest);
+    p.o.set_vec(L_DESTINATION, dest);
+    if done { Poll::Done } else { Poll::Wait }
+}
+
+/// Engine 0x103bdad0, pollStrafeFacing: FaceTarget None resumes; Focus
+/// re-copies its Location, then facing, steering on Destination, Destination
+/// restored.
+fn poll_strafe_facing(p: &Pawn) -> Poll {
+    let t = live(p.o.word(L_FACETARGET));
+    if t == 0 {
+        return Poll::Done;
+    }
+    let Some(face) = target(t) else { return Poll::Js };
+    let steer = match steer_target(p) {
+        Ok(s) => s,
+        Err(()) => return Poll::Js,
+    };
+    let focus = face.vec(L_LOCATION);
+    let dest = p.o.vec(L_DESTINATION);
+    if !facing_ok(p, focus) || !facing_ok(p, dest) {
+        return Poll::Js;
+    }
+    p.o.set_vec(L_FOCUS, focus);
+    turn_setup(p, focus);
+    let done = steer_arrive(p, steer, dest);
+    p.o.set_vec(L_DESTINATION, dest);
+    if done { Poll::Done } else { Poll::Wait }
+}
+
 /// Engine 0x103bb730, pollWaitForLanding, without the LongFall event.
 fn poll_wait_for_landing(handle: u32, delta: f64) -> Poll {
     if unsafe { (*addr_of!(L_NAMES))[2] } == 0 {
@@ -549,6 +593,8 @@ pub(crate) fn poll(handle: u32, latent: u32, delta: f64) -> Poll {
     match latent {
         501 => poll_move_to(&p),
         503 => poll_move_toward(&p),
+        505 => poll_strafe_to(&p),
+        507 => poll_strafe_facing(&p),
         509 => poll_turn_to(&p),
         511 => poll_turn_toward(&p),
         _ => Poll::Js,

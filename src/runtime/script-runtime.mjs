@@ -59,6 +59,7 @@ import { execActorPlaySound } from './script-sound.mjs';
 import { execMove } from './script-move.mjs';
 import {
   dispatchMoveTo, dispatchMoveToward, dispatchTurnTo, dispatchTurnToward,
+  dispatchStrafeTo, dispatchStrafeFacing, pollStrafeTo, pollStrafeFacing,
   dispatchWaitForLanding, pollMoveTo, pollMoveToward, pollTurnTo,
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
@@ -519,7 +520,7 @@ export class ScriptRuntime {
         if(call.index===0x181)return pollFinishAnim({
           animation:animationView(this,call.receiver),state:call.state,
         });
-        if([501,503,509,511,528].includes(call.index))
+        if([501,503,505,507,509,511,528].includes(call.index))
           return this.pollPawnLocomotion(call);
         if(!this.pollLatent)throw new Error(`Unimplemented original latent action ${call.index}`);
         return this.pollLatent(call);
@@ -1712,7 +1713,7 @@ export class ScriptRuntime {
       collisionRadius:'CollisionRadius',collisionHeight:'CollisionHeight',
       moveTarget:'MoveTarget',faceTarget:'FaceTarget',
       bCanStrafe:'bCanStrafe',bReducedSpeed:'bReducedSpeed',bCanSwim:'bCanSwim',
-      bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',
+      bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',bIsPlayer:'bIsPlayer',
     };
     const view={self:receiver};
     for(const [prop,name] of Object.entries(fields)){
@@ -1755,15 +1756,15 @@ export class ScriptRuntime {
    * every argument expression is evaluated before the body runs, exactly as
    * the original GNatives-dispatch order (all evals precede all writes). */
   pawnLocomotion(call) {
-    const dispatch={500:dispatchMoveTo,502:dispatchMoveToward,508:dispatchTurnTo,
-      510:dispatchTurnToward,527:dispatchWaitForLanding}[call.index];
+    const dispatch={500:dispatchMoveTo,502:dispatchMoveToward,504:dispatchStrafeTo,506:dispatchStrafeFacing,
+      508:dispatchTurnTo,510:dispatchTurnToward,527:dispatchWaitForLanding}[call.index];
     const args=[];
     for(let i=0;i<call.argumentCount;i++)args.push(refValue(call.evaluateArgument(i)));
     return dispatch({pawn:this.pawnView(call.receiver),state:this.instance(call.receiver).state,
       args,services:this.locomotionServices()});
   }
   pollPawnLocomotion(call) {
-    const poll={501:pollMoveTo,503:pollMoveToward,509:pollTurnTo,
+    const poll={501:pollMoveTo,503:pollMoveToward,505:pollStrafeTo,507:pollStrafeFacing,509:pollTurnTo,
       511:pollTurnToward,528:pollWaitForLanding}[call.index];
     return poll({pawn:this.pawnView(call.receiver),state:call.state,dt:call.seconds,
       services:this.locomotionServices()});
@@ -3435,7 +3436,7 @@ export class ScriptRuntime {
     }
     if(call.index===1013)return execGetMeshTexture(call,this.meshTextureServices());
     if(call.index===266)return execMove(call,this.moveServices(call));
-    if([500,502,508,510,527].includes(call.index))return this.pawnLocomotion(call);
+    if([500,502,504,506,508,510,527].includes(call.index))return this.pawnLocomotion(call);
     if(call.index===512)return execMakeNoise(call,this.noiseServices(call));
     // Pawn perception natives share the recovered services block
     // (docs/script-pawn-perception.md): LOS worker, target pickers, AICanSee.

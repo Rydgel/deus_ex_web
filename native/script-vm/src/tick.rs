@@ -702,7 +702,7 @@ fn process_state(a: &mut Actor, delta: f64) {
         Poll::Js
     } else if frame == LATENT_SLEEP {
         if poll_sleep(a, delta) { Poll::Wait } else { Poll::Done }
-    } else if matches!(frame, 501 | 503 | 509 | 511 | 528) {
+    } else if matches!(frame, 501 | 503 | 505 | 507 | 509 | 511 | 528) {
         crate::loco::poll(a.handle, frame, delta)
     } else {
         Poll::Js
