@@ -228,12 +228,12 @@ const animationTickViews=new WeakMap();
  * pendingKill (its bDeleteMe) is a prototype getter rather than a property
  * redefined per record, which left actor records in dictionary mode. */
 class ScriptInstance {
-  constructor(runtime,cls,slots,state,storage,sleepTimeLeft){
+  constructor(runtime,cls,slots,state,storage){
     // The slot fallback's defaults as of attachment. An object whose every
     // property has an image cell never reads a slot, so it keeps no copy.
     this.runtime=runtime;this.cls=cls;this.fieldTable=fieldTable(cls);
     this.defaultsSnapshot=storage.complete?undefined:new Map(cls.defaults);
-    this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;this.sleepTimeLeft=sleepTimeLeft;
+    this.slots=slots;this.bindings=new Map();this.state=state;this.singular=false;
     // The image is [base, base+size) of the runtime's object arena (R0).
     this.cells=storage.cells;this.arena=storage.arena;this.base=storage.base;this.size=storage.size;this.refs=storage.refs;
     this.poison=storage.poison?.size?storage.poison:null;this.imageSource=storage.source;
@@ -515,7 +515,7 @@ export class ScriptRuntime {
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
       gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
-        if(call.index===384)return pollActorSleep(this.instance(call.receiver),call.state,call.seconds);
+        if(call.index===384)return pollActorSleep(this.latentFloat(call.receiver),call.state,call.seconds);
         if(call.index===0x181)return pollFinishAnim({
           animation:animationView(this,call.receiver),state:call.state,
         });
@@ -753,7 +753,7 @@ export class ScriptRuntime {
       writeCell(cell,storage.arena.view,storage.refs,copyValue(field,value),storage.base);
       storage.poison?.delete(key);
     }
-    this.linkInstance(instance,new ScriptInstance(this,cls,slots,state,storage,0));
+    this.linkInstance(instance,new ScriptInstance(this,cls,slots,state,storage));
     state.transition(null,cls.metadata);
     return state;
   }
@@ -950,7 +950,7 @@ export class ScriptRuntime {
           writeCell(cell,storage.arena.view,storage.refs,copyValue(field,value),storage.base);
           storage.poison?.delete(field.key);
         }
-        this.linkInstance(object.identity,new ScriptInstance(this,cls,slots,null,storage,undefined));
+        this.linkInstance(object.identity,new ScriptInstance(this,cls,slots,null,storage));
         this.bindNativeObject(object.identity,object);
         services.initNativeProperties(object,template);
       },
@@ -1337,6 +1337,11 @@ export class ScriptRuntime {
   writeNamed(receiver,name,value) {
     const instance=this.instance(receiver),handle=this.namedHandle(instance,name);
     return this.writeInstanceField(instance,handle.field,value,handle.codec??=propertyCodec(handle.field),handle.cell);
+  }
+  /** Actor.LatentFloat (AActor+0xe0) as {get, set}: Sleep's remaining time
+   * (script-sleep.mjs). */
+  latentFloat(receiver) {
+    return {get:()=>this.readNamed(receiver,'LatentFloat'),set:value=>this.writeNamed(receiver,'LatentFloat',value)};
   }
   /** readNamed(receiver, name) as an indexable view: {length, at(i)} of the
    * array readNamed would return, or null where it is not an array. An
@@ -3613,8 +3618,8 @@ export class ScriptRuntime {
     }
     if(call.index===256){
       if(call.argumentCount!==1)throw new Error('Sleep requires one duration argument');
-      const instance=this.instance(call.receiver);
-      return sleepActor(instance,instance.state,refValue(call.evaluateArgument(0)));
+      const seconds=refValue(call.evaluateArgument(0));
+      return sleepActor(this.latentFloat(call.receiver),this.instance(call.receiver).state,seconds);
     }
     if(call.index===280){
       if(call.argumentCount!==2)throw new Error('SetTimer requires rate and loop arguments');

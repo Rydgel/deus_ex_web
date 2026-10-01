@@ -670,8 +670,12 @@ the separate representation step above.
   `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
   `--bypass --continue --render-feedback --warm 60 --ticks 300
   --digest-every 10 --json`.
-  * The references at this commit are Training `c8eebff5786adf55` and
-    Island `b767a7e417fe5968`.
+  * The references at this commit are Training `f217d0b162ab0189` and
+    Island `3f390b4c79796dd7`. They were Training `c8eebff5786adf55` and
+    Island `b767a7e417fe5968` until Sleep's remaining time moved into
+    `Actor.LatentFloat` (October 1, [Sleep](script-sleep.md)); with
+    `BENCH_DIGEST_SKIP=LatentFloat` all 30 checkpoints of both maps equal
+    the commit before it.
   * A representation step must not change them.
   * A fidelity fix may change them, but only with the first differing
     checkpoint explained, and as its own commit.

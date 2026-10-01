@@ -43,7 +43,7 @@ runtime.actorLifecycle={
     registry,findObject:lookup.findObject,
     internName:name=>names.intern(name),
     // Explicit native-tail fixture inputs; a full native CDO loader is separate.
-    initNativeProperties:object=>{object.auxiliary=null;runtime.instance(object.identity).sleepTimeLeft=0;},
+    initNativeProperties:object=>{object.auxiliary=null;},
     nativeConstructor:constructCameraPoint,
   },
   // Class+0x4e0 for this standalone world: UClass::Bind's autoclass lookup

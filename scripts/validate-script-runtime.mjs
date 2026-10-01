@@ -64,7 +64,10 @@ assert.deepEqual(calls.map(call=>call.index),[3970,264,301,3970,264,301]);
 await set(mover,'DelayTime',.02);
 state.gotoLabel('Open');state.process(1/120);
 assert.equal(state.latent,384);
+// Sleep's remaining time is Actor.LatentFloat (AActor+0xe0).
+assert.equal(getRef(mover,'LatentFloat').get(),Math.fround(.02));
 state.process(1/120);assert.equal(state.latent,384);
+assert.equal(getRef(mover,'LatentFloat').get(),Math.fround(Math.fround(.02)-Math.fround(1/120)));
 state.process(1/120);assert.equal(state.latent,302);
 assert.equal(getRef(mover,'bDelaying').get(),false);
 // Original native UFunction dispatch writes the same fields as script access.

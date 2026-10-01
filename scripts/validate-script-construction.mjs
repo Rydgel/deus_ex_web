@@ -21,7 +21,7 @@ const ref=(actor,name)=>runtime.namedReference(actor,name);
 ref(template,'Tag').set('TemplateTag');ref(template,'BindName').set('Owned template text');
 ref(template,'Location').set([11,22,33]);
 ref(template,'BlendAnimSequence').set(['Walk','Run','Idle','Stop']);
-runtime.instance(template).sleepTimeLeft=3.25;
+ref(template,'LatentFloat').set(3.25);
 // The fixture starts with the original index-zero None entry. The FName
 // allocator is explicit; release is outside this construction check.
 const noneEntry={index:0,flags:0,hashNext:null,text:'None'};
@@ -46,10 +46,7 @@ const actor=runtime.constructObject(cls,{outer,template},{
   registry,
   findObject:lookup.findObject,
   internName:name=>names.intern(name),
-  initNativeProperties:(object,source)=>{
-    object.auxiliary=nativeTemplate.auxiliary;
-    runtime.instance(object.identity).sleepTimeLeft=runtime.instance(source).sleepTimeLeft;
-  },
+  initNativeProperties:object=>{object.auxiliary=nativeTemplate.auxiliary;},
   nativeConstructor:constructCameraPoint,
 });
 const instance=runtime.instance(actor),object=instance.nativeObject;
@@ -60,7 +57,7 @@ assert.equal(ref(actor,'Class').get(),cls.record);assert.equal(ref(actor,'Outer'
 assert.equal(ref(actor,'ObjectFlags').get(),0);assert.equal(object.stateFrame,null);assert.equal(instance.state,null);
 assert.equal(ref(actor,'Tag').get(),'TemplateTag');assert.equal(ref(actor,'BindName').get(),'Owned template text');
 assert.deepEqual(ref(actor,'BlendAnimSequence').get(),['Walk','Run','Idle','Stop']);
-assert.equal(instance.sleepTimeLeft,3.25);
+assert.equal(ref(actor,'LatentFloat').get(),3.25);
 ref(actor,'Location').set([44,55,66]);assert.deepEqual(ref(template,'Location').get(),[11,22,33]);
 ref(actor,'BindName').set('Instance text');assert.equal(ref(template,'BindName').get(),'Owned template text');
 const state=runtime.initExecution(actor);

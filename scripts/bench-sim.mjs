@@ -166,7 +166,11 @@ const step = () => {
   }
 };
 
-/** Every property of every Level.Actors entry, in array order. */
+/** Every property of every Level.Actors entry, in array order, but the
+ * names in BENCH_DIGEST_SKIP (comma-separated): a change that moves a value
+ * into a property compares against the code before it with that property
+ * left out. */
+const digestSkip = new Set((process.env.BENCH_DIGEST_SKIP ?? '').split(',').filter(Boolean));
 function digest(dump = null) {
   const hash = createHash('sha256'), bits = new DataView(new ArrayBuffer(8));
   const identity = value => {
@@ -207,6 +211,7 @@ function digest(dump = null) {
     try { instance = runtime.instance(actor); } catch (error) { hash.update(`detached ${actor.name};`); continue; }
     hash.update(`actor ${actor.name} ${instance.cls.record.key};`);
     for (let cls = instance.cls; cls; cls = cls.base) for (const field of cls.propertyOrder) {
+      if (digestSkip.size && digestSkip.has(field.metadata.name ?? field.name)) continue;
       hash.update(`${field.metadata.name ?? field.name}=`);
       if (process.env.BENCH_TRACE) writeSync(2, `${actor.name}.${field.metadata.name ?? field.name}\n`);
       budget = 4096;

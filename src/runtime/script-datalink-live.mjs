@@ -104,7 +104,6 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
       registry,names,findObject:lookup.findObject,internName:name=>names.intern(name),
       initNativeProperties:object=>{
         object.auxiliary=null;
-        runtime.instance(object.identity).sleepTimeLeft=0;
       },
       nativeConstructor:constructActorBase,
       transientPackage,

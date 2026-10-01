@@ -19,8 +19,17 @@ disassembly is `.cache/reference/Engine.asm`; the declaration is
 native(256) final latent function Sleep( float Seconds );
 ```
 
-`UActor.h:579` names the float field `SleepTimeLeft`. The native code addresses
-and the relevant frame locations are:
+`UActor.h:579` names the float field `SleepTimeLeft`. In the SDK 1112f
+`EngineClasses.h` layout the same offset, `AActor+0xe0`, is the script-visible
+`Actor.LatentFloat` (`node scripts/sdk-layouts.mjs --at AActor 0xe0`;
+`Actor.uc` declares `var const float LatentFloat; // Internal latent function
+use.`). The pawn `WaitForLanding` bodies use the same float
+([pawn locomotion](script-pawn-locomotion.md)). The runtime stores `Sleep`'s
+remaining time in that property (`script-sleep.mjs`); until 2026-10-01 it kept
+it in a separate host member, which left `LatentFloat` unchanged and out of
+saved properties. No script in Core, Engine, Extension, DeusEx or ConSys
+reads `LatentFloat` (1,323 extracted sources). The native code
+addresses and the relevant frame locations are:
 
 | item | address or offset | evidence |
 | --- | ---: | --- |
@@ -134,14 +143,14 @@ For a valid actor state frame, the focused VM behavior is:
 sleep(frame, actor):
     seconds = evaluate_next_expression(frame, receiver=frame.Object)
     frame.Code = after_expression_payload(frame)
-    actor.SleepTimeLeft = float32(seconds)
     actor.StateFrame.LatentAction = 0x180
+    actor.LatentFloat = float32(seconds)       // SleepTimeLeft, +0xe0
     yield to ProcessState's next latent-poll phase
 
 poll_sleep(actor, deltaSeconds):
-    remainder_x87 = extended(float32(actor.SleepTimeLeft)
+    remainder_x87 = extended(float32(actor.LatentFloat)
                              - float32(deltaSeconds))
-    actor.SleepTimeLeft = float32(remainder_x87)
+    actor.LatentFloat = float32(remainder_x87)
     if ordered(remainder_x87 < 0.5 * float32(deltaSeconds)):
         actor.StateFrame.LatentAction = 0
         // ProcessState then executes state code in this call.
