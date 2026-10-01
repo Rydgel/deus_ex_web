@@ -213,7 +213,7 @@ async function capture(page,{frames,device,tolerance,admission}) {
 
 const browser=await chromium.launch({args:['--use-angle=metal']});
 let failed=false;
-const coverage={};
+const coverage={},failureNotes=[];
 try {
   for(const map of maps){
     const page=await browser.newPage({viewport:{width:1440,height:960}});
@@ -251,6 +251,8 @@ try {
     for(const [name,count] of Object.entries(report.coverage))coverage[name]=(coverage[name]??0)+count;
     const failures=checks.filter(([,ok])=>!ok).map(([name])=>name);
     failed||=failures.length>0;
+    // The sweep runner shows stderr: name what failed and why.
+    if(failures.length)failureNotes.push(`${map}: ${failures.join(', ')}${report.errors.length?` (${report.errors[0].split('\n')[0]})`:''}${errors.length?` (page: ${errors[0]})`:''}`);
     console.log(JSON.stringify({map,device,tolerance:TOLERANCE,failures,
       bitExactFraction:+(report.exact/Math.max(1,report.components)).toFixed(6),...report},null,1));
     await page.close();
@@ -266,5 +268,5 @@ console.log(JSON.stringify({coverage,missing}));
 const fullRun=['00_Training','01_NYC_UNATCOIsland'].every(map=>maps.includes(map));
 if(device==='gpu'&&fullRun&&missing.length)failed=true;
 else if(missing.length)console.log(`coverage not required for a partial run: missing ${missing.join(', ')}`);
-if(failed){console.error('validate-gpu-mesh: FAIL');process.exit(1);}
+if(failed){console.error(`validate-gpu-mesh: FAIL\n${failureNotes.join('\n')}`);process.exit(1);}
 console.log('validate-gpu-mesh: PASS');
