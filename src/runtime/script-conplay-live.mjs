@@ -141,6 +141,17 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       resolveName:(outer,name,options)=>resolveNameNative(outer,name,{...options,services:{}}),
       read:(o,k)=>o===classRef?(k==='nameIndex'?0x29b:k==='outer'?coreOuter:undefined)
         :o===coreOuter&&k==='nameIndex'?0x14:graph.read(o,k),
+      // StaticLoadObject's fallback after DeusEx.u's linker has no such
+      // export (BindActor's "DeusEx." + ObjectName, e.g. Ford Schick's
+      // AugmentationUpgrade). Every Class whose Outer is the DeusEx package is
+      // one of DeusEx.u's exports (classes come only from package loads and
+      // native registration, and each native DeusEx class is exported), so
+      // no resident object matches and the original returns None.
+      staticFindObject:({classRef:requested,outer,exactClass})=>{
+        if(requested!==classRef||outer!==runtime.resources.packages.get('deusex')||exactClass!==0)
+          throw new Error('Conversation class StaticFindObject outside the DeusEx package Class lookup');
+        return null;
+      },
     }).object;
   }};
   runtime.conversationLifecycle={...runtime.conversationLifecycle,transferObject:bindLoad,checkObject:bindLoad};

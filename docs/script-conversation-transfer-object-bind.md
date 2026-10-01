@@ -85,6 +85,20 @@ Spawn admission is the linked `DataVaultImage -> Engine.Inventory` ancestry rath
 than a class list, so all nine distinct image classes run the same body
 (`scripts/validate-datalink-transfer-object.mjs`).
 
+## An ObjectName DeusEx.u does not export
+
+`08_NYC_Smug`'s `M08MeetFordSchick` transfers ObjectName
+`AugmentationUpgrade`, which GOTY's DeusEx.u does not export. StaticLoadObject
+then misses in the linker and falls back to `StaticFindObject(Class, DeusEx,
+AugmentationUpgrade)`. Every Class whose Outer is the DeusEx package is one of
+DeusEx.u's exports: classes come only from package loads and native
+registration, and each native DeusEx class is exported by the package. No
+resident object can match, so the original returns None and `giveObject`
+stays None. `SetupEventTransferObject` then finds nothing (`FindInventoryType`
+of None) and `Spawn(None)` returns None. Play binds exactly that lookup
+(class Class, Outer the DeusEx package, inexact); any other StaticFindObject
+from this route stays an explicit error. The conversation runs to its end.
+
 Validation:
 
 ```text
