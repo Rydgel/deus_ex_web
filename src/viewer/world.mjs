@@ -12,7 +12,7 @@ import { batchWorldMeshes } from './world-batches.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
-  const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map();
+  const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map(), rotatedMovers = new Set();
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
   const movingLights = createMovingLights(lighting, map.model);
   lighting.setMovingApplier(movingLights.apply);
@@ -165,9 +165,21 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
-        group.matrix.copy(group.userData.baseMatrix);
-        const offset = toView(mover.collider.offset);
-        for (let i = 0; i < 3; i++) group.matrix.elements[12 + i] += offset[i];
+        const authored = mover.values.Rotation ?? [0, 0, 0], rotation = mover.rotation ?? authored;
+        if (rotation.some((v, i) => (v | 0) !== ((authored[i] ?? 0) | 0))) {
+          // A rotating key (physMovingBrush's NewRotation): the brush matrix of
+          // the live Location and Rotation, as ABrush::ToWorld poses it.
+          group.matrix.copy(brushMatrix({ ...mover.values, Location: mover.position, Rotation: rotation }));
+          if (!rotatedMovers.has(mover.name)) {
+            rotatedMovers.add(mover.name);
+            const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
+            if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
+          }
+        } else {
+          group.matrix.copy(group.userData.baseMatrix);
+          const offset = toView(mover.collider.offset);
+          for (let i = 0; i < 3; i++) group.matrix.elements[12 + i] += offset[i];
+        }
         group.matrixWorldNeedsUpdate = true;
       }
     },

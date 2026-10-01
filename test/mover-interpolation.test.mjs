@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {interpolateMoverTo,tickMoverInterpolation} from '../src/runtime/mover-interpolation.mjs';
 function mover(){
- const m={position:[-220,800,-64],basePosition:[-220,800,-64],oldPosition:[-220,800,-64],keyPositions:[[0,0,0],[0,-56,0]],rotation:[0,16384,0],key:0,previousKey:0,alpha:0,rate:.5,glideType:1,interpolating:false};
+ const m={position:[-220,800,-64],basePosition:[-220,800,-64],oldPosition:[-220,800,-64],keyPositions:[[0,0,0],[0,-56,0]],keyRotations:[[0,0,0],[0,0,0]],
+  rotation:[0,16384,0],baseRotation:[0,16384,0],oldRotation:[0,16384,0],key:0,previousKey:0,alpha:0,rate:.5,glideType:1,interpolating:false};
  m.move=(delta,rotation)=>{assert.deepEqual(rotation,[0,16384,0]);m.position=m.position.map((v,i)=>Math.fround(v+delta[i]));return true;};return m;
 }
 test('original first 120Hz movement stores absolute position before delta',()=>{

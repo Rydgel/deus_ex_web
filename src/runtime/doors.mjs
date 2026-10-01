@@ -26,13 +26,17 @@ export class Doors {
         (!named(mover.values.Event) || this.eventHasRecipients?.(mover.values.Event) === false);
       if (mover.collider.offset.some(v => v !== 0)) this.setOffset(mover, [...zero]);
       const base = mover.values.Location.map(f);
+      const rotation = (mover.values.Rotation ?? zero).map(v => v | 0);
+      // The script runtime reseeds the native fields from each mover's storage
+      // (script-doors.mjs seedMoverInterpolation); these are the fixture's.
       mover.interpolation = { position: [...base], basePosition: [...base], oldPosition: [...base],
         keyPositions: [mover.values.KeyPos ?? zero, mover.values['KeyPos[1]'] ?? zero].map(p => p.map(f)),
-        rotation: mover.values.Rotation ?? zero, key: 0, previousKey: 0, alpha: 0, rate: 0,
+        keyRotations: [mover.values.KeyRot ?? zero, mover.values['KeyRot[1]'] ?? zero].map(p => p.map(v => v | 0)),
+        rotation, baseRotation: [...rotation], oldRotation: [...rotation], key: 0, previousKey: 0, alpha: 0, rate: 0,
         glideType: mover.values.MoverGlideType, interpolating: false,
-        move: delta => {
+        move: (delta, newRotation = null) => {
           if (this.collision?.moveMover) {
-            const success = this.collision.moveMover(mover,delta);
+            const success = this.collision.moveMover(mover,delta,newRotation);
             mover.interpolation.position = mover.position.slice();
             return success;
           }

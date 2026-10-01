@@ -798,8 +798,15 @@ the separate representation step above.
   `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
   `--bypass --continue --render-feedback --warm 60 --ticks 300
   --digest-every 10 --json`.
-  * The references at this commit are Training `7d5804dd8ad9a9d4` and
-    Island `d99a97de6f21893f`. They were Training `1725cf61fe25d423` and
+  * The references at this commit are Training `bc332ff7595aae8a` and
+    Island `42e0401534a54b3a`. They were Training `7d5804dd8ad9a9d4` and
+    Island `d99a97de6f21893f` until every mover's native interpolation
+    fields were seeded from its own storage (October 1, [doors](doors.md#play-wiring)):
+    OldPos and OldRot now read the serialized values rather than Location
+    and Rotation, and KeyRot/KeyPos past slot 0 the authored keys rather than
+    zeros (Island's DeusExMover7 KeyRot[1]). With
+    `BENCH_DIGEST_SKIP=OldPos,OldRot,KeyRot,KeyPos` all 30 checkpoints of
+    both maps equal the commit before it. They were Training `1725cf61fe25d423` and
     Island `604901ddf66b4614` until IsAnimating (282) stopped inverting its
     tween branch (October 1, [animation
     controls](script-animation-controls.md#isanimating)): NPCs that land at

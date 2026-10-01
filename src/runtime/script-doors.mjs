@@ -3,7 +3,7 @@ import { preparePlayerDumpStore } from './script-player-dump.mjs';
 import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
 import { initScriptRunaway, refValue } from './script-vm.mjs';
-import { tickMoverInterpolation } from './mover-interpolation.mjs';
+import { physMovingBrush } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
 import { linkDecorationCollision } from './decoration-physics.mjs';
@@ -66,11 +66,6 @@ function classFields(cls) {
     for (const field of node.fields?.values() ?? []) if (!fields.has(field.key)) fields.set(field.key, field);
   }
   return [...fields.values()];
-}
-
-function ensureArray(value, dimension, fallback) {
-  if (!Array.isArray(value) || value.length !== dimension) return Array.from({ length: dimension }, fallback);
-  return value.map(item => item);
 }
 
 function moverKeyPairs(mover) {
@@ -261,28 +256,28 @@ function makeBinding(runtime, record, field) {
       get: () => interpolation()?.baseRotation ?? values.BaseRot ?? values.Rotation ?? ZERO_VECTOR,
       set: value => { if (interpolation()) interpolation().baseRotation = vector(value, true); },
     },
+    // KeyPos[8]/KeyRot[8]: every slot is the interpolation state's, which
+    // seedMoverInterpolation fills from the object's own storage.
     keypos: {
       get: () => {
         const state = interpolation();
         const dimension = field.metadata.arrayDim || 8;
-        const pairs = ensureArray(state?.keyPositions, 2, () => ZERO_VECTOR);
-        return Array.from({ length: dimension }, (_, index) => vector(pairs[index] ?? values[`KeyPos[${index}]`]));
+        return Array.from({ length: dimension }, (_, index) => vector(state?.keyPositions?.[index] ?? values[index ? `KeyPos[${index}]` : 'KeyPos']));
       },
       set: value => {
         const state = interpolation();
-        if (state && Array.isArray(value)) state.keyPositions = value.slice(0, 2).map(item => vector(item));
+        if (state && Array.isArray(value)) state.keyPositions = value.map(item => vector(item));
       },
     },
     keyrot: {
       get: () => {
         const state = interpolation();
         const dimension = field.metadata.arrayDim || 8;
-        const pairs = ensureArray(state?.keyRotations, 2, () => ZERO_VECTOR);
-        return Array.from({ length: dimension }, (_, index) => vector(pairs[index] ?? values[`KeyRot[${index}]`], true));
+        return Array.from({ length: dimension }, (_, index) => vector(state?.keyRotations?.[index] ?? values[index ? `KeyRot[${index}]` : 'KeyRot'], true));
       },
       set: value => {
         const state = interpolation();
-        if (state && Array.isArray(value)) state.keyRotations = value.slice(0, 2).map(item => vector(item, true));
+        if (state && Array.isArray(value)) state.keyRotations = value.map(item => vector(item, true));
       },
     },
     physics: {
@@ -821,6 +816,43 @@ export async function createScriptDoors({
     if (!receiver?.interpolation?.interpolating) state.latent = 0;
   };
 
+  // Mover.uc's native interpolation fields (KeyNum, PrevKeyNum, PhysAlpha,
+  // PhysRate, bInterpolating, KeyPos[8], KeyRot[8], BasePos, BaseRot, OldPos,
+  // OldRot) are bound to the host's interpolation state (makeBinding), which
+  // AMover::physMovingBrush reads. Seed it from the object's own storage — the
+  // map-authored value or the class default, which the bindings never write —
+  // after each property reset and before the startup passes run Mover.BeginPlay.
+  const moverClassRecords = new WeakMap();
+  function isMoverRecord(record) {
+    if (!record?.cls) return false;
+    let known = moverClassRecords.get(record.cls);
+    if (known === undefined) {
+      known = false;
+      for (let cls = record.cls; cls; cls = cls.base) if (cls.record?.key === 'engine.mover') { known = true; break; }
+      moverClassRecords.set(record.cls, known);
+    }
+    return known;
+  }
+  function seedMoverInterpolation(record) {
+    const mover = record.object, state = mover.interpolation;
+    if (!state || !isMoverRecord(record)) return;
+    const stored = name => runtime.readStoredField(mover, runtime.lookupMember(record.cls, 'fields', name));
+    const slots = (value, integer) => Array.from({ length: 8 }, (_, index) => vector(value?.[index], integer));
+    state.key = Number(stored('KeyNum')) & 0xff;
+    state.previousKey = Number(stored('PrevKeyNum')) & 0xff;
+    state.alpha = f(stored('PhysAlpha'));
+    state.rate = f(stored('PhysRate'));
+    state.interpolating = Boolean(stored('bInterpolating'));
+    state.keyPositions = slots(stored('KeyPos'), false);
+    state.keyRotations = slots(stored('KeyRot'), true);
+    state.basePosition = vector(stored('BasePos'));
+    state.baseRotation = vector(stored('BaseRot'), true);
+    state.oldPosition = vector(stored('OldPos'));
+    state.oldRotation = vector(stored('OldRot'), true);
+    state.scriptInterpolateEnd = true;
+    state.onInterpolateEnd = () => runtime.processEvent(mover, 'InterpolateEnd', [null]);
+  }
+
   /** Return a map actor's properties to their initial (map-authored or
    * class-default) values: its object storage and the store of properties
    * without an image cell. */
@@ -1347,16 +1379,20 @@ export async function createScriptDoors({
     physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physProjectile: (actor,delta)=>runActorProjectile(runtime,actor,delta),
     physMovingBrush: (actor,delta)=>{
-      // AMover::physMovingBrush returns when bInterpolating is clear. All
-      // map movers have native interpolation storage, including idle movers
-      // outside the recovered constant-rotation translation subset.
+      // AMover::physMovingBrush (mover-interpolation.mjs) for every map mover:
+      // any KeyNum, rotating keys, and the original InterpolateEnd event. It
+      // returns when bInterpolating is clear.
       let mover=false;
       for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.mover'){mover=true;break;}
-      if(!mover||!runtime.readNamed(actor,'bInterpolating')||!(f(delta)>0))return;
-      if(!actor.interpolation)throw new Error('MovingBrush requires its original mover interpolation storage');
-      if(actor.interpolation.interpolating&&!selectedMover(actor,level))
-        throw new Error(`MovingBrush interpolation outside the recovered translating subset: ${actor.name}`);
-      tickMoverInterpolation(actor.interpolation,delta);
+      if(!mover||!runtime.readNamed(actor,'bInterpolating'))return;
+      const state=actor.interpolation;
+      if(!state)throw new Error('MovingBrush requires its original mover interpolation storage');
+      physMovingBrush(state,delta,{
+        location:()=>actor.position,
+        glideType:()=>runtime.readNamed(actor,'MoverGlideType'),
+        move:(offset,rotation)=>state.move(offset,rotation),
+        interpolateEnd:()=>runtime.processEvent(actor,'InterpolateEnd',[null]),
+      });
     },
     physicsRotation: (target,delta)=>runActorRotation(runtime,target,delta),
     processEvent: (target, name, args) => runtime.processEvent(target, name, args),
@@ -1693,7 +1729,8 @@ export async function createScriptDoors({
     for (const actor of initialActorArray) {
       if (!actor || actor === playerActor || npcPawnSet.has(actor) || npcPatrolPointSet.has(actor)
           || npcPickupSet.has(actor) || npcDecorationSet.has(actor) || moversByObject.has(actor)) continue;
-      { const record = identities.get(actor); if (record) resetProperties(record); }
+      const record = identities.get(actor);
+      if (record) { resetProperties(record); seedMoverInterpolation(record); }
     }
     clearStartupPawnList();
     // A freshly loaded ULevel starts with an empty deferred-deletion chain;
@@ -1759,20 +1796,10 @@ export async function createScriptDoors({
   }
 
   function resetMover(record) {
-    const mover = record.mover, values = mover.values ?? {}, state = mover.interpolation;
-    if (!state) throw new Error(`Doors.reset() removed interpolation state for ${mover.name}`);
-    const pairs = moverKeyPairs(mover);
-    state.basePosition = vector(values.BasePos ?? values.Location);
-    state.baseRotation = vector(values.BaseRot ?? values.Rotation, true);
-    state.oldPosition = vector(state.position ?? values.Location);
-    state.oldRotation = vector(state.rotation ?? values.Rotation, true);
-    state.keyPositions = pairs.positions;
-    state.keyRotations = pairs.rotations;
-    state.scriptInterpolateEnd = true;
-    state.onInterpolateEnd = () => {
-      runtime.processEvent(mover, 'InterpolateEnd', [null]);
-    };
+    const mover = record.mover, values = mover.values ?? {};
+    if (!mover.interpolation) throw new Error(`Doors.reset() removed interpolation state for ${mover.name}`);
     resetProperties(record);
+    seedMoverInterpolation(record);
 
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
