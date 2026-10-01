@@ -3700,6 +3700,9 @@ export class ScriptRuntime {
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       destroyActor:(actor,force)=>this.destroyActor(actor,Boolean(force)),
       performPhysics:(actor,delta)=>this.processActorPhysics(actor,delta),
+      // processEvent above is this runtime's own: the Rust actor tick may
+      // dispatch its events in Rust (dispatch.rs).
+      runtimeEvents:true,
     }};
   }
   /** Paused ULevel.Tick's derived-to-base FloatProperty/CPF_Input traversal.
@@ -3994,6 +3997,18 @@ export class ScriptRuntime {
       tagOf:actor=>this.fieldReference(actor,tag).get(),
     });
   }
+  /** processEvent's Level gate, after GIsScriptable: false when the event
+   * is not dispatched. (The Rust event dispatch, dispatch.rs, runs both.) */
+  eventLevelGate(receiver,instance) {
+    // AActor::ProcessEvent 0x10369100 precedes Core's body on world actors:
+    // actor.Level (+0xa8), LevelInfo flags (+0x4f0), mask bBegunPlay (2).
+    // Standalone Core-event fixtures have no linked world/Actor.Level slot.
+    if(this.levelFor(receiver)&&reachesActor(instance.cls)) {
+      const info=this.readNamed(receiver,'Level');
+      if(info && !this.readNamed(info,'bBegunPlay'))return false;
+    }
+    return true;
+  }
   /** Core ProcessEvent's ordinary script/typed parameter path. The supplied
    * argument array represents the caller's parameter block: every parameter
    * is copied back, including those without OutParm. A declared ReturnParm
@@ -4004,13 +4019,7 @@ export class ScriptRuntime {
     // The recovered table covers every reserved probe index. Any other valid
     // loaded function name is outside that interval and bypasses its mask gate.
     const instance=this.instance(receiver),ename=probeNames.get(lowerName(name))??-1;
-    // AActor::ProcessEvent 0x10369100 precedes Core's body on world actors:
-    // actor.Level (+0xa8), LevelInfo flags (+0x4f0), mask bBegunPlay (2).
-    // Standalone Core-event fixtures have no linked world/Actor.Level slot.
-    if(this.levelFor(receiver)&&reachesActor(instance.cls)) {
-      const info=this.readNamed(receiver,'Level');
-      if(info && !this.readNamed(info,'bBegunPlay'))return false;
-    }
+    if(!this.eventLevelGate(receiver,instance))return false;
     if(instance.state&&!instance.state.isProbing(ename))return false;
     const record=selectedRecord??this.lookup(receiver,name),fn=record?.function;
     if(!fn)throw new Error(`Original event is not prepared: ${record?.key??name}`);

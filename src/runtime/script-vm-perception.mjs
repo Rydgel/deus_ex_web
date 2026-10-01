@@ -300,7 +300,7 @@ export class PerceptionHost {
     return value;
   }
   imports(enter, leave, count) {
-    const host = this, vm = this.vm, frame = id => vm.frames[id];
+    const host = this, vm = this.vm, frame = id => vm.run(id);
     const guarded = fn => (...args) => {
       enter();
       try { return fn(...args); } finally { leave(); }

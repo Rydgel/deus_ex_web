@@ -146,6 +146,9 @@ extern "C" {
     fn js_tick_probing(ctx: u32, which: u32) -> i32;
     fn js_tick_destroy(ctx: u32);
     fn js_tick_event(ctx: u32, which: u32, delta: f64);
+    /// After an event ran in Rust (dispatch.rs): the runaway count back to
+    /// JavaScript, then T_STATE as after a callback.
+    fn js_tick_refresh(ctx: u32);
     fn js_tick_state(ctx: u32, delta: f64);
     fn js_tick_physics(ctx: u32, delta: f64);
     fn js_tick_far_move(ctx: u32, weapon: u32, x: f64, y: f64, z: f64);
@@ -239,6 +242,7 @@ fn named_word(word: u32) -> bool {
 /// reads it there.
 struct Actor {
     ctx: u32,
+    handle: u32,
     base: u32,
     host: bool,
     mask: u64,
@@ -327,8 +331,15 @@ impl Actor {
             }
         }
     }
+    /// processEvent in Rust when dispatch.rs can, else in JavaScript.
     fn event(&mut self, which: u32, delta: f64) {
-        unsafe { js_tick_event(self.ctx, which, delta) };
+        let has_delta = which == E_TICK || which == E_UPDATEEYEHEIGHT || which == E_UPDATETACTICS;
+        match crate::dispatch::dispatch_event(self.handle, which, delta, has_delta) {
+            // processEvent returned false before any script ran.
+            0 => return,
+            1 => unsafe { js_tick_refresh(self.ctx) },
+            _ => unsafe { js_tick_event(self.ctx, which, delta) },
+        }
         self.refresh();
     }
 
@@ -474,6 +485,7 @@ fn start(a: &Actor, time_seconds: f64, tick_tag: u32) -> Option<Start> {
 #[no_mangle]
 pub extern "C" fn tick_actor(
     ctx: u32,
+    handle: u32,
     base: u32,
     mask_lo: u32,
     mask_hi: u32,
@@ -483,7 +495,7 @@ pub extern "C" fn tick_actor(
     time_seconds: f64,
     tick_tag: u32,
 ) -> i32 {
-    let mut a = Actor { ctx, base, host: false, mask: (mask_hi as u64) << 32 | mask_lo as u64, flags, demo: false };
+    let mut a = Actor { ctx, handle, base, host: false, mask: (mask_hi as u64) << 32 | mask_lo as u64, flags, demo: false };
     if flags & C_PLAYERPAWN != 0 {
         return HANDBACK;
     }

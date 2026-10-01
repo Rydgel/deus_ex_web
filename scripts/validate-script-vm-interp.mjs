@@ -233,6 +233,16 @@ const imports = {
     calls.push({imp: 'standalone', receiver: handle});
     return nativeHost.standalone(handle) ? 1 : 0;
   },
+  // October 1: the event dispatch host (script-vm-events.mjs protocol).
+  js_event_gate(handle) {
+    calls.push({imp: 'gate', receiver: handle, frames: framesKey()});
+    return nativeHost.gate(handle);
+  },
+  js_event_resolve(handle, which, slot) {
+    calls.push({imp: 'resolve', receiver: handle, which});
+    const [kind, code, size, param, template] = nativeHost.resolve(handle, which);
+    for (const [i, v] of [kind, code, size, param, template].entries()) wr32(slot + 16 + 4 * i, v);
+  },
   js_iterators(frame) {
     calls.push({imp: 'iterators', frame});
     return iteratorCount(frame);
@@ -255,6 +265,8 @@ const FRAMES_AT = x.vm_frames_ptr(), CALL_BLOCK_AT = x.vm_call_block_ptr();
 const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
 const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHECK_VALUES_AT = x.vm_check_values_ptr();
 const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr();
+const EVENTS_AT = x.vm_events_ptr(), DELETE_ME_AT = x.vm_delete_me_ptr(), ENAMES_AT = x.vm_enames_ptr();
+const RUNS_AT = x.vm_runs_ptr(), SERIAL_AT = x.vm_serial_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -292,6 +304,8 @@ function reset() {
   wr32(STATES_AT + 8, 0);
   wr32(FAULT_AT, 0);
   nativeHost = {};
+  // Event dispatch off.
+  for (let i = 0; i < 5; i++) wr32(EVENTS_AT + 4 * i, 0);
 }
 const count = (imp, receiver) => calls.filter(c => c.imp === imp && (receiver === undefined || c.receiver === receiver)).length;
 
@@ -3218,6 +3232,149 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
     same(count('zone'), expectedCalls.zone, `InStasis ${why} zone calls`);
     same(rd32(FAULT_AT), 0, `InStasis ${why} clears the fault`);
   }
+}
+
+// ---- October 1: tick events in Rust (dispatch.rs) ----------------------------------------
+// processEvent's order: the gate import, probing from the state table, the
+// event cache (resolved by the host per class row, state row and event),
+// pendingKill from bDeleteMe, then the body as a callee run.
+{
+  const ENTRY = 12, CAP = 64, STATE_TABLE = arena.alloc(ENTRY * CAP), SLOTS = 16, EV_TABLE = arena.alloc(48 * SLOTS);
+  const stateRow = n => { const a = arena.alloc(8 + 4 * n); wr32(a, 5); wr32(a + 4, n); for (let i = 0; i < n; i++) wr32(a + 8 + 4 * i, 1); return a; };
+  const ROW = {state: stateRow(1), other: stateRow(2), none: stateRow(0)};
+  const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
+  // ENAMES: Tick bit 5, Timer bit 40 (second word), Expired below the
+  // probe range, UpdateEyeHeight not a probe name.
+  const ENAMES = [0x12c + 5, 0x12c + 40, 0x100, 0xffffffff, 0x12c + 6, 0x12c + 7, 0x12c + 8];
+  const DM = {offset: 0x40, key: 6, mask: 0x8};
+  const PARAM = 0x10;
+  const setup = ({row = ROW.state, lo = 0xffffffff, hi = 0xffffffff, verify = 0} = {}) => {
+    reset();
+    classTable();
+    arena.bytes.fill(0, STATE_TABLE, STATE_TABLE + ENTRY * CAP);
+    wr32(STATES_AT, STATE_TABLE); wr32(STATES_AT + 4, CAP); wr32(STATES_AT + 8, 0);
+    wr32(STATE_TABLE + ENTRY * SELF_H, row); wr32(STATE_TABLE + ENTRY * SELF_H + 4, lo); wr32(STATE_TABLE + ENTRY * SELF_H + 8, hi);
+    arena.bytes.fill(0, EV_TABLE, EV_TABLE + 48 * SLOTS);
+    wr32(EVENTS_AT, EV_TABLE); wr32(EVENTS_AT + 4, SLOTS); wr32(EVENTS_AT + 8, 1); wr32(EVENTS_AT + 12, 1); wr32(EVENTS_AT + 16, verify);
+    ENAMES.forEach((e, i) => wr32(ENAMES_AT + 4 * i, e));
+    wr32(DELETE_ME_AT, DM.offset); wr32(DELETE_ME_AT + 4, DM.key); wr32(DELETE_ME_AT + 8, DM.mask);
+    nativeHost.gate = () => 1;
+    nativeHost.state = () => 0;
+  };
+  // A body: the parameter (a float local at PARAM) into SELF's 0x30, then an
+  // import that observes its run, then Return.
+  let observed = null;
+  const makeBody = () => assembleAt(FN_CODE[10], [
+    S.expr(E.setField(K.SET_FIELD_FLOAT, 0x30, node(), 0, w(K.LOCAL_FLOAT, PARAM))),
+    S.expr(w(K.JS_VOID, node((receiver, frame) => {
+      const at = RUNS_AT + 16 * frame;
+      observed = {receiver, frame, record: [rd32(at), rd32(at + 4), rd32(at + 8), rd32(at + 12)], frames: framesKey(),
+        runs: rd32(FRAMES_AT + 12), budget: rd32(BUDGET_AT), locals: [...arena.bytes.slice(rd32(at + 8), rd32(at + 8) + 0x18)]};
+    }))),
+    S.ret(R.VOID),
+  ]);
+  const runDecision = (param = PARAM + 1) => () => [K_RUN, makeBody(), 0x18, param, 77];
+  const dispatch = (which = 0, delta = 0.25) => x.vm_dispatch_event(SELF_H, which, delta, 1);
+
+  // The gate and the enable word.
+  setup();
+  wr32(EVENTS_AT + 12, 0);
+  same(dispatch(), -1, 'dispatch disabled');
+  same(calls.length, 0, 'disabled dispatch makes no import');
+  for (const [gate, expected] of [[0, 0], [-1, -1], [7, -1]]) {
+    setup();
+    nativeHost.gate = () => gate;
+    nativeHost.resolve = () => assert.fail('resolve after a failed gate');
+    same(dispatch(), expected, `gate ${gate}`);
+  }
+  // Probing: the event's bit in the probe words of an instance with a state.
+  for (const [which, lo, hi, probing] of [[0, 1 << 5, 0, true], [0, ~(1 << 5), ~0, false], [1, 0, 1 << 8, true],
+    [1, ~0, ~(1 << 8), false], [2, 0, 0, true], [3, 0, 0, true]]) {
+    setup({lo, hi});
+    nativeHost.resolve = () => [K_NOCALL, 0, 0, 0, 0];
+    same(dispatch(which), 0, `probe event ${which} lo ${lo} hi ${hi}`);
+    same(count('resolve'), probing ? 1 : 0, `probe event ${which} ${probing ? 'probing' : 'not probing'}`);
+  }
+  // No ScriptState (a row without names): no probe gate.
+  setup({row: ROW.none, lo: 0, hi: 0});
+  nativeHost.resolve = () => [K_NOCALL, 0, 0, 0, 0];
+  same(dispatch(0), 0, 'no state');
+  same(count('resolve'), 1, 'no state resolves');
+  // An undescribed state entry or class row: JavaScript.
+  setup();
+  wr32(STATE_TABLE + ENTRY * SELF_H, 0);
+  same(dispatch(), -1, 'undescribed state entry');
+  setup();
+  classRowHost = () => 0;
+  same(dispatch(), -1, 'undescribed class row');
+  // Decisions.
+  for (const [kind, expected] of [[K_JS, -1], [K_NOCALL, 0], [0, -1], [9, -1]]) {
+    setup();
+    nativeHost.resolve = () => [kind, 0, 0, 0, 0];
+    same(dispatch(), expected, `decision ${kind}`);
+  }
+  // A body: frame, parameter, RUNS record, budget, restored stack and count.
+  for (const delta of [0.25, -0, 1e40, NaN, f(0.1), 3]) {
+    setup();
+    fieldImage(SELF_IMG);
+    wr32(FRAMES_AT + 12, 3);
+    wr32(BUDGET_AT, 12345);
+    nativeHost.resolve = runDecision();
+    const before = framesKey(), serial = rd32(SERIAL_AT);
+    observed = null;
+    same(dispatch(0, delta), 1, `body runs (delta ${delta})`);
+    same(rd32(SELF_IMG + 0x30), bits(delta), `parameter delta ${delta} through the float codec`);
+    same(observed?.frame, 3, 'the body is run 3');
+    same(observed.receiver, SELF_H, 'the body runs on the receiver');
+    same(observed.record.join(), [77, SELF_H, observed.record[2], serial + 1].join(), 'RUNS record');
+    same(observed.runs, 4, 'run count during the body');
+    same(observed.budget, HANG_BUDGET - 2, 'the body has its own budget (two statements counted)');
+    same(observed.locals.every((b, i) => i >= PARAM && i < PARAM + 4 || b === 0), true, 'zeroed frame block');
+    same(framesKey(), before, 'frame stack restored');
+    same(rd32(FRAMES_AT + 12), 3, 'run count restored');
+    same(rd32(BUDGET_AT), 12345, 'budget restored');
+  }
+  // No parameter: nothing stored.
+  setup();
+  wr32(SELF_IMG + 0x30, 0xdeadbeef);
+  nativeHost.resolve = () => [K_RUN, assembleAt(FN_CODE[11], [S.ret(R.VOID)]), 0, 0, 78];
+  same(dispatch(1, 5), 1, 'body without parameter');
+  // The cache: one resolve per key; a new epoch, another state row or event,
+  // or verify resolves again.
+  setup();
+  nativeHost.resolve = runDecision();
+  dispatch(0); dispatch(0);
+  same(count('resolve'), 1, 'cached decision');
+  wr32(EVENTS_AT + 8, 2);
+  dispatch(0);
+  same(count('resolve'), 2, 'new epoch resolves');
+  dispatch(4);
+  same(count('resolve'), 3, 'another event resolves');
+  wr32(STATE_TABLE + ENTRY * SELF_H, ROW.other);
+  dispatch(0);
+  same(count('resolve'), 4, 'another state row resolves');
+  setup({verify: 1});
+  nativeHost.resolve = runDecision();
+  dispatch(0); dispatch(0);
+  same(count('resolve'), 2, 'verify resolves every dispatch');
+  // pendingKill: bDeleteMe in the image, or JavaScript.
+  for (const [why, flags, key, deleted, expected] of [['alive', 0, DM.key, false, 1], ['deleted', 0, DM.key, true, 0],
+    ['HOST receiver', HOST, DM.key, false, -1], ['bound bDeleteMe', BOUND, 3, false, -1], ['BOUND, unbound key', BOUND, DM.key, true, 0]]) {
+    setup();
+    infos.set(SELF_H, SELF_IMG | flags);
+    wr32(DELETE_ME_AT + 4, key);
+    wr32(SELF_IMG + DM.offset, deleted ? DM.mask | 1 : ~DM.mask);
+    nativeHost.resolve = runDecision();
+    observed = null;
+    same(dispatch(), expected, `pendingKill ${why}`);
+    same(observed !== null, expected === 1, `pendingKill ${why} body`);
+  }
+  // Beyond MAX_RUNS: JavaScript.
+  setup();
+  wr32(FRAMES_AT + 12, 256);
+  nativeHost.resolve = runDecision();
+  same(dispatch(), -1, 'run id beyond RUNS');
+  same(rd32(FRAMES_AT + 12), 256, 'run count untouched');
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

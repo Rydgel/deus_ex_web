@@ -133,6 +133,9 @@ export function objectImageCells(cls, {graph, identity}) {
 // registry; a key whose cells ever disagree is left to JavaScript.
 const fieldCells = new Map();
 let fieldCellVersion = 0;
+// Called after each registry change (the Rust interpreter's event cache).
+const fieldCellListeners = [];
+export const onFieldImageCellVersion = listener => { fieldCellListeners.push(listener); };
 function registerFieldCell(key, cell) {
   const known = fieldCells.get(key);
   if (known === undefined) {
@@ -142,7 +145,8 @@ function registerFieldCell(key, cell) {
     known.handle !== cell.handle)) {
     fieldCells.set(key, null);
     fieldCellVersion++;
-  }
+  } else return;
+  for (const listener of fieldCellListeners) listener();
 }
 /** The image cell every class with the property `key` uses, or null. */
 export const fieldImageCell = key => fieldCells.get(key) ?? null;

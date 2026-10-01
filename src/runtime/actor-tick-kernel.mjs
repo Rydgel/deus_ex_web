@@ -35,6 +35,7 @@ import {tickStandaloneActor} from './actor-tick.mjs';
 import {tickActorAnimation, selectAnimNotify, named} from './animation-tick.mjs';
 import {animationTickView} from './script-anim.mjs';
 import {propertyReference, propertyCodec} from './script-values.mjs';
+import {setScriptRunaway} from './script-vm.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.ACTOR_TICK_KERNEL === 'js' || globalThis.DEUS_EX_ACTOR_TICK_KERNEL === 'js';
@@ -305,16 +306,28 @@ export class ActorTickHost {
     // it is the stack's top, read once; reading the global costs ~0.1 ms
     // per Island tick.
     const x = this.x, pointer = ctx === 0 && this.vm.depth === 0 ? this.stackTop : x.__stack_pointer.value;
+    // Events may run in Rust (dispatch.rs) when processEvent behind these
+    // services is the runtime's own; never under the differential log,
+    // which records each event as a callback.
+    const events = this.vm.events, eventsBefore = events.enabled;
+    events.enabled = c.log ? 0 : events.allowed(services);
+    // A body Rust began that throws unwinds past its frame and budget.
+    const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top, runs = this.vm.depth;
+    const view = this.vm.arena.view, budget = view.getUint32(this.vm.budgetAt, true);
     let result;
     try {
-      result = x.tick_actor(ctx, instance.base, d.lo, d.hi, d.flags, seconds, tickType, level.timeSeconds, level.tickTag);
+      result = x.tick_actor(ctx, d.handle, instance.base, d.lo, d.hi, d.flags, seconds, tickType, level.timeSeconds, level.tickTag);
     } catch (error) {
       // An import that throws unwinds past the Rust frames.
       x.__stack_pointer.value = pointer;
+      stack.restore(stackIndex, stackTop);
+      this.vm.depth = runs;
+      this.vm.arena.view.setUint32(this.vm.budgetAt, budget, true);
       c.clear();
       throw error;
     } finally {
       this.depth = ctx;
+      events.enabled = eventsBefore;
     }
     if (DIFFERENTIAL) this.verify(c, before, result);
     c.clear();
@@ -414,6 +427,12 @@ export class ActorTickHost {
       js_tick_event(i, which, delta) {
         const c = context(i), [name, withDelta] = EVENTS[which], args = withDelta ? [delta] : [];
         host.callback(c, name, args.slice(), () => c.services.processEvent(c.receiver, name, args));
+      },
+      // An event ran in Rust (dispatch.rs): the runaway count it left, then
+      // the actor's fresh state as after a callback.
+      js_tick_refresh(i) {
+        setScriptRunaway(host.vm.arena.view.getUint32(host.vm.runawayAt, true));
+        host.refresh(context(i));
       },
       js_tick_state(i, delta) {
         const c = context(i);

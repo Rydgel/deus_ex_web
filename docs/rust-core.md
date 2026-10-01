@@ -304,6 +304,83 @@ noise: medians 10.17 ms before and 10.25 ms after on a loaded machine. The
 expected saving, about 0.2 ms, is below what these runs resolve. Browser
 (Island walk, 300 frames): tick 10.95 ms, frame 18.67 ms, no runtime error.
 
+### October 1: tick events in Rust (implemented)
+
+Actor.Tick's events (Tick, Timer, Expired, UpdateEyeHeight, PainTimer,
+SpeechTimer, UpdateTactics; tick.rs `event`) now run processEvent in Rust
+(dispatch.rs) when the event's function has a Rust lowering. Before, each of
+Island's 382 events per tick crossed to JavaScript, ran processEvent and
+`executeScript`, and entered Rust again for the body. processEvent's steps,
+in order, and where each runs now:
+
+1. `scriptability()` and the Level gate: `js_event_gate`, which runs the
+   runtime's `scriptability()` and `eventLevelGate` (the gate processEvent
+   now calls too, so both paths share one body). These stay in JavaScript:
+   `windowLifecycle` is reassigned in several places and Actor.Level is a
+   host binding.
+2. Probing: the state table entry. A row with names means a ScriptState,
+   whose probe words decide; an event name outside the probe range always
+   passes, as `isProbing` does.
+3. `lookup(receiver, name)` and the function checks: an event cache keyed
+   by (class row, state row, event), filled by `js_event_resolve` with one of
+   three decisions. **JavaScript:** anything processEvent throws on (no
+   function, the native-hook flag, a result, a parameter count other than
+   the event's), a singular function, a function without a call signature
+   or a Rust lowering, a receiver that is not an Actor. **No call:** a
+   native function, for which processEvent returns false. **Run:** code,
+   frame size, the float parameter's offset and a run template. The lookup
+   depends only on the class and the state node, so the row pair is the
+   key. The cache's epoch advances when a lowering is replaced, when
+   operands are relinked (`ScriptObjects.operandEpoch` is now an accessor
+   with listeners) and when the field registry changes
+   (`onFieldImageCellVersion`).
+4. `pendingKill`: bDeleteMe in the receiver's image at its registered cell,
+   or JavaScript when the image cannot be read there.
+5. The frame and body: a zeroed block from the shared FMemStack, the
+   parameter stored by the float codec, and the body as a callee run with
+   its own hang budget, as an R2b-3 call runs. The stack, the run count and
+   the budget are restored afterwards.
+
+**The body's JavaScript Run.** An import inside the body asks for its run's
+`Run` (nodes, frame object). Rust records each run it begins in `RUNS[id] =
+[template, SELF handle, locals, serial]`, and `RustScriptVm.run(id)` builds
+the Run from that record on first use. A run JavaScript begins clears the
+record's serial (`own`), so a stale record is never used. Every import now
+looks its run up through `run(id)` instead of indexing `frames`.
+
+**Runaway count.** `js_event_gate` hands JavaScript's runaway count to
+RUNAWAY before the body, and `js_tick_refresh` hands it back after (the
+interpreter's imports keep the two in step in between), so a body's jumps
+count on the same GRunaway as before.
+
+**When it is off.** `RUST_EVENTS=0`; the actor tick's differential log
+(`ACTOR_TICK_DIFFERENTIAL`, which records events as callbacks); services
+whose processEvent is not the runtime's own (`runtimeEvents`); a runtime
+with `processEvent`, `executeScript`, `eventLevelGate` or `lookup` replaced
+by an own property; and the JavaScript VM. `DISPATCH_VERIFY=1` resolves
+every dispatch again and throws when a filled slot differs.
+
+**Verification.** `validate-script-vm-interp` drives `vm_dispatch_event`
+with a mock host: the enable word and gate results, probe bits in both
+words and the out-of-range names, a state without names, undescribed
+state entries and class rows, the three decisions, a body's parameter
+(including -0, NaN and a value that rounds to infinity), its RUNS record,
+run id, budget and zeroed block, the restored stack, count and budget, the
+cache (one resolve per key, a new epoch, event or state row, verify),
+pendingKill on HOST and bound receivers, and the RUNS limit. All 14
+applied mutants of dispatch.rs were caught. Digests match at all 30
+checkpoints on both maps and both engines with `SCRIPT_VM_CHECK=1
+STATE_VERIFY=1 DISPATCH_VERIFY=1`. On Island `js_tick_event` no longer
+runs; per tick there are 382 `js_event_gate` calls (about 0.45 µs each),
+382 `js_tick_refresh` calls and 17.5 resolves, which follow operand
+relinking during play. Interleaved A/B against `225f788`, 4 pairs: medians
+10.08, 9.86, 10.18, 10.05 ms before and 9.93, 9.82, 9.76, 9.75 after, about
+0.25 ms per tick. Browser (Island walk): tick 10.78 ms, frame 18.70 ms, no
+runtime error.
+
+Next on this path: `js_call_begin` (848 calls per tick) through the same
+cache and run records, then the gate in Rust.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

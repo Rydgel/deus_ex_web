@@ -10,7 +10,14 @@ export class ScriptObjects {
     this.linkedOperands = new WeakMap();
     // Advances whenever an expanded operand can change (link, GC rewrite), so
     // callers may keep a resolved operand while it is unchanged.
-    this.operandEpoch = 0;
+    this.operandCount = 0;
+    // Called after each advance (the Rust interpreter's event cache).
+    this.operandListeners = [];
+  }
+  get operandEpoch() { return this.operandCount; }
+  set operandEpoch(value) {
+    this.operandCount = value;
+    for (const listener of this.operandListeners) listener();
   }
   async resolve(asset, index) {
     if (!index) return null;

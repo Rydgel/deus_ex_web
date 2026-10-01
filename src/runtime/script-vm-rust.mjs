@@ -34,6 +34,7 @@ import {MovePawnHost} from './move-pawn-kernel.mjs';
 import {WalkLoopHost} from './walk-loop-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 import {StateTable} from './script-vm-states.mjs';
+import {EventHost, MAX_RUNS} from './script-vm-events.mjs';
 import {onStateChange} from './script-state.mjs';
 
 // Receiver info flags (interp.rs).
@@ -203,6 +204,9 @@ class Run {
     this.fieldNodes = lowered.fieldNodes;
     this.self = self; this.selfHandle = handleOf(self); this.services = services;
     this.frameObject = frame; this.layout = layout; this.base = base; this.resultField = resultField;
+    // RUNS[id]'s serial when Rust began this body (dispatch.rs), 0 for a
+    // body JavaScript began.
+    this.serial = 0;
   }
   get frame() {
     return this.frameObject ??= this.compiled.createFrame(this.self,
@@ -253,6 +257,8 @@ export class RustScriptVm {
     this.walkLoop = new WalkLoopHost(this);
     // October 1: the state table (GetStateName) and the small natives' faults.
     this.states = new StateTable(this);
+    // October 1: tick events dispatched in Rust (dispatch.rs).
+    this.events = new EventHost(this);
   }
   attach() {
     const x = this.exports;
@@ -286,6 +292,7 @@ export class RustScriptVm {
     const limit = handleLimit();
     this.states.attach(x, limit);
     this.faultAt = x.vm_native_fault_ptr();
+    this.events.attach(x);
     this.growClassTable(limit);
     this.growReceiverTable(limit);
     this.setReceiverEpoch(receiverEpoch());
@@ -388,7 +395,7 @@ export class RustScriptVm {
   }
   /** SCRIPT_VM_CHECK: a value Rust read for `node` against the closure's. */
   check(frameId, node, handle, kind, value) {
-    const run = this.frames[frameId], n = run.nodes[node];
+    const run = this.run(frameId), n = run.nodes[node];
     const object = handle === run.selfHandle ? run.self : identityOfHandle(handle);
     if (kind === CK_VECTOR || kind === CK_ROTATOR || kind === CK_OP) return this.checkComposite(run, n, object, kind);
     let expected;
@@ -537,7 +544,7 @@ export class RustScriptVm {
     const leave = () => vm.arena.view.setUint32(vm.runawayAt, scriptRunawayCount(), true);
     const receiver = (run, handle) => handle === run.selfHandle ? run.self : vm.identity(handle);
     const value = (frame, node, handle) => {
-      const run = vm.frames[frame];
+      const run = vm.run(frame);
       if (STATS) count(`js value ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.why(run, node, handle)}`);
       return run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle));
     };
@@ -574,12 +581,16 @@ export class RustScriptVm {
       js_eval(frame, node, handle) {
         enter();
         try {
-          const run = vm.frames[frame];
+          const run = vm.run(frame);
           if (STATS) count(`js effect ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.whyEffect(run, node, handle)}`);
           run.compiled.nodeEffect(run.nodes[node], run.frame, receiver(run, handle));
         } finally { leave(); }
       },
       js_receiver: handle => vm.receiverInfo(handle),
+      // Tick events in Rust (dispatch.rs): processEvent's gates (they run
+      // no script) and the event cache's decisions (no script either).
+      js_event_gate: handle => vm.events.gate(handle),
+      js_event_resolve: (handle, which, slot) => vm.events.resolve(handle, which, slot),
       // The state table (script-vm-states.mjs); runs no script.
       js_state: handle => vm.states.state(handle),
       // LastRendered and InStasis (natives.rs): the level values their
@@ -613,7 +624,7 @@ export class RustScriptVm {
       js_iterator_next(frame) {
         enter();
         try {
-          const run = vm.frames[frame], iterators = run.frame.iterators, current = iterators.at(-1);
+          const run = vm.run(frame), iterators = run.frame.iterators, current = iterators.at(-1);
           if (!current) throw new Error('IteratorNext without an active iterator');
           let target = current.body;
           if (!current.iterator.next()) { iterators.pop(); target = current.after; }
@@ -623,7 +634,7 @@ export class RustScriptVm {
       js_iterator_pop(frame) {
         enter();
         try {
-          if (!vm.frames[frame].frame.iterators.pop()) throw new Error('IteratorPop without an active iterator');
+          if (!vm.run(frame).frame.iterators.pop()) throw new Error('IteratorPop without an active iterator');
         } finally { leave(); }
       },
       js_accessed_none(frame, node) {
@@ -632,7 +643,7 @@ export class RustScriptVm {
           // The closure's None path: the warning, then the result type's zero
           // (the lowering only types a context whose valueSize is nonzero;
           // zeroContextResult's refusal is kept, its value is the kind's zero).
-          const run = vm.frames[frame], n = run.nodes[node], services = run.frame.services;
+          const run = vm.run(frame), n = run.nodes[node], services = run.frame.services;
           services.warning?.({type: 'Accessed None', script: run.compiled.name, offset: n.offset});
           if (!services.zeroContextResult) throw new Error('Null context requires linked result type');
           services.zeroContextResult(run.compiled.script, n.value, n.valueSize);
@@ -644,7 +655,7 @@ export class RustScriptVm {
       },
       js_step(frame, index) {
         enter();
-        try { return vm.step(vm.frames[frame], index); } finally { leave(); }
+        try { return vm.step(vm.run(frame), index); } finally { leave(); }
       },
       // No script runs here: the stack takes (or creates) its next chunk.
       js_frame_advance: size => vm.runtime.frameStack().advance(size),
@@ -655,7 +666,7 @@ export class RustScriptVm {
       js_cast(frame, node, handle) {
         enter();
         try {
-          const run = vm.frames[frame], n = run.nodes[node], s = run.services;
+          const run = vm.run(frame), n = run.nodes[node], s = run.services;
           if (STATS) count('js cast (DynamicCast value in Rust)');
           const target = s.objectReference(run.compiled.script, n.fieldIndex, n);
           return handleOf(s.castObject(handle === run.selfHandle ? run.self : identityOfHandle(handle), target, 'dynamic'));
@@ -699,12 +710,12 @@ export class RustScriptVm {
       // No script runs here: the frame's active iterators (a callee's frame
       // object exists once one of its statements ran in JavaScript).
       js_iterators(frame) {
-        const run = vm.frames[frame];
+        const run = vm.run(frame);
         return run.frameObject?.iterators.length ?? 0;
       },
       js_error(frame, code, node) {
         enter();
-        const name = vm.frames[frame]?.compiled.displayName ?? 'script';
+        const name = vm.run(frame)?.compiled.displayName ?? 'script';
         switch (code) {
           case 1: throw new Error(`Script resume exceeded the host hang guard in ${name} (the original would not return)`);
           case 2: throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${name}`);
@@ -737,7 +748,10 @@ export class RustScriptVm {
     let entry = this.lowerings.get(compiled);
     if (!entry || entry.services !== services || entry.epoch !== epoch || entry.layout !== layout ||
       entry.stale?.()) {
-      if (entry?.lowered) this.retired.push(entry.lowered);
+      if (entry?.lowered) {
+        this.retired.push(entry.lowered);
+        this.events.bump();
+      }
       const lowered = lowerFunction(compiled, layout, services, this.runtime, instance);
       if (lowered) {
         lowered.code = this.arena.alloc(lowered.bytes);
@@ -761,7 +775,7 @@ export class RustScriptVm {
     // unwinds past that, so the stack is put back here.
     const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top;
     let budget = HANG_BUDGET;
-    this.frames[id] = new Run(this, compiled, lowered, frame.instance, frame.services, frame);
+    this.own(id, new Run(this, compiled, lowered, frame.instance, frame.services, frame));
     this.depth = id + 1;
     try {
       while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned) {
@@ -789,7 +803,7 @@ export class RustScriptVm {
         // A statement the lowering left to JavaScript: exactly one step of
         // the compiled loop, which advances the cursor before dispatch.
         const entry = lowered.entries[status];
-        if (STATS) count(`js statement ${DETAIL ? shape(this.frames[id], entry.node) : opName(entry.node)}`);
+        if (STATS) count(`js statement ${DETAIL ? shape(this.run(id), entry.node) : opName(entry.node)}`);
         if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${compiled.displayName} (the original would not return)`);
         frame.cursor = entry.next;
         compiled.step(frame, entry);
@@ -820,7 +834,7 @@ export class RustScriptVm {
     const outerBudget = this.arena.view.getUint32(this.budgetAt, true);
     const stack = this.runtime.frameStack(), stackIndex = stack.index, stackTop = stack.top;
     let budget = HANG_BUDGET;
-    this.frames[id] = new Run(this, compiled, lowered, frame.instance, frame.services, frame);
+    this.own(id, new Run(this, compiled, lowered, frame.instance, frame.services, frame));
     this.depth = id + 1;
     try {
       while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned) {
@@ -872,12 +886,32 @@ export class RustScriptVm {
     const value = view.getFloat64(at, true);
     return kind === RETURN_BOOL ? value !== 0 : kind === RETURN_OBJECT ? identityOfHandle(value) : value;
   }
+  /** The Run of active run `id`: the one JavaScript began, or, for a body
+   * Rust began (dispatch.rs RUNS[id] = [template, SELF handle, locals,
+   * serial]), one built from its record on first use. */
+  run(id) {
+    const run = this.frames[id];
+    if (id >= MAX_RUNS) return run;
+    const view = this.arena.view, at = this.events.runsAt + 16 * id, serial = view.getUint32(at + 12, true);
+    if (run !== undefined && run.serial === serial) return run;
+    const template = this.events.templates[view.getUint32(at, true)], handle = view.getUint32(at + 4, true);
+    const built = new Run(this, template.compiled, template.lowered, this.identity(handle), template.services, null,
+      template.layout, view.getUint32(at + 8, true), null);
+    built.serial = serial;
+    this.frames[id] = built;
+    return built;
+  }
+  /** Run `id` is JavaScript's: RUNS[id] no longer names a Rust body. */
+  own(id, run) {
+    this.frames[id] = run;
+    if (id < MAX_RUNS) this.arena.view.setUint32(this.events.runsAt + 16 * id + 12, 0, true);
+  }
   /** js_call_begin: runtime.invoke's resolution and callFunction's checks
    * for a CALL, then the callee's frame block. -1 leaves the whole call to
    * JavaScript (nothing has been evaluated yet); otherwise the callee's run
    * id, with CALL_BLOCK = [locals, code, self handle]. */
   beginCall(callerId, node, handle, sig) {
-    const caller = this.frames[callerId], n = caller.nodes[node], runtime = this.runtime, services = caller.services;
+    const caller = this.run(callerId), n = caller.nodes[node], runtime = this.runtime, services = caller.services;
     const receiver = handle === caller.selfHandle ? caller.self : this.identity(handle);
     const record = n.op === 0x1c ? services.operand(caller.compiled.script, n)
       : runtime.lookup(receiver, n.name, false);
@@ -895,7 +929,7 @@ export class RustScriptVm {
     view.setUint32(this.callAt + 4, lowered.code, true);
     view.setUint32(this.callAt + 8, handleOf(receiver), true);
     const id = this.depth;
-    this.frames[id] = new Run(this, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null);
+    this.own(id, new Run(this, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null));
     this.depth = id + 1;
     if (STATS) count('call in rust');
     return id;

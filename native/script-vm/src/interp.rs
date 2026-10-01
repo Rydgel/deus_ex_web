@@ -410,7 +410,7 @@ const P_BYTE: u32 = 5;
 /// Core's runaway-loop limit (script-vm.mjs SCRIPT_RUNAWAY_LIMIT).
 const RUNAWAY_LIMIT: u32 = 10_000_000;
 /// resumeCompiled's hang guard: each script frame's statement budget.
-const HANG_BUDGET: u32 = 200_000_000;
+pub(crate) const HANG_BUDGET: u32 = 200_000_000;
 /// 2^63: `_ftol`'s int64 range, the JavaScript conversions' boundary.
 const TWO_63: f64 = 9_223_372_036_854_775_808.0;
 
@@ -452,11 +452,11 @@ extern "C" {
 // capacity, epoch, verify] of the receiver table; CHECK nonzero under
 // SCRIPT_VM_CHECK.
 static mut RUNAWAY: u32 = 0;
-static mut BUDGET: u32 = 0;
+pub(crate) static mut BUDGET: u32 = 0;
 static mut RESULT: f64 = 0.0;
 static mut FLOAT_UNDEF: u32 = 0;
 pub(crate) static mut BOUND_KEYS: [u32; 2] = [0; 2];
-static mut FRAMES: [u32; 4] = [0; 4];
+pub(crate) static mut FRAMES: [u32; 4] = [0; 4];
 static mut CALL_BLOCK: [u32; 3] = [0; 3];
 static mut CLASSES: [u32; 2] = [0; 2];
 static mut RECEIVERS: [u32; 4] = [0; 4];
@@ -522,11 +522,11 @@ pub extern "C" fn vm_check_values_ptr() -> *mut f64 {
 }
 
 #[inline(always)]
-fn frames_save() -> [u32; 4] {
+pub(crate) fn frames_save() -> [u32; 4] {
     unsafe { *addr_of!(FRAMES) }
 }
 #[inline(always)]
-fn frames_restore(saved: [u32; 4]) {
+pub(crate) fn frames_restore(saved: [u32; 4]) {
     unsafe { *addr_of_mut!(FRAMES) = saved }
 }
 
@@ -575,7 +575,7 @@ fn float_of(bits: u32) -> f64 {
 }
 /// The float codec's store: `Math.fround(Number(v ?? 0))`.
 #[inline(always)]
-fn float_bits(v: f64) -> u32 {
+pub(crate) fn float_bits(v: f64) -> u32 {
     if v.to_bits() == UNDEF_F64_BITS {
         0
     } else {
@@ -792,6 +792,24 @@ pub(crate) fn row_has_name(row: u32, name: u32) -> bool {
     false
 }
 
+/// The address of the field at `offset` with key id `key` on a receiver
+/// whose info is `info`, or None when the field takes the JavaScript path
+/// (a HOST receiver, or a bound key on a BOUND receiver).
+#[inline(always)]
+pub(crate) fn field_addr(info: u32, key: u32, offset: u32) -> Option<u32> {
+    if info & (HOST | BOUND) != 0 {
+        if info & HOST != 0 {
+            return None;
+        }
+        let keys = addr_of!(BOUND_KEYS) as *const u32;
+        let (table, length) = unsafe { (*keys, *keys.add(1)) };
+        if key < length && load8(table.wrapping_add(key)) != 0 {
+            return None;
+        }
+    }
+    Some((info & !15).wrapping_add(offset))
+}
+
 /// An expression's receiver. `handle` 0 is SELF, whose info the run caches;
 /// any other handle is a context object (never None or undefined), with the
 /// info fetched when that object became known.
@@ -939,17 +957,7 @@ impl Run {
     #[inline(always)]
     pub(crate) fn field(&mut self, r: Recv, key: u32, offset: u32) -> Option<u32> {
         let info = if r.handle == 0 { self.self_info() } else { r.info };
-        if info & (HOST | BOUND) != 0 {
-            if info & HOST != 0 {
-                return None;
-            }
-            let keys = addr_of!(BOUND_KEYS) as *const u32;
-            let (table, length) = unsafe { (*keys, *keys.add(1)) };
-            if key < length && load8(table.wrapping_add(key)) != 0 {
-                return None;
-            }
-        }
-        Some((info & !15).wrapping_add(offset))
+        field_addr(info, key, offset)
     }
 
     /// SCRIPT_VM_CHECK: the host compares a value Rust computed for `node`
@@ -1078,7 +1086,7 @@ impl Run {
     /// resumeCompiled's loop. Returns -1 after a Return (its value in
     /// RESULT) or the index of an S_YIELD statement, which the JavaScript
     /// loop executes (and counts) before re-entering.
-    fn statements(&mut self, entry: u32) -> i32 {
+    pub(crate) fn statements(&mut self, entry: u32) -> i32 {
         let code = self.code;
         let count = unsafe { *code };
         let mut cursor = entry;

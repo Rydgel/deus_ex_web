@@ -12,6 +12,7 @@
 mod hash;
 mod move_actor;
 mod move_pawn;
+mod dispatch;
 mod interp;
 mod natives;
 mod percep;
