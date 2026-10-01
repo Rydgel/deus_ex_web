@@ -436,6 +436,34 @@ and mesh differences still explicit. Recursive mirrors, other orientations and
 material modes, and mirror/sky combinations remain outside this slice. See
 [mirror evidence](mirror-surfaces.md).
 
+**Conversations on every map (2026-10-02).** `census-map-startup --groups
+converse` starts up to ten conversations per map and plays each to its end.
+The families it found are closed with original evidence:
+- the FOV tangent (Core appTan, [x87 tan](x87-tan.md));
+- rotating and multi-key movers ([doors](doors.md#physmovingbrush));
+- InterpolationPoint paths ([pathing](pathing.md));
+- a destroyed mover's FarMoveActor
+  ([check-encroachment](check-encroachment.md#moving-brush-source));
+- CleanupDestroyed's reference pass ([script-cleanup](script-cleanup.md#play-wiring));
+- a transfer object naming a missing class
+  ([transfer bind](script-conversation-transfer-object-bind.md)).
+
+All 83 maps are now Stage 3 complete, 77 of them clean. The rest stop only at
+Stage 5 AI navigation natives (518, 523) and the ReachablePathnodes iterator.
+
+**Ambient sound (2026-10-02).** Galaxy's PlaySound, StopSound, StopSoundId,
+NoteDestroy and Update are oracle-exact ([galaxy audio](galaxy-audio.md)).
+That covers channel stealing, priorities, the ambient scan and refresh,
+listener-space pan, distance and occlusion factors, the volume ratios,
+Doppler and the 2D voice calls. Every pre-placed actor now has its measured
+GObjObjects index ([object-index captures](object-index-captures.md)). Play
+runs Update after each frame, and the browser plays the ambient voices
+through Web Audio with each WAV's own loop. The volume and pan law there is
+a host mapping; Galaxy's mixer is not translated. Script PlaySound (effects,
+footsteps, weapons) still stops at its recorded channel-0 boundary, and
+routing it through ClientHearSound into Galaxy is the next audio step.
+Music, zone reverb and the lip-sync branch of Update remain.
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,
