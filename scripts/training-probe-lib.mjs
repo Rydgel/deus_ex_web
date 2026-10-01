@@ -33,6 +33,8 @@ import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const PROBE_GROUPS = Object.freeze(['idle', 'frob', 'bump', 'touch', 'exec', 'fire', 'sequence', 'route']);
+// Not in the default set: the conversation census (census-map-startup --groups converse).
+export const EXTRA_PROBE_GROUPS = Object.freeze(['converse']);
 
 /** Run `script --child ...args` in its own process and SIGKILL it past capMiB
  * RSS (the fire-path OOM note: heap caps alone do not bound native growth).
@@ -885,6 +887,53 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
       'paddoor','DL_multitool','hackdoor','Body_Room_Entry','DL_body','DL_bodyexit','DL_dark','darkdoor','darkdoor2','DL_repairbot','DL_part2'];
     must(runtime.levelFor(player).actors.includes(part2Trigger), 'route exited its original level before DL_part2');
   }, frames: 1});
+  // Conversations (the Stage 4 conversation census): each map actor's bound
+  // conversations except DataLinks, started as mission scripts start them,
+  // DeusExPlayer.StartConversationByName(conName, owner, False, True) (the
+  // forced play skips the distance and CanConverse gates), then played to the
+  // end: the HUD paints every tick, and at a choice Enter takes the focused
+  // one through the root window. CONVERSE_LIMIT caps the count per map.
+  if (groups.includes('converse')) {
+    const read = (object, name) => runtime.readNamed(object, name);
+    const listed = [];
+    for (const actor of actors) {
+      let item;
+      try { item = read(actor, 'conListItems'); } catch { continue; }
+      for (let guard = 0; item && guard < 256; guard++, item = read(item, 'next')) {
+        const con = read(item, 'con');
+        // AI barks play through the bark manager (StartAIBarkConversation),
+        // never through StartConversation.
+        if (!con || read(con, 'bDataLinkCon') || /_Bark/i.test(String(read(con, 'conName')))) continue;
+        listed.push({owner: actor.name, con: String(read(con, 'conName'))});
+      }
+    }
+    const limit = Number(process.env.CONVERSE_LIMIT ?? 10);
+    const deusEx = await assets.get('DeusEx');
+    for (const {owner, con} of listed.slice(0, limit)) plan.push({group: 'converse', label: `${owner}:${con}`, body: async entry => {
+      // One painted frame first: the viewport has a size before any script
+      // asks for it, as in a running game (a reboot leaves none).
+      tick(1);
+      const target = actorNamed(owner);
+      const start = await runtime.prepareFunction(deusEx, deusEx.exportsByPath.get('deusexplayer.startconversationbyname'));
+      entry.started = Boolean(game.hud.scoped(() => runtime.callFunction(start, player, 4, i => [con, target, false, true][i])));
+      // A conversation's end can start the next one (a first-person bark
+      // handing over to a third-person scene): play on until two seconds
+      // pass without a ConPlay.
+      let frames = 0, idle = 0, conversations = 0, last = null;
+      for (; frames < 7200 && idle < 120; frames++) {
+        tick(1);
+        const conPlay = read(player, 'conPlay');
+        idle = conPlay ? 0 : idle + 1;
+        if (conPlay && conPlay !== last) conversations++;
+        last = conPlay;
+        const state = conPlay ? runtime.instance(conPlay)?.state?.stateNode?.record?.name : null;
+        if (state === 'WaitForInput' && frames % 30 === 29) { game.windowKey('Enter', true); tick(2); game.windowKey('Enter', false); }
+      }
+      entry.frames = frames;
+      entry.conversations = conversations;
+      entry.ended = !read(player, 'conPlay');
+    }, frames: 30});
+  }
   // The Player-start reset leg: after the last probe's reset, the level ticks
   // again from its re-run startup.
   if (finalIdle && groups.includes('idle')) plan.push({group: 'idle', label: 'reset+10s', body: () => {}, frames: 600});

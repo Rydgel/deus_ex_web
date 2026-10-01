@@ -13,7 +13,7 @@
  * return are not original behavior. Pass --strict to stop at the first
  * boundary as Play does.
  *
- *   node scripts/census-map-startup.mjs [--jobs 3] [--only regex] [--strict]
+ *   node scripts/census-map-startup.mjs [--jobs 3] [--only regex] [--strict] [--groups idle|converse]
  *        [--mem-cap MiB] [--time-limit s] [--json .cache/map-startup-census.json] [--reuse]
  *
  * Multiplayer maps (DXMP_*) are excluded: multiplayer is deferred. */
@@ -28,7 +28,8 @@ const argv = process.argv.slice(2);
 const flag = (name, fallback) => { const i = argv.indexOf(name); return i === -1 ? fallback : argv[i + 1]; };
 
 if (argv.includes('--child')) {
-  const result = await runTrainingProbes({groups: ['idle'], finalIdle: true, map: flag('--map'),
+  const groups = (flag('--groups') ?? 'idle').split(',');
+  const result = await runTrainingProbes({groups, finalIdle: groups.includes('idle'), map: flag('--map'),
     continueMode: !argv.includes('--strict'), log: () => {}});
   writeFileSync(flag('--out'), JSON.stringify(result));
   process.exit(0);
@@ -53,7 +54,8 @@ function runMap(map) {
     const file = path.join(work, `${map}.json`);
     rmSync(file, {force: true});
     const begin = Date.now();
-    const args = ['--max-old-space-size=6144', self, '--child', '--map', map, '--out', file, ...(argv.includes('--strict') ? ['--strict'] : [])];
+    const args = ['--max-old-space-size=6144', self, '--child', '--map', map, '--out', file, ...(argv.includes('--strict') ? ['--strict'] : []),
+      ...(flag('--groups') ? ['--groups', flag('--groups')] : [])];
     const proc = spawn(process.execPath, args, {stdio: ['ignore', 'ignore', 'pipe']});
     let stderr = '', peak = 0, killed = null;
     proc.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
