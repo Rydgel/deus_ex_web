@@ -5,7 +5,7 @@ Sound effects, ambient sounds and music reach the engine's `PlaySound`
 bookkeeping (channel ids, [script-sound](script-sound.md)) and the instant
 volumes ([galaxy-volumes](galaxy-volumes.md)) but no browser voice. This note
 records the original subsystem, then its translation
-(`src/runtime/galaxy-audio.mjs`); Play does not use it yet.
+(`src/runtime/galaxy-audio.mjs`) and how Play uses it.
 
 The audio device is `UGalaxyAudioSubsystem` (`DeusEx.ini`
 `AudioDevice=Galaxy.GalaxyAudioSubsystem`), Galaxy.dll SHA256
@@ -209,6 +209,52 @@ All 1,948 PlaySound/Update calls match: every return, the 100 voice starts
 and 166 voice controls (index, sample, frequency, volume, pan), the stops and
 status queries, each FastLineCheck and GlobalLighting request, and every bit
 of every channel record (the idle channels' uninitialized words masked).
+
+## Play
+
+`src/runtime/script-audio-live.mjs` builds the subsystem when Play starts,
+from `DeusEx.ini [Galaxy.GalaxyAudioSubsystem]` with Init's clamps
+(Use3dHardware True would be refused: its voices are not translated). The
+world services read the live actors. The listener is the player and its
+ViewTarget. `index` is the actor's measured `globalIndex`
+(object-index-captures.md), or a runtime-created object's registry slot; an
+ambient actor without either is left out of the scan and noted rather than
+given an invented id. `fastLineCheck` is the translated UModel::FastLineCheck.
+`globalLighting` follows Render.dll's `URender::GlobalLighting`
+(`0x10b05e90`): the light type's function (mesh-lighting.mjs; Steady when not
+realtime; Pulse, Flicker, SubtlePulse and the palette types are noted, as for
+mesh lighting), then a clamp to `[0, 1]` (floats `0x10b2a5c4`/`0x10b2a5b0`).
+
+UGameEngine::Draw calls `Audio->Update(Region, Frame->Coords)` after drawing
+(`0x1038f638`), so Play updates Galaxy after each HUD frame with the scene
+frame's coords for the view (`buildWindowSceneFrame`, the 12 floats at
+`frame+0x34`) and the wall-clock time (performance.now, the original's
+appSecondsSlow). A Player-start reload stops every channel; the original's
+level change of the subsystem is not traced.
+
+Samples: every AmbientSound of the level is decoded before the first tick (the
+WAV payload of the USound export). Voices are host records with a clock: a
+voice's position advances by the elapsed time times its last frequency;
+with the WAV's own `smpl` loop it wraps between the loop points, and without
+one it finishes after its frames. That is what `voicePlaying` reports.
+Galaxy's sample loader and mixer are not translated. The browser
+(`main.mjs galaxyVoice`) plays each voice as a buffer source at
+`frequency/rate` with the WAV's loop points, a stereo panner at
+`pan/16383.5 - 1` (0xc000 surround centred) and a gain of
+`volume/32767 · digital/127`. That volume and pan law is the host's mapping
+of Galaxy's units, not a measured mixer.
+
+What reaches Galaxy today: ambient sounds (Update's scan). PlaySound from
+scripts still stops at its existing boundary: most sites record the call and
+return channel 0. Routing it through execPlaySound, ClientHearSound
+(`APawn::execClientHearSound 0x103dfc40`: Volume `Parameters.X·0.01`, Radius
+`Parameters.Y` or 1600, Pitch `Parameters.Z·0.01`, a pending-kill Actor
+passed as None, only for a PlayerPawn whose Player is a UViewport) and
+PlaySound is the next step. Speech keeps its own transport.
+
+A booted UNATCO Island run of 180 frames starts six ambient voices (boat idle,
+strong and harbour wind, ...) with their WAV loops, and controls them every
+frame without an error.
 
 Remaining: StopSoundId, NoteDestroy, RegisterSound (sample decoding and
 loop points), the Galaxy library's voice functions and mixer (how a volume,

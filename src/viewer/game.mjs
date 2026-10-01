@@ -23,7 +23,7 @@ import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
-  onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, presentation = false,
+  onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
   subtitles = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
@@ -151,6 +151,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   playerScene.level.engine = {client:{decals:true,viewports:[{actor:player.collisionActor}]}};
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
+  collision.doorCallbacks.audioVoice=event=>onAudioVoice?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
@@ -228,6 +229,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     runtime.processEvent(pawn, 'UpdateInHand', []);
     return runtime.readNamed(pawn, 'inHand');
   };
+  // UGameEngine::Draw updates the audio subsystem after drawing the frame
+  // (0x1038f638): Galaxy's Update follows each HUD frame for that view.
+  if (hud) {
+    const draw = hud.commands.bind(hud);
+    hud.commands = (width, height, view) => {
+      const out = draw(width, height, view);
+      doors.scriptRuntime?.runtime?.audio?.update(view);
+      return out;
+    };
+  }
   const game = {
     player, doors, collision, notes, start, interaction, random, hud,
     tick(seconds) {

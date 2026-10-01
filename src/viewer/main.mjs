@@ -64,6 +64,44 @@ const conversationAudio=new Map();
 // Galaxy's lip-sync channels for the speech being played (docs/lip-sync.md).
 let lipSync=null;
 const audioTransport={requests:0,starts:0,failures:0,lastRequest:null,lastStarted:null,lastError:null};
+// Galaxy voices (docs/galaxy-audio.md): each runtime start/control/stop
+// drives one buffer source through a stereo panner and a gain. The mapping of
+// Galaxy's volume (0..32767), pan (0..32767, 16383 centre) and digital master
+// volume (0..127) onto Web Audio is the host's; Galaxy's own mixer is not
+// translated.
+const galaxyVoices=new Map(),galaxyBuffers=new Map();
+const galaxyAudio={starts:0,stops:0,controls:0,failures:0,lastError:null};
+function applyGalaxyVoice(entry,event){
+  entry.gain.gain.value=Math.max(0,event.volume)/32767*(event.digital??127)/127;
+  entry.panner.pan.value=event.pan>=0xc000?0:Math.max(-1,Math.min(1,event.pan/16383.5-1));
+  if(entry.source)entry.source.playbackRate.value=event.frequency/entry.rate;
+}
+async function galaxyVoice(event){
+  try{
+    if(event.op==='stop'){
+      const entry=galaxyVoices.get(event.voice);galaxyVoices.delete(event.voice);
+      if(entry){entry.stopped=true;try{entry.source?.stop();}catch{}entry.gain.disconnect();}
+      galaxyAudio.stops++;return;
+    }
+    if(event.op==='control'){const entry=galaxyVoices.get(event.voice);if(entry)applyGalaxyVoice(entry,event);galaxyAudio.controls++;return;}
+    const context=await activateInfoLinkAudio();
+    const entry={rate:event.rate,source:null,stopped:false,gain:context.createGain(),panner:context.createStereoPanner()};
+    entry.panner.connect(entry.gain);entry.gain.connect(context.destination);
+    galaxyVoices.set(event.voice,entry);applyGalaxyVoice(entry,event);
+    let buffer=galaxyBuffers.get(event.sound);
+    if(!buffer){buffer=context.decodeAudioData(event.bytes.slice().buffer);galaxyBuffers.set(event.sound,buffer);}
+    const decoded=await buffer;
+    if(entry.stopped)return;
+    const source=context.createBufferSource();source.buffer=decoded;
+    if(event.loop&&event.loop.end>event.loop.start){source.loop=true;source.loopStart=event.loop.start/event.rate;source.loopEnd=event.loop.end/event.rate;}
+    source.connect(entry.panner);entry.source=source;applyGalaxyVoice(entry,event);source.start();
+    galaxyAudio.starts++;
+  }catch(error){galaxyAudio.failures++;galaxyAudio.lastError=String(error?.message??error);}
+}
+function stopGalaxyVoices(){
+  for(const entry of galaxyVoices.values()){entry.stopped=true;try{entry.source?.stop();}catch{}entry.gain.disconnect();}
+  galaxyVoices.clear();
+}
 function stopConversationAudio(id){
   for(const [key,entry] of conversationAudio)if(id===undefined||id===key){
     entry.cancelled=true;entry.source?.stop();conversationAudio.delete(key);
@@ -120,6 +158,7 @@ async function activateInfoLinkAudio(){
 }
 function stopInfoLinkPresentation(){
   stopConversationAudio();
+  stopGalaxyVoices();
   $('infolink-shell').hidden=true;
 }
 // Accessibility mirrors native TextWindow contents. The pixels are emitted
@@ -237,6 +276,7 @@ async function loadMap(name) {
         subtitles: subtitlePreference,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
         onConversationSpeech:event=>{void playConversationSpeech(event);},
+        onAudioVoice:event=>{void galaxyVoice(event);},
       });
     }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
@@ -669,6 +709,7 @@ function status() {
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: game?.status() ?? null,
+    galaxy:{...galaxyAudio,voices:galaxyVoices.size},
     audio:{...audioTransport,contextState:infoLinkAudioContext?.state??'uninitialized',
       active:[...conversationAudio].map(([id,entry])=>({id,sound:entry.sound,started:Boolean(entry.source)}))},
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,

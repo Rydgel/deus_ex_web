@@ -29,6 +29,7 @@ import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
+import { createLiveAudio } from './script-audio-live.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
@@ -1883,6 +1884,7 @@ export async function createScriptDoors({
     destroyedActors.restore(receiver=>{const record=identities.get(receiver);if(record)resetProperties(record);});
     liveConPlay?.reset();
     liveDataLink?.reset();
+    runtime.audio?.reset();
     faceConversations?.reset?.();
     for (const record of records) resetMover(record);
     // Restore fields; the shared passes below own all startup events.
@@ -2194,6 +2196,8 @@ export async function createScriptDoors({
   liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:nativeWindowFacade,
     conversations:faceConversations.conversations,dataLinkConversations:liveDataLink.conversations,prepareClass:prepareNpcClass,
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
+  // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
+  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
 
   // Prepare the newly initialized player subsystem graph for subsequent ticks.
   await prepareNpcs();

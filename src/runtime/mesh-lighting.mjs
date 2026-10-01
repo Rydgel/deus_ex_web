@@ -98,8 +98,8 @@ export function d3dDiffuse(light, scale = D3D_MAX_COLOR_SCALE) {
 // applies them in realtime views. Pulse, Flicker, SubtlePulse and the
 // texture-palette types need tables that are not recovered; the caller gets
 // `unsupported` and the brightness is left as the steady value.
-const LIGHT_TYPE_UNSUPPORTED = new Set([2, 4, 7, 8, 9]);
-function lightTypeBrightness(light, brightness, timeSeconds, strobe) {
+export const LIGHT_TYPE_UNSUPPORTED = new Set([2, 4, 7, 8, 9]);
+export function lightTypeBrightness(light, brightness, timeSeconds, strobe) {
   switch (light.LightType & 255) {
     case 0: return 0;
     case 3: { // Blink 0x10b05a90
