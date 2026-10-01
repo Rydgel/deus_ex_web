@@ -58,7 +58,7 @@ actor). `+0x80 + 0x40*i`: channel `i`. `+0x880` double: the last Update time.
 2. An Id whose slot bits (`Id & 0xe`) are 0 becomes `(--counter) << 4`.
 3. The listener is the viewport Actor, or its ViewTarget (`+0x60c`).
    `Priority = float32((1.0 - sqrt(dx²+dy²+dz²) / Radius) * Volume)`: the
-   squares sum in extended, the CRT `sqrt` (IAT `0x10699730`) takes the
+   squares sum in extended, Core `appSqrt` (IAT `0x10699730`) takes the
    double, the division and `fsubr` of double 1.0 stay extended, one FST.
 4. Channel choice over the `+0x64` channels: a channel whose Id equals the
    new Id except for bit 0 is taken; but when the new Id has NoOverride (bit
@@ -104,9 +104,59 @@ actor). `+0x80 + 0x40*i`: channel `i`. `+0x880` double: the last Update time.
    `ftol(angle · 28671.125f · (1/π) + 16383.0)` clamped to `0..0x7fff`
    (16383 is centre). The distance factor is `clamp(1 - dist/Radius, 0, 1)`.
    Slot 5 (`Id & 0xf` of `0xa`/`0xb`, interface sounds) skips the 3D path.
-   Otherwise, for an actor source and a listener that IsA APawn, a level line
-   check (XLevel `+0x98`) runs from the source to the listener's eye
-   (`Location + (0, 0, EyeHeight +0x3f8)`) — occlusion, still being read.
+   Otherwise, for an actor source and a listener that IsA APawn,
+   `UModel::FastLineCheck` (Engine import) on `XLevel+0x98` (the level's
+   Model) runs from the source to the listener's eye (`Location + (0, 0,
+   EyeHeight +0x3f8)`, EyeHeight a float add); a blocked line means occluded.
+6. **Occlusion** (`+0x3c`): occluded, `min(occ + DeltaTime, 0.5)`; clear (or
+   not tested), `max(occ - DeltaTime, 0)`; stored float. The factor is
+   `max(1 - 2·occ, 0.33)`.
+7. **Category ratio** (SoundVolume `+0x6a`, SpeechVolume `+0x6b`; the
+   digital master is the louder, see galaxy-volumes.md): for speech (slot 5)
+   `Speech/Sound` when Sound > Speech, `Sound·(1/255)` when equal, else 1;
+   for every other sound `Sound/Speech` when Sound < Speech, `Sound/255` when
+   equal, else 1 (FILD/FIDIV of the bytes; the equal case is the original's).
+8. **Voice volume** `= ftol(ratio · factor · distanceFactor · Volume ·
+   32767.0f)` clamped to `0..0x7fff`, then raised to at least `0x80`.
+9. **Pan:** ReverseStereo (`+0x4c`) mirrors it (`0x7fff - pan`); a source
+   behind the listener (`local.z < 0`) with UseSurround (`+0x34`) gets
+   `0xc000`.
+10. **Doppler** for an ambient channel (slot 4) with an actor:
+    `1 - dot(SafeNormal(actor - listener), actor.Velocity) / DopplerSpeed`
+    (`+0x5c`), clamped to `[0.5, 2.0]`; 1 otherwise.
+11. A Sound without a Galaxy sample (`USound +0x50`) is registered
+    (vtable `+0x68`).
+12. A speaking pawn's channel (speech, time past `+0x34`) samples the voice
+    for the lip-sync amplitude (the FFT over `0x10676890`, already translated
+    for conversations) and advances `+0x34` by 0.1.
+13. **Voice:** frequency `= ftol(SamplesPerSec (sample +0x3c) · Pitch ·
+    Doppler)`. An existing voice is driven by `0x1060d280(voice, frequency,
+    volume, pan)` (or `0x1060d420` with the position scaled by `0.0025` and
+    the velocity when 3D), and its word `+0x16` takes the pan. Otherwise a
+    3D voice is tried when `+0x74` is set (`0x10612800`), and failing that
+    `0x10612310(channel + 1, sample, frequency, volume, pan, 0)` starts the 2D
+    voice (asserted nonzero, line `0x754`). Reverb (`0x106011cc`) applies to
+    3D voices only when `+0x78` is set.
+14. The rest of Update is the music transition (PlayerPawn Song `+0x670`,
+    SongSection `+0x675`, CdTrack `+0x674`, Transition `+0x676` with the fade
+    times `-0.002/-0.0004/-0.006` per Latency and `0.2`/`3.0` rates).
+
+**StopSound** (`0x10607e50`) stops a channel's voice (`0x10618590` for 3D,
+`0x10618410` otherwise) and resets the record to zeros with `-1.0f` at
+`+0x38`.
+
+## Configuration (`DeusEx.ini [Galaxy.GalaxyAudioSubsystem]`)
+
+The native StaticConstructor registers each config property with its offset
+(`0x10604da0`-`0x10605320`): UseDirectSound `+0x2c`, UseFilter `+0x30`,
+UseSurround `+0x34`, UseStereo `+0x38`, UseCDMusic `+0x3c`, UseDigitalMusic
+`+0x40`, UseReverb `+0x44`, Use3dHardware `+0x48`, ReverseStereo `+0x4c`,
+LowSoundQuality `+0x50`, AmbientFactor `+0x58`, DopplerSpeed `+0x5c`,
+Latency `+0x60`, EffectsChannels `+0x64`, OutputRate `+0x68`, MusicVolume
+`+0x69`, SoundVolume `+0x6a`, SpeechVolume `+0x6b`. The installed values:
+UseSurround False, Use3dHardware False (so `+0x74` stays clear and every voice
+is 2D), ReverseStereo False, EffectsChannels 16, DopplerSpeed 6500,
+AmbientFactor 0.7, SoundVolume 204, SpeechVolume 255.
 
 Constants: doubles `25.0` (`0x1063d788`), `1/64` (`0x1063d778`, SoundPitch
 scale), `0.1` (`0x1063d768`), `1/π` (`0x1063d758`), `16383.0`
@@ -115,8 +165,7 @@ scale), `0.1` (`0x1063d768`), `1/π` (`0x1063d758`), `16383.0`
 `appSecondsSlow`, `appStricmp`, `UObject::IsValid`, `appFailAssert`; Engine
 `APawn::PrivateStaticClass`.
 
-Remaining: the rest of Update (occlusion result, Doppler if any, the Galaxy
-voice start/update calls and their volume/pan/pitch units), StopSound,
-StopSoundId, NoteDestroy, RegisterSound (sample decoding), music
-(RegisterMusic, the tracker player) and the Galaxy library's mixer, then the
-oracle cases and the Web Audio mapping.
+Remaining: StopSoundId, NoteDestroy, RegisterSound (sample decoding and
+loop points), the Galaxy library's voice functions and mixer (how a volume,
+pan and frequency become samples), music (RegisterMusic, the tracker player),
+then the oracle cases and the Web Audio mapping.
