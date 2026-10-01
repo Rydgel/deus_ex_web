@@ -218,7 +218,10 @@ rect is exactly the band between the two raw-background bars.
   `ConEventTransferObject` gives the GEP gun, rockets and the Liberty Island
   DataVault image, the PaulWandering trigger sets Paul's orders and MeetPaul
   ends at tick 7137 (`validate-island-conversation` phase 7). The other two
-  choices are not exercised.
+  choices were run the same way once (Enter on the first; Down, Down, Enter):
+  the sniper rifle and its ammunition, ending at tick 7203, and the mini
+  crossbow and poison darts, ending at tick 7253, both without a runtime
+  error; the validator keeps only the GEP gun branch.
 * ConLight light on actor meshes, `ConEventMoveCamera`'s other camera types
   and the interactive camera are reached by the original script but not
   compared with the original renderer.
