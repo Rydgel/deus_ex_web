@@ -45,6 +45,15 @@ export function dispatchWindowHostNative(W, call) {
     // execIsFocusWindow 0x100528c0 -> XWindow::IsFocusWindow 0x1004ca20: the
     // root's +0x5c8 focus window is the receiver; a null root is false.
     case 1448: {const root=T.getRootWindow(W,win);value=Boolean(root&&W.ptr(root,T.ROOT.focus)===win);break;}
+    // MoveFocusLeft/Right/Up/Down (exec 0x10052740/80/c0/0x10052800): Code++,
+    // then XWindow::MoveFocus 0x1004ef30(EMove 0..3, bWrap 0) on the receiver.
+    case 1442: value=W.native.moveFocus(win,0,0);break;
+    case 1443: value=W.native.moveFocus(win,1,0);break;
+    case 1444: value=W.native.moveFocus(win,2,0);break;
+    case 1445: value=W.native.moveFocus(win,3,0);break;
+    // MoveTabGroupNext/Prev (exec 0x10052840/80): XWindow::MoveTabGroup 0x1004f440(3 / 2).
+    case 1446: value=W.native.moveTabGroup(win,3);break;
+    case 1447: value=W.native.moveTabGroup(win,2);break;
     case 1439: // exec 0x100524a0 passes the FString directly, without pipe conversion.
       setAcceleratorTextNative(win,arg(0,''),{
         read:(object,offset,kind)=>W.heap.read(object,offset,kind),

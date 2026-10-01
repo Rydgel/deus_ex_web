@@ -20,7 +20,15 @@
  *     35713 being his index in the original Island GObjObjects capture.
  *  5. The choice: three ConChoiceWindow buttons and ConPlay in WaitForInput,
  *     with no runtime error on the way.
- *  6. ISLAND_NPC_IDENTITIES equals the capture's (class, name) indices. */
+ *  6. ISLAND_NPC_IDENTITIES equals the capture's (class, name) indices.
+ *  7. The choice through the original root-window input: Down reaches
+ *     RootWindow.VirtualKeyPressed, whose MoveFocusDown (native 1445,
+ *     XWindow::MoveFocus 0x1004ef30) moves the focus from the first choice
+ *     button to the second; Enter activates the focused ConChoiceWindow, and
+ *     ConWindowActive.ButtonActivated plays its ConChoice. The rest of
+ *     MeetPaul runs in the original script: Paul's answer, the
+ *     ConEventTransferObject that hands the player the GEP gun and its
+ *     rockets, the PaulWandering trigger and the conversation's end. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -68,8 +76,19 @@ if (process.argv[2] !== 'child') {
   // 6.
   assert.equal(run.identities.checked, run.identities.total);
   assert.deepEqual(run.identities.mismatches, []);
+  // 7.
+  const choice = run.choosing;
+  assert.equal(choice.error, null, `no runtime error after the choice: ${JSON.stringify(choice.error)}`);
+  assert.deepEqual(choice.focus, [0, 1], 'the first choice has the focus, Down moves it to the second');
+  assert.ok(choice.handled.every(Boolean), 'the root window handles the posted keys');
+  assert.ok(/GEP/i.test(choice.chosen ?? ''), `the second choice is the GEP gun (${choice.chosen})`);
+  assert.ok(choice.received.includes('WeaponGEPGun') && choice.received.includes('AmmoRocket'),
+    `ConEventTransferObject gives the GEP gun and rockets (${choice.received})`);
+  assert.equal(choice.ended, true, 'MeetPaul ends: the player has no ConPlay');
+  assert.equal(choice.paulOrders, 'Wandering', 'the PaulWandering trigger gives Paul his orders');
   console.log(JSON.stringify({ ok: true, start: run.conversation.tick, choice: run.choiceTick, camera: camera.name,
-    letterboxFrames: run.clippedFrames, paulSpeech: run.paulSpeech.length, identities: run.identities.total }));
+    letterboxFrames: run.clippedFrames, paulSpeech: run.paulSpeech.length, identities: run.identities.total,
+    chosen: choice.chosen, received: choice.received, ended: choice.endTick }));
   process.exit(0);
 }
 
@@ -179,6 +198,33 @@ const lights = level.actors.filter(a => a && !read(a, 'bDeleteMe') && isA(a, 'co
 const cameraObject = read(read(player, 'conPlay'), 'cameraInfo');
 const held = [read(cameraObject, 'conLightSpeaker'), read(cameraObject, 'conLightSpeakingTo')];
 const paulSpeech = scripts.liveConPlay.soundRequests.filter(r => r.kind === 'speech' && r.emitter === paul).map(r => r.id);
+
+// 7. Choose through the root window and play MeetPaul to its end.
+const choosing = { error: firstError, focus: [], handled: [], chosen: null, received: [], ended: false, endTick: null, paulOrders: null };
+if (!firstError && state === 'WaitForInput') {
+  const rootWin = read(player, 'rootWindow'), conWin = read(read(player, 'conPlay'), 'conWinThird');
+  const buttons = Array.from({ length: read(conWin, 'numChoices') }, (_, i) => read(conWin, 'conChoices')[i]);
+  const focused = () => buttons.indexOf(W.ptr(rootWin, 0x5c8));
+  const inventory = () => { const names = []; for (let i = read(player, 'Inventory'); i; i = read(i, 'Inventory')) names.push(runtime.instance(i).cls.record.name); return names; };
+  const before = inventory();
+  const step = () => { simulatedMs += 1000 / 60; tick++; game.tick(1 / 60); game.hud.commands(1440, 960, game.view()); };
+  createPlayerInputFixture(game).key('KeyW', false);
+  choosing.focus.push(focused());
+  try {
+    for (const code of ['ArrowDown', 'Enter']) {
+      if (code === 'Enter') { choosing.focus.push(focused()); choosing.chosen = read(read(buttons[focused()], 'userObject'), 'choiceText'); }
+      choosing.handled.push(game.windowKey(code, true));
+      for (let i = 0; i < 3; i++) step();
+      choosing.handled.push(game.windowKey(code, false));
+      for (let i = 0; i < 10; i++) step();
+    }
+    for (let i = 0; i < 3600 && read(player, 'conPlay'); i++) step();
+  } catch (error) { choosing.error = { tick, message: String(error?.message ?? error).split('\n')[0] }; }
+  choosing.ended = !read(player, 'conPlay');
+  choosing.endTick = tick;
+  choosing.received = inventory().filter(name => !before.includes(name));
+  choosing.paulOrders = read(paul, 'Orders');
+}
 console.log(JSON.stringify({ firstError, conversation, camera, conLights: lights.length,
-  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), renderRect, renderMismatches: renderMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities }));
+  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), renderRect, renderMismatches: renderMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities, choosing }));
 process.exit(0);

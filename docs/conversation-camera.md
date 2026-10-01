@@ -209,9 +209,16 @@ rect is exactly the band between the two raw-background bars.
   Tracers on Island).
 * Lip sync is implemented ([lip sync](lip-sync.md)); other maps need their
   object-index capture first ([captures](object-index-captures.md)).
-* The choice waits for input (`ConPlay` in `WaitForInput`). Choosing through
-  the original ConChoiceWindow input path, the weapon transfer and the
-  conversation's end are not yet exercised headless.
+* The choice is made through the original input path (2026-10-01): Down
+  reaches `RootWindow.VirtualKeyPressed`, whose `MoveFocusDown` (native 1445,
+  `XWindow::MoveFocus`; the 1442–1447 family is bound,
+  [window input](script-window-input.md)) moves the focus from the first
+  ConChoiceWindow to the second, and Enter activates it.
+  `ConWindowActive.ButtonActivated` plays the GEP gun choice; Paul answers,
+  `ConEventTransferObject` gives the GEP gun, rockets and the Liberty Island
+  DataVault image, the PaulWandering trigger sets Paul's orders and MeetPaul
+  ends at tick 7137 (`validate-island-conversation` phase 7). The other two
+  choices are not exercised.
 * ConLight light on actor meshes, `ConEventMoveCamera`'s other camera types
   and the interactive camera are reached by the original script but not
   compared with the original renderer.

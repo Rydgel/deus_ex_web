@@ -108,6 +108,15 @@ key-down bytes and both counts exactly.
   else when bit 2 of `+0x164` is set; without wrap it reverses at the ends. It
   focuses the first traversable entry, else calls `MoveTabGroup`
   (`0x1004f440`, `script-window-root-tick.mjs`).
+* The script natives over them (`script-window-host-natives.mjs`, bound
+  2026-10-01): `MoveFocusLeft/Right/Up/Down` (1442–1445, exec `0x10052740`,
+  `0x10052780`, `0x100527c0`, `0x10052800`) step the cursor past
+  `EX_EndFunctionParms` and return `MoveFocus(0, 0)`, `(1, 0)`, `(2, 0)`,
+  `(3, 0)` on the receiver; `MoveTabGroupNext/Prev` (1446/1447, exec
+  `0x10052840`/`0x10052880`) return `MoveTabGroup(3)` / `MoveTabGroup(2)`.
+  `RootWindow.VirtualKeyPressed` reaches them for the arrow keys: Down moves
+  MeetPaul's choice focus from the first ConChoiceWindow to the second
+  (`validate-island-conversation`).
 * `CheckFocusWindow` (`0x10050b80`) replaces an untraversable focus with the top
   modal's preferred focus (`+0x178`), else `MoveFocus(1, 1)`, else no focus.
   An earlier revision of `window-tree-natives` stopped at this branch.
