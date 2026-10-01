@@ -3,7 +3,8 @@ import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x
 
 /** UGalaxyAudioSubsystem's channel logic (Galaxy.dll 606e71d1…, vtable
  * 0x1063d0e4; docs/galaxy-audio.md): PlaySound (0x10608100), StopSound
- * (0x10607e50) and Update's ambient scan, ambient refresh and per-channel
+ * (0x10607e50), StopSoundId (0x10607ef0), NoteDestroy (0x106083a0) and
+ * Update's ambient scan, ambient refresh and per-channel
  * voice parameters (0x10609510). The Galaxy library's voices are services:
  * `voicePlaying(voice)` (0x1060cf00(voice, 2, 0, 0) != 0),
  * `startVoice(index, sample, frequency, volume, pan)` (0x10612310, 2D),
@@ -218,6 +219,25 @@ export function createGalaxyAudio(config, services) {
     }
   }
 
-  /** StopSoundId (DEUS_EX) and NoteDestroy are not yet recovered. */
-  return { state, playSound, stopSound, update };
+  /** StopSoundId (DEUS_EX, 0x10607ef0): stop the first channel whose Id
+   * matches except for bit 0. */
+  function stopSoundId(id) {
+    const index = state.channels.findIndex(channel => ((channel.id ^ id) & ~1) === 0);
+    if (index >= 0) stopSound(index);
+  }
+
+  /** NoteDestroy (0x106083a0), from ULevel::DestroyActor: asserts a valid
+   * actor; an ambient channel of the actor stops, any other channel of it
+   * forgets the actor and keeps playing at its last Location. */
+  function noteDestroy(actor) {
+    if (!actor) throw new Error('Galaxy NoteDestroy: Actor is None (original appFailAssert)');
+    if (!services.isValid(actor)) throw new Error('Galaxy NoteDestroy: Actor is not valid (original appFailAssert)');
+    for (let index = 0; index < channelCount; index++) {
+      const channel = state.channels[index];
+      if (channel.actor !== actor) continue;
+      if ((channel.id & 0xe) === 8) stopSound(index);
+      else channel.actor = null;
+    }
+  }
+  return { state, playSound, stopSound, stopSoundId, noteDestroy, update };
 }

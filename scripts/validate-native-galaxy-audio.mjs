@@ -42,7 +42,9 @@ cases.push({config,sounds:{hum:22050,fan:11025},listener:'player',actors:[listen
   {name:'fan',index:301,location:[-150,80,0],soundRadius:8,soundVolume:255,soundPitch:80,ambient:'fan',lightType:1,lightBrightness:128},
   {name:'far',index:302,location:[9000,0,0],soundRadius:4,soundVolume:255,soundPitch:64,ambient:'hum'}],
   ops:[{op:'update',dt:1/30,coords:identity,light:[0.5]},{op:'update',dt:1/30,coords:turned,light:[1.25]},
-    {op:'update',dt:0.5,coords:identity,light:[1]}]});
+    {op:'play',actor:'hum',id:(300<<4)|(1<<1),sound:'fan',location:[200,0,48],volume:1,radius:800,pitch:1},
+    {op:'update',dt:0.5,coords:identity,light:[1]},{op:'noteDestroy',actor:'hum'},{op:'update',dt:0.1,coords:identity,light:[1]},
+    {op:'stopSoundId',id:(301<<4)|8|1},{op:'stopSoundId',id:12345},{op:'update',dt:0.1,coords:identity,light:[1]}]});
 // Occlusion ramps up and down; speech ratio; surround/reverse stereo.
 cases.push({config:{...config,useSurround:1,reverseStereo:1,soundVolume:255,speechVolume:128},sounds:{gun:44100,talk:22050},listener:'player',
   actors:[listener,{name:'guard',pawn:true,index:400,location:[-300,-200,40]},{name:'talker',pawn:true,index:401,location:[100,400,40]}],
@@ -69,6 +71,8 @@ for(let i=0;i<160;i++){
     ...(random()<.4?{ambient:pick(['x','y'])}:{}),lightType:random()<.3?1:0,lightBrightness:Math.floor(random()*256)});
   const ops=[];
   for(let k=0;k<12;k++){
+    if(random()<.08){const a=pick(actors.slice(1));ops.push({op:'noteDestroy',actor:a.name});continue;}
+    if(random()<.06){const a=pick(actors.slice(1));ops.push({op:'stopSoundId',id:(a.index<<4)|(Math.floor(random()*7)<<1)|(random()<.5?1:0)});continue;}
     if(random()<.55){const a=pick(actors.slice(1));ops.push({op:'play',actor:a.name,id:(a.index<<4)|(Math.floor(random()*7)<<1)|(random()<.2?1:0),
       sound:pick(['x','y']),location:a.location,volume:f(random()),radius:f(pick([64,400,1600,random()*3000+1])),pitch:f(pick([1,0.5,random()*2]))});}
     else{const [ax,ay]=unit();ops.push({op:'update',dt:pick([1/60,1/30,0.2,1]),coords:{origin:[coord(),coord(),coord()],x:[ax,ay,0],y:[0,0,1],z:[ay,-ax,0]},
@@ -123,6 +127,10 @@ function run(c){
     if(op.op==='play'){
       const ok=galaxy.playSound(op.actor?actors.get(op.actor):null,op.id|0,sounds[op.sound],op.location.map(f),f(op.volume),f(op.radius),f(op.pitch));
       results.push({op:'play',result:ok?1:0,events,channels:channels(),counter:galaxy.state.counter});
+    }else if(op.op==='noteDestroy'){
+      galaxy.noteDestroy(actors.get(op.actor));results.push({op:'noteDestroy',events,channels:channels()});
+    }else if(op.op==='stopSoundId'){
+      galaxy.stopSoundId(op.id|0);results.push({op:'stopSoundId',events,channels:channels()});
     }else{
       playing={...playing,...Object.fromEntries(Object.entries(op.playing??{}).map(([k,v])=>[Number(k),v]))};
       fast=[...(op.fast??[])];light=(op.light??[]).map(f);

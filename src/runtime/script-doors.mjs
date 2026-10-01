@@ -2198,6 +2198,8 @@ export async function createScriptDoors({
     onSpeech:event=>callbacks.conversationSpeech?.(event)});
   // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
   runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
+  // XLevel->Engine->Audio: ULevel::DestroyActor's NoteDestroy (script-destroy.mjs).
+  level.engine.audio={noteDestroy:actor=>runtime.audio.galaxy.noteDestroy(actor)};
 
   // Prepare the newly initialized player subsystem graph for subsequent ticks.
   await prepareNpcs();

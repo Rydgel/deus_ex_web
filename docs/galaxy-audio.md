@@ -203,9 +203,9 @@ scripts 165 cases:
   leaving range;
 - occlusion ramping up and down, the speech ratio, ReverseStereo and surround;
 - equal volumes and a ViewTarget listener;
-- 160 seeded random sequences.
+- 160 seeded random sequences (with NoteDestroy and StopSoundId).
 
-All 1,948 PlaySound/Update calls match: every return, the 100 voice starts
+All 1,954 calls match: every return, the 100 voice starts
 and 166 voice controls (index, sample, frequency, volume, pan), the stops and
 status queries, each FastLineCheck and GlobalLighting request, and every bit
 of every channel record (the idle channels' uninitialized words masked).
@@ -256,7 +256,15 @@ A booted UNATCO Island run of 180 frames starts six ambient voices (boat idle,
 strong and harbour wind, ...) with their WAV loops, and controls them every
 frame without an error.
 
-Remaining: StopSoundId, NoteDestroy, RegisterSound (sample decoding and
+**StopSoundId** (`0x10607ef0`) stops the first channel whose Id matches
+except for bit 0. **NoteDestroy** (`0x106083a0`) asserts a non-null, valid
+actor; each channel holding it is stopped when it is an ambient channel
+(slot 4), and otherwise forgets the actor and keeps playing at its last
+Location. Both are in the oracle's random sequences. Play links ULevel's
+`XLevel->Engine->Audio` (`level.engine.audio`) so DestroyActor's NoteDestroy
+reaches Galaxy (script-destroy.mjs).
+
+Remaining: RegisterSound (sample decoding and
 loop points), the Galaxy library's voice functions and mixer (how a volume,
 pan and frequency become samples), music (RegisterMusic, the tracker player),
 then the oracle cases and the Web Audio mapping.

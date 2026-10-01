@@ -181,6 +181,12 @@ class Probe(n.NativeCollision):
                                 sounds[op['sound']], *loc, op['volume'], op['radius'], op['pitch']))
                 results.append({'op': 'play', 'result': ret & 0xff, 'events': self.events, 'channels': self.channels(),
                                 'counter': self.read(self.this + 0x8fc, 'i')[0]})
+            elif op['op'] == 'noteDestroy':
+                self.call(at(0x106083a0), self.this, struct.pack('<I', actors[op['actor']]))
+                results.append({'op': 'noteDestroy', 'events': self.events, 'channels': self.channels()})
+            elif op['op'] == 'stopSoundId':
+                self.call(at(0x10607ef0), self.this, struct.pack('<i', op['id']))
+                results.append({'op': 'stopSoundId', 'events': self.events, 'channels': self.channels()})
             else:
                 # appSecondsSlow - (+0x880) is then exactly the case's dt.
                 self.write(self.this + 0x880, 'd', 0.0)
