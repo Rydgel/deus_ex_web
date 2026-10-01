@@ -61,6 +61,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
       hit=read(hud,'hit');compass=read(hud,'compass');cross=read(hud,'cross');
     },
     commands(width,height,view){return scoped(()=>host.draw(root,width,height,view));},
+    renderViewport(width,height){return scoped(()=>host.renderViewport(root,width,height));},
     tick(delta){scoped(()=>host.tick(root,delta));},
     key(key,action){return scoped(()=>host.key(root,key,action));},
     inputEvent(key,action,options){return scoped(()=>host.inputEvent(key,action,options));},

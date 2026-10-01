@@ -160,11 +160,47 @@ original exclusion each frame ([actor layer](npc-mesh-preview.md)), so the
 mesh appears with the first behind-view frame and is hidden again in first
 person.
 
+## The 3D view clip (render viewport)
+
+`XRootWindow` PreRender (`0x1003a760`, from `0x10038336`) receives the Canvas;
+its Frame is `Canvas+0x7c`. At `0x1003a7dd..0x1003a8c5` it edits the frame
+before `FSceneNode::ComputeRenderSize`:
+
+* without `bRender` (`+0x5d8` bit 0) the frame size becomes 0 x 0;
+* with `bClipRender` (bit 1) too, the root's float `renderX/Y/Width/Height`
+  (`+0x5dc..+0x5e8`) scale by the integer `hMultiplier/vMultiplier`
+  (`+0x730/+0x734`; vMultiplier passes through a float32 store) and truncate
+  through MSVCRT `_ftol`: `x0 = ftol(hm*renderX + XB)`,
+  `x1 = ftol(hm*renderWidth + x0)`, the same for y, each product and sum
+  unrounded on the x87 stack. x0/y0 are raised to XB/YB and x1/y1 lowered to
+  X+XB/Y+YB; the frame becomes XB = x0, YB = y0, X = x1 - x0, Y = y1 - y0.
+
+ComputeRenderSize then projects with that X (horizontal FOV across the rect's
+width), the Canvas gets `ClipX/ClipY` and `SetClip(XB, YB, X, Y)`, and the
+root's scene frame (`+0x740`, read by ConvertVectorToCoordinates, which adds
+`renderX/Y` back) is this frame. `SetRenderViewport` (1514) sets bClipRender
+and the four floats; `EnableRendering` (1512) is turned off only by
+DeusExRootWindow.ShowSnapshot when `UIBackground` is 1 or 2 (default 0).
+
+`rootRenderViewport` (script-root-render-viewport.mjs) is the translation, on
+the x87 model. The window host writes the scene frame at the clipped size and
+exposes `renderViewport`; Play's viewer draws the sky, scene and weapon passes
+inside that rect (viewport and scissor, camera aspect from the rect, the
+horizontal FOV kept) and the HUD over the whole canvas. With rendering off it
+draws no 3D. In MeetPaul the band is the area between the bars.
+
+`validate-root-render-viewport` runs `0x1003a7dd..0x1003a8cb` unchanged in
+Unicorn (Extension rebased, x87 control word 0x037f) on 1,783 cases: flag
+combinations, multipliers up to INT_MIN/INT_MAX and above 2^24, float
+specials, signed zeros, denormals, NaN, infinities, clamps on both sides and
+odd frames. All four frame ints match. Three of four planted mutations fail
+it (no float32 store of vMultiplier, x1 from the clamped x0, double instead of
+x87 arithmetic); the survivor (`>=` in the clamp) is equivalent.
+`validate-island-conversation` checks on every clipped frame that the render
+rect is exactly the band between the two raw-background bars.
+
 ## Open
 
-* The 3D view still renders full screen behind the bars. The original renders
-  the scene into the render viewport (its own centre and aspect), so the framing
-  between the bars differs (about 27 px vertically at 1440×960).
 * The choice waits for input (`ConPlay` in `WaitForInput`). Choosing through
   the original ConChoiceWindow input path, the weapon transfer and the
   conversation's end are not yet exercised headless.

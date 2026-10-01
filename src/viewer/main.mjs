@@ -126,6 +126,20 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe($('viewport'));
+// The original renders the 3D view into the root window's render viewport
+// (XRootWindow PreRender, script-root-render-viewport.mjs): the horizontal
+// FOV spans the rect's width, so a letterbox crops vertically about the
+// rect's centre.
+function setViewAspect(aspect, fov) {
+  if (camera.aspect === aspect && camera.userData.fov === fov) return;
+  camera.aspect = aspect; camera.userData.fov = fov;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) / aspect));
+  camera.updateProjectionMatrix();
+}
+function renderViewportFor(rect) {
+  const pr = renderer.getPixelRatio(), height = renderer.domElement.height;
+  return [rect.x / pr, (height - rect.y - rect.height) / pr, rect.width / pr, rect.height / pr];
+}
 function applyPlayerView() {
   const view = game.view();
   const angle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
@@ -154,6 +168,7 @@ function resetCamera() {
 function setMode(next) {
   if (mode === 'play' && next !== 'play') game?.resetInput({releasePhysical:true});
   mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
+  if (mode !== 'play') resize(); // Inspect uses the whole canvas again.
   if(mode==='play')hideNpcFocus();
   keys.clear();
   if (mode === 'play') applyPlayerView();
@@ -698,7 +713,7 @@ function animate(time) {
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
-    let playerView = null;
+    let playerView = null, renderRect = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
@@ -711,6 +726,11 @@ function animate(time) {
         try { world.syncMovingLights(game.movingLights(), game.collision.movers); } catch (error) { pauseForRuntimeError(error); }
       }
       try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
+      if (playerView && !runtimeError) {
+        const width = renderer.domElement.width, height = renderer.domElement.height;
+        try { renderRect = game.renderViewport(width, height); } catch (error) { pauseForRuntimeError(error); }
+        if (renderRect?.render && renderRect.width > 0 && renderRect.height > 0) setViewAspect(renderRect.width / renderRect.height, playerView.fov);
+      }
       phase('tick');
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
@@ -751,7 +771,14 @@ function animate(time) {
     phase('mirrors');
     let calls = drawCalls(); framePhases.mirrorCalls += calls;
     renderer.setClearColor('#06101b', 1); renderer.clear();
-    if (world.sky) {
+    const drawWorld = !renderRect || (renderRect.render && renderRect.width > 0 && renderRect.height > 0);
+    const clipped = drawWorld && renderRect && (renderRect.x || renderRect.y
+      || renderRect.width !== renderer.domElement.width || renderRect.height !== renderer.domElement.height);
+    if (clipped) {
+      const box = renderViewportFor(renderRect);
+      renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
+    }
+    if (drawWorld && world.sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));
       const markersVisible = world.markers.visible; world.markers.visible = false;
       const npcVisible=npcPreview?.root.visible;if(npcPreview)npcPreview.root.visible=false;
@@ -759,10 +786,14 @@ function animate(time) {
       if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
       framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
     }
-    renderer.render(scene, camera);
+    if (drawWorld) renderer.render(scene, camera);
     framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
-    if(mode==='play'&&weaponViewModel&&!runtimeError){
+    if(drawWorld&&mode==='play'&&weaponViewModel&&!runtimeError){
       try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
+    }
+    if (clipped) {
+      const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
+      renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
     }
     phase('render');
     if(mode==='play'&&hudRenderer&&playerView){

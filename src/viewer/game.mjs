@@ -310,6 +310,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
+    /** Where the 3D view draws in a width x height drawing buffer: the root
+     * window's render viewport (letterboxed conversations clip it). */
+    renderViewport(width, height) { return hud?.renderViewport(width, height) ?? { render: true, x: 0, y: 0, width, height }; },
     use() {
       const actor = readPlayer('FrobTarget');
       game.inputButton('RightMouse', true);

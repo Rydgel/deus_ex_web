@@ -55,6 +55,7 @@ if (process.argv[2] !== 'child') {
   // the frame's first tiles are one Solid tile per clip rect, at its pixels.
   assert.ok(run.clippedFrames > 2000, `clipped frames ${run.clippedFrames}`);
   assert.deepEqual(run.letterboxMismatches, [], 'one Solid tile per clip rect, at its pixels, on every frame');
+  assert.deepEqual(run.renderMismatches, [], 'the 3D view is the band between the bars on every clipped frame');
   // The held bars (the most frequent layout) are CalculateWindowSizes' full
   // size from the class's own height percentages.
   assert.deepEqual(run.settled, run.heldBars, 'the letterbox held during the conversation');
@@ -131,7 +132,8 @@ const player = game.player.collisionActor;
 let firstError = null, cameraOffEye = 0, letterbox = null, state = null, clippedFrames = 0;
 const layouts = new Map();
 let heldBars = null;
-const letterboxMismatches = [];
+const letterboxMismatches = [], renderMismatches = [];
+let renderRect = null;
 while (!firstError && tick < 5200) {
   simulatedMs += 1000 / 60; tick++;
   try {
@@ -162,6 +164,11 @@ while (!firstError && tick < 5200) {
         layouts.set(key, (layouts.get(key) ?? 0) + 1);
         clippedFrames++;
         if (JSON.stringify(letterbox.tiles) !== JSON.stringify(letterbox.expected)) letterboxMismatches.push({ tick, ...letterbox });
+        // The 3D view (PreRender's render viewport) is the band the bars leave.
+        const rect = game.renderViewport(1440, 960), [top, bottom] = letterbox.tiles;
+        renderRect = rect;
+        if (letterbox.tiles.length !== 2 || !rect.render || rect.x !== 0 || rect.width !== 1440
+          || rect.y !== top[1] + top[3] || rect.y + rect.height !== bottom[1]) renderMismatches.push({ tick, rect, tiles: letterbox.tiles });
       }
       state = runtime.instance(conPlay)?.state?.stateNode?.record?.name ?? null;
       if (state === 'WaitForInput' && choiceButtons) break;
@@ -173,5 +180,5 @@ const cameraObject = read(read(player, 'conPlay'), 'cameraInfo');
 const held = [read(cameraObject, 'conLightSpeaker'), read(cameraObject, 'conLightSpeakingTo')];
 const paulSpeech = scripts.liveConPlay.soundRequests.filter(r => r.kind === 'speech' && r.emitter === paul).map(r => r.id);
 console.log(JSON.stringify({ firstError, conversation, camera, conLights: lights.length,
-  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities }));
+  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), renderRect, renderMismatches: renderMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities }));
 process.exit(0);
