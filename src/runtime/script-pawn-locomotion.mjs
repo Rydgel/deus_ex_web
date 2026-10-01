@@ -288,7 +288,7 @@ function steerArrive200(p, dest, services) {
     // 90% of the class default (fcompp tests DefaultGravityZ*0.9 < ZoneG.z;
     // default -950*0.9=-855, so a -100 low-gravity zone qualifies and a
     // normal-gravity zone does not — low gravity grants air control).
-    const zone = services.zone(p);
+    const zone = services.zone(p.self);
     if (!zone) throw new Error('Falling pawn has no Region.Zone');
     if (!ltU(x87mul(ld(zone.defaultGravityZ), D90), ld(zone.gravityZ))) return 0;
     d[2] = 0;                                      // scratch dz zeroed at 0x103be2f3

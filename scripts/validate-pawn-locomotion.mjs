@@ -112,7 +112,14 @@ const FIELD_NAME = {
   CollisionHeight: 'collisionHeight', Velocity: 'velocity',
 };
 
-function makeServices(objectsByName, events) {
+function makeServices(objectsByName, events, view) {
+  // ScriptRuntime.pawnView is not the actor: a body hands the services the
+  // receiver as p.self. The twin's view and actor differ too (runJs), and a
+  // service given the view fails the scene.
+  const actorOnly = fn => (actor, ...rest) => {
+    if (actor === view) throw new Error('locomotion service received the pawn view, not p.self');
+    return fn(actor, ...rest);
+  };
   const zoneOf = actor => {
     const z = actor?.zone;
     return z ? {
@@ -121,13 +128,13 @@ function makeServices(objectsByName, events) {
     } : null;
   };
   return {
-    isA: (actor, name) => !!actor?.clsChain?.includes(name.toLowerCase()),
-    readField: (actor, name) => actor[FIELD_NAME[name] ?? name],
+    isA: actorOnly((actor, name) => !!actor?.clsChain?.includes(name.toLowerCase())),
+    readField: actorOnly((actor, name) => actor[FIELD_NAME[name] ?? name]),
     // The oracle's FindFunctionChecked stub always resolves; the JS seam
     // dispatches only on a hit, so the twin returns truthy to match.
-    findFunction: () => ({}),
-    processEvent: (actor, name, args) => events.push({ this: actor, name, args }),
-    zone: zoneOf,
+    findFunction: actorOnly(() => ({})),
+    processEvent: actorOnly((actor, name, args) => events.push({ this: actor, name, args })),
+    zone: actorOnly(zoneOf),
   };
 }
 
@@ -140,7 +147,10 @@ const nameOf = (actor, objectsByName) =>
 function runJs(scene, mod = module) {
   const objects = {};
   const pawn = makeActor({ ...BASE_PAWN, ...scene.pawn, zoneRef: scene.pawnZone ?? scene.zone });
-  objects.pawn = pawn;
+  // `pawn` is the body's view; references to the pawn (p.self, MoveTarget,
+  // event receivers) are a distinct handle reading the same fields.
+  pawn.self = new Proxy(pawn, {});
+  objects.pawn = pawn.self;
   const target = scene.target
     ? makeActor({ ...scene.target, zoneRef: scene.targetZone ?? scene.zone })
     : null;
@@ -149,7 +159,7 @@ function runJs(scene, mod = module) {
   pawn.moveTarget = objects[scene.pawn?.moveTarget] ?? null;
   pawn.faceTarget = objects[scene.pawn?.faceTarget] ?? null;
   const events = [];
-  const services = makeServices(objects, events);
+  const services = makeServices(objects, events, pawn);
   const state = { latent: scene.latent ?? 0 };
   const frame = { code: 0 };
   const operandOf = kind => ({ vector: 12, float: 4, object: 4, nothing: 0 })[kind];
