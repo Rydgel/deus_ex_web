@@ -93,12 +93,46 @@ fn events() -> [u32; 5] {
     unsafe { *addr_of!(EVENTS) }
 }
 
-/// The cache slot for (class row, state row, event).
+/// MurmurHash3's 32-bit finalizer: every input bit reaches the low bits the
+/// slot index takes.
 #[inline(always)]
-fn slot_for(row: u32, state: u32, which: u32) -> u32 {
-    let e = events();
-    let h = (row >> 3).wrapping_mul(0x9e37_79b1) ^ (state >> 3).wrapping_mul(0x85eb_ca77) ^ which.wrapping_mul(0xc2b2_ae3d);
-    e[0].wrapping_add((h & e[1].wrapping_sub(1)).wrapping_mul(SLOT))
+fn mix(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^ (h >> 16)
+}
+
+/// The way a miss replaces when every way of a set holds a key (round
+/// robin).
+static mut VICTIM: u32 = 0;
+const WAYS: u32 = 4;
+
+/// The slot holding `key` (words 0..N of a slot) in the 4-way set of hash
+/// `h` of a table of `count` slots of `size` bytes, or the slot to fill
+/// (an empty way first, then the ways in turn) and false. The key's last
+/// word is the epoch, so a slot of an older epoch never matches.
+#[inline(always)]
+fn find<const N: usize>(table: u32, count: u32, size: u32, h: u32, key: &[u32; N]) -> (u32, bool) {
+    let first = table.wrapping_add((h & count.wrapping_sub(1) & !(WAYS - 1)).wrapping_mul(size));
+    for way in 0..WAYS {
+        let slot = first.wrapping_add(way * size);
+        if (0..N).all(|i| load32(slot.wrapping_add(4 * i as u32)) == key[i]) {
+            return (slot, true);
+        }
+    }
+    for way in 0..WAYS {
+        let slot = first.wrapping_add(way * size);
+        if load32(slot) == 0 {
+            return (slot, false);
+        }
+    }
+    let way = unsafe {
+        VICTIM = (VICTIM + 1) & (WAYS - 1);
+        VICTIM
+    };
+    (first.wrapping_add(way * size), false)
 }
 
 /// processEvent(handle, event `which`) with the float `delta` when the event
@@ -134,10 +168,8 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
             return -1;
         }
     }
-    let slot = slot_for(row, state, which);
-    if e[4] != 0 || load32(slot) != row || load32(slot.wrapping_add(4)) != state || load32(slot.wrapping_add(8)) != which
-        || load32(slot.wrapping_add(12)) != e[2]
-    {
+    let (slot, hit) = find(e[0], e[1], SLOT, mix(row ^ mix(state ^ mix(which))), &[row, state, which, e[2]]);
+    if e[4] != 0 || !hit {
         unsafe { js_event_resolve(handle, which, slot) };
         store32(slot, row);
         store32(slot.wrapping_add(4), state);
@@ -185,6 +217,95 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
     unsafe { BUDGET = outer_budget };
     frames_restore(saved);
     1
+}
+
+// ---- Script calls (CALL) ----------------------------------------------------
+//
+// A CALL's begin (script-vm-rust.mjs `beginCall`: runtime.invoke's
+// resolution and callFunction's checks) from a cache keyed by (caller code,
+// call node, receiver class row, receiver state row): the resolution is the
+// operand (final calls) or lookup(receiver, name) (virtual), which depends
+// only on the receiver's class and state node; the checks depend on the
+// function and the call site. `js_call_resolve` fills a slot with
+// beginCall's decision, the JavaScript path or a Rust run: the callee's
+// code, frame size and run template. A hit pushes the zeroed block and
+// records the run (RUNS) without an import. The epoch and verify words are
+// EVENTS'; the host also advances the epoch when a boundary function is
+// added or removed.
+
+/// CALLS = [table, slot count (a power of two), enabled].
+static mut CALLS: [u32; 3] = [0; 3];
+// A call slot: [caller code, node, class row, state row, epoch, kind,
+// callee code, frame size, template].
+const CALL_SLOT: u32 = 48;
+
+#[no_mangle]
+pub extern "C" fn vm_calls_ptr() -> *mut u32 {
+    addr_of_mut!(CALLS) as *mut u32
+}
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    /// beginCall's decision for the CALL `node` of run `frame` on `handle`
+    /// into the slot at `slot` (kind, code, size, template); under verify,
+    /// compared with a filled slot first. Runs no script.
+    fn js_call_resolve(frame: u32, node: u32, handle: u32, sig: u32, slot: u32);
+}
+
+/// A begun call: its run id, frame block and code.
+pub(crate) struct Callee {
+    pub(crate) id: u32,
+    pub(crate) locals: u32,
+    pub(crate) code: u32,
+}
+
+/// beginCall from the cache, or None when the caller must ask js_call_begin
+/// (dispatch off, an undescribed receiver or state, the JavaScript decision,
+/// no RUNS record left).
+pub(crate) fn begin_call(frame: u32, caller: u32, node: u32, handle: u32, sig: u32) -> Option<Callee> {
+    let c = unsafe { *addr_of!(CALLS) };
+    if c[2] == 0 {
+        return None;
+    }
+    let mut row = class_entry(handle);
+    if row <= RELEASED {
+        row = unsafe { js_class_row(handle) };
+        if row <= RELEASED {
+            return None;
+        }
+    }
+    let entry = state_entry(handle);
+    if entry == 0 {
+        return None;
+    }
+    let state = load32(entry);
+    let e = events();
+    let h = mix(caller ^ mix(node ^ mix(row ^ mix(state))));
+    let (slot, hit) = find(c[0], c[1], CALL_SLOT, h, &[caller, node, row, state, e[2]]);
+    if e[4] != 0 || !hit {
+        unsafe { js_call_resolve(frame, node, handle, sig, slot) };
+        store32(slot, caller);
+        store32(slot.wrapping_add(4), node);
+        store32(slot.wrapping_add(8), row);
+        store32(slot.wrapping_add(12), state);
+        store32(slot.wrapping_add(16), events()[2]);
+    }
+    if load32(slot.wrapping_add(20)) != K_RUN {
+        return None;
+    }
+    let runs = unsafe { (*addr_of!(FRAMES))[3] };
+    if runs >= MAX_RUNS {
+        return None;
+    }
+    let (code, size, template) = (load32(slot.wrapping_add(24)), load32(slot.wrapping_add(28)), load32(slot.wrapping_add(32)));
+    let locals = if size != 0 { vm_frame_push(size) } else { 0 };
+    unsafe {
+        let serial = SERIAL.wrapping_add(1);
+        SERIAL = serial;
+        (*addr_of_mut!(RUNS))[runs as usize] = [template, handle, locals, serial];
+        (*addr_of_mut!(FRAMES))[3] = runs + 1;
+    }
+    Some(Callee { id: runs, locals, code })
 }
 
 /// dispatch_event for validators (validate-script-vm-interp).

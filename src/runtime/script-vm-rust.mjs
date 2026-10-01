@@ -591,6 +591,7 @@ export class RustScriptVm {
       // no script) and the event cache's decisions (no script either).
       js_event_gate: handle => vm.events.gate(handle),
       js_event_resolve: (handle, which, slot) => vm.events.resolve(handle, which, slot),
+      js_call_resolve: (frame, node, handle, sig, slot) => vm.events.callResolve(frame, node, handle, sig, slot),
       // The state table (script-vm-states.mjs); runs no script.
       js_state: handle => vm.states.state(handle),
       // LastRendered and InStasis (natives.rs): the level values their
@@ -750,7 +751,7 @@ export class RustScriptVm {
       entry.stale?.()) {
       if (entry?.lowered) {
         this.retired.push(entry.lowered);
-        this.events.bump();
+        this.events.retire(entry.lowered.code);
       }
       const lowered = lowerFunction(compiled, layout, services, this.runtime, instance);
       if (lowered) {

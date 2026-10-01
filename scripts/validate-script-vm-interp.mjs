@@ -238,6 +238,11 @@ const imports = {
     calls.push({imp: 'gate', receiver: handle, frames: framesKey()});
     return nativeHost.gate(handle);
   },
+  js_call_resolve(frame, n, handle, sig, slot) {
+    calls.push({imp: 'callResolve', frame, node: n, receiver: handle, sig, frames: framesKey()});
+    const [kind, code, size, template] = nativeHost.callResolve(frame, n, handle, sig);
+    for (const [i, v] of [kind, code, size, template].entries()) wr32(slot + 20 + 4 * i, v);
+  },
   js_event_resolve(handle, which, slot) {
     calls.push({imp: 'resolve', receiver: handle, which});
     const [kind, code, size, param, template] = nativeHost.resolve(handle, which);
@@ -266,7 +271,7 @@ const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
 const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHECK_VALUES_AT = x.vm_check_values_ptr();
 const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr();
 const EVENTS_AT = x.vm_events_ptr(), DELETE_ME_AT = x.vm_delete_me_ptr(), ENAMES_AT = x.vm_enames_ptr();
-const RUNS_AT = x.vm_runs_ptr(), SERIAL_AT = x.vm_serial_ptr();
+const RUNS_AT = x.vm_runs_ptr(), SERIAL_AT = x.vm_serial_ptr(), CALLS_AT = x.vm_calls_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -304,8 +309,9 @@ function reset() {
   wr32(STATES_AT + 8, 0);
   wr32(FAULT_AT, 0);
   nativeHost = {};
-  // Event dispatch off.
+  // Event dispatch and the call cache off.
   for (let i = 0; i < 5; i++) wr32(EVENTS_AT + 4 * i, 0);
+  for (let i = 0; i < 3; i++) wr32(CALLS_AT + 4 * i, 0);
 }
 const count = (imp, receiver) => calls.filter(c => c.imp === imp && (receiver === undefined || c.receiver === receiver)).length;
 
@@ -3375,6 +3381,137 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   nativeHost.resolve = runDecision();
   same(dispatch(), -1, 'run id beyond RUNS');
   same(rd32(FRAMES_AT + 12), 256, 'run count untouched');
+}
+
+// ---- October 1: the call cache (dispatch.rs begin_call) --------------------------------
+// beginCall from a 4-way cache keyed by (caller code, node, receiver class
+// row, receiver state row) under EVENTS' epoch; js_call_resolve fills a slot
+// with the decision; a hit pushes the callee's zeroed block and records its
+// run (RUNS) without an import.
+{
+  const ENTRY = 12, STATE_TABLE = arena.alloc(ENTRY * 64), SIG = 3, K_JS = 1, K_RUN = 3;
+  const stateRow = arena.alloc(12);
+  wr32(stateRow, 9); wr32(stateRow + 4, 1); wr32(stateRow + 8, 1);
+  const otherRow = arena.alloc(12);
+  wr32(otherRow, 10); wr32(otherRow + 4, 1); wr32(otherRow + 8, 2);
+  const setup = ({slots = 64, verify = 0, enabled = 1} = {}) => {
+    reset();
+    classTable();
+    arena.bytes.fill(0, STATE_TABLE, STATE_TABLE + ENTRY * 64);
+    wr32(STATES_AT, STATE_TABLE); wr32(STATES_AT + 4, 64); wr32(STATES_AT + 8, 0);
+    for (const h of [SELF_H, OTHER_H, 20, 21, 22, 23, 24]) wr32(STATE_TABLE + ENTRY * h, stateRow);
+    for (const h of [20, 21, 22, 23, 24]) infos.set(h, THIRD_IMG);
+    // Three slots past the table hold a canary: a set never reaches them.
+    const table = arena.alloc(48 * (slots + 3));
+    arena.bytes.fill(0, table, table + 48 * slots);
+    arena.bytes.fill(0xee, table + 48 * slots, table + 48 * (slots + 3));
+    wr32(CALLS_AT, table); wr32(CALLS_AT + 4, slots); wr32(CALLS_AT + 8, enabled);
+    wr32(EVENTS_AT + 8, 1); wr32(EVENTS_AT + 16, verify);
+    return table;
+  };
+  // The callee: its int parameter (offset 4) plus 1, after an import that
+  // observes its run.
+  let seen = null;
+  const callee = () => assembleAt(FN_CODE[9], [
+    S.expr(w(K.JS_VOID, node((receiver, frame) => {
+      const at = RUNS_AT + 16 * frame;
+      seen = {receiver, frame, record: [rd32(at), rd32(at + 4), rd32(at + 8), rd32(at + 12)], runs: rd32(FRAMES_AT + 12),
+        block: [...arena.bytes.slice(rd32(at + 8), rd32(at + 8) + 16)]};
+    }))),
+    S.ret(R.INT, w(K.INT_ADD, w(K.LOCAL_INT, 4), E.int(1))),
+  ]);
+  const runDecision = () => [K_RUN, callee(), 16, 55];
+  const callNode = (n, v) => w(K.CALL, n, R.INT, SIG, 1, 3 + E.int(v).length, [P.INT, 4, 0, ...E.int(v)]);
+  const on = (handle, expr) => handle === SELF_H ? expr : E.context(node(), (wr32(LOCALS + 44, handle), w(K.LOCAL_OBJECT, 44)), expr);
+
+  // A hit: one resolve, no js_call_begin; the run, its block and argument.
+  setup();
+  nativeHost.callResolve = runDecision;
+  const n = node(), before = framesKey(), serial = rd32(SERIAL_AT);
+  seen = null;
+  same(value(R.INT, w(K.INT_ADD, callNode(n, 41), on(SELF_H, callNode(n, 1)))), 42 + 2, 'cached calls return their values');
+  same(count('callResolve'), 1, 'one resolve for one key');
+  same(count('callBegin'), 0, 'no js_call_begin on the Rust path');
+  same(seen?.frame, 0, 'the callee is run 0');
+  same(seen.record.join(), [55, SELF_H, seen.record[2], serial + 2].join(), 'RUNS record of the second call');
+  same(seen.runs, 1, 'run count inside the callee');
+  same(seen.block.every((b, i) => i >= 4 && i < 8 || b === 0), true, 'zeroed callee block');
+  same(rd32(seen.record[2] + 4), 1, 'argument stored before the body');
+  same(framesKey(), before, 'frame stack restored');
+  same(rd32(FRAMES_AT + 12), 0, 'run count restored');
+  const resolveCall = calls.find(c => c.imp === 'callResolve');
+  same(resolveCall.node, n, 'js_call_resolve node');
+  same(resolveCall.sig, SIG, 'js_call_resolve signature');
+  same(resolveCall.frame, FRAME, 'js_call_resolve frame');
+  same(resolveCall.frames, before, 'js_call_resolve runs before the push');
+  // Another receiver class, another state row, a cleared slot, the epoch,
+  // verify: resolved again.
+  for (const [why, change, expected] of [
+    ['another class', () => 21, 2],
+    ['another state row', () => (wr32(STATE_TABLE + ENTRY * SELF_H, otherRow), SELF_H), 2],
+    ['a new epoch', () => (wr32(EVENTS_AT + 8, 2), SELF_H), 2],
+    ['the same key', () => SELF_H, 1],
+  ]) {
+    setup();
+    nativeHost.callResolve = runDecision;
+    const k = node();
+    value(R.INT, callNode(k, 1));
+    const handle = change();
+    same(value(R.INT, on(handle, callNode(k, 5))), 6, `call after ${why}`);
+    same(count('callResolve'), expected, `resolves after ${why}`);
+  }
+  {
+    const table = setup({slots: 4});
+    nativeHost.callResolve = runDecision;
+    const k = node();
+    value(R.INT, callNode(k, 1));
+    for (let i = 0; i < 4; i++) wr32(table + 48 * i, 0);
+    value(R.INT, callNode(k, 1));
+    same(count('callResolve'), 2, 'a cleared slot resolves again');
+  }
+  setup({verify: 1});
+  nativeHost.callResolve = runDecision;
+  {
+    const k = node();
+    value(R.INT, w(K.INT_ADD, callNode(k, 1), callNode(k, 2)));
+    same(count('callResolve'), 2, 'verify resolves every call');
+  }
+  // Four keys share a 4-way set without evicting each other.
+  {
+    setup({slots: 4});
+    nativeHost.callResolve = runDecision;
+    const k = node();
+    for (let round = 0; round < 3; round++) for (const h of [20, 21, 22, 23]) {
+      same(value(R.INT, on(h, callNode(k, h))), h + 1, `4-way call on ${h}`);
+      same(seen?.receiver, h, `the callee runs on ${h}`);
+    }
+    same(count('callResolve'), 4, 'four keys in one set resolve once each');
+  }
+  // Sets stay inside the table.
+  for (const slots of [4, 8, 64]) {
+    const table = setup({slots});
+    nativeHost.callResolve = runDecision;
+    for (const k of [node(), node(), node(), node(), node(), node()]) for (const h of [20, 21, 22, 23, 24, SELF_H]) value(R.INT, on(h, callNode(k, 1)));
+    same(arena.bytes.slice(table + 48 * slots, table + 48 * (slots + 3)).every(b => b === 0xee), true, `${slots}-slot table bounds`);
+  }
+  // The JavaScript decision, the cache off, an undescribed receiver, the
+  // RUNS limit: js_call_begin.
+  for (const [why, prepare] of [
+    ['JavaScript decision', () => { nativeHost.callResolve = () => [K_JS, 0, 0, 0]; }],
+    ['empty decision', () => { nativeHost.callResolve = () => [0, 0, 0, 0]; }],
+    ['unknown decision', () => { nativeHost.callResolve = () => [2, 0, 0, 0]; }],
+    ['cache off', () => { wr32(CALLS_AT + 8, 0); nativeHost.callResolve = () => assert.fail('resolve with the cache off'); }],
+    ['undescribed receiver', () => { classRowHost = () => 0; nativeHost.callResolve = () => assert.fail('resolve of an undescribed receiver'); }],
+    ['undescribed state', () => { wr32(STATE_TABLE + ENTRY * SELF_H, 0); nativeHost.callResolve = () => assert.fail('resolve without a state'); }],
+    ['RUNS limit', () => { wr32(FRAMES_AT + 12, 256); nativeHost.callResolve = runDecision; }],
+  ]) {
+    setup();
+    prepare();
+    const k = node(() => 77);
+    callSites.set(k, {target: null});
+    same(value(R.INT, callNode(k, 1)), 77, `${why}: the JavaScript path`);
+    same(count('callBegin'), 1, `${why}: js_call_begin`);
+  }
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

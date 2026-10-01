@@ -179,6 +179,26 @@ const lowerName=name=>{
   if(key===undefined)lowerNames.set(name,key=name.toLowerCase());
   return key;
 };
+/** The boundary functions (a Map by function key) with change listeners:
+ * the Rust interpreter's call cache (script-vm-events.mjs) holds decisions
+ * that depend on which keys are present. */
+class BoundaryFunctions extends Map {
+  constructor(entries){super(entries);this.listeners=[];}
+  set(key,value){
+    super.set(key,value);
+    for(const listener of this.listeners??[])listener();
+    return this;
+  }
+  delete(key){
+    const removed=super.delete(key);
+    for(const listener of this.listeners)listener();
+    return removed;
+  }
+  clear(){
+    super.clear();
+    for(const listener of this.listeners)listener();
+  }
+}
 // Per linked class: whether its chain reaches engine.actor (fixed once linked).
 const actorChains=new WeakMap();
 const reachesActor=cls=>{
@@ -435,7 +455,7 @@ export class ScriptRuntime {
     // e.g. DeusExPlayer.StartDataLinkTransmission. Its host-selected return value
     // can affect later branches and does not establish the original result. The handler
     // receives {record, receiver, argumentCount, evaluateArgument}.
-    this.boundaryFunctions=boundaryFunctions instanceof Map?boundaryFunctions:new Map(boundaryFunctions);
+    this.boundaryFunctions=new BoundaryFunctions(boundaryFunctions);
     this.levelFor=receiver=>{
       const object=(receiver?.[this.instanceKey]??this.instances.get(receiver))?.nativeObject;
       return object&&Object.hasOwn(object,'xLevel')?object.xLevel:levelFor?.(receiver);

@@ -378,8 +378,62 @@ relinking during play. Interleaved A/B against `225f788`, 4 pairs: medians
 0.25 ms per tick. Browser (Island walk): tick 10.78 ms, frame 18.70 ms, no
 runtime error.
 
-Next on this path: `js_call_begin` (848 calls per tick) through the same
-cache and run records, then the gate in Rust.
+### October 1: script calls through the cache (implemented)
+
+A CALL's begin (`beginCall`: runtime.invoke's resolution and callFunction's
+checks, then the callee's frame) now comes from a second cache in
+dispatch.rs, keyed by (caller code, call node, receiver class row,
+receiver state row). The resolution is the call's operand (final) or
+`lookup(receiver, name)` (virtual), which depends only on the receiver's
+class and state node; the checks depend on the function and the site.
+`js_call_resolve` fills a slot with beginCall's decision, the JavaScript
+path or a Rust run (code, frame size, run template). A hit pushes the
+zeroed block, writes the RUNS record and raises the run count with no
+import; `js_call_begin` remains the path for everything else. Island went
+from 848 `js_call_begin` calls per tick to 19.5, with about 1.2 resolves
+per tick.
+
+**Invalidation, refined for both caches.**
+* Replacing a lowering no longer advances the epoch. `retire` clears the
+  slots that run the old code, and the call slots keyed by it as the
+  caller, because its address can be reused once released.
+* The field registry advances the epoch only when a key's cell is
+  withdrawn (two classes disagree; `onFieldImageCellWithdrawn`). A key that
+  gains a cell leaves every decision valid: a lowering made without it
+  reads that field in JavaScript, which is exact.
+* Operand relinking and boundary-function changes still advance it.
+  `runtime.boundaryFunctions` is now a Map subclass with listeners, since
+  hosts add and remove boundaries during play.
+
+Before this, the epoch advanced about once every three Island ticks (100
+times in 300: 34 registry additions, 66 replaced lowerings).
+
+**Sets.** Both caches are 4-way set-associative, with a MurmurHash3
+finalizer over the key words and round-robin replacement. The first,
+direct-mapped version took the low bits of multiplicative products over
+aligned addresses: 50 event keys were resolved 6,956 times in 300 ticks,
+and three Tick keys shared one 2-way set. Now 16 event keys resolve 16
+times and 335 call keys 353 times.
+
+**Verification.** `validate-script-vm-interp` covers `begin_call`: a hit
+(result, run id, RUNS record, run count, zeroed block, the argument, the
+restored stack, resolve before the push), resolves after another class,
+another state row, a new epoch or a cleared slot, none for the same key,
+verify, four keys in one 4-way set, set bounds against a canary past the
+table, and the JavaScript path for the JavaScript, empty and unknown
+decisions, the cache off, an undescribed receiver or state and the RUNS
+limit. All 10 applied mutants of `begin_call` and its interp.rs caller
+were caught. Digests match at all 30 checkpoints on both maps and both
+engines with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1`.
+Interleaved A/B against `02a096b`, 4 pairs: medians 9.53, 9.68, 9.65,
+9.72 ms before and 8.94, 9.01, 9.25, 9.33 after, about 0.5 ms per tick (the
+event cache's hash fix included). Browser (Island walk): tick 10.18 ms,
+frame 18.03 ms, no runtime error. `RUST_CALLS=0` keeps every begin in
+JavaScript.
+
+The full sweep at `02a096b` (before this step) passed 443 of 444; the one
+failure, `validate-player-tick-order`, crossed the runner's 6 GiB cap with
+four jobs running and passes alone (3.7 GB peak).
 
 ### Next steps, in recommended order
 

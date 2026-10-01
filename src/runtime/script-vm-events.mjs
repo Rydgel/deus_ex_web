@@ -25,13 +25,16 @@ import {identityOfHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {functionSignature, fieldKeyId} from './script-vm-lower.mjs';
-import {fieldImageCell, scalarCell, onFieldImageCellVersion} from './script-object-image.mjs';
+import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-object-image.mjs';
 import {probeNames} from '../unreal/probe-names.mjs';
+import {handleOf} from './script-object-handles.mjs';
 
 const DISPATCH_VERIFY = typeof process !== 'undefined' && process.env?.DISPATCH_VERIFY === '1';
 // RUST_EVENTS=0 keeps every tick event in JavaScript (the reference path).
 const DISABLED = typeof process !== 'undefined' && process.env?.RUST_EVENTS === '0';
-const SLOTS = 1024, SLOT = 48;
+const SLOTS = 1024, SLOT = 48, CALL_SLOTS = 4096, CALL_SLOT = 48;
+// RUST_CALLS=0 keeps every CALL's begin in JavaScript (js_call_begin).
+const CALLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_CALLS === '0';
 const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
 export const MAX_RUNS = 256;
 /** The Actor.Tick events (tick.rs E_*): [name, takes the delta]. */
@@ -39,7 +42,7 @@ export const TICK_EVENTS = Object.freeze([['Tick', true], ['Timer', false], ['Ex
   ['PainTimer', false], ['SpeechTimer', false], ['UpdateTactics', true]]);
 
 const hosts = new Set();
-onFieldImageCellVersion(() => {
+onFieldImageCellWithdrawn(() => {
   for (const ref of hosts) {
     const host = ref.deref();
     if (host) host.bump();
@@ -69,7 +72,27 @@ export class EventHost {
     const enames = x.vm_enames_ptr();
     TICK_EVENTS.forEach(([name], i) => view.setUint32(enames + 4 * i, (probeNames.get(name.toLowerCase()) ?? -1) >>> 0, true));
     vm.runtime.objects?.operandListeners?.push(() => this.bump());
+    vm.runtime.boundaryFunctions?.listeners?.push(() => this.bump());
     hosts.add(new WeakRef(this));
+    // The call cache (dispatch.rs CALLS): on unless RUST_CALLS=0.
+    this.callsAt = x.vm_calls_ptr();
+    const calls = arena.alloc(CALL_SLOTS * CALL_SLOT);
+    arena.bytes.fill(0, calls, calls + CALL_SLOTS * CALL_SLOT);
+    view.setUint32(this.callsAt, calls, true);
+    view.setUint32(this.callsAt + 4, CALL_SLOTS, true);
+    view.setUint32(this.callsAt + 8, CALLS_DISABLED ? 0 : 1, true);
+  }
+  /** A lowering was replaced: the slots that run its code, and the call
+   * slots keyed by it as the caller, are resolved again. Its code is
+   * released once no run can be executing it, and the address may then be
+   * reused by another lowering. */
+  retire(code) {
+    if (!this.at) return;
+    const view = this.vm.arena.view, events = view.getUint32(this.at, true), calls = view.getUint32(this.callsAt, true);
+    for (let slot = events, end = events + SLOTS * SLOT; slot < end; slot += SLOT)
+      if (view.getUint32(slot + 20, true) === code) view.setUint32(slot, 0, true);
+    for (let slot = calls, end = calls + CALL_SLOTS * CALL_SLOT; slot < end; slot += CALL_SLOT)
+      if (view.getUint32(slot, true) === code || view.getUint32(slot + 24, true) === code) view.setUint32(slot, 0, true);
   }
   /** Every cache entry is resolved again. */
   bump() {
@@ -154,13 +177,48 @@ export class EventHost {
     this.deleteMe = field;
     return true;
   }
-  template(fn, lowered, layout) {
+  /** The run template of a lowering (one per lowering: its function,
+   * layout and services are fixed). */
+  template(fn, lowered, layout, services = this.vm.runtime.services) {
     let id = this.templateIds.get(lowered);
     if (id === undefined) {
       id = this.templates.length;
-      this.templates.push({compiled: fn.compiled, lowered, layout, services: this.vm.runtime.services});
+      this.templates.push({compiled: fn.compiled, lowered, layout, services, resultField: fn.result ?? null});
       this.templateIds.set(lowered, id);
     }
     return id;
+  }
+  /** js_call_resolve: beginCall's decision (script-vm-rust.mjs) for the CALL
+   * `node` of run `frame` on `handle`, into the slot at `slot`. */
+  callResolve(frame, node, handle, sig, slot) {
+    const decision = this.callDecision(frame, node, handle, sig), view = this.vm.arena.view;
+    if (DISPATCH_VERIFY && view.getUint32(slot + 20, true) !== 0 && view.getUint32(slot, true) === this.vm.run(frame).lowered.code &&
+      view.getUint32(slot + 4, true) === node && view.getUint32(slot + 8, true) === this.vm.classRow(handle) &&
+      view.getUint32(slot + 12, true) === (handle < this.vm.states.capacity ? view.getUint32(this.vm.states.table + 12 * handle, true) : 0) &&
+      view.getUint32(slot + 16, true) === view.getUint32(this.at + 8, true)) {
+      const words = [20, 24, 28, 32].map(at => view.getUint32(slot + at, true));
+      const fresh = [decision.kind, decision.code, decision.size, decision.template];
+      if (words.some((w, i) => w !== fresh[i]))
+        throw new Error(`Call cache slot for node ${node} on handle ${handle} is stale: [${words}], now [${fresh}]`);
+    }
+    view.setUint32(slot + 20, decision.kind, true);
+    view.setUint32(slot + 24, decision.code, true);
+    view.setUint32(slot + 28, decision.size, true);
+    view.setUint32(slot + 32, decision.template, true);
+  }
+  callDecision(frame, node, handle, sig) {
+    const js = {kind: K_JS, code: 0, size: 0, template: 0};
+    const vm = this.vm, caller = vm.run(frame), n = caller.nodes[node], runtime = vm.runtime, services = caller.services;
+    const receiver = handle === caller.selfHandle ? caller.self : identityOfHandle(handle);
+    if (receiver === null) return js;
+    const record = n.op === 0x1c ? services.operand(caller.compiled.script, n) : runtime.lookup(receiver, n.name, false);
+    const fn = record?.function;
+    if (!fn || runtime.boundaryFunctions.has(record.key) || fn.script.nativeIndex || fn.script.functionFlags & 0x400 ||
+      fn.script.functionFlags & 0x20 || n.args.length > fn.parameters.length ||
+      (receiver?.kind === 'Class' && !runtime.instances.has(receiver))) return js;
+    if (functionSignature(fn, runtime.classLoader)?.id !== sig) return js;
+    const layout = frameLayout(fn, runtime.classLoader), lowered = vm.loweringFor(fn.compiled, layout, services, receiver);
+    if (!lowered) return js;
+    return {kind: K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services)};
   }
 }

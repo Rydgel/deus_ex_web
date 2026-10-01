@@ -1354,8 +1354,20 @@ impl Run {
         let receiver = self.handle(r);
         // CallFunction's FMemMark: the frame stack as it was before the push.
         let saved = frames_save();
-        let callee = unsafe { js_call_begin(self.frame, node, receiver, sig) };
-        self.self_fresh = false;
+        // The callee's run id, frame block, code and SELF: from the call
+        // cache (dispatch.rs), or js_call_begin and CALL_BLOCK.
+        let (callee, locals, code, callee_self) =
+            match crate::dispatch::begin_call(self.frame, self.code as usize as u32, node, receiver, sig) {
+                Some(c) => (c.id as i32, c.locals, c.code, receiver),
+                None => {
+                    let callee = unsafe { js_call_begin(self.frame, node, receiver, sig) };
+                    self.self_fresh = false;
+                    // The callee block is read before any argument runs a
+                    // nested call.
+                    let block = addr_of!(CALL_BLOCK) as *const u32;
+                    unsafe { (callee, *block, *block.add(1), *block.add(2)) }
+                }
+            };
         if callee < 0 {
             // The JavaScript path performs the whole call, arguments included.
             self.skip(args_len);
@@ -1372,11 +1384,6 @@ impl Run {
             frames_restore(saved);
             return value;
         }
-        // The callee block is read before any argument runs a nested call.
-        let (locals, code, callee_self) = unsafe {
-            let block = addr_of!(CALL_BLOCK) as *const u32;
-            (*block, *block.add(1), *block.add(2))
-        };
         // Parameters in order, each stored before the next is evaluated; the
         // arguments evaluate in the caller's run with the caller's SELF.
         for _ in 0..argc {
