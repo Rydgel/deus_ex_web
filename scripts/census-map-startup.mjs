@@ -104,13 +104,8 @@ const LATER_STAGES = Object.freeze([
   // physProjectile (docs/projectile.md), physPathing for PHYS_Interpolating
   // (docs/pathing.md) and the full physMovingBrush (docs/doors.md) are
   // implemented: their boundaries now count as failures.
-  {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
-    test: key => /XRootWindow::DrawRawBackground/.test(key)},
-  // ConPlay's third-person conversation: CreateConCamera (2051) and the
-  // ConWindow speech font chosen from "GetCurrentRes" (roadmap Stage 4:
-  // conversation screens and camera behavior).
-  {stage: 4, reason: 'third-person conversation camera and ConWindow presentation',
-    test: key => /native N ConSys\.Conversation\.CreateConCamera|native 2051 |UWindowsViewport::Exec GetCurrentRes/.test(key)},
+  // The root window's raw background, CreateConCamera (2051) and the
+  // ConWindow's GetCurrentRes are implemented (docs/conversation-camera.md).
   // VisibleCollidingActors (312: FCollisionHash::ActorRadiusCheck, hash
   // vtable +0x18, then IsA/bHidden/FastLineCheck per link, exec 0x103e55b0)
   // is reached only from HurtRadius-style explosion/proximity damage.
