@@ -101,10 +101,9 @@ const LATER_STAGES = Object.freeze([
     test: key => /Original iterator native is not implemented: ReachablePathnodes/.test(key)},
   {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
     test: key => /performPhysics Physics=Swimming\b/.test(key)},
-  {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating; pawns on InterpolationPoint paths)',
-    test: key => /physProjectile|PHYS_Interpolating|performPhysics Physics=Interpolating\b/.test(key)},
-  {stage: 5, reason: 'moving doors/elevators: rotating MovingBrush interpolation (roadmap Stage 5)',
-    test: key => /MovingBrush interpolation outside the recovered translating subset/.test(key)},
+  // physProjectile (docs/projectile.md), physPathing for PHYS_Interpolating
+  // (docs/pathing.md) and the full physMovingBrush (docs/doors.md) are
+  // implemented: their boundaries now count as failures.
   {stage: 4, reason: 'root-window raw background drawing (UI presentation)',
     test: key => /XRootWindow::DrawRawBackground/.test(key)},
   // ConPlay's third-person conversation: CreateConCamera (2051) and the
