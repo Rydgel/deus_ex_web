@@ -89,13 +89,20 @@ extern "C" {
 }
 
 /// The enable word's bits (script-vm-events.mjs): events dispatch in Rust;
-/// a ProcessState with no code to run is skipped (tick.rs).
+/// a ProcessState with no code to run is skipped (tick.rs); latent polls
+/// run in Rust (tick.rs, loco.rs).
 const TICK_EVENTS_BIT: u32 = 1;
 const TICK_STATE_BIT: u32 = 2;
+const TICK_POLL_BIT: u32 = 4;
 
 /// Whether the actor tick may skip a ProcessState with no code to run.
 pub(crate) fn state_skip_enabled() -> bool {
     events()[3] & TICK_STATE_BIT != 0
+}
+/// Whether the actor tick may poll Sleep and the locomotion latent actions
+/// in Rust.
+pub(crate) fn polls_enabled() -> bool {
+    events()[3] & TICK_POLL_BIT != 0
 }
 
 /// Set EVENTS' enable word; returns the previous one.

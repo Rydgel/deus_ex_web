@@ -35,6 +35,19 @@ impl Ext {
         Self::normalized(sig as u128, if e == 0 { -149 } else { e as i32 - 150 }, sign)
     }
 
+    /// FLD m64 of a finite double (an embedded constant): exact.
+    pub fn load_f64(value: f64) -> Self {
+        let bits = value.to_bits();
+        let sign = ((bits >> 63) as u32) << 31;
+        let e = ((bits >> 52) & 0x7ff) as i32;
+        let m = bits & ((1u64 << 52) - 1);
+        if e == 0 {
+            Self::normalized(m as u128, -1074, sign)
+        } else {
+            Self::normalized((m | (1u64 << 52)) as u128, e - 1075, sign)
+        }
+    }
+
     /// FILD m32: an exact integer.
     pub fn load_i32(value: i32) -> Self {
         let sign = if value < 0 { 0x8000_0000 } else { 0 };
@@ -170,6 +183,39 @@ impl Ext {
         let extra = rem / den;
         let sticky = u128::from(rem % den != 0);
         Self::normalized((q << 3) | (extra << 1) | sticky, self.exp - other.exp - 67, sign)
+    }
+
+    /// FCOM's (C0, C3) as script-pawn-locomotion.mjs `x87compare` models
+    /// them: both set when unordered; an infinity pair is never below.
+    pub fn compare(self, other: Self) -> (bool, bool) {
+        if self.nan() || other.nan() {
+            return (true, true);
+        }
+        if self.inf() || other.inf() {
+            if self.inf() && other.inf() {
+                return (false, self.sign == other.sign);
+            }
+            return if self.inf() { (self.sign != 0, false) } else { (other.sign == 0, false) };
+        }
+        let m: i32 = if self.sig == 0 && other.sig == 0 {
+            0
+        } else if self.sig == 0 {
+            if other.sign != 0 { 1 } else { -1 }
+        } else if other.sig == 0 {
+            if self.sign != 0 { -1 } else { 1 }
+        } else if self.sign != other.sign {
+            if self.sign != 0 { -1 } else { 1 }
+        } else {
+            let o = (self.exp, self.sig).cmp(&(other.exp, other.sig)) as i32;
+            if self.sign != 0 { -o } else { o }
+        };
+        (m < 0, m == 0)
+    }
+
+    /// x87recip (script-vm.mjs): 1/x of a finite nonzero x, correctly
+    /// rounded, the dividend's FLD1.
+    pub fn recip(self) -> Self {
+        Self::normalized(1u128 << 63, -63, 0).div(self)
     }
 
     /// FSQRT of a finite nonnegative value or +inf; a zero keeps its sign.

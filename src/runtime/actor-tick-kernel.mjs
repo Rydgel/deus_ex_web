@@ -88,6 +88,8 @@ export const TICK_FIELDS = Object.freeze([
   ['BlendTweenRate', 'engine.actor.blendtweenrate', 'fixed', 'float'],
   ['BlendAnimLast', 'engine.actor.blendanimlast', 'fixed', 'float'],
   ['BlendAnimMinRate', 'engine.actor.blendanimminrate', 'fixed', 'float'],
+  // Sleep's remaining time (script-sleep.mjs), polled in Rust.
+  ['LatentFloat', 'engine.actor.latentfloat', 'float'],
 ]);
 const F = Object.fromEntries(TICK_FIELDS.map(([name], i) => [name, i]));
 // js_tick_get/js_tick_set: the animation view's animFlags accessor.
@@ -433,6 +435,16 @@ export class ActorTickHost {
       js_tick_state(i, delta) {
         const c = context(i);
         host.callback(c, 'state', [delta], () => c.services.processState(c.receiver, delta));
+      },
+      // Rust polled Sleep and cleared it (tick.rs process_state): the poll's
+      // LatentAction write, then ProcessState, which skips the poll and runs
+      // the state code, as one ProcessState call would.
+      js_tick_resume(i, delta) {
+        const c = context(i);
+        host.callback(c, 'state', [delta], () => {
+          host.runtime.instance(c.receiver).state.latent = 0;
+          c.services.processState(c.receiver, delta);
+        });
       },
       js_tick_physics(i, delta) {
         const c = context(i);

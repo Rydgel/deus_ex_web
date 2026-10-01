@@ -73,7 +73,8 @@ const F_BLENDRATE: usize = 38;
 const F_BLENDTWEEN: usize = 39;
 const F_BLENDLAST: usize = 40;
 const F_BLENDMINRATE: usize = 41;
-const FIELD_COUNT: usize = 42;
+const F_LATENTFLOAT: usize = 42;
+const FIELD_COUNT: usize = 43;
 /// js_tick_get/js_tick_set: the animation view's `animFlags` accessor.
 const A_FLAGS: u32 = 64;
 /// The fields the animation phase reads or writes, besides Role,
@@ -150,6 +151,9 @@ extern "C" {
     /// JavaScript, then T_STATE as after a callback.
     fn js_tick_refresh(ctx: u32);
     fn js_tick_state(ctx: u32, delta: f64);
+    /// After Rust's poll cleared the latent action (script_and_timer):
+    /// LatentAction 0, then ProcessState, which runs the state code.
+    fn js_tick_resume(ctx: u32, delta: f64);
     fn js_tick_physics(ctx: u32, delta: f64);
     fn js_tick_far_move(ctx: u32, weapon: u32, x: f64, y: f64, z: f64);
     fn js_tick_show_self(ctx: u32);
@@ -658,14 +662,9 @@ fn tick_body(
 }
 
 /// actor-tick.mjs `scriptAndTimer`: ProcessState, then updateActorTimer on
-/// the TimerRate/TimerCounter/bTimerLoop accessors. A ProcessState whose
-/// frame word says it returns at once (script-state.mjs `process`: no
-/// execution, or a null cursor) is not called.
+/// the TimerRate/TimerCounter/bTimerLoop accessors.
 fn script_and_timer(a: &mut Actor, delta: f64) {
-    if !(crate::dispatch::state_skip_enabled() && crate::natives::state_frame(a.handle) == crate::natives::FRAME_NONE) {
-        unsafe { js_tick_state(a.ctx, delta) };
-        a.refresh();
-    }
+    process_state(a, delta);
     if !(fround(a.num(F_TIMERRATE)) > 0.0) {
         return;
     }
@@ -685,6 +684,44 @@ fn script_and_timer(a: &mut Actor, delta: f64) {
         a.set_float(F_TIMERRATE, 0.0);
     }
     a.event(E_TIMER, delta);
+}
+
+/// script-state.mjs `process` by the state table's frame word: not called
+/// when it would return at once (no execution, or a null cursor); Sleep's
+/// poll (384) and the locomotion polls (loco.rs) here, then JavaScript only
+/// to resume the state code when the poll cleared the latent action;
+/// anything else in JavaScript.
+fn process_state(a: &mut Actor, delta: f64) {
+    use crate::loco::Poll;
+    use crate::natives::{state_frame, FRAME_NONE, LATENT_SLEEP};
+    let frame = if crate::dispatch::state_skip_enabled() { state_frame(a.handle) } else { 0 };
+    if frame == FRAME_NONE {
+        return;
+    }
+    let polled = if !crate::dispatch::polls_enabled() {
+        Poll::Js
+    } else if frame == LATENT_SLEEP {
+        if poll_sleep(a, delta) { Poll::Wait } else { Poll::Done }
+    } else if matches!(frame, 501 | 503 | 509 | 511 | 528) {
+        crate::loco::poll(a.handle, frame, delta)
+    } else {
+        Poll::Js
+    };
+    match polled {
+        Poll::Wait => return,
+        Poll::Done => unsafe { js_tick_resume(a.ctx, delta) },
+        Poll::Js => unsafe { js_tick_state(a.ctx, delta) },
+    }
+    a.refresh();
+}
+
+/// script-sleep.mjs `pollActorSleep` (PollSleep 0x103e0020) on
+/// Actor.LatentFloat: whether the latent action stays.
+fn poll_sleep(a: &mut Actor, delta: f64) -> bool {
+    let d = fround(delta);
+    let remaining = sub(fround(a.num(F_LATENTFLOAT)), d);
+    a.set_float(F_LATENTFLOAT, fround(remaining));
+    !(remaining < 0.5 * d)
 }
 
 // ---- The animation phase (animation-tick.mjs) -----------------------------

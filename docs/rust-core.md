@@ -543,12 +543,71 @@ passes (the state bit alone leaves event dispatch off). Island:
 `js_tick_state` 702 → 52 crossings per tick, `js_state` 0. Not timed: the
 machine's load average was 7.
 
-**Next.** Sleep (22.3 polls per Island tick) is the first poll to move: the
-frame word gives Rust the latent action, LatentFloat is in the image, and
-a cleared poll crosses only to resume the state code. Then the locomotion
-polls (503 20.6, 501 5.6, 509 1.5 per tick), after a census of the
-branches Island reaches; every branch it does not reach hands the poll
-back before any write.
+### October 1: latent polls in Rust (implemented)
+
+`process_state` (tick.rs) reads the frame word and polls Sleep (384) and
+the pawn locomotion latent actions (MoveTo 501, MoveToward 503, TurnTo 509,
+TurnToward 511, WaitForLanding 528) in Rust. A poll that keeps its latent
+action needs no crossing; one that clears it crosses to `js_tick_resume`,
+which writes LatentAction 0 and calls ProcessState, so the state code runs
+in the same ProcessState call as before (the JavaScript `process` skips the
+poll when LatentAction is 0). A poll Rust does not take crosses to
+`js_tick_state` as before.
+
+* **Sleep** (tick.rs `poll_sleep`): pollActorSleep on tick field 42,
+  LatentFloat, with the tick's image-or-JavaScript field access.
+* **Locomotion** (loco.rs, host `script-vm-locomotion.mjs`): the five
+  polls with turnSetup980 and steerArrive200, transcribed from
+  `script-pawn-locomotion.mjs` on the x87 model (`Ext`, plus `load_f64`,
+  `compare` and `recip` in x87.rs) and percep.rs's vectorToRotator
+  (`js_atan2`). Fields are read the way perception reads them: L_FIELDS
+  gives each field's offset, mask and key id; a third word after a class
+  row's perception words says which spellings the class resolves to those
+  keys and cells (`js_loco_class`, computed once per class); the receiver
+  info and binding set exclude HOST objects and bound keys. Pawn and
+  Inventory tests use the row's folded names, as `locomotionServices.isA`
+  compares names.
+* **Hand-backs, decided from reads before any write:** a field outside the
+  image; a float that is not finite or not below 2^60 in magnitude (the
+  JavaScript model throws where an intermediate becomes infinite); a facing
+  direction that is not; PHYS_Falling and PHYS_Spider; a gliding pawn; the
+  bAdvancedTactics walking branch (its SpawnNotification lookup); an
+  Inventory MoveTarget close enough to fire Touch; MoveToward with a Pawn
+  target (its zone read); WaitForLanding's LongFall.
+* **Gate.** Bit 4 of the tick word, with the state bit, when
+  pollPawnLocomotion, pawnView, locomotionServices, latentFloat, readNamed
+  and writeNamed are the runtime's own (`ScriptRuntime.originalMethods`).
+  `RUST_POLLS=0` keeps every poll in JavaScript.
+
+**Census** (Island, 360 ticks, per tick, all polls in JavaScript):
+MoveToward walking to a non-Pawn target 20.24, MoveTo walking 2.73,
+MoveTo/TurnTo swimming while gliding (fish) 3.24, WaitForLanding falling
+0.92, TurnTo walking 0.30, the bAdvancedTactics branch 0.28. Gliding is
+the one uncovered family worth adding (glideAcceleration over FCoords).
+
+**Verification.** New `validate-locomotion-kernel`: on real pawns, cases
+aimed at every compare (arrival at horizontal 16 and the height bound,
+Touch at CollisionRadius and CollisionHeight with exact equality, the
+facing cone's edges, deceleration at speed 100, braking at
+AvgPhysicsTime·speed·1.4, the melee bound, NaN payloads, infinities, huge
+values) run the Rust poll and the JavaScript poll from the same images;
+a hand-back must have written nothing, a completed poll must leave every
+image byte of the pawn and its targets as JavaScript does, with the same
+latent outcome and no JavaScript event. Training 3,000 and Island 4,000
+cases identical. Mutation pass: 22 of 25 mutants caught; the three
+survivors cannot change behavior (the restore of an unchanged Destination,
+and two that only move a case between Rust and the hand-back: Touch at
+exact equality, the tactics gate, whose lookup no shipped class resolves).
+Digests match at all 30 checkpoints on both maps and engines with
+`SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1`;
+`validate-actor-tick-kernel`, `-script-vm-interp` and `-x87` pass. Island:
+`js_tick_state` 52 → 6 crossings per tick, `js_tick_resume` 1.
+
+**Timing.** Interleaved A/B against `df5b74a` on Island, 4 pairs (load
+average about 5): medians 9.70, 10.15, 10.89, 11.07 ms before and 8.81,
+9.70, 9.57, 9.53 after, faster in every pair, about 0.5 to 1.5 ms. Browser
+(Island walk, CPU sampling on, loaded machine): tick 10.88 ms, frame
+19.47 ms, no runtime error; not comparable with earlier sessions.
 
 ### Next steps, in recommended order
 

@@ -4129,13 +4129,19 @@ export class ScriptRuntime {
   /** The FMemStack of function frame blocks (script-frame-locals.mjs). */
   frameStack(){return this.frameBlocks??=new FrameStack(this.objectArena());}
 }
-// The methods the Rust event dispatch (dispatch.rs) runs in place of, as
-// this module defines them: a host or validator that wraps one on the
-// prototype or on a runtime keeps every event in JavaScript
-// (script-vm-events.mjs `allowed`).
+// The methods the Rust event dispatch (dispatch.rs) and the Rust latent
+// polls (tick.rs, loco.rs) run in place of, as this module defines them: a
+// host or validator that wraps one on the prototype or on a runtime keeps
+// those events or polls in JavaScript (script-vm-events.mjs `allowed`).
 ScriptRuntime.originalMethods=Object.freeze({
   processEvent:ScriptRuntime.prototype.processEvent,
   executeScript:ScriptRuntime.prototype.executeScript,
   eventLevelGate:ScriptRuntime.prototype.eventLevelGate,
   lookup:ScriptRuntime.prototype.lookup,
+  pollPawnLocomotion:ScriptRuntime.prototype.pollPawnLocomotion,
+  pawnView:ScriptRuntime.prototype.pawnView,
+  locomotionServices:ScriptRuntime.prototype.locomotionServices,
+  latentFloat:ScriptRuntime.prototype.latentFloat,
+  readNamed:ScriptRuntime.prototype.readNamed,
+  writeNamed:ScriptRuntime.prototype.writeNamed,
 });

@@ -36,6 +36,8 @@ const ENTRY: u32 = 16;
 /// The frame word of a ProcessState that returns at once (no execution, or
 /// a null cursor): script-vm-states.mjs FRAME_NONE.
 pub(crate) const FRAME_NONE: u32 = 0xffff_ffff;
+/// Sleep's latent action (execSleep 0x103dfef0 writes 0x180).
+pub(crate) const LATENT_SLEEP: u32 = 384;
 
 #[no_mangle]
 pub extern "C" fn vm_states_ptr() -> *mut u32 {

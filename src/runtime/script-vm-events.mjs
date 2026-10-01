@@ -39,9 +39,12 @@ const SLOTS = 1024, SLOT = 48, CALL_SLOTS = 4096, CALL_SLOT = 48;
 const CALLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_CALLS === '0';
 // RUST_STATE=0 crosses to ProcessState for every ticked actor (tick.rs).
 const STATE_DISABLED = typeof process !== 'undefined' && process.env?.RUST_STATE === '0';
+// RUST_POLLS=0 keeps every latent poll in JavaScript (tick.rs, loco.rs).
+const POLLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_POLLS === '0';
 /** The tick word's bits (EVENTS[3], tick.rs): events dispatch in Rust; a
- * ProcessState with no code to run is skipped. */
-export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2;
+ * ProcessState with no code to run is skipped; Sleep and the locomotion
+ * latent actions are polled in Rust. */
+export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2, TICK_POLL_BIT = 4;
 const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
 export const MAX_RUNS = 256;
 /** The Actor.Tick events (tick.rs E_*): [name, takes the delta]. */
@@ -116,15 +119,21 @@ export class EventHost {
    * script-runtime.mjs defines them (not wrapped on the prototype or the
    * runtime). TICK_STATE_BIT: ProcessState may be skipped when the state
    * table's frame word says it would return at once, with
-   * ScriptState.prototype.process unwrapped. */
+   * ScriptState.prototype.process unwrapped. TICK_POLL_BIT (with the state
+   * bit): Sleep and the locomotion latent actions may be polled in Rust,
+   * with the runtime's poll methods unwrapped. */
   allowed(services) {
     const runtime = this.vm.runtime, m = runtime.constructor.originalMethods;
-    if (services?.runtimeEvents !== true || runtime.services?.scriptVm !== this.vm) return 0;
-    const events = !DISABLED && m !== undefined &&
+    if (services?.runtimeEvents !== true || runtime.services?.scriptVm !== this.vm || m === undefined) return 0;
+    const events = !DISABLED &&
       runtime.processEvent === m.processEvent && runtime.executeScript === m.executeScript &&
       runtime.eventLevelGate === m.eventLevelGate && runtime.lookup === m.lookup;
     const state = !STATE_DISABLED && ScriptState.prototype.process === originalProcess;
-    return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0);
+    const polls = state && !POLLS_DISABLED && runtime.pollPawnLocomotion === m.pollPawnLocomotion &&
+      runtime.pawnView === m.pawnView && runtime.locomotionServices === m.locomotionServices &&
+      runtime.latentFloat === m.latentFloat && runtime.readNamed === m.readNamed && runtime.writeNamed === m.writeNamed;
+    if (polls) this.vm.loco.table();
+    return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0) | (polls ? TICK_POLL_BIT : 0);
   }
   /** js_event_gate. */
   gate(handle) {
