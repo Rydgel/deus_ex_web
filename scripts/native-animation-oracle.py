@@ -17,7 +17,8 @@ spec.loader.exec_module(native)
 
 FIELDS = {'AnimSequence': 0x54, 'AnimFrame': 0x58, 'AnimRate': 0x5c,
           'TweenRate': 0x60, 'AnimLast': 0x220, 'AnimMinRate': 0x224, 'OldAnimRate': 0x228}
-BODIES = {'PlayAnim': (0x103e0160, 3), 'LoopAnim': (0x103e05e0, 4), 'TweenAnim': (0x103e0bd0, 2)}
+BODIES = {'PlayAnim': (0x103e0160, 3), 'LoopAnim': (0x103e05e0, 4), 'TweenAnim': (0x103e0bd0, 2),
+          'IsAnimating': (0x103e15c0, 0)}
 
 
 class Probe(native.NativeCollision):
@@ -26,6 +27,7 @@ class Probe(native.NativeCollision):
         self.actor = self.alloc(0x400)
         self.frame = self.alloc(0x30)
         self.code = self.alloc(32)
+        self.result = self.alloc(4)
         self.mesh = self.alloc(0x200)
         vt = self.alloc(0x100)
         self.write(self.mesh, 'I', vt)
@@ -109,7 +111,8 @@ class Probe(native.NativeCollision):
         self.write(self.mesh + 0x20, 'I', self.name('FixtureMesh'))
         self.write(self.actor + 0x174, 'I', 0 if sample.get('noMesh') else self.mesh)
         self.arguments = sample['args']
-        self.name(self.arguments[0])
+        if self.arguments:
+            self.name(self.arguments[0])
         names = self.alloc(len(self.names) * 4)
         for i, text in enumerate(self.name_text):
             entry = self.alloc(12 + (len(text) + 1) * 2)
@@ -122,8 +125,9 @@ class Probe(native.NativeCollision):
         self.cpu.mem_write(self.code, b'\x10' * count + b'\x16')
         self.write(self.frame + 8, '2I', self.actor, self.code)
         before = bytes(self.cpu.mem_read(self.actor, 0x240)).hex()
-        self.call(body, self.actor, struct.pack('<2I', self.frame, 0))
-        return {'name': sample['name'], 'before': before,
+        self.write(self.result, 'I', 0xcdcdcdcd)
+        self.call(body, self.actor, struct.pack('<2I', self.frame, self.result))
+        return {'name': sample['name'], 'before': before, 'result': self.read(self.result, 'I')[0],
                 'after': bytes(self.cpu.mem_read(self.actor, 0x240)).hex(),
                 'codeAdvance': self.read(self.frame + 12, 'I')[0] - self.code,
                 'names': self.name_text, 'events': self.events}

@@ -77,6 +77,21 @@ OldAnimRate. Positive Time sets the reciprocal tween rate and -1/NumFrames start
 zero/negative/unordered Time sets both frame and TweenRate to zero. SimAnim gets
 frame*10000, rate=0, tween*1000, last=0, with no comparison increment.
 
+## IsAnimating
+
+`AActor::execIsAnimating` (282, `0x103e15c0`) returns 0 for a None
+AnimSequence (+0x54). Otherwise it compares AnimFrame (+0x58) with float 0.0:
+below or unordered (C0) tests TweenRate (+0x60), else AnimRate (+0x5c), each
+against double 0.0, and "equal or unordered" (C3) is not animating. So a
+sequence that is tweening in is animating. The first translation had the
+tween branch inverted (`TweenRate == 0`): `LoopBaseConvoAnim`'s
+`if (!IsAnimating()) LoopAnim('BreatheLight')` then replaced every
+conversation gesture in the tick that started it, and Pawn.Landed played
+`PlayLanded` over startup idles. `isAnimating` in play-anim.mjs is the
+translation; validate-animation-controls runs the original body on 15 cases
+(tweens, both boundaries, signed zeros, denormals, NaN in each field) and
+checks its verdicts, its untouched actor storage and its P_FINISH.
+
 ## Integration boundary
 
 Control calls must read/write the linked Actor animation booleans and SimAnim

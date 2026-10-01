@@ -798,8 +798,15 @@ the separate representation step above.
   `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
   `--bypass --continue --render-feedback --warm 60 --ticks 300
   --digest-every 10 --json`.
-  * The references at this commit are Training `1725cf61fe25d423` and
-    Island `604901ddf66b4614`. They were Training `f217d0b162ab0189` and
+  * The references at this commit are Training `7d5804dd8ad9a9d4` and
+    Island `d99a97de6f21893f`. They were Training `1725cf61fe25d423` and
+    Island `604901ddf66b4614` until IsAnimating (282) stopped inverting its
+    tween branch (October 1, [animation
+    controls](script-animation-controls.md#isanimating)): NPCs that land at
+    startup while tweening into their idle now skip Pawn.Landed's
+    `PlayLanded`, which sets `bIsWalking` (16 landings in Training, 45 on
+    Island; the final states differ only in `bIsWalking`, on 14 and 19
+    pawns). Before that they were Training `f217d0b162ab0189` and
     Island `3f390b4c79796dd7` until the live registry gained DeusEx.u's
     package record before Login (October 1, [conversation
     camera](conversation-camera.md)): the player's host registry slot, and with

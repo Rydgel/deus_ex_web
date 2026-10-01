@@ -53,6 +53,19 @@ for(const native of ['PlayAnim','LoopAnim','TweenAnim']) {
   add(native,`${native}-null-mesh`,['Walk',0.5],previous,{noMesh:true});
   add(native,`${native}-missing-sequence`,['AbsentSequence',0.5],previous);
 }
+// IsAnimating (282): [AnimSequence, AnimFrame, AnimRate, TweenRate, expected].
+// 'NaN' and '-0' survive JSON as strings; the oracle stores them as float32.
+const animating=[
+  ['none-sequence','None',0.3,1,1,0],['playing','Walk',0.3,0.5,0,1],['stopped','Walk',0.3,0,2,0],
+  ['tween-in','Walk',-0.1,0.5,2.5,1],['tween-done','Walk',-0.1,0.5,0,0],['frame-zero-not-below','Walk',0,0,3,0],
+  ['frame-negative-zero','Walk','-0',1,0,1],['frame-unordered-stopped','Walk','NaN',1,0,0],
+  ['frame-unordered-tween','Walk','NaN',0,2,1],['rate-unordered','Walk',0.5,'NaN',0,0],
+  ['tween-unordered','Walk',-0.5,1,'NaN',0],['rate-negative','Walk',0.2,-1,0,1],
+  ['rate-negative-zero','Walk',0.2,'-0',5,0],['rate-denormal','Walk',0.2,1e-45,0,1],
+  ['frame-negative-denormal','Walk',-1e-45,0,1,1],
+];
+for(const [name,AnimSequence,AnimFrame,AnimRate,TweenRate,expected] of animating)
+  add('IsAnimating',name,[],{...previous,AnimSequence,AnimFrame,AnimRate,TweenRate},{expected});
 assert.equal(seq('HitTorso').numFrames,4);
 const reference=JSON.parse(execFileSync(process.env.DEUS_EX_NATIVE_PYTHON??'.cache/native-probe-env/bin/python',
   ['scripts/native-animation-oracle.py',root],{input:JSON.stringify(cases),encoding:'utf8',maxBuffer:8*1024*1024}));
@@ -61,7 +74,7 @@ if(process.argv.includes('--reference-only')) {
   console.log(`${reference.cases.length} original animation exec cases captured.`);
   process.exit(0);
 }
-const {execPlayAnim,execLoopAnim,execTweenAnim}=await import('../src/runtime/play-anim.mjs');
+const {execPlayAnim,execLoopAnim,execTweenAnim,isAnimating}=await import('../src/runtime/play-anim.mjs');
 const controls={PlayAnim:execPlayAnim,LoopAnim:execLoopAnim,TweenAnim:execTweenAnim};
 const offsets={AnimFrame:0x58,AnimRate:0x5c,TweenRate:0x60,AnimLast:0x220,AnimMinRate:0x224,OldAnimRate:0x228};
 for(let i=0;i<cases.length;i++) {
@@ -71,6 +84,13 @@ for(let i=0;i<cases.length;i++) {
     Velocity:[0x144,0x148,0x14c].map(at=>before.readFloatLE(at)),
     simAnim:Object.fromEntries(['frame','rate','tween','last'].map((key,n)=>[key,before.readFloatLE(0x22c+n*4)])),
     ...Object.fromEntries(Object.entries(offsets).map(([key,at])=>[key,before.readFloatLE(at)]))};
+  if(sample.native==='IsAnimating'){
+    assert.equal(original.result,sample.expected,`${sample.name}: original verdict`);
+    assert.equal(isAnimating(actor),original.result,sample.name);
+    assert.equal(original.after,original.before,`${sample.name}: actor storage untouched`);
+    assert.equal(original.codeAdvance,1,`${sample.name}: P_FINISH`);
+    continue;
+  }
   const logs=[], args=sample.args.slice(1).map(value=>value===null?undefined:Math.fround(Number(value)));
   const actualMesh=sample.noMesh?null:{...mesh,sequences:sample.sequences};
   if(sample.native==='TweenAnim')execTweenAnim(actor,actualMesh,sample.args[0],args[0],(...v)=>logs.push(v));
@@ -93,4 +113,4 @@ for(let i=0;i<cases.length;i++) {
   assert.equal(original.codeAdvance,count+1);
   assert.deepEqual(original.events.filter(e=>e.op==='Step').map(e=>e.index),Array.from({length:count},(_,n)=>n));
 }
-console.log(`PASS ${cases.length} original animation controls: complete actor storage, optional arguments, lookup/guards, reciprocal tweening, LoopAnim continuation and SimAnim writes.`);
+console.log(`PASS ${cases.length} original animation controls: complete actor storage, optional arguments, lookup/guards, reciprocal tweening, LoopAnim continuation and SimAnim writes; ${animating.length} IsAnimating verdicts including tweens, signed zeros, denormals and NaN.`);

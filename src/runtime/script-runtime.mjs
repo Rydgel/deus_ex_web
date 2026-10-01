@@ -42,7 +42,7 @@ import {
   installActorCollisionView, findActorBase, setCollisionArguments,
   setActorCollision, setActorCollisionSize, setActorPhysics,
 } from './script-actor-collision.mjs';
-import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim, execTweenBlendAnim } from './play-anim.mjs';
+import { execPlayAnim, execLoopAnim, execTweenAnim, execPlayBlendAnim, execTweenBlendAnim, isAnimating } from './play-anim.mjs';
 import { execGetAnimGroup } from './script-get-anim-group.mjs';
 import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
@@ -3371,14 +3371,7 @@ export class ScriptRuntime {
         state:this.instance(call.receiver).state,
       });
     }
-    if(call.index===282){
-      // AActor::IsAnimating/execIsAnimating 0x103e15c0: AnimSequence != None
-      // && (AnimFrame<0 ? TweenRate==0 : AnimRate!=0) — +0x54/+0x58/+0x5c/+0x60
-      // fields, both compares against double 0.0.
-      const view=animationView(this,call.receiver);
-      if(lower(view.AnimSequence)==='none')return 0;
-      return (view.AnimFrame<0?view.TweenRate===0:view.AnimRate!==0)?1:0;
-    }
+    if(call.index===282)return isAnimating(animationView(this,call.receiver));
     if(call.index===293)return execGetAnimGroup(call,{
       mesh:()=>this.meshPayload(call.receiver),
       log:(kind,details)=>this.warning?.({type:'GetAnimGroup',kind,...details}),

@@ -10,6 +10,15 @@ const equalOrUnordered = (a, b) => a === b || unordered(a, b);
 const lessOrUnordered = (a, b) => a < b || unordered(a, b);
 const nonzeroOrdered = value => value !== 0 && !Number.isNaN(value);
 
+/** AActor::execIsAnimating (282) at 0x103e15c0: None AnimSequence (+0x54)
+ * is not animating; otherwise AnimFrame (+0x58) is fcomp'd with float 0.0
+ * and below or unordered (C0) tests TweenRate (+0x60), else AnimRate (+0x5c),
+ * each fcomp'd with double 0.0: equal or unordered (C3) is not animating. */
+export function isAnimating(actor) {
+  if (!hasSequence(actor.AnimSequence)) return 0;
+  return nonzeroOrdered(lessOrUnordered(actor.AnimFrame, 0) ? actor.TweenRate : actor.AnimRate) ? 1 : 0;
+}
+
 /** UMesh vtable +68: original FName identity comparison in the 32-byte table. */
 export function findAnimSeq(mesh, sequenceName) {
   return mesh?.sequences.find(sequence => nameKey(sequence.name) === nameKey(sequenceName)) ?? null;
