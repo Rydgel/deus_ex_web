@@ -90,11 +90,15 @@ async function playConversationSpeech(event){
     audioTransport.starts++;audioTransport.lastStarted={id:event.id,sound};
     // Lip sync analyses the speech at its own rate (the MP3 header's, Galaxy's
     // record +0x3c); the realtime decode above may be resampled.
+    // A failed second decode leaves this speech without lip sync (the
+    // speech itself is playing); the reason is in status().audio.
     const rate=mp3SampleRate(bytes);
     if(rate&&lipSync){
-      const offline=new OfflineAudioContext(1,Math.max(1,Math.ceil(buffer.duration*rate)),rate);
-      const pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
-      if(!entry.cancelled)lipSync.attach(event.id,{pcm,rate,position:()=>(context.currentTime-startedAt)*rate*source.playbackRate.value});
+      try{
+        const offline=new OfflineAudioContext(1,Math.max(1,Math.ceil(buffer.duration*rate)),rate);
+        const pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
+        if(!entry.cancelled)lipSync.attach(event.id,{pcm,rate,position:()=>(context.currentTime-startedAt)*rate*source.playbackRate.value});
+      }catch(error){audioTransport.lipSyncFailures=(audioTransport.lipSyncFailures??0)+1;audioTransport.lipSyncError=String(error?.message??error);}
     }
   }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);
     audioTransport.failures++;audioTransport.lastError=String(error.message);pauseForRuntimeError(error);}

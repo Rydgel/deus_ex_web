@@ -28,7 +28,7 @@ if (process.argv[2] !== 'child') {
   assert.ok(run.paulSpeeches > 0, 'Paul spoke');
   assert.ok(run.analyses > 20, `analyses ran (${run.analyses})`);
   assert.ok(run.paulSlots.length && run.paulSlots.every(slot => slot === 5), `Paul speaks on SLOT_Talk: ${run.paulSlots}`);
-  assert.ok(run.nonTalk.length > 0, 'a non-Talk speech (the DataLink) is heard too');
+  assert.deepEqual(run.nonTalk, [{ emitter: 'JCDentonMale0', slot: 0 }], 'the one non-Talk speech: the opening DataLink, on JC in SLOT_None');
   assert.equal(run.nonTalkAnalysed, 0, 'a non-Talk channel is never analysed');
   assert.equal(run.cadenceErrors, 0, 'each analysis waits for 0.1 s of channel time (float sums)');
   assert.ok(Object.keys(run.paulLetters).length >= 4, `Paul's nextPhoneme varies: ${JSON.stringify(run.paulLetters)}`);

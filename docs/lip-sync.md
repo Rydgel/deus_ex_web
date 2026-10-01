@@ -157,7 +157,8 @@ input, oracle and twiddle table.
 the speech the player hears through the channels (PCM from ffmpeg, position
 from the channel's own time): Paul's speech is on SLOT_Talk, the opening
 DataLink's non-Talk channel is never analysed, every analysis follows 0.1 s of
-channel time with `next` advancing by float sums, Paul's `nextPhoneme` takes
+channel time with `next` advancing by float sums (the one non-Talk speech,
+the opening DataLink, plays on JC in slot 0), Paul's `nextPhoneme` takes
 several letters, and Pawn.LipSynch tweens only `Mouth*` sequences into blend
 slot 0. In the browser, Paul's letters and mouth sequences follow the playing
 speech (sampled every 100 ms) on his channel 571418 (35713 << 4 | Talk).
@@ -177,7 +178,14 @@ These are real-time in the original and differ run to run there too:
   (ClientHearSound), ended by StopSound or when the source ends (the
   original polls the voice's state, `0x1060cf00`).
 * the update runs once per Play frame after the game tick with the frame's
-  wall-clock delta; the original's Update is once per rendered frame too.
+  wall-clock delta. The original's `Audio->Update` is called from
+  `UGameEngine::Draw` (`0x1038f638`, Audio vtable +0x60 with the view's
+  PointRegion and the frame's Coords, right after the master frame is
+  created), not from `UGameEngine::Tick` (which never reads `Audio`, +0x4c):
+  each frame the level tick, where LipSynch reads `nextPhoneme`, comes before
+  the update that writes it, so a letter takes effect at the next tick, as in
+  Play. A failed second decode (the 16-bit PCM) leaves that speech without
+  lip sync and is counted in `status().audio.lipSyncFailures`.
 * a speech that is not MP3 (no MPEG frame header) gets no lip sync: the
   non-streamed path (record data, 0.1 s ahead) is not translated.
 
