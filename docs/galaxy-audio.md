@@ -233,7 +233,10 @@ appSecondsSlow). A Player-start reload stops every channel; the original's
 level change of the subsystem is not traced.
 
 Samples: every AmbientSound of the level is decoded before the first tick (the
-WAV payload of the USound export). Voices are host records with a clock: a
+WAV payload of the USound export), and any other sound the first time Galaxy
+needs it, synchronously from its loaded package (a script that sets
+AmbientSound later, Warehouse's dogs). A sample the host cannot decode plays as
+an empty voice that finishes at once, and is noted. Voices are host records with a clock: a
 voice's position advances by the elapsed time times its last frequency;
 with the WAV's own `smpl` loop it wraps between the loop points, and without
 one it finishes after its frames. That is what `voicePlaying` reports.

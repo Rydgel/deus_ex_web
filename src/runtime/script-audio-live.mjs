@@ -56,15 +56,23 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
   // Every AmbientSound of the level, decoded before the first tick (the
   // update is synchronous; RegisterSound's decode is the host's).
   const samples = new Map(), notes = new Set();
-  async function prepareSample(sound) {
-    if (!sound || samples.has(sound)) return;
-    await runtime.prepareResource(sound);
+  // RegisterSound decodes on first use; the export's package bytes are in
+  // memory once its package is loaded, so the decode can run synchronously.
+  function decodeSample(sound) {
     const {asset, index} = sound;
+    if (!asset?.bytes || !Number.isInteger(index)) return null;
     const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: asset.pkg.exports[index - 1]});
     const start = asset.pkg.exports[index - 1].serialOffset + decoded.lazy.inlineOffset;
     const bytes = decoded.bytes ?? asset.bytes.slice(start, start + decoded.lazy.byteCount);
-    if (decoded.lazy.formatName.toLowerCase() !== 'wav') { notes.add(`${sound.key}: ${decoded.lazy.formatName} sample`); return; }
-    samples.set(sound, {sound, bytes, ...wavInfo(bytes)});
+    if (decoded.lazy.formatName.toLowerCase() !== 'wav') { notes.add(`${sound.key}: ${decoded.lazy.formatName} sample`); return null; }
+    const sample = {sound, bytes, ...wavInfo(bytes)};
+    samples.set(sound, sample);
+    return sample;
+  }
+  async function prepareSample(sound) {
+    if (!sound || samples.has(sound)) return;
+    await runtime.prepareResource(sound);
+    decodeSample(sound);
   }
   for (const actor of level.actors) if (actor) {
     try { await prepareSample(read(actor, 'AmbientSound')); } catch (error) { notes.add(String(error?.message ?? error)); }
@@ -104,16 +112,24 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
       if (!(brightness >= 0)) brightness = 0; else if (!(brightness < 1)) brightness = 1;
       return brightness;
     },
+    // A sample the host cannot decode (package bytes not loaded, a format
+    // other than WAV) plays as an empty voice that finishes at once, noted:
+    // a host limitation, not Galaxy's (whose loader would have decoded it).
     sample: sound => {
-      const sample = samples.get(sound);
-      if (!sample) throw new Error(`Galaxy sample is not prepared: ${sound?.key ?? 'None'}`);
+      let sample = samples.get(sound);
+      if (!sample) { try { sample = decodeSample(sound); } catch (error) { notes.add(String(error?.message ?? error)); } }
+      if (!sample) {
+        notes.add(`${sound?.key ?? 'None'}: sample unavailable to the host`);
+        sample = {sound, bytes: null, rate: 22050, frames: 0, loop: null};
+        samples.set(sound, sample);
+      }
       return sample;
     },
     voicePlaying: voice => voices.get(voice)?.playing ?? false,
     startVoice: (channel, sample, frequency, volume, pan) => {
       const voice = nextVoice++;
       voices.set(voice, {sample, frequency, volume, pan, position: 0, playing: true});
-      onVoice?.({op: 'start', voice, channel, sound: sample.sound.key, bytes: sample.bytes, rate: sample.rate,
+      if (sample.bytes) onVoice?.({op: 'start', voice, channel, sound: sample.sound.key, bytes: sample.bytes, rate: sample.rate,
         loop: sample.loop, frequency, volume, pan, digital});
       return voice;
     },
