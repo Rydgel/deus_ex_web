@@ -67,12 +67,24 @@ the texture. A surface without a texture draws the viewport actor's
 whose `Sprite` (`+0x168`) is set, that texture replaces every surface's (Get
 too); the player's Sprite is None in play.
 
-The same pass pans: `PanU = f32(Surf.PanU + (ftol(Zone.TexUPanSpeed ·
-Level.TimeSeconds · 35f · 256.0) & 0x3ffff) · (1/256))` under `PF_AutoUPan`
-(`0x200`), and the same for V with TexVPanSpeed under `PF_AutoVPan`
-(`0x400`). `Zone` is the draw list's zone actor (`+0x34`), Level is
-`Frame->Level`'s LevelInfo (asserted). `PF_SmallWavy` (`0x2000`) follows.
-These are recovered but not yet in the viewer.
+The same pass pans (`0x10b1a59a`-`0x10b1a72a`): `PanU = f32(Surf.PanU +
+(ftol(Zone.TexUPanSpeed · Level.TimeSeconds · 35f · 256.0) & 0x3ffff) ·
+(1/256))` under `PF_AutoUPan` (`0x200`), and the same for V with
+TexVPanSpeed under `PF_AutoVPan` (`0x400`), so a pan wraps every 1,024
+texels. Level is `Frame->Level`'s LevelInfo (asserted). `Zone` is the draw
+list's zone actor (`+0x34`). The BSP occlusion pass (`0x10b173d0`) sets it:
+`IsFront = Plane·Viewpoint - W > 0` (`0x10b17dc9`), the node's
+`iZone[IsFront]` (FBspNode `+0x34`), then `Model.Zones[iZone].ZoneActor`
+(retail Zones at `+0x104`, stride `0x18`) or the LevelInfo. `PF_SmallWavy`
+(`0x2000`) follows; no map has a wavy surface.
+
+`surfacePan` (texture-animation.mjs) translates the pan.
+`scripts/validate-native-surface-pan.mjs` runs that instruction range of
+Render.dll on fabricated surfaces, zones and levels
+(`native-surface-pan-oracle.py`; msvcrt `_ftol` is the truncating x87
+sequence of the mesh-light oracle). 400 cases match as bits: every flag
+combination, int16 pans, speeds and times with zeros, infinities, NaN and
+products past the int32 range. Without the `0x3ffff` mask, 238 fail.
 
 ## Play
 
@@ -85,11 +97,22 @@ the merged opaque batches, whose texture slots are fixed. A frame whose size
 differs from the head's keeps the head's UV scale and is noted (none in
 Training).
 
+Auto-panned surfaces (39 in 36 maps; Training's and Island's are sky
+surfaces) get their own material whose texture objects carry the pan as a UV
+offset. The zone is the node's zone on the camera's side of its plane (a
+mover's both sides take its zone), and its TexUPanSpeed/TexVPanSpeed and
+Level.TimeSeconds come from the running level (`game.surfacePan()`). Without
+a running level, TimeSeconds is 0 and the surfaces keep their authored pan.
+The sky pass draws sky surfaces from the SkyZoneInfo's viewpoint, but the
+side test uses the main camera's.
+
 Unverified: the original runs Update only for surfaces in its draw list after
 BSP occlusion, which is not recovered, so a texture out of view keeps
 advancing here instead of advancing once when it reappears. The world notes
 this. Mesh skins with AnimNext still throw as unsupported.
 
-`scripts/validate-texture-animation-play.mjs` loads Training in headless
-Chromium: its 12 animated heads (14 materials) advance, each change follows
-the chain's AnimNext, and every material draws the shown frame.
+`scripts/validate-texture-animation-play.mjs [--map]` loads a map in
+headless Chromium. Training's 12 animated heads (Island's 4) advance, each
+change follows the chain's AnimNext, and every material draws the shown
+frame. Each panned group's offset equals surfacePan for the frame's
+TimeSeconds and zone (Training's SkyZoneInfo1, Island's SkyZoneInfo3).

@@ -248,6 +248,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       doors.tick(seconds);
       hud?.tick(doors.scriptRuntime.lastTickDelta);
     },
+    /** Render.dll's auto-pan inputs (docs/texture-animation.md): the
+     * LevelInfo's TimeSeconds and a zone actor's live TexUPanSpeed and
+     * TexVPanSpeed, by name (zone actors are pre-placed). */
+    surfacePan() {
+      const level = runtime.levelFor(player.collisionActor);
+      return { timeSeconds: levelTime.get(), zoneSpeeds: name => {
+        const actor = level.actors.find(candidate => candidate?.name === name);
+        return actor ? [runtime.readNamed(actor, 'TexUPanSpeed'), runtime.readNamed(actor, 'TexVPanSpeed')] : null;
+      } };
+    },
     // Render.dll SetupDynamics' per-frame scan of the level actor array
     // (docs/dynamic-lighting.md): live light fields of every moving-light
     // candidate, e.g. AugLight's Beams, for the world's lightmap pass.

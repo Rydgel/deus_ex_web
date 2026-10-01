@@ -473,8 +473,10 @@ UTexture Get, Update, Tick and ConstantTimeTick, oracle-exact over 309
 fabricated chains, with PostLoad's start state and UViewport::Lock's clock
 ([texture animation](texture-animation.md)). Without recovered BSP occlusion
 every animated texture advances each frame, not only the drawn ones.
-Render.dll's auto-panning formula is recovered but not wired; animated mesh
-skins and the Fire.dll procedural textures remain.
+Auto-panned surfaces (skies, 39 in 36 maps) follow Render.dll's pan formula,
+bit-exact over 400 cases, with the viewer-side zone's speeds and
+Level.TimeSeconds. Animated mesh skins and the Fire.dll procedural textures
+remain.
 
 ## 5. Implement the full gameplay systems
 

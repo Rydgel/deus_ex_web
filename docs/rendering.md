@@ -39,9 +39,9 @@ masks are reconstructed as described in [lighting.md](lighting.md). Moving
 lights add their texels to BSP and mover light maps in Play, as described in
 [dynamic-lighting.md](dynamic-lighting.md). Animated surface textures
 (AnimNext chains) advance through the original UTexture Get/Update/Tick
-([texture animation](texture-animation.md)); auto-panning (recovered there),
-wavy surfaces, fog and dynamic lighting of meshes remain outside the current
-renderer. Display brightness follows the original D3D
+and auto-panned surfaces pan with Render.dll's formula
+([texture animation](texture-animation.md)); wavy surfaces, fog and dynamic
+lighting of meshes remain outside the current renderer. Display brightness follows the original D3D
 gamma curve, separately from light intensities. Static translucent horizontal
 mirror floors now render reflected views and blend before gamma; see
 [original mirror evidence and remaining limits](mirror-surfaces.md). General

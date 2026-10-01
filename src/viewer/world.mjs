@@ -9,7 +9,8 @@ import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
 import { batchWorldMeshes } from './world-batches.mjs';
-import { get as textureFrame } from '../runtime/texture-animation.mjs';
+import { get as textureFrame, surfacePan } from '../runtime/texture-animation.mjs';
+import { ClassDefaults } from '../unreal/classes.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
@@ -77,16 +78,34 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     return frames;
   }
 
-  async function materialFor(surface, tile, mirror) {
+  // Zone actors for auto-pan: Model.Zones[i].ZoneActor, else the LevelInfo
+  // (GetZoneActor), with class defaults for TexUPanSpeed/TexVPanSpeed.
+  const classDefaults = new ClassDefaults(assets), zoneActors = new Map();
+  const levelInfoActor = map.actors.find(actor => actor.className === 'LevelInfo') ?? null;
+  async function zoneActor(zone) {
+    if (zoneActors.has(zone)) return zoneActors.get(zone);
+    const ref = map.model.zones?.[zone]?.actor;
+    const actor = (ref > 0 && map.actors.find(candidate => candidate.index === ref)) || levelInfoActor;
+    const values = actor ? await classDefaults.forActor(asset, actor) : {};
+    const record = { name: actor?.name ?? null, speeds: [Math.fround(values.TexUPanSpeed ?? 0), Math.fround(values.TexVPanSpeed ?? 0)] };
+    zoneActors.set(zone, record);
+    return record;
+  }
+  const panned = [];
+
+  async function materialFor(surface, tile, mirror, pan = null) {
     let flags = surface.flags;
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
     if (data.procedural) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
-    const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}`;
+    const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}`;
     if (!materials.has(key)) {
-      const material = new THREE.MeshBasicMaterial({ map: gpuTexture(data, flags),
+      // A panned material owns its texture objects (shared image data), whose
+      // offset carries the pan.
+      const own = texture => pan ? Object.assign(texture.clone(), { needsUpdate: true }) : texture;
+      const material = new THREE.MeshBasicMaterial({ map: own(gpuTexture(data, flags)),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
       applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror,
@@ -107,9 +126,16 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         // The surface's texture is the chain head; Render draws its Get(Time).
         const head = await animationRecord(data);
         head.data.set(data.masked, data);
-        head.uses.push({ material, frames: await animationFrames(head, data, flags) });
+        const frames = await animationFrames(head, data, flags);
+        if (pan) for (const [frame, texture] of frames) frames.set(frame, own(texture));
+        head.uses.push({ material, frames });
         animatedHeads.add(head);
         material.userData.animated = true;
+      }
+      if (pan) {
+        material.userData.animated = true;
+        panned.push({ material, surface, zones: await Promise.all(pan.zones.map(zoneActor)), plane: pan.plane,
+          width: data.mips[0].width, height: data.mips[0].height, last: null });
       }
       materials.set(key, material);
     }
@@ -124,21 +150,26 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const moverZone = matrix ? pointZone(map.model, transform(model.bounds.min.map((n, i) => (n + model.bounds.max[i]) / 2))) : null;
     const bySurface = new Map();
     for (const t of triangles) {
-      const zone = moverZone ?? model.nodes[t.node].zones[1];
-      const key = `${t.surface}:${zone}`;
-      if (!bySurface.has(key)) bySurface.set(key, { surfaceIndex: t.surface, zone, ts: [] });
+      const node = model.nodes[t.node], zone = moverZone ?? node.zones[1];
+      // An auto-panned surface pans with the zone on the viewer's side of
+      // its node (Render.dll's draw-list zone), so both zones are kept.
+      const panned = model.surfaces[t.surface].flags & (POLY.AutoUPan | POLY.AutoVPan);
+      const zones = panned ? (moverZone === null ? node.zones : [moverZone, moverZone]) : null;
+      const key = `${t.surface}:${zone}${zones ? `:${zones[0]}` : ''}`;
+      if (!bySurface.has(key)) bySurface.set(key, { surfaceIndex: t.surface, zone, ts: [],
+        pan: zones ? { zones, plane: node.plane, key: `${actorName ?? ''}:${key}` } : null });
       bySurface.get(key).ts.push(t);
     }
     const batches = new Map();
     let done = 0;
-    for (const { surfaceIndex, zone, ts } of bySurface.values()) {
+    for (const { surfaceIndex, zone, ts, pan } of bySurface.values()) {
       const surface = model.surfaces[surfaceIndex];
       if (surface.flags & (POLY.Invisible | POLY.FakeBackdrop)) continue;
       try {
         const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
         const mirror = mirrors.surface(model, surface, actorName);
-        const { material, flags, key } = await materialFor(surface, tile, mirror);
+        const { material, flags, key } = await materialFor(surface, tile, mirror, pan);
         if (flags & POLY.Invisible) continue;
         const lit = tile.enabled && !(flags & (POLY.Unlit | POLY.Modulated));
         lighting.stats[lit ? 'litSurfaces' : 'unlitSurfaces']++;
@@ -203,6 +234,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   if (mirrors.stats.surfaces) notes.add('Static translucent mirror floors render reflected world and actor views. Recursive mirrors and mirror/sky combinations remain unverified.');
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
+  if (panned.length) notes.add(`${panned.length} auto-panned surface groups follow Level.TimeSeconds and their viewer-side zone's pan speeds.`);
   if (animatedHeads.size) notes.add(`${animatedHeads.size} animated surface textures advance every frame; the original advances only those its BSP occlusion draws.`);
   const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
   function updateLighting(changes) {
@@ -247,14 +279,33 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * original updates only the textures of surfaces in its draw list; BSP
      * occlusion is not recovered, so every animated texture of the world
      * advances each frame here. */
-    updateTextureAnimation(time = clock()) {
+    updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null } = {}) {
       for (const head of animatedHeads) {
         const frame = textureFrame(head, time);
         if (frame === head.shown) continue;
         head.shown = frame;
         for (const { material, frames } of head.uses) material.map = frames.get(frame);
       }
+      // Auto-pan with the zone on the viewer's side of the node plane
+      // (IsFront = Plane·Viewpoint - W > 0) and Level.TimeSeconds; without a
+      // running level TimeSeconds stays 0 and so does the pan.
+      for (const entry of panned) {
+        const side = viewpoint && entry.plane[0] * viewpoint[0] + entry.plane[1] * viewpoint[1] + entry.plane[2] * viewpoint[2] - entry.plane[3] > 0 ? 1 : 0;
+        const zone = entry.zones[viewpoint ? side : 1];
+        const [speedU, speedV] = (zone.name && zoneSpeeds?.(zone.name)) ?? zone.speeds;
+        const { surface } = entry;
+        const pan = surfacePan({ panU: surface.pan[0], panV: surface.pan[1], flags: surface.flags,
+          speedU: Math.fround(speedU), speedV: Math.fround(speedV), timeSeconds: Math.fround(timeSeconds) });
+        // The geometry's UVs already carry Surf.PanU/PanV.
+        const u = (pan.u - surface.pan[0]) / entry.width, v = (pan.v - surface.pan[1]) / entry.height;
+        if (entry.last && entry.last[0] === u && entry.last[1] === v && entry.last[2] === entry.material.map) continue;
+        entry.material.map.offset.set(u, v);
+        entry.last = [u, v, entry.material.map];
+      }
     },
+    pannedSurfaces: () => panned.map(entry => ({ flags: entry.surface.flags, pan: [...entry.surface.pan],
+      zones: entry.zones.map(zone => zone.name), speeds: entry.zones.map(zone => zone.speeds), plane: entry.plane,
+      width: entry.width, height: entry.height, offset: [entry.material.map.offset.x, entry.material.map.offset.y] })),
     animatedTextures: () => [...animatedHeads].map(head => {
       const chain = [];
       let frame = head;

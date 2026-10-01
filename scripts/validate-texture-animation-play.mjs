@@ -24,7 +24,8 @@ if (!url) {
   await server.listen();
   url = server.resolvedUrls.local[0].replace(/\/$/, '');
 }
-const hook = `\nwindow.__deusTextureAnimation={get world(){return world;}};\n`;
+const hook = `\nwindow.__deusTextureAnimation={get world(){return world;},get game(){return game;},get camera(){return camera;}};\n`;
+const map = option('map', '00_Training');
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 let report;
 try {
@@ -36,6 +37,10 @@ try {
   });
   await page.goto(url);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
+  if (map !== '00_Training') {
+    await page.locator('#map').selectOption(map);
+    await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});
+  }
   report = await page.evaluate(async () => {
     const world = window.__deusTextureAnimation.world;
     const materials = [...world.materials.values()].filter(m => m.userData.animated).length;
@@ -54,12 +59,35 @@ try {
     return {materials, undrawn, heads: [...samples].map(([key, record]) => ({key, ...record})),
       notes: world.notes.filter(note => /animat/i.test(note))};
   });
+  // Auto-pan: each panned group's offset is Render.dll's surfacePan for the
+  // level's TimeSeconds and the viewer-side zone's speeds, over the drawn UVs.
+  report.pan = await page.evaluate(async () => {
+    const {surfacePan} = await import('/src/runtime/texture-animation.mjs');
+    const {fromView} = await import('/src/unreal/geometry.mjs');
+    const v = window.__deusTextureAnimation, out = [];
+    for (let k = 0; k < 3; k++) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const inputs = v.game?.surfacePan(), viewpoint = fromView(v.camera.position.toArray());
+      for (const entry of v.world.pannedSurfaces()) {
+        const side = entry.plane[0] * viewpoint[0] + entry.plane[1] * viewpoint[1] + entry.plane[2] * viewpoint[2] - entry.plane[3] > 0 ? 1 : 0;
+        const name = entry.zones[side], speeds = (name && inputs.zoneSpeeds(name)) ?? entry.speeds[side];
+        const pan = surfacePan({panU: entry.pan[0], panV: entry.pan[1], flags: entry.flags, speedU: Math.fround(speeds[0]),
+          speedV: Math.fround(speeds[1]), timeSeconds: Math.fround(inputs.timeSeconds)});
+        out.push({time: inputs.timeSeconds, zone: name, offset: entry.offset,
+          expected: [(pan.u - entry.pan[0]) / entry.width, (pan.v - entry.pan[1]) / entry.height]});
+      }
+    }
+    return out;
+  });
   report.pageErrors = errors;
   report.status = await page.evaluate(() => window.deusExViewer.status().runtimeError ?? null);
 } finally { await browser.close(); await server?.close(); }
-console.log(JSON.stringify(report, null, 1).slice(0, 4000));
+console.log(JSON.stringify({...report, heads: report.heads.map(head => ({key: head.key, frames: head.frames.length}))}, null, 1));
 assert.deepEqual(report.pageErrors, []);
-assert.ok(report.materials > 0, 'Training has animated surface materials');
+assert.ok(report.materials > 0, `${map} has animated surface materials`);
+// Each sample reads the world after a frame's update and the level time the
+// same frame used (the level ticks only inside that frame's update).
+for (const sample of report.pan) assert.deepEqual(sample.offset, sample.expected, `pan at ${sample.time} in ${sample.zone}`);
 assert.equal(report.undrawn, 0, 'every material draws its head\'s shown frame');
 for (const head of report.heads) {
   const frames = head.frames.filter(Boolean);
@@ -70,4 +98,4 @@ for (const head of report.heads) {
   for (let i = 1; i < frames.length; i++)
     assert.equal(frames[i], next(frames[i - 1]), `${head.key}: ${frames[i - 1]} -> ${frames[i]} follows AnimNext`);
 }
-console.log(`validate-texture-animation-play: PASS (${report.heads.length} animated heads, ${report.materials} materials)`);
+console.log(`validate-texture-animation-play: PASS (${map}: ${report.heads.length} animated heads, ${report.materials} materials, ${report.pan.length} pan samples)`);

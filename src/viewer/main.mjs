@@ -826,7 +826,11 @@ function animate(time) {
     }
     phase('actors');
     renderer.info.reset();
-    world.updateTextureAnimation();
+    let panInputs = null;
+    if (mode === 'play' && game && !runtimeError) {
+      try { panInputs = game.surfacePan(); } catch (error) { pauseForRuntimeError(error); }
+    }
+    world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()) });
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
