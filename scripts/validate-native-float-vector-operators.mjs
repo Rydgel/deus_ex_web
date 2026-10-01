@@ -89,8 +89,52 @@ const NATIVES = {
     [['A', 'struct', false, false], ['B', 'struct', false, false], ['ReturnValue', 'struct', true, true]],
     /native\(296\)\s+static final operator\(16\)\s+vector\s+\*\s*\(\s*vector A,\s*vector B\s*\)/,
     [[0x101379fe, 'd944241c'], [0x10137a02, 'd84c2410'], [0x10137a0e, 'd95c2404'], [0x10137a24, 'd95c2404'], [0x10137a37, 'd95c2408']]],
+  // The operators the VMs compute with host arithmetic and the x87 NaN rules
+  // (script-vm.mjs x87arith, interp.rs x87_nan): each is FLD m32, one x87
+  // FMUL/FDIV/FADD/FSUB, FSTP m32 (214: FDIVR m64 1.0, FMUL st(1) per component).
+  ...Object.fromEntries([
+    ['multiplyFloatFloat', 171, 0x10101efb, 0x10134e80, 'multiply_floatfloat', 16, [0x29, 0x6d, 0x03, 0x29, 0x6e, 0x03], '\\*', 'float A', 'float B',
+      [[0x10134ecc, 'd944240c'], [0x10134ed7, 'd84c2404'], [0x10134ee0, 'd91a']]],
+    ['divideFloatFloat', 172, 0x10102c0c, 0x10134f50, 'divide_floatfloat', 16, [0x29, 0x71, 0x03, 0x29, 0x72, 0x03], '\\/', 'float A', 'float B',
+      [[0x10134f9c, 'd9442404'], [0x10134fa0, 'd874240c'], [0x10134fb0, 'd91a']]],
+    ['addFloatFloat', 174, 0x101020cc, 0x10135100, 'add_floatfloat', 20, [0x29, 0x79, 0x03, 0x29, 0x7a, 0x03], '\\+', 'float A', 'float B',
+      [[0x1013514c, 'd944240c'], [0x10135157, 'd8442404'], [0x10135160, 'd91a']]],
+    ['subtractFloatFloat', 175, 0x1010265d, 0x101351d0, 'subtract_floatfloat', 20, [0x29, 0x7d, 0x03, 0x29, 0x7e, 0x03], '-', 'float A', 'float B',
+      [[0x1013521c, 'd9442404'], [0x10135227, 'd864240c'], [0x10135230, 'd91a']]],
+    ['multiplyEqualFloatFloat', 182, 0x101021f3, 0x101358e0, 'multiplyequal_floatfloat', 34, [0x29, 0x5d, 0x04, 0x29, 0x5e, 0x04], '\\*=', 'out float A', 'float B',
+      [[0x101358f7, 'c705f8321e1000000000'], [0x10135945, 'd9442410'], [0x10135949, 'd80f'], [0x10135956, 'd917'], [0x10135958, 'd91a']]],
+    ['addEqualFloatFloat', 184, 0x101024dc, 0x10135aa0, 'addequal_floatfloat', 34, [0x29, 0x65, 0x04, 0x29, 0x66, 0x04], '\\+=', 'out float A', 'float B',
+      [[0x10135ab7, 'c705f8321e1000000000'], [0x10135b05, 'd9442410'], [0x10135b09, 'd807'], [0x10135b16, 'd917'], [0x10135b18, 'd91a']]],
+    ['subtractEqualFloatFloat', 185, 0x10101645, 0x10135b80, 'subtractequal_floatfloat', 34, [0x29, 0x69, 0x04, 0x29, 0x6a, 0x04], '-=', 'out float A', 'float B',
+      [[0x10135b97, 'c705f8321e1000000000'], [0x10135be5, 'd907'], [0x10135be7, 'd8642410'], [0x10135bf6, 'd917'], [0x10135bf8, 'd91a']]],
+    ['multiplyVectorFloat', 212, 0x10103247, 0x101377e0, 'multiply_vectorfloat', 16, [0x29, 0x10, 0x29, 0x0f], '\\*', 'vector A', 'float B',
+      [[0x1013782a, 'd84c2420'], [0x10137836, 'd95c2404'], [0x1013783e, 'd84c2420'], [0x10137854, 'd84c241c'], [0x1013785f, 'd95c2408']]],
+    ['multiplyFloatVector', 213, 0x10102897, 0x101378d0, 'multiply_floatvector', 16, [0x29, 0x4c, 0x04, 0x29, 0x48, 0x04], '\\*', 'float A', 'vector B',
+      [[0x1013791a, 'd84c2404'], [0x1013792e, 'd84c2404'], [0x10137944, 'd84c2400'], [0x1013794f, 'd95c240c']]],
+    ['divideVectorFloat', 214, 0x10101c8f, 0x10137ab0, 'divide_vectorfloat', 16, [0x29, 0x47, 0x04, 0x29, 0x43, 0x04], '\\/', 'vector A', 'float B',
+      [[0x10137afa, 'dc3da8651710'], [0x10137b10, 'd8c9'], [0x10137b12, 'd95c2400'], [0x10137b1a, 'd8c9'], [0x10137b2e, 'd8c9'], [0x10137b3b, 'ddd8']]],
+    ['addVectorVector', 215, 0x101029a5, 0x10137bb0, 'add_vectorvector', 20, [0x29, 0x40, 0x04, 0x29, 0x7c, 0x03], '\\+', 'vector A', 'vector B',
+      [[0x10137bf2, 'd8442410'], [0x10137c06, 'd8442420'], [0x10137c1c, 'd8442420'], [0x10137c27, 'd95c2408']]],
+    ['subtractVectorVector', 216, 0x10101992, 0x10137ca0, 'subtract_vectorvector', 20, [0x29, 0x7f, 0x03, 0x29, 0x78, 0x03], '-', 'vector A', 'vector B',
+      [[0x10137ce2, 'd864241c'], [0x10137cf6, 'd8642420'], [0x10137d0c, 'd8642420'], [0x10137d17, 'd95c2408']]],
+    ['addEqualVectorVector', 223, 0x10101447, 0x10138b10, 'addequal_vectorvector', 34, [0x29, 0x55, 0x03, 0x29, 0x54, 0x03], '\\+=', 'out vector A', 'vector B',
+      [[0x10138b15, 'c705f8321e1000000000'], [0x10138b6b, 'd807'], [0x10138b78, 'd91f'], [0x10138b7e, 'd84704'], [0x10138b88, 'd84708']]],
+  ].map(([name, index, thunk, body, export_, precedence, script, op, a, b, pins]) => {
+    const type = t => t.endsWith('vector A') || t === 'vector B' ? 'struct' : 'float';
+    const result = a.endsWith('vector A') || b === 'vector B' ? 'vector' : 'float';
+    return [name, [index, thunk, body, `object.${export_}`, precedence, script,
+      [['A', type(a), a.startsWith('out'), false], ['B', type(b), false, false], ['ReturnValue', result === 'vector' ? 'struct' : 'float', true, true]],
+      new RegExp(`native\\(${index}\\)\\s+static final operator\\(${precedence}\\)\\s+${result}\\s+${op}\\s*\\(\\s*${a.replace(' ', '\\s+')},\\s*${b.replace(' ', '\\s+')}\\s*\\)`),
+      pins]];
+  })),
+  vectorSize: [225, 0x10102d88, 0x10138d10, 'object.vsize', 0,
+    [0x29, 0x76, 0x04],
+    [['A', 'struct', false, false], ['ReturnValue', 'float', true, true]],
+    /native\(225\)\s+static final function\s+float\s+VSize\s*\(\s*vector A\s*\)/,
+    [[0x10138d3d, 'd8c9'], [0x10138d41, 'd8cb'], [0x10138d4a, 'dec1'], [0x10138d57, 'dec1'], [0x10138d59, 'dd1c24'],
+      [0x10138d60, 'e855a5fcff'], [0x10138d6c, 'd919']]],
 };
-const OUT_PARAM = new Set([221, 222, 224]);
+const OUT_PARAM = new Set([182, 184, 185, 221, 222, 223, 224]);
 
 assert.deepEqual(oracle.addresses.natives, Object.fromEntries(Object.entries(NATIVES).map(
   ([name, [index, thunk, body]]) => [name, { index, thunk: `0x${thunk.toString(16)}`, body: `0x${body.toString(16)}` }],
@@ -177,7 +221,7 @@ for (const original of oracle.cases) {
   for (const [i, op] of original.operands.entries()) {
     if (original.lvalue[i]) {
       args.push(variable(i + 1));
-      receiver[String.fromCharCode(65 + i)] = Array.isArray(op) ? op.map(f32) : op;
+      receiver[String.fromCharCode(65 + i)] = Array.isArray(op) ? op.map(f32) : f32(op);
     } else {
       args.push(operand(Array.isArray(op) ? 'vector' : index === 249 ? 'int' : 'float', op, i));
       if (args.at(-1).bytes[0] === 0x01)
@@ -201,11 +245,12 @@ for (const original of oracle.cases) {
 
   if (original.lvalue[0]) {
     assert.notEqual(propAddr, 0, `${original.name}: GPropAddr lvalue`);
-    assert.deepEqual(receiver.A.map(v => nanNorm(bitsOf(v))), variableBits.map(nanNorm),
+    // Array.isArray, not [A].flat(): copying into a new double Array can store a NaN canonically.
+    assert.deepEqual((Array.isArray(receiver.A) ? receiver.A : [receiver.A]).map(v => nanNorm(bitsOf(v))), variableBits.map(nanNorm),
       `${original.name}: lvalue mutation`);
   } else if (OUT_PARAM.has(index)) {
     assert.equal(propAddr, 0, `${original.name}: temporary fallback`);
-    assert.deepEqual(variableBits, [0xa5a5a5a5, 0xa5a5a5a5, 0xa5a5a5a5],
+    assert.deepEqual(variableBits, variableBits.map(() => 0xa5a5a5a5),
       `${original.name}: variable sentinel`);
   } else {
     assert.equal(propAddr, 0xdeadbeef, `${original.name}: no GPropAddr use`);

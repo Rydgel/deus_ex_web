@@ -121,6 +121,85 @@ changes the significand ordering (raw `mulv-snan-qnan` → `0x7FC00001`,
 quieted input → `0x7FC00002`/`0x7FE00000` — the VM matches the quieted
 run exactly).
 
+### Host-arithmetic operators: the x87 NaN result
+
+Fourteen more operators are a single x87 operation per result, so both VMs
+compute them with doubles (or, for 214, the 222 kernel) and only their NaN
+results needed the original's rules.  Thunks and bodies come from the Core.dll
+exports; the pinned instructions are checked by the validator:
+
+| Index | Declaration | Thunk | Body | Key instructions |
+| --- | --- | --- | --- | --- |
+| 171 | `float * (float A, float B)` | `0x10101efb` | `0x10134e80` | `fld [esp+0xc]`, `fmul [esp+4]` at `0x10134ed7`, `fstp [edx]` |
+| 172 | `float / (float A, float B)` | `0x10102c0c` | `0x10134f50` | `fld [esp+4]`, `fdiv [esp+0xc]` at `0x10134fa0`, `fstp [edx]` |
+| 174 | `float + (float A, float B)` | `0x101020cc` | `0x10135100` | `fadd [esp+4]` at `0x10135157` |
+| 175 | `float - (float A, float B)` | `0x1010265d` | `0x101351d0` | `fsub [esp+0xc]` at `0x10135227` |
+| 182 | `float *= (out float A, float B)` | `0x101021f3` | `0x101358e0` | GPropAddr clear, `fmul [edi]` at `0x10135949`, `fst [edi]`, `fstp [edx]` |
+| 184 | `float += (out float A, float B)` | `0x101024dc` | `0x10135aa0` | `fadd [edi]` at `0x10135b09`, `fst [edi]`, `fstp [edx]` |
+| 185 | `float -= (out float A, float B)` | `0x10101645` | `0x10135b80` | `fld [edi]`, `fsub [esp+0x10]` at `0x10135be7` |
+| 212 | `vector * (vector A, float B)` | `0x10103247` | `0x101377e0` | one `fmul m32` and `fstp` per component |
+| 213 | `vector * (float A, vector B)` | `0x10102897` | `0x101378d0` | one `fmul m32` and `fstp` per component |
+| 214 | `vector / (vector A, float B)` | `0x10101c8f` | `0x10137ab0` | `fdivr qword [0x101765a8]` (1.0) kept on the stack, `fmul st(1)` per component, final `fstp st(0)` |
+| 215 | `vector + (vector A, vector B)` | `0x101029a5` | `0x10137bb0` | one `fadd m32` and `fstp` per component |
+| 216 | `vector - (vector A, vector B)` | `0x10101992` | `0x10137ca0` | one `fsub m32` and `fstp` per component |
+| 223 | `vector += (out vector A, vector B)` | `0x10101447` | `0x10138b10` | GPropAddr clear, `fadd [edi+k]`, `fstp [edi+k]` |
+| 225 | `float VSize (vector A)` | `0x10102d88` | `0x10138d10` | `(z*z + y*y) + x*x` by `fmul`/`faddp`, `fstp qword`, CRT sqrt thunk `0x101032ba` (Sqrt's), `fstp dword` |
+
+Doubles give the same finite value as each single x87 operation (a float32
+product is exact in a double, and a correctly rounded double sum, difference
+or quotient rounds to the correctly rounded float32).  Only NaN results
+differ, because JavaScript and Rust leave them to the host FPU: arm64's
+default NaN is `0x7FC00000`, x86's `0xFFC00000`, and the operand a NaN pair
+keeps depends on V8's tier (Maglev keeps the second) and LLVM's operand
+order.  Before 2026-10-01 both VMs kept "the first NaN operand" and the host's
+default NaN, so they agreed with each other on one CPU and with the original
+on neither: `validate-script-vm-interp` failed on x86 only, because it
+hard-coded arm64's `0x7FC00000` for `inf * 0`.
+
+The original stores, for every operator in the table (oracle cases
+`mulf-*`, `divf-*`, `addf-*`, `subf-*`, `muleqf-*`, `addeqf-*`, `subeqf-*`,
+`mulvf-*`, `mulfv-*`, `divvf-*`, `addv-*`, `subv-*`, `addeqv-*`, `vsize-*`):
+
+- **invalid operation**: `inf*0`, `0*inf`, `inf + -inf`, `inf - inf`,
+  `0/0`, `inf/inf` store the real indefinite `0xFFC00000`, in either operand
+  order (`mulf-inf-zero`, `mulf-zero-neg-inf`, `divf-zero-zero`,
+  `divf-inf-inf`, `addv-inf`, `subv-inf`, `divvf-zero`, `divvf-inf`);
+- **NaN pair**: the larger significand, either order (`*-nan-pair-a`,
+  `*-nan-pair-b`; `vsize-nan-zy`/`vsize-nan-yz`);
+- **equal significands, opposite signs**: the positive NaN, either order
+  (`*-nan-tie`, `*-nan-tie-b`, `*-indefinite-nan`: indefinite against
+  `0x7FC00000` keeps `0x7FC00000`);
+- **a lone NaN operand**: that NaN, quieted.
+
+The rule is symmetric, so operand order never matters.  It was measured
+twice: in the Unicorn oracle on the original bodies, and on real x87
+silicon (AMD Ryzen 9 8945HS, control word `0x037F`):
+`tools/x87-nan-probe.c` runs `fmul`/`fdiv`/`fadd`/`fsub` m32 and
+`fmulp`/`faddp` on 5,536 operand pairs (every invalid operation of a
+16-value grid, 4,384 NaN pairs, 536 opposite-sign ties) and
+`scripts/validate-x87-nan-hardware.mjs` compares every row with the VMs'
+helper.  Intel's documented rule (larger significand) agrees; a future Intel
+measurement that disagreed would be a finding, since the game ran on both.
+
+Both VMs now apply it explicitly.  `src/runtime/x87-nan.mjs` keeps the
+double result when it is not a NaN and otherwise builds the x87's float32
+NaN from the operands' float32 bits (`x87nanOf`); `interp.rs` `x87_nan` does
+the same, returning that float32 NaN widened, so Rust and JavaScript give the
+same f64 bits on every CPU.  214 now runs the 222 kernel in both VMs (it was
+`v * (1 / f(divisor))` in doubles): the bodies are the same instruction
+sequence apart from the out parameter, and the kernel's 80-bit reciprocal is
+observable (`divvf-recip-extended` stores `0xD9BDFD0B`, `divvf-near-mid`
+`0x3F800001`).  182/184/185/223 with a non-lvalue first operand now return
+the result and leave the variable alone, as the original's stack temporary
+does (`muleqf-nonlvalue`, `addeqf-nonlvalue`, `subeqf-nonlvalue`,
+`addeqv-nonlvalue`); the JavaScript VM threw before.
+
+The tick bookkeeping that `tick.rs` transcribes (actor-tick.mjs LifeSpan,
+SightCounter, PainTime/SpeechTime, script-timers.mjs, script-sleep.mjs,
+animation-tick.mjs) applies the same helpers per operation of its
+transcription.  Those Engine.dll bodies are x87 code too, but their NaN
+results have no oracle cases: the rule is applied, not measured there.
+
 ### Out parameters
 
 221/222/224 take `out vector A`: the body clears `GPropAddr`
@@ -146,7 +225,7 @@ post-result tail bytes.
 the thunk/body targets, the instruction pins above, the `fdivr` constant
 word (`1.0` at `0x101765a8`), the `GPropAddr` clears, Core.u declarations,
 indices, precedence, serialized script bytes and parameter `out` flags —
-then compares all 116 original cases against the VM bit-exact: arithmetic,
+then compares all 237 original cases against the VM bit-exact: arithmetic,
 signed-zero, denormal, infinity, NaN payload and NaN-tie results, the
 rounding-placement proofs named above, lvalue mutation and the temporary
 fallback, left-to-right operand evaluation, `FFrame` cursor advance and
@@ -168,4 +247,18 @@ float32 store (products of float32 operands are exact in double), so the
 extended-precision model's observable role there is NaN/indefinite and
 reciprocal handling; for `Dot` the 64-bit accumulation and summation
 order are directly proven by the cases above.  Other natives sharing
-these bodies' patterns but outside the ten listed indices remain unbound.
+these bodies' patterns but outside the listed indices remain unbound.
+
+Invalid-operation sites still left to the host FPU (audited 2026-10-01):
+
+- `script-decoration-primitives.mjs` 275 (`vector << rotator`, JavaScript
+  only): three dot products in doubles; its x87 operation tree is not traced,
+  so its NaN results follow the host.
+- The physics and collision transcriptions (trace, hash, walk, move_pawn and
+  their JavaScript references) compute in doubles; a NaN there needs
+  degenerate geometry (a zero-length normalization, `inf - inf`).  Rust and
+  JavaScript run the same host operations, so they agree on one CPU, but
+  their NaN bits are the host's, not verified against the original.
+- The x87 kernel (`x87.rs`, the BigInt model) compares raw significands, so
+  a signaling NaN *loaded* by FLD m32 (which the hardware quiets on load,
+  making it win as a quiet NaN) is unmodeled; neither VM can hold one.

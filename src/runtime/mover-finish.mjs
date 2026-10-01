@@ -1,7 +1,14 @@
 import{brushCollisionBounds}from'./brush-bounds.mjs';
+import{x87add,x87mul}from'./x87-nan.mjs';
 const f=Math.fround;
-// Core execVSize10138d10: (z*z+y*y)+x*x, double argument to appSqrt.
-export const finishVectorSize=v=>f(Math.sqrt((v[2]*v[2]+v[1]*v[1])+v[0]*v[0]));
+// Core execVSize10138d10: (z*z+y*y)+x*x, double argument to appSqrt. The
+// products and sums are x87 FMUL/FADDP, so a NaN component follows the x87
+// NaN rules (x87-nan.mjs); the CRT sqrt thunk 0x101032ba (Sqrt's) returns a
+// NaN operand quieted.
+export const finishVectorSize=v=>{
+ const s=x87add(x87add(x87mul(v[2],v[2]),x87mul(v[1],v[1])),x87mul(v[0],v[0]));
+ return f(s!==s?s:Math.sqrt(s));
+};
 /** GetBoundingBox(false, explicit pose), UModel only. No actor/hash mutation. */
 export function moverFinishBounds(model,owner,position,rotation){return brushCollisionBounds(model,{...owner,Location:position,Rotation:rotation});}
 export function moverFinishContains(bounds,mover,pawn){

@@ -3,7 +3,7 @@ import { finishVectorSize } from './mover-finish.mjs';
 const f = Math.fround;
 
 /** Native Object.uc indices used by the bounded mover script paths. */
-export const moverPrimitiveIndices = new Set([166, 186, 214, 225]);
+export const moverPrimitiveIndices = new Set([166, 186, 225]);
 
 function arity(args, expected, index) {
   if (!Array.isArray(args) || args.length !== expected) {
@@ -39,19 +39,10 @@ function absoluteFloat(value) {
   return value32 < 0 ? f(-value32) : value32;
 }
 
-function divideVector(value, divisor) {
-  const value32 = vector(value, 214);
-  const divisor32 = f(Number(divisor));
-  // Core 0x10137ab0 forms 1.0/divisor in retained x87 precision, then
-  // multiplies each float component and stores each result as float. Keeping
-  // this reciprocal unrounded matches that order for ordinary float32 input.
-  const reciprocal = 1 / divisor32;
-  return value32.map(component => f(component * reciprocal));
-}
-
 /**
- * Execute the four native operations needed by Mover.InterpolateEnd and
- * DeusExMover.FinishNotify. Arguments are evaluated values, except native
+ * Execute three of the native operations needed by Mover.InterpolateEnd and
+ * DeusExMover.FinishNotify (the fourth, 214, is the x87 kernel's
+ * DivideEqual_VectorFloat body in script-vm.mjs). Arguments are evaluated values, except native
  * 166's first argument, which must be a { reference, get, set } lvalue.
  */
 export function executeMoverPrimitive(index, args) {
@@ -65,9 +56,6 @@ export function executeMoverPrimitive(index, args) {
     case 186:
       arity(args, 1, index);
       return absoluteFloat(args[0]);
-    case 214:
-      arity(args, 2, index);
-      return divideVector(args[0], args[1]);
     case 225:
       arity(args, 1, index);
       return finishVectorSize(vector(args[0], index));

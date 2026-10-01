@@ -26,7 +26,7 @@
 //! writes the actor's fresh receiver info, mask and the level's DemoRecDriver
 //! test into T_STATE, which `refresh` reads back.
 
-use crate::interp::{live, load32, load8, nan_first, quiet, store32, HOST};
+use crate::interp::{live, load32, load8, quiet, store32, x87_nan, HOST};
 use crate::trace::sqrt;
 use core::ptr::{addr_of, addr_of_mut};
 
@@ -197,22 +197,22 @@ fn narrow(v: f64) -> u32 {
 fn widen(bits: u32) -> f64 {
     f32::from_bits(quiet(bits)) as f64
 }
-// `x op y` with the first NaN operand's payload (interp.rs nan_first).
+// `x op y` with the x87's NaN result (interp.rs x87_nan, x87-nan.mjs x87add...).
 #[inline(always)]
 fn add(x: f64, y: f64) -> f64 {
-    nan_first(x, y, x + y)
+    x87_nan(x, y, x + y)
 }
 #[inline(always)]
 fn sub(x: f64, y: f64) -> f64 {
-    nan_first(x, y, x - y)
+    x87_nan(x, y, x - y)
 }
 #[inline(always)]
 fn mul(x: f64, y: f64) -> f64 {
-    nan_first(x, y, x * y)
+    x87_nan(x, y, x * y)
 }
 #[inline(always)]
 fn div(x: f64, y: f64) -> f64 {
-    nan_first(x, y, x / y)
+    x87_nan(x, y, x / y)
 }
 /// x87 C0 (animation-tick.mjs and actor-tick.mjs `less`): below or unordered.
 #[inline(always)]

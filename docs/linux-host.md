@@ -98,8 +98,38 @@ path as in the bottle, so the `dump-*-win.exe` instructions are unchanged.
 ```bash
 npm test
 node scripts/validate-x87-transcendental-hardware.mjs
-npm run validate -- --jobs 4
+node scripts/validate-x87-nan-hardware.mjs
+npm run validate -- --jobs 8 --mem-budget 16384
 ```
+
+The Mac sweeps with the AGENTS.md default of 4 jobs. This machine has room
+for more (the user agreed on 2026-10-01): the runner's default memory budget
+is min(8 GiB, RAM/2), which would hold the 3–4 GB validators back, so pass a
+larger one with the extra jobs.
+
+## Validator baseline (2026-10-01)
+
+First full sweep on this machine, master `e21924c`, 4 jobs: 448 of 450
+passed in 1115 s wall (4261 s CPU, speedup 3.8×). The largest validators
+peaked at 4.0 GB (stage3-training-conformance) and 3.9 GB
+(player-tick-order); the slowest were gpu-mesh (480 s) and
+stage3-training-conformance (362 s). The two failures:
+
+- `validate-script-vm-interp`: the x86 NaN mismatch below, now fixed.
+- `validate-gpu-mesh`: not the `--use-angle=metal` flag. Chromium ignores
+  that ANGLE backend on Linux and the validator ran through to its Island
+  admission phase, where the game paused on `Non-Pawn performPhysics
+  physProjectile (0x103d4600) is not linked for deusex.tracer`: the open
+  Tracer projectile boundary (terrorists firing at the bots), which that
+  phase hits on any new Island pause. The flag still means the Mac and
+  Linux runs use different ANGLE backends.
+
+Every other validator, including the four hardware-x87 ones under wine
+11.17, passed here as on the Mac.
+
+The sweep after the NaN fix ran with `--jobs 8 --mem-budget 16384`: 449 of
+450 passed in 720 s wall (5758 s CPU, speedup 8.0×), the remaining failure
+being the same `validate-gpu-mesh` Tracer pause.
 
 ## Known gaps
 
@@ -130,16 +160,20 @@ npm run validate -- --jobs 4
   for |x| < 2^26 matched bit-exact. Inputs above 2^26 are refused, as on the
   Mac. A future disagreement would still be a finding to investigate, because
   the original game ran on both Intel and AMD CPUs.
-- **NaN sign on x86.** `validate-script-vm-interp` fails on this machine and
-  passes on the Mac, with the same wasm from Rust 1.95.0 or 1.99.0. For
-  `inf * 0`, the Rust VM returns `0xFFC00000` (x86's default NaN) and the
-  JavaScript VM returns `0x7FC00000`. The comment in
-  `native/script-vm/src/interp.rs` assumes both match "on the same machine",
-  which is true only on ARM. It is unresolved, and browsers on x86 PCs hit it
-  too.
+- **NaN results (fixed 2026-10-01).** `validate-script-vm-interp` failed on
+  this machine and passed on the Mac: it hard-coded arm64's default NaN
+  `0x7FC00000` for `inf * 0`, and both VMs left NaN results to the host FPU,
+  so on x86 they stored `0xFFC00000`. The original's x87 bodies store the
+  real indefinite `0xFFC00000` on every CPU, and keep the larger
+  significand of a NaN pair (the positive NaN on a tie), where the VMs kept
+  the first NaN operand. Both VMs now build the x87's NaN explicitly
+  (`src/runtime/x87-nan.mjs`, `interp.rs` `x87_nan`), measured on the
+  original bodies and on this machine's x87
+  (docs/script-float-vector-operators.md, "Host-arithmetic operators").
 - `scripts/validate-gpu-mesh.mjs` always launches Chromium with
-  `--use-angle=metal`, which exists only on macOS. It needs a Linux branch
-  before it can be trusted there.
+  `--use-angle=metal`, which exists only on macOS; Linux Chromium ignores it
+  and uses its default backend, so the GPU path runs on a different ANGLE
+  backend than on the Mac.
 - `ad/scripts/original-game.mjs` hard-codes the CrossOver bottle path under
   `~/Library`. The ad capture pipeline stays on the Mac.
 - The `.work/tools` perf scripts hard-code `/Users/gcc` paths. Performance

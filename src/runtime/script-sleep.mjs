@@ -1,3 +1,5 @@
+import {x87sub} from './x87-nan.mjs';
+
 const f=Math.fround;
 
 // The float both bodies address at AActor+0xe0 is Actor.LatentFloat
@@ -16,7 +18,7 @@ export function sleepActor(latentFloat,state,seconds) {
 /** PollSleep103e0020 stores the rounded difference but compares its retained
  * value against half DeltaSeconds. Equality does not wake the actor. */
 export function pollActorSleep(latentFloat,state,seconds) {
-  const delta=f(seconds),remaining=f(latentFloat.get())-delta;
+  const delta=f(seconds),remaining=x87sub(f(latentFloat.get()),delta);
   latentFloat.set(f(remaining));
   if(remaining<0.5*delta)state.latent=0;
 }

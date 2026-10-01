@@ -1,3 +1,5 @@
+import { x87add, x87div, x87mul, x87sub } from './x87-nan.mjs';
+
 const f = Math.fround;
 
 /** Native Actor flags bit used by bTimerLoop (Actor.uc, Engine.dll). */
@@ -91,7 +93,7 @@ export function updateActorTimer(actor, deltaTime, options = {}) {
   // register. fsts writes the rounded sum before the threshold branch; the
   // extended sum is still used for the quotient and remainder below.
   const delta = f(deltaTime), counter = floatField(state, timer.counterKey);
-  const sum = Number(delta) + Number(counter);
+  const sum = x87add(Number(delta), Number(counter));
   state[timer.counterKey] = f(sum);
 
   // fcoms sets C0 for a less-than or unordered comparison. `!(sum >= rate)`
@@ -100,8 +102,9 @@ export function updateActorTimer(actor, deltaTime, options = {}) {
 
   // _ftol truncates toward zero. With the positive rate and due sum above,
   // this is the nonnegative elapsed-period count used by the native branch.
-  const periods = Math.trunc(sum / rate);
-  state[timer.counterKey] = f(sum - periods * Number(rate));
+  // NaN results take the x87's bits (x87-nan.mjs), as tick.rs does.
+  const periods = Math.trunc(x87div(sum, rate));
+  state[timer.counterKey] = f(x87sub(sum, x87mul(periods, Number(rate))));
 
   // Native clears TimerRate before ProcessEvent for one-shot timers. Loop is
   // sampled before dispatch; a reentrant SetTimer therefore replaces this

@@ -1234,7 +1234,9 @@ now run in Rust, and state code runs its lowered statements there.
   NaN operand's payload with `nan_first`, as the compound assignments do.
   With a signaling NaN double, the arm64 FPU returns the signaling operand
   even when it comes second. No VM value is one: floats are f32 widenings
-  and arithmetic results, which are quiet.
+  and arithmetic results, which are quiet. (Since 2026-10-01 both VMs use
+  the original's x87 NaN result instead, `x87_nan` and x87-nan.mjs:
+  docs/script-float-vector-operators.md "Host-arithmetic operators".)
 * **State code.** A state has no parameters or locals, so its frame is
   lowered with the empty layout. `resumeState` keeps JavaScript's loop: the
   hang budget, the cursor lookup and advance, and the latent, cursor,
@@ -1332,8 +1334,9 @@ in `interp.rs`'s header.
   * Optimized code may fold a float32 widening with a later narrowing,
     keeping a signaling NaN.
 
-  Rust keeps one rule: quiet loads, the first NaN operand, the kernel's
-  words. The validator checks that rule with references computed as scalars
+  Rust keeps one rule: quiet loads, the first NaN operand (since
+  2026-10-01 the x87's NaN, `x87_nan`, shared with the JavaScript VM's
+  x87-nan.mjs), the kernel's words. The validator checks that rule with references computed as scalars
   from quiet words. `SCRIPT_VM_CHECK` treats any NaN as equal to any NaN.
   The same instability applies to the scalar float operators of R2b-5.
 * **SCRIPT_VM_CHECK** compares every new value Rust completes:
@@ -3211,7 +3214,9 @@ Exactness hazards met:
   and setFloat32, which quiets a signaling NaN. Rust rewrites them quieted.
 * Loads quiet signaling NaNs explicitly, since LLVM folds a float32 widening
   with a later narrowing (the mutation pass shows a copied sNaN otherwise);
-  binary operations take the first NaN operand (`nan_first`).
+  binary operations take the first NaN operand (`nan_first`; since
+  2026-10-01 the x87's NaN result, `x87_nan`, as the JavaScript bodies do
+  through x87-nan.mjs).
 * `Math.trunc` of the timer's period count is emulated; a NaN count is
   `!== 0`, as in JavaScript.
 * `remainder`'s operand order matters: `(end - stop) * rem / (end - start)`

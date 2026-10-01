@@ -1,13 +1,15 @@
 # Bounded mover script natives
 
-`src/runtime/script-mover-primitives.mjs` exposes the four original native
-indices needed by the current mover paths:
+`src/runtime/script-mover-primitives.mjs` exposes three of the four original
+native indices needed by the current mover paths; the fourth, `214`, runs the
+x87 kernel's DivideEqual_VectorFloat body in `script-vm.mjs` since 2026-10-01
+(docs/script-float-vector-operators.md, "Host-arithmetic operators"):
 
 ```js
 import { moverPrimitiveIndices, executeMoverPrimitive } from './script-mover-primitives.mjs';
 
-moverPrimitiveIndices.has(214); // true
-executeMoverPrimitive(214, [[10, 20, 30], 10]); // [1, 2, 3]
+moverPrimitiveIndices.has(225); // true
+executeMoverPrimitive(225, [[3, 4, 0]]); // 5
 ```
 
 The declarations are from the installed original `Object.uc`:
@@ -41,20 +43,22 @@ The native implementation authority is the local Deus Ex GOTY
 * Native `214` enters `0x10137ab0`. It evaluates the vector before the scalar,
   forms a retained x87 reciprocal from the 1.0 constant at `0x101765a8`,
   multiplies each float component by that reciprocal, and stores each result
-  as float32. The helper returns a new three-component array, preserving the
-  component store boundaries and avoiding an input-array alias.
+  as float32. This was a double reciprocal here; it is now the kernel body it
+  shares with 222, whose 80-bit reciprocal the oracle observes
+  (`divvf-recip-extended`).
 * Native `225` enters `0x10138d10`. Its established translation is shared with
   `finishVectorSize` in [mover-finish.md](mover-finish.md): the original order
   is `(Z*Z + Y*Y) + X*X`, the square root is called with the retained value,
   and the result is stored as float32.
 
-`executeMoverPrimitive(index, args)` accepts evaluated values for `186`, `214`,
-and `225`. Native `166` is the one exception: its argument must be a metadata
+`executeMoverPrimitive(index, args)` accepts evaluated values for `186` and
+`225`. Native `166` is the one exception: its argument must be a metadata
 aware lvalue with `reference: true`, `get()`, and `set()` methods. Argument
 evaluation, frame cursor movement, and generic native dispatch remain owned by
 the VM.
 
 The module covers ordinary finite float32 operands used by the two cited
-scripts. It does not claim exhaustive extended-x87 edge-case equivalence for
-NaN, infinities, or values outside that input contract, and it does not add a
-general native-operation table.
+scripts. `225`'s NaN components follow the x87 rules (`vsize-*` oracle
+cases); otherwise it does not claim exhaustive extended-x87 edge-case
+equivalence for infinities or values outside that input contract, and it does
+not add a general native-operation table.

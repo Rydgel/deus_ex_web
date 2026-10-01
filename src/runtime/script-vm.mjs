@@ -7,9 +7,10 @@ import { msvcrtWtoi } from './script-text-parser.mjs';
 import { rotatorSin } from './coords.mjs';
 import { referenceElementType } from './script-values.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
+import { X87_INDEFINITE, x87mul32, x87div32, x87add32, x87sub32 } from './x87-nan.mjs';
 
 const f = Math.fround;
-const primitiveNatives=new Set([112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
+const primitiveNatives=new Set([214,112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
 for(const index of moverPrimitiveIndices)primitiveNatives.add(index);
 for(const index of decorationPrimitiveIndices)primitiveNatives.add(index);
 export const primitiveNativeIndices=Object.freeze([...primitiveNatives,130,132].sort((a,b)=>a-b));
@@ -31,7 +32,7 @@ export const assign = (ref, value) => { if (!ref?.reference) throw new Error('Sc
 const f32io = new DataView(new ArrayBuffer(4));
 export const f32bits = v => (f32io.setFloat32(0, f(v), true), f32io.getUint32(0, true));
 export const f32num = b => (f32io.setUint32(0, b >>> 0, true), f32io.getFloat32(0, true));
-export const X87_INDEFINITE = 0xffc00000;
+export { X87_INDEFINITE };
 
 /** 80-bit x87 stack model for Core's float/vector operator natives.  The
  * bodies FLD float32 temporaries and keep intermediates on the x87 stack —
@@ -489,6 +490,7 @@ export function compileFunction(fn) {
       : UNARY_FLOAT_NATIVES.has(index) ? values.length===1 && typeof a==='number'
       : index===287 ? values.length===2 && isVec3(a) && typeof b==='number'
       : index===288 ? values.length===2 && typeof a==='number' && isVec3(b)
+      : index===214 ? values.length===2 && isVec3(a)
       : VECTOR_PAIR_NATIVES.has(index) ? values.length===2 && isVec3(a) && isVec3(b)
       : true;
     if (!claimed) {
@@ -586,8 +588,14 @@ export function compileFunction(fn) {
       case 163: { const v=((a | 0) + 1) | 0; if(args[0]?.reference)assign(args[0], v); return v; }
       case 164: { const v=((a | 0) - 1) | 0; if(args[0]?.reference)assign(args[0], v); return v; }
       case 165: if(args[0]?.reference)assign(args[0], ((a | 0) + 1) | 0); return a | 0;
-      case 171: return f(a * b);
-      case 172: return f(a / b);
+      // Multiply/Divide_FloatFloat (171/172), Add/Subtract_FloatFloat
+      // (174/175) and the out operators 182/184/185: FLD m32, one x87
+      // FMUL/FDIV/FADD/FSUB, FSTP m32. Doubles give the same value; a NaN
+      // result takes the x87's bits (x87-nan.mjs): the larger significand of
+      // a NaN pair, the positive NaN on a tie, the indefinite 0xFFC00000 for
+      // an invalid operation.
+      case 171: return x87mul32(a, b);
+      case 172: return x87div32(a, b);
       // Percent_FloatFloat (173): both operands are stored float32, widened
       // to doubles and passed cdecl to the shipped MSVCRT _CIfmod — which
       // classifies the x87 operand pair and either runs its fxch/FPREM loop
@@ -601,8 +609,8 @@ export function compileFunction(fn) {
       // which is always representable in float32, so the single store is
       // bit-exact.
       case 173: return x87Kernel().percent(a,b);
-      case 174: return f(a + b);
-      case 175: return f(a - b);
+      case 174: return x87add32(a, b);
+      case 175: return x87sub32(a, b);
       // Core's preoperator float - loads the operand as a float32 and uses
       // x87 FCHS before storing the float32 ReturnValue.
       case 169: return f(-f(a));
@@ -629,14 +637,17 @@ export function compileFunction(fn) {
         const x=f(a), y=f(b);
         return !(Number.isNaN(x)||Number.isNaN(y)||x===y);
       }
-      case 182: return assign(args[0], f(a * b));
-      case 184: return assign(args[0], f(a + b));
+      // A non-lvalue first operand of an out operator leaves GPropAddr 0 and
+      // the body stores to its stack temporary, still returning the result
+      // (muleqf-nonlvalue, addeqv-nonlvalue).
+      case 182: { const v = x87mul32(a, b); return args[0]?.reference ? assign(args[0], v) : v; }
+      case 184: { const v = x87add32(a, b); return args[0]?.reference ? assign(args[0], v) : v; }
       // These three operators are used by DeusExPlayer.ClientFlash and the
       // preceding TakeDamage/DXReduceDamage path.  Core evaluates operands
       // left-to-right, loads each serialized float as float32, and stores
       // every result component as float32.  The first operand of 185/223 is
       // an out-lvalue and is therefore retained by primitiveOutNatives.
-      case 185: return assign(args[0], f(f(a) - f(b)));
+      case 185: { const v = x87sub32(f(a), f(b)); return args[0]?.reference ? assign(args[0], v) : v; }
       // Sin (187)/Cos (188)/Tan (189)/Atan (190): each body widens the
       // float32 operand to a double and calls a Core thunk that runs the
       // bare x87 instruction — 0x10123240 fsin, 0x10123250 fcos,
@@ -760,8 +771,15 @@ export function compileFunction(fn) {
       // 2N'.y/2N'.z and the y/z products each take an FSTP float32 store,
       // while only the x product remains in 80-bit through the closing FSUB.
       case 300: return x87Kernel().mirrorVectorByNormal(a,b);
-      case 212: return a.map(v => f(f(v) * f(b)));
-      case 213: return b.map(v => f(f(a) * f(v)));
+      // Multiply_VectorFloat (212) / Multiply_FloatVector (213): one FMUL
+      // m32 and FSTP per component; Add/Subtract_VectorVector (215/216) and
+      // AddEqual_VectorVector (223) one FADD/FSUB m32 each.
+      case 212: return a.map(v => x87mul32(f(v), f(b)));
+      case 213: return b.map(v => x87mul32(f(a), f(v)));
+      // Divide_VectorFloat (214) is the 222 body without the out parameter:
+      // FDIVR m64 1.0 keeps the reciprocal on the x87 stack, then FMUL st(1)
+      // and FSTP per component (divvf-recip-extended, divvf-zero).
+      case 214: return x87Kernel().divideEqualVectorFloat(a, b);
       // Multiply_RotatorFloat (287) / Multiply_FloatRotator (288): each int32
       // component is FILD'd and FMUL'd against the float32 scalar — the
       // product stays on the x87 stack — then the shipped MSVCRT _ftol
@@ -772,9 +790,9 @@ export function compileFunction(fn) {
       // integer indefinite, whose low DWORD is 0.
       case 287: return x87Kernel().multiplyRotatorFloat(a,b);
       case 288: return x87Kernel().multiplyRotatorFloat(b,a);
-      case 215: return a.map((v,i) => f(v + b[i]));
-      case 216: return a.map((v,i) => f(v - b[i]));
-      case 223: return assign(args[0], a.map((v,i) => f(f(v) + f(b[i]))));
+      case 215: return a.map((v,i) => x87add32(v, b[i]));
+      case 216: return a.map((v,i) => x87sub32(v, b[i]));
+      case 223: { const v = a.map((v,i) => x87add32(f(v), f(b[i]))); return args[0]?.reference ? assign(args[0], v) : v; }
       case 235: return scriptCaps(a);
       case 236: return scriptChr(a);
       // Asc (237): the FString operand substitutes the runtime empty-string

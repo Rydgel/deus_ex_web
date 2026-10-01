@@ -3,9 +3,11 @@
  * Caller owns outer Tick eligibility/order and prepares event/mesh resources.
  */
 import {findAnimSeq} from './play-anim.mjs';
+import {x87add,x87div,x87mul,x87sub} from './x87-nan.mjs';
 
 const f=Math.fround;
 const less=(a,b)=>a<b||Number.isNaN(a)||Number.isNaN(b); // x87 C0
+// NaN results take the x87's bits (x87-nan.mjs), as tick.rs does.
 const nonzero=value=>value!==0&&!Number.isNaN(value); // !x87 C3 against zero
 // 'None' (the unset FName) is answered without building a lowercase copy.
 export const named=value=>value!=='None'&&value!=null&&String(value).toLowerCase()!=='none'&&value!=='';
@@ -14,7 +16,8 @@ const active=actor=>named(actor.AnimSequence)&&nonzero(less(actor.AnimFrame,0)?a
 function scaledRate(actor,rate,minimum,blend=false) {
   if(!less(rate,0))return rate;
   const [x,y,z]=actor.Velocity;
-  const product=-Math.sqrt(x*x+y*y+z*z)*rate,scaled=blend?f(product):product;
+  const s=x87add(x87add(x87mul(x,x),x87mul(y,y)),x87mul(z,z));
+  const product=x87mul(-(s!==s?s:Math.sqrt(s)),rate),scaled=blend?f(product):product;
   return less(minimum,scaled)?scaled:minimum;
 }
 
@@ -35,15 +38,15 @@ export function selectAnimNotify(actor,oldFrame,mesh) {
 
 function replicateCompletion(actor,animation) {
   if(actor.RemoteRole>=2||actor.isWeapon)return;
-  const rate=animation.AnimRate*5000;
-  animation.simAnim={...animation.simAnim,frame:f(animation.AnimFrame*10000),rate:rate>32767?32767:f(rate)};
+  const rate=x87mul(animation.AnimRate,5000);
+  animation.simAnim={...animation.simAnim,frame:f(x87mul(animation.AnimFrame,10000)),rate:rate>32767?32767:f(rate)};
 }
 
 /** Services represent original FindFunction/ProcessEvent and loaded Mesh.
  * Mutations by ProcessEvent are observed by the rest of this same tick. */
 export function tickActorAnimation(actor,seconds,{mesh,simulatedPawn,findFunction,processEvent}) {
   let remainingSeconds=f(seconds),iterations=0;
-  const remainder=(end,start,stop)=>f((end-stop)*remainingSeconds/(end-start));
+  const remainder=(end,start,stop)=>f(x87div(x87mul(x87sub(end,stop),remainingSeconds),x87sub(end,start)));
   const endEvent=()=>{
     if(!simulatedPawn)processEvent(findFunction('AnimEnd',true));
   };
@@ -51,7 +54,7 @@ export function tickActorAnimation(actor,seconds,{mesh,simulatedPawn,findFunctio
   while(admit()) {
     const oldFrame=actor.AnimFrame;
     if(less(oldFrame,0)) {
-      const advanced=oldFrame+remainingSeconds*actor.TweenRate;
+      const advanced=x87add(oldFrame,x87mul(remainingSeconds,actor.TweenRate));
       actor.AnimFrame=f(advanced);
       if(less(advanced,0))break;
       remainingSeconds=remainder(advanced,oldFrame,0);
@@ -62,7 +65,7 @@ export function tickActorAnimation(actor,seconds,{mesh,simulatedPawn,findFunctio
       }
       continue;
     }
-    actor.AnimFrame=f(oldFrame+remainingSeconds*scaledRate(actor,actor.AnimRate,actor.AnimMinRate));
+    actor.AnimFrame=f(x87add(oldFrame,x87mul(remainingSeconds,scaledRate(actor,actor.AnimRate,actor.AnimMinRate))));
     if(actor.animFlags&0x20) {
       const notify=selectAnimNotify(actor,oldFrame,mesh);
       if(notify) {
@@ -99,14 +102,14 @@ export function tickActorAnimation(actor,seconds,{mesh,simulatedPawn,findFunctio
     if(!named(blend.AnimSequence)||!less(blend.AnimFrame,blend.AnimLast))continue;
     const oldFrame=blend.AnimFrame;
     if(less(oldFrame,0)) {
-      const advanced=oldFrame+remainingSeconds*blend.TweenRate;
+      const advanced=x87add(oldFrame,x87mul(remainingSeconds,blend.TweenRate));
       blend.AnimFrame=f(advanced);
       if(!less(advanced,0)) {
         remainingSeconds=remainder(advanced,oldFrame,0);
         blend.AnimFrame=0;
       }
     } else {
-      blend.AnimFrame=f(oldFrame+remainingSeconds*scaledRate(actor,blend.AnimRate,blend.AnimMinRate,true));
+      blend.AnimFrame=f(x87add(oldFrame,x87mul(remainingSeconds,scaledRate(actor,blend.AnimRate,blend.AnimMinRate,true))));
       if(!less(blend.AnimFrame,blend.AnimLast)) {
         remainingSeconds=remainder(blend.AnimFrame,oldFrame,blend.AnimLast);
         blend.AnimFrame=blend.AnimLast;

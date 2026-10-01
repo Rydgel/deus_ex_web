@@ -46,8 +46,9 @@
 //! NaN stays NaN, so an unordered pair is true.
 //!
 //! Float operators (R2b-5): FLOAT_MUL/DIV/ADD/SUB return `f(a op b)` with a
-//! NaN operand's payload chosen explicitly (`nan_first`): the first NaN
-//! operand, quieted, as the FPU computes JavaScript's `a op b`.
+//! NaN result made the x87's explicitly (`x87_nan`): the larger float32
+//! significand of a NaN pair (the positive NaN on a tie), a lone NaN operand,
+//! quieted, or the indefinite 0xFFC00000 for an invalid operation.
 //!
 //! Handle classes (R2b-5). CLASSES = [table, capacity] is a per-runtime u32
 //! table indexed by handle: 0 (not described), RELEASED (the handle's
@@ -125,7 +126,7 @@
 //!   161 `off, node`, FIELD_VECTOR 162 `off, node, key`, JS_VECTOR 163,
 //!   VECTOR_ADD/SUB 164/165 (215/216 `f(a_i op b_i)`), VECTOR_SCALE 166 (212
 //!   `f(f(a_i) * f(s))`), SCALE_VECTOR 167 (213 `f(f(s) * f(b_i))`),
-//!   VECTOR_DIVIDE 168 (214, doubles: `r = 1 / f(s)`, `f(a_i * r)`),
+//!   VECTOR_DIVIDE 168 (214, the kernel's DivideEqual_VectorFloat body),
 //!   VECTOR_NEG 169 (211, sign flip), and the x87 kernel bodies VECTOR_MUL 170
 //!   (296), VECTOR_NORMAL 171 (226), VECTOR_MIRROR 172 (300), VECTOR_ROTATE 173
 //!   (276). Rotator: LIT_ROTATOR 175, LOCAL_ROTATOR 176, FIELD_ROTATOR 177,
@@ -137,8 +138,8 @@
 //!   VECTOR_EQ/NE 187/188 (217/218), ROTATOR_EQ/NE 189/190 (142/203),
 //!   NAME_EQ/NE 191/192 (254/255), IS_A 193 `node, name` (303 with a literal).
 //!   Names: LIT_NAME 194 `id`, JS_NAME 195. A float operand that is UNDEF_F64
-//!   is JavaScript's undefined, whose fround is NaN. A NaN result keeps the
-//!   first NaN operand, as the FPU does (`nan_first`).
+//!   is JavaScript's undefined, whose fround is NaN. A NaN result is the
+//!   x87's (`x87_nan`).
 //! * Stores: SET_LOCAL_VECTOR 196 / SET_LOCAL_ROTATOR 198 `off`;
 //!   SET_FIELD_VECTOR 197 / SET_FIELD_ROTATOR 199 `off, node, key, len` (as
 //!   set_field); VCOMPOUND_LOCAL 156 `op, off, node` and VCOMPOUND_FIELD 157
@@ -599,28 +600,49 @@ fn pointer_word(handle: u32) -> u32 {
         handle
     }
 }
-/// `r`, the FPU's result of JavaScript's `x op y`, with the NaN operand
-/// choice made explicit: a NaN operand yields the first NaN operand, quieted,
-/// which is what the FPU returns for `x op y` in that operand order (x86 SSE
-/// and ARM alike for quiet operands; JavaScript's float values are quiet, as
-/// its f32 widening quiets them). Rust leaves the payload of a NaN result
-/// unspecified: LLVM's wasm stackifier commutes f64.add/f64.mul operands
-/// when the second was computed first (a compound's value is evaluated
-/// before its target is read), which would return y's payload, and LLVM may
-/// fold an f32 widening with the fround after it, so an f32 sNaN target
-/// would pass through unquieted. Both are measured by the validator. A NaN
-/// from non-NaN operands (inf - inf, 0 * inf) stays the FPU's default NaN,
-/// as it is in JavaScript on the same machine.
+/// `r`, the double result of `x op y`, with a NaN result replaced by the
+/// x87's (src/runtime/x87-nan.mjs `x87nanOf`, the original operator bodies'
+/// FMUL/FDIV/FADD/FSUB, docs/script-float-vector-operators.md): a lone NaN
+/// operand propagates and a NaN pair keeps the larger float32 significand,
+/// the positive NaN on a tie, quieted; a NaN from non-NaN operands (inf -
+/// inf, 0 * inf, 0 / 0, inf / inf) is the real indefinite 0xFFC00000. The
+/// result is that float32 NaN widened, as the JavaScript helper returns it.
+/// Neither the host FPU nor Rust decides: the FPU's default NaN is
+/// 0x7FC00000 on arm64 and 0xFFC00000 on x86, Rust leaves a NaN result's
+/// payload unspecified, and LLVM's wasm stackifier commutes f64.add/f64.mul
+/// operands when the second was computed first.
 #[inline(always)]
-pub(crate) fn nan_first(x: f64, y: f64, r: f64) -> f64 {
-    const QUIET: u64 = 0x0008_0000_0000_0000;
-    if x.is_nan() {
-        f64::from_bits(x.to_bits() | QUIET)
-    } else if y.is_nan() {
-        f64::from_bits(y.to_bits() | QUIET)
+pub(crate) fn x87_nan(x: f64, y: f64, r: f64) -> f64 {
+    if r.is_nan() {
+        x87_nan_of(x, y)
     } else {
         r
     }
+}
+#[cold]
+#[inline(never)]
+fn x87_nan_of(x: f64, y: f64) -> f64 {
+    // The float32 bits of a double NaN: its sign and the top 23 bits of its
+    // payload (Math.fround and a float32 store keep these).
+    let narrow = |v: f64| {
+        let b = v.to_bits();
+        (((b >> 32) as u32) & 0x8000_0000) | 0x7f80_0000 | ((b >> 29) as u32 & 0x7f_ffff)
+    };
+    let keep = match (x.is_nan(), y.is_nan()) {
+        (false, false) => crate::x87::INDEFINITE,
+        (true, false) => narrow(x),
+        (false, true) => narrow(y),
+        (true, true) => {
+            let (a, b) = (narrow(x), narrow(y));
+            let (sa, sb) = (a & 0x7f_ffff, b & 0x7f_ffff);
+            if sa > sb || (sa == sb && a >> 31 == 0) {
+                a
+            } else {
+                b
+            }
+        }
+    } | 0x40_0000;
+    f64::from_bits((((keep & 0x8000_0000) as u64) << 32) | 0x7ff0_0000_0000_0000 | (((keep & 0x7f_ffff) as u64) << 29))
 }
 /// A handle's class table entry: 0, RELEASED or its class row (0 at or
 /// beyond the capacity, where every handle is live).
@@ -1565,9 +1587,9 @@ impl Run {
                     V_ADD => {
                         let (x, y) = (widen3(a), widen3(b));
                         [
-                            narrow(nan_first(x[0], y[0], x[0] + y[0])),
-                            narrow(nan_first(x[1], y[1], x[1] + y[1])),
-                            narrow(nan_first(x[2], y[2], x[2] + y[2])),
+                            narrow(x87_nan(x[0], y[0], x[0] + y[0])),
+                            narrow(x87_nan(x[1], y[1], x[1] + y[1])),
+                            narrow(x87_nan(x[2], y[2], x[2] + y[2])),
                         ]
                     }
                     // 224 / 297: the kernel bodies.
@@ -1615,14 +1637,14 @@ impl Run {
                 let a = float_of(load32(addr));
                 let v = match op {
                     // 184: assign(args[0], f(a + b))
-                    C_FLOAT_ADD => fround(nan_first(a, b, a + b)),
+                    C_FLOAT_ADD => fround(x87_nan(a, b, a + b)),
                     // 185: assign(args[0], f(f(a) - f(b)))
                     C_FLOAT_SUB => {
                         let (x, y) = (fround(a), fround(b));
-                        fround(nan_first(x, y, x - y))
+                        fround(x87_nan(x, y, x - y))
                     }
                     // 182: assign(args[0], f(a * b))
-                    _ => fround(nan_first(a, b, a * b)),
+                    _ => fround(x87_nan(a, b, a * b)),
                 };
                 store32(addr, float_bits(v));
             }
@@ -1702,14 +1724,14 @@ impl Run {
                 let v = match kind {
                     // 215/216: a.map((v, i) => f(v op b[i])).
                     VECTOR_ADD => [
-                        narrow(nan_first(x[0], y[0], x[0] + y[0])),
-                        narrow(nan_first(x[1], y[1], x[1] + y[1])),
-                        narrow(nan_first(x[2], y[2], x[2] + y[2])),
+                        narrow(x87_nan(x[0], y[0], x[0] + y[0])),
+                        narrow(x87_nan(x[1], y[1], x[1] + y[1])),
+                        narrow(x87_nan(x[2], y[2], x[2] + y[2])),
                     ],
                     VECTOR_SUB => [
-                        narrow(nan_first(x[0], y[0], x[0] - y[0])),
-                        narrow(nan_first(x[1], y[1], x[1] - y[1])),
-                        narrow(nan_first(x[2], y[2], x[2] - y[2])),
+                        narrow(x87_nan(x[0], y[0], x[0] - y[0])),
+                        narrow(x87_nan(x[1], y[1], x[1] - y[1])),
+                        narrow(x87_nan(x[2], y[2], x[2] - y[2])),
                     ],
                     // 296 / 300: the x87 kernel bodies.
                     VECTOR_MUL => {
@@ -1734,21 +1756,16 @@ impl Run {
                 let v = if kind == VECTOR_SCALE {
                     // 212: a.map(v => f(f(v) * f(b))).
                     [
-                        narrow(nan_first(x[0], fs, x[0] * fs)),
-                        narrow(nan_first(x[1], fs, x[1] * fs)),
-                        narrow(nan_first(x[2], fs, x[2] * fs)),
+                        narrow(x87_nan(x[0], fs, x[0] * fs)),
+                        narrow(x87_nan(x[1], fs, x[1] * fs)),
+                        narrow(x87_nan(x[2], fs, x[2] * fs)),
                     ]
                 } else {
-                    // 214 (script-mover-primitives.mjs divideVector):
-                    // reciprocal = 1 / f(Number(divisor)) in doubles (a NaN
-                    // divisor is the only NaN operand), then
-                    // f(component * reciprocal).
-                    let q = 1.0 / fs;
-                    [
-                        narrow(nan_first(x[0], q, x[0] * q)),
-                        narrow(nan_first(x[1], q, x[1] * q)),
-                        narrow(nan_first(x[2], q, x[2] * q)),
-                    ]
+                    // 214: the kernel's DivideEqual_VectorFloat body (the
+                    // JavaScript VM's case 214), whose 80-bit reciprocal
+                    // the original keeps on the x87 stack.
+                    crate::op_divide_equal_vector_float(a[0], a[1], a[2], narrow(fs));
+                    kernel_vector()
                 };
                 self.verify_op(node, r, x, [s, 0.0, 0.0], widen3(v));
                 v
@@ -1762,9 +1779,9 @@ impl Run {
                 let y = widen3(b);
                 let fs = fround_operand(s);
                 let v = [
-                    narrow(nan_first(fs, y[0], fs * y[0])),
-                    narrow(nan_first(fs, y[1], fs * y[1])),
-                    narrow(nan_first(fs, y[2], fs * y[2])),
+                    narrow(x87_nan(fs, y[0], fs * y[0])),
+                    narrow(x87_nan(fs, y[1], fs * y[1])),
+                    narrow(x87_nan(fs, y[2], fs * y[2])),
                 ];
                 self.verify_op(node, r, [s, 0.0, 0.0], y, widen3(v));
                 v
@@ -2170,8 +2187,8 @@ impl Run {
                 let a = self.vector(SELF);
                 let [x, y, z] = widen3(a);
                 let (xx, yy, zz) = (x * x, y * y, z * z);
-                let s = nan_first(zz, yy, zz + yy);
-                let s = nan_first(s, xx, s + xx);
+                let s = x87_nan(zz, yy, zz + yy);
+                let s = x87_nan(s, xx, s + xx);
                 let v = fround(if s.is_nan() { s } else { crate::trace::sqrt(s) });
                 self.verify_op(node, r, [x, y, z], [0.0; 3], [v, 0.0, 0.0]);
                 v
@@ -2195,13 +2212,13 @@ impl Run {
                 let a = self.float(SELF);
                 let b = self.float(SELF);
                 match kind {
-                    // 171/172/174/175: f(a op b), a NaN operand's payload
-                    // chosen explicitly (nan_first), not by the compiler's
+                    // 171/172/174/175: f(a op b), a NaN result the x87's
+                    // (x87_nan), not the host FPU's or the compiler's
                     // operand order.
-                    FLOAT_MUL => fround(nan_first(a, b, a * b)),
-                    FLOAT_DIV => fround(nan_first(a, b, a / b)),
-                    FLOAT_ADD => fround(nan_first(a, b, a + b)),
-                    FLOAT_SUB => fround(nan_first(a, b, a - b)),
+                    FLOAT_MUL => fround(x87_nan(a, b, a * b)),
+                    FLOAT_DIV => fround(x87_nan(a, b, a / b)),
+                    FLOAT_ADD => fround(x87_nan(a, b, a + b)),
+                    FLOAT_SUB => fround(x87_nan(a, b, a - b)),
                     // FMin (244): a > b ? b : a; FMax (245): a >= b ? a : b,
                     // on the raw values.
                     FLOAT_MIN => {

@@ -3,6 +3,7 @@
  * World iteration, startup and client/network simulation are separate work.
  */
 import {updateActorTimer} from './script-timers.mjs';
+import {x87add,x87sub} from './x87-nan.mjs';
 
 const f=Math.fround;
 const less=(a,b)=>a<b||Number.isNaN(a)||Number.isNaN(b);
@@ -79,7 +80,7 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
     scriptAndTimer();
     const lifespan=get('LifeSpan');
     if(lifespan!==0&&!Number.isNaN(lifespan)) {
-      const remaining=lifespan-delta;
+      const remaining=x87sub(lifespan,delta);
       set('LifeSpan',f(remaining));
       if(!(remaining>0.0001)) {
         event('Expired');
@@ -100,8 +101,8 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
   const weapon=get('Weapon');
   if(weapon)services.farMoveActor(weapon,get('Location'),0,0);
   if(get('Role')!==4||tickType!==2)return 1;
-  if(less(get('SightCounter'),0))set('SightCounter',f(get('SightCounter')+0.2));
-  set('SightCounter',f(get('SightCounter')-delta));
+  if(less(get('SightCounter'),0))set('SightCounter',f(x87add(get('SightCounter'),0.2)));
+  set('SightCounter',f(x87sub(get('SightCounter'),delta)));
   if(get('bIsPlayer')&&!get('bHidden'))services.showSelf(actor);
   if(less(get('SightCounter'),0)&&services.isProbing(actor,'EnemyNotVisible')) {
     services.checkEnemyVisible(actor);
@@ -109,7 +110,7 @@ export function tickStandaloneActor(actor,seconds,tickType,services) {
   }
   for(const [name,callback] of [['PainTime','PainTimer'],['SpeechTime','SpeechTimer']]) {
     if(get(name)>0) {
-      const remaining=get(name)-delta;
+      const remaining=x87sub(get(name),delta);
       set(name,f(remaining));
       if(less(remaining,0.001)) {
         set(name,0);

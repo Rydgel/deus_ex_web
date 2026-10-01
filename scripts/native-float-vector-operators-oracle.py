@@ -59,6 +59,24 @@ NATIVES = {
     "minIntInt":                  {"index": 249, "thunk": 0x1010190B, "body": 0x10134A20, "result": "i"},
     "square":                     {"index": 194, "thunk": 0x1010136B, "body": 0x101361F0, "result": "f"},
     "multiplyVectorVector":       {"index": 296, "thunk": 0x10102FFE, "body": 0x101379C0, "result": "3f"},
+    # The operators both VMs compute with host arithmetic plus the x87 NaN
+    # rules (script-vm.mjs x87arith, interp.rs x87_nan): FLD m32, then
+    # FMUL/FDIV/FADD/FSUB m32 (or FMUL st(1) by 214's FDIVR reciprocal),
+    # then FSTP m32 per result.
+    "multiplyFloatFloat":         {"index": 171, "thunk": 0x10101EFB, "body": 0x10134E80, "result": "f"},
+    "divideFloatFloat":           {"index": 172, "thunk": 0x10102C0C, "body": 0x10134F50, "result": "f"},
+    "addFloatFloat":              {"index": 174, "thunk": 0x101020CC, "body": 0x10135100, "result": "f"},
+    "subtractFloatFloat":         {"index": 175, "thunk": 0x1010265D, "body": 0x101351D0, "result": "f"},
+    "multiplyEqualFloatFloat":    {"index": 182, "thunk": 0x101021F3, "body": 0x101358E0, "result": "f", "variable": "f"},
+    "addEqualFloatFloat":         {"index": 184, "thunk": 0x101024DC, "body": 0x10135AA0, "result": "f", "variable": "f"},
+    "subtractEqualFloatFloat":    {"index": 185, "thunk": 0x10101645, "body": 0x10135B80, "result": "f", "variable": "f"},
+    "multiplyVectorFloat":        {"index": 212, "thunk": 0x10103247, "body": 0x101377E0, "result": "3f"},
+    "multiplyFloatVector":        {"index": 213, "thunk": 0x10102897, "body": 0x101378D0, "result": "3f"},
+    "divideVectorFloat":          {"index": 214, "thunk": 0x10101C8F, "body": 0x10137AB0, "result": "3f"},
+    "addVectorVector":            {"index": 215, "thunk": 0x101029A5, "body": 0x10137BB0, "result": "3f"},
+    "subtractVectorVector":       {"index": 216, "thunk": 0x10101992, "body": 0x10137CA0, "result": "3f"},
+    "addEqualVectorVector":       {"index": 223, "thunk": 0x10101447, "body": 0x10138B10, "result": "3f", "variable": "3f"},
+    "vectorSize":                 {"index": 225, "thunk": 0x10102D88, "body": 0x10138D10, "result": "f"},
 }
 
 # Float32 operand values are written as bit patterns; vectors are three
@@ -139,11 +157,12 @@ class FloatVectorOperatorsProbe(_NATIVE.NativeCollision):
         variable = None
         variable_bits = None
         if spec.get("variable"):
-            raw = self.cpu.mem_read(self.variable, 12)
-            variable_bits = list(struct.unpack("<3I", raw))
+            count = struct.calcsize("<" + spec["variable"]) // 4
+            raw = self.cpu.mem_read(self.variable, 4 * count)
+            variable_bits = list(struct.unpack("<%dI" % count, raw))
             variable = [
                 v if abs(v) != float("inf") and v == v else {"bits": b}
-                for v, b in zip(struct.unpack("<3f", raw), variable_bits)
+                for v, b in zip(struct.unpack("<%df" % count, raw), variable_bits)
             ]
         width = struct.calcsize("<" + spec["result"])
         raw_result = self.cpu.mem_read(result, width)
@@ -418,6 +437,80 @@ CASES = [
                                                     ("vector", [0xFFC00001, 0, 0])]),
     ("muleq-nan-tie", "multiplyEqualVectorFloat", [("lvector", [0x7FC00001, 0x3F800000, 0x3F800000]),
                                                    ("float", 0xFFC00001)]),
+] + [
+    # ---- the host-arithmetic operators: x87 NaN results ----
+    # Every invalid operation stores the real indefinite 0xFFC00000 whatever
+    # the operand order; a NaN pair keeps the larger significand, the
+    # positive NaN on a tie; a lone NaN operand propagates quieted.
+    (f"{tag}-{name}", native, [(kinds[0], a), (kinds[1], b)])
+    for tag, native, kinds, extra in [
+        ("mulf", "multiplyFloatFloat", ("float", "float"), [("inf-zero", INF, 0), ("zero-neg-inf", NEG_ZERO, NINF)]),
+        ("divf", "divideFloatFloat", ("float", "float"),
+         [("zero-zero", 0, NEG_ZERO), ("inf-inf", INF, NINF), ("by-zero", 0xBF800000, 0), ("by-inf", 0x3F800000, NINF)]),
+        ("addf", "addFloatFloat", ("float", "float"), [("inf-neg-inf", INF, NINF), ("neg-zero", NEG_ZERO, NEG_ZERO)]),
+        ("subf", "subtractFloatFloat", ("float", "float"), [("inf-inf", NINF, NINF), ("neg-zero", NEG_ZERO, 0)]),
+        ("muleqf", "multiplyEqualFloatFloat", ("lfloat", "float"), [("inf-zero", 0, INF)]),
+        ("addeqf", "addEqualFloatFloat", ("lfloat", "float"), [("inf-neg-inf", NINF, INF)]),
+        ("subeqf", "subtractEqualFloatFloat", ("lfloat", "float"), [("inf-inf", INF, INF)]),
+    ]
+    for name, a, b in [
+        ("basic", 0x3FC00000, 0x40200000),               # 1.5, 2.5
+        ("round", 0x3F99999A, 0x3E4CCCCD),
+        *extra,
+        ("nan-a", 0x7FC00001, 0x3F800000),
+        ("nan-b", 0x3F800000, 0xFFE12345),
+        ("nan-pair-b", 0x7FC00001, 0x7FC00002),          # larger significand: B
+        ("nan-pair-a", 0xFFD00000, 0x7FC00001),          # larger significand: A
+        ("nan-tie", 0xFFC00001, 0x7FC00001),             # tie: the positive NaN
+        ("nan-tie-b", 0x7FC00001, 0xFFC00001),
+        ("indefinite-nan", 0xFFC00000, 0x7FC00000),      # tie: the positive NaN
+        ("snan-qnan", 0x7FA00000, 0x7FC00001),
+    ]
+] + [
+    ("muleqf-nonlvalue", "multiplyEqualFloatFloat", [("float", 0x40000000), ("float", 0x40400000)]),
+    ("addeqf-nonlvalue", "addEqualFloatFloat", [("float", INF), ("float", NINF)]),
+    ("subeqf-nonlvalue", "subtractEqualFloatFloat", [("float", 0x40000000), ("float", 0x7FC00001)]),
+    # vector * float (212) and float * vector (213): one FMUL m32 per component.
+    ("mulvf-basic", "multiplyVectorFloat", [("vector", [0x3F800000, 0xC0200000, 0x3E4CCCCD]), ("float", 0x3F99999A)]),
+    ("mulvf-inf-zero", "multiplyVectorFloat", [("vector", [INF, 0x3F800000, NINF]), ("float", 0)]),
+    ("mulvf-by-inf", "multiplyVectorFloat", [("vector", [0, 0xBF800000, NEG_ZERO]), ("float", INF)]),
+    ("mulvf-nan-pair", "multiplyVectorFloat", [("vector", [0x7FC00001, 0xFFC00003, 0x7FC00002]), ("float", 0xFFC00002)]),
+    ("mulvf-nan-tie", "multiplyVectorFloat", [("vector", [0xFFC00002, 0x3F800000, INF]), ("float", 0x7FC00002)]),
+    ("mulfv-basic", "multiplyFloatVector", [("float", 0x3F99999A), ("vector", [0x3F800000, 0xC0200000, 0x3E4CCCCD])]),
+    ("mulfv-inf-zero", "multiplyFloatVector", [("float", NEG_ZERO), ("vector", [INF, 0x3F800000, NINF])]),
+    ("mulfv-nan-pair", "multiplyFloatVector", [("float", 0xFFC00002), ("vector", [0x7FC00001, 0xFFC00003, 0x7FC00002])]),
+    ("mulfv-nan-tie", "multiplyFloatVector", [("float", 0xFFC00002), ("vector", [0x7FC00002, 0, 0xFFC00002])]),
+    # vector / float (214): the 222 body shape — FDIVR m64 1.0 keeps the
+    # reciprocal on the x87 stack, then FMUL st(1) and FSTP per component.
+    ("divvf-basic", "divideVectorFloat", [("vector", [0x40000000, 0x40400000, 0x40A00000]), ("float", 0x40400000)]),
+    ("divvf-zero", "divideVectorFloat", [("vector", [0x3F800000, 0xC0400000, 0]), ("float", 0)]),
+    ("divvf-neg-zero", "divideVectorFloat", [("vector", [0x3F800000, 0xC0400000, NEG_ZERO]), ("float", NEG_ZERO)]),
+    ("divvf-inf", "divideVectorFloat", [("vector", [0x3F800000, 0xBF800000, INF]), ("float", INF)]),
+    ("divvf-nan-divisor", "divideVectorFloat", [("vector", [0x3F800000, 0x7FC00001, 0x7FD00000]), ("float", 0x7FC00002)]),
+    ("divvf-nan-tie", "divideVectorFloat", [("vector", [0xFFC00002, 0, 0]), ("float", 0x7FC00002)]),
+    ("divvf-recip-extended", "divideVectorFloat", [("vector", [0xA6A3A450, 0, 0]), ("float", 0x0C5C7FD0)]),
+    ("divvf-near-mid", "divideVectorFloat", [("vector", [0x4B800000, 0, 0]), ("float", 0x4B7FFFFF)]),
+    # vector + vector (215), vector - vector (216), += (223).
+    ("addv-basic", "addVectorVector", [("vector", [0x3F800000, 0xC0200000, 0x3E4CCCCD]), ("vector", [0x3F99999A, 0x40200000, NEG_ZERO])]),
+    ("addv-inf", "addVectorVector", [("vector", [INF, NINF, INF]), ("vector", [NINF, INF, INF])]),
+    ("addv-nan", "addVectorVector", [("vector", [0x7FC00001, 0xFFD00000, 0xFFC00001]), ("vector", [0x7FC00002, 0x7FC00001, 0x7FC00001])]),
+    ("subv-basic", "subtractVectorVector", [("vector", [0x3F800000, 0xC0200000, NEG_ZERO]), ("vector", [0x3F99999A, 0x40200000, 0])]),
+    ("subv-inf", "subtractVectorVector", [("vector", [INF, NINF, INF]), ("vector", [INF, NINF, NINF])]),
+    ("subv-nan", "subtractVectorVector", [("vector", [0x7FC00001, 0xFFD00000, 0xFFC00001]), ("vector", [0x7FC00002, 0x7FC00001, 0x7FC00001])]),
+    ("addeqv-basic", "addEqualVectorVector", [("lvector", [0x3F800000, 0xC0200000, 0x3E4CCCCD]), ("vector", [0x3F99999A, 0x40200000, NEG_ZERO])]),
+    ("addeqv-inf", "addEqualVectorVector", [("lvector", [INF, NINF, INF]), ("vector", [NINF, INF, INF])]),
+    ("addeqv-nan", "addEqualVectorVector", [("lvector", [0x7FC00001, 0xFFD00000, 0xFFC00001]), ("vector", [0x7FC00002, 0x7FC00001, 0x7FC00001])]),
+    ("addeqv-nonlvalue", "addEqualVectorVector", [("vector", [0x3F800000, INF, 0]), ("vector", [0x3F800000, NINF, 0])]),
+    # VSize (225): (z*z + y*y) + x*x by FMUL/FADDP, FSTP m64, the CRT sqrt
+    # thunk 0x101032ba, FSTP m32.  NaN components meet in the FADDPs.
+    ("vsize-345", "vectorSize", [("vector", [0x40400000, 0x40800000, 0])]),
+    ("vsize-inf", "vectorSize", [("vector", [0x3F800000, NINF, 0])]),
+    ("vsize-nan-x", "vectorSize", [("vector", [0xFFC00001, 0x3F800000, 0x3F800000])]),
+    ("vsize-nan-zy", "vectorSize", [("vector", [0, 0x7FC00001, 0x7FC00002])]),
+    ("vsize-nan-yz", "vectorSize", [("vector", [0, 0x7FC00002, 0x7FC00001])]),
+    ("vsize-nan-xyz", "vectorSize", [("vector", [0xFFE12345, 0x7FE00000, 0x7FC00001])]),
+    ("vsize-nan-tie", "vectorSize", [("vector", [0x7FC00001, 0xFFC00001, 0])]),
+    ("vsize-nan-tie-zx", "vectorSize", [("vector", [0xFFC00001, 0, 0x7FC00001])]),
 ]
 
 

@@ -16,6 +16,8 @@ import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {classRecordId, nameId, foldedNameId} from '../src/runtime/script-vm-lower.mjs';
 import {f32bits, f32num} from '../src/runtime/script-vm.mjs';
 import {executeMoverPrimitive} from '../src/runtime/script-mover-primitives.mjs';
+import {x87mul32, x87div32, x87add32, x87sub32} from '../src/runtime/x87-nan.mjs';
+import {finishVectorSize} from '../src/runtime/mover-finish.mjs';
 import {actorInStasis} from '../src/runtime/actor-tick.mjs';
 
 const K = {
@@ -571,10 +573,10 @@ for (const make of [...TO_INT_FLOATS.map(v => () => floatOperand(v)), ...FLOAT_B
 // ---- Float operators (native() cases) ---------------------------------------
 const isNaN = Number.isNaN;
 const FLOAT_BINARY = new Map([
-  [K.FLOAT_MUL, (a, b) => f(a * b)],                     // native 171
-  [K.FLOAT_DIV, (a, b) => f(a / b)],                     // 172
-  [K.FLOAT_ADD, (a, b) => f(a + b)],                     // 174
-  [K.FLOAT_SUB, (a, b) => f(a - b)],                     // 175
+  [K.FLOAT_MUL, (a, b) => x87mul32(a, b)],              // native 171
+  [K.FLOAT_DIV, (a, b) => x87div32(a, b)],              // 172
+  [K.FLOAT_ADD, (a, b) => x87add32(a, b)],              // 174
+  [K.FLOAT_SUB, (a, b) => x87sub32(a, b)],              // 175
   [K.FLOAT_MIN, (a, b) => a > b ? b : a],                // 244
   [K.FLOAT_MAX, (a, b) => a >= b ? a : b],               // 245
 ]);
@@ -1024,9 +1026,9 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
 {
   const OP = {FLOAT_ADD: 1, FLOAT_SUB: 2, FLOAT_MUL: 3, INT_ADD: 4, INT_SUB: 5};
   const COMPOUND_FLOAT = new Map([
-    [OP.FLOAT_ADD, (a, b) => f(a + b)],                  // native 184
-    [OP.FLOAT_SUB, (a, b) => f(f(a) - f(b))],            // 185
-    [OP.FLOAT_MUL, (a, b) => f(a * b)],                  // 182
+    [OP.FLOAT_ADD, (a, b) => x87add32(a, b)],            // native 184
+    [OP.FLOAT_SUB, (a, b) => x87sub32(f(a), f(b))],      // 185
+    [OP.FLOAT_MUL, (a, b) => x87mul32(a, b)],            // 182
   ]);
   const COMPOUND_INT = new Map([
     [OP.INT_ADD, (a, b) => ((a | 0) + (b | 0)) | 0],     // 161
@@ -1928,13 +1930,14 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
 }
 
 // ---- R2b-5: float operators on NaN pairs, exact bits ---------------------------------------
-// native() computes f(a op b) in JavaScript: the FPU returns the first NaN
-// operand, quieted (a float operand's f32 widening already quieted it). The
-// result's f64 bits and the f32 bits a float store keeps must be the same in
-// Rust, whatever order the compiler evaluates the operation in. VM float
+// native() computes f(a op b) with the x87's NaN result (x87-nan.mjs): the
+// larger float32 significand of a NaN pair, the positive NaN on a tie, a lone
+// NaN operand, quieted, or the indefinite 0xFFC00000 for an invalid
+// operation, whatever the host FPU's default NaN. The result's f64 bits (that
+// float32 NaN widened) and the f32 bits a float store keeps must be the same
+// in Rust, whatever order the compiler evaluates the operation in. VM float
 // values are quiet (f32 widenings and arithmetic results), so the doubles
-// below are quiet NaNs; with a signaling operand the arm64 FPU prefers it
-// over an earlier quiet one, which no VM value exercises.
+// below are quiet NaNs.
 {
   const u64 = new DataView(new ArrayBuffer(8));
   const bitsOf64 = v => (u64.setFloat64(0, v, true), `${u64.getUint32(4, true).toString(16)}:${u64.getUint32(0, true).toString(16)}`);
@@ -2350,26 +2353,25 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
 
 // ---- R2b-6: vectors, rotators and names ----------------------------------------------------
 // Each operator against the native() case it transcribes (script-vm.mjs), the
-// mover primitives (214/225) through executeMoverPrimitive itself, the x87
+// mover primitive 225 through executeMoverPrimitive itself, the x87
 // kernel bodies through the kernel the JavaScript VM calls, IsA through
 // ScriptRuntime.invokeNative itself.
 //
 // NaN payloads. V8 does not keep them stable in two places, measured with the
 // probes in .work/logs/r2b6: (1) for `x op y` with two NaN operands the
 // tier running the closure picks the NaN (Ignition and TurboFan the first,
-// Maglev the second: nan-add-probe2.mjs); (2) an optimized closure may store
-// a NaN into a double-elements Array canonically (0x7fe00000 became
-// 0x7fc00000 in this validator's own OSR code), and may fold a float32
-// widening with a narrowing, keeping a signaling NaN (snan-probe.mjs). The
-// JavaScript VM's vector NaN payloads therefore depend on JIT state. Rust
-// keeps one rule: loads quiet a signaling NaN (getFloat32's widening in the
-// interpreter), arithmetic returns the first NaN operand quieted (the
-// interpreter's and TurboFan's order), kernel bodies return the kernel's
-// words. The references below compute each component as a scalar from
-// quiet float32 words (bit operations, never a NaN inside an Array), compare
-// every non-NaN component exactly with the JavaScript VM's own code, and a
-// NaN component with that rule, checking that JavaScript's result is a NaN
-// (one of the operands' when two are NaN).
+// Maglev the second: nan-add-probe2.mjs), which is why both VMs now choose
+// the x87's NaN explicitly (x87-nan.mjs, interp.rs x87_nan); (2) an optimized
+// closure may store a NaN into a double-elements Array canonically
+// (0x7fe00000 became 0x7fc00000 in this validator's own OSR code), and may
+// fold a float32 widening with a narrowing, keeping a signaling NaN
+// (snan-probe.mjs). The JavaScript VM's vector NaN payloads therefore still
+// depend on JIT state where a vector Array holds them. Rust keeps one rule:
+// loads quiet a signaling NaN (getFloat32's widening in the interpreter),
+// arithmetic returns the x87's NaN, kernel bodies return the kernel's words.
+// The references below compute each component as a scalar from quiet float32
+// words (bit operations, never a NaN inside an Array) with the JavaScript
+// VM's own helpers, so every component, NaN or not, compares exactly.
 {
   const kernel = await loadScriptVmKernel();
   const isNaNBits = b => (b & 0x7f800000) === 0x7f800000 && (b & 0x7fffff) !== 0;
@@ -2388,19 +2390,16 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   const sameRotator = (actual, expected, message) => { for (let i = 0; i < 3; i++) same(actual[i], expected[i], `${message} [${i}]`); };
   const f32 = f;
   let nanPairs = 0, nanComponents = 0;
-  /** One component of JavaScript float arithmetic: `js` the closure's value
-   * of `x op y` (scalars), `actual` Rust's word. */
+  /** One component of the operators' float arithmetic: `js` the JavaScript
+   * VM's helper's value of `x op y` (scalars, so its NaN bits are exact),
+   * `actual` Rust's word. */
   const sameArithmetic = (actual, js, x, y, message) => {
     actual >>>= 0;
     if (Number.isNaN(js)) {
-      assert.ok(Number.isNaN(num(actual)), `${message}: Rust ${actual.toString(16)} is not NaN`);
-      if (Number.isNaN(x) && Number.isNaN(y)) {
-        assert.ok(bits(js) === bits(x) || bits(js) === bits(y), `${message}: JavaScript ${bits(js).toString(16)} is neither NaN operand`);
-        nanPairs++;
-      }
-      same(actual, Number.isNaN(x) ? bits(x) : Number.isNaN(y) ? bits(y) : bits(js), `${message} NaN`);
+      if (Number.isNaN(x) && Number.isNaN(y)) nanPairs++;
       nanComponents++;
-    } else same(actual, bits(js), message);
+    }
+    same(actual, bits(js), message);
     same(isNaNBits(actual) ? (actual & 0x400000) !== 0 : true, true, `${message} quiet`);
   };
   /** A kernel vector body: the JavaScript VM's value for non-NaN components,
@@ -2445,17 +2444,16 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
    * comparing non-NaN components). */
   const arrayOf = a => [a.v(0), a.v(1), a.v(2)];
   const vectorOperandOf = b => { const q = b.map(quietBits); return {q, v: i => num(q[i])}; };
-  // 225 (finishVectorSize, doubles and Math.sqrt): exact for NaN-free
-  // vectors; with a NaN component Rust keeps the source order z*z, y*y, x*x
-  // (the first NaN), and JavaScript's result must be a NaN.
+  // 225 (executeMoverPrimitive's finishVectorSize of the float32
+  // components: doubles, Math.sqrt and the x87 NaN rules), exact for every
+  // vector: the components reach it through getters, never a NaN inside an
+  // Array.
   const sameSize = (actual, a, message) => {
-    const expected = executeMoverPrimitive(225, [arrayOf(a)]), nans = [a.v(2), a.v(1), a.v(0)].filter(Number.isNaN);
-    if (nans.length) {
-      assert.ok(Number.isNaN(expected), `${message}: JavaScript ${expected} is not NaN`);
-      sameNumber(actual, nans[0], `${message} keeps the first NaN in source order`);
-      if (nans.length > 1) nanPairs++;
-      nanComponents++;
-    } else sameNumber(actual, expected, message);
+    const expected = finishVectorSize({ get 0() { return a.v(0); }, get 1() { return a.v(1); }, get 2() { return a.v(2); } });
+    const nans = [a.v(2), a.v(1), a.v(0)].filter(Number.isNaN).length;
+    if (nans > 1) nanPairs++;
+    if (nans) nanComponents++;
+    sameNumber(actual, expected, message);
   };
   const ROT_INTS = [0, 1, -1, 16384, -16384, 32768, 65535, 65536, 0x7fffffff, -0x80000000, 12345, -54321, 0x40000000];
   const rotatorCases = [];
@@ -2472,7 +2470,7 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   }
 
   // 215/216: a.map((v, i) => f(v op b[i])), per component.
-  for (const [kind, op] of [[K.VECTOR_ADD, (x, y) => x + y], [K.VECTOR_SUB, (x, y) => x - y]]) {
+  for (const [kind, op] of [[K.VECTOR_ADD, x87add32], [K.VECTOR_SUB, x87sub32]]) {
     for (const [ab, bb] of vectorCases) {
       reset();
       const a = vectorOperand(ab), b = vectorOperand(bb), actual = vectorOf(w(kind, node(), a.words, b.words));
@@ -2533,23 +2531,20 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
     let a = vectorOperand(ab), s = make();
     const fs = f32(s.js);
     let actual = vectorOf(w(K.VECTOR_SCALE, node(), a.words, s.words));
-    // 212: a.map(v => f(f(v) * f(b))).
-    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f32(f32(a.v(i)) * fs), a.v(i), fs, `212 ${ab} by ${s.js} [${i}]`);
+    // 212: a.map(v => x87mul32(f(v), f(b))).
+    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], x87mul32(f32(a.v(i)), fs), a.v(i), fs, `212 ${ab} by ${s.js} [${i}]`);
     reset();
     a = vectorOperand(ab); s = make();
     actual = vectorOf(w(K.VECTOR_DIVIDE, node(), a.words, s.words));
-    // 214, executeMoverPrimitive: v * (1 / f(Number(divisor))) in doubles.
-    const moved = executeMoverPrimitive(214, [arrayOf(a), s.js]), reciprocal = 1 / f32(Number(s.js));
-    for (let i = 0; i < 3; i++) {
-      sameArithmetic(actual[i], f32(a.v(i) * reciprocal), a.v(i), reciprocal, `214 ${ab} by ${s.js} [${i}]`);
-      if (!Number.isNaN(moved[i])) same(actual[i] >>> 0, bits(moved[i]), `214 ${ab} by ${s.js} [${i}] (executeMoverPrimitive)`);
-    }
+    // 214: the kernel's DivideEqual_VectorFloat body.
+    sameKernel(actual, kernel.divideEqualVectorFloat(arrayOf(a), s.js),
+      rawKernel(x.op_divide_equal_vector_float, ...a.q, bits(f32(Number(s.js)))), `214 ${ab} by ${s.js}`);
     reset();
     s = make(); a = vectorOperand(ab);
     const ft = f32(s.js);
     actual = vectorOf(w(K.SCALE_VECTOR, node(), s.words, a.words));
-    // 213: b.map(v => f(f(a) * f(v))), the float evaluated first.
-    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f32(ft * f32(a.v(i))), ft, a.v(i), `213 ${s.js} by ${ab} [${i}]`);
+    // 213: b.map(v => x87mul32(f(a), f(v))), the float evaluated first.
+    for (let i = 0; i < 3; i++) sameArithmetic(actual[i], x87mul32(ft, f32(a.v(i))), ft, a.v(i), `213 ${s.js} by ${ab} [${i}]`);
   }
   // Rotate (276): the vector against the rotator cases.
   for (let i = 0; i < 3000; i++) {
@@ -2595,25 +2590,28 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   // Explicit edges.
   reset();
   vectorOf(w(K.VECTOR_SCALE, node(), w(K.LIT_VECTOR, [bits(1), 0x80000000, 0x7fe00000]), w(K.JS_FLOAT, node(() => undefined))));
-  same(result3().join(), [0x7fc00000, 0x7fc00000, 0x7fe00000].join(), '212 by undefined: NaN, the vector NaN first');
+  same(result3().join(), [0x7fc00000, 0x7fc00000, 0x7fe00000].join(), '212 by undefined: NaN, the larger significand');
   reset();
   vectorOf(w(K.SCALE_VECTOR, node(), w(K.JS_FLOAT, node(() => undefined)), w(K.LIT_VECTOR, [bits(2), 0x7fe00000, 0])));
-  same(result3().join(), [0x7fc00000, 0x7fc00000, 0x7fc00000].join(), '213 undefined by a vector: the float NaN first');
+  same(result3().join(), [0x7fc00000, 0x7fe00000, 0x7fc00000].join(), '213 undefined by a vector: the larger significand');
   reset();
   vectorOf(w(K.VECTOR_SCALE, node(), w(K.LIT_VECTOR, [0x80000000, bits(1), 0x7f800000]), E.float(0)));
-  same(result3().join(), [0x80000000, 0, 0x7fc00000].join(), '212: -0 * 0 is -0, inf * 0 the default NaN');
+  same(result3().join(), [0x80000000, 0, 0xffc00000].join(), '212: -0 * 0 is -0, inf * 0 the x87 indefinite');
   reset();
   vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(-3), 0]), E.float(0)));
-  same(result3().join(), [0x7f800000, 0xff800000, 0x7fc00000].join(), '214 by zero: infinities, 0 * inf the default NaN');
+  same(result3().join(), [0x7f800000, 0xff800000, 0xffc00000].join(), '214 by zero: infinities, 0 * inf the x87 indefinite');
   reset();
   vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(3), 0x7fd00000]), E.float(0x7fe00001)));
-  same(result3().join(), [0x7fe00001, 0x7fe00001, 0x7fd00000].join(), '214 by a NaN: the reciprocal NaN, after a NaN component');
+  same(result3().join(), [0x7fe00001, 0x7fe00001, 0x7fe00001].join(), '214 by a NaN: the reciprocal NaN, the larger significand');
   reset();
   vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [bits(1), bits(3), 0x3f800001]), E.float(bits(3))));
-  same(result3().join(), executeMoverPrimitive(214, [[1, 3, num(0x3f800001)], 3]).map(bits).join(), '214 multiplies by the double reciprocal');
+  same(result3().join(), kernel.divideEqualVectorFloat([1, 3, num(0x3f800001)], 3).map(bits).join(), '214 multiplies by the 80-bit reciprocal');
+  reset();
+  vectorOf(w(K.VECTOR_DIVIDE, node(), w(K.LIT_VECTOR, [0xa6a3a450, 0, 0]), E.float(0x0c5c7fd0)));
+  same(result3()[0], 0xd9bdfd0b, '214 keeps the reciprocal unrounded (divvf-recip-extended)');
   for (const [words, message] of [
     [[0x7fa00000, 0xffe12345, 0], 'two NaN components: y*y + x*x keeps y'],
-    [[0xffe12345, 0x7fa00000, 0x7fc00001], 'z*z first'],
+    [[0xffe12345, 0x7fa00000, 0x7fc00001], 'three NaN components: the larger significand, x'],
     [[0x7f800000, 0x7fc00001, 0], 'infinity plus NaN'],
     [[0x80000000, 0x80000000, 0x80000000], '-0'],
     [[0x00000001, 0, 0], 'subnormal'],
@@ -2881,8 +2879,8 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
         const t = vectorOperandOf(target), actual = read3(at(onField));
         const message = `vcompound ${op} ${onField ? 'field' : 'local'} ${target} by ${operand.js ?? operand.q}`;
         if (!reference) {
-          // 223: a.map((v, i) => f(f(v) + f(b[i]))).
-          for (let i = 0; i < 3; i++) sameArithmetic(actual[i], f(f(t.v(i)) + f(operand.v(i))), t.v(i), operand.v(i), `${message} [${i}]`);
+          // 223: a.map((v, i) => x87add32(f(v), f(b[i]))).
+          for (let i = 0; i < 3; i++) sameArithmetic(actual[i], x87add32(f(t.v(i)), f(operand.v(i))), t.v(i), operand.v(i), `${message} [${i}]`);
           continue;
         }
         const [js, raw] = reference;
