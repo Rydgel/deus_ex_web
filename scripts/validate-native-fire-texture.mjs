@@ -39,6 +39,28 @@ for (const [uBits, vBits] of [[3, 3], [4, 3], [3, 5], [5, 5], [6, 4], [4, 7]])
     for (const pentiumPro of [1, 0])
       cases.push({...makeCase(`update ${rising ? 'rising' : 'still'} ${pentiumPro ? 'ppro' : 'p5'} ${1 << uBits}x${1 << vBits}`,
         {uBits, vBits, rising}), pentiumPro});
+// Spark types: several sparks of one type with random bytes (X, Y inside the
+// texture), on random pixels and generator state.
+const NAMES = ['Burn', 'Sparkle', 'Pulse', 'Signal', 'Blaze', 'OzHasSpoken', 'Cone', 'BlazeRight', 'BlazeLeft',
+  'Cylinder', 'Cylinder3D', 'Lissajous', 'Jugglers', 'Emit', 'Fountain', 'Flocks', 'Eels', 'Organic',
+  'WanderOrganic', 'RandomCloud', 'CustomCloud', 'LocalCloud', 'Stars', 'LineLightning', 'RampLightning',
+  'SphereLightning', 'Wheel', 'Gametes', 'Sprinkler'];
+const TYPES = (option('types', '0-3')).split(',').flatMap(range => {
+  const [a, b = a] = range.split('-').map(Number); return Array.from({length: b - a + 1}, (_, k) => a + k);
+});
+for (const type of TYPES)
+  for (const [uBits, vBits] of [[5, 5], [6, 4], [4, 6], [7, 7]])
+    for (let variant = 0; variant < 3; variant++) {
+      const count = 1 + random() % 12, limit = count + random() % 24;
+      const sparks = Array.from({length: count}, () => [type, random() & 255, random() & ((1 << uBits) - 1),
+        random() & ((1 << vBits) - 1), random() & 255, random() & 255, random() & 255, random() & 255]);
+      const c = makeCase(`spark ${NAMES[type] ?? type} ${1 << uBits}x${1 << vBits} #${variant}`,
+        {uBits, vBits, rising: random() & 1, sparks, ticks: 6});
+      c.fields.SparksLimit = limit;
+      // Room for the temporaries a spark emits: the array is SparksLimit long.
+      c.sparks += '00'.repeat(8 * (limit - count));
+      cases.push(c);
+    }
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
 
 const dir = path.resolve('reports/rendering');
