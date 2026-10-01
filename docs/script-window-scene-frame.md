@@ -60,10 +60,13 @@ host separately assigns RootWindow+0x740 to this allocated frame. Root integer
 UI multipliers remain in the projection consumer and must not be folded into
 the physical input dimensions.
 
-The default tangent leaf admits the measured FOV values 1, 30, 60, 75, 90, 120,
-and 170 degrees. Other float32 FOV values require an explicit
-`appTan(doubleArgument)` service returning the original qword result, or throw
-an unsupported-boundary error. There is no `Math.tan` fallback. Orthographic
+The default tangent leaf uses the measured FOV values 1, 30, 60, 75, 90, 120
+and 170 degrees, and for any other FOV the FPTAN model in
+[x87 tan](x87-tan.md): the correctly rounded tangent of the exact double
+argument, or both neighbouring doubles when FPTAN's error could round either
+way, in which case both must give the same float32 `projectionZ` (otherwise
+the frame throws). An `appTan(doubleArgument)` service still overrides it.
+There is no `Math.tan` fallback. Orthographic
 modes 13/14/15 remain unsupported. Transpose, frustum, device setup and the rest
 of FSceneNode are outside this HUD-consumed field slice. The caller must supply
 the original selected view location/rotation, including any original eye-height
@@ -85,8 +88,10 @@ and five size/projection float32 bit patterns, each argument to appTan, and the
 single render-device callback. Cases cover every admitted FOV, an external
 72.25-degree service case, each cardinal rotation axis, mixed/wrapped/extreme
 int32 rotators, nonzero and extreme camera origins, odd viewport dimensions,
-and dimensions above float32's exact-integer range. The test also checks the
-native-memory writer and explicit unsupported FOV/orthographic boundaries.
+and dimensions above float32's exact-integer range. The test also checks the native-memory writer, that the default tangent
+model reproduces the external case's projection without the service, and the
+orthographic boundary. `scripts/validate-x87-tan-hardware.mjs` checks the model
+itself against 208,181 real FPTAN results.
 Hardware and original capture artifacts remain under ignored
 `.cache/window-scene-frame/`; the driver skips explicitly when the required
 hardware runner/compiler is unavailable.

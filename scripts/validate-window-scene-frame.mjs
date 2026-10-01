@@ -76,7 +76,11 @@ for (const [index, sample] of samples.entries()) {
   assert.deepEqual(original.results[index].tangentCalls, [argumentsByFov.get(sample.fov)]);
   assert.equal(original.results[index].rendererCallbacks, 1);
 }
-assert.throws(() => buildWindowSceneFrame({...samples[0], fov: 72.25}), /measured original appTan/);
+// The default tangent leaf (docs/x87-tan.md) admits the external FOV and
+// reproduces the original projection without the measured service.
+const external = samples.findIndex(sample => sample.externalTan);
+assert.equal(bits32(buildWindowSceneFrame(samples[external]).projectionZ), original.results[external].sizeBits[4],
+  'default appTan model: external FOV projection');
 for (const renderMode of [13, 14, 15])
   assert.throws(() => buildWindowSceneFrame({...samples[0], renderMode}), /Orthographic/);
 console.log(`Window scene frame: ${samples.length} original Engine cases, ${argumentsByFov.size} real-x87 appTan qwords, all consumed fields bit-exact`);

@@ -5,6 +5,7 @@
  * a caller input; this module does not derive it from a browser camera.
  */
 import {rotatorSin} from './coords.mjs';
+import {x87TanCandidates} from './x87-tan.mjs';
 import {x87load as X, x87int32 as I, x87add as A, x87neg as N,
   x87mul as M, x87div as D, x87store as S, x87storeDouble as Q} from './script-vm.mjs';
 
@@ -26,8 +27,9 @@ const double = value => {
   return (rounded.neg ? -1 : 1) * Number(rounded.sig) * 2 ** rounded.exp;
 };
 const HALF = X64(.5), DEG_HALF = X64(0.008726646259971648);
-// Qword stores of original Core appTan's real-x87 extended return. These
-// values are admitted measurements, not a replacement transcendental model.
+// Qword stores of original Core appTan's real-x87 extended return, measured
+// first; every other FOV takes x87-tan.mjs, checked against these and against
+// 208,181 real FPTAN results (docs/x87-tan.md).
 const TANGENTS = new Map([
   [1, '3f81df645e10066f'], [30, '3fd126145e9ecd56'], [60, '3fe279a74590331c'],
   [75, '3fe88df153d6a676'], [90, '3fefffffffffffff'], [120, '3ffbb67ae8584ca8'],
@@ -58,7 +60,9 @@ function viewCoords(rotation, location) {
 /** Normal perspective input: original camera location/rotation arrays,
  * physical integer viewport dimensions and Actor.FOVAngle. Optional appTan
  * service accepts the original qword argument and returns the original qword
- * result; without it only sceneFrameMeasuredFovs are admitted.
+ * result; without it x87TanCandidates gives it. The tangent reaches the frame
+ * only through the float32 projectionZ, so when FPTAN could store either of
+ * two doubles both are tried and must agree there.
  */
 export function buildWindowSceneFrame({location, rotation, width, height, fov, renderMode = 5, appTan}) {
   if (!Array.isArray(location) || location.length !== 3 || !location.every(v => Number.isFinite(Math.fround(v))))
@@ -70,14 +74,17 @@ export function buildWindowSceneFrame({location, rotation, width, height, fov, r
   if (!Number.isInteger(renderMode) || [13, 14, 15].includes(renderMode))
     throw new Error('Orthographic scene-frame production is unsupported');
   fov = Math.fround(fov);
-  let tangent = TANGENTS.get(fov);
-  if (appTan) tangent = appTan(double(M(X(fov), DEG_HALF)));
-  if (!Number.isFinite(tangent) || tangent <= 0)
-    throw new Error(`Scene frame requires measured original appTan for FOV ${fov}`);
+  const argument = double(M(X(fov), DEG_HALF));
+  const tangents = appTan ? [appTan(argument)] : TANGENTS.has(fov) ? [TANGENTS.get(fov)] : x87TanCandidates(argument);
+  if (!tangents || !tangents.every(t => Number.isFinite(t) && t > 0))
+    throw new Error(`Scene frame requires the original appTan for FOV ${fov}`);
   const fx = S(I(width)), fy = S(I(height));
+  const projections = new Set(tangents.map(t => S(D(M(X(fx), HALF), X64(t)))));
+  if (projections.size !== 1)
+    throw new Error(`Scene frame FOV ${fov}: FPTAN's last bit decides projectionZ, which is unmeasured`);
   return {coords: viewCoords(rotation, location), width: fx, height: fy,
     center: [S(M(I(width), HALF)), S(M(X(fy), HALF))],
-    projectionZ: S(D(M(X(fx), HALF), X64(tangent)))};
+    projectionZ: [...projections][0]};
 }
 
 /** Writes only the recovered fields consumed by native HUD projection. */
