@@ -116,20 +116,26 @@ peaked at 4.0 GB (stage3-training-conformance) and 3.9 GB
 stage3-training-conformance (362 s). The two failures:
 
 - `validate-script-vm-interp`: the x86 NaN mismatch below, now fixed.
-- `validate-gpu-mesh`: not the `--use-angle=metal` flag. Chromium ignores
-  that ANGLE backend on Linux and the validator ran through to its Island
-  admission phase, where the game paused on `Non-Pawn performPhysics
-  physProjectile (0x103d4600) is not linked for deusex.tracer`: the open
-  Tracer projectile boundary (terrorists firing at the bots), which that
-  phase hits on any new Island pause. The flag still means the Mac and
-  Linux runs use different ANGLE backends.
+- `validate-gpu-mesh`: the game paused in its Island admission phase on
+  `Non-Pawn performPhysics physProjectile (0x103d4600) is not linked for
+  deusex.tracer` (terrorists firing at the bots), since translated
+  ([projectile](projectile.md)). Behind it was a second problem: Linux
+  Chromium ignores `--use-angle=metal` and falls back to SwiftShader, a
+  software Vulkan renderer. With the Tracer flying, the SwiftShader run then
+  failed the environment-UV tolerance (4.5e-4 against 2^-20) and, being slow,
+  reached MeetPaul before the admission phase (no tween captures). The
+  validator now takes `--angle`, Metal on macOS and GL elsewhere (here the
+  AMD iGPU through radeonsi, which keeps the NVIDIA display driver out of it;
+  `vulkan` would select the RTX): it passes, with exact environment UVs and
+  the player admitted at frame 260.
 
 Every other validator, including the four hardware-x87 ones under wine
 11.17, passed here as on the Mac.
 
 The sweep after the NaN fix ran with `--jobs 8 --mem-budget 16384`: 449 of
 450 passed in 720 s wall (5758 s CPU, speedup 8.0×), the remaining failure
-being the same `validate-gpu-mesh` Tracer pause.
+being the same `validate-gpu-mesh` Tracer pause, gone with physProjectile and
+the GL backend.
 
 ## Known gaps
 
@@ -170,10 +176,9 @@ being the same `validate-gpu-mesh` Tracer pause.
   (`src/runtime/x87-nan.mjs`, `interp.rs` `x87_nan`), measured on the
   original bodies and on this machine's x87
   (docs/script-float-vector-operators.md, "Host-arithmetic operators").
-- `scripts/validate-gpu-mesh.mjs` always launches Chromium with
-  `--use-angle=metal`, which exists only on macOS; Linux Chromium ignores it
-  and uses its default backend, so the GPU path runs on a different ANGLE
-  backend than on the Mac.
+- `scripts/validate-gpu-mesh.mjs` runs ANGLE on GL here and on Metal on the
+  Mac, so the two machines' GPU comparisons use different shader compilers
+  and hardware; both are checked against the same CPU kernels.
 - `ad/scripts/original-game.mjs` hard-codes the CrossOver bottle path under
   `~/Library`. The ad capture pipeline stays on the Mac.
 - The `.work/tools` perf scripts hard-code `/Users/gcc` paths. Performance

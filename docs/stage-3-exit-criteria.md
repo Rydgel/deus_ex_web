@@ -763,7 +763,8 @@ stage. Crashes and memory kills: 0. Each child peaked below 2.1 GB.
   - Everett's conversation camera and GetCurrentRes (11_Paris_Everett).
 - **Stage 5:**
   - swimming (5 maps);
-  - PoisonGas and Dart physProjectile (6 maps);
+  - PoisonGas and Dart physProjectile (6 maps; physProjectile is linked since
+    2026-10-01, [projectile](projectile.md): the census has not been rerun);
   - PHYS_Interpolating helicopters and cinematic pawns (6 maps);
   - AI natives 504, 518, 523 and 708 (5 maps);
   - one rotating DeusExMover (09_NYC_ShipBelow);

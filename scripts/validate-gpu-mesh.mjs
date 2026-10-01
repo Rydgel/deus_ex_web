@@ -1,7 +1,7 @@
 /**
  * GPU mesh path against the CPU kernels on the same inputs, in the same page
  * (docs/gpu-mesh.md, "Validation" and "Tolerances"). Headless Chromium
- * (Metal) runs Play with ?gpuMesh=1 against a dev server; at selected frames
+ * (ANGLE on the GPU, --angle) runs Play with ?gpuMesh=1 against a dev server; at selected frames
  * it reads the GPU pose, face, corner and environment float targets
  * (readPixels; the draw shader fetches exactly these) and compares them with:
  *   - positions: the CPU shadow's exact GetFrame output (the Wasm kernel);
@@ -18,6 +18,11 @@
  *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,90,120,160,200,250,300,360]
  *     [--device cpu]   (CPU substitutes for the GPU readbacks: JavaScript
  *                       lighting path, CPU positions; checks the harness)
+ *     [--angle metal|gl|vulkan]  (ANGLE backend: metal on macOS, gl elsewhere.
+ *                       Linux Chromium ignores metal and falls back to
+ *                       SwiftShader, a software renderer whose float results
+ *                       and frame timing differ; gl reaches the Linux host's
+ *                       AMD iGPU, docs/linux-host.md)
  *
  * Exits nonzero when a tolerance is exceeded or coverage is missing.
  */
@@ -28,6 +33,7 @@ import {gameDirectory} from './game-directory.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const device=option('device','gpu');
+const angle=option('angle',process.platform==='darwin'?'metal':'gl');
 try{gameDirectory();}catch{console.log('SKIP validate-gpu-mesh: no installed game data');process.exit(0);}
 // Without --url, a bounded dev server of this checkout with the repository's
 // configuration (game-data middleware included) on a free port. A checkout
@@ -211,7 +217,7 @@ async function capture(page,{frames,device,tolerance,admission}) {
   },{frames,device,tolerance,admission});
 }
 
-const browser=await chromium.launch({args:['--use-angle=metal']});
+const browser=await chromium.launch({args:[`--use-angle=${angle}`]});
 let failed=false;
 const coverage={},failureNotes=[];
 try {

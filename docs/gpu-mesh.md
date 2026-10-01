@@ -378,7 +378,9 @@ CPU kernels.
 
 **Validation** (`node scripts/validate-gpu-mesh.mjs`, dev server with the
 worktree, headless Chromium/ANGLE Metal on the M2 Pro, ten captures per map
-while walking):
+while walking; `--angle` picks the backend, GL on the Linux host, where
+Chromium would otherwise fall back to the SwiftShader software renderer,
+docs/linux-host.md):
 
 | | 00_Training | 01_NYC_UNATCOIsland |
 |---|---:|---:|

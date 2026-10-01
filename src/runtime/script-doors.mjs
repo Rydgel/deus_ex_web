@@ -33,7 +33,7 @@ import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
-import { runSpawnedActorFalling, runActorRolling, runActorRotation } from './script-actor-physics.mjs';
+import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
 
 const f = Math.fround;
@@ -1345,6 +1345,7 @@ export async function createScriptDoors({
     write: (target, name, value) => runtime.writeNamed(target, name,value),
     physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
     physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
+    physProjectile: (actor,delta)=>runActorProjectile(runtime,actor,delta),
     physMovingBrush: (actor,delta)=>{
       // AMover::physMovingBrush returns when bInterpolating is clear. All
       // map movers have native interpolation storage, including idle movers

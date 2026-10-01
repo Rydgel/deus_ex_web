@@ -6,6 +6,7 @@ import {processDecorationHitWall,setSupportBase} from './walking-callbacks.mjs';
 import {physicsRotation} from './actor-rotation.mjs';
 import {setScriptRotation} from './script-set-rotation.mjs';
 import {rolling} from './rolling.mjs';
+import {projectile} from './projectile.mjs';
 
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
@@ -102,6 +103,44 @@ export function runActorRolling(runtime,actor,seconds,zone) {
     setBase:target=>setSupportBase(actor,world(target),dispatch),
   });
   return get('Physics');
+}
+
+/** Field-backed AActor::physProjectile (projectile.mjs, docs/projectile.md)
+ * for a serialized map actor or spawned collision-view actor: live script
+ * fields, the actor's live Region.Zone, the original MoveActor, HitWall by
+ * ProcessEvent, ULevel::DestroyActor for zone 0 and the live Falling adapter
+ * for a bounce that set PHYS_Falling. */
+export function runActorProjectile(runtime,actor,seconds,iterations=0) {
+  const level=runtime.collisionViewActors.has(actor)?runtime.levelFor(actor)
+    :runtime.mapMoveLevel(actor,'physProjectile');
+  if(!level?.hash)throw new Error('Projectile actor requires the level collision hash');
+  const get=name=>runtime.readNamed(actor,name);
+  const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
+  const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
+  // The inlined IsA(AProjectile) at 0x103d47b6 selects the MaxSpeed clamp.
+  let isProjectile=false;
+  for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.projectile'){isProjectile=true;break;}
+  const regionZone=()=>{
+    const zone=runtime.regionValue(actor).zone;
+    if(!zone)throw new Error('physProjectile requires the actor Region.Zone (actor+0xc8)');
+    return zone;
+  };
+  const host={zoneNumber:runtime.regionValue(actor).zoneNumber};
+  for(const [key,name] of Object.entries({position:'Location',oldPosition:'OldLocation',velocity:'Velocity',
+    acceleration:'Acceleration',physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
+    Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
+  Object.defineProperty(host,'regionWater',{get:()=>Boolean(runtime.readNamed(regionZone(),'bWaterZone'))});
+  Object.defineProperty(host,'fluidFriction',{get:()=>runtime.readNamed(regionZone(),'ZoneFluidFriction')});
+  Object.defineProperty(host,'maxSpeed',{get:()=>isProjectile?get('MaxSpeed'):null});
+  projectile(host,seconds,iterations,{
+    destroy:()=>runtime.destroyActor(actor,false),
+    move:delta=>{
+      const result=playerMove(actor,delta,runtime.spawnedMoveServices(actor,level));
+      return {time:Math.fround(result.time),normal:result.hit?.normal??[0,0,0],actor:world(result.hit?.actor??null)};
+    },
+    hitWall:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)]),
+    physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,iterations),
+  });
 }
 
 export function runActorRotation(runtime,actor,seconds) {

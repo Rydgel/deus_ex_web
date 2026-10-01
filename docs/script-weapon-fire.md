@@ -156,7 +156,8 @@ oracle-validated routines (`runDecorationPhysics`) against the **live** level
 hash. The old separate decoration-physics pass used the creation-time hash
 closure, which a reset rebuilds. `physicsRotation` now uses the recovered, oracle-validated rotation body,
 including the four SecurityCameras and spawned fragments. `physProjectile`
-and the remaining movement modes are explicit boundaries.
+runs the recovered body ([projectile](projectile.md)); the remaining movement
+modes are explicit boundaries.
 
 `ULevel::Tick`'s DistanceFromPlayer pass (0x103a55c1–0x103a5698) now runs
 first each frame. It writes `DistanceFromPlayer` for every slot from

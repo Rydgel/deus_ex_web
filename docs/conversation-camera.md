@@ -202,11 +202,11 @@ rect is exactly the band between the two raw-background bars.
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight
-  the security bots before MeetPaul; a fired `DeusEx.Tracer` then pauses Play
-  at "Non-Pawn performPhysics physProjectile (0x103d4600) is not linked"
-  (projectile physics for non-pawns is not translated yet). Seen once in three
-  headless browser walks on October 1; headless validators without render
-  feedback do not reach it.
+  the security bots before MeetPaul. The `DeusEx.Tracer` they fire paused Play
+  at "Non-Pawn performPhysics physProjectile (0x103d4600) is not linked" until
+  October 1, when physProjectile was translated ([projectile](projectile.md),
+  bit-exact against the original body; `validate-island-tracer` flies real
+  Tracers on Island).
 * Lip sync is implemented ([lip sync](lip-sync.md)); other maps need their
   object-index capture first ([captures](object-index-captures.md)).
 * The choice waits for input (`ConPlay` in `WaitForInput`). Choosing through
