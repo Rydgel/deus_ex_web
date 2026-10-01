@@ -94,6 +94,9 @@ function summarize(data) {
 const LATER_STAGES = Object.freeze([
   {stage: 5, reason: 'AI navigation/latent movement natives (docs/script-pawn-nav.md unported workers)',
     test: key => /^native (504|506|508|518|523|524|525|526|708|712) /.test(key)},
+  // Pawn.ReachablePathnodes (iterator 1004) walks the navigation network.
+  {stage: 5, reason: 'AI navigation iterator: Pawn.ReachablePathnodes (1004)',
+    test: key => /Original iterator native is not implemented: ReachablePathnodes/.test(key)},
   {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
     test: key => /performPhysics Physics=Swimming\b/.test(key)},
   {stage: 5, reason: 'projectile and interpolating-actor physics (physProjectile, PHYS_Interpolating; pawns on InterpolationPoint paths)',
@@ -115,10 +118,12 @@ const LATER_STAGES = Object.freeze([
   {stage: 6, reason: 'map travel / saved games',
     test: key => /clienttravel|native 3011 /i.test(key)},
   // A pre-placed actor's global GObjObjects index depends on the session's
-  // whole load history (Entry, menus, maps reached by travel). Only 00_Training
-  // has a measured capture; other maps leave it unmeasured rather than invent
-  // one. PlaySound's channel id (ObjectIndex<<4|slot<<1|noOverride) needs it.
-  {stage: 6, reason: 'session-dependent global UObject index of pre-placed actors (measured only for 00_Training)',
+  // whole load history (Entry, menus, maps reached by travel). Every
+  // single-player map's pawns are measured for a fresh open from Training's
+  // console (docs/object-index-captures.md); other actors and other histories
+  // stay unmeasured. PlaySound's channel id (ObjectIndex<<4|slot<<1|noOverride)
+  // needs it.
+  {stage: 6, reason: 'session-dependent global UObject index of an unmeasured actor (pawns are captured per map)',
     test: key => /PlaySound requires the registered global UObject index/.test(key)},
 ]);
 const stageOf = key => LATER_STAGES.find(entry => entry.test(key.replace(/^(BOOT |\[swallowed\] |CRASH )/, ''))) ?? null;
@@ -141,7 +146,8 @@ const PHYSICS_NAMES = ['None', 'Walking', 'Falling', 'Swimming', 'Flying', 'Rota
   'Interpolating', 'MovingBrush', 'Spider', 'Trailer'];
 // Engine Actor iterator natives (Actor.uc) keep their names as well.
 const ITERATOR_NAMES = {304: 'AllActors', 305: 'ChildActors', 306: 'BasedActors', 307: 'TouchingActors',
-  309: 'TraceActors', 310: 'RadiusActors', 311: 'VisibleActors', 312: 'VisibleCollidingActors', 321: 'CollidingActors'};
+  309: 'TraceActors', 310: 'RadiusActors', 311: 'VisibleActors', 312: 'VisibleCollidingActors', 321: 'CollidingActors',
+  1004: 'ReachablePathnodes'};
 const normalize = text => String(text).replace(/Physics=(\d+)\b/g, (_, n) => `Physics=${PHYSICS_NAMES[n] ?? n}`)
   .replace(/iterator native is not implemented: (\d+)/g, (_, n) => `iterator native is not implemented: ${ITERATOR_NAMES[n] ?? n}`)
   .replace(/\b\d+(\.\d+)?\b/g, 'N').replace(/[A-Za-z_]+\d+\b/g, m => m.replace(/\d+$/, '#')).slice(0, 160);
