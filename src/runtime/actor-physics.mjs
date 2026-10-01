@@ -24,6 +24,20 @@ import {x87add, x87div, x87load, x87mul, x87neg, x87store} from './script-vm.mjs
  * physicsRotation, processEvent and `unsupported`
  * for the modes this host has not linked.
  */
+/** Velocity after PHYS_Interpolating and PHYS_MovingBrush: (Location -
+ * OldLocation) / DeltaTime, AActor 0x103c9881..0x103c98ce (the same bracket
+ * for physPathing at 0x103c9801) and APawn 0x103c9b49..0x103c9b9a. X/Y
+ * differences and the reciprocal are fst'd float32; Z keeps both extended
+ * intermediates. */
+export function interpolationVelocity(location, old, seconds) {
+  const differences = location.map((value, axis) => x87add(x87load(value), x87neg(x87load(old[axis]))));
+  const reciprocal = x87div(x87load(1), x87load(seconds));
+  const storedReciprocal = x87load(x87store(reciprocal));
+  return differences.map((difference, axis) => x87store(x87mul(
+    axis === 2 ? difference : x87load(x87store(difference)),
+    axis === 2 ? reciprocal : storedReciprocal)));
+}
+
 export function performActorPhysics(actor, seconds, services) {
   const {read, write} = services;
   const physics = Number(read(actor, 'Physics')) & 0xff;
@@ -32,16 +46,8 @@ export function performActorPhysics(actor, seconds, services) {
   const interpolated = (name, boundary) => {
     write(actor, 'OldLocation', [...read(actor, 'Location')]);
     move(name, boundary);
-    // 0x103c9881..0x103c98ce (same bracket for physPathing at 0x103c9801):
-    // X/Y differences and the reciprocal are fst'd float32; Z keeps both
-    // extended intermediates. Re-read OldLocation after the body/event.
-    const location = read(actor, 'Location'), old = read(actor, 'OldLocation');
-    const differences = location.map((value, axis) => x87add(x87load(value), x87neg(x87load(old[axis]))));
-    const reciprocal = x87div(x87load(1), x87load(seconds));
-    const storedReciprocal = x87load(x87store(reciprocal));
-    write(actor, 'Velocity', differences.map((difference, axis) => x87store(x87mul(
-      axis === 2 ? difference : x87load(x87store(difference)),
-      axis === 2 ? reciprocal : storedReciprocal))));
+    // Re-read OldLocation after the body/event.
+    write(actor, 'Velocity', interpolationVelocity(read(actor, 'Location'), read(actor, 'OldLocation'), seconds));
   };
   switch (physics) {
     case 2: services.physFalling(actor, seconds); break;

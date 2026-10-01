@@ -7,6 +7,7 @@ import {physicsRotation} from './actor-rotation.mjs';
 import {setScriptRotation} from './script-set-rotation.mjs';
 import {rolling} from './rolling.mjs';
 import {projectile} from './projectile.mjs';
+import {physPathing} from './pathing.mjs';
 
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
@@ -140,6 +141,32 @@ export function runActorProjectile(runtime,actor,seconds,iterations=0) {
     },
     hitWall:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)]),
     physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,iterations),
+  });
+}
+
+/** PHYS_Interpolating for a non-Pawn actor (helicopters on their flight
+ * paths): AActor::physPathing (pathing.mjs) over the actor's fields, with
+ * the generic MoveActor with its rotation (all flags clear; physPathing
+ * ignores the result) and InterpolateEnd through the attached actors'
+ * original bodies. performPhysics owns OldLocation and Velocity. */
+export function runActorPathing(runtime,actor,seconds) {
+  const level=runtime.collisionViewActors.has(actor)?runtime.levelFor(actor)
+    :runtime.mapMoveLevel(actor,'physPathing');
+  if(!level?.hash)throw new Error('physPathing requires the level collision hash');
+  const isA=(target,key)=>{
+    for(let cls=runtime.instance(target).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
+    return false;
+  };
+  physPathing(actor,seconds,{
+    read:(target,name)=>runtime.readNamed(target,name),
+    write:(target,name,value)=>runtime.writeNamed(target,name,value),
+    isA,
+    defaultFovAngle:target=>{
+      const cls=runtime.instance(target).cls;
+      return runtime.classDefaultReference(cls,runtime.lookupMember(cls,'fields','FovAngle')).get();
+    },
+    moveActor:(target,delta,rotation)=>{playerMove(target,delta,runtime.spawnedMoveServices(target,level),rotation);},
+    interpolateEnd:(receiver,other)=>runtime.processEvent(receiver,'InterpolateEnd',[other]),
   });
 }
 

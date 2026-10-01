@@ -33,7 +33,7 @@ import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
-import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile } from './script-actor-physics.mjs';
+import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile, runActorPathing } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
 
 const f = Math.fround;
@@ -52,6 +52,8 @@ const vector = (value, integer = false) => {
 };
 
 const isZeroVector = value => vector(value).every(component => component === 0);
+const MOVER_STATE_FIELDS = new Set(['keynum', 'prevkeynum', 'physalpha', 'physrate', 'binterpolating',
+  'oldpos', 'oldrot', 'basepos', 'baserot', 'keypos', 'keyrot']);
 const hasNamedValue = value => Boolean(value) && lower(value) !== 'none';
 
 function packageIndex(packageAsset, path, description) {
@@ -334,6 +336,11 @@ function makeBinding(runtime, record, field) {
       mirror: true,
     },
   };
+  // The Mover native fields above are a mover's interpolation state. PhysAlpha,
+  // PhysRate and bInterpolating are Actor fields: on any other actor (a
+  // helicopter an InterpolateTrigger sends along a path) they are its own
+  // storage, which physPathing and FinishInterpolation read.
+  if (MOVER_STATE_FIELDS.has(key) && !host.interpolation) return null;
   if (dynamic[key]) return dynamic[key];
   // bDeleteMe, the +0x1dc collision bools and bJustTeleported need no
   // binding: they are bits of the native flag words (+0x28, +0x1dc, +0x1ec)
@@ -732,8 +739,10 @@ export async function createScriptDoors({
       runtime.instance(call.receiver).state.latent = 302;
       return undefined;
     }
+    // execPollFinishInterpolation (0x103e0100): the latent action ends when
+    // the actor's bInterpolating (+0x1ec bit 7) is clear.
     if (call.index === 302) {
-      if (call.receiver?.interpolation?.interpolating) return undefined;
+      if (runtime.readNamed(call.receiver, 'bInterpolating')) return undefined;
       runtime.instance(call.receiver).state.latent = 0;
       return undefined;
     }
@@ -813,7 +822,7 @@ export async function createScriptDoors({
 
   runtime.pollLatent = ({ index, receiver, state }) => {
     if (index !== 302) throw new Error(`Unsupported original latent action ${index}`);
-    if (!receiver?.interpolation?.interpolating) state.latent = 0;
+    if (!runtime.readNamed(receiver, 'bInterpolating')) state.latent = 0;
   };
 
   // Mover.uc's native interpolation fields (KeyNum, PrevKeyNum, PhysAlpha,
@@ -1378,6 +1387,7 @@ export async function createScriptDoors({
     physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
     physRolling: (actor,delta)=>runActorRolling(runtime,actor,delta,zoneAt?.(actor.position)??{}),
     physProjectile: (actor,delta)=>runActorProjectile(runtime,actor,delta),
+    physPathing: (actor,delta)=>runActorPathing(runtime,actor,delta),
     physMovingBrush: (actor,delta)=>{
       // AMover::physMovingBrush (mover-interpolation.mjs) for every map mover:
       // any KeyNum, rotating keys, and the original InterpolateEnd event. It

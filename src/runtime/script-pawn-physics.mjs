@@ -45,6 +45,8 @@ import { linkDecorationCollision } from './decoration-physics.mjs';
 import { flagWordsOf } from './actor-flag-words.mjs';
 import { x87add, x87double, x87load, x87mul, x87store } from './script-vm.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
+import { physPathing } from './pathing.mjs';
+import { interpolationVelocity } from './actor-physics.mjs';
 
 const f = Math.fround;
 const unsupported = name => { throw new Error(`Original pawn physics boundary not linked: ${name}`); };
@@ -505,6 +507,20 @@ export function runScriptPawnPhysics(actor, dt, services) {
     case 2: pawn.falling(delta, 0); break;
     case 3: pawn.swimming(delta, 0); break;
     case 4: pawn.flying(delta, 0); break;
+    case 8: {
+      // 0x103c9b20: OldLocation = Location, physPathing (0x103dd8a0) along
+      // the InterpolationPoint path (pathing.mjs) through this pawn's own
+      // MoveActor, then Velocity from the moved Location.
+      pawn.oldLocation = [...pawn.position];
+      physPathing(actor, delta, {
+        read: services.read, write: services.write, isA: services.isA,
+        defaultFovAngle: target => services.classDefault(target, 'FovAngle'),
+        moveActor: (_actor, offset, rotation) => moveActor(pawn, offset, rotation, services, dispatch),
+        interpolateEnd: (receiver, other) => services.dispatch(receiver, 'InterpolateEnd', [other]),
+      });
+      pawn.velocity = interpolationVelocity(pawn.position, pawn.oldLocation, delta);
+      break;
+    }
     default: unsupported(`APawn::performPhysics Physics=${pawn.physics}`);
   }
   if (pawn.physics !== 0xa && (services.isA(actor, 'engine.playerpawn') ||

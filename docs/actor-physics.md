@@ -164,7 +164,7 @@ Non-Pawn actors use `AActor::performPhysics(DeltaTime)` (export thunk
 
 For 8/9 the velocity store is: X/Y differences stored float32, the reciprocal
 `fdivr 1.0` stored float32 (`fst`) and multiplied, but Z keeps the extended
-difference and the extended reciprocal (`fmulp`). Not translated here.
+difference and the extended reciprocal (`fmulp`).
 
 Tail (all Physics values), `src/runtime/actor-rotation.mjs` `performPhysicsTail`:
 
@@ -276,12 +276,13 @@ components are float32. Tail rotation and PendingTouch follow even if the
 movement body changed Physics or bDeleteMe. This bracket is implemented with
 the existing x87 primitives, without a binary64 reciprocal substitute.
 
-Bodies for Projectile, Interpolating and Trailer remain explicit unsupported
-boundaries unless a caller supplies a separately recovered service. Their
-jump-table dispatch is recovered; exposing a callback does not claim those
-bodies are implemented. MovingBrush reuses the recovered constant-rotation,
-two-key `tickMoverInterpolation` body; general mover rotation/key paths remain
-outside that body's scope.
+Play links the movement bodies as services: Projectile
+([projectile](projectile.md)), Interpolating ([pathing](pathing.md), and
+APawn's case 8 in `script-pawn-physics.mjs`) and MovingBrush (the full
+`physMovingBrush` in [doors](doors.md#physmovingbrush)). Trailer remains an
+explicit unsupported boundary; exposing a callback does not claim a body is
+implemented. The 8/9 Velocity bracket is `interpolationVelocity`, shared
+with APawn's (`0x103c9b49`).
 
 The dispatcher differential is `scripts/validate-native-actor-physics.mjs` /
 `native-actor-physics-oracle.py`: **114 cases, zero mismatches**, comparing the

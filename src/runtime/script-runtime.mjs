@@ -3813,6 +3813,12 @@ export class ScriptRuntime {
       field:(actor,name)=>this.namedReference(actor,name),
       read:(actor,name)=>this.readNamed(actor,name),
       write:(actor,name,value)=>this.writeNamed(actor,name,value),
+      // The class default object's value (UClass::Defaults), e.g. physPathing's
+      // FovAngle scale.
+      classDefault:(actor,name)=>{
+        const cls=this.instance(actor).cls;
+        return this.classDefaultReference(cls,this.lookupMember(cls,'fields',name)).get();
+      },
       isA:(actor,key)=>{
         for(let cls=this.instance(actor).cls;cls;cls=cls.base)if(cls.record.key===key)return true;
         return false;
