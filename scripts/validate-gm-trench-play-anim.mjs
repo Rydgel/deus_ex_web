@@ -438,7 +438,12 @@ try {
   assert.equal(sightEvents[0].result,true,'original ScriptedPawn.SeePlayer executes');
   assert.equal(get('SightCounter'),Math.fround(-0.1),'ShowSelf does not reset the listener counter');
   set('Enemy',player);
-  assert.throws(()=>runtime.checkPawnEnemyVisible(jaime,{level:visibilityLevel}),/requires original UObject validity/);
+  // Play supplies UObject::IsValid from the level collection (CleanupDestroyed's
+  // reference service, docs/script-cleanup.md); it accepts the live player.
+  const references=runtime.actorLifecycle?.references;
+  assert.equal(typeof references?.isValid,'function','Play supplies original UObject validity');
+  assert.equal(runtime.pawnTickVisibilityServices(jaime,{level:visibilityLevel}).isValid,references.isValid);
+  assert.equal(references.isValid(player),true);
   runtime.checkPawnEnemyVisible(jaime,{level:visibilityLevel,isValid:validity});
   assert.equal(get('LastSeenTime'),Math.fround(visibilityLevel.timeSeconds));
   assert.deepEqual(get('LastSeenPos'),closeLocation);assert.deepEqual(get('LastSeeingPos'),get('Location'));

@@ -12,7 +12,10 @@ if __name__=='__main__':
  raw=Path(sys.argv[2]).read_bytes();case_raw=Path(sys.argv[3]).read_bytes();scene=json.loads(raw);results=[]
  for c in json.loads(case_raw):
   n=NativePlayerScene(Path(sys.argv[1]),scene)
-  if 'pawnPosition'in c:
-   p=n.actor_ptrs['$pawn'];n.call(0x103583a0,n.hash,struct.pack('<I',p));n.write(p+0x114,'3f',*c['pawnPosition']);n.call(0x103580b0,n.hash,struct.pack('<I',p))
+  # Placed as native-mover-move-oracle.py does: hash remove, Location, add.
+  positions=dict(c.get('positions',{}))
+  if 'pawnPosition'in c:positions['$pawn']=c['pawnPosition']
+  for name,position in positions.items():
+   p=n.actor_ptrs[name];n.call(0x103583a0,n.hash,struct.pack('<I',p));n.write(p+0x114,'3f',*position);n.call(0x103580b0,n.hash,struct.pack('<I',p))
   results.append(n.capture(c))
  print(json.dumps({'hashes':m.m.base.HASHES|{'MSVCRT.dll':m.m.hash_module.CRT_HASH},'sceneSha256':hashlib.sha256(raw).hexdigest(),'casesSha256':hashlib.sha256(case_raw).hexdigest(),'results':results}))

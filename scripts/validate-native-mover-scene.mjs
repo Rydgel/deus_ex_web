@@ -9,7 +9,8 @@ import {moveTranslatingMover} from '../src/runtime/mover-move.mjs';
 import {moveSmooth} from '../src/runtime/move-smooth.mjs';
 import {moveActorRiders} from '../src/runtime/move-riders.mjs';
 import {playerMove} from '../src/runtime/player-move.mjs';
-import {playerBlockedBy} from '../src/runtime/check-encroachment.mjs';
+import {playerBlockedBy,checkMoverEncroachment} from '../src/runtime/check-encroachment.mjs';
+import {farMoveActor} from '../src/runtime/relocation.mjs';
 import {beginTouch,endTouch,isOverlapping} from '../src/runtime/actor-touch.mjs';
 import { loadTraceKernel } from '../src/runtime/trace-kernel.mjs';
 await loadTraceKernel(); // Rust BSP traces; TRACE_KERNEL=js runs the JavaScript bodies
@@ -36,11 +37,38 @@ for(let index=0;index<cases.length;index++){
  const rider=c.rider?actors.find(a=>a.id===c.rider):null;
  if(rider){rider.base=mover;mover.standingCount=1;}
  for(const a of actors)a.worldActor=queries.levelInfo;
- if(c.pawnPosition){const pawn=actors.find(a=>a.id==='$pawn');queries.changeActor(pawn,()=>pawn.position=c.pawnPosition);}
+ for(const [id,position]of Object.entries({...(c.positions??{}),...(c.pawnPosition?{$pawn:c.pawnPosition}:{})})){const a=actors.find(x=>x.id===id);queries.changeActor(a,()=>a.position=position);}
  const dispatch=(a,event)=>{trace.push({event,actor:a.id});return event==='EncroachingOn'&&Boolean(c.reject);};
  const removeActor=a=>{trace.push({hash:'remove',actor:a.id});queries.removeActor(a);},addActor=a=>{trace.push({hash:'add',actor:a.id});queries.addActor(a);};
  let first=true;
  const moveOptions=(extra={})=>({worldActor:queries.levelInfo,multiLineCheck:queries.multiLineCheck,removeActor,addActor,dispatch,isBlockedBy:playerBlockedBy,isOverlapping,beginTouch:(a,b)=>beginTouch(a,b,dispatch),endTouch:(a,b,s)=>endTouch(a,b,s,dispatch),setActorZone:a=>trace.push({zoneBoundary:a.id}),...extra});
+ const encroachmentCheck=(a,position,rotation,extra)=>{
+  if(first){trace.push({checkEncroachment:a.id,position:[...position],actors:Object.fromEntries(actors.map(x=>[x.id,[...x.position]]))});first=false;}
+  const entry={query:a.id,vector:[...position],moverPosition:[...mover.position]};trace.push(entry);
+  const hits=queries.actorEncroachmentCheck(a,position,rotation,extra).map(h=>h.actor);entry.hits=hits.map(a=>a.id);return hits;
+ };
+ const pushSmooth=(a,delta)=>{
+  const entry={smooth:a.id,vector:[...delta],moverPosition:[...mover.position]};trace.push(entry);
+  const result=moveSmooth(a,delta,{dispatch,moveActor(source,delta){
+   const r=playerMove(source,delta,moveOptions());
+   return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
+  }});entry.positionAfter=[...a.position];return result;
+ };
+ if('destination' in c){
+  // FarMoveActor (DeusExMover.BlowItUp's SetLocation): CheckEncroachment
+  // notify 1 over the same queries, with the controlled pawn's real push.
+  (c.touching??[]).forEach((id,index)=>{const other=actors.find(a=>a.id===id);mover.touching[index]=other;other.touching[0]=mover;});
+  const level={editor:false,netMode:0,actors,hash:{removeActor,addActor},findSpot:()=>{throw Error('FindSpot is not reached for a mover');},
+   checkEncroachment:(a,position,rotation,notify)=>checkMoverEncroachment(a,position,rotation,notify,{worldActor:queries.levelInfo,encroachmentCheck,moveSmooth:pushSmooth,dispatch,isOverlapping}),
+   setBase:()=>{throw Error('no based children');},setActorZone:a=>trace.push({zoneBoundary:a.id})};
+  const result=farMoveActor(level,mover,c.destination,c.test??0,c.noCheck??0);
+  const expected=native.results[index];
+  const actual={result:Number(result),position:mover.position,oldLocation:mover.oldLocation??[0,0,0],motion:mover.motionFlags??0,trace,
+   touching:Object.fromEntries(actors.map(a=>[a.id,a.touching.map(t=>t?.id??null)])),actors:Object.fromEntries(actors.map(a=>[a.id,a.position]))};
+  // The native oldLocation is the scene's unset zero unless FarMoveActor wrote it.
+  try{assert.deepEqual(actual,expected);}catch(error){mismatches.push({index,input:c,actual,expected,message:error.message.slice(0,800)});}
+  continue;
+ }
  const result=moveTranslatingMover(mover,c.delta,{rotation:c.rotation??null,
   // The recovered rider pass: each based actor's recursive MoveActor
   // (bIgnoreBases=1) through the same composed player move body.
@@ -48,19 +76,7 @@ for(let index=0;index<cases.length;index++){
    location:o=>o.position,rotation:o=>o.rotation,isPawn:o=>o.isPawn,addViewRotationYaw:()=>{},
    moveActor:(other,d,r)=>playerMove(other,d,moveOptions({ignoreBases:true}),r).success,
    actorLocation:()=>mover.position,actorRotation:()=>mover.rotation}),
-  encroachmentCheck(a,position,rotation,extra){
-   if(first){trace.push({checkEncroachment:a.id,position:[...position],actors:Object.fromEntries(actors.map(x=>[x.id,[...x.position]]))});first=false;}
-   const entry={query:a.id,vector:[...position],moverPosition:[...mover.position]};trace.push(entry);
-   const hits=queries.actorEncroachmentCheck(a,position,rotation,extra).map(h=>h.actor);entry.hits=hits.map(a=>a.id);return hits;
-  },
-  moveSmooth(a,delta){
-   const entry={smooth:a.id,vector:[...delta],moverPosition:[...mover.position]};trace.push(entry);
-   const result=moveSmooth(a,delta,{dispatch,moveActor(source,delta){
-
-     const r=playerMove(source,delta,moveOptions());
-     return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
-   }});entry.positionAfter=[...a.position];return result;
-  },dispatch,removeActor,addActor,
+  encroachmentCheck,moveSmooth:pushSmooth,dispatch,removeActor,addActor,
  });
  if(result&&!first)trace.push({boundary:'after pose/hash commit; before Bump/touch/zone'});
  const actual={result:Number(result),position:mover.position,rotation:mover.rotation,trace,actors:Object.fromEntries(actors.map(a=>[a.id,a.position])),
