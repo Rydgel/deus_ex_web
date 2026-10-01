@@ -9,7 +9,7 @@
  * writes the same path.
  *
  *   node scripts/run-validators.mjs [--jobs N] [--filter substring] [--serial]
- *        [--mem-budget MiB] [--mem-cap MiB]
+ *        [--mem-budget MiB] [--mem-cap MiB] [--timeout seconds]
  * Defaults to four validator jobs (the preferred local sweep size).
  *
  * Timings are cached in .cache/validator-timings.json and used to schedule the
@@ -31,6 +31,12 @@
  * counts memory held outside the sweep: at warning new validators start only
  * within half the budget, and at critical the latest is requeued the same way.  Peaks
  * are cached in .cache/validator-memory.json.
+ *
+ * Time is bounded too.  A validator still running after the larger of ten
+ * minutes and four times its recorded time is killed and fails, with a `ps`
+ * snapshot of its process group (state, cpu time, children such as an oracle)
+ * so the hang leaves evidence; unbounded, one stuck process held a sweep's
+ * last slot for forty minutes.  --timeout overrides the limit (0 disables it).
  */
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -62,6 +68,7 @@ const unknownPeak = 1536;
 // every sixth sample.  Between refreshes a process's footprint is estimated as
 // its last footprint plus its RSS growth since then.
 const samplePeriod = 500, footprintEvery = 6;
+const timeoutFlag = flag('--timeout', null);
 
 const probe = path.join(root, '.cache', 'native-probe-env', 'bin', 'python');
 const env = { ...process.env };
@@ -102,6 +109,8 @@ const started = Date.now();
 const pad = n => String(n).padStart(3);
 const predicted = name => solo.has(name) ? budget : Math.min(peaks[name] ?? unknownPeak, cap);
 const reservation = job => Math.max(job.current, predicted(job.name));
+const timeLimit = name => timeoutFlag !== null ? Number(timeoutFlag) * 1000
+  : Math.max(600_000, 4 * (timings[name] ?? 0));
 
 // Memory in MiB of every process in each running validator's group.
 const units = { B: 1 / 1048576, K: 1 / 1024, M: 1, G: 1024 };
@@ -165,6 +174,13 @@ const monitor = setInterval(async () => {
       job.peak = Math.max(job.peak, job.current);
       total += job.current;
       if (job.current > cap) kill(job, `memory cap: ${job.current.toFixed(0)} MiB > ${cap} MiB`);
+      const limit = timeLimit(job.name), elapsed = Date.now() - job.begin;
+      if (limit > 0 && elapsed > limit && !job.killed) {
+        const { stdout } = await run('ps', ['-A', '-o', 'pid=,pgid=,stat=,time=,rss=,command=']).catch(() => ({ stdout: '' }));
+        const group = stdout.split('\n').filter(line => Number(line.trim().split(/\s+/)[1]) === job.child.pid);
+        job.timedOut = true;
+        kill(job, `timeout: ${(elapsed / 1000).toFixed(0)}s > ${(limit / 1000).toFixed(0)}s; process group (pid pgid stat time rss command):\n${group.join('\n')}`);
+      }
     }
     const live = [...running.values()].filter(job => !job.killed).sort((a, b) => b.begin - a.begin);
     if (total > budget && live.length > 1)
@@ -195,7 +211,7 @@ const start = name => {
       return;
     }
     if (job.killed) { code = code || 137; job.err = `${job.killed}\n${job.err}`; }
-    peaks[name] = Math.round(job.killed ? cap : job.peak);
+    peaks[name] = Math.round(job.killed && !job.timedOut ? cap : job.peak);
     if (!job.killed) timings[name] = ms;
     saveCaches();
     const skipped = /^SKIP /m.test(job.out);
