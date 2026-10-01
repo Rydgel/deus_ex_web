@@ -28,7 +28,7 @@ import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
 import { prepareShadowStartup } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
-import { createLiveConPlayRuntime } from './script-conplay-live.mjs';
+import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
 import { performActorPhysics } from './actor-physics.mjs';
@@ -2126,9 +2126,11 @@ export async function createScriptDoors({
   windowHost.install();
   // LoadMap's collection of the unloaded level, run by every reload
   // (docs/script-loadmap-gc.md). A released object leaves the host's maps.
+  // DeusEx.u's package object, found by Conversation.CreateConCamera.
+  const deusExPackage=registerLoadedPackage(runtime,deusEx);
   levelCollection=createLevelCollection({runtime,level,viewports:level.engine.client.viewports,
     transientPackage:runtime.actorLifecycle.construction.transientPackage,
-    packages:[runtime.conversationLifecycle?.packageRecord].filter(Boolean),
+    packages:[runtime.conversationLifecycle?.packageRecord,deusExPackage].filter(Boolean),
     onReleased:identity=>{identities.delete(identity);windowHost.heap.forget(identity);}});
   // UViewport::Input (+0x60) exists before SpawnPlayActor; TravelPostAccept's
   // ResetKeyboard reaches it through the new player's Player.

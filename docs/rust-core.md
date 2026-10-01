@@ -795,8 +795,14 @@ the separate representation step above.
   `SCRIPT_VM_CHECK=1` for Rust, all 30 checkpoints and errors `{}`:
   `--bypass --continue --render-feedback --warm 60 --ticks 300
   --digest-every 10 --json`.
-  * The references at this commit are Training `f217d0b162ab0189` and
-    Island `3f390b4c79796dd7`. They were Training `c8eebff5786adf55` and
+  * The references at this commit are Training `1725cf61fe25d423` and
+    Island `604901ddf66b4614`. They were Training `f217d0b162ab0189` and
+    Island `3f390b4c79796dd7` until the live registry gained DeusEx.u's
+    package record before Login (October 1, [conversation
+    camera](conversation-camera.md)): the player's host registry slot, and with
+    it `DataLinkPlay0.playingSoundId` (a channel id from that slot), moved by
+    one; with `BENCH_DIGEST_SKIP=playingSoundId` all 30 checkpoints of both
+    maps equal the commit before it. Before that they were Training `c8eebff5786adf55` and
     Island `b767a7e417fe5968` until Sleep's remaining time moved into
     `Actor.LatentFloat` (October 1, [Sleep](script-sleep.md)); with
     `BENCH_DIGEST_SKIP=LatentFloat` all 30 checkpoints of both maps equal

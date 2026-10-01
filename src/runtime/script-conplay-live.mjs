@@ -7,6 +7,23 @@ import {decodeSoundResource} from './script-sound-resource.mjs';
 import {execActorPlaySound} from './script-sound.mjs';
 import {refValue} from './script-vm.mjs';
 
+/** A loaded package (DeusEx.u, loaded since boot) as the registered Core.Package
+ * object StaticFindObject finds: the same record the DeusExConText package has
+ * (script-conversation-startup.mjs). The level collection keeps it as a
+ * persistent package, like that one. Conversation.CreateConCamera's
+ * CreatePackage(NULL,"DeusEx") finds it (docs/conversation-camera.md). */
+export function registerLoadedPackage(runtime,asset){
+  const construction=runtime.actorLifecycle.construction;
+  const existing=construction.findObject(null,asset.name);
+  if(existing)return existing;
+  const resolved=construction.internName(asset.name);
+  const record={identity:runtime.resources.packageIdentity(asset),index:-1,hashNext:null,stateFrame:null,
+    linker:null,linkerIndex:-1,outer:null,flags:0,name:resolved.name,nameIndex:resolved.index,
+    objectClass:runtime.resources.nativeClass('Core.Package')};
+  construction.registry.add(record);
+  return record;
+}
+
 export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,dataLinkConversations=[],onSpeech,prepareClass}){
   const get=(o,k)=>runtime.readNamed(o,k);
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);

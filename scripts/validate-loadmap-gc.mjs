@@ -205,12 +205,13 @@ for (let reset = 1; reset <= RESETS; reset++) {
   assert.deepEqual(rootList(), [read(game.player.collisionActor, 'rootWindow')], `${label}: only the new root is listed`);
 
   // LoadMap 0x1038d0ee..0x1038d1e1: every object of the old generation is
-  // released; the four persistent stand-ins survive.
+  // released; the five persistent stand-ins survive (DeusEx is the package
+  // record CreateConCamera's CreatePackage finds, docs/conversation-camera.md).
   const collection = scene.lastCollection;
   assert.ok(collection.eliminated.length > 0, `${label}: the old level's actors were tagged`);
   assert.equal(collection.excluded.length, 0, `${label}: no reloaded object still referenced the old level`);
   const survivors = oldObjects.filter(object => !object.released);
-  assert.deepEqual(survivors.map(object => object.name).sort(), ['DeusExConText', 'MyLevel', 'TrainingRuntime', 'Transient'],
+  assert.deepEqual(survivors.map(object => object.name).sort(), ['DeusEx', 'DeusExConText', 'MyLevel', 'TrainingRuntime', 'Transient'],
     `${label}: only the persistent package and level records survive`);
   assert.throws(() => runtime.instance(oldPlayer), /released/, `${label}: the old player was released`);
   // PurgeGarbage's second pass appends each freed slot in index order, and
