@@ -33,18 +33,37 @@ different contents, so commit or move Linux-side work first.
 ## 3. Toolchains (on Linux)
 
 ```bash
-sudo pacman -S --needed git rustup wine mingw-w64-gcc python
-mise use -g node@26
+sudo pacman -S --needed git wine mingw-w64-gcc python nodejs npm
+```
+
+Rust comes from rustup (pacman's `rustup`, or the rustup.rs installer, which
+puts it in `~/.cargo/bin`). Use the same stable release as the Mac (1.99.0 on
+2026-10-01) and add the wasm target:
+
+```bash
 rustup default stable
 rustup target add wasm32-unknown-unknown
 ```
 
-If pacman reports `target not found: wine`, uncomment `[multilib]` in
-`/etc/pacman.conf` and run `sudo pacman -Sy`. Without mise, use
-`sudo pacman -S nodejs npm`. The Mac runs Node 26.8.2. Any Node ≥ 22.12 satisfies `package.json`, but
-keeping the same major version avoids V8 differences.
+With the same compiler, `script-vm.wasm` comes out byte-identical to the Mac
+build. `lodmesh-kernel.wasm` differs in one string only: the path of a standard
+library file inside a panic message. The Mac has rustup's `rust-src` component,
+so rustc writes the local path there. A Mac build with
+`--remap-path-prefix=<rust-src>=/rustc/<commit>` gives the identical file
+(checked 2026-10-01).
 
-## 4. Project setup (in `~/deus_ex_web`)
+Two wasm32 linker defaults changed after 1.95.0. Undeclared `extern "C"`
+functions no longer become `env` imports: 1.98.1 and 1.99.0 fail the link
+(fixed in commit 04860d7). `__heap_base` and `__data_end` are no longer
+exported: checked on 1.99.0 (fixed in commit 17257df). The source now declares both explicitly. 1.95.0 still builds
+the same bytes as before.
+
+If pacman reports `target not found: wine`, uncomment `[multilib]` in
+`/etc/pacman.conf` and run `sudo pacman -Sy`. Any Node ≥ 22.12 satisfies
+`package.json`. The Mac runs 26.8.2 and the Linux machine 26.8.1. Keep the same
+major version to avoid V8 differences.
+
+## 4. Project setup (in the project directory)
 
 ```bash
 npm ci
@@ -52,17 +71,20 @@ npm run build:wasm
 npx playwright install chromium
 python -m venv .cache/native-probe-env
 .cache/native-probe-env/bin/pip install capstone==5.0.9 unicorn==2.1.4
-WINEPREFIX=~/.wine-deusex wineboot -u
+WINEDLLOVERRIDES="mscoree,mshtml=" WINEPREFIX=~/.wine-deusex wineboot -u
 ```
 
 If Chromium later fails with a missing shared library, install
 `sudo pacman -S --needed nss atk at-spi2-core libcups libdrm libxkbcommon mesa alsa-lib pango cairo gtk3`.
-Playwright's `--with-deps` does not support Arch.
+Playwright's `--with-deps` does not support Arch, and it downloads its Ubuntu
+24.04 build instead. The `WINEDLLOVERRIDES` setting skips the Mono and Gecko
+prompts, which the probes do not need.
 
-Add to the shell profile:
+Add to `~/.bashrc`. Omarchy's `.bashrc` returns early in non-interactive
+shells, so scripts run over SSH must export these themselves:
 
 ```bash
-export NATIVE_PROBE_PYTHON=$HOME/deus_ex_web/.cache/native-probe-env/bin/python
+export NATIVE_PROBE_PYTHON=$HOME/projects/deus_ex_web/.cache/native-probe-env/bin/python
 export WINEPREFIX=$HOME/.wine-deusex
 export X87_PROBE_WINE=/usr/bin/wine
 ```
@@ -81,15 +103,40 @@ npm run validate -- --jobs 4
 
 ## Known gaps
 
+- **Display freeze with a visible Play window (2026-10-01).** Opening the dev
+  server (127.0.0.1:5173) in Chromium froze the whole screen. The machine stayed
+  reachable over SSH, but only a reboot recovered it. The kernel log shows
+  `nvidia-modeset/kthread_q` spinning in the display-idle prefetch
+  (`DifrPrefetchEventDeferredWork -> nvDIFRPrefetchSurfaces`) and Hyprland
+  blocked in `ApplyModeSetConfig` on its lock, with no Xid error. The external
+  monitor (HDMI-A-1) is driven by the RTX (`card1`); the laptop panel (eDP-2)
+  by the AMD iGPU. This is a driver bug in nvidia-open 610.57.04, the latest
+  in the repos on 2026-10-01, and no driver option disables DIFR. Headless
+  runs (validators, Playwright) are unaffected. Workaround: switch the ASUS
+  platform profile to `performance` (`powerprofilesctl set performance`).
+  The RTX then holds P0 (about 14 W instead of 2 W in P8), and Play ran in a
+  visible window without freezing. That is one good run against one freeze
+  in `balanced`, so the workaround is not proven. Driving the external
+  monitor from the AMD GPU (a USB-C DisplayPort output on `card2`) should
+  also avoid it, but is untested.
+
 - **D3D control word.** Wine is still in between here, as it is with CrossOver.
   A `DDSCL_FPUSETUP` control word measured under wine shows wine's
   reimplementation (wined3d), not Microsoft's. Only a Windows install can
   settle that question.
-- **x87 vendor.** The four hardware-x87 validators (transcendental, pawn
-  perception, pawn locomotion, window scene frame) were last measured under
-  Rosetta. On AMD silicon, fsin/fcos/fptan/fpatan may differ. A disagreement
-  would be a finding to investigate, since the original game ran on both Intel
-  and AMD CPUs. It does not mean the copy is broken.
+- **x87 vendor.** On 2026-10-01 all four hardware-x87 validators passed on the
+  AMD machine under wine 11.17 (control word 0x037f). That includes
+  validate-x87-transcendental-hardware, where 1,200,084 sin/cos/tan/atan results
+  for |x| < 2^26 matched bit-exact. Inputs above 2^26 are refused, as on the
+  Mac. A future disagreement would still be a finding to investigate, because
+  the original game ran on both Intel and AMD CPUs.
+- **NaN sign on x86.** `validate-script-vm-interp` fails on this machine and
+  passes on the Mac, with the same wasm from Rust 1.95.0 or 1.99.0. For
+  `inf * 0`, the Rust VM returns `0xFFC00000` (x86's default NaN) and the
+  JavaScript VM returns `0x7FC00000`. The comment in
+  `native/script-vm/src/interp.rs` assumes both match "on the same machine",
+  which is true only on ARM. It is unresolved, and browsers on x86 PCs hit it
+  too.
 - `scripts/validate-gpu-mesh.mjs` always launches Chromium with
   `--use-angle=metal`, which exists only on macOS. It needs a Linux branch
   before it can be trusted there.
