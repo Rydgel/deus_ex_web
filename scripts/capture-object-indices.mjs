@@ -42,27 +42,49 @@ const dump = () => execFileSync(WINE, ['C:\\Deus Ex GOTY Edition\\System\\dump-g
 if (!existsSync(path.join(SYSTEM, 'dump-gobjects-win.exe'))) throw new Error(`no dump-gobjects-win.exe in ${SYSTEM}`);
 mkdirSync(path.join(root, '.cache'), { recursive: true });
 const summary = [];
-for (const map of maps) {
-  const out = path.join(root, '.cache', `original-gobjects-${date}-${map.toLowerCase()}-open.txt`);
-  if (existsSync(out) && !force) { summary.push({ map, skipped: 'exists' }); continue; }
-  const began = Date.now();
+// A wineserver that shuts down between maps restarts cold with the next
+// launch, which then boots too late for the console command (every third map
+// on the Linux host): keep it running for the batch (`wineserver -k` at the
+// end, or after a hung game, ends it).
+try { execFileSync('wineserver', ['-p'], { env }); } catch { /* CrossOver manages its own */ }
+const gameProcesses = () => {
+  try { return execFileSync('pgrep', ['-f', 'DeusEx\\.exe'], { encoding: 'utf8' }).trim().length > 0; } catch { return false; }
+};
+// One fresh process: launch, open the map after `boot` ms, dump, quit.
+async function attempt(map, boot) {
+  for (let i = 0; i < 30 && gameProcesses(); i++) await sleep(1000);
+  if (gameProcesses()) { execFileSync('wineserver', ['-k'], { env }); await sleep(3000); }
   launch('00_Training.dx');
   let up = false;
   for (let i = 0; i < 60 && !up; i++) { await sleep(1000); up = running(); }
-  if (!up) { summary.push({ map, error: 'no game window' }); break; }
+  if (!up) return { error: 'no game window' };
   // A previous force-kill shows the "Recovery Mode" wizard first.
   try { run(script('button Run Deus Ex\n'), 30000); } catch { /* no wizard */ }
-  run(script(`sleep 15000\ncmd open ${map}\nsleep ${wait}\n`), wait + 120000);
+  run(script(`sleep ${boot}\ncmd open ${map}\nsleep ${wait}\n`), boot + wait + 120000);
   const text = dump();
   const header = text.split(/\r?\n/, 1)[0];
   const loaded = text.split(/\r?\n/).some(line => line.toLowerCase().endsWith(` package.${map.toLowerCase()}`));
-  writeFileSync(out, text);
   try { run(script('cmd exit\n'), 30000); } catch { /* checked below */ }
   let down = false;
   for (let i = 0; i < 30 && !down; i++) { await sleep(1000); down = !running(); }
   if (!down) execFileSync('wineserver', ['-k'], { env });
   await sleep(3000);
-  summary.push({ map, header, loaded, forced: !down, seconds: Math.round((Date.now() - began) / 1000) });
+  return { text, header, loaded, forced: !down };
+}
+for (const map of maps) {
+  const out = path.join(root, '.cache', `original-gobjects-${date}-${map.toLowerCase()}-open.txt`);
+  if (existsSync(out) && !force) { summary.push({ map, skipped: 'exists' }); continue; }
+  const began = Date.now();
+  // The console opens the map only once Training has loaded; after a forced
+  // quit the recovery wizard delays the boot, so a dump without the map's
+  // package is retried with a longer wait.
+  let result = await attempt(map, 15000), attempts = 1;
+  if (!result.error && !result.loaded) { result = await attempt(map, 45000); attempts++; }
+  if (result.error) { summary.push({ map, error: result.error }); break; }
+  if (result.loaded) writeFileSync(out, result.text);
+  summary.push({ map, header: result.header, loaded: result.loaded, forced: result.forced, attempts,
+    seconds: Math.round((Date.now() - began) / 1000) });
   console.log(JSON.stringify(summary.at(-1)));
 }
+try { execFileSync('wineserver', ['-k'], { env }); } catch { /* already gone */ }
 console.log(JSON.stringify({ captured: summary.filter(s => s.header).length, notLoaded: summary.filter(s => s.header && !s.loaded).map(s => s.map), errors: summary.filter(s => s.error) }));
