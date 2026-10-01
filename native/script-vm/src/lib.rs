@@ -13,6 +13,7 @@ mod hash;
 mod move_actor;
 mod move_pawn;
 mod interp;
+mod natives;
 mod percep;
 mod tick;
 mod trace;

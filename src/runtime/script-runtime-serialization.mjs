@@ -1,5 +1,6 @@
 import {serializeAActor} from './script-actor-serialization.mjs';
 import {serializeGcObject} from './script-object-serialization.mjs';
+import {stateChanged} from './script-state.mjs';
 
 const slot=(get,set)=>({get,set});
 function preservedSlot(get,label) {
@@ -33,7 +34,7 @@ export function serializeRuntimeActor(runtime,receiver,archive,options={}) {
     outer:headerReference('outer'),linker:headerReference('linker'),
     class:preservedSlot(()=>instance.cls.record,'an actor class'),
     stateFrame:slot(()=>object.stateFrame,value=>{
-      object.stateFrame=value;instance.state=value;
+      object.stateFrame=value;instance.state=value;stateChanged(receiver);
     }),
   };
   const frameLayout=state=>{

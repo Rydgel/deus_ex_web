@@ -165,6 +165,10 @@
 //! PAWN_ALLIANCE 201 (int, 2107) and AI_CAN_SEE 202 (float, 705), each
 //! `node, argc`, then per argument a presence word (0 for EX_Nothing) and,
 //! when present, its code; the receiver is the node's receiver.
+//!
+//! Small natives (October 1, natives.rs): STATE_NAME 203 (name, 284),
+//! LAST_RENDERED 204 (float, 723) and IN_STASIS 205 (bool, 721), on the
+//! node's receiver; GetStateName reads the state table (STATES).
 
 use core::ptr::{addr_of, addr_of_mut, read_unaligned, write_unaligned};
 
@@ -333,6 +337,10 @@ const SET_FIELD_ROTATOR: u32 = 199;
 const PAWN_ENEMY: u32 = 200;
 const PAWN_ALLIANCE: u32 = 201;
 const AI_CAN_SEE: u32 = 202;
+// October 1: small natives (natives.rs).
+const STATE_NAME: u32 = 203;
+const LAST_RENDERED: u32 = 204;
+const IN_STASIS: u32 = 205;
 
 // COMPOUND_LOCAL / COMPOUND_FIELD ops.
 const C_FLOAT_ADD: u32 = 1;
@@ -363,13 +371,14 @@ pub(crate) const RELEASED: u32 = 1;
 const UNREADABLE: u32 = 1;
 // js_check value kinds.
 const CK_INT: u32 = 1;
-const CK_BOOL: u32 = 2;
-const CK_FLOAT: u32 = 3;
+pub(crate) const CK_BOOL: u32 = 2;
+pub(crate) const CK_FLOAT: u32 = 3;
 const CK_OBJECT: u32 = 4;
 const CK_CAST: u32 = 5;
 const CK_VECTOR: u32 = 6;
 const CK_ROTATOR: u32 = 7;
 const CK_OP: u32 = 8;
+pub(crate) const CK_NAME: u32 = 9;
 /// The name id of `none` (the host interns it first).
 pub(crate) const NAME_NONE: u32 = 1;
 
@@ -843,7 +852,7 @@ impl Run {
         self.self_fresh = false;
         v
     }
-    fn host_float(&mut self, node: u32, r: Recv) -> f64 {
+    pub(crate) fn host_float(&mut self, node: u32, r: Recv) -> f64 {
         let v = unsafe { js_float(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
         unsafe {
@@ -854,7 +863,7 @@ impl Run {
         }
         v
     }
-    fn host_bool(&mut self, node: u32, r: Recv) -> bool {
+    pub(crate) fn host_bool(&mut self, node: u32, r: Recv) -> bool {
         let v = unsafe { js_bool(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
         v != 0
@@ -879,7 +888,7 @@ impl Run {
         let v = unsafe { *addr_of!(VECTOR_IO) };
         [v[0] as i32, v[1] as i32, v[2] as i32]
     }
-    fn host_name(&mut self, node: u32, r: Recv) -> u32 {
+    pub(crate) fn host_name(&mut self, node: u32, r: Recv) -> u32 {
         let v = unsafe { js_name(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
         v
@@ -928,7 +937,7 @@ impl Run {
     /// The address of `r`'s field at `offset` with key id `key`, or None
     /// when the field takes the JavaScript path.
     #[inline(always)]
-    fn field(&mut self, r: Recv, key: u32, offset: u32) -> Option<u32> {
+    pub(crate) fn field(&mut self, r: Recv, key: u32, offset: u32) -> Option<u32> {
         let info = if r.handle == 0 { self.self_info() } else { r.info };
         if info & (HOST | BOUND) != 0 {
             if info & HOST != 0 {
@@ -946,7 +955,7 @@ impl Run {
     /// SCRIPT_VM_CHECK: the host compares a value Rust computed for `node`
     /// on receiver `r` with the closure's.
     #[inline(always)]
-    fn verify(&self, node: u32, r: Recv, kind: u32, value: f64) {
+    pub(crate) fn verify(&self, node: u32, r: Recv, kind: u32, value: f64) {
         if unsafe { CHECK } != 0 {
             unsafe { js_check(self.frame, node, self.handle(r), kind, value) };
         }
@@ -1825,6 +1834,7 @@ impl Run {
                 self.skip(2);
                 self.host_name(node, r)
             }
+            STATE_NAME => self.state_name(r),
             CONTEXT => match self.context(r) {
                 Some(object) => self.name(object),
                 None => NAME_NONE,
@@ -2026,6 +2036,7 @@ impl Run {
         let kind = self.op(0);
         match kind {
             AI_CAN_SEE => self.ai_can_see(r),
+            LAST_RENDERED => self.last_rendered(r),
             LIT_FLOAT => {
                 let v = float_of(self.op(1));
                 self.skip(2);
@@ -2321,6 +2332,7 @@ impl Run {
             }
             IS_A => self.is_a(r),
             PAWN_ENEMY => self.pawn_alliance(r, true) != 0,
+            IN_STASIS => self.in_stasis(r),
             _ => self.fail(ERR_KIND, kind),
         }
     }

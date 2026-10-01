@@ -240,6 +240,70 @@ GetStateName, IsInState and any Rust dispatch), then natives 723, 720,
 284/281 and 721 in the interpreter, then tick-event dispatch in Rust, then
 the locomotion polls, the level loop and CycleActors.
 
+### October 1: state table and small natives (implemented)
+
+**State table.** `script-vm-states.mjs` keeps, per handle, the object's
+state as the state queries and probing read it: an entry `[row, probe lo,
+probe hi]` in a per-runtime arena table (`STATES = [table, capacity,
+verify]`, natives.rs). A row is `[node id, n, name ids]` along the node's
+base chain, where the node is `instance.state.stateNode ?? instance.cls`
+(the class sentinel `scriptGetStateName` reads) and `n = 0` for an
+instance without a ScriptState. Rust reads a filled entry directly and asks
+`js_state` for an empty one; `js_state` returns 0 for a handle it does not
+describe (released, a class identity, not attached here, a name
+`scriptNameToString` rejects), and the native then runs in JavaScript.
+
+* **Invalidation.** `script-state.mjs` reports every state change of an
+  identity (`stateChanged`): `setStateNode`, a ProbeMask replacement,
+  attachment (`linkInstance`), InitExecution and a restored StateFrame. A
+  report clears the handle's entry; a release clears it too. ProbeMask is
+  now a frozen array behind an accessor, so Enable/Disable (117/118) replace
+  it (`Array.prototype.with`) instead of writing a word in place, and a
+  future in-place write throws instead of leaving the table stale.
+* **`STATE_VERIFY=1`.** Rust asks `js_state` on every read, and `js_state`
+  throws when a filled entry differs from what it computes now. Both maps'
+  digests pass with it on.
+
+**Natives (natives.rs).** Each kind transcribes its `invokeNative` case and
+is lowered with the perception gate (the runtime's own invokeNative, not a
+boundary native), with no arguments; a value the body would not compute with
+hands the whole node to JavaScript.
+
+* GetStateName (284) as `STATE_NAME 203 node`: the row's first name id, or
+  None.
+* LastRendered (723) as `LAST_RENDERED 204 node, offset, key`: the f32
+  LastRenderTime in the image, the level clock from `js_level_clock` (mode
+  0: `soundField('TimeSeconds')`), then `clock - last`, 0 when negative or
+  NaN, else `Math.fround`.
+* InStasis (721) as `IN_STASIS 205`: `actorInStasis` over five image cells,
+  `js_level_clock` mode 1 (`levelFor(actor).timeSeconds`, a number),
+  `js_zone_render_time` only where the body reads it, and
+  `js_level_standalone`. On Island every caller's receiver is a BOUND map
+  actor and `engine.actor.physics` is a bound key (the player binds it), so
+  it still runs in JavaScript there; it needs the per-object bound-field rule
+  (step 6 below).
+* IsInState (281, 6.7 per tick) stays in JavaScript: it compares with
+  `scriptCaps`, which folds ASCII only, while name ids fold with
+  `toLowerCase`, so the two can differ on non-ASCII spellings.
+* GetPlayerPawn (720) stays in JavaScript: its body is the trigger host's
+  viewport walk (`resolveNativeGetPlayerPawn`), reached through the host
+  `native` chain, and a shortcut needs that chain's ownership of 720 made
+  explicit first.
+
+**Verification.** `validate-script-vm-interp` covers the three kinds (153
+kinds, 595,430 checks): GetStateName against rows, an empty entry, a table
+that grows inside `js_state`, `STATE_VERIFY`, the JavaScript path and the
+CK_NAME check; LastRendered over 13 clocks × 12 float32 patterns on SELF and
+a context receiver; InStasis against `actorInStasis` itself over 2,000
+field and level combinations, including where the zone time is read. Nine
+mutants of natives.rs were all caught. Digests match at all 30 checkpoints
+on both maps and both engines with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1`. On
+Island, `SCRIPT_VM_STATS` no longer shows JavaScript values for 723
+(167.5 per tick) or 284 (65.1). The interleaved A/B (4 pairs) is within
+noise: medians 10.17 ms before and 10.25 ms after on a loaded machine. The
+expected saving, about 0.2 ms, is below what these runs resolve. Browser
+(Island walk, 300 frames): tick 10.95 ms, frame 18.67 ms, no runtime error.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

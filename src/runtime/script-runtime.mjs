@@ -6,7 +6,7 @@ import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMe
 import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
-import { ScriptState } from './script-state.mjs';
+import { ScriptState, stateChanged } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
@@ -949,6 +949,7 @@ export class ScriptRuntime {
     // operation writes it, polling would depend on unrecovered allocator data.
     state.latent=undefined;
     instance.state=state;
+    stateChanged(receiver);
     if(instance.nativeObject)instance.nativeObject.stateFrame=state;
     flags.set(flags.get()|0x02000000);
     return state;
@@ -1102,6 +1103,7 @@ export class ScriptRuntime {
   linkInstance(receiver,instance) {
     this.instances.set(receiver,instance);
     bumpReceiverEpoch();
+    stateChanged(receiver);
     // An object the collection model never frees (it was unreachable, so the
     // host's own GC reclaimed it) returns its image range when collected.
     if(instance.imageToken)imageFinalizer.register(receiver,instance.imageToken,instance.imageToken);
@@ -3565,11 +3567,11 @@ export class ScriptRuntime {
         this.warning?.({type:'InvalidProbe',native:call.index,name});return;
       }
       const bit=ename-0x12c,word=bit>>>5,mask=1<<(bit&31);
-      if(call.index===118)state.probeMask[word]=(state.probeMask[word]&~mask)>>>0;
+      if(call.index===118)state.probeMask=state.probeMask.with(word,(state.probeMask[word]&~mask)>>>0);
       else{
         const metadata=state.stateNode?.script??instance.cls.metadata;
         const allowed=(instance.cls.metadata.probeMask[word]|metadata.probeMask[word])&metadata.ignoreMask[word];
-        state.probeMask[word]=(state.probeMask[word]|(mask&allowed))>>>0;
+        state.probeMask=state.probeMask.with(word,(state.probeMask[word]|(mask&allowed))>>>0);
       }
       return;
     }

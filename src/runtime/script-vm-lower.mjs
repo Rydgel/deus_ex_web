@@ -38,6 +38,7 @@ const K = {
   COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
   LIT_VECTOR: 160, LIT_ROTATOR: 175, LIT_NAME: 194, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184, IS_A: 193,
   PAWN_ENEMY: 200, PAWN_ALLIANCE: 201, AI_CAN_SEE: 202,
+  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
   CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
@@ -146,6 +147,11 @@ const PERCEPTION = new Map([
   [2107, [201, 'byte', ['object']]],
   [705, [202, 'float', ['object', 'float', 'bool', 'bool', 'bool', 'bool']]],
 ]);
+// October 1 small natives (natives.rs): GetStateName, LastRendered,
+// InStasis. The Actor fields LastRendered and InStasis read, with their kinds.
+const SMALL_NATIVES = new Set([284, 723, 721]);
+const STASIS_FIELDS = [['engine.actor.lastrendertime', 'float'], ['engine.actor.bstasis', 'bool'], ['engine.actor.physics', 'byte'],
+  ['engine.actor.bforcestasis', 'bool'], ['engine.actor.distancefromplayer', 'float']];
 // Cast tokens: [kind code, operand kind, result kind].
 const CASTS = new Map([
   [0x3a, [K.BYTE_TO_INT, 'byte', 'int']],
@@ -570,6 +576,7 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     if (composite) return compositeOperator(n, composite);
     if (index === 303) return isA(n);
     if (PERCEPTION.has(index)) return perception(n);
+    if (SMALL_NATIVES.has(index)) return smallNative(n);
     if (index === 130 || index === 132) {
       if (args.length !== 2 || !isNode(args[1]) || args[1].op !== 0x18) return null;
       const first = expr(args[0], 'bool'), second = expr(args[1].value, 'bool');
@@ -642,6 +649,27 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
       words.push(1, ...value);
     }
     return typed(result, words);
+  }
+
+  // October 1 (natives.rs): GetStateName (284), LastRendered (723) and
+  // InStasis (721), without arguments, where the runtime's own invokeNative
+  // would run their cases (the perception gate). LastRendered and InStasis
+  // read Actor fields at their registered cells.
+  function smallNative(n) {
+    if (!Array.isArray(n.args) || n.args.length !== 0 || !runtime.scriptVm?.states) return null;
+    if (services.invokeNative !== runtime.services.invokeNative || Object.hasOwn(runtime, 'invokeNative') ||
+      runtime.boundaryNatives?.has(n.index)) return null;
+    if (n.index === 284) return typed('name', [K.STATE_NAME, nodeId(n)]);
+    const fields = n.index === 723 ? STASIS_FIELDS.slice(0, 1) : STASIS_FIELDS, words = [];
+    for (const [key, kind] of fields) {
+      const registered = fieldImageCell(key);
+      if (!registered) { missingField = true; return null; }
+      const cell = scalarCell(registered);
+      if (cell?.kind !== kind) return null;
+      words.push(cell.offset, fieldKeyId(key));
+      if (kind === 'bool') words.push(cell.mask);
+    }
+    return typed(n.index === 723 ? 'float' : 'bool', [n.index === 723 ? K.LAST_RENDERED : K.IN_STASIS, nodeId(n), ...words]);
   }
 
   // EX_Context: the object against the current receiver, then the value

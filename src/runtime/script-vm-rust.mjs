@@ -21,7 +21,7 @@
  * JavaScript frame object exists only once one of its nodes needs it.
  */
 import {instantiateScriptVm} from './script-vm-kernel.mjs';
-import {handleOf, identityOfHandle, onHandleRelease, handleLimit} from './script-object-handles.mjs';
+import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './script-vm.mjs';
 import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
@@ -33,6 +33,8 @@ import {MoveActorHost} from './move-actor-kernel.mjs';
 import {MovePawnHost} from './move-pawn-kernel.mjs';
 import {WalkLoopHost} from './walk-loop-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
+import {StateTable} from './script-vm-states.mjs';
+import {onStateChange} from './script-state.mjs';
 
 // Receiver info flags (interp.rs).
 const BOUND = 1, HOST = 2;
@@ -40,7 +42,7 @@ const BOUND = 1, HOST = 2;
 // row's default image word when DefaultVariable reads stay in JavaScript.
 const RELEASED = 1, UNREADABLE = 1;
 // js_check value kinds (interp.rs).
-const CK_INT = 1, CK_BOOL = 2, CK_FLOAT = 3, CK_OBJECT = 4, CK_CAST = 5, CK_VECTOR = 6, CK_ROTATOR = 7, CK_OP = 8;
+const CK_INT = 1, CK_BOOL = 2, CK_FLOAT = 3, CK_OBJECT = 4, CK_CAST = 5, CK_VECTOR = 6, CK_ROTATOR = 7, CK_OP = 8, CK_NAME = 9;
 // CK_OP (R2b-6): each checked native's operand kinds, in the order Rust
 // reports them (CHECK_VALUES[0..3], [3..6]); a float or name operand is the
 // first slot of its group.
@@ -156,6 +158,11 @@ function eachInterpreter(fn) {
 }
 onHandleRelease(handle => eachInterpreter(vm => vm.markReleased(handle)));
 onReceiverEpoch(epoch => eachInterpreter(vm => vm.setReceiverEpoch(epoch)));
+// An object's state changed: its state table entry is computed again.
+onStateChange(identity => {
+  const handle = existingHandle(identity);
+  if (handle) eachInterpreter(vm => vm.states.clear(handle));
+});
 /** A class default or a class default image changed (script-runtime.mjs):
  * each class row's default image is validated again before Rust reads it. */
 export function classDefaultsChanged() {
@@ -244,6 +251,8 @@ export class RustScriptVm {
     // R3-b B4: MoveActor for a Pawn source (move-pawn-kernel.mjs).
     this.movePawn = new MovePawnHost(this);
     this.walkLoop = new WalkLoopHost(this);
+    // October 1: the state table (GetStateName) and the small natives' faults.
+    this.states = new StateTable(this);
   }
   attach() {
     const x = this.exports;
@@ -275,6 +284,8 @@ export class RustScriptVm {
     this.movePawn.attach(x);
     this.walkLoop.attach(x);
     const limit = handleLimit();
+    this.states.attach(x, limit);
+    this.faultAt = x.vm_native_fault_ptr();
     this.growClassTable(limit);
     this.growReceiverTable(limit);
     this.setReceiverEpoch(receiverEpoch());
@@ -321,6 +332,7 @@ export class RustScriptVm {
     this.growClassTable(handle);
     this.arena.view.setUint32(this.classTable + 4 * handle, RELEASED, true);
     if (handle < this.receiverCapacity) this.arena.view.setUint32(this.receiverTable + 8 * handle + 4, 0, true);
+    this.states.clear(handle);
   }
   invalidateDefaultImages() {
     const view = this.arena.view;
@@ -386,7 +398,7 @@ export class RustScriptVm {
     } else {
       const v = run.compiled.nodeValue(n, run.frame, object);
       expected = kind === CK_INT ? v | 0 : kind === CK_BOOL ? (v ? 1 : 0) : kind === CK_FLOAT ? (v === undefined ? undefined : +v)
-        : kind === CK_OBJECT ? handleOf(v) : NaN;
+        : kind === CK_OBJECT ? handleOf(v) : kind === CK_NAME ? nameId(v) : NaN;
     }
     if (!Object.is(expected, value))
       throw new Error(`SCRIPT_VM_CHECK ${run.compiled.displayName} ${opName(n)} at ${n.offset}: Rust ${value}, JavaScript ${expected}`);
@@ -568,6 +580,34 @@ export class RustScriptVm {
         } finally { leave(); }
       },
       js_receiver: handle => vm.receiverInfo(handle),
+      // The state table (script-vm-states.mjs); runs no script.
+      js_state: handle => vm.states.state(handle),
+      // LastRendered and InStasis (natives.rs): the level values their
+      // JavaScript bodies read, or NATIVE_FAULT when the body would throw
+      // or not compute with the value (the native then runs in JavaScript).
+      // Mode 0 is soundField's TimeSeconds (a number or a clock function's
+      // value), mode 1 the level's timeSeconds property (actorInStasis).
+      // None runs script.
+      js_level_clock(handle, mode) {
+        try {
+          const actor = identityOfHandle(handle);
+          if (actor !== null) {
+            const v = mode ? vm.runtime.levelFor(actor).timeSeconds : vm.runtime.soundField(actor, 'TimeSeconds');
+            if (typeof v === 'number') return v;
+          }
+        } catch {}
+        vm.arena.view.setUint32(vm.faultAt, 1, true);
+        return 0;
+      },
+      js_zone_render_time(handle) {
+        try {
+          const actor = identityOfHandle(handle), v = actor !== null ? vm.runtime.levelFor(actor).zoneLastRenderTime(actor) : null;
+          if (typeof v === 'number') return v;
+        } catch {}
+        vm.arena.view.setUint32(vm.faultAt, 1, true);
+        return 0;
+      },
+      js_level_standalone: handle => vm.runtime.levelFor(identityOfHandle(handle)).netMode === 0 ? 1 : 0,
       // stepCompiled's IteratorNext and IteratorPop on the frame's iterator
       // stack; IteratorNext returns the statement to continue at.
       js_iterator_next(frame) {

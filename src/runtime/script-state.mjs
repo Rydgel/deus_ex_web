@@ -1,6 +1,19 @@
 /** FStateFrame code/latent continuation. Class lookup and BeginState/EndState
  * dispatch are owned by the object runtime; this layer executes resolved states.
  * Original GotoLabel1012eb10 and ProcessState103e5b60: see docs/door-state.md. */
+
+// The Rust interpreter's state table (script-vm-rust.mjs, docs/rust-core.md
+// "State table") keeps, per handle, what GetStateName and probing read here.
+// Host bookkeeping, not an original structure: every change of a state's
+// node or probe mask, and every replacement of an instance's state, reports
+// the object's identity so its entry is computed again.
+const stateListeners=[];
+/** Call `listener(identity)` after each state change of `identity`. */
+export const onStateChange=listener=>{stateListeners.push(listener);};
+export function stateChanged(identity) {
+  for(const listener of stateListeners)listener(identity);
+}
+
 export class ScriptState {
   constructor(instance, services = {}) {
     this.instance=instance;this.services=services;this.stateNode=null;
@@ -11,6 +24,14 @@ export class ScriptState {
   setStateNode(node) {
     if(this.execution)this.execution.cursor=null;
     this.stateNode=node;this.execution=null;this.codeNode=null;this.latent=0;
+    stateChanged(this.instance);
+  }
+  get probeMask() { return this.probeWords; }
+  /** ProbeMask is replaced, never written in place (the words are frozen),
+   * so every change reports the state change. */
+  set probeMask(words) {
+    this.probeWords=Object.freeze([...words]);
+    stateChanged(this.instance);
   }
   isProbing(ename) {
     const bit=ename-0x12c;

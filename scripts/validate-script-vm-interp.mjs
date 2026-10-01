@@ -16,6 +16,7 @@ import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {classRecordId, nameId, foldedNameId} from '../src/runtime/script-vm-lower.mjs';
 import {f32bits, f32num} from '../src/runtime/script-vm.mjs';
 import {executeMoverPrimitive} from '../src/runtime/script-mover-primitives.mjs';
+import {actorInStasis} from '../src/runtime/actor-tick.mjs';
 
 const K = {
   S_EXPR: 1, S_JUMP: 2, S_JUMP_IF_NOT: 3, S_RETURN: 4, S_NOTHING: 5, S_YIELD: 6, S_ITER_NEXT: 7, S_ITER_POP: 8,
@@ -47,6 +48,8 @@ const K = {
   VECTOR_SIZE: 185, VECTOR_DOT: 186, VECTOR_EQ: 187, VECTOR_NE: 188, ROTATOR_EQ: 189, ROTATOR_NE: 190,
   NAME_EQ: 191, NAME_NE: 192, IS_A: 193, LIT_NAME: 194, JS_NAME: 195,
   SET_LOCAL_VECTOR: 196, SET_FIELD_VECTOR: 197, SET_LOCAL_ROTATOR: 198, SET_FIELD_ROTATOR: 199,
+  // October 1 (natives.rs)
+  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
 };
 const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, FLOAT_TO_INT: 6, FLOAT_TO_BYTE: 7, RETURN_ITERATOR: 8};
 const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
@@ -56,7 +59,7 @@ const NEXT_NONE = 0xffffffff, UNDEFINED = 0xffffffff, BOUND = 1, HOST = 2;
 // The handle class table (R2b-5): a released handle; a row's unreadable
 // default image; js_check value kinds.
 const RELEASED = 1, UNREADABLE = 1;
-const CK = {INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, CAST: 5, VECTOR: 6, ROTATOR: 7, OP: 8};
+const CK = {INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, CAST: 5, VECTOR: 6, ROTATOR: 7, OP: 8, NAME: 9};
 const RUNAWAY_LIMIT = 10_000_000;
 const f = Math.fround;
 
@@ -78,7 +81,7 @@ class VmError extends Error {
 const handlers = new Map(), infos = new Map(), calls = [];
 let nextNode = 1000;
 /** A node id whose JS evaluation is `fn(receiver, frame)`. */
-const node = (fn = () => { throw new Error('node evaluated unexpectedly'); }) => {
+const node = (fn = () => { throw new Error(`node evaluated unexpectedly: ${JSON.stringify(calls.slice(-6))}`); }) => {
   const id = nextNode++;
   handlers.set(id, fn);
   return id;
@@ -205,6 +208,31 @@ const imports = {
     calls.push({imp: 'name', frame, node: n, receiver});
     return nameId(evaluate(n, receiver, frame));
   },
+  // October 1 (natives.rs): the state table host (script-vm-states.mjs
+  // protocol: fill the entry, return the row, 0 for an undescribed handle)
+  // and the level values, each scripted by the test (`nativeHost`).
+  js_state(handle) {
+    calls.push({imp: 'state', receiver: handle});
+    return nativeHost.state ? nativeHost.state(handle) : 0;
+  },
+  js_level_clock(handle, mode) {
+    calls.push({imp: 'clock', receiver: handle, mode});
+    const v = nativeHost.clock?.(handle, mode);
+    if (typeof v === 'number') return v;
+    wr32(FAULT_AT, 1);
+    return 0;
+  },
+  js_zone_render_time(handle) {
+    calls.push({imp: 'zone', receiver: handle});
+    const v = nativeHost.zone?.(handle);
+    if (typeof v === 'number') return v;
+    wr32(FAULT_AT, 1);
+    return 0;
+  },
+  js_level_standalone(handle) {
+    calls.push({imp: 'standalone', receiver: handle});
+    return nativeHost.standalone(handle) ? 1 : 0;
+  },
   js_iterators(frame) {
     calls.push({imp: 'iterators', frame});
     return iteratorCount(frame);
@@ -214,6 +242,7 @@ const imports = {
 // installs `iteratorCount`).
 let iteratorCount = () => 0;
 let classRowHost = null;
+let nativeHost = {};
 const iterators = [];
 const CHUNK = 64, chunks = [], callSites = new Map(), frameInfo = new Map();
 let nextFrameId = 100;
@@ -225,6 +254,7 @@ const UNDEF_AT = x.vm_float_undef_ptr(), KEYS_AT = x.vm_bound_keys_ptr();
 const FRAMES_AT = x.vm_frames_ptr(), CALL_BLOCK_AT = x.vm_call_block_ptr();
 const CLASSES_AT = x.vm_classes_ptr(), CHECK_AT = x.vm_check_ptr();
 const VECTOR_IO_AT = x.vm_vector_io_ptr(), RESULT3_AT = x.vm_result3_ptr(), CHECK_VALUES_AT = x.vm_check_values_ptr();
+const STATES_AT = x.vm_states_ptr(), FAULT_AT = x.vm_native_fault_ptr();
 // Bound keys: the table marks keys 3 and 20, but only keys below 16 count.
 wr32(KEYS_AT, BOUND_TABLE);
 wr32(KEYS_AT + 4, 16);
@@ -256,6 +286,12 @@ function reset() {
   wr32(CHECK_AT, 0);
   classRowHost = null;
   iteratorCount = () => 0;
+  // No state table, no level values.
+  wr32(STATES_AT, 0);
+  wr32(STATES_AT + 4, 0);
+  wr32(STATES_AT + 8, 0);
+  wr32(FAULT_AT, 0);
+  nativeHost = {};
 }
 const count = (imp, receiver) => calls.filter(c => c.imp === imp && (receiver === undefined || c.receiver === receiver)).length;
 
@@ -2977,6 +3013,211 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   reset();
   vectorOf(w(K.VECTOR_ADD, node(), w(K.LIT_VECTOR, [0, 0, 0]), w(K.LOCAL_VECTOR, 0xc0, node())));
   same(count('check'), 0, 'no reports without CHECK');
+}
+
+// ---- October 1: GetStateName, LastRendered, InStasis (natives.rs) -------------------------
+{
+  // The state table: [row, probe lo, probe hi] per handle; a row is
+  // [node id, n, name ids] (script-vm-states.mjs).
+  const ENTRY = 12, CAPACITY = 64, STATE_TABLE = arena.alloc(ENTRY * CAPACITY);
+  const rowOf = names => {
+    const a = arena.alloc(8 + 4 * names.length);
+    wr32(a, 77);
+    wr32(a + 4, names.length);
+    names.forEach((n, i) => wr32(a + 8 + 4 * i, nameId(n)));
+    return a;
+  };
+  const stateTable = (verify = 0) => {
+    arena.bytes.fill(0, STATE_TABLE, STATE_TABLE + ENTRY * CAPACITY);
+    wr32(STATES_AT, STATE_TABLE);
+    wr32(STATES_AT + 4, CAPACITY);
+    wr32(STATES_AT + 8, verify);
+  };
+  const rows = {patrol: rowOf(['Patrolling', 'Wandering']), none: rowOf([]), cls: rowOf(['UNATCOTroop', 'ScriptedPawn'])};
+  // js_state as script-vm-states.mjs: enter the described row, return it.
+  const describe = described => handle => {
+    const row = described.get(handle) ?? 0, table = rd32(STATES_AT);
+    if (row) {
+      wr32(table + ENTRY * handle, row);
+      wr32(table + ENTRY * handle + 4, 0x11);
+      wr32(table + ENTRY * handle + 8, 0x22);
+    }
+    return row;
+  };
+  const nameEq = (a, name) => w(K.NAME_EQ, node(), a, w(K.LIT_NAME, nameId(name)));
+  const stateName = n => w(K.STATE_NAME, n);
+  const onHandle = (handle, expr) => handle === SELF_H ? expr
+    : E.context(node(), (wr32(LOCALS + 44, handle), w(K.LOCAL_OBJECT, 44)), expr);
+  // scriptGetStateName's spelling, compared by folded id (254).
+  for (const [handle, row, spelling] of [[SELF_H, rows.patrol, 'Patrolling'], [21, rows.cls, 'UNATCOTroop'], [22, rows.none, 'None']]) {
+    for (const probe of ['Patrolling', 'patrolling', 'Wandering', 'None', '', 'UNATCOTroop', 'ScriptedPawn', 'x']) {
+      reset();
+      stateTable();
+      infos.set(21, THIRD_IMG).set(22, THIRD_IMG);
+      nativeHost.state = describe(new Map([[handle, row]]));
+      same(value(R.BOOL, nameEq(onHandle(handle, stateName(node())), probe)), nameId(probe) === nameId(spelling),
+        `GetStateName on ${handle} == '${probe}'`);
+      same(count('state', handle), 1, 'js_state fills an empty entry once');
+    }
+  }
+  // A filled entry is read without an import; STATE_VERIFY asks every time.
+  for (const verify of [0, 1]) {
+    reset();
+    stateTable(verify);
+    nativeHost.state = describe(new Map([[SELF_H, rows.patrol]]));
+    same(value(R.BOOL, E.and(nameEq(stateName(node()), 'patrolling'), nameEq(stateName(node()), 'Patrolling'))), true,
+      `GetStateName twice (verify ${verify})`);
+    same(count('state'), verify ? 2 : 1, `js_state calls (verify ${verify})`);
+  }
+  // A handle beyond the table: js_state grows it, Rust reads the new table.
+  {
+    reset();
+    stateTable();
+    const bigger = arena.alloc(ENTRY * 128);
+    arena.bytes.fill(0, bigger, bigger + ENTRY * 128);
+    nativeHost.state = handle => {
+      wr32(STATES_AT, bigger);
+      wr32(STATES_AT + 4, 128);
+      return describe(new Map([[100, rows.cls]]))(handle);
+    };
+    infos.set(100, THIRD_IMG);
+    same(value(R.BOOL, nameEq(onHandle(100, stateName(node())), 'unatcotroop')), true, 'GetStateName after the table grew');
+  }
+  // An undescribed handle: the node runs in JavaScript on its receiver.
+  for (const handle of [SELF_H, 21]) {
+    reset();
+    stateTable();
+    infos.set(21, THIRD_IMG);
+    nativeHost.state = () => 0;
+    const n = node(r => (same(r, handle, 'GetStateName JavaScript receiver'), 'Seeking'));
+    same(value(R.BOOL, nameEq(onHandle(handle, stateName(n)), 'seeking')), true, `GetStateName in JavaScript on ${handle}`);
+    same(count('name'), 1, 'GetStateName js_name once');
+  }
+  // SCRIPT_VM_CHECK reports the name id.
+  {
+    reset();
+    stateTable();
+    wr32(CHECK_AT, 1);
+    nativeHost.state = describe(new Map([[SELF_H, rows.cls]]));
+    const n = node();
+    value(R.BOOL, nameEq(stateName(n), 'x'));
+    const check = calls.find(c => c.imp === 'check' && c.node === n);
+    same(check?.kind, CK.NAME, 'GetStateName check kind');
+    same(check?.value, nameId('UNATCOTroop'), 'GetStateName check value');
+  }
+
+  // LastRendered: max(clock - f32 LastRenderTime, 0) as Math.fround, 0 for NaN.
+  const LRT = 0x30, LRT_KEY = 5;
+  const lastRendered = (clock, lastBits) => {
+    const delta = clock - Math.fround(num(lastBits));
+    return delta < 0 || Number.isNaN(delta) ? 0 : f(delta);
+  };
+  const CLOCKS = [0, -0, 1, 5.5, 100.25, 1e9, 1e9 + 0.123456789, -3, NaN, Infinity, 0.1, 2 ** 30 + 0.3, 3.4028236e38];
+  const LASTS = [bits(0), 0x80000000, bits(1), bits(5.4), bits(100.25), bits(1e9), 0x7fc00000, 0x7fa00001, 0x7f800000,
+    0xff800000, bits(-2), bits(0.1)];
+  for (const handle of [SELF_H, 21]) {
+    for (const clock of CLOCKS) {
+      for (const lastBits of LASTS) {
+        reset();
+        infos.set(21, THIRD_IMG);
+        wr32((handle === SELF_H ? SELF_IMG : THIRD_IMG) + LRT, lastBits);
+        nativeHost.clock = (h, mode) => (same(h, handle, 'LastRendered clock receiver'), same(mode, 0, 'LastRendered clock mode'), clock);
+        same(value(R.FLOAT, onHandle(handle, w(K.LAST_RENDERED, node(), LRT, LRT_KEY))), lastRendered(clock, lastBits),
+          `LastRendered clock ${clock} last ${lastBits.toString(16)} on ${handle}`);
+      }
+    }
+  }
+  // The JavaScript path: a clock fault, a HOST receiver, a bound key.
+  for (const [why, setup, key, clockCalls] of [
+    ['clock fault', () => { nativeHost.clock = () => undefined; }, LRT_KEY, 1],
+    ['HOST receiver', () => infos.set(SELF_H, HOST), LRT_KEY, 0],
+    ['bound key', () => infos.set(SELF_H, SELF_IMG | BOUND), 3, 0],
+  ]) {
+    reset();
+    nativeHost.clock = () => 1;
+    setup();
+    const n = node(r => (same(r, SELF_H, `LastRendered ${why} receiver`), 2.5));
+    same(value(R.FLOAT, w(K.LAST_RENDERED, n, LRT, key)), 2.5, `LastRendered ${why}`);
+    same(count('float'), 1, `LastRendered ${why} in JavaScript once`);
+    same(count('clock'), clockCalls, `LastRendered ${why} clock calls`);
+    same(rd32(FAULT_AT), 0, `LastRendered ${why} clears the fault`);
+  }
+  {
+    reset();
+    wr32(CHECK_AT, 1);
+    wr32(SELF_IMG + LRT, bits(1));
+    nativeHost.clock = () => 4;
+    const n = node();
+    value(R.FLOAT, w(K.LAST_RENDERED, n, LRT, LRT_KEY));
+    const check = calls.find(c => c.imp === 'check' && c.node === n);
+    same(check?.kind, CK.FLOAT, 'LastRendered check kind');
+    same(check?.value, 3, 'LastRendered check value');
+  }
+
+  // InStasis: actor-tick.mjs actorInStasis with the native's level.
+  const ST = {lrt: [0x30, 5], stasis: [0x34, 6, 0x10], physics: [0x39, 7], force: [0x3c, 8, 0x2], distance: [0x40, 9]};
+  const inStasis = (n, keys = {}) => w(K.IN_STASIS, n,
+    ST.lrt[0], keys.lrt ?? ST.lrt[1], ST.stasis[0], keys.stasis ?? ST.stasis[1], ST.stasis[2], ST.physics[0], keys.physics ?? ST.physics[1],
+    ST.force[0], keys.force ?? ST.force[1], ST.force[2], ST.distance[0], keys.distance ?? ST.distance[1]);
+  const TIMES = [0, 3, 10, 100.5, NaN], LRTS = [bits(0), bits(4), bits(95.5), bits(1e3), 0x7fc00000];
+  const ZONES = [0, 3, 10, 95.5, NaN], DISTANCES = [bits(0), bits(1200), bits(1200.0001), bits(5000), 0x7fc00000];
+  let cases = 0;
+  for (const time of TIMES) for (const lrt of LRTS) for (const stasis of [0, 1]) for (const physics of [0, 1, 2, 5, 13])
+    for (const force of [0, 1]) for (const zone of ZONES) for (const distance of DISTANCES) for (const netMode of [0, 1]) {
+      if ((cases++ % 7) !== 0) continue;
+      reset();
+      wr32(SELF_IMG + ST.lrt[0], lrt);
+      wr32(SELF_IMG + ST.stasis[0], stasis ? ST.stasis[2] | 1 : 0xffffffef);
+      wr32(SELF_IMG + 0x38, 0xa5a500a5 | physics << 8);
+      wr32(SELF_IMG + ST.force[0], force ? ST.force[2] : ~ST.force[2]);
+      wr32(SELF_IMG + ST.distance[0], distance);
+      nativeHost.clock = (h, mode) => (same(mode, 1, 'InStasis clock mode'), time);
+      nativeHost.zone = () => zone;
+      nativeHost.standalone = () => netMode === 0;
+      let zoneReads = 0;
+      const fields = {LastRenderTime: num(lrt), bStasis: Boolean(stasis), Physics: physics, bForceStasis: Boolean(force),
+        DistanceFromPlayer: num(distance)};
+      const expected = actorInStasis({}, {read: (a, name) => fields[name],
+        level: {timeSeconds: time, netMode, zoneLastRenderTime: () => (zoneReads++, zone)}});
+      same(value(R.BOOL, inStasis(node())), expected, `InStasis ${JSON.stringify({time, lrt, stasis, physics, force, zone, distance, netMode})}`);
+      same(count('zone'), zoneReads, 'InStasis reads the zone time where actorInStasis does');
+    }
+  // Each kind consumes exactly its words: as the first operand of an operator.
+  {
+    reset();
+    wr32(SELF_IMG + LRT, bits(1));
+    nativeHost.clock = () => 4;
+    same(value(R.FLOAT, w(K.FLOAT_SUB, w(K.LAST_RENDERED, node(), LRT, LRT_KEY), E.float(bits(1)))), 2, 'LastRendered words');
+    reset();
+    wr32(SELF_IMG + ST.lrt[0], bits(0));
+    wr32(SELF_IMG + ST.stasis[0], ST.stasis[2]);
+    wr32(SELF_IMG + ST.distance[0], bits(5000));
+    nativeHost.clock = () => 100;
+    nativeHost.zone = () => 100;
+    nativeHost.standalone = () => true;
+    same(value(R.BOOL, w(K.BOOL_EQ, inStasis(node()), E.bool(0))), false, 'InStasis words');
+  }
+  // The JavaScript path: a field outside the image, a clock or zone fault.
+  for (const [why, setup, keys, expectedCalls] of [
+    ['HOST receiver', () => infos.set(SELF_H, HOST), {}, {clock: 0, zone: 0}],
+    ['bound Physics', () => infos.set(SELF_H, SELF_IMG | BOUND), {physics: 3}, {clock: 0, zone: 0}],
+    ['clock fault', () => { nativeHost.clock = () => 'x'; }, {}, {clock: 1, zone: 0}],
+    ['zone fault', () => { nativeHost.zone = () => null; }, {}, {clock: 1, zone: 1}],
+  ]) {
+    reset();
+    wr32(SELF_IMG + ST.lrt[0], bits(0));
+    wr32(SELF_IMG + ST.stasis[0], ST.stasis[2]);
+    nativeHost.clock = () => 100;
+    nativeHost.zone = () => 0;
+    nativeHost.standalone = () => true;
+    setup();
+    const n = node(r => (same(r, SELF_H, `InStasis ${why} receiver`), 'js'));
+    same(value(R.BOOL, inStasis(n, keys)), true, `InStasis ${why}`);
+    same(count('bool'), 1, `InStasis ${why} in JavaScript once`);
+    same(count('clock'), expectedCalls.clock, `InStasis ${why} clock calls`);
+    same(count('zone'), expectedCalls.zone, `InStasis ${why} zone calls`);
+    same(rd32(FAULT_AT), 0, `InStasis ${why} clears the fault`);
+  }
 }
 
 // ---- Coverage ---------------------------------------------------------------------------

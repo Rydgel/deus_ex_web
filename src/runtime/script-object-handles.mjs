@@ -32,6 +32,11 @@ export function handleOf(identity) {
   return handle;
 }
 
+/** The handle of an identity that has one, else 0; allocates nothing. */
+export function existingHandle(identity) {
+  return identity == null ? 0 : handles.get(identity) ?? 0;
+}
+
 /** The identity a handle names, or null for None or a released handle. */
 export function identityOfHandle(handle) {
   return identities[handle] ?? null;
