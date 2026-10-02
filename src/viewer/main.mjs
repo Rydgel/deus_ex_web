@@ -247,10 +247,13 @@ function setMode(next) {
 }
 function pauseForRuntimeError(error) {
   stopConversationAudio();
-  runtimeError={message:error.message,stack:error.stack};paused=true;
+  runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
   keys.clear();drag=false;document.exitPointerLock?.();
   showStats();
-  $('toast').textContent=`Play paused: ${error.message}. Choose Player start to reset.`;
+  // The map ended by travelling (Stage 6): a stop, not a failure.
+  $('toast').textContent=error.travel
+    ?`The map ended: it travels to “${error.travel.url}”. Map travel is not implemented yet (Stage 6). Choose Player start to replay.`
+    :`Play paused: ${error.message}. Choose Player start to reset.`;
 }
 function showStats() {
   const pairs = [['Map', currentMap], ['World triangles', map.summary.triangles.toLocaleString()],
@@ -849,7 +852,8 @@ function animate(time) {
       phase('tick');
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
       const target = game.target();
-      $('play-hint').textContent = runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
+      $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
+      : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
     } else if (x || y || z) {
       const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);

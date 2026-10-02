@@ -7,6 +7,7 @@ import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMe
 import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
+import { TravelBoundary } from './travel-boundary.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
@@ -2881,6 +2882,13 @@ export class ScriptRuntime {
         frand:()=>{if(typeof this.rng?.frand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');return Math.fround(this.rng.frand());},
       }),
     });
+    if(call.record?.key==='engine.playerpawn.clienttravel'){
+      // PlayerPawn.ClientTravel(URL, TravelType, bItems): map travel is the
+      // Stage 6 boundary (travel-boundary.mjs).
+      if(call.argumentCount!==3)throw new Error('ClientTravel requires URL, TravelType and bItems');
+      throw new TravelBoundary({url:String(refValue(call.evaluateArgument(0))),
+        travelType:refValue(call.evaluateArgument(1))|0,bItems:Boolean(refValue(call.evaluateArgument(2)))});
+    }
     if(call.record?.key==='engine.decal.detachdecal')return execDetachDecal(call,{
       read:(actor,name)=>this.readNamed(actor,name),
       detachSurfaces:actor=>detachDecalSurfaces(actor,{

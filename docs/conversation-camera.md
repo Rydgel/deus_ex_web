@@ -224,7 +224,9 @@ Engine.dll. Headless with render feedback stamped from `game.view()`, and in
 Chromium, the conversation then plays all 21 speeches without a pause until
 `MissionIntro.Timer` sees `Intro_Played` and `PostIntro` runs
 `Level.Game.SendPlayer(Self, "dxonly")` → `ClientTravel` (native 0): map
-travel, a Stage 6 boundary.
+travel, a Stage 6 boundary. Play stops there with a labeled
+`TravelBoundary` (`travel-boundary.mjs`: URL, travel type, bItems) and the
+viewer says the map ended by travelling, instead of an unknown-native pause.
 
 ## Open
 
