@@ -141,6 +141,35 @@ blocks sit half a cell up and left. `calculateWater` translates it; 12
 oracle cases (6 sizes to 256×256, both parities, 4 ticks) match fields and
 pixels byte for byte.
 
+## Water drops (WaterRedrawDrops)
+
+UWaterTexture::WaterRedrawDrops (`0x10506410`) increments GlobalPhase and
+runs the drops (8 bytes at `+0xe8`, NumDrops `+0xe4`: Type, Depth, X, Y,
+A-D) through a byte map (`0x10506e94`) and jump table (`0x10506e38`). A drop
+sits in half-size coordinates: `(Y << UBits) + X` is buffer A's row Y, and
+every write goes to that A cell and the B cell under it (`+USize/2`); the
+half masks are the bytes `UMask >> 1` and `VMask >> 1`.
+
+| Type | Case | Cell value |
+| --- | --- | --- |
+| FixedDepth | `0x105064c1` | D |
+| PhaseSpot, ShallowSpot, HalfAmpl | `0x105064d5`- | Depth += D; sine, `sine/2 + 0x40`, `max(sine, 0x80)` |
+| RandomMover | `0x1050655a` | `0xb9` over `0x47`; X and Y step by the difference of two 2-bit draws |
+| FixedRandomSpot | `0x1050666d` | two random bytes |
+| WhirlyThing, BigWhirly (0x40, 0x41 backwards) | `0x105066e4`- | Depth on a sine-table circle (`>> 4`, `>> 3`), angle B:A += D:C |
+| Horizontal/Vertical/Diagonal Line1/Line2 | `0x1050683a`- | Depth along `D/2 + 1` cells (Line1 runs left-down) |
+| the four Osc forms | `0x105069e6`- | the same lines with Depth += C, sine |
+| RainDrops | `0x10506c81` | one draw in 16: Depth over its complement within D of (X, Y) |
+| AreaClamp | `0x10506be6` | a `D/2` square of Depth |
+| LeakyTap, DrippyTap | `0x10506d9a`- | A += D; when it wraps to `<= D`, Depth over its complement (DrippyTap re-draws A) |
+| 0x14-0x3f, above 0x41 | `0x10506e15` | nothing |
+
+`waterRedrawDrops` translates it: 276 oracle cases (each type, four sizes
+to 256×256, five ticks) match fields, drops, GlobalPhase and the generator.
+The case generator draws from its LCG's top bits: its low bits cycle, which
+had kept RainDrops' one-in-16 gate (and every random-gated fire branch)
+from being reached with useful variety; all 1112 cases pass on the new draws.
+
 ## Play
 
 TextureStore reads a FireTexture's properties (DX names ActiveSparkNum

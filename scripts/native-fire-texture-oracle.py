@@ -152,6 +152,8 @@ class FireProbe:
             return self.tables(c)
         if c.get('entry') == 'water':
             return self.water(c)
+        if c.get('entry') == 'drops':
+            return self.drops(c)
         self.pentium_pro = self.alloc(4)
         self.write(PENTIUM_PRO_IMPORT, 'I', self.pentium_pro)
         self.write(self.pentium_pro, 'I', c.get('pentiumPro', 1))
@@ -248,6 +250,44 @@ class FireProbe:
             cpu.emu_start(0x105059c0, self.done, count=50_000_000)
             steps.append({'field': bytes(cpu.mem_read(fields, len(field))).hex(), 'pixels': bytes(cpu.mem_read(pixels, w * h)).hex(),
                           'parity': self.read(texture + 0x12f0, 'B')[0]})
+        return {'steps': steps}
+
+    def drops(self, c):
+        """UWaterTexture::WaterRedrawDrops (0x10506410) `ticks` times: the
+        drops (+0xe8, NumDrops +0xe4), the FX bytes (+0xd8..+0xe1), the masks,
+        GlobalPhase and SourceFields, with the module tables and generator."""
+        cpu = self.cpu
+        cpu.mem_write(SINE, bytes.fromhex(c['sine']))
+        cpu.mem_write(SINE_CLAMPED, bytes.fromhex(c['sineClamped']))
+        cpu.mem_write(SINE_SIGNED, bytes.fromhex(c['sineSigned']))
+        cpu.mem_write(RANDOM, bytes.fromhex(c['random']))
+        self.write(RANDOM_INDEX, 'I', c['randomIndex'])
+        w, h = c['size']
+        texture = self.alloc(0x1400)
+        cpu.mem_write(texture, bytes(0x1400))
+        field = bytes.fromhex(c['field'])
+        fields = self.alloc(len(field) + 64)
+        cpu.mem_write(fields, field)
+        ubits = w.bit_length() - 1
+        self.write(texture + 0x30, '2B', ubits, h.bit_length() - 1)
+        self.write(texture + 0x34, '2i', w, h)
+        self.write(texture + 0xc0, '2i', w - 1, h - 1)
+        self.write(texture + 0xd0, 'i', c['globalPhase'])
+        cpu.mem_write(texture + 0xd8, bytes(c['fx']))
+        self.write(texture + 0xe4, 'i', c['numDrops'])
+        cpu.mem_write(texture + 0xe8, bytes.fromhex(c['drops']))
+        self.write(texture + 0x8e8, 'I', fields)
+        steps = []
+        for _ in range(c['ticks']):
+            esp = self.stack - 0x1000
+            self.write(esp, 'I', self.done)
+            cpu.reg_write(UC_X86_REG_ESP, esp)
+            cpu.reg_write(UC_X86_REG_ECX, texture)
+            cpu.reg_write(UC_X86_REG_FPCW, 0x037f)
+            cpu.emu_start(0x10506410, self.done, count=50_000_000)
+            steps.append({'field': bytes(cpu.mem_read(fields, len(field))).hex(), 'drops': bytes(cpu.mem_read(texture + 0xe8, 2048)).hex(),
+                          'numDrops': self.read(texture + 0xe4, 'i')[0], 'globalPhase': self.read(texture + 0xd0, 'i')[0],
+                          'random': bytes(cpu.mem_read(RANDOM, 256)).hex(), 'randomIndex': self.read(RANDOM_INDEX, 'I')[0]})
         return {'steps': steps}
 
     def tables(self, c):

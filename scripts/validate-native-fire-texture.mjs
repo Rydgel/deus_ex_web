@@ -10,13 +10,15 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater} from '../src/runtime/fire-texture.mjs';
+import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater, waterRedrawDrops} from '../src/runtime/fire-texture.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
 let seed = 0xf12e;
-const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+// An LCG's low bits cycle (bit k with period 2^(k+1)), which starved the
+// random-gated branches; the cases draw from its top 24 bits.
+const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8; };
 const bytes = (n, f = () => random() & 255) => Uint8Array.from({length: n}, f);
 const hex = array => Buffer.from(array).toString('hex');
 const unhex = text => Uint8Array.from(Buffer.from(text, 'hex'));
@@ -110,6 +112,28 @@ for (const [w, h] of [[16, 16], [32, 32], [64, 32], [32, 64], [128, 128], [256, 
     cases.push({name: `water ${w}x${h} p${parity}`, entry: 'water', size: [w, h], parity, ticks: 4,
       field: hex(bytes(fieldSize)), pixels: hex(bytes(w * h)), renderTable: hex(bytes(1028)), waveTable: hex(bytes(1536))});
   }
+// WaterRedrawDrops: drops of one type (X, Y within the half-size field).
+const DROPS = ['FixedDepth', 'PhaseSpot', 'ShallowSpot', 'HalfAmpl', 'RandomMover', 'FixedRandomSpot', 'WhirlyThing',
+  'BigWhirly', 'HorizontalLine', 'VerticalLine', 'DiagonalLine1', 'DiagonalLine2', 'HorizontalOsc', 'VerticalOsc',
+  'DiagonalOsc1', 'DiagonalOsc2', 'RainDrops', 'AreaClamp', 'LeakyTap', 'DrippyTap'];
+const DROP_TYPES = (option('drops', '0-19,64-65,20')).split(',').flatMap(range => {
+  const [a, b = a] = range.split('-').map(Number); return Array.from({length: b - a + 1}, (_, k) => a + k);
+});
+for (const type of DROP_TYPES)
+  for (const [w, h] of [[32, 32], [64, 64], [128, 64], [256, 256]])
+    for (let variant = 0; variant < 3; variant++) {
+      const hw = w >> 1, hh = h >> 1, count = 1 + random() % 10;
+      const drops = new Uint8Array(2048);
+      for (let k = 0; k < 256; k++) for (let b = 0; b < 8; b++) drops[k * 8 + b] = random() & 255;
+      for (let k = 0; k < count; k++) {
+        drops[k * 8] = type; drops[k * 8 + 2] = random() % hw; drops[k * 8 + 3] = random() % hh;
+      }
+      const c = makeCase(`drop ${DROPS[type] ?? type} ${w}x${h} #${variant}`, {uBits: 5, vBits: 5});
+      Object.assign(c, {entry: 'drops', size: [w, h], ticks: 5, globalPhase: random() & 0xffff,
+        fx: Array.from({length: 10}, () => random() & 255), numDrops: count, drops: hex(drops),
+        field: hex(bytes(hw * hh * 2))});
+      cases.push(c);
+    }
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
 // --redraw: RedrawSparks alone (0x105025b0), without the fire update.
 const redrawOnly = process.argv.includes('--redraw');
@@ -132,6 +156,28 @@ selected.forEach((c, i) => {
       assert.equal(hex(new Uint8Array(tables.random.buffer)), expected.random, `${c.name}: random`);
       assert.equal(tables.randomIndex, expected.randomIndex, `${c.name}: random index`);
       assert.equal(expected.left, 0, 'all 512 appRand values used');
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
+  if (c.entry === 'drops') {
+    const globals = {sine: unhex(c.sine), sineClamped: unhex(c.sineClamped), sineSigned: unhex(c.sineSigned),
+      random: new DataView(unhex(c.random).buffer), randomIndex: c.randomIndex};
+    const [w, h] = c.size, fx = c.fx;
+    const water = {uBits: Math.log2(w), uSize: w, vSize: h, uMask: w - 1, vMask: h - 1, globalPhase: c.globalPhase,
+      dropType: fx[0], waveAmp: fx[1], fxFrequency: fx[2], fxPhase: fx[3], fxAmplitude: fx[4], fxSpeed: fx[5],
+      fxRadius: fx[6], fxSize: fx[7], fxDepth: fx[8], fxTime: fx[9], numDrops: c.numDrops, drops: unhex(c.drops),
+      fields: unhex(c.field)};
+    try {
+      native.results[i].steps.forEach((expected, step) => {
+        waterRedrawDrops(water, globals);
+        const where = `${c.name} tick ${step}`;
+        assert.equal(hex(new Uint8Array(globals.random.buffer, 0, 256)), expected.random, `${where}: random`);
+        assert.equal(globals.randomIndex, expected.randomIndex, `${where}: random index`);
+        assert.equal(hex(water.fields), expected.field, `${where}: field`);
+        assert.equal(hex(water.drops), expected.drops, `${where}: drops`);
+        assert.equal(water.numDrops, expected.numDrops, `${where}: NumDrops`);
+        assert.equal(water.globalPhase, expected.globalPhase, `${where}: GlobalPhase`);
+      });
     } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
     return;
   }

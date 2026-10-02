@@ -724,3 +724,77 @@ export function calculateWater(water) {
     }
   }
 }
+
+/** UWaterTexture::WaterRedrawDrops (0x10506410): increments GlobalPhase and
+ * runs every drop (8 bytes at +0xe8: Type Depth X Y A B C D) through a byte
+ * map (0x10506e94) and jump table (0x10506e38). Drops are in half-size
+ * coordinates: p = (Y << UBits) + X is buffer A's row Y, and each write goes
+ * to that A cell and the B cell under it (+USize/2). The half masks are the
+ * bytes (UMask >> 1) and (VMask >> 1). Types 0x14-0x3f and above 0x41 do
+ * nothing; 0x40 and 0x41 turn WhirlyThing and BigWhirly the other way. */
+export function waterRedrawDrops(water, globals) {
+  const sine = globals.sine, field = water.fields, d = water.drops, bits = water.uBits;
+  const hum = (water.uMask >> 1) & 255, hvm = (water.vMask >> 1) & 255, hw = (water.uSize / 2) | 0;
+  const rand = () => fireRandom(globals);
+  const put = (q, value) => { field[q] = value; field[q + hw] = value; };
+  const tap = (q, depth) => { field[q] = depth; field[q + hw] = ~depth & 255; };
+  water.globalPhase = (water.globalPhase + 1) | 0;
+  for (let i = 0; i < water.numDrops; i++) {
+    const o = i * 8, type = d[o], x = d[o + 2], y = d[o + 3], p = (y << bits) + x, n = d[o + 7] >> 1;
+    const phase = () => (d[o + 1] = (d[o + 1] + d[o + 7]) & 255);
+    const osc = () => sine[d[o + 1] = (d[o + 1] + d[o + 6]) & 255];
+    // The line shapes: n + 1 cells from (X, Y) along a direction.
+    const line = (value, dx, dy) => {
+      for (let k = 0; k <= n; k++) {
+        if (dy === 0) { const row = y << bits, cx = (x + k) & hum; field[row + cx] = value; field[row + hw + cx] = value; }
+        else put((((y + k) & hvm) << bits) + (dx === 0 ? x : (x + dx * k) & hum), value);
+      }
+    };
+    // WhirlyThing / BigWhirly: a 16-bit angle B:A stepped by D:C (or back),
+    // the cell on a sine-table circle around (X, Y).
+    const whirl = (sign, shift) => {
+      const angle = ((d[o + 5] << 8 | d[o + 4]) + sign * (d[o + 7] << 8 | d[o + 6])) & 0xffff;
+      d[o + 4] = angle & 255; d[o + 5] = angle >> 8;
+      const b = angle >> 8, cx = ((sine[b] >> shift) + x) & hum, cy = ((sine[(b + 0x40) & 255] >> shift) + y) & hvm;
+      put((cy << bits) + cx, d[o + 1]);
+    };
+    switch (type) {
+      case 0x00: put(p, d[o + 7]); break; // FixedDepth
+      case 0x01: put(p, sine[phase()]); break; // PhaseSpot
+      case 0x02: put(p, (sine[phase()] >> 1) + 0x40); break; // ShallowSpot
+      case 0x03: put(p, Math.max(sine[phase()], 0x80)); break; // HalfAmpl
+      case 0x04: { // RandomMover
+        const a = rand() & 3; d[o + 2] = ((rand() & 3) - a + x) & hum;
+        const b = rand() & 3; d[o + 3] = ((rand() & 3) - b + y) & hvm;
+        field[p] = 0xb9; field[p + hw] = 0x47; break;
+      }
+      case 0x05: field[p] = rand() & 255; field[p + hw] = rand() & 255; break; // FixedRandomSpot
+      case 0x06: whirl(1, 4); break; // WhirlyThing
+      case 0x07: whirl(1, 3); break; // BigWhirly
+      case 0x40: whirl(-1, 4); break;
+      case 0x41: whirl(-1, 3); break;
+      case 0x08: line(d[o + 1], 1, 0); break; // HorizontalLine
+      case 0x09: line(d[o + 1], 0, 1); break; // VerticalLine
+      case 0x0a: line(d[o + 1], -1, 1); break; // DiagonalLine1
+      case 0x0b: line(d[o + 1], 1, 1); break; // DiagonalLine2
+      case 0x0c: line(osc(), 1, 0); break; // HorizontalOsc
+      case 0x0d: line(osc(), 0, 1); break; // VerticalOsc
+      case 0x0e: line(osc(), -1, 1); break; // DiagonalOsc1
+      case 0x0f: line(osc(), 1, 1); break; // DiagonalOsc2
+      case 0x10: { // RainDrops: one in 16 ticks, a cell within D of (X, Y)
+        if (rand() & 0xf) break;
+        const r = d[o + 7], cy = ((((rand() & 255) * r) >> 8) + y) & hvm, cx = ((((rand() & 255) * r) >> 8) + x) & hum;
+        tap((cy << bits) + cx, d[o + 1]); break;
+      }
+      case 0x11: // AreaClamp: an n-by-n square
+        for (let j = 0; j < n; j++) for (let k = 0; k < n; k++) put((((y + j) & hvm) << bits) + ((x + k) & hum), d[o + 1]);
+        break;
+      case 0x12: // LeakyTap
+        if ((d[o + 4] = (d[o + 4] + d[o + 7]) & 255) <= d[o + 7]) tap(p, d[o + 1]);
+        break;
+      case 0x13: // DrippyTap
+        if ((d[o + 4] = (d[o + 4] + d[o + 7]) & 255) <= d[o + 7]) { d[o + 4] = rand() & 255; tap(p, d[o + 1]); }
+        break;
+    }
+  }
+}
