@@ -10,7 +10,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {fireConstantTimeTick, redrawSparks, drawFlashRamp} from '../src/runtime/fire-texture.mjs';
+import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad} from '../src/runtime/fire-texture.mjs';
+import {createNativeRng} from '../src/runtime/rng.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
@@ -82,6 +83,26 @@ for (let k = 0; k < 160; k++) {
   c.flash = [random() & 31, random() & 31, small(), small(), random() & 255, random() & 255];
   cases.push(c);
 }
+// The module tables' construction with MSVCRT rand streams.
+for (const seed of [1, 0x1234, 0xdeadbeef, 42]) {
+  const rng = createNativeRng(seed);
+  cases.push({name: `tables seed ${seed}`, entry: 'tables', rand: Array.from({length: 512}, () => rng.rand())});
+}
+// PostLoad: RenderTable for heats old and new, and spark arrays trimmed,
+// grown and clamped (the array is already Serialize's: at least the raw limit).
+for (let k = 0; k < 40; k++) {
+  const rawLimit = [2, 3, 4, 9, 40, 9000, 64][k % 7] + (k > 20 ? random() % 5 : 0);
+  const serialized = random() % 60;
+  const num = Math.max(serialized, rawLimit);
+  const sparks = Array.from({length: num}, () => [random() % 3 ? random() % 0x1d : 0x1f + random() % 13,
+    random() & 255, random() & 31, random() & 31, random() & 255, random() & 255, random() & 255, random() & 255]);
+  const heat = random() & 255;
+  const c = makeCase(`postLoad #${k}`, {uBits: 5, vBits: 5, sparks, ticks: 1,
+    fields: {RenderHeat: heat, OldRenderHeat: k % 5 === 0 ? heat : random() & 255, SparksLimit: rawLimit,
+      ActiveSparkNum: Math.min(num, random() % (num + 4))}});
+  c.entry = 'postLoad';
+  cases.push(c);
+}
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
 // --redraw: RedrawSparks alone (0x105025b0), without the fire update.
 const redrawOnly = process.argv.includes('--redraw');
@@ -97,6 +118,32 @@ const native = JSON.parse(stdout);
 
 const mismatches = [];
 selected.forEach((c, i) => {
+  if (c.entry === 'tables') {
+    const rand = [...c.rand], tables = fireTables(() => rand.shift()), expected = native.results[i];
+    try {
+      for (const key of ['sine', 'sineClamped', 'sineSigned']) assert.equal(hex(tables[key]), expected[key], `${c.name}: ${key}`);
+      assert.equal(hex(new Uint8Array(tables.random.buffer)), expected.random, `${c.name}: random`);
+      assert.equal(tables.randomIndex, expected.randomIndex, `${c.name}: random index`);
+      assert.equal(expected.left, 0, 'all 512 appRand values used');
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
+  if (c.entry === 'postLoad') {
+    const f = c.fields, expected = native.results[i].steps[0];
+    const t = {uSize: f.USize, vSize: f.VSize, renderHeat: f.RenderHeat, oldRenderHeat: f.OldRenderHeat,
+      sparksLimit: f.SparksLimit, activeSparkNum: f.ActiveSparkNum, renderTable: unhex(c.renderTable)};
+    try {
+      firePostLoad(t, unhex(c.sparks));
+      assert.equal(hex(t.renderTable), expected.renderTable, `${c.name}: RenderTable`);
+      for (const [key, field] of [['oldRenderHeat', 'OldRenderHeat'], ['sparksLimit', 'SparksLimit'],
+        ['activeSparkNum', 'ActiveSparkNum'], ['uMask', 'UMask'], ['vMask', 'VMask']])
+        assert.equal(t[key], expected.fields[field], `${c.name}: ${field}`);
+      assert.equal(t.sparks.length / 8, expected.sparkNum, `${c.name}: array size`);
+      assert.equal(hex(t.sparks.subarray(0, Math.min(t.sparks.length, expected.sparks.length / 2))),
+        expected.sparks.slice(0, 2 * Math.min(t.sparks.length, expected.sparks.length / 2)), `${c.name}: sparks`);
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
   const globals = {sine: unhex(c.sine), sineClamped: unhex(c.sineClamped), sineSigned: unhex(c.sineSigned),
     random: new DataView(unhex(c.random).buffer), randomIndex: c.randomIndex};
   const f = c.fields;

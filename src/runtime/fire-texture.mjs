@@ -1,3 +1,5 @@
+import {x87load, x87double, x87int32, x87mul, x87add, x87store, x87storeDouble, x87fistp} from './script-vm.mjs';
+
 /** Fire.dll's UFireTexture (docs/fire-texture.md), translated from the
  * hash-pinned DLL and checked by validate-native-fire-texture.
  *
@@ -611,4 +613,77 @@ export function fireConstantTimeTick(texture, globals) {
   if (texture.bRising & 1) fireUpdateRising(texture.pixels, texture.renderTable, texture.uSize, texture.vSize);
   else fireUpdateStill(texture.pixels, texture.renderTable, texture.uSize, texture.vSize);
   postDrawSparks(texture);
+}
+
+const SINE_SCALE = x87load(0.00390625), TWO_PI = x87load(6.2831854820251465);
+const SINE_AMPLITUDE = x87double(127.5), SINE_OFFSET = x87double(127.44999694824219);
+// An x87 value after an FSTP qword (53-bit significand) as a JS number.
+const doubleOf = v => v.sig === 0n ? 0 : (v.neg ? -1 : 1) * Number(v.sig) * 2 ** v.exp;
+
+/** The module tables' construction (0x10501020), once, at the first
+ * UFractalTexture: sine[i] = fistp(f32(appSin(i/256·2π)·127.5 + 127.45)),
+ * the clamped sine+0x20 and the sine+0x80 tables, and 512 bytes of appRand()
+ * with the index at 0. `appSin` is the host's double sine (Core calls the CRT
+ * sin, an x87 transcendental; docs/fire-texture.md gives the margins). */
+export function fireTables(appRand) {
+  const sine = new Uint8Array(256), sineClamped = new Uint8Array(256), sineSigned = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) {
+    const angle = doubleOf(x87storeDouble(x87mul(x87mul(x87int32(i), SINE_SCALE), TWO_PI)));
+    const value = x87store(x87add(x87mul(x87double(Math.sin(angle)), SINE_AMPLITUDE), SINE_OFFSET));
+    sine[i] = x87fistp(x87load(value)) & 255;
+  }
+  for (let i = 0; i < 256; i++) {
+    sineClamped[i] = Math.min(sine[i] + 0x20, 0xff);
+    sineSigned[i] = (sine[i] + 0x80) & 255;
+  }
+  const random = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) random[i] = appRand() & 255;
+  return {sine, sineClamped, sineSigned, random: new DataView(random.buffer), randomIndex: 0};
+}
+
+/** Load state: UFireTexture::Serialize (0x10508300) reads the sparks and
+ * grows the array to the raw SparksLimit; PostLoad (0x10507b70, from
+ * 0x10507d62) rebuilds RenderTable when RenderHeat differs from OldRenderHeat
+ * (`trunc(clamp(i/4 + 1 - (255 - RenderHeat)/16, 0, 255))` for i < 1024),
+ * and, when the array is not already SparksLimit long, clamps SparksLimit to
+ * 4..8192, drops temporaries (type >= 0x1f) from the top while
+ * ActiveSparkNum exceeds it, caps ActiveSparkNum and resizes the array to the
+ * limit. New slots are zero here (the allocator's memory is not
+ * cleared in the original). `sparks` is the serialized array. */
+export function firePostLoad(texture, sparks) {
+  const t = texture;
+  t.uMask = t.uSize - 1; t.vMask = t.vSize - 1;
+  if ((t.oldRenderHeat | 0) !== t.renderHeat) {
+    for (let i = 0; i < 0x400; i++) {
+      const value = i * 0.25 + 1 - (255 - t.renderHeat) * 0.0625;
+      t.renderTable[i] = value < 0 ? 0 : value >= 255 ? 255 : Math.trunc(value);
+    }
+    t.oldRenderHeat = t.renderHeat;
+  }
+  let num = Math.max(sparks.length >> 3, t.sparksLimit);
+  let array = new Uint8Array(num * 8);
+  array.set(sparks);
+  // The clamp and resize run only when the size differs from the raw limit
+  // (0x10507e15), so a limit above 8192 that Serialize grew to stands.
+  if (num === t.sparksLimit) { t.sparks = array; return t; }
+  const limit = Math.max(4, Math.min(0x2000, t.sparksLimit));
+  t.sparksLimit = limit;
+  if (num > limit) {
+    if (t.activeSparkNum > limit) {
+      for (let k = t.activeSparkNum - 1; k >= 0; k--) {
+        if (array[k * 8] < 0x1f) continue;
+        t.activeSparkNum -= 1;
+        array.copyWithin(k * 8, t.activeSparkNum * 8, t.activeSparkNum * 8 + 8);
+        if (t.activeSparkNum <= limit) break;
+      }
+    }
+    t.activeSparkNum = Math.min(t.activeSparkNum, limit);
+    array = array.slice(0, limit * 8);
+  } else if (num < limit) {
+    const grown = new Uint8Array(limit * 8);
+    grown.set(array);
+    array = grown;
+  }
+  t.sparks = array;
+  return t;
 }

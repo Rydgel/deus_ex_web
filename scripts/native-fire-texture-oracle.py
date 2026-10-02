@@ -21,7 +21,7 @@ import struct
 import sys
 
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
-from unicorn.x86_const import UC_X86_REG_ECX, UC_X86_REG_ESP, UC_X86_REG_FPCW, UC_X86_REG_EIP
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBP, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_ESI, UC_X86_REG_ESP, UC_X86_REG_FPCW, UC_X86_REG_EIP
 
 spec = importlib.util.spec_from_file_location('native', Path(__file__).with_name('native-collision-oracle.py'))
 native = importlib.util.module_from_spec(spec)
@@ -70,11 +70,64 @@ class FireProbe:
             self.slots[address] = f'{library}!{symbol}'
             self.iat.append((slot, address))
         self.pentium_pro = self.alloc(4)
+        # Leaves for the load-time entries: msvcrt _ftol as the truncating x87
+        # sequence (as native-mesh-light-oracle.py), appSin as FSIN of the
+        # double argument, appRand from the case's list, and FArray's
+        # Remove/Realloc on the {Data, Num, Max} header.
+        self.stubs = {}
+        self.leaf = 0x2d000000
+        cpu.mem_map(self.leaf, 0x1000)
+        cpu.mem_write(self.leaf, bytes.fromhex('83ec0c' 'd93c24' '668b0424' '660d000c' '6689442402' 'd96c2402'
+                                               'df7c2404' 'd92c24' '8b442404' '8b542408' '83c40c' 'c3'))
+        cpu.mem_write(self.leaf + 0x40, bytes.fromhex('dd442404' 'd9fe' 'c3'))  # fld qword [esp+4]; fsin; ret
+        for slot, address in self.iat:
+            name = self.slots[address]
+            if name.endswith('!_ftol'):
+                self.stubs[slot] = self.leaf
+            elif '?appSin@' in name:
+                self.stubs[slot] = self.leaf + 0x40
+        self.rand_values = []
+        self.halt = set()
+
+        def ret(uc, pop):
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            back = struct.unpack('<I', uc.mem_read(esp, 4))[0]
+            uc.reg_write(UC_X86_REG_ESP, esp + 4 + pop)
+            uc.reg_write(UC_X86_REG_EIP, back)
 
         def on_code(uc, address, size, data):
-            if address in self.slots:
-                raise RuntimeError(f'Unresolved Fire.dll import reached: {self.slots[address]}')
+            name = self.slots.get(address)
+            if name is None:
+                return
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            if '?appRand@' in name:
+                uc.reg_write(UC_X86_REG_EAX, self.rand_values.pop(0))
+                return ret(uc, 0)
+            if '?Remove@FArray@' in name:
+                this = uc.reg_read(UC_X86_REG_ECX)
+                index, count, size_ = struct.unpack('<3i', uc.mem_read(esp + 4, 12))
+                data_, num, _max = struct.unpack('<3I', uc.mem_read(this, 12))
+                tail = bytes(uc.mem_read(data_ + (index + count) * size_, (num - index - count) * size_))
+                uc.mem_write(data_ + index * size_, tail)
+                uc.mem_write(this + 4, struct.pack('<I', num - count))
+                return ret(uc, 12)
+            if '?Realloc@FArray@' in name:
+                this = uc.reg_read(UC_X86_REG_ECX)
+                size_ = struct.unpack('<i', uc.mem_read(esp + 4, 4))[0]
+                data_, num, max_ = struct.unpack('<3I', uc.mem_read(this, 12))
+                fresh = self.alloc(max_ * size_)
+                old = bytes(uc.mem_read(data_, min(num, max_) * size_)) if data_ else b''
+                uc.mem_write(fresh, bytes(max_ * size_))
+                uc.mem_write(fresh, old[:max_ * size_])
+                uc.mem_write(this, struct.pack('<I', fresh))
+                return ret(uc, 4)
+            raise RuntimeError(f'Unresolved Fire.dll import reached: {name}')
         cpu.hook_add(UC_HOOK_CODE, on_code, begin=self.trap, end=self.trap + 0x10000)
+
+        def on_halt(uc, address, size, data):
+            if address in self.halt:
+                uc.emu_stop()
+        cpu.hook_add(UC_HOOK_CODE, on_halt)
 
     def alloc(self, size):
         address = self.free
@@ -92,9 +145,11 @@ class FireProbe:
         # A fresh module image per case: the update routine patches itself.
         cpu.mem_write(image.base, self.pristine)
         for slot, address in self.iat:
-            self.write(slot, 'I', address)
+            self.write(slot, 'I', self.stubs.get(slot, address))
         self.write(PENTIUM_PRO_IMPORT, 'I', self.pentium_pro)
         self.free = self.heap + 0x100
+        if c.get('entry') == 'tables':
+            return self.tables(c)
         self.pentium_pro = self.alloc(4)
         self.write(PENTIUM_PRO_IMPORT, 'I', self.pentium_pro)
         self.write(self.pentium_pro, 'I', c.get('pentiumPro', 1))
@@ -132,6 +187,14 @@ class FireProbe:
             entry = CONSTANT_TIME_TICK
             if c.get('entry') == 'redraw':
                 entry = 0x105025b0
+            elif c.get('entry') == 'postLoad':
+                # UFireTexture::PostLoad from the RenderTable loop through the
+                # spark array (0x10507d62), ebx = 0 as the function holds it.
+                entry = 0x10507d62
+                cpu.reg_write(UC_X86_REG_ESI, texture)
+                cpu.reg_write(UC_X86_REG_EBX, 0)
+                cpu.reg_write(UC_X86_REG_EBP, self.stack - 0x800)
+                self.halt = {0x10507f36, 0x10507f7e}
             elif c.get('entry') == 'flash':
                 entry = 0x105022f0
                 x, y, xd, yd, c1, c2 = c['flash']
@@ -139,6 +202,7 @@ class FireProbe:
                 self.write(esp, 'I4B2I', self.done, x, y, xd, yd, c1, c2)
                 cpu.reg_write(UC_X86_REG_ESP, esp)
             cpu.emu_start(entry, self.done, count=50_000_000)
+            self.halt = set()
             n = c['fields']['USize'] * c['fields']['VSize']
             spark_data, spark_num = self.read(texture + 0xf4, '2I')
             steps.append({
@@ -147,8 +211,25 @@ class FireProbe:
                 'fields': {name: self.read(texture + offset, fmt)[0] for name, (offset, fmt) in FIELDS.items()},
                 'random': bytes(cpu.mem_read(RANDOM, 256)).hex(),
                 'randomIndex': self.read(RANDOM_INDEX, 'I')[0],
+                'renderTable': bytes(cpu.mem_read(texture + 0x104, 1028)).hex(),
+                'sparkNum': spark_num,
             })
         return {'steps': steps}
+
+    def tables(self, c):
+        """The module tables' one-time construction (0x10501020) with the
+        case's appRand values."""
+        cpu = self.cpu
+        self.write(0x10519580, 'I', 0)
+        self.rand_values = list(c['rand'])
+        esp = self.stack - 0x1000
+        self.write(esp, 'I', self.done)
+        cpu.reg_write(UC_X86_REG_ESP, esp)
+        cpu.reg_write(UC_X86_REG_FPCW, c.get('fpcw', 0x037f))
+        cpu.emu_start(0x10501020, self.done, count=10_000_000)
+        return {'sine': bytes(cpu.mem_read(SINE, 256)).hex(), 'sineClamped': bytes(cpu.mem_read(SINE_CLAMPED, 256)).hex(),
+                'sineSigned': bytes(cpu.mem_read(SINE_SIGNED, 256)).hex(), 'random': bytes(cpu.mem_read(RANDOM, 512)).hex(),
+                'randomIndex': self.read(RANDOM_INDEX, 'I')[0], 'left': len(self.rand_values)}
 
 
 def main():

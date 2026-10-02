@@ -33,6 +33,29 @@ index `0x10518558` at 0. Every random draw of every fire and water texture
 uses that one generator: it reads the dword `0x80` bytes ahead of the index,
 steps the index by 4 (mod `0x100`) and XORs the read value into the new slot.
 
+`fireTables` translates the construction. Its arguments are products on the
+x87 model; appSin is Core's call into the CRT sine, an x87 transcendental the
+host takes as the JS double sine. That cannot change a byte: the nearest
+`f32(sin·127.5 + 127.45)` comes 1.2·10⁻⁴ from a rounding midpoint (i = 56),
+while a float step there is 7.6·10⁻⁶. The appRand stream is Core's MSVCRT
+rand; its position when Fire first constructs is the host's (Play does not
+reproduce the original process's earlier rand calls).
+
+## Loading
+
+UTexture::Serialize (Engine `0x103ed470`) empties a parametric texture's
+(`+0x84` bit 3) mips before reading and zero-fills `USize·VSize` bytes per mip
+after, so a fire starts black. UFireTexture::Serialize reads the sparks (a
+compact count of 8-byte records) after the mips and grows the array to the
+raw SparksLimit. PostLoad then sets UMask/VMask, rebuilds RenderTable when
+RenderHeat differs from OldRenderHeat (transient, so 0 at load):
+`trunc(clamp(i/4 + 1 - (255 - RenderHeat)/16, 0, 255))` for `i < 1024`
+(exact in doubles), and, only when the array is not already SparksLimit
+long, clamps the limit to 4..8192, drops temporaries from the top while
+ActiveSparkNum exceeds it and resizes the array. A limit above 8192 that
+Serialize grew to stands. `firePostLoad` translates both; new slots are zero
+here, the allocator's leftovers in the original.
+
 ## ConstantTimeTick (`0x10507ff0`)
 
 For a texture of at least 8×8: RedrawSparks, then the fire update, then
@@ -91,11 +114,13 @@ cases match: the fire updates (6 sizes from 8×8 to 128×128 shapes, rising
 and still, both CPU forms), 12 cases of each of the 49 table types over four
 sizes and six ticks, 8 mixed populations of every authored type over 40
 ticks, and 160 DrawFlashRamp segments called on their own (the fuzz that
-found the fall-through in its flip test). `--types`, `--only` and `--redraw`
-(RedrawSparks alone) narrow a run.
+found the fall-through in its flip test). The table construction runs whole
+(appSin as FSIN, appRand from four MSVCRT seeds) and PostLoad from
+`0x10507d62` (FArray Remove/Realloc as leaves) over 40 heat and spark-array
+cases: 824 cases in all. `--types`, `--only` and `--redraw` (RedrawSparks
+alone) narrow a run.
 
 ## Status
 
-ConstantTimeTick is translated. Not yet: the module tables' construction
-(appSin and the appRand stream), PostLoad's RenderTable and spark array,
-the package loading and Play.
+ConstantTimeTick, the module tables and the load state are translated. Not
+yet in Play.
