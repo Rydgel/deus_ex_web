@@ -138,8 +138,10 @@ wardrobe doors.
 plane for each mirrored surface. All 211 surfaces have exactly one node plane,
 giving 80 distinct planes across the maps (117 counted per map, because
 repeated maps share them). The browser groups surfaces by the exact node
-plane, the same equality CreateChildFrame uses to merge children. The
-reflection itself (`MirrorByPlane`/`MirrorByVector`) has no orientation case.
+plane. CreateChildFrame also compares the plane exactly, but it requires the
+same surface and zone as well (see "Coplanar mover polygons", child
+merging). The reflection itself (`MirrorByPlane`/`MirrorByVector`) has no
+orientation case.
 
 **After the child frame.** `10b18b58–10b18b93` decides how the parent draws the
 mirror surface. `[ebp-0x30]` holds `flags & 0x47`
@@ -332,3 +334,123 @@ GPU time was not measured.
 are absent from the browser's inspect camera: the 747 galley's liquor
 bottles and cup, and an object at the right edge of Everett's 10° view. The
 cause was not investigated.
+
+## Coplanar mover polygons (2026-10-02)
+
+**Report.** In 00_Intro's VersaLife room the mirrored floor showed hard
+horizontal bands under BobPage0 and WaltonSimons0, alternating between
+"mostly reflection" and plain floor. The original shows a smooth floor.
+
+**Cause.** DeusExMover0 (Location `(0,-2896,-128)`, a TriggerToggle panel
+with `KeyPos[1]=(0,-304,0)`) is a 96×320×16 box. Its top polygon has the
+floor's texture and flags `0x08800004` (Translucent|Mirrored). At the placed
+position it lies exactly on the level floor, surface 7 at Z=−128. The
+browser drew both, and depth ties between two triangulations of one plane
+z-fought. Where the mover won, its composite S+R(1−S) showed the reflection
+almost alone: its S is black in the browser, because its light map has no
+light list (`LightActors −1`) and the zone the browser picks for it has no
+ambient.
+
+These checks located it:
+
+- Hiding DeusExMover0 removes every band.
+- With `world.mirrors.render` skipped, the bars stay black. That is the mover
+  face's own S, because `active` stays 0 when `render()` never runs. A stale
+  child target was never involved.
+- The clip plane and the child pass are not involved either. In a child
+  frame, both up-facing polygons face away from the reflected eye and are
+  culled.
+
+**Original.** Engine.dll (the brush tracker) and Render.dll (OccludeBsp) give
+the static polygon priority:
+
+- **Filtering.** Tracker::Update (`0x1037a400`) filters each mover polygon
+  into the level BSP. It calls `0x1037c0c0` with (iSurf, iNode 0,
+  iCoplanarParent −1, poly, Outside 1).
+- **Coplanar test.** `FPoly::SplitWithPlane` (`0x10386ad0`) classifies the
+  vertices against ±0.25 (doubles at `0x1042d518`/`0x1042d528`). If every
+  vertex is within that band, the polygon is coplanar. When it also faces
+  the same way (`dot(normal, node normal) >= 0`, `0x1037c21e`), that node
+  becomes iCoplanarParent and filtering continues on the front side.
+- **Chain order.** `0x1037bb00` adds each surviving fragment. It walks the
+  coplanar parent's iPlane chain (`+0x28`) to its end (`0x1037bb5d`) and
+  links the new node there (`0x1037bf66`).
+- **Span claim.** OccludeBsp processes a node, then its iPlane chain in
+  order (`0x10b19a53`). At `0x10b182d9–0x10b18337`, some surfaces clip their
+  raster through `FSpanBuffer::CopyFromRasterUpdate` (`0x10b21a90`, by
+  export name), which also fills the zone's screen span buffer. These are
+  surfaces with no `flags & 0x47` bit, Invisible|Portal (`0x4000001`)
+  surfaces, and mirrored surfaces. Other non-occluding surfaces use
+  `CopyFromRaster` (`0x10b21df0`).
+- **No spans left.** A polygon with no spans left gets node flag 8 and is
+  skipped (`0x10b18376–0x10b1838b`). This happens before the mirror path, so
+  it creates no child frame.
+
+So the level polygon, earlier in the chain, claims its spans first, and a
+mover fragment appended to that chain gets none of those spans.
+
+An analysis replay of that filter for 00_Intro (doubles, not a translation)
+splits DeusExMover0's top face into 8 fragments. Each one is appended to the
+chain of a surface 7 floor node that covers it (5135, 5204, 5221 or 5236).
+The strip over the stairwell (Y −3056 to −3040) lands in solid and is
+dropped. At the placed position, the original therefore draws none of the
+mover face.
+
+**Browser.**
+
+- **Offset.** Every mover surface material sets `polygonOffset` (factor 1,
+  units 1). This moves its depth away from the eye just enough to lose a
+  depth tie, and changes no other winner.
+- **No sharing.** Mover materials get their own cache key (`:mover`), so a
+  static surface never shares the offset.
+- **Why not a stencil.** A stencil mask cannot express "lose only at equal
+  depth" without plane-specific IDs that change as movers move.
+- **Limits.** Ties between two mover polygons stay unresolved. At a
+  mover/static intersection line, the offset can move the line by about one
+  depth-slope step.
+
+**Scope.** At their placed positions, 164 mover polygons on the shipped maps
+(DXMP included) are filtered into a static coplanar chain whose polygons
+overlap them by bounding box. Four of them are mirrored: DeusExMover0 in
+00_Intro and in 99_Endgame1–3. They all get the same treatment.
+
+**Checks.**
+
+- **Intro, oblique view.** Eye `(-40,-3000,120)`, rotation
+  `(60000,16384,0)`, 1280×720. The bands are gone. With NPC meshes hidden,
+  the frame is pixel-identical to one with DeusExMover0 hidden.
+- **Intro, against the original capture.** The capture is
+  `ad/captures/original/intro-walkway-oblique.png`, with exponent 1/1.5
+  applied. Mean absolute RGB error in three floor regions inside the
+  mover's rectangle fell from 22.2, 30.9 and 20.4 to 9.9, 11.2 and 10.6 per
+  255. A floor region outside it stays at 7.96.
+- **Intro, top view.** Eye `(-40,-2740,250)`, rotation `(51536,16384,0)`.
+  The red rectangle the mover drew is gone, as in `intro-walkway-top.png`.
+- **Training.** The entrance view is pixel-identical before and after. The
+  Training spec gives 2.04/255 for the floor and 3.87/255 for the emblem.
+- **Validators.** `validate-mirrors.mjs`, `validate-mirrors-play.mjs` and
+  `npm test` (595) pass.
+
+**Open.**
+
+- **Mover light-map zone.** The browser lights a mover from
+  `pointZone(brush centre)`, zone 0 for DeusExMover0. The tracker gives a
+  fragment node its parent's iZone (`0x1037bcf4–0x1037bd32`). Which zone
+  SetupForSurf takes the ambient from is not traced. It matters once the
+  panel slides over the stairwell, where it draws its own composite.
+- **Extra child pass.** The browser still renders a child for the hidden
+  mover group. It tests the frustum, not span visibility, so this view takes
+  2 child passes where the original creates 1. This is the span-visibility
+  gap noted under "Scope and unresolved branches".
+- **Child merging.** CreateChildFrame (`0x10b15a40–0x10b15ae9`) reuses a
+  child only when all of these equal its arguments: Level (`+4`), Parent
+  (`+8`), iSurf (`+0x14`), ZoneNumber (`+0x18`) and the four NearClip
+  floats (`+0x24`), per the SDK's FSceneNode. So it merges one surface's
+  polygons within a zone, not different surfaces on one plane. The
+  browser's per-plane groups are coarser. The image is the same, because a
+  child depends only on its plane, but the original may draw more child
+  frames than the browser. A mover polygon, being its own surface, would
+  never share the floor's child.
+- **Shadow blobs.** The original shows soft shadow blobs under pawns. These
+  are Shadow decals attached through AttachDecal. The runtime attaches them
+  (`runtime/script-decal.mjs`), but the viewer has no decal draw pass.

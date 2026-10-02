@@ -121,7 +121,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     return defaultTexture;
   }
 
-  async function materialFor(surface, tile, mirror, pan = null) {
+  async function materialFor(surface, tile, mirror, pan = null, mover = false) {
     let flags = surface.flags;
     const source = await surfaceTexture(surface);
     const decoded = await textures.get(source.asset, source.ref, Boolean(flags & POLY.Masked));
@@ -129,7 +129,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(source.asset, source.ref, true) : decoded;
     if (data.procedural && !data.fire && !data.wet) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
-    const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}`;
+    const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}${mover ? ':mover' : ''}`;
     if (!materials.has(key)) {
       // A panned material owns its texture objects (shared image data), whose
       // offset carries the pan.
@@ -155,6 +155,16 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       } else if (flags & POLY.Modulated) {
         material.transparent = true; material.depthWrite = false; material.blending = THREE.CustomBlending;
         material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
+      }
+      if (mover) {
+        // The brush tracker appends a mover polygon coplanar with a level
+        // node to the end of that node's coplanar chain (Engine 0x1037bb5d,
+        // linked at 0x1037bf66), and OccludeBsp walks a chain in order
+        // (Render 0x10b19a53), so the level polygons claim their spans
+        // first: a mover polygon loses every coplanar tie. Offsetting its
+        // depth away from the eye changes the winner only at equal depth.
+        // See mirror-surfaces.md, "Coplanar mover polygons".
+        material.polygonOffset = true; material.polygonOffsetFactor = 1; material.polygonOffsetUnits = 1;
       }
       material.userData = { key: data.key, flags, width: data.mips[0].width, height: data.mips[0].height, mipCount: data.mips.length,
         animated: Boolean(fire) };
@@ -215,7 +225,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
         const mirror = mirrors.surface(model, surfaceIndex, actorName);
-        const { material, flags, key } = await materialFor(surface, tile, mirror, pan);
+        const { material, flags, key } = await materialFor(surface, tile, mirror, pan, Boolean(actorName));
         if (flags & POLY.Invisible) continue;
         const lit = tile.enabled && !(flags & (POLY.Unlit | POLY.Modulated));
         lighting.stats[lit ? 'litSurfaces' : 'unlitSurfaces']++;

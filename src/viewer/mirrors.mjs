@@ -42,8 +42,9 @@ export const mirrorDrawFlags = flags => ((flags & 0x47 ? flags : flags | POLY.In
 export const MIRROR_RECURSION_LIMIT = 3;
 
 /** Mirrored BSP surfaces of any orientation: static ones grouped by their
- * exact node plane (CreateChildFrame 0x10b15a40 merges child frames whose
- * clip planes are equal), a mover's per polygon following the brush.
+ * exact node plane (CreateChildFrame 0x10b15a40 merges child frames only
+ * for the same surface, zone and exact clip plane; one child per plane gives
+ * the same image), a mover's per polygon following the brush.
  * Translucent mirrors composite S+R(1-S); opaque ones show the reflection
  * alone (mirrorDrawFlags). A mirror seen in a child view has its own child,
  * to MIRROR_RECURSION_LIMIT. Masked, modulated and two-sided mirrors remain
