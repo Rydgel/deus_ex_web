@@ -240,7 +240,9 @@ export async function createLighting(map, asset, assets) {
   }
 
   return {
-    stats, notes,
+    stats, notes, hsv, levelBrightness,
+    /** The light map's texel grid as SetupForSurf sees it (fog maps share it). */
+    gridFor(result) { return geometry(result).grid; },
     async prepare(model) { await Promise.all([...new Set(model.lights.filter(Boolean))].map(actor)); },
     updateActor,
     /** `apply(result, contributions)` adds moving-light texels onto the static copy. */

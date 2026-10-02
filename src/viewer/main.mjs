@@ -874,6 +874,16 @@ function animate(time) {
       new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum });
     world.flushLighting(renderer);
+    // Volumetric fog maps from this frame's eye and view rotation
+    // (docs/volumetric-fog.md). Mirror views reuse the main frame's maps.
+    if (world.fog?.stats.surfaces && !runtimeError) {
+      const toUnits = radians => Math.round(radians * 32768 / Math.PI);
+      const fogView = playerView ?? { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] };
+      try {
+        world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
+          new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)));
+      } catch (error) { pauseForRuntimeError(error); }
+    }
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
     phase('mirrors');

@@ -521,6 +521,14 @@ Play ([particles](particles.md)):
 
 Street steam now rises from the vents. SpriteAnimOnce frames remain.
 
+**Volumetric fog (2026-10-02).** Render.dll's fog maps are translated:
+ComputeFromActor's volumetric constants and SetupForSurf's fog loop are
+oracle-exact over 10,687 texels, and the loop runs in the Rust core. Play
+draws the D3D PF_Highlighted pass (ONE/INVSRCALPHA) on fog-zone surfaces
+each frame; 02_NYC_Bar's smoke haze renders. Mesh and mover fog, animated
+volumetric brightness and the upload scale's evidence remain. See
+[volumetric fog](volumetric-fog.md).
+
 **Laser beams (2026-10-02).** LaserTrigger and BeamTrigger beams draw through
 the original LaserIterator: CurrentItem is translated on the x87 model and
 matches the original over 5,348 items, random beams included. DX's

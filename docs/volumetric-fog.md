@@ -2,9 +2,8 @@
 
 Stage 4, 2026-10-02. Volumetric lights fill fog zones with lit haze. The
 single-player maps have 104 lights with `VolumeRadius > 0` and 67 `bFogZone`
-zones, each in 29 maps. Play does not draw them yet. This note records the
-original path as it is recovered. The fog-map computation is translated and
-oracle-exact; the wiring into Play is still open.
+zones, each in 29 maps. This note records the original path. The fog-map
+computation is translated and oracle-exact, and Play draws it (see "Play").
 
 Authority:
 - Render.dll `607f1077…d75d1`;
@@ -120,7 +119,44 @@ the exact 80-bit `Ext` model.
 - **Memory.** Its statics (a 64K-texel output buffer) raise the kernel's
   `__heap_base` to `0x1931d0`, within the 2 MB object-arena reserve.
 
+## Play
+
+`src/viewer/fog-pass.mjs` (`world.fog`) draws the fog maps.
+
+- **Surfaces.** At world build it collects every light-mapped level surface
+  in a `bFogZone` zone, with its light-map record, atlas tile, triangles,
+  light UVs and bounds. It also collects every actor with `VolumeRadius > 0`,
+  with its colour from `movingLightConstants` and its steady
+  LightBrightness/255.
+- **Frame coords.** Each frame, main.mjs passes the view's eye and rotation.
+  The frame coords are ViewCoords under the view rotation: `getAxes`' Y, −Z
+  and X. getAxes computes `UnitCoords / Rotation`, and ViewCoords permutes
+  and negates that basis, so the axes are exact.
+- **Per frame.** For each fog surface in the view frustum, every volumetric
+  light's constants are rebuilt (`volumetricLight`) and the Rust loop
+  (`fogMapKernel`) fills the fog map. Its BGRA texels go into a fog atlas
+  whose pages mirror the light atlas tiles, padding included.
+- **Pass.** The pass draws each surface again with blending `ONE` /
+  `ONE_MINUS_SRC_ALPHA`, Z writes and `LessEqual`. It samples the fog atlas
+  at the light UVs, doubling the seven-bit channels as the light-map shader
+  does.
+- **Check.** `validate-volumetric-fog-play.mjs` stands in 02_NYC_Bar's
+  Light90 volume. 919 fog-zone surfaces are collected, 264 in view get fog
+  maps (29,668 texels) through the Rust loop, and the frame changes with the
+  pass. The haze takes the light's blue and thickens with distance.
+
 Unverified or host choices, noted:
+- **Upload scale.** The seven-bit upload scale (×2) follows the light maps;
+  D3D's upload of the fog map's format is not yet traced.
+- **Light linking.** Every volumetric light is linked to every fog surface.
+  The original's culls drop only lights that add nothing, but the early-out
+  flag then sees a different sequence.
+- **Brightness and colour.** Volumetric lights use their steady brightness
+  and colour; GlobalLighting's LightType animation is not applied to them.
+- **Not fogged.** Mover surfaces and meshes get no fog. Mirror child views
+  reuse the main frame's fog maps instead of their own frames'.
+- **Gamma.** The display gamma ramp applies per fragment of the pass,
+  before blending, as for other blended passes.
 - **Early-out and index rounding.** The quick early-out test and the later
   lights' float-stored index scale are translated from the listing. Over
   these cases they give the same results as their alternatives, so the
@@ -130,7 +166,5 @@ Unverified or host choices, noted:
 - **Draw order.** The early-out flag persists across surfaces in the
   original draw order. Play's surface order differs, which can change
   boundary texels.
-- **Not done yet.**
-  - the fog pass in Play (surfaces of fog zones, the frame's coords, per-frame
-    maps), with the 7-bit upload scale to confirm;
-  - fog on meshes (DrawMesh's Volumetrics argument).
+- **Not done yet.** Fog on meshes (DrawMesh's Volumetrics argument) and on
+  movers.

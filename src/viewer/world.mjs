@@ -14,6 +14,8 @@ import { ClassDefaults } from '../unreal/classes.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
 import { createLightFrame } from '../runtime/static-lighting.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
+import { createFogPass } from './fog-pass.mjs';
+import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
@@ -24,6 +26,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
   const mirrors = createMirrors(notes, displayGamma);
+  // Volumetric fog maps (docs/volumetric-fog.md); the per-texel loop runs in
+  // the Rust core when its kernel loads.
+  let fogKernel = null;
+  try { fogKernel = await loadScriptVmKernel(); } catch { fogKernel = null; }
+  const fog = createFogPass({ lightAtlas, levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, displayGamma, notes, kernel: fogKernel });
   const counts = { triangles: 0, degenerate: 0, corrected: 0, movers: 0, surfaces: 0 };
   const flagProperties = { bInvisible: 1, bMasked: 2, bTranslucent: 4, bTwoSided: 256,
     bNoSmooth: 2048, bUnlit: POLY.Unlit, bModulated: POLY.Modulated };
@@ -90,7 +97,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const ref = map.model.zones?.[zone]?.actor;
     const actor = (ref > 0 && map.actors.find(candidate => candidate.index === ref)) || levelInfoActor;
     const values = actor ? await classDefaults.forActor(asset, actor) : {};
-    const record = { name: actor?.name ?? null, speeds: [Math.fround(values.TexUPanSpeed ?? 0), Math.fround(values.TexVPanSpeed ?? 0)] };
+    // ZoneInfo +0x388 bit 1 (bFogZone) gates SetupForSurf's fog map.
+    const record = { name: actor?.name ?? null, speeds: [Math.fround(values.TexUPanSpeed ?? 0), Math.fround(values.TexVPanSpeed ?? 0)],
+      fog: Boolean(values.bFogZone) };
     zoneActors.set(zone, record);
     return record;
   }
@@ -211,6 +220,15 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         }
         for (let i = 0; i < g.positions.length / 9; i++) batch.faces.push(surfaceIndex);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
+        if (!actorName && lightmap && lit && (await zoneActor(zone)).fog) {
+          const fogUV = [], fogBounds = [];
+          for (let i = 0; i < g.positions.length; i += 3) {
+            fogUV.push(...lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))));
+            fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
+          }
+          lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds);
+        }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
       }
@@ -236,6 +254,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   }
 
   await addModel(map.model, map.triangles, root);
+  for (const actor of map.actors) {
+    if (!(actor.values.VolumeRadius > 0)) continue;
+    fog.addLight(await classDefaults.forActor(asset, actor));
+  }
+  if (fog.stats.surfaces && fog.stats.lights) {
+    root.add(fog.root);
+    notes.add(`${fog.stats.surfaces} fog-zone surfaces draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; mover surfaces and meshes get no fog.`);
+  }
   for (const actor of map.actors.filter(a => /Mover$/.test(a.className) && a.values.Brush > 0)) {
     try {
       const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush);
@@ -273,7 +299,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
     return { ...update, uploaded: update.lightmaps.length };
   }
-  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, submissionBatches, notes: [...notes], errors, sky,
+  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky,
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
@@ -367,7 +393,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); },
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); },
   };
   return world;
 }
