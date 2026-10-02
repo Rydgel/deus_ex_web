@@ -202,6 +202,17 @@ Unverified or host choices, noted:
   Fog (Core's `operator|` and SizeSquared bound natively) for 12 vertices per
   case after the surface loop, carrying the same early-out flag. All 1,440
   vertex FPlanes (1,033 fogged) and the final flag match.
-- **Still to trace.** DrawLodMesh's call sites (Render calls the Fog slot
-  twice) and D3D's use of the vertex fog under PF_RenderFog, before meshes
-  can be fogged in Play.
+- **D3D** (`UD3DRenderDevice::DrawGouraudPolygon`, `0x100056b0`).
+  - **Gate.** Fog is used when the device field `+0x9d0` is set and
+    `(PolyFlags & 0x40000044) == 0x40000000` (PF_RenderFog, neither
+    translucent nor modulated).
+  - **Specular.** Each vertex's specular is `0xFF` alpha over
+    `fistp(Fog.RGB·K)` from FTransSample `+0x40…+0x48`, so the fog colour is
+    added.
+  - **Diffuse.** The diffuse is `fistp(Light.RGB·scale·K)` (+0x30…+0x38,
+    device scale +0xaa4…) with alpha byte 0x78. Without fog the specular is
+    0 and the alpha 0xff.
+  - **Fog alpha.** Fog.W is not read there.
+- **Still to trace.** DrawLodMesh's two Fog call sites, including where
+  `(1 − Fog.W)` attenuates the lit colour; K at `0x100186a8`; and the
+  `+0x9d0` field. These come before meshes can be fogged in Play.
