@@ -16,7 +16,7 @@ export class ActorMeshTextures {
   }
   acquire(data,flags) {
     if(this.disposed)throw new Error('Actor mesh texture pool is disposed');
-    if(data.procedural==='FireTexture')return this.procedural.acquire(data);
+    if(data.procedural==='FireTexture'||data.procedural==='WetTexture')return this.procedural.acquire(data);
     if(data.procedural||data.values.AnimNext)throw new Error('Animated/procedural mesh skin is unsupported');
     // Blend/side/environment flags live on each actor's material or UVs and
     // do not change these immutable texels and sampler settings.

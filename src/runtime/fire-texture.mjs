@@ -798,3 +798,84 @@ export function waterRedrawDrops(water, globals) {
     }
   }
 }
+
+/** UWaterTexture's constructor (0x10508540), after UFractalTexture's
+ * (0x10507520, phases 0): WaveTable[i] = clamp((i >> 1) - 0x100 + (i < 0x300),
+ * 0, 255) over 1536 entries, OldWaveAmp -1 and WaveParity 0. These fields are
+ * transient, so a loaded texture keeps them (the loader constructs before
+ * Serialize). */
+export function waterConstruct(water) {
+  const waveTable = new Uint8Array(1536);
+  for (let i = 0; i < 1536; i++) waveTable[i] = Math.min(255, Math.max(0, (i >> 1) - 0x100 + (i < 0x300 ? 1 : 0)));
+  return Object.assign(water, {waveTable, oldWaveAmp: -1, waveParity: 0, globalPhase: 0, drawPhase: 0, auxPhase: 0});
+}
+
+/** UWaterTexture::PostLoad (0x10508790), after UTexture's: the masks, and
+ * when there is none, a SourceFields of USize·VSize/2 bytes of 0x80. */
+export function waterPostLoad(water) {
+  water.uMask = water.uSize - 1; water.vMask = water.vSize - 1;
+  water.fields ??= new Uint8Array(Math.trunc(water.uSize * water.vSize / 2)).fill(0x80);
+  return water;
+}
+
+/** UWetTexture::SetRefractionTable (0x10509910): RenderTable[i] =
+ * clamp(ftol((i - 511) · (WaveAmp · 1/512)), -128, 127) for i < 1024. The
+ * products are exact in any x87 precision. */
+export function setRefractionTable(wet) {
+  for (let i = 0; i < 1024; i++)
+    wet.renderTable[i] = Math.min(127, Math.max(-128, Math.trunc((i - 511) * (wet.waveAmp * 0.001953125)))) & 255;
+}
+
+/** UWetTexture::PostLoad (0x10509590). With a source (`wet.source`: uBits,
+ * vBits, palette, pixels; possibly `wet` itself): a source of the same bits
+ * frees LocalSourceBitmap (`wet.local`); a smaller one is replicated up into
+ * a new one, `local[y·USize + x] = src[((y >> dv) << srcUBits) + (x >> du)]`;
+ * a larger one is dropped. A new source lends its palette, and a changed
+ * WaveAmp rebuilds RenderTable. The source's Lock/Unlock before (it loads
+ * the source's lazy mips) changes no pixels. */
+export function wetPostLoad(wet) {
+  waterPostLoad(wet);
+  const source = wet.source;
+  if (!source) return wet;
+  if (source.uBits === wet.uBits && source.vBits === wet.vBits) wet.local = null;
+  else {
+    const du = wet.uBits - source.uBits, dv = wet.vBits - source.vBits;
+    if (du < 0 || dv < 0) wet.source = null;
+    else {
+      const local = new Uint8Array(wet.uSize * wet.vSize), src = source.pixels;
+      for (let y = 0; y < wet.vSize; y++)
+        for (let x = 0; x < wet.uSize; x++) local[y * wet.uSize + x] = src[((y >> dv) << source.uBits) + (x >> du)];
+      wet.local = local;
+    }
+  }
+  if (wet.source && wet.source !== wet.oldSource) wet.palette = wet.source.palette;
+  wet.oldSource = wet.source;
+  if (wet.waveAmp !== wet.oldWaveAmp) setRefractionTable(wet);
+  wet.oldWaveAmp = wet.waveAmp;
+  return wet;
+}
+
+/** UWetTexture::ApplyWetTexture (0x10505a10): each mip-0 byte, a refraction
+ * offset written by CalculateWater, becomes the source pixel that far along
+ * its row, `dst[x] = src[(dst[x] + x) & (USize - 1)]` in byte arithmetic,
+ * rows at `y << UBits` in both. In place, two pixels per step (its byte
+ * counter would not end a row wider than 256; none is). */
+export function applyWetTexture(wet) {
+  if (!wet.source) return;
+  const dst = wet.pixels, src = wet.local ?? wet.source.pixels, mask = (wet.uSize - 1) & 255;
+  for (let y = 0; y < wet.vSize; y++) {
+    const row = y << wet.uBits;
+    for (let x = 0; x < wet.uSize; x++) dst[row + x] = src[row + (((dst[row + x] + x) & 255) & mask)];
+  }
+}
+
+/** UWetTexture::ConstantTimeTick (0x10509840): with a source and at least
+ * 8×8, Lock and Unlock the source at LastUpdateTime (Engine's UTexture::Lock
+ * 0x103ecc90 runs its Update; a static source has nothing to update), then
+ * WaterRedrawDrops, CalculateWater and ApplyWetTexture. */
+export function wetConstantTimeTick(wet, globals) {
+  if (!wet.source || wet.uSize < 8 || wet.vSize < 8) return;
+  waterRedrawDrops(wet, globals);
+  calculateWater(wet);
+  applyWetTexture(wet);
+}

@@ -383,9 +383,9 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       try {
         let flags=group.flags;
         let data=await textures.get(group.reference.asset,group.reference.index,Boolean(flags&POLY.Masked));
-        // A FireTexture skin is live (procedural-textures.mjs); other
-        // animated/procedural skins stay unsupported.
-        if(data.procedural!=='FireTexture'&&(data.procedural||data.values.AnimNext))
+        // A FireTexture or WetTexture skin is live (procedural-textures.mjs);
+        // other animated/procedural skins stay unsupported.
+        if(data.procedural!=='FireTexture'&&data.procedural!=='WetTexture'&&(data.procedural||data.values.AnimNext))
           throw new Error('Animated/procedural mesh skin is unsupported');
         for(const [name,flag] of Object.entries({bMasked:POLY.Masked,bTranslucent:POLY.Translucent,
           bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))

@@ -2,7 +2,9 @@
 // procedural mesh skins (laser spots and beams, the nano and biocell glows,
 // barrel flames) are live textures, no mesh face group is skipped, and each
 // fire advances its GlobalPhase and pixels between frames through the
-// translated Fire.dll tick (validate-native-fire-texture).
+// translated Fire.dll tick (validate-native-fire-texture). The BSP's
+// WetTexture water (drtywater_a on Island and in Training) is live the same
+// way.
 //
 //   node scripts/validate-fire-texture-play.mjs [--map 01_NYC_UNATCOIsland] [--url http://...]
 import assert from 'node:assert/strict';
@@ -48,7 +50,7 @@ try {
     for (let k = 0; k < 10; k++) await frames();
     const after = npc.proceduralTextures();
     return {before, after, skipped: npc.summary.skipped.map(s => `${s.actor} ${s.texture}: ${s.message}`),
-      worldErrors: window.__deusFire.world.errors.map(e => JSON.stringify(e)).filter(e => /Texture size|FireTexture/.test(e)),
+      worldErrors: window.__deusFire.world.errors.map(e => JSON.stringify(e)).filter(e => /Texture size|FireTexture|WetTexture/.test(e)),
       worldFires: [...window.__deusFire.world.materials.values()].filter(m => m.userData.animated && m.map?.isDataTexture && !m.map.mipmaps?.length).length,
       runtimeError: window.deusExViewer.status().runtimeError ?? null};
   });
@@ -60,6 +62,8 @@ assert.equal(report.runtimeError, null);
 assert.deepEqual(report.skipped, [], 'no mesh face group is skipped');
 assert.deepEqual(report.worldErrors, [], 'no BSP surface fails on a fire texture');
 assert.ok(report.after.length > 0, `${map} has fire skins`);
+if (['01_NYC_UNATCOIsland', '00_Training', '00_TrainingFinal'].includes(map))
+  assert.ok(report.after.some(entry => entry.kind === 'WetTexture' && /drtywater_a/i.test(entry.key)), `${map}'s drtywater_a is live`);
 for (const fire of report.after) {
   const earlier = report.before.find(entry => entry.key === fire.key);
   assert.ok(earlier, `${fire.key} was live before`);

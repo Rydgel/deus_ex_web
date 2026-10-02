@@ -10,7 +10,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater, waterRedrawDrops} from '../src/runtime/fire-texture.mjs';
+import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater, waterRedrawDrops,
+  waterConstruct, wetPostLoad, wetConstantTimeTick, setRefractionTable} from '../src/runtime/fire-texture.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -134,6 +135,48 @@ for (const type of DROP_TYPES)
         field: hex(bytes(hw * hh * 2))});
       cases.push(c);
     }
+// UWaterTexture's constructor, UWetTexture's PostLoad and ConstantTimeTick.
+cases.push({name: 'water construct', entry: 'construct'});
+const wetSource = (w, h, palette = 0x5150) => ({size: [w, h], palette, pixels: hex(bytes(w * h))});
+for (const [w, h] of [[32, 64], [64, 64], [128, 128], [256, 256], [8, 16]]) {
+  const base = {entry: 'wetPostLoad', size: [w, h], palette: 0x7770, waveAmp: 1 + random() % 255};
+  const variants = {
+    'same size': {source: wetSource(w, h)},
+    'smaller source': {source: wetSource(Math.max(1, w >> 1), Math.max(1, h >> 2))},
+    'narrower source': {source: wetSource(Math.max(1, w >> 3), h)},
+    'larger source': {source: wetSource(w * 2, h), local: hex(bytes(w * h))},
+    'no source': {field: hex(bytes(w * h / 2)), oldWaveAmp: 7},
+    'self source': {sourceSelf: true},
+    'kept tables': {source: wetSource(w, h), field: hex(bytes(w * h / 2)), renderTable: hex(bytes(1028)), oldSourceSame: true},
+    'local freed': {source: wetSource(w, h), local: hex(bytes(w * h))},
+    'local rebuilt': {source: wetSource(w >> 1, h >> 1), local: hex(bytes(w * h))},
+  };
+  for (const [label, extra] of Object.entries(variants)) {
+    const c = {name: `wet postLoad ${label} ${w}x${h}`, ...base, ...extra};
+    if (label === 'kept tables') c.oldWaveAmp = c.waveAmp;
+    cases.push(c);
+  }
+}
+const waveTable = hex(waterConstruct({}).waveTable);
+for (const [w, h] of [[32, 64], [64, 64], [128, 128], [256, 256], [4, 64]])
+  for (const [label, extra] of Object.entries({
+    'game drops': {dropTypes: [16, 2, 6, 1, 12]}, 'mixed drops': {dropTypes: [...Array(20).keys(), 64, 65]},
+    'smaller source': {dropTypes: [2, 6], small: true}, 'no source': {dropTypes: [1], noSource: true}})) {
+    const hw = w >> 1, hh = h >> 1, count = 1 + random() % 40, drops = bytes(2048);
+    for (let k = 0; k < count; k++) {
+      drops[k * 8] = extra.dropTypes[random() % extra.dropTypes.length]; drops[k * 8 + 2] = random() % hw; drops[k * 8 + 3] = random() % hh;
+    }
+    const wet = {waveAmp: 1 + random() % 255, renderTable: new Uint8Array(1028)};
+    setRefractionTable(wet);
+    const c = makeCase(`wet tick ${label} ${w}x${h}`, {uBits: 5, vBits: 5});
+    const sw = extra.small ? w >> 1 : w, sh = extra.small ? h >> 1 : h;
+    Object.assign(c, {entry: 'wetTick', size: [w, h], ticks: 6, palette: 0x7770, waveAmp: wet.waveAmp,
+      renderTable: random() & 1 ? hex(wet.renderTable) : hex(bytes(1028)), waveTable, parity: random() & 255,
+      globalPhase: random() & 0xffff, numDrops: count, drops: hex(drops), field: hex(bytes(hw * h)),
+      pixels: hex(bytes(w * h)), time: (random() % 100000) / 64, source: extra.noSource ? null : wetSource(sw, sh)});
+    if (extra.small) c.local = hex(bytes(w * h));
+    cases.push(c);
+  }
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
 // --redraw: RedrawSparks alone (0x105025b0), without the fire update.
 const redrawOnly = process.argv.includes('--redraw');
@@ -156,6 +199,68 @@ selected.forEach((c, i) => {
       assert.equal(hex(new Uint8Array(tables.random.buffer)), expected.random, `${c.name}: random`);
       assert.equal(tables.randomIndex, expected.randomIndex, `${c.name}: random index`);
       assert.equal(expected.left, 0, 'all 512 appRand values used');
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
+  if (c.entry === 'construct') {
+    const expected = native.results[i], water = waterConstruct({});
+    try {
+      assert.equal(hex(water.waveTable), expected.waveTable, 'WaveTable');
+      assert.equal(water.oldWaveAmp, expected.oldWaveAmp, 'OldWaveAmp');
+      assert.equal(water.waveParity, expected.waveParity, 'WaveParity');
+      assert.deepEqual([water.globalPhase, water.drawPhase, water.auxPhase], expected.phases, 'phases');
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
+  if (c.entry === 'wetPostLoad' || c.entry === 'wetTick') {
+    const [w, h] = c.size, given = c.local == null ? null : unhex(c.local);
+    const source = c.source && {uBits: Math.log2(c.source.size[0]), vBits: Math.log2(c.source.size[1]),
+      palette: c.source.palette, pixels: unhex(c.source.pixels)};
+    const wet = {uBits: Math.log2(w), vBits: Math.log2(h), uSize: w, vSize: h, palette: c.palette, waveAmp: c.waveAmp,
+      oldWaveAmp: c.oldWaveAmp ?? -1, renderTable: unhex(c.renderTable ?? '00'.repeat(1028)),
+      waveTable: unhex(c.waveTable ?? '00'.repeat(1536)), waveParity: c.parity ?? 0, globalPhase: c.globalPhase ?? 0,
+      numDrops: c.numDrops ?? 0, drops: unhex(c.drops ?? '00'.repeat(2048)), fields: c.field == null ? undefined : unhex(c.field),
+      pixels: unhex(c.pixels ?? '00'.repeat(w * h)), local: given};
+    wet.source = c.sourceSelf ? wet : source ?? null;
+    wet.oldSource = c.oldSourceSame ? wet.source : null;
+    if (c.entry === 'wetTick') { wet.uMask = w - 1; wet.vMask = h - 1; }
+    const name = value => value == null ? null : value === wet ? 'self' : value === source ? 'source' : 'other';
+    const lockCalls = () => wet.source && wet.source !== wet && wet.uSize >= 8 && wet.vSize >= 8
+      ? [['lock', 'source', c.time ?? 0, 0, 0], ['unlock', 'source']] : [];
+    const check = (expected, where) => {
+      if (c.entry === 'wetPostLoad') {
+        assert.deepEqual([wet.uMask, wet.vMask], expected.masks, `${where}: masks`);
+        assert.equal(wet.palette, expected.palette, `${where}: palette`);
+        assert.equal(hex(wet.renderTable), expected.renderTable, `${where}: RenderTable`);
+        assert.equal(wet.oldWaveAmp, expected.oldWaveAmp, `${where}: OldWaveAmp`);
+        assert.equal(name(wet.oldSource), expected.oldSource, `${where}: OldSourceTex`);
+        assert.equal(wet.local == null ? null : wet.local === given ? 'kept' : hex(wet.local), expected.local, `${where}: LocalSourceBitmap`);
+      }
+      assert.equal(name(wet.source), expected.source, `${where}: SourceTexture`);
+      assert.equal(wet.fields ? hex(wet.fields) : null, expected.field, `${where}: SourceFields`);
+      assert.equal(hex(wet.pixels), expected.pixels, `${where}: pixels`);
+      assert.equal(wet.globalPhase, expected.globalPhase, `${where}: GlobalPhase`);
+      assert.equal(wet.waveParity, expected.parity, `${where}: WaveParity`);
+      assert.equal(hex(wet.drops), expected.drops, `${where}: drops`);
+    };
+    try {
+      if (c.entry === 'wetPostLoad') {
+        wetPostLoad(wet);
+        const expected = native.results[i];
+        check(expected, c.name);
+        const calls = expected.calls.filter(([k]) => k === 'lock' || k === 'unlock');
+        assert.deepEqual(calls, c.source && !c.sourceSelf ? [['lock', 'source', 0, 0, 0], ['unlock', 'source']] : [], `${c.name}: Lock`);
+      } else {
+        const globals = {sine: unhex(c.sine), random: new DataView(unhex(c.random).buffer), randomIndex: c.randomIndex};
+        native.results[i].steps.forEach((expected, step) => {
+          wetConstantTimeTick(wet, globals);
+          const where = `${c.name} tick ${step}`;
+          check(expected, where);
+          assert.equal(hex(new Uint8Array(globals.random.buffer, 0, 256)), expected.random, `${where}: random`);
+          assert.equal(globals.randomIndex, expected.randomIndex, `${where}: random index`);
+          assert.deepEqual(expected.calls, lockCalls(), `${where}: Lock`);
+        });
+      }
     } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
     return;
   }

@@ -99,15 +99,16 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
-    if (data.procedural && !data.fire) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
+    if (data.procedural && !data.fire && !data.wet) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
     const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}`;
     if (!materials.has(key)) {
       // A panned material owns its texture objects (shared image data), whose
       // offset carries the pan.
       const own = texture => pan ? Object.assign(texture.clone(), { needsUpdate: true }) : texture;
-      // A FireTexture surface draws the page's live fire (docs/fire-texture.md).
-      const fire = data.fire ? sharedProceduralTextures().acquire(data).texture : null;
+      // A FireTexture or WetTexture surface draws the page's live texture
+      // (docs/fire-texture.md).
+      const fire = data.fire || data.wet ? sharedProceduralTextures().acquire(data).texture : null;
       const material = new THREE.MeshBasicMaterial({ map: own(fire ?? gpuTexture(data, flags)),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });

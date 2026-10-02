@@ -47,8 +47,13 @@ UTexture::Serialize (Engine `0x103ed470`) empties a parametric texture's
 (`+0x84` bit 3) mips before reading and zero-fills `USize·VSize` bytes per mip
 after, so a fire starts black. UFireTexture::Serialize reads the sparks (a
 compact count of 8-byte records) after the mips and grows the array to the
-raw SparksLimit. PostLoad then sets UMask/VMask, rebuilds RenderTable when
-RenderHeat differs from OldRenderHeat (transient, so 0 at load):
+raw SparksLimit. The loader constructs the object before Serialize, so the
+transient fields hold the C++ constructors' values: UFractalTexture
+(`0x10507520`) zeroes the phases, UFireTexture (`0x10507840`) sets
+OldRenderHeat to -1 and StarStatus to 1. PostLoad then sets UMask/VMask,
+rebuilds RenderTable when RenderHeat differs from OldRenderHeat (always at
+load; three fires, Wepn_EMPG_SFX, SparkFX1 and Spark_Electric, keep the class
+default RenderHeat 0 and were black in Play before this was read):
 `trunc(clamp(i/4 + 1 - (255 - RenderHeat)/16, 0, 255))` for `i < 1024`
 (exact in doubles), and, only when the array is not already SparksLimit
 long, clamps the limit to 4..8192, drops temporaries from the top while
@@ -170,14 +175,65 @@ The case generator draws from its LCG's top bits: its low bits cycle, which
 had kept RainDrops' one-in-16 gate (and every random-gated fire branch)
 from being reached with useful variety; all 1112 cases pass on the new draws.
 
+## Wet textures
+
+DX has two Fire.dll water classes in use, both in Effects: eight WetTextures
+(drtywater_a and bluewater_a, named by 47 map files (40 and 11), the tear and poison gas
+clouds, DrunkFX, DrunkBoy, Xplsn_EMPG, WavyBlade) and one WaveTexture
+(waterfntn_a, not translated). Layout (SDK `FractalPrivate.h`, retail
+offsets): DropType `+0xd8`, WaveAmp `+0xd9`, FX bytes `+0xda`-`+0xe1`,
+NumDrops `+0xe4`, Drops `+0xe8`, SourceFields `+0x8e8`, RenderTable
+`+0x8ec`, WaveTable `+0xcf0`, WaveParity `+0x12f0`, OldWaveAmp `+0x12f4`,
+then UWetTexture's SourceTexture `+0x12f8`, OldSourceTex `+0x12fc` and
+LocalSourceBitmap `+0x1300` (class `0x1304` bytes).
+
+- **Construction.** The non-persistent fields keep the constructors'
+  values. UWaterTexture (`0x10508540`) fills WaveTable,
+  `clamp((i >> 1) - 0x100 + (i < 0x300), 0, 255)` for 1536 entries, and sets
+  OldWaveAmp -1 and WaveParity 0. UWetTexture (`0x10509410`) clears
+  OldSourceTex and LocalSourceBitmap.
+- **PostLoad.** UWaterTexture's (`0x10508790`) sets the masks and allocates a
+  SourceFields of `USize·VSize/2` bytes of 0x80. UWetTexture's (`0x10509590`)
+  then, given a source, locks and unlocks it (loading its lazy mips). A
+  source with the same bits is used directly. A smaller one is replicated up
+  into LocalSourceBitmap. A larger one is dropped. A new source lends its
+  palette. SetRefractionTable (`0x10509910`) runs when WaveAmp differs from
+  OldWaveAmp, so always at load:
+  `RenderTable[i] = clamp(ftol((i - 511)·WaveAmp/512), -128, 127)`. The
+  products are exact at any x87 precision.
+- **ConstantTimeTick** (`0x10509840`) needs a source and at least 8×8. It
+  locks the source at LastUpdateTime: Engine's UTexture::Lock (`0x103ecc90`)
+  runs the source's Update when the time is non-zero, which does nothing for
+  the game's eight sources, all static P8 textures of the wet texture's size
+  and palette. It then runs WaterRedrawDrops, CalculateWater and
+  ApplyWetTexture (`0x10505a10`). That last step turns each mip-0 refraction
+  offset into the source pixel that far along the row,
+  `dst[x] = src[(dst[x] + x) & (USize-1)]` in byte arithmetic. Its byte
+  counter could not finish a row wider than 256 pixels, and no wet texture
+  is that wide.
+
+`waterConstruct`, `waterPostLoad`, `setRefractionTable`, `wetPostLoad`,
+`applyWetTexture` and `wetConstantTimeTick` translate these. The oracle
+runs the constructor whole (UTexture's constructor as a leaf) and PostLoad
+whole (UTexture::PostLoad as a leaf, GMalloc a fake allocator, the source's
+Lock and Unlock recorded). It covers 45 PostLoad cases: same, smaller,
+narrower and larger sources, none, the texture itself, kept tables, and a
+LocalSourceBitmap freed or rebuilt. It also covers 20 ConstantTimeTick
+cases of six ticks: the game's drop types, all types, a smaller source and
+no source, at five sizes. All match the field, pixels, drops, phases, tables,
+palette, generator and the source's Lock calls.
+
 ## Play
 
 TextureStore reads a FireTexture's properties (DX names ActiveSparkNum
-`NumSparks`), palette and sparks instead of decoding pixels.
+`NumSparks`), palette and sparks instead of decoding pixels. For a
+WetTexture it reads the drops (ADrop structs, FDrop's 8 bytes in
+SerializeBin order) and its source's P8 mip 0 and palette.
 `src/viewer/procedural-textures.mjs` keeps one record per texture object:
-the load state (`firePostLoad`), a zeroed P8 buffer, UTexture's animation
+the load state (the constructors' fields, then `firePostLoad` or
+`wetPostLoad`), a zeroed P8 buffer, UTexture's animation
 fields with PostLoad's Accumulator 0 and LastUpdateTime, and a
-ConstantTimeTick that is UFireTexture's. UFireTexture inherits UTexture's
+ConstantTimeTick that is the class's. Both inherit UTexture's
 Tick, so `texture-animation.mjs` gates it: PrimeCount ticks at the first
 update (100 for the flames), and with no MaxFrameRate (none of the game's
 fires set one) one tick per drawn frame, so a fire runs at the frame rate as
@@ -195,9 +251,15 @@ shared generator), and the module tables take their appRand bytes from a
 host-seeded MSVCRT stream. Sprites (a ParticleGenerator's SmokePuff1, for
 one) are not drawn yet.
 
+Wet textures go through the same path: drtywater_a is live on Island's and
+Training's BSP water, and the gas clouds tick at their MaxFrameRate of 20. A
+masked use of a wet texture is refused, because it would need index 0 cut
+out of the one shared state's upload; none has been seen.
+
 `scripts/validate-fire-texture-play.mjs` loads UNATCO Island in headless
 Chromium: its six fire skins (LaserBeam1, LaserSpot1, Nano_SFX, BioCell_SFX,
 Flame_J, Nano_SFX_A) are live, no mesh face group is skipped any more (the
 NanoKey's, LaserTriggers', BarrelFires' and canister's were), and each fire's
 GlobalPhase and pixels advance between frames. With `--map 00_TrainingFinal`
-the BSP's BP_FX_03 is live too and no BSP surface fails on a fire.
+the BSP's BP_FX_03 is live too and no BSP surface fails on a fire. On
+Island and in Training it also requires drtywater_a live and ticking.

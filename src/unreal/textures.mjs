@@ -40,7 +40,7 @@ export function readTexture(asset, index) {
   return {
     name: object.entry.path, className: object.entry.className,
     format: object.values.Format ?? 0, palette: object.values.Palette ?? 0,
-    mips, compressedMips, values: object.values,
+    mips, compressedMips, values: object.values, properties: object.properties,
     nativeBytes: r.bytes.length - r.offset, native: r.bytes.subarray(r.offset),
   };
 }
@@ -103,6 +103,32 @@ export class TextureStore {
           if (count < 0 || at + count * 8 > native.length) throw new Error(`Invalid FireTexture sparks: ${object.key}`);
           return { ...texture, key: object.key, asset: object.asset, masked: false, procedural: 'FireTexture',
             fire: { sparks: native.slice(at, at + count * 8), palette: palette ? readPalette(palette.asset, palette.index) : null } };
+        }
+        if (texture.className === 'WetTexture') {
+          // Procedural (docs/fire-texture.md "Wet textures"): the drops are
+          // ADrop structs (FDrop's 8 bytes, SerializeBin order); the source
+          // is a P8 texture whose mip 0 indices the wet texture refracts.
+          const drops = new Uint8Array(2048);
+          for (const p of texture.properties) {
+            if (p.name !== 'Drops') continue;
+            if (p.struct !== 'ADrop' || p.data.length !== 8 || p.arrayIndex > 255) throw new Error(`Invalid WetTexture drop: ${object.key}`);
+            drops.set(p.data, p.arrayIndex * 8);
+          }
+          const paletteOf = async (asset, ref) => {
+            if (!ref) return null;
+            const p = await this.assets.resolve(asset, ref);
+            return readPalette(p.asset, p.index);
+          };
+          let source = null;
+          if (texture.values.SourceTexture) {
+            const s = await this.assets.resolve(object.asset, texture.values.SourceTexture);
+            const image = readTexture(s.asset, s.index);
+            if (image.format !== 0 || !image.mips[0]?.data.length) throw new Error(`WetTexture source is not a stored P8 image: ${s.key}`);
+            source = { key: s.key, uBits: Math.log2(image.mips[0].width), vBits: Math.log2(image.mips[0].height),
+              pixels: image.mips[0].data, palette: await paletteOf(s.asset, image.palette), values: image.values };
+          }
+          return { ...texture, key: object.key, asset: object.asset, masked, procedural: 'WetTexture',
+            wet: { drops, source, palette: await paletteOf(object.asset, texture.palette) } };
         }
         if (texture.values.SourceTexture && texture.mips.every(mip => mip.data.length === 0)) {
           const source = await this.get(object.asset, texture.values.SourceTexture, masked, [...ancestry, object.key]);
