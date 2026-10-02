@@ -19,6 +19,10 @@
 //! error return.
 use std::cell::RefCell;
 
+mod sequencer;
+mod x87;
+pub use sequencer::*;
+
 // glxLoadMusic results (GALAXY.H GLXERR_* numbering, as returned by the DLL).
 pub const OK: u32 = 0;
 pub const ALREADY_LOADED: u32 = 1; // 0x10618bfc
@@ -44,7 +48,14 @@ pub const HAZARD_SHORT_HEADER: u32 = 0x10; // fewer than 0x30 bytes for the disp
 pub const INFO_UNWRITTEN_SAMPLE_TAIL: u32 = 0x100;
 
 const SLACK: u32 = 0x400; // Update's FArray::Add(0x400) before the load (0x1060a702..0x1060a735)
-const MARK: u32 = 0xffff_ffff; // a set pointer field (allocation-independent)
+const MARK: u32 = 0xffff_ffff; // a set pointer field in the loader dump (allocation-independent)
+/// Address model: allocations get the addresses of the oracle's bump heap
+/// (scripts/native-galaxy-music-oracle.py: base 0x40000000, blocks rounded to
+/// 16 bytes (at least 16), realloc always moves, nothing reused, reset at each
+/// load). The original's MSVCRT addresses are unknowable; no code path
+/// depends on absolute values (docs/galaxy-music/sequencer.md), and replaying
+/// the oracle's makes the voice records and pattern pointers compare raw.
+pub(crate) const HEAP_BASE: u32 = 0x4000_0000;
 
 const INST: u32 = 0x5453_4e49;
 const SAMP: u32 = 0x504d_4153;
@@ -93,15 +104,20 @@ fn put32(b: &mut [u8], o: usize, v: u32) {
 
 /// `glxInstrument` (0x14a header) followed by `glxSample[Samples]` (0x48
 /// each), exactly as allocated; `data[n]` is sample n's Data allocation.
+/// Pointer fields hold model addresses (HEAP_BASE); `addr` is the record's.
 struct Instrument {
     bytes: Vec<u8>,
     data: Vec<Option<Vec<u8>>>,
+    addr: u32,
 }
 
-/// `glxPattern` with its single `glxTrack`; `events` is Track[0].Events.
+/// `glxPattern` with its single `glxTrack`; `events` is Track[0].Events
+/// (header +0x24 holds its model address, `events_addr`).
 struct Pattern {
     header: [u8; 0x28],
     events: Vec<u8>,
+    addr: u32,
+    events_addr: u32,
 }
 
 /// The memory stream 0x10618aa0/0x10618b10/0x10618bd0 over glxMemory{Data, Length, DataPos}.
@@ -209,15 +225,15 @@ pub struct Library {
     player_mode: u8,       // 0x10697ce8
     min_period: u16,       // 0x106886a6
     max_period: u16,       // 0x10698180
-    r10698208: u32,        // reset scalars, named by address until the player names them
-    r10697ce6: u16,
-    r10698141: u8,
-    r10697ca8: u8,
+    pattern: u32,          // 0x10698208 current pattern (model address, 0 = none)
+    tick_in_row: u16,      // 0x10697ce6
+    row: u8,               // 0x10698141 (0xff before the first row)
+    break_flag: u8,        // 0x10697ca8
     tempo: u16,            // 0x10698188
     speed: u16,            // 0x10698342
     order_position: u8,    // 0x10698201
-    r10698140: u8,
-    r10698200: u8,
+    skip_rows: u8,         // 0x10698140 (rows to skip + 1)
+    loop_flag: u8,         // 0x10698200
     first_music_voice: u8, // 0x1068828d = EffectsChannels
     song_name: [u8; 32],   // 0x106981e0
     orders: [u8; 256],     // 0x10698220
@@ -230,6 +246,9 @@ pub struct Library {
     alloc_log: Vec<(u8, u32)>,
     stream_log: Vec<(u8, u32, u32, u32)>,
     mutant: u32,
+    heap_top: u32,
+    /// The module player and mixer front end (sequencer.rs).
+    player: sequencer::Player,
 }
 
 impl Library {
@@ -263,15 +282,15 @@ impl Library {
             player_mode: 0,
             min_period: 0,
             max_period: 0x7800,
-            r10698208: 0,
-            r10697ce6: 0,
-            r10698141: 0xff,
-            r10697ca8: 0,
+            pattern: 0,
+            tick_in_row: 0,
+            row: 0xff,
+            break_flag: 0,
             tempo: 0x78,
             speed: 0x30,
             order_position: 0xff,
-            r10698140: 1,
-            r10698200: 1,
+            skip_rows: 1,
+            loop_flag: 1,
             first_music_voice: 8,
             song_name: [0; 32],
             orders: [0; 256],
@@ -284,6 +303,8 @@ impl Library {
             alloc_log: Vec::new(),
             stream_log: Vec::new(),
             mutant: 0,
+            heap_top: HEAP_BASE,
+            player: sequencer::Player::new(),
         };
         library.set_sample_channels(effects_channels as u32);
         library
@@ -305,11 +326,20 @@ impl Library {
         self.mutant == id
     }
 
-    fn malloc(&mut self, size: u32) {
-        self.alloc_log.push((1, size));
+    /// The bump heap of the address model; logs like the oracle's MSVCRT stubs.
+    fn bump(&mut self, size: u32) -> u32 {
+        let ptr = self.heap_top;
+        let rounded = (size.wrapping_add(15) & !15).max(16);
+        self.heap_top = self.heap_top.wrapping_add(rounded);
+        ptr
     }
-    fn realloc(&mut self, size: u32) {
+    fn malloc(&mut self, size: u32) -> u32 {
+        self.alloc_log.push((1, size));
+        self.bump(size)
+    }
+    fn realloc(&mut self, size: u32) -> u32 {
         self.alloc_log.push((2, size));
+        self.bump(size)
     }
     fn free(&mut self, size: u32) {
         self.alloc_log.push((3, size));
@@ -334,19 +364,19 @@ impl Library {
             put16(v, 0x14, 0x4000);
             v[0xc] = 0xbc;
         }
-        self.r10698208 = 0;
-        self.r10697ce6 = 0;
-        self.r10698141 = 0xff;
-        self.r10697ca8 = 0;
+        self.pattern = 0;
+        self.tick_in_row = 0;
+        self.row = 0xff;
+        self.break_flag = 0;
         self.tempo = 0x78;
         self.speed = 0x30;
         self.order_position = 0xff;
-        self.r10698140 = 1;
+        self.skip_rows = 1;
         self.song_length = 0;
         self.music_master = 0x7f;
         self.initial_speed = 0x30;
         self.initial_tempo = 0x78;
-        self.r10698200 = 1;
+        self.loop_flag = 1;
         self.player_mode = 0;
         self.min_period = 0;
         self.max_period = 0x7800;
@@ -365,6 +395,7 @@ impl Library {
         if reset == MUSIC_PLAYING {
             return reset;
         }
+        self.heap_top = HEAP_BASE; // the oracle's heap is empty before every load
         let mut s = Stream {
             data: input,
             length: module.wrapping_add(SLACK),
@@ -392,6 +423,7 @@ impl Library {
         };
         self.hazards |= s.hazards;
         self.stream_log.extend_from_slice(&s.log);
+        self.rebuild_regions();
         result
     }
 
@@ -464,13 +496,13 @@ impl Library {
                 let off = base.wrapping_add(get32(&self.scratch, INSOFF + 4 * i));
                 s.seek(off, 0);
                 s.read(&mut ib, 1, 0x226)?;
-                self.malloc(0x14a);
+                let addr = self.malloc(0x14a);
                 let mut bytes = vec![0u8; 0x14a];
                 put32(&mut bytes, 0, INST);
                 put32(&mut bytes, 4, 0x142);
                 bytes[9] = i as u8;
                 bytes[0xa..0x24].copy_from_slice(&ib[0x20..0x3a]);
-                self.instruments[i] = Some(Instrument { bytes, data: Vec::new() });
+                self.instruments[i] = Some(Instrument { bytes, data: Vec::new(), addr });
                 if &ib[0..4] != b"IMPI" {
                     continue;
                 }
@@ -488,7 +520,7 @@ impl Library {
                 let off = base.wrapping_add(get32(&self.scratch, SMPOFF + 4 * i));
                 s.seek(off, 0);
                 s.read(&mut smp, 1, 0x50)?;
-                self.malloc(0x192);
+                let addr = self.malloc(0x192);
                 let mut bytes = vec![0u8; 0x192];
                 put32(&mut bytes, 0, INST);
                 put32(&mut bytes, 4, 0x142);
@@ -496,7 +528,7 @@ impl Library {
                 bytes[0xa..0x24].copy_from_slice(&smp[0x14..0x2e]);
                 if &smp[0..4] != b"IMPS" {
                     self.hazards |= HAZARD_UNINIT_INSTRUMENT;
-                    self.instruments[i] = Some(Instrument { bytes, data: Vec::new() });
+                    self.instruments[i] = Some(Instrument { bytes, data: Vec::new(), addr });
                     continue;
                 }
                 bytes[0x14a..0x192].fill(0);
@@ -504,7 +536,7 @@ impl Library {
                 bytes[0x2a..0xaa].fill(0);
                 bytes[0x152..0x16c].copy_from_slice(&smp[0x14..0x2e]);
                 convert_sample(&mut bytes, 0x14a, &smp, self.mutant);
-                self.instruments[i] = Some(Instrument { bytes, data: vec![None] });
+                self.instruments[i] = Some(Instrument { bytes, data: vec![None], addr });
                 s.seek(base.wrapping_add(get32(&smp, 0x48)), 0);
                 let status = self.load_sample(i, 0, s)?;
                 if status != OK {
@@ -587,9 +619,10 @@ impl Library {
             ins[0x11d] = ib[0x185] & 0xf;
         }
         let size = 0x14a + ib[0x1e] as usize * 0x48;
-        self.realloc(size as u32);
+        let addr = self.realloc(size as u32);
         {
             let ins = self.instruments[i].as_mut().unwrap();
+            ins.addr = addr;
             ins.bytes.resize(size, 0);
             ins.data = (0..ib[0x1e]).map(|_| None).collect();
         }
@@ -651,10 +684,10 @@ impl Library {
         if size > 0x1000_0000 {
             return Err(UNSUPPORTED_SAMPLE);
         }
-        self.alloc_log.push((1, size));
+        let addr = self.malloc(size);
         let mut data = vec![0u8; size as usize];
         let ins = &mut self.instruments[slot].as_mut().unwrap();
-        put32(&mut ins.bytes, at + 0x44, MARK);
+        put32(&mut ins.bytes, at + 0x44, addr);
         let got = s.read(&mut data, bps, length)?;
         if got != length {
             ins.data[n] = Some(data);
@@ -761,16 +794,16 @@ impl Library {
                     self.scratch[at..at + 0x40].fill(0);
                 }
             }
-            self.malloc(0x28);
+            let addr = self.malloc(0x28);
             let mut header = [0u8; 0x28];
             put32(&mut header, 0, PATT);
             put32(&mut header, 4, 0x1e);
             put32(&mut header, 8, 1);
             put32(&mut header, 0xc, TRAK);
             put32(&mut header, 0x10, 0x14);
-            put32(&mut header, 0x24, MARK);
-            self.malloc(0xc101);
-            self.patterns[p] = Some(Pattern { header, events: Vec::new() });
+            let scratch = self.malloc(0xc101);
+            put32(&mut header, 0x24, scratch);
+            self.patterns[p] = Some(Pattern { header, events: Vec::new(), addr, events_addr: scratch });
             s.seek(base.wrapping_add(get32(&self.scratch, PATOFF + 4 * p)), 0);
             s.read(&mut pb[..8], 1, 8)?;
             let packed = get16(pb, 0) as u32;
@@ -780,8 +813,11 @@ impl Library {
                 return Err(UNSUPPORTED_PATTERN); // rowsLeft = -1: 2^32 rows
             }
             let events = self.convert_pattern(pb, 8 + got as usize, rows)?;
-            self.realloc(events.len() as u32);
-            self.patterns[p].as_mut().unwrap().events = events;
+            let events_addr = self.realloc(events.len() as u32);
+            let pattern = self.patterns[p].as_mut().unwrap();
+            pattern.events = events;
+            pattern.events_addr = events_addr;
+            put32(&mut pattern.header, 0x24, events_addr);
         }
         Ok(())
     }
@@ -1008,6 +1044,7 @@ impl Library {
             self.unload_instrument(idx);
         }
         self.channels = 0;
+        self.rebuild_regions();
         OK
     }
 
@@ -1051,15 +1088,15 @@ impl Library {
         scal.push(self.player_mode);
         scal.extend_from_slice(&self.min_period.to_le_bytes());
         scal.extend_from_slice(&self.max_period.to_le_bytes());
-        scal.extend_from_slice(&self.r10698208.to_le_bytes());
-        scal.extend_from_slice(&self.r10697ce6.to_le_bytes());
-        scal.push(self.r10698141);
-        scal.push(self.r10697ca8);
+        scal.extend_from_slice(&self.pattern.to_le_bytes());
+        scal.extend_from_slice(&self.tick_in_row.to_le_bytes());
+        scal.push(self.row);
+        scal.push(self.break_flag);
         scal.extend_from_slice(&self.tempo.to_le_bytes());
         scal.extend_from_slice(&self.speed.to_le_bytes());
         scal.push(self.order_position);
-        scal.push(self.r10698140);
-        scal.push(self.r10698200);
+        scal.push(self.skip_rows);
+        scal.push(self.loop_flag);
         scal.push(self.first_music_voice);
         section(b"SCAL", &scal);
         section(b"NAME", &self.song_name);
@@ -1071,9 +1108,19 @@ impl Library {
             let Some(ins) = ins else { continue };
             let mut payload = (slot as u16).to_le_bytes().to_vec();
             payload.extend_from_slice(&(ins.bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&ins.bytes);
+            let mut bytes = ins.bytes.clone();
+            let samples = get16(&bytes, 0x148) as usize;
+            for k in 0..samples {
+                let field = 0x14a + 0x48 * k + 0x44;
+                if field + 4 > bytes.len() {
+                    break;
+                }
+                if get32(&bytes, field) != 0 {
+                    put32(&mut bytes, field, MARK);
+                }
+            }
+            payload.extend_from_slice(&bytes);
             section(b"INST", &payload);
-            let samples = get16(&ins.bytes, 0x148) as usize;
             for (k, data) in ins.data.iter().enumerate().take(samples) {
                 let Some(data) = data else { continue };
                 let mut payload = (slot as u16).to_le_bytes().to_vec();
@@ -1086,7 +1133,11 @@ impl Library {
         for (p, pattern) in self.patterns.iter().enumerate() {
             let Some(pattern) = pattern else { continue };
             let mut payload = (p as u16).to_le_bytes().to_vec();
-            payload.extend_from_slice(&pattern.header);
+            let mut header = pattern.header;
+            if get32(&header, 0x24) != 0 {
+                put32(&mut header, 0x24, MARK);
+            }
+            payload.extend_from_slice(&header);
             payload.extend_from_slice(&(pattern.events.len() as u32).to_le_bytes());
             payload.extend_from_slice(&pattern.events);
             section(b"PATT", &payload);

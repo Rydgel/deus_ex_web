@@ -185,6 +185,67 @@ event streams (format: it-loader §4.6) and the instrument/sample records with
 their padded data. The kernel does not yet expose typed accessors; phase 2
 adds them next to the sequencer translation.
 
+## Phase 2 status (sequencer, 2026-10-02, in progress)
+
+**Done and verified.**
+
+- Oracle `scripts/native-galaxy-music-sequencer-oracle.py` (subclasses the
+  phase-1 loader oracle). Init runs from the DLL: glxInit's tail with the pan
+  table (CPUID flags of the reference machine: MMX, SSE), glxSetCallback(DX's
+  0x10601064), the output open's tail (44100 Hz, 16-bit stereo, flags 7:
+  `0x10697cfc` = 0x47, MIDI-mode periods). Cases are JSON programs (load,
+  start = Update 0x1060a822..0x1060a88d, pin counters, pinned ring fill, 882-frame
+  callbacks). The inner kernel `[0x10698354]` is a recording `ret` stub (14
+  args); trace records M/R/U/T/K/P/L/S/E, one 8-byte SHA-256 digest per tick
+  group. Coverage uses self-deleting per-instruction hooks (no measurable cost).
+- Measured: Unicorn 2.1.4 honours x87 PC; the pan table at PC 64 differs from
+  PC 53 only at entry 0x7fff (32766 vs 32767), PC 24 at 54 entries. Intro
+  first tick: order 0, speed 6, tempo 153, P = 720·65536 + 38550, first
+  voice-update reload 0x2c1999 (1 ms, MIDI mode from the open), as derived.
+- Rust translation `native/galaxy-kernel/src/sequencer.rs` (mixer entry
+  without the PCM kernel, voice update with envelopes, sequencer tick, IT
+  handler, note delay, ramps, period to step, stop/start/control/volumes,
+  setup) and `x87.rs` (exact PC-parameterised pan table). The loader now
+  replays the oracle's bump-heap addresses (`HEAP_BASE`) so voice records and
+  pattern pointers compare raw; the phase-1 dump still writes MARK
+  (`validate-galaxy-music-loader.mjs` passes unchanged).
+- **Intro_Music section 0, counters pinned 0/0: 2449 ticks (2000 callbacks,
+  40 s) bit-equal per tick to the original**, first attempt.
+
+**Written but unverified.** Everything beyond that one case: the other 34
+songs and sections, section > 0 starts, null-pattern skips, same-song section
+switches, chained songs, other counter phases, the instrument envelopes
+(Lebedev uses the pan envelope), Amiga mode (Endgame1/2), every effect not in
+Intro, the generated .rdata tables (formula + the original's exceptions:
+Amiga 110 = 382 and 117 = 255, finetune 7 = 34468) and the Rust pan table
+against Unicorn's (only the oracle side was measured). No mutants run yet.
+
+**Next step.** Write `scripts/validate-galaxy-music-sequencer.mjs`: build the
+case list (every song × sections 0..5 run `until: loop`, margin 64; same-song
+switch at ~500 ticks; Title→Intro chain; 2–3 counter phases; the phase-1
+synthetic modules plus new ones for arpeggio, tremolo, K/L, S3/S4, SBx, SCx,
+SEx, T<0x20, C row > 0, EDx ≥ speed, A00), run the oracle once into
+`.cache/galaxy-music/sequencer` (~8 min for the whole corpus without
+coverage cost), replay exact callback counts in Rust, compare digests, diff
+the first 256 groups' full records on mismatch, check the pan tables (oracle
+should dump PC 64/53/24 tables and the 1112-dword table block at
+0x1063daa0), report coverage with reasons for unreached runs, and catch the
+mutants defined in sequencer.rs (101..109). Then update sequencer.md.
+
+**Rerun the checks.**
+
+```
+npm run build:wasm
+node scripts/validate-galaxy-music-loader.mjs          # phase 1, unchanged
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python
+$NATIVE_PROBE_PYTHON scripts/native-galaxy-music-sequencer-oracle.py "Deus Ex GOTY Edition" \
+  .cache/galaxy-music/modules .work/music/phase2/cases-test2.json .work/music/phase2/out
+node .work/music/phase2/smoke.mjs .work/music/phase2/out intro-long 2000   # expect ALL EQUAL
+```
+
+(`.work/music/phase2` also holds `dec.py`, a trace decoder, and `gdis.py`,
+the disassembler used for the translation.)
+
 ## Determinism
 
 Given the voice state, both counters and the sequence of mixer calls, the
