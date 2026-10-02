@@ -113,7 +113,7 @@ export class LightAtlas {
 
 export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false, array = null) {
   const stride = array ? array.value.image.depth + 1 : 0;
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${Boolean(mirror)}:${Boolean(modulated)}:${stride}`;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}`;
   material.onBeforeCompile = shader => {
     shader.uniforms.deusLightAtlas = array ?? { value: page.texture };
     shader.uniforms.deusLightingEnabled = enabled;
@@ -149,8 +149,8 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       ${mirror ? `if (deusMirrorActive > 0.5) {
         vec2 mirrorUV = gl_FragCoord.xy / deusMirrorSize;
         vec3 reflection = texture2D(deusMirror, vec2(1.0 - mirrorUV.x, mirrorUV.y)).rgb;
-        vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
-        gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);
+        ${mirror.opaque ? `gl_FragColor.rgb = reflection;` : `vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
+        gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);`}
       }` : ''}
       ${displayRampGlsl('deusDisplayGamma', modulated)}`);
   };

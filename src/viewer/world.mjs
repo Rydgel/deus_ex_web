@@ -129,11 +129,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const material = new THREE.MeshBasicMaterial({ map: own(fire ?? gpuTexture(data, flags)),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
-      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror,
+      // An opaque mirror draws PF_Invisible after its child frame
+      // (mirrors.mjs mirrorDrawFlags): the shader shows the reflection alone.
+      applyLightAtlas(material, tile.page, lightingEnabled, displayGamma,
+        mirror && { ...mirror, opaque: !(flags & 0x47) },
         !mirror && !(flags & POLY.Translucent) && Boolean(flags & POLY.Modulated));
       if (mirror) {
         // The reflected child is composited by the shader, then PF_Occlude
-        // writes floor depth. Ordinary translucent surfaces keep their blend.
+        // writes the mirror's depth. Ordinary translucent surfaces keep their blend.
         material.blending = THREE.NoBlending; material.depthWrite = true;
       } else if (flags & POLY.Translucent) {
         material.transparent = true; material.depthWrite = false; material.blending = THREE.CustomBlending;
@@ -190,7 +193,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       try {
         const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
-        const mirror = mirrors.surface(model, surface, actorName);
+        const mirror = mirrors.surface(model, surfaceIndex, actorName);
         const { material, flags, key } = await materialFor(surface, tile, mirror, pan);
         if (flags & POLY.Invisible) continue;
         const lit = tile.enabled && !(flags & (POLY.Unlit | POLY.Modulated));
@@ -255,7 +258,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   root.add(markers);
   notes.add(`${map.summary.unknownLevelBytes} trailing Level bytes and ${map.summary.undecodedActorProperties} property values remain opaque.`);
   for (const note of lighting.notes) notes.add(note);
-  if (mirrors.stats.surfaces) notes.add('Static translucent mirror floors render reflected world and actor views. Recursive mirrors and mirror/sky combinations remain unverified.');
+  if (mirrors.stats.surfaces) notes.add('Static mirrored BSP surfaces render reflected world and actor views. Mirror/sky combinations remain unverified.');
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   if (panned.length) notes.add(`${panned.length} auto-panned surface groups follow Level.TimeSeconds and their viewer-side zone's pan speeds.`);

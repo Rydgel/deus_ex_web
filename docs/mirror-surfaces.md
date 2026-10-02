@@ -1,4 +1,4 @@
-# Training mirror floors
+# Mirror surfaces
 
 ## Original contract, recovered before implementation
 
@@ -20,9 +20,10 @@ Authority is the local original DLLs, not another engine implementation:
 `URender::OccludeBsp` at `0x10b1886d–0x10b18b93` checks the mirror
 flag, limits child-frame depth to below 3, checks viewport actor flags at
 `+0x5fc` bit `0x800`, and checks render-device field `+0x5c` for translucent
-mirrors. The names of those last two fields are not yet established; the
-browser's normal view takes the enabled path. The disabled-device path clears
-translucency and sets `PF_Occlude=0x80000000`.
+mirrors. `+0x5c` is `ShinySurfaces` (see "All maps" below); the name of the
+actor field is not yet established, and the browser's normal view takes the
+enabled path. The disabled-device path clears translucency and sets
+`PF_Occlude=0x80000000`.
 
 The enabled path reflects the camera Origin across the node's world plane and
 each of its three axes across the plane normal. With unit normal N and plane
@@ -115,3 +116,86 @@ are not verified here. Original BSP span visibility and child merging are not
 yet reproduced by the browser's depth-buffer renderer. Existing mesh lighting,
 plant texture and lightmap precision differences remain separate fidelity gaps.
 Do not treat this slice as complete Stage 4 acceptance.
+
+## All maps (2026-10-02)
+
+The shipped single-player maps have 211 mirrored static BSP surfaces in 49
+maps. By orientation and treatment:
+
+| Orientation | Composited (`flags & 0x47`) | Opaque |
+| --- | --- | --- |
+| Up (floors, Training's 46 among them) | 110 | 1 |
+| Vertical (wall mirrors) | 84 | 13 |
+| Down | 1 | – |
+| Oblique | 2 | – |
+
+Thirteen mover brushes also carry a mirrored polygon. Most are cabinet or
+wardrobe doors.
+
+**Plane.** OccludeBsp reflects across `[ebp-0x1c]`, the FBspNode, whose first
+16 bytes are its FPlane. `mirrorPlanes()` in `viewer/mirrors.mjs` reads that
+plane for each mirrored surface. All 211 surfaces have exactly one node plane,
+giving 80 distinct planes across the maps (117 counted per map, because
+repeated maps share them). The browser groups surfaces by the exact node
+plane, the same equality CreateChildFrame uses to merge children. The
+reflection itself (`MirrorByPlane`/`MirrorByVector`) has no orientation case.
+
+**After the child frame.** `10b18b58–10b18b93` decides how the parent draws the
+mirror surface. `[ebp-0x30]` holds `flags & 0x47`
+(Invisible|Masked|Translucent|Modulated, set at `10b182d9–10b182de`) and
+`[ebp-0x4c]` holds `Viewport->RenDev` (`Frame->Viewport+0x64`, at
+`10b17489–10b174a0`).
+
+- A composited mirror keeps its flags plus `PF_Occlude`.
+- Otherwise, if `RenDev+0x48` is set, the code takes `10b19a53`.
+- Otherwise the surface also becomes `PF_Invisible`: the parent draws nothing
+  there, and the reflected child shows unmodified.
+
+Engine's `URenderDevice::StaticConstructor` (`103713c0`) registers its config
+properties at `+0x58` VolumetricLighting, `+0x5c` ShinySurfaces, `+0x60`
+Coronas, `+0x64` HighDetailActors, `+0x38` Description, `+0x44` DescFlags and
+`+0x78` DetailTextures. Those offsets match the SDK header's whole-DWORD
+fields, which places `SpanBased` at `+0x48`. SpanBased is not a config
+property, and no instruction in D3DDrv.dll writes `+0x48`, so on D3D it stays 0.
+The shipped `Default.ini`/`DeusEx.ini` set `ShinySurfaces=True` for
+`D3DDrv.D3DRenderDevice`.
+
+`scripts/native-mirror-oracle.py` now also executes `10b18b58–10b18b93` for
+every mirrored flag word in the maps, statics and movers alike.
+`mirrorDrawFlags()` matches it, giving `flags|0x80000000` when
+`flags & 0x47` is set and `flags|0x80000001` otherwise. The frame cases cover
+3 cameras × the 80 map planes as well as Training's 12. The oracle's stack
+now starts below the segment's deepest local (`ebp-0xd94`); before, pushes
+from `ebp-0x400` could overlap locals. Adapter comparisons allow 4 float32 ulps
+of the largest magnitude involved, because the original computes in float32
+and the adapter in doubles. The Training frames still match within the old
+absolute bounds.
+
+**Browser.**
+
+- **Static surfaces.** Static mirrored surfaces of every orientation
+  render their plane's reflected child.
+- **Composited mirrors** draw S+R(1−S) as before. **Opaque mirrors** draw R
+  alone, with depth written as PF_Occlude.
+- **Children first.** Every visible plane's child renders before any mirror
+  shows its reflection, and each child hides only its own plane's faces.
+  `mirrors.enabled = false` is a diagnostics switch that draws every
+  mirror without its reflection.
+- **Checks.** `scripts/validate-mirrors-play.mjs` faces the 02_NYC_Bar
+  translucent wall mirror and the 02_NYC_Hotel opaque unlit bathroom mirror.
+  It checks that a child renders, that the frame changes with the reflection
+  and that no runtime error occurs. The Training spec still passes against the
+  native capture. With the current static lighting it gives 2.04/255 for the
+  floor region and 3.87/255 for the emblem.
+
+**Unsupported, explicitly noted in Play.**
+
+- **Mirrors on moving brushes** draw as ordinary surfaces.
+- **Masked, modulated and two-sided mirrors** (none in the shipped maps) are
+  likewise drawn as ordinary surfaces.
+- **Nested reflections.** A mirror seen inside another mirror's reflection
+  draws its surface without a nested reflection. The original nests children
+  while `Frame->Recursion < 3`.
+- **Opaque mirrors on a span-based device.** The `+0x48` SpanBased path is a
+  software-renderer branch and is not translated.
+- **No capture yet.** There is no original-game capture of a wall mirror.

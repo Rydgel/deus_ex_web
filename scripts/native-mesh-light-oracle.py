@@ -60,7 +60,7 @@ class MeshOracle(dyn.Oracle):
     def __init__(self, root, control_word):
         super().__init__(root, control_word)
         cpu = self.cpu
-        cpu.mem_map(0, 0x1000)  # SEH prologue fs:[0]; no exception is expected.
+        # Page 0 (the SEH prologue's fs:[0]) is mapped by the lighting oracle.
         self.d3d = native.Image(Path(root) / 'System' / 'D3DDrv.dll', D3D_HASH)
         cpu.mem_map(self.d3d.base, (self.d3d.size + 4095) & ~4095)
         for _, _, virtual, raw_size, raw in self.d3d.sections:
