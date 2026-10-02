@@ -19,7 +19,8 @@ const bits = value => { io.setFloat32(0, value, true); return io.getUint32(0, tr
 const float = word => { io.setUint32(0, word >>> 0, true); return io.getFloat32(0, true); };
 const doubleBits = value => { io.setFloat64(0, value, true); return io.getBigUint64(0, true).toString(16).padStart(16, '0'); };
 let seed = 0x7e57a11;
-const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+// The top bits: an LCG's low bits cycle (bit k with period 2^(k+1)).
+const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8; };
 const pick = list => list[random() % list.length];
 const RATES = [0, 0x80000000, 0x7fc00000, 0xffc00000, 0x7f800000, 0xff800000, 1, bits(0.01), bits(0.009), bits(0.0100001),
   bits(100), bits(100.5), bits(99.99), bits(1), bits(2), bits(8), bits(10), bits(15), bits(20), bits(24), bits(30), bits(60), bits(-5)];

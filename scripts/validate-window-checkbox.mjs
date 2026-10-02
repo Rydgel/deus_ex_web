@@ -28,7 +28,8 @@ const IMAGE = 0x300, bits = value => { const b = new DataView(new ArrayBuffer(4)
 // Deterministic case mix. Fractional margins, font heights and extents make
 // every fst/fstp and compare placement observable in the result bits.
 let seed = 7;
-const rand = n => { seed = (seed * 1103515245 + 12345) >>> 0; return seed % n; };
+// The top bits: an LCG's low bits cycle (bit k with period 2^(k+1)).
+const rand = n => { seed = (seed * 1103515245 + 12345) >>> 0; return (seed >>> 8) % n; };
 const pick = list => list[rand(list.length)];
 const cases = [];
 const textures = [{}, {0x1f8: [[16, 16], 'on']}, {0x1f4: [[20, 12], 'off'], 0x1f8: [[16, 18], 'on']},

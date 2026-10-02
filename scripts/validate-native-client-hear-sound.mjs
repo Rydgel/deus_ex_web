@@ -18,11 +18,13 @@ const io = new DataView(new ArrayBuffer(4));
 const bits = value => { io.setFloat32(0, value, true); return io.getUint32(0, true); };
 const float = word => { io.setUint32(0, word >>> 0, true); return io.getFloat32(0, true); };
 let seed = 0x5eed1234;
-const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+// The top bits: an LCG's low bits cycle (bit k with period 2^(k+1)).
+const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8; };
+const dword = () => ((random() << 8) | (random() & 255)) >>> 0;
 const SPECIAL = [0, 0x80000000, 0x7fc00000, 0xffc00000, 0x7f800001, 0x7f800000, 0xff800000, 1, 0x807fffff,
   0x7f7fffff, 0x3f800000, 0x42c80000, 0xc2c80000, 0x00800000, 0x3c23d70a, 0x4f000000, 0x447a0000];
 const word = () => random() % 3 === 0 ? SPECIAL[random() % SPECIAL.length]
-  : random() % 2 ? random() : bits(((random() % 200000) - 100000) / 64);
+  : random() % 2 ? dword() : bits(((random() % 200000) - 100000) / 64);
 
 const cases = [];
 const base = {kind: 'hear', pawnClass: 'exact', player: 'exact', audio: true, actor: 'live', actorFlags: 0, id: 547874,
@@ -35,8 +37,8 @@ for (const pawnClass of ['exact', 'sub', 'other'])
         cases.push({...base, pawnClass, player, audio, actor, actorFlags});
 // Parameter arithmetic: Volume/Pitch scale, the Radius zero/unordered test.
 for (let i = 0; i < 400; i++)
-  cases.push({...base, id: random() | 0, location: [word(), word(), word()], parameters: [word(), word(), word()]});
-for (const id of [0, 1, -1, 0x7fffffff, -0x80000000, 547874, random() | 0])
+  cases.push({...base, id: dword() | 0, location: [word(), word(), word()], parameters: [word(), word(), word()]});
+for (const id of [0, 1, -1, 0x7fffffff, -0x80000000, 547874, dword() | 0])
   for (const audio of [true, false]) cases.push({kind: 'stop', audio, id});
 for (const functionFlags of [0, 0x400, 0x500, 0x2400, 0x2000, 0x100, 0xffffffff])
   for (const role of [0, 1, 2, 3, 4, 255])

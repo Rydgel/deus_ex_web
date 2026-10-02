@@ -16,7 +16,8 @@ const io = new DataView(new ArrayBuffer(4));
 const bits = value => { io.setFloat32(0, value, true); return io.getUint32(0, true); };
 const float = word => { io.setUint32(0, word >>> 0, true); return io.getFloat32(0, true); };
 let seed = 0x9a71;
-const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+// The top bits: an LCG's low bits cycle (bit k with period 2^(k+1)).
+const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8; };
 const SPECIAL = [0, 0x80000000, 0x7fc00000, 0xffc00000, 0x7f800000, 0xff800000, 1, bits(1), bits(-1), bits(0.5), bits(2),
   bits(1e9), bits(-1e9), bits(3.4e38), bits(1 / 35), bits(1 / 8960), bits(29.257143)];
 const word = () => random() % 4 === 0 ? SPECIAL[random() % SPECIAL.length] : bits(((random() % 2000000) - 1000000) / 1000);
