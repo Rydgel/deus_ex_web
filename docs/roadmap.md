@@ -518,8 +518,14 @@ Play ([particles](particles.md)):
 - every admitted sprite actor draws, with Render.dll's sprite size, style
   and ScaleGlow, and its LastRenderTime feedback.
 
-Street steam now rises from the vents. LaserIterator beams and
-SpriteAnimOnce frames remain.
+Street steam now rises from the vents. SpriteAnimOnce frames remain.
+
+**Laser beams (2026-10-02).** LaserTrigger and BeamTrigger beams draw through
+the original LaserIterator: CurrentItem is translated on the x87 model and
+matches the original over 5,348 items, random beams included. DX's
+FDynamicSprite snapshots each item, and DrawActorSprite swaps that snapshot
+into the actor around DrawMesh. Play mirrors this with one LaserProxy
+preview per segment. The Island doorway beams render. See [lasers](lasers.md).
 
 ## 5. Implement the full gameplay systems
 

@@ -320,6 +320,7 @@ async function loadMap(name) {
       const spriteRuntime=nextGame.doors.scriptRuntime.runtime;
       nextSpriteScene=createSpriteScene(spriteRuntime,new TextureStore(assets),{
         player:()=>nextGame.player.collisionActor,displayGamma:nextWorld.displayGamma,
+        frand:()=>spriteRuntime.rng.frand(),
         constructIterator:(cls,outer)=>{
           const linked=[...spriteRuntime.linkedClasses].find(candidate=>candidate.record.key===(cls.key??cls.record?.key));
           if(!linked)throw new Error(`RenderIteratorClass ${cls.key} is not linked`);
@@ -845,17 +846,21 @@ function animate(time) {
     // The GPU timer starts before the actor layer, whose mesh passes
     // (docs/gpu-mesh.md) are GPU work submitted during this phase.
     gpuBegin();
+    // SetupDynamics' actor scan (sprites and render iterators) runs first:
+    // a LaserProxy, spawned after its emitter, is drawn as an actor where
+    // this frame's LaserIterator left it (docs/lasers.md).
+    let meshItems=[];
+    if(spriteScene&&mode==='play'&&game&&!runtimeError){
+      try{meshItems=spriteScene.update();}catch(error){pauseForRuntimeError(error);}
+      spriteScene.root.visible=true;
+    }else if(spriteScene)spriteScene.root.visible=false;
     if(npcPreview&&!runtimeError){
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
       try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,camera,
-        cull:!world.mirrors.mayRender(camera)});}catch(error){pauseForRuntimeError(error);}
+        cull:!world.mirrors.mayRender(camera),items:meshItems});}catch(error){pauseForRuntimeError(error);}
     }
-    if(spriteScene&&mode==='play'&&game&&!runtimeError){
-      try{spriteScene.update();}catch(error){pauseForRuntimeError(error);}
-      spriteScene.root.visible=true;
-    }else if(spriteScene)spriteScene.root.visible=false;
     phase('actors');
     renderer.info.reset();
     let panInputs = null;

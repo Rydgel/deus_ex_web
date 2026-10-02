@@ -171,6 +171,45 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     }
     for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);
   };
+  // Render-iterator mesh items (docs/lasers.md): each FDynamicSprite of a
+  // DT_Mesh item draws through DrawActorSprite (0x10b2556a-0x10b25655), which
+  // writes the snapshot's ScaleGlow, DrawScale, Location and Rotation into
+  // the actor, calls DrawMesh and restores them. One preview per item slot
+  // of the actor, updated the same way; items draw whatever the actor's
+  // bHidden (SetupDynamics admits the iterating actor, not its items).
+  const itemPools=new Map(),SNAPSHOT=[['ScaleGlow','scaleGlow'],['DrawScale','drawScale'],['Location','location'],['Rotation','rotation']];
+  const drawItems=(items,cameraPosition,view)=>{
+    const counts=new Map();
+    for(const item of items){
+      const slot=counts.get(item.actor)??0;counts.set(item.actor,slot+1);
+      let pool=itemPools.get(item.actor);
+      if(!pool)itemPools.set(item.actor,pool=[]);
+      if(!pool[slot]){
+        const entry=pool[slot]={preview:null};
+        createActorMeshPreview(runtime,assets,item.actor,{originalObjectIndex:synthetic++,kernel,visible:()=>true,
+          lighting,displayGamma,texturePool:textures,gpu,batches})
+          .then(preview=>{if(disposed||itemPools.get(item.actor)!==pool){preview.dispose();return;}entry.preview=preview;root.add(preview.root);})
+          .catch(error=>{entry.failed=error.message;errors.push({actor:`${item.actor.name??'?'} item`,message:error.message});});
+        continue;
+      }
+      const preview=pool[slot].preview;
+      if(!preview)continue;
+      const saved=SNAPSHOT.map(([name])=>runtime.readNamed(item.actor,name));
+      try{
+        for(const [name,key] of SNAPSHOT)runtime.writeNamed(item.actor,name,item[key]);
+        preview.update(cameraPosition,view);
+      }finally{SNAPSHOT.forEach(([name],i)=>runtime.writeNamed(item.actor,name,saved[i]));}
+    }
+    for(const [actor,pool] of itemPools){
+      const used=counts.get(actor)??0;
+      if(!used&&(!live?.has(actor)||read(actor,'bDeleteMe'))){
+        for(const entry of pool)entry.preview?.dispose(),entry.preview?.root.removeFromParent();
+        itemPools.delete(actor);continue;
+      }
+      for(let i=used;i<pool.length;i++)if(pool[i].preview)pool[i].preview.root.visible=false;
+    }
+  };
+  const itemPreviews=()=>[...itemPools.values()].flatMap(pool=>pool.map(entry=>entry.preview).filter(Boolean));
   reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length){textures.dispose();throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');}
   return {root,actors,npcActors,propActors,summary,kernel,
@@ -182,6 +221,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
         reconcile();
         if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
         for(const actor of actors)actor.update(cameraPosition,view);
+        drawItems(view.items??[],cameraPosition,view);
       }finally{frameViewer=null;}
       // The GPU path's passes (docs/gpu-mesh.md) run once per main frame,
       // after every actor planned its pose and lighting.
@@ -194,17 +234,20 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
      * also take this pass's frustum decision (`camera`, the pass camera). */
     updateView(cameraPosition,camera=null){
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
-      for(const actor of actors){
+      for(const actor of [...actors,...itemPreviews()]){
         if(actor.viewDependent)actor.updateView(cameraPosition);
         if(camera)actor.passVisibility?.(camera);
       }
       batches?.flush();
     },
+    /** Iterator item previews in use (validation access). */
+    itemStats:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,slots:pool.length,
+      drawn:pool.filter(entry=>entry.preview?.root.visible).length})),
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
     batchStats:()=>batches?.stats()??null,
     proceduralTextures:()=>textures.procedural.records(),
-    dispose(){disposed=true;for(const actor of actors)actor.dispose();batches?.dispose();textures.dispose();},
+    dispose(){disposed=true;for(const actor of [...actors,...itemPreviews()])actor.dispose();itemPools.clear();batches?.dispose();textures.dispose();},
   };
 }
 

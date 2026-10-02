@@ -127,8 +127,8 @@ Host choices and limits, noted:
   D3D span clipping. Translucent sprites apply display gamma per fragment,
   like the world's translucent surfaces.
 - **Not translated yet.** DT_SpriteAnimOnce's LifeSpan frame choice (the
-  first frame is drawn), iterator classes other than ParticleIterator
-  (DeusEx's LaserIterator for laser beams), and the bHighDetail rule.
+  first frame is drawn), iterator classes other than ParticleIterator and
+  LaserIterator (see [lasers](lasers.md)), and the bHighDetail rule.
 - **Visibility.** Play has no BSP occlusion, so every admitted iterator
   runs each frame, as SetupDynamics does. Visibility only decides which
   sprites three.js draws, and so which proxies get a LastRenderTime.

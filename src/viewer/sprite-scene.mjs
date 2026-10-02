@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { toView } from '../unreal/geometry.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { ensureRenderInterface, particleIteratorItems } from '../runtime/script-particles.mjs';
+import { laserIteratorItems } from '../runtime/script-laser.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
 
 /** Sprites in Play (docs/particles.md "Sprites"): URender::SetupDynamics'
@@ -13,9 +14,13 @@ import { sharedProceduralTextures } from './procedural-textures.mjs';
  * channel; Style picks masked, translucent (additive) or modulated
  * blending. Drawing one writes its actor's LastRenderTime (0x10b25150).
  *
+ * A LaserIterator's items are DT_Mesh LaserProxy snapshots (docs/lasers.md);
+ * update() returns them, in order, for the actor mesh scene to draw.
+ *
  * Not translated yet, noted: DT_SpriteAnimOnce's frame choice, iterator
- * classes other than ParticleIterator, the bHighDetail rule and fog. */
-export function createSpriteScene(runtime, textures, { player, displayGamma, constructIterator }) {
+ * classes other than ParticleIterator and LaserIterator, the bHighDetail
+ * rule and fog. */
+export function createSpriteScene(runtime, textures, { player, displayGamma, constructIterator, frand }) {
   const root = new THREE.Group(), pool = [], textureCache = new Map(), notes = new Set();
   root.matrixAutoUpdate = false; root.name = 'Sprites';
   let used = 0;
@@ -88,9 +93,11 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
     object.userData.feedback = () => runtime.writeNamed(actor, 'LastRenderTime', Math.fround(timeRef()));
   }
 
-  /** One frame: the level actor array in order, after the tick. */
+  /** One frame: the level actor array in order, after the tick. Returns the
+   * iterator items that draw as meshes. */
   function update({ firstPerson = true } = {}) {
     used = 0;
+    const meshItems = [];
     const viewer = player(), level = runtime.levelFor(viewer), info = level.actors[0];
     const time = () => runtime.readNamed(info, 'TimeSeconds');
     const read = (actor, name) => runtime.readNamed(actor, name);
@@ -109,8 +116,18 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
       if (read(actor, 'RenderIteratorClass')) {
         const iterator = ensureRenderInterface(runtime, actor, constructIterator);
         if (!iterator) continue;
-        if (runtime.instance(iterator).cls.record.key !== 'deusex.particleiterator') {
-          notes.add(`RenderIterator ${runtime.instance(iterator).cls.record.key} is not translated.`);
+        const kind = runtime.instance(iterator).cls.record.key;
+        if (kind === 'deusex.laseriterator') {
+          for (const item of laserIteratorItems(runtime, iterator, actor, viewer, {
+            processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args), frand })) {
+            const drawType = read(item.actor, 'DrawType') & 255;
+            if (drawType === 2) meshItems.push(item);
+            else if (drawType === 1 || drawType === 7) draw(item.actor, item, time);
+          }
+          continue;
+        }
+        if (kind !== 'deusex.particleiterator') {
+          notes.add(`RenderIterator ${kind} is not translated.`);
           continue;
         }
         for (const item of particleIteratorItems(runtime, iterator, viewer, {
@@ -127,7 +144,7 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
         scaleGlow: Math.fround(read(actor, 'ScaleGlow')) }, time);
     }
     for (let i = used; i < pool.length; i++) { pool[i].visible = false; pool[i].userData.feedback = null; }
-    return used;
+    return meshItems;
   }
 
   return { root, update, notes, count: () => used,
