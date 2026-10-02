@@ -168,3 +168,22 @@ Unverified or host choices, noted:
   boundary texels.
 - **Not done yet.** Fog on meshes (DrawMesh's Volumetrics argument) and on
   movers.
+
+## Mesh fog (recovered entry points, not translated)
+
+- **Vtable.** The light manager is the static object `0x10b3d2f0`, with
+  vtable `0x10b2a93c` (set at `0x10b09990`). The SDK's RenderPrivate.h
+  orders the slots Init, Exit, SetupForActor (`0x10b010b9`), SetupForSurf,
+  FinishSurf, FinishActor, Light (`0x10b01271`) and Fog (`0x10b011f4` →
+  `0x10b02c00`).
+- **`Fog(FTransSample& Point, DWORD ExtraFlags)`.** It works only with
+  `ExtraFlags & 0x40000000` (PF_RenderFog) and walks the same sorted
+  volumetric list (`0x10b3db84`…`[0x10b3cad8]`), which SetupForActor builds
+  from the actor's Volumetrics.
+- **Per light.** It runs the same chord integral as the fog-map texels,
+  except that Core's `FVector::operator|` and `SizeSquared` are called out
+  of line, the early-out flag `0x10b4ea00` is shared, and it accumulates a
+  float FPlane at `[ebp-0x50]`.
+- **Still to trace.** The accumulation, DrawLodMesh's call sites (Render
+  calls the Fog slot twice) and D3D's use of the vertex fog under
+  PF_RenderFog.
