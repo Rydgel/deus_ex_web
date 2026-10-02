@@ -160,7 +160,7 @@ never initialises), and a chain where each song loads after the real
   writes. The kernel zero-fills them; whether the mixer can read them is a
   mixer question (phase 3).
 - *NULL patterns:* 25 songs have orders whose pattern stays NULL (empty IT
-  pattern or index ≥ PatNum), e.g. order 2 in 19 songs. Which slots stay
+  pattern or index ≥ PatNum), e.g. order 2 in 21 songs. Which slots stay
   NULL is now proven; how the player steps over them is phase 2.
 - *GV:* the loader stores the header GV (`0x80` for every song; the clamp
   cannot fire) into `0x10697cf0`, which is the music master volume of
