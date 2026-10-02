@@ -485,6 +485,22 @@ spots and beams, flames and the nano and biocell glows render as live mesh
 skins in Play. The shared generator's draw order and seed are host choices;
 sprites (and so sprite fires, smoke and sparks) are not drawn yet.
 
+**Water textures (2026-10-02).** Fire.dll's water family is translated and
+oracle-exact: CalculateWater, the 20 drop types, and the WetTexture
+constructor, PostLoad and tick. Drtywater on Island's and Training's BSP
+water is live ([fire textures](fire-texture.md#wet-textures)).
+
+**Static light maps (2026-10-02).** BSP and brush light maps now come from
+Render.dll's own static path ([static lighting](static-lighting.md)): the
+shadow blur table and illumination, the zone ambient, the normal,
+NonIncidence, spot and cylinder bodies and the colour merge. That is
+oracle-exact for 15,745 light steps on every Training surface, plus
+samples on Island and NYC Street. Surfaces lit by Cylinder, TorchWaver or
+FireWaver lights (34 maps) are no longer dropped. Training's entrance
+moved closer to the original-game capture in every compared region (worst
+2.78 → 1.26 mean RGB levels). Time-varying light effects and types are
+still steady snapshots or left out, with notes.
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,

@@ -1,6 +1,8 @@
 /** Static lights on BSP light maps through Render.dll's light-manager path
  * (docs/static-lighting.md). */
-import { fistp, normalLightTable } from './dynamic-lighting.mjs';
+import { fistp, normalLightTable, surfaceLightClass, movingLightConstants, movingLightRect, normalLightIncidence,
+  normalLightSpatial, nonIncidenceSpatial, colorTableEntry } from './dynamic-lighting.mjs';
+import { fcoordsAxes } from './script-pawn-locomotion.mjs';
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store } from './script-vm.mjs';
 
 const f = Math.fround;
@@ -176,3 +178,63 @@ export function cylinderSpatial(rect, grid, location, constants, write, illumina
     rowX = f(rowX + vx); rowY = f(rowY + vy); rowZ = f(rowZ + vz);
   }
 }
+
+const NORMAL_BODY = new Set([0, 1, 2, 3, 11, 19]);
+const EFFECT_NAMES = ['None', 'TorchWaver', 'FireWaver', 'WateryShimmer', 'Searchlight', 'SlowWave', 'FastWave', 'CloudCast',
+  'StaticSpot', 'Shock', 'Disco', 'Warp', 'Spotlight', 'NonIncidence', 'Shell', 'OmniBumpMap', 'Interference', 'Cylinder',
+  'Rotor', 'Unused'];
+
+/** SetupForSurf's static map for one light map (docs/static-lighting.md):
+ * the zone ambient fill, then each listed light's illumination (its shadow
+ * mask, the list index selecting it), spatial body and saturating colour
+ * merge. Returns RGB bytes (≤ 127) per texel.
+ *
+ * `lights` are the light map's list entries in order: `{values, location}`
+ * with `values` the actor's properties (null for a rejected entry). Class 0
+ * lights are exact. Class 1 lights (bNoDelete or animated) take this
+ * frame-independent snapshot: their LightType and merge-dynamic effects
+ * (TorchWaver, FireWaver, WateryShimmer) do not vary yet. Class 2 lights
+ * from a static list (merged unshadowed each frame) and spatially dynamic
+ * effects are omitted, with `notes`. */
+export function staticLightMap({ width, height, ambient, lights, shadowBits, shadowOffset, facet, grid, levelBrightness, notes, hsv }) {
+  const texels = new Uint8Array(width * height * 3);
+  for (let p = 0; p < width * height; p++) texels.set(ambient, p * 3);
+  const pitch = (width + 7) >> 3, stride = pitch * 8;
+  lights.forEach(({ values, location }, index) => {
+    if (!values) return;
+    const lightClass = surfaceLightClassOf(values);
+    if (lightClass === null || lightClass === 3) return;
+    if (lightClass === 2) { notes?.add('A moving light listed in a static light map is not merged (none seen so far).'); return; }
+    const effect = values.LightEffect ?? 0;
+    const spot = effect === 8 || effect === 12, cylinder = effect === 17;
+    if (!NORMAL_BODY.has(effect) && effect !== 13 && !spot && !cylinder) {
+      notes?.add(`Light effect ${EFFECT_NAMES[effect] ?? effect} is not translated; those lights are left out of static light maps.`);
+      return;
+    }
+    if (lightClass === 1) {
+      if ((values.LightType ?? 0) !== 1) notes?.add(`Light type ${values.LightType} uses a steady snapshot; its time variation is not active.`);
+      if ([1, 2, 3].includes(effect)) notes?.add('Torch, fire and watery-shimmer lights omit their per-frame merge modulation.');
+      if (!values.bStatic) notes?.add('bNoDelete lights (TriggerLight) are snapshots; script brightness changes use explicit invalidation.');
+    }
+    const constants = movingLightConstants(values, levelBrightness, hsv(values.LightHue ?? 0, values.LightSaturation ?? 0));
+    const rect = movingLightRect(location, constants.radius, facet);
+    if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) return;
+    const illumination = { bytes: shadowIllumination(shadowBits, shadowOffset + index * pitch * height, width, height), stride };
+    const [red, green, blue] = constants.steps;
+    const write = (u, v, spatial) => {
+      if (!spatial) return;
+      const at = (v * width + u) * 3;
+      texels[at] = Math.min(127, texels[at] + colorTableEntry(red, spatial));
+      texels[at + 1] = Math.min(127, texels[at + 1] + colorTableEntry(green, spatial));
+      texels[at + 2] = Math.min(127, texels[at + 2] + colorTableEntry(blue, spatial));
+    };
+    const incidence = cylinder ? 0 : normalLightIncidence(location, facet, constants.rradius);
+    if (cylinder) cylinderSpatial(rect, grid, location, constants, write, illumination);
+    else if (spot) spotLightSpatial(rect, grid, location, { ...constants, incidence }, write, illumination,
+      { cone: values.LightCone ?? 0, axis: fcoordsAxes((values.Rotation ?? [0, 0, 0]).map(n => n | 0))[1] });
+    else if (effect === 13) nonIncidenceSpatial(rect, grid, location, constants, write, illumination);
+    else normalLightSpatial(rect, grid, location, { ...constants, incidence }, write, illumination);
+  });
+  return texels;
+}
+const surfaceLightClassOf = surfaceLightClass;

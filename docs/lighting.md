@@ -92,8 +92,14 @@ and atlas isolation, alongside earlier format tests. Browser checks exercise bot
 reference cameras, lighting/brightness toggles, unchanged pixels on an authored
 unlit surface, and shader errors, alongside the existing viewer checks.
 
-Lightmaps use floating-point reconstruction and padded GPU atlases. The original's
-fixed-point intermediate rounding, lookup-table discretization and filtering are
+Static light maps now go through the original Render.dll integer path
+([static lighting](static-lighting.md), 2026-10-02): shadow blur table,
+ambient fill, spatial bodies and colour merge match the original byte for
+byte on every Training light map. The paragraph below describes the earlier
+float reconstruction, which this replaced.
+
+Lightmaps used floating-point reconstruction and padded GPU atlases. The original's
+fixed-point intermediate rounding, lookup-table discretization and filtering were
 not reproduced bit for bit. Remaining small differences are recorded rather than
 hidden by an exposure adjustment. Gamma is currently applied per material;
 the mirror-floor path now composes reflected raw colours before gamma, while

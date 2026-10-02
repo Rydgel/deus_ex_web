@@ -133,12 +133,51 @@ The rsqrt tables match bit for bit. Like the moving-light bodies, the
 per-texel arithmetic outside the x87-model chains is a measured match, not
 a proof for all inputs.
 
+## Play
+
+`createLighting` (`src/unreal/lighting.mjs`) now fills every BSP and brush
+light map through `staticLightMap` (`src/runtime/static-lighting.mjs`):
+- the zone's ambient bytes;
+- then each listed light in list order, with its own shadow mask (selected
+  by list index);
+- the original rectangle, incidence, illumination, spatial body and colour
+  merge;
+- texel bytes divided by 255 for the atlas.
+
+The surface's facet and texel grid are those SetupForSurf sees: a level
+surface keeps its serialized float vectors, and a brush surface takes its
+mover transform, as the moving lights do. Moving lights still add onto a
+copy of these texels.
+
+What changed in the browser:
+- **Missing surfaces drawn.** Surfaces lit by LE_Cylinder, LE_TorchWaver or
+  LE_FireWaver lights are no longer refused. On Battery Park, NYC Street,
+  Wan Chai Market and Area 51 Bunker, every "Unsupported light effect"
+  surface now draws; the remaining errors there are the older mover
+  correspondence ones.
+- **Closer to the original game.** Training's entrance view (the saved
+  `reports/lighting` camera, 926×603, brightness 0.40) moved closer in all
+  six regions of the original-game comparison. The worst region went from
+  2.78 to 1.26 mean RGB levels: ceiling 1.90 → 0.85, beam 0.97 → 0.68,
+  pillar 0.83 → 0.70, door 2.03 → 0.98, warm wall 2.78 → 0.61, cyan strip
+  2.47 → 1.26. The old numbers were measured on the Mac and the new ones
+  headless on Linux. HUD, meshes and the mirror floor stay excluded, and
+  this remains a regional comparison.
+
+Diagnostics, still open:
+- Time-varying effects (Searchlight, SlowWave, FastWave, CloudCast, Shock,
+  Disco, Interference, Rotor) and Shell leave their lights out of the light
+  map, with a note naming the effect.
+- Class 1 lights are steady snapshots (LightType variation and the
+  torch/fire/watery merge modulation are not active), with notes.
+- A class 2 light in a static list is skipped, with a note; none has been
+  seen.
+
 ## Not yet moved
 
-Play still draws the float reconstruction. Wiring the translated path into
-Play comes next. After that: the time-varying spatial functions, the
-merge-dynamic modulation, the LightType functions (pulse, flicker, strobe…)
-and class 1's per-frame recomputation.
+Still to do: the time-varying spatial functions, the merge-dynamic
+modulation, the LightType functions (pulse, flicker, strobe…), class 1's
+per-frame recomputation, and volumetric (fog map) lighting.
 
 Two facts recovered from SetupForSurf's listing matter for that wiring:
 - A level surface's static list goes through AddLight with each light's

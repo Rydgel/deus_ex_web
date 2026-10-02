@@ -1,5 +1,7 @@
 import { ClassDefaults } from './classes.mjs';
 import { cross, dot, sub } from './geometry.mjs';
+import { staticLightMap, ambientTexel } from '../runtime/static-lighting.mjs';
+import { fgetHsv } from '../runtime/dynamic-lighting.mjs';
 
 const normalize = v => { const d = Math.hypot(...v); if (!d) throw new Error('Zero lighting normal'); return v.map(n => n / d); };
 
@@ -158,29 +160,53 @@ export async function createLighting(map, asset, assets) {
     movingApplier(result, result.moving);
   }
 
-  function refill(result) {
-    const { points, normal, surface, lightEntries } = result, pixels = result.staticPixels ?? result.pixels;
-    const ambient = zoneValues[result.zone] ?? levelValues;
-    const rgb = lightColor(ambient.AmbientHue, ambient.AmbientSaturation, ambient.AmbientBrightness).map(c => c * .25);
-    for (let p = 0; p < points.length; p++) pixels.set(rgb, p * 3);
-    for (const { ref, shadow } of lightEntries) {
-      const light = actors.get(ref);
-      if (!light) throw new Error(`Unprepared light ${ref}`);
-      if (!light.LightType || !light.LightBrightness) continue;
-      if (Boolean(surface.flags & 0x100000) !== Boolean(light.bSpecialLit)) continue;
-      const effect = light.LightEffect ?? 0;
-      if (![0, 3, 8, 12, 13].includes(effect)) throw new Error(`Unsupported light effect ${effect}`);
-      if (effect === 3) notes.add('Watery-shimmer lights use their static contribution; shimmer animation is not active.');
-      if (![1, 9].includes(light.LightType)) notes.add(`Light type ${light.LightType} uses a steady snapshot; time-varying light animation is not active.`);
-      if (!light.bStatic) notes.add('Steady TriggerLight brightness changes use explicit host invalidation; other script-controlled light changes are not active.');
-      usedLights.add(ref); stats.lightActors = usedLights.size;
-      const color = lightColor(light.LightHue, light.LightSaturation, 255)
-        .map(c => c * light.LightBrightness / 255 * (levelValues.Brightness ?? 1));
-      for (let p = 0; p < points.length; p++) {
-        const weight = shadow[p] * lightAttenuation(light, points[p], normal);
-        for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(127 / 255, pixels[p * 3 + c] + color[c] * weight);
-      }
+  // The original's per-light colour and the zone ambients through Engine
+  // FGetHSV on the x87 model (docs/static-lighting.md).
+  const hsvCache = new Map(), ambientCache = new Map();
+  const hsv = (hue, saturation) => {
+    const key = (hue & 255) << 8 | saturation & 255;
+    if (!hsvCache.has(key)) hsvCache.set(key, fgetHsv(hue, saturation, 255));
+    return hsvCache.get(key);
+  };
+  const levelBrightness = Math.fround(levelValues.Brightness ?? 1);
+
+  /** The light map's facet and texel grid as SetupForSurf sees them: a level
+   * surface keeps its serialized float facet; a brush surface moves with its
+   * transform (as moving-lights.mjs). */
+  function geometry(result) {
+    if (!result.staticGeometry) {
+      const { model, surface, basis, transform, transformNormal, lightMap, owner } = result;
+      const base = model.points[surface.base], vectors = model.vectors, origin = transform(base);
+      const along = vector => transform(base.map((v, i) => v + vector[i])).map((v, i) => v - origin[i]);
+      const p00 = transform(basis.point(0, 0)), p10 = transform(basis.point(1, 0)), p01 = transform(basis.point(0, 1));
+      result.staticGeometry = {
+        facet: { origin, axisU: owner ? along(vectors[surface.textureU]) : vectors[surface.textureU],
+          axisV: owner ? along(vectors[surface.textureV]) : vectors[surface.textureV],
+          normal: owner ? transformNormal(vectors[surface.normal]) : vectors[surface.normal],
+          pan: [lightMap.pan[0], lightMap.pan[1]], scale: lightMap.scale, clamp: lightMap.clamp },
+        grid: { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])),
+          stepV: p01.map((v, i) => Math.fround(v - p00[i])) },
+      };
     }
+    return result.staticGeometry;
+  }
+
+  function refill(result) {
+    const { width, height, lightEntries, model, lightMap } = result, pixels = result.staticPixels ?? result.pixels;
+    const zone = zoneValues[result.zone] ?? levelValues;
+    const ambientKey = `${zone.AmbientHue ?? 0}:${zone.AmbientSaturation ?? 0}:${zone.AmbientBrightness ?? 0}`;
+    if (!ambientCache.has(ambientKey))
+      ambientCache.set(ambientKey, ambientTexel(fgetHsv(zone.AmbientHue ?? 0, zone.AmbientSaturation ?? 0, zone.AmbientBrightness ?? 0)));
+    const lights = lightEntries.map(({ ref }) => {
+      const values = actors.get(ref);
+      if (!values) throw new Error(`Unprepared light ${ref}`);
+      if (values.LightType && values.LightBrightness) { usedLights.add(ref); stats.lightActors = usedLights.size; }
+      return { values, location: (values.Location ?? [0, 0, 0]).map(Math.fround) };
+    });
+    const { facet, grid } = geometry(result);
+    const texels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights, shadowBits: model.lightBits,
+      shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv });
+    for (let i = 0; i < texels.length; i++) pixels[i] = texels[i] / 255;
     if (result.staticPixels) compose(result);
     return result;
   }
@@ -240,8 +266,10 @@ export async function createLighting(map, asset, assets) {
       const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
       const points = [];
       for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) points.push(transform(basis.point(x, y)));
-      const refs = lightReferences(model, lm);
-      const lightEntries = refs.map((ref, lightIndex) => ({ ref, shadow: shadowMask(model, lm, lightIndex) }));
+      const refs = lightReferences(model, lm), pitch = (width + 7) >> 3;
+      if (refs.length && lm.dataOffset + refs.length * pitch * height > model.lightBits.length)
+        throw new Error('Shadow mask outside serialized lighting data');
+      const lightEntries = refs.map(ref => ({ ref }));
       stats.shadowMasks += lightEntries.length;
       const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
         model, surfaceIndex, surface, points, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,

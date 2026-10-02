@@ -16,7 +16,7 @@ function fixture() {
     actors: [
       { index: 1, className: 'LevelInfo', values: { AmbientHue: 0, AmbientSaturation: 0, AmbientBrightness: 0, Brightness: 1 } },
       { index: 2, className: 'TriggerLight', values: { LightType: 1, LightBrightness: 64, LightHue: 85, LightSaturation: 0,
-        LightRadius: 3, LightEffect: 0, Location: [0, 0, 0], bSpecialLit: false, bStatic: false } },
+        LightRadius: 3, LightEffect: 0, Location: [0, 0, 10], bSpecialLit: false, bStatic: false, bNoDelete: true } },
     ],
     model: {
       vectors: [[0, 0, 1], [1, 0, 0], [0, 1, 0]], points: [[0, 0, 0]],
