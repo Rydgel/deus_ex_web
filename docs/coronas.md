@@ -73,5 +73,30 @@ the TRACE_ flags).
 - **Stub.** The oracle answers 1 for `UObject::IsValid`, the entries'
   assertion.
 
-Not in Play yet; host choices to label when wired: the appSeconds clock and
-the canvas tile's blending.
+## Play
+
+`src/viewer/corona-pass.mjs` runs the pass after the main world draw, before
+the first-person weapon and the HUD, matching DrawFrame ahead of PostRender.
+
+- **Gates and fade.** It checks the player's Region, then fades the cache
+  with the host clock.
+- **Visibility.** It visits the lights permeating the player's leaf. Model
+  references resolve to live actors by export name, and the two line checks
+  are Play's translated SingleLineCheck (`level.hash.lineCheck`), from the
+  view location.
+- **Draw.** Each live entry's `coronaIcon` is computed with the view's
+  exact frame coords: getAxes' Y, −Z and X, as for fog. The tile is drawn in
+  an orthographic overlay with the canvas's translucent blend (ONE,
+  INVSRCCOLOR) and the display ramp.
+- **Check.** `validate-coronas-play.mjs` looks up at a corona light from a
+  start. On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
+  visible and 1 is drawn. On 03_NYC_Airfield, Light348 is among 13 leaf
+  lights, 7 are visible and 4 are drawn. In both, the frame changes with the
+  pass and the street lamp shows its glow.
+
+Host choices, noted:
+- the clock is the host's;
+- the frame precomputes (FX2, FY2, `Proj.Z = FX2/tan(FOV/2)`, Frame.X) come
+  from Play's canvas and the view FOV, not the original's resolution;
+- the leaf's dynamic lights (LeafLights) are not visited;
+- the canvas tile's display ramp applies per fragment.

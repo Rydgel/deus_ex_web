@@ -7,6 +7,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
+import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
@@ -45,7 +46,7 @@ let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
-let spriteScene=null;
+let spriteScene=null,coronaPass=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
 // default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
 // selects the CPU kernels, which stay the reference and the fallback. A
@@ -337,6 +338,11 @@ async function loadMap(name) {
             ...base,validate:()=>true,initNativeProperties:()=>{},nativeConstructor:()=>{}});
         }});
     }
+    // Light coronas (docs/coronas.md), DrawFrame's corona pass.
+    const nextCoronaPass=nextGame?createCoronaPass(nextGame.doors.scriptRuntime.runtime,new TextureStore(assets),{
+      model:nextMap.model,exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor,
+      displayGamma:nextWorld.displayGamma}):null;
+    coronaPass?.dispose();coronaPass=nextCoronaPass;
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
@@ -905,6 +911,13 @@ function animate(time) {
       framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
     }
     if (drawWorld) renderer.render(scene, camera);
+    // Coronas close DrawFrame, before PostRender's weapon and HUD.
+    if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {
+      const pr = renderer.getPixelRatio(), box = clipped ? renderViewportFor(renderRect)
+        : [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
+      try { coronaPass.update(playerView, box[2], box[3]); coronaPass.render(renderer); }
+      catch (error) { pauseForRuntimeError(error); }
+    }
     framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
     if(drawWorld&&mode==='play'&&weaponViewModel&&!runtimeError){
       try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}

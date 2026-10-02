@@ -521,6 +521,12 @@ Play ([particles](particles.md)):
 
 Street steam now rises from the vents. SpriteAnimOnce frames remain.
 
+**Light coronas (2026-10-02).** DrawFrame's corona pass is translated
+(oracle-exact over 200 frames: fade, visibility helper, DrawIcon arguments).
+Play runs it each frame over the player leaf's lights with the translated
+SingleLineCheck, and draws translucent screen tiles. Airfield and Battery
+Park street lamps glow. See [coronas](coronas.md).
+
 **Volumetric fog (2026-10-02).** Render.dll's fog maps are translated:
 ComputeFromActor's volumetric constants and SetupForSurf's fog loop are
 oracle-exact over 10,687 texels, and the loop runs in the Rust core. Play
