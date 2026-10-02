@@ -19,18 +19,30 @@ export function readPolys(pkg, bytes, index) {
   return polygons;
 }
 
-/** Runtime mover polygons carry their polygon ordinal as the lighting index.
- * Match the compiled surfaces explicitly, rather than assuming the same order. */
-export function withMoverLightmaps(model, polygons) {
-  const equal = (a, b) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) < 1e-5);
-  const surfaces = model.surfaces.map(s => {
-    const matches = polygons.map((p, i) => ({ p, i })).filter(({ p }) => p.texture === s.texture &&
-      equal(p.base, model.points[s.base]) && equal(p.normal, model.vectors[s.normal]) &&
-      equal(p.textureU, model.vectors[s.textureU]) && equal(p.textureV, model.vectors[s.textureV]) && equal(p.pan, s.pan));
-    if (matches.length !== 1) throw new Error('Ambiguous mover polygon lighting correspondence');
-    const lightMap = matches[0].i;
-    if (lightMap >= model.lightMaps.length) throw new Error('Missing mover polygon lightmap');
-    return { ...s, lightMap };
+/** A mover drawn as the original draws it: Engine's brush tracker
+ * (0x1037b5c0, run for every non-static brush when the level's tracker is
+ * built) appends one level surface per brush polygon, with the polygon's
+ * texture, pan, base, normal and texture vectors, PolyFlags & 0x3cffffff
+ * (PF_SpecialLit added for a bSpecialLit mover) and iLightMap = the
+ * polygon's iBrushPoly, an index into the brush model's light maps (-1 for
+ * invisible polygons); Update (0x1037a400) then transforms the polygons, not
+ * the brush model's compiled BSP surfaces, whose light indices are all -1.
+ * Returns that model (the brush's light maps, shadow bits and light lists
+ * kept) with one node per polygon and its triangle fan. */
+export function moverModelFromPolys(model, polygons, { specialLit = false } = {}) {
+  const points = [], vectors = [], surfaces = [], nodes = [], triangles = [];
+  polygons.forEach((polygon, index) => {
+    const base = points.push(polygon.base) - 1, normal = vectors.push(polygon.normal) - 1;
+    const textureU = vectors.push(polygon.textureU) - 1, textureV = vectors.push(polygon.textureV) - 1;
+    const flags = ((polygon.flags & 0x3cffffff) | (specialLit ? 0x100000 : 0)) >>> 0;
+    surfaces.push({ texture: polygon.texture, flags, base, normal, textureU, textureV, lightMap: polygon.brushPolygon,
+      brushPolygon: index, pan: polygon.pan });
+    const [nx, ny, nz] = polygon.normal, [bx, by, bz] = polygon.base;
+    nodes.push({ plane: [nx, ny, nz, nx * bx + ny * by + nz * bz], surface: index, zones: [0, 0], vertexCount: polygon.vertices.length });
+    const first = points.length;
+    for (const vertex of polygon.vertices) points.push(vertex);
+    if (flags & 1) return;
+    for (let k = 1; k < polygon.vertices.length - 1; k++) triangles.push({ points: [first, first + k, first + k + 1], surface: index, node: index });
   });
-  return { ...model, surfaces };
+  return { model: { ...model, points, vectors, surfaces, nodes }, triangles };
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lightColor, shadowMask, lightmapBasis, lightAttenuation, pointZone } from '../src/unreal/lighting.mjs';
 import { LightAtlas } from '../src/viewer/light-atlas.mjs';
-import { readPolys, withMoverLightmaps } from '../src/unreal/polys.mjs';
+import { readPolys, moverModelFromPolys } from '../src/unreal/polys.mjs';
 import { POLY } from '../src/unreal/geometry.mjs';
 
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
@@ -99,8 +99,12 @@ test('mover polygon decoder and correspondence use authored bases, not empty BSP
   const bytes = Uint8Array.from(data), pkg = { names: [{ name: 'None' }], exports: [{ className: 'Polys', serialOffset: 0, serialSize: bytes.length }] };
   const polygons = readPolys(pkg, bytes, 1);
   const model = { points: [base], vectors: [normal, u, v], lightMaps: [{}], surfaces: [{ base: 0, normal: 0, textureU: 1, textureV: 2, pan: [0, 0], texture: 0, lightMap: -1 }] };
-  assert.equal(withMoverLightmaps(model, polygons).surfaces[0].lightMap, 0);
+  // The brush tracker's surfaces: one per polygon, iLightMap = iBrushPoly.
+  const lit = [{ ...polygons[0], brushPolygon: 3, flags: 0x41000000 }, { ...polygons[0], brushPolygon: -1, flags: 1 }];
+  const mover = moverModelFromPolys(model, lit, { specialLit: true });
+  assert.deepEqual(mover.model.surfaces.map(s => s.lightMap), [3, -1]);
+  assert.equal(mover.model.surfaces[0].flags, 0x100000, 'PolyFlags & 0x3cffffff, PF_SpecialLit for a bSpecialLit mover');
+  assert.equal(mover.triangles.length, 1, 'an invisible polygon draws nothing');
   assert.equal(model.surfaces[0].lightMap, -1);
-  assert.throws(() => withMoverLightmaps(model, [...polygons, ...polygons]), /Ambiguous/);
   assert.throws(() => readPolys(pkg, bytes.subarray(0, -1), 1), /Truncated/);
 });

@@ -13,10 +13,30 @@ package ownership and are not merged into map indices.
 
 `lighting.mjs` combines the original surface light lists, row-aligned LSB-first
 shadow masks, lightmap pans/scales, light positions/radii, colour, zone ambient and
-special-lit flags. `polys.mjs` connects static mover surfaces to their original
-brush polygons. The native mover assigns each polygon its ordinal; its compiled
-BSP surfaces can have lightmap indices of -1 despite valid polygon lightmaps.
-We validate the correspondence using texture, base, normal, axes and pan.
+special-lit flags. Movers are drawn from their brush polygons, as Engine's
+brush tracker draws them (2026-10-02). AMover::PostLoad (`0x103af7e0`)
+numbers the polygons (`iLink = i`). Building the level's tracker
+(`0x1037ac40`) then calls `0x1037b5c0` for every non-static brush. That
+call appends one level surface per polygon, copying the polygon's texture,
+pan, base, normal and texture vectors and `PolyFlags & 0x3cffffff` (plus
+PF_SpecialLit for a bSpecialLit mover). It sets the surface's **iLightMap
+to the polygon's iBrushPoly**, an index into the brush model's light maps
+(−1 on invisible polygons), and points `iLink` at the new surface.
+Tracker::Update (`0x1037a400`) transforms the polygons into those surfaces
+each move; SetupForSurf takes a dynamic surface's light maps from its
+actor's brush model. The brush model's own compiled surfaces (all
+iLightMap and iBrushPoly −1) are not drawn.
+
+`moverModelFromPolys` (`polys.mjs`) builds that surface set. The earlier
+reconstruction matched compiled surfaces to polygons by texture, base,
+normal, axes and pan, and took the polygon ordinal as the light map. It
+refused 74 of 159 movers on UNATCO HQ, Battery Park, the Ship and Training,
+because coplanar polygons are ambiguous. Where invisible polygons come
+first, the ordinal is the wrong light map. The polygon path draws every
+mover on the maps checked. A light list may also name a light deleted in
+the editor but still exported, such as the Ship's Light388 (bDeleteMe,
+lighting DeusExMover39): the reference loads it and AddLight does not test
+bDeleteMe, so `createLighting` reads such an export directly.
 
 The following findings came from disassembling the supplied binaries; addresses
 are RVAs, relative to each DLL's image base:

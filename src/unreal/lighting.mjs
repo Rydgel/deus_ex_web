@@ -1,4 +1,5 @@
 import { ClassDefaults } from './classes.mjs';
+import { readObject } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
 import { staticLightMap, ambientTexel } from '../runtime/static-lighting.mjs';
 import { fgetHsv } from '../runtime/dynamic-lighting.mjs';
@@ -135,6 +136,11 @@ export async function createLighting(map, asset, assets) {
   const stats = { lightActors: 0, lightmaps: 0, shadowMasks: 0, litSurfaces: 0, unlitSurfaces: 0, missingLightmaps: 0 };
   async function actor(ref) {
     if (!ref) ref = levelInfo?.index;
+    // A light list can name an actor the level no longer lists (deleted in
+    // the editor, still exported): the original loads it through that
+    // reference, and AddLight does not test bDeleteMe.
+    if (ref && !sourceActors.has(ref) && asset.pkg.exports[ref - 1]?.serialSize)
+      sourceActors.set(ref, { index: ref, values: readObject(asset.pkg, asset.bytes, ref).values });
     if (!ref || !sourceActors.has(ref)) throw new Error(`Missing lighting actor ${ref}`);
     if (!pendingActors.has(ref)) {
       const promise = defaults.forActor(asset, sourceActors.get(ref)).then(values => { actors.set(ref, values); return values; });

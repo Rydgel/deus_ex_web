@@ -5,7 +5,7 @@ import { buildSurfaceGeometry, POLY, toView, fromView } from '../unreal/geometry
 import { brushMatrix } from './transforms.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
-import { readPolys, withMoverLightmaps } from '../unreal/polys.mjs';
+import { readPolys, moverModelFromPolys } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
 import { batchWorldMeshes } from './world-batches.mjs';
@@ -219,12 +219,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   for (const actor of map.actors.filter(a => /Mover$/.test(a.className) && a.values.Brush > 0)) {
     try {
       const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush);
-      const model = withMoverLightmaps(rawModel, readPolys(asset.pkg, asset.bytes, rawModel.polygons));
+      // The brush tracker's surfaces: one per polygon (polys.mjs).
+      const { model, triangles } = moverModelFromPolys(rawModel, readPolys(asset.pkg, asset.bytes, rawModel.polygons),
+        { specialLit: Boolean((await classDefaults.forActor(asset, actor)).bSpecialLit) });
       const group = new THREE.Group();
       group.matrix.copy(brushMatrix(actor.values)); group.matrixAutoUpdate = false;
       group.userData.baseMatrix = group.matrix.clone(); moverGroups.set(actor.name, group);
       root.add(group);
-      await addModel(model, triangulateModel(model), group, actor.name, group.matrix);
+      await addModel(model, triangles, group, actor.name, group.matrix);
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
