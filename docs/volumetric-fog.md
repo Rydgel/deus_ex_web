@@ -22,8 +22,15 @@ Authority:
      passes the frame's four side planes (`Frame+0x130`).
    - **Links.** It gets a frame-scoped FVolActorLink: the actor plus its
      camera-space location.
-   - **Not yet traced.** The surface draw lists' `Volumetrics` (+0x40) come
-     from these links; the exact attachment is still to trace.
+   - **Attachment.** OccludeBsp (`0x10b19612–0x10b196d6`) gives each new
+     draw item an empty `Volumetrics` (+0x40). It then prepends every frame
+     link whose sphere is not wholly outside one of the item's eye planes
+     (`0x10b56608`, one per clipped-polygon edge): `N·L ≤ R` for each.
+   - **Conservative culls.** This and the leaf admission only drop lights
+     whose sphere no eye ray to a texel of the surface can meet. Such a
+     light adds nothing (later lights skip a zero; a first light writes
+     `table[0]`, which is all zero). The culls change results only through
+     the early-out flag's carried state.
 2. **SetupForSurf** (`0x10b06c90`) returns a FogMap when the surface's zone
    has `+0x388 & 2` (bFogZone), its draw list has volumetric links (+0x40),
    and the draw flags (+0x10) lack bit 4 (`0x10b07162–0x10b0718f`).
@@ -124,6 +131,6 @@ Unverified or host choices, noted:
   original draw order. Play's surface order differs, which can change
   boundary texels.
 - **Not done yet.**
-  - the per-leaf admission and draw-list attachment;
-  - the fog pass in Play, with the 7-bit upload scale to confirm;
+  - the fog pass in Play (surfaces of fog zones, the frame's coords, per-frame
+    maps), with the 7-bit upload scale to confirm;
   - fog on meshes (DrawMesh's Volumetrics argument).
