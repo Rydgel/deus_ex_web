@@ -116,6 +116,17 @@ GC, brought forward by speech decode allocation. Unverified.
    `getParameter`), the moving-light signature, draw-call count, and
    draw-list visibility (which bounds fog and procedural-texture work).
 
+### Fixed: animated light-map merge in the Rust core (October 2)
+
+`light.rs` runs SetupForSurf's class 1 merge with its colour and modulation
+tables (`LIGHT_KERNEL=js` / `?lightKernel=js` selects the reference).
+`validate-light-animation-rust`: 1,469,720 merges on seven maps, every region
+and texel byte equal (docs/static-lighting.md, "Rust kernel"). A single page
+switching through six maps (`.work/tools/map-swap.mjs`) shows no page error.
+A/B against `bc09717`, 3 pairs, start view: 00_Training 14.01 [13.42–14.03] →
+12.13 [11.61–12.97] ms (texture/light-map phase 6.67 → 5.07);
+02_NYC_BatteryPark's phase 5.09 → 4.64, its total within tick noise.
+
 ### Ten maps after the October 2 fixes
 
 Same `scan-play.mjs` workload as the census above (four headings, 90 frames
