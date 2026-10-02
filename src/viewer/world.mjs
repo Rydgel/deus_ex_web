@@ -296,7 +296,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   if (lighting.animatedRecords().length) notes.add(`${lighting.animatedRecords().length} light maps carry animated lights (pulse, flicker, strobe, torch/fire/watery waver), merged each frame; their noise draws come from a host stream.`);
   function updateLighting(changes) {
     const update = lighting.invalidate(changes);
-    for (const lightmap of update.lightmaps) lightAtlas.update(lightmap);
+    for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
     return { ...update, uploaded: update.lightmaps.length };
   }
   const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky,
@@ -347,7 +347,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : undefined;
         const start = performance.now(), changed = lighting.animate(lightFrame.advance(timeSeconds), visible);
         lightAnimation.mergeMs = performance.now() - start;
-        for (const { lightmap, region } of changed) lightAtlas.update(lightmap, region ? { partial: true, region } : undefined);
+        // A light map composed with moving lights changes as a whole (no
+        // region): its whole tile is resent, not the whole atlas.
+        for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
         lightAnimation.changed = changed.length; lightAnimation.ms = performance.now() - start;
       }
       // Fire textures, BSP and mesh skins alike, once per frame.

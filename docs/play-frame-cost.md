@@ -116,6 +116,30 @@ GC, brought forward by speech decode allocation. Unverified.
    `getParameter`), the moving-light signature, draw-call count, and
    draw-list visibility (which bounds fog and procedural-texture work).
 
+### Fixed: light-map uploads (October 2)
+
+Host rendering only; the texels on the GPU are unchanged
+(`scripts/validate-light-atlas-upload.mjs`).
+- A light map composed with moving lights changes as a whole and was sent
+  with a full `update()`, which re-uploaded the whole sealed array (six
+  4 MB layers on Training) in 183 of 240 frames. It now resends its tile.
+- Once the atlas is sealed, unbatched surfaces sample their page's array
+  layer (2D-array layer sampling equals 2D sampling byte for byte on this
+  GPU, checked by the validator), so the page textures are never uploaded and
+  each change is sent once.
+- Array rectangles go up with one `texSubImage3D` each under one unpack setup
+  per flush (`UNPACK_IMAGE_HEIGHT` must be the page height for skipped rows).
+
+Interleaved A/B, 3 pairs, start view, ms per frame, median [min–max]:
+
+| Map | Phase | before (715e72e) | after |
+|---|---|---:|---:|
+| 00_Training | total | 21.07 [20.99–21.25] | 17.41 [16.98–17.91] |
+| | mirrors (texture/light-map phase) | 13.99 | 10.61 |
+| 03_NYC_Airfield | total | 21.55 [21.04–21.74] | 15.75 [15.71–16.75] |
+| | mirrors | 7.57 | 4.16 |
+| | render | 1.49 | 1.01 |
+
 ## September 30, night: mesh animation and lighting on the GPU
 
 The actor meshes' GetFrame interpolation and DrawLodMesh lighting now run

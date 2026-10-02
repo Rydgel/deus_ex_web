@@ -16,12 +16,15 @@ export class LightAtlas {
     // The staging texture shares the pixels but never renders, so the
     // renderer copies its rectangles from memory, not by framebuffer.
     const staging = new THREE.DataTexture(pixels, this.size, this.size, THREE.RGBAFormat);
-    const page = { index: this.pages.length, texture, staging, pixels, x: 0, y: 0, rowHeight: 0, uploaded: false, dirty: [] };
+    const page = { index: this.pages.length, texture, staging, pixels, x: 0, y: 0, rowHeight: 0, uploaded: false, dirty: [],
+      layers: this.arrayUniform };
     texture.onUpdate = () => { page.uploaded = true; };
     this.pages.push(page); return page;
   }
   /** Seal the finished world's pages as array layers. Page textures and
-   * staging views keep the same bytes for unbatched surfaces and updates. */
+   * staging views keep the same bytes; once sealed, unbatched surfaces also
+   * sample their page's layer (applyLightAtlas), so the page textures are
+   * not uploaded and each light-map change is sent once. */
   sealArray() {
     if (this.arrayUniform.value) return this.arrayUniform;
     if (this.pages.some(page => page.uploaded)) throw new Error('Seal lightmap layers before the first draw');
@@ -86,19 +89,55 @@ export class LightAtlas {
     else this.dirtyPage(page);
     return tile;
   }
-  /** Send deferred tile rectangles; without a renderer the pages re-upload. */
+  /** Send deferred tile rectangles; without a renderer the pages re-upload.
+   * Array layers take one texSubImage3D per rectangle straight from the
+   * page's bytes, under one pixel-store setup per flush (the same texels
+   * copyTextureToTexture sends, without its per-call state round trips). */
   flush(renderer) {
+    let array = null;
     for (const page of this.pages) {
       if (!page.dirty.length) continue;
-      const rects = page.dirty; page.dirty = [];
-      if (!renderer || rects.length > 256) { this.dirtyPage(page); continue; }
+      let rects = page.dirty; page.dirty = [];
+      if (!renderer) { this.dirtyPage(page); continue; }
+      // Many rectangles: resend the page's whole layer instead.
+      const whole = rects.length > 256;
+      if (whole) rects = [[0, 0, this.size, this.size]];
       for (const [x, y, width, height] of rects) {
+        if (!page.uploaded) continue;
+        if (whole) { page.texture.needsUpdate = true; break; }
         const region = new THREE.Box2(new THREE.Vector2(x, y), new THREE.Vector2(x + width, y + height));
-        if (page.uploaded) renderer.copyTextureToTexture(page.staging, page.texture, region, new THREE.Vector2(x, y));
-        if (this.arrayUploaded) renderer.copyTextureToTexture(page.staging, this.arrayUniform.value, region,
-          new THREE.Vector3(x, y, page.index));
+        renderer.copyTextureToTexture(page.staging, page.texture, region, new THREE.Vector2(x, y));
+      }
+      if (!this.arrayUploaded) continue;
+      array ??= this.beginArrayUpload(renderer);
+      if (!array) { this.dirtyPage(page); continue; }
+      const { gl } = array;
+      for (const [x, y, width, height] of rects) {
+        array.state.pixelStorei(gl.UNPACK_SKIP_PIXELS, x); array.state.pixelStorei(gl.UNPACK_SKIP_ROWS, y);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, page.pixels);
       }
     }
+    if (array) for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS'])
+      array.state.pixelStorei(array.gl[name], 0);
+  }
+  /** Bind the uploaded array on unit 0 through three's state cache, with the
+   * unpack state copyTextureToTexture would set. Null when three still owes
+   * the array a full upload (that upload carries every dirty texel). */
+  beginArrayUpload(renderer) {
+    const texture = this.arrayUniform.value, properties = renderer.properties.get(texture);
+    if (!properties.__webglTexture || properties.__version !== texture.version) return null;
+    const gl = renderer.getContext(), state = renderer.state;
+    state.activeTexture(gl.TEXTURE0);
+    state.bindTexture(gl.TEXTURE_2D_ARRAY, properties.__webglTexture, gl.TEXTURE0);
+    state.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, texture.flipY);
+    state.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, texture.premultiplyAlpha);
+    state.pixelStorei(gl.UNPACK_ALIGNMENT, texture.unpackAlignment);
+    state.pixelStorei(gl.UNPACK_ROW_LENGTH, this.size);
+    // 3D uploads measure UNPACK_SKIP_ROWS against the image height, which
+    // defaults to the rectangle's own height: it must be the page height.
+    state.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, this.size);
+    state.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
+    return { gl, state };
   }
   coordinates(tile, point) {
     if (!tile.enabled) return [0, 0, 0];
@@ -113,9 +152,15 @@ export class LightAtlas {
 
 export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false, array = null) {
   const stride = array ? array.value.image.depth + 1 : 0;
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}`;
+  // An unbatched surface samples its page's array layer when the atlas has
+  // been sealed by the time its program is built (the same texels, linear
+  // filtered within one layer), otherwise the page texture.
+  const layer = () => !array && page?.layers?.value ? page.layers : null;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}`;
   material.onBeforeCompile = shader => {
-    shader.uniforms.deusLightAtlas = array ?? { value: page.texture };
+    const pageLayers = layer();
+    shader.uniforms.deusLightAtlas = array ?? pageLayers ?? { value: page.texture };
+    if (pageLayers) shader.uniforms.deusLightPage = { value: page.index };
     shader.uniforms.deusLightingEnabled = enabled;
     shader.uniforms.deusDisplayGamma = gamma;
     if (mirror) {
@@ -131,7 +176,8 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       vDeusLightUV = lightUV;
       vDeusLightBounds = lightBounds;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      uniform ${array ? 'highp sampler2DArray' : 'sampler2D'} deusLightAtlas;
+      uniform ${array || pageLayers ? 'highp sampler2DArray' : 'sampler2D'} deusLightAtlas;
+      ${pageLayers ? 'uniform float deusLightPage;' : ''}
       uniform float deusLightingEnabled;
       uniform float deusDisplayGamma;
       ${mirror ? 'uniform sampler2D deusMirror; uniform vec2 deusMirrorSize; uniform float deusMirrorActive;' : ''}
@@ -144,7 +190,8 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       ${array ? `highp int deusLightLayer = int(floor(vDeusLightUV.z + 0.5)) % ${stride};` : ''}
       if (deusLightingEnabled > 0.5 && ${array ? 'deusLightLayer > 0' : 'vDeusLightUV.z > 0.5'}) {
         vec2 lm = clamp(vDeusLightUV.xy, vDeusLightBounds.xy, vDeusLightBounds.zw);
-        gl_FragColor.rgb *= ${array ? 'texture(deusLightAtlas, vec3(lm, float(deusLightLayer - 1)))' : 'texture2D(deusLightAtlas, lm)'}.rgb * 2.0;
+        gl_FragColor.rgb *= ${array ? 'texture(deusLightAtlas, vec3(lm, float(deusLightLayer - 1)))'
+          : pageLayers ? 'texture(deusLightAtlas, vec3(lm, deusLightPage))' : 'texture2D(deusLightAtlas, lm)'}.rgb * 2.0;
       }
       ${mirror ? `if (deusMirrorActive > 0.5) {
         vec2 mirrorUV = gl_FragCoord.xy / deusMirrorSize;

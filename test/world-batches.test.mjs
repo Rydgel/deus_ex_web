@@ -22,15 +22,30 @@ test('lightmap array retains page bytes and sends partial updates to the exact l
   array.onUpdate(); atlas.pages[1].texture.onUpdate();
   maps[1].pixels[0] = .75;
   atlas.update(maps[1], {partial: true, region: {minU: 0, maxU: 1, minV: 0, maxV: 1}});
-  const copies = [];
+  // The page texture (uploaded here) takes three's copy; the array layer
+  // takes one texSubImage3D from the page bytes under the matching unpack
+  // state, and the row/skip state returns to zero afterwards.
+  const copies = [], uploads = [], store = new Map(), handle = {};
+  const gl = {TEXTURE0: 0x84c0, TEXTURE_2D_ARRAY: 0x8c1a, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401,
+    UNPACK_FLIP_Y_WEBGL: 1, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 2, UNPACK_ALIGNMENT: 3, UNPACK_ROW_LENGTH: 4,
+    UNPACK_IMAGE_HEIGHT: 5, UNPACK_SKIP_IMAGES: 6, UNPACK_SKIP_PIXELS: 7, UNPACK_SKIP_ROWS: 8,
+    texSubImage3D(...args) { uploads.push({args: args.slice(0, 10), data: args[10], store: Object.fromEntries(store)}); }};
   atlas.flush({copyTextureToTexture(source, destination, region, position) {
     copies.push({source, destination, min: region.min.toArray(), max: region.max.toArray(), at: position.toArray()});
-  }});
-  assert.equal(copies.length, 2);
+  }, getContext: () => gl, properties: {get: texture => texture === array ? {__webglTexture: handle, __version: array.version} : {}},
+  state: {activeTexture() {}, bindTexture(type, texture) { assert.equal(type, gl.TEXTURE_2D_ARRAY); assert.equal(texture, handle); },
+    pixelStorei(name, value) { store.set(name, value); }}});
+  assert.equal(copies.length, 1);
   assert.equal(copies[0].destination, tiles[1].page.texture);
-  assert.equal(copies[1].destination, array);
-  assert.deepEqual(copies.map(copy => [copy.min, copy.max, copy.at]),
-    [[[0, 0], [2, 2], [0, 0]], [[0, 0], [2, 2], [0, 0, 1]]]);
+  assert.deepEqual([copies[0].min, copies[0].max, copies[0].at], [[0, 0], [2, 2], [0, 0]]);
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(uploads[0].args, [gl.TEXTURE_2D_ARRAY, 0, 0, 0, 1, 2, 2, 1, gl.RGBA, gl.UNSIGNED_BYTE]);
+  assert.equal(uploads[0].data, tiles[1].page.pixels);
+  assert.equal(uploads[0].store[gl.UNPACK_ROW_LENGTH], 4); assert.equal(uploads[0].store[gl.UNPACK_IMAGE_HEIGHT], 4);
+  assert.equal(uploads[0].store[gl.UNPACK_SKIP_PIXELS], 0); assert.equal(uploads[0].store[gl.UNPACK_SKIP_ROWS], 0);
+  assert.equal(uploads[0].store[gl.UNPACK_FLIP_Y_WEBGL], false);
+  for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS'])
+    assert.equal(store.get(gl[name]), 0);
   assert.equal(tiles[1].page.pixels[0], Math.round(.75 * 255));
   atlas.update(maps[2]); assert.equal(array.layerUpdates.size, 0);
   atlas.update(maps[0], {partial: true}); atlas.flush(null);
