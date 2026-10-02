@@ -75,6 +75,21 @@ class Oracle:
         cpu.mem_write(self.stub_pow, bytes.fromhex('dd05') + struct.pack('<I', self.pow_slot) + bytes.fromhex('c3'))
         self.stub_isnan = STUBS + 0x90
         cpu.mem_write(self.stub_isnan, bytes.fromhex('c3'))
+        # SEH frames go through fs:[0] with a zero FS base.
+        cpu.mem_map(0, 0x1000)
+        # msvcrt _ftol as the truncating x87 sequence (native-fire-texture-oracle.py).
+        self.stub_ftol = STUBS + 0x100 + 0x40
+        cpu.mem_write(self.stub_ftol, bytes.fromhex('83ec0c' 'd93c24' '668b0424' '660d000c' '6689442402' 'd96c2402'
+                                                    'df7c2404' 'd92c24' '8b442404' '8b542408' '83c40c' 'c3'))
+        # appFrand: the case's scripted doubles, loaded onto the x87 stack.
+        self.stub_frand = STUBS + 0xc0
+        self.frand_slot = STUBS + 0xe0
+        cpu.mem_write(self.stub_frand, bytes.fromhex('dd05') + struct.pack('<I', self.frand_slot) + bytes.fromhex('c3'))
+        self.frand_values = []
+
+        def on_frand(uc, address, size, data):
+            uc.mem_write(self.frand_slot, struct.pack('<d', self.frand_values.pop(0)))
+        cpu.hook_add(UC_HOOK_CODE, on_frand, begin=self.stub_frand, end=self.stub_frand)
         # UObject::IsA(Class): a fabricated light is never a Pawn.
         self.stub_isa = STUBS + 0xa0
         cpu.mem_write(self.stub_isa, bytes.fromhex('31c0' 'c20400'))
@@ -115,6 +130,10 @@ class Oracle:
                     target = self.stub_pow
                 elif symbol == '?appIsNan@@YAHN@Z':
                     target = self.stub_isnan
+                elif library == 'msvcrt.dll' and symbol == '_ftol':
+                    target = self.stub_ftol
+                elif symbol == '?appFrand@@YAMXZ':
+                    target = self.stub_frand
                 elif symbol == '?IsA@UObject@@QBEHPAVUClass@@@Z':
                     target = self.stub_isa
                 elif library == 'core.dll' and symbol in ('?GMath@@3VFGlobalMath@@A', '??_0FCoords@@QAEAAV0@ABVFRotator@@@Z'):
@@ -277,6 +296,65 @@ class Oracle:
         self.lightmap_globals(facet)
         self.call(case.get('address', 0x10b04f80), [LIGHTMAP, info, illum, spatial])
         return {'spatial': list(self.read(spatial, f'{width * height}B'))}
+
+    # The per-frame noise 0x10b13080(time) over a sequence of times.
+    def noise(self, case):
+        self.frand_values = list(case['frand'])
+        self.write(0x10b50248, 'i', case.get('last', 0))
+        for table in (0x10b4fa44, 0x10b4fe44, 0x10b4f640):
+            self.cpu.mem_write(table, bytes(0x404))
+        steps = []
+        for time in case['times']:
+            self.call(0x10b13080, [struct.unpack('<I', struct.pack('<f', time))[0]])
+            steps.append({'A': list(self.read(0x10b4fa44, '256I')), 'W': list(self.read(0x10b4fe44, '256I')),
+                          'S': list(self.read(0x10b4f644, '256I')), 'last': self.read(0x10b50248, 'i')[0]})
+        return {'steps': steps, 'left': len(self.frand_values)}
+
+    # GlobalLighting 0x10b05e90(animate, actor, &brightness, &colour) per
+    # frame for one light: LightType/Period/Phase, Level.TimeSeconds, the
+    # noise table A and the shared strobe state.
+    def light_type(self, case):
+        light = case['light']
+        actor, level = self.actor({'location': (0, 0, 0), 'brightness': light['brightness'], 'radius': 1,
+                                   'type': light['type'], 'hue': light.get('hue', 0), 'saturation': light.get('saturation', 0)}), self.alloc(0x600)
+        self.write(actor + 0x1e6, 'BB', light.get('period', 0), light.get('phase', 0))
+        self.write(actor + 0xa8, 'I', level)
+        self.write(0x10b49ea4, 'II', *case.get('strobe', (0, 0)))
+        out = []
+        for frame in case['frames']:
+            self.write(level + 0x478, 'f', frame['time'])
+            self.write(0x10b4fa44, '256I', *frame['A'])
+            brightness, color = self.alloc(4), self.alloc(16)
+            self.write(brightness, 'I', frame['brightness'])
+            self.call(0x10b05e90, [case.get('animate', 1), actor, brightness, color])
+            out.append({'brightness': self.read(brightness, 'I')[0], 'strobe': list(self.read(0x10b49ea4, 'II'))})
+        return {'frames': out, 'flickerKey': actor & 0xff}
+
+    # The merge 0x10b03040 with a merge-dynamic effect (1-3): noise tables,
+    # start index, spatial bytes and colour table from the case.
+    def merge_mod(self, case):
+        width, height = case['clamp']
+        self.write(CLAMP_U, 'ii', width, height)
+        self.write(0x10b4fa44, '256I', *case['A'])
+        self.write(0x10b4fe44, '256I', *case['W'])
+        size_u = 1 << (width - 1).bit_length()
+        self.write(SIZE_U, 'i', size_u)
+        info, spatial, colors = self.alloc(0x100), self.alloc(width * height + 16), self.alloc(0x400)
+        self.cpu.mem_write(spatial, bytes(case['spatial']))
+        self.write(colors, '256I', *case['table'])
+        self.write(info + 0x8c, 'I', colors)
+        self.write(info + 0x28, 'I', spatial)
+        self.write(info + 0x34, 'iiii', *case['rect'])
+        source, target = self.alloc(size_u * height * 4 + 16), self.alloc(size_u * height * 4 + 16)
+        for y in range(height):
+            self.write(source + y * size_u * 4, f'{width}I', *case['static'][y * width:(y + 1) * width])
+        self.call(0x10b03040, [LIGHTMAP, case['effect'], case['index'], info, source, target])
+        rect = case['rect']
+        merged = []
+        for y in range(height):
+            row = self.read(target + y * size_u * 4, f'{width}I')
+            merged.extend(row[x] if rect[0] <= x < rect[1] and rect[2] <= y < rect[3] else case['static'][y * width + x] for x in range(width))
+        return {'merged': merged}
 
     def incidence(self, light, facet, reciprocal):
         info, coords = self.alloc(0x100), self.alloc(0x40)
@@ -492,6 +570,9 @@ def main():
     if cases.get('sines'):
         oracle.gmath(cases['sines'])
     out['spots'] = [oracle.spot_merge(case) for case in cases.get('spots', [])]
+    out['noise'] = [oracle.noise(case) for case in cases.get('noise', [])]
+    out['lightTypes'] = [oracle.light_type(case) for case in cases.get('lightTypes', [])]
+    out['mergeMods'] = [oracle.merge_mod(case) for case in cases.get('mergeMods', [])]
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []
     json.dump(out, sys.stdout)

@@ -1,0 +1,100 @@
+/** Compare the light animation in src/runtime/static-lighting.mjs with the
+ * original Render.dll (scripts/native-dynamic-light-oracle.py): the per-frame
+ * light noise (0x10b13080) over irregular, repeated, backward and jumping
+ * times; GlobalLighting's LightType functions (0x10b05e90) per frame; and the
+ * merge's TorchWaver/FireWaver/WateryShimmer modulation (0x10b03040).
+ * docs/static-lighting.md "Light animation" records the scope. */
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createLightNoise, lightTypeBrightness, mergeModulation } from '../src/runtime/static-lighting.mjs';
+import { colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
+import { createNativeRng } from '../src/runtime/rng.mjs';
+import { rotationSineTable } from '../src/runtime/coords.mjs';
+import { gameDirectory } from './game-directory.mjs';
+
+const root = gameDirectory(), python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
+const runOracle = cases => JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root],
+  { input: JSON.stringify(cases), maxBuffer: 1 << 30 }));
+const view = new DataView(new ArrayBuffer(4));
+const u32 = value => { view.setFloat32(0, value, true); return view.getUint32(0, true); };
+let seed = 0x1a77;
+const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8;
+const f = Math.fround;
+
+// Noise: a frame clock with ordinary steps, repeats, a backward step and jumps.
+const times = [];
+let t = 0.004;
+for (let k = 0; k < 80; k++) {
+  const r = random() % 20;
+  t = r === 0 ? t : r === 1 ? t - 0.05 : r === 2 ? t + 0.6 : r === 3 ? t + 0.457 : t + (1 + random() % 40) / 1000;
+  times.push(f(Math.max(0, t)));
+}
+const noiseCases = [0, 7, -3].map(last => {
+  const rng = createNativeRng(0x5eed + last), frand = Array.from({ length: 512 * times.length }, () => rng.frand());
+  return { last, times, frand };
+});
+// Light types 0-7 (8, 9 are not translated), several periods/phases, per frame.
+const typeCases = [];
+for (const type of [0, 1, 2, 3, 4, 5, 6, 7]) for (let k = 0; k < 4; k++) {
+  const light = { type, brightness: random() & 255, period: k === 0 ? 0 : random() & 255, phase: random() & 255 };
+  const frames = times.slice(0, 40).map(time => ({ time, A: Array.from({ length: 256 }, () => u32(f((random() % 1000) / 999))),
+    brightness: u32(f((light.brightness & 255) * f(1 / 255))) }));
+  typeCases.push({ light, frames, strobe: [u32(0), 0], animate: k === 3 ? 0 : 1 });
+}
+// Merge modulation: effects 1-3, random rectangles, spatial bytes and tables.
+const mergeCases = [];
+for (const effect of [1, 2, 3]) for (let k = 0; k < 6; k++) {
+  const width = 1 + random() % 40, height = 1 + random() % 20;
+  const minU = random() % width, maxU = minU + 1 + random() % (width - minU), minV = random() % height, maxV = minV + 1 + random() % (height - minV);
+  const steps = [0, 1, 2].map(() => random() % 200000);
+  const table = Array.from({ length: 256 }, (_, i) => (colorTableEntry(steps[2], i) | colorTableEntry(steps[1], i) << 8 | colorTableEntry(steps[0], i) << 16 | 0xff000000) >>> 0);
+  mergeCases.push({ effect, clamp: [width, height], rect: [minU, maxU, minV, maxV], index: random() & 0xffff,
+    spatial: Array.from({ length: width * height }, () => random() & 255), table,
+    static: Array.from({ length: width * height }, () => ((random() & 0x7f) | (random() & 0x7f) << 8 | (random() & 0x7f) << 16 | 0x7f000000) >>> 0),
+    A: Array.from({ length: 256 }, () => u32(f((random() % 1000) / 999))), W: Array.from({ length: 256 }, () => u32(f((random() % 1000) / 999))) });
+}
+
+const native = runOracle({ sines: [...rotationSineTable()].map(u32), noise: noiseCases, lightTypes: typeCases, mergeMods: mergeCases });
+const report = { noiseSteps: 0, noiseMismatch: 0, typeFrames: 0, typeMismatch: 0, mergeTexels: 0, mergeMismatch: 0, first: [] };
+
+noiseCases.forEach((c, i) => {
+  const values = [...c.frand], noise = createLightNoise(() => values.shift());
+  noise.last = c.last;
+  native.noise[i].steps.forEach((expected, step) => {
+    noise.update(c.times[step]); report.noiseSteps++;
+    const bad = ['A', 'W', 'S'].filter(key => expected[key].some((v, k) => v !== u32(noise[key][k])));
+    if (expected.last !== noise.last) bad.push('last');
+    if (bad.length) { report.noiseMismatch++; if (report.first.length < 5) report.first.push({ noise: i, step, bad }); }
+  });
+});
+typeCases.forEach((c, i) => {
+  const strobe = { time: 0, flag: 0 }, key = native.lightTypes[i].flickerKey;
+  const values = { LightType: c.light.type, LightBrightness: c.light.brightness, LightPeriod: c.light.period, LightPhase: c.light.phase };
+  c.frames.forEach((frame, k) => {
+    const A = Float32Array.from(frame.A, bits => { view.setUint32(0, bits, true); return view.getFloat32(0, true); });
+    const brightness = lightTypeBrightness(values, { timeSeconds: frame.time, noise: { A }, strobe, flickerKey: key, animate: Boolean(c.animate) });
+    report.typeFrames++;
+    if (u32(brightness) !== native.lightTypes[i].frames[k].brightness) {
+      report.typeMismatch++; if (report.first.length < 5) report.first.push({ type: c.light.type, frame: k, js: brightness, bits: native.lightTypes[i].frames[k].brightness });
+    }
+  });
+});
+mergeCases.forEach((c, i) => {
+  const fl = bits => { view.setUint32(0, bits, true); return view.getFloat32(0, true); };
+  const noise = { A: Float32Array.from(c.A, fl), W: Float32Array.from(c.W, fl) }, modulate = mergeModulation(c.effect, noise);
+  const [width] = c.clamp, [minU, maxU, minV, maxV] = c.rect;
+  let index = c.index;
+  const merged = [...c.static];
+  for (let v = minV; v < maxV; v++) for (let u = minU; u < maxU; u++) {
+    const p = v * width + u, byte = modulate(c.spatial[p], index++), entry = c.table[byte];
+    let out = c.static[p] & 0xff000000;
+    for (let ch = 0; ch < 3; ch++) out |= Math.min(127, ((c.static[p] >>> (ch * 8)) & 255) + ((entry >>> (ch * 8)) & 255)) << (ch * 8);
+    merged[p] = out >>> 0;
+  }
+  native.mergeMods[i].merged.forEach((v, p) => { report.mergeTexels++; if (((v ^ merged[p]) & 0xffffff) !== 0) report.mergeMismatch++; });
+});
+console.log(JSON.stringify(report));
+assert.equal(report.noiseMismatch, 0, 'light noise tables match');
+assert.equal(report.typeMismatch, 0, 'LightType brightness matches');
+assert.equal(report.mergeMismatch, 0, 'merge modulation matches');
+console.log(`validate-light-animation: PASS (${report.noiseSteps} noise frames, ${report.typeFrames} LightType frames, ${report.mergeTexels} merged texels)`);

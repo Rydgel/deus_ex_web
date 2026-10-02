@@ -3,7 +3,8 @@
 import { fistp, normalLightTable, surfaceLightClass, movingLightConstants, movingLightRect, normalLightIncidence,
   normalLightSpatial, nonIncidenceSpatial, colorTableEntry } from './dynamic-lighting.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87ftol, x87cmp } from './script-vm.mjs';
+import { rotatorSin } from './coords.mjs';
 
 const f = Math.fround;
 const scratch = new DataView(new ArrayBuffer(4));
@@ -238,3 +239,81 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
   return texels;
 }
 const surfaceLightClassOf = surfaceLightClass;
+
+/** The light manager's per-frame noise (0x10b13080), called once a frame
+ * with Level.TimeSeconds (0x10b146a5): `step = ftol(time·35)`; table A
+ * (0x10b4fa44) takes 256 fresh appFrand floats; table W (0x10b4fe44, the
+ * watery shimmer) eases toward A: with 0 ≤ step − last < 16 and a previous
+ * step, the slopes S (0x10b4f644) of the 16·(step−last) entries from
+ * last·16 are re-aimed, `(A − W)/16`, and the other entries advance by
+ * `(step − last)·S`; otherwise (the first call, a jump) W takes 256 more
+ * draws and every slope is re-aimed. W is clamped to [0, 1]. `frand` is the
+ * host's appFrand stream (the original's position in the CRT stream is not
+ * reproduced). */
+export function createLightNoise(frand) {
+  const A = new Float32Array(256), W = new Float32Array(256), S = new Float32Array(256);
+  const state = { A, W, S, last: 0 };
+  state.update = timeSeconds => {
+    const step = x87ftol(x87mul(x87load(f(timeSeconds)), x87double(35)));
+    for (let i = 0; i < 256; i++) A[i] = f(frand());
+    const last = state.last;
+    if ((Math.imul(step - last, 16) >>> 0) >= 0x100 || last === 0) {
+      for (let i = 0; i < 256; i++) { W[i] = f(frand()); S[i] = f((A[i] - W[i]) * 0.0625); }
+    } else {
+      const start = Math.imul(last, 16) & 0xff, end = Math.imul(step, 16) & 0xff, n = (step - last) & 0xff;
+      for (let c = start; c !== end; c = (c + 1) & 0xff) S[c] = f((A[c] - W[c]) * 0.0625);
+      for (let c = end; c !== start; c = (c + 1) & 0xff) W[c] = f(n * S[c] + W[c]);
+    }
+    for (let i = 0; i < 256; i++) W[i] = W[i] < 0 ? 0 : W[i] < 1 ? W[i] : 1;
+    state.last = step;
+  };
+  return state;
+}
+
+/** GlobalLighting's LightType functions (table 0x10b2a284) on the f32
+ * brightness LightBrightness/255, then the clamp to [0, 1] (0x10b05f26).
+ * Pulse and SubtlePulse: `ftol(TimeSeconds·2293760/max(1, LightPeriod) +
+ * LightPhase·256)` through GMath's sine table, times `0.6 + 0.39·sin` or
+ * `0.9 + 0.09·sin`; Blink is dark on odd `ftol(TimeSeconds·2293760/(LightPeriod
+ * + 1) + LightPhase·256)`; Flicker is dark below 0.5 of the frame's noise
+ * entry and scaled by it otherwise; Strobe is dark while one shared flag,
+ * flipped whenever TimeSeconds changes, is set; BackdropLight and Steady are
+ * unchanged. The flicker entry is chosen by the low byte of the actor's
+ * address in the original; `flickerKey` is the host's stand-in. Texture
+ * palette types (8, 9) are not translated and stay steady. With animation
+ * off (the viewport actor's SHOW_PlayerCtrl clear) every type is steady. */
+export function lightTypeBrightness(values, { timeSeconds, noise, strobe, flickerKey = 0, animate = true }) {
+  let brightness = f((values.LightBrightness & 255) * f(1 / 255));
+  const type = animate ? values.LightType & 255 : 1, time = x87load(f(timeSeconds));
+  const angle = (divisor, scale, offset) => {
+    const phase = (values.LightPhase & 255) << 8;
+    const a = x87ftol(x87add(x87div(x87mul(time, x87double(2293760)), x87int32(divisor)), x87int32(phase)));
+    return scale === undefined ? a : x87store(x87mul(x87add(x87mul(x87load(rotatorSin(a)), x87double(scale)), x87double(offset)), x87load(brightness)));
+  };
+  if (type === 0) brightness = 0;
+  else if (type === 2) brightness = angle(Math.max(1, values.LightPeriod & 255), 0.39, 0.6);
+  else if (type === 7) brightness = angle(Math.max(1, values.LightPeriod & 255), 0.09, 0.9);
+  else if (type === 3) { if (angle((values.LightPeriod & 255) + 1) & 1) brightness = 0; }
+  else if (type === 4) {
+    const r = noise.A[flickerKey & 0xff];
+    brightness = x87cmp(x87load(r), x87double(0.5)) === 'lt' ? 0 : f(r * brightness);
+  } else if (type === 5) {
+    if (strobe.time !== f(timeSeconds)) { strobe.time = f(timeSeconds); strobe.flag ^= 1; }
+    if (strobe.flag) brightness = 0;
+  }
+  return brightness < 0 ? 0 : brightness < 1 ? brightness : 1;
+}
+
+/** The merge's per-texel modulation of the merge-dynamic effects (0x10b030f2
+ * -0x10b03244): TorchWaver `spatial·(0.95 + 0.05·A[i])`, FireWaver
+ * `spatial·(0.8 + 0.2·A[i])`, WateryShimmer `spatial·(0.6 + 0.4·W[i])`, the
+ * product stored as a float, less 0.5, through FISTP (its low byte); `i`
+ * runs on from the merge's start index, one per rectangle texel. */
+export function mergeModulation(effect, noise) {
+  const [table, scale, offset] = effect === 1 ? [noise.A, 0.05, 0.95] : effect === 2 ? [noise.A, 0.2, 0.8] : [noise.W, 0.4, 0.6];
+  const S = x87double(scale), O = x87double(offset);
+  return (spatial, index) => {
+    const factor = x87add(x87mul(x87load(table[index & 0xff]), S), O);
+    return fistp(x87store(x87mul(factor, x87int32(spatial))) - 0.5) & 255;
+  };
+}

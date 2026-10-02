@@ -173,6 +173,55 @@ Diagnostics, still open:
 - A class 2 light in a static list is skipped, with a note; none has been
   seen.
 
+## Light animation
+
+Three per-frame inputs drive the class 1 lights. All three are now
+translated and oracle-checked (`validate-light-animation.mjs`), but not
+yet wired into Play.
+
+**Noise** (`0x10b13080`). It is called once a frame with Level.TimeSeconds
+through a second light-manager object (`0x10b30a08`, call at `0x10b146ae`).
+- `step = ftol(time·35)`.
+- Table A (`0x10b4fa44`) takes 256 fresh appFrand floats every frame.
+- Table W (`0x10b4fe44`) eases toward A. When `0 ≤ step − last < 16` and
+  there was a previous step, the slopes S (`0x10b4f644`) of the
+  `16·(step − last)` entries from `last·16` are re-aimed at `(A − W)/16`,
+  and the remaining entries advance by `(step − last)·S`. Otherwise W takes
+  256 more draws and every slope is re-aimed.
+- W is clamped to [0, 1].
+
+The draws come from the process-wide CRT rand, whose position at each frame
+the browser does not reproduce: Play will feed a host stream.
+
+**LightType** (GlobalLighting `0x10b05e90`, table `0x10b2a284`). Each type
+function changes the float brightness, which is then clamped to [0, 1].
+- Pulse: `0.6 + 0.39·sin`; SubtlePulse: `0.9 + 0.09·sin`. The angle is
+  `ftol(TimeSeconds·2293760/max(1, LightPeriod) + LightPhase·256)`, through
+  GMath's sine table.
+- Blink: dark on an odd `ftol(TimeSeconds·2293760/(LightPeriod+1) +
+  LightPhase·256)`.
+- Flicker: dark below 0.5 of A at the low byte of the actor's address (a
+  host key in Play), scaled by it otherwise.
+- Strobe: dark while one shared flag, flipped whenever TimeSeconds changes,
+  is set.
+- BackdropLight and Steady: unchanged.
+- The two texture-palette types: not translated.
+- Every type is steady unless the viewport actor's SHOW_PlayerCtrl (0x800)
+  is set, which it is in play.
+
+**Merge modulation** (`0x10b030f2`-`0x10b03244`). Before the saturating
+add, each spatial byte of a TorchWaver, FireWaver or WateryShimmer light
+becomes the low byte of `FISTP(float(spatial·factor) − 0.5)`, where factor
+is `0.95 + 0.05·A[i]`, `0.8 + 0.2·A[i]` or `0.6 + 0.4·W[i]`, with `i`
+running on from the merge's start index.
+
+The oracle runs the noise function (scripted appFrand, msvcrt `_ftol` as
+the truncating x87 sequence) over 240 frames: irregular steps, repeats, a
+backward step, jumps, and three starting steps. It runs GlobalLighting for
+eight types × four lights over 40 frames each (1,280 frames, including
+animation off) and the merge for the three effects on 18 random rectangles
+(3,600 texels). Everything matches.
+
 ## Not yet moved
 
 Still to do: the time-varying spatial functions, the merge-dynamic
