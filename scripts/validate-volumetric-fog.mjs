@@ -57,7 +57,7 @@ const reference = JSON.parse(execFileSync(python, ['scripts/native-volumetric-fo
   { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 1 << 28 }));
 
 // The Rust core's loop (fog.rs) against the original and the JavaScript.
-let rustTexels = 0;
+let rustTexels = 0, rustTexelLights = 0, fastFallbacks = 0;
 inputs.forEach((input, i) => {
   const state = { missFlag: input.missFlag }, rust = fogMapKernel(kernel, { ...input, state });
   if (i < SURFACES) {
@@ -68,7 +68,12 @@ inputs.forEach((input, i) => {
     assert.deepEqual([...rust], [...fogMap({ ...input, state: jsState })], `surface ${i}: Rust against JavaScript`);
     assert.equal(state.missFlag, jsState.missFlag, `surface ${i}: Rust early-out flag against JavaScript`);
   }
-  rustTexels += input.width * input.height;
+  // fog.rs's certain-rounding fast path against Ext on every texel of the
+  // surface just uploaded, from the same incoming flag (fog.check).
+  kernel.fog.setMiss(input.missFlag); kernel.fog.resetFallbacks();
+  assert.equal(kernel.fog.check(input.width, input.height, input.lights.length), 0, `surface ${i}: fast path against Ext`);
+  fastFallbacks += kernel.fog.fallbacks();
+  rustTexels += input.width * input.height; rustTexelLights += input.width * input.height * input.lights.length;
 });
 
 let texels = 0, lit = 0, merged = 0, inside = 0, vertexCount = 0, fogVertices = 0;
@@ -93,4 +98,4 @@ cases.forEach((c, i) => {
   if (c.lights.length > 1) merged++;
 });
 assert.ok(lit > 2000 && merged > 50 && inside > 3 && fogVertices > 300, 'cases reach fogged texels, merges, inside-volume lights and fogged vertices');
-console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights and ${vertexCount} mesh vertices (${fogVertices} fogged, FLightManager::Fog) match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels).`);
+console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights and ${vertexCount} mesh vertices (${fogVertices} fogged, FLightManager::Fog) match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels), its fast path matching Ext on every texel and flag (${fastFallbacks} of ${rustTexelLights} texel-lights fall back).`);

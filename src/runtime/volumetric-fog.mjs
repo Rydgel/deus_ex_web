@@ -181,10 +181,13 @@ export function fogMap({ grid, width, height, coords, lights, state = { missFlag
  * kernel; `state.missFlag` is written before and read back after. Returns
  * null when the surface exceeds the kernel's buffers. */
 const kernelsWithTable = new WeakSet();
+// FOG_EXACT=1 (Node only) keeps every texel on the Ext model, for A/B runs
+// of fog.rs's certain-rounding fast path.
+const FOG_EXACT = typeof process !== 'undefined' && process.env?.FOG_EXACT === '1';
 export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 } }) {
   if (!lights.length) return null;
   const fog = kernel.fog;
-  if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); kernelsWithTable.add(fog); }
+  if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); if (FOG_EXACT) fog.setExact(true); kernelsWithTable.add(fog); }
   const sorted = sortVolumetricLights(lights), words = new Uint32Array(sorted.length * 9), tables = new Uint8Array(sorted.length * 1024);
   sorted.forEach((light, k) => {
     words.set([...light.location.map(bitsOf), bitsOf(light.radiusSq), bitsOf(light.invRadius), bitsOf(light.invRadiusSq),

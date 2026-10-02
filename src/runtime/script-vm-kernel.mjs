@@ -153,6 +153,16 @@ export function createScriptVmKernel(instance, memory) {
         ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice() : null,
       miss: () => x.fog_miss(),
       setMiss: value => x.fog_set_miss(value >>> 0),
+      // The certain-rounding fast path (fog.rs texel_fast): `setExact(true)`
+      // runs every texel on the Ext model; `fallbacks` counts the texels the
+      // fast path left to Ext. `check` (validation only) runs the loop on Ext
+      // with the fast path compared on every texel from the same incoming
+      // flag and returns the texels where they differ.
+      setExact: on => x.fog_set_exact(on ? 1 : 0),
+      fallbacks: () => x.fog_fallbacks() >>> 0,
+      resetFallbacks: () => x.fog_reset_fallbacks(),
+      check: (width, height, count) => x.fog_check(width >>> 0, height >>> 0, count >>> 0) >>> 0,
+      texels: (width, height) => new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice(),
     }),
     // Fire.dll's procedural texture ticks (fire.rs, docs/fire-texture.md
     // "Rust kernel"), driven by fire-texture-kernel.mjs over blocks from

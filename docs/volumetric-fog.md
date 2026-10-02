@@ -119,6 +119,105 @@ the exact 80-bit `Ext` model.
 - **Memory.** Its statics (a 64K-texel output buffer) raise the kernel's
   `__heap_base` to `0x1931d0`, within the 2 MB object-arena reserve.
 
+**Fast path.** `texel_fast` in fog.rs evaluates each texel's operations in
+f64 and keeps a result only where it is already the Ext result. Otherwise
+it returns nothing and the texel reruns on Ext from the same incoming
+early-out flag. The fast path never writes the flag. The method is the one
+in `x87-fast.mjs` and lodmesh-kernel's `pose_double`.
+- **Rule.** The f64 value and the Ext value both lie within a bound E of
+  the exact real computed from the stored f32 inputs. An FST is taken only
+  when every real within E of the f64 value rounds to the same normal f32
+  (`certain_f32`; no zero, subnormal, top-binade or non-finite results). A
+  comparison of unstored values is taken only when its margin exceeds E.
+- **Bounds.** Each E is at least 1.5 times Higham's γₙ on the
+  absolute-value expression: n·2⁻⁵³ for f64 plus n·2⁻⁶⁴ for Ext, with n
+  the roundings on the deepest path. A 2⁻¹⁰⁰⁰ term covers f64 subnormals.
+  Products of two f32s are exact in both models.
+
+  | Value | Roundings | E |
+  |---|---|---|
+  | `dot` store | 2 | 4u·(\|pz·lz\| + \|py·ly\| + \|px·lx\|) |
+  | `pp` (unstored), its store | 2 | 4u·pp |
+  | early-out `pp·d² − dd > pp·R²` | 4 / 3 | 8u·(\|pp·d²\| + dd + pp·R²) |
+  | `h2` store | 4 | 8u·(\|d²\| + dd/pp) |
+  | chord value `v` (both branches) | 5 | 8u·\|v\|abs |
+  | first light `st(v·255)` | 6 | 10u·255·\|v\|abs |
+
+  Here u = 2⁻⁵³ and \|v\|abs is v's expression with every term taken
+  positive. Cancellation therefore falls back: a ray through the light's
+  centre (h2 ≈ 0), dot ≈ 0, or a short chord (`outer ≈ inner`).
+- **Exact by construction.** These are computed in native f32 and must be
+  normal and finite.
+  - `t = dot/length`, `s = t − length` and `R² − h2`: Ext rounds the
+    exact quotient or difference of two f32s to 64 bits, then FST rounds
+    it to 24. That double rounding is innocuous (64 ≥ 2·24 + 2). The
+    64-bit rounding changes such a result only where it lies more than
+    2⁻⁴⁹ (relative) from every f32 midpoint. A difference is exact in 64
+    bits unless the exponents differ by more than 40, and then lies within
+    2⁻³⁹ of the larger operand. A quotient is never a midpoint and lies at
+    least 2⁻⁴⁹ from one.
+  - `hn = st(h2·R⁻²)` and the later lights' `st(vf·255)`: each rounds an
+    exact product once, as the native multiply does.
+  - Comparisons of stored f32s are exact natively. The Ext compare quirks
+    (unordered, an infinity pair) need non-finite operands. A light with a
+    non-finite word runs on Ext, and so does a non-finite texel position.
+- **Decisions on v.** v's sign must be certain and nonzero. A −0 passes
+  `below(v, 0)`, stores as `0x80000000` and clamps to 1.0. `store(v) ≥ 1.0`
+  is decided against 1 − 2⁻²⁵, the midpoint that rounds to the even 1.0.
+  A light whose brightness word is 0 has v = ±0 on every chord, so its
+  texels always fall back.
+- **Interface.** `fog.setExact` / `fog_set_exact` runs every texel on Ext;
+  FOG_EXACT=1 sets it from Node through `fogMapKernel`. `fog.fallbacks`
+  counts fallbacks. `fog.check` (validation only) runs the loop on Ext,
+  runs the fast path on every texel from the same incoming flag, and counts
+  the texels where they differ.
+- **Check.** Two validators cover it.
+  - `validate-volumetric-fog.mjs` runs `fog.check` on all 1,620 surfaces,
+    with 0 differences. 19,728 of 275,830 texel-lights fall back, nearly
+    all on its brightness-0 lights. Its 120 oracle cases pass through the
+    fast path and again with FOG_EXACT=1.
+  - `validate-volumetric-fog-fast.mjs` replays real Play inputs.
+    `volumetric-fog-capture.mjs` builds a world headless, swaps
+    `fog-pass.mjs`'s kernel for a recording wrapper through a resolve hook,
+    and drives `world.fog.update` over 240 deterministic views per map
+    (cached in `.cache/volumetric-fog-inputs/`; `--capture` refreshes them). The maps are 02_NYC_Bar,
+    06_HongKong_WanChai_Market, 09_NYC_Ship and 02_NYC_BatteryPark. Views
+    sit inside and around the volumes and facing fog surfaces, plus the
+    PlayerStarts and validate-volumetric-fog-play's view. One frame in
+    eight sends every fog surface.
+  - Each frame replays in Play's surface order with the flag carried. Over
+    45,050,740 texel-lights (447,910 surface maps), `fog.check` finds 0
+    differences in index or flag. The fast and Ext-only maps and final
+    flags are equal, and the replayed flag chain equals Play's.
+  - Fallbacks: Bar 111 (0.0015%), WanChai Market 366 (0.0048%), Ship 173
+    (0.0029%) and BatteryPark 120 (0.0005%).
+  - Many lights, by hand with `--maps`: 02_NYC_Underground (20 volumetric
+    lights, 242,620,360 texel-lights) and 03_NYC_AirfieldHeliBase (10,
+    116,158,220) show 0 differences, with 1,791 (0.0007%) and 222 (0.0002%)
+    fallbacks.
+  - No shipped map has an always-fallback light. The 88 maps hold 105
+    volumetric lights in 30 maps, and none has a zero VolumeBrightness or
+    LightBrightness byte.
+- **Speed.** `validate-volumetric-fog-fast.mjs --bench` times the kernel
+  loop with its uploads over the 211 frustum-culled view frames, Ext only
+  against the fast path. It runs headless on the M2 Pro, interleaved, and
+  reports medians of 7.
+
+  | Map | Texel-lights per frame | Ext only (ms) | Fast (ms) | Speed-up |
+  |---|---|---|---|---|
+  | 02_NYC_Bar | 28,288 | 18.73 | 0.91 | 20.6× |
+  | 06_HongKong_WanChai_Market | 30,893 | 15.85 | 0.89 | 17.8× |
+  | 09_NYC_Ship | 22,209 | 6.67 | 0.40 | 16.8× |
+  | 02_NYC_BatteryPark | 86,930 | 18.31 | 0.98 | 18.8× |
+  | 02_NYC_Underground (`--maps`, 3 passes) | 768,547 | 136.46 | 5.34 | 25.6× |
+  | 03_NYC_AirfieldHeliBase (`--maps`, 3 passes) | 341,769 | 56.49 | 2.37 | 23.9× |
+
+  A whole headless `world.fog.update` on validate-volumetric-fog-play's
+  view (264 surfaces, 29,668 texels) drops from 21.0 to 2.2 ms. Most of
+  the rest is JavaScript per surface: the three grid transforms on the JS
+  x87 model, the light words and tables rebuilt and uploaded per surface,
+  and the atlas copy. Browser timings are not measured here.
+
 ## Play
 
 `src/viewer/fog-pass.mjs` (`world.fog`) draws the fog maps.
