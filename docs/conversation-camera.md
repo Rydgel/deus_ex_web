@@ -252,6 +252,11 @@ player's collision word is now its image ([Rust core](rust-core.md), "Not
 moved, and why"); headless the cut lands on (-11054,-8558,-5085) at tick
 7105 and the crane ends on (-11054,-8560,-5004).
 
+The last point, sequence 1015 at (31,-38,57), lies away from all level
+geometry, so the frame under "Or better than kings. Gods." is black. The
+original shows the same black frame (observed in the running original game,
+2026-10-02).
+
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight
