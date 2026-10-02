@@ -48,11 +48,10 @@ assert.equal(scene.summary.poseBackend,'rust-wasm',scene.summary.kernelError);
 // No actor fails outright; every actor renders at least its solid faces.
 assert.deepEqual(scene.summary.errors,[],`unexpected mesh errors: ${JSON.stringify(scene.summary.errors)}`);
 
-// The one undecodable skin in Training is the NanoKey's procedural FireTexture
-// effect face; it is skipped so the solid key body still draws, and recorded.
-assert.equal(scene.summary.skipped.length,1,`expected only the NanoKey fire face skipped: ${JSON.stringify(scene.summary.skipped)}`);
-assert.equal(scene.summary.skipped[0].actor,'NanoKey0');
-assert.match(scene.summary.skipped[0].texture,/biocell_sfx/);
+// The NanoKey's effect face is a procedural FireTexture, now a live texture
+// (docs/fire-texture.md); no face group is skipped.
+assert.deepEqual(scene.summary.skipped,[],`unexpected skipped faces: ${JSON.stringify(scene.summary.skipped)}`);
+assert.ok(scene.proceduralTextures().some(fire=>/biocell_sfx/i.test(fire.key)),'the NanoKey fire skin is live');
 
 // The props JC walks into and frobs must be present with real geometry.
 const propByName=new Map(scene.propActors.map(p=>[p.summary.actor,p]));
@@ -60,7 +59,7 @@ for(const name of ['WeaponCrowbar1','WeaponCombatKnife0','CrateBreakableMedGener
   'CrateUnbreakableMed0','CrateUnbreakableSmall0','Plant0','Plant2','Ammo10mm2','DataCube0','Keypad0',
   'LightSwitch0','SecurityCamera0','Multitool0','NanoKey0'])
   assert.ok(propByName.has(name),`missing prop mesh ${name}`);
-assert.ok(propByName.get('NanoKey0').summary.triangles>0,'the NanoKey body renders despite its skipped effect face');
+assert.ok(propByName.get('NanoKey0').summary.triangles>0,'the NanoKey body renders with its fire face');
 
 // Every prop mesh carries finite geometry, matched UVs and a decoded skin.
 let propTriangles=0;

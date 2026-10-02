@@ -120,7 +120,30 @@ found the fall-through in its flip test). The table construction runs whole
 cases: 824 cases in all. `--types`, `--only` and `--redraw` (RedrawSparks
 alone) narrow a run.
 
-## Status
+## Play
 
-ConstantTimeTick, the module tables and the load state are translated. Not
-yet in Play.
+TextureStore reads a FireTexture's properties (DX names ActiveSparkNum
+`NumSparks`), palette and sparks instead of decoding pixels.
+`src/viewer/procedural-textures.mjs` keeps one record per texture object:
+the load state (`firePostLoad`), a zeroed P8 buffer, UTexture's animation
+fields with PostLoad's Accumulator 0 and LastUpdateTime, and a
+ConstantTimeTick that is UFireTexture's. UFireTexture inherits UTexture's
+Tick, so `texture-animation.mjs` gates it: PrimeCount ticks at the first
+update (100 for the flames), and with no MaxFrameRate (none of the game's
+fires set one) one tick per drawn frame, so a fire runs at the frame rate as
+in the original. After a tick the buffer goes through the palette into a
+`THREE.DataTexture` (PostLoad clears PF_Masked from a fire, so index 0 keeps
+its colour). Mesh skins use it (`actor-mesh-textures.mjs`); the actor scene
+runs the updates once per main frame.
+
+Host choices, noted in the viewer: every acquired fire updates each frame in
+acquisition order (the original updates the drawn ones in draw order with one
+shared generator), and the module tables take their appRand bytes from a
+host-seeded MSVCRT stream. Fires in BSP surfaces and sprites are not wired
+(no map's BSP uses one; sprites are not drawn yet).
+
+`scripts/validate-fire-texture-play.mjs` loads UNATCO Island in headless
+Chromium: its six fire skins (LaserBeam1, LaserSpot1, Nano_SFX, BioCell_SFX,
+Flame_J, Nano_SFX_A) are live, no mesh face group is skipped any more (the
+NanoKey's, LaserTriggers', BarrelFires' and canister's were), and each fire's
+GlobalPhase and pixels advance between frames.

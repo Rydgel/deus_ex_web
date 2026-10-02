@@ -178,6 +178,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
     update(cameraPosition,view={}){
       frameViewer=null;frameViewer=viewer();
+      textures.updateProcedural?.();
       try{
         reconcile();
         if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
@@ -203,6 +204,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     // Asset decode is asynchronous; useful both for load and focused integration checks.
     async ready(){await Promise.all(pending.values());},
     batchStats:()=>batches?.stats()??null,
+    proceduralTextures:()=>textures.procedural.records(),
     dispose(){disposed=true;for(const actor of actors)actor.dispose();batches?.dispose();textures.dispose();},
   };
 }
@@ -382,11 +384,14 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       try {
         let flags=group.flags;
         let data=await textures.get(group.reference.asset,group.reference.index,Boolean(flags&POLY.Masked));
-        if(data.procedural||data.values.AnimNext)throw new Error('Animated/procedural mesh skin is unsupported');
+        // A FireTexture skin is live (procedural-textures.mjs); other
+        // animated/procedural skins stay unsupported.
+        if(data.procedural!=='FireTexture'&&(data.procedural||data.values.AnimNext))
+          throw new Error('Animated/procedural mesh skin is unsupported');
         for(const [name,flag] of Object.entries({bMasked:POLY.Masked,bTranslucent:POLY.Translucent,
           bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))
           if(data.values[name])flags|=flag;
-        if(flags&POLY.Masked&&!data.masked)data=await textures.get(group.reference.asset,group.reference.index,true);
+        if(flags&POLY.Masked&&!data.masked&&!data.fire)data=await textures.get(group.reference.asset,group.reference.index,true);
         // Keep the original private decoder/await sequence: only the GPU
         // resource is shared, synchronously, at its former allocation point.
         textureLease=gpuTextures.acquire(data,flags);textureLeases.push(textureLease);

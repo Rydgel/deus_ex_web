@@ -2,8 +2,9 @@ import {x87load, x87double, x87add, x87neg, x87div, x87mul, x87cmp, x87store, x8
 
 /** Engine.dll UTexture animation (docs/texture-animation.md): Update
  * 0x103ecb70, Tick 0x103ed0d0, ConstantTimeTick 0x103ed330 and Get
- * 0x103212e0, for the plain UTexture (procedural subclasses override Tick and
- * ConstantTimeTick and are not translated).
+ * 0x103212e0. A record with its own `constantTimeTick` (a procedural texture
+ * whose class overrides the virtual, e.g. UFireTexture) runs that instead of
+ * the AnimNext step; Tick itself is UTexture's for them too.
  *
  * `texture` is a host record: `animNext` (the serialized AnimNext record or
  * null), `primeCount` (byte), `minFrameRate`/`maxFrameRate` (float32) and the
@@ -30,13 +31,14 @@ function frameTime(rate) {
 
 /** 0x103ed0d0, Tick(DeltaSeconds) for a plain UTexture. */
 export function tick(texture, deltaSeconds) {
+  const step = texture.constantTimeTick ?? constantTimeTick;
   while ((texture.primeCurrent & 255) < (texture.primeCount & 255)) {
     texture.primeCurrent = (texture.primeCurrent + 1) & 255;
-    constantTimeTick(texture);
+    step(texture);
   }
   const max = x87load(texture.maxFrameRate);
   const zero = x87cmp(max, ZERO);
-  if (zero === 'eq' || zero === 'un') { constantTimeTick(texture); return; }
+  if (zero === 'eq' || zero === 'un') { step(texture); return; }
   const minTime = frameTime(texture.maxFrameRate), maxTime = frameTime(texture.minFrameRate);
   // The sum is compared before its float store (fcom, then fst).
   const sum = x87add(x87load(deltaSeconds), x87load(texture.accumulator));
@@ -44,7 +46,7 @@ export function tick(texture, deltaSeconds) {
   const againstMin = x87cmp(sum, minTime);
   if (againstMin === 'lt' || againstMin === 'un') return;
   const againstMax = x87cmp(sum, maxTime);
-  constantTimeTick(texture);
+  step(texture);
   if (againstMax === 'lt' || againstMax === 'un') { texture.accumulator = 0; return; }
   const rest = x87add(x87load(texture.accumulator), x87neg(maxTime));
   texture.accumulator = x87store(rest);

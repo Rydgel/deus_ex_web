@@ -41,7 +41,7 @@ export function readTexture(asset, index) {
     name: object.entry.path, className: object.entry.className,
     format: object.values.Format ?? 0, palette: object.values.Palette ?? 0,
     mips, compressedMips, values: object.values,
-    nativeBytes: r.bytes.length - r.offset,
+    nativeBytes: r.bytes.length - r.offset, native: r.bytes.subarray(r.offset),
   };
 }
 
@@ -92,6 +92,18 @@ export class TextureStore {
     if (!this.cache.has(key)) {
       const pending = (async () => {
         const texture = readTexture(object.asset, object.index);
+        if (texture.className === 'FireTexture') {
+          // Procedural (docs/fire-texture.md): no stored pixels; the sparks
+          // follow the mips (a compact count of 8-byte records).
+          const palette = texture.palette ? await this.assets.resolve(object.asset, texture.palette) : null;
+          const native = texture.native;
+          let at = 0, b = native[at++], count = b & 0x3f;
+          if (b & 0x40) { let shift = 6, next; do { next = native[at++]; count |= (next & 0x7f) << shift; shift += 7; } while (next & 0x80); }
+          if (b & 0x80) count = -count;
+          if (count < 0 || at + count * 8 > native.length) throw new Error(`Invalid FireTexture sparks: ${object.key}`);
+          return { ...texture, key: object.key, asset: object.asset, masked: false, procedural: 'FireTexture',
+            fire: { sparks: native.slice(at, at + count * 8), palette: palette ? readPalette(palette.asset, palette.index) : null } };
+        }
         if (texture.values.SourceTexture && texture.mips.every(mip => mip.data.length === 0)) {
           const source = await this.get(object.asset, texture.values.SourceTexture, masked, [...ancestry, object.key]);
           return { ...texture, mips: source.mips, key: object.key, asset: object.asset, masked,

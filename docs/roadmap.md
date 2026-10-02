@@ -475,8 +475,15 @@ fabricated chains, with PostLoad's start state and UViewport::Lock's clock
 every animated texture advances each frame, not only the drawn ones.
 Auto-panned surfaces (skies, 39 in 36 maps) follow Render.dll's pan formula,
 bit-exact over 400 cases, with the viewer-side zone's speeds and
-Level.TimeSeconds. Animated mesh skins and the Fire.dll procedural textures
-remain.
+Level.TimeSeconds. Animated mesh skins remain.
+
+**Fire textures (2026-10-02).** Fire.dll's UFireTexture is translated whole
+and byte-exact against the DLL ([fire textures](fire-texture.md)): every
+spark type, DrawFlashRamp, both self-modifying fire updates, the shared
+generator, the module tables and the load state (824 oracle cases). Laser
+spots and beams, flames and the nano and biocell glows render as live mesh
+skins in Play. The shared generator's draw order and seed are host choices;
+sprites (and so sprite fires, smoke and sparks) are not drawn yet.
 
 ## 5. Implement the full gameplay systems
 
