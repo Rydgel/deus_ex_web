@@ -15,10 +15,12 @@ class NativeWalking(b.NativeFalling):
     pos=list(self.read(st+8,'3f'));self.write(self.pawn+0x114,'3f',*pos);self.events.append({'farMove':pos});cpu.reg_write(c.UC_X86_REG_EAX,1);return
    if address==0x103cecc0:
     self.events.append({'wall':list(self.read(st+4,'3f'))})
-    if self.case.get('wallPhysics'):self.write(self.pawn+0x30,'B',self.case['wallPhysics'])
+    if 'wallPhysics' in self.case:self.write(self.pawn+0x30,'B',self.case['wallPhysics'])
     ret(16);return
    if address==0x103cc450:
     self.events.append({'prelude':self.read(st+8,'f')[0],'iterations':self.read(st+12,'i')[0]});cpu.reg_write(c.UC_X86_REG_EAX,0);ret(0);return
+   if address==0x103d3040:
+    self.events.append({'flying':self.read(st+4,'f')[0],'iterations':self.read(st+8,'i')[0]});ret(8);return
    if address in [0x103c9390,0x103c95f0,0x103d0a50]:
     if address==0x103c9390:
      base=self.read(st+4,'I')[0];self.write(self.pawn+0xc4,'I',base);self.events.append({'base':bool(base)});ret(4)
@@ -31,6 +33,7 @@ class NativeWalking(b.NativeFalling):
     names={0x103cba19:'MayFall',0x103cc820:'WalkTexture',0x103cc57c:'WalkTexture',0x103cbbca:'Falling',0x103cb30a:'Falling'}
     if caller not in names:raise RuntimeError(f'Unsupported event {caller:x}')
     self.events.append({'event':names[caller]})
+    if names[caller]=='Falling' and 'fallingPhysics' in self.case:self.write(self.pawn+0x30,'B',self.case['fallingPhysics'])
     if names[caller]=='MayFall' and self.case.get('denyFall'):self.write(self.pawn+0x318,'I',self.read(self.pawn+0x318,'I')[0]&~0x1000)
     return
    if address in [self.line_thunk,self.move_thunk]:
@@ -44,6 +47,7 @@ class NativeWalking(b.NativeFalling):
      loc=self.read(self.pawn+0x114,'3f');self.write(self.pawn+0x114,'3f',*[a+b.f(v*r['time']) for a,v in zip(loc,delta)])
      pos=self.read(self.pawn+0x114,'3f')
      if r.get('justTeleported'):self.write(self.pawn+0x1ec,'I',0x100)
+     if 'physics' in r:self.write(self.pawn+0x30,'B',r['physics'])
     else:
      self.li+=1;h,actor,end,start,flags=self.read(st+4,'5I');pos=self.read(end,'3f')
      self.events.append({'line':{'start':list(self.read(start,'3f')),'end':list(pos),'extent':list(self.read(st+24,'3f')),'flags':flags}})
@@ -56,6 +60,7 @@ class NativeWalking(b.NativeFalling):
   self.write(self.pawn+0xc4,'I',self.zone if case.get('base',True) else 0)
   for off,key in [(0x114,'position'),(0x144,'velocity'),(0x150,'acceleration')]:self.write(self.pawn+off,'3f',*case[key])
   for off,key in [(0x378,'groundSpeed'),(0x384,'accelRate'),(0x38c,'maxStepHeight')]:self.write(self.pawn+off,'f',case[key])
+  self.write(self.pawn+0x380,'f',case.get('airSpeed',0))
   self.write(self.zone+0x334,'f',case['friction']);self.write(self.zone+0x31c,'3f',*case['gravity']);self.write(self.zone+0x328,'3f',*case['zoneVelocity'])
   self.events=[];self.call(0x103ca540,self.pawn,struct.pack('<fi',case['dt'],case.get('iterations',0)))
   result={key:list(self.read(self.pawn+off,'3f')) for off,key in [(0x114,'position'),(0x144,'velocity'),(0x150,'acceleration')]}

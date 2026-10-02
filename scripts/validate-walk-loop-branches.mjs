@@ -16,7 +16,13 @@
  * ones with the same counts; no walking call may be handed back; and the
  * counted branches must include those the scenario exists for. The counts
  * are printed; a zero names a branch still covered only by the reference's
- * own oracles (validate-native-walking and its family). */
+ * own oracles (validate-native-walking and its family).
+ *
+ * A second Training run pair uses scripts/scenarios/walk-physics-events.mjs:
+ * Bump/HitWall/Touch/Falling events that change Physics inside physWalking,
+ * which the original continues through (docs/walking.md). It must reach the
+ * Falling-event physFlying tail (`flyings`) with equal digests and no
+ * boundary on either path. */
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
@@ -24,16 +30,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'walk-loop-branches-'));
-const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '30', '--ticks', '300', '--digest-every', '25',
-  '--scenario', 'scripts/scenarios/walk-branches.mjs'];
+const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '30', '--ticks', '300', '--digest-every', '25'];
 // The branches the scenario is built to reach: on every map, and on at
 // least one (a retreat on Island ends in the EncroachingOn boundary).
 const REQUIRED = ['moves', 'stepUps', 'hitWalls', 'slopeProbes', 'nudges'];
 const REQUIRED_ANY = ['retreats', 'farMoves', 'mayFalls', 'fallingEvents', 'physicsSets'];
 const reached = new Set();
-function run(map, tag, env) {
+function run(map, tag, env, scenario = 'scripts/scenarios/walk-branches.mjs') {
   const out = join(dir, `${map}-${tag}.json`);
-  const child = spawnSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--json', out],
+  const child = spawnSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--scenario', scenario, '--json', out],
     {env: {...process.env, ...env}, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 64 << 20});
   assert.equal(child.status, 0, `${map} ${tag}: bench-sim exited ${child.status}\n${child.stderr?.slice(-2000)}`);
   const report = JSON.parse(readFileSync(out, 'utf8'));
@@ -64,6 +69,20 @@ try {
       `  boundaries on both paths: ${JSON.stringify(rust.report.errors ?? {})}`);
   }
   for (const key of REQUIRED_ANY) assert(reached.has(key), `no map reached ${key}`);
+  {
+    const map = '00_Training', scenario = 'scripts/scenarios/walk-physics-events.mjs';
+    const rust = run(map, 'physics-rust', {WALK_LOOP_DIFFERENTIAL: '1'}, scenario);
+    const js = run(map, 'physics-js', {WALK_LOOP_KERNEL: 'js'}, scenario);
+    assert.deepEqual(rust.report.errors ?? {}, {}, `${map} physics events: boundaries on the Rust path`);
+    assert.deepEqual(js.report.errors ?? {}, {}, `${map} physics events: boundaries on the JavaScript path`);
+    assert.equal(rust.report.digest, js.report.digest, `${map} physics events: final digest`);
+    assert.deepEqual(rust.report.digests, js.report.digests, `${map} physics events: checkpoint digests`);
+    const d = rust.differential;
+    assert(d && d.calls > 0 && d.handedBack === 0, `${map} physics events: Rust walking calls`);
+    assert(d.flyings > 0, `${map} physics events: the Falling-event physFlying tail was not reached`);
+    console.log(`${map} physics events: ${d.calls} Rust walking calls, digest ${rust.report.digest} on both paths, ` +
+      `${d.flyings} Falling-event physFlying tails, ${d.fallings} physFalling tails, ${d.hitWalls} HitWalls`);
+  }
 } finally {
   rmSync(dir, {recursive: true, force: true});
 }

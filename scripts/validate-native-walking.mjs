@@ -10,6 +10,17 @@ export function walkingCases(){
  for(const normal of [[-.8,0,.6],[0,0,1],[0,0,0]])mods.push({hitSlopedWall:true,lines:[{time:.5,normal},...many(floor)]});
  for(const friction of [.2,.5,2,4,8])mods.push({friction,lines:many({time:2/27,normal:[.6,0,.8]})});
  for(const dt of [.01,.033,.1])mods.push({dt,position:[124.412,-56.334,102],acceleration:[414,-819,0],velocity:[-153,66,0]});
+ // A script event during the forward MoveActor (or stepUp's HitWall) that
+ // sets a Physics other than Swimming: the body continues (0x103cb466);
+ // a ledge then takes the Falling event with Physics as left. The stepUp
+ // Falling event that leaves PHYS_Flying runs 0x103cb343 (physFlying).
+ const wall={time:.25,normal:[-1,0,0]};
+ for(const physics of [0,2,4,5])for(const dt of [.016,.1])mods.push({moves:[{...clear,physics},...many(clear)],dt},{moves:[{...clear,physics},...many(clear)],lines:many(clear),dt});
+ mods.push({moves:[{...wall,physics:4},clear,clear,floor,...many(clear)]},{moves:[{...wall,physics:0},clear,clear,floor,...many(clear)],dt:.1});
+ mods.push({moves:[wall,clear,wall,...many(clear)],wallPhysics:4},{moves:[wall,clear,wall,...many(clear)],wallPhysics:0,dt:.1});
+ for(const dt of [.016,.1,.01])mods.push({moves:[wall,clear,wall,...many(clear)],wallPhysics:2,fallingPhysics:4,airSpeed:420.5,dt});
+ mods.push({moves:[wall,clear,wall,...many(clear)],wallPhysics:2,fallingPhysics:0,airSpeed:420.5,dt:.1});
+ for(const fallingPhysics of [0,4])mods.push({lines:many(clear),fallingPhysics,airSpeed:420.5});
  return mods.map(m=>({...base,...m}));
 }
 
@@ -17,10 +28,10 @@ export function run(c){
  const events=[];let mi=0,li=0;const actor={};
  const pawn={...structuredClone(c),position:c.position.map(f),velocity:c.velocity.map(f),acceleration:c.acceleration.map(f),radius:20,height:43,physics:1,base:c.base===false?null:actor,canJump:true,isPlayer:true,isWalking:!!c.walking,hitSlopedWall:!!c.hitSlopedWall,mass:150,
  walkingPrelude(dt,it){events.push({prelude:dt,iterations:it});return false;},
- move(delta){events.push({move:delta,velocity:[...this.velocity]});const r=c.moves[mi++];if(r.justTeleported)this.justTeleported=true;this.position=this.position.map((v,i)=>f(v+f(delta[i]*f(r.time))));return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
+ move(delta){events.push({move:delta,velocity:[...this.velocity]});const r=c.moves[mi++];if(r.justTeleported)this.justTeleported=true;if(r.physics!==undefined)this.physics=r.physics;this.position=this.position.map((v,i)=>f(v+f(delta[i]*f(r.time))));return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
  lineCheck(start,end,extent,flags){events.push({line:{start:[...start],end,extent,flags}});const r=c.lines[li++];return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
  setSupportBase(a){this.base=a;events.push({base:!!a});},setPhysics(p){this.physics=p;events.push({physics:p});},
- farMove(pos){this.position=[...pos];events.push({farMove:pos});},mayFall(){events.push({event:'MayFall'});if(c.denyFall)this.canJump=false;},fallingEvent(){events.push({event:'Falling'});},falling(dt,it){events.push({falling:dt,iterations:it});},hitWall(h){events.push({wall:h.normal});if(c.wallPhysics)this.physics=c.wallPhysics;}};
+ farMove(pos){this.position=[...pos];events.push({farMove:pos});},mayFall(){events.push({event:'MayFall'});if(c.denyFall)this.canJump=false;},fallingEvent(){events.push({event:'Falling'});if(c.fallingPhysics!==undefined)this.physics=c.fallingPhysics;},falling(dt,it){events.push({falling:dt,iterations:it});},flying(dt,it){events.push({flying:dt,iterations:it});},hitWall(h){events.push({wall:h.normal});if(c.wallPhysics!==undefined)this.physics=c.wallPhysics;}};
  walking(pawn,c.dt,c.iterations??0);return Object.fromEntries(['position','velocity','acceleration','physics','hitSlopedWall'].map(k=>[k,pawn[k]]).concat([['events',events]]));
 }
 if(process.argv[1] && new URL(import.meta.url).pathname===process.argv[1]) {

@@ -7,7 +7,7 @@
 //! walk-loop-kernel.mjs); each effect is one import at the reference's
 //! point: the surface prelude, the line checks, HitWall, the Falling and
 //! MayFall events, SetSupportBase, setPhysics, FarMoveActor, and the
-//! physFalling and startSwimming tail calls. MoveActor is `move_pawn`
+//! physFalling, startSwimming and Falling-event physFlying tail calls. MoveActor is `move_pawn`
 //! (B4), called directly; where it hands a call back, the JavaScript
 //! `pawn.move` runs it through the import.
 //!
@@ -94,6 +94,7 @@ extern "C" {
     fn js_walk_far_move(depth: u32, x: f64, y: f64, z: f64);
     fn js_walk_falling(depth: u32, remaining: f64, iterations: i32);
     fn js_walk_swim(depth: u32, step: f64, remaining: f64, iterations: i32);
+    fn js_walk_fly(depth: u32, remaining: f64, iterations: i32);
     fn js_walk_zone_vec(depth: u32, which: u32);
     fn js_walk_zone_float(depth: u32, which: u32) -> f64;
     fn js_walk_error(depth: u32, code: u32);
@@ -235,8 +236,9 @@ impl PawnOps for ImagePawn {
 }
 
 // js_walk_error codes (walk-loop-kernel.mjs ERRORS); 1 is the timestep
-// error, which is a hand-back here instead.
-const E_NON_DRY: u32 = 2;
+// error, which is a hand-back here instead. Code 2 (the former non-dry
+// physics stop) is retired: physWalking continues for any Physics but
+// Swimming.
 const E_STEP_BUDGET: u32 = 3;
 const E_GROUND_VELOCITY: u32 = 4;
 
@@ -333,12 +335,21 @@ pub extern "C" fn walk_loop(depth: u32, base: u32, seconds: f32, mut iterations:
                     let moved = js_hypot(pos[0] - origin[0], pos[1] - origin[1]);
                     remaining = f(remaining + step * (1.0 - js_min(1.0, moved / f(sqrt(dot(original_delta, original_delta))))));
                     unsafe { js_walk_falling_event(depth) };
-                    if pawn.physics() == 2 && remaining > 0.01 { unsafe { js_walk_falling(depth, remaining, iterations) }; }
+                    // 0x103cb30a: one Physics read after the event; a
+                    // Flying pawn takes walking.mjs `flyFrom` (0x103cb343).
+                    let after = pawn.physics();
+                    if after == 2 {
+                        if remaining > 0.01 { unsafe { js_walk_falling(depth, remaining, iterations) }; }
+                    } else if after == 4 {
+                        unsafe { js_walk_fly(depth, remaining, iterations) };
+                    }
                     return DONE;
                 }
             }
+            // 0x103cb3fd: only PHYS_Swimming leaves here; any other Physics
+            // a script event set during the move continues the body
+            // (0x103cb466 always jumps on to the floor probe 0x103cb562).
             if pawn.physics() == 3 { unsafe { js_walk_swim(depth, step, remaining, iterations) }; return DONE; }
-            if pawn.physics() != 1 { unsafe { js_walk_error(depth, E_NON_DRY) }; return DONE; }
         }
         if stopped {
             let pos = pawn.position();

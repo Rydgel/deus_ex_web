@@ -1942,12 +1942,16 @@ that actor's image (a zone actor without one falls back to the view's
 and `step_up` run over its `PawnOps`; `move_by` is `move_pawn` on the pawn
 MoveActor host's context at the same depth (a MoveActor nested in an event
 gets the next one), falling back to the view's `move` where that body
-hands the call back (no run has). The 16 imports are the reference's
+hands the call back (no run has). The 17 imports are the reference's
 effects and reads at its points: the surface prelude, the line checks, the
 fallback move, HitWall, stepUp's two reads on the hit actor
 (`pushableDecoration` and Mass), the Falling and MayFall events,
-SetSupportBase, setPhysics, FarMoveActor, the physFalling and
-startSwimming tail calls, the two zone fallbacks and the error throws. Two changes to the reference itself: the pawn view's
+SetSupportBase, setPhysics, FarMoveActor, the physFalling,
+startSwimming and (2026-10-02) Falling-event physFlying (`js_walk_fly`,
+walking.mjs `flyFrom`) tail calls, the two zone fallbacks and the error
+throws. Since 2026-10-02 neither path stops when a script event leaves a
+Physics other than Swimming after the move; the original continues the
+body (docs/walking.md). Two changes to the reference itself: the pawn view's
 `hitSlopedWall` is an accessor over the bHitSlopedWall bit (Pawn +0x318,
 0x20; `Pawn.uc` "used by Physics"), so both paths read one storage and
 the host member left the NPC reset list; and `move_pawn` calls

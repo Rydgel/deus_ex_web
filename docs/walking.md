@@ -60,8 +60,56 @@ Callbacks, invoked with pawn as receiver:
 
 PlayerPawn.Falling calls PlayInAir in original embedded source; its visual/script
 work is external to this math caller. A callback that leaves PHYS_Swimming
-hands off to startSwimming at the original checks ([swimming](swimming.md));
-other transitions from callbacks are explicitly unsupported. Entry requires a valid dry PlayerPawn world region.
+hands off to startSwimming at the original checks ([swimming](swimming.md)).
+Entry requires a valid dry PlayerPawn world region.
+
+## Physics changed by a script event during the body (2026-10-02)
+
+The loop test (`0x103ca853`) reads only the remaining time (`> 0`) and the
+iteration count (`< 8`); nothing in the body requires Physics to stay
+Walking.  After the forward MoveActor (and stepUp when it hit), the only
+exit is `0x103cb3fd`: `IsA(APawn)` and Physics == PHYS_Swimming →
+startSwimming, return.  Every other Physics — PHYS_None, Flying, Rotating,
+a Falling set by an event of a move that did not hit — reaches `0x103cb466`
+`xor eax,eax; test eax,eax; je 0x103cb562`, which always jumps to the floor
+probe: the iteration and the following ones run the ordinary walking body
+(floor probe, floor move and SetSupportBase, the two later Swimming exits,
+the friction slide, the ledge).  At a ledge the Falling event is followed by
+`setPhysics(PHYS_Falling)` only for a pawn still Walking, physFalling only
+for one Falling, and otherwise `MoveActor(desired*remaining)` with the
+remaining time zeroed (`0x103cbc99`).  The end still rebuilds Velocity from
+OldLocation unless bJustTeleported and zeroes Velocity.Z.  (The guarded
+block at `0x103cb470` is the stationary foot ray, entered only from the
+near-zero-delta path at `0x103ca9ee`.)
+
+The stepUp branch (Physics == PHYS_Falling after stepUp, `0x103cb241`)
+dispatches Falling and reads Physics once (`0x103cb30a`): Falling →
+physFalling(remaining) when remaining > 0.01; **Flying** (`0x103cb343`) →
+Velocity = (0,0,AirSpeed `+0x380`), Acceleration = (0,0,AccelRate `+0x384`),
+then physFlying (`0x103d3040`) when remaining > 0.01 (`walking.mjs`
+`flyFrom`); anything else → return.
+
+`walking.mjs` and the Rust loop (`walk_loop.rs`, import `js_walk_fly`) had
+thrown "Walking entered unsupported non-dry physics" after the move and
+returned without the Flying sub-branch; both now follow the original.
+`validate-native-walking.mjs` adds 26 cases (69 in all, zero mismatches)
+with a Physics byte set inside MoveActor, stepUp's HitWall or the Falling
+event (None, Falling, Flying, Rotating; one and several substeps, clear
+moves, wall hits, ledges with and without physFalling, the Flying
+sub-branch with and without the physFlying call).  The oracle's
+`wallPhysics` option now also applies 0.  The Rust loop is held to the
+same behaviour by `validate-walk-loop-branches.mjs`'s second Training pair
+(`scripts/scenarios/walk-physics-events.mjs`: Bump/HitWall/Touch/Falling
+events that set Physics None, Falling or Flying): equal digests on both
+paths, no boundary, and the physFlying tail reached; the same scenario
+stopped 300 times at the old "non-dry" throw.
+
+Reproduction: the 00_Intro frontier (`.work/intro/frontier-walk.mjs`, a
+copy of `frontier.mjs` with seeded dt) with `ASPECT=1.5 DT=wide SEED=4`
+(dt in [1/120, 1/120+0.05)) stopped at tick 1692 when MJ12Troop0
+(Attacking, Health 31 after damage) went from PHYS_Walking to
+PHYS_Falling during its walking move, without a stepUp; fixed dt 1/60 at
+1.5/1.6 and 1/60+[0,0.02) jitter at 1.3333/1.5/1.6 did not reach it.
 Native MoveActor/query/event internals are supplied callbacks, not proven by this
 harness. MayFall probing/state-machine suppression is likewise the adapter's
 responsibility; for ordinary PlayerPawn the inherited event is empty.

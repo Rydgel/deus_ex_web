@@ -12,7 +12,8 @@
  * stay the pawn view's own functions, called from the imports at the
  * reference's points: the surface prelude, the line checks, HitWall, the
  * Falling and MayFall events, SetSupportBase, setPhysics, FarMoveActor, and
- * the physFalling and startSwimming tail calls. The zone fields (gravity,
+ * the physFalling, startSwimming and Falling-event physFlying (`flyFrom`)
+ * tail calls. The zone fields (gravity,
  * zone velocity, ground friction) are read from the zone actor's image, or
  * from the view's `zoneFields` service where that actor has no image.
  *
@@ -26,6 +27,7 @@
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell, scalarCell} from './script-object-image.mjs';
 import {handleOf} from './script-object-handles.mjs';
 import {identityOfHandle} from './script-object-handles.mjs';
+import {flyFrom} from './walking.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.WALK_LOOP_KERNEL === 'js' || globalThis.DEUS_EX_WALK_LOOP_KERNEL === 'js';
@@ -33,7 +35,7 @@ const DIFFERENTIAL = env.WALK_LOOP_DIFFERENTIAL === '1';
 // The Rust-side counters, in the state block's order from word 2 (walk_loop.rs WL_STATE).
 export const COUNTERS = ['moves', 'slopeProbes', 'nudges', 'slides', 'retreats', 'stepUps'];
 const counts = {calls: 0, handedBack: 0, declined: 0, declinedBy: {}, prelude: 0, lines: 0, handedBackMoves: 0, zoneFallbacks: 0,
-  hitWalls: 0, fallingEvents: 0, mayFalls: 0, supportBases: 0, physicsSets: 0, farMoves: 0, fallings: 0, swims: 0,
+  hitWalls: 0, fallingEvents: 0, mayFalls: 0, supportBases: 0, physicsSets: 0, farMoves: 0, fallings: 0, swims: 0, flyings: 0,
   ...Object.fromEntries(COUNTERS.map(key => [key, 0]))};
 if (DIFFERENTIAL) process.on('exit', () => process.stderr.write(`walk loop differential: ${JSON.stringify(counts)}\n`));
 const declined = (why, name) => {
@@ -199,7 +201,7 @@ export class WalkLoopHost {
       v[0] = hit.time; v[1] = hit.normal[0]; v[2] = hit.normal[1]; v[3] = hit.normal[2];
       v[4] = hit.actor ? handleOf(hit.actor) : 0;
     };
-    const ERRORS = {1: 'Walking requires timestep in (0,0.4]', 2: 'Walking entered unsupported non-dry physics',
+    const ERRORS = {1: 'Walking requires timestep in (0,0.4]',
       3: 'Original stepUp recursion budget exceeded', 4: 'Ground velocity requires an original actor timestep in (0, 0.4]'};
     return {
       js_walk_prelude(depth, dt, iterations) {
@@ -232,6 +234,7 @@ export class WalkLoopHost {
         if (typeof pawn.startSwimming !== 'function') throw Error('physWalking entered PHYS_Swimming without the startSwimming service (0x103cb44e)');
         pawn.startSwimming(pawn.velocity.map(f), step, remaining, iterations);
       },
+      js_walk_fly(depth, remaining, iterations) { counts.flyings++; flyFrom(context(depth).pawn, remaining, iterations); },
       js_walk_zone_vec(depth, which) {
         counts.zoneFallbacks++;
         const pawn = context(depth).pawn, v = io();

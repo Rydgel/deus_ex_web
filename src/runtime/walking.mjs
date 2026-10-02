@@ -9,6 +9,16 @@ const swimFrom=(pawn,step,remaining,iterations)=>{
  if(typeof pawn.startSwimming!=='function')throw Error('physWalking entered PHYS_Swimming without the startSwimming service (0x103cb44e)');
  pawn.startSwimming(pawn.velocity.map(f),step,remaining,iterations);
 };
+/** 0x103cb343..0x103cb3e5: after the stepUp Falling event, a pawn the event
+ * left PHYS_Flying gets Velocity (0,0,AirSpeed) and Acceleration
+ * (0,0,AccelRate), then physFlying(remaining, Iterations) when remaining >
+ * 0.01; physWalking returns either way. docs/walking.md. */
+export const flyFrom=(pawn,remaining,iterations)=>{
+ if(typeof pawn.flying!=='function'||typeof pawn.airSpeed!=='number')
+  throw Error('physWalking entered PHYS_Flying from the Falling event without the physFlying service (0x103cb3e5)');
+ pawn.velocity=[0,0,f(pawn.airSpeed)];pawn.acceleration=[0,0,f(pawn.accelRate)];
+ if(remaining>.01)pawn.flying(remaining,iterations);
+};
 /** Original APawn.physWalking ordinary dry Player path. See docs/walking.md. */
 export function walking(pawn,seconds,iterations=0){
  const dt=f(seconds);if(!(dt>0)||dt>f(.4))throw Error('Walking requires timestep in (0,0.4]');
@@ -48,13 +58,20 @@ export function walking(pawn,seconds,iterations=0){
     hit=stepUp(pawn,gravity,safeNormal(delta),scale(delta,f(1-hit.time)));
     if(pawn.physics===2){
      remaining=f(remaining+step*(1-Math.min(1,Math.hypot(pawn.position[0]-origin[0],pawn.position[1]-origin[1])/f(Math.sqrt(dot(originalDelta,originalDelta))))));
-     pawn.fallingEvent();if(pawn.physics===2&&remaining>.01)pawn.falling(remaining,iterations);return;
+     // 0x103cb30a: one Physics read after the event.
+     pawn.fallingEvent();const after=pawn.physics;
+     if(after===2){if(remaining>.01)pawn.falling(remaining,iterations);}
+     else if(after===4)flyFrom(pawn,remaining,iterations);
+     return;
     }
    }
    // 0x103cb3fd (also reached from 0x103cb190): a move or stepUp that left
-   // PHYS_Swimming (a script ZoneChange) hands off to startSwimming.
+   // PHYS_Swimming (a script ZoneChange) hands off to startSwimming. Any
+   // other Physics a script event set during the move continues the walking
+   // body: 0x103cb466 `xor eax,eax; test eax,eax; je 0x103cb562` always goes
+   // on to the floor probe, and the loop test (0x103ca853) reads only the
+   // remaining time and the iteration count.
    if(pawn.physics===3)return swimFrom(pawn,step,remaining,iterations);
-   if(pawn.physics!==1)throw Error('Walking entered unsupported non-dry physics');
   }
   if(stopped){
    const start=[pawn.position[0],pawn.position[1],f(pawn.position[2]-extent[2])];
