@@ -102,6 +102,7 @@ BODIES = {
     'clearPaths': 0x103da050,
     'FindPathTo': 0x103bc800,          # native 518 exec
     'pathToWorker': 0x103dc1d0,
+    'findPathTo': 0x103bc800,          # execFindPathTo, native 518
     'FindPathToward': 0x103bc9c0,      # native 517 exec
     'findPathToward': 0x103bc9c0,
     'pathTowardWorker': 0x103db3f0,

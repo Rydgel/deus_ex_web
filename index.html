@@ -26,6 +26,11 @@
           <option value="keypad" title="Reset Play in front of the Training keypad that opens paddoor">Keypad</option>
         </select>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
+        <select id="screen-aspect" aria-label="Screen shape" title="Screen shape of the game view: the original ran at 4:3 resolutions, where cinematic letterboxes (and the intro's subtitles) have room">
+          <option value="window">Screen: window</option>
+          <option value="4:3">Screen: 4:3</option>
+          <option value="16:10">Screen: 16:10</option>
+        </select>
         <button id="hide-ui" title="Hide the page bars so the game view fills the window">Hide UI</button>
       </div>
       <input id="folder" type="file" webkitdirectory multiple hidden />

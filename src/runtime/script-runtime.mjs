@@ -68,7 +68,7 @@ import {
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
 import { moveSmooth } from './move-smooth.mjs';
-import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execEAdjustJump, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
+import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execFindPathTo, execEAdjustJump, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -3622,6 +3622,17 @@ export class ScriptRuntime {
       const bSingle=singleArgument===undefined?0:singleArgument|0;
       const bClear=clearArgument===undefined?1:clearArgument|0;
       return execFindPathToward(call.receiver,target,bSingle,bClear,
+        this.pawnNavServices(call.receiver));
+    }
+    if(call.index===518){
+      // execFindPathTo 0x103bc800: (point, bSinglePath=0, bClearPaths=1);
+      // EX_Nothing keeps the pre-stored defaults, as for 517.
+      const point=call.argumentCount>0?refValue(call.evaluateArgument(0)):undefined;
+      if(!Array.isArray(point)||point.length!==3)throw new Error('FindPathTo requires an FVector');
+      const singleArgument=call.argumentCount>1?refValue(call.evaluateArgument(1)):undefined;
+      const clearArgument=call.argumentCount>2?refValue(call.evaluateArgument(2)):undefined;
+      return execFindPathTo(call.receiver,point.map(Math.fround),
+        singleArgument===undefined?0:singleArgument|0,clearArgument===undefined?1:clearArgument|0,
         this.pawnNavServices(call.receiver));
     }
     if(call.index===523){

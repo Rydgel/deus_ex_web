@@ -1175,9 +1175,15 @@ IM_Radius)`. See [roadmap](roadmap.md) for the research note.
   scenes (13 direct, the delegation through `pathTowardWorker` with a
   PHYS_Falling Pawn target, a LevelInfo-subclass Actors(0)), 4 mutants, and
   every instruction of the body but the two inlined `check()` failure paths
-  (347/363) plus the toward worker's delegation block executed. The 518
-  exec (`0x103bc800`) and `FindRandomDest` (`0x103da050`/`0x103dc700`) are
-  not wired.
+  (347/363) plus the toward worker's delegation block executed.
+- `execFindPathTo` (`0x103bc800`, native 518) — **wired** (2026-10-02):
+  point, `bSinglePath=0`, `bClearPaths=1` pre-stored (EX_Nothing keeps
+  them), the worker, then the 517 exec's tail (shared `pathExecTail`). Five
+  exec scenes compare the result slot, the tail's flags and the node state,
+  each also through the decoded VM call; the exec's coverage excludes only
+  the GTimestamp stat arms and the tailSet call for a SpecialHandling
+  result, which the probe cannot dispatch (unverified there as for 517).
+  `FindRandomDest` (`0x103da050`/`0x103dc700`) is not wired.
 - `FindRandomDest` shares the ReachSpec BFS machinery
   (`0x103da050`/`0x103dc700`) recovered at the field level — see the graph
   layout above.

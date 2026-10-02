@@ -292,6 +292,20 @@ function fpto(name, { point = [420, 0, 0], ...opts } = {}) {
   s.coverage = [PATH_TO_COVERAGE];
   return s;
 }
+/* A FindPathTo exec scene (0x103bc800, native 518): the point vector and
+ * the optional bSinglePath=0 / bClearPaths=1 through the token stream; the
+ * result slot carries the found actor (argCount < 3 sends EX_Nothing). */
+function fxt(name, opts = {}) {
+  const { point = [420, 0, 0], bSingle = 0, bClear = 1 } = opts;
+  const s = fpto(name, { ...opts, point, bSingle, bClear });
+  s.body = 'findPathTo';
+  delete s.directArgs; s.coverage = [FIND_PATH_TO_EXEC_COVERAGE];
+  s.args = [{ kind: 'vector', value: point }, { kind: 'int', value: bSingle }, { kind: 'int', value: bClear }]
+    .slice(0, opts.argCount ?? 3);
+  while (s.args.length < 3) s.args.push({ kind: 'nothing' });
+  s.js.argCount = opts.argCount ?? 3;
+  return s;
+}
 // The worker's body up to its SEH funclet (0x103dc5b7). The inlined
 // check(XLevel->Actors(0)) and check(Actors(0)->IsA(ALevelInfo)) failure
 // paths (an IsA chain ending in null, then appFailAssert) are the only
@@ -302,6 +316,15 @@ const PATH_TO_ASSERTS = new Set(['103dc20d', '103dc212', '103dc217', '103dc21c',
   '103dc24c', '103dc251', '103dc256', '103dc25b', '103dc261']);
 // pathTowardWorker's falling-target delegation (0x103db4e6..0x103db567).
 const DELEGATION_COVERAGE = ['103db4e6', '103db567'];
+// execFindPathTo (0x103bc800..0x103bc95f). The rdtsc arms of XLevel's
+// FindPath cycle stat run only with GTimestamp set (a stat, unobservable).
+const FIND_PATH_TO_EXEC_COVERAGE = ['103bc800', '103bc95f'];
+const FIND_PATH_TO_EXEC_STAT = new Set(['103bc88a', '103bc88c', '103bc88e', '103bc890',
+  '103bc93a', '103bc93c', '103bc93e', '103bc940']);
+// The tailSet call for a result that probes SpecialHandling (0x103bc906..
+// 0x103bc90c): shared with 517 and, as there, not run by the oracle (the
+// probe has no SpecialHandling event dispatch). Listed, not required.
+const FIND_PATH_TO_EXEC_TAILSET = new Set(['103bc906', '103bc909', '103bc90b', '103bc90c']);
 
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
@@ -1271,6 +1294,68 @@ const scenes = [
                  navB: { location: [60, 0, 0], visitedWeight: 55, cost: 11 } },
     reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
   }),
+  // -- FindPathTo exec 0x103bc800 (native 518) ------------------------------
+  // fto-bfs's graph through the exec: result navB; bShootSpecial and
+  // SpecialPause clear; navB is the SpecialGoal, so SpecialGoal clears.
+  fxt('ftx-bfs-tail', {
+    navList: 'navA', pawn: { flags318: 0x2000000, specialPause: 5.0, specialGoal: 'navB' },
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 1], probing: [0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // A failed search: the result slot stays None; the tail still clears.
+  fxt('ftx-fail', {
+    navList: 'navA', pawn: { flags318: 0x2000000, specialPause: 2.0 },
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // Only the point: bSinglePath=0 and bClearPaths=1 are the pre-stored
+  // defaults (scoutE runs; the reset overwrites the fabricated state).
+  fxt('ftx-point-only', {
+    argCount: 1, navList: 'navA',
+    navPoints: {
+      navA: { location: [200, 0, 0], paths: [0], nextNav: 'navB', visitedWeight: 77, cost: 33 },
+      navB: { location: [400, 0, 0], upstreamPaths: [0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1], probing: [0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(80),
+  }),
+  // bSinglePath given, bClearPaths omitted (still 1).
+  fxt('ftx-single-default-clear', {
+    argCount: 2, bSingle: 1, navList: 'navA',
+    navPoints: {
+      navA: { location: [200, 0, 0], paths: [0], nextNav: 'navB', visitedWeight: 77, cost: 33 },
+      navB: { location: [400, 0, 0], upstreamPaths: [0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1], probing: [0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(80),
+  }),
+  // bClearPaths=0 given: the fabricated search state survives into the BFS.
+  fxt('ftx-noclear', {
+    bClear: 0, point: [70, 0, 0], navList: 'navA', moveActor: flatWalk(40), probing: [0],
+    navPoints: { navA: { location: [10, 0, 0], nextNav: 'navB', visitedWeight: 77, cost: 33 },
+                 navB: { location: [60, 0, 0], visitedWeight: 55, cost: 11 } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
   // pathTowardWorker with a PHYS_Falling Pawn target: target->jumpLanding
   // (one 0.1 s tick onto a floor, then the restoring FarMoveActor of the
   // target) and the findPathTo worker toward the landing on the fto-bfs graph.
@@ -1570,6 +1655,22 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     ret = mod.pathTowardWorker(pawn, target, j.bSingle | 0, foundCell, j.bClear | 0, services);
   else if (scene.body === 'pathToWorker')
     ret = mod.pathToWorker(pawn, j.point.map(f32), j.bSingle | 0, foundCell, j.bClear | 0, services);
+  else if (scene.body === 'findPathTo') {
+    if (throughRuntime) {
+      // The same tokens as the oracle: EX_VectorConst, EX_IntConst or EX_Nothing.
+      const f32bytes = v => { const b = new Uint8Array(4); new DataView(b.buffer).setFloat32(0, v, true); return [...b]; };
+      const args = scene.args.flatMap(arg => arg.kind === 'nothing' ? [0x0b]
+        : arg.kind === 'vector' ? [0x23, ...arg.value.flatMap(f32bytes)]
+        : [0x1d, ...Array.from({length: 4}, (_, i) => (arg.value >>> (8 * i)) & 255)]);
+      const bytes = Uint8Array.from([0x04, 0x62, 0x06, ...args, 0x16]);
+      const vm = compileFunction({pkg: {imports: [], exports: []}, entry: {path: scene.name}, bytes, size: bytes.length});
+      const host = {boundaryNatives: new Set(), collisionViewActors: new WeakSet(), pawnNavServices: () => services};
+      ret = vm.run(pawn, {}, {invokeNative: call => ScriptRuntime.prototype.invokeNative.call(host, call)});
+    } else {
+      ret = mod.execFindPathTo(pawn, j.point.map(f32), j.argCount > 1 ? j.bSingle | 0 : 0,
+        j.argCount > 2 ? j.bClear | 0 : 1, services);
+    }
+  }
   else if (scene.body === 'findPathToward') {
     if (throughRuntime) {
       // Decode the SAME argument tokens the native oracle evaluates. In
@@ -1610,7 +1711,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
   return {
     // findPathToward's result slot is an actor pointer: null -> '0' like the
     // probe's zeroed resultOut; live actors resolve to their scene name.
-    ret: scene.body === 'findPathToward'
+    ret: scene.body === 'findPathToward' || scene.body === 'findPathTo'
       ? (ret ? (nameOf.get(ret) || '?obj') : '0')
       : (ret && typeof ret === 'object') ? (nameOf.get(ret) || '?obj') : ret,
     moves, farMoves, slc: sli, fli,
@@ -1710,7 +1811,7 @@ function runJsPick(scene, mod = module) {
 const PTR_RET_BODIES = new Set(['aiDirection']);
 // Bodies whose result slot (or &found cell) carries an actor pointer — the
 // probe reports the raw address; resolve it through the scene's address map.
-const FOUND_BODIES = new Set(['pathTowardWorker', 'findPathToward', 'pathToWorker']);
+const FOUND_BODIES = new Set(['pathTowardWorker', 'findPathToward', 'pathToWorker', 'findPathTo']);
 function normalizeProbe(r, isExec, body) {
   const nameOf = new Map(Object.entries(r.addresses || {}).map(([n, a]) => [a, n]));
   // Probe address fields are hex strings; the addresses map keys are ints.
@@ -1722,7 +1823,7 @@ function normalizeProbe(r, isExec, body) {
   return {
     // Exec natives write the verdict to *result; workers return it in eax.
     // FindPathToward's result slot is an actor pointer, not a verdict int.
-    ret: body === 'findPathToward' ? addr(r.resultOut)
+    ret: body === 'findPathToward' || body === 'findPathTo' ? addr(r.resultOut)
         : isExec ? parseInt(r.resultOut, 16)
         : PTR_RET_BODIES.has(body) ? (r.returned !== 0 ? 1 : 0)
         : r.returned | 0,
@@ -1787,10 +1888,10 @@ function compare(name, o, j) {
   return d;
 }
 
-const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec', 'findPathToward']);
+const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec', 'findPathToward', 'findPathTo']);
 const PICK_BODIES = new Set(['aiDirection', 'aiPickSearch', 'aiPickWorker', 'aiPickExec']);
 const GRAPH_BODIES = new Set(['reachMask', 'directReach', 'actorWorker',
-                              'pathTowardWorker', 'findPathToward', 'pathToWorker']);
+                              'pathTowardWorker', 'findPathToward', 'pathToWorker', 'findPathTo']);
 const runFor = scene =>
   (PICK_BODIES.has(scene.body) ? runJsPick
    : scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
@@ -1815,7 +1916,7 @@ for (let i = 0; i < scenes.length; i++) {
   try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
   const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body), scene.body), js);
-  if (scene.body === 'findPathToward') {
+  if (scene.body === 'findPathToward' || scene.body === 'findPathTo') {
     runtimeCases++;
     try {
       diffs.push(...compare(`${scene.name} VM/runtime`, normalizeProbe(r.result, true, scene.body),
@@ -1827,17 +1928,19 @@ for (let i = 0; i < scenes.length; i++) {
 // Every instruction of the findPathTo worker (but its two appFailAssert
 // calls) and of the toward worker's falling-target delegation executed.
 {
-  const [listing] = runProbe([{ disasm: { pathTo: PATH_TO_COVERAGE, delegation: DELEGATION_COVERAGE } }]);
+  const [listing] = runProbe([{ disasm: { pathTo: PATH_TO_COVERAGE, delegation: DELEGATION_COVERAGE,
+    exec518: FIND_PATH_TO_EXEC_COVERAGE } }]);
   const covered = new Set(probeResults.flatMap(r => r?.result?.coverage ?? []));
   const missed = Object.entries(listing.result.instructions).flatMap(([name, list]) =>
-    list.filter(a => !covered.has(a) && !PATH_TO_ASSERTS.has(a)).map(a => `${name}:${a}`));
+    list.filter(a => !covered.has(a) && !PATH_TO_ASSERTS.has(a) && !FIND_PATH_TO_EXEC_STAT.has(a)
+      && !FIND_PATH_TO_EXEC_TAILSET.has(a)).map(a => `${name}:${a}`));
   const total = Object.values(listing.result.instructions).reduce((n, list) => n + list.length, 0);
   if (missed.length) { failures++; console.log(`FAIL findPathTo coverage: ${missed.length} instructions not executed: ${missed.join(' ')}`); }
-  else console.log(`PASS findPathTo coverage: ${total - PATH_TO_ASSERTS.size}/${total} instructions executed (${PATH_TO_ASSERTS.size} appFailAssert excluded)`);
+  else console.log(`PASS findPathTo coverage: ${total - PATH_TO_ASSERTS.size - FIND_PATH_TO_EXEC_STAT.size - FIND_PATH_TO_EXEC_TAILSET.size}/${total} instructions executed (excluded: ${PATH_TO_ASSERTS.size} check() failure path, ${FIND_PATH_TO_EXEC_STAT.size} GTimestamp stat, ${FIND_PATH_TO_EXEC_TAILSET.size} unverified tailSet call)`);
 }
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav: ${passed}/${scenes.length} scenes bit-exact`);
-console.log(`Compared ${runtimeCases} FindPathToward scenes through decoded VM/runtime dispatch.`);
+console.log(`Compared ${runtimeCases} FindPathToward/FindPathTo scenes through decoded VM/runtime dispatch.`);
 
 // ---------------------------------------------------------------------------
 // Mutation coverage: each edit rewrites one behavior the disassembly dictates.

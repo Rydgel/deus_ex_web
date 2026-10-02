@@ -2008,6 +2008,31 @@ export function execFindPathToward(pawn, target, bSinglePath, bClearPaths, servi
   const result = { node: null };                            // [ebp+8] result slot
   if (pathTowardWorker(pawn, target, bSinglePath | 0, found, bClearPaths | 0, services))
     result.node = found.node;                               // 0x103bca8f
+  return pathExecTail(pawn, result, services);
+}
+
+/**
+ * execFindPathTo 0x103bc800 — native(518).
+ *   (FVector point, optional int bSinglePath /*=0*\/, optional int bClearPaths /*=1*\/)
+ *
+ * No null gate: the findPathTo worker (0x103dc1d0, thunk 0x10303972) runs
+ * with &found; the result slot takes the node only on success, then the
+ * same tail as 517 (0x103bc8d1..0x103bc91e).  The rdtsc pair around the
+ * worker only adjusts XLevel's FindPath cycle stat (+0x1128).
+ */
+export function execFindPathTo(pawn, point, bSinglePath, bClearPaths, services) {
+  const found = { node: null };                             // [ebp-0xc]
+  const result = { node: null };                            // [ebp+8] result slot
+  if (pathToWorker(pawn, point, bSinglePath | 0, found, bClearPaths | 0, services))
+    result.node = found.node;                               // 0x103bc8ce
+  return pathExecTail(pawn, result, services);
+}
+
+/** The 517/518 exec tail: clears bShootSpecial (+0x318 &~ 0x2000000) and
+ * SpecialPause (+0x460) unconditionally; a nonnull result that probes
+ * SpecialHandling (name 0x15a) runs tailSet; a result equal to SpecialGoal
+ * clears SpecialGoal (+0x45c). */
+function pathExecTail(pawn, result, services) {
   const f318 = rd(services, pawn, 'Flags318') >>> 0;
   wr(services, pawn, 'Flags318', (f318 & ~0x2000000) >>> 0); // clear bShootSpecial
   wr(services, pawn, 'SpecialPause', 0);                    // pawn+0x460 = 0

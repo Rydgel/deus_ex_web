@@ -188,9 +188,31 @@ function updateInfoLinkAccessibility(){
   // Native displayBuffer contains the characters that have actually appeared.
   $('infolink-text').textContent=host.computerText(text);
 }
+// Play's screen shape: the window's own, or a fixed one centred in it (like
+// choosing a 1024x768 or 1680x1050 resolution in the original). The root
+// window and the 3D view take the canvas size, so a forced-play letterbox
+// follows the chosen shape.
+const SCREEN_ASPECTS = { window: null, '4:3': 4 / 3, '16:10': 16 / 10 };
+let screenAspect = 'window';
 function resize() {
-  const box = $('viewport').getBoundingClientRect();
-  renderer.setSize(box.width, box.height, false); camera.aspect = box.width / Math.max(1, box.height);
+  const box = $('viewport').getBoundingClientRect(), canvas = $('scene');
+  let width = box.width, height = box.height;
+  const aspect = mode === 'play' ? SCREEN_ASPECTS[screenAspect] : null;
+  if (aspect) { if (width / Math.max(1, height) > aspect) width = height * aspect; else height = width / aspect; }
+  if (mode === 'play') {
+    // A resolution the root window divides: ResizeRoot (0x1003adf0) takes
+    // m = min(floor(w/640), floor(h/480)) and the GC draws whole root units
+    // times m, so a remainder column or row would show the 3D view under
+    // the letterbox. The canvas buffer is snapped down to multiples of m.
+    const pr = renderer.getPixelRatio();
+    let w = Math.floor(width * pr), h = Math.floor(height * pr);
+    const m = Math.max(1, Math.min(Math.floor(w / 640), Math.floor(h / 480)));
+    // (+0.25 so three.js's floor(css * pr) gives back w and h exactly.)
+    w -= w % m; h -= h % m; width = (w + 0.25) / pr; height = (h + 0.25) / pr;
+    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+    canvas.style.marginLeft = `${Math.floor((box.width - width) / 2)}px`; canvas.style.marginTop = `${Math.floor((box.height - height) / 2)}px`;
+  } else for (const name of ['width', 'height', 'marginLeft', 'marginTop']) canvas.style[name] = '';
+  renderer.setSize(width, height, false); camera.aspect = width / Math.max(1, height);
   camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(75 / 2)) / camera.aspect));
   camera.updateProjectionMatrix();
 }
@@ -237,7 +259,7 @@ function resetCamera() {
 function setMode(next) {
   if (mode === 'play' && next !== 'play') game?.resetInput({releasePhysical:true});
   mode = next === 'play' && game ? 'play' : 'inspect'; $('mode').value = mode;
-  if (mode !== 'play') resize(); // Inspect uses the whole canvas again.
+  resize(); // Inspect uses the whole canvas again; Play takes the screen shape.
   if(mode==='play')hideNpcFocus();
   keys.clear();
   if (mode === 'play') applyPlayerView();
@@ -433,6 +455,12 @@ function setUiHidden(hidden) {
   try { localStorage.setItem('deusex.uiHidden', hidden ? '1' : '0'); } catch { /* storage unavailable */ }
 }
 $('hide-ui').onclick = () => setUiHidden(true);
+function setScreenAspect(value) {
+  screenAspect = Object.hasOwn(SCREEN_ASPECTS, value) ? value : 'window'; $('screen-aspect').value = screenAspect; resize();
+  try { localStorage.setItem('deusex.screenAspect', screenAspect); } catch { /* storage unavailable */ }
+}
+$('screen-aspect').onchange = event => setScreenAspect(event.target.value);
+try { setScreenAspect(localStorage.getItem('deusex.screenAspect') ?? 'window'); } catch { /* storage unavailable */ }
 $('show-ui').onclick = () => setUiHidden(false);
 try { if (localStorage.getItem('deusex.uiHidden') === '1') setUiHidden(true); } catch { /* storage unavailable */ }
 $('close-panel').onclick = () => togglePanel(false);
