@@ -231,6 +231,26 @@ function renderViewportFor(rect) {
   const pr = renderer.getPixelRatio(), height = renderer.domElement.height;
   return [rect.x / pr, (height - rect.y - rect.height) / pr, rect.width / pr, rect.height / pr];
 }
+const rotatorAngle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
+// A rotator as the view's Euler (pitch, -yaw, -roll in 'YXZ', as applyPlayerView).
+const rotatorEuler = ([pitchUnits, yawUnits, rollUnits]) =>
+  new THREE.Euler(rotatorAngle(pitchUnits), -rotatorAngle(yawUnits), -rotatorAngle(rollUnits), 'YXZ');
+// Render.dll's sky frame (0x10b18410): only when LevelInfo.SkyZone (+0x384)
+// is set; the frame zone's ZoneInfo (LevelInfo when the zone has none)
+// supplies its SkyZone, whose Location is the sky frame's origin and whose
+// Rotation detransforms the view coords (FCoords /= FRotator: roll, pitch,
+// yaw), i.e. the sky view is the SkyZone rotation applied after the view's.
+// In Play the zones' SkyZone is what the original LinkToSkybox set at
+// startup; Inspect uses the map's statically chosen sky.
+function skyFrame() {
+  const runtime = mode === 'play' ? game?.doors?.scriptRuntime?.runtime : null;
+  if (!runtime) return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
+  const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
+  if (!runtime.readNamed(info, 'SkyZone')) return null;
+  const zone = level.pointRegion(fromView(camera.position.toArray()))?.zone ?? info;
+  const sky = runtime.readNamed(zone, 'SkyZone') ?? runtime.readNamed(info, 'SkyZone');
+  return { location: runtime.readNamed(sky, 'Location'), rotation: runtime.readNamed(sky, 'Rotation') };
+}
 function applyPlayerView() {
   const view = game.view();
   const angle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
@@ -954,8 +974,10 @@ function animate(time) {
       const box = renderViewportFor(renderRect);
       renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
     }
-    if (drawWorld && world.sky) {
-      skyCamera.copy(camera); skyCamera.position.fromArray(toView(world.sky));
+    const sky = drawWorld ? skyFrame() : null;
+    if (sky) {
+      skyCamera.copy(camera); skyCamera.position.fromArray(toView(sky.location));
+      skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));
       const markersVisible = world.markers.visible; world.markers.visible = false;
       const npcVisible=npcPreview?.root.visible;if(npcPreview)npcPreview.root.visible=false;
       renderer.render(scene, skyCamera); world.markers.visible = markersVisible;

@@ -197,10 +197,20 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       bySurface.get(key).ts.push(t);
     }
     const batches = new Map();
+    // Fake-backdrop surfaces draw the sky zone's view in their spans, and
+    // like every BSP surface they occlude what lies behind them (Render.dll's
+    // span buffer): drawn depth-only after the sky pass, so other parts of the
+    // level beyond a sky opening stay hidden.
+    const backdrop = { [THREE.FrontSide]: [], [THREE.DoubleSide]: [] };
     let done = 0;
     for (const { surfaceIndex, zone, ts, pan } of bySurface.values()) {
       const surface = model.surfaces[surfaceIndex];
-      if (surface.flags & (POLY.Invisible | POLY.FakeBackdrop)) continue;
+      if (surface.flags & POLY.Invisible) continue;
+      if (surface.flags & POLY.FakeBackdrop) {
+        if (!actorName) backdrop[surface.flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide]
+          .push(...buildSurfaceGeometry(model, ts, surfaceIndex, 1, 1).positions);
+        continue;
+      }
       try {
         const lightmap = surface.flags & POLY.Unlit ? null : lighting.surface(model, surfaceIndex, zone, transform, transformNormal, actorName);
         const tile = lightAtlas.add(lightmap);
@@ -235,6 +245,18 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
       }
       if (++done % 100 === 0) { onProgress(`Preparing ${actorName ?? 'world'} surfaces`, done, bySurface.size); await new Promise(resolve => setTimeout(resolve, 0)); }
+    }
+    for (const [side, positions] of Object.entries(backdrop)) {
+      if (!positions.length) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: Number(side) }));
+      mesh.matrixAutoUpdate = false;
+      mesh.userData = { actor: actorName, backdrop: true, model: model.entry.name };
+      mesh.renderOrder = -1; // before anything it hides
+      parent.add(mesh);
+      counts.backdropTriangles = (counts.backdropTriangles ?? 0) + positions.length / 9;
     }
     for (const batch of batches.values()) {
       const geometry = new THREE.BufferGeometry();
@@ -291,7 +313,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   if (panned.length) notes.add(`${panned.length} auto-panned surface groups follow Level.TimeSeconds and their viewer-side zone's pan speeds.`);
   if (animatedHeads.size) notes.add(`${animatedHeads.size} animated surface textures advance every frame; the original advances only those its BSP occlusion draws.`);
-  const sky = map.actors.find(a => a.className === 'SkyZoneInfo' && a.values.Location)?.values.Location ?? null;
+  // Inspect's sky: what LinkToSkybox (ZoneInfo.uc, called for every zone by
+  // GameInfo) gives every zone: the last SkyZoneInfo in the Level's Actors
+  // order, then the last whose bHighDetail matches Level.bHighDetailMode,
+  // taken as True (the value Play's startup reads). Play reads the zones'
+  // SkyZone from the running scripts instead.
+  const skies = map.actors.filter(a => a.className === 'SkyZoneInfo' && a.values.Location);
+  const skyActor = skies.filter(a => a.values.bHighDetail).at(-1) ?? skies.at(-1) ?? null;
+  const sky = skyActor?.values.Location ?? null, skyRotation = skyActor?.values.Rotation ?? [0, 0, 0];
   // The appFrand draws of the light noise come from a host stream: the
   // original's position in the process-wide CRT stream is not reproduced.
   const lightFrame = createLightFrame(createNativeRng(0x11647).frand), lightAnimation = { changed: 0 };
@@ -301,7 +330,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
     return { ...update, uploaded: update.lightmaps.length };
   }
-  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky,
+  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;

@@ -34,7 +34,7 @@ point-sampled HUD keeps index zero's palette colour with zero alpha instead
 (`TextureStore` mode `'point'`): masked HUD styles discard those texels, and
 the unmasked styles that share the texture draw the unmasked colour. Two-sided, no-smoothing, translucent screen
 blend, and modulated blend flags affect materials. Fake-backdrop openings reveal
-an initial pass from the original SkyZoneInfo location. Static lightmaps and shadow
+an initial pass from the sky zone (see "Sky" below). Static lightmaps and shadow
 masks are reconstructed as described in [lighting.md](lighting.md). Moving
 lights add their texels to BSP and mover light maps in Play, as described in
 [dynamic-lighting.md](dynamic-lighting.md). Animated surface textures
@@ -115,3 +115,32 @@ Binary layouts were checked against SurrealEngine, reference revision
 and the Model and UObject links in [extracted-data.md](extracted-data.md).
 Rendering uses [Three.js DataTexture](https://threejs.org/docs/#DataTexture)
 and BufferGeometry. SurrealEngine is a format reference, not a linked runtime.
+
+## Sky
+
+Render.dll's sky frame (`0x10b18410`): the sky is drawn only when
+`XLevel->Actors(0)` (the LevelInfo) has a `SkyZone` (`AZoneInfo +0x384`), the
+frame recursion is below 3 and the viewport actor's ShowFlags has bit `0x800`.
+The frame zone's ZoneInfo (`Model->Zones[zone].ZoneActor`, the LevelInfo when
+the zone has none) supplies the `SkyZone` actually used. Its frame copies the
+view coords, takes the SkyZone's Location as origin (`+0x114`) and applies
+Core's `FCoords::operator/=(FRotator)` with the SkyZone's Rotation (inverse
+roll `+0x128`, pitch `+0x120`, yaw `+0x124`, GMath sine table), i.e. the sky
+view is the sky zone's rotation applied after the view's. Which SkyZoneInfo a
+zone links to is script: `GameInfo` calls every ZoneInfo's `LinkToSkybox`,
+which keeps the last SkyZoneInfo in the Level's Actors order, then the last
+whose `bHighDetail` equals `Level.bHighDetailMode` (so every zone shares one
+sky). Play reads the zone's `SkyZone` from the running scripts each frame;
+Inspect applies the same rule to the map's actors with `bHighDetailMode`
+True. Before 2026-10-02 the viewer took the first SkyZoneInfo in export
+order and ignored its rotation: 00_Intro showed SkyZoneInfo0 (an empty black
+box) instead of SkyZoneInfo3's clouds, and UNATCO Island's skyline was turned
+by the SkyZoneInfo's yaw 5080 (checked against the original-game captures
+`ad/captures/original/l-statue-*`).
+
+A fake-backdrop surface takes the sky in its spans and, like any BSP surface,
+occludes what lies behind it. The viewer draws the world's backdrop surfaces
+depth-only (render order -1, after the sky pass, before the world), so the
+other sets of a map (00_Intro keeps VersaLife, the streets and the Statue in
+one level) no longer show through sky openings. Mover backdrop surfaces and
+mirror views through sky openings remain unverified.
