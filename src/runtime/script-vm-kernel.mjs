@@ -86,6 +86,18 @@ export function createScriptVmKernel(instance, memory) {
   const words = () => new Uint32Array(memory.buffer);
   uploadSineTable(x, memory);
   const resultAt = x.result_ptr() >>> 2;
+  // Fire.dll texture blocks (fire.rs) live above the memory's initial size,
+  // past the statics and stack, and stay for the instance's life (a page's
+  // procedural textures do too). This bump allocator is the only thing that
+  // grows this instance's memory; the other kernels here re-derive their
+  // views on every call.
+  let fireTop = memory.buffer.byteLength;
+  const fireAlloc = bytes => {
+    const at = (fireTop + 15) & ~15, end = at + bytes;
+    if (end > memory.buffer.byteLength) memory.grow(Math.ceil((end - memory.buffer.byteLength) / 65536));
+    fireTop = end;
+    return at;
+  };
   const vector = () => { const w = words(); return [num(w[resultAt]), num(w[resultAt + 1]), num(w[resultAt + 2])]; };
   const ints = () => { const w = new Int32Array(memory.buffer); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; };
   return Object.freeze({
@@ -141,6 +153,15 @@ export function createScriptVmKernel(instance, memory) {
         ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice() : null,
       miss: () => x.fog_miss(),
       setMiss: value => x.fog_set_miss(value >>> 0),
+    }),
+    // Fire.dll's procedural texture ticks (fire.rs, docs/fire-texture.md
+    // "Rust kernel"), driven by fire-texture-kernel.mjs over blocks from
+    // `alloc` (byte addresses in `memory`).
+    fire: Object.freeze({
+      memory,
+      alloc: fireAlloc,
+      wetTick: header => x.fire_wet_tick(header >>> 0),
+      expand: (pixels, count, palette, rgba) => x.fire_expand(pixels >>> 0, count >>> 0, palette >>> 0, rgba >>> 0),
     }),
   });
 }

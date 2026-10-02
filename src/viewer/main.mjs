@@ -23,6 +23,10 @@ import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
 const scriptVmParam=new URLSearchParams(location.search).get('scriptVm');
 if(scriptVmParam)globalThis.DEUS_EX_SCRIPT_VM=scriptVmParam;
+// Fire.dll's procedural texture ticks run in the Rust core
+// (docs/fire-texture.md "Rust kernel"); ?fireKernel=js keeps the JavaScript.
+const fireKernelParam=new URLSearchParams(location.search).get('fireKernel');
+if(fireKernelParam)globalThis.DEUS_EX_FIRE_KERNEL=fireKernelParam;
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.

@@ -263,3 +263,90 @@ NanoKey's, LaserTriggers', BarrelFires' and canister's were), and each fire's
 GlobalPhase and pixels advance between frames. With `--map 00_TrainingFinal`
 the BSP's BP_FX_03 is live too and no BSP surface fails on a fire. On
 Island and in Training it also requires drtywater_a live and ticking.
+
+## Rust kernel
+
+The per-tick work moves to the Rust core (`native/script-vm/src/fire.rs`)
+as exact representation changes; `fire-texture.mjs` stays the reference and
+the fallback. A 2026-10-02 browser census measured drtywater_a's
+`calculateWater` at ~1.7 ms on every map (`play-frame-cost.md`).
+
+- **Where.** fire.rs runs in the script-VM kernel instance
+  (`script-vm-kernel.mjs`). It has no statics: the interpreter instance
+  shares the module's reserved 2 MiB (`build.rs`). Texture blocks come from
+  `kernel.fire.alloc`, a bump allocator above the instance's initial memory,
+  the only thing that grows that memory. Blocks live as long as the page's
+  texture set.
+- **State.** The load functions (constructors, Serialize's arrays,
+  `wetPostLoad`) still build plain objects. `fire-texture-kernel.mjs` `wet`
+  then copies the state into a block: a header of u32 words (scalars and
+  buffer addresses, `W_*` in fire.rs) followed by the drops, SourceFields,
+  RenderTable, WaveTable, P8 pixels, the source pixels (LocalSourceBitmap or
+  the source's mip 0), a 1024-byte palette and the RGBA output. The returned
+  state keeps the reference's shape. GlobalPhase and WaveParity read the
+  header, and the buffers are views re-derived when the memory grows, so the
+  JavaScript bodies run on it unchanged.
+- **Generator.** `fireTables` (with its x87 products and host sine) stays the
+  module state. A Globals block holds a copy of the three tables. Around each
+  kernel tick `globals.run` copies the 512 random bytes and the index in and
+  back out. Kernel and JavaScript ticks therefore draw from one stream in
+  acquisition order, as before.
+- **Admission.** A wet texture whose tick runs (a source, at least 8×8) moves
+  when USize and VSize are `1 << UBits` and `1 << VBits` and the buffers have
+  the lengths the body indexes. Any other texture ticks in JavaScript on the
+  same stream. All eight game wet textures are admitted.
+- **Representation changes, with their arguments.**
+  - `calculateWater` reads a copy of the fields. A pass writes only its own
+    parity's rows. Besides each cell's own value, read before its one write,
+    it reads only the other parity's rows, so the kernel updates in place.
+  - The stencil's three-column window is carried along the row instead of
+    re-read with per-texel modulo.
+  - On a power-of-two texture the pass writes every pixel exactly once (each
+    cell its 2×2 block, the even pass's shifted with wrapping).
+    `applyWetTexture` then maps each refraction offset through
+    `src[row + ((offset + x) & 255 & (USize-1))]`. The kernel therefore
+    writes the source byte directly, and the separate pass and the
+    intermediate offsets are gone.
+  - `waterRedrawDrops` keeps the JavaScript typed-array rules. A write
+    outside SourceFields from an unmasked drop X/Y is dropped, and drops past
+    the 256 the array holds do nothing.
+  - The upload's palette expansion (`fire_expand`) reads a zero-padded
+    1024-byte copy of the palette, as the JavaScript loop reads `undefined`
+    (stored as 0) past a short palette. The RGBA bytes are copied into the
+    `THREE.DataTexture`'s own array, so three.js never holds a view that a
+    memory growth could detach.
+- **Switch.** `FIRE_KERNEL=js` (Node) or `?fireKernel=js` (viewer,
+  `globalThis.DEUS_EX_FIRE_KERNEL`) keeps the JavaScript bodies. The choice is
+  made once per texture set, at its first acquisition. The kernel is used
+  when it is loaded by then, which world.mjs ensures before any surface.
+  `records()` reports each texture's `backend`.
+
+`scripts/validate-fire-texture-rust.mjs` checks the kernel against the
+JavaScript bodies. A child process loads each map headless (world, game,
+actor mesh layer) and lists the textures Play acquires. Two sets are built
+from them, one per backend, with the same seed and order. Every texture
+ticks 600 times. After every tick the pixels, the fields, drops or sparks
+(whole arrays), the scalars, the 512 generator bytes and index, and the RGBA
+upload must match. On 2026-10-02 every byte matched for each set:
+
+| Set | Textures | Texture ticks |
+| --- | --- | --- |
+| 00_Training | drtywater_a, BioCell_SFX | 1200 |
+| 10_Paris_Chateau | Auc_Nanofeed, drtywater_a, BP_FX_02, BioCell_SFX, Nano_SFX_A | 3000 |
+| 15_Area51_Bunker | flame_b, bluewater_a, LaserBeam2, LaserSpot2, BioCell_SFX, LaserSpot1, Flame_J, Nano_SFX_A | 4800 |
+| all of Effects, BobPage and OceanLab | 8 wet, 40 fire | 28800 |
+| synthetic wet | 24 textures, 8×8 to 256×256 | 14400 |
+
+The synthetic wet set covers what the game's data does not: the game's wet
+textures use only drop types 0x01, 0x02, 0x06, 0x0c and 0x10. The set has
+every drop type (and unused ones), drops outside the half texture,
+NumDrops 300, smaller sources and short palettes. Two injected kernel bugs
+were caught: a refraction mask on the first Training tick, and a generator
+XOR on WavyBlade's first tick.
+
+`--bench N` times both backends headless (Node, M2 Pro, median of 300). For
+the 256×256 drtywater_a and bluewater_a the tick plus upload went from
+1.53–1.60 + 0.25 ms in JavaScript to 0.084–0.087 + 0.027 ms in Rust, about
+16×. The 128×128 wet textures went from 0.39 + 0.064 to 0.022 + 0.007 ms.
+Browser A/B and the Play validator (`validate-fire-texture-play.mjs`, which
+needs a browser) are not part of this record.

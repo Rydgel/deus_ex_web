@@ -3,6 +3,14 @@ import {fireTables, firePostLoad, fireConstantTimeTick, waterConstruct, wetPostL
   from '../runtime/fire-texture.mjs';
 import {get as textureFrame} from '../runtime/texture-animation.mjs';
 import {createNativeRng} from '../runtime/rng.mjs';
+import {scriptVmKernel} from '../runtime/script-vm-kernel.mjs';
+import {createFireKernel} from '../runtime/fire-texture-kernel.mjs';
+
+/** The ticks run in the Rust core (fire-texture-kernel.mjs) when the
+ * script-VM kernel is loaded at the first acquisition; FIRE_KERNEL=js in
+ * Node or ?fireKernel=js in the viewer keeps fire-texture.mjs's bodies. */
+const fireKernelMode = () => (typeof process !== 'undefined' && process.env?.FIRE_KERNEL)
+  || globalThis.DEUS_EX_FIRE_KERNEL || 'rust';
 
 /** Procedural textures in the viewer (docs/fire-texture.md "Play"): one
  * record per FireTexture or WetTexture object with its load state
@@ -16,9 +24,14 @@ import {createNativeRng} from '../runtime/rng.mjs';
  * acquisition order (the original updates the drawn ones in draw order, and
  * they share one generator), and the module tables take their 512 appRand
  * bytes from a host-seeded MSVCRT stream (the original process's rand
- * position at Fire's first construction is not reproduced). */
-export function createProceduralTextures({seed = 0x0f12e} = {}) {
-  let globals = null;
+ * position at Fire's first construction is not reproduced).
+ *
+ * `kernel`: the script-VM kernel whose fire.rs runs the ticks, null for the
+ * JavaScript bodies, or undefined to decide at the first acquisition (see
+ * fireKernelMode). The choice holds for the set: its textures share one
+ * generator. */
+export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
+  let globals = null, rust = null, kernelGlobals = null;
   const records = new Map(), notes = new Set();
   const clock = () => performance.now() / 1000;
 
@@ -48,22 +61,29 @@ export function createProceduralTextures({seed = 0x0f12e} = {}) {
       source: source && {uBits: source.uBits, vBits: source.vBits, palette: source.palette, pixels: source.pixels}});
     state.globalPhase = v.GlobalPhase | 0;
     wetPostLoad(state);
+    const moved = rust?.wet(state, kernelGlobals);
+    if (moved) return {state: moved.state, palette: () => moved.state.palette, tick: moved.tick, expand: moved.expand};
     return {state, palette: () => state.palette, tick: () => wetConstantTimeTick(state, globals)};
   }
 
   function acquire(data) {
     let record = records.get(data.key);
     if (!record) {
-      globals ??= fireTables(createNativeRng(seed).rand);
+      if (!globals) {
+        globals = fireTables(createNativeRng(seed).rand);
+        const chosen = kernel !== undefined ? kernel : fireKernelMode() === 'js' ? null : scriptVmKernel;
+        rust = chosen ? createFireKernel(chosen) : null;
+        kernelGlobals = rust?.globals(globals);
+      }
       const kind = data.procedural === 'FireTexture' ? fireState : data.procedural === 'WetTexture' ? wetState : null;
       if (!kind) throw new Error(`Procedural texture ${data.procedural} is not translated`);
-      const {state, palette, tick} = kind(data), uSize = state.uSize, vSize = state.vSize, v = data.values;
+      const {state, palette, tick, expand = null} = kind(data), uSize = state.uSize, vSize = state.vSize, v = data.values;
       const rgba = new Uint8Array(uSize * vSize * 4);
       const texture = new THREE.DataTexture(rgba, uSize, vSize, THREE.RGBAFormat);
       texture.colorSpace = THREE.SRGBColorSpace; texture.flipY = false;
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
       texture.magFilter = THREE.LinearFilter; texture.minFilter = THREE.LinearFilter; texture.generateMipmaps = false;
-      record = {key: data.key, kind: data.procedural, state, texture, rgba, palette, changed: true,
+      record = {key: data.key, kind: data.procedural, state, texture, rgba, palette, expand, changed: true,
         // UTexture's animation fields (texture-animation.mjs) with PostLoad's
         // Accumulator 0 and LastUpdateTime at the load clock.
         primeCount: (v.PrimeCount ?? 0) & 255, primeCurrent: 0,
@@ -79,7 +99,8 @@ export function createProceduralTextures({seed = 0x0f12e} = {}) {
 
   function upload(record) {
     const {state, rgba} = record, palette = record.palette() ?? BLACK;
-    for (let p = 0, n = state.pixels.length; p < n; p++) {
+    if (record.expand) record.expand(palette, rgba);
+    else for (let p = 0, n = state.pixels.length; p < n; p++) {
       const c = state.pixels[p] * 4, o = p * 4;
       rgba[o] = palette[c]; rgba[o + 1] = palette[c + 1]; rgba[o + 2] = palette[c + 2]; rgba[o + 3] = 255;
     }
@@ -96,7 +117,13 @@ export function createProceduralTextures({seed = 0x0f12e} = {}) {
         if (record.changed) upload(record);
       }
     },
-    records: () => [...records.values()].map(r => ({key: r.key, kind: r.kind, sparks: r.state.activeSparkNum, size: [r.state.uSize, r.state.vSize],
+    /** Validation (validate-fire-texture-rust): the raw records in
+     * acquisition order, the shared module state, and `step(record)`, one
+     * ConstantTimeTick and its upload. */
+    inspect: () => ({records: [...records.values()], globals, upload,
+      step: record => { record.constantTimeTick(record); upload(record); }}),
+    records: () => [...records.values()].map(r => ({key: r.key, kind: r.kind, backend: r.expand ? 'rust' : 'js',
+      sparks: r.state.activeSparkNum, size: [r.state.uSize, r.state.vSize],
       phase: r.state.globalPhase, checksum: r.state.pixels.reduce((sum, value, index) => (sum + value * (index + 1)) >>> 0, 0)})),
     dispose() { for (const record of records.values()) record.texture.dispose(); records.clear(); },
   };
