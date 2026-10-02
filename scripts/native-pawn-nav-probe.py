@@ -12,6 +12,7 @@ Recovered bodies (Engine.dll image base 0x10300000):
   PickWallAdjust(526)   exec 0x103bb7e0 -> 0x103c4150
   FindStairRotation(524) exec 0x103bb880 (inline fp)
   AIDirectionReachable(708) exec 0x103c8560 -> band search 0x103c78a0
+  ReachablePathnodes(1004) iterator exec 0x103c8bb0 -> GetPathnodeList 0x103c6490
 
 The reachability core is a stepped-walk graph primitive: the point/actor
 workers run zone gates, an optional eye trace, a test FarMoveActor, then
@@ -118,6 +119,11 @@ BODIES = {
     # AIDirectionReachable (708): exec -> the band search above, which is
     # APawn::AIDirectionReachable (thunk 0x103011d6), with a literal 15.0f.
     'aiDirectionReachableExec': 0x103c8560,  # native 708 exec (thunk 0x103022cf)
+    # ReachablePathnodes (1004): the iterator exec (thunk 0x10303382) and
+    # APawn::GetPathnodeList (thunk 0x10302086), thiscall(pawn; list, max,
+    # FromPoint, bUsePrunedPaths, bSort), ret 0x14.
+    'reachablePathnodes': 0x103c8bb0,
+    'getPathnodeList': 0x103c6490,
 }
 
 # Engine IAT slot for Core's appFrand — patched to a scripted queue for the
@@ -145,6 +151,7 @@ INVENTORY_CLASS = 0x10576f70     # AInventory::StaticClass()
 MOVER_CLASS = 0x1058bb58         # AMover::StaticClass()
 TRIGGER_CLASS = 0x10576088       # ATrigger::StaticClass()
 ACTOR_CLASS = 0x1057c560         # AActor::StaticClass()
+BRUSH_CLASS = 0x10582a28         # ABrush::StaticClass() (AActor::IsOverlapping's IsBrush)
 
 # Expression tokens consumed by the exec wrappers through GNatives[token].
 TOK_NOTHING = 0x0b
@@ -165,6 +172,13 @@ MAIL_PR = 0x1ff00280   # PointRegion    header
 MAIL_FL = 0x1ff00300   # FastLineCheck  header
 MAIL_FR = 0x1ff00380   # appFrand       header (scripted float queue)
 MAIL_SC = 0x1ff00400   # SpecialCost    header (scripted int queue)
+MAIL_IT = 0x1ff00480   # iterator body record count (scene 'iterator')
+
+# Script token of the iterator-body record stub (an otherwise unused
+# GNatives slot): it logs the two out-slot dwords per iteration.
+TOK_ITER_RECORD = 0x5f
+EX_ITERATOR_NEXT = 0x31
+EX_ITERATOR_POP = 0x30
 
 # Deep enough that a ~100-step reach loop can't exhaust a scripted boundary
 # (each list is padded by repeating its last entry to this depth).
@@ -211,6 +225,30 @@ def outarg_stub():
         '83400c04',
         '5e',
         'c20800')
+
+
+def iter_record_stub():
+    """GNatives evaluator for the probe's iterator body token, deployed once:
+    append the dwords at the two slot addresses in MAIL_IT+8/+0xc to the
+    record buffer at MAIL_IT+4, ++count (MAIL_IT+0); on the call whose count
+    equals MAIL_IT+0x10 set Stack.Code = MAIL_IT+0x14.  Per-scene values
+    live in the mailbox, not in immediates: rewriting code at a reused heap
+    address would leave Unicorn's translated block stale.  stdcall, ret 8."""
+    m = lambda off: struct.pack('<I', MAIL_IT + off).hex()
+    return hx(
+        '56', '57',
+        '8b35', m(0),                                 # esi = count
+        '8bfe', 'c1e703',                             # edi = count*8
+        '033d', m(4),                                 # edi += records
+        'a1', m(8), '8b00', '8907',                   # [edi]   = *nav slot
+        'a1', m(0xc), '8b00', '894704',               # [edi+4] = *dist slot
+        '46',
+        '8935', m(0),                                 # ++count
+        '3b35', m(0x10),                              # == breakAt ?
+        '750d',                                       # jne done
+        '8b44240c',                                   # eax = Stack
+        '8b0d', m(0x14), '89480c',                    # Stack.Code = break pop
+        '5f', '5e', 'c20800')
 
 
 def move_stub(mail, recs):
@@ -583,6 +621,7 @@ class NavProbe:
         self.write(GNATIVES + TOK_INT * 4, 'I', self.deploy(dword_stub(1)))
         self.write(GNATIVES + TOK_NOTHING * 4, 'I', self.deploy(dword_stub(0)))
         self.write(GNATIVES + TOK_OUT * 4, 'I', self.deploy(outarg_stub()))
+        self.write(GNATIVES + TOK_ITER_RECORD * 4, 'I', self.deploy(iter_record_stub()))
         # Fabricated level vtable: MoveActor +0x88, FarMoveActor +0x8c,
         # SingleLineCheck +0xc0 -> recording stubs; every other slot -> trap.
         self.vtable = self.alloc(0x100)
@@ -860,6 +899,7 @@ class NavProbe:
         'navpoint': NAVPOINT_CLASS, 'navigationpoint': NAVPOINT_CLASS,
         'warpzonemarker': WARPMARKER_CLASS, 'inventory': INVENTORY_CLASS,
         'mover': MOVER_CLASS, 'trigger': TRIGGER_CLASS, 'actor': ACTOR_CLASS,
+        'brush': BRUSH_CLASS,
     }
 
     def zone(self, spec):
@@ -913,7 +953,7 @@ class NavProbe:
                 self.write(obj + off, 'f', spec[key])
         for key, off in [('flags1dc', 0x1dc), ('flags318', 0x318), ('flags31c', 0x31c),
                          ('flags28', 0x28), ('field444', 0x444), ('field4ec', 0x4ec),
-                         ('physics', 0x30),
+                         ('physics', 0x30), ('brush', 0x178),
                          # NavigationPoint path-search state: +0x448 packs
                          # bPlayerOnly(1)/bEndPoint(2)/bEndPointOnly(4)/
                          # bSpecialCost(8)/bOneWayPath(0x10).
@@ -963,7 +1003,7 @@ class NavProbe:
             mem = self.alloc(28 * len(reach_specs))
             for i, s in enumerate(reach_specs):
                 o = mem + i * 28
-                self.write(o + 0x00, 'I', s.get('distance', 0))
+                self.write(o + 0x00, 'I', s.get('distance', 0) & 0xffffffff)
                 self.write(o + 0x04, 'I', s.get('start', 0))
                 self.write(o + 0x08, 'I', s.get('end', 0))
                 self.write(o + 0x0c, 'I', s.get('radius', 0))
@@ -992,7 +1032,7 @@ class NavProbe:
         if 'disasm' in scene:
             return {'instructions': self.instructions(
                 {name: (int(lo, 16), int(hi, 16)) for name, (lo, hi) in scene['disasm'].items()})}
-        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR, MAIL_SC):
+        for mail in (MAIL_MV, MAIL_FM, MAIL_SL, MAIL_PR, MAIL_FL, MAIL_FR, MAIL_SC, MAIL_IT):
             self.write(mail, 'I', 0)
             self.write(mail + 4, 'I', 0)
         self.probing_results = scene.get('probing', [])
@@ -1178,6 +1218,8 @@ class NavProbe:
         self.write(TRIGGER_CLASS + 0x28, 'I', ACTOR_CLASS)
         self.write(ACTOR_CLASS + 0x28, 'I', 0)
         self.write(LEVELINFO_CLASS + 0x28, 'I', self.class_object(0))
+        self.write(BRUSH_CLASS + 0x28, 'I', ACTOR_CLASS)
+        refs['__class_navpoint'] = NAVPOINT_CLASS
 
         # Token stream for exec wrappers.
         stream = []
@@ -1202,11 +1244,36 @@ class NavProbe:
                 stream.append(TOK_NOTHING)
             else:
                 raise ValueError(f'Unknown arg kind {kind}')
-        code = self.alloc(len(stream) + 16)
-        self.cpu.mem_write(code, bytes(stream + [TOK_END, 0, 0, 0]))
+        iterator = scene.get('iterator')
+        iter_rec = 0
+        if iterator is not None:
+            # An iterator exec reads PRE_ITERATOR's wEndOffset word after
+            # P_FINISH and runs the body until IteratorNext/IteratorPop:
+            #   [args][0x16][wEnd][REC][0x31 next][0x30 break pop][0x30 at wEnd]
+            # REC logs the two named out slots; on its breakAt-th call it
+            # moves Code to the break pop (a script `break`). Exhaustion
+            # leaves Code at Script(wEnd+1), Script = Stack.Node+0x44.
+            n = len(stream)
+            w_end = n + 6
+            tail = [TOK_END, w_end & 0xff, w_end >> 8, TOK_ITER_RECORD,
+                    EX_ITERATOR_NEXT, EX_ITERATOR_POP, EX_ITERATOR_POP, 0, 0, 0]
+            code = self.alloc(len(stream) + len(tail) + 16)
+            self.cpu.mem_write(code, bytes(stream + tail))
+            iter_rec = self.alloc(8 * 64)
+            nav_slot, dist_slot = (refs[name] for name in iterator.get('slots', ['foundbuf', 'vecbuf']))
+            self.write(MAIL_IT, '6I', 0, iter_rec, nav_slot, dist_slot,
+                       iterator.get('breakAt', 0) & 0xffffffff, code + n + 5)
+            self.iter_exits = {n + 6: 'pop', n + 7: 'end'}
+        else:
+            code = self.alloc(len(stream) + 16)
+            self.cpu.mem_write(code, bytes(stream + [TOK_END, 0, 0, 0]))
         frame = self.alloc(0x40)
         self.write(frame + 0x8, 'I', pawn)
         self.write(frame + 0xc, 'I', code)
+        if iterator is not None:
+            node = self.alloc(0x60)
+            self.write(node + 0x44, 'I', code)     # UStruct Script.Data
+            self.write(frame + 0x4, 'I', node)     # FFrame.Node
         result_out = self.alloc(16)
         # Optional exec-frame state: a sentinel in the result slot (so an
         # unwritten result is visible) and a stale Core GPropAddr value left by
@@ -1365,6 +1432,11 @@ class NavProbe:
             },
             'hitbuf': ['%08x' % w for w in self.read(refs['hitbuf'], '12I')],
             'vecbuf': ['%08x' % w for w in self.read(refs['vecbuf'], '4I')],
+            'scratch': ['%08x' % w for w in self.read(refs['scratch'], '64I')],
+            'iterRecords': [['%08x' % w for w in self.read(iter_rec + i * 8, '2I')]
+                            for i in range(self.read(MAIL_IT, 'I')[0])] if iter_rec else None,
+            'iterExit': (self.iter_exits.get(self.read(frame + 0xc, 'I')[0] - code, 'other')
+                         if iter_rec else None),
             'pawnAddress': pawn,
             'addresses': {n: a for n, a in refs.items() if not n.startswith('__out_')},
             'levelAddress': lvl,

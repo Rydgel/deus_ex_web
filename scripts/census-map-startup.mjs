@@ -96,9 +96,8 @@ function summarize(data) {
 const LATER_STAGES = Object.freeze([
   {stage: 5, reason: 'AI navigation/latent movement natives (docs/script-pawn-nav.md unported workers)',
     test: key => /^native (504|506|508|518|524|525|526|708|712) /.test(key)},
-  // Pawn.ReachablePathnodes (iterator 1004) walks the navigation network.
-  {stage: 5, reason: 'AI navigation iterator: Pawn.ReachablePathnodes (1004)',
-    test: key => /Original iterator native is not implemented: ReachablePathnodes/.test(key)},
+  // Pawn.ReachablePathnodes (iterator 1004, GetPathnodeList) is implemented
+  // (docs/script-pawn-nav.md): its boundary now counts as a failure.
   {stage: 5, reason: 'swimming: APawn::performPhysics PHYS_Swimming (roadmap Stage 5 movement)',
     test: key => /performPhysics Physics=Swimming\b/.test(key)},
   // physProjectile (docs/projectile.md), physPathing for PHYS_Interpolating

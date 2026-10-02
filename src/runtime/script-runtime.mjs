@@ -68,7 +68,7 @@ import {
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
 import { moveSmooth } from './move-smooth.mjs';
-import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execFindPathTo, execEAdjustJump, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
+import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execFindPathTo, execEAdjustJump, actorReachable, pointWorker, aiDirection, createReachablePathnodesIterator } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -4154,6 +4154,12 @@ export class ScriptRuntime {
       // VisibleActors tests the candidate's whole +0x28 word for bHidden.
       return createVisibleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
         actorWord:actor=>actorWordOf(this.instance(actor))});
+    }
+    if(call.index===1004){
+      // execReachablePathnodes 0x103c8bb0 over APawn::GetPathnodeList
+      // 0x103c6490, with the receiver's pawn-nav seam; see
+      // docs/script-pawn-nav.md.
+      return createReachablePathnodesIterator({...call,services:this.pawnNavServices(call.receiver)});
     }
     if(call.index!==304)throw new Error(`Original iterator native is not implemented: ${call.index}`);
     if(!this.actorClass||!this.levelFor)throw new Error('AllActors requires a linked original actor array');

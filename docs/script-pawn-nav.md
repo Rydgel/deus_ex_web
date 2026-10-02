@@ -19,6 +19,7 @@ Pawn.uc             the native() declarations quoted below
 | 525 | `final function actor FindRandomDest(optional bool bClearPaths)` | thunk `0x103014f1` | `0x103bcb90` → `0x103da050`+`0x103dc700` |
 | 526 | `final function bool PickWallAdjust()` | thunk `0x10303968` | `0x103bb7e0` → `0x103c4150` |
 | 708 | `final function bool AIDirectionReachable(vector focus, int yaw, int pitch, float minDist, float maxDist, out vector bestDest)` | thunk `0x103022cf` | `0x103c8560` → band search `0x103c78a0` |
+| 1004 | `final iterator function ReachablePathnodes(class<NavigationPoint> BaseClass, out NavigationPoint NavPoint, Actor FromPoint, out float distance, optional bool bUsePrunedPaths)` | thunk `0x10303382` | `0x103c8bb0` → `GetPathnodeList` `0x103c6490` |
 
 The Unicorn oracle is `scripts/native-pawn-nav-probe.py`.  It loads the real
 Engine/Core images, fabricates a pawn + zones + a `ULevel` whose vtable slots
@@ -57,6 +58,10 @@ Jumping (`FindBestJump`/`SuggestJumpVelocity`/`jumpLanding`) has its own
 `AIDirectionReachable` (708: exec `0x103c8560` over the band search
 `0x103c78a0`) has its own 285-case original-DLL comparison through the
 translated exec and Play's VM binding, and is dispatched live.
+
+`ReachablePathnodes` (1004: the iterator exec `0x103c8bb0` over
+`APawn::GetPathnodeList` `0x103c6490`) has its own section below and is
+dispatched live through `createIterator`.
 
 Not yet oracle-verified: the
 proximity-landing `appSqrt` arc, `FindRandomDest`, `FindPathTo`,
@@ -1184,6 +1189,11 @@ IM_Radius)`. See [roadmap](roadmap.md) for the research note.
   the GTimestamp stat arms and the tailSet call for a SpecialHandling
   result, which the probe cannot dispatch (unverified there as for 517).
   `FindRandomDest` (`0x103da050`/`0x103dc700`) is not wired.
+- `ReachablePathnodes` (native 1004: exec `0x103c8bb0`, `GetPathnodeList`
+  `0x103c6490`, `IsOverlapping` `0x10369430`, MSVCRT `qsort`) — **ported to
+  JS and dispatched live** through `createIterator` (2026-10-02); 64
+  original-DLL scenes, 8 mutants, full exec coverage and worker coverage but
+  the `check()` failure tails (see its section below).
 - `FindRandomDest` shares the ReachSpec BFS machinery
   (`0x103da050`/`0x103dc700`) recovered at the field level — see the graph
   layout above.
@@ -1258,3 +1268,158 @@ Island's PaulDenton0 follows the player through GetNextVector
 (`validate-island-jump-reach.mjs`). Stage 3 remains unfinished. Remaining
 navigation implementation includes the ReachSpec path workers
 `FindRandomDest`/`FindPathTo`.
+
+## `ReachablePathnodes` native 1004 — exec `0x103c8bb0` → `GetPathnodeList` `0x103c6490` (2026-10-02)
+
+DeusEx's `Pawn.uc` declares it; ScriptedPawn uses it twice, both with
+`FromPoint=None` (the projectile-avoidance away vector near line 2364 and a
+wander/seek helper near line 10369).  The translation is JavaScript beside
+its siblings (`src/runtime/script-pawn-nav.mjs`): every helper it calls
+(reachMask, the actorReachable worker and the reach family under it) is this
+module's oracle-verified JS, so a Rust body would only call back into it.
+Rust's VM already hands EX_Iterator to the JS `stepCompiled`, so no Rust
+change was needed.
+
+### `APawn::GetPathnodeList(_FNavInfo* list, int max, AActor* FromPoint, int bUsePrunedPaths, int bSort)` `0x103c6490`
+
+Thunk `0x10302086`, thiscall pawn, `ret 0x14`; returns the count. `list` is
+an array of 8-byte `{NavigationPoint* node, FLOAT dist}`.
+
+1. `mask = reachMask(pawn)` (`calcMoveFlags` thunk `0x1030321a`), `cri`/`chi`
+   = `_ftol` of CollisionRadius/Height; `loc` = pawn Location.
+2. Start node: a FromPoint that `IsA(ANavigationPoint 0x1057a128)` is the
+   start node outright.  A non-NavigationPoint FromPoint only replaces `loc`
+   (`0x103c6532`) and does **not** stop the next two tests, which are on the
+   **pawn**: MoveTarget (`+0x34c`) if it is a NavigationPoint and
+   `pawn->IsOverlapping(MoveTarget)`; else the first node of
+   `LevelInfo.NavigationPointList` (`Actors(0)+0x548`, `+0x42c` links) with
+   `pawn->IsOverlapping(node)` (no class test on list nodes).
+3. With a start node: `Paths[16]` (`+0x360`), then `PrunedPaths[16]`
+   (`+0x3a0`) when `bUsePrunedPaths`; each loop stops at `-1`, 16 slots or
+   `count >= max` (the -1 test first).  A spec (`XLevel+0x8c`, 28-byte stride)
+   adds `{End, (float)(int)distance}` (`fild`/`fstp dword`) when `End`
+   (`+0x08`) is non-null and IsA NavigationPoint, `radius >= cri`,
+   `height >= chi` (signed) and `(flags & mask) == flags`.  **No reachability
+   test** on this path.  The spec index is not bounds-checked by the
+   original; the JS throws on an index outside the table.
+4. Without one (`0x103c6786`): for every list node, in 80-bit,
+   `S = (dx²+dy²)+dz²` with `d = node - loc` (z, y, x loaded in that order);
+   `S < 1000000.0f` (`0x10430a64`, `fcom`, unordered counts as below) →
+   `d = appSqrt(S)`.  While `count < max` the node is appended; a full list
+   looks among entries with `d < entry.dist` for the one whose dist is
+   **smallest** (`fld list[slot]; fcomp list[k]; test ah,0x41` keeps the
+   earlier on `<=`), i.e. not the farthest, and replaces it; no such entry →
+   dropped.  Stored dists are `fstp dword` of the 80-bit root.  Then every
+   entry is kept only when the actorReachable worker (`0x103c0630` via thunk
+   `0x103024be`, argC 0 — not the 520 exec's NavigationPoint fast path)
+   accepts it, compacted in order; slots past the new count keep stale
+   entries.
+5. `bSort && count > 1` → `appQsort(list, count, 8, 0x103c6a70)` (Core IAT
+   `0x10599ed0`).  Core's `appQsort` (`0x1010194c` → `0x10123640`) forwards to
+   **MSVCRT.dll `qsort` `0x7802543d`**, the classic non-recursive quicksort:
+   size ≤ 8 → shortsort `0x780255e2` (repeatedly move the *last* maximum by
+   `comp(p,max) > 0` to the tail); larger → middle element swapped to `lo`,
+   `loguy`/`higuy` scans with `comp <= 0` / `>= 0`, `swap(lo, higuy)`, push
+   the larger side, iterate the smaller (the byte test `higuy-1-lo >=
+   hi-loguy` is `higuy-lo > hi-loguy` in elements).  It is unstable, and
+   ScriptedPawn's `bestYaw > absYaw` keeps the first of equals, so the order of
+   equal distances is script-observable.  Comparator `0x103c6a70`: `fcomp`
+   C0 (below or unordered) → −1, C3 → 0, else 1.
+
+`appSqrt` (IAT `0x10599ca4`) is Core's `0x101032ba` → `0x10123290`: `fld
+qword [esp+4]; fsqrt; ret` (not MSVCRT `sqrt`).  The root stays 80-bit:
+the worker `fcom`s it against the f32 list and `fstp dword`s it.  The
+module's shared `appSqrt` helper additionally rounds the root to double;
+this worker uses a local `coreAppSqrt` without that rounding, and scene
+`gpl-dist-sqrt-tie` proves the difference against the original (a
+Pythagorean hypotenuse at an f32 midpoint with `distSq = c² + 2^-34`: the
+80-bit root rounds up, a double-rounded one ties to even below).  **Open:**
+the other callers of the shared helper (scoutA/scoutB, the findPath workers,
+actorWorker's widen, the jump/landing bodies) may carry the same
+double-rounding; not re-examined here.
+
+The inlined `check(XLevel->Actors(0))` / `check(Actors(0)->IsA(ALevelInfo))`
+before the overlap scan and before the distance scan are `appFailAssert`
+paths and are not modeled (`navListHead` reads Actors(0)'s list).
+
+### `AActor::IsOverlapping(const AActor* Other)` `0x10369430`
+
+Thunk `0x103029be`, thiscall, `ret 4`.  0 when `this` or `Other` IsBrush
+(`Brush +0x178` non-null **and** an ancestry reaching `ABrush 0x10582a28`),
+or `Other == this->Level` (`+0xa8`).  Else, 80-bit with `d = this - Other`:
+`r = Other.CR + this.CR`, overlap needs `dy²+dx² < r²` (strict, `fcompp;
+test ah,0x41`) and `dz² < (Other.CH + this.CH)²`.  From GetPathnodeList
+`this` is always the pawn, so `this`-IsBrush is unreachable here
+(implemented, not oracle-exercised).
+
+### `execReachablePathnodes` `0x103c8bb0`
+
+`P_GET_OBJECT BaseClass` (null → `ANavigationPoint::StaticClass`, never read
+again), `P_GET_OBJECT_REF NavPoint` and `P_GET_FLOAT_REF distance` (each
+resets `GPropAddr` first; a non-lvalue writes a stack temporary),
+`P_GET_ACTOR FromPoint`, `P_GET_UBOOL_OPTX(bUsePrunedPaths, 0)` (pre-stored
+0, EX_Nothing keeps it), `P_FINISH`; then one `GetPathnodeList(list[32] on
+the stack, 32, FromPoint, bUsePrunedPaths, 1)` and `PRE_ITERATOR` (`wEndOffset`
+word, `StartCode`).  Each pass: `*NavPoint = 0`; while `i < count`,
+`*NavPoint = list[i].node`, `*distance = list[i].dist`, `i++`; a null
+`*NavPoint` (read back) sets `Code = Script + wEndOffset + 1` and returns.
+Otherwise `POST_ITERATOR`: step the body until `EX_IteratorNext` (0x31,
+`Code = StartCode`, next pass) or `EX_IteratorPop` (0x30, return after it).
+The list is computed once at iterator start.
+
+Runtime binding: `createReachablePathnodesIterator` evaluates the five
+arguments in P_GET order (four when the optional is absent), uses the
+shared `writeSlot`/`refValue` (non-lvalue out args become sinks; exhaustion
+is decided from the local node, not by reading the sink back), and
+`ScriptRuntime.createIterator` returns it for index 1004 with
+`pawnNavServices(receiver)`.  The VM owns IteratorNext/IteratorPop.
+
+### Verification (2026-10-02)
+
+`native-pawn-nav-probe.py` gained the bodies `getPathnodeList` and
+`reachablePathnodes`, the `scratch` buffer in its output, the ABrush class
+and `brush` (+0x178) field, and an opt-in iterator stream: after the
+arguments, `[0x16][wEnd][REC][0x31][0x30 break][0x30 at wEnd]` with a
+`Stack.Node` whose `Script.Data` is the stream.  REC (`GNatives[0x5f]`) is a
+stub deployed once at probe start that logs the two out slots per pass and,
+on the `breakAt`-th pass, moves `Code` to the break pop; its per-scene
+parameters live in a mailbox (`0x1ff00480`) because rewriting stub code at a
+reused heap address left Unicorn executing the stale translation (the first
+version failed exactly that way).  The exit (`end` = `wEnd+1`, `pop`) comes
+from the final `Code`.
+
+`validate-pawn-nav.mjs`: 64 new scenes, all bit-exact — 54 worker scenes
+comparing the count, all 32 list slots (node and dist bits, stale slots
+included), boundary call counts and the pawn location: every start-path
+gate in both arrays (End None / non-NavigationPoint / subclass, radius,
+height, flags, -1, 16 slots, the cap in either array, PrunedPaths ignored
+when off), FromPoint NavigationPoint / subclass / non-NavigationPoint (the
+pawn still overlaps, with and without a MoveTarget start), MoveTarget
+overlap / out of reach / non-NavigationPoint / subclass, IsOverlapping's
+strict XY and Z edges, collision widening, IsBrush and the Level node, the
+distance path's 1000 limit, actorReachable rejections and acceptances, the
+full-list replacement rule (with ties), the 32 cap over 34 fractional
+points, two far-origin rings (70 more points), the sqrt tie, an empty list, a
+LevelInfo-subclass Actors(0), and 25 qsort scenes (sizes 2–32, many ties,
+sorted, reversed, constant, two-valued, unsorted with bSort 0); 10 exec
+scenes comparing every pass's out slots, the exit and the final slot
+values (end, break at 1 and 2, empty, class BaseClass, explicit
+bUsePrunedPaths true/false, FromPoint NavigationPoint, non-lvalue NavPoint
+and distance, the distance path), 9 of them also as compiled `foreach`
+bytecode through `ScriptRuntime.createIterator`.  Instruction coverage:
+GetPathnodeList 346/378 (the 32 excluded are the four `check()` failure
+tails), the exec 167/167.  Eight new mutants (47/47 total) flip: replacing the
+farthest entry, the double-rounded appSqrt, overlap from the FromPoint,
+MoveTarget without the overlap test, an inclusive XY bound, a stable sort, a
+lower qsort pivot, and not clearing NavPoint before the exhaustion test.
+
+`ComputePathnodeDistances` (1020, exec `0x103c8910`) also calls
+GetPathnodeList and writes `visitedWeight` (`+0x420`); 1004 never reads
+search state, so it does not depend on 1020.  1020 is not implemented.
+
+Focused checkpoint: `validate-pawn-nav.mjs` 225/225 scenes, 47/47 mutants;
+`npm test` 595/595; bench-sim digests unchanged (Training
+`7de779f65538b9f3`, Island `d8c40ff82e415ca6`); the 00_Intro frontier
+(`ASPECT=1.3333 STRICT=1 STOP=1`, 9000 ticks) no longer stops at 1004 and
+runs to the labeled Stage 6 `ClientTravel("dxonly")` stop at tick 8040 with
+no unsupported natives.

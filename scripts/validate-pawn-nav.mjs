@@ -326,6 +326,91 @@ const FIND_PATH_TO_EXEC_STAT = new Set(['103bc88a', '103bc88c', '103bc88e', '103
 // probe has no SpecialHandling event dispatch). Listed, not required.
 const FIND_PATH_TO_EXEC_TAILSET = new Set(['103bc906', '103bc909', '103bc90b', '103bc90c']);
 
+/* A GetPathnodeList scene (0x103c6490, ReachablePathnodes' worker):
+ * thiscall(pawn; _FNavInfo* list, max, AActor* FromPoint, bUsePrunedPaths,
+ * bSort), ret 0x14.  The list is the probe's 256-byte 'scratch' (32 x {node,
+ * f32 dist}); all 32 slots are compared, including stale ones past the
+ * count.  `levelInfo` names a fabricated LevelInfo (Actors(0), pawn.Level).
+ * Every instruction of the body is recorded for the coverage check. */
+function gp(name, { max = 32, from = null, pruned = 0, sort = 1, levelInfo = null, ...opts } = {}) {
+  const s = fp(name, { ...opts, target: null });
+  s.body = 'getPathnodeList';
+  s.directArgs = [{ ref: 'scratch' }, { i: max }, from ? { ref: from } : { i: 0 },
+                  { i: pruned }, { i: sort }];
+  Object.assign(s.js, { max, from, pruned, sort, levelInfo });
+  if (levelInfo) s.levelInfo = levelInfo;
+  s.coverage = [PATHNODE_COVERAGE];
+  return s;
+}
+/* A ReachablePathnodes exec scene (0x103c8bb0, native 1004): BaseClass,
+ * out NavPoint ('foundbuf', or a non-lvalue None), FromPoint, out distance
+ * ('vecbuf'), optional bUsePrunedPaths (EX_Nothing when undefined), then the
+ * PRE_ITERATOR word and a body whose record token logs both out slots per
+ * iteration; `breakAt` makes the body's n-th pass a script `break` (its
+ * IteratorPop).  `vm` also runs the scene as compiled foreach bytecode
+ * through ScriptRuntime.createIterator (breakAt 0 or 1 only). */
+function rpn(name, { breakAt = 0, from = null, pruned, baseClass = '__none', navOut = 'out',
+                     distOut = 'out', vm = true, ...opts } = {}) {
+  const s = gp(name, opts);
+  s.body = 'reachablePathnodes';
+  delete s.directArgs;
+  s.args = [{ kind: 'object', value: baseClass },
+            navOut === 'out' ? { kind: 'out', value: 'foundbuf' } : { kind: 'object', value: '__none' },
+            { kind: 'object', value: from ?? '__none' },
+            distOut === 'out' ? { kind: 'out', value: 'vecbuf' } : { kind: 'float', value: 0.5 },
+            pruned === undefined ? { kind: 'nothing' } : { kind: 'int', value: pruned }];
+  s.iterator = { breakAt };
+  s.coverage = [RPN_EXEC_COVERAGE, PATHNODE_COVERAGE];
+  Object.assign(s.js, { breakAt, vm: vm && breakAt <= 1 });
+  return s;
+}
+// GetPathnodeList up to its SEH funclet (0x103c690d).  Excluded: the inlined
+// check(XLevel->Actors(0)) and check(Actors(0)->IsA(ALevelInfo)) failure
+// paths before the overlap scan and before the distance scan (the LevelInfo
+// IsA walk's null tail is itself the failure), then appFailAssert.
+const PATHNODE_COVERAGE = ['103c6490', '103c690d'];
+const PATHNODE_ASSERTS = new Set([
+  '103c65a4', '103c65a9', '103c65ae', '103c65b3', '103c65b9',
+  '103c65d4', '103c65d9', '103c65db', '103c65dd', '103c65de', '103c65e1',
+  '103c65e3', '103c65e8', '103c65ed', '103c65f2', '103c65f8',
+  '103c6791', '103c6796', '103c679b', '103c67a0', '103c67a6',
+  '103c67c1', '103c67c6', '103c67c8', '103c67ca', '103c67cb', '103c67ce',
+  '103c67d0', '103c67d5', '103c67da', '103c67df', '103c67e5']);
+// execReachablePathnodes (0x103c8bb0..0x103c8d86): no exclusions.
+const RPN_EXEC_COVERAGE = ['103c8bb0', '103c8d86'];
+// Deterministic small-range draws (many ties) for the qsort scenes.
+function lcg(seed) {
+  let x = seed >>> 0;
+  return () => { x = (Math.imul(x, 1103515245) + 12345) >>> 0; return x >>> 16; };
+}
+/* A start-path list of `dists.length` entries (Paths first, then
+ * PrunedPaths): the pawn overlaps n0, whose specs lead to e0..eN. */
+function sortScene(name, dists, extra = {}) {
+  const navPoints = { n0: { location: [5, 0, 0],
+    paths: dists.slice(0, 16).map((_, i) => i),
+    prunedPaths: dists.slice(16).map((_, i) => 16 + i) } };
+  dists.forEach((_, i) => { navPoints[`e${i}`] = { location: [1000 + 10 * i, 0, 0] }; });
+  return gp(name, { navList: 'n0', navPoints, pruned: dists.length > 16 ? 1 : 0,
+    reachSpecs: dists.map((d, i) => ({ start: 'n0', end: `e${i}`, distance: d, radius: 30, height: 50, flags: 0 })),
+    ...extra });
+}
+/* Distance-path nodes on a chain (none overlapping the pawn). */
+function chain(points, extra = {}) {
+  const names = points.map((_, i) => `d${i}`);
+  return Object.fromEntries(points.map((location, i) =>
+    [names[i], { location, ...(i + 1 < points.length ? { nextNav: names[i + 1] } : {}), ...extra }]));
+}
+/* f32-exact pseudo-random points at a distance in [lo, hi) of `origin`. */
+function ring(count, seed, origin, lo, hi) {
+  const r = lcg(seed), u = () => r() / 65536;
+  return Array.from({ length: count }, () => {
+    const d = lo + (hi - lo) * u(), yaw = 2 * Math.PI * u(), z = (u() - 0.5) * 0.4;
+    return [origin[0] + d * Math.cos(yaw) * Math.sqrt(1 - z * z),
+            origin[1] + d * Math.sin(yaw) * Math.sqrt(1 - z * z),
+            origin[2] + d * z].map(f32);
+  });
+}
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -1379,6 +1464,310 @@ const scenes = [
     s.coverage = [PATH_TO_COVERAGE, DELEGATION_COVERAGE];
     return s;
   })(),
+
+  // -- GetPathnodeList 0x103c6490 (ReachablePathnodes 1004's worker) -------
+  // Start node = the first list node the pawn overlaps; its Paths specs, no
+  // reachability test, sorted (n2/n3 tie at 195).
+  gp('gpl-start-sort3', {
+    navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] }, n3: { location: [0, -200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n3', distance: 195, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-sort-off', {
+    sort: 0, navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] }, n3: { location: [0, -200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n3', distance: 1, radius: 30, height: 50, flags: 0 }],
+  }),
+  // Every spec gate: End None, End not a NavigationPoint, a NavigationPoint
+  // subclass End, radius 21 < 22, height 39 < 40, a flag outside the mask;
+  // PrunedPaths ignored without bUsePrunedPaths.
+  gp('gpl-start-filters', {
+    navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2, 3, 4, 5, 6, 7], prunedPaths: [8] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0], cls: 'navpoint*' },
+      n3: { location: [30, 0, 0] }, n4: { location: [40, 0, 0] } },
+    actors: { a1: { location: [50, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 0, distance: 1, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'a1', distance: 2, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 50, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 3, radius: 21, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 4, radius: 30, height: 39, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 5, radius: 30, height: 50, flags: 1 },
+                 { start: 'n0', end: 'n1', distance: 10, radius: 22, height: 40, flags: 0 },
+                 { start: 'n0', end: 'n3', distance: 50, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 6, radius: 30, height: 50, flags: 0 }],
+  }),
+  // The same gates over PrunedPaths, continuing the Paths count; the pawn's
+  // bCanWalk|bCanOpenDoors mask admits flags 1|0x10 but not 2.
+  gp('gpl-start-pruned', {
+    pruned: 1, navList: 'n0', pawn: { flags318: 0x12000 },
+    navPoints: { n0: { location: [5, 0, 0], paths: [6], prunedPaths: [0, 1, 2, 3, 4, 5, 7, 8, 9] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0], cls: 'navpoint*' },
+      n3: { location: [30, 0, 0] }, n4: { location: [40, 0, 0] } },
+    actors: { a1: { location: [50, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 0, distance: 1, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'a1', distance: 2, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 50, radius: 30, height: 50, flags: 0x11 },
+                 { start: 'n0', end: 'n4', distance: 3, radius: 21, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 4, radius: 30, height: 39, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: 5, radius: 30, height: 50, flags: 2 },
+                 { start: 'n0', end: 'n1', distance: 60, radius: 22, height: 40, flags: 1 },
+                 { start: 'n0', end: 'n3', distance: 50, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n4', distance: -6, radius: 30, height: 50, flags: 0x10 },
+                 { start: 'n0', end: 'n1', distance: 7, radius: 30, height: 50, flags: 0 }],
+  }),
+  // max 3: the Paths scan stops at the cap and the PrunedPaths scan exits
+  // on its first entry; then the cap reached inside the PrunedPaths scan.
+  gp('gpl-start-cap', {
+    max: 3, pruned: 1, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2, 3, 4], prunedPaths: [5] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] }, n3: { location: [30, 0, 0] } },
+    reachSpecs: [0, 1, 2, 3, 4, 5].map(i => ({ start: 'n0', end: `n${1 + (i % 3)}`, distance: 90 - i,
+      radius: 30, height: 50, flags: 0 })),
+  }),
+  gp('gpl-pruned-cap', {
+    max: 3, pruned: 1, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], prunedPaths: [1, 2, 3, 4] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] }, n3: { location: [30, 0, 0] } },
+    reachSpecs: [0, 1, 2, 3, 4].map(i => ({ start: 'n0', end: `n${1 + (i % 3)}`, distance: 10 + 7 * i,
+      radius: 30, height: 50, flags: 0 })),
+  }),
+  // One entry (no sort call) and none (both arrays empty).
+  gp('gpl-one', {
+    navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0] }, n1: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 12, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-start-empty', {
+    pruned: 1, navList: 'n0', navPoints: { n0: { location: [5, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n0', distance: 12, radius: 30, height: 50, flags: 0 }],
+  }),
+  // A NavigationPoint FromPoint is the start node itself (no overlap test,
+  // ahead of the overlapping n0); a NavigationPoint subclass takes the walk.
+  gp('gpl-from-nav', {
+    from: 'nF', navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], nextNav: 'nF' },
+      nF: { location: [3000, 0, 0], paths: [1, 2] }, n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nF', end: 'n2', distance: 40, radius: 30, height: 50, flags: 0 },
+                 { start: 'nF', end: 'n1', distance: 30, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-from-subclass', {
+    from: 'nF', navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], nextNav: 'nF' },
+      nF: { location: [3000, 0, 0], paths: [1], cls: 'navpoint*' }, n1: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nF', end: 'n1', distance: 30, radius: 30, height: 50, flags: 0 }],
+  }),
+  // A non-NavigationPoint FromPoint moves only the distance origin: overlap
+  // stays the pawn's (d0 sits on a1), and actorReachable runs from the pawn
+  // (every node > 800 away -> all rejected, the stale list stays visible).
+  gp('gpl-from-actor', {
+    from: 'a1', actors: { a1: { location: [3000, 0, 0], collisionRadius: 30, collisionHeight: 30 } },
+    navList: 'd0', navPoints: chain([[3005, 0, 0], [2100, 0, 0], [3500.5, 0.25, 10], [3000, 999, 0],
+      [4001, 0, 0], [3000, 0, -700.75]]),
+  }),
+  // ...and the MoveTarget overlap test still runs after it.
+  gp('gpl-from-actor-anchor', {
+    from: 'a1', actors: { a1: { location: [3000, 0, 0] } }, pawn: { moveTarget: 'nM' },
+    navList: 'd0', navPoints: { ...chain([[3005, 0, 0]]), nM: { location: [0, 10, 30], paths: [0] },
+      n1: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'nM', end: 'n1', distance: 9, radius: 30, height: 50, flags: 0 }],
+  }),
+  // MoveTarget: an overlapping one wins over the list; one out of reach, a
+  // non-NavigationPoint one and a NavigationPoint subclass.
+  gp('gpl-mt-hit', {
+    pawn: { moveTarget: 'nM' }, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0] }, nM: { location: [-5, 3, -20], paths: [1] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nM', end: 'n2', distance: 9, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-mt-far', {
+    pawn: { moveTarget: 'nM' }, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0] }, nM: { location: [-16, 16, 0], paths: [1] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nM', end: 'n2', distance: 9, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-mt-actor', {
+    pawn: { moveTarget: 'a1' }, navList: 'n0', actors: { a1: { location: [1, 0, 0] } },
+    navPoints: { n0: { location: [5, 0, 0], paths: [0] }, n1: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-mt-subclass', {
+    pawn: { moveTarget: 'nM' }, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0] }, nM: { location: [0, 0, 39], paths: [1], cls: 'navpoint*' },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nM', end: 'n2', distance: 9, radius: 30, height: 50, flags: 0 }],
+  }),
+  // IsOverlapping's strict bounds: r² = dx² (n0) and h² = dz² (n1) do not
+  // overlap; n2's own CollisionRadius/Height widen r and h.
+  gp('gpl-overlap-edges', {
+    navList: 'n0',
+    navPoints: { n0: { location: [22, 0, 0], paths: [0], nextNav: 'n1' },
+      n1: { location: [0, 0, 40], paths: [0], nextNav: 'n2' },
+      n2: { location: [30, 0, 45], collisionRadius: 10, collisionHeight: 10, paths: [1] },
+      n3: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n3', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'n2', end: 'n3', distance: 8, radius: 30, height: 50, flags: 0 }],
+  }),
+  gp('gpl-overlap-second', {
+    navList: 'n0',
+    navPoints: { n0: { location: [500, 0, 0], paths: [0], nextNav: 'n1' },
+      n1: { location: [-3, -4, 12], paths: [1] }, n2: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n2', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'n1', end: 'n2', distance: 8, radius: 30, height: 50, flags: 0 }],
+  }),
+  // IsBrush needs both Brush (+0x178) and ABrush ancestry: b0 is skipped,
+  // b1 (Brush None) overlaps.
+  gp('gpl-overlap-brush', {
+    navList: 'b0',
+    navPoints: { b0: { location: [5, 0, 0], cls: 'brush', brush: 1, paths: [0], nextNav: 'b1' },
+      b1: { location: [6, 0, 0], cls: 'brush', paths: [1] }, n2: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'b0', end: 'n2', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'b1', end: 'n2', distance: 8, radius: 30, height: 50, flags: 0 }],
+  }),
+  // The pawn's own Level (Actors(0), here also the list head) never overlaps.
+  gp('gpl-overlap-level', {
+    levelInfo: 'nL', navList: 'nL',
+    navPoints: { nL: { location: [5, 0, 0], cls: 'levelinfo', paths: [0], nextNav: 'n1' },
+      n1: { location: [6, 0, 0], paths: [1] }, n2: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'nL', end: 'n2', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'n1', end: 'n2', distance: 8, radius: 30, height: 50, flags: 0 }],
+  }),
+  // Distance path: d0/d4 reachable, d1 beyond actorReachable's 800, d2
+  // beyond 1000 (never listed), d3's line of sight blocked.
+  gp('gpl-dist-filter', {
+    navList: 'd0', navPoints: chain([[100, 0, 0], [900, 0, 0], [1200, 0, 0], [300, 0, 0], [60, 60, 0]]),
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }, { ret: 1, hit: { actor: 0, time: 0.5 } },
+                 { ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(200),
+  }),
+  // A full list (max 3): 810 replaces, among the farther entries, the
+  // nearest (820), not the farthest; 990 and 900 have no farther entry;
+  // 830 replaces 850.  All beyond 800: actorReachable rejects them.
+  gp('gpl-dist-replace', {
+    max: 3, navList: 'd0',
+    navPoints: chain([[850, 0, 0], [820, 0, 0], [900, 0, 0], [810, 0, 0], [990, 0, 0], [830, 0, 0], [900, 0, 0]]),
+  }),
+  gp('gpl-dist-replace-ties', {
+    max: 3, navList: 'd0',
+    navPoints: chain([[850, 0, 0], [0, 850, 0], [900, 0, 0], [820, 0, 0], [0, 0, 850], [0, 0, -820]]),
+  }),
+  // 34 fractional points between 800 and 1000: the 32 cap, the replacement
+  // rule and the 80-bit appSqrt/fstp rounding of every distance.
+  gp('gpl-dist-cap32', { navList: 'd0', navPoints: chain(ring(34, 7, [0, 0, 0], 800.5, 999.5)) }),
+  gp('gpl-dist-from-ring', {
+    from: 'a1', actors: { a1: { location: [-3000.25, 1500.5, 64.125] } },
+    navList: 'd0', navPoints: chain(ring(40, 11, [-3000.25, 1500.5, 64.125], 1, 1100)),
+  }),
+  gp('gpl-dist-from-ring2', {
+    from: 'a1', actors: { a1: { location: [2048.75, -777.5, -12.5] } }, max: 20,
+    navList: 'd0', navPoints: chain(ring(30, 23, [2048.75, -777.5, -12.5], 900, 1000.5)),
+  }),
+  gp('gpl-empty-list', { navPoints: { n1: { location: [10, 0, 0] } } }),
+  // appSqrt keeps the 80-bit root.  (6007001, 17505000, 18507001)·2^-15 is
+  // a Pythagorean triple whose hypotenuse c is an f32 midpoint (odd at
+  // 2^-15 in [512,1024)); dz = 2^-17 makes distSq the double c² + 2^-34, so
+  // the root lies within half a double ulp above c.  fstp dword of the
+  // 80-bit root rounds up; a double-rounded root would tie to the even
+  // neighbour below.  The pawn is far away: actorReachable rejects.
+  gp('gpl-dist-sqrt-tie', {
+    from: 'a1', actors: { a1: { location: [0, 0, 0] } }, pawn: { location: [5000, 5000, 0] },
+    navList: 'd0', navPoints: chain([[6007001 / 32768, 17505000 / 32768, 2 ** -17], [700, 700, 0]]),
+  }),
+  // Actors(0) is a LevelInfo subclass (DeusExLevelInfo in the game's maps):
+  // both inlined check(IsA(ALevelInfo)) walks take one Super link.
+  gp('gpl-levelinfo-subclass', {
+    levelInfo: 'dxli', actors: { dxli: { cls: 'levelinfo*' } },
+    navList: 'd0', navPoints: chain([[850, 0, 0], [0, 900.5, 0]]),
+  }),
+  // The qsort: shortsort (<= 8) and partitioned (> 8) sizes, ties, sorted,
+  // reversed and constant inputs, unsorted when bSort is 0.
+  ...[2, 3, 4, 5, 7, 8, 9, 10, 11, 13, 15, 16, 17, 20, 23, 24, 27, 31, 32, 32].map((n, k) => {
+    const r = lcg(101 + k);
+    return sortScene(`gpl-sort-${n}-${k}`, Array.from({ length: n }, () => (r() % (k % 3 === 0 ? 4 : 40)) * 25));
+  }),
+  sortScene('gpl-sort-ascending', Array.from({ length: 32 }, (_, i) => 10 * i)),
+  sortScene('gpl-sort-descending', Array.from({ length: 32 }, (_, i) => 1000 - 10 * i)),
+  sortScene('gpl-sort-constant', Array.from({ length: 32 }, () => 77)),
+  sortScene('gpl-sort-two-values', Array.from({ length: 29 }, (_, i) => (i * 7) % 3 ? 5 : 9)),
+  sortScene('gpl-sort-unsorted', Array.from({ length: 20 }, (_, i) => (i * 13) % 7), { sort: 0 }),
+
+  // -- execReachablePathnodes 0x103c8bb0 (native 1004) ---------------------
+  rpn('rpn-start', {
+    navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] }, n3: { location: [0, -200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n3', distance: 195, radius: 30, height: 50, flags: 0 }],
+  }),
+  rpn('rpn-break-1', {
+    breakAt: 1, navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 }],
+  }),
+  rpn('rpn-break-2', {
+    breakAt: 2, navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1, 2] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] }, n3: { location: [0, -200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n3', distance: 100, radius: 30, height: 50, flags: 0 }],
+  }),
+  rpn('rpn-empty', { navPoints: { n1: { location: [10, 0, 0] } } }),
+  // A class BaseClass (unused) and an explicit bUsePrunedPaths: true / false.
+  rpn('rpn-pruned-class', {
+    baseClass: '__class_navpoint', pruned: 1, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], prunedPaths: [1, 2] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 30, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 20, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n1', distance: 25, radius: 30, height: 50, flags: 0 }],
+  }),
+  rpn('rpn-pruned-off', {
+    pruned: 0, navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], prunedPaths: [1, 2] },
+      n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 30, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 20, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n1', distance: 25, radius: 30, height: 50, flags: 0 }],
+  }),
+  rpn('rpn-from-nav', {
+    from: 'nF', navList: 'n0',
+    navPoints: { n0: { location: [5, 0, 0], paths: [0], nextNav: 'nF' },
+      nF: { location: [3000, 0, 0], paths: [1, 2] }, n1: { location: [10, 0, 0] }, n2: { location: [20, 0, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 5, radius: 30, height: 50, flags: 0 },
+                 { start: 'nF', end: 'n2', distance: 40, radius: 30, height: 50, flags: 0 },
+                 { start: 'nF', end: 'n1', distance: 30, radius: 30, height: 50, flags: 0 }],
+  }),
+  // NavPoint as a non-lvalue: the writes go to a private temporary, the
+  // iteration still runs once per entry and the record sees None.
+  rpn('rpn-temp-navpoint', {
+    navOut: 'temp', navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 }],
+  }),
+  // distance as a non-lvalue: the exec writes its private temporary.
+  rpn('rpn-temp-dist', {
+    distOut: 'temp', navList: 'n0', navPoints: { n0: { location: [5, 0, 0], paths: [0, 1] },
+      n1: { location: [300, 0, 0] }, n2: { location: [0, 200, 0] } },
+    reachSpecs: [{ start: 'n0', end: 'n1', distance: 295, radius: 30, height: 50, flags: 0 },
+                 { start: 'n0', end: 'n2', distance: 195, radius: 30, height: 50, flags: 0 }],
+  }),
+  // The distance path through the exec (FromPoint None, default pruned).
+  rpn('rpn-dist', {
+    navList: 'd0', navPoints: chain([[100, 0, 0], [900, 0, 0], [1200, 0, 0], [300, 0, 0], [60, 60, 0]]),
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }, { ret: 1, hit: { actor: 0, time: 0.5 } },
+                 { ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(200),
+  }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -1502,6 +1891,7 @@ const ISA = {
   inventoryspot: ['InventorySpot', 'NavPoint', 'Actor'],
   mover: ['Mover', 'Actor'], inventory: ['Inventory', 'Actor'],
   trigger: ['Trigger', 'Triggers', 'Actor'], levelinfo: ['LevelInfo', 'Actor'],
+  brush: ['Brush', 'Actor'],
 };
 function runJsGraph(scene, mod = module, throughRuntime = false) {
   const j = scene.js;
@@ -1546,6 +1936,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
       __rz: spec.regionZone ?? 'dry', __fz: spec.footZone ?? 'dry',
       __paths: spec.paths || [], __upstream: spec.upstreamPaths || [],
       __pruned: spec.prunedPaths || [],
+      Brush: spec.brush | 0,                                  // +0x178 (IsBrush)
     };
   };
   const actors = {};
@@ -1568,6 +1959,8 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     actors[n].Field398 = ref(spec.field398);
   pawn.MoveTarget = ref(j.pawn.moveTarget);                   // pawn+0x34c
   pawn.SpecialGoal = ref(j.pawn.specialGoal);                 // pawn+0x45c
+  // pawn+0xa8: the scene's LevelInfo, else the probe's own fresh one.
+  pawn.Level = j.levelInfo ? ref(j.levelInfo) : { levelInfo: true };
   const specs = (scene.reachSpecs || []).map(s => ({
     start: ref(s.start), distance: s.distance | 0, end: ref(s.end),
     radius: s.radius | 0, height: s.height | 0, reachFlags: s.flags | 0, pruned: s.pruned | 0,
@@ -1645,7 +2038,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     nextNav: n => n.__nextNav,                                // navpoint+0x42c
   };
   const foundCell = { node: null };
-  let ret;
+  let ret, pathnodes = null, iter = null;
   if (scene.body === 'reachMask') ret = mod.reachMask(pawn, services);
   else if (scene.body === 'directReach')
     ret = mod.directReach(pawn, actors[j.source], target, services);
@@ -1690,6 +2083,34 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
       ret = mod.execFindPathToward(pawn, target, j.bSingle | 0, j.bClear | 0, services);
     }
   }
+  else if (scene.body === 'getPathnodeList') {
+    pathnodes = [];
+    ret = mod.getPathnodeList(pawn, pathnodes, j.max, ref(j.from) || null, j.pruned, j.sort, services);
+  }
+  else if (scene.body === 'reachablePathnodes') {
+    if (throughRuntime) iter = runVmPathnodes(scene, pawn, actors, services);
+    else {
+      // The exec's five argument evaluations, then the VM's loop: next()
+      // before each body pass, the record body, a `break` at breakAt.
+      const cells = { foundbuf: { v: null }, vecbuf: { v: 0 } };
+      const evaluate = i => {
+        const a = scene.args[i];
+        if (a.kind === 'out') { const c = cells[a.value]; return { reference: true, get: () => c.v, set: v => { c.v = v; } }; }
+        if (a.kind === 'object') return a.value === '__none' ? null : a.value === '__class_navpoint' ? CLASS_NAVPOINT : ref(a.value);
+        if (a.kind === 'int' || a.kind === 'float') return a.value;
+        return undefined;
+      };
+      const it = mod.createReachablePathnodesIterator({ receiver: pawn, argumentCount: scene.args.length,
+        evaluateArgument: evaluate, services });
+      const records = [];
+      let exit = 'end';
+      while (it.next()) {
+        records.push([cells.foundbuf.v, cells.vecbuf.v]);
+        if (records.length === j.breakAt) { exit = 'pop'; break; }
+      }
+      iter = { records, exit, found: cells.foundbuf.v, dist: cells.vecbuf.v };
+    }
+  }
   else ret = mod.actorWorker(pawn, target, j.argC, services);
   // foundbuf/result slot values resolve to node names for comparison.
   const nameOf = new Map(Object.entries(actors).map(([n, a]) => [a, n]));
@@ -1710,17 +2131,13 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
   }
   return {
     // findPathToward's result slot is an actor pointer: null -> '0' like the
-    // probe's zeroed resultOut; live actors resolve to their scene name.
-    ret: scene.body === 'findPathToward' || scene.body === 'findPathTo'
-      ? (ret ? (nameOf.get(ret) || '?obj') : '0')
-      : (ret && typeof ret === 'object') ? (nameOf.get(ret) || '?obj') : ret,
+    // probe's zeroed resultOut; live actors resolve to their scene name
+    // (the `ret` key below).
     moves, farMoves, slc: sli, fli,
     locationBits: vecBits(pawn.location),
     // The 517 bodies also emit the found slot, per-node search state, and the
     // pawn's special-nav fields; other bodies leave them undefined so the
     // compare skips them (the probe only reports them for FOUND_BODIES).
-    found: navOut ? (foundCell.node ? (nameOf.get(foundCell.node) || '?obj') : '0')
-                  : undefined,
     scCalls: navOut ? scCalls.length : undefined,
     shCalls: navOut ? shCalls.length : undefined,
     navState: navOut ? navState : undefined,
@@ -1728,7 +2145,67 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
                         : undefined,
     specialPause: navOut ? pawn.SpecialPause : undefined,
     flags318: navOut ? pawn.Flags318 : undefined,
+    // GetPathnodeList: all 32 list slots {node, f32 dist} (stale ones too).
+    list: pathnodes ? Array.from({ length: 32 }, (_, i) => pathnodes[i]
+      ? [nameOf.get(pathnodes[i].node) || '?obj', bitsHex(pathnodes[i].dist)] : ['0', '00000000']) : undefined,
+    // ReachablePathnodes: each body pass's out slots, the exit and the
+    // slots' final values.
+    iterRecords: iter ? iter.records.map(([n, d]) => [n ? nameOf.get(n) || '?obj' : '0', bitsHex(d ?? 0)]) : undefined,
+    iterExit: iter ? iter.exit : undefined,
+    found: iter ? (iter.found ? nameOf.get(iter.found) || '?obj' : '0') : navOut ? (foundCell.node ? (nameOf.get(foundCell.node) || '?obj') : '0') : undefined,
+    finalDist: iter ? bitsHex(iter.dist ?? 0) : undefined,
+    ret: scene.body === 'reachablePathnodes' ? undefined
+      : scene.body === 'findPathToward' || scene.body === 'findPathTo'
+      ? (ret ? (nameOf.get(ret) || '?obj') : '0')
+      : (ret && typeof ret === 'object') ? (nameOf.get(ret) || '?obj') : ret,
   };
+}
+
+const CLASS_NAVPOINT = { class: 'NavigationPoint' };
+/* ReachablePathnodes as compiled foreach bytecode through the VM and
+ * ScriptRuntime.createIterator: foreach ReachablePathnodes(BaseClass, Found,
+ * FromPoint, Dist[, pruned]) { native(1023)(Found, Dist); [break;] }.
+ * In-memory offsets count each compact object index as 4 bytes. */
+function runVmPathnodes(scene, pawn, actors, services) {
+  const parts = [];                                         // [bytes, memSize]
+  const put = (bytes, mem = bytes.length) => parts.push([bytes, mem]);
+  const at = () => parts.reduce((n, [, m]) => n + m, 0);
+  const [base, nav, from, dist, pruned] = scene.args;
+  put([0x2f]); put([0x63, 0xec]);                           // EX_Iterator, native 1004
+  put(base.value === '__none' ? [0x2a] : [0x20, 4], base.value === '__none' ? 1 : 5);
+  put(nav.kind === 'out' ? [0x01, 1] : [0x2a], nav.kind === 'out' ? 5 : 1);
+  put(from.value === '__none' ? [0x2a] : [0x20, 3], from.value === '__none' ? 1 : 5);
+  if (dist.kind === 'out') put([0x01, 2], 5);
+  else put([0x1e, ...new Uint8Array(Float32Array.of(dist.value).buffer)]);
+  if (pruned.kind === 'nothing') put([0x0b]);
+  else put([0x1d, pruned.value & 255, 0, 0, 0]);
+  put([0x16]);
+  const wEndAt = parts.length; put([0, 0]);                 // patched below
+  put([0x63, 0xff, 0x01, 1, 0x01, 2, 0x16], 13);            // the record call
+  let jumpAt = -1;
+  if (scene.js.breakAt === 1) { put([0x30]); jumpAt = parts.length; put([0x06, 0, 0]); }
+  put([0x31]);
+  const wEnd = at(); put([0x30]);
+  const after = at(); put([0x04, 0x0b]);
+  parts[wEndAt][0] = [wEnd & 255, wEnd >> 8];
+  if (jumpAt >= 0) parts[jumpAt][0] = [0x06, after & 255, after >> 8];
+  const bytes = Uint8Array.from(parts.flatMap(([b]) => b));
+  const vm = compileFunction({ pkg: { imports: [], exports: [{ name: 'Found' }, { name: 'Dist' }, { name: 'From' }, { name: 'Cls' }] },
+    entry: { path: scene.name }, bytes, size: at() });
+  const host = { pawnNavServices: () => services };
+  const records = [];
+  const value = v => (v?.reference ? v.get() : v);
+  pawn.Found = null; pawn.Dist = 0;
+  vm.run(pawn, {}, {
+    iterator: call => ScriptRuntime.prototype.createIterator.call(host, call),
+    invokeNative: call => {
+      if (call.index !== 1023) throw new Error(`unexpected native ${call.index}`);
+      records.push([value(call.evaluateArgument(0)), value(call.evaluateArgument(1))]);
+    },
+    objectReference: (fn, index) => index === 3 ? actors[from.value] : index === 4 ? CLASS_NAVPOINT : null,
+  });
+  return { records, exit: scene.js.breakAt === 1 && records.length ? 'pop' : 'end',
+    found: pawn.Found, dist: pawn.Dist };
 }
 
 /* AI-pick twin (709 chain): direction/search/worker/exec bodies share the
@@ -1823,11 +2300,17 @@ function normalizeProbe(r, isExec, body) {
   return {
     // Exec natives write the verdict to *result; workers return it in eax.
     // FindPathToward's result slot is an actor pointer, not a verdict int.
-    ret: body === 'findPathToward' || body === 'findPathTo' ? addr(r.resultOut)
+    ret: body === 'reachablePathnodes' ? undefined
+        : body === 'findPathToward' || body === 'findPathTo' ? addr(r.resultOut)
         : isExec ? parseInt(r.resultOut, 16)
         : PTR_RET_BODIES.has(body) ? (r.returned !== 0 ? 1 : 0)
         : r.returned | 0,
-    found: navBodies ? addr(r.found) : undefined,
+    found: navBodies || body === 'reachablePathnodes' ? addr(r.found) : undefined,
+    list: body === 'getPathnodeList'
+      ? Array.from({ length: 32 }, (_, i) => [addr(r.scratch[2 * i]), r.scratch[2 * i + 1]]) : undefined,
+    iterRecords: r.iterRecords ? r.iterRecords.map(([n, d]) => [addr(n), d]) : undefined,
+    iterExit: r.iterExit ?? undefined,
+    finalDist: body === 'reachablePathnodes' ? r.vecbuf[0] : undefined,
     navState: navBodies
       ? Object.fromEntries(Object.entries(r.navState).map(([n, s]) => [n, {
           visitedWeight: s.visitedWeight, bestPathWeight: s.bestPathWeight,
@@ -1876,6 +2359,14 @@ function compare(name, o, j) {
     d.push(`${name}: specialPause ${o.specialPause} != ${j.specialPause}`);
   if (j.flags318 !== undefined && (o.flags318 | 0) !== (j.flags318 | 0))
     d.push(`${name}: flags318 ${(o.flags318 >>> 0).toString(16)} != ${(j.flags318 >>> 0).toString(16)}`);
+  if (j.list && JSON.stringify(o.list) !== JSON.stringify(j.list))
+    d.push(`${name}: list ${JSON.stringify(o.list)} != ${JSON.stringify(j.list)}`);
+  if (j.iterRecords && JSON.stringify(o.iterRecords) !== JSON.stringify(j.iterRecords))
+    d.push(`${name}: iteration records ${JSON.stringify(o.iterRecords)} != ${JSON.stringify(j.iterRecords)}`);
+  if (j.iterExit !== undefined && o.iterExit !== j.iterExit)
+    d.push(`${name}: iterator exit ${o.iterExit} != ${j.iterExit}`);
+  if (j.finalDist !== undefined && o.finalDist !== j.finalDist)
+    d.push(`${name}: final distance ${o.finalDist} != ${j.finalDist}`);
   if (j.navState && o.navState) {
     for (const n of new Set([...Object.keys(o.navState), ...Object.keys(j.navState)])) {
       const a = o.navState[n], b = j.navState[n];
@@ -1891,7 +2382,8 @@ function compare(name, o, j) {
 const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec', 'findPathToward', 'findPathTo']);
 const PICK_BODIES = new Set(['aiDirection', 'aiPickSearch', 'aiPickWorker', 'aiPickExec']);
 const GRAPH_BODIES = new Set(['reachMask', 'directReach', 'actorWorker',
-                              'pathTowardWorker', 'findPathToward', 'pathToWorker', 'findPathTo']);
+                              'pathTowardWorker', 'findPathToward', 'pathToWorker', 'findPathTo',
+                              'getPathnodeList', 'reachablePathnodes']);
 const runFor = scene =>
   (PICK_BODIES.has(scene.body) ? runJsPick
    : scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
@@ -1916,7 +2408,8 @@ for (let i = 0; i < scenes.length; i++) {
   try { js = runFor(scene)(scene); }
   catch (e) { console.log(`FAIL ${scene.name}: js threw ${e.stack ?? e}`); failures++; continue; }
   const diffs = compare(scene.name, normalizeProbe(r.result, EXEC_BODIES.has(scene.body), scene.body), js);
-  if (scene.body === 'findPathToward' || scene.body === 'findPathTo') {
+  if (scene.body === 'findPathToward' || scene.body === 'findPathTo'
+      || (scene.body === 'reachablePathnodes' && scene.js.vm)) {
     runtimeCases++;
     try {
       diffs.push(...compare(`${scene.name} VM/runtime`, normalizeProbe(r.result, true, scene.body),
@@ -1929,18 +2422,23 @@ for (let i = 0; i < scenes.length; i++) {
 // calls) and of the toward worker's falling-target delegation executed.
 {
   const [listing] = runProbe([{ disasm: { pathTo: PATH_TO_COVERAGE, delegation: DELEGATION_COVERAGE,
-    exec518: FIND_PATH_TO_EXEC_COVERAGE } }]);
+    exec518: FIND_PATH_TO_EXEC_COVERAGE, getPathnodeList: PATHNODE_COVERAGE,
+    exec1004: RPN_EXEC_COVERAGE } }]);
   const covered = new Set(probeResults.flatMap(r => r?.result?.coverage ?? []));
   const missed = Object.entries(listing.result.instructions).flatMap(([name, list]) =>
     list.filter(a => !covered.has(a) && !PATH_TO_ASSERTS.has(a) && !FIND_PATH_TO_EXEC_STAT.has(a)
-      && !FIND_PATH_TO_EXEC_TAILSET.has(a)).map(a => `${name}:${a}`));
+      && !FIND_PATH_TO_EXEC_TAILSET.has(a) && !PATHNODE_ASSERTS.has(a)).map(a => `${name}:${a}`));
   const total = Object.values(listing.result.instructions).reduce((n, list) => n + list.length, 0);
-  if (missed.length) { failures++; console.log(`FAIL findPathTo coverage: ${missed.length} instructions not executed: ${missed.join(' ')}`); }
-  else console.log(`PASS findPathTo coverage: ${total - PATH_TO_ASSERTS.size - FIND_PATH_TO_EXEC_STAT.size - FIND_PATH_TO_EXEC_TAILSET.size}/${total} instructions executed (excluded: ${PATH_TO_ASSERTS.size} check() failure path, ${FIND_PATH_TO_EXEC_STAT.size} GTimestamp stat, ${FIND_PATH_TO_EXEC_TAILSET.size} unverified tailSet call)`);
+  const excluded = PATH_TO_ASSERTS.size + FIND_PATH_TO_EXEC_STAT.size + FIND_PATH_TO_EXEC_TAILSET.size
+    + PATHNODE_ASSERTS.size;
+  const perBody = Object.entries(listing.result.instructions).map(([name, list]) =>
+    `${name} ${list.filter(a => covered.has(a)).length}/${list.length}`).join(', ');
+  if (missed.length) { failures++; console.log(`FAIL findPathTo/ReachablePathnodes coverage: ${missed.length} instructions not executed: ${missed.join(' ')}`); }
+  else console.log(`PASS findPathTo/ReachablePathnodes coverage: ${total - excluded}/${total} instructions executed (${perBody}; excluded: ${PATH_TO_ASSERTS.size + PATHNODE_ASSERTS.size} check() failure path, ${FIND_PATH_TO_EXEC_STAT.size} GTimestamp stat, ${FIND_PATH_TO_EXEC_TAILSET.size} unverified tailSet call)`);
 }
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav: ${passed}/${scenes.length} scenes bit-exact`);
-console.log(`Compared ${runtimeCases} FindPathToward/FindPathTo scenes through decoded VM/runtime dispatch.`);
+console.log(`Compared ${runtimeCases} FindPathToward/FindPathTo/ReachablePathnodes scenes through decoded VM/runtime dispatch.`);
 
 // ---------------------------------------------------------------------------
 // Mutation coverage: each edit rewrites one behavior the disassembly dictates.
@@ -2186,6 +2684,50 @@ MUTATIONS.push(
     pattern: 'listT.keys[0] = x87ftol(appSqrt(ld(listT.keys[i])));  // 0x103dc4ac fild, sqrt, ftol',
     replacement: 'listT.keys[0] = listT.keys[i];',
     expect: ['fto-bfs', 'fto-scan-second'] },
+);
+
+MUTATIONS.push(
+  // -- GetPathnodeList (0x103c6490) / ReachablePathnodes (1004) mutants -----
+  // A full list replacing its farthest farther entry (the "obvious" rule).
+  { name: 'gpl-replace-farthest',
+    pattern: 'if (slot < 0 || !leU(ld(list[slot].dist), ld(list[k].dist))) slot = k;',
+    replacement: 'if (slot < 0 || ltU(ld(list[slot].dist), ld(list[k].dist))) slot = k;',
+    expect: ['gpl-dist-replace'] },
+  // The shared appSqrt's double rounding of the root.
+  { name: 'gpl-sqrt-double-rounding',
+    pattern: 'const d = coreAppSqrt(distSq);                        // 0x103c6845',
+    replacement: 'const d = appSqrt(distSq);',
+    expect: ['gpl-dist-sqrt-tie'] },
+  // The overlap scan from the FromPoint instead of the pawn.
+  { name: 'gpl-overlap-from',
+    pattern: "      if (isOverlapping(pawn, nav, services)) { start = nav; break; } // 0x103c6616",
+    replacement: "      if (isOverlapping(fromPoint && !services.isA(fromPoint, 'NavPoint') ? fromPoint : pawn, nav, services)) { start = nav; break; }",
+    expect: ['gpl-from-actor'] },
+  // A NavigationPoint MoveTarget taken without the overlap test.
+  { name: 'gpl-mt-no-overlap',
+    pattern: "    if (anchor && services.isA(anchor, 'NavPoint') && isOverlapping(pawn, anchor, services))",
+    replacement: "    if (anchor && services.isA(anchor, 'NavPoint'))",
+    expect: ['gpl-mt-far'] },
+  // IsOverlapping's XY bound inclusive.
+  { name: 'overlap-xy-inclusive',
+    pattern: 'if (leU(x87mul(r, r), x87add(x87mul(dy, dy), x87mul(dx, dx)))) return 0;',
+    replacement: 'if (ltU(x87mul(r, r), x87add(x87mul(dy, dy), x87mul(dx, dx)))) return 0;',
+    expect: ['gpl-overlap-edges'] },
+  // A stable sort in place of MSVCRT's qsort.
+  { name: 'gpl-stable-sort',
+    pattern: 'if (bSort && count > 1) msvcrtQsort(list, count, pathnodeCompare); // 0x103c68ef',
+    replacement: 'if (bSort && count > 1) list.slice(0, count).sort(pathnodeCompare).forEach((e, i) => { list[i] = e; });',
+    expect: ['gpl-sort-two-values', 'gpl-start-filters'] },
+  // The qsort pivot one element lower.
+  { name: 'qsort-pivot',
+    pattern: 'swap(lo + (size >>> 1), lo);                          // 0x780254ff',
+    replacement: 'swap(lo + ((size - 1) >>> 1), lo);',
+    expect: ['gpl-sort-two-values'] },
+  // The iterator not clearing NavPoint before the exhaustion test.
+  { name: 'rpn-no-clear',
+    pattern: '      navOut.set(null);                                     // 0x103c8d02\n',
+    replacement: '',
+    expect: ['rpn-start'] },
 );
 
 const src = readFileSync(modulePath, 'utf8');

@@ -8,11 +8,11 @@
 import { fastLineCheck } from './fast-line-check.mjs';
 
 const isReference = value => Boolean(value?.reference && typeof value.set === 'function');
-const refValue = value => value?.reference ? value.get() : value;
+export const refValue = value => value?.reference ? value.get() : value;
 /** The original exec bodies resolve each out expression to a raw address;
  * non-assignable expressions fall back to a private temporary whose writes
  * never escape. A bare sink reproduces that. */
-const writeSlot = value => isReference(value) ? value : {set() {}};
+export const writeSlot = value => isReference(value) ? value : {set() {}};
 
 function nameText(value) {
   if (value === null || value === undefined) return 'none';

@@ -18,6 +18,7 @@ import {
   x87load, x87add, x87mul, x87div, x87neg, x87recip, x87store,
   x87storeDouble, x87sqrt, x87safeNormal, x87width, x87ftol,
 } from './script-vm.mjs';
+import { refValue, writeSlot } from './script-iterators.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
 import { findWaterLine } from './swimming.mjs';
 import { twoWallAdjust } from './steps.mjs';
@@ -39,6 +40,9 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     aiDirectionReachable:    Object.freeze({ index: 708, thunk: 0x103022cf, body: 0x103c8560, worker: 0x103c78a0 }),
     // 709's exec thunk; 0x1030181b is the worker's (APawn::AIPickRandomDestination).
     aiPickRandomDestination: Object.freeze({ index: 709, thunk: 0x103029b9, body: 0x103c86f0, worker: 0x103c7fc0 }),
+    // Iterator: APawn::execReachablePathnodes over APawn::GetPathnodeList
+    // (thunk 0x10302086).
+    reachablePathnodes: Object.freeze({ index: 1004, thunk: 0x10303382, body: 0x103c8bb0, worker: 0x103c6490 }),
   }),
   // Shared workers beneath the exec bodies.
   workers: Object.freeze({
@@ -58,6 +62,9 @@ export const PAWN_NAV_CONTRACT = Object.freeze({
     aiPickSearch:0x103c78a0,  // stepped-move band search (thunk 0x103011d6)
     aiScore:     0x103c7f80,  // f32 range classifier (thunk 0x10303319)
     waterMove:   0x103c3ca0,  // APawn::swimMove (thunk 0x10303f53)
+    getPathnodeList: 0x103c6490,  // APawn::GetPathnodeList (thunk 0x10302086)
+    isOverlapping:   0x10369430,  // AActor::IsOverlapping (thunk 0x103029be)
+    pathnodeCompare: 0x103c6a70,  // GetPathnodeList's appQsort comparator
   }),
   // Level vtable slots the workers call.
   vtable: Object.freeze({
@@ -2041,4 +2048,233 @@ function pathExecTail(pawn, result, services) {
   if (result.node === rd(services, pawn, 'SpecialGoal'))
     wr(services, pawn, 'SpecialGoal', null);                // pawn+0x45c = 0
   return result.node;
+}
+
+// ---------------------------------------------------------------------------
+// ReachablePathnodes — native 1004, an iterator (execReachablePathnodes
+// 0x103c8bb0, thunk 0x10303382) over APawn::GetPathnodeList 0x103c6490
+// (thunk 0x10302086).  JavaScript beside its siblings: every helper it calls
+// (reachMask, actorWorker and the reach family below it) is this module's
+// oracle-verified JS, so a Rust body would only call back into it.
+// ---------------------------------------------------------------------------
+
+/** Core appSqrt (Engine IAT 0x10599ca4 -> Core thunk 0x101032ba -> body
+ * 0x10123290): `fld qword [esp+4]; fsqrt; ret`.  The caller's `fstp qword`
+ * rounds the argument to double; the root stays 80-bit in st0 (the module's
+ * shared `appSqrt` above additionally rounds the result to double, which
+ * this body does not do — GetPathnodeList fcoms and fstp-dwords st0). */
+const coreAppSqrt = v => x87sqrt(x87storeDouble(v));
+
+/** GetPathnodeList's distance limit, f32 1000000.0 at 0x10430a64 (fcom). */
+const PATHNODE_DIST_SQ = ld(1000000.0);
+
+/**
+ * AActor::IsOverlapping 0x10369430 (thunk 0x103029be), thiscall(actor;
+ * other), ret 4.  0 when either actor IsBrush (Brush +0x178 nonnull and an
+ * ancestry reaching ABrush 0x10582a28) or `other` is actor.Level (+0xa8).
+ * Otherwise, in 80-bit: r = other.CR + actor.CR, the strict test
+ * dy²+dx² < r² (fcompp, test ah,0x41), then h = other.CH + actor.CH and
+ * dz² < h²; d = actor.Location - other.Location.  Unordered compares fail.
+ */
+export function isOverlapping(actor, other, services) {
+  const isBrush = a => Boolean(rd(services, a, 'Brush')) && services.isA(a, 'Brush');
+  if (isBrush(actor)) return 0;                             // 0x10369439..0x10369462
+  if (isBrush(other)) return 0;                             // 0x10369474..0x1036949d
+  if (other === rd(services, actor, 'Level')) return 0;     // 0x1036949f
+  const al = services.location(actor), ol = services.location(other);
+  const dx = sub(ld(al[0]), ld(ol[0])), dy = sub(ld(al[1]), ld(ol[1]));
+  const r = x87add(ld(rd(services, other, 'CollisionRadius')), ld(rd(services, actor, 'CollisionRadius')));
+  if (leU(x87mul(r, r), x87add(x87mul(dy, dy), x87mul(dx, dx)))) return 0;
+  const dz = sub(ld(al[2]), ld(ol[2]));
+  const h = x87add(ld(rd(services, other, 'CollisionHeight')), ld(rd(services, actor, 'CollisionHeight')));
+  if (leU(x87mul(h, h), x87mul(dz, dz))) return 0;          // 0x1036950e
+  return 1;
+}
+
+/** Comparator 0x103c6a70 (cdecl, two {node, dist} entries): `fld a.dist;
+ * fcomp b.dist` -> C0 (below or unordered) -1, C3 (equal) 0, else 1. */
+export function pathnodeCompare(a, b) {
+  const f = x87compare(ld(a.dist), ld(b.dist));
+  return f.c0 ? -1 : f.c3 ? 0 : 1;
+}
+
+/**
+ * MSVCRT.dll qsort 0x7802543d (Core appQsort 0x10123640 forwards to it) over
+ * entries [0, num), translated in element indices from the byte-pointer
+ * body: size <= 8 runs the shortsort 0x780255e2 (repeatedly swap the last
+ * maximum by `comp(p, max) > 0` to the tail); larger partitions swap the
+ * middle element (lo + size/2) to lo, scan loguy up while comp(loguy, lo)
+ * <= 0 and higuy down while comp(higuy, lo) >= 0, swap(lo, higuy), push the
+ * larger side on the explicit stack and iterate the smaller.  The byte test
+ * `higuy - 1 - lo >= hi - loguy` (0x78025561, signed) is `higuy - lo > hi -
+ * loguy` in elements.  swap 0x7802563b is a no-op for equal pointers.
+ */
+export function msvcrtQsort(arr, num, comp) {
+  if (num < 2) return;                                      // 0x7802544e (width 8)
+  const swap = (i, j) => { if (i !== j) { const t = arr[i]; arr[i] = arr[j]; arr[j] = t; } };
+  const loStack = [], hiStack = [];
+  let lo = 0, hi = num - 1;
+  for (;;) {
+    const size = hi - lo + 1;                               // 0x78025491
+    if (size <= 8) {
+      for (let h = hi; h > lo; h--) {                       // shortsort 0x780255e2
+        let max = lo;
+        for (let p = lo + 1; p <= h; p++) if (comp(arr[p], arr[max]) > 0) max = p;
+        swap(max, h);
+      }
+    } else {
+      swap(lo + (size >>> 1), lo);                          // 0x780254ff
+      let loguy = lo, higuy = hi + 1;
+      for (;;) {
+        do loguy++; while (loguy <= hi && comp(arr[loguy], arr[lo]) <= 0);
+        do higuy--; while (higuy > lo && comp(arr[higuy], arr[lo]) >= 0);
+        if (higuy < loguy) break;                           // 0x7802553f
+        swap(loguy, higuy);
+      }
+      swap(lo, higuy);                                      // 0x7802554d
+      if (higuy - lo > hi - loguy) {
+        if (lo + 1 < higuy) { loStack.push(lo); hiStack.push(higuy - 1); }
+        if (loguy < hi) { lo = loguy; continue; }
+      } else {
+        if (loguy < hi) { loStack.push(loguy); hiStack.push(hi); }
+        if (lo + 1 < higuy) { hi = higuy - 1; continue; }
+      }
+    }
+    if (!loStack.length) return;                            // 0x780254b2
+    lo = loStack.pop(); hi = hiStack.pop();
+  }
+}
+
+/**
+ * APawn::GetPathnodeList 0x103c6490 (thunk 0x10302086), thiscall(pawn;
+ * _FNavInfo* list, int max, AActor* FromPoint, int bUsePrunedPaths, int
+ * bSort), ret 0x14.  `list` receives {node, dist} entries (8 bytes each);
+ * returns the count.  Entries past the count keep stale values, as the
+ * original's stack buffer does.
+ *
+ * 1. mask = reachMask(pawn); cri/chi = ftol(CollisionRadius/Height).
+ * 2. Start node: a NavigationPoint FromPoint; else (with `loc` = a non-nav
+ *    FromPoint's Location, or the pawn's) the pawn's MoveTarget (+0x34c)
+ *    when it is a NavigationPoint the PAWN overlaps; else the first node of
+ *    LevelInfo.NavigationPointList (+0x548, +0x42c links) the pawn overlaps.
+ * 3. With a start node: its Paths[16] (then PrunedPaths[16] when
+ *    bUsePrunedPaths) until -1 or `max` entries; a spec whose End is a
+ *    NavigationPoint with radius >= cri, height >= chi and admitted flags
+ *    adds {End, float(int distance)}.  No reachability test.
+ * 4. Otherwise every list node with (dx²+dy²)+dz² < 1000000.0f from `loc`
+ *    (80-bit) gets d = appSqrt: appended while count < max, else it
+ *    replaces, among entries with d < entry.dist, the one with the smallest
+ *    dist (first of equals) — not the farthest.  Then each entry is kept
+ *    only if actorReachable's worker (0x103c0630, argC 0) accepts it,
+ *    compacted in order.
+ * 5. bSort with count > 1: appQsort(list, count, 8, 0x103c6a70).
+ * The inlined check(XLevel->Actors(0)) and check(IsA(ALevelInfo)) before
+ * the overlap scan and the distance scan are appFailAssert paths, not
+ * modeled (navListHead reads Actors(0)'s list).
+ */
+export function getPathnodeList(pawn, list, max, fromPoint, bUsePrunedPaths, bSort, services) {
+  const mask = reachMask(pawn, services);                   // 0x103c64c4 [ebp-0x24]
+  const cri = x87ftol(ld(rd(services, pawn, 'CollisionRadius'))); // [ebp-0x1c]
+  const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight'))); // [ebp-0x20]
+  let loc = services.location(pawn).map(f32);              // [ebp-0x40..-0x38]
+  let start = null;                                         // [ebp-0x14]
+  if (fromPoint) {
+    if (services.isA(fromPoint, 'NavPoint')) start = fromPoint; // 0x103c652b
+    else loc = services.location(fromPoint).map(f32);       // 0x103c6532
+  }
+  if (!start) {                                             // 0x103c6551
+    const anchor = rd(services, pawn, 'MoveTarget');
+    if (anchor && services.isA(anchor, 'NavPoint') && isOverlapping(pawn, anchor, services))
+      start = anchor;                                       // 0x103c658f
+  }
+  if (!start) {                                             // 0x103c659c
+    for (let nav = services.navListHead(pawn); nav; nav = services.nextNav(nav))
+      if (isOverlapping(pawn, nav, services)) { start = nav; break; } // 0x103c6616
+  }
+  let count = 0;                                            // edi / [ebp+0x10]
+  if (start) {                                              // 0x103c6629
+    const table = services.reachSpecTable(pawn);            // XLevel+0x8c
+    const scan = arr => {
+      for (let i = 0; i < 16; i++) {                        // cmp edx,0x10
+        const idx = i < arr.length ? (arr[i] | 0) : -1;
+        if (idx === -1 || count >= max) return;             // 0x103c6647 / 0x103c6650
+        const spec = table[idx];
+        if (!spec) throw new Error(`GetPathnodeList ReachSpec index ${idx} is outside the level table`);
+        const end = spec.end;                               // spec+0x08
+        if (!end || !services.isA(end, 'NavPoint')) continue;
+        if ((spec.radius | 0) < cri) continue;              // spec+0x0c, jl
+        if ((spec.height | 0) < chi) continue;              // spec+0x10, jl
+        if (((spec.reachFlags | 0) & mask) !== (spec.reachFlags | 0)) continue; // spec+0x14
+        list[count++] = { node: end, dist: f32(spec.distance | 0) }; // fild/fstp
+      }
+    };
+    scan(services.paths(start));                            // +0x360
+    if (bUsePrunedPaths) scan(services.prunedPaths(start)); // +0x3a0
+  } else {                                                  // 0x103c6786
+    for (let nav = services.navListHead(pawn); nav; nav = services.nextNav(nav)) {
+      const nl = services.location(nav);
+      const dz = sub(ld(nl[2]), ld(loc[2])), dy = sub(ld(nl[1]), ld(loc[1])),
+            dx = sub(ld(nl[0]), ld(loc[0]));
+      const distSq = x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz));
+      if (!ltU(distSq, PATHNODE_DIST_SQ)) continue;         // 0x103c6832
+      const d = coreAppSqrt(distSq);                        // 0x103c6845
+      let slot;
+      if (count < max) slot = count++;                      // 0x103c6858
+      else {                                                // 0x103c6871
+        slot = -1;
+        for (let k = 0; k < count; k++) {
+          if (!ltU(d, ld(list[k].dist))) continue;          // 0x103c687a
+          if (slot < 0 || !leU(ld(list[slot].dist), ld(list[k].dist))) slot = k;
+        }
+      }
+      if (slot >= 0) list[slot] = { node: nav, dist: st(d) }; // 0x103c6862
+    }
+    let kept = 0;                                           // 0x103c68aa
+    for (let i = 0; i < count; i++) {
+      if (!actorWorker(pawn, list[i].node, 0, services)) continue; // 0x103c68bc
+      list[kept++] = { node: list[i].node, dist: list[i].dist };
+    }
+    count = kept;
+  }
+  if (bSort && count > 1) msvcrtQsort(list, count, pathnodeCompare); // 0x103c68ef
+  return count;
+}
+
+/**
+ * execReachablePathnodes 0x103c8bb0 — native(1004) final iterator
+ *   ReachablePathnodes(class<NavigationPoint> BaseClass, out NavigationPoint
+ *   NavPoint, Actor FromPoint, out float distance, optional bool
+ *   bUsePrunedPaths)
+ *
+ * P_GET_OBJECT BaseClass (null -> ANavigationPoint 0x1057a128, then never
+ * read), P_GET_OBJECT_REF NavPoint and P_GET_FLOAT_REF distance (GPropAddr,
+ * else a private temporary), P_GET_ACTOR FromPoint, P_GET_UBOOL_OPTX
+ * bUsePrunedPaths (pre-stored 0; EX_Nothing keeps it), P_FINISH, then one
+ * GetPathnodeList(list[32], 32, FromPoint, bUsePrunedPaths, 1).  Each
+ * iteration stores NavPoint = None, then while entries remain NavPoint =
+ * node and distance = dist; a None NavPoint ends the loop at wEndOffset+1
+ * (the VM's `after`).  IteratorNext/IteratorPop are the VM's.
+ */
+export function createReachablePathnodesIterator({ receiver, argumentCount, evaluateArgument, services }) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('ReachablePathnodes requires evaluateArgument');
+  if (argumentCount !== 4 && argumentCount !== 5)
+    throw new RangeError(`ReachablePathnodes takes four or five arguments; got ${String(argumentCount)}`);
+  evaluateArgument(0);                                      // BaseClass (unused)
+  const navOut = writeSlot(evaluateArgument(1));
+  const fromPoint = refValue(evaluateArgument(2)) ?? null;
+  const distOut = writeSlot(evaluateArgument(3));
+  const pruned = argumentCount > 4 ? refValue(evaluateArgument(4)) : undefined;
+  const list = [];                                          // [esp+0x54], 32 x 8 bytes
+  const count = getPathnodeList(receiver, list, 32, fromPoint, pruned ? 1 : 0, 1, services);
+  let i = 0;                                                // ebp
+  return {
+    next() {
+      navOut.set(null);                                     // 0x103c8d02
+      if (i >= count) return false;
+      const entry = list[i++];
+      navOut.set(entry.node);
+      distOut.set(entry.dist);
+      return entry.node !== null && entry.node !== undefined; // 0x103c8d1b
+    },
+  };
 }
