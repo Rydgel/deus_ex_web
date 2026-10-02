@@ -67,6 +67,34 @@ class Oracle:
         self.stub_push = STUBS + 0x20
         cpu.mem_write(self.stub_push, bytes.fromhex(
             '8b01' '8b542408' '4a' '01d0' 'f7d2' '21d0' '89c2' '03542404' '8911' 'c20800'))
+        # appPow(x, y) and appIsNan(x): Python's double pow loaded onto the
+        # x87 stack (the host's choice for this transcendental, as in
+        # static-lighting.mjs), and the NaN test.
+        self.stub_pow = STUBS + 0x60
+        self.pow_slot = STUBS + 0x80
+        cpu.mem_write(self.stub_pow, bytes.fromhex('dd05') + struct.pack('<I', self.pow_slot) + bytes.fromhex('c3'))
+        self.stub_isnan = STUBS + 0x90
+        cpu.mem_write(self.stub_isnan, bytes.fromhex('c3'))
+        # UObject::IsA(Class): a fabricated light is never a Pawn.
+        self.stub_isa = STUBS + 0xa0
+        cpu.mem_write(self.stub_isa, bytes.fromhex('31c0' 'c20400'))
+
+        def on_stub(uc, address, size, data):
+            import math
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            if address == self.stub_pow:
+                x, y = struct.unpack('<dd', uc.mem_read(esp + 4, 16))
+                try:
+                    value = math.pow(x, y)
+                except (OverflowError, ZeroDivisionError):
+                    value = math.inf
+                except ValueError:  # pow(0, negative) is +inf, a negative base NaN
+                    value = math.inf if x == 0 else math.nan
+                uc.mem_write(self.pow_slot, struct.pack('<d', value))
+            elif address == self.stub_isnan:
+                x = struct.unpack('<d', uc.mem_read(esp + 4, 8))[0]
+                uc.reg_write(UC_X86_REG_EAX, 1 if x != x else 0)
+        cpu.hook_add(UC_HOOK_CODE, on_stub, begin=self.stub_pow, end=self.stub_isnan)
         # appMemset(dest, value, count): rep stosb.
         self.stub_memset = STUBS + 0x40
         cpu.mem_write(self.stub_memset, bytes.fromhex('57' '8b7c2408' '8b44240c' '8b4c2410' 'f3aa' '5f' 'c3'))
@@ -83,6 +111,14 @@ class Oracle:
                     target = self.stub_sqrt
                 elif symbol == '?appMemset@@YAXPAXHH@Z':
                     target = self.stub_memset
+                elif symbol == '?appPow@@YANNN@Z':
+                    target = self.stub_pow
+                elif symbol == '?appIsNan@@YAHN@Z':
+                    target = self.stub_isnan
+                elif symbol == '?IsA@UObject@@QBEHPAVUClass@@@Z':
+                    target = self.stub_isa
+                elif library == 'core.dll' and symbol in ('?GMath@@3VFGlobalMath@@A', '??_0FCoords@@QAEAAV0@ABVFRotator@@@Z'):
+                    target = core_exports[symbol]
                 elif symbol == '?PushBytes@FMemStack@@QAEPAEHH@Z':
                     target = self.stub_push
                 elif symbol == '?GMem@@3VFMemStack@@A':
@@ -197,6 +233,51 @@ class Oracle:
         self.call(0x10b02650, [LIGHTMAP, shadow, out])
         return bytes(self.read(out, f'{pitch * 8 * (height + 1)}B')).hex()
 
+    # SetupForSurf 0x10b07fcc-0x10b080cf: the zone ambient FGetHSV(hue,
+    # saturation, brightness) as the static map's fill texel (BGRA).
+    def ambient(self, hue, saturation, brightness):
+        result = self.alloc(0x10)
+        self.call(self.fgethsv_address, [result, hue, saturation, brightness])
+        ebp = self.frame()
+        self.cpu.reg_write(UC_X86_REG_EAX, result)
+        self.run(0x10b07fd2, 0x10b080cf)
+        return self.read(ebp + 0xc, 'I')[0]
+
+    # Init 0x10b022d0-0x10b022e4: the x^-0.5 tables (0x10b33650, 0x10b3d384).
+    def rsqrt_tables(self):
+        self.frame()
+        self.run(0x10b022d0, 0x10b022e4)
+        return {'mantissa': list(self.read(0x10b33650, '1024I')), 'exponent': list(self.read(0x10b3d384, '512I'))}
+
+    # GMath's UnitCoords and trig table for Core's FCoords /= FRotator; the
+    # caller supplies coords.mjs's sine table (its own validation).
+    def gmath(self, sines):
+        gmath = self.core.exports()['?GMath@@3VFGlobalMath@@A']
+        self.write(gmath + 0x18, '12f', 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+        self.write(0x101b32a4, f'{len(sines)}I', *sines)
+
+    # Spot 0x10b04f80 and the merge, as spatial_merge; the light's Rotation
+    # (+0x120) and LightCone (+0x1e8) come from the case.
+    def spot_merge(self, case):
+        light, facet, grid, rect, constants = case['light'], case['facet'], case['grid'], case['rect'], case['constants']
+        width, height = facet['clamp']
+        stride = ((width + 7) >> 3) * 8
+        info, actor = self.alloc(0x100), self.actor(light)
+        self.write(actor + 0x120, 'iii', *light.get('rotation', (0, 0, 0)))
+        self.write(actor + 0x1e8, 'B', light.get('cone', 0))
+        illum, spatial = self.alloc(stride * height + 16), self.alloc(width * height + 16)
+        self.cpu.mem_write(illum, bytes.fromhex(case['illumination'])[:stride * height])
+        self.write(info, 'I', actor)
+        self.write(info + 0x18, 'II', constants['rradius'], constants['rr2'])
+        self.write(info + 0x24, 'I', constants['incidence'])
+        self.write(info + 0x34, 'iiii', *rect)
+        self.write(START, 'III', *grid['start'])
+        self.write(STEP_U, 'III', *grid['stepU'])
+        self.write(STEP_V, 'III', *grid['stepV'])
+        self.lightmap_globals(facet)
+        self.call(case.get('address', 0x10b04f80), [LIGHTMAP, info, illum, spatial])
+        return {'spatial': list(self.read(spatial, f'{width * height}B'))}
+
     def incidence(self, light, facet, reciprocal):
         info, coords = self.alloc(0x100), self.alloc(0x40)
         actor = self.actor(light)
@@ -280,7 +361,10 @@ class Oracle:
         stride = ((width + 7) >> 3) * 8
         info, actor = self.alloc(0x100), self.actor(light)
         illum, spatial = self.alloc(stride * height + 16), self.alloc(width * height + 16)
-        self.cpu.mem_write(illum, bytes([illumination]) * (stride * height))
+        if isinstance(illumination, str):
+            self.cpu.mem_write(illum, bytes.fromhex(illumination)[:stride * height])
+        else:
+            self.cpu.mem_write(illum, bytes([illumination]) * (stride * height))
         self.write(info, 'I', actor)
         self.write(info + 0x18, 'II', constants['rradius'], constants['rr2'])
         self.write(info + 0x24, 'I', constants.get('incidence', 0))
@@ -402,6 +486,12 @@ def main():
     if cases.get('shadowTable'):
         out['shadowTable'] = oracle.shadow_table()
     out['illumination'] = [oracle.illumination(case) for case in cases.get('illumination', [])]
+    out['ambient'] = [oracle.ambient(*triple) for triple in cases.get('ambient', [])]
+    if cases.get('rsqrtTables') or cases.get('spots'):
+        out['rsqrtTables'] = oracle.rsqrt_tables()
+    if cases.get('sines'):
+        oracle.gmath(cases['sines'])
+    out['spots'] = [oracle.spot_merge(case) for case in cases.get('spots', [])]
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []
     json.dump(out, sys.stdout)

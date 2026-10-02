@@ -188,12 +188,22 @@ export function movingLightRect(location, radius, facet) {
   };
 }
 
+/** A spatial function's illumination: one byte for every texel (0x7f for
+ * an unshadowed moving light) or a static light's bytes from
+ * static-lighting.mjs shadowIllumination, `{bytes, stride}` with rows
+ * padded to whole shadow bytes. */
+function illuminationAt(illumination) {
+  if (typeof illumination === 'number') return () => illumination;
+  const {bytes, stride} = illumination;
+  return (u, v) => bytes[v * stride + u];
+}
+
 /** NonIncidence spatial function 0x10b054e0. `grid` is the float texel grid
  * (start 0x10b38a90, U step 0x10b49e10, V step 0x10b3d378); an unshadowed
  * moving light has illumination 0x7f everywhere (0x10b02660). Calls
  * `write(u, v, byte)` for each texel of the rectangle. */
 export function nonIncidenceSpatial(rect, grid, location, constants, write, illumination = 0x7f) {
-  const { minU, maxU, minV, maxV } = rect, { rradius, rr2 } = constants;
+  const { minU, maxU, minV, maxV } = rect, { rradius, rr2 } = constants, illum = illuminationAt(illumination);
   const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
   const [lx, ly, lz] = location;
   let rowX = f(f(sx + f(vx * minV)) + f(ux * minU));
@@ -203,10 +213,11 @@ export function nonIncidenceSpatial(rect, grid, location, constants, write, illu
     let dx = f(rowX - lx), dy = f(rowY - ly), dz = f(rowZ - lz);
     for (let u = minU; u < maxU; u++) {
       let spatial = 0;
-      if (illumination) {
+      const light = illum(u, v);
+      if (light) {
         const distanceSquared = dy * dy + dz * dz + dx * dx;
         if (fistp(f(distanceSquared * rr2)) >>> 0 < 0x1000) {
-          const scaled = (1.02 - tableSqrt(f(distanceSquared)) * rradius) * illumination;
+          const scaled = (1.02 - tableSqrt(f(distanceSquared)) * rradius) * light;
           spatial = fistp(f(scaled) - .5) & 0xff;
         }
       }
@@ -249,7 +260,7 @@ export function normalLightIncidence(location, facet, rradius) {
  * the falloff table; the output byte is the low float byte after adding
  * 2^23, not a floor/clamp. See docs/moving-normal-lighting.md. */
 export function normalLightSpatial(rect, grid, location, constants, write, illumination = 0x7f) {
-  const { minU, maxU, minV, maxV } = rect, { rr2, incidence } = constants;
+  const { minU, maxU, minV, maxV } = rect, { rr2, incidence } = constants, illum = illuminationAt(illumination);
   const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
   const [lx, ly, lz] = location;
   const delta = [f(f(sx - lx + f(ux * minU)) + f(vx * minV)),
@@ -270,8 +281,9 @@ export function normalLightSpatial(rect, grid, location, constants, write, illum
   for (let v = minV; v < maxV; v++) {
     let distance = row, step = rowU;
     for (let u = minU; u < maxU; u++) {
-      const byte = illumination && (distance >>> 0) < 0x1000000
-        ? bitsOf(f(illumination * table[distance >>> 12] * incidence + 8388608)) & 255 : 0;
+      const light = illum(u, v);
+      const byte = light && (distance >>> 0) < 0x1000000
+        ? bitsOf(f(light * table[distance >>> 12] * incidence + 8388608)) & 255 : 0;
       write(u, v, byte);
       distance = (distance + step) | 0;
       step = (step + stepUU) | 0;

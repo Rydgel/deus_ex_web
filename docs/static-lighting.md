@@ -81,9 +81,69 @@ compares the table and every shadow mask. Training's 15,754 masks
 masks) match, as do eight fabricated widths and heights and the no-shadow
 fill.
 
+## Ambient, spot and cylinder
+
+**Ambient** (`0x10b07fcc`-`0x10b080cf`). Each channel of the zone's FGetHSV
+becomes `clamp(FISTP(float(float(c·0.25)·256) − 0.5), 0, 255)`; the
+products are exact powers of two. The texel is BGRA with alpha `0x7f`
+(`ambientTexel`).
+
+**Spot** (`0x10b04f80`, LE_StaticSpot and LE_Spotlight).
+- *Direction.* The X axis of `GMath.UnitCoords / Rotation`, using
+  ViewRotation for a Pawn. That is Core's operator `0x1011b690`, which
+  `fcoordsAxes` already translates.
+- *Cone.* `c = 1 − LightCone/256`, with `1/(1−c)`, `c/(1−c)` and `c²` stored
+  as floats.
+- *Per texel with illumination.* The falloff index is
+  `FISTP(float(d²)·rr2)`, zero at 4096 or more. The byte is zero unless the
+  axis dot is positive and `dot² > d²·c²`. Otherwise
+  `s = rsqrt(d²)·dot/(1−c) − c/(1−c)` and the byte is the low byte of
+  `FISTP(float(s²·normal[index]·illumination·incidence) − 0.5)`.
+- *rsqrt.* It reads the light manager's x^-0.5 tables (init `0x10b022d0`,
+  builder `0x10b024b0`: `float(appPow(|x|, −0.5))` over 512 exponent and
+  1024 mantissa patterns). appPow is the CRT's x87 pow, taken as the JS
+  double. The nearest float rounding midpoint is 6.4·10⁻¹¹ (relative) away,
+  so no table entry depends on that choice.
+- *Code.* `spotLightSpatial` keeps the displacement and sum arithmetic in
+  doubles at the recovered float stores, and runs the `s` chain on the x87
+  model.
+
+**Cylinder** (`0x10b04a80`, LE_Cylinder). The byte is
+`max(0, FISTP(float((1 − (dx²+dy²)/R²)·illumination) − 0.5))`, using
+horizontal distance only and no cut beyond the texel rectangle
+(`cylinderSpatial`).
+
+## Static light validation
+
+`validate-static-lighting.mjs` phase 2 runs the zone ambients and 64
+fabricated triples. On every `--surfaces`-th world surface, it then chains
+each class 0 and 1 light, starting from an ambient fill, through the
+original rectangle, incidence, colour table, illumination, spatial body and
+merge. The oracle runs the original spot and cylinder bodies with Core's
+operator, using GMath filled with `coords.mjs`'s sine table and IsA stubbed
+to "not a Pawn"; appPow is Python's double pow.
+
+| Map | Light steps | Of which | Texels | Mismatches |
+| --- | ---: | --- | ---: | ---: |
+| 00_Training, every surface | 15,745 | 7,737 spot | 8,891,470 | 0 |
+| 01_NYC_UNATCOIsland, every 4th surface | 3,425 | | 7,753,474 | 0 |
+| 04_NYC_Street, every 3rd surface | 4,538 | 332 spot, 483 cylinder | 4,210,782 | 0 |
+
+The rsqrt tables match bit for bit. Like the moving-light bodies, the
+per-texel arithmetic outside the x87-model chains is a measured match, not
+a proof for all inputs.
+
 ## Not yet moved
 
-Play still draws the float reconstruction. The ambient fill, the spot,
-Cylinder and time-varying spatial functions, the merge-dynamic modulation,
-the LightType functions (pulse, flicker, strobe…) and class 1's per-frame
-recomputation come next, in that order.
+Play still draws the float reconstruction. Wiring the translated path into
+Play comes next. After that: the time-varying spatial functions, the
+merge-dynamic modulation, the LightType functions (pulse, flicker, strobe…)
+and class 1's per-frame recomputation.
+
+Two facts recovered from SetupForSurf's listing matter for that wiring:
+- A level surface's static list goes through AddLight with each light's
+  shadow mask; the mask pointer advances for every list entry, including
+  rejected lights. There is no bSpecialLit test there. On Training, Island,
+  Battery Park and NYC Street no listed light mismatches its surface.
+- A class 2 light from a static list is merged unshadowed every frame, even
+  though it has a mask. None of those four maps has one.
