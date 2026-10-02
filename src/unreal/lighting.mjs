@@ -291,7 +291,9 @@ export async function createLighting(map, asset, assets) {
     ownedRecords() { return owned; },
     invalidate(changes) {
       const entries = normalizeLightingChanges(changes), changedLights = [...new Set(entries.map(entry => entry.ref))];
-      for (const { ref, values } of entries) if (values) updateActor(ref, values);
+      // A light no light map lists (the world prepares every list before
+      // Play starts) changes no cached texel: its values are not kept here.
+      for (const { ref, values } of entries) if (values && actors.has(ref)) updateActor(ref, values);
       const affected = [...cacheRecords].filter(result => changedLights.some(ref => result.lightRefs.has(ref)));
       for (const result of affected) refill(result);
       return { changedLights, lightmaps: affected,
