@@ -1,6 +1,6 @@
 // Wall mirrors in Play (docs/mirror-surfaces.md "All maps"): the player faces
-// the translucent bar mirror in 02_NYC_Bar and an opaque unlit bathroom mirror
-// in 02_NYC_Hotel. Each plane's reflected child renders, the mirror region
+// the translucent bar mirror in 02_NYC_Bar, an opaque unlit bathroom mirror
+// in 02_NYC_Hotel and the translucent mirror on 02_NYC_Smug's DeusExMover7. Each plane's reflected child renders, the mirror region
 // differs from the same frame drawn without the reflection, and the opaque
 // mirror shows the child alone.
 //
@@ -28,6 +28,7 @@ if (!url) {
 const CASES = [
   {map: '02_NYC_Bar', name: 'translucent wall', location: [-768, -600, 95], yaw: 49152, opaque: false},
   {map: '02_NYC_Hotel', name: 'opaque unlit wall', location: [1880, -1158, 148], yaw: 32768, opaque: true},
+  {map: '02_NYC_Smug', name: 'translucent mover', location: [-576, 1530, 250], yaw: 16384, opaque: false},
 ];
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 const results = [];

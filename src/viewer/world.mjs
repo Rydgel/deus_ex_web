@@ -258,7 +258,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   root.add(markers);
   notes.add(`${map.summary.unknownLevelBytes} trailing Level bytes and ${map.summary.undecodedActorProperties} property values remain opaque.`);
   for (const note of lighting.notes) notes.add(note);
-  if (mirrors.stats.surfaces) notes.add('Static mirrored BSP surfaces render reflected world and actor views. Mirror/sky combinations remain unverified.');
+  if (mirrors.stats.surfaces) notes.add('Mirrored BSP and mover surfaces render reflected world and actor views. Mirror/sky combinations remain unverified.');
   if (lighting.stats.missingLightmaps) notes.add(`${lighting.stats.missingLightmaps} surfaces have no stored lightmap and retain their base texture brightness.`);
   if (errors.length) notes.add(`${errors.length} surfaces or moving brushes could not be rendered. See diagnostics details.`);
   if (panned.length) notes.add(`${panned.length} auto-panned surface groups follow Level.TimeSeconds and their viewer-side zone's pan speeds.`);

@@ -36,12 +36,12 @@ export function mirrorPlanes(model) {
  * PF_Invisible, so only the child shows (validate-mirrors.mjs). */
 export const mirrorDrawFlags = flags => ((flags & 0x47 ? flags : flags | POLY.Invisible) | 0x80000000) >>> 0;
 
-/** Static mirrored BSP surfaces of any orientation, grouped by their exact
- * node plane: CreateChildFrame (0x10b15a40) merges child frames whose clip
- * planes are equal. Translucent mirrors composite S+R(1-S); opaque ones show
- * the reflection alone (mirrorDrawFlags). Moving, masked, modulated and
- * two-sided mirrors and nested reflections remain explicit boundaries; see
- * mirror-surfaces.md. */
+/** Mirrored BSP surfaces of any orientation: static ones grouped by their
+ * exact node plane (CreateChildFrame 0x10b15a40 merges child frames whose
+ * clip planes are equal), a mover's per polygon following the brush.
+ * Translucent mirrors composite S+R(1-S); opaque ones show the reflection
+ * alone (mirrorDrawFlags). Masked, modulated and two-sided mirrors and nested
+ * reflections remain explicit boundaries; see mirror-surfaces.md. */
 export function createMirrors(notes, displayGamma) {
   const planes = new Map(), size = new THREE.Vector2(), frustum = new THREE.Frustum();
   const projection = new THREE.Matrix4(), clipMatrix = new THREE.Matrix4(), camera = new THREE.PerspectiveCamera();
@@ -84,13 +84,16 @@ export function createMirrors(notes, displayGamma) {
   function surface(model, surfaceIndex, actorName) {
     const surface = model.surfaces[surfaceIndex];
     if (!(surface.flags & POLY.Mirrored)) return null;
-    if (actorName) return unsupported('Mirrors on moving brushes remain unsupported; they draw as ordinary surfaces.');
     if (surface.flags & (POLY.Masked | POLY.Modulated | POLY.TwoSided))
       return unsupported('Masked, modulated and two-sided mirrors remain unsupported; they draw as ordinary surfaces.');
     if (!modelPlanes.has(model)) modelPlanes.set(model, mirrorPlanes(model));
     const node = modelPlanes.get(model).get(surfaceIndex);
     if (!node) return unsupported('A mirrored surface without one node plane remains unsupported.');
-    const key = node.join();
+    // A mover's polygon joins the level BSP through the brush tracker each
+    // time the brush moves; its node plane is the polygon's, in world space.
+    // The group follows the mover: its plane is the brush-local plane under
+    // the mover's current transform (host-computed, see mirror-surfaces.md).
+    const key = actorName ? `${actorName}:${surfaceIndex}` : node.join();
     if (!planes.has(key)) {
       const target = new THREE.WebGLRenderTarget(1, 1, {
         minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
@@ -99,14 +102,24 @@ export function createMirrors(notes, displayGamma) {
       target.texture.colorSpace = THREE.NoColorSpace; // Original display-encoded framebuffer bytes.
       const plane = new THREE.Plane(new THREE.Vector3(...toView(node.slice(0, 3))), -node[3]);
       for (const other of planes.values())
-        if (other.plane.normal.dot(plane.normal) < 1 - 1e-6)
+        if (actorName || other.moving || other.plane.normal.dot(plane.normal) < 1 - 1e-6)
           notes.add('A mirror seen inside another mirror\'s reflection draws without its own nested reflection (the original nests child frames up to recursion 3).');
-      planes.set(key, { key, plane, matrix: mirrorMatrix(plane), target, meshes: [],
+      planes.set(key, { key, plane, matrix: mirrorMatrix(plane), target, meshes: [], moving: Boolean(actorName),
+        localPlane: actorName ? plane.clone() : null,
         texture: { value: target.texture }, size: { value: new THREE.Vector2(1, 1) }, active: { value: 0 } });
     }
     stats.surfaces++; stats.planes = planes.size;
     if (!(surface.flags & 0x47)) stats.opaqueSurfaces++;
     return planes.get(key);
+  }
+  /** A moving group's world plane and reflection from its mover's current
+   * transform (the meshes are children of the mover's group). */
+  function follow(group) {
+    const mesh = group.meshes[0];
+    if (!group.moving || !mesh) return;
+    mesh.updateWorldMatrix(true, false);
+    group.plane.copy(group.localPlane).applyMatrix4(mesh.matrixWorld);
+    group.matrix = mirrorMatrix(group.plane);
   }
   /** Whether render() would draw any mirror plane for this source camera:
    * the same plane side and floor-frustum predicate, evaluated early so the
@@ -115,6 +128,7 @@ export function createMirrors(notes, displayGamma) {
     if (!planes.size) return false;
     source.updateMatrixWorld();
     frustum.setFromProjectionMatrix(projection.multiplyMatrices(source.projectionMatrix, source.matrixWorldInverse));
+    for (const group of planes.values()) follow(group);
     for (const group of planes.values())
       if (group.plane.distanceToPoint(source.position) > 0 &&
         group.meshes.some(mesh => mesh.visible && frustum.intersectsObject(mesh))) return true;
@@ -130,6 +144,7 @@ export function createMirrors(notes, displayGamma) {
     // only the plane meshes and their ancestors are updated here.
     source.updateMatrixWorld();
     for (const group of planes.values()) for (const mesh of group.meshes) mesh.updateWorldMatrix(true, false);
+    for (const group of planes.values()) follow(group);
     frustum.setFromProjectionMatrix(projection.multiplyMatrices(source.projectionMatrix, source.matrixWorldInverse));
     // Every group draws without its reflection until all children exist: a
     // mirror inside another mirror's child view shows its own surface, not a

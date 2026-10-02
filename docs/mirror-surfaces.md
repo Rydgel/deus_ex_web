@@ -188,9 +188,22 @@ absolute bounds.
   native capture. With the current static lighting it gives 2.04/255 for the
   floor region and 3.87/255 for the emblem.
 
+**Mover mirrors.**
+
+- **Groups.** A mover's polygons join the level BSP through the brush tracker
+  (`0x1037b5c0`) whenever the brush moves, so a mirrored mover polygon
+  reflects across its own world plane. Each such polygon is its own group
+  (thirteen movers carry one).
+- **Plane.** The group's plane is the brush-local `[N, N·base]` node plane
+  under the mover's current transform, recomputed before every mirror pass.
+  The tracker's exact float32 node plane is not reproduced: this plane is
+  host-computed in doubles. The reflection itself is the verified one.
+- **Check.** `validate-mirrors-play.mjs` faces 02_NYC_Smug's DeusExMover7
+  (translucent): both of that map's planes render, and the frame changes
+  with the reflection.
+
 **Unsupported, explicitly noted in Play.**
 
-- **Mirrors on moving brushes** draw as ordinary surfaces.
 - **Masked, modulated and two-sided mirrors** (none in the shipped maps) are
   likewise drawn as ordinary surfaces.
 - **Nested reflections.** A mirror seen inside another mirror's reflection

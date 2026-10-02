@@ -442,8 +442,9 @@ oblique mirrors. Each surface is grouped by its node plane. All 252 frame cases
 match the original instructions. The post-child branch, also executed from the
 original, makes opaque mirrors PF_Invisible, so only the reflection shows;
 ShinySurfaces at +0x5c is confirmed from the retail property registration.
-Mover mirrors (13 brushes), nested reflections and mirror/sky combinations
-remain explicit gaps.
+Mover mirrors (13 brushes) follow their brush, with the plane
+host-computed from the tracker polygon. Nested reflections and mirror/sky
+combinations remain explicit gaps.
 
 **Conversations on every map (2026-10-02).** `census-map-startup --groups
 converse` starts up to ten conversations per map and plays each to its end.
