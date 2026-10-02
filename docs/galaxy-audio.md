@@ -70,7 +70,10 @@ actor). `+0x80 + 0x40*i`: channel `i`. `+0x880` double: the last Update time.
 
 ## Update (`0x10609510`), the parts read so far
 
-1. Returns without a viewport. Calls `0x1060e840` (Galaxy library tick).
+1. Returns without a viewport. Calls `0x1060e840`, which is
+   `EnterCriticalSection(0x1067b670)` (not a library tick; `0x10618920`
+   leaves it at `0x1060abd6`), so Update runs under the Galaxy lock against
+   the mixer thread ([galaxy-music](galaxy-music.md)).
 2. DeltaTime: the RDTSC or `appSeconds` time minus `+0x880` (which is then
    advanced), clamped to `[0, 1]`.
 3. **Ambient scan** when the viewport Actor exists, its ShowFlags
@@ -138,8 +141,9 @@ actor). `+0x80 + 0x40*i`: channel `i`. `+0x880` double: the last Update time.
     voice (asserted nonzero, line `0x754`). Reverb (`0x106011cc`) applies to
     3D voices only when `+0x78` is set.
 14. The rest of Update is the music transition (PlayerPawn Song `+0x670`,
-    SongSection `+0x675`, CdTrack `+0x674`, Transition `+0x676` with the fade
-    times `-0.002/-0.0004/-0.006` per Latency and `0.2`/`3.0` rates).
+    SongSection `+0x674`, CdTrack `+0x675`, Transition `+0x676`; fade ends at
+    Latency × `-0.002/-0.0004/-0.006`, rates 1, `0.2`, `3.0`): see
+    [galaxy-music](galaxy-music.md).
 
 **StopSound** (`0x10607e50`) stops a channel's voice (`0x10618590` for 3D,
 `0x10618410` otherwise) and resets the record to zeros with `-1.0f` at

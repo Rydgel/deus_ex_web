@@ -1,0 +1,38 @@
+Area51Bunker_Music.umx       ord 35 ins 0 smp 25 pat 54 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd7 tmp130 sep128 sflags{17: 3, 3: 12, 81: 2, 1: 6, 65: 1, 83: 1} cvt{1: 25}
+Area51_Music.umx             ord 56 ins 0 smp 35 pat200 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv56 spd3 tmp115 sep128 sflags{65: 6, 0: 12, 3: 4, 1: 8, 17: 2, 67: 1, 81: 2} cvt{1: 23, 0: 12}
+BatteryPark_Music.umx        ord 49 ins 0 smp 27 pat 85 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv100 spd6 tmp125 sep128 sflags{3: 20, 19: 4, 17: 2, 1: 1} cvt{1: 27}
+Credits_Music.umx            ord 31 ins 0 smp 34 pat 24 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp125 sep128 sflags{3: 19, 0: 4, 17: 4, 83: 1, 1: 2, 81: 3, 19: 1} cvt{1: 30, 0: 4}
+DeusExDanceMix_Music.umx     ord 30 ins 0 smp 34 pat 19 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd5 tmp128 sep128 sflags{1: 19, 3: 7, 19: 4, 17: 3, 65: 1} cvt{1: 34}
+Endgame1_Music.umx           ord 20 ins 0 smp 27 pat 15 cwt0x217 cmwt0x100 flags0x13 spec0x6 gv128 mv64 spd3 tmp114 sep128 sflags{1: 8, 17: 3, 81: 1, 19: 4, 3: 10, 65: 1} cvt{1: 27}
+Endgame2_Music.umx           ord 21 ins 0 smp 16 pat 22 cwt0x217 cmwt0x100 flags0x13 spec0x6 gv128 mv64 spd3 tmp114 sep128 sflags{3: 8, 19: 3, 17: 3, 1: 2} cvt{1: 16}
+Endgame3_Music.umx           ord 25 ins 0 smp 24 pat 22 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv64 spd5 tmp147 sep128 sflags{17: 3, 1: 4, 19: 5, 3: 10, 0: 1, 145: 1} cvt{1: 23, 0: 1}
+HKClub2_Music.umx            ord 17 ins 0 smp 12 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp130 sep128 sflags{3: 9, 1: 1, 17: 1, 19: 1} cvt{1: 12}
+HKClub_Music.umx             ord 25 ins 0 smp 19 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp120 sep128 sflags{3: 18, 19: 1} cvt{1: 19}
+HongKongCanal_Music.umx      ord 26 ins 0 smp 12 pat 44 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv80 spd6 tmp125 sep128 sflags{19: 3, 3: 8, 1: 1} cvt{1: 12}
+HongKongHelipad_Music.umx    ord 38 ins 0 smp 20 pat 61 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv61 spd6 tmp125 sep128 sflags{3: 12, 17: 2, 19: 2, 1: 2, 0: 1, 81: 1} cvt{1: 19, 0: 1}
+HongKong_Music.umx           ord 46 ins 0 smp 28 pat 63 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd7 tmp124 sep128 sflags{3: 10, 1: 11, 17: 5, 65: 1, 0: 1} cvt{1: 27, 0: 1}
+Intro_Music.umx              ord 30 ins 0 smp 29 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv82 spd6 tmp153 sep128 sflags{3: 15, 0: 3, 17: 8, 19: 1, 81: 1, 1: 1} cvt{1: 26, 0: 3}
+Lebedev_Music.umx            ord 33 ins23 smp 99 pat 33 cwt0x217 cmwt0x200 flags0x0d spec0x6 gv128 mv90 spd6 tmp125 sep128 sflags{3: 10, 0: 83, 83: 2, 19: 1, 1: 1, 67: 2} cvt{1: 16, 0: 83}
+LibertyIsland_Music.umx      ord 45 ins 0 smp 19 pat 46 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd8 tmp125 sep128 sflags{17: 4, 83: 5, 81: 1, 3: 6, 19: 1, 1: 2} cvt{1: 19}
+MJ12_Music.umx               ord 42 ins 0 smp 25 pat 64 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp125 sep128 sflags{19: 2, 3: 8, 1: 8, 17: 5, 81: 2} cvt{1: 25}
+NYCBar2_Music.umx            ord 22 ins 0 smp 31 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp105 sep128 sflags{3: 16, 1: 2, 0: 8, 17: 5} cvt{1: 23, 0: 8}
+NYCStreets2_Music.umx        ord 41 ins 0 smp 34 pat 63 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd4 tmp141 sep128 sflags{3: 9, 1: 17, 0: 1, 67: 1, 65: 2, 81: 2, 83: 1, 17: 1} cvt{1: 33, 0: 1}
+NYCStreets_Music.umx         ord 34 ins 0 smp 27 pat 57 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp125 sep128 sflags{3: 19, 81: 1, 0: 1, 1: 5, 83: 1} cvt{1: 26, 0: 1}
+NavalBase_Music.umx          ord 34 ins 0 smp 26 pat 36 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv80 spd6 tmp125 sep128 sflags{83: 3, 17: 3, 0: 8, 19: 2, 1: 4, 81: 1, 3: 5} cvt{1: 18, 0: 8}
+OceanLab2_Music.umx          ord 40 ins 0 smp 25 pat 54 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp125 sep128 sflags{0: 3, 19: 2, 3: 7, 83: 2, 1: 7, 17: 3, 81: 1} cvt{0: 3, 1: 22}
+OceanLab_Music.umx           ord 43 ins 0 smp 18 pat 73 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv70 spd7 tmp125 sep128 sflags{19: 1, 3: 10, 17: 3, 1: 4} cvt{1: 18}
+ParisCathedral_Music.umx     ord 68 ins 0 smp 25 pat 93 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv68 spd4 tmp117 sep128 sflags{17: 5, 1: 9, 65: 1, 3: 2, 81: 1, 0: 2, 19: 5} cvt{1: 23, 0: 2}
+ParisChateau_Music.umx       ord 39 ins 0 smp 24 pat 53 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv90 spd6 tmp125 sep128 sflags{83: 1, 19: 1, 81: 1, 3: 10, 17: 4, 1: 1, 0: 6} cvt{1: 18, 0: 6}
+ParisClub2_Music.umx         ord 21 ins 0 smp 17 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp113 sep128 sflags{3: 9, 19: 4, 1: 4} cvt{1: 17}
+ParisClub_Music.umx          ord 21 ins 0 smp 14 pat 51 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd4 tmp121 sep128 sflags{3: 10, 19: 3, 83: 1} cvt{1: 14}
+Quotes_Music.umx             ord 28 ins 0 smp 33 pat 19 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd5 tmp116 sep128 sflags{1: 11, 81: 5, 3: 3, 0: 11, 17: 2, 65: 1} cvt{1: 22, 0: 11}
+Title_Music.umx              ord 18 ins 0 smp 31 pat 22 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp116 sep128 sflags{83: 1, 3: 13, 81: 4, 17: 2, 1: 5, 65: 2, 0: 2, 19: 2} cvt{1: 29, 0: 2}
+Training_Music.umx           ord 16 ins 0 smp 14 pat 13 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp116 sep128 sflags{3: 7, 1: 2, 17: 2, 81: 2, 0: 1} cvt{1: 13, 0: 1}
+Tunnels_Music.umx            ord 40 ins 0 smp 24 pat 55 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd7 tmp125 sep128 sflags{3: 9, 17: 6, 1: 6, 0: 1, 81: 1, 65: 1} cvt{1: 23, 0: 1}
+UNATCOReturn_Music.umx       ord 51 ins 0 smp 26 pat 77 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv60 spd6 tmp125 sep128 sflags{3: 13, 19: 2, 17: 3, 1: 7, 81: 1} cvt{1: 26}
+UNATCO_Music.umx             ord 47 ins 0 smp 99 pat 41 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv90 spd6 tmp125 sep128 sflags{19: 3, 83: 2, 17: 4, 81: 3, 0: 77, 3: 10} cvt{1: 22, 0: 77}
+Vandenberg_Music.umx         ord 27 ins 0 smp 15 pat 42 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv48 spd6 tmp125 sep128 sflags{3: 5, 81: 3, 17: 1, 83: 1, 1: 5} cvt{1: 15}
+VersaLife_Music.umx          ord 36 ins 0 smp 33 pat 76 cwt0x217 cmwt0x100 flags0x09 spec0x6 gv128 mv90 spd7 tmp124 sep128 sflags{3: 13, 1: 8, 17: 3, 0: 8, 81: 1} cvt{1: 25, 0: 8}
+TOTAL sample flags {'loop': 216, '16bit': 440, 'pingpong': 83, 'vibrato_depth': 2, 'sus_pingpong': 1}
+EFFECTS {'0': 341, 'A': 2058, 'B': 258, 'C': 119, 'D': 17407, 'E': 728, 'F': 666, 'G': 5706, 'H': 151, 'M': 199, 'O': 6033, 'Q': 301, 'S': 4948, 'T': 938, 'X': 1, 'Y': 18}
+VOLCOL {1: 0, 'v<=64': 103535, 0: 0, 2: 0, 3: 0, 6: 0, 4: 0, 5: 0}

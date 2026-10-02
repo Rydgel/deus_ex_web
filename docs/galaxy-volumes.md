@@ -38,9 +38,11 @@ float `127.0` is at `0x1063d530`.
   The digital volume is therefore the louder of sound and speech: the intro's
   `SetInstantSoundVolume(32)` leaves it at 127 with the installed
   `SpeechVolume=255`.
-- **Music.** `float32(clamp(MusicVolume * K, 0, 1))`; with a song handle at
-  `+0x40` it goes to `0x1060eb60` and with `+0x3c` to `0x1060e9a0` (both
-  `ftol(x * 127.0)`); then `+0x69` is the argument.
+- **Music.** `float32(clamp(MusicVolume * K, 0, 1))`; with the
+  UseDigitalMusic config flag (`+0x40`) it goes to `0x1060eb60` and with
+  UseCDMusic (`+0x3c`) to `0x1060e9a0` (both `ftol(x * 127.0)`); then `+0x69`
+  is the argument. (Earlier notes called `+0x40`/`+0x3c` a song handle; they
+  are the config bools, see [galaxy-music](galaxy-music.md).)
 
 ## Translation
 
