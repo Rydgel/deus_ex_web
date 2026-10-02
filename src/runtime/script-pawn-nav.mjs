@@ -621,6 +621,18 @@ export function suggestJumpVelocity(pawn, dest, vel, services) {
 }
 
 /**
+ * execEAdjustJump 0x103bc110 — native(523) `vector EAdjustJump()`.
+ * v = Velocity (+0x144); SuggestJumpVelocity(Destination +0x354, &v)
+ * (0x103bc14e); P_FINISH; *Result = v.  Velocity itself is untouched: the
+ * script assigns the result (ScriptedPawn FallingState.AdjustJump).
+ */
+export function execEAdjustJump(pawn, services) {
+  const v = services.velocity(pawn).map(f32);
+  suggestJumpVelocity(pawn, rd(services, pawn, 'Destination').map(f32), v, services);
+  return v;
+}
+
+/**
  * APawn::jumpLanding 0x103c2530 (jumpLanding(testvel, FVector& Landing,
  * moveActor)). Up to 36 test-moved 0.1 s ticks of zone gravity, fluid
  * friction and zone velocity until a floor (Normal.Z > 0.7) or water; a
@@ -1745,13 +1757,13 @@ export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, 
   if (pawnPhys !== 4 && services.isA(target, 'Pawn') &&
       (rd(services, target, 'Physics') | 0) === 2) {        // PHYS_Falling
     // 0x103db4ec: Landing = target.Location; target->jumpLanding(
-    // target.Velocity, Landing, 0) (0x103db526), then the findPathTo worker
-    // (thunk 0x10303972 -> 0x103dc1d0) toward Landing, which is unported.
-    if (typeof services.findPathToWorker !== 'function')
-      throw new Error('FindPathToward falling-pawn delegation needs the unported findPathTo worker (0x103dc1d0)');
+    // target.Velocity, Landing, 0) (0x103db526, thiscall on the target: its
+    // zone, collision and test moves), then the findPathTo worker (thunk
+    // 0x10303972 -> 0x103dc1d0) toward Landing with this worker's
+    // bSinglePath, found and bClearPaths.
     const out = services.location(target).map(f32);
-    jumpLanding(target, services.velocity(target), out, 0, services);
-    return services.findPathToWorker(pawn, out, bSinglePath, found, bClearPaths);
+    jumpLanding(target, services.velocity(target), out, 0, services.forActor(target));
+    return pathToWorker(pawn, out, bSinglePath, found, bClearPaths, services);
   }
 
   const origLoc = services.location(pawn).map(f32);         // [ebp-0x20..]
@@ -1870,6 +1882,78 @@ export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, 
   }
   if (state.anchor && tail === listP.items[0]) return 0;    // 0x103dbba1
   return 1;                                                 // 0x103dbba3
+}
+
+/**
+ * Worker 0x103dc1d0 — thiscall(pawn; FVector point, int bSinglePath,
+ * ANavigationPoint** found, int bClearPaths), ret 0x18.  The path search
+ * toward a point: FindPathTo's (518) worker and pathTowardWorker's
+ * falling-target delegation.
+ *
+ * The findPathToward worker's first pass with a point for the target and
+ * no NavigationPoint pre-seed: the same gates, scoutA, scoutB/scoutC/scoutD
+ * on the pawn-side head, then the target-side scan (FastLineCheck from the
+ * candidate to the point, a test FarMoveActor onto it, pointReachable with
+ * arg 1) and BFS from the reached candidate.  Unlike the toward worker it
+ * has no bHunting fallback and no second pass: an exhausted scan or a
+ * failed BFS restores the pawn and fails.
+ */
+export function pathToWorker(pawn, point, bSinglePath, found, bClearPaths, services) {
+  found.node = null;                                        // *[ebp+0x18] = 0
+  const level = services.level(pawn);
+  if (!services.navListHead(pawn)) return 0;                // LevelInfo+0x548
+  if (!(services.reachSpecTable(pawn)?.length > 0)) return 0; // level+0x90
+
+  const origLoc = services.location(pawn).map(f32);         // [ebp-0x24..-0x1c]
+  const model = services.model(level);
+  const listP = navList();                                  // [ebp-0x244] pawn side
+  const listT = navList();                                  // [ebp-0x13c] point side
+  const state = { anchor: 0, seeded: 0 };                   // [ebp-0x14]/[ebp-0x18]
+  navScoutA(listP, pawn, point, listT, bClearPaths, state, services);
+  if (listP.count === 0) return 0;                          // [ebp-0x144]==0
+  if (listT.count === 0) return 0;                          // [ebp-0x3c]==0
+
+  const fail = () => { services.farMoveActor(pawn, origLoc, 1, 1); return 0; };
+
+  if (!state.anchor) {                                      // 0x103dc2f3
+    const flag = { v: 0 };
+    if (!navScoutB(listP, pawn, flag, services)) return fail();
+    state.anchor = flag.v;
+  }
+  if (state.anchor) {                                       // 0x103dc353
+    if (navScoutC(listP, pawn, point, services)) {
+      found.node = listP.items[0];                          // 0x103dc383
+      services.farMoveActor(pawn, origLoc, 1, 1);           // 0x103dc3a1
+      return 1;
+    }
+    navScoutD(listP, pawn, services);                       // 0x103dc3c6
+  }
+
+  // Point-anchor scan (0x103dc3d8) over the point-side candidates.
+  if (!state.seeded) {
+    for (let i = 0; i < listT.count; i++) {
+      const item = listT.items[i], iloc = services.location(item);
+      if (!services.fastLineCheck(model, iloc, point)) continue;
+      if (!services.farMoveActor(pawn, iloc.map(f32), 1, 0)) continue;
+      if (!pointWorker(pawn, point, 1, services)) continue;
+      state.seeded = 1;                                     // [ebp-0x18] = 1
+      listT.items[0] = item;
+      listT.keys[0] = x87ftol(appSqrt(ld(listT.keys[i])));  // 0x103dc4ac fild, sqrt, ftol
+      break;
+    }
+    if (!state.seeded) return fail();                       // 0x103dc4e4
+  }
+
+  // BFS (0x103dc4ea) from the point-side head back over upstream paths.
+  const bfsOut = { node: null };                            // [ebp+0x1c]
+  const mask = reachMask(pawn, services);
+  wr(services, listT.items[0], 'visitedWeight', listT.keys[0]);
+  if (!navSearchBFS(pawn, listT.items[0], bfsOut, bSinglePath, mask, services)) return fail();
+  found.node = bfsOut.node;
+  services.farMoveActor(pawn, origLoc, 1, 1);               // 0x103dc550 restore
+  if (!state.anchor && !bSinglePath)                        // [ebp-0x14]==0
+    navScoutE(listP, pawn, found, services);                // 0x103018cf
+  return 1;
 }
 
 /**

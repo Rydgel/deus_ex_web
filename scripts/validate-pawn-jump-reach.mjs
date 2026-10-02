@@ -20,6 +20,7 @@ import {existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync} from 'no
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {x87load, x87add, x87mul, x87store} from '../src/runtime/script-vm.mjs';
+import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const python = process.env.NATIVE_PROBE_PYTHON || path.join(root, '.cache/native-probe-env/bin/python');
@@ -38,7 +39,8 @@ const wall = (time, normal) => hit(time, normal);
 // Instruction ranges of the three translated bodies (SEH unwind funclets
 // excluded; SuggestJumpVelocity's loop body sits after its catch funclet).
 const COVERAGE = {findBestJump: ['103c2f50', '103c31a4'], jumpLanding: ['103c2530', '103c29b7'],
-  suggestJumpVelocity: ['103c2c80', '103c2e5d'], suggestJumpVelocityLoop: ['103c2e8d', '103c2eb7']};
+  suggestJumpVelocity: ['103c2c80', '103c2e5d'], suggestJumpVelocityLoop: ['103c2e8d', '103c2eb7'],
+  eAdjustJump: ['103bc110', '103bc17d']};
 const G = [0, 0, -950];
 const ZONES = {dry: {gravity: G, zoneVelocity: [0, 0, 0], fluidFriction: 1.2},
   wet: {water: true, gravity: G, zoneVelocity: [0, 0, 0], fluidFriction: 2.4},
@@ -66,7 +68,11 @@ function scene(name, body, expected, options = {}) {
   pawn.regionZone = rest.pawn?.regionZone ?? zoneAt(f32(pawn.location[2]));
   pawn.footZone = rest.pawn?.footZone ?? pawn.regionZone;
   const vec = v => v.map(f => ({f}));
-  const directArgs = body === 'suggestJumpVelocity' ? [...vec(dest), {ref: 'vecbuf'}]
+  // execEAdjustJump (native 523) runs through the exec frame: no directArgs;
+  // Destination and Velocity are the pawn's own fields.
+  if (body === 'eAdjustJump') { pawn.destination = dest; pawn.velocity = vel; }
+  const directArgs = body === 'eAdjustJump' ? undefined
+    : body === 'suggestJumpVelocity' ? [...vec(dest), {ref: 'vecbuf'}]
     : body === 'jumpLanding' ? [...vec(vel), {ref: 'vecbuf'}, {i: moveActorFlag}]
     : body === 'findBestJump' ? [...vec(dest), ...vec(vel), {ref: 'vecbuf'}, {i: moveActorFlag}]
     : body === 'dispatch' ? [...vec(point), {f: radius}, target]
@@ -263,6 +269,12 @@ for (let i = 0; i < 60; i++) {
       collideFlag: rnd() < 0.9 ? 1 : 0},
     moveActor: [...hits(Math.floor(rnd() * 30)), pickOf([hit(), floor(1), floor(0)])]}));
 }
+// execEAdjustJump (523): every SuggestJumpVelocity case again through the
+// exec, with the destination and velocity in the pawn's own fields.
+const adjust = [...handwritten, ...generated].filter(s => s.body === 'suggestJumpVelocity').map(s =>
+  scene(`eaj-${s.name}`, 'eAdjustJump', undefined, {dest: s.test.dest, vel: s.test.vel, pawn: {...s.pawn},
+    zones: s.zones, plane: s.test.plane, dry: s.test.dry, wet: s.test.wet}));
+generated.push(...adjust);
 const scenes = [...handwritten, ...generated];
 if (process.env.JUMP_CASE) {                     // print one scene definition and exit
   console.log(JSON.stringify(scenes.find(s => s.name === process.env.JUMP_CASE)));
@@ -283,7 +295,7 @@ for (let i = 0; i < scenes.length; i++) {
 const covered = new Set(results.flatMap(r => r.result.coverage));
 const uncovered = Object.fromEntries(Object.entries(listing.result.instructions)
   .map(([name, list]) => [name, list.filter(a => !covered.has(a))]));
-const VOID = new Set(['suggestJumpVelocity', 'jumpLanding']);
+const VOID = new Set(['suggestJumpVelocity', 'jumpLanding', 'eAdjustJump']);
 const verdicts = {};
 for (const s of scenes) {
   const r = results[scenes.indexOf(s)].result;
@@ -325,12 +337,13 @@ function originalSnapshot(r, body) {
   buckets.set('logf', r.logf.map(l => ({op: 'logf', format: l.format, args: l.args})));
   return {ret: VOID.has(body) ? null : r.returned, location: r.pawn.locationBits, velocity: r.pawn.velocityBits,
     region: name(r.pawn.regionZone),
-    out: ['suggestJumpVelocity', 'jumpLanding', 'findBestJump'].includes(body) ? r.vecbuf.slice(0, 3) : null,
+    out: body === 'eAdjustJump' ? r.resultVec
+      : ['suggestJumpVelocity', 'jumpLanding', 'findBestJump'].includes(body) ? r.vecbuf.slice(0, 3) : null,
     commands: r.callsites.map(([op]) => buckets.get(op).shift())};
 }
 
 const X_SMALL = 1e-4;
-function translatedSnapshot(s, mod) {
+function translatedSnapshot(s, mod, viaRuntime = false) {
   const t = s.test;
   const zones = Object.fromEntries(Object.entries(s.zones).map(([name, z]) =>
     [name, {name, water: !!z.water, pain: !!z.pain, damageType: z.damageType | 0, gravityZ: f32(z.gravityZ),
@@ -342,6 +355,7 @@ function translatedSnapshot(s, mod) {
     CollisionHeight: f32(a.collisionHeight || 0), MaxStepHeight: f32(a.maxStepHeight || 0),
     GroundSpeed: f32(a.groundSpeed || 0), JumpZ: f32(a.jumpZ || 0), BaseEyeHeight: f32(a.baseEyeHeight || 0),
     MeleeRange: f32(a.meleeRange || 0), Physics: a.physics | 0, Flags318: a.flags318 | 0,
+    Destination: (a.destination || [0, 0, 0]).map(f32),
     Flags1dc: a.flags1dc | 0, CollideFlag: a.collideFlag | 0,
     ReducedDamageType: a.field444 | 0, WarpDestZone: zones[a.markedWarpZone] || 0,
     region: zones[a.regionZone] || zones.dry, foot: zones[a.footZone] || zones.dry});
@@ -393,6 +407,12 @@ function translatedSnapshot(s, mod) {
   const f = v => v.map(f32), out = [0, 0, 0];
   let ret = null;
   if (s.body === 'suggestJumpVelocity') { out.splice(0, 3, ...f(t.vel)); mod.suggestJumpVelocity(pawn, f(t.dest), out, services); }
+  else if (s.body === 'eAdjustJump') out.splice(0, 3, ...(viaRuntime
+    // Play's binding: ScriptRuntime.invokeNative's 523 branch.
+    ? ScriptRuntime.prototype.invokeNative.call({boundaryNatives: new Set(), collisionViewActors: new WeakSet(),
+        pawnNavServices: () => services},
+        {index: 523, receiver: pawn, argumentCount: 0})
+    : mod.execEAdjustJump(pawn, services)));
   else if (s.body === 'jumpLanding') mod.jumpLanding(pawn, f(t.vel), out, t.moveActorFlag, services);
   else if (s.body === 'findBestJump') ret = mod.findBestJump(pawn, f(t.dest), f(t.vel), out, t.moveActorFlag, services);
   else if (s.body === 'dispatch') ret = mod.physicsReach(pawn, f(t.point), f32(t.radius), target, services);
@@ -400,15 +420,20 @@ function translatedSnapshot(s, mod) {
   else if (s.body === 'actorWorker') ret = mod.actorWorker(pawn, target, t.argC, services);
   else ret = mod.walkReach(pawn, f(t.point), f32(t.radius), t.reachFlags, target, services);
   return {ret, location: pawn.location.map(bits), velocity: pawn.velocity.map(bits), region: pawn.region.name,
-    out: ['suggestJumpVelocity', 'jumpLanding', 'findBestJump'].includes(s.body) ? out.map(bits) : null, commands};
+    out: ['suggestJumpVelocity', 'jumpLanding', 'findBestJump', 'eAdjustJump'].includes(s.body) ? out.map(bits) : null, commands};
 }
 
 const modulePath = path.join(root, 'src/runtime/script-pawn-nav.mjs');
 const mod = await import(pathToFileURL(modulePath));
 const originals = results.map((r, i) => originalSnapshot(r.result, scenes[i].body));
 let commandCount = 0;
+let runtimeCases = 0;
 for (let i = 0; i < scenes.length; i++) {
   assert.deepEqual(translatedSnapshot(scenes[i], mod), originals[i], scenes[i].name);
+  if (scenes[i].body === 'eAdjustJump') {
+    assert.deepEqual(translatedSnapshot(scenes[i], mod, true), originals[i], `${scenes[i].name} via ScriptRuntime 523`);
+    runtimeCases++;
+  }
   commandCount += originals[i].commands.length;
 }
 const missing = Object.values(uncovered).flat().length;
@@ -416,6 +441,7 @@ console.log(`PASS jump reach: ${scenes.length}/${scenes.length} original-DLL cas
   `${generated.length} generated; ${commandCount} ordered boundary calls with argument bits incl. ${logs} GLog lines, ` +
   `verdict, Location/Velocity/Region, out vector), 0 mismatches`);
 console.log(`verdicts ${JSON.stringify(verdicts)}`);
+console.log(`EAdjustJump (523): ${runtimeCases} exec cases also through ScriptRuntime.invokeNative`);
 console.log(`instruction coverage: ${Object.entries(listing.result.instructions).map(([n, l]) =>
   `${n} ${l.length - uncovered[n].length}/${l.length}`).join(', ')}${missing ? ` uncovered ${JSON.stringify(uncovered)}` : ''}`);
 assert.equal(missing, 0, 'every instruction of the three bodies executes in some original case');

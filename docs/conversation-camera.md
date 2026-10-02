@@ -199,6 +199,33 @@ x87 arithmetic); the survivor (`>=` in the clamp) is equivalent.
 `validate-island-conversation` checks on every clipped frame that the render
 rect is exactly the band between the two raw-background bars.
 
+## The intro (00_Intro, forced play)
+
+`MissionIntro.FirstFrame` starts `Intro` on BobPage through
+`StartConversationByName('Intro', bob, False, True)`: bForcePlay. Its
+`ConWindowActive.CalculateWindowSizes` does not use the height percentages:
+`cinHeight = root.height * 0.5625 * root.width / root.height` (16:9 of the
+width), both bars `int(0.5 * (root.height - cinHeight))`, the render viewport
+the band between them, and `ResetRenderViewport` when that is negative. The
+speech text is the lower bar's (`ConPlay` shows it when `player.bSubtitles`
+or there is no audio; User.ini has `bSubtitles=True`). Measured in Play at the
+first speech (root units, GUI scale): 1440×824, the canvas left by the page
+bars, scale 1, bars 7: the text is clipped; 1440×960 scale 2, bars 37 (74
+px); 1024×768 bars 96; 1512×856 bars 2; 1920×1080 scale 2, bars 0 (no
+subtitle area at 16:9 or wider, by the original's own formula). The viewer's
+"Hide UI" button (remembered per browser) removes the page bars so the root
+takes the window's aspect.
+
+With render feedback (the camera's shots stamp LastRenderTime) the intro's
+NSF and MJ12 pawns fight. That reached the findPathToward falling-target
+delegation (the findPathTo worker, [pawn navigation](script-pawn-nav.md))
+and native 523 `EAdjustJump`; both are translated and verified against
+Engine.dll. Headless with render feedback stamped from `game.view()`, and in
+Chromium, the conversation then plays all 21 speeches without a pause until
+`MissionIntro.Timer` sees `Intro_Played` and `PostIntro` runs
+`Level.Game.SendPlayer(Self, "dxonly")` → `ClientTravel` (native 0): map
+travel, a Stage 6 boundary.
+
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight

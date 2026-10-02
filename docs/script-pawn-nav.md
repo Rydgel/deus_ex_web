@@ -480,9 +480,14 @@ Unresolved or unmodeled branches:
   `validate-native-steps` and here only through the jump corpus.
 - The oracle's `+0xd0` ZoneNumber byte and FootRegion are static per scene;
   Region.Zone follows the water plane. Non-finite inputs are not covered.
-- Native 523 `execEAdjustJump` and the findPathToward falling-target branch
-  (jumpLanding on a non-receiver target, then the unported findPathTo worker)
-  are not wired.
+- Native 523 `execEAdjustJump` (`0x103bc110`) is wired (2026-10-02):
+  `v = Velocity`, `SuggestJumpVelocity(Destination +0x354, &v)`, `P_FINISH`,
+  `*Result = v`; Velocity itself is untouched (ScriptedPawn
+  `FallingState.AdjustJump` assigns the result). Every SuggestJumpVelocity
+  case runs again through the original exec with Destination/Velocity in the
+  pawn (74 `eaj-*` cases, the exec's 35/35 instructions), and through
+  `ScriptRuntime.invokeNative`. The findPathToward falling-target branch is
+  wired too; see the findPathTo worker.
 
 ### Verification (2026-09-29)
 
@@ -733,8 +738,12 @@ Worker `0x103db3f0` (`thiscall pawn; target, bSinglePath, &found, bClearPaths`):
 
 1. Gates: `*found=0`; null target, absent `LevelInfo+0x548` nav list, or
    `ULevel+0x90 == 0` (empty ReachSpec table) → 0.  A falling target
-   (`Physics==2`) lands the target through jumpLanding → the `findPathTo` worker
-   `0x103dc1d0` — an explicit unported service boundary.
+   (`Physics==2`, the pawn itself not `PHYS_Flying`) lands the target through
+   `target->jumpLanding(target.Velocity, Landing = target.Location, 0)` — a
+   member call on the target, so its zone, collision and test moves are the
+   target's (`services.forActor(target)` in Play) — and returns the
+   `findPathTo` worker `0x103dc1d0` toward Landing with this worker's
+   bSinglePath, found and bClearPaths (see the findPathTo worker below).
 2. `navScoutA` collects two sorted 32-slot candidate lists over the serialized
    nav chain: `listA` keyed by pawn-distSq (seeded by `MoveTarget` within
    `|dz|<CH_a+CH_p` and `distSq<CR²`, doubled for `bIsPlayer`+`InventorySpot`),
@@ -1160,12 +1169,71 @@ IM_Radius)`. See [roadmap](roadmap.md) for the research note.
   8/8 mutants, and every reachable instruction of the exec (111/111), the
   band search (405/405) and the range score (16/16) executed** in
   `scripts/validate-pawn-direction-reach.mjs`.
-- `FindRandomDest`/`FindPathTo` share the
-  ReachSpec BFS machinery (`0x103da050`/`0x103dc700`/`0x103dc1d0`)
-  recovered at the field level — see the graph layout above.
+- The findPathTo worker `0x103dc1d0` (FindPathTo 518's worker and the
+  findPathToward falling-target delegation) — **ported to JS** as
+  `pathToWorker` and live through 517's delegation, with 16 original-DLL
+  scenes (13 direct, the delegation through `pathTowardWorker` with a
+  PHYS_Falling Pawn target, a LevelInfo-subclass Actors(0)), 4 mutants, and
+  every instruction of the body but the two inlined `check()` failure paths
+  (347/363) plus the toward worker's delegation block executed. The 518
+  exec (`0x103bc800`) and `FindRandomDest` (`0x103da050`/`0x103dc700`) are
+  not wired.
+- `FindRandomDest` shares the ReachSpec BFS machinery
+  (`0x103da050`/`0x103dc700`) recovered at the field level — see the graph
+  layout above.
 - `FindStairRotation` (524) is inline fp using the `GMath` sine table
   (`0x103fxxxx` via Core's `FVector::Rotation`) — integer math, no
   transcendentals; the Unicorn oracle is authoritative for it.
+
+### findPathTo worker `0x103dc1d0` (2026-10-02)
+
+`thiscall(pawn; FVector point, int bSinglePath, ANavigationPoint** found,
+int bClearPaths)`, `ret 0x18`. It is the toward worker's first pass with a
+point for the target and nothing pre-seeded:
+
+1. `*found = 0`; `check(XLevel->Actors(0))` and `check(Actors(0)->IsA(
+   ALevelInfo))` (inlined Super-chain walk, `appFailAssert` on failure);
+   no `LevelInfo+0x548` nav list or an empty ReachSpec table → 0.
+2. Save `Location`; `scoutA(listP, pawn, point, listT, bClearPaths, &anchor
+   [ebp-0x14], &seeded [ebp-0x18])` with both flags 0; an empty pawn-side
+   or point-side list → 0 (no restore).
+3. Without the MoveTarget anchor, `scoutB(listP)`; its failure restores
+   (`FarMoveActor(Location, 1, 1)`) and returns 0, and it may set the anchor.
+4. With the anchor, `scoutC(listP, point)` → `*found = listP.items[0]`,
+   restore, 1; otherwise `scoutD(listP)` marks the head's outbound ends.
+5. Point-anchor scan over listT: `FastLineCheck(item.Location, point)`,
+   `FarMoveActor(pawn, item.Location, 1, 0)`, `pointReachable` worker with
+   arg 1; the first success makes it `listT.items[0]` with
+   `keys[0] = ftol(sqrt(double(keys[i])))` (msvcrt `sqrt`, as the toward
+   worker). No success → restore, 0: unlike the toward worker there is no
+   bHunting fallback and no second pass (mutant `fto-hunting-fallback`).
+6. `items[0].visitedWeight = keys[0]`; `BFS(items[0], &out, bSinglePath,
+   reachMask)`; failure → restore, 0. Success → `*found = out`, restore,
+   and `scoutE(listP, found)` when neither the anchor nor bSinglePath is set;
+   return 1.
+
+The FastLineCheck operand order is the toward worker's (same push order at
+`0x103dc3e6` and `0x103db749`).
+
+Oracle fixes found on the way (`native-pawn-nav-probe.py`): the PointRegion,
+FastLineCheck and SpecialCost record stubs were written in place over their
+incremental-link thunks and ran over the following thunks (PointRegion's
+reached PickWallAdjust `0x10303968` and this worker's `0x10303972`); they now
+live in the probe heap behind a 5-byte `jmp`. The Core `UObject::IsA` stub had
+wrong relative jumps (only an immediate class match worked; a Super-chain step
+or a mismatch landed mid-instruction) and also overwrote the next six Core
+thunks; it is re-encoded and deployed the same way. `validate-pawn-nav.mjs`
+compared the probe's `flags318` through a field the probe never emitted (so
+the original side was always 0); it now reads `pawn.flags318`. All five
+validators that use the probe pass unchanged after the fixes.
+
+Focused checkpoint (2026-10-02): `validate-pawn-nav.mjs` 156/156 scenes,
+39/39 mutants, findPathTo coverage 347/363 (16 `check()` failure-path
+instructions excluded); `validate-pawn-jump-reach.mjs` 437/437 cases (74
+EAdjustJump execs, also through the runtime binding), 23/23 mutants, full
+coverage including `eAdjustJump` 35/35; direction, swimming and flying
+reach unchanged; `npm test` 595/595; bench-sim digests unchanged (Training
+`7de779f65538b9f3`, Island `d8c40ff82e415ca6`).
 
 Focused checkpoint (2026-09-29, supersedes the earlier notes):
 `validate-pawn-nav.mjs` passes 140/140 cases and 35/35 mutants, including

@@ -279,6 +279,30 @@ function fx(name, opts = {}) {
   return s;
 }
 
+/* A pathToWorker scene (0x103dc1d0, FindPathTo's worker): thiscall(pawn;
+ * FVector point, bSinglePath, ANavigationPoint** foundbuf, bClearPaths),
+ * ret 0x18.  The graph/boundary options are fp()'s; there is no target
+ * actor.  Every instruction of the body is recorded for the coverage check. */
+function fpto(name, { point = [420, 0, 0], ...opts } = {}) {
+  const s = fp(name, { ...opts, target: null });
+  s.body = 'pathToWorker';
+  s.directArgs = [{ f: point[0] }, { f: point[1] }, { f: point[2] }, { i: s.js.bSingle },
+                  { ref: 'foundbuf' }, { i: s.js.bClear }];
+  s.js.point = point;
+  s.coverage = [PATH_TO_COVERAGE];
+  return s;
+}
+// The worker's body up to its SEH funclet (0x103dc5b7). The inlined
+// check(XLevel->Actors(0)) and check(Actors(0)->IsA(ALevelInfo)) failure
+// paths (an IsA chain ending in null, then appFailAssert) are the only
+// instructions left out of the coverage requirement.
+const PATH_TO_COVERAGE = ['103dc1d0', '103dc5b7'];
+const PATH_TO_ASSERTS = new Set(['103dc20d', '103dc212', '103dc217', '103dc21c', '103dc222',
+  '103dc23d', '103dc242', '103dc244', '103dc246', '103dc247', '103dc24a',
+  '103dc24c', '103dc251', '103dc256', '103dc25b', '103dc261']);
+// pathTowardWorker's falling-target delegation (0x103db4e6..0x103db567).
+const DELEGATION_COVERAGE = ['103db4e6', '103db567'];
+
 /* Alternate forward-full / down-floor hits so each checkMove step progresses
  * like a flat walk; padded at the tail to the requested depth. */
 function flatWalk(depth) {
@@ -1102,6 +1126,174 @@ const scenes = [
     reachSpecs: [{ start: 'navA', end: 'tgt', distance: 30, radius: 30, height: 50, flags: 0 }],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
   }),
+
+  // -- findPathTo worker 0x103dc1d0 (FindPathTo 518 / falling-target path) ---
+  // Entry gates: no LevelInfo nav list, empty ReachSpec table.
+  fpto('fto-no-navlist', {
+    navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  fpto('fto-no-specs', {
+    navList: 'navA', navPoints: { navA: { location: [10, 0, 0] } }, reachSpecs: [],
+  }),
+  // No node within 800 of the pawn: the pawn-side list is empty -> 0, no restore.
+  fpto('fto-no-pawn-side', {
+    point: [2400, 0, 0], navList: 'navA', navPoints: { navA: { location: [2000, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // No node within 800 of the point: the point-side list is empty -> 0.
+  fpto('fto-no-point-side', {
+    point: [5000, 0, 0], navList: 'navA', navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // scoutB rejects every pawn-side node (eye FastLineCheck fails) -> restore, 0.
+  fpto('fto-scoutb-fail', {
+    point: [70, 0, 0], navList: 'navA', navPoints: { navA: { location: [10, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+    fastLine: [0],
+  }),
+  // The pawn stands at navA (scoutB sets the anchor); scoutC's hop from navA
+  // reaches the point -> found = the pawn-side head navA, not the point-side
+  // head navB.
+  fpto('fto-hop', {
+    point: [70, 0, 0], navList: 'navA', moveActor: flatWalk(40),
+    navPoints: { navA: { location: [10, 0, 0], nextNav: 'navB' }, navB: { location: [60, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // The MoveTarget anchor seeds the pawn-side head: no scoutB.
+  fpto('fto-anchor-hop', {
+    point: [70, 0, 0], navList: 'navA', moveActor: flatWalk(40), pawn: { moveTarget: 'navA' },
+    navPoints: { navA: { location: [10, 0, 0], nextNav: 'navB', collisionHeight: 40 },
+                 navB: { location: [60, 0, 0] } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // Anchored, no hop (scoutC's FastLineCheck fails): scoutD marks navB, the
+  // point scan reaches navC, BFS from navC relaxes navB -> found = navB.
+  fpto('fto-bfs', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // The scan's first candidate fails pointReachable's move (far step
+  // blocked) and the second (navB) passes: keys[0] = ftol(sqrt) of navB's.
+  fpto('fto-scan-second', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 1, 1],
+    farMove: [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // Every scan FastLineCheck fails: no point anchor -> restore, 0.  The pawn
+  // is bHunting: unlike the toward worker, nothing seeds the head for it.
+  fpto('fto-scan-exhaust', {
+    navList: 'navA', pawn: { flags318: 0x200000 },
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0], upstreamPaths: [1] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // The point anchor navC has no inbound spec: BFS fails -> restore, 0.
+  fpto('fto-bfs-fail', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [200, 0, 0], upstreamPaths: [0], nextNav: 'navC' },
+      navC: { location: [400, 0, 0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(60),
+  }),
+  // The pawn is 200 from navA: scoutB marks it an endpoint without the
+  // anchor, the scan reaches navB, BFS finds navA, and scoutE refines over
+  // the pawn-side candidates.
+  fpto('fto-scoute', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [200, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [400, 0, 0], upstreamPaths: [0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(80),
+  }),
+  // The same with bSinglePath=1: no scoutE.
+  fpto('fto-singlepath', {
+    bSingle: 1, navList: 'navA',
+    navPoints: {
+      navA: { location: [200, 0, 0], paths: [0], nextNav: 'navB' },
+      navB: { location: [400, 0, 0], upstreamPaths: [0] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'navB', distance: 200, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    moveActor: flatWalk(80),
+  }),
+  // Actors(0) is a LevelInfo subclass (DeusExLevelInfo in the game's maps):
+  // the inlined IsA walks one Super link before matching.
+  (() => {
+    const s = fpto('fto-levelinfo-subclass', {
+      point: [70, 0, 0], navList: 'navA', moveActor: flatWalk(40),
+      actors: { dxli: { cls: 'levelinfo*' } },
+      navPoints: { navA: { location: [10, 0, 0], nextNav: 'navB' }, navB: { location: [60, 0, 0] } },
+      reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+    });
+    s.levelInfo = 'dxli';
+    return s;
+  })(),
+  // bClearPaths=0: scoutA leaves the fabricated search state.
+  fpto('fto-noclear', {
+    bClear: 0, point: [70, 0, 0], navList: 'navA', moveActor: flatWalk(40),
+    navPoints: { navA: { location: [10, 0, 0], nextNav: 'navB', visitedWeight: 77, cost: 33 },
+                 navB: { location: [60, 0, 0], visitedWeight: 55, cost: 11 } },
+    reachSpecs: [{ start: 'navA', end: 'navA', distance: 1, radius: 30, height: 50 }],
+  }),
+  // pathTowardWorker with a PHYS_Falling Pawn target: target->jumpLanding
+  // (one 0.1 s tick onto a floor, then the restoring FarMoveActor of the
+  // target) and the findPathTo worker toward the landing on the fto-bfs graph.
+  (() => {
+    const s = fp('fpt-falling-target', {
+      navList: 'navA',
+      zones: { dry: { gravityZ: -950, gravity: [0, 0, -950], zoneVelocity: [0, 0, 0], fluidFriction: 1.2 } },
+      actors: { tgt: { cls: 'pawn', physics: 2, location: [400, 0, 100], velocity: [30, 0, -200],
+        collisionRadius: 20, collisionHeight: 40, collideFlag: 1, regionZone: 'dry', footZone: 'dry' } },
+      navPoints: {
+        navA: { location: [10, 0, 0], paths: [0], nextNav: 'navB' },
+        navB: { location: [200, 0, 0], paths: [1], upstreamPaths: [0], nextNav: 'navC' },
+        navC: { location: [400, 0, 0], upstreamPaths: [1] },
+      },
+      reachSpecs: [{ start: 'navA', end: 'navB', distance: 190, radius: 30, height: 50, flags: 0 },
+                   { start: 'navB', end: 'navC', distance: 200, radius: 30, height: 50, flags: 0 }],
+      fastLine: [1, 0, 1],
+      singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+      moveActor: [H(0.5, 1), ...flatWalk(60)],
+    });
+    s.coverage = [PATH_TO_COVERAGE, DELEGATION_COVERAGE];
+    return s;
+  })(),
 ];
 
 // ---------------------------------------------------------------------------
@@ -1231,7 +1423,11 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
   const zones = j.zones || {};
   const zoneObj = n => {
     const s = zones[n] || {};
-    return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ };
+    // jumpLanding (the falling-target delegation) reads the full ZoneGravity,
+    // ZoneVelocity and ZoneFluidFriction; the probe's zone is zeroed elsewhere.
+    return { water: !!s.water, pain: !!s.pain, damageType: s.damageType | 0, gravityZ: s.gravityZ,
+      gravity: (s.gravity ?? [0, 0, s.gravityZ ?? -950]).map(f32),
+      velocity: (s.zoneVelocity ?? [0, 0, 0]).map(f32), fluidFriction: f32(s.fluidFriction ?? 0) };
   };
   const mkActor = spec => {
     // A trailing '*' fabricates a subclass of the named class (probe side);
@@ -1349,7 +1545,8 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
       return r;
     },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
-    findPathToWorker: () => { throw new Error('findPathToWorker is outside this corpus'); },
+    // The twin's services already act on any actor (target->jumpLanding).
+    forActor: () => services,
     pointRegion: pt => {
       const arr = prSeq || [{ zone: 'dry' }];
       const r = arr[Math.min(pqi++, arr.length - 1)];
@@ -1371,6 +1568,8 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     ret = mod.actorReachable(pawn, target, services);
   else if (scene.body === 'pathTowardWorker')
     ret = mod.pathTowardWorker(pawn, target, j.bSingle | 0, foundCell, j.bClear | 0, services);
+  else if (scene.body === 'pathToWorker')
+    ret = mod.pathToWorker(pawn, j.point.map(f32), j.bSingle | 0, foundCell, j.bClear | 0, services);
   else if (scene.body === 'findPathToward') {
     if (throughRuntime) {
       // Decode the SAME argument tokens the native oracle evaluates. In
@@ -1511,7 +1710,7 @@ function runJsPick(scene, mod = module) {
 const PTR_RET_BODIES = new Set(['aiDirection']);
 // Bodies whose result slot (or &found cell) carries an actor pointer — the
 // probe reports the raw address; resolve it through the scene's address map.
-const FOUND_BODIES = new Set(['pathTowardWorker', 'findPathToward']);
+const FOUND_BODIES = new Set(['pathTowardWorker', 'findPathToward', 'pathToWorker']);
 function normalizeProbe(r, isExec, body) {
   const nameOf = new Map(Object.entries(r.addresses || {}).map(([n, a]) => [a, n]));
   // Probe address fields are hex strings; the addresses map keys are ints.
@@ -1538,7 +1737,7 @@ function normalizeProbe(r, isExec, body) {
       : undefined,
     specialGoal: navBodies ? addr(r.pawnSpecial.specialGoal) : undefined,
     specialPause: navBodies ? r.pawnSpecial.specialPause : undefined,
-    flags318: navBodies ? r.pawn.flags : undefined,
+    flags318: navBodies ? r.pawn.flags318 : undefined,
     scCalls: navBodies ? r.counts.specialCost : undefined,
     moves: r.counts.moveActor,
     farMoves: r.counts.farMoveActor,
@@ -1591,7 +1790,7 @@ function compare(name, o, j) {
 const EXEC_BODIES = new Set(['actorReachable', 'aiPickExec', 'findPathToward']);
 const PICK_BODIES = new Set(['aiDirection', 'aiPickSearch', 'aiPickWorker', 'aiPickExec']);
 const GRAPH_BODIES = new Set(['reachMask', 'directReach', 'actorWorker',
-                              'pathTowardWorker', 'findPathToward']);
+                              'pathTowardWorker', 'findPathToward', 'pathToWorker']);
 const runFor = scene =>
   (PICK_BODIES.has(scene.body) ? runJsPick
    : scene.body === 'walkReach' || scene.body === 'dispatch' || scene.body === 'pointWorker' ? runJsWalk
@@ -1624,6 +1823,17 @@ for (let i = 0; i < scenes.length; i++) {
     } catch (error) { diffs.push(`${scene.name} VM/runtime: ${error.stack ?? error}`); }
   }
   if (diffs.length) { failures++; diffs.forEach(d => console.log(`FAIL ${d}`)); }
+}
+// Every instruction of the findPathTo worker (but its two appFailAssert
+// calls) and of the toward worker's falling-target delegation executed.
+{
+  const [listing] = runProbe([{ disasm: { pathTo: PATH_TO_COVERAGE, delegation: DELEGATION_COVERAGE } }]);
+  const covered = new Set(probeResults.flatMap(r => r?.result?.coverage ?? []));
+  const missed = Object.entries(listing.result.instructions).flatMap(([name, list]) =>
+    list.filter(a => !covered.has(a) && !PATH_TO_ASSERTS.has(a)).map(a => `${name}:${a}`));
+  const total = Object.values(listing.result.instructions).reduce((n, list) => n + list.length, 0);
+  if (missed.length) { failures++; console.log(`FAIL findPathTo coverage: ${missed.length} instructions not executed: ${missed.join(' ')}`); }
+  else console.log(`PASS findPathTo coverage: ${total - PATH_TO_ASSERTS.size}/${total} instructions executed (${PATH_TO_ASSERTS.size} appFailAssert excluded)`);
 }
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-nav: ${passed}/${scenes.length} scenes bit-exact`);
@@ -1849,6 +2059,31 @@ const MUTATIONS = [
     replacement: 'const yawOff = aiDraw(frand, dp, 32767.0, -32768.0);            // 0x1036d0d8',
     expect: ['ad-inner', 'ad-clamps'] },
 ];
+
+MUTATIONS.push(
+  // -- findPathTo worker (0x103dc1d0) mutants --------------------------------
+  // The toward worker's bHunting fallback grafted on: a hunting pawn with no
+  // point anchor would search from the unreached head.
+  { name: 'fto-hunting-fallback',
+    pattern: "    if (!state.seeded) return fail();                       // 0x103dc4e4",
+    replacement: "    if (!state.seeded && (rd(services, pawn, 'Flags318') & 0x200000)) state.seeded = 1;\n    if (!state.seeded) return fail();",
+    expect: ['fto-scan-exhaust'] },
+  // scoutE gated on the anchor alone: bSinglePath no longer skips it.
+  { name: 'fto-scoute-gate',
+    pattern: "  if (!state.anchor && !bSinglePath)                        // [ebp-0x14]==0\n    navScoutE(listP, pawn, found, services);                // 0x103018cf\n  return 1;\n}",
+    replacement: "  if (!state.anchor)\n    navScoutE(listP, pawn, found, services);\n  return 1;\n}",
+    expect: ['fto-singlepath'] },
+  // The hop result is the pawn-side head, not the point-side head.
+  { name: 'fto-hop-found',
+    pattern: 'found.node = listP.items[0];                          // 0x103dc383',
+    replacement: 'found.node = listT.items[0];',
+    expect: ['fto-hop', 'fto-anchor-hop'] },
+  // The point anchor's BFS seed is the distance, not the squared distance.
+  { name: 'fto-scan-key',
+    pattern: 'listT.keys[0] = x87ftol(appSqrt(ld(listT.keys[i])));  // 0x103dc4ac fild, sqrt, ftol',
+    replacement: 'listT.keys[0] = listT.keys[i];',
+    expect: ['fto-bfs', 'fto-scan-second'] },
+);
 
 const src = readFileSync(modulePath, 'utf8');
 const runtimeUrl = pathToFileURL(path.join(root, 'src/runtime/')).href;

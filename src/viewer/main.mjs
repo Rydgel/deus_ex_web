@@ -422,6 +422,16 @@ $('reset').onclick = resetCamera;
 $('mode').onchange = event => setMode(event.target.value);
 function togglePanel(open) { $('panel').hidden = !open; $('diagnostics').setAttribute('aria-expanded', String(open)); }
 $('diagnostics').onclick = () => togglePanel($('panel').hidden);
+// Page bars off: the view fills the window, so the HUD root (and with it a
+// forced-play conversation's letterbox, which holds the intro's subtitles)
+// gets the window's own aspect. A per-browser convenience only.
+function setUiHidden(hidden) {
+  $('app').classList.toggle('ui-hidden', hidden); $('show-ui').hidden = !hidden;
+  try { localStorage.setItem('deusex.uiHidden', hidden ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+$('hide-ui').onclick = () => setUiHidden(true);
+$('show-ui').onclick = () => setUiHidden(false);
+try { if (localStorage.getItem('deusex.uiHidden') === '1') setUiHidden(true); } catch { /* storage unavailable */ }
 $('close-panel').onclick = () => togglePanel(false);
 $('wireframe').onchange = event => { if (world) for (const material of world.materials.values()) material.wireframe = event.target.checked; };
 $('actor-markers').onchange = event => { if (world) world.markers.visible = event.target.checked; };

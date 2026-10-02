@@ -67,7 +67,7 @@ import {
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
 import { moveSmooth } from './move-smooth.mjs';
-import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
+import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execEAdjustJump, actorReachable, pointWorker, aiDirection } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
@@ -3616,6 +3616,11 @@ export class ScriptRuntime {
       return execFindPathToward(call.receiver,target,bSingle,bClear,
         this.pawnNavServices(call.receiver));
     }
+    if(call.index===523){
+      // execEAdjustJump 0x103bc110: no parameters; SuggestJumpVelocity from
+      // the pawn's Destination over a copy of its Velocity.
+      return execEAdjustJump(call.receiver,this.pawnNavServices(call.receiver));
+    }
     if(call.index===650){
       // execInitEventManager 0x103023b0 -> 0x10384a90: the lazy +0x550
       // UEventManager creator LevelInfo.PreBeginPlay invokes. The Map is the
@@ -4016,7 +4021,7 @@ export class ScriptRuntime {
       }
     };
     const ref=(actor,name)=>this.namedReference(actor,name);
-    return {
+    const services={
       read:(actor,name)=>name==='CollideFlag'
         ?(this.regionValue(actor).zoneNumber??0)&0xff      // pawn+0xd0 byte
         :name in flagWords?flagRead(actor,name)
@@ -4097,7 +4102,11 @@ export class ScriptRuntime {
         if(actor!==receiver)throw new Error('AIPickRandomDestination FarMoveActor on a non-receiver actor is unlinked');
         return view.farMove(dest,test,noCheck);
       },
+      // A native member call on another actor (FindPathToward's falling
+      // target runs target->jumpLanding) moves that actor: its own services.
+      forActor:actor=>actor===receiver?services:this.pawnNavServices(actor),
     };
+    return services;
   }
   createIterator(call) {
     if(call.index===309||call.index===1000){

@@ -94,6 +94,7 @@ BODIES = {
     'findBestJump': 0x103c2f50,
     'jumpLanding': 0x103c2530,         # APawn::jumpLanding (thunk 0x103016ae)
     'suggestJumpVelocity': 0x103c2c80, # APawn::SuggestJumpVelocity (thunk 0x103035a8)
+    'eAdjustJump': 0x103bc110,         # execEAdjustJump, native 523 (vector result)
     'flyMove': 0x103c3900,
     'waterMove': 0x103c3ca0,
     'FindRandomDest': 0x103bcb90,      # native 525 exec
@@ -387,15 +388,15 @@ def isa_stub():
     """UObject::IsA(UClass*): ecx=this,[esp+4]=class.  Walk [this+0x24]
     super chain via +0x28; eax=1 on match else 0; ret 4."""
     return hx(
-        '8b4124',
-        '85c0',
-        '7408',
-        '3b442404',
-        '7408',
-        '8b4028',
-        'ebf4',
-        '33c0', 'c20400',
-        'b801000000', 'c20400')
+        '8b4124',                                   # 00 eax = this->Class
+        '85c0',                                     # 03 loop: null ends the chain
+        '740b',                                     # 05 je 12 -> 0
+        '3b442404',                                 # 07 cmp eax, class arg
+        '740a',                                     # 0b je 17 -> 1
+        '8b4028',                                   # 0d eax = eax->SuperField
+        'ebf1',                                     # 10 jmp 03
+        '33c0', 'c20400',                           # 12 return 0
+        'b801000000', 'c20400')                     # 17 return 1
 
 
 def specialcost_stub(mail, recs):
@@ -620,7 +621,12 @@ class NavProbe:
                 ('pointRegion', POINTREGION_THUNK, pointregion_stub(MAIL_PR, self.rec_pr)),
                 ('fastLineCheck', FASTLINE_THUNK, fastline_stub(MAIL_FL, self.rec_fl)),
                 ('specialCost', SPECIALCOST_THUNK, specialcost_stub(MAIL_SC, self.rec_sc))]:
-            cpu.mem_write(thunk, builder)
+            # The stub lives in the probe heap behind a 5-byte jmp at the
+            # thunk VA: written in place, its body would overwrite the next
+            # incremental-link thunks (PointRegion's ran over PickWallAdjust
+            # 0x10303968 and the findPathTo worker 0x10303972).
+            body = self.deploy(builder)
+            cpu.mem_write(thunk, b'\xe9' + struct.pack('<i', body - (thunk + 5)))
             self.stub_entry[thunk] = op
         self.callsite_log = []
         cpu.mem_write(EH_PROLOG, hx('33c0', 'c3'))
@@ -633,7 +639,10 @@ class NavProbe:
         self.logf_body = exports['core.dll'].get('?Logf@FOutputDevice@@QAAXPBGZZ')
         self.logf_log = []
         if self.isa_body:
-            cpu.mem_write(self.isa_body, isa_stub())
+            # The export is Core's incremental-link thunk: a jmp to the stub
+            # keeps the neighbouring thunks intact.
+            body = self.deploy(isa_stub())
+            cpu.mem_write(self.isa_body, b'\xe9' + struct.pack('<i', body - (self.isa_body + 5)))
         self.missed_oracles = []
         self.probing_results = []
         self.probing_index = 0
@@ -1305,6 +1314,7 @@ class NavProbe:
         return {
             'returned': self.cpu.reg_read(UC_X86_REG_EAX),
             'resultOut': '%08x' % self.read(result_out, 'I')[0],
+            'resultVec': ['%08x' % w for w in self.read(result_out, '3I')],
             'resultOutValue': self.read(result_out, 'f')[0],
             # Script bytes the exec consumed (its P_GETs plus P_FINISH).
             'codeConsumed': self.read(frame + 0xc, 'I')[0] - code,
