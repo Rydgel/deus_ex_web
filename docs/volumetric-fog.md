@@ -146,8 +146,9 @@ the exact 80-bit `Ext` model.
   pass. The haze takes the light's blue and thickens with distance.
 
 Unverified or host choices, noted:
-- **Upload scale.** The seven-bit upload scale (×2) follows the light maps;
-  D3D's upload of the fog map's format is not yet traced.
+- **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
+  Render's vertex fog uses the same 2v (see "Mesh fog"), but D3D's upload of
+  the fog map's format is not yet traced.
 - **Light linking.** Every volumetric light is linked to every fog surface.
   The original's culls drop only lights that add nothing, but the early-out
   flag then sees a different sequence.
@@ -184,6 +185,16 @@ Unverified or host choices, noted:
   except that Core's `FVector::operator|` and `SizeSquared` are called out
   of line, the early-out flag `0x10b4ea00` is shared, and it accumulates a
   float FPlane at `[ebp-0x50]`.
-- **Still to trace.** The accumulation, DrawLodMesh's call sites (Render
-  calls the Fog slot twice) and D3D's use of the vertex fog under
-  PF_RenderFog.
+- **Accumulation** (`0x10b02e7f–0x10b02f84`). For each light the clamped
+  chord value v is doubled and stored, and a zero skips the light. Then:
+  - `a = min(1, st(2v·fog))`, where fog = VolumeFog/255 (+0x88);
+  - each channel is `min(1, st(2v·colour_c + (1 − a)·old_c))`;
+  - alpha is `min(1, old_A + a)`.
+
+  The result is the vertex's FPlane fog.
+- **Upload scale.** A fog-map byte is `(255v)·c` capped at 127, so after a
+  ×2 upload it reads `2v·c`, the vertex path's value. Within Render.dll this
+  supports the ×2 seven-bit upload scale used for the fog pass; D3D's RGBA7
+  filler itself is still untraced.
+- **Still to trace.** DrawLodMesh's call sites (Render calls the Fog slot
+  twice) and D3D's use of the vertex fog under PF_RenderFog.
