@@ -116,6 +116,45 @@ GC, brought forward by speech decode allocation. Unverified.
    `getParameter`), the moving-light signature, draw-call count, and
    draw-list visibility (which bounds fog and procedural-texture work).
 
+### Fixed: Fire.dll textures and the fog loop in the Rust core (October 2)
+
+- Water/wet/fire ticks and the P8→RGBA upload run in `fire.rs`
+  (`FIRE_KERNEL=js` / `?fireKernel=js` selects the JavaScript reference).
+  `validate-fire-texture-rust` compares every byte of state, pixels, upload
+  and the shared random stream after each of 81,000 texture ticks;
+  `validate-native-fire-texture` still matches Fire.dll (docs/fire-texture.md,
+  "Rust kernel").
+- The fog loop keeps the exact x87 answer through a certain-rounding f64 fast
+  path with an Ext fallback (`FOG_EXACT=1` forces Ext).
+  `validate-volumetric-fog-fast`: 0 differences over 45,050,740 texel-lights
+  captured from Play on four fog maps, 0.0017% fallbacks
+  (docs/volumetric-fog.md, "Fast path").
+
+Interleaved A/B against `c30b122`, 3 pairs, start view, ms per frame,
+median [min–max]:
+
+| Map | Phase | before | after |
+|---|---|---:|---:|
+| 02_NYC_Bar | total | 21.43 [21.26–21.70] | 8.32 [8.19–8.32] |
+| | mirrors (texture/fog/light-map phase) | 15.09 | 2.40 |
+| 10_Paris_Chateau | total | 9.82 [9.76–9.84] | 7.90 [7.70–8.02] |
+| | mirrors | 2.91 | 0.40 |
+
+Island walk in the browser after both kernels: no page error, Play running,
+texture/light-map phase 0.37 ms (2.8 before the night's fixes).
+
+**GC trace (Island, ~54 s walk, `trace-play.mjs --gc`).** One major GC: heap
+2.50 → 0.81 GB, "finalize incremental marking via stack guard" (34 ms on the
+main thread), preceded by a 160 ms `V8.GC_MC_INCREMENTAL_START` on the main
+thread whose children account for 2 ms; 607 ms of main-thread incremental
+marking events in all, with background marking on 8 threads. Pause cost
+follows the live heap; frequency follows allocation. Galaxy's per-frame
+ambient scan (`services.actors()` array and one `readNamed('AmbientSound')`
+per actor) is deferred: a Rust version needs a second field table (the class
+row's field word is 31/32 full). The moving-light float path
+(`lightAttenuation`, effects 1/2/3/8/11/12/19) is a labelled reconstruction,
+so it is fidelity work, not a port target.
+
 ### Fixed: light-map uploads (October 2)
 
 Host rendering only; the texels on the GPU are unchanged
