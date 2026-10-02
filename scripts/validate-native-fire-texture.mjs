@@ -10,7 +10,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad} from '../src/runtime/fire-texture.mjs';
+import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater} from '../src/runtime/fire-texture.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -103,6 +103,13 @@ for (let k = 0; k < 40; k++) {
   c.entry = 'postLoad';
   cases.push(c);
 }
+// CalculateWater: random fields and tables over sizes, both parities, ticks.
+for (const [w, h] of [[16, 16], [32, 32], [64, 32], [32, 64], [128, 128], [256, 256]])
+  for (const parity of [0, 1]) {
+    const fieldSize = (w >> 1) * (h >> 1) * 2;
+    cases.push({name: `water ${w}x${h} p${parity}`, entry: 'water', size: [w, h], parity, ticks: 4,
+      field: hex(bytes(fieldSize)), pixels: hex(bytes(w * h)), renderTable: hex(bytes(1028)), waveTable: hex(bytes(1536))});
+  }
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
 // --redraw: RedrawSparks alone (0x105025b0), without the fire update.
 const redrawOnly = process.argv.includes('--redraw');
@@ -125,6 +132,19 @@ selected.forEach((c, i) => {
       assert.equal(hex(new Uint8Array(tables.random.buffer)), expected.random, `${c.name}: random`);
       assert.equal(tables.randomIndex, expected.randomIndex, `${c.name}: random index`);
       assert.equal(expected.left, 0, 'all 512 appRand values used');
+    } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
+    return;
+  }
+  if (c.entry === 'water') {
+    const water = {uSize: c.size[0], vSize: c.size[1], waveParity: c.parity, fields: unhex(c.field), pixels: unhex(c.pixels),
+      renderTable: unhex(c.renderTable), waveTable: unhex(c.waveTable)};
+    try {
+      native.results[i].steps.forEach((expected, step) => {
+        calculateWater(water);
+        assert.equal(water.waveParity, expected.parity, `${c.name} tick ${step}: parity`);
+        assert.equal(hex(water.fields), expected.field, `${c.name} tick ${step}: field`);
+        assert.equal(hex(water.pixels), expected.pixels, `${c.name} tick ${step}: pixels`);
+      });
     } catch (error) { mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)}); }
     return;
   }

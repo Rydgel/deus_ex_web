@@ -120,6 +120,27 @@ found the fall-through in its flip test). The table construction runs whole
 cases: 824 cases in all. `--types`, `--only` and `--redraw` (RedrawSparks
 alone) narrow a run.
 
+## Water (CalculateWater)
+
+UWaterTexture::CalculateWater (`0x105059c0`) increments WaveParity and runs
+one of two self-modifying routines in `.data` by its parity (`0x10516ce0`
+odd, `0x10516470` even, set up by `0x10516988`). Their reconstruction came
+from the oracle: running them on buffers at recognisable addresses, tracing
+which cells and pixels each block writes, and disassembling the patched code
+mid-run. SourceFields is a half-resolution height field `USize/2` wide and
+`VSize` rows tall: even rows are buffer A, odd rows buffer B, on a staggered
+grid. The odd pass rewrites every B cell from the A cells at its corners
+(columns x and x+1, rows above and below), the even pass every A cell from
+the B cells at its corners (columns x-1 and x), wrapping both ways:
+`new = WaveTable[corner sum - 2·old + 0x200]`. Each cell also writes its 2×2
+pixels from horizontal slopes through RenderTable (+0x200): `s` on the south
+row (`x+1` minus `x-1`, one column further left for A cells) and
+`h = (s + north slope) >> 1`; the right pixels take `2·slope`, the left
+ones the slope plus its left neighbour's (the routine carries it). A cells'
+blocks sit half a cell up and left. `calculateWater` translates it; 12
+oracle cases (6 sizes to 256×256, both parities, 4 ticks) match fields and
+pixels byte for byte.
+
 ## Play
 
 TextureStore reads a FireTexture's properties (DX names ActiveSparkNum

@@ -687,3 +687,40 @@ export function firePostLoad(texture, sparks) {
   t.sparks = array;
   return t;
 }
+
+/** UWaterTexture::CalculateWater (0x105059c0): WaveParity++ and the
+ * self-modifying update in .data (0x10516ce0 for odd parity, 0x10516470 for
+ * even) over SourceFields, a half-resolution height field `hw = USize/2`
+ * wide and `2·VSize/2` rows tall whose even rows are buffer A and odd rows
+ * buffer B, on a staggered grid. Odd parity rewrites every B cell from the A
+ * cells at its corners, even parity every A cell from the B cells at its
+ * corners (half a cell up and left), wrapping both ways:
+ *   new = WaveTable[corner sum - 2·old + 0x200]
+ * and writes the cell's 2×2 pixels from the corners' horizontal slopes
+ * through RenderTable (+0x200): s = S[+1] - S[-1] on the south row and
+ * h = (s + N[+1] - N[-1]) >> 1 with the north row, each pixel pair being
+ * 2·slope and the slope plus its left neighbour's. Oracle-checked
+ * (validate-native-fire-texture "water"). */
+export function calculateWater(water) {
+  water.waveParity = (water.waveParity + 1) & 255;
+  const odd = water.waveParity & 1, hw = water.uSize >> 1, rows = (water.vSize >> 1) * 2, w = water.uSize;
+  const field = water.fields, rt = water.renderTable, wt = water.waveTable, pixels = water.pixels;
+  const old = field.slice();
+  const F = (x, r) => old[(((r % rows) + rows) % rows) * hw + (((x % hw) + hw) % hw)];
+  // Corner columns: B cell x reads A columns x and x+1; A cell x reads B x-1 and x.
+  const lo = odd ? 0 : -1, hi = odd ? 1 : 0;
+  for (let r = odd; r < rows; r += 2) {
+    const n = r - 1, sRow = r + 1, y = r >> 1;
+    const s = x => F(x + (odd ? 1 : 0), sRow) - F(x + (odd ? -1 : -2), sRow);
+    const h = x => (s(x) + F(x + (odd ? 1 : 0), n) - F(x + (odd ? -1 : -2), n)) >> 1;
+    for (let x = 0; x < hw; x++) {
+      field[r * hw + x] = wt[F(x + lo, n) + F(x + hi, n) + F(x + lo, sRow) + F(x + hi, sRow) - 2 * F(x, r) + 0x200];
+      const sx = s(x), hx = h(x), px = odd ? 2 * x : 2 * x - 1, top = odd ? 2 * y : 2 * y - 1;
+      const at = (cx, cy) => (((cy % water.vSize) + water.vSize) % water.vSize) * w + (((cx % w) + w) % w);
+      pixels[at(px, top + 1)] = rt[sx + s(x - 1) + 0x200];
+      pixels[at(px + 1, top + 1)] = rt[2 * sx + 0x200];
+      pixels[at(px, top)] = rt[hx + h(x - 1) + 0x200];
+      pixels[at(px + 1, top)] = rt[2 * hx + 0x200];
+    }
+  }
+}

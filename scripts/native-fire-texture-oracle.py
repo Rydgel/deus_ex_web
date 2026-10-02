@@ -150,6 +150,8 @@ class FireProbe:
         self.free = self.heap + 0x100
         if c.get('entry') == 'tables':
             return self.tables(c)
+        if c.get('entry') == 'water':
+            return self.water(c)
         self.pentium_pro = self.alloc(4)
         self.write(PENTIUM_PRO_IMPORT, 'I', self.pentium_pro)
         self.write(self.pentium_pro, 'I', c.get('pentiumPro', 1))
@@ -214,6 +216,38 @@ class FireProbe:
                 'renderTable': bytes(cpu.mem_read(texture + 0x104, 1028)).hex(),
                 'sparkNum': spark_num,
             })
+        return {'steps': steps}
+
+    def water(self, c):
+        """UWaterTexture::CalculateWater (0x105059c0) `ticks` times on a
+        fabricated water texture: SourceFields, RenderTable (+0x8ec),
+        WaveTable (+0xcf0), WaveParity (+0x12f0), USize/VSize, mip 0."""
+        cpu = self.cpu
+        w, h = c['size']
+        texture = self.alloc(0x1400)
+        cpu.mem_write(texture, bytes(0x1400))
+        field = bytes.fromhex(c['field'])
+        fields = self.alloc(len(field))
+        cpu.mem_write(fields, field)
+        pixels = self.alloc(w * h)
+        cpu.mem_write(pixels, bytes.fromhex(c['pixels']))
+        mips = self.alloc(0x40)
+        self.write(mips + 0x1c, 'I', pixels)
+        self.write(texture + 0xa4, 'I', mips)
+        self.write(texture + 0x34, '2i', w, h)
+        self.write(texture + 0x8e8, 'I', fields)
+        cpu.mem_write(texture + 0x8ec, bytes.fromhex(c['renderTable']))
+        cpu.mem_write(texture + 0xcf0, bytes.fromhex(c['waveTable']))
+        self.write(texture + 0x12f0, 'B', c['parity'])
+        steps = []
+        for _ in range(c['ticks']):
+            esp = self.stack - 0x1000
+            self.write(esp, 'I', self.done)
+            cpu.reg_write(UC_X86_REG_ESP, esp)
+            cpu.reg_write(UC_X86_REG_ECX, texture)
+            cpu.emu_start(0x105059c0, self.done, count=50_000_000)
+            steps.append({'field': bytes(cpu.mem_read(fields, len(field))).hex(), 'pixels': bytes(cpu.mem_read(pixels, w * h)).hex(),
+                          'parity': self.read(texture + 0x12f0, 'B')[0]})
         return {'steps': steps}
 
     def tables(self, c):
