@@ -115,3 +115,16 @@ test('ordered batches preserve vertices, equal-depth triangle order, barriers an
   assert.match(shader.fragmentShader, /highp int deusLightLayer = int\(floor\(vDeusLightUV.z \+ 0.5\)\) % 4;/);
   root.traverse(mesh => mesh.geometry?.dispose());atlas.dispose();textures.forEach(texture => texture.dispose());
 });
+
+test('a light-map byte update writes exactly what the float samples bytes/255 would', () => {
+  // The conversion returns every byte from its own sample.
+  for (let byte = 0; byte < 256; byte++) assert.equal(Math.round(Math.max(0, Math.min(1, byte / 255)) * 255), byte);
+  const width = 5, height = 4, bytes = Uint8Array.from({length: width * height * 3}, (_, i) => (i * 37 + 11) % 256);
+  const map = () => ({width, height, pixels: Float32Array.from(bytes, byte => byte / 255), uv: () => [.5, .5]});
+  const floats = new LightAtlas(16), direct = new LightAtlas(16), a = map(), b = map();
+  floats.add(a); direct.add(b);
+  for (const region of [null, {minU: 0, maxU: 2, minV: 1, maxV: 4}, {minU: 2, maxU: 5, minV: 0, maxV: 2}]) {
+    floats.update(a, {region}); direct.update(b, {region, bytes});
+    assert.deepEqual(direct.pages[0].pixels, floats.pages[0].pixels);
+  }
+});

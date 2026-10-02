@@ -348,8 +348,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         const start = performance.now(), changed = lighting.animate(lightFrame.advance(timeSeconds), visible);
         lightAnimation.mergeMs = performance.now() - start;
         // A light map composed with moving lights changes as a whole (no
-        // region): its whole tile is resent, not the whole atlas.
-        for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
+        // region): its whole tile is resent, not the whole atlas. Otherwise
+        // lighting.animate has just set the region's samples to texels/255,
+        // so the page takes the merged bytes themselves.
+        for (const { lightmap, region } of changed)
+          lightAtlas.update(lightmap, region ? { partial: true, region, bytes: lightmap.texels } : { partial: true });
         lightAnimation.changed = changed.length; lightAnimation.ms = performance.now() - start;
       }
       // Fire textures, BSP and mesh skins alike, once per frame.

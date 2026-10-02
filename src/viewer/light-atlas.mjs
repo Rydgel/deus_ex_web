@@ -69,21 +69,30 @@ export class LightAtlas {
   /** Upload changed light samples into the existing tile, retaining its UVs,
    * page and padding. The lighting engine owns when and how samples change.
    * A partial update of an uploaded page defers to flush() as one sub-image
-   * copy per tile instead of re-uploading the page. */
-  update(lightmap, { partial = false, region = null } = {}) {
+   * copy per tile instead of re-uploading the page.
+   * `bytes` (RGB, the light map's stride) may stand in for the samples when
+   * every sample the region reads is exactly bytes/255: the conversion
+   * below returns that byte for all 256 values (test/world-batches.test.mjs),
+   * so the page receives the same bytes without the float round trip. */
+  update(lightmap, { partial = false, region = null, bytes = null } = {}) {
     const tile = this.tiles.get(lightmap);
     if (!tile) throw new Error('Lightmap is not allocated in this atlas');
     if (lightmap.width !== tile.width || lightmap.height !== tile.height)
       throw new Error('Updating a lightmap cannot change its atlas dimensions');
-    const {page, x, y} = tile;
+    const {page, x, y} = tile, pixels = page.pixels, size = this.size, width = lightmap.width, height = lightmap.height;
     // A region (source texel rectangle) also refreshes the padding it borders.
-    const [left, right] = region ? [region.minU ? region.minU : -1, region.maxU < lightmap.width ? region.maxU - 1 : lightmap.width] : [-1, lightmap.width];
-    const [top, bottom] = region ? [region.minV ? region.minV : -1, region.maxV < lightmap.height ? region.maxV - 1 : lightmap.height] : [-1, lightmap.height];
-    for (let row = top; row <= bottom; row++) for (let col = left; col <= right; col++) {
-      const src = (Math.max(0, Math.min(lightmap.height - 1, row)) * lightmap.width + Math.max(0, Math.min(lightmap.width - 1, col))) * 3;
-      const dst = ((y + row) * this.size + x + col) * 4;
-      for (let c = 0; c < 3; c++) page.pixels[dst + c] = Math.round(Math.max(0, Math.min(1, lightmap.pixels[src + c])) * 255);
-      page.pixels[dst + 3] = 255;
+    const [left, right] = region ? [region.minU ? region.minU : -1, region.maxU < width ? region.maxU - 1 : width] : [-1, width];
+    const [top, bottom] = region ? [region.minV ? region.minV : -1, region.maxV < height ? region.maxV - 1 : height] : [-1, height];
+    const samples = lightmap.pixels;
+    for (let row = top; row <= bottom; row++) {
+      const srcRow = (row < 0 ? 0 : row >= height ? height - 1 : row) * width;
+      let dst = ((y + row) * size + x + left) * 4;
+      for (let col = left; col <= right; col++, dst += 4) {
+        const src = (srcRow + (col < 0 ? 0 : col >= width ? width - 1 : col)) * 3;
+        if (bytes) { pixels[dst] = bytes[src]; pixels[dst + 1] = bytes[src + 1]; pixels[dst + 2] = bytes[src + 2]; }
+        else for (let c = 0; c < 3; c++) pixels[dst + c] = Math.round(Math.max(0, Math.min(1, samples[src + c])) * 255);
+        pixels[dst + 3] = 255;
+      }
     }
     if (partial && (page.uploaded || this.arrayUploaded)) page.dirty.push([x + left, y + top, right - left + 1, bottom - top + 1]);
     else this.dirtyPage(page);

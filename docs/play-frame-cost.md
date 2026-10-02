@@ -130,6 +130,13 @@ Host rendering only; the texels on the GPU are unchanged
 - Array rectangles go up with one `texSubImage3D` each under one unpack setup
   per flush (`UNPACK_IMAGE_HEIGHT` must be the page height for skipped rows).
 
+- Animated light maps without moving lights hand the atlas their merged
+  bytes: lighting.animate has just set those samples to bytes/255, and the
+  float conversion returns each byte unchanged (unit test over all 256
+  values), so the page bytes are identical without the float round trip
+  (Training 19.97 → 17.61 ms, texture/light-map phase 11.93 → 9.30, 3 pairs,
+  against eef7c08).
+
 Interleaved A/B, 3 pairs, start view, ms per frame, median [min–max]:
 
 | Map | Phase | before (715e72e) | after |
