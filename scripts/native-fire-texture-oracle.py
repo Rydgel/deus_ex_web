@@ -126,7 +126,19 @@ class FireProbe:
             cpu.reg_write(UC_X86_REG_ESP, esp)
             cpu.reg_write(UC_X86_REG_ECX, texture)
             cpu.reg_write(UC_X86_REG_FPCW, 0x037f)
-            cpu.emu_start(CONSTANT_TIME_TICK, self.done, count=50_000_000)
+            # 'redraw' runs RedrawSparks (0x105025b0) alone, without the fire
+            # update; 'flash' calls DrawFlashRamp (0x105022f0) with c['flash'] =
+            # [X, Y, XD, YD, Color1, Color2].
+            entry = CONSTANT_TIME_TICK
+            if c.get('entry') == 'redraw':
+                entry = 0x105025b0
+            elif c.get('entry') == 'flash':
+                entry = 0x105022f0
+                x, y, xd, yd, c1, c2 = c['flash']
+                esp -= 12
+                self.write(esp, 'I4B2I', self.done, x, y, xd, yd, c1, c2)
+                cpu.reg_write(UC_X86_REG_ESP, esp)
+            cpu.emu_start(entry, self.done, count=50_000_000)
             n = c['fields']['USize'] * c['fields']['VSize']
             spark_data, spark_num = self.read(texture + 0xf4, '2I')
             steps.append({

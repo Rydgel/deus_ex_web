@@ -10,7 +10,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
-import {fireConstantTimeTick} from '../src/runtime/fire-texture.mjs';
+import {fireConstantTimeTick, redrawSparks, drawFlashRamp} from '../src/runtime/fire-texture.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
@@ -45,7 +45,7 @@ const NAMES = ['Burn', 'Sparkle', 'Pulse', 'Signal', 'Blaze', 'OzHasSpoken', 'Co
   'Cylinder', 'Cylinder3D', 'Lissajous', 'Jugglers', 'Emit', 'Fountain', 'Flocks', 'Eels', 'Organic',
   'WanderOrganic', 'RandomCloud', 'CustomCloud', 'LocalCloud', 'Stars', 'LineLightning', 'RampLightning',
   'SphereLightning', 'Wheel', 'Gametes', 'Sprinkler'];
-const TYPES = (option('types', '0-3')).split(',').flatMap(range => {
+const TYPES = (option('types', '0-48')).split(',').flatMap(range => {
   const [a, b = a] = range.split('-').map(Number); return Array.from({length: b - a + 1}, (_, k) => a + k);
 });
 for (const type of TYPES)
@@ -61,7 +61,31 @@ for (const type of TYPES)
       c.sparks += '00'.repeat(8 * (limit - count));
       cases.push(c);
     }
+// Mixed populations of every authored type, long enough for emitted
+// temporaries to live, collide with the limit, die and be replaced.
+for (let variant = 0; variant < 8; variant++) {
+  const [uBits, vBits] = [[5, 5], [6, 6], [7, 5], [4, 7]][variant % 4];
+  const count = 4 + random() % 20, limit = count + 8 + random() % 64;
+  const sparks = Array.from({length: count}, () => [random() % 0x1d, random() & 255, random() & ((1 << uBits) - 1),
+    random() & ((1 << vBits) - 1), random() & 255, random() & 255, random() & 255, random() & 255]);
+  const c = makeCase(`mixed ${1 << uBits}x${1 << vBits} #${variant}`, {uBits, vBits, rising: variant & 1, sparks, ticks: 40});
+  c.fields.SparksLimit = limit;
+  c.sparks += '00'.repeat(8 * (limit - count));
+  cases.push(c);
+}
+// DrawFlashRamp (0x105022f0) on its own: segments of every sign and
+// major-axis combination.
+for (let k = 0; k < 160; k++) {
+  const small = () => random() % 4 === 0 ? random() & 7 : random() & 63;
+  const c = makeCase(`flash ${k}`, {uBits: 5, vBits: 5, ticks: 1});
+  c.entry = 'flash';
+  c.flash = [random() & 31, random() & 31, small(), small(), random() & 255, random() & 255];
+  cases.push(c);
+}
 const selected = only ? cases.filter(c => new RegExp(only).test(c.name)) : cases;
+// --redraw: RedrawSparks alone (0x105025b0), without the fire update.
+const redrawOnly = process.argv.includes('--redraw');
+if (redrawOnly) for (const c of selected) if (!c.entry) c.entry = 'redraw';
 
 const dir = path.resolve('reports/rendering');
 await mkdir(dir, {recursive: true});
@@ -82,16 +106,22 @@ selected.forEach((c, i) => {
     sparks: unhex(c.sparks), renderTable: unhex(c.renderTable), pixels: unhex(c.pixels)};
   try {
     native.results[i].steps.forEach((expected, step) => {
-      fireConstantTimeTick(texture, globals);
+      if (c.entry === 'flash') drawFlashRamp(texture, globals, c.flash.slice(0, 4), c.flash[4], c.flash[5]);
+      else if (redrawOnly) redrawSparks(texture, globals);
+      else fireConstantTimeTick(texture, globals);
       const where = `${c.name} tick ${step}`;
-      assert.equal(hex(texture.pixels), expected.pixels, `${where}: pixels`);
+      assert.equal(hex(new Uint8Array(globals.random.buffer, 0, 256)), expected.random, `${where}: random`);
+      assert.equal(globals.randomIndex, expected.randomIndex, `${where}: random index`);
+      if (hex(texture.pixels) !== expected.pixels) {
+        const want = unhex(expected.pixels), diff = [];
+        for (let k = 0; k < want.length; k++) if (want[k] !== texture.pixels[k]) diff.push(k);
+        throw new Error(`${where}: pixels differ at ${diff.length} offsets, first ${diff[0]} (x ${diff[0] & (f.USize - 1)}, y ${diff[0] >> f.UBits}): ${texture.pixels[diff[0]]} vs ${want[diff[0]]}`);
+      }
       assert.equal(hex(texture.sparks.subarray(0, expected.sparks.length / 2)), expected.sparks, `${where}: sparks`);
       assert.equal(texture.globalPhase, expected.fields.GlobalPhase, `${where}: GlobalPhase`);
       assert.equal(texture.auxPhase, expected.fields.AuxPhase, `${where}: AuxPhase`);
       assert.equal(texture.activeSparkNum, expected.fields.ActiveSparkNum, `${where}: ActiveSparkNum`);
       assert.equal(texture.starStatus, expected.fields.StarStatus, `${where}: StarStatus`);
-      assert.equal(hex(new Uint8Array(globals.random.buffer, 0, 256)), expected.random, `${where}: random`);
-      assert.equal(globals.randomIndex, expected.randomIndex, `${where}: random index`);
     });
   } catch (error) {
     mismatches.push({name: c.name, message: error.message.split('\n')[0].slice(0, 300)});

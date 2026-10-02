@@ -85,7 +85,10 @@ export function redrawSparks(texture, globals) {
   texture.auxPhase = (texture.auxPhase + texture.fxFrequency) & 255;
   texture.globalPhase = (texture.globalPhase + 1) | 0;
   for (let i = 0; i < texture.activeSparkNum; i++) {
+    // Types above 0x2b skip the table (ja 0x10505858); 0x1f's entry is that
+    // same continue.
     const type = texture.sparks[i * 8];
+    if (type > 0x2b || type === 0x1f) continue;
     const handler = SPARKS[type];
     if (!handler) throw new Error(`Fire spark type ${type} is not translated`);
     handler(texture, globals, i);
@@ -348,6 +351,247 @@ SPARKS[0x24] = (t, g, i) => {
   if (sp[s + 6] >= 0xfa) return killSpark(t, i);
   t.pixels[at(t, sp[s + 2], sp[s + 3])] = sp[s + 6];
   drift(t, g, s);
+};
+
+/** A walk by explicit signed steps (the 0x26-0x29/0x2b forms): X by dx,
+ * then Y by dy, one draw each. */
+function walkBy(t, g, s, dx, dy) {
+  const sp = t.sparks, r = fireRandom(g) & 0x7f;
+  if (dx < 0) { if (r < -dx) sp[s + 2] = byte(sp[s + 2] - 1) & t.uMask; }
+  else if (r < dx) sp[s + 2] = byte(sp[s + 2] + 1) & t.uMask;
+  const q = fireRandom(g) & 0x7f;
+  if (dy < 0) { if (q < -dy) sp[s + 3] = byte(sp[s + 3] - 1) & t.vMask; }
+  else if (q < dy) sp[s + 3] = byte(sp[s + 3] + 1) & t.vMask;
+}
+/** CustomCloud/Flocks jitter: X += (r1 & 7) - (r2 & 7), then Y the same. */
+function jitter(t, g, s) {
+  const sp = t.sparks;
+  let a = fireRandom(g) & 7, b = fireRandom(g) & 7;
+  sp[s + 2] = byte(a - b + sp[s + 2]) & t.uMask;
+  a = fireRandom(g) & 7; b = fireRandom(g) & 7;
+  sp[s + 3] = byte(a - b + sp[s + 3]) & t.vMask;
+}
+
+/** UFireTexture::DrawFlashRamp (0x105022f0): a jagged line from (X, Y) by the
+ * signed deltas XD, YD (magnitude, sign in bit 0), colour ramping from
+ * Color1 to Color2. A segment whose major delta is negative is drawn from its
+ * other end with the colours swapped. N = max(XD, YD) | 1 random bytes
+ * jitter the minor axis (6-bit fixed point); the colour steps in 23-bit
+ * fixed point (idiv by N). */
+export function drawFlashRamp(t, g, [x0, y0, xd0, yd0], color1, color2) {
+  let x = x0, y = y0, xd = xd0, yd = yd0, c1 = color1, c2 = color2;
+  // 0x105022f9-0x1050233c: an odd YD with 2·YD >= XD flips; otherwise an odd
+  // XD with 2·YD < XD does.
+  const flip = ((yd & 1) && 2 * yd >= xd) || ((xd & 1) && 2 * yd < xd);
+  if (flip) {
+    x = byte(x + ((xd & 1) ? -xd : xd));
+    y = byte(y + ((yd & 1) ? -yd : yd));
+    xd ^= 1; yd ^= 1;
+    [c1, c2] = [c2, c1];
+  }
+  const n = Math.max(xd, yd) | 1, jag = new Uint8Array(n);
+  let sum = 0;
+  for (let k = 0; k < n; k++) { const r = byte(fireRandom(g)); jag[k] = r; sum += r; }
+  const yStep = (yd & 1) ? -1 : 1, ySigned = (yd & 1) ? -yd : yd;
+  const xStep = (xd & 1) ? -1 : 1, xSigned = (xd & 1) ? -xd : xd;
+  const colorStep = ((((c2 - c1) << 23) / n) | 0);
+  let color = c1 << 23;
+  if (xd >= yd) {
+    const increment = ((((ySigned << 6) - sum) / n) | 0);
+    let acc = y << 6;
+    for (let k = 0; k < xd; k++) {
+      acc = (acc + jag[k] + increment) | 0;
+      const p = (((acc >> 6) & t.vMask) << t.uBits) + (x & t.uMask);
+      x = byte(x + xStep);
+      color = (color + colorStep) | 0;
+      t.pixels[p] = byte(color >> 23);
+    }
+  } else {
+    const increment = ((((xSigned << 6) - sum) / n) | 0);
+    let acc = x << 6;
+    for (let k = 0; k < yd; k++) {
+      acc = (acc + jag[k] + increment) | 0;
+      const p = ((y & t.vMask) << t.uBits) + ((acc >> 6) & t.uMask);
+      y = byte(y + yStep);
+      color = (color + colorStep) | 0;
+      t.pixels[p] = byte(color >> 23);
+    }
+  }
+}
+
+// SPARK_Flocks (0x10503fb7): a 0x27 within 0..31 heading A (B = A, A 0), C =
+// B, D = D; A += C; then the spark jitters.
+SPARKS[0x0f] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d] = 0x27;
+    sp[d + 2] = byte((fireRandom(g) & 0x1f) + sp[s + 2]) & t.uMask;
+    sp[d + 3] = byte((fireRandom(g) & 0x1f) + sp[s + 3]) & t.vMask;
+    sp[d + 5] = sp[s + 4]; sp[d + 4] = 0; sp[d + 6] = sp[s + 5]; sp[d + 7] = sp[s + 7]; sp[d + 1] = sp[s + 1];
+    sp[s + 4] = byte(sp[s + 4] + sp[s + 6]);
+  }
+  jitter(t, g, s);
+};
+// SPARK_Eels (0x1050374d): a draw under 0x14, below the limit, emits a 0x26
+// within 0..31 with random A and B and the spark's Heat and C; then wanders.
+SPARKS[0x10] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (byte(fireRandom(g)) < 0x14 && t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d + 1] = sp[s + 1]; sp[d] = 0x26;
+    sp[d + 2] = byte((fireRandom(g) & 0x1f) + sp[s + 2]) & t.uMask;
+    sp[d + 3] = byte((fireRandom(g) & 0x1f) + sp[s + 3]) & t.vMask;
+    sp[d + 4] = byte(fireRandom(g)); sp[d + 5] = byte(fireRandom(g)); sp[d + 6] = sp[s + 6];
+  }
+  wander(t, g, s);
+};
+// SPARK_CustomCloud (0x10503ca5): a 0x25 within 0..31 with the spark's A, B
+// and C = D; then the spark jitters.
+SPARKS[0x14] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d] = 0x25;
+    sp[d + 2] = byte((fireRandom(g) & 0x1f) + sp[s + 2]) & t.uMask;
+    sp[d + 3] = byte((fireRandom(g) & 0x1f) + sp[s + 3]) & t.vMask;
+    sp[d + 4] = sp[s + 4]; sp[d + 5] = sp[s + 5]; sp[d + 6] = sp[s + 7];
+  }
+  jitter(t, g, s);
+};
+// SPARK_LocalCloud (0x10503e9e): a 0x25 within C (rand·C>>8) with A, B and C = D.
+SPARKS[0x15] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (t.activeSparkNum >= t.sparksLimit) return;
+  const n = t.activeSparkNum++, d = n * 8;
+  sp[d] = 0x25;
+  sp[d + 2] = byte(sp[s + 2] + ((byte(fireRandom(g)) * sp[s + 6]) >> 8)) & t.uMask;
+  sp[d + 3] = byte(sp[s + 3] + ((byte(fireRandom(g)) * sp[s + 6]) >> 8)) & t.vMask;
+  sp[d + 4] = sp[s + 4]; sp[d + 5] = sp[s + 5]; sp[d + 6] = sp[s + 7];
+};
+// SPARK_Stars (0x105042ed): B at the spark (PostDrawSparks does the rest).
+SPARKS[0x16] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  t.pixels[at(t, sp[s + 2], sp[s + 3])] = sp[s + 5];
+};
+/** Line/RampLightning (0x10504315 / 0x105043ed): with Heat, a running C
+ * counts down while the flash draws (X, Y)+(A, B); an idle one re-arms when a
+ * draw reaches D, for (rand + 1) & 5 ticks. */
+const lightning = shift => (t, g, i) => {
+  const s = i * 8, sp = t.sparks, heat = sp[s + 1];
+  if (!heat) return;
+  if (sp[s + 6] > 0) {
+    sp[s + 6] -= 1;
+    drawFlashRamp(t, g, [sp[s + 2], sp[s + 3], sp[s + 4], sp[s + 5]], heat, heat >> shift);
+    return;
+  }
+  if (byte(fireRandom(g)) < sp[s + 7]) return;
+  sp[s + 6] = byte(fireRandom(g) + 1) & 5;
+};
+SPARKS[0x17] = lightning(0);
+SPARKS[0x18] = lightning(3);
+// SPARK_SphereLightning (0x105044c8): a draw reaching D flashes a ray of
+// length C at a random angle, centred (C>>1 back), Heat to Heat>>2.
+SPARKS[0x19] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (byte(fireRandom(g)) < sp[s + 7]) return;
+  const a = byte(fireRandom(g)), radius = sp[s + 6], half = radius >> 1, heat = sp[s + 1];
+  const dx = ((g.sine[a] * radius) >> 8) - half, dy = ((g.sine[(a + 0x40) & 255] * radius) >> 8) - half;
+  const encode = v => byte(v > 0 ? v & ~1 : (-v) | 1);
+  drawFlashRamp(t, g, [sp[s + 2], sp[s + 3], encode(dx), encode(dy)], heat, heat >> 2);
+};
+// SPARK_Wheel (0x105041d1): a 0x27 at the spark heading A (B = A, A 0), C =
+// B, D = D; then A += C.
+SPARKS[0x1a] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d] = 0x27; sp[d + 2] = sp[s + 2]; sp[d + 3] = sp[s + 3];
+    sp[d + 5] = sp[s + 4]; sp[d + 4] = 0; sp[d + 6] = sp[s + 5]; sp[d + 7] = sp[s + 7]; sp[d + 1] = sp[s + 1];
+  }
+  sp[s + 4] = byte(sp[s + 4] + sp[s + 6]);
+};
+// SPARK_Gametes (0x105039f9): a draw under 0x14, below the limit, emits a
+// 0x2b within 0..31 with random A and D and the spark's Heat and C; then wanders.
+SPARKS[0x1b] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (byte(fireRandom(g)) < 0x14 && t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d] = 0x2b; sp[d + 1] = sp[s + 1];
+    sp[d + 2] = byte((fireRandom(g) & 0x1f) + sp[s + 2]) & t.uMask;
+    sp[d + 3] = byte((fireRandom(g) & 0x1f) + sp[s + 3]) & t.vMask;
+    sp[d + 4] = byte(fireRandom(g)); sp[d + 6] = sp[s + 6]; sp[d + 7] = byte(fireRandom(g));
+  }
+  wander(t, g, s);
+};
+// SPARK_Sprinkler (0x1050425f): a 0x28 copying the spark (D 2); then A += D.
+SPARKS[0x1c] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  if (t.activeSparkNum < t.sparksLimit) {
+    const n = t.activeSparkNum++, d = n * 8;
+    sp[d] = 0x28; sp[d + 2] = sp[s + 2]; sp[d + 3] = sp[s + 3]; sp[d + 1] = sp[s + 1];
+    sp[d + 4] = sp[s + 4]; sp[d + 5] = sp[s + 5]; sp[d + 6] = sp[s + 6]; sp[d + 7] = 2;
+  }
+  sp[s + 4] = byte(sp[s + 4] + sp[s + 7]);
+};
+// Temporary 0x25 (0x10504fd6): C += 4, dying at 0xfa or above; draws C and walks.
+SPARKS[0x25] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 6] = byte(sp[s + 6] + 4);
+  if (sp[s + 6] >= 0xfa) return killSpark(t, i);
+  t.pixels[at(t, sp[s + 2], sp[s + 3])] = sp[s + 6];
+  walk(t, g, s);
+};
+// Temporary 0x26 (0x10505162): C counts down to death; draws Heat and walks.
+SPARKS[0x26] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 6] = byte(sp[s + 6] - 1);
+  if (sp[s + 6] === 0xff) return killSpark(t, i);
+  drawHeat(t, s); walk(t, g, s);
+};
+// Temporary 0x27 (0x105054be): C counts down; draws Heat, steers by the
+// sine+0x80 table at B, and the A/B word advances by D·16.
+SPARKS[0x27] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 6] = byte(sp[s + 6] - 1);
+  if (sp[s + 6] === 0xff) return killSpark(t, i);
+  drawHeat(t, s);
+  const b = sp[s + 5], dy = signed(g.sineSigned[b]), dx = signed(g.sineSigned[(b + 0x40) & 255]);
+  const word = ((sp[s + 4] | (sp[s + 5] << 8)) + (sp[s + 7] << 4)) & 0xffff;
+  sp[s + 4] = word & 255; sp[s + 5] = word >> 8;
+  walkBy(t, g, s, dx, dy);
+};
+// Temporary 0x28 (0x10505672): C counts down; draws Heat, steers X by
+// sin(A+64)+0x80 and Y by B; A += D.
+SPARKS[0x28] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 6] = byte(sp[s + 6] - 1);
+  if (sp[s + 6] === 0xff) return killSpark(t, i);
+  drawHeat(t, s);
+  const a = sp[s + 4], dx = signed(byte(g.sine[(a + 0x40) & 255] + 0x80)), dy = signed(sp[s + 5]);
+  sp[s + 4] = byte(sp[s + 7] + a);
+  walkBy(t, g, s, dx, dy);
+};
+// Temporary 0x29 (0x105048ef): Heat -= C, dying at 0xfa or above; draws and walks.
+SPARKS[0x29] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 1] = byte(sp[s + 1] - sp[s + 6]);
+  if (sp[s + 1] >= 0xfa) return killSpark(t, i);
+  drawHeat(t, s); walk(t, g, s);
+};
+// Temporary 0x2b (0x105052ed): C counts down; draws Heat; A += 7 folds into a
+// 0..63 triangle that, with D, picks sine steps for X and Y.
+SPARKS[0x2b] = (t, g, i) => {
+  const s = i * 8, sp = t.sparks;
+  sp[s + 6] = byte(sp[s + 6] - 1);
+  if (sp[s + 6] === 0xff) return killSpark(t, i);
+  drawHeat(t, s);
+  sp[s + 4] = byte(sp[s + 4] + 7);
+  let fold = sp[s + 4] & 0x7f;
+  if (fold > 0x3f) fold = 0x7f - fold;
+  const angle = byte(sp[s + 7] + fold);
+  const dy = signed(byte(g.sine[(angle + 0x40) & 255] - 0x7f)), dx = signed(byte(g.sine[angle] - 0x7f));
+  walkBy(t, g, s, dx, dy);
 };
 
 // SPARK_Signal (0x10502778): Heat above C draws; Heat += D, and a carry

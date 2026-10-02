@@ -54,16 +54,48 @@ PostDrawSparks.
   set: the pixel under each is kept in ByteB and, below `0x26`, replaced by
   ByteA; StarStatus clears when none is active.
 
+## Sparks
+
+Each spark is 8 bytes: Type, Heat, X, Y and A-D. Pixels are written at
+`(Y << UBits) + X`, masked by UMask/VMask where the case masks. Emitters add
+temporaries at ActiveSparkNum while it is below SparksLimit; those run in the
+same pass (the loop re-reads the count), and a dying temporary takes the last
+spark into its slot. Bytes an emitter does not set keep the slot's old value.
+
+| Type | Case | Behaviour |
+| --- | --- | --- |
+| Burn, Sparkle, Pulse, Signal | `0x1050260d`- | random / jittered / pulsing / gated Heat at the spark |
+| Cylinder, Cylinder3D, Jugglers, Lissajous, 0x1d, 0x1e | `0x105027fa`- | sine-table orbits (Cylinder3D the front half) |
+| Blaze, OzHasSpoken, Cone, BlazeLeft/Right, Emit, Fountain | `0x10502b27`- | emit 0x20, 0x21, 0x22 or 0x2a particles |
+| Organic, WanderOrganic, RandomCloud, CustomCloud, LocalCloud | `0x1050317a`- | emit 0x23/0x24/0x25 puffs; the emitter wanders or jitters |
+| Eels, Gametes, Flocks, Wheel, Sprinkler | | emit 0x26, 0x2b, 0x27, 0x27, 0x28 swimmers steered by A/B or the sine tables |
+| Stars | `0x105042ed` | B at the spark, with PostDrawSparks |
+| Line/RampLightning | `0x10504315` / `0x105043ed` | flash (X, Y)+(A, B) while C counts down, re-armed when a draw reaches D |
+| SphereLightning | `0x105044c8` | a ray of length C at a random angle |
+| 0x1f, above 0x2b | | nothing (the loop's continue) |
+
+**DrawFlashRamp** (`0x105022f0`) draws a jagged line from (X, Y) by the
+deltas XD, YD (magnitude with the sign in bit 0), ramping from Color1 to
+Color2: an odd YD with `2·YD >= XD`, or else an odd XD with `2·YD < XD`,
+draws it from the other end with the colours swapped; `N = max(XD, YD) | 1`
+random bytes jitter the minor axis in 6-bit fixed point and the colour steps
+in 23-bit fixed point (`idiv N`).
+
 ## Validation
 
 `scripts/validate-native-fire-texture.mjs` runs ConstantTimeTick in the
 hash-pinned DLL (`native-fire-texture-oracle.py`: Fire.dll mapped alone, the
 texture and module state fabricated, unresolved imports trapping) and
-compares, after every tick, every pixel, spark, field and random byte. The
-fire updates: 6 sizes from 8×8 to 64×64 and 16×128, rising and still, both
-CPU forms, 4 ticks each, all equal.
+compares, after every tick, every pixel, spark, field and random byte. 780
+cases match: the fire updates (6 sizes from 8×8 to 128×128 shapes, rising
+and still, both CPU forms), 12 cases of each of the 49 table types over four
+sizes and six ticks, 8 mixed populations of every authored type over 40
+ticks, and 160 DrawFlashRamp segments called on their own (the fuzz that
+found the fall-through in its flip test). `--types`, `--only` and `--redraw`
+(RedrawSparks alone) narrow a run.
 
 ## Status
 
-The spark types are being translated one at a time; an untranslated type
-throws. Not yet wired into Play.
+ConstantTimeTick is translated. Not yet: the module tables' construction
+(appSin and the appRand stream), PostLoad's RenderTable and spark array,
+the package loading and Play.
