@@ -1,5 +1,121 @@
 # Play frame cost from first principles
 
+## October 2: ten-map census after the render-feature night
+
+Master `77053aa` (68 commits since `e21924c`: light maps, fire/water/wet
+textures, particles, lasers, coronas, volumetric fog, mirrors, Galaxy audio).
+Host measurements only, 1440×960, DPR 1, Chromium/Metal, M2 Pro. Single runs
+on a loaded machine (load average 6–9), so differences under ~1 ms are noise.
+
+**Island before and after the night** (`profile-play-browser --walk`, same
+route): host frame 19.0 → 32.7 ms. The simulation tick barely moved
+(processLevelTick 8.9 → 9.7 ms, within run-to-run noise: two head runs gave
+phase tick 14.6 and 18.0). The new per-frame work is render-side and audio
+JavaScript: moving lights 2.7, Galaxy `Update` 2.1 (inside the HUD phase),
+`calculateWater` 1.7, lasers/particles/sprites/coronas 1.6, fire 0.7,
+light-atlas flush 0.5.
+
+**Workload correction.** A forward walk from Player start often ends facing a
+wall (02_NYC_Bar: 14 main draw calls, "60 fps"), so the census below uses
+`.work/tools/scan-play.mjs`: no walking, four drag-look headings ~60° apart
+(the first is the authored start view), 90 frames each, one CPU profile per
+map. Families are assigned by first-match rules on each sample's stack
+(`.work/tools/frame-buckets.mjs scan-<map>`, git-ignored; the rules are in
+the script).
+
+| Family (ms/frame) | Train | Island | Bar | Battery | Airfield | WanChai | Ship | Chateau | Everett | A51Bunk |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| sim: level tick | 2.82 | 8.47 | 3.7 | 1.67† | 5.69 | 6.22 | 4.54 | 3.11 | 3.48 | 5.97 |
+| fog: volumetric fog maps | 0 | 0.01 | 6.72 | 2.14 | 0.01 | 9.51 | 5.1 | - | - | 0.01 |
+| light: light atlas/flush | 6.27 | 0.15 | 0 | 4.43 | 5.89 | 0.41 | 1.47 | 0.32 | 3.17 | 0.99 |
+| gl: three render | 0.61 | 2.12 | 0.91 | 4.92 | 2.01 | 3.46 | 2.48 | 1.02 | 2.56 | 1.88 |
+| hud: script HUD | 2.96 | 2.11 | 2.56 | 1.16 | 2.55 | 2.57 | 1.93 | 2.12 | 1.28 | 1.73 |
+| actors: mesh layer | 1.14 | 3.24 | 1.04 | 0.59 | 2.27 | 3.18 | 2.09 | 1.58 | 3.27 | 2.22 |
+| tex: water/wet (calculateWater) | 1.67 | 1.68 | 1.77 | 1.75 | 1.7 | 1.76 | 1.66 | 1.7 | 1.69 | 3.33 |
+| audio: Galaxy update | 0.65 | 1.99 | 0.59 | 2.04 | 1.92 | 1.56 | 1.19 | 1.15 | 1.09 | 1.08 |
+| light: animated light maps | 3.29 | - | - | 1.74 | 0.55 | 0.45 | 0.49 | 0.09 | 1 | 0.7 |
+| tex: fire/other procedural | 0.33 | 0.7 | 0.33 | 0.76 | 0.54 | 0.39 | 0.59 | 1.41 | 1.07 | 1.07 |
+| mirrors | 2.91 | 0.02 | 0.83 | 0 | 0.02 | 0 | 1.02 | 1.2 | 0.05 | 0.44 |
+| world: texture-animation loop | 2.16 | 0.03 | 0 | 0.94 | 1 | 0.1 | 0.11 | 0.05 | 0.89 | 0.24 |
+| light: moving lights | 0.03 | 0.75 | 0.01 | 0.28 | 3.83 | 0.04 | 0.05 | 0.03 | 0.08 | 0.04 |
+| fx: particles | - | 0.21 | - | 0.01 | 0.27 | 1.4 | 0.95 | 0.2 | - | 1.26 |
+| fx: sprites + lasers + coronas | 0.36 | 0.96 | 0.24 | 0.17 | 1.57 | 0.8 | 0.46 | 0.34 | 0.41 | 0.78 |
+| (gc) | 0.33 | 0.49 | 0.57 | 0.19 | 0.73 | 0.39 | 0.3 | 0.16 | 0.41 | 0.35 |
+| **host total (wall)** | 25.6 | 22.02 | 18.12 | 23.13 | 32.25 | 34.99 | 22.77 | 15.39 | 22.41 | 22.38 |
+
+† Battery Park paused at the first heading: `Unsupported original door native
+518 in scriptedpawn.seeking.getnextlocation` (FindPathTo,
+`script-pawn-nav.mjs`). Headings 1–3 rendered a paused simulation, so the
+whole column is a frozen-sim workload, not Battery Park's running cost. 15_Area51_Bunker
+also pauses after ~270 frames of a forward walk: `DynamicLoadObject
+first-load package is not prepared: deusex` from
+`bindConversationTransferObjectActor`.
+
+Worst heading (host ms): Bar's start view 34.3 (fog 12.8 of it), Wan Chai
+48.4, Airfield 43.3, Battery Park 39.9, Ship 38.8, Island 35.5.
+
+**Profiler artifact.** `Profiler.start` produces one 1.3–3 s "(program)" run
+before the first measured frame (V8 logging existing code). Normalized over a
+300-frame window it looked like 4.5–11 ms/frame of browser time. Steady-state
+"(program)" is 0.2–0.7 ms. Wall-clock `framePhases` are unaffected. A Chrome
+trace of Island confirms the renderer main thread is ~94% inside the rAF
+`FunctionCall`; layout/style/compositor are negligible.
+
+**Periodic hitches: consistent with a V8 major GC.** A 70 s Island walk
+(`.work/tools/spike-play.mjs`, per-frame phases, `performance.memory`): the
+heap climbs 1.34 → 3.01 GB in ~28 s, then one 605 ms frame drops it to
+1.34 GB. The aligned CPU profile shows no `(garbage collector)` samples in that
+window, so the GC event itself is not observed yet (a trace with the
+`disabled-by-default-v8.gc` category would show it). A separate 434 ms frame
+at 16.9 s is a different, unexplained stall: tick 414 ms, heap flat, samples
+in `readInstanceField`/`actor-link-fields`/`moveActorRiders`. Allocation sampling
+(`profile-play-browser --alloc`): 13.9 MB allocated per frame. Top sites:
+moving lights (`lightAttenuation` 1.17, `apply` 0.72, `geometry` 0.26,
+`update` 0.23 MB/frame), the JS VM's x87 helpers used by JS natives
+(`x87mul`/`x87add`/`x87store`/`x87load` ≈ 2.2), object-image reads
+(`readComposite` 0.55, `fieldReference` 0.46), `setupForActor` 0.47,
+`gcMemory` 0.31. A Training DataLink in real Chrome with audio (four speech
+lines decoded, `decodeAudioData` twice per line for playback and lip sync)
+adds only ~0.7 ms of HUD per frame and two ~61 ms frames; the user-visible
+comms hitch was not reproduced separately and is most likely the same major
+GC, brought forward by speech decode allocation. Unverified.
+
+**Other measured facts.**
+- `Effects.water.drtywater_a` (256×256 WetTexture) ticks every frame on every
+  map: the constant ~1.7 ms. Every acquired procedural texture ticks each
+  frame (the original ticks only drawn ones; draw-list occlusion is not
+  recovered).
+- Fog is already in Rust (`fog.rs`): ~95% of its time is in the Wasm loop,
+  which runs every texel×light through the soft 80-bit `Ext` model (~30 ops).
+- Light-atlas flush: per dirty tile, three.js `copyTextureToTexture` uploads
+  the same rectangle to the 2D page and to the 2D array (Training ~0.73 MB
+  `texSubImage2D` + 0.75 MB `texSubImage3D` per frame), with 5 synchronous
+  `getParameter` calls ≈ 1 ms.
+- Moving lights recompute a `JSON.stringify` signature of every light every
+  frame.
+- Real Chrome (not headless shell), DPR 2, Everett, 1200 frames: 18.5 ms
+  host, 3.7 ms GPU, per-100-frame medians flat (no drift).
+
+**Where the time should go, by fix type.**
+1. Rust kernels on typed arrays (oracle validators exist; follow
+   `fog.rs`/`script-vm-kernel.mjs`): Fire.dll water/wet/fire tick (~2–3 ms on
+   every map), moving-light texel `apply` (3.8 Airfield), `animateLightMap`
+   (3.3 Training).
+2. A certain-rounding fast path for `fog.rs` (exact, Ext fallback only when
+   the f32 rounding is uncertain, as `x87-fast.mjs`/`pose_double`): fog is
+   5–13 ms on fog maps.
+3. Rust over the object image: Galaxy `Update`'s actor scan (0.6–2.0 on
+   every map), particle/laser iterator reads, SetupForActor (actors phase),
+   and the level tick's dispatch plumbing (docs/rust-core.md next step).
+   These also remove most of the 13.9 MB/frame garbage behind the GC hitches.
+   That fixes their frequency only: pause length scales with the live heap
+   (771 MB retained on Island after a forced GC, 1.34 GB floor in the 70 s
+   run). What holds ~1 GB (handle tables, per-actor JS records, caches) is an
+   open question.
+4. Not Rust: light-atlas uploads (upload once, batch, no per-tile
+   `getParameter`), the moving-light signature, draw-call count, and
+   draw-list visibility (which bounds fog and procedural-texture work).
+
 ## September 30, night: mesh animation and lighting on the GPU
 
 The actor meshes' GetFrame interpolation and DrawLodMesh lighting now run
