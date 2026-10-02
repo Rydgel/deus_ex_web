@@ -1,5 +1,31 @@
 # Play frame cost from first principles
 
+## October 2: phases for the Stage 4 passes
+
+`deusExViewer.framePhases()` now gives each Stage 4 rendering and audio pass
+its own wall-clock phase, so `profile-play-browser.mjs` reports them without
+code changes. The census below attributes the same work from CPU-profile
+stacks; the fog texel loop, the Fire.dll textures and the animated light-map
+merge have since moved to the Rust core (`fog.rs`, `fire.rs`, `light.rs`).
+
+| Phase | Work | Earlier phase |
+|---|---|---|
+| `sprites` | particle and sprite actors, render iterators (lasers) | `actors` |
+| `lightAnimation` | animated light-map merge, plus `surfacePan` and the view frustum | `mirrors` |
+| `textures` | fire, water and wet textures, AnimNext chains, auto-pan | `mirrors` |
+| `lightUpload` | light-atlas uploads (moving lights and light animation) | `mirrors` |
+| `fog` | volumetric fog maps and their uploads | `mirrors` |
+| `coronas` | corona pass (line checks, draw) | `render` |
+| `weapon` | first-person weapon | `render` |
+| `audio` | Galaxy Update after the HUD draw | `hud` |
+
+To compare with profiles from before the split, add up the phases in the right
+column: for example, the old `mirrors` (the "texture/light-map phase" in the
+A/B tables below) is `lightAnimation + textures + lightUpload + fog + mirrors`.
+Phases are wall time on the CPU, and GPU work is reported by the `--gpu` timer
+as before. Per AGENTS.md, a family moves to the Rust core only once a
+measurement points to it.
+
 ## October 2: ten-map census after the render-feature night
 
 Master `77053aa` (68 commits since `e21924c`: light maps, fire/water/wet

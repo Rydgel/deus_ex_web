@@ -377,7 +377,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * original updates only the textures of surfaces in its draw list; BSP
      * occlusion is not recovered, so every animated texture of the world
      * advances each frame here. */
-    updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null, frustum = null } = {}) {
+    updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null, frustum = null, phase = null } = {}) {
       // Light animation: the light manager's noise with Level.TimeSeconds,
       // then the animated class 1 light maps (docs/static-lighting.md). The
       // original merges only drawn surfaces; with a `frustum` the level's
@@ -396,6 +396,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           lightAtlas.update(lightmap, region ? { partial: true, region, bytes: lightmap.texels } : { partial: true });
         lightAnimation.changed = changed.length; lightAnimation.ms = performance.now() - start;
       }
+      phase?.('lightAnimation');
       // Fire textures, BSP and mesh skins alike, once per frame.
       sharedProceduralTextures().update(time);
       for (const head of animatedHeads) {
@@ -420,6 +421,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         entry.material.map.offset.set(u, v);
         entry.last = [u, v, entry.material.map];
       }
+      phase?.('textures');
     },
     pannedSurfaces: () => panned.map(entry => ({ flags: entry.surface.flags, pan: [...entry.surface.pan],
       zones: entry.zones.map(zone => zone.name), speeds: entry.zones.map(zone => zone.speeds), plane: entry.plane,

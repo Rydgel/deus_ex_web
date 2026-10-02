@@ -835,7 +835,8 @@ window.deusExViewer = { status, framePhases(reset = true) {
 
 // Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
 // phase, read and reset by deusExViewer.framePhases(). Measurement only.
-const framePhases = { frames: 0, tick: 0, lighting: 0, actors: 0, mirrors: 0, render: 0, hud: 0, total: 0,
+const framePhases = { frames: 0, tick: 0, lighting: 0, sprites: 0, actors: 0, lightAnimation: 0, textures: 0, lightUpload: 0,
+  fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, audio: 0, total: 0,
   mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0, gpu: 0, gpuFrames: 0, gpuDisjoint: 0, gpuSupported: 0 };
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
@@ -931,6 +932,7 @@ function animate(time) {
       try{meshItems=spriteScene.update();}catch(error){pauseForRuntimeError(error);}
       spriteScene.root.visible=true;
     }else if(spriteScene)spriteScene.root.visible=false;
+    phase('sprites');
     if(npcPreview&&!runtimeError){
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
@@ -950,8 +952,9 @@ function animate(time) {
     camera.updateMatrixWorld();
     const viewFrustum = world.mirrors.mayRender(camera) ? null : new THREE.Frustum().setFromProjectionMatrix(
       new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-    world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum });
+    world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum, phase });
     world.flushLighting(renderer);
+    phase('lightUpload');
     // Volumetric fog maps from this frame's eye and view rotation
     // (docs/volumetric-fog.md). Mirror views reuse the main frame's maps.
     if (world.fog?.stats.surfaces && !runtimeError) {
@@ -962,6 +965,7 @@ function animate(time) {
           new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)));
       } catch (error) { pauseForRuntimeError(error); }
     }
+    phase('fog');
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
     phase('mirrors');
@@ -985,6 +989,7 @@ function animate(time) {
       framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
     }
     if (drawWorld) renderer.render(scene, camera);
+    phase('render');
     // Coronas close DrawFrame, before PostRender's weapon and HUD.
     if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {
       const pr = renderer.getPixelRatio(), box = clipped ? renderViewportFor(renderRect)
@@ -992,6 +997,7 @@ function animate(time) {
       try { coronaPass.update(playerView, box[2], box[3]); coronaPass.render(renderer); }
       catch (error) { pauseForRuntimeError(error); }
     }
+    phase('coronas');
     framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
     if(drawWorld&&mode==='play'&&weaponViewModel&&!runtimeError){
       try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
@@ -1000,7 +1006,7 @@ function animate(time) {
       const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
       renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
     }
-    phase('render');
+    phase('weapon');
     if(mode==='play'&&hudRenderer&&playerView){
       hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
       updateInfoLinkAccessibility();
@@ -1008,6 +1014,9 @@ function animate(time) {
     gpuEnd();
     framePhases.hudCalls += drawCalls() - calls;
     phase('hud');
+    // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
+    const audioMs = mode === 'play' ? game?.takeAudioMs?.() ?? 0 : 0;
+    framePhases.hud -= audioMs; framePhases.audio += audioMs;
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {
       lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);

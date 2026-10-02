@@ -231,15 +231,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   };
   // UGameEngine::Draw updates the audio subsystem after drawing the frame
   // (0x1038f638): Galaxy's Update follows each HUD frame for that view.
+  // audioMs is host timing for main.mjs's frame phases (measurement only).
+  let audioMs = 0;
   if (hud) {
     const draw = hud.commands.bind(hud);
     hud.commands = (width, height, view) => {
-      const out = draw(width, height, view);
+      const out = draw(width, height, view), start = performance.now();
       doors.scriptRuntime?.runtime?.audio?.update(view);
+      audioMs += performance.now() - start;
       return out;
     };
   }
   const game = {
+    takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
     tick(seconds) {
       // Actor.Tick owns ReadInput, PlayerInput/PlayerTick, ProcessState, timers,
