@@ -1,5 +1,13 @@
 # B: Galaxy module loader, Impulse Tracker branch
 
+> **Verified 2026-10-02.** This report was checked against the original
+> `glxLoadMusic` under Unicorn on all 35 songs and 9 synthetic modules
+> (`scripts/native-galaxy-music-oracle.py`); the Rust translation
+> (`native/galaxy-kernel`) matches byte for byte
+> (`scripts/validate-galaxy-music-loader.mjs`, summary in
+> [galaxy-music.md](../galaxy-music.md#loader-implemented-2026-10-02)).
+> Corrections and additions from that work are marked **(oracle)** below.
+
 Research note (topic B). Source of truth: the hash-pinned GOTY `System/Galaxy.dll`
 (preferred base `0x10600000`). Every claim cites the instruction address that
 establishes it. Struct and global names come from `GALAXY.H` in the DX SDK
@@ -270,6 +278,13 @@ For `i` in `0 .. InsNum-1` (`0x10628c3a`):
 | PanFlag `+0x118` | same transform as VolFlag, applied to `ib[0x182]` | `0x10629177`-`0x106291b3` |
 | PanSize `+0x11a` / PanSustain `+0x11b` / PanLS `+0x11c` / PanLE `+0x11d` | `ib[0x183]` / `ib[0x187]` (**SLE**) / `ib[0x184]` / `ib[0x185]`, each `&0xf` | `0x106291b9`-`0x1062922b` |
 
+   **(oracle)** The two clamp shapes differ. Envelope nodes compare the
+   dword before keeping its low word, so there is no lower clamp: a pan
+   node of −128 stores `0x0000` (low word of −0x20000). VolFadeOut stores
+   the low word first and clamps the re-read word, so fade `0x800` stores
+   `0` (`0x10000` wraps) while `0x400` stores `0x7fff`. Sample Volume and
+   Panning use the second shape too: Vol 128 stores `0`, Vol 200 `0x7fff`.
+
    The Articulation vibrato and tremolo fields (`+0xaa`-`+0xb7`),
    PitFadeOut (`+0x116`) and PanFadeOut (`+0x146`) stay 0 from the memset.
 6. `ins = realloc(ins, 0x14a + NoS*0x48)` (`0x1062924e`). Null returns 9.
@@ -339,6 +354,12 @@ length, `0x106299c2`):
    (`0x1062a2a9`-`0x1062a2cf`).
 7. `P+0x24 = realloc(ev0, ev - ev0)`; the result is not null-checked
    (`0x1062a2f4`).
+
+**(oracle)** With `Rows == 0` (only possible for a damaged file, e.g. a
+pattern header read from zero slack after truncation) `rowsLeft` starts at
+−1 and the converter writes past its `0xc101`-byte block: the original
+faults (Unicorn: unmapped write). No DX pattern overreads its packed bytes
+(measured per pattern).
 
 **Channel entry** (`0x10629b66`-`0x1062a2a4`):
 
@@ -424,6 +445,13 @@ The argument `s` is a `glxSample`; `bps = (Type & 4) ? 2 : 1` (`0x1062fb1a`-`0x1
    pre-fade values.
 10. Return 0.
 
+**(oracle)** For a looped sample with `LoopEnd < Length` the frames
+`[max(LoopEnd+31, Length), Length+31)` of the allocation are never written:
+the padding starts at LoopEnd and the file data ends at Length. They keep
+whatever the MSVCRT heap held. For the DX songs that is 972 bytes in 119
+samples, measured as the only bytes that change with the heap fill. A short
+read (`0x10`) leaves that sample's data unwritten past what was read.
+
 ## 6. In-memory layouts
 
 ### 6.1 Song globals
@@ -431,7 +459,7 @@ The argument `s` is a `glxSample`; `bps = (Type & 4) ? 2 : 1` (`0x1062fb1a`-`0x1
 | VA | Type | IT loader writes | Reset `0x1060e850` / init `0x1060e0xx` | Name |
 | --- | --- | --- | --- | --- |
 | `0x106981e0` | u8[26 written] | song name | - | `glxSongName[32]` (header candidate) |
-| `0x10697cf0` | u8 | GV (`0x80` for DX) | `0x7f` | unnamed global volume |
+| `0x10697cf0` | u8 | GV (`0x80` for DX) | `0x7f` | **(oracle/xref)** the music master volume: `glxSetMusicVolume` `0x1060eb60(vol, 0)` stores it, which SetVolumes calls right after the load (derived from Update's order, `0x1060a810`) |
 | `0x10697cea` | u16 | IS | `0x30` | `glxInitialSpeed` (header candidate; the header says "Default 48") |
 | `0x1069817e` | u16 | tempo | `0x78` | `glxInitialTempo` (header candidate; the header says "Default 120") |
 | `0x1069834a` | u8 | song length, base zero | 0 | `glxSongLength` (header candidate) |
@@ -444,6 +472,15 @@ The argument `s` is a `glxSample`; `bps = (Type & 4) ? 2 : 1` (`0x1062fb1a`-`0x1
 | `0x10698180` | u16 | `0xff00` | `0x7800` | `glxMaxPeriod` (header candidate) |
 | `0x10698348` | u8 | channel count | 0 (init, unload `0x106194dc`) | doubles as the "music loaded" test in `glxLoadMusic` |
 | `0x10698349` | u8 | - | 0 | music playing (set 1 at `0x106122eb`) |
+| `0x10698188` / `0x10698342` | u16 | - | `0x78` / `0x30` | current tempo / speed (reset and init) |
+| `0x10698201` | u8 | - | `0xff` | order position (Update copies it to SongSection) |
+| `0x10698208`, `0x10697ce6`, `0x10698141`, `0x10697ca8`, `0x10698140`, `0x10698200` | | - | `0`, `0`, `0xff`, `0`, `1`, `1` | **(oracle)** other scalars the reset writes; named by the player report |
+
+The reset also zeroes every voice record from `[0x1068828d]` (EffectsChannels,
+16) to 255, FourCC included, and sets `+0xc = 0xbc`, `+0x12 = 0x4e20`,
+`+0x14 = +0x16 = 0x4000`, `+0x1a = 0x7fff`, `+0x1e = 0x28`, `+0x3f = +0x41 =
+0x64` (`0x1060e86b..0x1060e8e9`); glxInit's values differ (`0x7f`, `0x7e02`,
+`+0x11 = 8`, `'VOIC'`/`0x98`). **(oracle)**
 
 Loader-static scratch, overwritten by the next load:
 
@@ -454,6 +491,12 @@ Loader-static scratch, overwritten by the next load:
 | `0x106845a8` | pattern offsets, u32[256] |
 | `0x106844a8` | remap[256] |
 | `0x106841a8`, `0x106841e8`, `0x10684228`, `0x10684468`, `0x106849a8`, `0x106849e8` | the six `[64]` converter arrays |
+
+**(oracle/xref)** The block `0x106841a8..0x10684e28` is referenced by no code
+outside the IT loader, so the player never reads the converter state. The
+sample-offset table is `u32[256]` (`0x10684a28..0x10684e28`; the next
+referenced address, `0x10684e28`, is CRT data). The block persists between
+loads: only `patoff` and the converter arrays are cleared per load.
 
 ### 6.2 `glxInstrument` (binary-confirmed against GALAXY.H, pack 1)
 
@@ -619,7 +662,10 @@ IT and XM alone use the wide limits.
 3. GV is stored as `0x80` for every DX song (the ineffective clamp at
    `0x10628a77`). Whether the player reads `0x10697cf0` signed or unsigned
    (readers `0x106152df`, `0x10617f50`…) decides between full and
-   inverted/zero volume.
+   inverted/zero volume. **(oracle)** `0x10697cf0` is the music master volume
+   (`0x1060eb60` stores it); SetVolumes overwrites it right after the load
+   (derived from Update's call order, not oracle-run), so the loaded `0x80`
+   only matters if UseDigitalMusic is off.
 4. Galaxy cmd `0xf` with `v = 0x20` (from A>0x20): is it speed 32 or
    tempo 32? Galaxy cmd `0x14` (T<0x20) in the player? cmd `0xd`: BCD or
    hex?
@@ -628,16 +674,24 @@ IT and XM alone use the wide limits.
 6. The `+0x400` uninitialised slack that the caller adds to the stream
    Length (`0x1060a711`). It only matters for truncated modules, where a
    short sample read is otherwise `0x10`. Caller semantics belong to
-   agent A.
+   agent A. **(oracle) Answered:** no read of the 35 songs reaches it and
+   their dumps do not change with its content; a module truncated by less
+   than 1024 bytes loads with status 0 and slack bytes in its last sample.
 7. The return-2 path (`0x1060e850` sees `0x10698349`) and who unloads
    before a reload (the `0x10698348` gate) belong to agent A.
 8. The extent of the sample-offset table at `0x10684a28` (no limit is
-   checked; DX has at most 99 samples).
+   checked; DX has at most 99 samples). **(oracle/xref)** `u32[256]`, up to
+   `0x10684e28`; the kernel reports `UNSUPPORTED_TABLE` beyond the loader's block.
 9. The IT loader runs **without** the music critical section `0x1067b670`;
    `0x1060e850` enters it and leaves it before returning. Thread-safety
    against the mixer is unknown.
 
 ## 11. How I would probe this (Unicorn oracle)
+
+**(oracle)** Done differently: the oracle calls `0x10618be0` with the reset,
+as Update does, after executing glxInit's state section for real, and the
+dump comparison is against the Rust translation rather than a Python model.
+The plan below is kept for its preconditions.
 
 Run **`0x10628990` directly**, not `0x10618be0`. The dispatcher's only IT
 effect is the 0x30-byte peek, and `0x1060e850` calls KERNEL32 critical

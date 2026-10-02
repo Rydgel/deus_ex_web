@@ -5,6 +5,7 @@ const root=new URL('../',import.meta.url);
 for(const [crate,artifact,output] of [
   ['lodmesh-kernel','lodmesh_kernel.wasm','lodmesh-kernel.wasm'],
   ['script-vm','script_vm.wasm','script-vm.wasm'],
+  ['galaxy-kernel','galaxy_kernel.wasm','galaxy-kernel.wasm'],
 ]){
   execFileSync('cargo',['build','--manifest-path',`native/${crate}/Cargo.toml`,
     '--locked','--release','--target','wasm32-unknown-unknown','--target-dir','.cache/wasm'],

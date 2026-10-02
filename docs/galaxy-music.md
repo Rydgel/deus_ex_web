@@ -14,8 +14,9 @@ implementation, from the hash-pinned GOTY `System/Galaxy.dll` (base
 | [census](galaxy-music/census.txt) | IT header and sample flags of the 35 songs |
 
 The reports were written from disassembly alone; claims marked *derived*
-there still need the oracle runs listed below. Nothing here is verified
-against a running original yet beyond the existing `-log` output.
+there still need the oracle runs listed below. The loader (it-loader) is now
+verified against the original under Unicorn (see "Loader: implemented");
+the sequencer, mixer and Update reports are not yet.
 
 ## Corrections to earlier notes (applied)
 
@@ -83,6 +84,107 @@ Effects used: A B C D E F G H M O Q S T X Y; the volume column holds only
 volumes. 00_Intro's `Intro_Music`: sample mode, 29 samples, 51 patterns,
 speed 6, tempo 153, section 0.
 
+## Loader: implemented (2026-10-02)
+
+`glxLoadMusic`'s IT branch runs in Rust (`native/galaxy-kernel`, built to
+`src/runtime/galaxy-kernel.wasm`, JS bridge `src/runtime/galaxy-music-loader.mjs`).
+The kernel owns Galaxy's song state as the DLL lays it out: the song scalars,
+name, orders, initial pan, the IT loader's statics `0x106841a8..0x10684e28`
+(one block, so table overruns land where the original's do), the 256 voice
+records (raw `0xa0`-byte layout, as the reset leaves them), and the
+instrument/pattern slots in their original byte layouts. Translated:
+the dispatcher `0x10618be0` (IT only), the reset `0x1060e850`, the memory
+stream, the IT loader `0x10628990`, the sample loader `0x1062fb10` for every
+Type an IT sample can carry, `glxUnloadMusic` `0x10619450`/`0x106195b0`, and
+the glxInit state section plus `0x1060ebc0(EffectsChannels)` as the initial
+state. Module bytes come from `src/unreal/music-module.mjs` (the Music
+export's lazy array, exactly what Update hands over).
+
+**Oracle.** `scripts/native-galaxy-music-oracle.py` runs the real
+`glxLoadMusic(&Mem{'MEMO', 0xc, Data, size + 1024, 0}, 2)` under Unicorn,
+after executing glxInit's state section (`0x1060dfff..0x1060e1b4`) and
+`0x1060ebc0(16)` for real. Stubbed leaves only: Enter/LeaveCriticalSection,
+MSVCRT malloc/realloc (copy-on-grow)/free/memcpy/memset/memcmp, every call
+logged. It dumps everything the player reads (format in the bridge) plus the
+allocation log and the stream log (every seek/read/tell with its position),
+so the parse order is compared, not asserted. Three passes: fresh with fill
+0, fresh with fill `0xa5` and a different slack (to measure what the original
+never initialises), and a chain where each song loads after the real
+`glxUnloadMusic` of the previous one.
+
+**Verification** (`scripts/validate-galaxy-music-loader.mjs`):
+
+- All 35 songs byte-equal to the original, fresh (57,414,482 dump bytes) and
+  chained (57,431,867). The chain differs from fresh only where the original
+  carries state: the order table tail, the loader statics, and the unload's
+  frees.
+- 9 synthetic IT modules (`scripts/galaxy-music-synthetic.mjs`) for the
+  branches the songs never reach: every effect letter and S sub-command,
+  A00/K00/L00 recall, E/F extra-fine slides, note cut/off and raw notes,
+  volume-column values above 64 reused through mask `0x40`, channels ≥ 32,
+  unsigned 8/16-bit samples, LoopEnd > Length, empty loops, loops shorter than
+  the padding, Vol 128 (stores 0) and 200, pan clamps, a non-`IMPS` sample,
+  instrument mode (key remap, all envelope clamps, the PitFlag quirk, a bad
+  `IMPI`, Length-0 and non-`IMPS` samples, fade `0x800` wrapping to 0),
+  OrdNum 0 / 300 / past the file, truncation into the slack and past it
+  (status `0x10` with the original's partial state), bad sample offsets.
+  All equal, 436,279 bytes.
+- Instruction coverage of the original loader functions: 2318 of 2616
+  (songs alone 2173). The 25 unreached runs are listed with reasons in the
+  validator: out-of-memory returns (not modeled), two dead clamps (`movsx`
+  GV, pitch nodes), non-IT formats and the stdio stream (kernel:
+  `UNSUPPORTED_FORMAT`), stereo/delta conversion (the IT loader never sets
+  Type `0x40`/`0x01`; kernel: `UNSUPPORTED_CODING`), seek whence 2, the
+  sample-loader Volume clamp (the IT conversion pre-clamps), and the
+  "already loaded" / "music playing" gates (translated; reached only with
+  the player).
+- 8 mutants all caught: no fade-in, 30-frame padding, D fine slides swapped,
+  note cut keeping its volume, effect memory reset per pattern (changes 27
+  patterns' events), order tail cleared (chain only), S9x untranslated
+  (songs); the Volume clamp done on the dword (synthetic only: no song has
+  Vol > 64).
+- Hazard flags match what the oracle measured: slack reads, short reads,
+  uninitialised instrument records, never-written sample tails.
+
+**Answers.**
+
+- *Slack:* no read of any of the 35 songs reaches the 1024 bytes Update
+  appends, and every dump is identical under a different slack. The slack
+  is only read for a truncated module (synthetic case: the last sample's
+  data then comes from uninitialised memory; kernel `HAZARD_SLACK_READ`).
+  Separately, 24 of the 35 songs' Data end with 1024 zero bytes the loader
+  never reads (the other 11 end at the last sample's data).
+- *Uninitialised output:* the only fill-dependent bytes for the songs are
+  972 bytes in 119 looped samples: the allocation tail
+  `[max(LoopEnd+31, Length), Length+31)` frames, which the padding never
+  writes. The kernel zero-fills them; whether the mixer can read them is a
+  mixer question (phase 3).
+- *NULL patterns:* 25 songs have orders whose pattern stays NULL (empty IT
+  pattern or index ≥ PatNum), e.g. order 2 in 19 songs. Which slots stay
+  NULL is now proven; how the player steps over them is phase 2.
+- *GV:* the loader stores the header GV (`0x80` for every song; the clamp
+  cannot fire) into `0x10697cf0`, which is the music master volume of
+  `glxSetMusicVolume` `0x1060eb60`. Derived from Update's call order (not
+  from this oracle): SetVolumes at `0x1060a810` overwrites it right after
+  the load when UseDigitalMusic.
+- *Converter memory:* the six `[64]` arrays and the offset tables are
+  referenced by no code but the IT loader (xref scan), so the player never
+  reads them; they persist between loads and the chain proves the stale
+  parts never change a song's output.
+- *Faults of the original:* a pattern header read from zero slack (Rows 0)
+  makes the converter write past its `0xc101`-byte block; the original
+  crashes. The kernel stops with `UNSUPPORTED_PATTERN` there, and with an
+  `UNSUPPORTED_*` status wherever the original would leave an allocation.
+
+**Phase 2 inputs.** The sequencer reads, from the kernel: the voice records
+as the reset leaves them (music voices from `0x1068828d` = 16), the order list,
+`0x1069834a` (base-zero song length), `0x10698348` (channel count),
+speed/tempo (`0x10697cea`/`0x1069817e` and the reset's `0x10698342`/`0x10698188`),
+the player mode `0x10697ce8`, the period limits, initial pan, the pattern
+event streams (format: it-loader §4.6) and the instrument/sample records with
+their padded data. The kernel does not yet expose typed accessors; phase 2
+adds them next to the sequencer translation.
+
 ## Determinism
 
 Given the voice state, both counters and the sequence of mixer calls, the
@@ -100,11 +202,15 @@ counters' initial phases explicitly.
   FPUSETUP question): the fade end frame, the ±1 of the music volume, and
   the sqrt pan table (at PC 53 it equals plain doubles).
 - The music bus delay (about 1 s) needs a loopback recording.
-- NULL patterns skipped rather than played as 64 empty rows; a section > 0
-  start keeping speed 48 / tempo 120 and the previous song's tick period;
-  the extra tick-0 pass at a pattern end; key-off and note-cut handling;
-  global volume 0x80 read signed or unsigned; speed vs tempo for clamped
-  Axx; the 1024-byte uninitialised slack after the module.
+- NULL patterns skipped rather than played as 64 empty rows (which slots
+  are NULL is now proven, see the loader section); a section > 0 start
+  keeping speed 48 / tempo 120 and the previous song's tick period; the
+  extra tick-0 pass at a pattern end; key-off and note-cut handling; speed
+  vs tempo for clamped Axx. (Answered by the loader oracle: the 1024-byte
+  slack is never read for the 35 songs; GV `0x80` lands in the music master
+  byte, which SetVolumes overwrites.)
+- Whether the mixer can read the never-written tail of a looped sample's
+  allocation (972 bytes over 119 DX samples).
 - Counter phases are free-running from library init.
 
 ## Plan
@@ -113,7 +219,7 @@ counters' initial phases explicitly.
    `scripts/native-galaxy-audio-oracle.py`'s mapping): run `glxLoadMusic`
    on each song's bytes, dump the song globals, samples (with padding and
    fade-in), patterns and the parameter memory. Translate the loader in
-   Rust and compare all 35 songs.
+   Rust and compare all 35 songs. **Done** (see "Loader: implemented").
 2. **Sequencer oracle:** after the start sequence, call the mixer with a
    fixed request schedule and record the 14 inner-mixer arguments and the
    voice records per tick (Intro from section 0 first, then the edge cases
