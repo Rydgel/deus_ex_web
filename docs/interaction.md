@@ -112,6 +112,18 @@ Inventory use, mission state changes, visual highlight rendering and sound/UI
 are not implemented by this targeting helper. Original native iterator body
 callbacks can mutate the world; this bounded consumer performs only selection.
 
+## Sibling native 1003 TraceVisibleActors
+
+Deus Ex's `execTraceVisibleActors` (`0x1036ec50`, thunk `0x10302847`) is the
+309 exec above with one change. Its `MultiLineCheck` passes
+`ExtraNodeFlags = 4` (`NF_NotVisBlocking`, `push 4` at `1036edfe`) instead of
+0. It has no bHidden or other per-hit filter. ScriptedPawn's Wandering
+GetNextLocation is its only caller.
+`createTraceVisibleActorsIterator` shares the 309 controller. The
+`native-trace-actors-oracle.py` captures cover it: 5 cases, including a
+bHidden actor and hits after the world hit, plus a 6-argument short call.
+Instruction coverage is 244/261. Details are in `docs/script-trace.md`.
+
 ## Geometry-driven Play probes
 
 The shared Training probe fixture no longer assigns `FrobTarget` or

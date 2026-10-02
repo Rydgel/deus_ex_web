@@ -1,6 +1,6 @@
-# Engine Actor Trace / FastTrace / TraceActors / TraceTexture
+# Engine Actor Trace / FastTrace / TraceActors / TraceTexture / TraceVisibleActors
 
-The authority for these four natives is the installed GOTY `System/Engine.u`
+The authority for these five natives is the installed GOTY `System/Engine.u`
 and hash-pinned `System/Engine.dll`:
 
 ```text
@@ -18,6 +18,7 @@ Engine.u exports, not from the declaration text.
 | 548 | `final function bool FastTrace (vector TraceEnd, optional vector TraceStart)` | `0x10302103` | `0x103e35e0` | pre-stored `this->Location` default before the optional expression, both vectors pushed by value, `call 0x10301a37` on `*(this+0xac)+0x98` (Level->Model -> `UModel::FastLineCheck` at `0x103f3280`), `movzx eax,al` byte-masked result |
 | 309 | `final iterator function TraceActors (class<actor> BaseClass, out actor Actor, out vector HitLoc, out vector HitNorm, vector End, optional vector Start, optional vector Extent)` | `0x10303bd4` | `0x103e4bc0` | seven `GPropAddr`/value evaluations, BaseClass defaulted to `class'Actor'` when null and never tested against hits, `call [XLevel vtable +0xc8]` `MultiLineCheck(GMem, End, Start, Extent, checkActors=1, worldActor=this->+0xa8, extra=0)`, per-node publish loop dispatching the iterator body until `0x30`/`0x31`, Actor out cleared at exhaustion only |
 | 1000 | `final iterator function TraceTexture (class<actor> BaseClass, out actor Actor, out name texName, out name texGroup, out int flags, out vector HitLoc, out vector HitNorm, vector End, optional vector Start, optional vector Extent)` | `0x10302252` | `0x1036e450` | same ten-argument/MultiLineCheck skeleton as 309; per hit, texName/texGroup/flags zero then — only when the hit actor's class ancestry reaches `LevelInfo` (`0x1057bf00`) — `hit.Item` (+0x28) indexes `Model->+0x58` node records (64 bytes, `+0x1c` = iSurf) into `Model->+0x98` surface records (64 bytes, `+0x00` = material object, `+0x04` = PolyFlags): `material->+0x20` → texName, `material->+0x18->+0x20` (Outer name) → texGroup, surface `+0x04` → flags |
+| 1003 | `final iterator function TraceVisibleActors (class<actor> BaseClass, out actor Actor, out vector HitLoc, out vector HitNorm, vector End, optional vector Start, optional vector Extent)` | `0x10302847` | `0x1036ec50` | instruction-for-instruction the 309 body except the `MultiLineCheck` last argument: `push 4` at `1036edfe` (309 pushes its zero register at `103e4d6a`), i.e. `ExtraNodeFlags = NF_NotVisBlocking`; no per-hit test (no `+0x28` bHidden read) |
 
 ## Recovered semantics
 
@@ -129,6 +130,57 @@ Cases (`scripts/native-trace-texture-oracle.py` →
 - `hits=[]` — the `0x11`/`0x22`/`-7` name/group/flags seeds survive; only
   `Actor` clears.
 - `breakAfter=3` — the published world-hit texture values are retained.
+
+### 1003 `TraceVisibleActors` — `0x1036ec50`
+
+Deus Ex addition (thunk `0x10302847`, export
+`?execTraceVisibleActors@AActor@@QAEXAAUFFrame@@QAX@Z`). A normalized
+instruction diff against `execTraceActors` differs only at the
+`MultiLineCheck` call: 1003 loads the Extent X dword into `ebx` before the
+pushes and pushes the immediate `4` as `ExtraNodeFlags` where 309 pushes `ebx`
+(still zero). All other differences are relocated branch targets. `4` is
+`NF_NotVisBlocking` ("Node does not block visibility, i.e. is an invisible
+collision hull", DX SDK 1112f `Engine/Inc/UnObj.h:50`). `MultiLineCheck`
+(`0x1039b220`) forwards it as `extra & 0xff` to the world `UModel::LineCheck`
+and raw to the hash `ActorLineCheck`, so world and mover BSP traces ignore
+those nodes (`ray.mjs` mask `(extra & ~0x10) | 0x21`). The hit loop has no
+class, owner, self or bHidden test. The only caller,
+`ScriptedPawn.Wandering.GetNextLocation` (ScriptedPawn.uc:10269), makes its own
+`hitActor != self`, `hitActor == Level` and `bBlockSight && !bHidden` checks.
+
+`createTraceVisibleActorsIterator` shares the 309 controller body with
+`extra = 4`, and `ScriptRuntime.createIterator` dispatches 1003 to it.
+
+Cases (`native-trace-actors-oracle.py`, `exec: 'visible'` →
+`validate-native-trace-actors.mjs`, 5 cases plus a 6-argument short call):
+
+- A hit list of self, a **bHidden** actor (`+0x28 = 2`), the world, then a
+  plain actor and an owned Mover. Every node is published in order, and the
+  hits after the world hit are still yielded.
+- `baseClass` absent or `Mover`: identical yields, covering both sides of the
+  null-default branch.
+- `breakAfter=2`, `hits=[]` and explicit or default `start`/`extent`: the
+  same out-parameter contract as 309.
+- The captured query carries `extra: 4`. Changing the controller to
+  `extra: 0` gives 6 mismatches.
+- The 6-argument call shape of the only caller keeps the zero Extent default.
+
+Instruction coverage of `0x1036ec50`–`0x1036ef5e` is 244/261. The 17
+unreached instructions fall in two groups:
+
+- `ecbf/ecc3`, `ecf7/ecfb` and `ed2f/ed33` are the `GPropAddr == null`
+  local-buffer fallback for the three `out` arguments. Compiled `foreach`
+  outs are always lvalues.
+- `ef30`–`ef4a` is the `FMemMark` release path taken when `MultiLineCheck`
+  allocated from `GMem`. The oracle stubs `MultiLineCheck`, so nothing is
+  allocated.
+
+Neither group changes script-visible state.
+
+Unverified: `ray.mjs`'s ExtraNodeFlags mask is pinned by native ray cases with
+bits `0x01` and `0x10` only. Bit `0x04` takes the same mask expression, but no
+dedicated `0x04` ray case exists. Which shipping BSP nodes carry
+`NF_NotVisBlocking` is map data that this check does not sample.
 
 ### Optional-argument arity (all four iterator execs)
 

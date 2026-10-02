@@ -116,18 +116,33 @@ const isLevelInfo = actor =>
  * the hits; no self/owner exclusion applies (that lives in SingleLineCheck).
  * At natural exhaustion only the Actor out is cleared — HitLocation/HitNormal
  * keep the last published hit. Evidence: docs/script-trace.md. */
-export function createTraceActorsIterator({
+export function createTraceActorsIterator(call) {
+  return traceActorsIterator(call, 'TraceActors', 0);
+}
+
+/** Original execTraceVisibleActors 0x1036ec50 (Deus Ex native index 1003,
+ * thunk 0x10302847). Instruction-for-instruction the execTraceActors body
+ * except the MultiLineCheck's last argument: `push 4` (1036edfe) where 309
+ * pushes its zero register — ExtraNodeFlags = NF_NotVisBlocking, so the world
+ * and mover BSP traces pass through invisible collision hulls. There is no
+ * per-hit test: bHidden actors are published like any other hit.
+ * Evidence: docs/script-trace.md. */
+export function createTraceVisibleActorsIterator(call) {
+  return traceActorsIterator(call, 'TraceVisibleActors', 4);
+}
+
+function traceActorsIterator({
   receiver,
   argumentCount,
   evaluateArgument,
   levelFor,
   readActor = (actor,name) => name==='Location'?actor.position:actor.worldActor,
-}) {
-  if (typeof evaluateArgument !== 'function') throw new TypeError('TraceActors requires evaluateArgument');
-  if (typeof levelFor !== 'function') throw new TypeError('TraceActors requires levelFor');
+}, name, extra) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError(`${name} requires evaluateArgument`);
+  if (typeof levelFor !== 'function') throw new TypeError(`${name} requires levelFor`);
   // The exec's OPTX macros make Start/Extent optional: valid calls carry
   // five to seven argument expressions.
-  if (argumentCount < 5 || argumentCount > 7) throw new RangeError(`TraceActors takes five to seven arguments; got ${String(argumentCount)}`);
+  if (argumentCount < 5 || argumentCount > 7) throw new RangeError(`${name} takes five to seven arguments; got ${String(argumentCount)}`);
 
   evaluateArgument(0);
   const outActor = writeSlot(evaluateArgument(1));
@@ -142,12 +157,12 @@ export function createTraceActorsIterator({
   const queries = level?.hash;
   const worldActor = readActor(receiver,'Level');
   if (typeof queries?.multiLineCheck !== 'function')
-    throw new TypeError('TraceActors requires the live level MultiLineCheck service');
+    throw new TypeError(`${name} requires the live level MultiLineCheck service`);
   if (worldActor === undefined)
-    throw new TypeError('TraceActors requires the receiver level-info field');
+    throw new TypeError(`${name} requires the receiver level-info field`);
   const hits = queries.multiLineCheck({
     end: end.map(Math.fround), start: start.map(Math.fround), extent: extent.map(Math.fround),
-    checkActors: 1, worldActor, extra: 0,
+    checkActors: 1, worldActor, extra,
   });
 
   let index = 0;

@@ -1,13 +1,18 @@
-"""Execute original execTraceActors; argument/body evaluation and MultiLine
-results are explicit controlled callbacks. Iterator decisions are original code.
+"""Execute original execTraceActors (native 309, 0x103e4bc0) or, for cases with
+exec='visible', execTraceVisibleActors (native 1003, 0x1036ec50); argument/body
+evaluation and MultiLine results are explicit controlled callbacks. Iterator
+decisions are original code. The 1003 body's executed addresses are recorded
+for instruction coverage.
 """
 import importlib.util,json,struct,sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('native',Path(__file__).with_name('native-collision-oracle.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 CLASSES={'Actor':0x1057cdf0,'Pawn':0x1058c660,'Mover':0x1058bb58,'LevelInfo':0x1057bf00}
+EXECS={None:0x103e4bc0,'visible':0x1036ec50}
+VISIBLE_BODY=(0x1036ec50,0x1036ef61)
 class NativeTraceActors(m.NativeCollision):
  def __init__(self,root):
-  self.argument=self.body=self.multi=None
+  self.argument=self.body=self.multi=None;self.visited=set()
   super().__init__(root);self.call(0x10102978,0x101b3218,b'');self.source=self.alloc(0x200);self.level=self.alloc(0x100);self.vtable=self.alloc(0x100);self.info=self.alloc(0x200)
   self.frame=self.alloc(0x40);self.node=self.alloc(0x80);self.code=self.alloc(32);self.outactor=self.alloc(4);self.outloc=self.alloc(12);self.outnorm=self.alloc(12)
   self.argument=0x700fc000;self.body=0x700fc010;self.multi=0x700fc020
@@ -19,6 +24,7 @@ class NativeTraceActors(m.NativeCollision):
   self.write(self.frame+4,'III',self.node,self.source,self.code);self.write(self.node+0x44,'I',self.code)
  def on_instruction(self,c,a,z,d):
   sp=c.reg_read(m.UC_X86_REG_ESP)
+  if VISIBLE_BODY[0]<=a<VISIBLE_BODY[1]:self.visited.add(a)
   if a==self.argument:
    result=self.read(sp+8,'I')[0];i=self.argindex;self.argindex+=1
    if i==0:self.write(result,'I',CLASSES.get(self.case.get('baseClass'),0))
@@ -44,12 +50,20 @@ class NativeTraceActors(m.NativeCollision):
   for actor in case.get('actors',[]):actors[actor['id']]=self.alloc(0x200)
   for actor in case.get('actors',[]):
    self.write(actors[actor['id']]+0x24,'I',CLASSES[actor.get('kind','Actor')]);self.write(actors[actor['id']]+0x3c,'I',actors.get(actor.get('owner'),0));self.write(actors[actor['id']]+0x1dc,'I',actor.get('flags',0))
+   # bHidden is AActor +0x28 bit 0x02 (VisibleActors' `test byte ptr [edi+0x28],2`).
+   self.write(actors[actor['id']]+0x28,'I',2 if actor.get('hidden') else 0)
   self.ids={v:k for k,v in actors.items()};self.ids[0]=None
   self.hitptrs=[self.alloc(44)for _ in case['hits']]
   for i,hit in enumerate(case['hits']):self.write(self.hitptrs[i],'II6fIfi',self.hitptrs[i+1]if i+1<len(self.hitptrs)else 0,actors[hit['actor']],*hit.get('location',[i,2,3]),*hit.get('normal',[0,0,1]),0,hit.get('time',i/10),-1)
   self.write(self.source+0x114,'3f',*case.get('sourcePosition',[10,20,30]));self.write(self.outactor,'I',0);self.write(self.outloc,'3f',9,9,9);self.write(self.outnorm,'3f',8,8,8)
   self.cpu.mem_write(self.code,bytes([254]*7+[22])+struct.pack('<H',12)+bytes([253,49,48,0]));self.write(self.frame+12,'I',self.code)
-  self.argindex=0;self.yields=[];self.query=None;self.call(0x103e4bc0,self.source,struct.pack('<II',self.frame,0))
+  self.argindex=0;self.yields=[];self.query=None;self.call(EXECS[case.get('exec')],self.source,struct.pack('<II',self.frame,0))
   return {'query':self.query,'yields':self.yields,'finalActor':self.ids[self.read(self.outactor,'I')[0]],'finalLocation':self.read(self.outloc,'3f'),'finalNormal':self.read(self.outnorm,'3f')}
+def coverage(n):
+ from capstone import Cs,CS_ARCH_X86,CS_MODE_32
+ code=bytes(n.cpu.mem_read(VISIBLE_BODY[0],VISIBLE_BODY[1]-VISIBLE_BODY[0]))
+ body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(code,VISIBLE_BODY[0])if i.mnemonic!='nop']
+ return {'total':len(body),'reached':sum(a in n.visited for a in body),'unreached':[hex(a)for a in body if a not in n.visited]}
 if __name__=='__main__':
- n=NativeTraceActors(Path(sys.argv[1]));print(json.dumps({'hashes':m.HASHES,'results':[n.run(c)for c in json.loads(Path(sys.argv[2]).read_text())]}))
+ n=NativeTraceActors(Path(sys.argv[1]));results=[n.run(c)for c in json.loads(Path(sys.argv[2]).read_text())]
+ print(json.dumps({'hashes':m.HASHES,'results':results,'visibleCoverage':coverage(n)}))

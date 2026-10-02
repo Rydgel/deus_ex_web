@@ -21,7 +21,7 @@ import { loadTraceKernel } from './trace-kernel.mjs';
 import { RustScriptVm, classDefaultsChanged } from './script-vm-rust.mjs';
 import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
@@ -4128,11 +4128,12 @@ export class ScriptRuntime {
     return services;
   }
   createIterator(call) {
-    if(call.index===309||call.index===1000){
-      // execTraceActors/execTraceTexture run one MultiLineCheck at
-      // IteratorStart and publish each hit list node in order; see
-      // docs/script-trace.md.
-      const create=call.index===309?createTraceActorsIterator:createTraceTextureIterator;
+    if(call.index===309||call.index===1000||call.index===1003){
+      // execTraceActors/execTraceTexture/execTraceVisibleActors run one
+      // MultiLineCheck at IteratorStart and publish each hit list node in
+      // order; see docs/script-trace.md.
+      const create=call.index===309?createTraceActorsIterator
+        :call.index===1003?createTraceVisibleActorsIterator:createTraceTextureIterator;
       return create({...call,levelFor:this.levelFor,readActor:(actor,name)=>this.readNamed(actor,name)});
     }
     if(call.index===310||call.index===311||call.index===306||call.index===1002){
