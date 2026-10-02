@@ -232,10 +232,11 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     detachPlayerIdentity(){
       const old=source;
       // The retired identity's image is purged with the old level; the
-      // Player's motion word, velocity and pose (position, body rotation,
+      // Player's motion and collision words, velocity and pose (position, body rotation,
       // collision size, OldLocation) are host state until the next identity
       // links.
       player.linkMotionFlags(null);
+      player.linkCollisionFlags(null);
       player.linkVelocity(null);
       player.linkPose(null);
       collision.queries.removeActor(old);player.actorRegistered=false;

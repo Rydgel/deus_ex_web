@@ -228,6 +228,30 @@ travel, a Stage 6 boundary. Play stops there with a labeled
 `TravelBoundary` (`travel-boundary.mjs`: URL, travel type, bItems) and the
 viewer says the map ended by travelling, instead of an unknown-native pause.
 
+### Intro shots: CameraPoint, not ConCamera
+
+The Intro conversation has no ConEventMoveCamera; it plays in first-person
+display mode, so `DeusExPlayer.PlayerCalcView` returns the player's own
+Location + EyeHeight and ViewRotation, and `ConPlay.cameraInfo` stays None.
+The shots come from the map's 49 `Engine.CameraPoint` actors (sequence 0 to
+1015): `CameraPoint.Idle` at sequence 0 puts the player in Paralyzed
+(Letterbox), hides it, clears `bCollideWorld`, `SetCollision(False, False,
+False)` and BaseEyeHeight, then `Running.Tick` executes the commands (MOVE
+cuts or smooth moves, PUSH, FOV, TILT, PAN, WAIT, TRIGGER, some `bRandom`)
+through `Player.SetLocation`, `ViewRotation` and `SetFOVAngle`.
+
+Sequence 74 cuts from Page's close-up (sequence 71, 23 units from his face)
+to the clone's tank at (-11054,-8558,-5085), and 76 cranes up 81 units over
+7.25 s. Until 2026-10-02 that `SetLocation` failed: the movement port's
+collision word was a host copy that missed the script write to
+`bCollideWorld`, so `FarMoveActor` ran FindSpot (relocation.mjs, the
+`flags & 2` gate) and refused the destination. The camera stayed at Page's
+position with the new rotation, a red wall, for 7.25 s, and the crane then
+landed 22-28 units off its target where FindSpot fitted the cylinder. The
+player's collision word is now its image ([Rust core](rust-core.md), "Not
+moved, and why"); headless the cut lands on (-11054,-8558,-5085) at tick
+7105 and the crane ends on (-11054,-8560,-5004).
+
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight

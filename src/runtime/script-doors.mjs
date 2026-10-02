@@ -17,7 +17,7 @@ import { preparePlayerLogStore } from './script-player-log.mjs';
 import { createWorldDestroyServices, createDestroyedActorLedger, mapActorNativeObject } from './script-world-destroy.mjs';
 import { setActorCollisionSize, findActorBase, setActorCollision, setCollisionArguments } from './script-actor-collision.mjs';
 import { writeCollisionFlags, isMapMoveHost } from './map-actor-native.mjs';
-import { installActorFlagWords, flagWord, MOTION_WORD } from './actor-flag-words.mjs';
+import { installActorFlagWords, flagWord, MOTION_WORD, COLLISION_WORD } from './actor-flag-words.mjs';
 import { installMirrorFields, mirrorsField, resetMirrorField, imageField, PLAYER_BOUND, PLAYER_PORT } from './actor-mirror-fields.mjs';
 import { installPoseFields, posesField, resetPoseField, isPoseProp, keepLivePose, imagePoseField } from './actor-pose-fields.mjs';
 import { installLinkFields, linksField, isLinkProp, resetLinkField } from './actor-link-fields.mjs';
@@ -956,6 +956,7 @@ export async function createScriptDoors({
   function installFlagWords(host) {
     if (host.controlledPlayer) {
       playerController.linkMotionFlags(flagWord(runtime.instance(host), MOTION_WORD));
+      playerController.linkCollisionFlags(flagWord(runtime.instance(host), COLLISION_WORD));
       return;
     }
     const collision = Number.isInteger(host.flags), actor = Number.isInteger(host.actorFlags);

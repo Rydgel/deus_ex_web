@@ -8,6 +8,7 @@ import { runPlayerPhysics } from './player-physics.mjs';
 import { walkingInput, healthyWalkingGroundSpeed } from './player-input.mjs';
 import { defaultPawnCollisionHeight } from './stance.mjs';
 import { setCollisionSize } from './relocation.mjs';
+import { collisionFlagsFrom } from './map-actor-native.mjs';
 import { updateCrouch } from './crouch-query.mjs';
 import { scriptTrace } from './script-trace.mjs';
 import { handleWalkingControls, stanceCrouchRequested, afterStanceControls, afterJumpControls } from './player-controls.mjs';
@@ -31,13 +32,17 @@ export class Player {
     this.radius = defaults.CollisionRadius;
     this.standingHeight = defaultPawnCollisionHeight(defaults.CollisionHeight);
     this.motionWord = null;
+    this.collisionWord = null;
+    // The class default +0x1dc word, bProjTarget (0x10) included, as the
+    // spawned identity's image starts.
+    this.initialCollisionFlags = collisionFlagsFrom(defaults);
+    this.hostCollisionFlags = this.initialCollisionFlags;
     this.velocityField = null;
     this.poseFields = null;
     this.motionFlags = defaults.bJustTeleported ? 0x100 : 0;
     const player = this;
     this.collisionActor = { controlledPlayer: true, static: Boolean(defaults.bStatic), movable: defaults.bMovable ?? true,
-      flags: (defaults.bCollideActors ? 1 : 0) | (defaults.bCollideWorld ? 2 : 0) |
-        (defaults.bBlockActors ? 4 : 0) | (defaults.bBlockPlayers ? 8 : 0),
+      get flags() { return player.collisionFlags; }, set flags(value) { player.collisionFlags = value >>> 0; },
       get motionFlags() { return player.motionFlags; }, set motionFlags(value) { player.motionFlags = value >>> 0; },
       get position() { return player.position; }, set position(value) { player.position = value; },
       get radius() { return player.radius; }, set radius(value) { player.radius = value; },
@@ -96,6 +101,9 @@ export class Player {
     for (const [field, member] of Object.entries(fields)) if (values[field] !== undefined)
       actor[member] = Array.isArray(values[field]) ? [...values[field]] : values[field];
     this.motionFlags = values.bJustTeleported ? 0x100 : 0;
+    // A new identity starts from the movement port's construction word, as
+    // the data member the descriptors copied did before it was linked.
+    this.collisionFlags = this.initialCollisionFlags;
     actor.static = Boolean(values.bStatic);
     actor.movable = Boolean(values.bMovable);
     actor.values = { ...values,
@@ -141,6 +149,24 @@ export class Player {
     if (word && ((this.hostMotionFlags ?? 0) & 0x100) !== (word.get() & 0x100))
       throw new Error(`Player bJustTeleported 0x${((this.hostMotionFlags ?? 0) >>> 0).toString(16)} differs from its image word 0x${word.get().toString(16)}`);
     this.motionWord = word;
+  }
+  /** The +0x1dc collision word (bCollideActors 0x1, bCollideWorld 0x2,
+   * bBlockActors 0x4, bBlockPlayers 0x8, bProjTarget 0x10). While an
+   * attached identity is linked (script-doors.mjs installFlagWords) it is
+   * that identity's image word, so a script bool write reaches the natives
+   * that read the word: CameraPoint.Idle's `Player.bCollideWorld = False`
+   * turns off FarMoveActor's FindSpot (relocation.mjs), as in the original.
+   * Before attach, between identities and in fixtures it is host state. */
+  get collisionFlags() { return this.collisionWord ? this.collisionWord.get() : this.hostCollisionFlags; }
+  set collisionFlags(value) { if (this.collisionWord) this.collisionWord.set(value >>> 0); else this.hostCollisionFlags = value >>> 0; }
+  /** Link the collision word to an attached identity's image (a FlagWord),
+   * or unlink it (null) before that identity's image is released. The host
+   * copy and the image agree when linked. */
+  linkCollisionFlags(word) {
+    if (this.collisionWord) this.hostCollisionFlags = this.collisionWord.get();
+    if (word && (this.hostCollisionFlags >>> 0) !== word.get())
+      throw new Error(`Player collision word 0x${(this.hostCollisionFlags >>> 0).toString(16)} differs from its image word 0x${word.get().toString(16)}`);
+    this.collisionWord = word;
   }
   /** Actor.Velocity (+0x144): while an attached identity is linked
    * (script-doors.mjs installMirrors) it is that identity's image field, so

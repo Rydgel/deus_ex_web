@@ -2215,12 +2215,22 @@ The words are now the image's bytes.
 
 Not moved, and why:
 
-* **The player's collision and actor words** stay the movement port's host
-  state (step 6). Player start assigns the retired identity a composed
-  `actorFlags` without bDeleteMe and re-registers it in the hash before
-  LoadMap's collection. With the image as the word, that registration would
-  follow the destroyed identity's bDeleteMe. In both maps' shadow runs the
-  player's words equalled its image at every tick.
+* **The player's actor word** stays the movement port's host state (step
+  6). Player start assigns the retired identity a composed `actorFlags`
+  without bDeleteMe and re-registers it in the hash before LoadMap's
+  collection. With the image as the word, that registration would follow the
+  destroyed identity's bDeleteMe.
+* **The player's collision word** moved on 2026-10-02, the way its motion
+  word had: `Player.collisionFlags` is the attached identity's +0x1dc image
+  word while linked (`linkCollisionFlags` in installFlagWords), host state
+  before attach and after `detachPlayerIdentity` unlinks it. The
+  retired-identity concern above is the actor word's; the collision word is
+  unlinked before the old image is purged. The host word starts from the
+  class default word, bProjTarget included (0x1f for JCDentonMale). Training
+  and Island never write the player's collision bools, so their digests are
+  unchanged. 00_Intro does: `CameraPoint.Idle` sets `Player.bCollideWorld =
+  False`, and FarMoveActor's FindSpot gate must see it, or the cut to the
+  clone's tank is refused ([conversation camera](conversation-camera.md)).
 * **The collision kernel** still reads a candidate's `collisionBits` through
   `lc_accept` and `lc_candidate`. The hash kernel lives in the trace
   kernel's own instance and memory, not a runtime arena (R3-b B0), so it
