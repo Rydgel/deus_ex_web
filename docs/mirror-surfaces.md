@@ -447,9 +447,10 @@ overlap them by bounding box. Four of them are mirrored: DeusExMover0 in
   (`+8`), iSurf (`+0x14`), ZoneNumber (`+0x18`) and the four NearClip
   floats (`+0x24`), per the SDK's FSceneNode. So it merges one surface's
   polygons within a zone, not different surfaces on one plane. The
-  browser's per-plane groups are coarser. The image is the same, because a
-  child depends only on its plane, but the original may draw more child
-  frames than the browser. A mover polygon, being its own surface, would
+  browser's per-plane groups are coarser. Within one zone the image is the
+  same, because the reflection depends only on the plane. Across zones, the
+  original's separate children may see different portal traversals, and it
+  may draw more child frames than the browser. A mover polygon, being its own surface, would
   never share the floor's child.
 - **Shadow blobs.** The original shows soft shadow blobs under pawns. These
   are Shadow decals attached through AttachDecal. The runtime attaches them
