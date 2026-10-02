@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { getAxes } from '../src/runtime/camera.mjs';
-import { coordsTransform, volumetricLight, fogMap, fogMapKernel, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
+import { coordsTransform, volumetricLight, fogMap, fogMapKernel, fogVertex, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -44,11 +44,14 @@ for (let c = 0; c < SURFACES + EXTRA; c++) {
   const missFlag = c % 2;
   inputs.push({ grid, width, height, coords, lights, missFlag });
   if (c >= SURFACES) continue;
+  // Mesh vertices in frame space near the lights (FLightManager::Fog).
+  const vertices = Array.from({ length: 12 }, () => coordsTransform(vec(surface, 300), coords));
   cases.push({ coords: [...eye, ...x, ...y, ...z].map(bits), grid: { base: grid.base.map(bits), stepU: u.map(bits), stepV: v.map(bits) },
     width, height, missFlag, order, lights: lightInputs.map(l => ({ ...l, location: l.location.map(bits), color: l.color.map(bits),
-      brightness: bits(l.brightness) })) });
+      brightness: bits(l.brightness) })), vertices: vertices.map(p => p.map(bits)) });
   const state = { missFlag };
-  js.push({ lights, texels: fogMap({ grid, width, height, coords, lights, state }), state });
+  const texels = fogMap({ grid, width, height, coords, lights, state }), surfaceFlag = state.missFlag;
+  js.push({ lights, texels, state: { missFlag: surfaceFlag }, vertices: vertices.map(p => fogVertex(p, lights, state)), vertexFlag: state.missFlag });
 }
 const reference = JSON.parse(execFileSync(python, ['scripts/native-volumetric-fog-oracle.py', gameDirectory()],
   { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 1 << 28 }));
@@ -68,7 +71,7 @@ inputs.forEach((input, i) => {
   rustTexels += input.width * input.height;
 });
 
-let texels = 0, lit = 0, merged = 0, inside = 0;
+let texels = 0, lit = 0, merged = 0, inside = 0, vertexCount = 0, fogVertices = 0;
 cases.forEach((c, i) => {
   const expected = reference[i], actual = js[i];
   expected.lights.forEach((e, k) => {
@@ -81,10 +84,13 @@ cases.forEach((c, i) => {
     if (a.inside) inside++;
   });
   assert.deepEqual([...actual.texels], expected.texels, `case ${i}: fog texels`);
+  actual.vertices.forEach((plane, k) => assert.deepEqual(plane.map(bits), expected.vertices[k], `case ${i} vertex ${k}: fog plane`));
+  assert.equal(actual.vertexFlag, expected.vertexMissFlag, `case ${i}: early-out flag after the vertices`);
+  for (const plane of expected.vertices) { vertexCount++; if (plane[3]) fogVertices++; }
   assert.equal(actual.state.missFlag, expected.missFlag, `case ${i}: early-out flag`);
   texels += c.width * c.height;
   for (let t = 3; t < expected.texels.length; t += 4) if (expected.texels[t]) lit++;
   if (c.lights.length > 1) merged++;
 });
-assert.ok(lit > 2000 && merged > 50 && inside > 3, 'cases reach fogged texels, merges and inside-volume lights');
-console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels).`);
+assert.ok(lit > 2000 && merged > 50 && inside > 3 && fogVertices > 300, 'cases reach fogged texels, merges, inside-volume lights and fogged vertices');
+console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights and ${vertexCount} mesh vertices (${fogVertices} fogged, FLightManager::Fog) match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels).`);

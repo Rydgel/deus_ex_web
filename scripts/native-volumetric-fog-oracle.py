@@ -38,6 +38,11 @@ class FogOracle(lighting.Oracle):
         # statistics take the non-rdtsc path.
         self.timestamp = self.alloc(16)
         self.write(0x10b5d4c8, 'I', self.timestamp)
+        # FLightManager::Fog's out-of-line Core calls: FVector::operator| and
+        # SizeSquared (Render IAT 0x10b5d4d0, 0x10b5d4cc).
+        core = self.core.exports()
+        self.write(0x10b5d4d0, 'I', core['??UFVector@@QBEMABV0@@Z'])
+        self.write(0x10b5d4cc, 'I', core['?SizeSquared@FVector@@QBEMXZ'])
         self.sqrt_table()                  # fast square-root table 0x10b3e1b8
         self.frame()
         self.run(0x10b020cf, 0x10b02112)   # fog attenuation table 0x10b38ac8
@@ -97,7 +102,18 @@ class FogOracle(lighting.Oracle):
         texels = []
         for v in range(height):
             texels += list(self.cpu.mem_read(data + v * stride * 4, width * 4))
-        return {'lights': [info for _, info in infos], 'texels': texels, 'missFlag': self.read(MISS, 'I')[0]}
+        flag = self.read(MISS, 'I')[0]
+        # FLightManager::Fog (0x10b02c00, PolyFlags PF_RenderFog) for mesh
+        # vertices in frame space, after the surface, over the same sorted
+        # list and early-out flag.
+        vertices = []
+        point, plane = self.alloc(0x40), self.alloc(0x10)
+        for vertex in case.get('vertices', []):
+            self.write(point, '3I', *vertex)
+            self.call(0x10b02c00, [plane, point, 0x40000000], 0x10b3d2f0)
+            vertices.append(list(self.read(plane, '4I')))
+        return {'lights': [info for _, info in infos], 'texels': texels, 'missFlag': flag,
+                'vertices': vertices, 'vertexMissFlag': self.read(MISS, 'I')[0]}
 
 
 if __name__ == '__main__':

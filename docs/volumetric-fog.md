@@ -196,5 +196,12 @@ Unverified or host choices, noted:
   ×2 upload it reads `2v·c`, the vertex path's value. Within Render.dll this
   supports the ×2 seven-bit upload scale used for the fog pass; D3D's RGBA7
   filler itself is still untraced.
+- **Translation.** `fogVertex` (volumetric-fog.mjs) shares the chord code
+  with the fog-map loop through `chordValue`, with SizeSquared's
+  `(x² + y²) + z²` order. `validate-volumetric-fog.mjs` calls the original
+  Fog (Core's `operator|` and SizeSquared bound natively) for 12 vertices per
+  case after the surface loop, carrying the same early-out flag. All 1,440
+  vertex FPlanes (1,033 fogged) and the final flag match.
 - **Still to trace.** DrawLodMesh's call sites (Render calls the Fog slot
-  twice) and D3D's use of the vertex fog under PF_RenderFog.
+  twice) and D3D's use of the vertex fog under PF_RenderFog, before meshes
+  can be fogged in Play.

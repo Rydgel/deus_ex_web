@@ -53,7 +53,7 @@ export function volumetricLight({ location, color, brightness, volumeRadius, vol
   return {
     location: location.map(f), radius: st(radius), radiusSq, invRadius: st(invRadius), invRadiusSq: st(x87mul(invRadius, invRadius)),
     distanceSq: st(distanceSq), brightness: st(x87mul(x87mul(x87int32(volumeBrightness & 255), ld(brightness)), V_BRIGHT)),
-    inside: compare === 'lt' || compare === 'un', fog, table,
+    inside: compare === 'lt' || compare === 'un', fog, table, color: color.map(Math.fround),
   };
 }
 
@@ -62,23 +62,24 @@ export function volumetricLight({ location, color, brightness, volumeRadius, vol
  * 0; equal depths keep the host sort's order (see docs). */
 export const sortVolumetricLights = lights => lights.slice().sort((a, b) => b.location[2] - a.location[2]);
 
-// One texel's fog fraction (0x10b075dc-0x10b07824 and 0x10b078f3-0x10b07b07):
-// the light's sphere along the eye ray to P, `first` choosing the first
-// light's extended scale or the later lights' float store. Returns the
-// colour-table index, or -1 for the later-light skip.
-function texelIndex(light, px, py, pz, state, first) {
+// The light's sphere along the eye ray to P (SetupForSurf's per-texel body
+// 0x10b075dc-0x10b07824 / 0x10b078f3-0x10b07b07 and FLightManager::Fog
+// 0x10b02c83-0x10b02e7f): the clamped chord value in 80 bits, or null for a
+// miss. `vertex` selects Fog's out-of-line Core SizeSquared, which sums
+// (x² + y²) + z² where the surface loop sums (x² + z²) + y².
+function chordValue(light, px, py, pz, state, vertex = false) {
   const [lx, ly, lz] = light.location;
   const dot = st(x87add(x87add(x87mul(ld(pz), ld(lz)), x87mul(ld(py), ld(ly))), x87mul(ld(px), ld(lx))));
-  const miss = () => first ? 0 : -1;
-  if (!light.inside && bitsOf(dot) >= 0x80000000) return miss();
-  const pp = x87add(x87add(x87mul(ld(px), ld(px)), x87mul(ld(pz), ld(pz))), x87mul(ld(py), ld(py)));
+  if (!light.inside && bitsOf(dot) >= 0x80000000) return null;
+  const pp = vertex ? x87add(x87add(x87mul(ld(px), ld(px)), x87mul(ld(py), ld(py))), x87mul(ld(pz), ld(pz)))
+    : x87add(x87add(x87mul(ld(px), ld(px)), x87mul(ld(pz), ld(pz))), x87mul(ld(py), ld(py)));
   const dd = x87mul(ld(dot), ld(dot));
   if (state.missFlag) {
     const c = x87cmp(sub(x87mul(pp, ld(light.distanceSq)), dd), x87mul(pp, ld(light.radiusSq)));
-    if (c === 'gt') return miss();
+    if (c === 'gt') return null;
   }
   const h2 = st(sub(ld(light.distanceSq), x87div(dd, pp)));
-  if (x87cmp(ld(light.radiusSq), ld(h2)) === 'lt' || x87cmp(ld(light.radiusSq), ld(h2)) === 'un') { state.missFlag = 1; return miss(); }
+  if (x87cmp(ld(light.radiusSq), ld(h2)) === 'lt' || x87cmp(ld(light.radiusSq), ld(h2)) === 'un') { state.missFlag = 1; return null; }
   state.missFlag = 0;
   const length = tableSqrt(st(pp));
   const t = st(x87div(ld(dot), ld(length)));
@@ -92,7 +93,7 @@ function texelIndex(light, px, py, pz, state, first) {
     if (lessU(s, -w)) s = -w;
     far = t;
   }
-  if (!lessU(s, far)) return miss();
+  if (!lessU(s, far)) return null;
   const hn = st(x87mul(ld(h2), ld(light.invRadiusSq)));
   const a = x87mul(ld(far), ld(light.invRadius));
   const c = sub(THREE, x87mul(ld(hn), THREE));
@@ -104,11 +105,42 @@ function texelIndex(light, px, py, pz, state, first) {
     v = x87mul(sub(A, x87mul(sub(c, x87mul(b, b)), b)), ld(light.brightness));
   }
   const below = x87cmp(v, ZERO);
-  if (below === 'lt' || below === 'un') return miss();
-  if (bitsOf(st(v)) >= 0x3f800000) v = ONE_F;
+  if (below === 'lt' || below === 'un') return null;
+  return bitsOf(st(v)) >= 0x3f800000 ? ONE_F : v;
+}
+
+// One texel's colour-table index: the first light writes table[0] for a
+// miss and scales the 80-bit value, later lights skip a miss (-1) and scale
+// the float store.
+function texelIndex(light, px, py, pz, state, first) {
+  const v = chordValue(light, px, py, pz, state);
+  if (!v) return first ? 0 : -1;
   if (first) return fistp(st(x87mul(v, S255)));
   const vf = st(v);
   return vf === 0 && bitsOf(vf) === 0 ? -1 : fistp(st(x87mul(ld(vf), S255)));
+}
+
+/** FLightManager::Fog (0x10b02c00) for a mesh vertex under PF_RenderFog:
+ * the vertex in frame space against the sorted volumetric lights. Each
+ * light's chord value is doubled; a = min(1, 2v·fog), each channel
+ * min(1, 2v·colour + (1 − a)·old), alpha min(1, old + a). Returns the FPlane
+ * [R, G, B, A]. `state.missFlag` is the shared early-out flag. */
+export function fogVertex(point, lights, state = { missFlag: 0 }) {
+  let r = 0, g = 0, b = 0, alpha = 0;
+  const clampStore = value => { const f32 = st(value); return bitsOf(f32) >= 0x3f800000 ? 1 : f32; };
+  for (const light of sortVolumetricLights(lights)) {
+    const v = chordValue(light, point[0], point[1], point[2], state, true);
+    const twice = st(x87add(v ?? ZERO, v ?? ZERO));
+    if (bitsOf(twice) === 0) continue;
+    const a = clampStore(x87mul(ld(twice), ld(light.fog)));
+    const k = sub(ONE_F, ld(a));
+    const [cr, cg, cb] = light.color;
+    r = clampStore(x87add(x87mul(ld(twice), ld(cr)), x87mul(k, ld(r))));
+    g = clampStore(x87add(x87mul(ld(twice), ld(cg)), x87mul(k, ld(g))));
+    b = clampStore(x87add(x87mul(ld(twice), ld(cb)), x87mul(k, ld(b))));
+    alpha = clampStore(x87add(ld(alpha), ld(a)));
+  }
+  return [r, g, b, alpha];
 }
 
 /** SetupForSurf's fog map for one surface: `grid` {base, stepU, stepV} in
