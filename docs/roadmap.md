@@ -395,9 +395,20 @@ of general script compatibility.
 
 ## 4. Restore the remaining presentation
 
-**In progress.** Current rendering increments restore original moving-light
-spatial calculations on BSP/mover lightmaps and Training's mirrored floor.
-Full Stage 4 acceptance remains open.
+**In progress.** Restored so far, each with its evidence below: original
+mesh lighting (CPU kernels and an exact GPU path), static and animated light
+maps, moving lights on light maps, mirrors on every static and mover plane
+with nesting, Fire.dll fire and water textures, animated and auto-panned
+surfaces, particles and sprites, light coronas, laser beams, volumetric fog
+on BSP surfaces, ambient sound and script sounds through Galaxy, and the
+third-person conversation camera with lip sync. Open: fog on meshes and
+movers in Play, mirror/sky combinations, SpriteAnimOnce frames, animated
+mesh skins, decals, music, zone reverb and Galaxy's mixer, time-varying
+moving lights and spotlights, BSP occlusion (the draw list that bounds
+per-frame texture, fog and light-map work), and original-game visual
+acceptance across maps. Full Stage 4 acceptance remains open. Frame cost and
+the Rust-core ports that keep these effects inside the frame budget are in
+[play frame cost](play-frame-cost.md).
 
 Decode and render original character, weapon, and prop meshes, skins, animation
 sequences, sprites, attachments, and the first-person weapon view. Restore animated
@@ -422,10 +433,32 @@ match the original on Training's BSP (square-root table, all radii, FGetHSV,
 438 filtered surfaces, 72,255 texels). AugLight lights Training's dark room in
 Play. Steady ordinary moving lights now use the original integer pipeline too:
 4,096 table entries, 37,763 reference texels and 11 live camera-light lightmaps
-match their documented original-code comparisons. Mesh lighting, spotlights,
-other light effects, the live renderer's FPU control word and original-game
-visual acceptance remain open; see [ordinary moving lights](moving-normal-lighting.md)
+match their documented original-code comparisons. Spotlights, other light
+effects, the live renderer's FPU control word and original-game visual
+acceptance remain open; see [ordinary moving lights](moving-normal-lighting.md)
 and [moving lights](dynamic-lighting.md).
+
+**Mesh lighting (2026-09-28).** NPCs, props and the first-person weapon are
+lit by the recovered Render.dll FLightManager path (SetupForActor/Light) and
+D3DDrv's diffuse conversion: 0 diffuse bytes differ from the native oracle
+and on live Play inputs. PF_Modulated fragments emit pow(2·src, g)/2, the
+exact equivalent of the display ramp after the D3D DESTCOLOR/SRCCOLOR blend,
+which removed the bright band of the masked-out character glasses. See
+[mesh lighting](mesh-lighting.md).
+
+**GPU mesh path (2026-10-01).** GetFrame interpolation and DrawLodMesh
+lighting run as WebGL2 passes by default. They are bit-exact with the CPU
+kernels on Training and Island (every position component, every drawn
+corner's colour byte, environment normals and UVs, visibility), using a
+barrier against ANGLE/Metal's fast-math contraction; `?gpuMesh=0` keeps the
+CPU reference and software WebGL keeps the CPU path. See [GPU mesh](gpu-mesh.md).
+
+**Third-person conversations and lip sync (2026-10-01).** MeetPaul plays
+through the original CreateConCamera, letterbox raw background, behind-view
+player, gestures and the 3D view clip ([conversation camera](conversation-camera.md)).
+Galaxy.dll's speech analysis runs in the Rust core, bit-exact with the DLL on
+its inputs, and drives Pawn.nextPhoneme ([lip sync](lip-sync.md)); the
+decoded speech and mixer position are host measurements.
 
 **Training mirror floors (2026-09-28).** The 46 authored mirror surfaces at four
 heights render reflected world/actor views, clipped at the original plane, with
@@ -443,8 +476,18 @@ match the original instructions. The post-child branch, also executed from the
 original, makes opaque mirrors PF_Invisible, so only the reflection shows;
 ShinySurfaces at +0x5c is confirmed from the retail property registration.
 Mover mirrors (13 brushes) follow their brush, with the plane
-host-computed from the tracker polygon. Nested reflections and mirror/sky
-combinations remain explicit gaps.
+host-computed from the tracker polygon. Mirror/sky combinations remain an
+explicit gap.
+
+**Mirror seam, player and nesting (2026-10-02).** The child target's scissor
+is its own, in target pixels, over the mirrored columns; the screen-space
+scissor had left a seam between two viewpoints on Everett's and the 747's
+mirrors. Child frames draw the player, as Render.dll passes no excluded
+actor when Frame->Parent is set (0x10b1a161), and native captures show JC in
+Everett's mirror. Nesting follows OccludeBsp's Recursion < 3 (0x10b18881):
+children render before their parent and odd depths flip submission.
+Everett's facing mirrors match the native captures. See
+[mirror surfaces](mirror-surfaces.md).
 
 **Conversations on every map (2026-10-02).** `census-map-startup --groups
 converse` starts up to ten conversations per map and plays each to its end.
@@ -508,8 +551,26 @@ oracle-exact for 15,745 light steps on every Training surface, plus
 samples on Island and NYC Street. Surfaces lit by Cylinder, TorchWaver or
 FireWaver lights (34 maps) are no longer dropped. Training's entrance
 moved closer to the original-game capture in every compared region (worst
-2.78 → 1.26 mean RGB levels). Time-varying light effects and types are
-still steady snapshots or left out, with notes.
+2.78 → 1.26 mean RGB levels). A surface without a texture draws the level's
+DefaultTexture as Render.dll does, and a singular light-map basis takes the
+original's non-finite texel grid (NYC Street, the Hotel, the Intro, the Free
+Clinic).
+
+**Animated lights (2026-10-02).** The light manager's per-frame noise, the
+LightType functions (pulse, blink, flicker, strobe, subtle pulse) and the
+merge's TorchWaver, FireWaver and WateryShimmer modulation are translated
+(`validate-light-animation`: 240 noise frames, 1,280 LightType frames, 3,600
+merged texels against the original). In Play, class 1 lights whose type or
+merge varies stay out of the static light map; their light maps re-merge
+each drawn frame with Level.TimeSeconds. The appFrand stream and Flicker's
+per-light key are host choices, noted. Moving lights' own time variation is
+still a steady snapshot.
+
+**Movers from their brush polygons (2026-10-02).** As Engine's brush tracker
+does (0x1037b5c0), each mover polygon draws as a level surface whose light
+map is its iBrushPoly; this replaced a heuristic that refused 74 of 159
+movers on four maps. UNATCO HQ, the Ship, Catacombs, Battery Park, Area 51
+Bunker, OceanLab and Island draw every mover.
 
 **Particles and sprites (2026-10-02).** DeusEx's ParticleIterator runs in
 Play ([particles](particles.md)):
@@ -531,9 +592,13 @@ Park street lamps glow. See [coronas](coronas.md).
 ComputeFromActor's volumetric constants and SetupForSurf's fog loop are
 oracle-exact over 10,687 texels, and the loop runs in the Rust core. Play
 draws the D3D PF_Highlighted pass (ONE/INVSRCALPHA) on fog-zone surfaces
-each frame; 02_NYC_Bar's smoke haze renders. Mesh and mover fog, animated
-volumetric brightness and the upload scale's evidence remain. See
-[volumetric fog](volumetric-fog.md).
+each frame; 02_NYC_Bar's smoke haze renders. FLightManager::Fog, the mesh
+vertex fog under PF_RenderFog, is translated and oracle-exact over 1,440
+vertices but not yet applied to mesh rendering. The Rust fog loop keeps the
+exact x87 answer through a certain-rounding fast path (0 differences over
+45 million texel-lights from Play, 17–21× faster). Mesh and mover fog in
+Play, animated volumetric brightness and the upload scale's evidence remain.
+See [volumetric fog](volumetric-fog.md).
 
 **Laser beams (2026-10-02).** LaserTrigger and BeamTrigger beams draw through
 the original LaserIterator: CurrentItem is translated on the x87 model and
@@ -669,8 +734,10 @@ forward-walk workload runs unbypassed to MeetPaul's first choice at tick 4720
    `validate-root-raw-background`), Island's captured speaker indices, choice
    graphs and omitted button colours. MeetPaul now runs from tick 1872 to its
    first choice at tick 4720 (`validate-island-conversation`), where ConPlay
-   waits for the player's input. The 3D view is not yet clipped to the render
-   viewport, and choosing is not yet exercised headless.
+   waits for the player's input. Since then the 3D view draws inside the
+   letterbox band (root render viewport, ba5c359) and the weapon choice runs
+   through the root window's focus natives 1442–1447 (a59a7ac); each of the
+   three choices plays to the end.
 
 Done when training and Liberty Island support representative combat, stealth,
 exploration, conversation, and alternate-route objectives, with the systems

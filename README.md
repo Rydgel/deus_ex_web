@@ -4,8 +4,10 @@ The aim is to make the original Deus Ex playable in a browser using its original
 maps, assets, and game behavior. **Stage 3 is complete within its adopted scope:**
 Training passes all five runtime criteria across 95 probes, and all 83
 single-player maps reach only boundaries assigned to later stages in the startup
-census. **Stage 4 rendering is in progress**, building on the existing actor,
-weapon, HUD and moving-light rendering. See the [completion record and coverage
+census. **Stage 4 presentation is in progress**: original mesh, static, animated
+and moving lighting, mirrors, Fire.dll textures, particles, coronas, lasers,
+volumetric fog, ambient sound and the conversation camera with lip sync already
+run from original evidence (see below). See the [completion record and coverage
 limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
 
 The target is **100% original fidelity**. Every supported behavior needs original
@@ -73,9 +75,9 @@ or push further hosting updates unless the user asks.
   and the nanokey), so the collidable props JC walks into are no longer invisible.
   **NPC mesh preview → Focus** jumps the inspection camera between the characters.
   The meshes stay visible after returning to Play or resetting to Player start.
-  These are texture-only previews; original mesh lighting and distance LOD remain
-  unfinished, and one procedural NanoKey effect face is skipped. See
-  [preview scope and evidence](docs/npc-mesh-preview.md).
+  They are lit by the original DrawLodMesh lighting (see Stage 4 below);
+  distance LOD remains unfinished, and one procedural NanoKey effect face is
+  skipped. See [preview scope and evidence](docs/npc-mesh-preview.md).
 - Frobbing a Training weapon, ammo, tool, food or key **picks it up** into JC's
   inventory through the original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give,
   and the item's world mesh disappears; a carried item follows JC as a based
@@ -89,8 +91,8 @@ or push further hosting updates unless the user asks.
   ticked weapon states and mesh notify. Two hits break a Training crate,
   spawning its original wood fragments and Lockpick contents; fragments
   bounce, fade and expire, and Player start restores the crate. The first-person
-  mesh follows original RenderOverlays/CalcDrawOffset and GetFrame; original
-  mesh lighting remains unfinished. See [weapon equip](docs/script-weapon-equip.md),
+  mesh follows original RenderOverlays/CalcDrawOffset and GetFrame and takes the
+  original mesh lighting. See [weapon equip](docs/script-weapon-equip.md),
   [weapon fire evidence](docs/script-weapon-fire.md),
   [crate destruction](docs/script-crate-destruction.md), and
   [weapon rendering](docs/script-weapon-rendering.md).
@@ -107,10 +109,11 @@ or push further hosting updates unless the user asks.
   [movement evidence](docs/movement.md) and [level queries](docs/level-queries.md).
 
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
-not every interaction or full campaign compatibility. Original mesh lighting,
-remaining native UI presentation, audio mixing, recursive/other mirror modes,
-procedural textures and other renderer effects remain
-Stage 4 work. Training is the visual acceptance target; other maps expose
+not every interaction or full campaign compatibility. Remaining Stage 4 work
+includes fog on meshes and movers, mirror/sky combinations, SpriteAnimOnce
+frames, animated mesh skins, decals, music, zone reverb and Galaxy's mixer,
+time-varying moving lights, BSP occlusion and remaining native UI
+presentation. Training is the visual acceptance target; other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open. See
 [rendering](docs/rendering.md) and [movement](docs/movement.md).
@@ -122,9 +125,11 @@ and actual window/tab pause acceptance deferred from Stage 2 remain open. See
   from PlayerStart1 through `DL_part2`.
 - The all-maps census covers original LoadMap startup and Login, ten seconds of
   ticking, a Player-start reload and ten further seconds. All **83/83**
-  single-player maps have no unclassified Stage 3 boundary, boot failure or crash;
-  **53/83** run without any boundary, while the other 30 reach named Stage 4–6
-  features.
+  single-player maps have no unclassified Stage 3 boundary, boot failure or crash.
+  At the 2026-09-28 completion **53/83** ran without any boundary; after the
+  conversation census of 2026-10-02 (up to ten conversations per map played to
+  their end) **77/83** are clean and the rest stop only at Stage 5 AI navigation
+  natives (518, 523) and the ReachablePathnodes iterator.
 - Interactions outside Training remain unprobed. The census continues past
   deferred boundaries with declared zero results; behavior downstream of those
   returns is not original-game fidelity evidence. Implementing those features
@@ -137,32 +142,45 @@ The [exit criteria and measured results](docs/stage-3-exit-criteria.md) are the
 current status. The [September 20 audit](docs/stage-3-completion-audit.md) and
 [earlier handoff](docs/stage-3-handoff.md) are historical checkpoints.
 
-## Stage 4 rendering — in progress
+## Stage 4 presentation — in progress
 
-Original actor meshes and animation poses, first-person weapons, static lighting
-and parts of the original HUD already render in the browser. These remain scoped
-implementations: mesh lighting, distance LOD and complete presentation fidelity
-are unfinished.
+Each item runs in Play from translated original code, with the evidence and
+limits in the linked document. The [roadmap](docs/roadmap.md#4-restore-the-remaining-presentation)
+keeps the dated record.
 
-AugLight's moving beams now illuminate BSP and mover light maps through the
-recovered Render.dll NonIncidence path. Steady ordinary moving lights, including
-Training's four security-camera lights, now use the original integer spatial
-routine too. All 4,096 falloff-table entries and 37,763 reference texels match
-the installed DLL under the documented FPU convention; live composition matches
-on 11 Training lightmaps. Original-game visual comparison and the running
-renderer's FPU mode remain open. See [ordinary moving-light evidence](docs/moving-normal-lighting.md)
-and [the broader rendering limits](docs/dynamic-lighting.md).
+- **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
+  weapon ([mesh lighting](docs/mesh-lighting.md)), with GetFrame and lighting
+  on the GPU, bit-exact with the CPU kernels ([GPU mesh](docs/gpu-mesh.md)).
+- **Light maps:** Render.dll's static path, DefaultTexture for untextured
+  surfaces ([static lighting](docs/static-lighting.md)); pulse, flicker,
+  strobe and waver lights re-merged each frame; moving lights such as AugLight
+  and security cameras on BSP and mover light maps
+  ([moving lights](docs/moving-normal-lighting.md)); movers drawn from their
+  brush polygons.
+- **Mirrors:** every static and mover mirror plane, nested to the original
+  recursion depth, with the player in reflections
+  ([mirror surfaces](docs/mirror-surfaces.md)).
+- **Textures and effects:** Fire.dll fire and water textures
+  ([fire textures](docs/fire-texture.md)), animated and auto-panned surfaces
+  ([texture animation](docs/texture-animation.md)), particles and sprites
+  ([particles](docs/particles.md)), light coronas ([coronas](docs/coronas.md)),
+  laser beams ([lasers](docs/lasers.md)) and volumetric fog on BSP surfaces
+  ([volumetric fog](docs/volumetric-fog.md)).
+- **Sound and conversations:** Galaxy's ambient and script sounds
+  ([galaxy audio](docs/galaxy-audio.md)), the third-person conversation camera
+  and letterbox ([conversation camera](docs/conversation-camera.md)) and
+  speech-driven lip sync ([lip sync](docs/lip-sync.md)).
 
-Training's polished floor now renders the reflected world and actors using its
-original mirror flags, plane and translucent blend. Twelve reflected camera/clip
-cases match the original DLL, and the entrance floor has been compared with the
-native capture. Other mirror modes and recursive/sky combinations remain open.
-See [mirror-floor evidence and limits](docs/mirror-surfaces.md).
+Several of these effects run every frame. The heavy loops (mesh posing and
+lighting, Fire.dll ticks, the fog loop, lip sync) run in the Rust/WebAssembly
+core or on the GPU with exact results; the per-map frame cost, the A/B
+measurements and the remaining work toward the 120 fps target are in
+[play frame cost](docs/play-frame-cost.md) and [Rust core](docs/rust-core.md).
 
 ## Open the viewer
 
 Use Node 22.12 or newer (or a newer supported Node LTS release), and a Rust
-toolchain with the WebAssembly target (tested with Rust 1.95):
+toolchain with the WebAssembly target (tested with Rust 1.99):
 
 ```sh
 npm ci
@@ -256,7 +274,7 @@ static doors. The footprint overlays every height and is not a game screenshot.
   the Training gate and all 83 single-player maps' startup census; coverage limits
   are recorded above.
 - **Stage 4:** restore animated actors, visual effects, audio, and original interfaces —
-  in progress, currently extending original moving-light rendering.
+  in progress; see the Stage 4 section above.
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations.
 - **Stage 6:** persist saves and map state, then validate the full campaign.
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.
