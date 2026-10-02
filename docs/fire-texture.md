@@ -275,9 +275,12 @@ textures at 0.3–1.4 ms and their P8→RGBA uploads at 0.3–0.5 ms.
 - **Where.** fire.rs runs in the script-VM kernel instance
   (`script-vm-kernel.mjs`). It has no statics: the interpreter instance
   shares the module's reserved 2 MiB (`build.rs`). Texture blocks come from
-  `kernel.fire.alloc`, a bump allocator above the instance's initial memory,
-  the only thing that grows that memory. Blocks live as long as the page's
-  texture set.
+  `kernel.fire.alloc`, the kernel's block allocator above the instance's
+  initial memory and the only thing that grows that memory. Fire blocks
+  live as long as the page's texture set. The animated light maps
+  (`light.rs`, docs/static-lighting.md "Rust kernel") take blocks from the
+  same allocator at world load and on a refill and free them with the world;
+  a freed block is reused whole by a later request it fits.
 - **State.** The load functions (constructors, Serialize's arrays,
   `firePostLoad`, `wetPostLoad`) still build plain objects.
   `fire-texture-kernel.mjs` `fire` or `wet` then copies the state into a
