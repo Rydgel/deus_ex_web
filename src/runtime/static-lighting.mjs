@@ -197,11 +197,12 @@ const EFFECT_NAMES = ['None', 'TorchWaver', 'FireWaver', 'WateryShimmer', 'Searc
  * (TorchWaver, FireWaver, WateryShimmer) do not vary yet. Class 2 lights
  * from a static list (merged unshadowed each frame) and spatially dynamic
  * effects are omitted, with `notes`. */
-export function staticLightMap({ width, height, ambient, lights, shadowBits, shadowOffset, facet, grid, levelBrightness, notes, hsv }) {
+export function staticLightMap({ width, height, ambient, lights, shadowBits, shadowOffset, facet, grid, levelBrightness, notes, hsv,
+  animated = null }) {
   const texels = new Uint8Array(width * height * 3);
   for (let p = 0; p < width * height; p++) texels.set(ambient, p * 3);
   const pitch = (width + 7) >> 3, stride = pitch * 8;
-  lights.forEach(({ values, location }, index) => {
+  lights.forEach(({ values, location, ref }, index) => {
     if (!values) return;
     const lightClass = surfaceLightClassOf(values);
     if (lightClass === null || lightClass === 3) return;
@@ -212,17 +213,24 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
       notes?.add(`Light effect ${EFFECT_NAMES[effect] ?? effect} is not translated; those lights are left out of static light maps.`);
       return;
     }
+    // A class 1 light whose LightType or merge varies per frame is merged by
+    // animateLightMap each frame from its cached spatial bytes.
+    const moving = lightClass === 1 && animated && (ANIMATED_TYPES.has(values.LightType & 255) || [1, 2, 3].includes(effect));
     if (lightClass === 1) {
-      if ((values.LightType ?? 0) !== 1) notes?.add(`Light type ${values.LightType} uses a steady snapshot; its time variation is not active.`);
-      if ([1, 2, 3].includes(effect)) notes?.add('Torch, fire and watery-shimmer lights omit their per-frame merge modulation.');
-      if (!values.bStatic) notes?.add('bNoDelete lights (TriggerLight) are snapshots; script brightness changes use explicit invalidation.');
+      if ([8, 9].includes(values.LightType & 255)) notes?.add(`Light type ${values.LightType} (texture palette) is not translated and stays steady.`);
+      if (!values.bStatic) notes?.add('bNoDelete lights (TriggerLight) take script brightness changes through explicit invalidation.');
     }
     const constants = movingLightConstants(values, levelBrightness, hsv(values.LightHue ?? 0, values.LightSaturation ?? 0));
     const rect = movingLightRect(location, constants.radius, facet);
     if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) return;
     const illumination = { bytes: shadowIllumination(shadowBits, shadowOffset + index * pitch * height, width, height), stride };
     const [red, green, blue] = constants.steps;
-    const write = (u, v, spatial) => {
+    let cached = null;
+    if (moving) {
+      cached = new Uint8Array((rect.maxU - rect.minU) * (rect.maxV - rect.minV));
+      animated.push({ values, effect, rect, spatial: cached, ref });
+    }
+    const write = moving ? (u, v, spatial) => { cached[(v - rect.minV) * (rect.maxU - rect.minU) + u - rect.minU] = spatial; } : (u, v, spatial) => {
       if (!spatial) return;
       const at = (v * width + u) * 3;
       texels[at] = Math.min(127, texels[at] + colorTableEntry(red, spatial));
@@ -239,6 +247,107 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
   return texels;
 }
 const surfaceLightClassOf = surfaceLightClass;
+const ANIMATED_TYPES = new Set([2, 3, 4, 5, 7]);
+
+/** The class 1 part of SetupForSurf's per-frame map: from the static bytes,
+ * each animated light (staticLightMap's `animated`) merged with this
+ * frame's GlobalLighting colour and, for TorchWaver, FireWaver and
+ * WateryShimmer, the merge modulation from index 0 (0x10b088de passes 0).
+ * `frame` is {timeSeconds, noise, strobe, factors} from createLightFrame.
+ * Writes `texels` in place over the animated rectangles (reset to `base`
+ * first) and returns the changed texel region, or null. */
+export function animateLightMap(base, texels, width, animated, frame, { levelBrightness, hsv, keyOf }, memo = null) {
+  frame.constants ??= new Map();
+  const constantsOf = ({ values, ref }) => {
+    let constants = frame.constants.get(ref);
+    if (!constants) {
+      const brightness = lightTypeBrightness(values, { timeSeconds: frame.timeSeconds, noise: frame.noise, strobe: frame.strobe,
+        flickerKey: keyOf(ref) });
+      constants = movingLightConstants(values, levelBrightness, hsv(values.LightHue ?? 0, values.LightSaturation ?? 0), brightness);
+      constants.signature = constants.steps.join(',');
+      constants.tables = constants.steps.map(step => Uint8Array.from({ length: 256 }, (_, byte) => colorTableEntry(step, byte)));
+      frame.constants.set(ref, constants);
+    }
+    return constants;
+  };
+  // Every input of the merge: each light's colour steps and, for the
+  // wavers, the noise table it reads (A each frame, W on a new step).
+  if (memo) {
+    const signature = animated.map(light => `${constantsOf(light).signature}/${light.effect === 1 || light.effect === 2 ? `A${frame.frameIndex}`
+      : light.effect === 3 ? `W${frame.noise.version}` : ''}`).join(';');
+    if (memo.signature === signature) return null;
+    memo.signature = signature;
+  }
+  let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+  for (const { rect } of animated) {
+    minU = Math.min(minU, rect.minU); maxU = Math.max(maxU, rect.maxU);
+    minV = Math.min(minV, rect.minV); maxV = Math.max(maxV, rect.maxV);
+  }
+  if (!(minU < maxU && minV < maxV)) return null;
+  const before = new Uint8Array((maxU - minU) * (maxV - minV) * 3);
+  for (let v = minV, k = 0; v < maxV; v++) {
+    const row = (v * width + minU) * 3, end = (v * width + maxU) * 3;
+    before.set(texels.subarray(row, end), k); k += end - row;
+    texels.set(base.subarray(row, end), row);
+  }
+  for (const light of animated) {
+    const { effect, rect, spatial } = light, constants = constantsOf(light);
+    const [red, green, blue] = constants.tables, modulate = effect >= 1 && effect <= 3 ? frame.modulation(effect) : null;
+    const rw = rect.maxU - rect.minU;
+    let index = 0;
+    for (let v = rect.minV; v < rect.maxV; v++) {
+      let source = (v - rect.minV) * rw, at = (v * width + rect.minU) * 3;
+      for (let u = rect.minU; u < rect.maxU; u++, index++, source++, at += 3) {
+        let byte = spatial[source];
+        if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
+        if (!byte) continue;
+        const r = texels[at] + red[byte], g = texels[at + 1] + green[byte], b = texels[at + 2] + blue[byte];
+        texels[at] = r < 127 ? r : 127; texels[at + 1] = g < 127 ? g : 127; texels[at + 2] = b < 127 ? b : 127;
+      }
+    }
+  }
+  for (let v = minV, k = 0; v < maxV; v++) {
+    const row = (v * width + minU) * 3, end = (v * width + maxU) * 3;
+    for (let i = row; i < end; i++, k++) if (texels[i] !== before[k]) return { minU, maxU, minV, maxV };
+  }
+  return null;
+}
+
+/** One frame's light animation inputs: the noise refresh with
+ * Level.TimeSeconds (once a drawn frame, as the renderer does), the shared
+ * strobe state and the merge factors per noise entry (`0.95 + 0.05·A`,
+ * `0.8 + 0.2·A`, `0.6 + 0.4·W`) in doubles; validate-light-animation
+ * compares that double path with the x87-model mergeModulation. */
+export function createLightFrame(frand) {
+  const noise = createLightNoise(frand), strobe = { time: 0, flag: 0 };
+  const factors = { 1: new Float64Array(256), 2: new Float64Array(256), 3: new Float64Array(256) };
+  const frame = { noise, strobe, factors, timeSeconds: 0, frameIndex: 0 };
+  // The modulated byte for every (noise entry, spatial byte), built when a
+  // merge first needs it after its noise input changed.
+  const tables = { 1: new Uint8Array(65536), 2: new Uint8Array(65536), 3: new Uint8Array(65536) }, built = { 1: -1, 2: -1, 3: -1 };
+  frame.modulation = effect => {
+    const version = effect === 3 ? noise.version : frame.frameIndex;
+    if (built[effect] !== version) {
+      const table = tables[effect], factor = factors[effect];
+      for (let i = 0; i < 256; i++) for (let byte = 0; byte < 256; byte++) table[i << 8 | byte] = fistp(f(factor[i] * byte) - 0.5) & 255;
+      built[effect] = version;
+    }
+    return tables[effect];
+  };
+  frame.advance = timeSeconds => {
+    frame.timeSeconds = f(timeSeconds);
+    frame.constants = new Map();
+    frame.frameIndex++;
+    noise.update(frame.timeSeconds);
+    for (let i = 0; i < 256; i++) {
+      factors[1][i] = noise.A[i] * 0.05 + 0.95;
+      factors[2][i] = noise.A[i] * 0.2 + 0.8;
+      factors[3][i] = noise.W[i] * 0.4 + 0.6;
+    }
+    return frame;
+  };
+  return frame;
+}
 
 /** The light manager's per-frame noise (0x10b13080), called once a frame
  * with Level.TimeSeconds (0x10b146a5): `step = ftol(time·35)`; table A
@@ -252,9 +361,11 @@ const surfaceLightClassOf = surfaceLightClass;
  * reproduced). */
 export function createLightNoise(frand) {
   const A = new Float32Array(256), W = new Float32Array(256), S = new Float32Array(256);
-  const state = { A, W, S, last: 0 };
+  // `version` counts the updates that can change W (a new step or a reset).
+  const state = { A, W, S, last: 0, version: 0 };
   state.update = timeSeconds => {
     const step = x87ftol(x87mul(x87load(f(timeSeconds)), x87double(35)));
+    if (step !== state.last || state.last === 0) state.version++;
     for (let i = 0; i < 256; i++) A[i] = f(frand());
     const last = state.last;
     if ((Math.imul(step - last, 16) >>> 0) >= 0x100 || last === 0) {

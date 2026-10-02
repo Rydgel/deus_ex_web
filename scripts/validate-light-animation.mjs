@@ -6,7 +6,8 @@
  * docs/static-lighting.md "Light animation" records the scope. */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createLightNoise, lightTypeBrightness, mergeModulation } from '../src/runtime/static-lighting.mjs';
+import { createLightNoise, lightTypeBrightness, mergeModulation, createLightFrame } from '../src/runtime/static-lighting.mjs';
+import { fistp } from '../src/runtime/dynamic-lighting.mjs';
 import { colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
 import { createNativeRng } from '../src/runtime/rng.mjs';
 import { rotationSineTable } from '../src/runtime/coords.mjs';
@@ -93,7 +94,27 @@ mergeCases.forEach((c, i) => {
   }
   native.mergeMods[i].merged.forEach((v, p) => { report.mergeTexels++; if (((v ^ merged[p]) & 0xffffff) !== 0) report.mergeMismatch++; });
 });
+// Play's per-frame merge factors (createLightFrame, doubles) against the
+// x87-model modulation for every noise entry and spatial byte, on 16
+// frames of real noise and 16 of random tables.
+report.factorPairs = 0; report.factorMismatch = 0;
+const frame = createLightFrame(createNativeRng(0xfac7).frand);
+for (let k = 0; k < 32; k++) {
+  frame.advance(k < 16 ? k * 0.0137 : 100 + k);
+  if (k >= 16) for (let i = 0; i < 256; i++) { frame.noise.A[i] = f((random() % 100000) / 99999); frame.noise.W[i] = f((random() % 100000) / 99999); }
+  for (let i = 0; i < 256; i++) {
+    frame.factors[1][i] = frame.noise.A[i] * 0.05 + 0.95; frame.factors[2][i] = frame.noise.A[i] * 0.2 + 0.8; frame.factors[3][i] = frame.noise.W[i] * 0.4 + 0.6;
+  }
+  for (const effect of [1, 2, 3]) {
+    const exact = mergeModulation(effect, frame.noise);
+    for (let i = 0; i < 256; i++) for (let spatial = 0; spatial < 256; spatial++) {
+      report.factorPairs++;
+      if ((fistp(f(frame.factors[effect][i] * spatial) - 0.5) & 255) !== exact(spatial, i)) report.factorMismatch++;
+    }
+  }
+}
 console.log(JSON.stringify(report));
+assert.equal(report.factorMismatch, 0, 'the double merge factors give the x87 modulation bytes');
 assert.equal(report.noiseMismatch, 0, 'light noise tables match');
 assert.equal(report.typeMismatch, 0, 'LightType brightness matches');
 assert.equal(report.mergeMismatch, 0, 'merge modulation matches');

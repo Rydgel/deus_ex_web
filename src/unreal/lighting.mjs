@@ -1,7 +1,7 @@
 import { ClassDefaults } from './classes.mjs';
 import { readObject } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
-import { staticLightMap, ambientTexel } from '../runtime/static-lighting.mjs';
+import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static-lighting.mjs';
 import { fgetHsv } from '../runtime/dynamic-lighting.mjs';
 
 const normalize = v => { const d = Math.hypot(...v); if (!d) throw new Error('Zero lighting normal'); return v.map(n => n / d); };
@@ -207,15 +207,24 @@ export async function createLighting(map, asset, assets) {
       const values = actors.get(ref);
       if (!values) throw new Error(`Unprepared light ${ref}`);
       if (values.LightType && values.LightBrightness) { usedLights.add(ref); stats.lightActors = usedLights.size; }
-      return { values, location: (values.Location ?? [0, 0, 0]).map(Math.fround) };
+      return { values, location: (values.Location ?? [0, 0, 0]).map(Math.fround), ref };
     });
-    const { facet, grid } = geometry(result);
-    const texels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights, shadowBits: model.lightBits,
-      shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv });
+    const { facet, grid } = geometry(result), animated = [];
+    result.baseTexels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights, shadowBits: model.lightBits,
+      shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv, animated });
+    result.animated = animated;
+    if (animated.length) animatedRecords.add(result); else animatedRecords.delete(result);
+    const texels = result.texels = result.baseTexels.slice();
+    result.animationMemo = {};
+    if (animated.length && lightFrame) animateLightMap(result.baseTexels, texels, width, animated, lightFrame, animationOptions);
     for (let i = 0; i < texels.length; i++) pixels[i] = texels[i] / 255;
     if (result.staticPixels) compose(result);
     return result;
   }
+  // Light animation (docs/static-lighting.md): the current frame's inputs,
+  // and every light map with an animated class 1 light.
+  let lightFrame = null;
+  const animatedRecords = new Set(), animationOptions = { levelBrightness, hsv, keyOf: ref => ref & 0xff };
 
   function updateActor(ref, values = {}) {
     if (!Number.isInteger(ref) || ref <= 0) throw new TypeError(`Invalid lighting actor reference: ${ref}`);
@@ -252,6 +261,28 @@ export async function createLighting(map, asset, assets) {
       else result.staticPixels = null;
     },
     recordsFor(model, surfaceIndex) { return bySurface.get(model)?.get(surfaceIndex) ?? []; },
+    /** SetupForSurf's per-frame class 1 merge for every light map with an
+     * animated light (`frame` from static-lighting.mjs createLightFrame,
+     * advanced once per drawn frame); returns the records whose texels
+     * changed. `visible` may skip light maps not drawn this frame: the
+     * merge does not depend on which surfaces are drawn. */
+    animate(frame, visible = () => true) {
+      lightFrame = frame;
+      const changed = [];
+      for (const result of animatedRecords) {
+        if (!visible(result)) continue;
+        const region = animateLightMap(result.baseTexels, result.texels, result.width, result.animated, frame, animationOptions,
+          result.animationMemo ??= {});
+        if (!region) continue;
+        const { texels, width } = result, pixels = result.staticPixels ?? result.pixels;
+        for (let v = region.minV; v < region.maxV; v++)
+          for (let i = (v * width + region.minU) * 3, end = (v * width + region.maxU) * 3; i < end; i++) pixels[i] = texels[i] / 255;
+        if (result.staticPixels) compose(result);
+        changed.push({ lightmap: result, region: result.staticPixels ? null : region });
+      }
+      return changed;
+    },
+    animatedRecords: () => [...animatedRecords],
     ownedRecords() { return owned; },
     invalidate(changes) {
       const entries = normalizeLightingChanges(changes), changedLights = [...new Set(entries.map(entry => entry.ref))];

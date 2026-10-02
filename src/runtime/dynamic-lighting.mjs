@@ -155,9 +155,11 @@ export function fgetHsv(hue, saturation, value) {
  * table scale (0x10b05fd9-0x10b06027), brightness (0x10b060b3), colour
  * (0x10b0612f-0x10b06148) and the colour-table steps (0x10b064ff-0x10b0656d).
  * `hsv` is FGetHSV(hue, saturation, 255); steady lights keep it unchanged. */
-export function movingLightConstants(values, levelBrightness, hsv) {
+export function movingLightConstants(values, levelBrightness, hsv, typeBrightness = null) {
   const radius = f(worldLightRadius(values)), clamped = radius > 1 ? radius : 1;
-  const reciprocal = 1 / clamped, brightness = f((values.LightBrightness & 255) * f(1 / 255));
+  // GlobalLighting's LightType brightness (static-lighting.mjs
+  // lightTypeBrightness) when animated; steady LightBrightness/255 otherwise.
+  const reciprocal = 1 / clamped, brightness = typeBrightness ?? f((values.LightBrightness & 255) * f(1 / 255));
   const scale = x87mul(x87load(levelBrightness), x87load(brightness));
   const color = hsv.map(channel => x87store(x87mul(scale, x87load(channel))));
   return { radius, rradius: f(reciprocal), rr2: f(reciprocal * reciprocal * 4093), color,

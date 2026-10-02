@@ -175,9 +175,9 @@ Diagnostics, still open:
 
 ## Light animation
 
-Three per-frame inputs drive the class 1 lights. All three are now
-translated and oracle-checked (`validate-light-animation.mjs`), but not
-yet wired into Play.
+Three per-frame inputs drive the class 1 lights. All three are
+translated, oracle-checked (`validate-light-animation.mjs`) and wired into
+Play (see "In Play" at the end of this section).
 
 **Noise** (`0x10b13080`). It is called once a frame with Level.TimeSeconds
 through a second light-manager object (`0x10b30a08`, call at `0x10b146ae`).
@@ -222,11 +222,37 @@ eight types × four lights over 40 frames each (1,280 frames, including
 animation off) and the merge for the three effects on 18 random rectangles
 (3,600 texels). Everything matches.
 
+**In Play.**
+- *Cached spatial bytes.* `staticLightMap` leaves animated class-1 lights
+  (Pulse, Blink, Flicker, Strobe, SubtlePulse, and the three wavers) out of
+  the static bytes and keeps their spatial bytes, as SetupForSurf caches
+  them.
+- *Per frame.* Each drawn frame, `world.updateTextureAnimation` advances
+  the noise with Level.TimeSeconds (`createLightFrame`). `lighting.animate`
+  then re-merges every animated light map from its static bytes: each
+  light's GlobalLighting colour is computed once per frame, the wavers' bytes
+  go through their noise tables, and the merge starts at index 0 as at
+  `0x10b088de`. Changed regions are uploaded, and moving lights still add on
+  top.
+- *Exact fast path.* The merge factors are doubles, and the per-(entry,
+  byte) modulation table is rebuilt only when its noise input changes. The
+  validator checks those doubles against the x87-model modulation for all
+  6,291,456 (noise entry, byte) pairs of 32 frames, with no difference.
+- *Skipping and culling.* A light map whose lights' colours and noise
+  inputs are unchanged is skipped. Without a possible mirror view, level
+  light maps outside the camera frustum wait. The merge does not depend on
+  which surfaces are drawn, so a skipped map is correct once it is drawn.
+- *Host choices, noted in the viewer.* The noise draws come from a host
+  appFrand stream, and Flicker's entry is the light's export index
+  (low byte) instead of its address.
+- *Not in Play yet.* The texture-palette LightTypes (8, 9) and the
+  spatially dynamic effects.
+
 ## Not yet moved
 
-Still to do: the time-varying spatial functions, the merge-dynamic
-modulation, the LightType functions (pulse, flicker, strobe…), class 1's
-per-frame recomputation, and volumetric (fog map) lighting.
+Still to do: the time-varying spatial functions (Searchlight, SlowWave,
+FastWave, CloudCast, Shock, Disco, Interference, Rotor), the texture
+palette LightTypes and volumetric (fog map) lighting.
 
 Two facts recovered from SetupForSurf's listing matter for that wiring:
 - A level surface's static list goes through AddLight with each light's

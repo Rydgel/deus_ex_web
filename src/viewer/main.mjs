@@ -830,7 +830,12 @@ function animate(time) {
     if (mode === 'play' && game && !runtimeError) {
       try { panInputs = game.surfacePan(); } catch (error) { pauseForRuntimeError(error); }
     }
-    world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()) });
+    // Light-map animation skips light maps outside the view unless a mirror
+    // may draw them.
+    camera.updateMatrixWorld();
+    const viewFrustum = world.mirrors.mayRender(camera) ? null : new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    world.updateTextureAnimation(undefined, { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum });
     world.flushLighting(renderer);
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
