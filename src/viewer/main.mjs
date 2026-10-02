@@ -306,6 +306,7 @@ async function loadMap(name) {
         nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{gpu:nextGpuMesh,
           // Player start logs in a new player; follow the current one.
           player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
+          childFrames:nextWorld.mirrors.stats.planes>0,
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
         nextMeshLighting.kernel=nextNpcPreview.kernel;
         nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
@@ -864,8 +865,9 @@ function animate(time) {
       camera.updateMatrixWorld();
       const frustum=new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
+      const children=world.mirrors.mayRender(camera);
       try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,camera,
-        cull:!world.mirrors.mayRender(camera),items:meshItems});}catch(error){pauseForRuntimeError(error);}
+        cull:!children,children,items:meshItems});}catch(error){pauseForRuntimeError(error);}
     }
     phase('actors');
     renderer.info.reset();

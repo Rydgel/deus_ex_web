@@ -112,7 +112,8 @@ adjustment.
 This slice targets static, upward-facing horizontal Translucent mirrored BSP
 floors, including Training's four authored heights. Moving mirrors, nonparallel
 recursive mirror views, portal/sky combinations and other mirror material modes
-are not verified here. Original BSP span visibility and child merging are not
+are not verified here (wall, mover and nested mirrors: see "All maps" and
+"Wall mirrors against the original"). Original BSP span visibility and child merging are not
 yet reproduced by the browser's depth-buffer renderer. Existing mesh lighting,
 plant texture and lightmap precision differences remain separate fidelity gaps.
 Do not treat this slice as complete Stage 4 acceptance.
@@ -179,6 +180,7 @@ absolute bounds.
   alone, with depth written as PF_Occlude.
 - **Children first.** Every visible plane's child renders before any mirror
   shows its reflection, and each child hides only its own plane's faces.
+  Children nest; see "Wall mirrors against the original".
   `mirrors.enabled = false` is a diagnostics switch that draws every
   mirror without its reflection.
 - **Checks.** `scripts/validate-mirrors-play.mjs` faces the 02_NYC_Bar
@@ -206,9 +208,127 @@ absolute bounds.
 
 - **Masked, modulated and two-sided mirrors** (none in the shipped maps) are
   likewise drawn as ordinary surfaces.
-- **Nested reflections.** A mirror seen inside another mirror's reflection
-  draws its surface without a nested reflection. The original nests children
-  while `Frame->Recursion < 3`.
 - **Opaque mirrors on a span-based device.** The `+0x48` SpanBased path is a
   software-renderer branch and is not translated.
-- **No capture yet.** There is no original-game capture of a wall mirror.
+
+## Wall mirrors against the original (2026-10-02)
+
+**Captures.** The original game ran in the CrossOver bottle with the
+exact-camera pipeline (`ad/scripts/original-game.mjs`). The level was frozen
+before `open` (`set LevelInfo bPlayersOnly True`), so Everett's opening
+conversation never starts. The camera was a ghost one at eye = Location + 40,
+with the HUD hidden. The Shot bitmaps stay outside Git in
+`ad/captures/original/`:
+
+- `mirror-11_Paris_Everett-*.png`: the small wall mirror (surface 388,
+  Y=1660) and the standing mirror on DeusExMover2 (Y=1476), facing each
+  other. Views are centred, turned 3°, 10° and 20°, and from the side.
+- `mirror-03_NYC_747-c1..c3.png`: the galley floor mirror (Z=306), seen
+  from the corridor through its doorway.
+
+**Seam (browser bug, fixed).** The child target holds the reflection
+right-to-left, so target column `x` is screen column `W−1−x`. The child's
+scissor, however, was the mirror's screen rectangle set with
+`renderer.setScissor`. That call takes CSS pixels and multiplies by the pixel
+ratio, but the bounds are drawing-buffer pixels, so it was wrong twice. It
+was not mirrored, and on a pixel-ratio-2 display it was scaled twice.
+
+The child was cleared and drawn only inside that rectangle. The columns the
+composite samples outside it kept whatever an earlier frame had left there,
+so the mirror showed two viewpoints split by a seam. Off-axis views showed
+this at any pixel ratio, and on Retina even centred mirrors did. A view
+where the misplaced rectangle happens to cover the sampled columns looks
+correct, which is why the check below places the mirror at the screen's
+left edge.
+
+The scissor is now the target's own (`target.scissor`, in target pixels),
+over columns `[W−x−w, W−x)`. The Everett and 747 views then match the
+original captures (one continuous reflection) and no longer depend on
+earlier frames.
+
+**The player in reflections.** The original draws the first-person player in
+a mirror's child frame. The frame pass `0x10b19fc0` passes SetupDynamics an
+excluded actor computed at `0x10b1a161–0x10b1a18e`: none when the viewport
+actor's `bBehindView` (`+0x318` bit 0) is set, or when `Frame->Parent`
+(`+0x8`, per the SDK's FSceneNode) is non-null; otherwise the ViewTarget, or
+the view actor itself. The pass then recurses into `Frame->Child` and each
+`Sibling` (`0x10b1a267–0x10b1a27c`). SetupDynamics' own ViewTarget rejection
+applies only at Recursion 0 ([render visibility](render-visibility.md)).
+
+The capture agrees. Standing in front of Everett's wall mirror, JC is
+visible; with `bHidden True` he is gone. In ghost mode he shows half sunk in
+the floor, because `CheatFlying` poses him and the eye height set his
+Location.
+
+**Browser.**
+
+- **Admission.** On a map with mirror groups, the actor layer also admits
+  actors that only child frames draw (`drawnInWorld(..., child)`).
+- **Per pass.** When a mirror may render, such an actor is posed and lit
+  with the main frame. It is shown in each child pass and hidden in the
+  main pass (`passVisibility`).
+- **Lighting.** Like every actor in a mirror pass, it reuses main-frame
+  lighting, not a per-frame light setup. This is an approximation.
+
+**Checks.** `scripts/validate-mirrors-play.mjs` now renders at pixel ratio 2.
+
+- **Everett off-axis.** It views Everett's standing mirror at the left of
+  the screen after filling every child target with magenta at near depth,
+  and requires no magenta pixel in the mirror. Served the previous
+  `mirrors.mjs`, the same case fails with 27.7% of the mirror still magenta.
+- **Hotel player.** In the Hotel bathroom, hiding the player changes 0.96%
+  of the frame with reflections on and 0% with them off.
+- **Training.** The Training spec still gives 2.04/255 for the floor and
+  3.89/255 for the emblem.
+
+**Nested reflections.** At `0x10b18881` OccludeBsp takes the mirror path
+only while `Frame->Recursion` (`+0x1c`) is below 3. CreateChildFrame sets a
+child's Recursion to its parent's plus one (`0x10b15e4a–0x10b15e5c`).
+Children therefore nest to recursion 3, and a mirror inside a recursion-3
+frame is an ordinary surface. In the Everett wall-mirror view, the original
+shows the standing mirror inside the reflection with its own reflection: the
+far wall, its table, JC, and the wall mirror again, dark at the limit.
+
+The browser now builds the same tree (`MIRROR_RECURSION_LIMIT`):
+
+- **Order.** A frame's visible mirror groups each get a child frame, drawn
+  before the frame itself, as DrawFrame does. The child's camera is the
+  frame's true camera reflected across the group's plane, and the child
+  hides that group's faces and clips at its plane.
+- **Handedness.** Each level reverses handedness again, so only odd depths
+  negate the submitted X axis. Every child target is then mirrored against
+  its parent's pixels, and the composite's right-to-left sample is correct
+  at every depth.
+- **Region.** A child's region is the group's bounds in its parent frame,
+  intersected with the parent's own region, then mirrored. This stands in
+  for the original's span buffer: it is a rectangle, so it is never smaller
+  than the spans.
+- **Targets.** Render targets are pooled by depth and sibling index. A
+  frame's children are all sampled by its own draw, and each child's
+  descendants are done before that child draws.
+- **At the limit.** A recursion-3 frame draws its mirrors without a
+  reflection: the surface's S, written opaque. The original blends a
+  Translucent surface over whatever its framebuffer holds there. That
+  matches only if the region is black, which is unverified.
+
+In the Everett wall-mirror and standing-mirror views, the browser now shows
+the same nesting as the original captures; JC differs only because the
+inspect camera stands where the ghost capture's player was. The validator's
+Everett case renders four child passes to depth 3, all covered by the
+magenta check.
+
+**Cost.** At the Everett views the browser now draws 4 child passes, where
+it drew 2 at depth 1. Measured headless (Metal ANGLE, 1280×720, inspect
+camera, medians of six interleaved 60-frame rounds):
+
+| Nesting | Draw calls per frame | Host mirror phase, reflections on − off |
+| --- | --- | --- |
+| Depth 1 | 61 | 0.46–0.60 ms |
+| Depth 3 | 134–140 | 0.65–0.80 ms |
+
+GPU time was not measured.
+
+**Seen while comparing, outside this work.** Some actors the original draws
+are absent from the browser's inspect camera: the 747 galley's liquor
+bottles and cup, and an object at the right edge of Everett's 10° view. The
+cause was not investigated.

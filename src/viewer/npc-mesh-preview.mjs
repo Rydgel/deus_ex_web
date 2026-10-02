@@ -57,7 +57,7 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
  * identities keep their captured index for animation-history fidelity. */
 /** `player` is the player actor or a getter for it: Player start logs a new
  * player in, so the viewer passes a getter. */
-export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma,gpu=null}={}) {
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player:playerSource,lighting=null,displayGamma,gpu=null,childFrames=false}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -90,6 +90,11 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   // person. So the player is drawn in behind view (a third-person
   // conversation). SkilledTool's DownItem unhides the held tool, so it is
   // drawn here too.
+  // Both viewer rejections belong to the root frame only. The frame pass
+  // (0x10b19fc0) passes no excluded actor when Frame->Parent (+0x8) is set
+  // (0x10b1a16d-0x10b1a175) and recurses into each child (0x10b1a267-
+  // 0x10b1a27c); SetupDynamics skips the ViewTarget only at Recursion 0.
+  // So a mirror's child frame (`child`) draws the player in first person.
   // The viewer's fields, read once per update (no script runs while the
   // actor layer updates); asynchronous admission reads them afresh.
   let frameViewer=null;
@@ -98,12 +103,12 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     const player=currentPlayer();
     return player?{player,behind:Boolean(read(player,'bBehindView')),viewTarget:read(player,'ViewTarget')}:{player:null};
   };
-  const drawnInWorld=(actor,own=null)=>{
+  const drawnInWorld=(actor,own=null,child=false)=>{
     if(own?(own.bHidden()||own.bDeleteMe()):(read(actor,'bHidden')||read(actor,'bDeleteMe')))return false;
     const {player,behind,viewTarget}=viewer();
     if(!player)return true;
-    if(!behind&&actor===(viewTarget??player))return false;
-    if(!behind&&viewTarget===actor)return false;
+    if(!child&&!behind&&actor===(viewTarget??player))return false;
+    if(!child&&!behind&&viewTarget===actor)return false;
     let owned=false;
     for(let owner=actor;owner;owner=own&&owner===actor?own.Owner():read(owner,'Owner'))if(owner===player){owned=true;break;}
     if((own?own.bOnlyOwnerSee():read(actor,'bOnlyOwnerSee'))&&(!owned||behind))return false;
@@ -125,9 +130,12 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     let mesh;
     if(readMesh){try{mesh=readMesh();}catch{mesh=undefined;}}else mesh=read(actor,'Mesh');
     if(failed.get(actor)===mesh)return;
-    if(!mesh||(mesh.kind!=='LodMesh'&&mesh.kind!=='Mesh')||!drawnInWorld(actor)||!read(actor,'Location'))return;
+    if(!mesh||(mesh.kind!=='LodMesh'&&mesh.kind!=='Mesh')||!read(actor,'Location'))return;
+    // A map with mirrors also admits actors only its child frames draw.
+    if(!drawnInWorld(actor)&&!(childFrames&&drawnInWorld(actor,null,true)))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
+      childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,
       lighting,displayGamma,texturePool:textures,gpu,batches})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
@@ -231,12 +239,13 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     /** Mirror child frames change only camera-relative environment UVs.  The
      * main-frame update immediately before them already reconciled actors,
      * sampled poses, applied styles and lit the geometry. GPU-path groups
-     * also take this pass's frustum decision (`camera`, the pass camera). */
+     * also take this pass's frustum decision (`camera`, the pass camera);
+     * an actor only child frames draw shows in child passes alone. */
     updateView(cameraPosition,camera=null){
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
       for(const actor of [...actors,...itemPreviews()]){
-        if(actor.viewDependent)actor.updateView(cameraPosition);
         if(camera)actor.passVisibility?.(camera);
+        if(actor.viewDependent)actor.updateView(cameraPosition);
       }
       batches?.flush();
     },
@@ -277,7 +286,7 @@ function setMeshBounds(geometry,array){
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  lighting=null,displayGamma={value:1},texturePool=null,gpu=null,batches=null}) {
+  childVisible=null,lighting=null,displayGamma={value:1},texturePool=null,gpu=null,batches=null}) {
   // This actor's per-frame reads through pre-resolved accessors
   // (actor-fields.mjs); any other object or name reads through readNamed.
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
@@ -620,9 +629,13 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       return frustum.intersectsSphere(group.exact.boundingSphere);
     }
     const passFrustum=new THREE.Frustum(),passMatrix=new THREE.Matrix4();
-    let mainCamera=null;
+    // childOnly: this frame only mirror child frames draw the actor (the
+    // player in first person); the main pass hides it.
+    let mainCamera=null,childOnly=false;
     function passVisibility(camera){
-      if(mode!=='gpu'||disposed||!root.visible)return;
+      if(disposed)return;
+      if(childOnly){root.visible=camera!==mainCamera;if(!root.visible){hideBatched();return;}}
+      if(mode!=='gpu'||!root.visible)return;
       if(camera===mainCamera){for(const group of groups.values())showGroup(group,group.mainVisible);return;}
       passFrustum.setFromProjectionMatrix(passMatrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
         THREE.WebGLCoordinateSystem,camera.reversedDepth);
@@ -687,6 +700,10 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       update(cameraPosition,view={}){
         if(disposed)return false;
         root.visible=visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+        // `view.children`: mirror child frames will draw this frame.
+        childOnly=!root.visible&&Boolean(view.children&&childVisible?.(actor,own));
+        mainCamera=view.camera??null;
+        if(childOnly)root.visible=true;
         if(!root.visible){hideBatched();return false;}
         // Render.dll only draws, and so only calls GetFrame for, actors in
         // the view. Outside the frustum even a conservative bound of every
@@ -739,13 +756,14 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         }
         let mainVisible;
         if(mode==='gpu'){
-          mainCamera=view.camera??null;
           mainVisible=false;
           const assign=(group,visible)=>{group.mainVisible=visible;showGroup(group,visible);mainVisible||=visible;};
           if(view.frustum)decideGroups(view.frustum,assign);else for(const group of groups.values())assign(group,true);
         }
         const environmentUpload=updateView(cameraPosition);
-        if(lighting&&view.lit&&lighting.frame&&(!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
+        // Mirror frames reuse the main frame's lighting (see update() in
+        // createActorMeshScene); a child-only actor is lit the same way.
+        if(lighting&&view.lit&&lighting.frame&&(childOnly||!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
           group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))){
           if(mode==='gpu'){
             const prepared=lighting.setupMesh(actor);
@@ -760,6 +778,8 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
             }
           } else summary.lighting=relight()??summary.lighting;
         }
+        // Hidden from the main pass until a child pass shows it (passVisibility).
+        if(childOnly){root.visible=false;hideBatched();}
         lastPose=current;summary.animation=own.AnimSequence();summary.frame=own.AnimFrame();
         // True when a buffer was re-uploaded: pose positions, or the
         // camera-relative environment UVs, which change with the viewer.
