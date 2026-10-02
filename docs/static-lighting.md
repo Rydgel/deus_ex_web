@@ -265,6 +265,92 @@ animation off) and the merge for the three effects on 18 random rectangles
 - *Not in Play yet.* The texture-palette LightTypes (8, 9) and the
   spatially dynamic effects.
 
+## Rust kernel
+
+The per-frame merge (`animateLightMap`) runs in the Rust core
+(`native/script-vm/src/light.rs`, driven by
+`src/runtime/light-animation-kernel.mjs`) as an exact representation change.
+`animateLightMap` stays the reference: `LIGHT_KERNEL=js` in Node or
+`?lightKernel=js` in the viewer selects it. Browser profiles on October 2
+measured its JavaScript loop at 2.5 ms/frame on Training, 1.7 on Battery
+Park and 1.0 on Everett (`play-frame-cost.md`).
+
+- **Where.** light.rs runs in the script-VM kernel instance, with no
+  statics, beside fire.rs and fog.rs. A light map's block (a header of u32
+  words, the static bytes, a mirror of the texels and each animated light's
+  cached spatial bytes) comes from a per-world pool of 1 MiB chunks of
+  `kernel.light.alloc`. The fire allocator now also frees: `world.dispose`
+  returns the pool and the next world reuses its chunks. `refill` (a script
+  brightness change) re-registers the light map after its JavaScript merge,
+  reusing the block when the new layout fits.
+- **Admission.** Every rectangle must lie inside the map and every spatial
+  array must hold its rectangle; otherwise the light map keeps merging in
+  JavaScript. All 2,713 animated light maps of the seven validated maps are
+  admitted.
+- **What stays in JavaScript.**
+  - The GlobalLighting constants, through the reference's own
+    `animatedLightConstants` and per-frame cache, called for every light of
+    each merged map in list order, so Strobe's shared flag flips on the same
+    frames. Their colour `tables` are now built at first use; the kernel
+    path never asks for them unless it must copy them (below).
+  - The memo. The reference compares a string of each light's three colour
+    steps and its noise input (`A<frameIndex>`, `W<noise version>` or
+    nothing). For numbers `String(a) === String(b)` exactly when `a === b`
+    or both are NaN, and a light's input kind is fixed by its effect, so the
+    kernel path runs the same test on numbers kept in a Float64Array.
+  - The choice of light maps, and the float samples (`lighting.mjs`).
+- **What moved.**
+  - The colour tables: `Math.min(127, (byte·step) >> 16)` through a
+    Uint8Array, built in light.rs when the three steps are int32 integers
+    (the double product is then exact and ToInt32 keeps its low 32 bits).
+    Other steps (NaN, beyond int32) copy the reference's tables. One slot
+    per light actor, rewritten when its constants object changes.
+  - The modulation tables, rebuilt by the reference's rule (a new frame
+    object, frameIndex for effects 1–2, noise version for effect 3) from the
+    frame's factors at that first use: `fistp(f(factor·byte) − 0.5) & 255`.
+    Below 2^52 the nearest-even sum with ±2^52 lands on the integer grid, so
+    it equals `fistp`'s ties-to-even exactly; larger magnitudes, infinities
+    and NaN take the transcribed `fistp` and ToInt32's low byte.
+  - The union reset from the static bytes, the merge in light order (the
+    modulation index counts every rectangle texel from 0) and the
+    comparison with the saved union. When a byte changed, the union's row
+    span is copied back to the record's JavaScript texels (the block mirrors
+    them, so the columns outside the union are equal); otherwise nothing is
+    copied, as nothing changed.
+- **Validation.** `validate-light-animation-rust.mjs` builds the light maps
+  of 00_Training, 02_NYC_BatteryPark, 11_Paris_Everett,
+  06_HongKong_WanChai_Underworld (Pulse, Flicker, Strobe),
+  06_HongKong_MJ12lab (Pulse, SubtlePulse), 03_NYC_MolePeople (FireWaver)
+  and 15_Area51_Page (TorchWaver, FireWaver, WateryShimmer) headless, as
+  `world.mjs` does. Each animated light map has a JavaScript mirror merged
+  by `animateLightMap` on a second frame with an identical appFrand stream.
+  Over 600 frames per map (steps, repeats, jumps; some frames skip a subset
+  of maps), with four script brightness changes per map, every returned
+  region (or null) and every texel byte match. The kernel's colour and
+  modulation tables also match the reference's whenever they hold the
+  current frame's inputs. Synthetic maps cover what the game data does not:
+  static bytes above 127, every LightType and effect, Blink, huge, negative
+  and NaN steps, factors at ties, 0, negative, huge, infinite and NaN,
+  merges without a memo, re-registration and a recreated kernel. Each of
+  seven injected bugs failed it: ties rounded up, the rounding's negative
+  branch dropped, a wrong low byte between 2^52 and 2^62, a 7-bit
+  modulation index, no reset from the static bytes, negative colour entries
+  clamped to 0, and the memo ignoring the noise input.
+- **Cost.** Headless (`--bench 600`, Node, M2 Pro, interleaved blocks of 50
+  frames, medians in ms per frame), the merge alone and `lighting.animate`
+  (with the float samples of changed regions, still JavaScript):
+
+  | Map | merge JS | merge Rust | animate JS | animate Rust |
+  |---|---:|---:|---:|---:|
+  | 00_Training | 2.34 | 0.67 | 2.67 | 0.95 |
+  | 02_NYC_BatteryPark | 1.55 | 0.40 | 1.71 | 0.54 |
+  | 11_Paris_Everett | 0.77 | 0.20 | 0.84 | 0.27 |
+
+  On Training the kernel path's remaining time is light.rs's merge
+  (~0.4 ms for ~200,000 spatial texels a frame), the WateryShimmer table
+  (~0.1 ms when the noise steps) and ~0.1 ms of JavaScript (constants,
+  memo, copy-back). Browser frames were not measured here.
+
 ## Not yet moved
 
 Still to do: the time-varying spatial functions (Searchlight, SlowWave,

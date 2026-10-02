@@ -20,6 +20,10 @@ import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map(), rotatedMovers = new Set();
+  // The script-VM kernel runs the animated light-map merge (light.rs) and
+  // the volumetric fog loop (fog.rs) when it loads.
+  let scriptKernel = null;
+  try { scriptKernel = await loadScriptVmKernel(); } catch { scriptKernel = null; }
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
   const movingLights = createMovingLights(lighting, map.model);
   lighting.setMovingApplier(movingLights.apply);
@@ -28,9 +32,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const mirrors = createMirrors(notes, displayGamma);
   // Volumetric fog maps (docs/volumetric-fog.md); the per-texel loop runs in
   // the Rust core when its kernel loads.
-  let fogKernel = null;
-  try { fogKernel = await loadScriptVmKernel(); } catch { fogKernel = null; }
-  const fog = createFogPass({ lightAtlas, levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, displayGamma, notes, kernel: fogKernel });
+  const fog = createFogPass({ lightAtlas, levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, displayGamma, notes, kernel: scriptKernel });
   const counts = { triangles: 0, degenerate: 0, corrected: 0, movers: 0, surfaces: 0 };
   const flagProperties = { bInvisible: 1, bMasked: 2, bTranslucent: 4, bTwoSided: 256,
     bNoSmooth: 2048, bUnlit: POLY.Unlit, bModulated: POLY.Modulated };
@@ -398,7 +400,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,
     dispose() { root.traverse(o => o.geometry?.dispose()); for (const m of materials.values()) m.dispose();
-      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); },
+      for (const t of textureGPU.values()) t.dispose(); markerMaterial.dispose(); lightAtlas.dispose(); mirrors.dispose(); fog.dispose(); lighting.dispose(); },
   };
   return world;
 }

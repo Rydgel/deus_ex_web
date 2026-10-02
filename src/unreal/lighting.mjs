@@ -3,6 +3,15 @@ import { readObject } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
 import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static-lighting.mjs';
 import { fgetHsv } from '../runtime/dynamic-lighting.mjs';
+import { scriptVmKernel } from '../runtime/script-vm-kernel.mjs';
+import { createLightAnimationKernel } from '../runtime/light-animation-kernel.mjs';
+
+/** The animated light-map merge runs in the Rust core (light-animation-kernel.mjs)
+ * when the script-VM kernel is loaded as the lighting is created;
+ * LIGHT_KERNEL=js in Node or ?lightKernel=js in the viewer keeps
+ * animateLightMap. */
+const lightKernelMode = () => (typeof process !== 'undefined' && process.env?.LIGHT_KERNEL)
+  || globalThis.DEUS_EX_LIGHT_KERNEL || 'rust';
 
 const normalize = v => { const d = Math.hypot(...v); if (!d) throw new Error('Zero lighting normal'); return v.map(n => n / d); };
 
@@ -134,7 +143,9 @@ function normalizeLightingChanges(value) {
   return result;
 }
 
-export async function createLighting(map, asset, assets) {
+/** `kernel`: the script-VM kernel whose light.rs merges animated light maps,
+ * null for animateLightMap, or undefined to decide now (lightKernelMode). */
+export async function createLighting(map, asset, assets, { kernel } = {}) {
   const defaults = new ClassDefaults(assets), actors = new Map(), pendingActors = new Map(), notes = new Set();
   const sourceActors = new Map(map.actors.map(a => [a.index, a]));
   const levelInfo = map.actors.find(a => a.className === 'LevelInfo');
@@ -157,6 +168,8 @@ export async function createLighting(map, asset, assets) {
   const levelValues = await actor(levelInfo.index);
   const zoneValues = map.model.zones.map(z => actors.get(z.actor) ?? levelValues);
   const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set(), bySurface = new WeakMap(), owned = [];
+  const chosenKernel = kernel !== undefined ? kernel : lightKernelMode() === 'js' ? null : scriptVmKernel;
+  const animationKernel = chosenKernel ? createLightAnimationKernel(chosenKernel) : null;
   let movingApplier = null;
 
   // Moving lights (docs/dynamic-lighting.md) add onto a copy of the static
@@ -222,6 +235,10 @@ export async function createLighting(map, asset, assets) {
     const texels = result.texels = result.baseTexels.slice();
     result.animationMemo = {};
     if (animated.length && lightFrame) animateLightMap(result.baseTexels, texels, width, animated, lightFrame, animationOptions);
+    // The kernel's copy starts from the bytes just merged (its old block, if
+    // the new layout fits, is reused).
+    result.lightKernel = animated.length && animationKernel
+      ? animationKernel.register(result.baseTexels, width, animated, texels, result.lightKernel ?? null) : null;
     for (let i = 0; i < texels.length; i++) pixels[i] = texels[i] / 255;
     if (result.staticPixels) compose(result);
     return result;
@@ -278,8 +295,10 @@ export async function createLighting(map, asset, assets) {
       const changed = [];
       for (const result of animatedRecords) {
         if (!visible(result)) continue;
-        const region = animateLightMap(result.baseTexels, result.texels, result.width, result.animated, frame, animationOptions,
-          result.animationMemo ??= {});
+        const region = result.lightKernel
+          ? animationKernel.animate(result.lightKernel, result.texels, frame, animationOptions, result.animationMemo ??= {})
+          : animateLightMap(result.baseTexels, result.texels, result.width, result.animated, frame, animationOptions,
+            result.animationMemo ??= {});
         if (!region) continue;
         const { texels, width } = result, pixels = result.staticPixels ?? result.pixels;
         for (let v = region.minV; v < region.maxV; v++)
@@ -290,6 +309,10 @@ export async function createLighting(map, asset, assets) {
       return changed;
     },
     animatedRecords: () => [...animatedRecords],
+    /** The light-map merge kernel (null for animateLightMap). */
+    animationKernel,
+    /** Free the kernel's blocks (the world is going). */
+    dispose() { animationKernel?.dispose(); },
     ownedRecords() { return owned; },
     invalidate(changes) {
       const entries = normalizeLightingChanges(changes), changedLights = [...new Set(entries.map(entry => entry.ref))];

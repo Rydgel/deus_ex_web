@@ -15,6 +15,7 @@ mod move_pawn;
 mod dispatch;
 mod interp;
 mod fire;
+mod light;
 mod fog;
 mod lipsync;
 mod loco;

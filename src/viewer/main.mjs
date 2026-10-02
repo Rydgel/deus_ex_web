@@ -27,6 +27,10 @@ if(scriptVmParam)globalThis.DEUS_EX_SCRIPT_VM=scriptVmParam;
 // (docs/fire-texture.md "Rust kernel"); ?fireKernel=js keeps the JavaScript.
 const fireKernelParam=new URLSearchParams(location.search).get('fireKernel');
 if(fireKernelParam)globalThis.DEUS_EX_FIRE_KERNEL=fireKernelParam;
+// The animated light-map merge runs in the Rust core (docs/static-lighting.md
+// "Rust kernel"); ?lightKernel=js keeps the JavaScript.
+const lightKernelParam=new URLSearchParams(location.search).get('lightKernel');
+if(lightKernelParam)globalThis.DEUS_EX_LIGHT_KERNEL=lightKernelParam;
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.

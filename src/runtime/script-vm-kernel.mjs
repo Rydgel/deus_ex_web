@@ -86,17 +86,28 @@ export function createScriptVmKernel(instance, memory) {
   const words = () => new Uint32Array(memory.buffer);
   uploadSineTable(x, memory);
   const resultAt = x.result_ptr() >>> 2;
-  // Fire.dll texture blocks (fire.rs) live above the memory's initial size,
-  // past the statics and stack, and stay for the instance's life (a page's
-  // procedural textures do too). This bump allocator is the only thing that
-  // grows this instance's memory; the other kernels here re-derive their
-  // views on every call.
-  let fireTop = memory.buffer.byteLength;
-  const fireAlloc = bytes => {
-    const at = (fireTop + 15) & ~15, end = at + bytes;
+  // Kernel blocks (Fire.dll textures, fire.rs; animated light maps,
+  // light.rs) live above the memory's initial size, past the statics and
+  // stack. Fire blocks stay for the instance's life (a page's procedural
+  // textures do too); a world's light-map blocks are freed with it. A freed
+  // block is handed whole to a later request it fits (first fit), so equal
+  // requests reuse it exactly. This allocator is the only thing that grows
+  // this instance's memory; the other kernels here re-derive their views on
+  // every call.
+  let top = memory.buffer.byteLength;
+  const sizes = new Map(), freed = [];
+  const alloc = bytes => {
+    bytes = (bytes + 15) & ~15;
+    const reuse = freed.findIndex(at => sizes.get(at) >= bytes);
+    if (reuse >= 0) return freed.splice(reuse, 1)[0];
+    const at = (top + 15) & ~15, end = at + bytes;
     if (end > memory.buffer.byteLength) memory.grow(Math.ceil((end - memory.buffer.byteLength) / 65536));
-    fireTop = end;
+    top = end; sizes.set(at, bytes);
     return at;
+  };
+  const free = at => {
+    if (!sizes.has(at) || freed.includes(at)) throw new Error(`Kernel block ${at} is not allocated`);
+    freed.push(at);
   };
   const vector = () => { const w = words(); return [num(w[resultAt]), num(w[resultAt + 1]), num(w[resultAt + 2])]; };
   const ints = () => { const w = new Int32Array(memory.buffer); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; };
@@ -169,10 +180,21 @@ export function createScriptVmKernel(instance, memory) {
     // `alloc` (byte addresses in `memory`).
     fire: Object.freeze({
       memory,
-      alloc: fireAlloc,
+      alloc,
       tick: header => x.fire_tick(header >>> 0),
       wetTick: header => x.fire_wet_tick(header >>> 0),
       expand: (pixels, count, palette, rgba) => x.fire_expand(pixels >>> 0, count >>> 0, palette >>> 0, rgba >>> 0),
+    }),
+    // The animated light-map merge (light.rs, docs/static-lighting.md "Rust
+    // kernel"), driven by light-animation-kernel.mjs over blocks from
+    // `alloc`, returned with `free` when the world goes.
+    light: Object.freeze({
+      memory,
+      alloc,
+      free,
+      merge: (header, before) => x.light_merge(header >>> 0, before >>> 0),
+      colourTables: (out, red, green, blue) => x.light_colour_tables(out >>> 0, red | 0, green | 0, blue | 0),
+      modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
     }),
   });
 }

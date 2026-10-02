@@ -256,20 +256,8 @@ const ANIMATED_TYPES = new Set([2, 3, 4, 5, 7]);
  * `frame` is {timeSeconds, noise, strobe, factors} from createLightFrame.
  * Writes `texels` in place over the animated rectangles (reset to `base`
  * first) and returns the changed texel region, or null. */
-export function animateLightMap(base, texels, width, animated, frame, { levelBrightness, hsv, keyOf }, memo = null) {
-  frame.constants ??= new Map();
-  const constantsOf = ({ values, ref }) => {
-    let constants = frame.constants.get(ref);
-    if (!constants) {
-      const brightness = lightTypeBrightness(values, { timeSeconds: frame.timeSeconds, noise: frame.noise, strobe: frame.strobe,
-        flickerKey: keyOf(ref) });
-      constants = movingLightConstants(values, levelBrightness, hsv(values.LightHue ?? 0, values.LightSaturation ?? 0), brightness);
-      constants.signature = constants.steps.join(',');
-      constants.tables = constants.steps.map(step => Uint8Array.from({ length: 256 }, (_, byte) => colorTableEntry(step, byte)));
-      frame.constants.set(ref, constants);
-    }
-    return constants;
-  };
+export function animateLightMap(base, texels, width, animated, frame, options, memo = null) {
+  const constantsOf = light => animatedLightConstants(frame, light, options);
   // Every input of the merge: each light's colour steps and, for the
   // wavers, the noise table it reads (A each frame, W on a new step).
   if (memo) {
@@ -311,6 +299,28 @@ export function animateLightMap(base, texels, width, animated, frame, { levelBri
     for (let i = row; i < end; i++, k++) if (texels[i] !== before[k]) return { minU, maxU, minV, maxV };
   }
   return null;
+}
+
+/** An animated light's GlobalLighting constants for `frame`, computed at the
+ * first request in the frame for its `ref` and kept in `frame.constants`
+ * (Strobe's shared flag flips at that first computation): its colour steps,
+ * their `signature`, and its colour `tables` (one Uint8Array of 256
+ * colorTableEntry bytes per channel), built at first use. */
+export function animatedLightConstants(frame, { values, ref }, { levelBrightness, hsv, keyOf }) {
+  frame.constants ??= new Map();
+  let constants = frame.constants.get(ref);
+  if (!constants) {
+    const brightness = lightTypeBrightness(values, { timeSeconds: frame.timeSeconds, noise: frame.noise, strobe: frame.strobe,
+      flickerKey: keyOf(ref) });
+    constants = movingLightConstants(values, levelBrightness, hsv(values.LightHue ?? 0, values.LightSaturation ?? 0), brightness);
+    constants.signature = constants.steps.join(',');
+    let tables = null;
+    const { steps } = constants;
+    Object.defineProperty(constants, 'tables', { enumerable: true,
+      get: () => tables ??= steps.map(step => Uint8Array.from({ length: 256 }, (_, byte) => colorTableEntry(step, byte))) });
+    frame.constants.set(ref, constants);
+  }
+  return constants;
 }
 
 /** One frame's light animation inputs: the noise refresh with
