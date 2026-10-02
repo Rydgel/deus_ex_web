@@ -122,9 +122,11 @@ export function createScriptObjectLookup({
       throw new Error('Find-only FName lookup returned an invalid index');
     if (nameIndex === 0) return null;
     const resolvedOuter = outerRef.get();
-    if (resolvedOuter !== null && !Number.isInteger(resolvedOuter?.index))
+    // An unregistered map actor hashes by its measured index (hashIndex).
+    const outerIndex = resolvedOuter === null ? 0 : Number.isInteger(resolvedOuter?.index) ? resolvedOuter.index : resolvedOuter?.hashIndex;
+    if (resolvedOuter !== null && !Number.isInteger(outerIndex))
       throw new Error('Object lookup requires Outer.Index');
-    const bucket = (nameIndex ^ (resolvedOuter?.index ?? 0)) & 0xfff;
+    const bucket = (nameIndex ^ outerIndex) & 0xfff;
     const seen = new Set();
     for (let object = registry.buckets[bucket]; object !== null; object = object.hashNext) {
       if (!object || seen.has(object)) throw new Error('Invalid native object hash chain');

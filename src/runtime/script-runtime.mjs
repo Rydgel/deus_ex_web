@@ -1,3 +1,4 @@
+import { execUpdateParticles } from './script-particles.mjs';
 import {setWindowHeightNative} from './script-window-size.mjs';
 import {setTileWindow} from './script-window-tile.mjs';
 import {setWindowConfigurationNative} from './script-window-configuration.mjs';
@@ -2917,6 +2918,11 @@ export class ScriptRuntime {
       if(!object||object.kind!=='Enum'||index<0)return 'None';
       const names=this.enumNames(object);
       return index<names.length?names[index]:'None';
+    }
+    // DeusEx ParticleIterator.UpdateParticles (docs/particles.md).
+    if(call.index===3017){
+      if(typeof this.rng?.frand!=='function')throw new Error('UpdateParticles requires the shared original RNG stream');
+      return execUpdateParticles(this,call.receiver,Math.fround(refValue(call.evaluateArgument(0))),()=>this.rng.frand());
     }
     if(call.index===231)return execObjectLog(call,{logDevice:this.logDevice});
     if(call.index===751)return this.criticalDelete(call);

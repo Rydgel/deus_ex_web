@@ -6,6 +6,8 @@ import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
+import { createSpriteScene } from './sprite-scene.mjs';
+import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
@@ -43,6 +45,7 @@ let subtitlePreference = false;
 let game, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
+let spriteScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
 // default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
 // selects the CPU kernels, which stay the reference and the fallback. A
@@ -311,6 +314,31 @@ async function loadMap(name) {
     const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
     if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
       {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
+    // Sprites and particles (docs/particles.md), drawn from the live level.
+    let nextSpriteScene=null;
+    if(nextGame){
+      const spriteRuntime=nextGame.doors.scriptRuntime.runtime;
+      nextSpriteScene=createSpriteScene(spriteRuntime,new TextureStore(assets),{
+        player:()=>nextGame.player.collisionActor,displayGamma:nextWorld.displayGamma,
+        constructIterator:(cls,outer)=>{
+          const linked=[...spriteRuntime.linkedClasses].find(candidate=>candidate.record.key===(cls.key??cls.record?.key));
+          if(!linked)throw new Error(`RenderIteratorClass ${cls.key} is not linked`);
+          const base=spriteRuntime.actorLifecycle.construction,native=spriteRuntime.instance(outer).nativeObject;
+          if(!native)throw new Error(`${outer.name} has no native object to own its RenderInterface`);
+          // A pre-placed actor hashes its owned objects by its measured
+          // GObjObjects index (docs/object-index-captures.md).
+          if(!Number.isInteger(native.index)&&!Number.isInteger(native.hashIndex)){
+            const measured=spriteRuntime.measuredObjectIndex(outer);
+            if(!Number.isInteger(measured))throw new Error(`${outer.name} has no measured object index for its RenderInterface`);
+            native.hashIndex=measured;
+          }
+          return spriteRuntime.constructObject(linked,{outer:native,name:'None',flags:0,template:null},{
+            ...base,validate:()=>true,initNativeProperties:()=>{},nativeConstructor:()=>{}});
+        }});
+    }
+    if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
+    spriteScene=nextSpriteScene;
+    if(spriteScene)scene.add(spriteScene.root);
     meshLighting=nextMeshLighting??null;
     hudRenderer?.dispose();hudRenderer=nextHud;
     weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
@@ -824,6 +852,10 @@ function animate(time) {
       try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,camera,
         cull:!world.mirrors.mayRender(camera)});}catch(error){pauseForRuntimeError(error);}
     }
+    if(spriteScene&&mode==='play'&&game&&!runtimeError){
+      try{spriteScene.update();}catch(error){pauseForRuntimeError(error);}
+      spriteScene.root.visible=true;
+    }else if(spriteScene)spriteScene.root.visible=false;
     phase('actors');
     renderer.info.reset();
     let panInputs = null;

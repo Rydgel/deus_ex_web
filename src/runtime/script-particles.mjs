@@ -61,3 +61,73 @@ export function updateParticles(state, deltaTime, frand) {
   state.proxyHidden = noneActive;
   return state;
 }
+
+// The script-visible sParticle members (DeusEx.ParticleIterator).
+const MEMBER = name => `deusex.particleiterator.sparticle.${name}`;
+
+function readIteratorState(runtime, iterator) {
+  const read = name => runtime.readNamed(iterator, name);
+  return {
+    particles: read('Particles').map(p => ({ active: Boolean(p[MEMBER('bactive')]), initVel: [...p[MEMBER('initvel')]].map(f),
+      velocity: [...p[MEMBER('velocity')]].map(f), location: [...p[MEMBER('location')]].map(f), drawScale: f(p[MEMBER('drawscale')]),
+      scaleGlow: f(p[MEMBER('scaleglow')]), lifeSpan: f(p[MEMBER('lifespan')]) })),
+    nextFreeParticle: read('nextFreeParticle') | 0, gravity: Boolean(read('bOwnerUsesGravity')), scales: Boolean(read('bOwnerScales')),
+    fades: Boolean(read('bOwnerFades')), zoneGravity: f(read('OwnerZoneGravity')), riseRate: f(read('OwnerRiseRate')),
+    ownerLifeSpan: f(read('OwnerLifeSpan')), ownerDrawScale: f(read('OwnerDrawScale')),
+  };
+}
+
+function writeParticles(runtime, iterator, state) {
+  runtime.writeNamed(iterator, 'Particles', state.particles.map(p => ({ [MEMBER('bactive')]: p.active, [MEMBER('initvel')]: p.initVel,
+    [MEMBER('velocity')]: p.velocity, [MEMBER('location')]: p.location, [MEMBER('drawscale')]: p.drawScale,
+    [MEMBER('scaleglow')]: p.scaleGlow, [MEMBER('lifespan')]: p.lifeSpan })));
+  runtime.writeNamed(iterator, 'nextFreeParticle', state.nextFreeParticle);
+}
+
+/** Native 3017 on a live iterator: the shared appFrand stream and the
+ * proxy's bHidden (Actor +0x28 bit 1) as the original writes them. */
+export function execUpdateParticles(runtime, iterator, deltaTime, frand) {
+  const state = updateParticles(readIteratorState(runtime, iterator), deltaTime, frand);
+  writeParticles(runtime, iterator, state);
+  const proxy = runtime.readNamed(iterator, 'proxy');
+  if (proxy) runtime.writeNamed(proxy, 'bHidden', state.proxyHidden);
+}
+
+/** URender::SetupDynamics' RenderInterface rule (0x10b22f42-0x10b22fd2):
+ * an actor with a RenderIteratorClass and no valid interface gets one from
+ * StaticConstructObject (Outer = the actor, the class defaults). `construct`
+ * builds the object; returns the interface or null. */
+export function ensureRenderInterface(runtime, actor, construct) {
+  const cls = runtime.readNamed(actor, 'RenderIteratorClass');
+  let iterator = runtime.readNamed(actor, 'RenderInterface');
+  if (!cls) return null;
+  if (!iterator) { iterator = construct(cls, actor); runtime.writeNamed(actor, 'RenderInterface', iterator); }
+  return iterator;
+}
+
+/** One frame of the render-iterator protocol for a ParticleIterator
+ * (SetupDynamics 0x10b22fee-0x10b2307c with Engine's URenderIterator and
+ * DeusEx's CurrentItem 0x1001ab20): Init(Camera) runs the script Init and
+ * stores Observer; Index runs from 0 while below MaxItems; for an active
+ * particle CurrentItem copies DrawScale and ScaleGlow onto the proxy and
+ * FarMoveActors it to the particle (a failed move deletes the particle),
+ * and the proxy is drawn there. Returns the proxy's sprite states in order. */
+export function particleIteratorItems(runtime, iterator, camera, { processEvent, farMoveActor }) {
+  processEvent(iterator, 'Init', [camera]);
+  runtime.writeNamed(iterator, 'Observer', camera);
+  const items = [], max = runtime.readNamed(iterator, 'MaxItems') | 0, proxy = runtime.readNamed(iterator, 'proxy');
+  let state = null;
+  for (let index = 0; index < max; index++) {
+    runtime.writeNamed(iterator, 'Index', index);
+    if (!proxy) continue;
+    state ??= readIteratorState(runtime, iterator);
+    const p = state.particles[index];
+    if (!p?.active) continue;
+    runtime.writeNamed(proxy, 'DrawScale', p.drawScale);
+    runtime.writeNamed(proxy, 'ScaleGlow', p.scaleGlow);
+    if (!farMoveActor(proxy, p.location)) { deleteParticle(state, index); writeParticles(runtime, iterator, state); continue; }
+    items.push({ actor: proxy, location: runtime.readNamed(proxy, 'Location').map(f), drawScale: p.drawScale, scaleGlow: p.scaleGlow });
+  }
+  runtime.writeNamed(iterator, 'Index', max);
+  return items;
+}

@@ -11,13 +11,16 @@ export class ScriptObjectRegistry {
   add(object) {
     if(object.index!==-1||!Number.isInteger(object.nameIndex)||object.nameIndex<0)
       throw new Error('Fresh registration requires an unregistered object and resolved FName index');
-    if(object.outer&&!Number.isInteger(object.outer.index))throw new Error('Object Outer has no native index');
+    // A pre-placed map actor is not in Play's registry; its measured
+    // GObjObjects index (hashIndex) stands in for the name hash.
+    const outerIndex=object.outer?(Number.isInteger(object.outer.index)?object.outer.index:object.outer.hashIndex):0;
+    if(object.outer&&!Number.isInteger(outerIndex))throw new Error('Object Outer has no native index');
     const index=this.freeIndices.length?this.freeIndices.at(-1):this.objects.length;
     if(!Number.isInteger(index)||index<0||index>this.objects.length||this.objects[index]!=null)
       throw new Error('Invalid original free object index');
     if(this.freeIndices.length)this.freeIndices.pop();
     this.objects[index]=object;object.index=index;
-    const hash=((object.outer?.index??0)^object.nameIndex)&0xfff;
+    const hash=(outerIndex^object.nameIndex)&0xfff;
     object.hashNext=this.buckets[hash];this.buckets[hash]=object;
     return index;
   }

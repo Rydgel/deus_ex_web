@@ -75,11 +75,60 @@ particles over 12 updates each (zero dt included). All 288 updates match:
 every particle field, nextFreeParticle, the proxy's bHidden and the number
 of appFrand draws.
 
-## Not yet done
+## Sprites (DrawActorSprite `0x10b25080`)
 
-- native 3017 in the VM;
-- the render-iterator protocol and CurrentItem in Play;
-- the proxy's FarMoveActor;
-- sprite drawing (Render.dll's sprite path);
-- the LastRenderTime and DistanceFromPlayer feedback that unfreezes a
-  generator.
+For a DT_Sprite or DT_SpriteAnimOnce item:
+- The function first writes `Level.TimeSeconds` to the actor's
+  LastRenderTime.
+- It draws one tile through the render device: `Texture.USize·DrawScale`
+  by `VSize·DrawScale` times the projection, centred on the projected
+  Location. That equals a screen-aligned quad of that world size.
+- Its colour is white (an editor-selection tint in the editor), times
+  ScaleGlow when that is not 1, each channel capped at 1, with no fog. The
+  flags are the texture's PolyFlags, the style flags and `0x100`.
+- The style flags come from `0x10b26230`: Style 2, 3 and 4 give PF_Masked,
+  PF_Translucent and PF_Modulated. PF_Unlit is set unless the actor is
+  lit-capable in the software renderer, so sprites are unlit here.
+
+## Play
+
+- **Native 3017** runs `execUpdateParticles` in the VM on the shared
+  appFrand stream, the script FRand's.
+- **The sprite scene** (`src/viewer/sprite-scene.mjs`) runs after each Play
+  tick. It walks the level actor array in order with SetupDynamics'
+  admission: bHidden, the first-person ViewTarget, bOnlyOwnerSee and
+  bOwnerNoSee.
+- **Iterators.** An actor with a RenderIteratorClass gets its
+  RenderInterface built the way StaticConstructObject does it (Outer = the
+  actor, class defaults). It then runs the iterator protocol: the script
+  `Init(Camera)`, Observer and Index, and CurrentItem's proxy DrawScale and
+  ScaleGlow writes and FarMoveActor (`particleIteratorItems`).
+- **Drawing.** Each DT_Sprite item and each admitted sprite actor draws as
+  a screen-aligned three.js sprite: Fire and Wet textures (SmokePuff1 is a
+  FireTexture) from the page's shared live procedural textures, display
+  gamma as for surfaces, and LastRenderTime written when it renders.
+- **Feedback.** Those writes, with Play's existing DistanceFromPlayer,
+  are what unfreeze a generator.
+- **Name hash.** A map actor has no slot in Play's object registry.
+  Constructing its iterator hashes the name by the actor's measured
+  GObjObjects index (`hashIndex`, from the object-index captures), and
+  registry lookup and registration accept it.
+
+`validate-particles-play.mjs` checks this on 02_NYC_Street. With the player
+by ParticleGenerator3's vent:
+- the renderer builds the iterator;
+- the drawn proxy unfreezes the generator;
+- particles spawn, live and rise;
+- drawing them keeps the proxy's LastRenderTime current;
+- the steam draws, with no runtime error.
+
+Host choices and limits, noted:
+- **Lighting.** Three.js draws sprites without the original's software or
+  D3D span clipping. Translucent sprites apply display gamma per fragment,
+  like the world's translucent surfaces.
+- **Not translated yet.** DT_SpriteAnimOnce's LifeSpan frame choice (the
+  first frame is drawn), iterator classes other than ParticleIterator
+  (DeusEx's LaserIterator for laser beams), and the bHighDetail rule.
+- **Visibility.** Play has no BSP occlusion, so every admitted iterator
+  runs each frame, as SetupDynamics does. Visibility only decides which
+  sprites three.js draws, and so which proxies get a LastRenderTime.

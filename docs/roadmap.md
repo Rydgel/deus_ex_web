@@ -501,6 +501,17 @@ moved closer to the original-game capture in every compared region (worst
 2.78 → 1.26 mean RGB levels). Time-varying light effects and types are
 still steady snapshots or left out, with notes.
 
+**Particles and sprites (2026-10-02).** DeusEx's ParticleIterator runs in
+Play ([particles](particles.md)):
+- native 3017 is oracle-exact over 288 updates;
+- the renderer's RenderIterator protocol builds the iterator;
+- CurrentItem moves the proxy through the particles;
+- every admitted sprite actor draws, with Render.dll's sprite size, style
+  and ScaleGlow, and its LastRenderTime feedback.
+
+Street steam now rises from the vents. LaserIterator beams and
+SpriteAnimOnce frames remain.
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,
