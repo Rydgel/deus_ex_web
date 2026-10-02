@@ -266,10 +266,11 @@ Island and in Training it also requires drtywater_a live and ticking.
 
 ## Rust kernel
 
-The per-tick work moves to the Rust core (`native/script-vm/src/fire.rs`)
-as exact representation changes; `fire-texture.mjs` stays the reference and
-the fallback. A 2026-10-02 browser census measured drtywater_a's
-`calculateWater` at ~1.7 ms on every map (`play-frame-cost.md`).
+The per-tick work runs in the Rust core (`native/script-vm/src/fire.rs`)
+as exact representation changes. `fire-texture.mjs` stays the reference and
+the fallback. A 2026-10-02 browser census (`play-frame-cost.md`) measured
+drtywater_a's `calculateWater` at ~1.7 ms on every map. It measured the fire
+textures at 0.3–1.4 ms and their P8→RGBA uploads at 0.3–0.5 ms.
 
 - **Where.** fire.rs runs in the script-VM kernel instance
   (`script-vm-kernel.mjs`). It has no statics: the interpreter instance
@@ -278,12 +279,18 @@ the fallback. A 2026-10-02 browser census measured drtywater_a's
   the only thing that grows that memory. Blocks live as long as the page's
   texture set.
 - **State.** The load functions (constructors, Serialize's arrays,
-  `wetPostLoad`) still build plain objects. `fire-texture-kernel.mjs` `wet`
-  then copies the state into a block: a header of u32 words (scalars and
-  buffer addresses, `W_*` in fire.rs) followed by the drops, SourceFields,
-  RenderTable, WaveTable, P8 pixels, the source pixels (LocalSourceBitmap or
-  the source's mip 0), a 1024-byte palette and the RGBA output. The returned
-  state keeps the reference's shape. GlobalPhase and WaveParity read the
+  `firePostLoad`, `wetPostLoad`) still build plain objects.
+  `fire-texture-kernel.mjs` `fire` or `wet` then copies the state into a
+  block: a header of u32 words (scalars and buffer addresses, `F_*` / `W_*`
+  in fire.rs) and the buffers.
+  - A fire's buffers are the whole spark array, RenderTable, the P8 pixels
+    and 2·USize bytes of scratch for the update's saved rows.
+  - A wet texture's are the drops, SourceFields, RenderTable, WaveTable, the
+    pixels and the source pixels (LocalSourceBitmap or the source's mip 0).
+  - Both also hold a 1024-byte palette and the RGBA output.
+
+  The returned state keeps the reference's shape. The fields a tick changes
+  (GlobalPhase, AuxPhase, ActiveSparkNum, StarStatus, WaveParity) read the
   header, and the buffers are views re-derived when the memory grows, so the
   JavaScript bodies run on it unchanged.
 - **Generator.** `fireTables` (with its x87 products and host sine) stays the
@@ -291,25 +298,37 @@ the fallback. A 2026-10-02 browser census measured drtywater_a's
   kernel tick `globals.run` copies the 512 random bytes and the index in and
   back out. Kernel and JavaScript ticks therefore draw from one stream in
   acquisition order, as before.
-- **Admission.** A wet texture whose tick runs (a source, at least 8×8) moves
-  when USize and VSize are `1 << UBits` and `1 << VBits` and the buffers have
-  the lengths the body indexes. Any other texture ticks in JavaScript on the
-  same stream. All eight game wet textures are admitted.
+- **Admission.** A texture whose tick would not run (under 8×8, or a wet
+  texture without a source) stays in JavaScript; its tick does nothing.
+  - A fire moves when its arrays have the sizes the body indexes: USize·VSize
+    pixels, 1028 RenderTable bytes, and a spark array holding both
+    ActiveSparkNum and SparksLimit sparks. firePostLoad guarantees the last.
+  - A wet texture also needs USize and VSize equal to `1 << UBits` and
+    `1 << VBits`.
+  - Anything else ticks in JavaScript on the same stream. All 40 game fires
+    and all 8 game wet textures are admitted.
+- **The JavaScript typed-array rules are kept, not trapped.** Many writes
+  are unmasked: spark pixels at `(Y << UBits) + X` (Burn, Pulse, Signal,
+  Stars, the temporaries' draws, a DrawFlashRamp step when UBits is wider
+  than USize) and drops' SourceFields cells. A write past the buffer's end
+  is dropped. A PostDrawSparks read past the pixels gives 0 (stored in B)
+  and writes nothing. Drops past the 256 the array holds do nothing.
 - **Representation changes, with their arguments.**
   - `calculateWater` reads a copy of the fields. A pass writes only its own
     parity's rows. Besides each cell's own value, read before its one write,
     it reads only the other parity's rows, so the kernel updates in place.
-  - The stencil's three-column window is carried along the row instead of
-    re-read with per-texel modulo.
-  - On a power-of-two texture the pass writes every pixel exactly once (each
-    cell its 2×2 block, the even pass's shifted with wrapping).
+  - The water and fire stencils carry their window along the row. They test
+    wrapping only at the edges instead of per-texel modulo.
+  - On a power-of-two texture the water pass writes every pixel exactly once
+    (each cell its 2×2 block, the even pass's shifted with wrapping).
     `applyWetTexture` then maps each refraction offset through
     `src[row + ((offset + x) & 255 & (USize-1))]`. The kernel therefore
     writes the source byte directly, and the separate pass and the
     intermediate offsets are gone.
-  - `waterRedrawDrops` keeps the JavaScript typed-array rules. A write
-    outside SourceFields from an unmasked drop X/Y is dropped, and drops past
-    the 256 the array holds do nothing.
+  - The fire update keeps the reference's saved rows. Rising keeps the
+    first two rows. Still keeps the first row and each row's old copy.
+  - RedrawSparks re-reads the count every step. A killed spark's
+    replacement is not run until the next tick, as in the reference.
   - The upload's palette expansion (`fire_expand`) reads a zero-padded
     1024-byte copy of the palette, as the JavaScript loop reads `undefined`
     (stored as 0) past a short palette. The RGBA bytes are copied into the
@@ -336,17 +355,38 @@ upload must match. On 2026-10-02 every byte matched for each set:
 | 15_Area51_Bunker | flame_b, bluewater_a, LaserBeam2, LaserSpot2, BioCell_SFX, LaserSpot1, Flame_J, Nano_SFX_A | 4800 |
 | all of Effects, BobPage and OceanLab | 8 wet, 40 fire | 28800 |
 | synthetic wet | 24 textures, 8×8 to 256×256 | 14400 |
+| synthetic fire | 48 textures, 8×8 to 256×256 | 28800 |
 
-The synthetic wet set covers what the game's data does not: the game's wet
-textures use only drop types 0x01, 0x02, 0x06, 0x0c and 0x10. The set has
-every drop type (and unused ones), drops outside the half texture,
-NumDrops 300, smaller sources and short palettes. Two injected kernel bugs
-were caught: a refraction mask on the first Training tick, and a generator
-XOR on WavyBlade's first tick.
+The synthetic sets cover what the game's data does not (its wet textures
+use only drop types 0x01, 0x02, 0x06, 0x0c and 0x10):
 
-`--bench N` times both backends headless (Node, M2 Pro, median of 300). For
-the 256×256 drtywater_a and bluewater_a the tick plus upload went from
-1.53–1.60 + 0.25 ms in JavaScript to 0.084–0.087 + 0.027 ms in Rust, about
-16×. The 128×128 wet textures went from 0.39 + 0.064 to 0.022 + 0.007 ms.
-Browser A/B and the Play validator (`validate-fire-texture-play.mjs`, which
-needs a browser) are not part of this record.
+- Wet: every drop type (and unused ones), drops outside the half texture,
+  NumDrops 300, smaller sources and short palettes.
+- Fire: every spark type 0x00–0x2b (and 0x2c, 0x7f, 0xff); sparks off the
+  texture; bytes at the borrow and carry edges; inactive serialized sparks;
+  limits below, at and above the count and above 8192; both updates; a
+  UBits wider than USize; short palettes.
+
+Injected kernel bugs were all caught on their first tick: a refraction mask,
+a generator XOR, a DrawFlashRamp colour and step, the kill's copy,
+lightning's re-arm, PostDrawSparks' read past the end and its write, the
+0x2a fall's GlobalPhase parity, and an unmasked 0x23 countdown (caught once
+the edge bytes were added).
+
+`--bench N` times both backends headless (Node, M2 Pro, median of 300).
+Each row gives tick + upload in ms:
+
+| Texture | JavaScript | Rust |
+| --- | --- | --- |
+| drtywater_a, bluewater_a (256², wet) | 1.53–1.57 + 0.25 | 0.084–0.087 + 0.027 |
+| Auc_Nanofeed, BP_FX_02 (256² fire) | 0.18–0.19 + 0.27 | 0.040 + 0.026 |
+| flame_b | 0.145 + 0.066 | 0.021 + 0.007 |
+| Nano_SFX_A | 0.070 + 0.066 | 0.025 + 0.007 |
+| BioCell_SFX | 0.012 + 0.004 | 0.004 + 0.001 |
+| lasers, Flame_J | 0.005–0.008 + 0.002–0.004 | 0.001–0.003 + 0.001 |
+
+Per map the procedural textures went from 1.81 to 0.12 ms (Training), 2.88
+to 0.28 ms (Chateau) and 2.21 to 0.19 ms (Bunker). The fires' remaining
+time is the 4-tap stencil through RenderTable, about 0.6 ns a pixel. Browser
+A/B and the Play validator (`validate-fire-texture-play.mjs`, which needs a
+browser) are not part of this record.

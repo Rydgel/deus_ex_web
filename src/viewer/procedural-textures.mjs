@@ -46,6 +46,8 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
       renderTable: new Uint8Array(1028), pixels: new Uint8Array(uSize * vSize)}, data.fire.sparks);
     // PostLoad clears PF_Masked from a fire's PolyFlags; P8 index 0 keeps
     // its palette colour (palette alpha is not surface alpha).
+    const moved = rust?.fire(state, kernelGlobals);
+    if (moved) return {state: moved.state, palette: () => data.fire.palette, tick: moved.tick, expand: moved.expand};
     return {state, palette: () => data.fire.palette, tick: () => fireConstantTimeTick(state, globals)};
   }
 

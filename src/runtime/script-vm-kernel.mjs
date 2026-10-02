@@ -160,6 +160,7 @@ export function createScriptVmKernel(instance, memory) {
     fire: Object.freeze({
       memory,
       alloc: fireAlloc,
+      tick: header => x.fire_tick(header >>> 0),
       wetTick: header => x.fire_wet_tick(header >>> 0),
       expand: (pixels, count, palette, rgba) => x.fire_expand(pixels >>> 0, count >>> 0, palette >>> 0, rgba >>> 0),
     }),

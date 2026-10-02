@@ -1,8 +1,9 @@
 // Fire.dll's procedural texture ticks in the Rust core (fire.rs, through
 // fire-texture-kernel.mjs) against fire-texture.mjs (docs/fire-texture.md
 // "Rust kernel"). For the procedural textures Play acquires on each map (its
-// world and actor mesh layer, loaded headless in a child process) and for
-// every FireTexture and WetTexture in the game's packages, two texture sets
+// world and actor mesh layer, loaded headless in a child process), for every
+// FireTexture and WetTexture in the game's packages, and for synthetic
+// textures that reach the branches the game's data does not, two texture sets
 // are built the way procedural-textures.mjs builds them, one on the
 // JavaScript bodies and one on the kernel, from the same seed and in the same
 // order, so they share identical generators. Each set ticks every texture in
@@ -10,7 +11,7 @@
 // arrays), the scalars, the generator's 512 bytes and index, and the RGBA
 // upload must match byte for byte.
 //
-//   node scripts/validate-fire-texture-rust.mjs [--maps 00_Training,...] [--ticks 600] [--no-all] [--bench 200]
+//   node scripts/validate-fire-texture-rust.mjs [--maps 00_Training,...] [--ticks 600] [--no-all] [--no-synthetic] [--bench 200]
 //   node scripts/validate-fire-texture-rust.mjs --collect <map>   (child: prints the acquired keys)
 import {readFile, readdir} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
@@ -170,12 +171,40 @@ function syntheticWet(k, [uBits, vBits]) {
     wet: {drops, palette: bytes(1024), source: {uBits: su, vBits: sv, pixels: bytes((1 << su) << sv), palette}}};
 }
 const SIZES = [[3, 3], [4, 5], [5, 3], [6, 6], [7, 7], [8, 8], [5, 7], [8, 6]];
+// Every spark type (authored and temporary, and unused ones), sparks off the
+// texture, inactive serialized sparks, limits below, at and above the count
+// (and above 8192), both fire updates, short palettes, and a UBits wider than
+// USize (rows past the buffer).
+const SPARK_TYPES = [...Array(0x2c).keys(), 0x2c, 0x7f, 0xff];
+// Bytes at the borrow and carry edges a quarter of the time.
+const EDGES = [0, 1, 2, 3, 4, 5, 0x7f, 0x80, 0x81, 0xbe, 0xbf, 0xfa, 0xfb, 0xfd, 0xfe, 0xff];
+const edge = () => (random() % 4 === 0 ? EDGES[random() % EDGES.length] : random() & 255);
+function syntheticFire(k, [uBits, vBits]) {
+  const uSize = 1 << uBits, vSize = 1 << vBits;
+  const types = k % 3 === 0 ? SPARK_TYPES : Array.from({length: 1 + random() % 4}, () => SPARK_TYPES[random() % SPARK_TYPES.length]);
+  const count = 1 + random() % (k % 4 === 0 ? 200 : 24);
+  const sparks = new Uint8Array(count * 8);
+  for (let i = 0; i < count; i++) {
+    const inside = random() % 4 !== 0;
+    sparks.set([types[random() % types.length], edge(), inside ? random() % uSize : random() & 255,
+      inside ? random() % vSize : random() & 255, edge(), edge(), edge(), edge()], i * 8);
+  }
+  const limit = [count + random() % 64, count, Math.max(1, count >> 1), 9000][k % 4];
+  return {key: `synthetic.fire${k}`, procedural: 'FireTexture', masked: false,
+    values: {USize: uSize, VSize: vSize, UBits: k % 11 === 5 ? uBits + 1 : uBits, RenderHeat: random() & 255,
+      GlobalPhase: random() & 0xffff, FX_Frequency: random() & 255, bRising: random() & 1, SparksLimit: limit,
+      NumSparks: k % 5 === 1 ? count >> 1 : count},
+    fire: {sparks, palette: k % 4 === 3 ? bytes(4 * (1 + random() % 200)) : bytes(1024)}};
+}
 
 const script = fileURLToPath(import.meta.url), run = promisify(execFile);
 if (!process.argv.includes('--no-synthetic')) {
   const entries = [];
   for (let k = 0; k < 24; k++) { const data = syntheticWet(k, SIZES[k % SIZES.length]); entries.push({key: data.key, data}); }
   differential('synthetic wet', entries);
+  const fires = [];
+  for (let k = 0; k < 48; k++) { const data = syntheticFire(k, SIZES[k % SIZES.length]); fires.push({key: data.key, data}); }
+  differential('synthetic fire', fires);
 }
 const allKeys = new Set();
 for (const map of maps) {

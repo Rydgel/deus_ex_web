@@ -2,8 +2,8 @@
  * (native/script-vm/src/fire.rs, docs/fire-texture.md "Rust kernel").
  *
  * fire-texture.mjs stays the reference: its load functions build a texture's
- * state as plain objects, then `wet` moves the state into a block of the
- * script-VM kernel's memory (`kernel.fire.alloc`). The returned state keeps
+ * state as plain objects, then `fire` or `wet` moves the state into a block
+ * of the script-VM kernel's memory (`kernel.fire.alloc`). The returned state keeps
  * the reference's shape: the fields a tick changes read and write the
  * block's header, its buffers are views into the block (re-derived when the
  * memory grows), and the rest are plain values, so fire-texture.mjs's bodies
@@ -20,6 +20,11 @@ const GLOBALS_BYTES = 1284, RANDOM = 768, INDEX = 1280;
 const W = {uBits: 0, vBits: 1, uSize: 2, vSize: 3, uMask: 4, vMask: 5, globalPhase: 6, waveParity: 7, numDrops: 8,
   hasSource: 9, globals: 10, drops: 11, fields: 12, renderTable: 13, waveTable: 14, pixels: 15, source: 16};
 const WET_WORDS = 17;
+// Fire header words (fire.rs F_*).
+const F = {uBits: 0, vBits: 1, uSize: 2, vSize: 3, uMask: 4, vMask: 5, globalPhase: 6, auxPhase: 7, fxFrequency: 8,
+  bRising: 9, sparksLimit: 10, activeSparkNum: 11, starStatus: 12, globals: 13, sparks: 14, sparksLength: 15,
+  renderTable: 16, pixels: 17, scratch: 18};
+const FIRE_WORDS = 19;
 
 export function createFireKernel(kernel) {
   const fire = kernel.fire, memory = fire.memory;
@@ -75,11 +80,43 @@ export function createFireKernel(kernel) {
       const at = fire.alloc(GLOBALS_BYTES), random = new Uint8Array(tables.random.buffer, tables.random.byteOffset, 512);
       sync();
       u8.set(tables.sine, at); u8.set(tables.sineClamped, at + 256); u8.set(tables.sineSigned, at + 512);
+      const mirror = bytesAt(at + RANDOM, 512);
       return {at, run(tick) {
-        sync(); u8.set(random, at + RANDOM); i32[(at + INDEX) >> 2] = tables.randomIndex;
+        mirror().set(random); sync(); i32[(at + INDEX) >> 2] = tables.randomIndex;
         tick();
-        sync(); random.set(u8.subarray(at + RANDOM, at + RANDOM + 512)); tables.randomIndex = i32[(at + INDEX) >> 2];
+        random.set(mirror()); sync(); tables.randomIndex = i32[(at + INDEX) >> 2];
       }};
+    },
+
+    /** A loaded FireTexture state (firePostLoad) in a block, or null when
+     * its tick would not run (under 8×8) or its arrays are not the sizes
+     * fire.rs indexes (the spark array holding the active sparks and the
+     * limit). Returns {state, tick, expand}. */
+    fire(state, globals) {
+      const {uBits, uSize, vSize, sparks} = state, n = uSize * vSize;
+      if (!(uSize >= 8 && vSize >= 8)) return null;
+      const words = [uBits, uSize, vSize, state.uMask, state.vMask, state.globalPhase, state.auxPhase, state.fxFrequency,
+        state.bRising, state.sparksLimit, state.activeSparkNum, state.starStatus];
+      if (!words.every(Number.isInteger) || uBits < 0 || uBits > 15 || uSize > 4096 || vSize > 4096
+        || state.pixels.length !== n || state.renderTable.length !== 1028 || sparks.length % 8
+        || state.activeSparkNum < 0 || state.sparksLimit < 0
+        || Math.max(state.activeSparkNum, state.sparksLimit) * 8 > sparks.length) return null;
+      const area = block({header: FIRE_WORDS * 4, sparks: sparks.length, renderTable: 1028, pixels: n, scratch: 2 * uSize,
+        palette: 1024, rgba: n * 4});
+      sync();
+      u8.set(sparks, area.sparks); u8.set(state.renderTable, area.renderTable); u8.set(state.pixels, area.pixels);
+      const h = area.header >> 2;
+      for (const name of ['uBits', 'uSize', 'vSize', 'uMask', 'vMask', 'globalPhase', 'auxPhase', 'fxFrequency', 'bRising',
+        'sparksLimit', 'activeSparkNum', 'starStatus']) i32[h + F[name]] = state[name];
+      i32[h + F.vBits] = 0;
+      i32[h + F.globals] = globals.at; i32[h + F.sparks] = area.sparks; i32[h + F.sparksLength] = sparks.length;
+      i32[h + F.renderTable] = area.renderTable; i32[h + F.pixels] = area.pixels; i32[h + F.scratch] = area.scratch;
+      const {globalPhase, auxPhase, activeSparkNum, starStatus, renderTable, pixels, ...rest} = state;
+      const moved = define(rest, area.header,
+        {globalPhase: F.globalPhase, auxPhase: F.auxPhase, activeSparkNum: F.activeSparkNum, starStatus: F.starStatus},
+        {sparks: bytesAt(area.sparks, sparks.length), renderTable: bytesAt(area.renderTable, 1028), pixels: bytesAt(area.pixels, n)});
+      const tick = () => fire.tick(area.header);
+      return {state: moved, tick: () => globals.run(tick), expand: expander(area.pixels, n, area)};
     },
 
     /** A loaded WetTexture state (wetPostLoad) in a block, or null when its
