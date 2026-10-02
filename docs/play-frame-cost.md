@@ -116,6 +116,30 @@ GC, brought forward by speech decode allocation. Unverified.
    `getParameter`), the moving-light signature, draw-call count, and
    draw-list visibility (which bounds fog and procedural-texture work).
 
+### Ten maps after the October 2 fixes
+
+Same `scan-play.mjs` workload as the census above (four headings, 90 frames
+each, no walking), on `76a42c2`. Host ms per frame. The two scans were not
+interleaved and the morning one ran under heavier machine load, so treat
+single values as approximate; the direction holds on every map.
+
+| Map | mean before | mean after | worst view before | worst view after |
+|---|---:|---:|---:|---:|
+| 00_Training | 25.6 | 9.7 | 29.9 | 13.0 |
+| 01_NYC_UNATCOIsland | 22.0 | 16.1 | 35.5 | 24.8 |
+| 02_NYC_Bar | 18.1 | 7.1 | 34.3 | 8.9 |
+| 02_NYC_BatteryPark | 23.1† | 10.8† | 39.9 | 22.2 |
+| 03_NYC_Airfield | 32.3 | 14.5 | 43.3 | 19.7 |
+| 06_HongKong_WanChai_Market | 35.0 | 15.7 | 48.4 | 17.8 |
+| 09_NYC_Ship | 22.8 | 15.5 | 38.8 | 24.8 |
+| 10_Paris_Chateau | 15.4 | 10.1 | 18.7 | 15.2 |
+| 11_Paris_Everett | 22.4 | 8.1 | 23.6 | 9.3 |
+| 15_Area51_Bunker | 22.4 | 16.2 | 35.7 | 19.6 |
+
+† Play paused at the first heading in both runs (now `Unsupported original
+door native 523`, a Stage 5 navigation native), so three views are a frozen
+simulation.
+
 ### Fixed: Fire.dll textures and the fog loop in the Rust core (October 2)
 
 - Water/wet/fire ticks and the P8→RGBA upload run in `fire.rs`
