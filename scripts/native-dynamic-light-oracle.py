@@ -67,6 +67,9 @@ class Oracle:
         self.stub_push = STUBS + 0x20
         cpu.mem_write(self.stub_push, bytes.fromhex(
             '8b01' '8b542408' '4a' '01d0' 'f7d2' '21d0' '89c2' '03542404' '8911' 'c20800'))
+        # appMemset(dest, value, count): rep stosb.
+        self.stub_memset = STUBS + 0x40
+        cpu.mem_write(self.stub_memset, bytes.fromhex('57' '8b7c2408' '8b44240c' '8b4c2410' 'f3aa' '5f' 'c3'))
         cpu.mem_write(RETURN, b'\xf4')
         engine_exports = self.engine.exports()
         core_exports = self.core.exports()
@@ -78,6 +81,8 @@ class Oracle:
                 target = TRAP
                 if symbol == '?appSqrt@@YANN@Z':
                     target = self.stub_sqrt
+                elif symbol == '?appMemset@@YAXPAXHH@Z':
+                    target = self.stub_memset
                 elif symbol == '?PushBytes@FMemStack@@QAEPAEHH@Z':
                     target = self.stub_push
                 elif symbol == '?GMem@@3VFMemStack@@A':
@@ -159,6 +164,38 @@ class Oracle:
         self.frame()
         self.run(0x10b022fe, 0x10b02352)
         return list(self.read(0x10b34a6c, '4096I'))
+
+    # Light-manager init 0x10b02112-0x10b0225b (the local 8x8 shadow weight
+    # matrix) and 0x10b02352-0x10b0243e: the 128-pattern table at 0x10b3cae0.
+    def shadow_table(self):
+        if getattr(self, 'shadow_ready', False):
+            return list(self.read(0x10b3cae0, '512I'))
+        self.frame()
+        self.cpu.reg_write(UC_X86_REG_EBX, 0)
+        self.run(0x10b02112, 0x10b0225b)
+        self.cpu.reg_write(UC_X86_REG_EBX, 0)
+        self.run(0x10b02352, 0x10b0243e)
+        self.shadow_ready = True
+        return list(self.read(0x10b3cae0, '512I'))
+
+    # 0x10b02650(LightMap, ShadowBits, Out): the static light's illumination
+    # bytes, rows padded to whole shadow bytes (ILLUM_BYTES * 8 texels).
+    def illumination(self, case):
+        self.shadow_table()
+        width, height = case['clamp']
+        pitch = (width + 7) >> 3
+        self.write(ILLUM_BYTES, 'i', pitch)
+        self.write(0x10b3cad4, 'i', pitch * height)
+        self.write(CLAMP_U, 'ii', width, height)
+        bits = bytes.fromhex(case['bits']) if case.get('bits') is not None else None
+        shadow = 0
+        if bits is not None:
+            shadow = self.alloc(len(bits) + 16)
+            self.cpu.mem_write(shadow, bits)
+        out = self.alloc(pitch * 8 * (height + 1) + 16)
+        self.cpu.mem_write(out, b'\xcd' * (pitch * 8 * (height + 1)))
+        self.call(0x10b02650, [LIGHTMAP, shadow, out])
+        return bytes(self.read(out, f'{pitch * 8 * (height + 1)}B')).hex()
 
     def incidence(self, light, facet, reciprocal):
         info, coords = self.alloc(0x100), self.alloc(0x40)
@@ -362,6 +399,9 @@ def main():
     out['spatial'] = [oracle.spatial_merge(case['light'], case['facet'], case['grid'], case['rect'],
                                            case['constants'], case['table'], case['static'], case.get('illumination', 0x7f))
                       for case in cases.get('spatial', [])]
+    if cases.get('shadowTable'):
+        out['shadowTable'] = oracle.shadow_table()
+    out['illumination'] = [oracle.illumination(case) for case in cases.get('illumination', [])]
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []
     json.dump(out, sys.stdout)

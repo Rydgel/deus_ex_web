@@ -63,10 +63,11 @@ in Play reads exactly these values from the spawned `Beam0`/`Beam1`.
    map (key suffix `0x18`). When any class 1 or 2 light exists, a per-frame map
    (suffix `0x31`) starts as a copy of the static one and receives them.
 4. For a class 2 light the illumination map comes from `0x10b02650` with a null
-   shadow pointer: `memset(…, 0x7f, …)`. A fully lit static texel has 255
-   (the shadow kernel table at `0x10b3cae0` scales to `255/total`), so an
-   unshadowed moving light contributes half of what a fully visible static
-   light would.
+   shadow pointer: `memset(…, 0x7f, …)`. A fully lit static texel has 254
+   (the shadow kernel table at `0x10b3cae0` truncates each weight row's
+   `sum·255/320`: 70+114+70; [static lighting](static-lighting.md)), so an
+   unshadowed moving light contributes exactly half of what a fully visible
+   static light would.
 5. **FLightInfo::ComputeFromActor** (`0x10b05fa0`) sets the per-light
    constants: `R=float(WorldLightRadius)` (clamped to ≥1), `1/R` and
    `float((1/R)²·4093)`; brightness `float(LightBrightness·float(1/255))`;
