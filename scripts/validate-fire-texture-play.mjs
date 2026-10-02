@@ -24,7 +24,7 @@ if (!url) {
   await server.listen();
   url = server.resolvedUrls.local[0].replace(/\/$/, '');
 }
-const hook = `\nwindow.__deusFire={get npc(){return npcPreview;}};\n`;
+const hook = `\nwindow.__deusFire={get npc(){return npcPreview;},get world(){return world;}};\n`;
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 let report;
 try {
@@ -48,6 +48,8 @@ try {
     for (let k = 0; k < 10; k++) await frames();
     const after = npc.proceduralTextures();
     return {before, after, skipped: npc.summary.skipped.map(s => `${s.actor} ${s.texture}: ${s.message}`),
+      worldErrors: window.__deusFire.world.errors.map(e => JSON.stringify(e)).filter(e => /Texture size|FireTexture/.test(e)),
+      worldFires: [...window.__deusFire.world.materials.values()].filter(m => m.userData.animated && m.map?.isDataTexture && !m.map.mipmaps?.length).length,
       runtimeError: window.deusExViewer.status().runtimeError ?? null};
   });
   report.pageErrors = errors;
@@ -56,6 +58,7 @@ console.log(JSON.stringify(report, null, 1).slice(0, 3000));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
 assert.deepEqual(report.skipped, [], 'no mesh face group is skipped');
+assert.deepEqual(report.worldErrors, [], 'no BSP surface fails on a fire texture');
 assert.ok(report.after.length > 0, `${map} has fire skins`);
 for (const fire of report.after) {
   const earlier = report.before.find(entry => entry.key === fire.key);

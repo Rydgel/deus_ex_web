@@ -133,17 +133,21 @@ update (100 for the flames), and with no MaxFrameRate (none of the game's
 fires set one) one tick per drawn frame, so a fire runs at the frame rate as
 in the original. After a tick the buffer goes through the palette into a
 `THREE.DataTexture` (PostLoad clears PF_Masked from a fire, so index 0 keeps
-its colour). Mesh skins use it (`actor-mesh-textures.mjs`); the actor scene
-runs the updates once per main frame.
+its colour). One page-wide set (`sharedProceduralTextures`) serves BSP
+surfaces (`world.mjs`, 140 surfaces in 13 maps: WhiteStatic, flame_b,
+Virus_SFX, Nano_SFX_A, Auc_Nanofeed, BobPage's BP_FX_03...) and mesh skins
+(`actor-mesh-textures.mjs`), so a texture object has one state as in the
+original; the world's per-frame update runs it.
 
 Host choices, noted in the viewer: every acquired fire updates each frame in
 acquisition order (the original updates the drawn ones in draw order with one
 shared generator), and the module tables take their appRand bytes from a
-host-seeded MSVCRT stream. Fires in BSP surfaces and sprites are not wired
-(no map's BSP uses one; sprites are not drawn yet).
+host-seeded MSVCRT stream. Sprites (a ParticleGenerator's SmokePuff1, for
+one) are not drawn yet.
 
 `scripts/validate-fire-texture-play.mjs` loads UNATCO Island in headless
 Chromium: its six fire skins (LaserBeam1, LaserSpot1, Nano_SFX, BioCell_SFX,
 Flame_J, Nano_SFX_A) are live, no mesh face group is skipped any more (the
 NanoKey's, LaserTriggers', BarrelFires' and canister's were), and each fire's
-GlobalPhase and pixels advance between frames.
+GlobalPhase and pixels advance between frames. With `--map 00_TrainingFinal`
+the BSP's BP_FX_03 is live too and no BSP surface fails on a fire.

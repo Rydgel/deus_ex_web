@@ -178,7 +178,6 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
      * SetupForActor/Light pass each; mirror frames reuse those colours. */
     update(cameraPosition,view={}){
       frameViewer=null;frameViewer=viewer();
-      textures.updateProcedural?.();
       try{
         reconcile();
         if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);

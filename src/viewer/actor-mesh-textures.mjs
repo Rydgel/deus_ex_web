@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {POLY} from '../unreal/geometry.mjs';
-import {createProceduralTextures} from './procedural-textures.mjs';
+import {sharedProceduralTextures} from './procedural-textures.mjs';
 
 /** Scene-owned static skin textures. Only GPU textures and sampler state
  * are shared; each actor retains its material, lighting and draw order.
@@ -10,8 +10,9 @@ import {createProceduralTextures} from './procedural-textures.mjs';
 export class ActorMeshTextures {
   constructor() {
     this.entries=new Map();this.disposed=false;
-    // FireTexture skins (docs/fire-texture.md): one live texture per object.
-    this.procedural=createProceduralTextures();
+    // FireTexture skins (docs/fire-texture.md): the page's shared live
+    // textures, updated once per frame by the world (world.mjs).
+    this.procedural=sharedProceduralTextures();
   }
   acquire(data,flags) {
     if(this.disposed)throw new Error('Actor mesh texture pool is disposed');
@@ -47,8 +48,6 @@ export class ActorMeshTextures {
     for(const entry of this.entries.values()){
       entry.disposed=true;entry.texture.dispose();
     }
-    this.entries.clear();this.procedural.dispose();
+    this.entries.clear();
   }
-  /** Get(Viewport->CurrentTime) for the fire skins, once per main frame. */
-  updateProcedural(time){if(!this.disposed)this.procedural.update(time);}
 }

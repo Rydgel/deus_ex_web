@@ -76,3 +76,8 @@ export function createProceduralTextures({seed = 0x0f12e} = {}) {
     dispose() { for (const record of records.values()) record.texture.dispose(); records.clear(); },
   };
 }
+
+let shared = null;
+/** The page's one procedural texture set: a texture object has one state
+ * whether BSP surfaces or mesh skins draw it, as in the original. */
+export function sharedProceduralTextures() { return shared ??= createProceduralTextures(); }

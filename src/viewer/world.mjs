@@ -11,6 +11,7 @@ import { createMirrors } from './mirrors.mjs';
 import { batchWorldMeshes } from './world-batches.mjs';
 import { get as textureFrame, surfacePan } from '../runtime/texture-animation.mjs';
 import { ClassDefaults } from '../unreal/classes.mjs';
+import { sharedProceduralTextures } from './procedural-textures.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
@@ -98,14 +99,16 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
     const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
-    if (data.procedural) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
+    if (data.procedural && !data.fire) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
     const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}`;
     if (!materials.has(key)) {
       // A panned material owns its texture objects (shared image data), whose
       // offset carries the pan.
       const own = texture => pan ? Object.assign(texture.clone(), { needsUpdate: true }) : texture;
-      const material = new THREE.MeshBasicMaterial({ map: own(gpuTexture(data, flags)),
+      // A FireTexture surface draws the page's live fire (docs/fire-texture.md).
+      const fire = data.fire ? sharedProceduralTextures().acquire(data).texture : null;
+      const material = new THREE.MeshBasicMaterial({ map: own(fire ?? gpuTexture(data, flags)),
         side: flags & POLY.TwoSided ? THREE.DoubleSide : THREE.FrontSide,
         alphaTest: flags & POLY.Masked ? .5 : 0 });
       applyLightAtlas(material, tile.page, lightingEnabled, displayGamma, mirror,
@@ -121,7 +124,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         material.transparent = true; material.depthWrite = false; material.blending = THREE.CustomBlending;
         material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
       }
-      material.userData = { key: data.key, flags, width: data.mips[0].width, height: data.mips[0].height, mipCount: data.mips.length };
+      material.userData = { key: data.key, flags, width: data.mips[0].width, height: data.mips[0].height, mipCount: data.mips.length,
+        animated: Boolean(fire) };
       if (data.values.AnimNext) {
         // The surface's texture is the chain head; Render draws its Get(Time).
         const head = await animationRecord(data);
@@ -280,6 +284,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * occlusion is not recovered, so every animated texture of the world
      * advances each frame here. */
     updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null } = {}) {
+      // Fire textures, BSP and mesh skins alike, once per frame.
+      sharedProceduralTextures().update(time);
       for (const head of animatedHeads) {
         const frame = textureFrame(head, time);
         if (frame === head.shown) continue;
