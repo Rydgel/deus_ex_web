@@ -101,6 +101,18 @@ fog loop runs over the same lights in depth order.
   texels (7,162 fogged, 80 surfaces with merged lights, 65 inside-volume
   lights) and the final flag match.
 
+**Rust core.** `native/script-vm/src/fog.rs` runs the same per-texel loop on
+the exact 80-bit `Ext` model.
+- **Interface.** `kernel.fog` in script-vm-kernel.mjs, wrapped by
+  `fogMapKernel`. The JavaScript keeps the per-light constants, colour tables
+  and the three grid transforms; the early-out flag persists in the module
+  like the original global.
+- **Check.** The same validator runs the Rust loop on the 120 oracle cases
+  and on 1,500 more surfaces against the JavaScript (137,827 texels). All
+  match.
+- **Memory.** Its statics (a 64K-texel output buffer) raise the kernel's
+  `__heap_base` to `0x1931d0`, within the 2 MB object-arena reserve.
+
 Unverified or host choices, noted:
 - **Early-out and index rounding.** The quick early-out test and the later
   lights' float-stored index scale are translated from the listing. Over
@@ -114,5 +126,4 @@ Unverified or host choices, noted:
 - **Not done yet.**
   - the per-leaf admission and draw-list attachment;
   - the fog pass in Play, with the 7-bit upload scale to confirm;
-  - fog on meshes (DrawMesh's Volumetrics argument);
-  - a fast path for per-frame use.
+  - fog on meshes (DrawMesh's Volumetrics argument).

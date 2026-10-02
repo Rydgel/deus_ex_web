@@ -128,5 +128,19 @@ export function createScriptVmKernel(instance, memory) {
       real: () => new Uint32Array(memory.buffer, x.lipsync_real_ptr(), 1024).slice(),
       imag: () => new Uint32Array(memory.buffer, x.lipsync_imag_ptr(), 1024).slice(),
     }),
+    // Render.dll's volumetric fog loop (fog.rs, docs/volumetric-fog.md):
+    // volumetric-fog.mjs fogMapKernel writes the square-root table once, the
+    // lights' words and colour tables and the camera-space grid, then reads
+    // the BGRA texels. The early-out flag persists in the module.
+    fog: Object.freeze({
+      sqrt: table => new Uint32Array(memory.buffer, x.fog_sqrt_ptr(), 2048).set(table),
+      lights: words => new Uint32Array(memory.buffer, x.fog_lights_ptr(), words.length).set(words),
+      tables: bytes => new Uint8Array(memory.buffer, x.fog_tables_ptr(), bytes.length).set(bytes),
+      grid: words => new Uint32Array(memory.buffer, x.fog_grid_ptr(), 9).set(words),
+      map: (width, height, count) => x.fog_map(width >>> 0, height >>> 0, count >>> 0)
+        ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice() : null,
+      miss: () => x.fog_miss(),
+      setMiss: value => x.fog_set_miss(value >>> 0),
+    }),
   });
 }

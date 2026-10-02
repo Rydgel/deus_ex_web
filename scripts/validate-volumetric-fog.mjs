@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { getAxes } from '../src/runtime/camera.mjs';
-import { coordsTransform, volumetricLight, fogMap, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
+import { coordsTransform, volumetricLight, fogMap, fogMapKernel, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
+import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 const f = Math.fround, io = new DataView(new ArrayBuffer(4));
@@ -20,8 +21,10 @@ const between = (a, b) => f(a + (b - a) * random());
 const vec = (c, s) => c.map(v => f(v + between(-s, s)));
 const int = n => Math.floor(random() * n);
 
-const cases = [], js = [];
-for (let c = 0; c < 120; c++) {
+const kernel = await loadScriptVmKernel();
+const cases = [], js = [], inputs = [];
+const SURFACES = 120, EXTRA = 1500; // EXTRA: Rust against JavaScript only
+for (let c = 0; c < SURFACES + EXTRA; c++) {
   const surface = [between(-3000, 3000), between(-3000, 3000), between(-1000, 1000)];
   const eye = vec(surface, c % 4 === 0 ? 120 : 900);
   const [x, y, z] = getAxes([int(65536) - 32768, int(65536), c % 5 === 0 ? int(65536) : 0]);
@@ -39,6 +42,8 @@ for (let c = 0; c < 120; c++) {
   const lights = lightInputs.map(volumetricLight);
   const sorted = sortVolumetricLights(lights), order = sorted.map(light => lights.indexOf(light));
   const missFlag = c % 2;
+  inputs.push({ grid, width, height, coords, lights, missFlag });
+  if (c >= SURFACES) continue;
   cases.push({ coords: [...eye, ...x, ...y, ...z].map(bits), grid: { base: grid.base.map(bits), stepU: u.map(bits), stepV: v.map(bits) },
     width, height, missFlag, order, lights: lightInputs.map(l => ({ ...l, location: l.location.map(bits), color: l.color.map(bits),
       brightness: bits(l.brightness) })) });
@@ -47,6 +52,21 @@ for (let c = 0; c < 120; c++) {
 }
 const reference = JSON.parse(execFileSync(python, ['scripts/native-volumetric-fog-oracle.py', gameDirectory()],
   { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 1 << 28 }));
+
+// The Rust core's loop (fog.rs) against the original and the JavaScript.
+let rustTexels = 0;
+inputs.forEach((input, i) => {
+  const state = { missFlag: input.missFlag }, rust = fogMapKernel(kernel, { ...input, state });
+  if (i < SURFACES) {
+    assert.deepEqual([...rust], reference[i].texels, `case ${i}: Rust fog texels`);
+    assert.equal(state.missFlag, reference[i].missFlag, `case ${i}: Rust early-out flag`);
+  } else {
+    const jsState = { missFlag: input.missFlag };
+    assert.deepEqual([...rust], [...fogMap({ ...input, state: jsState })], `surface ${i}: Rust against JavaScript`);
+    assert.equal(state.missFlag, jsState.missFlag, `surface ${i}: Rust early-out flag against JavaScript`);
+  }
+  rustTexels += input.width * input.height;
+});
 
 let texels = 0, lit = 0, merged = 0, inside = 0;
 cases.forEach((c, i) => {
@@ -67,4 +87,4 @@ cases.forEach((c, i) => {
   if (c.lights.length > 1) merged++;
 });
 assert.ok(lit > 2000 && merged > 50 && inside > 3, 'cases reach fogged texels, merges and inside-volume lights');
-console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights match the original Render.dll.`);
+console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels).`);

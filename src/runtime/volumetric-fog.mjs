@@ -2,7 +2,7 @@
 // volumetric constants (Render.dll 0x10b06868-0x10b06c19) and SetupForSurf's
 // fog-map block (0x10b07162-0x10b07c4a) on the x87 model.
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
-import { fistp, tableSqrt, colorTableEntry } from './dynamic-lighting.mjs';
+import { fistp, tableSqrt, colorTableEntry, squareRootTable } from './dynamic-lighting.mjs';
 
 const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
 const f = Math.fround;
@@ -142,4 +142,28 @@ export function fogMap({ grid, width, height, coords, lights, state = { missFlag
     first = false;
   }
   return out;
+}
+
+/** The same fog map through the Rust core (native/script-vm/src/fog.rs):
+ * `kernel.fog` from script-vm-kernel.mjs. The early-out flag lives in the
+ * kernel; `state.missFlag` is written before and read back after. Returns
+ * null when the surface exceeds the kernel's buffers. */
+const kernelsWithTable = new WeakSet();
+export function fogMapKernel(kernel, { grid, width, height, coords, lights, state = { missFlag: 0 } }) {
+  if (!lights.length) return null;
+  const fog = kernel.fog;
+  if (!kernelsWithTable.has(fog)) { fog.sqrt(squareRootTable()); kernelsWithTable.add(fog); }
+  const sorted = sortVolumetricLights(lights), words = new Uint32Array(sorted.length * 9), tables = new Uint8Array(sorted.length * 1024);
+  sorted.forEach((light, k) => {
+    words.set([...light.location.map(bitsOf), bitsOf(light.radiusSq), bitsOf(light.invRadius), bitsOf(light.invRadiusSq),
+      bitsOf(light.distanceSq), bitsOf(light.brightness), light.inside ? 1 : 0], k * 9);
+    tables.set(light.table, k * 1024);
+  });
+  fog.lights(words); fog.tables(tables);
+  fog.grid([...coordsTransform(grid.base, coords), ...coordsTransform(grid.stepU, coords, false),
+    ...coordsTransform(grid.stepV, coords, false)].map(bitsOf));
+  fog.setMiss(state.missFlag);
+  const texels = fog.map(width, height, sorted.length);
+  state.missFlag = fog.miss();
+  return texels;
 }
