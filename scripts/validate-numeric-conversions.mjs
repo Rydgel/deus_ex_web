@@ -10,5 +10,12 @@ function convert(value){
   return compileFunction({entry:{path:'fixture.FloatToInt'},pkg:{},bytes,size:bytes.length}).run({});
 }
 for(const c of cases){assert.equal(convert(c.input),c.output);assert.equal(c.codeAdvance,1);}
-assert.throws(()=>convert(2**63),/nonfinite\/overflow/);
-console.log(`Original Core FloatToInt passed ${cases.length} finite/truncation/int32-wrap cases.`);
+// _ftol's integer indefinite for int64 overflow and (through native 172
+// Divide_FloatFloat: 0/0, +-1/0) nonfinite operands — validate-x87-ftol-hardware.
+for(const v of [2**63,-(2**64)])assert.equal(convert(v),0);
+for(const [a,b] of [[0,0],[1,0],[-1,0]]){
+  const bytes=new Uint8Array(14);bytes.set([0x04,0x44,0xac,0x1e]);const d=new DataView(bytes.buffer);
+  d.setFloat32(4,a,true);bytes[8]=0x1e;d.setFloat32(9,b,true);bytes[13]=0x16;
+  assert.equal(compileFunction({entry:{path:'fixture.FloatToInt'},pkg:{},bytes,size:bytes.length}).run({}),0);
+}
+console.log(`Original Core FloatToInt passed ${cases.length} finite/truncation/int32-wrap cases; nonfinite/overflow give 0.`);

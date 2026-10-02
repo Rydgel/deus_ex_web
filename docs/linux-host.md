@@ -99,6 +99,7 @@ path as in the bottle, so the `dump-*-win.exe` instructions are unchanged.
 npm test
 node scripts/validate-x87-transcendental-hardware.mjs
 node scripts/validate-x87-nan-hardware.mjs
+node scripts/validate-x87-ftol-hardware.mjs
 npm run validate -- --jobs 8 --mem-budget 16384
 ```
 

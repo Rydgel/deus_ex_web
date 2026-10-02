@@ -37,8 +37,9 @@ the operand into a zero-initialized four-byte float local, loads it with `flds`
 at `10131ac8`, calls the already identified MSVCRT `_ftol` import bridge
 `1016eec0 -> IAT 102ab4b8`, then stores only AL (`10131ad5`). The ordinary
 finite path truncates toward zero to int64 and keeps the low byte; it does not
-clamp to 0–255. The VM rounds its input to float32 first and rejects nonfinite
-or int64-overflow inputs, whose imported exceptional behavior remains untraced.
+clamp to 0–255. The VM rounds its input to float32 first. A nonfinite or
+int64-overflow input stores `_ftol`'s integer indefinite, so the byte is 0
+(docs/script-numeric-conversions.md).
 The original TriggerLight.Tick uses this conversion at expanded offset164
 when assigning `Alpha * InitialBrightness` to the byte LightBrightness.
 

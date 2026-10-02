@@ -761,8 +761,6 @@ export class RustScriptVm {
           case 2: throw new Error(`Runaway loop detected (over ${SCRIPT_RUNAWAY_LIMIT} iterations) in ${name}`);
           case 3: throw new Error('VM instruction pointer outside script');
           case 5: throw new Error('Original Divide_IntInt signed overflow (x86 divide exception) is unsupported');
-          case 6: throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
-          case 7: throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
           case 8: throw new Error('Return requires compiled iterator unwind');
           default: throw new Error(`Script VM code error ${code} (${node})`);
         }

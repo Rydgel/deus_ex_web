@@ -20,7 +20,10 @@ test('VM resolves local/instance references, native out parameters, and float32 
   assert.equal(toByte.run({Value: 300.9}), 44);
   assert.equal(toByte.run({Value: -1.9}), 255);
   assert.equal(toByte.run({Value: 255.99999999}), 0);
-  assert.throws(() => toByte.run({Value: NaN}), /nonfinite\/overflow/);
+  // MSVCRT _ftol integer indefinite (scripts/validate-x87-ftol-hardware.mjs).
+  assert.equal(toByte.run({Value: NaN}), 0);
+  assert.equal(toByte.run({Value: Infinity}), 0);
+  assert.equal(toByte.run({Value: 2 ** 64}), 0);
 });
 test('VM follows expanded jump addresses and fails closed on invalid/unsupported programs', () => {
   // if (Value < Amount) return 1; return 0;

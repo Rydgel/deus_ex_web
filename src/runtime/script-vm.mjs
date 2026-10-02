@@ -292,6 +292,16 @@ export const x87ftol = v => {
   return n > 0x7fffffffffffffffn || n < -0x8000000000000000n ? 0
     : Number(BigInt.asIntN(32, n));
 };
+// Core execFloatToInt 10131b40 / execFloatToByte 10131aa0: FLD the float32
+// operand and call the game's MSVCRT _ftol (0x78004dc1: RC=truncate, FISTP
+// qword).  A NaN, an infinity or a value outside int64 stores the integer
+// indefinite 0x8000000000000000, whose low DWORD (and AL) is 0 — measured on
+// real x87 by scripts/validate-x87-ftol-hardware.mjs.  ToInt32 of the
+// truncated value is the low DWORD of the int64.
+export const floatToInt = v => {
+  const x = f(v);
+  return x >= -(2 ** 63) && x < 2 ** 63 ? Math.trunc(x) | 0 : 0;
+};
 // FVector::SafeNormal (Core.dll 0x10144be0, thiscall reached through thunk
 // 0x101031c0 by natives 226 and 300): the squared length is accumulated
 // left-associatively in 80-bit — (x*x + y*y) + z*z — stored to a double by
@@ -1071,24 +1081,8 @@ export function compileFunction(fn) {
       case 0x3a: case 0x3d: { const value = sub(n.value); return fr => value.rv(fr, fr.instance) & 255; }
       case 0x3c: { const value = sub(n.value); return fr => f(value.rv(fr, fr.instance) & 255); }
       case 0x3f: { const value = sub(n.value); return fr => f(value.rv(fr, fr.instance) | 0); }
-      case 0x43: {
-        const value = sub(n.value);
-        return fr => {
-          const v = f(value.rv(fr, fr.instance));
-          if (!Number.isFinite(v) || v < -(2 ** 63) || v >= 2 ** 63)
-            throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
-          return Math.trunc(v) & 255;
-        };
-      }
-      case 0x44: {
-        const value = sub(n.value);
-        return fr => {
-          const v = f(value.rv(fr, fr.instance));
-          if (!Number.isFinite(v) || v < -(2 ** 63) || v >= 2 ** 63)
-            throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
-          return Math.trunc(v) | 0;
-        };
-      }
+      case 0x43: { const value = sub(n.value); return fr => floatToInt(value.rv(fr, fr.instance)) & 255; }
+      case 0x44: { const value = sub(n.value); return fr => floatToInt(value.rv(fr, fr.instance)); }
       case 0x4a: { const value = sub(n.value); return fr => msvcrtWtoi(scriptStringText(value.rv(fr, fr.instance) ?? '')); }
       case 0x50: { const value = sub(n.value); return fr => vectorToRotator(value.rv(fr, fr.instance)); }
       case 0x53: { const value = sub(n.value); return fr => String(value.rv(fr, fr.instance) | 0); }
@@ -1323,20 +1317,10 @@ export function compileFunction(fn) {
           case 0x3c: return f(rvalue(n.value) & 255);
           case 0x3d: return rvalue(n.value) & 255;
           case 0x3f: return f(rvalue(n.value) | 0);
-          case 0x43: {
-            // execFloatToByte 10131aa0: float32 local -> _ftol -> store AL.
-            const value = f(rvalue(n.value));
-            if (!Number.isFinite(value) || value < -(2 ** 63) || value >= 2 ** 63)
-              throw new Error('Original FloatToByte _ftol nonfinite/overflow conversion is not implemented');
-            return Math.trunc(value) & 255;
-          }
-          case 0x44: {
-            // Core10131b40: float32 local -> _ftol -> store low DWORD.
-            const value=f(rvalue(n.value));
-            if(!Number.isFinite(value)||value<-(2**63)||value>=2**63)
-              throw new Error('Original FloatToInt _ftol nonfinite/overflow conversion is not implemented');
-            return Math.trunc(value)|0;
-          }
+          // execFloatToByte 10131aa0: float32 local -> _ftol -> store AL.
+          case 0x43: return floatToInt(rvalue(n.value)) & 255;
+          // Core10131b40: float32 local -> _ftol -> store low DWORD.
+          case 0x44: return floatToInt(rvalue(n.value));
           // Core execStringToInt 0x10132320: evaluate the FString, then
           // appAtoi(*Str) (an empty FString reads as ""), store the DWORD.
           case 0x4a: return msvcrtWtoi(scriptStringText(rvalue(n.value,instance) ?? ''));

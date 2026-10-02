@@ -14,7 +14,7 @@ import {instantiateScriptVm, loadScriptVmKernel} from '../src/runtime/script-vm-
 import {ObjectArena, RESERVED} from '../src/runtime/script-object-arena.mjs';
 import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
 import {classRecordId, nameId, foldedNameId} from '../src/runtime/script-vm-lower.mjs';
-import {f32bits, f32num} from '../src/runtime/script-vm.mjs';
+import {f32bits, f32num, floatToInt} from '../src/runtime/script-vm.mjs';
 import {executeMoverPrimitive} from '../src/runtime/script-mover-primitives.mjs';
 import {x87mul32, x87div32, x87add32, x87sub32} from '../src/runtime/x87-nan.mjs';
 import {finishVectorSize} from '../src/runtime/mover-finish.mjs';
@@ -53,7 +53,7 @@ const K = {
   // October 1 (natives.rs)
   STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
 };
-const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, FLOAT_TO_INT: 6, FLOAT_TO_BYTE: 7, RETURN_ITERATOR: 8};
+const ERR = {HANG: 1, RUNAWAY: 2, OUTSIDE: 3, KIND: 4, DIV_OVERFLOW: 5, RETURN_ITERATOR: 8};
 const R = {VOID: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, VECTOR: 5, ROTATOR: 6};
 const P = {SKIP: 0, INT: 1, BOOL: 2, FLOAT: 3, OBJECT: 4, BYTE: 5};
 const RETURNED = 0xfffffffe, HANG_BUDGET = 200_000_000;
@@ -553,20 +553,15 @@ for (const a of CONVERT_INTS) {
 const TO_INT_FLOATS = [...FLOATS, 2 ** 31, 2 ** 31 + 256, -(2 ** 31) - 256, 2 ** 32 + 512, 2 ** 40 + 4096, 2 ** 53, 2 ** 62,
   2 ** 63, -(2 ** 63), 9.2233715e18, 9.223371e18, -9.2233715e18, -9.223373e18, 1e19, -1e19, 0.99999, -0.99999, 255.9,
   256.5, -1.5, -255.5, 4294967295.5, 1e12 + 0.5];
-const ftol = (v, mask) => {                              // compileEv 0x44 / 0x43
-  const x = f(v);
-  if (!Number.isFinite(x) || x < -(2 ** 63) || x >= 2 ** 63) return 'error';
-  return mask ? Math.trunc(x) & 255 : Math.trunc(x) | 0;
-};
+// compileEv 0x44 / 0x43; nonfinite and int64 overflow give the _ftol
+// integer indefinite's low DWORD, 0 (validate-x87-ftol-hardware.mjs).
+const ftol = (v, mask) => mask ? floatToInt(v) & 255 : floatToInt(v);
 for (const make of [...TO_INT_FLOATS.map(v => () => floatOperand(v)), ...FLOAT_BITS.map(b => () => floatBitsOperand(b)),
   ...Array.from({length: 1000}, () => randomFloatOperand)]) {
-  for (const [kind, mask, code] of [[K.FLOAT_TO_INT, false, ERR.FLOAT_TO_INT], [K.FLOAT_TO_BYTE, true, ERR.FLOAT_TO_BYTE]]) {
+  for (const [kind, mask] of [[K.FLOAT_TO_INT, false], [K.FLOAT_TO_BYTE, true]]) {
     reset();
-    const operand = make(), expected = ftol(operand.js, mask), expr = w(kind, operand.words);
-    if (expected === 'error') {
-      const error = vmError(() => value(R.INT, expr));
-      same(error.code, code, `kind ${kind}(${operand.js}) error`);
-    } else same(value(R.INT, expr), expected, `kind ${kind}(${operand.js})`);
+    const operand = make(), expr = w(kind, operand.words);
+    same(value(R.INT, expr), ftol(operand.js, mask), `kind ${kind}(${operand.js})`);
   }
 }
 

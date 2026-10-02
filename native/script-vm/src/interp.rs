@@ -389,8 +389,6 @@ const ERR_RUNAWAY: u32 = 2;
 const ERR_OUTSIDE: u32 = 3;
 const ERR_KIND: u32 = 4;
 const ERR_DIV_OVERFLOW: u32 = 5;
-const ERR_FLOAT_TO_INT: u32 = 6;
-const ERR_FLOAT_TO_BYTE: u32 = 7;
 const ERR_RETURN_ITERATOR: u32 = 8;
 
 // CALL result kinds (also S_RETURN's) and argument kinds.
@@ -2003,11 +2001,11 @@ impl Run {
             FLOAT_TO_INT | FLOAT_TO_BYTE => {
                 self.skip(1);
                 let v = fround(self.float(SELF));
-                if !v.is_finite() || v < -TWO_63 || v >= TWO_63 {
-                    self.fail(if kind == FLOAT_TO_INT { ERR_FLOAT_TO_INT } else { ERR_FLOAT_TO_BYTE }, 0);
-                }
+                // The game's MSVCRT _ftol (0x78004dc1) stores the integer
+                // indefinite for a NaN, an infinity or an int64 overflow; its
+                // low dword is 0 (scripts/validate-x87-ftol-hardware.mjs).
                 // `as i64` truncates toward zero; the low dword is ToInt32.
-                let t = v as i64 as i32;
+                let t = if v >= -TWO_63 && v < TWO_63 { v as i64 as i32 } else { 0 };
                 if kind == FLOAT_TO_INT {
                     t
                 } else {
