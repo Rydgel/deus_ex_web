@@ -37,9 +37,14 @@ export function shadowMask(model, lm, lightIndex) {
 
 export function lightmapBasis(model, surface, lm) {
   const u = model.vectors[surface.textureU], v = model.vectors[surface.textureV], n = model.vectors[surface.normal];
+  // Render.dll inverts the facet's FCoords (Core FCoords::Inverse, at
+  // 0x10b06175) without a test: a zero determinant makes every texel
+  // position non-finite, which the spatial bodies turn into FISTP's integer
+  // indefinite or a zero byte (docs/static-lighting.md). NaN stands for
+  // that whole non-finite grid.
   const determinant = dot(u, cross(v, n));
-  if (Math.abs(determinant) < 1e-10) throw new Error('Singular lightmap texture basis');
-  const du = cross(v, n).map(x => x / determinant), dv = cross(n, u).map(x => x / determinant);
+  const du = determinant ? cross(v, n).map(x => x / determinant) : [NaN, NaN, NaN];
+  const dv = determinant ? cross(n, u).map(x => x / determinant) : [NaN, NaN, NaN];
   const base = model.points[surface.base];
   return {
     normal: normalize(n),

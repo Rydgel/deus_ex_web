@@ -96,11 +96,26 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   }
   const panned = [];
 
+  // Render.dll's surface pass draws Level.DefaultTexture (LevelInfo +0x508)
+  // for a surface without a texture (docs/texture-animation.md).
+  let defaultTexture;
+  async function surfaceTexture(surface) {
+    if (surface.texture) return { asset, ref: surface.texture };
+    if (defaultTexture === undefined) {
+      const levelInfo = map.actors.find(actor => actor.className === 'LevelInfo');
+      defaultTexture = levelInfo?.values.DefaultTexture ? { asset, ref: levelInfo.values.DefaultTexture }
+        : levelInfo ? await classDefaults.objectDefault(asset, asset.pkg.exports[levelInfo.index - 1].classIndex, 'DefaultTexture') : null;
+    }
+    if (!defaultTexture) throw new Error('Surface without a texture and no Level.DefaultTexture');
+    return defaultTexture;
+  }
+
   async function materialFor(surface, tile, mirror, pan = null) {
     let flags = surface.flags;
-    const decoded = await textures.get(asset, surface.texture, Boolean(flags & POLY.Masked));
+    const source = await surfaceTexture(surface);
+    const decoded = await textures.get(source.asset, source.ref, Boolean(flags & POLY.Masked));
     for (const [name, flag] of Object.entries(flagProperties)) if (decoded.values[name]) flags |= flag;
-    const data = flags & POLY.Masked && !decoded.masked ? await textures.get(asset, surface.texture, true) : decoded;
+    const data = flags & POLY.Masked && !decoded.masked ? await textures.get(source.asset, source.ref, true) : decoded;
     if (data.procedural && !data.fire && !data.wet) notes.add(`${data.key}: ${data.procedural}. Ripple simulation is not active.`);
     textureNames.add(data.key);
     const key = `${data.key}:${flags}:${tile.page.index}:${mirror?.key ?? ''}${pan ? `:pan:${pan.key}` : ''}`;

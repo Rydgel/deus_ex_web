@@ -173,6 +173,23 @@ Diagnostics, still open:
 - A class 2 light in a static list is skipped, with a note; none has been
   seen.
 
+## Singular light-map bases
+
+SetupForSurf inverts the facet's FCoords (Core `FCoords::Inverse`, call at
+`0x10b06175`) without a test. For a surface whose texture axes are
+collinear with its normal (11 surfaces: 5 in 00_Intro, 5 in
+02_NYC_FreeClinic, 1 in 12_Vandenberg_Cmd), the zero determinant makes the
+whole texel grid non-finite.
+- Every coefficient of the normal body becomes FISTP's integer indefinite.
+- The NonIncidence, spot and cylinder bodies write zero bytes.
+
+`lightmapBasis` now yields NaN texel positions there instead of refusing
+the surface. The translated bodies treat NaN as the x87 treats those
+values, and `validate-static-lighting` covers these surfaces: all 8,505
+light steps on every Intro surface and 2,184 on the Free Clinic's match the
+original fed the same grid. Their textures still map normally, since
+texture mapping does not use the inverse.
+
 ## Light animation
 
 Three per-frame inputs drive the class 1 lights. All three are

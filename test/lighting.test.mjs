@@ -41,7 +41,8 @@ test('lightmap sample positions invert scaled and skewed texture axes', () => {
   for (const [x, y] of [[0, 0], [5, 3], [-2, 7]]) {
     const uv = b.uv(b.point(x, y)); close(uv[0], x + .5); close(uv[1], y + .5);
   }
-  assert.throws(() => lightmapBasis(model, { ...surface, textureV: 0 }, lm), /Singular/);
+  // The original inverts without a test: a singular basis has no finite texel position.
+  assert.ok(lightmapBasis(model, { ...surface, textureV: 0 }, lm).point(0, 0).every(Number.isNaN));
 });
 
 test('native falloff combines incidence with smooth radius falloff and cone direction', () => {

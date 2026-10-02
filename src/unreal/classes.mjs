@@ -251,6 +251,16 @@ export class ClassDefaults {
     }
     return this.cache.get(object.key);
   }
+  /** An object-reference default (`name`) with its package: the class's
+   * own tagged default or its nearest ancestor's, resolved in the package
+   * that declares it. */
+  async objectDefault(asset, ref, name) {
+    const object = await this.assets.resolve(asset, ref);
+    const cls = readClass(object.asset, object.index);
+    const property = cls.properties.find(p => p.name === name && [5, 8].includes(p.type) && !p.arrayIndex);
+    if (property) return property.value ? { asset: object.asset, ref: property.value } : null;
+    return cls.base ? this.objectDefault(object.asset, cls.base, name) : null;
+  }
   async forActor(asset, actor) {
     return { ...await this.get(asset, asset.pkg.exports[actor.index - 1].classIndex), ...actor.values };
   }
