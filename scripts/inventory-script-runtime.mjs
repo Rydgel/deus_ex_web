@@ -79,6 +79,7 @@ const bindings={
     {index:548,scope:'FastTrace through Level->Model->FastLineCheck with the pre-stored Location default and the exec\'s AL byte mask; geometry only, no hit outs'},
     {index:309,scope:'TraceActors MultiLineCheck iterator: checkActors=1, worldActor=this->+0xa8, BaseClass evaluated but non-filtering, Actor out cleared at natural exhaustion while the vector outs keep the last hit'},
     {index:1000,scope:'TraceTexture same MultiLineCheck iterator plus per-hit Item->Model->Nodes[i].iSurf->Surfs[s] texture/group/PolyFlags publish gated on the hit actor\'s LevelInfo ancestry'},
+    {index:1003,scope:'TraceVisibleActors: the TraceActors exec (0x1036ec50) with MultiLineCheck ExtraNodeFlags=4 (NF_NotVisBlocking); no per-hit bHidden or class filter'},
     {index:1024,scope:'Extension StringToName with explicit shared FName interning/error services'},
     {index:283,scope:'SetCollisionSize for collision-view actors: collide-bit-gated hash RemoveActor, raw f32 radius/height stores, AddActor re-add, unconditional result=1'},
     {index:310,scope:'RadiusActors iterator: BaseClass ancestry filter, pre-stored Loc optional default, strict (Radius+CollisionRadius)^2 > 3-axis dist^2 over the live Level.Actors array with no self-exclusion and per-resume out clear'},
