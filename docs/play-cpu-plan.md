@@ -276,7 +276,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 2.2 mesh scene reads in Rust | ec779ee | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
 | 2.2 SetupForActor and Mesh-change reads | 5c97992 | 30.25 → 29.67 | actors 6.02 → 5.39 |
 | 4.3 noncolliding FarMoveActor in Rust | 316342f | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
-| 4.2 UpdateParticles in Rust | this commit | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
+| 4.2 UpdateParticles in Rust | 33ad364 | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
+| 1.3 the mesh scene skips the non-forced matrix walk | this commit | 29.25 → 27.98 | render 4.84 → 4.16 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -414,3 +415,11 @@ bCollideWorld, bCollideWhenPlacing, StandingCount, Brush, OldLocation and
 bJustTeleported). It serves the carried weapons' per-tick FarMove, the
 Shadows' SetLocation and the laser proxies. The rider MoveActor already
 ran in Rust; the hash updates remain.
+
+Step 1.3, second part: every object under the actor mesh scene's root
+keeps the identity matrix (GetFrame's vertices are world-space and no
+preview root, group, twin or batch mesh updates its own matrix), so that
+root's `updateMatrixWorld` recurses only when forced. The renderer's own
+Scene.updateMatrixWorld, twice a frame, no longer walks those objects.
+`validate-scene-matrices` (Island, Smug, Training and the Node mover pass)
+still finds every matrixWorld equal to the forced cascade on every update.

@@ -72,6 +72,13 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     catch(error){kernel=null;kernelError=error.message;}
   }
   const root=new THREE.Group(),textures=new ActorMeshTextures();root.visible=false;root.matrixAutoUpdate=false;
+  // Every object under this root keeps the identity matrix: GetFrame's
+  // vertices are world-space, and no preview root, group, twin or batch
+  // mesh moves or updates its own matrix. The renderer's non-forced
+  // Scene.updateMatrixWorld (twice a frame) therefore need not walk these
+  // thousands of objects; a forced cascade still does, and
+  // validate-scene-matrices compares the two on every update.
+  root.updateMatrixWorld=function(force){if(force)THREE.Object3D.prototype.updateMatrixWorld.call(this,force);};
   // Opaque GPU-path groups that share a material state draw as one batch
   // (actor-batches.mjs); only with original lighting, where every actor's
   // material colour is the same.
