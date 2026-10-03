@@ -87,7 +87,7 @@ the first-person weapon and the HUD, matching DrawFrame ahead of PostRender.
 - **Draw.** Each live entry's `coronaIcon` is computed with the view's
   exact frame coords: getAxes' Y, −Z and X, as for fog. The tile is drawn in
   an orthographic overlay with the canvas's translucent blend (ONE,
-  INVSRCCOLOR) and the display ramp.
+  INVSRCCOLOR); the display ramp maps the finished frame.
 - **Check.** `validate-coronas-play.mjs` looks up at a corona light from a
   start. On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
   visible and 1 is drawn. On 03_NYC_Airfield, Light348 is among 13 leaf
@@ -99,4 +99,5 @@ Host choices, noted:
 - the frame precomputes (FX2, FY2, `Proj.Z = FX2/tan(FOV/2)`, Frame.X) come
   from Play's canvas and the view FOV, not the original's resolution;
 - the leaf's dynamic lights (LeafLights) are not visited;
-- the canvas tile's display ramp applies per fragment.
+- the display ramp applies to the finished frame, after the tile blends
+  ([lighting](lighting.md), "Display ramp").

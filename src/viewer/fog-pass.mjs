@@ -14,8 +14,9 @@ import { displayRampGlsl } from './light-atlas.mjs';
  * Host choices, noted: every volumetric light of the map is linked to every
  * fog surface (LeafVolumetricLighting's and OccludeBsp's culls only drop
  * lights that add nothing); volumetric lights use their steady LightBrightness
- * (GlobalLighting's LightType animation is not applied to them); the display
- * gamma ramp applies per fragment of the pass; mover surfaces get no fog. */
+ * (GlobalLighting's LightType animation is not applied to them); mover
+ * surfaces get no fog. The display ramp maps the finished frame after the
+ * pass blends (display-ramp.mjs), unless ?gamma=material. */
 export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, notes, kernel = null }) {
   const root = new THREE.Group(), surfaces = [], lights = [], pages = new Map();
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;

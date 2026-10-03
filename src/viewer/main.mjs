@@ -18,6 +18,8 @@ import { actorRenderFeedback } from './actor-render-feedback.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
+import { setDisplayRampPerFragment } from './light-atlas.mjs';
+import { createDisplayRamp } from './display-ramp.mjs';
 
 // Script function bodies run in the Rust interpreter by default
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
@@ -51,6 +53,14 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
+// The original's display gamma ramp maps the finished 8-bit framebuffer, HUD
+// included (D3DDrv SetGammaRamp, display-ramp.mjs): shaders draw raw colours
+// and one pass ramps the frame. ?gamma=material keeps the earlier ramp in
+// every shader, before blending (docs/lighting.md "Display ramp").
+const rampPerFragment = new URLSearchParams(location.search).get('gamma') === 'material';
+setDisplayRampPerFragment(rampPerFragment);
+const displayRamp = rampPerFragment ? null : createDisplayRamp();
+const canvasClear = new THREE.Color('#06101b');
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
@@ -59,8 +69,9 @@ const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1';
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-// World and actor shaders apply the original display-encoded modulation and
-// gamma ramp themselves.  Keep canvas and render-target programs in Three's
+// World and actor shaders apply the original display-encoded modulation
+// themselves and draw raw colours; the display ramp maps the finished frame
+// (display-ramp.mjs).  Keep canvas and render-target programs in Three's
 // working space so mirror child draws do not select a second shader variant
 // for every material; the custom output bytes are unchanged.
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.autoClear = false;
@@ -861,7 +872,7 @@ window.deusExViewer = { status, framePhases(reset = true) {
 // Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
 // phase, read and reset by deusExViewer.framePhases(). Measurement only.
 const framePhases = { frames: 0, tick: 0, lighting: 0, sprites: 0, actors: 0, lightAnimation: 0, textures: 0, lightUpload: 0,
-  fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, audio: 0, total: 0,
+  fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, ramp: 0, audio: 0, total: 0,
   mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0, gpu: 0, gpuFrames: 0, gpuDisjoint: 0, gpuSupported: 0 };
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
@@ -999,7 +1010,8 @@ function animate(time) {
       updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
     phase('mirrors');
     let calls = drawCalls(); framePhases.mirrorCalls += calls;
-    renderer.setClearColor('#06101b', 1); renderer.clear();
+    // The ramp pass maps the raw clear colour back to the UI colour.
+    renderer.setClearColor(displayRamp ? displayRamp.rawClear(canvasClear, world.displayGamma.value) : canvasClear, 1); renderer.clear();
     const drawWorld = !renderRect || (renderRect.render && renderRect.width > 0 && renderRect.height > 0);
     const clipped = drawWorld && renderRect && (renderRect.x || renderRect.y
       || renderRect.width !== renderer.domElement.width || renderRect.height !== renderer.domElement.height);
@@ -1040,9 +1052,11 @@ function animate(time) {
       hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
       updateInfoLinkAccessibility();
     }
-    gpuEnd();
     framePhases.hudCalls += drawCalls() - calls;
     phase('hud');
+    if (displayRamp) displayRamp.apply(renderer, world.displayGamma.value);
+    gpuEnd();
+    phase('ramp');
     // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
     const audioMs = mode === 'play' ? game?.takeAudioMs?.() ?? 0 : 0;
     framePhases.hud -= audioMs; framePhases.audio += audioMs;

@@ -93,7 +93,11 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
   const vertexLight=texels(RGBA32F,vertexCapacity),environmentNormals=texels(RGBA32F,vertexCapacity);
   const corners=texels(RGBA8UI,cornerCapacity);
 
+  // three sets the unpack state per texture and leaves it (a flipY texture
+  // leaves UNPACK_FLIP_Y on, which reverses the rows of a typed-array upload).
   const upload=(target,x,y,width,height,data)=>{
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);
     gl.bindTexture(gl.TEXTURE_2D,target.handle);
     gl.texSubImage2D(gl.TEXTURE_2D,0,x,y,width,height,target.format,target.type,data);
   };

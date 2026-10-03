@@ -99,6 +99,41 @@ Windows. Browser brightness 0.40 gives the identity curve for comparisons; the
 default 0.60 reproduces the original D3D gamma exponent of 2/3. Brightness can be
 adjusted without changing authored light intensities.
 
+## Display ramp
+
+D3DDrv applies the Brightness setting as a gamma ramp on the primary
+surface (`0x2e3e`; UT432's Direct3D7.cpp has the same loop:
+`appRound(appPow(x/255, 1/(2.5·Brightness))·65535)` per entry, then
+`SetGammaRamp`). The ramp maps the finished 8-bit framebuffer at scanout,
+so every pass, blended ones and the HUD included, is composed before it.
+
+Play does the same since 2026-10-03 (`src/viewer/display-ramp.mjs`). Shaders
+draw raw colours into the canvas, and after the HUD one pass copies the
+drawing buffer to a texture and draws it back through `pow(x, g)`, one
+fragment per pixel. The UI clear colour is drawn raw as `c^(1/g)`, so it
+looks unchanged.
+- **Why.** The ramp used to be applied per fragment, before blending
+  (`displayRampGlsl`). That is exact for opaque output and for PF_Modulated
+  (see mesh lighting), but not for additive passes: over a dark wall, faint
+  volumetric fog of 2/255 showed as about 10/255. On 10_Paris_Club, matched
+  shots against the original under Wine (D3D, VolumetricLighting on, fog
+  toggled with `set D3DRenderDevice VolumetricLighting False`) put Play's fog
+  at 2.3–3.6× the original's contribution (in linear units). With the
+  frame ramp it is 1.3–1.7×, the same ratio as the raw framebuffers.
+  Translucent surfaces, sprites, coronas and the HUD now compose the same
+  way. The HUD was not ramped at all before; the original's is.
+- **Switch.** `?gamma=material` keeps the per-fragment ramp (no ramp pass).
+- **Host choice.** The ramp's 16-bit entries reach an 8-bit canvas as
+  `round(255·pow(x/255, g))`; how a display reduced them is not modelled.
+- **Not explained yet.** On 10_Paris_Club, Play's unfogged walls are also
+  1.25–1.5× brighter than the original's raw framebuffer under Wine, and the
+  fog's remaining 1.3–1.7× may share that cause. Training's start shows the
+  same direction (lit floor 1.25–1.3×). It is not the ramp, not light
+  animation (the club's 95 lights are steady) and not the missing detail
+  textures (D3D draws them only within 380 units). The September Mac
+  comparison under CrossOver matched more closely, so the Wine D3D path is a
+  suspect.
+
 ## Validation and limits
 
 Training prepares 5,212 lightmap tiles (including mover faces and separate zones),
@@ -121,9 +156,7 @@ float reconstruction, which this replaced.
 Lightmaps used floating-point reconstruction and padded GPU atlases. The original's
 fixed-point intermediate rounding, lookup-table discretization and filtering were
 not reproduced bit for bit. Remaining small differences are recorded rather than
-hidden by an exposure adjustment. Gamma is currently applied per material;
-the mirror-floor path now composes reflected raw colours before gamma, while
-general transparency composition remains Stage 4 work.
+hidden by an exposure adjustment. The display ramp is described below.
 
 Moving lights (AugLight's Beams, cameras and other non-static light actors) now
 add their unshadowed texels per frame; see [moving lights](dynamic-lighting.md).

@@ -105,8 +105,8 @@ For a DT_Sprite or DT_SpriteAnimOnce item:
   ScaleGlow writes and FarMoveActor (`particleIteratorItems`).
 - **Drawing.** Each DT_Sprite item and each admitted sprite actor draws as
   a screen-aligned three.js sprite: Fire and Wet textures (SmokePuff1 is a
-  FireTexture) from the page's shared live procedural textures, display
-  gamma as for surfaces, and LastRenderTime written when it renders.
+  FireTexture) from the page's shared live procedural textures, raw colours
+  as for surfaces, and LastRenderTime written when it renders.
 - **Feedback.** Those writes, with Play's existing DistanceFromPlayer,
   are what unfreeze a generator.
 - **Name hash.** A map actor has no slot in Play's object registry.
@@ -124,8 +124,8 @@ by ParticleGenerator3's vent:
 
 Host choices and limits, noted:
 - **Lighting.** Three.js draws sprites without the original's software or
-  D3D span clipping. Translucent sprites apply display gamma per fragment,
-  like the world's translucent surfaces.
+  D3D span clipping. Translucent sprites blend raw colours; the display
+  ramp maps the finished frame ([lighting](lighting.md), "Display ramp").
 - **Not translated yet.** DT_SpriteAnimOnce's LifeSpan frame choice (the
   first frame is drawn), iterator classes other than ParticleIterator and
   LaserIterator (see [lasers](lasers.md)), and the bHighDetail rule.

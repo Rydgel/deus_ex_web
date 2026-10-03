@@ -213,14 +213,20 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
 }
 
 /** The display gamma ramp (D3DDrv 0x2e3e) applies to the finished framebuffer,
- * after blending. Shaders apply it per fragment instead. That is exact for
- * opaque output. It is also exact for PF_Modulated, whose SetBlending state
- * (0x1000837a: DESTCOLOR, SRCCOLOR) stores 2*src*dst: emitting pow(2*src, g)/2
- * blends to pow(2*src*dst, g). The masked-out character glasses rely on this,
- * with GrayMaskTex (128) blending to the unchanged background. For g > 1
- * (Brightness < 0.4), src > 2^(1/g)/2 would need a fragment value above 1 and
- * clamps. */
+ * after blending: SetGammaRamp on the primary surface, so the HUD and every
+ * blended pass are composed before it. By default Play draws raw colours and
+ * applies the ramp once to the finished 8-bit frame (display-ramp.mjs), and
+ * this returns no code. `?gamma=material` keeps the earlier per-fragment ramp:
+ * exact for opaque output and for PF_Modulated, whose SetBlending state
+ * (0x1000837a: DESTCOLOR, SRCCOLOR) stores 2*src*dst, so emitting
+ * pow(2*src, g)/2 blends to pow(2*src*dst, g) (the masked-out character
+ * glasses rely on this, with GrayMaskTex (128) blending to the unchanged
+ * background; for g > 1, src > 2^(1/g)/2 clamps), but not for the additive
+ * passes (fog, coronas, translucent surfaces) or the HUD. */
+let rampPerFragment = false;
+export function setDisplayRampPerFragment(enabled) { rampPerFragment = Boolean(enabled); }
 export function displayRampGlsl(gamma, modulated) {
+  if (!rampPerFragment) return '';
   return modulated
     ? `gl_FragColor.rgb = 0.5 * pow(max(2.0 * gl_FragColor.rgb, vec3(0.0)), vec3(${gamma}));`
     : `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${gamma}));`;

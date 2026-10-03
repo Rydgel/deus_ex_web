@@ -255,13 +255,14 @@ faces (skin slot 6, `PF_Modulated|PF_TwoSided`) and lens faces (slot 7,
 `GrayMaskTex` (every texel 128) and `BlackMaskTex` (every texel 0), so both
 blend back to the unchanged background.
 
-Play applies the gamma ramp per fragment. For modulated faces it emits
-`pow(2·src, g)/2`, which blends to `pow(2·src·dst, g)`, exactly the ramp after
-the blend (`displayRampGlsl` in `src/viewer/light-atlas.mjs`). A plain
-`pow(src, g)` turned 128-gray into a visible bright band across every face.
-Translucent faces are exact only for black or white sources: `pow(s,g) +
-pow(d,g)·(1 − pow(s,g))` differs from `pow(s + d − s·d, g)` for other colours,
-as it already does for world surfaces.
+Play applies the gamma ramp once to the finished frame ([lighting](lighting.md),
+"Display ramp"), so modulated and translucent faces blend raw colours as
+the original does. With `?gamma=material` the ramp runs per fragment; for
+modulated faces it then emits `pow(2·src, g)/2`, which blends to
+`pow(2·src·dst, g)`, exactly the ramp after the blend (`displayRampGlsl` in
+`src/viewer/light-atlas.mjs`); a plain `pow(src, g)` turned 128-gray into a
+visible bright band across every face. Translucent faces are exact there
+only for black or white sources.
 
 ## Wasm translation boundary
 

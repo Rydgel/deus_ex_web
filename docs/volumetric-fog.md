@@ -246,8 +246,9 @@ in `x87-fast.mjs` and lodmesh-kernel's `pose_double`.
 
 Unverified or host choices, noted:
 - **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
-  Render's vertex fog uses the same 2v (see "Mesh fog"), but D3D's upload of
-  the fog map's format is not yet traced.
+  Render's vertex fog uses the same 2v (see "Mesh fog"). UT432's D3DDrv
+  source uploads RGBA7 textures to 8888 as `*Dest = *Src * 2` (every
+  channel, alpha included); DX's own D3DDrv.dll filler is not yet traced.
 - **Light linking.** Every volumetric light is linked to every fog surface.
   The original's culls drop only lights that add nothing, but the early-out
   flag then sees a different sequence.
@@ -255,8 +256,10 @@ Unverified or host choices, noted:
   and colour; GlobalLighting's LightType animation is not applied to them.
 - **Not fogged.** Mover surfaces and meshes get no fog. Mirror child views
   reuse the main frame's fog maps instead of their own frames'.
-- **Gamma.** The display gamma ramp applies per fragment of the pass,
-  before blending, as for other blended passes.
+- **Gamma.** The display ramp maps the finished frame after the pass
+  blends ([lighting](lighting.md), "Display ramp"), as the original's
+  SetGammaRamp does. Until 2026-10-03 it applied per fragment, before
+  blending, which showed faint fog over dark surfaces 2–3× too strongly.
 - **Early-out and index rounding.** The quick early-out test and the later
   lights' float-stored index scale are translated from the listing. Over
   these cases they give the same results as their alternatives, so the
