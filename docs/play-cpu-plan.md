@@ -277,7 +277,10 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 2.2 SetupForActor and Mesh-change reads | 5c97992 | 30.25 → 29.67 | actors 6.02 → 5.39 |
 | 4.3 noncolliding FarMoveActor in Rust | 316342f | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
 | 4.2 UpdateParticles in Rust | 33ad364 | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
-| 1.3 the mesh scene skips the non-forced matrix walk | this commit | 29.25 → 27.98 | render 4.84 → 4.16 |
+| 1.3 the mesh scene skips the non-forced matrix walk | 14f9de8 | 29.25 → 27.98 | render 4.84 → 4.16 |
+
+Full validator sweep at 14f9de8 (Linux host, `run-validators.mjs --jobs 8
+--mem-budget 16384`): 489 passed, 0 skipped, 0 failed.
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
