@@ -132,7 +132,10 @@ looks unchanged.
   animation (the club's 95 lights are steady) and not the missing detail
   textures (D3D draws them only within 380 units). The September Mac
   comparison under CrossOver matched more closely, so the Wine D3D path is a
-  suspect.
+  suspect. The user reports a known gamma bug of Deus Ex on Windows, so the
+  Wine reference may carry it (unverified). Both sides of this comparison
+  are before the ramp (the Shot bitmap and Play at the identity ramp), so a
+  ramp that never reaches the screen would not by itself explain the gap.
 
 ## Validation and limits
 
