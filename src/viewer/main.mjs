@@ -41,10 +41,12 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // scan against them. The same js/verify switches: ?meshLight= for
 // SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
 // CycleActors (script-iterators.mjs) and ?levelScan= for the level loop's
-// DistanceFromPlayer and compaction passes (level.rs) and ?farMove= for the
-// noncolliding FarMoveActor (render.rs far_move).
+// DistanceFromPlayer and compaction passes (level.rs), ?farMove= for the
+// noncolliding FarMoveActor (render.rs far_move) and ?particles= for
+// execUpdateParticles (particles.rs).
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
-  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE']]) {
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
+  ['particles','DEUS_EX_PARTICLES']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

@@ -1,5 +1,6 @@
 /** DeusEx.dll's ParticleIterator natives (docs/particles.md). */
 import { x87load, x87double, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
+import { particlesMode } from './script-vm-particles.mjs';
 
 const f = Math.fround;
 export const PARTICLE_COUNT = 64;
@@ -87,6 +88,27 @@ function writeParticles(runtime, iterator, state) {
 /** Native 3017 on a live iterator: the shared appFrand stream and the
  * proxy's bHidden (Actor +0x28 bit 1) as the original writes them. */
 export function execUpdateParticles(runtime, iterator, deltaTime, frand) {
+  // The update in Rust over the iterator's own cells (particles.rs), or
+  // null where it must run here (script-vm-particles.mjs).
+  const host = runtime.scriptVm?.particles;
+  if (host) {
+    const verify = particlesMode() === 'verify', draws = [];
+    const before = verify ? readIteratorState(runtime, iterator) : null;
+    const hidden = host.update(iterator, deltaTime, verify ? () => { const v = frand(); draws.push(v); return v; } : frand);
+    if (hidden !== null) {
+      if (verify) {
+        const want = updateParticles(before, deltaTime, () => draws.shift()), got = readIteratorState(runtime, iterator);
+        const same = (a, b) => Array.isArray(a) ? a.every((v, i) => same(v, b[i]))
+          : a && typeof a === 'object' ? Object.keys(a).every(key => same(a[key], b[key])) : Object.is(a, b);
+        if (draws.length || want.proxyHidden !== hidden || !same(want.particles, got.particles) ||
+          want.nextFreeParticle !== got.nextFreeParticle)
+          throw new Error(`PARTICLES=verify: ${iterator.name} UpdateParticles differs in Rust`);
+      }
+      const proxy = runtime.readNamed(iterator, 'proxy');
+      if (proxy) runtime.writeNamed(proxy, 'bHidden', hidden);
+      return;
+    }
+  }
   const state = updateParticles(readIteratorState(runtime, iterator), deltaTime, frand);
   writeParticles(runtime, iterator, state);
   const proxy = runtime.readNamed(iterator, 'proxy');

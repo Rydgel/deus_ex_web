@@ -132,3 +132,23 @@ Host choices and limits, noted:
 - **Visibility.** Play has no BSP occlusion, so every admitted iterator
   runs each frame, as SetupDynamics does. Visibility only decides which
   sprites three.js draws, and so which proxies get a LastRenderTime.
+
+## Rust update
+
+`native/script-vm/src/particles.rs` runs execUpdateParticles' update on
+the iterator's own image cells instead of copying its 64 sParticle structs
+into JavaScript and back each call: the same x87 chains (`Ext`), the same
+appFrand draws in the same order (one import per draw), DeleteParticle's
+two stores, and the proxy's bHidden returned for the JavaScript write.
+`script-vm-particles.mjs` checks the layout (the Particles fixed array of
+64 structs and every member and scalar cell of the kinds the update reads)
+and admits an iterator only when each spelling resolves on its class to
+that cell and the object binds none of them. The JavaScript update copied
+inactive particles back as well; the Rust update leaves them untouched,
+which differs only in a NaN payload a copy would canonicalize.
+`PARTICLES=js` (`?particles=js`) keeps the JavaScript update;
+`PARTICLES=verify` runs it on the state read before the Rust update, with
+the same appFrand values, and compares every particle, nextFreeParticle and
+the proxy flag. Browser runs on 02_NYC_Street and Island (400 frames
+walking) found no difference; `validate-particles-play` and
+`validate-native-particles` pass. Island: 0.35 → 0.01 ms per frame.

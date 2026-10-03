@@ -275,7 +275,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | Galaxy ambient scan, 4.6 level loop | 04aaae4 | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
 | 2.2 mesh scene reads in Rust | ec779ee | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
 | 2.2 SetupForActor and Mesh-change reads | 5c97992 | 30.25 → 29.67 | actors 6.02 → 5.39 |
-| 4.3 noncolliding FarMoveActor in Rust | this commit | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
+| 4.3 noncolliding FarMoveActor in Rust | 316342f | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
+| 4.2 UpdateParticles in Rust | this commit | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through

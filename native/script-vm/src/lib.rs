@@ -24,6 +24,7 @@ mod natives;
 mod percep;
 mod render;
 mod meshlight;
+mod particles;
 mod tick;
 mod trace;
 mod walk;
