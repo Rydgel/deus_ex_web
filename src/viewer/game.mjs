@@ -10,6 +10,7 @@ import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
 import { actorsEpoch, bumpBaseEpoch } from '../runtime/base-epoch.mjs';
+import { RENDER_LIGHT } from '../runtime/script-vm-render.mjs';
 import { brushMatrix } from './transforms.mjs';
 import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { isHighlighted } from '../runtime/interaction.mjs';
@@ -276,8 +277,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // candidate, e.g. AugLight's Beams, for the world's lightmap pass and
     // the mesh lighting's leaf lists (mesh-lighting-view.mjs beginFrame).
     movingLights() {
-      const lights = [];
-      for (const actor of runtime.levelFor(player.collisionActor).actors) {
+      const lights = [], actors = runtime.levelFor(player.collisionActor).actors;
+      // The render scan (script-vm-render.mjs) leaves only the actors that
+      // pass the gate or that it hands back; each takes the same reads.
+      const entries = runtime.scriptVm?.render?.scan(actors, { kinds: RENDER_LIGHT }) ?? null;
+      const count = entries ? entries.length : actors.length;
+      for (let i = 0; i < count; i++) {
+        const actor = entries ? actors[entries[i] >>> 5] : actors[i];
         if (!actor) continue;
         const read = name => runtime.readNamed(actor, name), LightType = read('LightType');
         if (!LightType || read('bDeleteMe')) continue;

@@ -21,6 +21,7 @@ mod lipsync;
 mod loco;
 mod natives;
 mod percep;
+mod render;
 mod tick;
 mod trace;
 mod walk;

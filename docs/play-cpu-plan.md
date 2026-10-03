@@ -126,6 +126,24 @@ Estimate −5 to −7 ms.
      `validate-actor-mesh-scene`, `validate-render-visibility`.
    - The render-iterator protocol stays in JavaScript: it fires script events
      and FarMoveActor.
+   - Refined after Phase 1 (2026-10-03). The three consumers read Level.Actors
+     at different points of the frame: the moving lights after
+     PlayerCalcView, the sprites in the sprites phase, the mesh admission
+     after the sprites. A render iterator runs script in the middle of the
+     sprite scan, and the actors after it are judged after it ran. To keep
+     every read where it is now, `render_scan(start, kinds, view)` is one
+     Rust filter called by each consumer at its own time, over the
+     (handle, receiver info) list perception already builds per
+     `actorsEpoch`. It writes `index << 4 | kind` entries in array order:
+     LIGHT (SetupDynamics' gate), SPRITE (visible, DrawType 1 or 7, no
+     iterator), ITERATOR (visible, RenderIteratorClass set: the scan stops
+     there and returns where to resume, so JavaScript runs the iterator and
+     scans on), MESH (a live Mesh pointer: the admission candidates), and JS
+     (a field the image cannot answer as readNamed would, or an Owner chain
+     longer than the bound: that consumer evaluates the actor as today). The
+     viewer, its ViewTarget and the first-person flag are arguments, read
+     again after each iterator. A pass over 2,600 actors in Rust costs tens
+     of microseconds, so three passes cost nothing measurable.
 3. **SetupForActor in Rust.**
    - The light fade caches move into Rust memory, keeping the sort and the
      120/8/16 limits.
@@ -250,7 +268,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 1.2 one moving-light scan | 8eabcc4 | 39.7 → 39.5 (noise) | lighting 0.75 → 0.23 |
 | 1.3 no matrix cascade | 90a083d | 42.1 → 40.5 (noisy runs) | render 5.99 → 4.92 |
 | 1.6 small items | b3b16f8 | 38.6 → 38.8 (noise) | render 4.77 → 4.61 |
-| 1.5 IsProbing in Rust | this commit | bench-sim tick −0.24 (noise) | 700 crossings per tick removed |
+| 1.5 IsProbing in Rust | ef8b469 | bench-sim tick −0.24 (noise) | 700 crossings per tick removed |
+| 2.1–2.2 render scan | this commit | 38.1 → 35.4 | sprites 2.44 → 1.52, tick 16.9 → 15.4 (light scan) |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -267,3 +286,18 @@ its brush matrix changes. `validate-scene-matrices.mjs` compares every
 object's `matrixWorld` after the renderer's update with a forced cascade, in
 the browser (Island, Smug, Training) and in Node with moving and rotating
 movers on Smug.
+
+Steps 2.1–2.2 (`render.rs`, `script-vm-render.mjs`): the render word is the
+class row's fourth word, after the locomotion word; 14 fields
+(visibility, Owner, RenderIteratorClass, DrawType, Mesh and the light gate).
+`game.movingLights`, the sprite scene and the mesh admission each call
+`render_scan` with their own kinds and run their JavaScript body only on the
+entries. `RENDER_SCAN=verify` (`?renderScan=verify`) checks every actor a scan
+covered against `referenceKinds`, the consumers' tests through readNamed:
+Island 150 ticks walking and Training 300 ticks (8,400 scans, iterators and
+sprites included) and browser runs on Island (400 frames walking) and
+02_NYC_Street (300 frames) found no difference and no hand-back.
+`validate-lasers-play`, `-particles-play`, `-actor-mesh-scene` and
+`-auglight-lighting` pass. The mesh admission now loops over about 420 Island
+actors with a Mesh instead of 2,600; the per-actor update (visibility, cull,
+pose reads) is the remaining actor cost before SetupForActor.

@@ -4,6 +4,7 @@ import { displayRampGlsl } from './light-atlas.mjs';
 import { ensureRenderInterface, particleIteratorItems } from '../runtime/script-particles.mjs';
 import { laserIteratorItems } from '../runtime/script-laser.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
+import { RENDER_ITERATOR, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
 
 /** Sprites in Play (docs/particles.md "Sprites"): URender::SetupDynamics'
  * actor scan in array order (docs/render-visibility.md admission), with
@@ -101,21 +102,26 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
     const viewer = player(), level = runtime.levelFor(viewer), info = level.actors[0];
     const time = () => runtime.readNamed(info, 'TimeSeconds');
     const read = (actor, name) => runtime.readNamed(actor, name);
-    for (const actor of level.actors) {
-      if (!actor || actor === viewer) continue;
+    // The render scan (script-vm-render.mjs) leaves the actors visit()
+    // would draw or iterate, plus those it hands back, and stops after an
+    // iterator: an iterator may run script, so the scan resumes after it with
+    // the viewer's ViewTarget read again. Without it, every actor in order.
+    const actors = level.actors, render = runtime.scriptVm?.render ?? null;
+    const visit = actor => {
+      if (!actor || actor === viewer) return;
       let hidden;
-      try { hidden = read(actor, 'bHidden'); } catch { continue; }
-      if (hidden) continue;
-      if (firstPerson && read(viewer, 'ViewTarget') === actor) continue;
+      try { hidden = read(actor, 'bHidden'); } catch { return; }
+      if (hidden) return;
+      if (firstPerson && read(viewer, 'ViewTarget') === actor) return;
       if (read(actor, 'bOnlyOwnerSee')) {
         let owned = false;
         for (let owner = actor; owner; owner = read(owner, 'Owner')) if (owner === viewer) { owned = true; break; }
-        if (!owned || !firstPerson) continue;
+        if (!owned || !firstPerson) return;
       }
-      if (read(actor, 'bOwnerNoSee') && firstPerson && read(actor, 'Owner') === viewer) continue;
+      if (read(actor, 'bOwnerNoSee') && firstPerson && read(actor, 'Owner') === viewer) return;
       if (read(actor, 'RenderIteratorClass')) {
         const iterator = ensureRenderInterface(runtime, actor, constructIterator);
-        if (!iterator) continue;
+        if (!iterator) return;
         const kind = runtime.instance(iterator).cls.record.key;
         if (kind === 'deusex.laseriterator') {
           for (const item of laserIteratorItems(runtime, iterator, actor, viewer, {
@@ -124,24 +130,33 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
             if (drawType === 2) meshItems.push(item);
             else if (drawType === 1 || drawType === 7) draw(item.actor, item, time);
           }
-          continue;
+          return;
         }
         if (kind !== 'deusex.particleiterator') {
           notes.add(`RenderIterator ${kind} is not translated.`);
-          continue;
+          return;
         }
         for (const item of particleIteratorItems(runtime, iterator, viewer, {
           processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args),
           farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) })) {
           if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) draw(item.actor, item, time);
         }
-        continue;
+        return;
       }
       const drawType = read(actor, 'DrawType') & 255;
-      if (drawType !== 1 && drawType !== 7) continue;
+      if (drawType !== 1 && drawType !== 7) return;
       if (drawType === 7) notes.add('DT_SpriteAnimOnce sprites draw their first frame; the LifeSpan frame choice is not translated.');
       draw(actor, { location: read(actor, 'Location').map(Math.fround), drawScale: Math.fround(read(actor, 'DrawScale')),
         scaleGlow: Math.fround(read(actor, 'ScaleGlow')) }, time);
+    };
+    for (let start = 0; ;) {
+      const entries = render?.scan(actors, { start, kinds: RENDER_SPRITE | RENDER_ITERATOR, viewer,
+        viewTarget: firstPerson ? read(viewer, 'ViewTarget') : null, firstPerson }) ?? null;
+      if (!entries) { for (let i = start; i < actors.length; i++) visit(actors[i]); break; }
+      for (const entry of entries) visit(actors[entry >>> 5]);
+      const last = entries[entries.length - 1];
+      if (!entries.length || !(last & RENDER_ITERATOR)) break;
+      start = (last >>> 5) + 1;
     }
     for (let i = used; i < pool.length; i++) { pool[i].visible = false; pool[i].userData.feedback = null; }
     return meshItems;

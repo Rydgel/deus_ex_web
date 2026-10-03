@@ -28,6 +28,7 @@ import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
+import {RenderScanHost} from './script-vm-render.mjs';
 import {ActorTickHost} from './actor-tick-kernel.mjs';
 import {ZoneHost} from './zone-kernel.mjs';
 import {MoveActorHost} from './move-actor-kernel.mjs';
@@ -255,6 +256,8 @@ export class RustScriptVm {
     this.perception = new PerceptionHost(this);
     // October 1: the locomotion polls' table (loco.rs).
     this.loco = new LocomotionHost(this);
+    // October 3: the viewer's render scan (render.rs).
+    this.render = new RenderScanHost(this);
     // R3-d: Actor.Tick's bookkeeping (actor-tick-kernel.mjs).
     this.actorTick = new ActorTickHost(this);
     // R3-e: SetActorZone's common case (zone-kernel.mjs).
@@ -294,6 +297,7 @@ export class RustScriptVm {
     this.checkValuesAt = x.vm_check_values_ptr();
     this.perception.attach(x);
     this.loco.attach(x);
+    this.render.attach(x);
     this.actorTick.attach(x);
     this.zone.attach(x);
     this.moveActor.attach(x);
@@ -379,8 +383,9 @@ export class RustScriptVm {
       }
       // The row, then (R3-c) its field and flag words for the perception
       // natives, 0 until js_class_fields computes them (the arena zeroes),
-      // and the locomotion word (loco.rs), 0 until js_loco_class does.
-      const n = chain.length, address = this.arena.alloc(8 + 8 * n + 12), view = this.arena.view;
+      // and the locomotion word (loco.rs), 0 until js_loco_class does, then
+      // the render word (render.rs), 0 until js_render_class does.
+      const n = chain.length, address = this.arena.alloc(8 + 8 * n + 16), view = this.arena.view;
       view.setUint32(address + 4, n, true);
       chain.forEach((id, i) => view.setUint32(address + 8 + 4 * i, id, true));
       names.forEach((id, i) => view.setUint32(address + 8 + 4 * (n + i), id, true));
@@ -589,6 +594,7 @@ export class RustScriptVm {
     return {
       ...vm.perception.imports(enter, leave, STATS ? count : null),
       ...vm.loco.imports(),
+      ...vm.render.imports(),
       ...vm.actorTick.imports(),
       ...vm.movePawn.imports(),
       ...vm.walkLoop.imports(),

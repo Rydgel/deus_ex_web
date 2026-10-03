@@ -6,6 +6,7 @@ import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodM
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
+import {RENDER_MESH} from '../runtime/script-vm-render.mjs';
 import {fieldAccessor,fieldAccessors} from './actor-fields.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
@@ -177,7 +178,11 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
       // asynchronously, so it appears once they are ready.
       else if(preview.readMesh()!==preview.mesh){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
     }
-    for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);
+    // The render scan (script-vm-render.mjs) leaves the actors with a live
+    // Mesh, and those it hands back; admit returns at once for the others.
+    const entries=runtime.scriptVm?.render?.scan(level.actors,{kinds:RENDER_MESH})??null;
+    if(entries)for(const entry of entries){const actor=level.actors[entry>>>5];admit(actor,meshAccessors.get(actor));}
+    else for(let i=0;i<liveList.length;i++)admit(liveList[i],meshReaders[i]);
   };
   // Render-iterator mesh items (docs/lasers.md): each FDynamicSprite of a
   // DT_Mesh item draws through DrawActorSprite (0x10b2556a-0x10b25655), which
