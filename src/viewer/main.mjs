@@ -50,6 +50,11 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.autoClear = false;
 renderer.info.autoReset=false;
 const scene = new THREE.Scene();
+// The scene and the world root keep identity matrices: without auto-update
+// on them, renderer.render no longer forces every descendant's matrixWorld
+// to be recomputed (twice per frame, sky and main pass). Objects that move
+// update or flag their own (validate-scene-matrices.mjs).
+scene.matrixAutoUpdate = false;
 const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.clone();
 camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();

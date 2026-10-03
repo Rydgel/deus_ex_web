@@ -19,6 +19,8 @@ import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
+  // Identity, never moved: no auto-update cascade (main.mjs, the scene).
+  root.matrixAutoUpdate = false;
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map(), rotatedMovers = new Set();
   // The script-VM kernel runs the animated light-map merge (light.rs) and
   // the volumetric fog loop (fog.rs) when it loads.
@@ -307,6 +309,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       group.userData.baseMatrix = group.matrix.clone(); moverGroups.set(actor.name, group);
       root.add(group);
       await addModel(model, triangles, group, actor.name, group.matrix);
+      // The group's and its meshes' world matrices now; syncMovers redoes
+      // this on a change (nothing cascades from the root).
+      group.updateMatrixWorld(true);
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
@@ -315,6 +320,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const markerGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(markerPositions, 3));
   const markerMaterial = new THREE.PointsMaterial({ color: '#efc176', size: 5, sizeAttenuation: false, depthTest: false });
   const markers = new THREE.Points(markerGeometry, markerMaterial); markers.visible = false; markers.renderOrder = 100;
+  markers.matrixAutoUpdate = false;
   root.add(markers);
   notes.add(`${map.summary.unknownLevelBytes} trailing Level bytes and ${map.summary.undecodedActorProperties} property values remain opaque.`);
   for (const note of lighting.notes) notes.add(note);
@@ -340,7 +346,13 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
     return { ...update, uploaded: update.lightmaps.length };
   }
+  const moverMatrix = new THREE.Matrix4();
   const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
+    /** Each mover group's brush matrix; a changed one updates its own and
+     * its meshes' world matrices at once. A flag alone is not enough: a
+     * mesh's updateWorldMatrix(true, false) (mirrors.mjs) recomputes the
+     * flagged group and clears its flag without updating the group's other
+     * children. */
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
@@ -348,18 +360,20 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         if (rotation.some((v, i) => (v | 0) !== ((authored[i] ?? 0) | 0))) {
           // A rotating key (physMovingBrush's NewRotation): the brush matrix of
           // the live Location and Rotation, as ABrush::ToWorld poses it.
-          group.matrix.copy(brushMatrix({ ...mover.values, Location: mover.position, Rotation: rotation }));
+          moverMatrix.copy(brushMatrix({ ...mover.values, Location: mover.position, Rotation: rotation }));
           if (!rotatedMovers.has(mover.name)) {
             rotatedMovers.add(mover.name);
             const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
             if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
           }
         } else {
-          group.matrix.copy(group.userData.baseMatrix);
+          moverMatrix.copy(group.userData.baseMatrix);
           const offset = toView(mover.collider.offset);
-          for (let i = 0; i < 3; i++) group.matrix.elements[12 + i] += offset[i];
+          for (let i = 0; i < 3; i++) moverMatrix.elements[12 + i] += offset[i];
         }
-        group.matrixWorldNeedsUpdate = true;
+        if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
+        group.matrix.copy(moverMatrix);
+        group.updateMatrixWorld(true);
       }
     },
     updateLighting,

@@ -247,4 +247,14 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | Step | Commit | total ms | Phase change |
 |---|---|---:|---|
 | 1.1 moving lights incremental | c072cd0 | 45.5 → 39.8 | tick 21.0 → 17.2 |
-| 1.2 one moving-light scan | this commit | 39.7 → 39.5 (noise) | lighting 0.75 → 0.23 |
+| 1.2 one moving-light scan | 8eabcc4 | 39.7 → 39.5 (noise) | lighting 0.75 → 0.23 |
+| 1.3 no matrix cascade | this commit | 42.1 → 40.5 (noisy runs) | render 5.99 → 4.92 |
+
+Step 1.3 found a latent trap: three's `updateWorldMatrix(true, false)`, which
+the mirror pass calls on a mover's mirror mesh, recomputes a flagged parent
+group and clears its flag without updating the group's other children. The
+forced cascade hid this; a mover group now updates its subtree at once when
+its brush matrix changes. `validate-scene-matrices.mjs` compares every
+object's `matrixWorld` after the renderer's update with a forced cascade, in
+the browser (Island, Smug, Training) and in Node with moving and rotating
+movers on Smug.
