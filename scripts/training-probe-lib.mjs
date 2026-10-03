@@ -117,11 +117,15 @@ export async function runTrainingProbes({groups = PROBE_GROUPS, continueMode = f
     entry.calls++; entry.probes.add(probe);
     try { return invokeNative.call(this, call); }
     catch (error) {
-      const match = UNSUPPORTED_NATIVE.exec(error?.message ?? '');
-      if (!match || Number(match[1]) !== call.index) throw error;
+      // ClientTravel stops at a labeled TravelBoundary (travel-boundary.mjs,
+      // Stage 6): the same native boundary record as an unsupported native.
+      const travel = error?.name === 'TravelBoundary';
+      const match = travel ? null : UNSUPPORTED_NATIVE.exec(error?.message ?? '');
+      if (!travel && (!match || Number(match[1]) !== call.index)) throw error;
       entry.unsupported++;
       const caller = String(call.script?.entry?.path ?? stack.at(-1) ?? '').toLowerCase();
-      records.push({kind: 'native', probe, index: call.index, name, caller, stack: [...stack].slice(-8)});
+      records.push({kind: 'native', probe, index: call.index, name: travel ? 'engine.playerpawn.clienttravel' : name, caller,
+        stack: [...stack].slice(-8)});
       if (!continueMode) { seen.add(error); throw error; }
       let result = call.record?.function?.result;
       if (!result && name) try { result = this.lookup(call.receiver, name.split('.').at(-1))?.function?.result; } catch { /* no receiver */ }
