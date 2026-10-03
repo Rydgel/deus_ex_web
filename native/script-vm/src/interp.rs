@@ -944,6 +944,15 @@ impl Run {
         unsafe { js_eval(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
     }
+    /// js_eval of `node` on a context object (gc.rs).
+    pub(crate) fn host_eval_on(&mut self, node: u32, r: Recv) {
+        self.host_eval(node, r);
+    }
+    /// The Accessed None report of a context whose object is None (gc.rs).
+    pub(crate) fn accessed_none(&mut self, node: u32) {
+        unsafe { js_accessed_none(self.frame, node) };
+        self.self_fresh = false;
+    }
     fn host_vector(&mut self, node: u32, r: Recv) -> [u32; 3] {
         unsafe { js_vector(self.frame, node, self.handle(r)) };
         self.self_fresh = false;
@@ -1396,6 +1405,7 @@ impl Run {
             CALL => {
                 self.call(SELF);
             }
+            crate::gc::GC_EFFECT => self.gc_effect(),
             _ => self.fail(ERR_KIND, kind),
         }
     }

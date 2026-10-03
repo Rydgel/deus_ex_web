@@ -17,7 +17,8 @@
  * convert it: int `v | 0`, bool `Boolean(v)`, float `+v` (undefined is kept
  * apart, since the float store codec turns it into 0), object its handle.
  */
-import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell} from './script-object-image.mjs';
+import {scalarCell, structMemberCell, fieldImageCell, fieldImageCellVersion, isFixedCell, vectorCell, cellKind} from './script-object-image.mjs';
+import {GC_RUST_NATIVES} from './script-vm-gc.mjs';
 import {primitiveNativeIndices} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {fixedArrayShape} from './script-values.mjs';
@@ -38,7 +39,7 @@ const K = {
   COMPOUND_LOCAL: 56, COMPOUND_FIELD: 57, VCOMPOUND_LOCAL: 156, VCOMPOUND_FIELD: 157,
   LIT_VECTOR: 160, LIT_ROTATOR: 175, LIT_NAME: 194, VECTOR_MEMBER: 183, ROTATOR_MEMBER: 184, IS_A: 193,
   PAWN_ENEMY: 200, PAWN_ALLIANCE: 201, AI_CAN_SEE: 202,
-  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205,
+  STATE_NAME: 203, LAST_RENDERED: 204, IN_STASIS: 205, GC_EFFECT: 206,
   CONTEXT: 70, SELF: 71, CALL: 72, DYNAMIC_CAST: 73,
   NOT: 80, AND: 81, OR: 82, BOOL_NE: 83, BOOL_EQ: 84,
   INT_DIV: 95, INT_LE: 96, INT_GE: 113, INT_CLAMP: 109, INT_NEG: 102, INT_NOT: 103,
@@ -50,6 +51,13 @@ const NEXT_NONE = 0xffffffff;
 const RETURN_KIND = {int: 1, byte: 1, bool: 2, float: 3, object: 4, vector: 5, rotator: 6};
 // A context's value width (EX_Context's valueSize) per kind.
 const WIDTH = {int: 4, byte: 1, bool: 4, float: 4, object: 4, vector: 12, rotator: 12, name: 4};
+// gc.rs GC_EFFECT argument kinds.
+const GA = {float: 1, int: 2, bool: 3, object: 4, colorLocal: 5, colorField: 6};
+const COLOR_MEMBERS = ['r', 'g', 'b', 'a'].map(name => `core.object.color.${name}`);
+// A Color struct cell: R, G, B, A bytes at offsets 0..3, so pack() of the
+// value is the cell's u32.
+const isColorCell = cell => cellKind(cell) === 'struct' && cell.members?.length === 4 &&
+  COLOR_MEMBERS.every((key, i) => { const m = cell.members.find(item => item.key === key); return cellKind(m) === 'byte' && m.offset === i; });
 
 // Core operator natives by index: [kind code, operand kinds, result kind].
 // Each transcribes its case in script-vm.mjs native().
@@ -778,6 +786,50 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
     return [K.COMPOUND_FIELD, op, cell.offset, nodeId(n), cell.key, value.length, ...value];
   }
 
+  // `gc.Native(...)` as a statement for a GC native gc.rs runs (GC_EFFECT),
+  // where the runtime's own invokeNative would reach dispatchGcNative (the
+  // perception gate; the window host's gate admits each paint). The context
+  // object is a local or field read without imports; an int or bool argument
+  // has none either (dispatchGcNative takes its JavaScript value unconverted)
+  // and a Color is a sole local or field.
+  function gcEffect(n) {
+    const v = n.value, kinds = isNode(v) && v.op === 'native' ? GC_RUST_NATIVES.get(v.index) : null;
+    if (!kinds || !runtime.scriptVm?.gc?.lowerable) return null;
+    if (services.invokeNative !== runtime.services.invokeNative || Object.hasOwn(runtime, 'invokeNative') ||
+      runtime.boundaryNatives?.has(v.index)) return null;
+    if (!Array.isArray(v.args) || v.args.length !== kinds.length) return null;
+    if (!isNode(n.context) || (n.context.op !== 0x00 && n.context.op !== 0x01)) return null;
+    const mark = imports, fail = () => { imports = mark; return null; };
+    const context = expr(n.context, 'object');
+    if (imports !== mark) return fail();
+    const words = [];
+    for (let i = 0; i < kinds.length; i++) {
+      const kind = kinds[i], arg = v.args[i];
+      if (!isNode(arg) || arg.op === 0x0b) return fail();
+      if (kind === 'color') {
+        if (kinds.length !== 1 || (arg.op !== 0x00 && arg.op !== 0x01)) return fail();
+        const field = operand(arg);
+        if (!field?.metadata) return fail();
+        if (arg.op === 0x00) {
+          const cell = layout.cells.get(field.key);
+          if (!isColorCell(cell)) return fail();
+          words.push(GA.colorLocal, cell.offset);
+        } else {
+          const cell = fieldImageCell(field.key);
+          if (!cell) { missingField = true; return fail(); }
+          if (!isColorCell(cell)) return fail();
+          fieldNodes.add(nodeId(arg));
+          words.push(GA.colorField, cell.offset, fieldKeyId(field.key));
+        }
+        continue;
+      }
+      const before = imports, code = expr(arg, kind);
+      if ((kind === 'int' || kind === 'bool') && imports !== before) return fail();
+      words.push(GA[kind], ...code);
+    }
+    return [K.GC_EFFECT, nodeId(n), nodeId(v), v.index, context.length, ...context, 1 + words.length, kinds.length, ...words];
+  }
+
   function statement(n) {
     switch (n.op) {
       case 0x06: return [K.S_JUMP, indexOf.get(n.target)];
@@ -818,6 +870,10 @@ export function lowerFunction(compiled, layout, services, runtime, instance) {
         if (n.op === 0x1b || n.op === 0x1c) {
           const lowered = call(n, true);
           if (lowered) return [K.S_EXPR, ...lowered.words];
+        }
+        if (n.op === 0x19) {
+          const words = gcEffect(n);
+          if (words) return [K.S_EXPR, ...words];
         }
         return [K.S_EXPR, K.JS_VOID, nodeId(n)];
       }

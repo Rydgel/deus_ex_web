@@ -132,3 +132,10 @@ export function dispatchGcNative(heap,services,call) {
  }
  return {handled:true,value};
 }
+/** A GC native's method body on arguments already converted as
+ * dispatchGcNative converts them (the Rust core's GC natives hand their
+ * evaluated arguments here: script-vm-gc.mjs). */
+export function runGcNative(index,receiver,args,services) {
+ const fn=natives.get(index);if(!fn)throw new Error(`GC native ${index} has no body`);
+ return fn(receiver,...args,services);
+}

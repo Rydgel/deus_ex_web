@@ -18,6 +18,7 @@ mod level;
 mod fire;
 mod light;
 mod fog;
+mod gc;
 mod lipsync;
 mod loco;
 mod natives;

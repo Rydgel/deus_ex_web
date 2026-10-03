@@ -278,6 +278,7 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 4.3 noncolliding FarMoveActor in Rust | 316342f | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
 | 4.2 UpdateParticles in Rust | 33ad364 | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
 | 1.3 the mesh scene skips the non-forced matrix walk | 14f9de8 | 29.25 → 27.98 | render 4.84 → 4.16 |
+| 5.1 GC state and tile natives in Rust | (this commit) | 33.0 → 32.2 (noisy runs) | hud 2.98 → 2.56 |
 
 Full validator sweep at 14f9de8 (Linux host, `run-validators.mjs --jobs 8
 --mem-budget 16384`): 489 passed, 0 skipped, 0 failed.
@@ -418,6 +419,31 @@ bCollideWorld, bCollideWhenPlacing, StandingCount, Brush, OldLocation and
 bJustTeleported). It serves the carried weapons' per-tick FarMove, the
 Shadows' SetLocation and the laser proxies. The rider MoveActor already
 ran in Rust; the hash updates remain.
+
+Step 5.1 (`gc.rs`, `script-vm-gc.mjs`): the HUD draw was 2.4 ms in a
+headless profile (`.work/tools/hud-bench.mjs`, Island, 1920×1080): 82
+DrawWindow/PostDrawWindow events and about 150 GC native calls per frame,
+each handed to JavaScript. The window host's native heap is now a range of
+the object arena (same addresses and bytes; `createNativeHeap({arena})`), so
+Rust addresses the UGC image. A statement `gc.Native(...)` for SetStyle,
+SetTileColor, SetTextColor, SetFont, SetAlignments, EnableWordWrap,
+DrawTexture or DrawPattern is lowered to GC_EFFECT: the context object, the
+arguments in order with SELF, dispatchGcNative's conversions (f32 bits,
+pack() of a Color variable, addressOf of an object) and the body,
+transcribed from script-gc-*.mjs and the draw model's clip and sink with the
+same f64 intermediates and f32 roundings. The DrawTile command goes to the
+host's callVirtual, so the command list keeps its order with the natives
+still in JavaScript (DrawText, DrawBorders, the window natives). The bodies
+run only while the window host paints and its own dispatch would reach
+dispatchGcNative (no boundary native, no replaced invokeNative); otherwise,
+and for a receiver without a heap image, the native node runs in
+JavaScript. `GC_NATIVE=js` (`?gcNative=js`) keeps the JavaScript bodies;
+`GC_NATIVE=verify` reruns each JavaScript body on the GC image from before
+the Rust body and compares the image and the DrawTile command: 200 headless
+frames and 300 browser frames on Island found no difference, and the HUD
+command digest is unchanged. Left in JavaScript: DrawText (14 calls, its
+strings are not image bytes), the bound Width and Height reads (29 per
+frame), PushGC/PopGC and the tree walk.
 
 Step 1.3, second part: every object under the actor mesh scene's root
 keeps the identity matrix (GetFrame's vertices are world-space and no

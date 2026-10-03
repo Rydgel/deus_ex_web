@@ -28,6 +28,12 @@
  * A stale pointer into a freed range then fails at the boundary, or resolves
  * to whatever the range holds now, as a dangling native pointer would.
  * See docs/script-window-host.md.
+ *
+ * With an `arena` (script-object-arena.mjs), the storage is a range of the
+ * arena's WebAssembly memory, so the Rust core can address the same bytes
+ * (docs/play-cpu-plan.md, Phase 5): native address A is arena offset
+ * `region + (A - HEAP_BASE)`. The views follow the arena's buffer when it
+ * grows. Addresses and contents are the same as without an arena.
  */
 
 const HEAP_BASE = 0x21000000;
@@ -53,8 +59,12 @@ export class NativeHeapError extends Error {
 
 const fail = (message, details) => { throw new NativeHeapError(message, details); };
 
-export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} = {}) {
-  const bytes = new Uint8Array(capacity), view = new DataView(bytes.buffer);
+export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null, arena = null, onRelease = null} = {}) {
+  const region = arena ? arena.alloc(capacity) : 0;
+  let bytes, view;
+  const attach = buffer => { bytes = new Uint8Array(buffer, region, capacity); view = new DataView(buffer, region, capacity); };
+  if (arena) { attach(arena.memory.buffer); arena.listeners.push(attach); }
+  else { bytes = new Uint8Array(capacity); view = new DataView(bytes.buffer); }
   let next = 16;
   const objects = new Map();          // object -> {address, size}
   const handles = new Map();          // opaque value -> address
@@ -137,6 +147,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
     byAddress.delete(record.address);
     released.add(object);
     freeRaw(record.address);
+    onRelease?.();
   }
 
   /** Drop the opaque handle of an identity that no longer exists (a purged
@@ -147,6 +158,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
     if (address === undefined) return;
     handles.delete(value);
     byAddress.delete(address);
+    onRelease?.();
   }
 
   function isAllocated(object) { return objects.has(object); }
@@ -311,7 +323,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
 
   /** Address-based access used by the XGC/UFont natives (hud-text shape). */
   const mem = {
-    bytes,
+    get bytes() { return bytes; },
     allocRaw: size => allocRaw(size),
     realloc: (address, size) => realloc(address, size),
     free: address => freeRaw(address >>> 0),
@@ -320,7 +332,7 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
   };
 
   const api = {
-    bytes, allocRaw, freeRaw, realloc, allocate, free, forget, isAllocated, addressOf, objectAt, read, write, mem, copyBytes,
+    get bytes() { return bytes; }, allocRaw, freeRaw, realloc, allocate, free, forget, isAllocated, addressOf, objectAt, read, write, mem, copyBytes,
     // End of the bump region (tools serialise [HEAP_BASE, usedEnd()) as a memory image).
     usedEnd: () => HEAP_BASE + next,
     objectAddress: object => {
@@ -330,6 +342,8 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null} 
     },
     sizeOf: object => objects.get(object)?.size ?? 0,
     get used() { return next; },
+    /** The arena offset of HEAP_BASE, or 0 without an arena. */
+    region, capacity, base: HEAP_BASE,
   };
   return api;
 }

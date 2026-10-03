@@ -267,7 +267,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const resourceImages = new Map();      // heap address -> {kind, ref, ...}
   const textureInfo = new Map();          // texture ref -> {address, width, height}
-  const heap = createNativeHeap({external: (value, api) => materialize(value, api)});
+  // The arena range lets the Rust core's GC natives address the heap
+  // (script-vm-gc.mjs); a release invalidates its cached addresses.
+  const heap = createNativeHeap({external: (value, api) => materialize(value, api), arena: runtime.objectArena?.(),
+    onRelease: () => runtime.scriptVm?.gc?.invalidate()});
   const vtableFor = new Map();
   const textureVtable = (() => { const vt = heap.allocRaw(0x80); heap.mem.write(vt + 0x54, 'u32', 1); heap.mem.write(vt + 0x58, 'u32', 2); return vt; })();
   function textureImage(asset, index, ref) {
@@ -1499,7 +1502,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if(rect?.width>0&&rect.height>0){writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
-      drawCommands.length=0;T.paintWindows(W,root,canvas);return drawCommands.slice();
+      drawCommands.length=0;
+      // The Rust core may run the GC natives while this paint runs
+      // (script-vm-gc.mjs open: only when this host's dispatch would).
+      const gcNatives=runtime.scriptVm?.gc;
+      gcNatives?.open({heap,services:gcServices,handleNative:lifecycle.handleNative});
+      try{T.paintWindows(W,root,canvas);}finally{gcNatives?.close();}
+      return drawCommands.slice();
     },
     install() {
       runtime.windowLifecycle = {...runtime.windowLifecycle, ...lifecycle};

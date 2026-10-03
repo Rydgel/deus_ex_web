@@ -26,6 +26,9 @@ export class ObjectArena {
     this.top = RESERVED;
     this.free = new Map();
     this.released = [];
+    // Callbacks that keep views over a range current (the window host's
+    // native heap, script-native-heap.mjs).
+    this.listeners = [];
     this.refresh();
   }
   /** Re-derive the views after the memory buffer was replaced. */
@@ -33,6 +36,7 @@ export class ObjectArena {
     const buffer = this.memory.buffer;
     this.view = new DataView(buffer);
     this.bytes = new Uint8Array(buffer);
+    for (const listener of this.listeners) listener(buffer);
   }
   /** A zeroed range of `size` bytes; returns its base. */
   alloc(size) {
