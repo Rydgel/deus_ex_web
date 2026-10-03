@@ -60,6 +60,11 @@ extern "C" {
     fn js_level_standalone(handle: u32) -> i32;
 }
 
+/// Whether STATE_VERIFY=1 set the table's verify word.
+pub(crate) fn state_verify() -> bool {
+    unsafe { *(addr_of!(STATES) as *const u32).add(2) != 0 }
+}
+
 /// The address of `handle`'s state entry [row, probe lo, probe hi, frame], computed
 /// by the host when it is not filled (or always, under STATE_VERIFY), or 0
 /// when the host does not describe the handle.

@@ -90,10 +90,12 @@ extern "C" {
 
 /// The enable word's bits (script-vm-events.mjs): events dispatch in Rust;
 /// a ProcessState with no code to run is skipped (tick.rs); latent polls
-/// run in Rust (tick.rs, loco.rs).
+/// run in Rust (tick.rs, loco.rs); the tick's IsProbing reads the state
+/// table's probe words (tick.rs).
 const TICK_EVENTS_BIT: u32 = 1;
 const TICK_STATE_BIT: u32 = 2;
 const TICK_POLL_BIT: u32 = 4;
+const TICK_PROBE_BIT: u32 = 8;
 
 /// Whether the actor tick may skip a ProcessState with no code to run.
 pub(crate) fn state_skip_enabled() -> bool {
@@ -103,6 +105,10 @@ pub(crate) fn state_skip_enabled() -> bool {
 /// in Rust.
 pub(crate) fn polls_enabled() -> bool {
     events()[3] & TICK_POLL_BIT != 0
+}
+/// Whether the actor tick's IsProbing may read the state table.
+pub(crate) fn probes_enabled() -> bool {
+    events()[3] & TICK_PROBE_BIT != 0
 }
 
 /// Set EVENTS' enable word; returns the previous one.

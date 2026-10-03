@@ -103,13 +103,18 @@ const E_UPDATETACTICS: u32 = 6;
 // js_tick_probing names.
 const P_TICK: u32 = 0;
 const P_ENEMYNOTVISIBLE: u32 = 1;
+/// The probe index (ename) of each js_tick_probing name, written by the host
+/// (probe-names.mjs), 0xffffffff for a name without one.
+static mut P_ENAMES: [u32; 2] = [u32::MAX; 2];
 // js_tick_stmt statements run in JavaScript when a field they use is not in
 // the image: `set('ViewRotation',get('Rotation'))` and the weapon's
 // `if(weapon)services.farMoveActor(weapon,get('Location'),0,0)`.
 const S_VIEWROTATION: u32 = 0;
 const S_WEAPON: u32 = 1;
-// js_tick_error: the DemoRecDriver a callback installed.
+// js_tick_error: the DemoRecDriver a callback installed; under
+// STATE_VERIFY, a probe the state table answered unlike JavaScript.
 const ERR_DEMO: u32 = 1;
+const ERR_PROBE: u32 = 2;
 
 /// T_FIELDS: per field [offset, bool mask or fixed-array element stride],
 /// written by the host from the cell registry.
@@ -138,6 +143,35 @@ pub extern "C" fn tick_f64_ptr() -> *mut f64 {
 #[no_mangle]
 pub extern "C" fn tick_empty_name_ptr() -> *mut u32 {
     addr_of_mut!(T_EMPTY_NAME)
+}
+#[no_mangle]
+pub extern "C" fn tick_probe_names_ptr() -> *mut u32 {
+    addr_of_mut!(P_ENAMES) as *mut u32
+}
+
+/// `services.isProbing(actor, name)` for the ticking actor: with the probe
+/// bit (the runtime's own isProbing and ScriptState.isProbing), the state
+/// table entry decides as script-runtime.mjs isProbing does: an instance
+/// without a ScriptState (a row with no names) probes everything, and one
+/// with a state probes a name outside the 64 probe bits or whose ProbeMask
+/// bit is set. Otherwise, or for a handle the table does not describe,
+/// js_tick_probing asks JavaScript. Under STATE_VERIFY both answer and must
+/// agree.
+fn probing(ctx: u32, handle: u32, which: u32) -> bool {
+    if crate::dispatch::probes_enabled() {
+        let entry = crate::natives::state_entry(handle);
+        if entry != 0 {
+            let bit = unsafe { (*addr_of!(P_ENAMES))[which as usize] }.wrapping_sub(0x12c);
+            let probing = load32(load32(entry).wrapping_add(4)) == 0
+                || bit >= 64
+                || load32(entry.wrapping_add(4 + 4 * (bit >> 5))) & (1u32 << (bit & 31)) != 0;
+            if crate::natives::state_verify() && (unsafe { js_tick_probing(ctx, which) } != 0) != probing {
+                unsafe { js_tick_error(ctx, ERR_PROBE) };
+            }
+            return probing;
+        }
+    }
+    unsafe { js_tick_probing(ctx, which) != 0 }
 }
 
 #[link(wasm_import_module = "env")]
@@ -566,7 +600,7 @@ fn tick_body(
         if tick_type == 1 {
             return 1;
         }
-        if unsafe { js_tick_probing(ctx, P_TICK) } != 0 {
+        if probing(ctx, a.handle, P_TICK) {
             a.event(E_TICK, delta);
         }
         script_and_timer(&mut a, delta);
@@ -640,7 +674,7 @@ fn tick_body(
         unsafe { js_tick_show_self(ctx) };
         a.refresh();
     }
-    if less(a.num(F_SIGHTCOUNTER), 0.0) && unsafe { js_tick_probing(ctx, P_ENEMYNOTVISIBLE) } != 0 {
+    if less(a.num(F_SIGHTCOUNTER), 0.0) && probing(ctx, a.handle, P_ENEMYNOTVISIBLE) {
         unsafe { js_tick_check_enemy(ctx) };
         a.refresh();
         a.set_float(F_SIGHTCOUNTER, fround(0.1));

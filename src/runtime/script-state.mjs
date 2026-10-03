@@ -131,3 +131,4 @@ export class ScriptState {
 /** ScriptState.prototype.process as defined here: the Rust actor tick skips
  * a ProcessState with no code to run only while it is unwrapped. */
 export const originalProcess=ScriptState.prototype.process;
+export const originalIsProbing=ScriptState.prototype.isProbing;

@@ -36,6 +36,7 @@ import {tickActorAnimation, selectAnimNotify, named} from './animation-tick.mjs'
 import {animationTickView} from './script-anim.mjs';
 import {propertyReference, propertyCodec} from './script-values.mjs';
 import {setScriptRunaway} from './script-vm.mjs';
+import {probeNames} from '../unreal/probe-names.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.ACTOR_TICK_KERNEL === 'js' || globalThis.DEUS_EX_ACTOR_TICK_KERNEL === 'js';
@@ -201,6 +202,9 @@ export class ActorTickHost {
     this.stateAt = x.tick_state_ptr();
     this.f64At = x.tick_f64_ptr();
     this.vm.arena.view.setUint32(x.tick_empty_name_ptr(), nameCellWord(''), true);
+    // The probe index of each js_tick_probing name, for tick.rs `probing`.
+    const probes = x.tick_probe_names_ptr();
+    PROBES.forEach((name, i) => this.vm.arena.view.setUint32(probes + 4 * i, (probeNames.get(name.toLowerCase()) ?? -1) >>> 0, true));
     this.enabled = !DISABLED;
   }
   /** Fill the table's missing entries from the registry. An entry, once
@@ -489,7 +493,8 @@ export class ActorTickHost {
         host.set(c, field, element, value);
         host.refresh(c);
       },
-      js_tick_error() {
+      js_tick_error(i, code) {
+        if (code === 2) throw new Error(`Actor tick kernel: the state table's IsProbing differs from JavaScript for ${context(i).receiver?.name}`);
         throw new Error('Actor.Tick callback installed an unsupported DemoRecDriver');
       },
       js_anim_end(i) {

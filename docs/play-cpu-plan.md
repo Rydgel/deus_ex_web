@@ -249,7 +249,15 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 1.1 moving lights incremental | c072cd0 | 45.5 → 39.8 | tick 21.0 → 17.2 |
 | 1.2 one moving-light scan | 8eabcc4 | 39.7 → 39.5 (noise) | lighting 0.75 → 0.23 |
 | 1.3 no matrix cascade | 90a083d | 42.1 → 40.5 (noisy runs) | render 5.99 → 4.92 |
-| 1.6 small items | this commit | 38.6 → 38.8 (noise) | render 4.77 → 4.61 |
+| 1.6 small items | b3b16f8 | 38.6 → 38.8 (noise) | render 4.77 → 4.61 |
+| 1.5 IsProbing in Rust | this commit | bench-sim tick −0.24 (noise) | 700 crossings per tick removed |
+
+Step 1.5's other items were dropped after measuring: `events.allowed` costs
+a few identity comparisons per actor tick, and the pass-through
+`withLifecycle` wrappers sit under 0.01 ms of self time. Step 1.4 (a Mesh
+epoch for actor admission, about 0.3 ms of Mesh reads) is folded into Phase 2:
+`render_scan` reads Mesh in Rust, and a JavaScript epoch would need every
+Actor.Mesh writer, Rust stores included, to bump it.
 
 Step 1.3 found a latent trap: three's `updateWorldMatrix(true, false)`, which
 the mirror pass calls on a mover's mirror mesh, recomputes a flagged parent

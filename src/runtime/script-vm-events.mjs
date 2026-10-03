@@ -29,7 +29,7 @@ import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-ob
 import {probeNames} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
 import {STATE_ENTRY} from './script-vm-states.mjs';
-import {ScriptState, originalProcess} from './script-state.mjs';
+import {ScriptState, originalProcess, originalIsProbing} from './script-state.mjs';
 
 const DISPATCH_VERIFY = typeof process !== 'undefined' && process.env?.DISPATCH_VERIFY === '1';
 // RUST_EVENTS=0 keeps every tick event in JavaScript (the reference path).
@@ -41,10 +41,13 @@ const CALLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_CALLS
 const STATE_DISABLED = typeof process !== 'undefined' && process.env?.RUST_STATE === '0';
 // RUST_POLLS=0 keeps every latent poll in JavaScript (tick.rs, loco.rs).
 const POLLS_DISABLED = typeof process !== 'undefined' && process.env?.RUST_POLLS === '0';
+// RUST_PROBES=0 asks JavaScript for the tick's IsProbing (js_tick_probing).
+const PROBES_DISABLED = typeof process !== 'undefined' && process.env?.RUST_PROBES === '0';
 /** The tick word's bits (EVENTS[3], tick.rs): events dispatch in Rust; a
  * ProcessState with no code to run is skipped; Sleep and the locomotion
- * latent actions are polled in Rust. */
-export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2, TICK_POLL_BIT = 4;
+ * latent actions are polled in Rust; the tick's IsProbing('Tick') and
+ * IsProbing('EnemyNotVisible') read the state table's probe words. */
+export const TICK_EVENTS_BIT = 1, TICK_STATE_BIT = 2, TICK_POLL_BIT = 4, TICK_PROBE_BIT = 8;
 const K_JS = 1, K_NOCALL = 2, K_RUN = 3;
 export const MAX_RUNS = 256;
 /** The Actor.Tick events (tick.rs E_*): [name, takes the delta]. */
@@ -121,7 +124,9 @@ export class EventHost {
    * table's frame word says it would return at once, with
    * ScriptState.prototype.process unwrapped. TICK_POLL_BIT (with the state
    * bit): Sleep and the locomotion latent actions may be polled in Rust,
-   * with the runtime's poll methods unwrapped. */
+   * with the runtime's poll methods unwrapped. TICK_PROBE_BIT (with the
+   * events bit): the tick's IsProbing reads the state table, with
+   * runtime.isProbing and ScriptState.prototype.isProbing unwrapped. */
   allowed(services) {
     const runtime = this.vm.runtime, m = runtime.constructor.originalMethods;
     if (services?.runtimeEvents !== true || runtime.services?.scriptVm !== this.vm || m === undefined) return 0;
@@ -133,7 +138,11 @@ export class EventHost {
       runtime.pawnView === m.pawnView && runtime.locomotionServices === m.locomotionServices &&
       runtime.latentFloat === m.latentFloat && runtime.readNamed === m.readNamed && runtime.writeNamed === m.writeNamed;
     if (polls) this.vm.loco.table();
-    return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0) | (polls ? TICK_POLL_BIT : 0);
+    // The probe words are ScriptState.isProbing's ProbeMask (script-vm-states.mjs).
+    const probes = events && !PROBES_DISABLED && runtime.isProbing === m.isProbing &&
+      ScriptState.prototype.isProbing === originalIsProbing;
+    return (events ? TICK_EVENTS_BIT : 0) | (state ? TICK_STATE_BIT : 0) | (polls ? TICK_POLL_BIT : 0) |
+      (probes ? TICK_PROBE_BIT : 0);
   }
   /** js_event_gate. */
   gate(handle) {

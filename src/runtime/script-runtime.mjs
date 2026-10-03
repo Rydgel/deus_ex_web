@@ -4295,6 +4295,7 @@ ScriptRuntime.originalMethods=Object.freeze({
   executeScript:ScriptRuntime.prototype.executeScript,
   eventLevelGate:ScriptRuntime.prototype.eventLevelGate,
   lookup:ScriptRuntime.prototype.lookup,
+  isProbing:ScriptRuntime.prototype.isProbing,
   pollPawnLocomotion:ScriptRuntime.prototype.pollPawnLocomotion,
   pawnView:ScriptRuntime.prototype.pawnView,
   locomotionServices:ScriptRuntime.prototype.locomotionServices,

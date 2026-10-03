@@ -616,6 +616,32 @@ average about 5): medians 9.70, 10.15, 10.89, 11.07 ms before and 8.81,
 (Island walk, CPU sampling on, loaded machine): tick 10.88 ms, frame
 19.47 ms, no runtime error; not comparable with earlier sessions.
 
+### October 3: the tick's IsProbing from the state table (implemented)
+
+[Play CPU plan](play-cpu-plan.md) step 1.5. The Actor.Tick body asks
+`IsProbing('Tick')` before the Tick event and `IsProbing('EnemyNotVisible')`
+before CheckEnemyVisible; tick.rs crossed to `js_tick_probing` for each, about
+700 times per Island tick. With the new tick word bit `TICK_PROBE_BIT` (8),
+`probing` reads the state table entry instead, as script-runtime.mjs
+`isProbing` decides: an instance without a ScriptState (a row with no names)
+probes every name; one with a state probes a name whose index is outside the
+64 probe bits or whose ProbeMask bit is set. The probe indices of the two
+names come from probe-names.mjs (`tick_probe_names_ptr`). The bit requires
+the events bit and an unwrapped `runtime.isProbing` and
+`ScriptState.prototype.isProbing`; `RUST_PROBES=0` keeps the import. A
+handle the table does not describe still crosses.
+
+Under `STATE_VERIFY=1` Rust also asks JavaScript and stops the tick on a
+different answer (`js_tick_error` code 2); inverting the bit test makes the
+first Island tick fail. Digests match at all 30 checkpoints on both maps and
+engines with `SCRIPT_VM_CHECK=1 STATE_VERIFY=1 DISPATCH_VERIFY=1` (references
+at `b3b16f8`: Island `fcd924498a0882c8`, Training `44267cb4460ab7b3`).
+`validate-actor-tick-kernel` (its differential runs with the events word 0,
+so it keeps the import), `validate-actor-tick` and
+`validate-locomotion-kernel` pass. Island `js_tick_probing` crossings over 180
+ticks: 126,751 → 0. Timing (Linux host, bench-sim, 8 interleaved pairs):
+median pair delta −0.24 ms, inside this machine's ±1.9 ms pair noise.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
