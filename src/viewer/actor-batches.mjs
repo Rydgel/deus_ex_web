@@ -38,10 +38,11 @@ export function createActorBatches(root,{makeMaterial}) {
     const material=makeMaterial(template,{value:texture});
     const mesh=new THREE.Mesh(new THREE.BufferGeometry(),material);
     mesh.frustumCulled=false;mesh.visible=false;mesh.name=`actor batch ${key}`;mesh.matrixAutoUpdate=false;
+    mesh.userData.actorBatch=true;
     batch={key,members,data,texture,material,mesh,rows:1};
-    mesh.onAfterRender=()=>{
+    mesh.onAfterRender=renderer=>{
       if(!stamping)return;
-      for(const member of members)if(member.visible)member.rendered();
+      for(const member of members)if(member.visible)member.rendered(renderer);
     };
     root.add(mesh);batches.set(key,batch);
     return batch;

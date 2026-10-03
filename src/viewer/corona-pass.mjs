@@ -3,6 +3,7 @@ import { getAxes } from '../runtime/camera.mjs';
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
 import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon } from '../runtime/coronas.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
+import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
 /** Light coronas in Play (docs/coronas.md "Play"): DrawFrame's corona pass
  * each main frame (top level only, D3D's default Coronas=True). The lights
@@ -60,10 +61,19 @@ export function createCoronaPass(runtime, textures, { model, exportName, player,
     for (let i = start; i < model.lights.length && model.lights[i]; i++) out.push(model.lights[i]);
     return out;
   }
+  // Level.Actors membership changes only when actorsEpoch advances
+  // (base-epoch.mjs), so its set is rebuilt only then.
+  let membership = null;
+  const live = level => {
+    const epoch = actorsEpoch();
+    if (membership?.actors !== level.actors || membership.epoch !== epoch)
+      membership = { actors: level.actors, epoch, set: new Set(level.actors) };
+    return membership.set;
+  };
   function actorFor(ref, level) {
     const name = exportName(ref);
     let actor = byName.get(name);
-    if (!actor || !level.actors.includes(actor)) {
+    if (!actor || !live(level).has(actor)) {
       actor = level.actors.find(candidate => candidate?.name === name) ?? null;
       byName.set(name, actor);
     }

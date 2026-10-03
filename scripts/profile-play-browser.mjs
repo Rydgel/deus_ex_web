@@ -62,12 +62,18 @@ try {
       if(!body.includes(original))throw new Error('Fixed-step measurement patch no longer matches animate()');
       body=body.replace(original,`const dt = ${fixedDt};`);
     }
-    if(noMirrors)body=body.replace('world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,',
-      'false && world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,');
-    if(noMeshLighting)body=body.replace('if(meshLighting&&!runtimeError){','if(false&&meshLighting&&!runtimeError){');
-    if(noSky)body=body.replace('if (world.sky) {','if (false && world.sky) {');
-    if(noSimulation)body=body.replace('if (!paused && !runtimeError && !document.hidden) {',
-      'if (false && !paused && !runtimeError && !document.hidden) {');
+    // Each switch patches one line of animate(); a patch that no longer
+    // matches fails instead of measuring the unpatched frame.
+    const patch=(from,to,what)=>{
+      if(!body.includes(from))throw new Error(`${what} measurement patch no longer matches animate()`);
+      body=body.replace(from,to);
+    };
+    if(noMirrors)patch('world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,',
+      'false && world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,','--no-mirrors');
+    if(noMeshLighting)patch('if(meshLighting&&!runtimeError){','if(false&&meshLighting&&!runtimeError){','--no-mesh-lighting');
+    if(noSky)patch('const sky = drawWorld ? skyFrame() : null;','const sky = null;','--no-sky');
+    if(noSimulation)patch('if (!paused && !runtimeError && !document.hidden) {',
+      'if (false && !paused && !runtimeError && !document.hidden) {','--no-simulation');
     await route.fulfill({response,body});
   });
   if(bypass)for(const [pattern,from,to] of BYPASS_PATCHES)await page.route(
@@ -175,7 +181,7 @@ try {
       const totals={};let frames=0;
       Mesh.prototype.onBeforeRender=function(renderer,scene,camera,geometry,material,group){
         const kind=camera.isOrthographicCamera?'hud':this.userData.model?
-          (this.userData.actor?'movers':'world'):this.userData.actor?'actors':'other';
+          (this.userData.actor?'movers':'world'):this.userData.actor||this.userData.actorBatch?'actors':'other';
         const row=totals[kind]??={groups:0,triangles:0};row.groups++;
         row.triangles+=Math.min(geometry.drawRange.count,group?.count??Infinity,
           geometry.index?.count??geometry.attributes.position.count)/3;

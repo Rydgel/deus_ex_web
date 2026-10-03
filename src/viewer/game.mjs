@@ -9,7 +9,7 @@ import { Doors } from '../runtime/doors.mjs';
 import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
-import { bumpBaseEpoch } from '../runtime/base-epoch.mjs';
+import { actorsEpoch, bumpBaseEpoch } from '../runtime/base-epoch.mjs';
 import { brushMatrix } from './transforms.mjs';
 import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { isHighlighted } from '../runtime/interaction.mjs';
@@ -242,6 +242,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       return out;
     };
   }
+  let zoneNames = null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
@@ -257,8 +258,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
      * TexVPanSpeed, by name (zone actors are pre-placed). */
     surfacePan() {
       const level = runtime.levelFor(player.collisionActor);
+      // The first Level.Actors entry of each name, rebuilt when the array's
+      // membership changes (actorsEpoch).
+      if (zoneNames?.actors !== level.actors || zoneNames.epoch !== actorsEpoch()) {
+        const byName = new Map();
+        for (const actor of level.actors) if (actor && !byName.has(actor.name)) byName.set(actor.name, actor);
+        zoneNames = { actors: level.actors, epoch: actorsEpoch(), byName };
+      }
+      const { byName } = zoneNames;
       return { timeSeconds: levelTime.get(), zoneSpeeds: name => {
-        const actor = level.actors.find(candidate => candidate?.name === name);
+        const actor = byName.get(name);
         return actor ? [runtime.readNamed(actor, 'TexUPanSpeed'), runtime.readNamed(actor, 'TexVPanSpeed')] : null;
       } };
     },
