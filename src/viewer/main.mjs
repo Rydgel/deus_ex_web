@@ -36,10 +36,17 @@ if(lightKernelParam)globalThis.DEUS_EX_LIGHT_KERNEL=lightKernelParam;
 const movingLightsParam=new URLSearchParams(location.search).get('movingLights');
 if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // The render scan (script-vm-render.mjs) filters Level.Actors in Rust for
-// the moving lights, sprites and mesh admission; ?renderScan=js keeps the
-// JavaScript loops, ?renderScan=verify checks every scan against them.
-const renderScanParam=new URLSearchParams(location.search).get('renderScan');
-if(renderScanParam)globalThis.DEUS_EX_RENDER_SCAN=renderScanParam;
+// the moving lights, sprites, mesh admission and Galaxy's ambient scan;
+// ?renderScan=js keeps the JavaScript loops, ?renderScan=verify checks every
+// scan against them. The same js/verify switches: ?meshLight= for
+// SetupForActor's light selection (script-vm-meshlight.mjs), ?cycleScan= for
+// CycleActors (script-iterators.mjs) and ?levelScan= for the level loop's
+// DistanceFromPlayer and compaction passes (level.rs).
+for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
+  ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN']]) {
+  const value=new URLSearchParams(location.search).get(param);
+  if(value)globalThis[global]=value;
+}
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.

@@ -271,7 +271,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 1.5 IsProbing in Rust | ef8b469 | bench-sim tick −0.24 (noise) | 700 crossings per tick removed |
 | 2.1–2.2 render scan | 79e6a0d | 38.1 → 35.4 | sprites 2.44 → 1.52, tick 16.9 → 15.4 (light scan) |
 | 2.3 mesh-light selection | 233bcc9 | 35.8 → 35.1 | actors 7.2 → 6.7 |
-| 4.1 CycleActors scan in Rust | this commit | bench-sim pair delta 0.00 (noise) | profiled `js_iterator_next` 1.33 → 0.16 ms per tick |
+| 4.1 CycleActors scan in Rust | c542880 | bench-sim pair delta 0.00 (noise) | profiled `js_iterator_next` 1.33 → 0.16 ms per tick |
+| Galaxy ambient scan, 4.6 level loop | this commit | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -316,9 +317,13 @@ light the image cannot answer fills from its JavaScript record. Each light
 view has its own cache context. `MESH_LIGHT=verify` (`?meshLight=verify`)
 runs the JavaScript selection beside it with its own caches and compares
 ambient, selected lights (location, radius, colour bits), traced lights and
-flags: `validate-mesh-lighting-play` (24 oracle passes plus 30 frames) and
-browser runs on Island and Training (400 frames walking each) found no
-difference. A first version filled every slot from the JavaScript record
+flags: `validate-mesh-lighting-play` (24 oracle passes plus 30 frames)
+found no difference. Correction (October 3): the browser runs first
+reported here passed `?meshLight=verify`, which the viewer did not read, so
+they ran the Rust selection alone. The switch is now wired in main.mjs with
+`?cycleScan=` and `?levelScan=`, and browser runs with all four verify
+switches (Island, Training, 02_NYC_Street, 03_NYC_Airfield, 400 frames
+walking each) found no difference. A first version filled every slot from the JavaScript record
 and saved nothing: the record reads, not the selection, were the cost.
 
 Phase 3 waits: merging actor batches across textures needs the
@@ -335,3 +340,28 @@ cursor and steps. Digests unchanged on both maps and engines with
 `CYCLE_SCAN=verify STATE_VERIFY=1 DISPATCH_VERIFY=1`. Rust-owned foreach
 entries (docs/rust-core.md step 3b) would also remove the iterator
 crossing, which is now small.
+
+Galaxy's ambient scan (galaxy-audio.mjs `update`, `ambientActors`): the
+fresh profile after step 4.1 put the audio phase at 3.3 ms, all of it
+Update's AmbientSound read on every Level.Actors entry. The render scan's
+AMBIENT kind (a live AmbientSound pointer) leaves the actors to test, in
+array order, and the loop body is unchanged. AmbientSound carried a host
+binding on every map actor whose getter read the image cell and whose
+setter also copied the value to a host member nothing read; that binding
+made every actor a hand-back, and it is gone (reads and writes are the same
+cell). Entries are now `index << 6` (RENDER_SHIFT) for the sixth kind bit.
+
+Step 4.6 (`level.rs`): tickStandaloneLevel's DistanceFromPlayer pass and
+compactScriptActors' per-tick check run on the render list. `level_distance`
+writes the image actors' DistanceFromPlayer with playerDistance's fast path
+(the f64 root when every real within 16 × 2^-53 rounds to one f32) and its
+x87 sequence otherwise, and hands back the actors the image cannot answer
+or whose Location is not finite, which the JavaScript loop then computes in
+order; no script runs in this pass. `level_settled` is true only when no
+dynamic slot is null and no actor is bDeleteMe, so the compaction loop would
+neither warn nor move anything. `LEVEL_SCAN=js` keeps both loops,
+`LEVEL_SCAN=verify` compares every distance and every settled answer with
+the JavaScript. Digests unchanged on both maps and engines under
+`RENDER_SCAN=verify LEVEL_SCAN=verify`; `validate-level-tick`,
+`-play-frame`, `-gm-trench-play-anim`, `-script-spawn`, `-frob`,
+`-native-galaxy-audio` and `-galaxy-volumes` pass.

@@ -59,11 +59,14 @@ export function cleanupScriptReferences(fields,reference,services,{editor=false}
 /** Engine CompactActors103963e0: stable compaction only after Level+110.
  * A caller must supply that native index; filtering the whole array changes
  * the permanent-prefix indices and is not equivalent. */
-export function compactScriptActors(level,{read,warning,recordArrayRemoval}={}) {
+export function compactScriptActors(level,{read,warning,recordArrayRemoval,settled}={}) {
   const actors=level.actors,start=level.firstDynamicActor;
   if(!Array.isArray(actors)||!Number.isInteger(start)||start<0||start>actors.length)
     throw new Error('CompactActors requires the original Level+0x110 prefix index');
   if(!Object.hasOwn(level,'undo'))throw new Error('CompactActors requires the original undo context');
+  // Host work: `settled` (level.rs) is true only when the loop below would
+  // warn of nothing and move nothing.
+  if(settled?.(actors,start))return;
   let write=start;
   for(let index=start;index<actors.length;index++){
     const actor=actors[index];

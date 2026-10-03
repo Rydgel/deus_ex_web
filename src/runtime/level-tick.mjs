@@ -89,9 +89,14 @@ export function tickStandaloneLevel(level,seconds,tickType,services) {
     const player=level.firstViewport.actor;
     if(player&&isA(player,'engine.playerpawn')&&read(player,'Player')) {
       const origin=[...read(player,'Location')];
-      for(let i=level.firstDynamicActor;i<level.actors.length;i++) {
+      const distance=actor=>playerDistance(read(actor,'Location'),origin);
+      // Host work: `playerDistances` (level.rs) writes the image actors'
+      // distances and returns the indices left to this loop, in order.
+      const handed=services.playerDistances?.(level.actors,level.firstDynamicActor,origin,distance)??null;
+      if(handed)for(const i of handed){const actor=level.actors[i];if(actor)write(actor,'DistanceFromPlayer',distance(actor));}
+      else for(let i=level.firstDynamicActor;i<level.actors.length;i++) {
         const actor=level.actors[i];
-        if(actor)write(actor,'DistanceFromPlayer',playerDistance(read(actor,'Location'),origin));
+        if(actor)write(actor,'DistanceFromPlayer',distance(actor));
       }
     }
     let progress=0;

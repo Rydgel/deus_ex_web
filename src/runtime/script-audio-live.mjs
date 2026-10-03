@@ -4,6 +4,7 @@ import {buildWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
 import {lightTypeBrightness, LIGHT_TYPE_UNSUPPORTED} from './mesh-lighting.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
+import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
 
 /** Galaxy's channel logic (galaxy-audio.mjs) over the live level: ambient
  * sounds from Update's scan, and PlaySound through execPlaySound and the
@@ -87,18 +88,28 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
   // Measured global indices only: a runtime spawn's host registry slot is not
   // the original index (ScriptRuntime.measuredObjectIndex).
   const index = actor => runtime.measuredObjectIndex(actor);
+  // An actor whose global index is unmeasured cannot form its ambient
+  // channel id; it is left out and noted rather than given an invented id.
+  const measured = actor => {
+    if (!actor || index(actor) !== null) return actor;
+    try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured global index`); } catch {}
+    return null;
+  };
   const galaxy = createGalaxyAudio(galaxyConfig, {
     listener: () => ({actor: player(), viewTarget: player() ? read(player(), 'ViewTarget') : null}),
     read, atan2: Math.atan2, isValid: () => true,
     isA: (object, key) => { for (let cls = runtime.instance(object).cls; cls; cls = cls.base) if (cls.record.key === key) return true; return false; },
     index: actor => index(actor),
-    // An actor whose global index is unmeasured cannot form its ambient
-    // channel id; it is left out and noted rather than given an invented id.
-    actors: () => level.actors.map(actor => {
-      if (!actor || index(actor) !== null) return actor;
-      try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured global index`); } catch {}
-      return null;
-    }),
+    actors: () => level.actors.map(measured),
+    // The render scan (script-vm-render.mjs) leaves the actors with a live
+    // AmbientSound and those it hands back, in array order.
+    ambientActors: () => {
+      const entries = runtime.scriptVm?.render?.scan(level.actors, {kinds: RENDER_AMBIENT});
+      if (!entries) return null;
+      const actors = new Array(entries.length);
+      for (let i = 0; i < entries.length; i++) actors[i] = measured(level.actors[entries[i] >>> RENDER_SHIFT]);
+      return actors;
+    },
     fastLineCheck: (end, start) => fastLineCheck(level.model, end, start),
     globalLighting: (realtime, actor, volume) => {
       const values = {LightType: realtime ? read(actor, 'LightType') : 1, LightPeriod: read(actor, 'LightPeriod'), LightPhase: read(actor, 'LightPhase')};

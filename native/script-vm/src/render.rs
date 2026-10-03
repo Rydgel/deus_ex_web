@@ -14,13 +14,15 @@
 //!   runs the iterator, which may run script, and scans on from the next
 //!   index with the viewer's fields read again.
 //! * MESH: a live Mesh pointer, npc-mesh-preview.mjs admission's first test.
+//! * AMBIENT: a live AmbientSound pointer, the first test of Galaxy Update's
+//!   ambient scan (galaxy-audio.mjs `update`).
 //! * JS: a field one of the requested kinds reads cannot be read in the
 //!   image as readNamed would (a HOST receiver, a bound key, a class whose
 //!   spelling resolves elsewhere), or an owner walk longer than OWNER_WALK:
 //!   the consumer evaluates that actor in JavaScript, as before.
 //!
 //! The list is [count, handle...] (script-vm-render.mjs, per actorsEpoch);
-//! an entry is `index << 5 | kind bits`.
+//! an entry is `index << 6 | kind bits`.
 
 use crate::interp::{
     bound_key, chain_has, class_entry, js_class_row, live, load32, load8, receiver, store32, BOUND, HOST, RELEASED,
@@ -47,7 +49,10 @@ pub(crate) const R_LIGHTEFFECT: usize = 14;
 pub(crate) const R_BMOVABLE: usize = 15;
 pub(crate) const R_BSPECIALLIT: usize = 16;
 pub(crate) const R_LOCATION: usize = 17;
-const FIELD_COUNT: usize = 18;
+const R_AMBIENTSOUND: usize = 18;
+// The level loop's fields (level.rs).
+pub(crate) const R_DISTANCEFROMPLAYER: usize = 19;
+const FIELD_COUNT: usize = 20;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -64,7 +69,8 @@ const K_LIGHT: u32 = 1;
 const K_SPRITE: u32 = 2;
 const K_ITERATOR: u32 = 4;
 const K_MESH: u32 = 8;
-const K_JS: u32 = 16;
+const K_AMBIENT: u32 = 16;
+const K_JS: u32 = 32;
 
 const LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
     | 1 << R_BDELETEME
@@ -80,6 +86,7 @@ const SPRITE_FIELDS: u32 = 1 << R_BHIDDEN
     | 1 << R_RENDERITERATOR
     | 1 << R_DRAWTYPE;
 const MESH_FIELDS: u32 = 1 << R_MESH;
+const AMBIENT_FIELDS: u32 = 1 << R_AMBIENTSOUND;
 /// Owners followed before an actor is handed to JavaScript.
 const OWNER_WALK: u32 = 64;
 
@@ -155,6 +162,10 @@ impl Obj {
     /// A float cell's bits at `field`, element `i`.
     pub(crate) fn word(&self, field: usize, i: u32) -> u32 {
         load32(self.at(field).wrapping_add(4 * i))
+    }
+    /// Store float bits at `field`, element `i`.
+    pub(crate) fn set_word(&self, field: usize, i: u32, bits: u32) {
+        store32(self.at(field).wrapping_add(4 * i), bits)
     }
     pub(crate) fn flag(&self, field: usize) -> bool {
         load32(self.at(field)) & rfield(field)[1] != 0
@@ -241,10 +252,13 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
     if kinds & K_MESH != 0 {
         need |= MESH_FIELDS;
     }
+    if kinds & K_AMBIENT != 0 {
+        need |= AMBIENT_FIELDS;
+    }
     let sprites = kinds & (K_SPRITE | K_ITERATOR) != 0;
     let mut written = 0u32;
     let mut emit = |index: u32, bits: u32| {
-        crate::interp::store32(out.wrapping_add(written.wrapping_mul(4)), index << 5 | bits);
+        crate::interp::store32(out.wrapping_add(written.wrapping_mul(4)), index << 6 | bits);
         written += 1;
     };
     let mut index = start;
@@ -266,6 +280,9 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
         }
         if kinds & K_MESH != 0 && a.pointer(R_MESH) != 0 {
             bits |= K_MESH;
+        }
+        if kinds & K_AMBIENT != 0 && a.pointer(R_AMBIENTSOUND) != 0 {
+            bits |= K_AMBIENT;
         }
         if sprites && h != viewer {
             match sprite(&a, h, viewer, view_target, first_person != 0) {

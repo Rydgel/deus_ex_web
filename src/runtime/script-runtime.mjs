@@ -2699,6 +2699,7 @@ export class ScriptRuntime {
       destroyActorEvents:lifecycle.destroyActorEvents,
       recordArrayRemoval:lifecycle.recordArrayRemoval,
       warning:this.warning,
+      settled:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactSettled(actors,start):null,
     },force);
   }
   bindProperty(receiver,field,binding) {
@@ -3899,6 +3900,8 @@ export class ScriptRuntime {
       processEvent:(actor,name,args)=>this.processEvent(actor,name,args),
       resetInputProperties:actor=>this.resetActorInput(actor),
       cleanupDestroyed:(world,force)=>this.cleanupDestroyed(world,Boolean(force)),
+      playerDistances:this.scriptVm?.render?(actors,start,origin,reference)=>
+        this.scriptVm.render.playerDistances(actors,start,origin,reference):null,
     });
   }
   /** Caller supplies Actor.Tick eligibility and ordering. This is only its

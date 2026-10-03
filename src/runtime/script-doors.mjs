@@ -330,10 +330,6 @@ function makeBinding(runtime, record, field) {
       get: () => host.realRotation ?? values.RealRotation ?? ZERO_VECTOR,
       set: value => { host.realRotation = vector(value, true); },
     },
-    ambientsound: {
-      get: stored,
-      set: value => { host.ambientSound = value; runtime.writeStoredField(host, field, value); },
-    },
     netmode: {
       get: () => record.level?.netMode ?? 0,
       set: value => { if (record.level) record.level.netMode = Number(value) | 0; },
@@ -1832,7 +1828,6 @@ export async function createScriptDoors({
 
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
-    mover.ambientSound = values.AmbientSound ?? null;
     mover.realPosition = vector(values.RealPosition ?? values.Location);
     mover.realRotation = vector(values.RealRotation ?? values.Rotation, true);
     mover.simOldPosition = vector(values.SimOldPos ?? values.Location);

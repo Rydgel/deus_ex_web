@@ -4,7 +4,7 @@ import { displayRampGlsl } from './light-atlas.mjs';
 import { ensureRenderInterface, particleIteratorItems } from '../runtime/script-particles.mjs';
 import { laserIteratorItems } from '../runtime/script-laser.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
-import { RENDER_ITERATOR, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
+import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
 
 /** Sprites in Play (docs/particles.md "Sprites"): URender::SetupDynamics'
  * actor scan in array order (docs/render-visibility.md admission), with
@@ -153,10 +153,10 @@ export function createSpriteScene(runtime, textures, { player, displayGamma, con
       const entries = render?.scan(actors, { start, kinds: RENDER_SPRITE | RENDER_ITERATOR, viewer,
         viewTarget: firstPerson ? read(viewer, 'ViewTarget') : null, firstPerson }) ?? null;
       if (!entries) { for (let i = start; i < actors.length; i++) visit(actors[i]); break; }
-      for (const entry of entries) visit(actors[entry >>> 5]);
+      for (const entry of entries) visit(actors[entry >>> RENDER_SHIFT]);
       const last = entries[entries.length - 1];
       if (!entries.length || !(last & RENDER_ITERATOR)) break;
-      start = (last >>> 5) + 1;
+      start = (last >>> RENDER_SHIFT) + 1;
     }
     for (let i = used; i < pool.length; i++) { pool[i].visible = false; pool[i].userData.feedback = null; }
     return meshItems;

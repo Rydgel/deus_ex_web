@@ -185,7 +185,7 @@ const CLAMP: f64 = 1.0 - 1.0 / 33_554_432.0;
 /// nearest-even, to that one normal f32 (x87-fast.mjs unambiguousF32). None
 /// for zero, subnormal, top-binade or non-finite results.
 #[inline(always)]
-fn certain_f32(value: f64, bound: f64) -> Option<u32> {
+pub(crate) fn certain_f32(value: f64, bound: f64) -> Option<u32> {
     let f = value as f32;
     let bits = f.to_bits();
     let e = (bits >> 23) & 0xff;

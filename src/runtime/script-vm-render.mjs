@@ -45,14 +45,25 @@ export const RENDER_FIELDS = Object.freeze([
   ['bMovable', 'engine.actor.bmovable', 'bool'],
   ['bSpecialLit', 'engine.actor.bspeciallit', 'bool'],
   ['Location', 'engine.actor.location', 'vector'],
+  // Galaxy Update's ambient scan.
+  ['AmbientSound', 'engine.actor.ambientsound', 'pointer'],
+  // The level loop (level.rs).
+  ['DistanceFromPlayer', 'engine.actor.distancefromplayer', 'float'],
 ]);
-/** Entry kinds: `entry >>> 5` is the Level.Actors index, `entry & 31` these. */
-export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_JS = 16;
+/** Entry kinds: `entry >>> RENDER_SHIFT` is the Level.Actors index, the low
+ * bits these. */
+export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_AMBIENT = 16,
+  RENDER_JS = 32, RENDER_SHIFT = 6;
 const COMPUTED = 0x80000000;
 
 /** 'rust' (default), 'js' or 'verify'. */
 export const renderScanMode = () => (typeof process !== 'undefined' && process.env?.RENDER_SCAN)
   || globalThis.DEUS_EX_RENDER_SCAN || 'rust';
+/** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
+export const levelScanMode = () => (typeof process !== 'undefined' && process.env?.LEVEL_SCAN)
+  || globalThis.DEUS_EX_LEVEL_SCAN || 'rust';
+const f32Bits = new DataView(new ArrayBuffer(4));
+const bitsOf = value => { f32Bits.setFloat32(0, value, true); return f32Bits.getUint32(0, true); };
 
 export class RenderScanHost {
   constructor(vm) {
@@ -179,11 +190,56 @@ export class RenderScanHost {
     const view = this.vm.arena.view, at = this.cycleOut;
     return {kind: view.getUint32(at, true), cursor: view.getUint32(at + 4, true), steps: view.getUint32(at + 8, true)};
   }
+  /** tickStandaloneLevel's DistanceFromPlayer pass (level.rs
+   * level_distance) over `actors` from `start` for the player's Location
+   * `origin`: the indices the image could not answer, which the caller
+   * computes in order, or null when the pass cannot run here (the mode is
+   * js, the table is not complete, a non-finite origin). `reference(actor)`
+   * is the caller's own distance, compared under LEVEL_SCAN=verify. */
+  playerDistances(actors, start, origin, reference) {
+    const mode = levelScanMode();
+    if (mode === 'js' || !origin.every(Number.isFinite)) return null;
+    this.table();
+    if (!this.complete) return null;
+    const list = this.listFor(actors), count = actors.length;
+    if (count + 1 > this.outCapacity) {
+      if (this.out) this.vm.arena.release(this.out, 4 * this.outCapacity);
+      this.outCapacity = Math.max(1024, 2 * (count + 1));
+      this.out = this.vm.arena.alloc(4 * this.outCapacity);
+    }
+    const handed = this.x.level_distance(list, start, bitsOf(origin[0]), bitsOf(origin[1]), bitsOf(origin[2]), this.out);
+    const indices = new Uint32Array(this.vm.arena.memory.buffer, this.out, handed).slice();
+    if (mode === 'verify') {
+      const back = new Set(indices);
+      for (let i = start; i < count; i++) {
+        if (!actors[i] || back.has(i)) continue;
+        const got = this.runtime.readNamed(actors[i], 'DistanceFromPlayer'), want = reference(actors[i]);
+        if (bitsOf(got) !== bitsOf(want))
+          throw new Error(`LEVEL_SCAN=verify: ${actors[i].name} DistanceFromPlayer is ${got} in Rust, ${want} by playerDistance`);
+      }
+    }
+    return indices;
+  }
+  /** Whether compactScriptActors would change nothing (level.rs
+   * level_settled): true only when no slot of `actors` from `start` is null
+   * and no actor is bDeleteMe, read in the image. */
+  compactSettled(actors, start) {
+    const mode = levelScanMode();
+    if (mode === 'js') return false;
+    this.table();
+    if (!this.complete) return false;
+    const settled = this.x.level_settled(this.listFor(actors), start) === 1;
+    if (settled && mode === 'verify')
+      for (let i = start; i < actors.length; i++)
+        if (!actors[i] || this.runtime.readNamed(actors[i], 'bDeleteMe'))
+          throw new Error(`LEVEL_SCAN=verify: Level.Actors[${i}] ${actors[i]?.name} is settled in Rust`);
+    return settled;
+  }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */
   verify(actors, entries, view) {
-    const last = entries.length && entries[entries.length - 1] & RENDER_ITERATOR ? entries[entries.length - 1] >>> 5 : actors.length - 1;
-    const byIndex = new Map([...entries].map(entry => [entry >>> 5, entry & 31]));
+    const last = entries.length && entries[entries.length - 1] & RENDER_ITERATOR ? entries[entries.length - 1] >>> RENDER_SHIFT : actors.length - 1;
+    const byIndex = new Map([...entries].map(entry => [entry >>> RENDER_SHIFT, entry & (1 << RENDER_SHIFT) - 1]));
     for (let i = view.start; i <= last; i++) {
       const got = byIndex.get(i) ?? 0;
       if (got & RENDER_JS) continue;
@@ -195,8 +251,8 @@ export class RenderScanHost {
 }
 
 /** The consumers' own tests on one actor through readNamed: game.movingLights'
- * gate, sprite-scene.mjs update's admission and the mesh admission's live
- * Mesh. Any throw makes the consumer's own loop decide (RENDER_JS). */
+ * gate, sprite-scene.mjs update's admission, the mesh admission's live Mesh
+ * and Galaxy Update's live AmbientSound. Any throw makes the consumer's own loop decide (RENDER_JS). */
 export function referenceKinds(runtime, actor, {kinds, viewer = null, viewTarget = null, firstPerson = true}) {
   if (!actor) return 0;
   const read = name => runtime.readNamed(actor, name);
@@ -206,6 +262,7 @@ export function referenceKinds(runtime, actor, {kinds, viewer = null, viewTarget
       !((read('bStatic') || read('bNoDelete')) && !read('bDynamicLight')) && read('LightBrightness') && read('LightRadius'))
       bits |= RENDER_LIGHT;
     if (kinds & RENDER_MESH && read('Mesh')) bits |= RENDER_MESH;
+    if (kinds & RENDER_AMBIENT && read('AmbientSound')) bits |= RENDER_AMBIENT;
     if (kinds & (RENDER_SPRITE | RENDER_ITERATOR) && actor !== viewer) bits |= spriteKind() & kinds;
     return bits;
   } catch {

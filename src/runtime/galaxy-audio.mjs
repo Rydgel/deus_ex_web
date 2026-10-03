@@ -15,7 +15,9 @@ import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x
  *
  * World services: `listener()` the viewport Actor and its ViewTarget,
  * `read(object, name)`, `isA(object, key)`, `index(actor)` the UObject index
- * used in ambient ids, `actors()` XLevel's actor array, `fastLineCheck(end,
+ * used in ambient ids, `actors()` XLevel's actor array (`ambientActors()`,
+ * optional, the same without actors whose AmbientSound is None, or null),
+ * `fastLineCheck(end,
  * start)` UModel::FastLineCheck (true when clear), `globalLighting(realtime,
  * actor, volume)` URender::GlobalLighting's volume, `sample(sound)` the
  * registered Galaxy sample ({rate}, RegisterSound when absent) and
@@ -102,7 +104,9 @@ export function createGalaxyAudio(config, services) {
     let ambientActive = false;
     if ((read(viewActor, 'ShowFlags') & 0x4800) && read(read(viewTarget ?? viewActor, 'Level'), 'Pauser') === '') {
       ambientActive = true;
-      const actors = services.actors();
+      // `ambientActors()` may leave out actors whose AmbientSound is None
+      // (the scan's first test), keeping the others in array order.
+      const actors = services.ambientActors?.() ?? services.actors();
       for (let index = 0; index < actors.length; index++) {
         const actor = actors[index];
         if (!actor) continue;
