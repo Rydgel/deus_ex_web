@@ -197,15 +197,9 @@ export function createMeshLightManager() {
  * `worldToCamera(location)` (the Frame coordinates) and `alive(light)`.
  * A light is {values, location, index} with `values` its reflected fields. */
 export function setupForActor(manager, actor, scene) {
-  const zone = actor.zone ?? scene.levelInfo;
-  const glow = f((actor.AmbientGlow & 255) === 255
-    ? Math.sin(scene.viewport.currentTime * 8) * 0.2 + 0.25 : (actor.AmbientGlow & 255) * (1 / 255));
-  const hsv = cachedHsv(zone.ambient[1], zone.ambient[2], zone.ambient[0]);
-  const ambient = [f(glow + hsv[0]), f(glow + hsv[1]), f(glow + hsv[2])];
-  const result = { ambient, scaleGlow: f(actor.ScaleGlow), lights: [], flags: 0, traced: [] };
+  const result = setupAmbient(actor, scene);
   const leaf = scene.model.leaves[actor.iLeaf];
-  if (actor.bUnlit || actor.iLeaf === -1 || !scene.model.leaves.length || scene.rendMap !== 5 || scene.noLighting)
-    return result;
+  if (!lightsActor(actor, scene)) return result;
   const stamp = ++manager.stamp;
   const elapsed = (scene.viewport.currentTime - scene.viewport.lastUpdateTime) * 768;
   const step = Math.min(255, Math.max(0, Math.trunc(elapsed)));
@@ -263,9 +257,30 @@ export function setupForActor(manager, actor, scene) {
   const written = [];
   for (const { light, tag } of list) if (written.length < 16 && tag.fade > 1) written.push({ light, fade: tag.fade, index: light.index });
   manager.caches.set(actor.index, written);
+  return finishSetup(manager, actor, scene, result, added.map(light => ({ light, fade: tags.get(identity(light)).fade })));
+}
+
+/** SetupForActor's ambient (the zone's FGetHSV plus AmbientGlow) and the
+ * empty result the light selection fills. */
+export function setupAmbient(actor, scene) {
+  const zone = actor.zone ?? scene.levelInfo;
+  const glow = f((actor.AmbientGlow & 255) === 255
+    ? Math.sin(scene.viewport.currentTime * 8) * 0.2 + 0.25 : (actor.AmbientGlow & 255) * (1 / 255));
+  const hsv = cachedHsv(zone.ambient[1], zone.ambient[2], zone.ambient[0]);
+  const ambient = [f(glow + hsv[0]), f(glow + hsv[1]), f(glow + hsv[2])];
+  return { ambient, scaleGlow: f(actor.ScaleGlow), lights: [], flags: 0, traced: [] };
+}
+/** Whether SetupForActor selects lights for `actor` at all. */
+export const lightsActor = (actor, scene) =>
+  !(actor.bUnlit || actor.iLeaf === -1 || !scene.model.leaves.length || scene.rendMap !== 5 || scene.noLighting);
+
+/** SetupForActor's tail: AddLight for each selected light in order
+ * (`added`: {light, fade} with the light's final fade), with its
+ * ComputeFromActor colour. */
+export function finishSetup(manager, actor, scene, result, added) {
   // AddLight (0x10b08b30) with an owner: skip the owner itself and dark or
   // typeless lights; every accepted light is class 2.
-  for (const light of added) {
+  for (const { light, fade: tagFade } of added) {
     const values = light.values;
     if (light.actor === actor.self || !(values.LightType & 255) || !(values.LightBrightness & 255)) continue;
     if (result.lights.length >= 256) break; // (0x10b495c0 - 0x10b401c0) / 0x94 FLightInfo slots
@@ -278,7 +293,7 @@ export function setupForActor(manager, actor, scene) {
     const constants = cachedConstants(values, levelBrightness, hsv);
     const color = brightness === f((values.LightBrightness & 255) * f(1 / 255)) ? constants.color
       : hsv.map(channel => f(levelBrightness * brightness * channel));
-    const fade = tags.get(identity(light)).fade * (1 / 255);
+    const fade = tagFade * (1 / 255);
     result.lights.push({ light, location: scene.worldToCamera(light.location), radius: constants.radius,
       rradius: constants.rradius, color: color.map(channel => f(fade * channel)) });
   }

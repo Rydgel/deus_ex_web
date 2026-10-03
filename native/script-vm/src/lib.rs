@@ -22,6 +22,7 @@ mod loco;
 mod natives;
 mod percep;
 mod render;
+mod meshlight;
 mod tick;
 mod trace;
 mod walk;

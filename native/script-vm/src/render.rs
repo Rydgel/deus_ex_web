@@ -27,20 +27,35 @@ use core::ptr::{addr_of, addr_of_mut};
 
 // Field indices (script-vm-render.mjs RENDER_FIELDS).
 const R_BHIDDEN: usize = 0;
-const R_BDELETEME: usize = 1;
+pub(crate) const R_BDELETEME: usize = 1;
 const R_MESH: usize = 2;
 const R_DRAWTYPE: usize = 3;
 const R_OWNER: usize = 4;
 const R_BONLYOWNERSEE: usize = 5;
 const R_BOWNERNOSEE: usize = 6;
 const R_RENDERITERATOR: usize = 7;
-const R_LIGHTTYPE: usize = 8;
-const R_BSTATIC: usize = 9;
+pub(crate) const R_LIGHTTYPE: usize = 8;
+pub(crate) const R_BSTATIC: usize = 9;
 const R_BNODELETE: usize = 10;
 const R_BDYNAMICLIGHT: usize = 11;
-const R_LIGHTBRIGHTNESS: usize = 12;
-const R_LIGHTRADIUS: usize = 13;
-const FIELD_COUNT: usize = 14;
+pub(crate) const R_LIGHTBRIGHTNESS: usize = 12;
+pub(crate) const R_LIGHTRADIUS: usize = 13;
+// The mesh-light selection's light fields (meshlight.rs).
+pub(crate) const R_LIGHTEFFECT: usize = 14;
+pub(crate) const R_BMOVABLE: usize = 15;
+pub(crate) const R_BSPECIALLIT: usize = 16;
+pub(crate) const R_LOCATION: usize = 17;
+const FIELD_COUNT: usize = 18;
+/// The fields meshlight.rs reads on a light.
+pub(crate) const MESH_LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
+    | 1 << R_LIGHTEFFECT
+    | 1 << R_LIGHTBRIGHTNESS
+    | 1 << R_LIGHTRADIUS
+    | 1 << R_BSTATIC
+    | 1 << R_BMOVABLE
+    | 1 << R_BSPECIALLIT
+    | 1 << R_BDELETEME
+    | 1 << R_LOCATION;
 
 // Entry kinds.
 const K_LIGHT: u32 = 1;
@@ -90,14 +105,14 @@ fn rfield(field: usize) -> [u32; 3] {
 
 /// An actor the scan reads: its receiver info, binding set and the row's
 /// render word (0 for a HOST or undescribed object).
-struct Obj {
+pub(crate) struct Obj {
     info: u32,
     bind: u32,
     fields: u32,
 }
 
 impl Obj {
-    fn of(handle: u32) -> Obj {
+    pub(crate) fn of(handle: u32) -> Obj {
         let (info, bind) = receiver(handle);
         let mut row = class_entry(handle);
         if row <= RELEASED {
@@ -115,7 +130,7 @@ impl Obj {
         Obj { info, bind, fields: load32(at) }
     }
     /// Whether every field of `set` is read in the image.
-    fn has(&self, set: u32) -> bool {
+    pub(crate) fn has(&self, set: u32) -> bool {
         if self.fields & set != set {
             return false;
         }
@@ -132,10 +147,14 @@ impl Obj {
     fn at(&self, field: usize) -> u32 {
         (self.info & !15).wrapping_add(rfield(field)[0])
     }
-    fn byte(&self, field: usize) -> u32 {
+    pub(crate) fn byte(&self, field: usize) -> u32 {
         load8(self.at(field)) as u32
     }
-    fn flag(&self, field: usize) -> bool {
+    /// A float cell's bits at `field`, element `i`.
+    pub(crate) fn word(&self, field: usize, i: u32) -> u32 {
+        load32(self.at(field).wrapping_add(4 * i))
+    }
+    pub(crate) fn flag(&self, field: usize) -> bool {
         load32(self.at(field)) & rfield(field)[1] != 0
     }
     /// A pointer as readNamed yields it: a released handle is None.

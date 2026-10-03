@@ -40,6 +40,11 @@ export const RENDER_FIELDS = Object.freeze([
   ['bDynamicLight', 'engine.actor.bdynamiclight', 'bool'],
   ['LightBrightness', 'engine.actor.lightbrightness', 'byte'],
   ['LightRadius', 'engine.actor.lightradius', 'byte'],
+  // The mesh-light selection's light fields (meshlight.rs).
+  ['LightEffect', 'engine.actor.lighteffect', 'byte'],
+  ['bMovable', 'engine.actor.bmovable', 'bool'],
+  ['bSpecialLit', 'engine.actor.bspeciallit', 'bool'],
+  ['Location', 'engine.actor.location', 'vector'],
 ]);
 /** Entry kinds: `entry >>> 5` is the Level.Actors index, `entry & 31` these. */
 export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_JS = 16;

@@ -269,7 +269,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 1.3 no matrix cascade | 90a083d | 42.1 → 40.5 (noisy runs) | render 5.99 → 4.92 |
 | 1.6 small items | b3b16f8 | 38.6 → 38.8 (noise) | render 4.77 → 4.61 |
 | 1.5 IsProbing in Rust | ef8b469 | bench-sim tick −0.24 (noise) | 700 crossings per tick removed |
-| 2.1–2.2 render scan | this commit | 38.1 → 35.4 | sprites 2.44 → 1.52, tick 16.9 → 15.4 (light scan) |
+| 2.1–2.2 render scan | 79e6a0d | 38.1 → 35.4 | sprites 2.44 → 1.52, tick 16.9 → 15.4 (light scan) |
+| 2.3 mesh-light selection | this commit | 35.8 → 35.1 | actors 7.2 → 6.7 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -301,3 +302,20 @@ sprites included) and browser runs on Island (400 frames walking) and
 `-auglight-lighting` pass. The mesh admission now loops over about 420 Island
 actors with a Mesh instead of 2,600; the per-actor update (visibility, cull,
 pose reads) is the remaining actor cost before SetupForActor.
+
+Step 2.3 (`meshlight.rs`, `script-vm-meshlight.mjs`): SetupForActor's light
+choice (the per-actor fade caches, the 120-entry candidate list, Core's Sort,
+the 8 + 8 rule with the re-trace stagger, the 16-entry cache write) runs in
+Rust; `finishSetup` (AddLight's colours, x87-cached) stays in JavaScript for
+the selected lights. Light fields fill a per-frame slot from the image
+through the render word (four light fields joined it: LightEffect, bMovable,
+bSpecialLit, Location), with Level.Actors membership from a bitmap rebuilt
+with the view's membership set and the re-trace index cached per handle; a
+light the image cannot answer fills from its JavaScript record. Each light
+view has its own cache context. `MESH_LIGHT=verify` (`?meshLight=verify`)
+runs the JavaScript selection beside it with its own caches and compares
+ambient, selected lights (location, radius, colour bits), traced lights and
+flags: `validate-mesh-lighting-play` (24 oracle passes plus 30 frames) and
+browser runs on Island and Training (400 frames walking each) found no
+difference. A first version filled every slot from the JavaScript record
+and saved nothing: the record reads, not the selection, were the cost.

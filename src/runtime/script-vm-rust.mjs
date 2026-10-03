@@ -29,6 +29,7 @@ import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, fol
 import {PerceptionHost} from './script-vm-perception.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
 import {RenderScanHost} from './script-vm-render.mjs';
+import {MeshLightHost} from './script-vm-meshlight.mjs';
 import {ActorTickHost} from './actor-tick-kernel.mjs';
 import {ZoneHost} from './zone-kernel.mjs';
 import {MoveActorHost} from './move-actor-kernel.mjs';
@@ -258,6 +259,8 @@ export class RustScriptVm {
     this.loco = new LocomotionHost(this);
     // October 3: the viewer's render scan (render.rs).
     this.render = new RenderScanHost(this);
+    // The mesh-light selection (meshlight.rs).
+    this.meshLight = new MeshLightHost(this);
     // R3-d: Actor.Tick's bookkeeping (actor-tick-kernel.mjs).
     this.actorTick = new ActorTickHost(this);
     // R3-e: SetActorZone's common case (zone-kernel.mjs).
@@ -298,6 +301,7 @@ export class RustScriptVm {
     this.perception.attach(x);
     this.loco.attach(x);
     this.render.attach(x);
+    this.meshLight.attach(x);
     this.actorTick.attach(x);
     this.zone.attach(x);
     this.moveActor.attach(x);
@@ -595,6 +599,7 @@ export class RustScriptVm {
       ...vm.perception.imports(enter, leave, STATS ? count : null),
       ...vm.loco.imports(),
       ...vm.render.imports(),
+      ...vm.meshLight.imports(),
       ...vm.actorTick.imports(),
       ...vm.movePawn.imports(),
       ...vm.walkLoop.imports(),

@@ -2,8 +2,10 @@ import { getAxes } from '../runtime/camera.mjs';
 import { traceRay } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
-import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, lightVertex, setupForActor,
-  unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
+import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, finishSetup, lightVertex,
+  lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
+import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
+import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
 
 const f = Math.fround;
 const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius',
@@ -18,7 +20,7 @@ const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue',
 export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined, kernel = null }) {
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
   const manager = createMeshLightManager();
-  let frame = null, frameCount = 0, lastTime = null;
+  let frame = null, frameCount = 0, lastTime = null, meshLightContext = null;
   // Level.Actors' name map and membership set change only when actorsEpoch
   // advances (base-epoch.mjs); they are rebuilt only then.
   let membership = null;
@@ -43,6 +45,18 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     }
   }
   for (const name of LIGHT_FIELDS) Object.defineProperty(LightValues.prototype, name, { get() { return this.field(name); } });
+  // SetupForActor staggers visibility re-traces by (light.Index ^
+  // FrameCount) & 15. Play uses the measured GObjObjects index or a
+  // spawn's modeled slot; a pre-placed light without a capture falls back
+  // to its map export index (the global index is a Stage 6 boundary).
+  const lightIndex = actor => {
+    let index = runtime.soundField?.(actor, 'ObjectIndex');
+    if (!Number.isInteger(index)) {
+      index = exportIndex(actor.name);
+      manager.diagnostics.add('Mesh-light re-trace phases use map export indices where the original GObjObjects index is unmeasured.');
+    }
+    return Number.isInteger(index) ? index : 0;
+  };
   const lightRecord = (actor, scanned = null) => {
     let record = frame.lights.get(actor);
     if (record) return record;
@@ -50,19 +64,46 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     // A light from game.movingLights() brings the fields it already read in
     // this frame (the same reads, with no script run in between).
     if (scanned) for (const name of LIGHT_FIELDS) if (Object.hasOwn(scanned.values, name)) values.read.set(name, scanned.values[name]);
-    // SetupForActor staggers visibility re-traces by (light.Index ^
-    // FrameCount) & 15. Play uses the measured GObjObjects index or a
-    // spawn's modeled slot; a pre-placed light without a capture falls back
-    // to its map export index (the global index is a Stage 6 boundary).
-    let index = runtime.soundField?.(actor, 'ObjectIndex');
-    if (!Number.isInteger(index)) {
-      index = exportIndex(actor.name);
-      manager.diagnostics.add('Mesh-light re-trace phases use map export indices where the original GObjObjects index is unmeasured.');
-    }
     record = { actor, values, location: (scanned ? scanned.location : read(actor, 'Location') ?? [0, 0, 0]).map(f),
-      index: Number.isInteger(index) ? index : 0 };
+      index: lightIndex(actor) };
     frame.lights.set(actor, record);
     return record;
+  };
+  // The leaf's permeating static lights as handles, per frame (lightOf's
+  // exports by name; MESH_LIGHT_MISSING where no live actor has the name).
+  const permeatingRun = iLeaf => {
+    let run = frame.runs.get(iLeaf);
+    if (run) return run;
+    const leaf = frame.model.leaves[iLeaf], lights = frame.model.lights, refs = [], handles = [];
+    if (leaf && leaf.permeating >= 0)
+      for (let i = leaf.permeating; i < lights.length && lights[i]; i++) {
+        const name = exportName(lights[i]), light = name && frame.byName.get(name);
+        refs.push(lights[i]); handles.push(light ? handleOf(light) : 0xffffffff);
+      }
+    frame.runs.set(iLeaf, run = { refs, handles });
+    return run;
+  };
+  /** setupForActor with the light choice in meshlight.rs; the same result. */
+  const rustSetup = (rust, sink, scene) => {
+    const result = setupAmbient(sink, scene);
+    if (!lightsActor(sink, scene)) return result;
+    const elapsed = (scene.viewport.currentTime - scene.viewport.lastUpdateTime) * 768;
+    const step = Math.min(255, Math.max(0, Math.trunc(elapsed)));
+    const run = permeatingRun(sink.iLeaf), leafHandles = scene.leafLights.map(record => handleOf(record.actor));
+    const choice = rust.select(meshLightContext, handleOf(sink.self), sink.location, sink.bSpecialLit, step, scene.viewport.frameCount,
+      run.handles, leafHandles);
+    if (choice.missing !== undefined) scene.lightOf(run.refs[choice.missing]);
+    result.traced = choice.traced.map(handle => lightRecord(identityOfHandle(handle)));
+    return finishSetup(manager, sink, scene, result,
+      choice.added.map(([handle, fade]) => ({ light: lightRecord(identityOfHandle(handle)), fade })));
+  };
+  const u32 = value => { const b = new DataView(new ArrayBuffer(4)); b.setFloat32(0, value, true); return b.getUint32(0, true); };
+  const describe = setup => JSON.stringify({ ambient: setup.ambient.map(u32), scaleGlow: u32(setup.scaleGlow), flags: setup.flags,
+    traced: setup.traced.map(light => light.actor?.name), lights: setup.lights.map(info => [info.light.actor?.name,
+      ...info.location.map(u32), u32(info.radius), u32(info.rradius), ...info.color.map(u32)]) });
+  const verifySetup = (actor, js, rust) => {
+    const a = describe(js), b = describe(rust);
+    if (a !== b) throw new Error(`MESH_LIGHT=verify: ${actor.name} JavaScript ${a}, Rust ${b}`);
   };
   const view = {
     manager,kernel,
@@ -86,7 +127,16 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const { byName, live } = levelMembership(level), levelInfo = level.actors[0];
       frame = { level, model: level.model, axes, origin, viewport, lights: new Map(), leafLights: new Map(),
         levelInfo, byName, timeSeconds: read(levelInfo, 'TimeSeconds') ?? 0,
-        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live };
+        levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live,
+        meshLight: runtime.scriptVm?.meshLight ?? null, runs: new Map() };
+      // The Rust selection's light slots come from this frame's records.
+      if (frame.meshLight) meshLightContext ??= frame.meshLight.context();
+      frame.meshLight?.beginFrame(meshLightContext, { live,
+        index: handle => lightIndex(identityOfHandle(handle)),
+        alive: handle => { const light = identityOfHandle(handle); return Boolean(light) && !read(light, 'bDeleteMe') && live.has(light); },
+        light: handle => lightRecord(identityOfHandle(handle)),
+        trace: (from, to) => traceRay(frame.model, from, to) === null,
+      });
       // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
       // Filter prepends each onto the leaves it reaches.
       const filter = record => {
@@ -133,12 +183,12 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       };
       const location = (read(actor, 'Location') ?? [0, 0, 0]).map(f);
       const iLeaf = region['engine.actor.pointregion.ileaf'] ?? -1;
-      const setup = setupForActor(manager, {
+      const sink = {
         self: actor, index: actor, location, iLeaf,
         zone: zoneActor ? { ambient: ambientOf(zoneActor) } : null,
         AmbientGlow: read(actor, 'AmbientGlow') ?? 0, ScaleGlow: read(actor, 'ScaleGlow') ?? 1,
         bUnlit: Boolean(values.bUnlit), bSpecialLit: Boolean(read(actor, 'bSpecialLit')),
-      }, {
+      }, scene = {
         levelInfo: { ambient: ambientOf(frame.levelInfo), brightness: frame.levelBrightness, timeSeconds: frame.timeSeconds },
         model: frame.model,
         lightOf: ref => {
@@ -152,7 +202,15 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         viewport: frame.viewport, rendMap: 5, noLighting: false,
         alive: light => !read(light.actor, 'bDeleteMe') && frame.live.has(light.actor),
         worldToCamera: point => view.toCamera(point),
-      });
+      };
+      // SetupForActor's light choice runs in the Rust core when the script VM
+      // has it (meshlight.rs); MESH_LIGHT=verify runs both and compares.
+      const mode = meshLightMode(), rust = mode !== 'js' ? frame.meshLight : null;
+      let setup;
+      if (rust) {
+        setup = rustSetup(rust, sink, scene);
+        if (mode === 'verify') verifySetup(actor, setupForActor(manager, sink, scene), setup);
+      } else setup = setupForActor(manager, sink, scene);
       const flags = polyFlags | setup.flags;
       return { setup, flags, unlit: unlitColor(read(actor, 'AmbientGlow') ?? 0, f(read(actor, 'ScaleGlow') ?? 1)) };
     },
