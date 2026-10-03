@@ -72,9 +72,11 @@ pub(crate) struct FlyFields {
 }
 
 /// calcVelocity(pawn, {direction, dt, maxSpeed, friction, fluid: 1, brake:
-/// 0, buoyant: 0}) for a non-PlayerPawn: Acceleration and Velocity
-/// written.
-fn calc_velocity(p: &ImagePawn, direction: [u32; 3], dt: u32, max_speed: u32, friction: u32, desired_speed: u32, accel_rate: u32) {
+/// 0, buoyant}) for a non-PlayerPawn: Acceleration and Velocity written.
+/// `buoyant` is physSwimming's (Buoyancy, Mass) float bits, None for
+/// physFlying's `buoyant: 0`.
+pub(crate) fn calc_velocity(p: &ImagePawn, direction: [u32; 3], dt: u32, max_speed: u32, friction: u32, desired_speed: u32,
+    accel_rate: u32, buoyant: Option<(u32, u32)>) {
     let step = dt;
     let raw_friction = friction;
     // 0x103cd7bb: FILD bFluid (1); FCOM Friction -> the larger.
@@ -106,6 +108,14 @@ fn calc_velocity(p: &ImagePawn, direction: [u32; 3], dt: u32, max_speed: u32, fr
     }
     // 0x103cdf05: a non-PlayerPawn's MaxSpeed *= DesiredSpeed.
     let max = l(max_speed).mul(l(desired_speed)).store();
+    if let Some((buoyancy, mass)) = buoyant {
+        // 0x103cdf33: V += (ZoneGravity*dt) * f(1 - Buoyancy/Mass).
+        let gravity_step = p.gravity().map(|g| l(step).mul(l(bits(g))).store());
+        let lift = sub(Ext::load_f64(1.0), l(buoyancy).div(l(mass))).store();
+        for i in 0..3 {
+            v[i] = l(l(lift).mul(l(gravity_step[i])).store()).add(l(v[i])).store();
+        }
+    }
     let size_squared = dot(loads(v), loads(v)).store();
     if below(l(max).mul(l(max)), l(size_squared)) {
         v = safe_normal(v).map(|c| l(max).mul(l(c)).store());
@@ -123,7 +133,7 @@ pub(crate) fn phys_flying(p: &mut ImagePawn, seconds: f64, fields: &FlyFields, c
     count(3);
     let acceleration = p.acceleration_bits();
     let direction = if acceleration.iter().all(|c| zero_component(*c)) { acceleration } else { safe_normal(acceleration) };
-    calc_velocity(p, direction, dt, fields.air_speed, p.fluid_friction_bits(), fields.desired_speed, fields.accel_rate);
+    calc_velocity(p, direction, dt, fields.air_speed, p.fluid_friction_bits(), fields.desired_speed, fields.accel_rate, None);
     let position = p.position_bits();
     p.set_old_location_bits(position);
     ImagePawn::set_just_teleported(p, false);

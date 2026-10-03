@@ -620,7 +620,7 @@ fn tick_body(
             // (pawn_phys.rs), a falling non-Pawn's AActor::performPhysics
             // (fall.rs), or the callback where their hosts decline.
             let done = !a.host && if a.flags & C_PAWN != 0 {
-                (physics == 1.0 || physics == 4.0) && crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)
+                (physics == 1.0 || physics == 3.0 || physics == 4.0) && crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)
             } else {
                 physics == 2.0 && crate::fall::perform(ctx, a.handle, a.base, delta)
             };

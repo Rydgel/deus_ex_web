@@ -50,6 +50,8 @@ const D04 = x87double(.4), D40 = x87double(40), D07 = x87double(.7), DM80 = x87d
 const D16M = x87double(16000000);
 const PHYS_FALLING = 2, PHYS_SWIMMING = 3, PHYS_FLYING = 4;
 const boundary = message => { throw new Error(`Original swimming physics boundary: ${message}`); };
+/** findWaterLine's boundary below; swim.rs raises it through the host. */
+export const waterLineBoundary = () => boundary('findWaterLine does not converge: the midpoint rounds onto an endpoint');
 
 /** ULevel::MoveActor's early return (0x1039915a..0x10399240): each |Delta|
  * component below the double 1e-4 (unordered counts as below) with an
@@ -83,8 +85,7 @@ export function findWaterLine(pawn, start, end) {
     // call forever (float spacing above 1 unit); the native recursion would
     // exhaust the stack there, which is not modeled.
     const toStart = Boolean(pawn.waterAt(mid)) !== Boolean(pawn.regionWater);
-    if (mid.every((c, i) => c === (toStart ? start : end)[i]))
-      boundary('findWaterLine does not converge: the midpoint rounds onto an endpoint');
+    if (mid.every((c, i) => c === (toStart ? start : end)[i])) waterLineBoundary();
     if (toStart) start = mid;                            // findWaterLine(MidPoint, End)
     else end = mid;                                      // End = MidPoint; findWaterLine(Start, End)
   }

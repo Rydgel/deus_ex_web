@@ -29,6 +29,7 @@ mod render;
 mod meshlight;
 mod particles;
 mod pawn_phys;
+mod swim;
 mod tick;
 mod trace;
 mod walk;

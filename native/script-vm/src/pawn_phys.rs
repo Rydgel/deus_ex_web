@@ -1,18 +1,20 @@
-//! APawn::performPhysics (Engine.dll 0x103c9a70) for a walking or flying
-//! pawn on its image (docs/rust-core.md, steps R3-b B6a and B6b). The JavaScript reference is
-//! script-pawn-physics.mjs `runScriptPawnPhysics`, which the actor tick's
-//! physics callback reaches (actor-tick-kernel.mjs `js_tick_physics` ->
+//! APawn::performPhysics (Engine.dll 0x103c9a70) for a walking, swimming or
+//! flying pawn on its image (docs/rust-core.md, steps R3-b B6a, B6b and
+//! B6d). The JavaScript reference is script-pawn-physics.mjs
+//! `runScriptPawnPhysics`, which the actor tick's physics callback reaches
+//! (actor-tick-kernel.mjs `js_tick_physics` ->
 //! ScriptRuntime.processActorPhysics). It stays the reference: the host
 //! (pawn-physics-kernel.mjs) declines a call it cannot prove equal, and the
 //! tick then takes the callback as before.
 //!
-//! The body for Physics = PHYS_Walking or PHYS_Flying, in the reference's
-//! order:
+//! The body for Physics = PHYS_Walking, PHYS_Swimming or PHYS_Flying, in
+//! the reference's order:
 //! * `pawn.walking(delta, 0)`: the walk loop (walk_loop.rs) on this pawn's
 //!   contexts, or the JavaScript `walking` body where the loop hands the
-//!   call back (`js_pawn_walk`); or `pawn.flying(delta, 0)`: physFlying
-//!   (fly.rs) over the same contexts, or the JavaScript body where the
-//!   reference raises a boundary (`js_pawn_fly`);
+//!   call back (`js_pawn_walk`); `pawn.swimming(delta, 0)`: physSwimming
+//!   (swim.rs) over the same contexts; or `pawn.flying(delta, 0)`:
+//!   physFlying (fly.rs), or the JavaScript body where the reference raises
+//!   a boundary (`js_pawn_fly`);
 //! * the physicsRotation gate (0x103c9b9e): Physics is not PHYS_Spider, and
 //!   Rotation differs from DesiredRotation or RotationRate.Roll > 0 (a
 //!   PlayerPawn never reaches this body: the tick hands it back);
@@ -52,10 +54,16 @@ const P_PENDING_TOUCH: usize = 3;
 const P_FIXED_ROTATION_DIR: usize = 4;
 const P_ROTATE_TO_DESIRED: usize = 5;
 const P_AIR_SPEED: usize = 6;
-const P_DESIRED_SPEED: usize = 7;
+pub(crate) const P_DESIRED_SPEED: usize = 7;
+pub(crate) const P_WATER_SPEED: usize = 8;
+pub(crate) const P_BUOYANCY: usize = 9;
+// HeadRegion.Zone: the HeadRegion cell's member.
+pub(crate) const P_HEAD_ZONE: usize = 10;
 // Region.ZoneNumber: the Region cell's member.
-const P_ZONE_NUMBER: usize = 8;
-const P_COUNT: usize = 9;
+const P_ZONE_NUMBER: usize = 11;
+// ZoneInfo.bWaterZone: the zone actor's [offset, mask].
+pub(crate) const P_WATER_ZONE: usize = 12;
+const P_COUNT: usize = 13;
 // The move field table's bCollideWorld and Rotation rows
 // (move-actor-kernel.mjs MOVE_FIELDS).
 const M_COLLIDE_WORLD: usize = 3;
@@ -65,8 +73,9 @@ static mut PFIELDS: [[u32; 2]; P_COUNT] = [[0; 2]; P_COUNT];
 /// Running counts for the host's PAWN_PHYSICS_STATS: [0] physicsRotation
 /// entered, [1] its MoveActor completed here, [2] PostTouch tails; physFlying's
 /// branches (fly.rs): [3] calls, [4] blocked moves, [5] stepUp, [6] HitWall
-/// and the slide's progress test, [7] the slide move, [8] TwoWallAdjust.
-static mut PP_COUNTS: [u32; 9] = [0; 9];
+/// and the slide's progress test, [7] the slide move, [8] TwoWallAdjust;
+/// physSwimming's (swim.rs SW_*) from 9.
+static mut PP_COUNTS: [u32; 26] = [0; 26];
 #[inline(always)]
 pub(crate) fn count(i: usize) {
     unsafe { let c = core::ptr::addr_of_mut!(PP_COUNTS); (*c)[i] = (*c)[i].wrapping_add(1); }
@@ -101,9 +110,9 @@ extern "C" {
 }
 
 #[inline(always)]
-fn pf(i: usize) -> [u32; 2] { unsafe { (*core::ptr::addr_of!(PFIELDS))[i] } }
+pub(crate) fn pf(i: usize) -> [u32; 2] { unsafe { (*core::ptr::addr_of!(PFIELDS))[i] } }
 #[inline(always)]
-fn p_at(base: u32, i: usize) -> u32 { base + pf(i)[0] }
+pub(crate) fn p_at(base: u32, i: usize) -> u32 { base + pf(i)[0] }
 #[inline(always)]
 fn rotator(at: u32) -> [i32; 3] {
     [load32(at) as i32, load32(at + 4) as i32, load32(at + 8) as i32]
@@ -131,12 +140,15 @@ fn fix_toward(current: i64, target: i64, delta: f64) -> i64 {
     (current - step.min((current - target) & 0xffff)) & 0xffff
 }
 
-/// APawn::performPhysics for the walking (1) or flying (4) pawn `handle`
+/// APawn::performPhysics for the walking (1), swimming (3) or flying (4) pawn `handle`
 /// at `base`: true when the body ran here, false when the physics callback
 /// must run it (nothing has happened yet).
 pub(crate) fn perform(ctx: u32, handle: u32, base: u32, dt: f64, physics: f64) -> bool {
-    // walking.mjs's timestep error stays the reference's.
+    // walking.mjs's and swimming.mjs's timestep errors stay the reference's.
     if physics == 1.0 && (!(dt > 0.0) || dt > 0.4f32 as f64) {
+        return false;
+    }
+    if physics == 3.0 && !((dt as f32) > 0.0) {
         return false;
     }
     let depth = unsafe { js_pawn_begin(ctx) };
@@ -148,6 +160,8 @@ pub(crate) fn perform(ctx: u32, handle: u32, base: u32, dt: f64, physics: f64) -
         if walk_loop(depth, base, dt as f32, 0) == 0 {
             unsafe { js_pawn_walk(depth, dt) };
         }
+    } else if physics == 3.0 {
+        crate::swim::phys_swimming(&mut ImagePawn { depth, base }, dt, 0);
     } else {
         let mut pawn = ImagePawn { depth, base };
         let fields = FlyFields {

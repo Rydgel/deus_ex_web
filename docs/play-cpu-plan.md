@@ -319,6 +319,7 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 5.2 PushGC/PopGC in Rust | 090989e | 28.74 → 27.54 | hud 2.39 → 2.15 |
 | B6a–B6b walking and flying pawns' performPhysics in Rust | 510aefe | 27.86 → 27.57 | tick 12.91 → 12.25 |
 | B6c falling non-Pawns' performPhysics in Rust | c80e28a | 27.9 → 27.0 (six pairs) | tick 12.41 → 11.82 |
+| B6d swimming pawns' performPhysics in Rust | (this commit) | 27.33 → 26.98 | tick 12.02 → 11.88; bench-sim tick 13.03 → 12.50 |
 
 Full validator sweep at 14f9de8 (Linux host, `run-validators.mjs --jobs 8
 --mem-budget 16384`): 489 passed, 0 skipped, 0 failed.

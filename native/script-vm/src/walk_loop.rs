@@ -33,13 +33,13 @@ const W_IS_WALKING: usize = 4;
 pub(crate) const W_MOVE_TIMER: usize = 5;
 const W_HIT_SLOPED_WALL: usize = 6;
 const W_IS_PLAYER: usize = 7;
-const W_MASS: usize = 8;
+pub(crate) const W_MASS: usize = 8;
 const W_VELOCITY: usize = 9;
 const W_ACCELERATION: usize = 10;
 const W_OLD_LOCATION: usize = 11;
 pub(crate) const W_PHYSICS: usize = 12;
 const W_BASE: usize = 13;
-const W_REGION_ZONE: usize = 14;
+pub(crate) const W_REGION_ZONE: usize = 14;
 const W_LOCATION: usize = 15;
 const W_RADIUS: usize = 16;
 const W_HEIGHT: usize = 17;
@@ -132,6 +132,8 @@ fn set_vec(base: u32, i: usize, v: V3) {
 fn io(i: usize) -> f64 { unsafe { (*core::ptr::addr_of!(WL_IO))[i] } }
 #[inline(always)]
 fn state(i: usize) -> u32 { unsafe { (*core::ptr::addr_of!(WL_STATE))[i] } }
+/// The level's zone model (zone.rs), or 0 without one.
+pub(crate) fn zone_model() -> u32 { state(0) }
 
 #[inline(always)]
 fn add(a: V3, b: V3) -> V3 { [f(a[0] + b[0]), f(a[1] + b[1]), f(a[2] + b[2])] }
@@ -178,6 +180,12 @@ impl ImagePawn {
     /// steps.mjs's `Original stepUp recursion budget exceeded`.
     pub(crate) fn step_budget_error(&self) { unsafe { js_walk_error(self.depth, E_STEP_BUDGET) }; }
     pub(crate) fn physics(&self) -> i32 { load8(at(self.base, W_PHYSICS)) as i32 }
+    /// `pawn.walkingPrelude(dt, iterations)`: true when it ended the call.
+    pub(crate) fn prelude(&self, dt: f64, iterations: i32) -> bool { unsafe { js_walk_prelude(self.depth, dt, iterations) != 0 } }
+    /// `pawn.setPhysics(next)`.
+    pub(crate) fn set_physics(&self, next: u32) { unsafe { js_walk_set_physics(self.depth, next) }; }
+    /// `pawn.falling(remaining, iterations)`.
+    pub(crate) fn falling(&self, remaining: f64, iterations: i32) { unsafe { js_walk_falling(self.depth, remaining, iterations) }; }
     fn position(&self) -> V3 { vec(self.base, W_LOCATION) }
     fn velocity(&self) -> V3 { vec(self.base, W_VELOCITY) }
     fn set_velocity(&self, v: V3) { set_vec(self.base, W_VELOCITY, v); }

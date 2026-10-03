@@ -122,6 +122,17 @@ const regionWater = a => Boolean(read(zoneOf(a), 'bWaterZone'));
 // case 3 is view.swimming; the walking/falling hand-offs call startSwimming).
 const calls = new Map();
 const count = (name, kind) => calls.set(`${name}.${kind}`, (calls.get(`${name}.${kind}`) ?? 0) + 1);
+// performPhysics's case 3 in Rust (pawn_phys.rs, swim.rs) never calls the
+// view: it enters through the pawn physics host's admission, counted there.
+const pawnHost = runtime.scriptVm?.pawnPhysics;
+if (pawnHost) {
+  const begin = pawnHost.begin.bind(pawnHost);
+  pawnHost.begin = c => {
+    const depth = begin(c);
+    if (depth >= 0 && read(c.receiver, 'Physics') === 3) count(c.receiver.name, 'swimming');
+    return depth;
+  };
+}
 const wrapViews = () => {
   for (const a of level.actors) {
     const view = a?._pawnPhysics;

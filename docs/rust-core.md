@@ -774,6 +774,58 @@ native-player-move, projectile, rider-move, pawn-move, pawn-physics-kernel,
 actor-tick, script-spawn, inventory-spawn, island-swimming, island-blowitup,
 island-tracer and native-actor-physics pass.
 
+### October 3: a swimming pawn's performPhysics in Rust (B6d, implemented)
+
+Island's swimmers are its GeneratorScouts and the fish their generators
+spawn: about six PHYS_Swimming pawns a tick. Their performPhysics went
+through the physics callback to swimming.mjs `physSwimming` over the pawn
+view (about 0.5 ms of a headless tick).
+
+`swim.rs` runs physSwimming, Swim and findWaterLine on the pawn's image,
+transcribed from swimming.mjs on the `Ext` model, and pawn_phys.rs now
+admits Physics = PHYS_Swimming beside walking and flying (tick.rs), with the
+same rotation and timer tail. The pieces it shares:
+* calcVelocity is fly.rs's, which gained the buoyant term (0x103cdf33:
+  Velocity += f(ZoneGravity*dt) * f(1 - Buoyancy/Mass)), read after the
+  surface prelude's script as the reference reads it;
+* stepUp and TwoWallAdjust are walk.rs's, MoveActor `move_pawn` through the
+  walk loop's `ImagePawn`;
+* the surface prelude, HitWall, setPhysics and the physFalling tail are the
+  walk imports; the physFlying tail is `js_swim_fly`.
+
+bWaterZone is read on the zone actor's image (ZoneInfo's bool, a new row of
+the pawn table): Region.Zone for `regionWater`, HeadRegion.Zone (a new row,
+HeadRegion's Zone member) for `headWater`, and zone.rs `point_region`'s zone
+at each findWaterLine midpoint. A zone without an image, or a level without
+the zone model, asks the view (`js_swim_water`). findWaterLine's
+non-convergence raises the reference's own error (`waterLineBoundary`,
+exported from swimming.mjs); its endpoint test compares floats, as the
+reference's `===`. A nonpositive timestep stays the callback's. The pawn
+table gained WaterSpeed, Buoyancy and HeadRegion (eligibility as before) and
+the bWaterZone row; PP_COUNTS gained physSwimming's branches.
+
+`validate-pawn-physics-kernel` adds Island with
+scripts/scenarios/swim-branches.mjs: every swimming pawn, rescanned each
+phase (the fish are spawned), is driven along turning headings through its
+Velocity with DesiredSpeed 1, made buoyant every third phase and given a
+current every fourth. Digests equal at every checkpoint, no decline. The
+Rust counts reach the blocked move, stepUp, the HitWall slide, the current,
+the head-out damping, Swim's exit with findWaterLine and its air time, the
+kept Velocity.Z, the exit into PHYS_Falling and its falling tail. Never
+reached: TwoWallAdjust after a slide, the slow-rise Velocity.Z, the
+physFlying tail and a zone without an image. Island as played: 1,827
+swimming calls in 330 ticks, all in Rust. The validators now run each
+Rust/JavaScript pair concurrently. `validate-island-swimming` counted the
+view's `swimming` calls; it now also counts the host's admissions of a
+PHYS_Swimming pawn, which the Rust path takes instead. Timing (Linux host,
+three interleaved pairs against c5499df): bench-sim median tick 13.03 →
+12.50 ms, same digest; browser (Island at Player start, where few fish
+have spawned yet) tick 12.02 → 11.88 ms, total 27.33 → 26.98 ms, no errors.
+The validator groups pawn-physics-kernel, swimming (native-swimming,
+pawn-swimming-reach, island-swimming), flying, walking, walk-loop,
+walk-kernel, pawn-move, actor-tick, falling, zone, pawn-locomotion and
+pawn-nav pass.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
@@ -846,12 +898,17 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
      runs in Rust on the pawn's image over B3's kernels and calls B4's
      MoveActor directly; Island's median tick 13.13 → 11.66 ms. Falling
      and swimming return as tail calls.
-   * **B6.** Falling, landing, rotation and the pawn tail. B6a, B6b and
-     B6c are done (October 3, above): a walking or flying pawn's
+   * **B6.** Falling, landing, rotation and the pawn tail. B6a to B6d
+     are done (October 3, above): a walking, swimming or flying pawn's
      performPhysics, physicsRotation and tail, and a falling non-Pawn's
-     performPhysics, run in Rust. Next: a pawn's physSwimming (Island's
-     fish and GeneratorScouts, about 0.6 ms headless); a pawn's
-     physFalling is only map-start settling on Island.
+     performPhysics, run in Rust. A pawn's physFalling is only map-start
+     settling on Island. Measured next (October 3 profile, per tick): the
+     surface prelude (`js_walk_prelude`, about 1.35 ms of JavaScript and
+     0.7 ms in the collision instance), the per-actor JavaScript around
+     `tick_actor` (about 776 calls a tick, 0.6–0.8 ms: a level loop in Rust),
+     and the collision instance's JavaScript host (about 1.35 ms, with the
+     candidate callbacks), which merging it into the interpreter's instance
+     would remove.
    * **B7.** The player. It needs 1e-6.
 
    Keep these rules:

@@ -1,15 +1,15 @@
 /**
- * APawn::performPhysics for a walking or flying pawn in Rust
- * (native/script-vm/src/pawn_phys.rs and fly.rs, docs/rust-core.md steps
- * R3-b B6a and B6b). The JavaScript body
+ * APawn::performPhysics for a walking, swimming or flying pawn in Rust
+ * (native/script-vm/src/pawn_phys.rs, swim.rs and fly.rs, docs/rust-core.md
+ * steps R3-b B6a, B6b and B6d). The JavaScript body
  * (script-pawn-physics.mjs `runScriptPawnPhysics`, reached from the actor
  * tick's physics callback through ScriptRuntime.processActorPhysics) stays
  * the reference: when this host declines, the tick takes the callback as
  * before, with nothing done yet.
  *
  * The tick's Rust body (tick.rs) asks `js_pawn_begin` for a non-player
- * Pawn whose Physics is PHYS_Walking or PHYS_Flying. The host admits it
- * when:
+ * Pawn whose Physics is PHYS_Walking, PHYS_Swimming or PHYS_Flying. The
+ * host admits it when:
  * - the physics callback would reach runScriptPawnPhysics unchanged (the
  *   runtime's own processActorPhysics, no ACTOR_TICK_DIFFERENTIAL log);
  * - the walk loop host would run `walking` in Rust (walk-loop-kernel.mjs:
@@ -17,11 +17,13 @@
  *   is not a brush);
  * - DesiredRotation, RotationRate, AvgPhysicsTime, PendingTouch, the
  *   motion word's bFixedRotationDir and bRotateToDesired, AirSpeed and
- *   DesiredSpeed (PHYS_FIELDS) are the image cells `readNamed` uses, unbound
+ *   DesiredSpeed, WaterSpeed, Buoyancy and HeadRegion (PHYS_FIELDS) are the
+ *   image cells `readNamed` uses, unbound
  *   on the instance, the two bools bits 0x20 and 0x40 of one word, and the
  *   actor's `motionFlags` is that image word (actor-flag-words.mjs); the
  *   table's last row is Region.ZoneNumber (the Region cell checked by the
- *   walk and move hosts, ZoneHost's member offset).
+ *   walk and move hosts, ZoneHost's member offset), then ZoneInfo's
+ *   bWaterZone bit, read on a zone actor's image.
  * It then pushes the walk's contexts (the pawn view and its walk services,
  * as WalkLoopHost.walk does) and returns their depth. The imports run the
  * reference's own functions where Rust hands a step back: the `walking`
@@ -36,6 +38,7 @@ import {flagWordsOf} from './actor-flag-words.mjs';
 import {pawnPhysicsView, pawnPhysicsTail, pawnDispatch} from './script-pawn-physics.mjs';
 import {walking} from './walking.mjs';
 import {physFlying} from './flying.mjs';
+import {waterLineBoundary} from './swimming.mjs';
 import {directWalkBegin, directWalkEnd} from './walk-loop-kernel.mjs';
 
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
@@ -45,11 +48,12 @@ const disabled = () => env.PAWN_PHYSICS === 'js' || globalThis.DEUS_EX_PAWN_PHYS
 const STATS = env.PAWN_PHYSICS_STATS === '1';
 // `rust`: pawn_phys.rs's counts (PP_COUNTS: physicsRotation entered, its
 // MoveActor completed in Rust, PostTouch tails, then physFlying's calls,
-// blocked moves, stepUps, wall hits, slides and TwoWallAdjusts).
+// blocked moves, stepUps, wall hits, slides and TwoWallAdjusts, then
+// physSwimming's, swim.rs SW_*).
 const stats = {calls: 0, declined: new Map(), walks: 0, flyBoundaries: 0, rotations: 0, tails: [0, 0, 0], rust: null};
 let statsHost = null;
 if (STATS) process.on('exit', () => {
-  if (statsHost) stats.rust = Array.from(new Uint32Array(statsHost.vm.arena.memory.buffer, statsHost.x.pawn_phys_counts_ptr(), 9));
+  if (statsHost) stats.rust = Array.from(new Uint32Array(statsHost.vm.arena.memory.buffer, statsHost.x.pawn_phys_counts_ptr(), COUNT_ROWS));
   process.stderr.write(`pawn physics kernel: ${JSON.stringify({...stats, declined: Object.fromEntries(stats.declined)})}\n`);
 });
 const decline = why => {
@@ -67,10 +71,17 @@ export const PHYS_FIELDS = [
   ['bRotateToDesired', 'engine.actor.brotatetodesired', 'bool'],
   ['AirSpeed', 'engine.pawn.airspeed', 'float'],
   ['DesiredSpeed', 'engine.pawn.desiredspeed', 'float'],
+  // physSwimming's (swim.rs): its calcVelocity maximum and buoyant term,
+  // and HeadRegion, whose row holds the Zone member.
+  ['WaterSpeed', 'engine.pawn.waterspeed', 'float'],
+  ['Buoyancy', 'engine.actor.buoyancy', 'float'],
+  ['HeadRegion', 'engine.pawn.headregion', 'struct'],
 ];
-const FIXED = 4, ROTATE = 5;
-// pawn_phys.rs P_ZONE_NUMBER: the row after PHYS_FIELDS.
-const ZONE_NUMBER = PHYS_FIELDS.length;
+const FIXED = 4, ROTATE = 5, HEAD_REGION = 10;
+// pawn_phys.rs P_ZONE_NUMBER and P_WATER_ZONE: the rows after PHYS_FIELDS.
+const ZONE_NUMBER = PHYS_FIELDS.length, WATER_ZONE = ZONE_NUMBER + 1;
+// pawn_phys.rs PP_COUNTS.
+const COUNT_ROWS = 26;
 
 export class PawnPhysicsHost {
   constructor(vm) {
@@ -103,16 +114,21 @@ export class PawnPhysicsHost {
     // Region.ZoneNumber at its member offset (move_actor.rs's region rows).
     this.vm.zone.table();
     const region = fieldImageCell('engine.actor.region'), members = this.vm.zone.members;
+    // ZoneInfo.bWaterZone, read on the zone actor's image (swim.rs).
+    const water = fieldImageCell('engine.zoneinfo.bwaterzone'), waterBit = scalarCell(water);
     this.valid = !this.cells.includes(null) && fixed && rotate && fixed.offset === rotate.offset &&
-      fixed.mask === 0x20 && rotate.mask === 0x40 && cellKind(region) === 'struct' && members !== null;
+      fixed.mask === 0x20 && rotate.mask === 0x40 && cellKind(region) === 'struct' && members !== null &&
+      cellKind(water) === 'bool' && Boolean(waterBit);
     if (!this.valid) return;
     const view = this.vm.arena.view;
     this.cells.forEach((cell, i) => {
-      view.setUint32(this.fieldsAt + i * 8, cell.offset, true);
+      view.setUint32(this.fieldsAt + i * 8, i === HEAD_REGION ? cell.offset + members[0].offset : cell.offset, true);
       view.setUint32(this.fieldsAt + i * 8 + 4, (scalarCell(cell)?.mask ?? 0) >>> 0, true);
     });
     view.setUint32(this.fieldsAt + ZONE_NUMBER * 8, region.offset + members[2].offset, true);
     view.setUint32(this.fieldsAt + ZONE_NUMBER * 8 + 4, 0, true);
+    view.setUint32(this.fieldsAt + WATER_ZONE * 8, waterBit.offset, true);
+    view.setUint32(this.fieldsAt + WATER_ZONE * 8 + 4, waterBit.mask >>> 0, true);
   }
   /** Whether every spelling of `cls` resolves to the table's cell and the
    * instance binds none of the keys. */
@@ -207,6 +223,14 @@ export class PawnPhysicsHost {
         if (STATS) stats.flyBoundaries++;
         physFlying(context(depth).pawn, delta, 0);
       },
+      // swim.rs: bWaterZone where the zone has no image, physSwimming's
+      // physFlying tail, and findWaterLine's boundary.
+      js_swim_water(depth, which, x, y, z) {
+        const pawn = context(depth).pawn;
+        return (which === 0 ? pawn.regionWater : which === 1 ? pawn.headWater : pawn.waterAt([x, y, z])) ? 1 : 0;
+      },
+      js_swim_fly(depth, remaining, iterations) { context(depth).pawn.flying(remaining, iterations); },
+      js_swim_error() { waterLineBoundary(); },
       js_pawn_rotate(depth, pitch, yaw) {
         if (STATS) stats.rotations++;
         context(depth).pawn.moveActor([0, 0, 0], [pitch, yaw, 0]);
