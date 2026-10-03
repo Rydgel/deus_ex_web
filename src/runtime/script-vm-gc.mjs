@@ -8,9 +8,17 @@
  * in script-window-gc-dispatch.mjs; GC_NATIVE=verify runs each Rust body,
  * then the JavaScript body on the GC image from before it, and throws on any
  * difference in the image or the DrawTile command.
+ *
+ * The same switch covers PushGC and PopGC (gc.rs vm_gc_push / vm_gc_pop),
+ * which the window host's DrawTree and PaintWindows call for every window:
+ * under verify each runs again in JavaScript on the heap from before it, and
+ * the heap's used bytes and the depth are compared.
  */
 import {runGcNative} from './script-window-gc-dispatch.mjs';
 import {drawTileCommand} from './script-gc-draw-model.mjs';
+import {gcPushGC} from './script-gc-push-gc.mjs';
+import {gcPopGC} from './script-gc-pop-gc.mjs';
+import {NativeHeapError} from './script-native-heap.mjs';
 
 export const gcNativeMode = () => (typeof process !== 'undefined' && process.env?.GC_NATIVE)
   || globalThis.DEUS_EX_GC_NATIVE || 'rust';
@@ -43,6 +51,58 @@ export class GcHost {
     this.argsAt = x.vm_gc_args_ptr();
     this.tileAt = x.vm_gc_tile_ptr();
     this.snapAt = x.vm_gc_snap_ptr();
+    this.statusAt = x.vm_gc_status_ptr();
+  }
+  /** The heap stack bodies run in Rust for `heap` (arena-backed). */
+  stackReady(heap) { return this.mode !== 'js' && heap.region > 0; }
+  /** gcPushGC(gc) in Rust: the depth, or undefined when the JavaScript body
+   * must run (an empty free list allocates a node). */
+  push(heap, services, gc) {
+    const base = gc?.base ?? heap.objectAddress(gc);
+    this.useHeap(heap);
+    if (this.mode === 'verify') return this.verifyStack(heap, () => this.x.vm_gc_push(base), () => gcPushGC(gc, services));
+    const depth = this.x.vm_gc_push(base);
+    return this.status(depth);
+  }
+  /** gcPopGC(gc, gcNum) in Rust (it always completes or faults). */
+  pop(heap, services, gc, gcNum) {
+    const base = gc?.base ?? heap.objectAddress(gc);
+    this.useHeap(heap);
+    if (this.mode === 'verify') { this.verifyStack(heap, () => this.x.vm_gc_pop(base, gcNum | 0), () => gcPopGC(gc, gcNum, services)); return; }
+    this.x.vm_gc_pop(base, gcNum | 0);
+    this.status(undefined);
+  }
+  /** GC_HOST's heap words for `heap` (open() writes them too). */
+  useHeap(heap) {
+    if (this.heapWords === heap) return;
+    this.heapWords = heap;
+    const view = this.vm.arena.view;
+    view.setUint32(this.hostAt, heap.region, true);
+    view.setUint32(this.hostAt + 4, heap.capacity, true);
+  }
+  status(value) {
+    const view = this.vm.arena.view, status = view.getUint32(this.statusAt, true);
+    if (status === 0) return value;
+    if (status === 1) return undefined;
+    const address = view.getUint32(this.statusAt + 4, true);
+    throw new NativeHeapError(`Native heap address 0x${address.toString(16)} is outside heap storage`, {address});
+  }
+  verifyStack(heap, rust, js) {
+    const used = heap.used, before = heap.bytes.slice(0, used);
+    let rustValue = rust();
+    const status = this.vm.arena.view.getUint32(this.statusAt, true);
+    // PushGC's allocation case returns before any store.
+    if (status === 1) return undefined;
+    if (status === 2) rustValue = 'fault';
+    const after = heap.bytes.slice(0, used);
+    heap.bytes.set(before, 0);
+    let jsValue, error = null;
+    try { jsValue = js(); } catch (thrown) { if (!(thrown instanceof NativeHeapError)) throw thrown; jsValue = 'fault'; error = thrown; }
+    const now = heap.bytes.subarray(0, used), at = now.findIndex((b, i) => b !== after[i]);
+    if (at >= 0) throw new Error(`GC_NATIVE verify: stack body differs at heap +0x${at.toString(16)} (rust ${after[at]}, js ${now[at]})`);
+    if (rustValue !== jsValue) throw new Error(`GC_NATIVE verify: stack body result rust ${rustValue} js ${jsValue}`);
+    if (error) throw error;
+    return jsValue;
   }
   /** Whether the lowering may emit GC_EFFECT. */
   get lowerable() { return this.mode !== 'js'; }
@@ -54,6 +114,7 @@ export class GcHost {
       !Object.hasOwn(runtime, 'invokeNative') && ![...GC_RUST_NATIVES.keys()].some(index => runtime.boundaryNatives?.has(index));
     this.heap = heap;
     this.services = services;
+    this.heapWords = heap;
     this.write([heap.region, heap.capacity, gate ? 1 : 0, this.mode === 'verify' ? 1 : 0, ++this.epoch]);
   }
   close() { this.vm.arena.view.setUint32(this.hostAt + 8, 0, true); }

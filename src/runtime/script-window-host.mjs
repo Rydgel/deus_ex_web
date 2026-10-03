@@ -1394,7 +1394,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       return {width:extent.xExtent,height:extent.yExtent};
     },
     fontHeight:(gc,space)=>gcGetFontHeight(gc,space,gcServices),
-    push:gc=>gcPushGC(gc,gcServices),pop:(gc,depth)=>gcPopGC(gc,depth,gcServices),
+    // PushGC/PopGC per window run in Rust over the arena-backed heap
+    // (gc.rs; script-vm-gc.mjs, GC_NATIVE switch).
+    push:gc=>{const rust=runtime.scriptVm?.gc;
+      return (rust?.stackReady(heap)?rust.push(heap,gcServices,gc):undefined)??gcPushGC(gc,gcServices);},
+    pop:(gc,depth)=>{const rust=runtime.scriptVm?.gc;
+      if(rust?.stackReady(heap))rust.pop(heap,gcServices,gc,depth);else gcPopGC(gc,depth,gcServices);},
     setCanvas:(gc,canvas)=>W.setPtr(gc,GC.canvas,canvas), // XGC::SetCanvas 0x10026ec0
     setMultipliers:(gc,h,v)=>{W.setI32(gc,0x9c,h);W.setI32(gc,0xa0,v);}, // 0x10026ed0
     enableDrawing:(gc,enabled)=>gcEnableDrawing(gc,enabled,gcServices),

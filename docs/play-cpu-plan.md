@@ -278,7 +278,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 4.3 noncolliding FarMoveActor in Rust | 316342f | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
 | 4.2 UpdateParticles in Rust | 33ad364 | 28.83 → 28.44 | profiled `execUpdateParticles` 0.35 → 0.01 |
 | 1.3 the mesh scene skips the non-forced matrix walk | 14f9de8 | 29.25 → 27.98 | render 4.84 → 4.16 |
-| 5.1 GC state and tile natives in Rust | (this commit) | 33.0 → 32.2 (noisy runs) | hud 2.98 → 2.56 |
+| 5.1 GC state and tile natives in Rust | a3e391d | 33.0 → 32.2 (noisy runs) | hud 2.98 → 2.56 |
+| 5.2 PushGC/PopGC in Rust | (this commit) | 28.74 → 27.54 | hud 2.39 → 2.15 |
 
 Full validator sweep at 14f9de8 (Linux host, `run-validators.mjs --jobs 8
 --mem-budget 16384`): 489 passed, 0 skipped, 0 failed.
@@ -444,6 +445,17 @@ frames and 300 browser frames on Island found no difference, and the HUD
 command digest is unchanged. Left in JavaScript: DrawText (14 calls, its
 strings are not image bytes), the bound Width and Height reads (29 per
 frame), PushGC/PopGC and the tree walk.
+
+Step 5.2 (`gc.rs` `vm_gc_push`, `vm_gc_pop`): DrawTree and PaintWindows
+push and pop the root GC around every window, about 0.45 ms of the
+headless profile (gcPushGC, gcPopGC's restore and gcCopyGC, through the
+checked JavaScript accessors). They run in Rust with the JavaScript bodies'
+reads and stores in order; a PushGC whose free list is empty (it allocates
+a node) runs in JavaScript before any store, and an access outside the heap
+stops where the JavaScript body would throw and raises the same heap error.
+Under `GC_NATIVE=verify` each call runs again in JavaScript on the heap
+from before it and the heap's used bytes and the depth are compared: 60
+headless and 150 browser frames on Island found no difference.
 
 Step 1.3, second part: every object under the actor mesh scene's root
 keeps the identity matrix (GetFrame's vertices are world-space and no

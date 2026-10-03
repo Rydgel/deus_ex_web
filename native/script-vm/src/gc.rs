@@ -536,3 +536,174 @@ impl Run {
         self.self_fresh = false;
     }
 }
+
+// PushGC 0x10027c90 / PopGC's restore 0x10027d40 and CopyGC 0x10027b40
+// (script-gc-push-gc.mjs, script-gc-pop-gc.mjs, script-gc-copy-gc.mjs), for
+// the window host's DrawTree and PaintWindows (script-window-tree-natives
+// .mjs), which call them directly. Each read and store is the JavaScript
+// body's, in its order. GC_STATUS = [status, address]: 0 done; 1 the
+// JavaScript body must run instead (PushGC with an empty free list, which
+// allocates a node), before any store; 2 a heap access at `address` fell
+// outside the heap after the stores the JavaScript body makes before the
+// same access, which then throws there.
+const G_NODE_FLAGS: u32 = 0xa4;
+const G_DEPTH: u32 = 0xa8;
+const G_STACK_TOP: u32 = 0xac;
+const G_FREE_LIST: u32 = 0xb0;
+const G_OWNER: u32 = 0xb4;
+const G_TEXT_POLY: u32 = 0x50;
+const G_UNKNOWN84: u32 = 0x84;
+const G_UNDERLINE: u32 = 0x88;
+const G_BASELINE: u32 = 0x8c;
+const G_VSPACING: u32 = 0x90;
+static mut GC_STATUS: [u32; 2] = [0; 2];
+
+#[no_mangle]
+pub extern "C" fn vm_gc_status_ptr() -> *mut u32 {
+    addr_of_mut!(GC_STATUS) as *mut u32
+}
+
+/// A checked heap access for the stack bodies: the arena address, or None
+/// after recording the fault.
+#[inline(always)]
+fn checked(a: u32, width: u32) -> Option<u32> {
+    let off = a.wrapping_sub(HEAP_BASE);
+    if a < HEAP_BASE || off as u64 + width as u64 > host(1) as u64 {
+        unsafe { *addr_of_mut!(GC_STATUS) = [2, a] };
+        return None;
+    }
+    Some(host(0).wrapping_add(off))
+}
+fn g32(a: u32) -> Option<u32> {
+    checked(a, 4).map(load32)
+}
+fn s32(a: u32, v: u32) -> Option<()> {
+    checked(a, 4).map(|p| store32(p, v))
+}
+fn g8(a: u32) -> Option<u8> {
+    checked(a, 1).map(|p| crate::interp::load8(p))
+}
+fn s8(a: u32, v: u8) -> Option<()> {
+    checked(a, 1).map(|p| store8(p, v))
+}
+
+/// gcCopyGC(dst, src).
+fn copy_gc(dst: u32, src: u32) -> Option<()> {
+    s32(dst.wrapping_add(G_CANVAS), g32(src.wrapping_add(G_CANVAS))?)?;
+    let mut off = G_ORIGIN_X;
+    while off <= G_CLIP_H {
+        s32(dst.wrapping_add(off), g32(src.wrapping_add(off))?)?;
+        off += 4;
+    }
+    s8(dst.wrapping_add(G_STYLE), g8(src.wrapping_add(G_STYLE))?)?;
+    let flags = g32(dst.wrapping_add(G_FLAGS))?;
+    s32(dst.wrapping_add(G_FLAGS), (flags & !0x3f) | (g32(src.wrapping_add(G_FLAGS))? & 0x3f))?;
+    for off in [G_POLY, G_TEXT_POLY, G_TILE_COLOR] {
+        s32(dst.wrapping_add(off), g32(src.wrapping_add(off))?)?;
+    }
+    for i in 0..4 {
+        s32(dst.wrapping_add(G_TILE_FLOATS + 4 * i), g32(src.wrapping_add(G_TILE_FLOATS + 4 * i))?)?;
+    }
+    s32(dst.wrapping_add(G_TEXT_COLOR), g32(src.wrapping_add(G_TEXT_COLOR))?)?;
+    for i in 0..4 {
+        s32(dst.wrapping_add(G_TEXT_FLOATS + 4 * i), g32(src.wrapping_add(G_TEXT_FLOATS + 4 * i))?)?;
+    }
+    for off in [G_NORMAL_FONT, G_BOLD_FONT, G_UNKNOWN84, G_UNDERLINE, G_BASELINE, G_VSPACING] {
+        s32(dst.wrapping_add(off), g32(src.wrapping_add(off))?)?;
+    }
+    s8(dst.wrapping_add(G_HALIGN), g8(src.wrapping_add(G_HALIGN))?)?;
+    s8(dst.wrapping_add(G_VALIGN), g8(src.wrapping_add(G_VALIGN))?)?;
+    let text_flags = g32(dst.wrapping_add(G_TEXT_FLAGS))?;
+    s32(dst.wrapping_add(G_TEXT_FLAGS), (text_flags & !0x3) | (g32(src.wrapping_add(G_TEXT_FLAGS))? & 0x3))?;
+    for off in [G_HMULT, G_VMULT] {
+        s32(dst.wrapping_add(off), g32(src.wrapping_add(off))?)?;
+    }
+    Some(())
+}
+
+fn push_gc(gc: u32) -> Option<i32> {
+    let depth = g32(gc + G_DEPTH)? as i32;
+    if g32(gc + G_OWNER)? != 0 {
+        return Some(depth);
+    }
+    let node = g32(gc + G_FREE_LIST)?;
+    if node == 0 {
+        unsafe { *addr_of_mut!(GC_STATUS) = [1, 0] };
+        return None;
+    }
+    s32(gc + G_FREE_LIST, g32(node.wrapping_add(G_STACK_TOP))?)?;
+    copy_gc(node, gc)?;
+    s32(node.wrapping_add(G_OWNER), gc)?;
+    s32(node.wrapping_add(G_NODE_FLAGS), g32(node.wrapping_add(G_NODE_FLAGS))? & !1)?;
+    s32(node.wrapping_add(G_FREE_LIST), 0)?;
+    s32(node.wrapping_add(G_DEPTH), g32(gc + G_DEPTH)?)?;
+    s32(node.wrapping_add(G_STACK_TOP), g32(gc + G_STACK_TOP)?)?;
+    s32(gc + G_STACK_TOP, node)?;
+    s32(gc + G_DEPTH, (g32(gc + G_DEPTH)? as i32).wrapping_add(1) as u32)?;
+    Some(depth)
+}
+
+/// gcRestoreGC(gc, n).
+fn restore_gc(gc: u32, n: i32) -> Option<()> {
+    if n >= g32(gc + G_DEPTH)? as i32 {
+        return Some(());
+    }
+    if g32(gc + G_OWNER)? != 0 {
+        return Some(());
+    }
+    let mut found = false;
+    let mut last = 0;
+    let mut node = g32(gc + G_STACK_TOP)?;
+    while node != 0 {
+        let node_depth = g32(node.wrapping_add(G_DEPTH))? as i32;
+        if node_depth < n {
+            break;
+        }
+        if node_depth == n {
+            found = true;
+        }
+        last = node;
+        let next = g32(node.wrapping_add(G_STACK_TOP))?;
+        s32(gc + G_STACK_TOP, next)?;
+        s32(gc + G_DEPTH, node_depth as u32)?;
+        let free = g32(gc + G_FREE_LIST)?;
+        let depth = if free != 0 { (g32(free.wrapping_add(G_DEPTH))? as i32).wrapping_add(1) } else { 1 };
+        s32(node.wrapping_add(G_DEPTH), depth as u32)?;
+        s32(node.wrapping_add(G_OWNER), gc)?;
+        s32(node.wrapping_add(G_NODE_FLAGS), g32(node.wrapping_add(G_NODE_FLAGS))? | 1)?;
+        s32(node.wrapping_add(G_STACK_TOP), g32(gc + G_FREE_LIST)?)?;
+        s32(node.wrapping_add(G_FREE_LIST), 0)?;
+        s32(gc + G_FREE_LIST, node)?;
+        if found {
+            break;
+        }
+        node = next;
+    }
+    if last != 0 {
+        copy_gc(gc, last)?;
+    }
+    Some(())
+}
+
+/// gcPushGC on the GC at native address `gc`: its depth before the push.
+#[no_mangle]
+pub extern "C" fn vm_gc_push(gc: u32) -> i32 {
+    unsafe { *addr_of_mut!(GC_STATUS) = [0, 0] };
+    push_gc(gc).unwrap_or(0)
+}
+
+/// gcPopGC(gc, gcNum).
+#[no_mangle]
+pub extern "C" fn vm_gc_pop(gc: u32, gc_num: i32) {
+    unsafe { *addr_of_mut!(GC_STATUS) = [0, 0] };
+    let _ = (|| -> Option<()> {
+        if gc_num == -1 {
+            let top = g32(gc + G_STACK_TOP)?;
+            // `L.read(depth) - 1` is a double; gcRestoreGC's `n |= 0` wraps it.
+            let target = if top != 0 { g32(top.wrapping_add(G_DEPTH))? as i32 } else { (g32(gc + G_DEPTH)? as i32).wrapping_sub(1) };
+            restore_gc(gc, target)
+        } else {
+            restore_gc(gc, gc_num)
+        }
+    })();
+}
