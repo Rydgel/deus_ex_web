@@ -113,6 +113,11 @@ contribution inside their radius.
 * `world.syncMovingLights` runs after each Play tick; `LightAtlas` uploads the
   changed tile rectangles through `copyTextureToTexture` from a never-rendered
   staging texture that shares the page's pixels.
+* Host work (2026-10-03, [Play CPU plan](play-cpu-plan.md) step 1.1): by
+  default only the light maps a changed light or moved mover reaches are
+  recomposed (see "Incremental recomposition" below). `MOVING_LIGHTS=full` in
+  Node or `?movingLights=full` in the viewer keeps the whole-frame recompute
+  as the reference.
 * The static texels stay in the existing float reconstruction; a moving texel
   is `min(127/255, static + entry/255)`.
 
@@ -150,6 +155,44 @@ In the browser, the Training dark room goes from black to lit around the Beam
 and back when AugLight toggles; the light follows the view while walking the
 maze. The moving-light sync costs about 2 ms median and 3 ms mean per frame
 while the Beam moves (headless measurement over 120 frames).
+
+## Incremental recomposition
+
+This is host bookkeeping, not original behavior: the original recomputes its
+dynamic light-map texels per drawn surface every frame. The full mode
+recomposed every moving light map whenever any light or mover changed, so on
+UNATCO Island the three flickering ElectricityEmitters (their `LightType`
+toggles between `LT_None` and `LT_Steady`) recomposed about 185 light maps on
+almost every frame.
+
+A light map's moving texels depend only on its static copy and on its
+contributions, added in light order with `min(127/255, texel + addend)` into a
+float. The incremental mode keeps, per light (by name), the signature of its
+location, light fields and level brightness, its contribution and the records
+it reaches. A light map is recomposed only when a contribution it had or now
+has changes: a light changed, appeared or left, or the mover owning a brush
+light map changed its offset. The recomposition re-adds every contribution of
+that light map in the same light order, so its float operations are the full
+mode's. Each contribution also caches its per-texel addends, so an unchanged
+light's addends are re-added without evaluating the spatial function again;
+a light that leaves and comes back unchanged (the flicker) gets its cached
+contribution back, unless a mover moved meanwhile. If the remaining lights
+change their relative order, every light map is recomputed, as before.
+
+`scripts/validate-moving-lights-incremental.mjs` runs both modes on two worlds
+of one map with the same lights and mover offsets every frame, and requires
+identical moving light maps, float texels, static copies, moving regions and
+light-atlas bytes after every frame. Workloads: Training with the original
+AugLight path (F12) while turning, and Island and Airfield with their authored
+lights plus seeded synthetic perturbations (lights leaving and returning,
+changed brightness and locations, swapped and repeated entries, mover
+offsets, probe lights beside movers for the brush light maps on the normal,
+NonIncidence and float paths). The first version failed this check: a light
+leaving in the same frame as a mover moved was parked with contributions at
+the old offset. On the default seed, Island recomposes 30,626 light maps
+over 300 frames against 178,984, and Airfield 52,511 against 200,800. Island
+standing at Player start in the browser (Linux host, 1920×1080): the `tick`
+phase, which holds the moving-light sync, drops by about 3.5 ms.
 
 ## Precision boundary: FPU control word
 

@@ -1,9 +1,10 @@
 # Play CPU plan: less main-thread work, more Rust and GPU
 
 Written 2026-10-03 after the Linux-host measurements in
-[play frame cost](play-frame-cost.md) ("October 3"). Nothing below is
-implemented yet; the savings are estimates from CPU-profile attribution, and
-each step's A/B decides what it really saves.
+[play frame cost](play-frame-cost.md) ("October 3"). The savings are
+estimates from CPU-profile attribution, and each step's A/B decides what it
+really saves. Done steps and their measurements are under
+[Progress](#progress) at the end.
 
 ## Starting point
 
@@ -236,3 +237,13 @@ the cost:
 
 The M2 Pro runs the tick about 1.35× faster (bench-sim, 17.6 against about
 13 ms). These are attribution estimates, not measurements.
+
+## Progress
+
+Island standing at Player start, Linux host, Arch Chromium, 1920×1080,
+`--no-profile`, medians of three interleaved pairs against the previous
+commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
+
+| Step | Commit | total ms | Phase change |
+|---|---|---:|---|
+| 1.1 moving lights incremental | this commit | 45.5 → 39.8 | tick 21.0 → 17.2 |

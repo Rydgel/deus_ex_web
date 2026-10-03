@@ -17,7 +17,7 @@ import { createNativeRng } from '../runtime/rng.mjs';
 import { createFogPass } from './fog-pass.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
-export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true} = {}) {
+export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   const notes = new Set(), errors = [], textureNames = new Set(), moverGroups = new Map(), rotatedMovers = new Set();
   // The script-VM kernel runs the animated light-map merge (light.rs) and
@@ -25,7 +25,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   let scriptKernel = null;
   try { scriptKernel = await loadScriptVmKernel(); } catch { scriptKernel = null; }
   const lighting = await createLighting(map, asset, assets), lightAtlas = new LightAtlas();
-  const movingLights = createMovingLights(lighting, map.model);
+  const movingLights = createMovingLights(lighting, map.model, movingLightsMode ? { mode: movingLightsMode } : undefined);
   lighting.setMovingApplier(movingLights.apply);
   const lightingEnabled = { value: 1 };
   const displayGamma = { value: 1 / 1.5 };
@@ -436,6 +436,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     }),
     flushLighting(renderer) { lightAtlas.flush(renderer); },
     movingLightRecords: () => movingLights.records(),
+    /** The light atlas pages' bytes (validators compare them). */
+    lightAtlasPages: () => lightAtlas.pages.map(page => page.pixels),
     lightAnimation: () => ({ records: lighting.animatedRecords().length, changed: lightAnimation.changed,
       ms: lightAnimation.ms, mergeMs: lightAnimation.mergeMs,
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
