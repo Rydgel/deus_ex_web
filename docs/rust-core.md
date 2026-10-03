@@ -642,6 +642,73 @@ so it keeps the import), `validate-actor-tick` and
 ticks: 126,751 → 0. Timing (Linux host, bench-sim, 8 interleaved pairs):
 median pair delta −0.24 ms, inside this machine's ±1.9 ms pair noise.
 
+### October 3: walking and flying pawns' performPhysics in Rust (B6a, B6b, implemented)
+
+The first part of B6. The walk loop (B5) and the pawn MoveActor (B4) already
+ran in Rust, but every walking pawn still reached them through the tick's
+`js_tick_physics` callback: ScriptRuntime.processActorPhysics, a fresh
+`pawnPhysicsServices` object, runScriptPawnPhysics, the view's `walking`,
+WalkLoopHost.walk, and after the loop physicsRotation, MoveTimer,
+AvgPhysicsTime and the PendingTouch read, each field through `readNamed`.
+On Island that was about 0.63 ms of JavaScript per browser frame around the
+loop, for about 50 walking pawns per tick.
+
+`pawn_phys.rs` runs APawn::performPhysics for Physics = PHYS_Walking from
+tick.rs, in the reference's order: the walk loop, the physicsRotation gate
+(not PHYS_Spider; Rotation differs from DesiredRotation or RotationRate.Roll
+is positive), physicsRotation itself (bFixedRotationDir cleared and
+bRotateToDesired set in the +0x1ec word; Yaw and Pitch stepped by
+`fixToward` with `Math.trunc` of the double products; the Pitch clamp;
+`move_pawn` with a zero delta and the new rotation when it changed), then
+`MoveTimer = f(MoveTimer - dt)` and AvgPhysicsTime through `phys_avg_time`.
+Its host (`pawn-physics-kernel.mjs`) admits a non-player Pawn when the
+callback would reach runScriptPawnPhysics unchanged (the runtime's own
+processActorPhysics, no tick differential log), the walk loop host would run
+the loop in Rust, and DesiredRotation, RotationRate, AvgPhysicsTime,
+PendingTouch and the two motion bools are image cells `readNamed` uses
+(PHYS_FIELDS), the bools bits 0x20 and 0x40 of one word and the actor's
+`motionFlags` that image word. It pushes the walk contexts as WalkLoopHost.walk
+does. Where Rust hands a step back, an import runs the reference's own code:
+the `walking` body (`js_pawn_walk`), the rotation's MoveActor
+(`js_pawn_rotate`), and the body's rest from a stage (`js_pawn_tail`:
+`pawnPhysicsTail`, now split out of runScriptPawnPhysics). A PendingTouch
+target runs its PostTouch tail there too. After the walk and after the
+rotation's move, Rust reads the pawn's receiver info again; when its image
+changed hands, the rest of the body runs in JavaScript from that point. An
+import that throws pops the contexts in the tick kernel's unwind.
+
+B6b, in the same change: Physics = PHYS_Flying (Island's GeneratorScouts,
+about 12 per tick) runs `fly.rs`, physFlying and calcVelocity's
+accelerating path transcribed from flying.mjs on `Ext` (the x87 model
+validate-script-vm-x87 compares with script-vm.mjs's), with walk.rs's
+`step_up` and `two_wall_adjust` and the walk loop's image pawn for the
+moves and HitWall. A non-PlayerPawn in a standalone level never reaches
+calcVelocity's walking clamp or network boundary. AirSpeed, DesiredSpeed
+and Region.ZoneNumber joined PHYS_FIELDS and ZoneFluidFriction the walk
+table's zone fields; the reference's two boundaries (a nonpositive
+timestep, a colliding pawn in zone 0) run the JavaScript body
+(`js_pawn_fly`), which raises them.
+
+`PAWN_PHYSICS=js` (`?pawnPhysics=js`) keeps the callback;
+`PAWN_PHYSICS_STATS=1` prints the admissions, hand-backs and Rust's branch
+counts. Digests match at all 30 checkpoints on both maps and engines
+(Island `fcd924498a0882c8`, Training `44267cb4460ab7b3`; 22,649 and 5,524
+calls, no declines, no hand-backs). The maps alone fly without hitting
+anything, so `validate-pawn-physics-kernel` runs both maps with
+scripts/scenarios/fly-branches.mjs (every map pawn flies into walls,
+floors, ceilings and corners while DesiredRotation turns) and
+walk-branches.mjs, Rust against `PAWN_PHYSICS=js`: equal digests at every
+checkpoint, and on Island alone 18,810 flights with 1,427 blocked moves,
+582 stepUps, 845 HitWall slides, 138 TwoWallAdjusts and 10,306 rotation
+moves. Never reached: the PostTouch tail and every JavaScript hand-back
+(the walk loop handing back, a flight boundary, a rotation move handed
+back, a changed image). Timing (Linux host, bench-sim, three interleaved
+pairs against `PAWN_PHYSICS=js`, walking only): median tick 14.07 →
+13.46 ms. In the browser (Island at Player start, three interleaved pairs
+against 80a0384): tick 12.91 → 12.25 ms, no errors. The validator groups
+pawn-physics-kernel, walk, flying, pawn, island-falling, island-swimming,
+actor-tick and training-ladder pass.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
@@ -714,7 +781,11 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
      runs in Rust on the pawn's image over B3's kernels and calls B4's
      MoveActor directly; Island's median tick 13.13 → 11.66 ms. Falling
      and swimming return as tail calls.
-   * **B6.** Falling, landing, rotation and the pawn tail.
+   * **B6.** Falling, landing, rotation and the pawn tail. B6a and B6b
+     are done (October 3, above): a walking or flying pawn's
+     performPhysics, physicsRotation and tail run in Rust. Next: the
+     non-Pawn MoveActor and physFalling (crates floating in water), then
+     a pawn's physFalling and physSwimming.
    * **B7.** The player. It needs 1e-6.
 
    Keep these rules:

@@ -307,10 +307,13 @@ export function pawnPhysicsView(actor, services) {
   // B5), with MoveActor's services for the moves it makes there; otherwise,
   // or when Rust hands the call back before any effect, the body runs here.
   let walkOps = null;
+  const opsOfWalk = () => walkOps ??= { level, worldActor, move: moveOps(pawn, services, dispatch, decorate, false) };
   pawn.walking = (seconds, iterations = 0) => {
-    walkOps ??= { level, worldActor, move: moveOps(pawn, services, dispatch, decorate, false) };
-    if (!services.walkLoop?.(pawn, seconds, iterations, walkOps)) walking(pawn, seconds, iterations);
+    if (!services.walkLoop?.(pawn, seconds, iterations, opsOfWalk())) walking(pawn, seconds, iterations);
   };
+  // The walk's services for performPhysics in Rust (pawn-physics-kernel.mjs).
+  // Not enumerable, as `surfaceScan`.
+  Object.defineProperty(pawn, 'walkOps', { value: opsOfWalk });
   pawn.falling = (seconds, iterations) => falling(pawn, seconds, iterations);
   pawn.flying = (seconds, iterations) => physFlying(pawn, seconds, iterations);
   pawn.swimming = (seconds, iterations) => physSwimming(pawn, seconds, iterations);
@@ -494,14 +497,17 @@ function physicsRotation(pawn, dt, services, dispatch) {
     moveActor(pawn, [0, 0, 0], [pitch, yaw, 0], services, dispatch);
 }
 
+/** performPhysics's event dispatch: the view stands for its actor. */
+export const pawnDispatch = (actor, pawn, services) => (target, event, args = []) =>
+  services.dispatch(target === pawn ? actor : target, event, args.map(a => a === pawn ? actor : a));
+
 /** APawn::performPhysics (0x103c9a70), dry standalone dispatch. Non-Pawn
  * actors keep their own recovered routes (decorations: runDecorationPhysics). */
 export function runScriptPawnPhysics(actor, dt, services) {
   if (!services.isA(actor, 'engine.pawn')) unsupported('non-Pawn APawn::performPhysics');
   const pawn = pawnPhysicsView(actor, services);
   const delta = f(dt);
-  const dispatch = (target, event, args = []) =>
-    services.dispatch(target === pawn ? actor : target, event, args.map(a => a === pawn ? actor : a));
+  const dispatch = pawnDispatch(actor, pawn, services);
   switch (pawn.physics) {
     case 1: pawn.walking(delta, 0); break;
     case 2: pawn.falling(delta, 0); break;
@@ -523,9 +529,22 @@ export function runScriptPawnPhysics(actor, dt, services) {
     }
     default: unsupported(`APawn::performPhysics Physics=${pawn.physics}`);
   }
-  if (pawn.physics !== 0xa && (services.isA(actor, 'engine.playerpawn') ||
+  pawnPhysicsTail(actor, pawn, delta, services, dispatch, 0);
+}
+
+/** performPhysics after the Physics dispatch, from `stage`: 0 the
+ * physicsRotation gate, 1 MoveTimer and AvgPhysicsTime, 2 the PostTouch
+ * tail. The Rust body (pawn_phys.rs) runs the rest here from the point
+ * where the pawn's image changed hands, and the PostTouch tail. */
+export function pawnPhysicsTail(actor, pawn, delta, services, dispatch, stage = 0) {
+  if (stage <= 0 && pawn.physics !== 0xa && (services.isA(actor, 'engine.playerpawn') ||
       !sameRotation(pawn.rotation, pawn.desiredRotation) || pawn.rotationRate[2] > 0))
     physicsRotation(pawn, delta, services, dispatch);
+  if (stage <= 1) pawnPhysicsTimers(pawn, delta);
+  postTouchTail(actor, pawn, services, dispatch);
+}
+
+function pawnPhysicsTimers(pawn, delta) {
   pawn.moveTimer = f(pawn.moveTimer - delta);
   // 0x103c9c37..0x103c9c4e keeps both products and their sum in x87 extended
   // precision: old*double[0x10431418] + dt*double[0x1042b8e8], then FSTP m32.
@@ -536,6 +555,9 @@ export function runScriptPawnPhysics(actor, dt, services) {
   pawn.avgPhysicsTime = scriptVmKernel ? scriptVmKernel.avgPhysicsTime(pawn.avgPhysicsTime, delta) : x87store(x87add(
     x87mul(x87load(pawn.avgPhysicsTime), x87double(0.8)),
     x87mul(x87load(delta), x87double(0.2))));
+}
+
+function postTouchTail(actor, pawn, services, dispatch) {
   // APawn has the same deferred-touch tail ordering: call the current target's
   // PostTouch with this pawn, then re-read PendingTouch and unlink one link.
   // The callback can replace/clear PendingTouch, so unlink the post-callback

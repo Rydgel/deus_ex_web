@@ -614,8 +614,14 @@ fn tick_body(
                 return 1;
             }
         }
-        if a.num(F_PHYSICS) != 0.0 && a.num(F_ROLE) != 3.0 {
-            unsafe { js_tick_physics(ctx, delta) };
+        let physics = a.num(F_PHYSICS);
+        if physics != 0.0 && a.num(F_ROLE) != 3.0 {
+            // A walking or flying Pawn's APawn::performPhysics in Rust
+            // (pawn_phys.rs), or the callback where its host declines.
+            if !((physics == 1.0 || physics == 4.0) && a.flags & C_PAWN != 0 && !a.host &&
+                crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)) {
+                unsafe { js_tick_physics(ctx, delta) };
+            }
             a.refresh();
         }
     } else if a.num(F_PHYSICS) == 2.0 {

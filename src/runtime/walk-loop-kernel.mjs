@@ -45,7 +45,7 @@ const declined = (why, name) => {
 const f = Math.fround;
 
 // [spelling, key, kind]: the order is the ABI shared with walk_loop.rs
-// (W_*). The last three are the zone actor's fields.
+// (W_*). The last four are the zone actor's fields.
 export const WALK_FIELDS = [
   ['GroundSpeed', 'engine.pawn.groundspeed', 'float'],
   ['AccelRate', 'engine.pawn.accelrate', 'float'],
@@ -69,8 +69,28 @@ export const WALK_FIELDS = [
   ['ZoneGravity', 'engine.zoneinfo.zonegravity', 'vector'],
   ['ZoneVelocity', 'engine.zoneinfo.zonevelocity', 'vector'],
   ['ZoneGroundFriction', 'engine.zoneinfo.zonegroundfriction', 'float'],
+  // physFlying's (fly.rs, pawn-physics-kernel.mjs).
+  ['ZoneFluidFriction', 'engine.zoneinfo.zonefluidfriction', 'float'],
 ];
+// walk_loop.rs W_ZONE_FLUID_FRICTION.
+const ZONE_FLUID_FRICTION = 22;
 const PAWN_FIELDS = 19;
+
+/** WALK_LOOP_DIFFERENTIAL's counts for a walking call pawn_phys.rs makes
+ * itself (pawn-physics-kernel.mjs), as `walk` keeps them: the Rust-side
+ * counters before the call, then their change and the outcome. */
+export function directWalkBegin(host) {
+  if (!DIFFERENTIAL) return null;
+  const view = host.vm.arena.view;
+  return COUNTERS.map((_, i) => view.getUint32(host.stateAt + 8 + i * 4, true));
+}
+export function directWalkEnd(host, before, handedBack) {
+  if (!before) return;
+  const view = host.vm.arena.view;
+  COUNTERS.forEach((key, i) => { counts[key] += (view.getUint32(host.stateAt + 8 + i * 4, true) - before[i]) >>> 0; });
+  if (handedBack) counts.handedBack++;
+  else counts.calls++;
+}
 
 export class WalkLoopHost {
   constructor(vm) {
@@ -241,9 +261,10 @@ export class WalkLoopHost {
         const value = which === 19 ? pawn.gravity : pawn.zoneVelocity;
         v[0] = value[0]; v[1] = value[1]; v[2] = value[2];
       },
-      js_walk_zone_float(depth) {
+      js_walk_zone_float(depth, which) {
         counts.zoneFallbacks++;
-        return context(depth).pawn.friction;
+        const pawn = context(depth).pawn;
+        return which === ZONE_FLUID_FRICTION ? pawn.fluidFriction : pawn.friction;
       },
       js_walk_error(depth, code) { throw new Error(ERRORS[code] ?? `Walk loop error ${code}`); },
     };

@@ -37,6 +37,7 @@ import {ZoneHost} from './zone-kernel.mjs';
 import {MoveActorHost} from './move-actor-kernel.mjs';
 import {MovePawnHost} from './move-pawn-kernel.mjs';
 import {WalkLoopHost} from './walk-loop-kernel.mjs';
+import {PawnPhysicsHost} from './pawn-physics-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 import {StateTable} from './script-vm-states.mjs';
 import {EventHost, MAX_RUNS} from './script-vm-events.mjs';
@@ -94,6 +95,15 @@ const RECEIVER_VERIFY = typeof process !== 'undefined' && process.env?.RECEIVER_
 // operand shapes (op, property type) instead of their op alone.
 const DETAIL = STATS && process.env.SCRIPT_VM_STATS_DETAIL === '1';
 const count = key => STATS.set(key, (STATS.get(key) ?? 0) + 1);
+// SCRIPT_VM_STATS_TIME=1: also the inclusive wall time of each JavaScript
+// value and effect node, by the same key (measurement only).
+const TIMED = STATS && process.env.SCRIPT_VM_STATS_TIME === '1' ? new Map() : null;
+const timedCount = (key, fn) => {
+  count(key);
+  if (!TIMED) return fn();
+  const clock = globalThis.__realNow ?? performance.now.bind(performance), start = clock();
+  try { return fn(); } finally { TIMED.set(key, (TIMED.get(key) ?? 0) + clock() - start); }
+};
 function shape(run, n, depth = 2) {
   if (n === null || typeof n !== 'object') return String(n);
   let type = '';
@@ -111,10 +121,12 @@ function shape(run, n, depth = 2) {
   return `${opName(n)}${type}${name}${kids?.length ? `(${kids.map(k => shape(run, k, depth - 1)).join(', ')})` : ''}`;
 }
 // bench-sim clears its measurements after the warm-up ticks.
-if (STATS) globalThis.__scriptVmStatsReset = () => STATS.clear();
+if (STATS) globalThis.__scriptVmStatsReset = () => { STATS.clear(); TIMED?.clear(); };
 if (STATS) process.on('exit', () => {
-  const rows = [...STATS].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
-  console.error(`script-vm stats:\n${rows.map(([key, n]) => `${String(n).padStart(10)}  ${key}`).join('\n')}`);
+  const rows = [...STATS].sort(TIMED ? (a, b) => (TIMED.get(b[0]) ?? 0) - (TIMED.get(a[0]) ?? 0) : (a, b) => b[1] - a[1])
+    .slice(0, Number(process.env.SCRIPT_VM_STATS_ROWS) || 60);
+  const ms = key => TIMED ? `${(TIMED.get(key) ?? 0).toFixed(1).padStart(9)} ms` : '';
+  console.error(`script-vm stats:\n${rows.map(([key, n]) => `${String(n).padStart(10)}${ms(key)}  ${key}`).join('\n')}`);
 });
 // SCRIPT_VM_IMPORT_TIME=1 (Node): wall time of the JavaScript behind each
 // import, by import name. `self` leaves out the imports nested inside a
@@ -274,6 +286,8 @@ export class RustScriptVm {
     // R3-b B4: MoveActor for a Pawn source (move-pawn-kernel.mjs).
     this.movePawn = new MovePawnHost(this);
     this.walkLoop = new WalkLoopHost(this);
+    // R3-b B6a: a walking pawn's performPhysics (pawn-physics-kernel.mjs).
+    this.pawnPhysics = new PawnPhysicsHost(this);
     // October 1: the state table (GetStateName) and the small natives' faults.
     this.states = new StateTable(this);
     // October 1: tick events dispatched in Rust (dispatch.rs).
@@ -314,6 +328,7 @@ export class RustScriptVm {
     this.moveActor.attach(x);
     this.movePawn.attach(x);
     this.walkLoop.attach(x);
+    this.pawnPhysics.attach(x);
     const limit = handleLimit();
     this.states.attach(x, limit);
     this.faultAt = x.vm_native_fault_ptr();
@@ -599,7 +614,8 @@ export class RustScriptVm {
     const receiver = (run, handle) => handle === run.selfHandle ? run.self : vm.identity(handle);
     const value = (frame, node, handle) => {
       const run = vm.run(frame);
-      if (STATS) count(`js value ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.why(run, node, handle)}`);
+      if (STATS) return timedCount(`js value ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.why(run, node, handle)}`,
+        () => run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle)));
       return run.compiled.nodeValue(run.nodes[node], run.frame, receiver(run, handle));
     };
     return {
@@ -612,6 +628,7 @@ export class RustScriptVm {
       ...vm.actorTick.imports(),
       ...vm.movePawn.imports(),
       ...vm.walkLoop.imports(),
+      ...vm.pawnPhysics.imports(),
       js_int(frame, node, handle) {
         enter();
         try { return value(frame, node, handle) | 0; } finally { leave(); }
@@ -641,8 +658,9 @@ export class RustScriptVm {
         enter();
         try {
           const run = vm.run(frame);
-          if (STATS) count(`js effect ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.whyEffect(run, node, handle)}`);
-          run.compiled.nodeEffect(run.nodes[node], run.frame, receiver(run, handle));
+          if (STATS) timedCount(`js effect ${DETAIL ? shape(run, run.nodes[node]) : opName(run.nodes[node])}${vm.whyEffect(run, node, handle)}`,
+            () => run.compiled.nodeEffect(run.nodes[node], run.frame, receiver(run, handle)));
+          else run.compiled.nodeEffect(run.nodes[node], run.frame, receiver(run, handle));
         } finally { leave(); }
       },
       js_receiver: handle => vm.receiverInfo(handle),
@@ -1003,9 +1021,9 @@ export class RustScriptVm {
    * marker), else the statement to continue at. */
   step(run, index) {
     const frame = run.frame, entry = run.entries[index];
-    if (STATS) count(`js statement ${DETAIL ? shape(run, entry.node) : opName(entry.node)} (callee)`);
     frame.cursor = entry.next;
-    run.compiled.step(frame, entry);
+    if (STATS) timedCount(`js statement ${DETAIL ? shape(run, entry.node) : opName(entry.node)} (callee)`, () => run.compiled.step(frame, entry));
+    else run.compiled.step(frame, entry);
     if (frame.returned || frame.cursor === null) {
       this.writeResult(run.resultField, frame.result);
       return RETURNED;

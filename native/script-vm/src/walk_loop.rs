@@ -14,7 +14,7 @@
 //! Arithmetic follows the reference: doubles in the same order, `f` at every
 //! Math.fround, `sqrt` for Math.sqrt, `js_hypot` for Math.hypot, `js_min` for
 //! Math.min.
-use crate::interp::{live, load32, load8, receiver_info, HOST};
+use crate::interp::{live, load32, load8, quiet, receiver_info, HOST};
 use crate::move_actor::store;
 use crate::move_pawn::{move_pawn, mp_io, MP_DONE};
 use crate::trace::{abs, f, js_max, js_min, sqrt};
@@ -26,18 +26,18 @@ const DONE: u32 = 1;
 
 // The walk field table (walk-loop-kernel.mjs WALK_FIELDS): [offset, mask].
 const W_GROUND_SPEED: usize = 0;
-const W_ACCEL_RATE: usize = 1;
+pub(crate) const W_ACCEL_RATE: usize = 1;
 const W_MAX_STEP_HEIGHT: usize = 2;
 const W_CAN_JUMP: usize = 3;
 const W_IS_WALKING: usize = 4;
-const W_MOVE_TIMER: usize = 5;
+pub(crate) const W_MOVE_TIMER: usize = 5;
 const W_HIT_SLOPED_WALL: usize = 6;
 const W_IS_PLAYER: usize = 7;
 const W_MASS: usize = 8;
 const W_VELOCITY: usize = 9;
 const W_ACCELERATION: usize = 10;
 const W_OLD_LOCATION: usize = 11;
-const W_PHYSICS: usize = 12;
+pub(crate) const W_PHYSICS: usize = 12;
 const W_BASE: usize = 13;
 const W_REGION_ZONE: usize = 14;
 const W_LOCATION: usize = 15;
@@ -48,7 +48,9 @@ const W_MOTION: usize = 18;
 const W_ZONE_GRAVITY: usize = 19;
 const W_ZONE_VELOCITY: usize = 20;
 const W_ZONE_FRICTION: usize = 21;
-const W_COUNT: usize = 22;
+// physFlying's (fly.rs).
+const W_ZONE_FLUID_FRICTION: usize = 22;
+const W_COUNT: usize = 23;
 
 static mut WFIELDS: [[u32; 2]; W_COUNT] = [[0; 2]; W_COUNT];
 // WL_IO: a line check's answer [time, nx, ny, nz, actor handle], and the
@@ -103,7 +105,7 @@ extern "C" {
 #[inline(always)]
 fn wf(i: usize) -> [u32; 2] { unsafe { (*core::ptr::addr_of!(WFIELDS))[i] } }
 #[inline(always)]
-fn at(base: u32, i: usize) -> u32 { base + wf(i)[0] }
+pub(crate) fn at(base: u32, i: usize) -> u32 { base + wf(i)[0] }
 #[inline(always)]
 fn bit(base: u32, i: usize) -> bool { load32(at(base, i)) & wf(i)[1] != 0 }
 #[inline(always)]
@@ -144,22 +146,46 @@ fn dot(a: V3, b: V3) -> f64 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
 fn sloped(h: &Hit) -> bool { h.time < 1.0 && h.normal[2] > 0.01 && h.normal[2] < 0.7 }
 
 /// The pawn view over the image: the reads and writes walking.mjs and
-/// stepUp make, at the same points.
-struct ImagePawn {
-    depth: u32,
-    base: u32,
+/// stepUp make, at the same points (and physFlying's, fly.rs).
+pub(crate) struct ImagePawn {
+    pub(crate) depth: u32,
+    pub(crate) base: u32,
+}
+
+/// A float32 cell's bits as its JavaScript read yields them: getFloat32
+/// quiets a signaling NaN.
+#[inline(always)]
+fn bits3(base: u32, i: usize) -> [u32; 3] {
+    let a = at(base, i);
+    [quiet(load32(a)), quiet(load32(a + 4)), quiet(load32(a + 8))]
+}
+#[inline(always)]
+fn set_bits3(base: u32, i: usize, v: [u32; 3]) {
+    let a = at(base, i);
+    store(a, v[0]); store(a + 4, v[1]); store(a + 8, v[2]);
 }
 
 impl ImagePawn {
-    fn physics(&self) -> i32 { load8(at(self.base, W_PHYSICS)) as i32 }
+    pub(crate) fn velocity_bits(&self) -> [u32; 3] { bits3(self.base, W_VELOCITY) }
+    pub(crate) fn set_velocity_bits(&self, v: [u32; 3]) { set_bits3(self.base, W_VELOCITY, v); }
+    pub(crate) fn acceleration_bits(&self) -> [u32; 3] { bits3(self.base, W_ACCELERATION) }
+    pub(crate) fn set_acceleration_bits(&self, v: [u32; 3]) { set_bits3(self.base, W_ACCELERATION, v); }
+    pub(crate) fn position_bits(&self) -> [u32; 3] { bits3(self.base, W_LOCATION) }
+    pub(crate) fn old_location_bits(&self) -> [u32; 3] { bits3(self.base, W_OLD_LOCATION) }
+    pub(crate) fn set_old_location_bits(&self, v: [u32; 3]) { set_bits3(self.base, W_OLD_LOCATION, v); }
+    /// `f(zone().ZoneFluidFriction ?? 1.2)`'s bits.
+    pub(crate) fn fluid_friction_bits(&self) -> u32 { (self.zone_float(W_ZONE_FLUID_FRICTION) as f32).to_bits() }
+    /// steps.mjs's `Original stepUp recursion budget exceeded`.
+    pub(crate) fn step_budget_error(&self) { unsafe { js_walk_error(self.depth, E_STEP_BUDGET) }; }
+    pub(crate) fn physics(&self) -> i32 { load8(at(self.base, W_PHYSICS)) as i32 }
     fn position(&self) -> V3 { vec(self.base, W_LOCATION) }
     fn velocity(&self) -> V3 { vec(self.base, W_VELOCITY) }
     fn set_velocity(&self, v: V3) { set_vec(self.base, W_VELOCITY, v); }
     fn acceleration(&self) -> V3 { vec(self.base, W_ACCELERATION) }
     fn set_acceleration(&self, v: V3) { set_vec(self.base, W_ACCELERATION, v); }
     fn base_actor(&self) -> u32 { live(load32(at(self.base, W_BASE))) }
-    fn just_teleported(&self) -> bool { bit(self.base, W_MOTION) }
-    fn set_just_teleported(&self, on: bool) { set_bit(self.base, W_MOTION, on); }
+    pub(crate) fn just_teleported(&self) -> bool { bit(self.base, W_MOTION) }
+    pub(crate) fn set_just_teleported(&self, on: bool) { set_bit(self.base, W_MOTION, on); }
     fn hit_sloped_wall(&self) -> bool { bit(self.base, W_HIT_SLOPED_WALL) }
     fn set_hit_sloped_wall(&self, on: bool) { set_bit(self.base, W_HIT_SLOPED_WALL, on); }
     /// `pawn.region.zone ?? level.pointRegion(pawn.position).zone`, then the
@@ -180,7 +206,7 @@ impl ImagePawn {
         let info = receiver_info(zone);
         if info & HOST != 0 { 0 } else { info & !3 }
     }
-    fn zone_vec(&self, which: usize) -> V3 {
+    pub(crate) fn zone_vec(&self, which: usize) -> V3 {
         let zone = self.zone_base();
         if zone != 0 { return vec(zone, which); }
         unsafe { js_walk_zone_vec(self.depth, which as u32) };
@@ -191,8 +217,8 @@ impl ImagePawn {
         if zone != 0 { return float(zone, which); }
         f(unsafe { js_walk_zone_float(self.depth, which as u32) })
     }
-    fn gravity(&self) -> V3 { self.zone_vec(W_ZONE_GRAVITY) }
-    fn zone_velocity(&self) -> V3 { self.zone_vec(W_ZONE_VELOCITY) }
+    pub(crate) fn gravity(&self) -> V3 { self.zone_vec(W_ZONE_GRAVITY) }
+    pub(crate) fn zone_velocity(&self) -> V3 { self.zone_vec(W_ZONE_VELOCITY) }
     fn friction(&self) -> f64 { self.zone_float(W_ZONE_FRICTION) }
     /// `pawn.lineCheck(s, e, extent, flags, 0)`.
     fn line(&self, s: V3, e: V3, extent: V3, flags: u32) -> Hit {
@@ -202,7 +228,7 @@ impl ImagePawn {
     /// `pawn.move(delta)`: `move_pawn` on this image, or the JavaScript
     /// `pawn.move` where it hands the call back. The result is the view's
     /// `{time: f(time), normal: normal.map(f), actor}`.
-    fn move_by(&self, delta: V3) -> Hit {
+    pub(crate) fn move_by(&self, delta: V3) -> Hit {
         count(2);
         let code = move_pawn(self.depth, self.base, delta[0] as f32, delta[1] as f32, delta[2] as f32, 0, 0, 0, 0, 0);
         if code != MP_DONE {
