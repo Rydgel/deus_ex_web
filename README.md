@@ -175,7 +175,8 @@ Several of these effects run every frame. The heavy loops (mesh posing and
 lighting, Fire.dll ticks, the fog loop, lip sync) run in the Rust/WebAssembly
 core or on the GPU with exact results; the per-map frame cost, the A/B
 measurements and the remaining work toward the 120 fps target are in
-[play frame cost](docs/play-frame-cost.md) and [Rust core](docs/rust-core.md).
+[play frame cost](docs/play-frame-cost.md), [Rust core](docs/rust-core.md) and
+the [Play CPU plan](docs/play-cpu-plan.md).
 
 ## Open the viewer
 

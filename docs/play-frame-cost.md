@@ -43,6 +43,8 @@ identical triangle/material/order stream; `validate-world-batch-gpu` still
 has 0 pixel differences. Interleaved, 3 pairs, 1920×1080: render
 6.86 → 5.36 ms, main draws 726 → 451.
 
+The plan for the remaining main-thread work is [Play CPU plan](play-cpu-plan.md).
+
 ## October 2: phases for the Stage 4 passes
 
 `deusExViewer.framePhases()` now gives each Stage 4 rendering and audio pass
