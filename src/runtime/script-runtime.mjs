@@ -1,3 +1,4 @@
+import {farMoveMode} from './script-vm-render.mjs';
 import { execUpdateParticles } from './script-particles.mjs';
 import {setWindowHeightNative} from './script-window-size.mjs';
 import {setTileWindow} from './script-window-tile.mjs';
@@ -2490,6 +2491,33 @@ export class ScriptRuntime {
     if(!level?.hash)throw new Error('Spawned FarMoveActor requires the level collision hash');
     return farMoveActor(this.relocationLevel(view,level),view,destination,test,noCheck);
   }
+  /** FarMoveActor on a spawned non-Pawn view in the Rust core (render.rs
+   * far_move) where the recovered body would run no callback and no query;
+   * true when it moved the actor. FAR_MOVE=js keeps the JavaScript body;
+   * FAR_MOVE=verify also runs that body from the same state and compares
+   * the result and every field it writes. */
+  noncollidingFarMove(actor,destination,noCheck) {
+    const vm=this.scriptVm,mode=farMoveMode();
+    if(!vm?.render||!vm.zone?.enabled||mode==='js'||!Array.isArray(destination)||destination.length!==3)return false;
+    const level=this.levelFor(actor);
+    if(!level?.hash||!level.zoneModel)return false;
+    const model=vm.zone.model(level);
+    if(!model)return false;
+    const names=['Location','OldLocation','bJustTeleported','Region'];
+    const state=()=>names.map(name=>this.readNamed(actor,name));
+    const before=mode==='verify'?state():null;
+    if(!vm.render.farMove(actor,destination,noCheck,model))return false;
+    if(mode==='verify'){
+      const rust=state();
+      names.forEach((name,i)=>this.writeNamed(actor,name,before[i]));
+      const moved=this.relocateSpawnedActor(actor,destination,0,noCheck),js=state();
+      const same=(a,b)=>a===b||typeof a==='object'&&a!==null&&b!==null&&Object.keys(a).length===Object.keys(b).length&&
+        Object.keys(a).every(key=>Object.is(a[key],b[key]));
+      if(moved!==true||!names.every((_,i)=>same(rust[i],js[i])))
+        throw new Error(`FAR_MOVE=verify: ${actor.name} FarMoveActor differs: Rust ${JSON.stringify(rust)}, JavaScript ${moved} ${JSON.stringify(js)}`);
+    }
+    return true;
+  }
   /** The same FarMoveActor for a map actor: SetLocation on a decoration JC
    * lifts, drops or throws (DeusExPlayer.PutCarriedDecorationInHand /
    * DropDecoration), and the Actor.Tick pawn tail's FarMoveActor(Weapon,
@@ -2523,7 +2551,10 @@ export class ScriptRuntime {
    * same recovered relocation through its pawn physics view, whose hash,
    * encroachment, SetBase and SetActorZone services act on the pawn itself. */
   farMoveActor(actor,destination,test=0,noCheck=0) {
-    if(this.collisionViewActors.has(actor))return this.relocateSpawnedActor(actor,destination,test,noCheck);
+    if(this.collisionViewActors.has(actor)){
+      if(test===0&&!actor.pawn&&!actor.movingBrush&&this.noncollidingFarMove(actor,destination,noCheck))return true;
+      return this.relocateSpawnedActor(actor,destination,test,noCheck);
+    }
     if(this.isMapPawn(actor))
       return (actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor))).farMove(destination,test,noCheck);
     if(actor?.movingBrush)return this.relocateMover(actor,destination,test,noCheck);

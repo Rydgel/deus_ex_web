@@ -75,7 +75,17 @@ const R_BNOSMOOTH: usize = 33;
 const R_BMESHENVIROMAP: usize = 34;
 const R_BMESHCURVY: usize = 35;
 const R_BUNLIT: usize = 36;
-const FIELD_COUNT: usize = 37;
+// The noncolliding FarMoveActor (`far_move`).
+const R_BCOLLIDEACTORS: usize = 37;
+const R_BBLOCKACTORS: usize = 38;
+const R_BBLOCKPLAYERS: usize = 39;
+const R_BCOLLIDEWORLD: usize = 40;
+const R_BCOLLIDEWHENPLACING: usize = 41;
+const R_STANDINGCOUNT: usize = 42;
+const R_BRUSH: usize = 43;
+const R_OLDLOCATION: usize = 44;
+const R_BJUSTTELEPORTED: usize = 45;
+const FIELD_COUNT: usize = 46;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -191,6 +201,13 @@ impl Obj {
     /// Store float bits at `field`, element `i`.
     pub(crate) fn set_word(&self, field: usize, i: u32, bits: u32) {
         store32(self.at(field).wrapping_add(4 * i), bits)
+    }
+    fn set_flag(&self, field: usize) {
+        let at = self.at(field);
+        store32(at, load32(at) | rfield(field)[1])
+    }
+    fn set_byte(&self, field: usize, value: u8) {
+        crate::interp::store8(self.at(field), value)
     }
     pub(crate) fn flag(&self, field: usize) -> bool {
         load32(self.at(field)) & rfield(field)[1] != 0
@@ -565,4 +582,80 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
         }
         store32(word(MB_STATUS), status);
     }
+}
+
+const FAR_MOVE_FIELDS: u64 = 1 << R_BSTATIC
+    | 1 << R_BMOVABLE
+    | 1 << R_BDELETEME
+    | 1 << R_BCOLLIDEACTORS
+    | 1 << R_BBLOCKACTORS
+    | 1 << R_BBLOCKPLAYERS
+    | 1 << R_BCOLLIDEWORLD
+    | 1 << R_BCOLLIDEWHENPLACING
+    | 1 << R_STANDINGCOUNT
+    | 1 << R_BRUSH
+    | 1 << R_LOCATION
+    | 1 << R_OLDLOCATION
+    | 1 << R_BJUSTTELEPORTED
+    | 1 << R_REGION_ZONE
+    | 1 << R_REGION_ILEAF
+    | 1 << R_REGION_ZONENUMBER;
+
+/// ULevel::FarMoveActor (0x10398ba0, relocation.mjs farMoveActor) with
+/// Test 0 on a non-Pawn, non-Brush actor of the image (`handle`) to the f32
+/// bits `x, y, z`, where the JavaScript body would run no callback and no
+/// query: movable and not static, no collision or blocking bits and no
+/// Brush (no hash remove/add; the non-Pawn CheckEncroachment returns false
+/// before any query, docs/rider-move-kernel.md), no FindSpot (bCollideWorld
+/// and bCollideWhenPlacing clear, or `no_check`), no standing riders, a
+/// finite destination, and SetActorZone keeping the zone (or bDeleteMe,
+/// where it returns at once). Then bJustTeleported, Location, OldLocation
+/// and Region are stored and 1 (success) is returned; anything else
+/// returns 0 before any store and the JavaScript body runs. `model` is the
+/// zone model (zone.rs).
+#[no_mangle]
+pub extern "C" fn far_move(handle: u32, model: u32, x: u32, y: u32, z: u32, no_check: u32) -> u32 {
+    let a = Obj::of(handle);
+    if !a.has(FAR_MOVE_FIELDS) || a.flag(R_BSTATIC) || !a.flag(R_BMOVABLE) {
+        return 0;
+    }
+    if a.flag(R_BCOLLIDEACTORS) || a.flag(R_BBLOCKACTORS) || a.flag(R_BBLOCKPLAYERS) || a.pointer(R_BRUSH) != 0 {
+        return 0;
+    }
+    if no_check == 0 && (a.flag(R_BCOLLIDEWORLD) || a.flag(R_BCOLLIDEWHENPLACING)) {
+        return 0;
+    }
+    if a.byte(R_STANDINGCOUNT) != 0 {
+        return 0;
+    }
+    let p = [x, y, z];
+    if p.iter().any(|&w| w & 0x7f80_0000 == 0x7f80_0000) {
+        return 0;
+    }
+    let region = if a.flag(R_BDELETEME) {
+        None
+    } else {
+        if model == 0 || !crate::zone::model_live(model) {
+            return 0;
+        }
+        let point = p.map(|w| f32::from_bits(w) as f64);
+        let Some(r) = crate::zone::point_region(model, point) else {
+            return 0;
+        };
+        if r.zone != a.pointer(R_REGION_ZONE) {
+            return 0;
+        }
+        Some(r)
+    };
+    a.set_flag(R_BJUSTTELEPORTED);
+    for i in 0..3 {
+        a.set_word(R_LOCATION, i, p[i as usize]);
+        a.set_word(R_OLDLOCATION, i, p[i as usize]);
+    }
+    if let Some(r) = region {
+        a.set_word(R_REGION_ZONE, 0, r.zone);
+        a.set_word(R_REGION_ILEAF, 0, r.leaf as u32);
+        a.set_byte(R_REGION_ZONENUMBER, r.number as u8);
+    }
+    1
 }

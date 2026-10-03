@@ -567,7 +567,7 @@ pub(crate) fn load8(addr: u32) -> u8 {
     unsafe { *(addr as usize as *const u8) }
 }
 #[inline(always)]
-fn store8(addr: u32, value: u8) {
+pub(crate) fn store8(addr: u32, value: u8) {
     unsafe { *(addr as usize as *mut u8) = value }
 }
 /// Math.fround.

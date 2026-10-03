@@ -274,7 +274,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 4.1 CycleActors scan in Rust | c542880 | bench-sim pair delta 0.00 (noise) | profiled `js_iterator_next` 1.33 → 0.16 ms per tick |
 | Galaxy ambient scan, 4.6 level loop | 04aaae4 | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
 | 2.2 mesh scene reads in Rust | ec779ee | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
-| 2.2 SetupForActor and Mesh-change reads | this commit | 30.25 → 29.67 | actors 6.02 → 5.39 |
+| 2.2 SetupForActor and Mesh-change reads | 5c97992 | 30.25 → 29.67 | actors 6.02 → 5.39 |
+| 4.3 noncolliding FarMoveActor in Rust | this commit | 30.01 → 28.67 | tick 13.6 → 13.0, sprites 1.57 → 1.21 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -403,3 +404,12 @@ permeating lights' records in the frame's record map, which the Rust
 selection fills only for the lights it returns. It now asks the view for
 the record (`lightRecordOf`), and passes plain, with `MESH_LIGHT=verify` and
 with `RENDER_SCAN=verify`.
+
+Step 4.3, first part (`render.rs` `far_move`, docs/rider-move-kernel.md
+"Noncolliding FarMoveActor"): FarMoveActor on a spawned non-Pawn view
+without collision, FindSpot, riders or a zone change runs in Rust over the
+render field table (nine more fields: the collision and blocking bits,
+bCollideWorld, bCollideWhenPlacing, StandingCount, Brush, OldLocation and
+bJustTeleported). It serves the carried weapons' per-tick FarMove, the
+Shadows' SetLocation and the laser proxies. The rider MoveActor already
+ran in Rust; the hash updates remain.

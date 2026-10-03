@@ -145,3 +145,36 @@ the clock, and surrounds `ScriptRuntime.prototype.moveSpawnedActor` with
 that real clock only while `globalThis.__boundReadsOn` is true (the existing
 benchmark's measured-step gate). It sums elapsed milliseconds and counts
 calls; neither that instrument nor the local captures is shipped in Play.
+
+## Noncolliding FarMoveActor
+
+`render.rs` `far_move` runs `ULevel::FarMoveActor` (`0x10398ba0`,
+`relocation.mjs farMoveActor`) with Test 0 on a spawned non-Pawn,
+non-Brush collision view, where that body would run no callback and no
+query. Its gates, all read in the object image through the render field
+table before any store:
+
+1. Movable and not static (else the body returns false at its first test;
+   the JavaScript returns that).
+2. No bCollideActors, bBlockActors or bBlockPlayers and no Brush: the hash
+   remove/add is skipped (`collides` is bCollideActors), and the non-Pawn
+   CheckEncroachment (`0x1039a350`) returns false before any query, as in
+   step 3 above.
+3. No FindSpot: bCollideWorld and bCollideWhenPlacing clear, or bNoCheck.
+4. StandingCount 0, so no rider is detached through SetBase.
+5. A finite destination, and SetActorZone keeping the current zone (the
+   same point query and hand-back as the rider move), or bDeleteMe, where
+   SetActorZone returns at once.
+
+It then stores bJustTeleported, Location and OldLocation (the float32
+destination) and the new Region, and returns success. Anything else
+leaves the actor untouched for the JavaScript body. Island's users are the
+pawns' carried weapons (Actor.Tick's FarMoveActor of a drawn weapon, about
+23 per tick), the Shadows' SetLocation and the LaserIterator's proxy
+segments. `FAR_MOVE=js` (`?farMove=js`) keeps the JavaScript body;
+`FAR_MOVE=verify` runs it again from the restored state after every Rust
+move and compares the result, Location, OldLocation, bJustTeleported and
+Region. Island and Training digests (both engines), browser runs on Island,
+Training and 02_NYC_Street (400 frames walking), `validate-lasers-play`,
+`-npc-weapon-startup`, `-weapon-select`, `-native-relocation` and
+`-script-set-location` pass under it.

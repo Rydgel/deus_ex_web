@@ -71,6 +71,16 @@ export const RENDER_FIELDS = Object.freeze([
   ['bMeshEnviroMap', 'engine.actor.bmeshenviromap', 'bool'],
   ['bMeshCurvy', 'engine.actor.bmeshcurvy', 'bool'],
   ['bUnlit', 'engine.actor.bunlit', 'bool'],
+  // The noncolliding FarMoveActor (render.rs far_move).
+  ['bCollideActors', 'engine.actor.bcollideactors', 'bool'],
+  ['bBlockActors', 'engine.actor.bblockactors', 'bool'],
+  ['bBlockPlayers', 'engine.actor.bblockplayers', 'bool'],
+  ['bCollideWorld', 'engine.actor.bcollideworld', 'bool'],
+  ['bCollideWhenPlacing', 'engine.actor.bcollidewhenplacing', 'bool'],
+  ['StandingCount', 'engine.actor.standingcount', 'byte'],
+  ['Brush', 'engine.actor.brush', 'pointer'],
+  ['OldLocation', 'engine.actor.oldlocation', 'vector'],
+  ['bJustTeleported', 'engine.actor.bjustteleported', 'bool'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]`, a fixed array of four contiguous floats. */
@@ -87,6 +97,10 @@ const COMPUTED = 0x80000000;
 /** 'rust' (default), 'js' or 'verify'. */
 export const renderScanMode = () => (typeof process !== 'undefined' && process.env?.RENDER_SCAN)
   || globalThis.DEUS_EX_RENDER_SCAN || 'rust';
+/** The noncolliding FarMoveActor (render.rs far_move): 'rust' (default),
+ * 'js' or 'verify'. */
+export const farMoveMode = () => (typeof process !== 'undefined' && process.env?.FAR_MOVE)
+  || globalThis.DEUS_EX_FAR_MOVE || 'rust';
 /** The level loop's passes (level.rs): 'rust' (default), 'js' or 'verify'. */
 export const levelScanMode = () => (typeof process !== 'undefined' && process.env?.LEVEL_SCAN)
   || globalThis.DEUS_EX_LEVEL_SCAN || 'rust';
@@ -280,6 +294,15 @@ export class RenderScanHost {
     if (!this.complete) return false;
     this.x.mesh_reads(pairs, count, player ? handleOf(player) : 0, behind ? 1 : 0, viewTarget ? handleOf(viewTarget) : 0);
     return true;
+  }
+  /** FarMoveActor(actor, destination, Test 0, `noCheck`) in Rust
+   * (render.rs far_move) over the zone `model`: true when it moved the
+   * actor, false when the JavaScript body must run (nothing was stored). */
+  farMove(actor, destination, noCheck, model) {
+    this.table();
+    if (!this.complete) return false;
+    return this.x.far_move(handleOf(actor), model, bitsOf(destination[0]), bitsOf(destination[1]), bitsOf(destination[2]),
+      noCheck ? 1 : 0) === 1;
   }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */
