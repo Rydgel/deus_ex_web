@@ -6,7 +6,8 @@ import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodM
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorRenderFeedback} from './actor-render-feedback.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
-import {RENDER_MESH,RENDER_SHIFT} from '../runtime/script-vm-render.mjs';
+import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
+import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
 import {fieldAccessor,fieldAccessors} from './actor-fields.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
@@ -17,6 +18,10 @@ import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh
 
 export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
+
+// A scene preview's block of render.rs mesh_reads words (u32 indices).
+const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46};
+const MB_WORDS=47,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8;
 
 /** Live NPC mesh binding: update() resamples GetFrame whenever the shared
  * runtime's pose fields change, so original startup/animation is visible in
@@ -137,7 +142,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     const npc=retired.get(actor)??false;retired.delete(actor);
     const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:synthetic++,kernel,visible:drawnInWorld,
       childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,
-      lighting,displayGamma,texturePool:textures,gpu,batches})
+      lighting,displayGamma,texturePool:textures,gpu,batches,reads:true})
       .then(preview=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){preview.dispose();return;}
         preview.root.visible=drawnInWorld(actor);root.add(preview.root);
@@ -223,6 +228,37 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     }
   };
   const itemPreviews=()=>[...itemPools.values()].flatMap(pool=>pool.map(entry=>entry.preview).filter(Boolean));
+  // The previews' per-frame reads in one Rust pass (render.rs mesh_reads)
+  // before their updates, which write none of the fields it reads: each
+  // preview's block, or null when the pass cannot run (the script VM has no
+  // render host, ?renderScan=js). Item previews (drawItems) read the
+  // snapshot their item writes, so they keep their own reads.
+  let pairs=0,pairsCapacity=0;
+  const meshReads=()=>{
+    const render=runtime.scriptVm?.render;
+    if(!render||!actors.length)return null;
+    const arena=runtime.scriptVm.arena;
+    if(8*actors.length>pairsCapacity){
+      if(pairs)arena.release(pairs,pairsCapacity);
+      pairsCapacity=Math.max(4096,16*actors.length);pairs=arena.alloc(pairsCapacity);
+    }
+    let count=0;
+    for(const preview of actors){
+      if(!preview.block)continue;
+      arena.view.setUint32(pairs+8*count,handleOf(preview.actor),true);
+      arena.view.setUint32(pairs+8*count+4,preview.block,true);count++;
+    }
+    const {player,behind,viewTarget}=viewer();
+    if(!render.meshReads(pairs,count,{player,behind,viewTarget}))return null;
+    // Typed views of the arena's current buffer: a memory growth during an
+    // update (the GPU plan, the light selection) replaces it.
+    let buffer=null,u32=null,f32=null;
+    const views=()=>{
+      if(arena.memory.buffer!==buffer){buffer=arena.memory.buffer;u32=new Uint32Array(buffer);f32=new Float32Array(buffer);}
+      return {u32,f32};
+    };
+    return {views,verify:renderScanMode()==='verify'};
+  };
   reconcile();await Promise.all(pending.values());refreshSummary();
   if(!actors.length){textures.dispose();throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');}
   return {root,actors,npcActors,propActors,summary,kernel,
@@ -233,7 +269,8 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
       try{
         reconcile();
         if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
-        for(const actor of actors)actor.update(cameraPosition,view);
+        const reads=meshReads();
+        for(const actor of actors)actor.update(cameraPosition,reads?{...view,reads}:view);
         drawItems(view.items??[],cameraPosition,view);
       }finally{frameViewer=null;}
       // The GPU path's passes (docs/gpu-mesh.md) run once per main frame,
@@ -291,7 +328,7 @@ function setMeshBounds(geometry,array){
 }
 
 export async function createActorMeshPreview(runtime,assets,actor,{originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  childVisible=null,lighting=null,displayGamma={value:1},texturePool=null,gpu=null,batches=null}) {
+  childVisible=null,lighting=null,displayGamma={value:1},texturePool=null,gpu=null,batches=null,reads=false}) {
   // This actor's per-frame reads through pre-resolved accessors
   // (actor-fields.mjs); any other object or name reads through readNamed.
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
@@ -365,7 +402,15 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
   // Actor meshes hold world-space positions: their transforms stay identity,
   // so three.js need not recompose their local matrices every traversal.
   const root=new THREE.Group(),materials=[],textureLeases=[],groups=new Map(),skipped=[];root.matrixAutoUpdate=false;
-  let disposed=false,lastPose=null,lastStyle,lastGlow,materialStateApplied=false;
+  let disposed=false,lastPose=null,lastStyle,lastGlow,materialStateApplied=false,lastNames=null;
+  // `reads`: a scene preview whose `visible`/`childVisible` are drawnInWorld
+  // takes its per-frame reads from a mesh_reads block (MB) when the frame
+  // has one. MB.LAST holds the numeric pose of the last update, valid when
+  // MB.LAST_VALID (the last update used the block); lastNames its names.
+  const arena=reads?runtime.scriptVm?.arena??null:null;
+  let block=0;
+  if(arena){block=arena.alloc(4*MB_WORDS);arena.bytes.fill(0,block,block+4*MB_WORDS);}
+  const meshHandle=meshReference?handleOf(meshReference):0;
   const gpuUniform={value:mode==='gpu'?1:0};
   root.name=`${actorName} authored mesh inspection`;root.visible=false;
   const dispose=()=>{
@@ -377,6 +422,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     kernel?.releaseLightingMesh?.(faceWords);
     for(const group of groups.values())if(group.batchEntry){batches.remove(group.batchEntry);group.batchEntry=null;}
     if(gpuHandle)gpu.release(gpuHandle);
+    if(block){arena.release(block,4*MB_WORDS);block=0;}
     // A failed pose may have left an internal lease outstanding; disposal
     // still releases this private cache and must not mask the original error.
     cache.entries.clear();
@@ -390,6 +436,12 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       ...(self?own.BlendAnimSequence():read(animationActor,'BlendAnimSequence')),
       ...(self?own.BlendAnimFrame():read(animationActor,'BlendAnimFrame'))];
   };
+  // pose()'s names: AnimSequence and the four BlendAnimSequence entries of
+  // the animation actor.
+  const poseNames=animationActor=>animationActor===actor
+    ?[own.AnimSequence(),...own.BlendAnimSequence()]
+    :[read(animationActor,'AnimSequence'),...read(animationActor,'BlendAnimSequence')];
+  const sameNames=(a,b)=>a.length===b.length&&a.every((value,index)=>Object.is(value,b[index]));
   const copyPositions=(positions,indices)=>{
     const vertices=new DataView(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength);
     for(let corner=0;corner<indices.length;corner++){
@@ -692,7 +744,29 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       }catch(error){toCpu(error.message);}
     }
     lastPose=pose();
-    return {actor,root,dispose,mesh:meshReference,get viewDependent(){return hasEnvironment&&mode==='cpu';},updateView,
+    const blockLastValid=()=>new Uint32Array(arena.memory.buffer)[(block>>2)+MB.LAST_VALID]!==0;
+    /** pose() as the last block update saw it: MB.LAST's words (animation
+     * actor, bParticles, DrawScale, Location, Rotation, PrePivot, AnimFrame,
+     * BlendAnimFrame) and lastNames, in pose()'s order. */
+    const blockLastPose=()=>{
+      const buffer=arena.memory.buffer,at=(block>>2)+MB.LAST,w=new Uint32Array(buffer,4*at,17),x=new Float32Array(buffer,4*at,17);
+      return [identityOfHandle(w[0]),Boolean(w[1]),x[2],x[3],x[4],x[5],w[6]|0,w[7]|0,w[8]|0,x[9],x[10],x[11],
+        lastNames[0],x[12],...lastNames.slice(1),x[13],x[14],x[15],x[16]];
+    };
+    // RENDER_SCAN=verify: the block's reads against the JavaScript reads.
+    const bitsOf=value=>{const v=new DataView(new ArrayBuffer(4));v.setFloat32(0,value,true);return v.getUint32(0,true);};
+    function verifyReads(u32,f32,at){
+      const status=u32[at+MB.STATUS],fail=what=>{throw new Error(`RENDER_SCAN=verify: ${actorName} ${what} differs in mesh_reads`);};
+      if(Boolean(status&MS_DRAWN)!==Boolean(visible(actor,own)))fail('drawnInWorld');
+      if(childVisible&&Boolean(status&MS_DRAWN_CHILD)!==Boolean(childVisible(actor,own)))fail('drawnInWorld(child)');
+      if(u32[at+MB.MESH]!==(own.Mesh()?handleOf(own.Mesh()):0))fail('Mesh');
+      if(u32[at+MB.STYLE]!==own.Style())fail('Style');
+      const floats=[[MB.SCALEGLOW,[own.ScaleGlow()]],[MB.LOCATION,own.Location()],[MB.PREPIVOT,own.PrePivot()],[MB.DRAWSCALE,[own.DrawScale()]]];
+      for(const [word,values] of floats)values.forEach((value,i)=>{if(u32[at+word+i]!==bitsOf(value))fail(`word ${word+i}`);});
+      const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
+      if(u32[at+MB.ANIMACTOR]!==handleOf(animationActor))fail('animation actor');
+    }
+    return {actor,root,dispose,mesh:meshReference,get block(){return block;},get viewDependent(){return hasEnvironment&&mode==='cpu';},updateView,
       /** The actor's current Mesh (undefined where readNamed would throw). */
       readMesh(){try{return own.Mesh();}catch{return undefined;}},
       passVisibility,get path(){return mode;},
@@ -704,9 +778,14 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       update(cameraPosition,view={}){
         if(disposed)return false;
-        root.visible=visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+        // This frame's mesh_reads words (MB), or -1.
+        const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
+        const verify=at>=0&&view.reads.verify;
+        root.visible=at>=0?Boolean(u32[at+MB.STATUS]&MS_DRAWN)
+          :visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+        if(verify)verifyReads(u32,f32,at);
         // `view.children`: mirror child frames will draw this frame.
-        childOnly=!root.visible&&Boolean(view.children&&childVisible?.(actor,own));
+        childOnly=!root.visible&&Boolean(view.children&&(at>=0?childVisible&&u32[at+MB.STATUS]&MS_DRAWN_CHILD:childVisible?.(actor,own)));
         mainCamera=view.camera??null;
         if(childOnly)root.visible=true;
         if(!root.visible){hideBatched();return false;}
@@ -715,16 +794,23 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         // pose is culled here; three.js would cull each group anyway, so
         // render feedback is unchanged. Mirror frames disable this (view.cull).
         if(view.cull&&view.frustum){
-          const location=own.Location(),pivot=own.PrePivot();
-          cullSphere.center.set(location[1]+pivot[1],location[2]+pivot[2],-(location[0]+pivot[0]));
-          cullSphere.radius=cullRadius*Math.max(1,Math.abs(own.DrawScale()))*1.01+1;
+          if(at>=0){
+            const l=at+MB.LOCATION,p=at+MB.PREPIVOT;
+            cullSphere.center.set(f32[l+1]+f32[p+1],f32[l+2]+f32[p+2],-(f32[l]+f32[p]));
+            cullSphere.radius=cullRadius*Math.max(1,Math.abs(f32[at+MB.DRAWSCALE]))*1.01+1;
+          }else{
+            const location=own.Location(),pivot=own.PrePivot();
+            cullSphere.center.set(location[1]+pivot[1],location[2]+pivot[2],-(location[0]+pivot[0]));
+            cullSphere.radius=cullRadius*Math.max(1,Math.abs(own.DrawScale()))*1.01+1;
+          }
           if(!view.frustum.intersectsSphere(cullSphere)){root.visible=false;hideBatched();return false;}
         }
-        if(own.Mesh()!==meshReference)throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
+        if(at>=0?u32[at+MB.MESH]!==meshHandle:own.Mesh()!==meshReference)
+          throw new Error(`${actorName} changed Mesh; rebuilding the inspection resource is unsupported`);
         // Actor.uc declares ScaleGlow as the lighting multiplier. With original
         // mesh lighting it is inside FLightManager::Light and the unlit colour;
         // the unlit inspection path applies it to the texture directly.
-        const glow=lighting?1:Math.min(1,own.ScaleGlow()),style=own.Style();
+        const glow=lighting?1:Math.min(1,at>=0?f32[at+MB.SCALEGLOW]:own.ScaleGlow()),style=at>=0?u32[at+MB.STYLE]:own.Style();
         if(!materialStateApplied||!Object.is(glow,lastGlow)||!Object.is(style,lastStyle))for(const material of materials){
           material.color.setRGB(glow,glow,glow);
           const flags=material.userData.flags;
@@ -745,8 +831,25 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
           if(!group.batchEntry)showGroup(group,group.mesh.visible);
         }
         lastGlow=glow;lastStyle=style;materialStateApplied=true;
-        const current=pose();
-        const poseChanged=!current.every((value,index)=>Object.is(value,lastPose[index]));
+        // The pose changed: the block's numeric words against the last
+        // update's (CHANGED) and the names, when the last update used the
+        // block too; pose() against lastPose otherwise.
+        let current=null,names=null,poseChanged;
+        if(at>=0){
+          const words=view.reads.views().u32;
+          names=poseNames(identityOfHandle(words[at+MB.ANIMACTOR]));
+          if(words[at+MB.LAST_VALID])poseChanged=Boolean(words[at+MB.STATUS]&MS_CHANGED)||!sameNames(names,lastNames);
+        }
+        if(poseChanged===undefined||verify){
+          // A JavaScript-path update after block updates compares with the
+          // pose the last block update committed.
+          if(at<0&&block&&lastNames&&blockLastValid())lastPose=blockLastPose();
+          current=pose();
+          const changed=!current.every((value,index)=>Object.is(value,lastPose[index]));
+          if(poseChanged!==undefined&&poseChanged!==changed)
+            throw new Error(`RENDER_SCAN=verify: ${actorName} pose changed is ${poseChanged} from mesh_reads, ${changed} by pose()`);
+          poseChanged=changed;
+        }
         let posed=false;
         if(poseChanged&&mode==='gpu'){planGpu();posed=true;}
         if(poseChanged&&mode==='cpu'){
@@ -785,7 +888,12 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         }
         // Hidden from the main pass until a child pass shows it (passVisibility).
         if(childOnly){root.visible=false;hideBatched();}
-        lastPose=current;summary.animation=own.AnimSequence();summary.frame=own.AnimFrame();
+        if(at>=0){
+          const words=view.reads.views().u32;
+          words.copyWithin(at+MB.LAST,at+MB.POSE,at+MB.POSE+(MB.LAST-MB.POSE));words[at+MB.LAST_VALID]=1;lastNames=names;
+          if(verify)lastPose=current;
+        }else{lastPose=current??pose();if(block)new Uint32Array(arena.memory.buffer)[(block>>2)+MB.LAST_VALID]=0;}
+        summary.animation=own.AnimSequence();summary.frame=own.AnimFrame();
         // True when a buffer was re-uploaded: pose positions, or the
         // camera-relative environment UVs, which change with the viewer.
         return poseChanged||environmentUpload;

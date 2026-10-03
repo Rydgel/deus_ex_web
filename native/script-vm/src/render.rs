@@ -16,6 +16,10 @@
 //! * MESH: a live Mesh pointer, npc-mesh-preview.mjs admission's first test.
 //! * AMBIENT: a live AmbientSound pointer, the first test of Galaxy Update's
 //!   ambient scan (galaxy-audio.mjs `update`).
+//!
+//! `mesh_reads` is the actor mesh scene's per-actor read pass
+//! (npc-mesh-preview.mjs `update`): drawnInWorld, the cull sphere's fields,
+//! Mesh, Style, ScaleGlow and the numeric half of `pose()`.
 //! * JS: a field one of the requested kinds reads cannot be read in the
 //!   image as readNamed would (a HOST receiver, a bound key, a class whose
 //!   spelling resolves elsewhere), or an owner walk longer than OWNER_WALK:
@@ -52,7 +56,17 @@ pub(crate) const R_LOCATION: usize = 17;
 const R_AMBIENTSOUND: usize = 18;
 // The level loop's fields (level.rs).
 pub(crate) const R_DISTANCEFROMPLAYER: usize = 19;
-const FIELD_COUNT: usize = 20;
+// The mesh scene's per-actor reads (`mesh_reads`).
+const R_PREPIVOT: usize = 20;
+const R_DRAWSCALE: usize = 21;
+const R_STYLE: usize = 22;
+const R_SCALEGLOW: usize = 23;
+const R_BANIMBYOWNER: usize = 24;
+const R_BPARTICLES: usize = 25;
+const R_ROTATION: usize = 26;
+const R_ANIMFRAME: usize = 27;
+const R_BLENDANIMFRAME: usize = 28;
+const FIELD_COUNT: usize = 29;
 /// The fields meshlight.rs reads on a light.
 pub(crate) const MESH_LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
@@ -342,4 +356,172 @@ pub extern "C" fn cycle_scan(list: u32, cursor: u32, steps: u32, bound: u32, rid
     store32(out, kind);
     store32(out.wrapping_add(4), cursor);
     store32(out.wrapping_add(8), steps);
+}
+
+// mesh_reads block words (npc-mesh-preview.mjs MESH_BLOCK).
+const MB_STATUS: u32 = 0;
+const MB_MESH: u32 = 1;
+const MB_STYLE: u32 = 2;
+const MB_SCALEGLOW: u32 = 3;
+const MB_LOCATION: u32 = 4;
+const MB_PREPIVOT: u32 = 7;
+const MB_DRAWSCALE: u32 = 10;
+const MB_ANIMACTOR: u32 = 11;
+const MB_POSE: u32 = 12;
+const MB_LAST: u32 = MB_POSE + POSE_WORDS;
+const MB_LAST_VALID: u32 = MB_LAST + POSE_WORDS;
+/// The numeric pose: animation actor, bParticles, DrawScale, Location,
+/// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
+const POSE_WORDS: u32 = 17;
+/// Which pose words are floats (NaN equals NaN, as Object.is).
+const POSE_FLOATS: u32 = 1 << 2 | 0b111 << 3 | 0b111 << 9 | 0b11111 << 12;
+// Status bits.
+const MS_OK: u32 = 1;
+const MS_DRAWN: u32 = 2;
+const MS_DRAWN_CHILD: u32 = 4;
+const MS_CHANGED: u32 = 8;
+
+const MESH_SELF_FIELDS: u32 = 1 << R_BHIDDEN
+    | 1 << R_BDELETEME
+    | 1 << R_OWNER
+    | 1 << R_BONLYOWNERSEE
+    | 1 << R_BOWNERNOSEE
+    | 1 << R_MESH
+    | 1 << R_STYLE
+    | 1 << R_SCALEGLOW
+    | 1 << R_LOCATION
+    | 1 << R_PREPIVOT
+    | 1 << R_DRAWSCALE
+    | 1 << R_BANIMBYOWNER
+    | 1 << R_ROTATION;
+const MESH_ANIM_FIELDS: u32 = 1 << R_BPARTICLES | 1 << R_ANIMFRAME | 1 << R_BLENDANIMFRAME;
+
+#[inline(always)]
+fn same_word(a: u32, b: u32, float: bool) -> bool {
+    a == b || float && (a & 0x7fff_ffff) > 0x7f80_0000 && (b & 0x7fff_ffff) > 0x7f80_0000
+}
+
+/// npc-mesh-preview.mjs drawnInWorld on `a` (handle `h`) for `player`
+/// (0: none), `behind` and `view_target`, with `child` as its third
+/// argument; None when an owner on the walk cannot be read in the image or
+/// the walk is too long.
+fn drawn_in_world(a: &Obj, h: u32, player: u32, behind: bool, view_target: u32, child: bool) -> Option<bool> {
+    if a.flag(R_BHIDDEN) || a.flag(R_BDELETEME) {
+        return Some(false);
+    }
+    if player == 0 {
+        return Some(true);
+    }
+    let target = if view_target != 0 { view_target } else { player };
+    if !child && !behind && (h == target || view_target == h) {
+        return Some(false);
+    }
+    let mut owned = false;
+    let mut owner = h;
+    let mut steps = 0;
+    while owner != 0 {
+        if owner == player {
+            owned = true;
+            break;
+        }
+        steps += 1;
+        if steps > OWNER_WALK {
+            return None;
+        }
+        owner = if owner == h {
+            a.pointer(R_OWNER)
+        } else {
+            let o = Obj::of(owner);
+            if !o.has(1 << R_OWNER) {
+                return None;
+            }
+            o.pointer(R_OWNER)
+        };
+    }
+    if a.flag(R_BONLYOWNERSEE) && (!owned || behind) {
+        return Some(false);
+    }
+    Some(!(owned && a.flag(R_BOWNERNOSEE) && !behind))
+}
+
+/// The mesh scene's reads for `count` (handle, block) pairs at `pairs`: per
+/// block the status (OK when every read is in the image; DRAWN and
+/// DRAWN_CHILD, drawnInWorld without and with `child`; CHANGED when
+/// MB_LAST_VALID and a numeric pose word differs from the last), Mesh,
+/// Style, ScaleGlow, Location, PrePivot, DrawScale, the animation actor
+/// (bAnimByOwner ? Owner ?? self : self) and the numeric pose.
+#[no_mangle]
+pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, view_target: u32) {
+    for k in 0..count {
+        let h = load32(pairs.wrapping_add(8 * k));
+        let block = load32(pairs.wrapping_add(8 * k + 4));
+        let word = |i: u32| block.wrapping_add(4 * i);
+        store32(word(MB_STATUS), 0);
+        let a = Obj::of(h);
+        if !a.has(MESH_SELF_FIELDS) {
+            continue;
+        }
+        let (Some(drawn), Some(drawn_child)) = (
+            drawn_in_world(&a, h, player, behind != 0, view_target, false),
+            drawn_in_world(&a, h, player, behind != 0, view_target, true),
+        ) else {
+            continue;
+        };
+        let mut anim_actor = h;
+        if a.flag(R_BANIMBYOWNER) {
+            let owner = a.pointer(R_OWNER);
+            if owner != 0 {
+                anim_actor = owner;
+            }
+        }
+        let other;
+        let anim = if anim_actor == h {
+            &a
+        } else {
+            other = Obj::of(anim_actor);
+            &other
+        };
+        if !anim.has(MESH_ANIM_FIELDS) {
+            continue;
+        }
+        store32(word(MB_MESH), a.pointer(R_MESH));
+        store32(word(MB_STYLE), a.byte(R_STYLE));
+        store32(word(MB_SCALEGLOW), a.word(R_SCALEGLOW, 0));
+        for i in 0..3 {
+            store32(word(MB_LOCATION + i), a.word(R_LOCATION, i));
+            store32(word(MB_PREPIVOT + i), a.word(R_PREPIVOT, i));
+        }
+        store32(word(MB_DRAWSCALE), a.word(R_DRAWSCALE, 0));
+        store32(word(MB_ANIMACTOR), anim_actor);
+        let mut pose = [0u32; POSE_WORDS as usize];
+        pose[0] = anim_actor;
+        pose[1] = anim.flag(R_BPARTICLES) as u32;
+        pose[2] = a.word(R_DRAWSCALE, 0);
+        for i in 0..3 {
+            pose[3 + i] = a.word(R_LOCATION, i as u32);
+            pose[6 + i] = a.word(R_ROTATION, i as u32);
+            pose[9 + i] = a.word(R_PREPIVOT, i as u32);
+        }
+        pose[12] = anim.word(R_ANIMFRAME, 0);
+        for i in 0..4 {
+            pose[13 + i] = anim.word(R_BLENDANIMFRAME, i as u32);
+        }
+        let mut changed = false;
+        for (i, &value) in pose.iter().enumerate() {
+            let i = i as u32;
+            changed |= !same_word(value, load32(word(MB_LAST + i)), POSE_FLOATS & 1 << i != 0);
+            store32(word(MB_POSE + i), value);
+        }
+        let mut status = MS_OK;
+        if drawn {
+            status |= MS_DRAWN;
+        }
+        if drawn_child {
+            status |= MS_DRAWN_CHILD;
+        }
+        if changed && load32(word(MB_LAST_VALID)) != 0 {
+            status |= MS_CHANGED;
+        }
+        store32(word(MB_STATUS), status);
+    }
 }

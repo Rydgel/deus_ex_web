@@ -272,7 +272,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 2.1–2.2 render scan | 79e6a0d | 38.1 → 35.4 | sprites 2.44 → 1.52, tick 16.9 → 15.4 (light scan) |
 | 2.3 mesh-light selection | 233bcc9 | 35.8 → 35.1 | actors 7.2 → 6.7 |
 | 4.1 CycleActors scan in Rust | c542880 | bench-sim pair delta 0.00 (noise) | profiled `js_iterator_next` 1.33 → 0.16 ms per tick |
-| Galaxy ambient scan, 4.6 level loop | this commit | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
+| Galaxy ambient scan, 4.6 level loop | 04aaae4 | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
+| 2.2 mesh scene reads in Rust | this commit | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -365,3 +366,24 @@ the JavaScript. Digests unchanged on both maps and engines under
 `RENDER_SCAN=verify LEVEL_SCAN=verify`; `validate-level-tick`,
 `-play-frame`, `-gm-trench-play-anim`, `-script-spawn`, `-frob`,
 `-native-galaxy-audio` and `-galaxy-volumes` pass.
+
+Step 2.2's remainder (`render.rs` `mesh_reads`): the actor mesh scene's
+per-actor reads in one Rust pass before the updates. Each scene preview
+owns a block of words: drawnInWorld with and without `child` (the Owner walk
+bounded as the sprite scan's), Mesh, Style, ScaleGlow, the cull sphere's
+Location, PrePivot and DrawScale, the animation actor and the numeric half
+of `pose()` (bParticles, DrawScale, Location, Rotation, PrePivot, AnimFrame,
+BlendAnimFrame), with a CHANGED bit against the last committed pose words
+(a NaN equals a NaN, as `Object.is`). Names are not image bytes, so
+AnimSequence and BlendAnimSequence stay JavaScript reads and compare with
+the last update's. Nine fields joined the render word (29 of its 31 bits);
+SetupForActor's own reads (Region, the poly-flag bools, AmbientGlow) need a
+second word and stay in JavaScript. An update that cannot use its block
+(handed back, item previews, `?renderScan=js`) reads as before, and one
+after block updates compares with the pose rebuilt from the block. The
+updates write none of the fields the pass reads; the arena may grow during
+them, so the views follow its buffer. `RENDER_SCAN=verify` compares every
+block read and every pose decision with the JavaScript reads: browser runs
+on Island, Training, 02_NYC_Street and 02_NYC_Smug (400 frames walking)
+found no difference; `validate-actor-mesh-scene`, `-gpu-mesh`,
+`-mirrors-play`, `-npc-mesh-preview` and `-render-visibility` pass.

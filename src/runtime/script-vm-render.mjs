@@ -49,7 +49,24 @@ export const RENDER_FIELDS = Object.freeze([
   ['AmbientSound', 'engine.actor.ambientsound', 'pointer'],
   // The level loop (level.rs).
   ['DistanceFromPlayer', 'engine.actor.distancefromplayer', 'float'],
+  // The mesh scene's reads (render.rs mesh_reads).
+  ['PrePivot', 'engine.actor.prepivot', 'vector'],
+  ['DrawScale', 'engine.actor.drawscale', 'float'],
+  ['Style', 'engine.actor.style', 'byte'],
+  ['ScaleGlow', 'engine.actor.scaleglow', 'float'],
+  ['bAnimByOwner', 'engine.actor.banimbyowner', 'bool'],
+  ['bParticles', 'engine.actor.bparticles', 'bool'],
+  ['Rotation', 'engine.actor.rotation', 'rotator'],
+  ['AnimFrame', 'engine.actor.animframe', 'float'],
+  // A fixed array of four floats, read element by element.
+  ['BlendAnimFrame', 'engine.actor.blendanimframe', 'float[4]'],
 ]);
+/** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
+ * kind, or `float[4]`, a fixed array of four contiguous floats. */
+const cellIs = (cell, kind) => kind === 'float[4]'
+  ? cellKind(cell) === 'fixed' && cellKind(cell.element) === 'float' && cell.element.offset === 0 &&
+    cell.stride === 4 && cell.dim === 4
+  : cellKind(cell) === kind;
 /** Entry kinds: `entry >>> RENDER_SHIFT` is the Level.Actors index, the low
  * bits these. */
 export const RENDER_LIGHT = 1, RENDER_SPRITE = 2, RENDER_ITERATOR = 4, RENDER_MESH = 8, RENDER_AMBIENT = 16,
@@ -100,7 +117,7 @@ export class RenderScanHost {
     RENDER_FIELDS.forEach(([, key, kind], index) => {
       if (expected[index]) return;
       const cell = fieldImageCell(key);
-      if (!cell || cellKind(cell) !== kind) return;
+      if (!cell || !cellIs(cell, kind)) return;
       expected[index] = cell;
       added = true;
       const at = this.fieldsAt + 12 * index;
@@ -234,6 +251,16 @@ export class RenderScanHost {
         if (!actors[i] || this.runtime.readNamed(actors[i], 'bDeleteMe'))
           throw new Error(`LEVEL_SCAN=verify: Level.Actors[${i}] ${actors[i]?.name} is settled in Rust`);
     return settled;
+  }
+  /** The mesh scene's per-actor reads (render.rs mesh_reads) into each
+   * block of the `count` (handle, block) pairs at `pairs`; false when they
+   * cannot run here (the mode is js, the table is not complete). */
+  meshReads(pairs, count, {player = null, behind = false, viewTarget = null}) {
+    if (renderScanMode() === 'js') return false;
+    this.table();
+    if (!this.complete) return false;
+    this.x.mesh_reads(pairs, count, player ? handleOf(player) : 0, behind ? 1 : 0, viewTarget ? handleOf(viewTarget) : 0);
+    return true;
   }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */
