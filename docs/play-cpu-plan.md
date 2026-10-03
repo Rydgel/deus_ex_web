@@ -221,15 +221,52 @@ on the page's main thread.
     build-std setup.
   - The gain is bounded by those loops' size once Phases 1–2 are done.
 - **Simulation and drawing overlapped (Phase 7, the user's decision).**
+  Planned on 2026-10-03, after Phase 4's ports stopped showing in fps. The
+  frame today is the sum of both halves; overlapped, it is the longer one.
   - Drawing is not read-only here: the HUD runs UnrealScript, render
     iterators fire events and move actors, and LastRenderTime stamps feed the
     next tick. All of that stays in the simulation's sequence.
-  - Only the GL work (three.js submission, uploads, GPU mesh passes), about
-    6–8 ms, can move to a worker with an OffscreenCanvas.
-  - It needs every viewer module split into extract and draw halves, and it
-    adds up to a frame of latency.
-  - Phase 2's draw list is the extract half, so Phase 2 keeps this option
-    open.
+  - LastRenderTime is stamped today from three.js's `onAfterRender`
+    (actor-render-feedback.mjs). Overlapped, the next tick starts before
+    that draw ends, so the simulation side must choose the drawn set with
+    the same culling test and stamp it there.
+  - What moves away from the simulation: GL submission, uploads, GPU mesh
+    passes, Web Audio and the DOM.
+  - Which thread is which: the simulation can move to a worker, or the GL
+    work can move to one over an OffscreenCanvas. The runtime already runs
+    without a page (bench-sim, the validators), and Wasm instantiates in a
+    worker as it does in Node, so the simulation in a worker is the shorter
+    path. Input and sounds then cross as message queues, as do the DOM
+    pieces of the DataLink and window host (about ten runtime files).
+  - The boundary: the viewer calls 46 runtime and game entry points today
+    (`readNamed`, `namedReference`, `levelFor`, `prepareMesh`,
+    `getActorMeshTexture`, `movingLights`, `renderViewport`, `surfacePan`,
+    `hud`, `windowPointer` and others). They become one snapshot per frame
+    plus an input queue. Phase 2's Rust render scan is the snapshot's core;
+    with cross-origin isolation (COOP/COEP headers on the dev server and any
+    host), Rust can write it into shared memory without a copy.
+  - Steps, in working days:
+
+    | Step | Days |
+    |---|---:|
+    | Boot the runtime in a worker and send it the package bytes | 1 |
+    | The snapshot replaces the viewer's entry points | 3–5 |
+    | Drawn set and LastRenderTime on the simulation side; DOM pieces | 1–2 |
+    | Input and sound queues | 1 |
+    | Worker digests against in-process runs; browser profile | 1 |
+
+  - Expected on the Linux host (Island, 1920×1080, the 2026-10-03 profile):
+    the simulation side is the tick (11.7 ms), the HUD scripts (2.5), the
+    render iterators (1.0) and the snapshot (about 1), about 16 ms. The
+    drawing side is the meshes (5.4), three.js (4.4), the rest (about 3) and
+    the browser's work between frames (about 5, which does not shrink at
+    720p), about 18 ms. That is about 34 → 50–55 fps. These are attribution
+    estimates; measure the ceiling first by profiling with the tick off.
+  - Every Rust port of tick or HUD work still counts afterwards: it shrinks
+    the simulation side, and moving mesh pose planning to that side
+    balances the two.
+  - It adds one frame of latency. The tick and draw order is unchanged, and
+    the validators keep running the runtime in-process.
 
 ## Fidelity questions found along the way
 
@@ -281,7 +318,7 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 5.1 GC state and tile natives in Rust | a3e391d | 33.0 → 32.2 (noisy runs) | hud 2.98 → 2.56 |
 | 5.2 PushGC/PopGC in Rust | 090989e | 28.74 → 27.54 | hud 2.39 → 2.15 |
 | B6a–B6b walking and flying pawns' performPhysics in Rust | 510aefe | 27.86 → 27.57 | tick 12.91 → 12.25 |
-| B6c falling non-Pawns' performPhysics in Rust | (this commit) | 27.9 → 27.0 (six pairs) | tick 12.41 → 11.82 |
+| B6c falling non-Pawns' performPhysics in Rust | c80e28a | 27.9 → 27.0 (six pairs) | tick 12.41 → 11.82 |
 
 Full validator sweep at 14f9de8 (Linux host, `run-validators.mjs --jobs 8
 --mem-budget 16384`): 489 passed, 0 skipped, 0 failed.
