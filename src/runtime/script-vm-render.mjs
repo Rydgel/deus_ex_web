@@ -20,7 +20,7 @@
  * on a difference.
  */
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell} from './script-object-image.mjs';
-import {fieldKeyId} from './script-vm-lower.mjs';
+import {classRecordId, fieldKeyId} from './script-vm-lower.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {actorsEpoch} from './base-epoch.mjs';
 
@@ -168,6 +168,16 @@ export class RenderScanHost {
     const entries = new Uint32Array(this.vm.arena.memory.buffer, this.out, written).slice();
     if (mode === 'verify') this.verify(actors, entries, {start, kinds, viewer, viewTarget, firstPerson});
     return entries;
+  }
+  /** CycleActors' scan step in Rust (render.rs cycle_scan) over `actors`
+   * for class record `base`: {kind (0 exhausted, 1 found, 2 untested),
+   * cursor, steps}; the actor found or untested is actors[cursor - 1]. */
+  cycleScan(actors, cursor, steps, bound, base) {
+    const list = this.listFor(actors);
+    this.cycleOut ??= this.vm.arena.alloc(16);
+    this.x.cycle_scan(list, cursor, steps, bound, classRecordId(base), this.cycleOut);
+    const view = this.vm.arena.view, at = this.cycleOut;
+    return {kind: view.getUint32(at, true), cursor: view.getUint32(at + 4, true), steps: view.getUint32(at + 8, true)};
   }
   /** RENDER_SCAN=verify: every actor the scan covered against
    * referenceKinds. */

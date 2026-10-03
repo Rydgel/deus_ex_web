@@ -22,7 +22,9 @@
 //! The list is [count, handle...] (script-vm-render.mjs, per actorsEpoch);
 //! an entry is `index << 5 | kind bits`.
 
-use crate::interp::{bound_key, class_entry, js_class_row, live, load32, load8, receiver, BOUND, HOST, RELEASED};
+use crate::interp::{
+    bound_key, chain_has, class_entry, js_class_row, live, load32, load8, receiver, store32, BOUND, HOST, RELEASED,
+};
 use core::ptr::{addr_of, addr_of_mut};
 
 // Field indices (script-vm-render.mjs RENDER_FIELDS).
@@ -282,4 +284,45 @@ pub extern "C" fn render_scan(list: u32, start: u32, kinds: u32, viewer: u32, vi
         }
     }
     written
+}
+
+/// CycleActors' scan step (script-iterators.mjs createCycleActorsIterator,
+/// Engine.dll execCycleActors 0x1036e9d0) over `list` ([count, handle...]):
+/// from `cursor` with `steps` taken of `bound`, wrapping the cursor to 0 at
+/// the count, skip null slots and stop at the first actor whose class row
+/// lists record id `rid` (the cls chain classIsA walks). Writes [kind,
+/// cursor, steps] to `out`: kind 0 exhausted, 1 found (the actor is at
+/// cursor - 1), 2 the actor at cursor - 1 has no class row (JavaScript tests
+/// it).
+#[no_mangle]
+pub extern "C" fn cycle_scan(list: u32, cursor: u32, steps: u32, bound: u32, rid: u32, out: u32) {
+    let count = load32(list);
+    let (mut cursor, mut steps) = (cursor, steps);
+    let mut kind = 0;
+    while steps < bound {
+        if cursor >= count {
+            cursor = 0;
+        }
+        let h = load32(list.wrapping_add(4).wrapping_add(cursor.wrapping_mul(4)));
+        cursor += 1;
+        steps += 1;
+        if h == 0 {
+            continue;
+        }
+        let mut row = class_entry(h);
+        if row <= RELEASED {
+            row = unsafe { js_class_row(h) };
+        }
+        if row == 0 {
+            kind = 2;
+            break;
+        }
+        if chain_has(row, rid) {
+            kind = 1;
+            break;
+        }
+    }
+    store32(out, kind);
+    store32(out.wrapping_add(4), cursor);
+    store32(out.wrapping_add(8), steps);
 }

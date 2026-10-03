@@ -694,7 +694,7 @@ pub(crate) fn live(handle: u32) -> u32 {
 /// Whether class row `row` lists record id `rid`: castObject's `for (; cls;
 /// cls = cls.base) if (cls.record === target)`.
 #[inline(always)]
-fn chain_has(row: u32, rid: u32) -> bool {
+pub(crate) fn chain_has(row: u32, rid: u32) -> bool {
     let count = load32(row.wrapping_add(4));
     let mut at = row.wrapping_add(8);
     for _ in 0..count {

@@ -395,6 +395,7 @@ export function createCycleActorsIterator({
   actorClass,
   levelFor,
   isA,
+  scan = null,
 }) {
   if (typeof evaluateArgument !== 'function') throw new TypeError('CycleActors requires evaluateArgument');
   if (typeof levelFor !== 'function') throw new TypeError('CycleActors requires levelFor');
@@ -418,24 +419,53 @@ export function createCycleActorsIterator({
   let cursor = startIndex >= 0 && startIndex < bound ? startIndex : 0;
   let steps = 0;
 
+  // `scan(array, cursor, steps, bound, baseClass)`, when given, runs the
+  // loop below in the Rust core (script-vm-render.mjs cycleScan): the same
+  // cursor, steps and first match, or an actor it leaves to `isA`.
+  // CYCLE_SCAN=js keeps this loop; CYCLE_SCAN=verify runs both.
+  const mode = cycleScanMode();
+  if (mode === 'js') scan = null;
+  const loop = (array, state) => {
+    while (state.steps < bound) {
+      if (state.cursor >= array.length) state.cursor = 0;
+      const actor = array[state.cursor++]; state.steps++;
+      if (actor === null || actor === undefined) continue;
+      if (!isA(actor, baseClass)) continue;
+      return actor;
+    }
+    return null;
+  };
   return {
     next() {
       outActor.set(null);
       const array = actors();
       if (array.length < bound) bound = array.length;
-      while (steps < bound) {
-        if (cursor >= array.length) cursor = 0;
-        const actor = array[cursor++]; steps++;
-        if (actor === null || actor === undefined) continue;
-        if (!isA(actor, baseClass)) continue;
-        outActor.set(actor); outIndex.set(cursor);
-        return true;
+      let found = null;
+      if (scan) {
+        const check = mode === 'verify' ? {cursor, steps} : null;
+        for (;;) {
+          const result = scan(array, cursor, steps, bound, baseClass);
+          cursor = result.cursor; steps = result.steps;
+          if (result.kind === 0) break;
+          if (result.kind === 1 || isA(array[cursor - 1], baseClass)) { found = array[cursor - 1]; break; }
+        }
+        if (check) {
+          const expected = loop(array, check);
+          if (expected !== found || check.cursor !== cursor || check.steps !== steps)
+            throw new Error(`CYCLE_SCAN=verify: Rust ${found?.name}@${cursor}/${steps}, JavaScript ${expected?.name}@${check.cursor}/${check.steps}`);
+        }
+      } else {
+        const state = {cursor, steps};
+        found = loop(array, state);
+        cursor = state.cursor; steps = state.steps;
       }
+      if (found) { outActor.set(found); outIndex.set(cursor); return true; }
       outIndex.set(cursor);
       return false;
     },
   };
 }
+const cycleScanMode = () => (typeof process !== 'undefined' && process.env?.CYCLE_SCAN) || globalThis.DEUS_EX_CYCLE_SCAN || 'rust';
 
 /** Original execBasedActors 0x103e4800 (native index 306). The exec evaluates
  * BaseClass and the out Actor expression, defaults a null BaseClass to

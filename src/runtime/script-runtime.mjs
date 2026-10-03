@@ -4150,7 +4150,12 @@ export class ScriptRuntime {
         return createBasedActorsIterator({...call,actorClass:this.actorClass.record,
           levelFor:this.levelFor,isA,baseOf:actor=>this.fieldReference(actor,baseField).get()});
       }
-      if(call.index===1002)return createCycleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
+      if(call.index===1002){
+        // The scan loop runs in the Rust core when the script VM has it.
+        const render=this.scriptVm?.render;
+        return createCycleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
+          scan:render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null});
+      }
       if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
       // VisibleActors tests the candidate's whole +0x28 word for bHidden.
       return createVisibleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
