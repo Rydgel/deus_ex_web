@@ -1,5 +1,48 @@
 # Play frame cost from first principles
 
+## October 3: Island standing still on the Linux host
+
+The user saw about 20 fps on UNATCO Island, standing at Player start, in
+Arch's Chromium 152 on the Linux host (Ryzen 9 8945HS, Radeon 780M iGPU,
+RTX 4070 laptop GPU; docs/linux-host.md). `profile-play-browser` now takes
+`--angle` (default `gl` off macOS: the hard-coded `metal` made Linux headless
+fall back to SwiftShader), `--headed` and `--executable`.
+
+**The frame is main-thread JavaScript.** Headless, `--angle gl` (the 780M,
+as the user's Chromium picks), 1920×1080, no CPU profiler, medians of three
+runs after the batching fix below, ms per frame:
+
+| tick | actors | render | audio | HUD | sprites | lighting | rest | total | GPU |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 19.6 | 6.8 | 5.4 | 2.8 | 2.5 | 2.3 | 1.2 | 0.9 | 41.8 | 2.75 |
+
+The GPU timer reads 2.3 ms at 1440×960 and 2.75 ms at 1920×1080; the user
+measured the same frame rate with Chromium on the RTX (PRIME offload). The
+`tick` phase includes `world.syncMovingLights` (about 3.3 ms in a CPU profile)
+and the view setup, besides `game.tick`.
+
+**Machine factor.** `bench-sim` on Island (the 300-tick walk) has a median
+tick of 17.6 ms here against about 13 ms on the M2 Pro, so this CPU runs the
+tick about 1.35× slower. Arch's Chromium 152 against Chrome for Testing 153
+(Playwright), interleaved at 1920×1080: 42.5 against 40.4 ms, almost all of
+it in the tick.
+
+**No regression since October 2, apart from one.** `bc09717` against `841f005`
+on this machine, interleaved, 1440×960: 37.8 against 38.2 ms. The exception
+was world batching. The fake-backdrop depth mesh from `c1486d4` has
+`renderOrder` −1, and `batchWorldMeshes` returned without batching whenever
+any opaque mesh had a nonzero render order. Island's world submissions went
+from 70 to 343 (main pass from 455 to 726 draws), and `validate-world-batches`
+had crashed since then on the backdrop mesh's missing `faces`. Three's opaque
+sort compares group order, then render order, then material ID, so a mesh
+with its own render order draws wholly before or after the render-order-0
+list. The batcher now leaves such meshes out of the material-ID sequence
+instead of giving up. The validator streams the backdrop mesh in draw order
+and passes: Island 438 → 105 opaque submissions, Training 270 → 117, with an
+identical triangle/material/order stream; `validate-world-batch-gpu` still
+has 0 pixel differences. Interleaved, 3 pairs, 1920×1080: render
+6.86 → 5.36 ms, main draws 726 → 451.
+
 ## October 2: phases for the Stage 4 passes
 
 `deusExViewer.framePhases()` now gives each Stage 4 rendering and audio pass

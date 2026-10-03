@@ -15,10 +15,19 @@ const assets = new AssetStore(files);
 function stream(world) {
   const meshes = [];world.root.traverse(mesh => {if (mesh.isMesh) meshes.push(mesh);});
   meshes.sort((a, b) => Number(a.material.transparent) - Number(b.material.transparent) ||
-    a.material.id - b.material.id || a.id - b.id);
+    a.renderOrder - b.renderOrder || a.material.id - b.material.id || a.id - b.id);
   const hash = createHash('sha256');let triangles = 0;
   for (const mesh of meshes) {
     const material = mesh.material;
+    if (mesh.userData.backdrop) {
+      // The depth-only fake-backdrop mesh (no texture or face identities):
+      // its triangles and its place in the draw order belong to the stream.
+      hash.update(JSON.stringify(['backdrop', mesh.userData.actor, mesh.userData.model, mesh.renderOrder,
+        material.side, material.colorWrite, material.depthWrite]));
+      const positions = mesh.geometry.getAttribute('position').array;
+      hash.update(new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength));
+      continue;
+    }
     // Transparent meshes retain their geometry/material boundaries; opaque
     // merged runs retain this same per-triangle sequence and material state.
     for (let i = 0; i < mesh.userData.faces.length; i++) {

@@ -15,14 +15,17 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
     if (!object.material.transparent) meshes.push(object);
   });
   const stats = {before: meshes.length, after: meshes.length, batches: 0};
-  // Current world construction uses group/render order zero throughout. A
-  // future custom order must be handled explicitly rather than misbatched.
-  for (const mesh of meshes) {
-    if (mesh.renderOrder !== 0) return stats;
+  // Three's opaque sort compares group order, then render order, then
+  // material ID. World groups keep group order zero; a future custom group
+  // order must be handled explicitly rather than misbatched. A mesh with its
+  // own render order (the depth-only fake-backdrop mesh, -1) draws wholly
+  // before or after every render-order-zero mesh, so it stays outside the
+  // material-ID sequence that the runs below follow.
+  for (const mesh of meshes)
     for (let parent = mesh.parent; parent; parent = parent.parent)
       if (parent.isGroup && parent.renderOrder !== 0) return stats;
-  }
-  meshes.sort((a, b) => a.material.id - b.material.id);
+  const ordered = meshes.filter(mesh => mesh.renderOrder === 0);
+  ordered.sort((a, b) => a.material.id - b.material.id);
   const eligible = mesh => {
     const material = mesh.material;
     // An animated texture swaps the material's map each frame.
@@ -38,7 +41,7 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
   const runs = [];
   let run = [], textures = new Set();
   const flush = () => { if (run.length > 1) runs.push(run); run = []; textures = new Set(); };
-  for (const mesh of meshes) {
+  for (const mesh of ordered) {
     if (!eligible(mesh)) { flush(); continue; }
     const material = mesh.material, first = run[0]?.material;
     if (first && (first.side !== material.side || first.alphaTest !== material.alphaTest ||
