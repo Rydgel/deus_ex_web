@@ -388,8 +388,8 @@ export class RustScriptVm {
       // The row, then (R3-c) its field and flag words for the perception
       // natives, 0 until js_class_fields computes them (the arena zeroes),
       // and the locomotion word (loco.rs), 0 until js_loco_class does, then
-      // the render word (render.rs), 0 until js_render_class does.
-      const n = chain.length, address = this.arena.alloc(8 + 8 * n + 16), view = this.arena.view;
+      // the two render words (render.rs), 0 until js_render_class does.
+      const n = chain.length, address = this.arena.alloc(8 + 8 * n + 20), view = this.arena.view;
       view.setUint32(address + 4, n, true);
       chain.forEach((id, i) => view.setUint32(address + 8 + 4 * i, id, true));
       names.forEach((id, i) => view.setUint32(address + 8 + 4 * (n + i), id, true));

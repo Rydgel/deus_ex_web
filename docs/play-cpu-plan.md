@@ -273,7 +273,8 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 | 2.3 mesh-light selection | 233bcc9 | 35.8 → 35.1 | actors 7.2 → 6.7 |
 | 4.1 CycleActors scan in Rust | c542880 | bench-sim pair delta 0.00 (noise) | profiled `js_iterator_next` 1.33 → 0.16 ms per tick |
 | Galaxy ambient scan, 4.6 level loop | 04aaae4 | 33.9 → 30.8 | audio 3.14 → 0.85, tick 14.3 → 13.5 |
-| 2.2 mesh scene reads in Rust | this commit | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
+| 2.2 mesh scene reads in Rust | ec779ee | 31.6 → 30.3 (noisy) | actors 6.77 → 6.07 |
+| 2.2 SetupForActor and Mesh-change reads | this commit | 30.25 → 29.67 | actors 6.02 → 5.39 |
 
 Step 1.5's other items were dropped after measuring: `events.allowed` costs
 a few identity comparisons per actor tick, and the pass-through
@@ -387,3 +388,18 @@ block read and every pose decision with the JavaScript reads: browser runs
 on Island, Training, 02_NYC_Street and 02_NYC_Smug (400 frames walking)
 found no difference; `validate-actor-mesh-scene`, `-gpu-mesh`,
 `-mirrors-play`, `-npc-mesh-preview` and `-render-visibility` pass.
+
+The render word is now two words in the class row (fields 0..30 with
+COMPUTED, then 31..62), and a struct member can be a field of its own
+(its offset in the struct, its binding test the struct's key). Region's
+Zone, iLeaf and ZoneNumber, AmbientGlow, bNoSmooth, bMeshEnviroMap,
+bMeshCurvy and bUnlit joined it, so `mesh_reads` also fills SetupForActor's
+reads (`setupMesh(actor, fields)`, MS_SETUP), and reconcile's Mesh-change
+test reads the block (the pass now runs before reconcile). Under
+`RENDER_SCAN=verify` setupMesh compares every field with its readNamed
+reads and reconcile compares each Mesh decision. `validate-mesh-lighting-play`
+had failed since step 2.3 without `MESH_LIGHT=verify`: it looked up the
+permeating lights' records in the frame's record map, which the Rust
+selection fills only for the lights it returns. It now asks the view for
+the record (`lightRecordOf`), and passes plain, with `MESH_LIGHT=verify` and
+with `RENDER_SCAN=verify`.

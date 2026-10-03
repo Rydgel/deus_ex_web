@@ -19,7 +19,7 @@ use crate::render::{Obj, R_BDELETEME, R_DISTANCEFROMPLAYER, R_LOCATION};
 use crate::trace::sqrt;
 use crate::x87::Ext;
 
-const DISTANCE_FIELDS: u32 = 1 << R_LOCATION | 1 << R_DISTANCEFROMPLAYER;
+const DISTANCE_FIELDS: u64 = 1 << R_LOCATION | 1 << R_DISTANCEFROMPLAYER;
 const U: f64 = 1.0 / 9_007_199_254_740_992.0; // 2^-53
 
 #[inline(always)]

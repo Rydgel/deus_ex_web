@@ -60,6 +60,17 @@ export const RENDER_FIELDS = Object.freeze([
   ['AnimFrame', 'engine.actor.animframe', 'float'],
   // A fixed array of four floats, read element by element.
   ['BlendAnimFrame', 'engine.actor.blendanimframe', 'float[4]'],
+  // SetupForActor's reads (mesh-lighting-view.mjs setupMesh). A struct
+  // member is [spelling, struct key, member kind, member key]: its entry is
+  // the member's offset, and its binding test is the struct's key.
+  ['Region.Zone', 'engine.actor.region', 'pointer', 'engine.actor.pointregion.zone'],
+  ['Region.iLeaf', 'engine.actor.region', 'int', 'engine.actor.pointregion.ileaf'],
+  ['Region.ZoneNumber', 'engine.actor.region', 'byte', 'engine.actor.pointregion.zonenumber'],
+  ['AmbientGlow', 'engine.actor.ambientglow', 'byte'],
+  ['bNoSmooth', 'engine.actor.bnosmooth', 'bool'],
+  ['bMeshEnviroMap', 'engine.actor.bmeshenviromap', 'bool'],
+  ['bMeshCurvy', 'engine.actor.bmeshcurvy', 'bool'],
+  ['bUnlit', 'engine.actor.bunlit', 'bool'],
 ]);
 /** Whether `cell` is of `kind` as render.rs reads it: a scalar or struct
  * kind, or `float[4]`, a fixed array of four contiguous floats. */
@@ -100,8 +111,8 @@ export class RenderScanHost {
     this.x = exports;
     this.fieldsAt = exports.render_fields_ptr();
   }
-  /** The row's render word address: after its names, the two perception
-   * words and the locomotion word. */
+  /** The row's first render word address: after its names, the two
+   * perception words and the locomotion word; the second follows it. */
   wordAt(address) {
     return address + 8 + 8 * this.vm.arena.view.getUint32(address + 4, true) + 12;
   }
@@ -114,37 +125,43 @@ export class RenderScanHost {
     this.tableVersion = version;
     const view = this.vm.arena.view, expected = this.expected ??= RENDER_FIELDS.map(() => null);
     let added = false;
-    RENDER_FIELDS.forEach(([, key, kind], index) => {
+    RENDER_FIELDS.forEach(([, key, kind, member], index) => {
       if (expected[index]) return;
       const cell = fieldImageCell(key);
-      if (!cell || !cellIs(cell, kind)) return;
+      const target = member ? cellKind(cell) === 'struct' && cell.members.find(item => item.key === member) : cell;
+      if (!target || !cellIs(target, kind)) return;
       expected[index] = cell;
       added = true;
       const at = this.fieldsAt + 12 * index;
-      view.setUint32(at, cell.offset, true);
-      view.setUint32(at + 4, cell.mask >>> 0, true);
+      view.setUint32(at, member ? cell.offset + target.offset : cell.offset, true);
+      view.setUint32(at + 4, target.mask >>> 0, true);
       view.setUint32(at + 8, fieldKeyId(key), true);
     });
     if (!added) return;
     this.bits = new WeakMap();
-    for (const {address} of this.vm.rows.values()) view.setUint32(this.wordAt(address), 0, true);
+    for (const {address} of this.vm.rows.values()) {
+      view.setUint32(this.wordAt(address), 0, true);
+      view.setUint32(this.wordAt(address) + 4, 0, true);
+    }
     this.complete = !expected.includes(null);
   }
-  /** A class's render word: field i is set when `lookupMember` on `cls`
-   * resolves the spelling to the key and the instance reads a cell the table
-   * describes. */
+  /** A class's two render words: field i is set when `lookupMember` on
+   * `cls` resolves the spelling to the key and the instance reads a cell the
+   * table describes (fields 0..30 in the first word with COMPUTED, 31..62
+   * in the second). */
   classBits(cls, cells) {
     let bits = this.bits.get(cls);
     if (bits !== undefined) return bits;
-    bits = COMPUTED;
+    let low = COMPUTED, high = 0;
     const expected = this.expected ?? [];
     RENDER_FIELDS.forEach(([name, key], index) => {
       if (!expected[index] || !cells) return;
       let field;
-      try { field = this.runtime.lookupMember(cls, 'fields', name); } catch { return; }
-      if (field?.key === key && sameCell(cells.get(key), expected[index])) bits |= 1 << index;
+      try { field = this.runtime.lookupMember(cls, 'fields', name.split('.')[0]); } catch { return; }
+      if (field?.key !== key || !sameCell(cells.get(key), expected[index])) return;
+      if (index < 31) low |= 1 << index; else high |= 1 << (index - 31);
     });
-    bits >>>= 0;
+    bits = [low >>> 0, high >>> 0];
     this.bits.set(cls, bits);
     return bits;
   }
@@ -154,7 +171,9 @@ export class RenderScanHost {
     if (!address) return;
     const identity = identityOfHandle(handle), runtime = this.runtime;
     const instance = identity[runtime.instanceKey] ?? runtime.instances.get(identity);
-    vm.arena.view.setUint32(this.wordAt(address), this.classBits(instance.cls, instance.cells), true);
+    const [low, high] = this.classBits(instance.cls, instance.cells), at = this.wordAt(address);
+    vm.arena.view.setUint32(at, low, true);
+    vm.arena.view.setUint32(at + 4, high, true);
   }
   imports() {
     return {js_render_class: handle => this.classWord(handle)};

@@ -20,8 +20,9 @@ export {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 
 // A scene preview's block of render.rs mesh_reads words (u32 indices).
-const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46};
-const MB_WORDS=47,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8;
+const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
+  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51};
+const MB_WORDS=52,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
 
 /** Live NPC mesh binding: update() resamples GetFrame whenever the shared
  * runtime's pose fields change, so original startup/animation is visible in
@@ -163,7 +164,7 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
   // (actor-fields.mjs) kept in Level.Actors order.
   let live=null,liveEpoch=-1,liveList=[],meshReaders=[];
   const meshAccessors=new Map();
-  const reconcile=()=>{
+  const reconcile=(reads=null)=>{
     if(disposed||!level)return;
     const epoch=actorsEpoch();
     if(epoch!==liveEpoch||!live){
@@ -181,7 +182,9 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
       // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
       // mesh is admitted like a newly visible actor; its resources decode
       // asynchronously, so it appears once they are ready.
-      else if(preview.readMesh()!==preview.mesh){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
+      // `reads`: this frame's mesh_reads blocks answer for the previews whose
+      // reads they hold.
+      else if(preview.meshChanged(reads)){retired.set(actor,npcActors.includes(preview));retire(actor,preview);}
     }
     // The render scan (script-vm-render.mjs) leaves the actors with a live
     // Mesh, and those it hands back; admit returns at once for the others.
@@ -267,9 +270,9 @@ export async function createActorMeshScene(runtime,assets,asset,{kernel,player:p
     update(cameraPosition,view={}){
       frameViewer=null;frameViewer=viewer();
       try{
-        reconcile();
-        if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
         const reads=meshReads();
+        reconcile(reads);
+        if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
         for(const actor of actors)actor.update(cameraPosition,reads?{...view,reads}:view);
         drawItems(view.items??[],cameraPosition,view);
       }finally{frameViewer=null;}
@@ -744,6 +747,16 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
       }catch(error){toCpu(error.message);}
     }
     lastPose=pose();
+    /** setupMesh's reads from this frame's block (MS_SETUP), or null. */
+    const setupFields=({u32,f32})=>{
+      const at=block>>2;
+      if(!(u32[at+MB.STATUS]&MS_SETUP))return null;
+      const zone=u32[at+MB.ZONE],flags=u32[at+MB.SETUP_FLAGS];
+      return {zone:zone?identityOfHandle(zone):null,zoneNumber:u32[at+MB.ZONENUMBER],iLeaf:u32[at+MB.ILEAF]|0,
+        Style:u32[at+MB.STYLE],bNoSmooth:Boolean(flags&1),bMeshEnviroMap:Boolean(flags&2),bMeshCurvy:Boolean(flags&4),
+        bUnlit:Boolean(flags&8),location:[f32[at+MB.LOCATION],f32[at+MB.LOCATION+1],f32[at+MB.LOCATION+2]],
+        AmbientGlow:u32[at+MB.AMBIENTGLOW],ScaleGlow:f32[at+MB.SCALEGLOW],bSpecialLit:Boolean(flags&16)};
+    };
     const blockLastValid=()=>new Uint32Array(arena.memory.buffer)[(block>>2)+MB.LAST_VALID]!==0;
     /** pose() as the last block update saw it: MB.LAST's words (animation
      * actor, bParticles, DrawScale, Location, Rotation, PrePivot, AnimFrame,
@@ -769,6 +782,17 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
     return {actor,root,dispose,mesh:meshReference,get block(){return block;},get viewDependent(){return hasEnvironment&&mode==='cpu';},updateView,
       /** The actor's current Mesh (undefined where readNamed would throw). */
       readMesh(){try{return own.Mesh();}catch{return undefined;}},
+      /** Whether Mesh is no longer this preview's: from this frame's block
+       * when it holds the reads (compared with readMesh under
+       * RENDER_SCAN=verify), else readMesh. */
+      meshChanged(reads){
+        const u32=reads&&block?reads.views().u32:null,at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
+        const readChanged=()=>{try{return own.Mesh()!==meshReference;}catch{return true;}};
+        if(at<0)return readChanged();
+        const changed=u32[at+MB.MESH]!==meshHandle;
+        if(reads.verify&&changed!==readChanged())throw new Error(`RENDER_SCAN=verify: ${actorName} Mesh change differs in mesh_reads`);
+        return changed;
+      },
       passVisibility,get path(){return mode;},
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
@@ -874,7 +898,7 @@ export async function createActorMeshPreview(runtime,assets,actor,{originalObjec
         if(lighting&&view.lit&&lighting.frame&&(childOnly||!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
           group.geometry.boundingSphere&&view.frustum.intersectsSphere(group.geometry.boundingSphere))))){
           if(mode==='gpu'){
-            const prepared=lighting.setupMesh(actor);
+            const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null);
             if(prepared){
               lastSetup=prepared;lastLitFrame=gpu.frame+1;
               summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};

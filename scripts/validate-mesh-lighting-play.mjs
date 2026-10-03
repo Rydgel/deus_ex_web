@@ -108,7 +108,7 @@ for (const actor of chosen) {
     for (let i = leaf.permeating; i < model.lights.length && model.lights[i]; i++) run.push(model.lights[i]);
   const records = lighting.frame.lights, byActor = new Map();
   const idOf = record => { if (!byActor.has(record.actor)) byActor.set(record.actor, byActor.size + 1); return byActor.get(record.actor); };
-  const runRecords = run.map(ref => [...records.values()].find(record => record.actor.name === asset.pkg.exports[ref - 1].name));
+  const runRecords = run.map(ref => lighting.lightRecordOf(lighting.frame.byName.get(asset.pkg.exports[ref - 1].name)));
   const leafRecords = lighting.frame.leafLights.get(iLeaf) ?? [];
   const all = [...new Set([...runRecords, ...leafRecords])];
   assert.equal(new Set(all.map(record => record.index)).size, all.length, `${actor.name}: unique light indices`);

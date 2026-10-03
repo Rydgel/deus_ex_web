@@ -6,6 +6,7 @@ import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDi
   lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
 import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
+import { renderScanMode } from '../runtime/script-vm-render.mjs';
 
 const f = Math.fround;
 const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius',
@@ -83,6 +84,15 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     frame.runs.set(iLeaf, run = { refs, handles });
     return run;
   };
+  /** setupMesh's reads of `actor`, with its defaults. */
+  const setupFields = actor => {
+    const region = read(actor, 'Region') ?? {};
+    return { zone: region['engine.actor.pointregion.zone'] ?? null, zoneNumber: region['engine.actor.pointregion.zonenumber'] ?? 0,
+      iLeaf: region['engine.actor.pointregion.ileaf'] ?? -1, Style: read(actor, 'Style'), bNoSmooth: read(actor, 'bNoSmooth'),
+      bMeshEnviroMap: read(actor, 'bMeshEnviroMap'), bMeshCurvy: read(actor, 'bMeshCurvy'), bUnlit: read(actor, 'bUnlit'),
+      location: read(actor, 'Location') ?? [0, 0, 0], AmbientGlow: read(actor, 'AmbientGlow') ?? 0,
+      ScaleGlow: read(actor, 'ScaleGlow') ?? 1, bSpecialLit: read(actor, 'bSpecialLit') };
+  };
   /** setupForActor with the light choice in meshlight.rs; the same result. */
   const rustSetup = (rust, sink, scene) => {
     const result = setupAmbient(sink, scene);
@@ -108,6 +118,11 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   const view = {
     manager,kernel,
     get frame() { return frame; },
+    /** Validation access: this frame's light record of `actor`, made as
+     * the JavaScript selection's lightOf makes it. The Rust selection fills
+     * its slots from the image and makes records only for the lights it
+     * returns. */
+    lightRecordOf(actor) { return frame && actor ? lightRecord(actor) : undefined; },
     /** URender's per-frame setup for the main viewport: Frame->Coords, the
      * viewport clock and SetupDynamics' moving-light leaf lists. `lights`,
      * Play's game.movingLights() of this frame, stands for the candidate
@@ -165,14 +180,20 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     /** SetupForActor for one DrawLodMesh pass of `actor`: the selected
      * lights, ambient and ScaleGlow, the actor poly flags and the unlit
      * colour. Mutates the light manager's caches exactly once per call. */
-    setupMesh(actor) {
+    setupMesh(actor, fields = null) {
       if (!frame) return null;
-      const region = read(actor, 'Region') ?? {};
-      const zoneActor = region['engine.actor.pointregion.zone'] ?? null;
-      const zoneNumber = region['engine.actor.pointregion.zonenumber'] ?? 0;
-      const values = { Style: read(actor, 'Style'), bNoSmooth: read(actor, 'bNoSmooth'), bSelected: false,
-        bMeshEnviroMap: read(actor, 'bMeshEnviroMap'), bMeshCurvy: read(actor, 'bMeshCurvy'),
-        bUnlit: read(actor, 'bUnlit'), ZoneNumber: zoneNumber };
+      // `fields`: the same reads from the mesh scene's Rust pass
+      // (npc-mesh-preview.mjs MB), compared under RENDER_SCAN=verify.
+      if (fields && renderScanMode() === 'verify') {
+        const want = setupFields(actor), same = (a, b) => Array.isArray(a) ? a.every((v, i) => Object.is(v, b[i])) : Object.is(a, b);
+        for (const key of Object.keys(want)) if (!same(want[key], fields[key]))
+          throw new Error(`RENDER_SCAN=verify: ${actor.name} ${key} is ${fields[key]} in mesh_reads, ${want[key]} by readNamed`);
+      }
+      const v = fields ?? setupFields(actor);
+      const zoneActor = v.zone, zoneNumber = v.zoneNumber;
+      const values = { Style: v.Style, bNoSmooth: v.bNoSmooth, bSelected: false,
+        bMeshEnviroMap: v.bMeshEnviroMap, bMeshCurvy: v.bMeshCurvy,
+        bUnlit: v.bUnlit, ZoneNumber: zoneNumber };
       const polyFlags = actorPolyFlags(values) | PF.Flat;
       // Zone and LevelInfo ambient fields do not change within a frame.
       const ambientOf = zone => {
@@ -181,13 +202,13 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
           read(zone, 'AmbientSaturation') ?? 0]);
         return ambient;
       };
-      const location = (read(actor, 'Location') ?? [0, 0, 0]).map(f);
-      const iLeaf = region['engine.actor.pointregion.ileaf'] ?? -1;
+      const location = v.location.map(f);
+      const iLeaf = v.iLeaf;
       const sink = {
         self: actor, index: actor, location, iLeaf,
         zone: zoneActor ? { ambient: ambientOf(zoneActor) } : null,
-        AmbientGlow: read(actor, 'AmbientGlow') ?? 0, ScaleGlow: read(actor, 'ScaleGlow') ?? 1,
-        bUnlit: Boolean(values.bUnlit), bSpecialLit: Boolean(read(actor, 'bSpecialLit')),
+        AmbientGlow: v.AmbientGlow, ScaleGlow: v.ScaleGlow,
+        bUnlit: Boolean(values.bUnlit), bSpecialLit: Boolean(v.bSpecialLit),
       }, scene = {
         levelInfo: { ambient: ambientOf(frame.levelInfo), brightness: frame.levelBrightness, timeSeconds: frame.timeSeconds },
         model: frame.model,
@@ -212,7 +233,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         if (mode === 'verify') verifySetup(actor, setupForActor(manager, sink, scene), setup);
       } else setup = setupForActor(manager, sink, scene);
       const flags = polyFlags | setup.flags;
-      return { setup, flags, unlit: unlitColor(read(actor, 'AmbientGlow') ?? 0, f(read(actor, 'ScaleGlow') ?? 1)) };
+      return { setup, flags, unlit: unlitColor(v.AmbientGlow, f(v.ScaleGlow)) };
     },
     /** One DrawLodMesh lighting pass. `points` are GetFrame's world-space
      * vertices, `faces` the mesh faces in draw order ({vertices, flags}).

@@ -66,9 +66,18 @@ const R_BPARTICLES: usize = 25;
 const R_ROTATION: usize = 26;
 const R_ANIMFRAME: usize = 27;
 const R_BLENDANIMFRAME: usize = 28;
-const FIELD_COUNT: usize = 29;
+// SetupForActor's reads; Region's members are entries of their own.
+const R_REGION_ZONE: usize = 29;
+const R_REGION_ILEAF: usize = 30;
+const R_REGION_ZONENUMBER: usize = 31;
+const R_AMBIENTGLOW: usize = 32;
+const R_BNOSMOOTH: usize = 33;
+const R_BMESHENVIROMAP: usize = 34;
+const R_BMESHCURVY: usize = 35;
+const R_BUNLIT: usize = 36;
+const FIELD_COUNT: usize = 37;
 /// The fields meshlight.rs reads on a light.
-pub(crate) const MESH_LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
+pub(crate) const MESH_LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_LIGHTEFFECT
     | 1 << R_LIGHTBRIGHTNESS
     | 1 << R_LIGHTRADIUS
@@ -86,21 +95,21 @@ const K_MESH: u32 = 8;
 const K_AMBIENT: u32 = 16;
 const K_JS: u32 = 32;
 
-const LIGHT_FIELDS: u32 = 1 << R_LIGHTTYPE
+const LIGHT_FIELDS: u64 = 1 << R_LIGHTTYPE
     | 1 << R_BDELETEME
     | 1 << R_BSTATIC
     | 1 << R_BNODELETE
     | 1 << R_BDYNAMICLIGHT
     | 1 << R_LIGHTBRIGHTNESS
     | 1 << R_LIGHTRADIUS;
-const SPRITE_FIELDS: u32 = 1 << R_BHIDDEN
+const SPRITE_FIELDS: u64 = 1 << R_BHIDDEN
     | 1 << R_BONLYOWNERSEE
     | 1 << R_BOWNERNOSEE
     | 1 << R_OWNER
     | 1 << R_RENDERITERATOR
     | 1 << R_DRAWTYPE;
-const MESH_FIELDS: u32 = 1 << R_MESH;
-const AMBIENT_FIELDS: u32 = 1 << R_AMBIENTSOUND;
+const MESH_FIELDS: u64 = 1 << R_MESH;
+const AMBIENT_FIELDS: u64 = 1 << R_AMBIENTSOUND;
 /// Owners followed before an actor is handed to JavaScript.
 const OWNER_WALK: u32 = 64;
 
@@ -118,7 +127,8 @@ extern "C" {
     fn js_render_class(handle: u32);
 }
 
-/// The class row's render word: bit i for field i, and COMPUTED.
+/// The class row's render words: the first holds fields 0..30 in bits
+/// 0..30 and COMPUTED, the second fields 31..62 in bits 0..31.
 const COMPUTED: u32 = 1 << 31;
 
 #[inline(always)]
@@ -131,7 +141,7 @@ fn rfield(field: usize) -> [u32; 3] {
 pub(crate) struct Obj {
     info: u32,
     bind: u32,
-    fields: u32,
+    fields: u64,
 }
 
 impl Obj {
@@ -150,10 +160,11 @@ impl Obj {
         if load32(at) & COMPUTED == 0 {
             unsafe { js_render_class(handle) };
         }
-        Obj { info, bind, fields: load32(at) }
+        let fields = (load32(at) & !COMPUTED) as u64 | (load32(at.wrapping_add(4)) as u64) << 31;
+        Obj { info, bind, fields }
     }
     /// Whether every field of `set` is read in the image.
-    pub(crate) fn has(&self, set: u32) -> bool {
+    pub(crate) fn has(&self, set: u64) -> bool {
         if self.fields & set != set {
             return false;
         }
@@ -370,6 +381,13 @@ const MB_ANIMACTOR: u32 = 11;
 const MB_POSE: u32 = 12;
 const MB_LAST: u32 = MB_POSE + POSE_WORDS;
 const MB_LAST_VALID: u32 = MB_LAST + POSE_WORDS;
+// SetupForActor's reads, valid with MS_SETUP.
+const MB_ZONE: u32 = MB_LAST_VALID + 1;
+const MB_ILEAF: u32 = MB_ZONE + 1;
+const MB_ZONENUMBER: u32 = MB_ZONE + 2;
+const MB_AMBIENTGLOW: u32 = MB_ZONE + 3;
+/// bNoSmooth 1, bMeshEnviroMap 2, bMeshCurvy 4, bUnlit 8, bSpecialLit 16.
+const MB_SETUP_FLAGS: u32 = MB_ZONE + 4;
 /// The numeric pose: animation actor, bParticles, DrawScale, Location,
 /// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
 const POSE_WORDS: u32 = 17;
@@ -380,8 +398,18 @@ const MS_OK: u32 = 1;
 const MS_DRAWN: u32 = 2;
 const MS_DRAWN_CHILD: u32 = 4;
 const MS_CHANGED: u32 = 8;
+const MS_SETUP: u32 = 16;
+const MESH_SETUP_FIELDS: u64 = 1 << R_REGION_ZONE
+    | 1 << R_REGION_ILEAF
+    | 1 << R_REGION_ZONENUMBER
+    | 1 << R_AMBIENTGLOW
+    | 1 << R_BNOSMOOTH
+    | 1 << R_BMESHENVIROMAP
+    | 1 << R_BMESHCURVY
+    | 1 << R_BUNLIT
+    | 1 << R_BSPECIALLIT;
 
-const MESH_SELF_FIELDS: u32 = 1 << R_BHIDDEN
+const MESH_SELF_FIELDS: u64 = 1 << R_BHIDDEN
     | 1 << R_BDELETEME
     | 1 << R_OWNER
     | 1 << R_BONLYOWNERSEE
@@ -394,7 +422,7 @@ const MESH_SELF_FIELDS: u32 = 1 << R_BHIDDEN
     | 1 << R_DRAWSCALE
     | 1 << R_BANIMBYOWNER
     | 1 << R_ROTATION;
-const MESH_ANIM_FIELDS: u32 = 1 << R_BPARTICLES | 1 << R_ANIMFRAME | 1 << R_BLENDANIMFRAME;
+const MESH_ANIM_FIELDS: u64 = 1 << R_BPARTICLES | 1 << R_ANIMFRAME | 1 << R_BLENDANIMFRAME;
 
 #[inline(always)]
 fn same_word(a: u32, b: u32, float: bool) -> bool {
@@ -521,6 +549,19 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
         }
         if changed && load32(word(MB_LAST_VALID)) != 0 {
             status |= MS_CHANGED;
+        }
+        if a.has(MESH_SETUP_FIELDS) {
+            status |= MS_SETUP;
+            store32(word(MB_ZONE), a.pointer(R_REGION_ZONE));
+            store32(word(MB_ILEAF), a.word(R_REGION_ILEAF, 0));
+            store32(word(MB_ZONENUMBER), a.byte(R_REGION_ZONENUMBER));
+            store32(word(MB_AMBIENTGLOW), a.byte(R_AMBIENTGLOW));
+            let flags = a.flag(R_BNOSMOOTH) as u32
+                | (a.flag(R_BMESHENVIROMAP) as u32) << 1
+                | (a.flag(R_BMESHCURVY) as u32) << 2
+                | (a.flag(R_BUNLIT) as u32) << 3
+                | (a.flag(R_BSPECIALLIT) as u32) << 4;
+            store32(word(MB_SETUP_FLAGS), flags);
         }
         store32(word(MB_STATUS), status);
     }
