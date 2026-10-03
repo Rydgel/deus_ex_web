@@ -12,6 +12,9 @@
  *     [--draw-counts] (count submitted mesh groups after timing)
  *     [--fixed-dt seconds] (explicit fixed-step comparison workload, not live FPS)
  *     [--query gpuMesh=1] (viewer URL switches, e.g. the GPU mesh path)
+ *     [--angle metal|gl|vulkan] (ANGLE backend: metal on macOS, gl elsewhere;
+ *       Linux headless Chromium ignores metal and falls back to SwiftShader)
+ *     [--headed] [--executable /usr/bin/chromium] (a visible window, another Chromium)
  *
  * The raw .cpuprofile is written to .cache/perf/<tag>.cpuprofile (outside Git).
  * `phases` is deusExViewer.framePhases(): wall ms per animate() phase.
@@ -46,7 +49,9 @@ const label=frame=>`${frame.functionName||'(anon)'} ${frame.url.split('/').at(-1
 let perFrameCount=frames;
 const perFrame=ms=>+(ms/perFrameCount).toFixed(2);
 
-const browser=await chromium.launch({args:['--use-angle=metal']});
+const angle=option('angle',process.platform==='darwin'?'metal':'gl');
+const browser=await chromium.launch({args:[`--use-angle=${angle}`],headless:!process.argv.includes('--headed'),
+  executablePath:option('executable',undefined)});
 try {
   const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:dpr});
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
