@@ -13,6 +13,13 @@ import {physPathing} from './pathing.mjs';
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
 export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
+  const {host,options}=spawnedFallingAdapter(runtime,actor);
+  falling(host,seconds,iterations,options);
+}
+
+/** The live host and falling options of runSpawnedActorFalling. The Rust
+ * body (fall.rs, actor-physics-kernel.mjs) calls the host's `landed` here. */
+export function spawnedFallingAdapter(runtime,actor) {
   // A serialized map actor already owns its collision/native surface; preserve
   // that identity and only link its hash cylinder to live Location. Spawned
   // actors expose the same members through installActorCollisionView.
@@ -28,7 +35,9 @@ export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
     return false;
   })();
   const host={};
-  for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
+  // physFalling stores OldLocation = Location at every substep for every
+  // source (0x103d0ee2-0x103d0f01, no Pawn test).
+  for(const [key,name] of Object.entries({position:'Location',oldLocation:'OldLocation',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
     Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
   if(isDecoration)Object.defineProperty(host,'landingCounter',{
@@ -70,7 +79,7 @@ export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
     landed:hit=>isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}),
   });
-  falling(host,seconds,iterations,{nonPawn:true,hitWallEvent:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)])});
+  return {host,options:{nonPawn:true,hitWallEvent:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)])}};
 }
 
 /** Field-backed AActor::physRolling for a serialized map actor or spawned

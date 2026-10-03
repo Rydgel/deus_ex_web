@@ -86,6 +86,7 @@ extern "C" {
     fn js_move_overlap(depth: u32, handle: u32) -> u32;
     fn js_move_end_touch(depth: u32, handle: u32);
     fn js_move_zone(depth: u32);
+    fn js_move_encroach(depth: u32, x: f64, y: f64, z: f64, pitch: i32, yaw: i32, roll: i32) -> u32;
 }
 
 #[inline(always)]
@@ -139,6 +140,15 @@ fn finish(time: f64, hit: i32, success: bool, delta: [f64; 3], position: [f64; 3
 #[no_mangle]
 pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_rot: u32,
                             pitch: i32, yaw: i32, roll: i32, ignore_bases: u32) -> u32 {
+    move_source(depth, base, dx, dy, dz, has_rot, pitch, yaw, roll, ignore_bases, false)
+}
+
+/// The same body for a non-Pawn source (fall.rs, B6c): `encroach` adds the
+/// reference's `!source.pawn&&!noFail&&checkEncroachment(...)` test after
+/// the rider pass. The caller's services always supply checkEncroachment
+/// and never noFail (ScriptRuntime.spawnedMoveServices).
+pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_rot: u32,
+                          pitch: i32, yaw: i32, roll: i32, ignore_bases: u32, encroach: bool) -> u32 {
     // `const requested=delta.map(f),rotation=newRotation?[...newRotation]:[...source.rotation]`
     let requested = [dx as f64, dy as f64, dz as f64];
     let location = address(base, F_LOCATION);
@@ -233,6 +243,15 @@ pub extern "C" fn move_pawn(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, ha
     let eligible_scanned = queried && source_flags & 14 != 0 && unsafe { js_move_eligible(depth) } != 0;
     if standing_count(base) != 0 {
         unsafe { js_move_riders(depth, query_delta[0], query_delta[1], query_delta[2], rotation[0], rotation[1], rotation[2]) };
+    }
+    // `checkEncroachment(source, source.position.map((v,i)=>f(f(v)+query.delta[i])), rotation, 0)`:
+    // a rejection returns the query unmoved, `success` false.
+    if encroach {
+        let p = vector(location);
+        let target = [f(p[0] + query_delta[0]), f(p[1] + query_delta[1]), f(p[2] + query_delta[2])];
+        if unsafe { js_move_encroach(depth, target[0], target[1], target[2], rotation[0], rotation[1], rotation[2]) } != 0 {
+            return finish(query_time, hit, false, query_delta, vector(location), &records);
+        }
     }
     if collision_flags(base) & 1 != 0 { unsafe { js_move_hash(depth, 0) }; }
     let position = vector(location);

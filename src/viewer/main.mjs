@@ -46,11 +46,13 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // DistanceFromPlayer and compaction passes (level.rs), ?farMove= for the
 // noncolliding FarMoveActor (render.rs far_move), ?particles= for
 // execUpdateParticles (particles.rs), ?gcNative= for the HUD's GC state
-// and tile natives (gc.rs, script-vm-gc.mjs) and ?pawnPhysics=js for a
-// walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs).
+// and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
+// walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs) and
+// ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs).
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
-  ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS']]) {
+  ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
+  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

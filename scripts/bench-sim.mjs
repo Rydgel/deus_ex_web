@@ -11,7 +11,11 @@
  *   node scripts/bench-sim.mjs [--map 01_NYC_UNATCOIsland] [--warm 60] [--ticks 300]
  *     [--bypass] [--continue] [--render-feedback] [--tickstats] [--counts]
  *     [--digest-every 0] [--json out.json] [--dump fields.txt] [--bound-reads]
- *     [--scenario file.mjs] [--cpu-profile out.cpuprofile]
+ *     [--scenario file.mjs] [--cpu-profile out.cpuprofile] [--dt 0.016666]
+ *
+ * --dt sets the simulated seconds per tick (default 1/60). A longer step
+ * reaches physics branches a 60 Hz step cannot (physFalling's apex
+ * subdivision needs a substep above 0.03 s).
  *
  * --cpu-profile records a V8 CPU profile (node:inspector, 100 us sampling) of
  * the timed ticks only, so warm-up spawns and compilation stay out of it.
@@ -33,11 +37,13 @@ const argv = process.argv.slice(2);
 const flag = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
 const map = flag('map', '01_NYC_UNATCOIsland'), warm = Number(flag('warm', 60)), ticks = Number(flag('ticks', 300));
 const digestEvery = Number(flag('digest-every', 0)), continueMode = argv.includes('--continue');
+// The default keeps the clock's original arithmetic (1000 / 60 per tick).
+const tickSeconds = Number(flag('dt', 1 / 60)), tickMs = argv.includes('--dt') ? 1000 * tickSeconds : 1000 / 60;
 if (argv.includes('--bypass')) register('./bench-sim-hooks.mjs', import.meta.url);
 
 // Determinism for digests: the Level calendar (updateTime) reads Date and the
 // window host / appSeconds read performance.now. Pin both to a simulated clock
-// that advances 1/60 s per tick; timing uses the saved real clock.
+// that advances one tick (--dt, 1/60 s) per tick; timing uses the saved real clock.
 const realNow = performance.now.bind(performance);
 // Instruments in modules loaded after the pin (script-vm-rust.mjs
 // SCRIPT_VM_IMPORT_TIME) time with the real clock through this global.
@@ -156,10 +162,10 @@ function stampRendered() {
 }
 const errors = new Map();
 const step = () => {
-  simulatedMs += 1000 / 60;
+  simulatedMs += tickMs;
   if (scenario) scenario(tickIndex);
   tickIndex++;
-  try { game.tick(1 / 60); if (renderFeedback) stampRendered(); }
+  try { game.tick(tickSeconds); if (renderFeedback) stampRendered(); }
   catch (error) {
     const message = String(error?.message ?? error).split('\n')[0];
     errors.set(message, (errors.get(message) ?? 0) + 1);

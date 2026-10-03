@@ -38,6 +38,7 @@ import {MoveActorHost} from './move-actor-kernel.mjs';
 import {MovePawnHost} from './move-pawn-kernel.mjs';
 import {WalkLoopHost} from './walk-loop-kernel.mjs';
 import {PawnPhysicsHost} from './pawn-physics-kernel.mjs';
+import {ActorPhysicsHost} from './actor-physics-kernel.mjs';
 import {receiverEpoch, onReceiverEpoch} from './receiver-epoch.mjs';
 import {StateTable} from './script-vm-states.mjs';
 import {EventHost, MAX_RUNS} from './script-vm-events.mjs';
@@ -288,6 +289,7 @@ export class RustScriptVm {
     this.walkLoop = new WalkLoopHost(this);
     // R3-b B6a: a walking pawn's performPhysics (pawn-physics-kernel.mjs).
     this.pawnPhysics = new PawnPhysicsHost(this);
+    this.actorPhysics = new ActorPhysicsHost(this);
     // October 1: the state table (GetStateName) and the small natives' faults.
     this.states = new StateTable(this);
     // October 1: tick events dispatched in Rust (dispatch.rs).
@@ -329,6 +331,7 @@ export class RustScriptVm {
     this.movePawn.attach(x);
     this.walkLoop.attach(x);
     this.pawnPhysics.attach(x);
+    this.actorPhysics.attach(x);
     const limit = handleLimit();
     this.states.attach(x, limit);
     this.faultAt = x.vm_native_fault_ptr();
@@ -629,6 +632,7 @@ export class RustScriptVm {
       ...vm.movePawn.imports(),
       ...vm.walkLoop.imports(),
       ...vm.pawnPhysics.imports(),
+      ...vm.actorPhysics.imports(),
       js_int(frame, node, handle) {
         enter();
         try { return value(frame, node, handle) | 0; } finally { leave(); }

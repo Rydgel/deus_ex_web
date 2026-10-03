@@ -58,6 +58,15 @@ export function performActorPhysics(actor, seconds, services) {
     case 11: move('physTrailer', 'physTrailer (0x103d7850)'); break;
     default: break;
   }
+  actorPhysicsTail(actor, seconds, services);
+  return physics;
+}
+
+/** The tail at 0x103c98ed, after the movement: physicsRotation, then one
+ * PendingTouch. The Rust falling body (fall.rs) runs it from here when the
+ * actor has a rotation rate or a PendingTouch. */
+export function actorPhysicsTail(actor, seconds, services) {
+  const {read, write} = services;
   const rate = read(actor, 'RotationRate');
   if ((rate[0] & 0xffff) || (rate[1] & 0xffff) || (rate[2] & 0xffff)) services.physicsRotation(actor, seconds);
   const pending = read(actor, 'PendingTouch');
@@ -69,5 +78,9 @@ export function performActorPhysics(actor, seconds, services) {
     write(actor, 'PendingTouch', read(current, 'PendingTouch'));
     write(current, 'PendingTouch', null);
   }
-  return physics;
 }
+
+/** A host's `runtime.actorPhysics` -> the services it passes to
+ * performActorPhysics. The Rust falling body (actor-physics-kernel.mjs)
+ * runs only under a function registered here, with those services. */
+export const linkedActorPhysics = new WeakMap();

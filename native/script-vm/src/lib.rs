@@ -16,6 +16,7 @@ mod dispatch;
 mod interp;
 mod level;
 mod fire;
+mod fall;
 mod fly;
 mod light;
 mod fog;

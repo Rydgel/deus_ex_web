@@ -195,6 +195,11 @@ export class MovePawnHost {
         const c = context(depth), other = host.vm.identity(handle);
         c.ops.endTouch(c.pawn, other, false);
       },
+      // A non-Pawn source's CheckEncroachment (fall.rs, B6c).
+      js_move_encroach(depth, x, y, z, pitch, yaw, roll) {
+        const c = context(depth);
+        return c.ops.checkEncroachment(c.pawn, [x, y, z], [pitch, yaw, roll], 0) ? 1 : 0;
+      },
       js_move_zone(depth) {
         const c = context(depth);
         c.ops.setActorZone(c.pawn, false, false);

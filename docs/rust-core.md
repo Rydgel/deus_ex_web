@@ -709,6 +709,71 @@ against 80a0384): tick 12.91 → 12.25 ms, no errors. The validator groups
 pawn-physics-kernel, walk, flying, pawn, island-falling, island-swimming,
 actor-tick and training-ladder pass.
 
+### October 3: a falling non-Pawn's performPhysics in Rust (B6c, implemented)
+
+Island's breakable crates sit in WaterZone1 in PHYS_Falling: every tick each
+one integrates through the water branch, slides along a wall (HitWall, no
+probe) and, when it reaches the floor, takes processLanded's bBounceVelocity
+branch, so it never settles. A census of the JavaScript path put them at
+168 µs a call, 4 calls a tick, 0.67 ms of a headless tick: the
+field-backed host `runSpawnedActorFalling` builds for every call (about 15
+accessors over `readNamed`), the integration on script-vm.mjs's x87 model,
+and `playerMove` with its moveQuery and CheckEncroachment.
+
+`fall.rs` runs AActor::performPhysics for Physics = PHYS_Falling from
+tick.rs for any non-Pawn: falling.mjs's body with `nonPawn` (the water,
+bBobbing and dry integrations and their apex copies on `Ext`, the apex
+subdivision, the per-substep ZoneVelocity, the bBounce branch with its
+refund and counter, the floor landing's velocity, the HitWall slide,
+TwoWallAdjust and its ditch test, the end-of-substep velocity with the
+terminal clamp), then performActorPhysics's tail. MoveActor is B4's body,
+`move_source` (move_pawn.rs), which for a non-Pawn source adds playerMove's
+CheckEncroachment test after the rider pass (`js_move_encroach`; a
+rejection returns the query unmoved). The imports are the reference's own
+functions: processDecorationHitWall, the bBounce HitWall event, the host's
+`landed` (decorationLanded or actorLanded, with zoneBounceLanding), the zone
+reads for a zone without an image, `playerMove` where the Rust MoveActor
+hands back, and `actorPhysicsTail` (split out of performActorPhysics) when
+RotationRate or PendingTouch is set. Its host (`actor-physics-kernel.mjs`)
+admits the actor when the callback would reach the services the Play host
+linked (`linkedActorPhysics`, set beside `runtime.actorPhysics` in
+script-doors.mjs), the actor is a map move host (through `mapMoveLevel`, as
+the reference) or a spawned collision view, and every MOVE_FIELDS and
+FALL_FIELDS spelling (Decoration's bBobbing for a Decoration) is an unbound
+image cell. Region.ZoneNumber 0 (FellOutOfWorld) and a static or immovable
+source stay the reference's.
+
+The reference had a gap, fixed in the same change: the non-Pawn host had no
+`oldLocation`, so `pawn.oldLocation = origin` landed on the adapter object
+and the actor's OldLocation was never written. physFalling stores it at
+every substep for every source (0x103d0ee2-0x103d0f01, `Location` +0x114 to
+`OldLocation` +0x12c, no Pawn test; disassembled for this change). Island's
+digest changes with it on both paths.
+
+`ACTOR_PHYSICS=js` (`?actorPhysics=js`) keeps the callback;
+`ACTOR_PHYSICS_STATS=1` prints the declines and Rust's branch counts.
+bench-sim gained `--dt` (seconds a tick; the default keeps the clock's
+arithmetic), because the apex subdivision needs a substep above 0.03 s.
+`validate-actor-physics-kernel` runs Island as played and both maps with
+scripts/scenarios/fall-branches.mjs (every movable Decoration and Inventory
+launched into PHYS_Falling each phase: rising, fast, bouncing, bobbing,
+spinning), once at 20 ticks a second, Rust against `ACTOR_PHYSICS=js`.
+Digests equal at every checkpoint on every run; on Island as played all
+2,062 calls run in Rust (1,616 water substeps, 963 HitWall slides, 173
+landings) with no decline, and the scenario runs add bobbing, bounces,
+two-wall adjustments, the terminal clamp, the tail and, at 20 Hz, the apex
+subdivision. Only Region.ZoneNumber 0 declines. Never reached: a
+destroyed source (bDeleteMe after the move), a MoveActor handed back, a
+zone without an image, and the image check after an event. Timing (Linux
+host): bench-sim, three interleaved pairs against `ACTOR_PHYSICS=js`,
+median tick 13.22 → 12.84 ms; browser (Island at
+Player start, six interleaved pairs against 510aefe) tick 12.41 → 11.82 ms,
+total 27.9 → 27.0 ms, no errors. The validator groups actor-physics-kernel,
+falling, landing, crate, decoration, plant, rolling, encroach, native-move,
+native-player-move, projectile, rider-move, pawn-move, pawn-physics-kernel,
+actor-tick, script-spawn, inventory-spawn, island-swimming, island-blowitup,
+island-tracer and native-actor-physics pass.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the
@@ -781,11 +846,12 @@ not by crossings removed. The target is the whole browser frame (AGENTS.md:
      runs in Rust on the pawn's image over B3's kernels and calls B4's
      MoveActor directly; Island's median tick 13.13 → 11.66 ms. Falling
      and swimming return as tail calls.
-   * **B6.** Falling, landing, rotation and the pawn tail. B6a and B6b
-     are done (October 3, above): a walking or flying pawn's
-     performPhysics, physicsRotation and tail run in Rust. Next: the
-     non-Pawn MoveActor and physFalling (crates floating in water), then
-     a pawn's physFalling and physSwimming.
+   * **B6.** Falling, landing, rotation and the pawn tail. B6a, B6b and
+     B6c are done (October 3, above): a walking or flying pawn's
+     performPhysics, physicsRotation and tail, and a falling non-Pawn's
+     performPhysics, run in Rust. Next: a pawn's physSwimming (Island's
+     fish and GeneratorScouts, about 0.6 ms headless); a pawn's
+     physFalling is only map-start settling on Island.
    * **B7.** The player. It needs 1e-6.
 
    Keep these rules:

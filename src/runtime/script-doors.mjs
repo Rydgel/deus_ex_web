@@ -35,7 +35,7 @@ import { mapPlayerIndex } from './map-object-indices.mjs';
 import { assignMeasuredObjectIndices } from './measured-object-indices.mjs';
 import { createLiveMissionRuntime } from './script-mission-live.mjs';
 import { prepareFaceConversations } from './script-conversation-face-live.mjs';
-import { performActorPhysics } from './actor-physics.mjs';
+import { performActorPhysics, linkedActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile, runActorPathing } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
@@ -1396,7 +1396,7 @@ export async function createScriptDoors({
   // non-Pawn); Rolling may recurse into that same live Falling adapter.
   // linkDecorationCollision above remains the map-load hash linkage for
   // decoration queries. Spawned actors and physicsRotation share these bodies.
-  runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, {
+  const actorPhysicsServices = {
     read: (target, name) => runtime.readNamed(target, name),
     write: (target, name, value) => runtime.writeNamed(target, name,value),
     physFalling: (actor,delta)=>runSpawnedActorFalling(runtime,actor,delta),
@@ -1424,7 +1424,11 @@ export async function createScriptDoors({
     unsupported: (target, what) => {
       throw new Error(`Non-Pawn performPhysics ${what} is not linked for ${runtime.instance(target).cls.record.key}`);
     },
-  });
+  };
+  runtime.actorPhysics = (actor, delta) => performActorPhysics(actor, delta, actorPhysicsServices);
+  // The Rust falling body runs under this function with these services
+  // (actor-physics-kernel.mjs).
+  linkedActorPhysics.set(runtime.actorPhysics, actorPhysicsServices);
 
   runtime.relocation={actorFor:actor=>actor,
     farMoveActor:(_level,actor,destination,test,noCheck)=>runtime.farMoveActor(actor,destination,test,noCheck)};

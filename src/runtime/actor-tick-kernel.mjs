@@ -171,6 +171,7 @@ class TickContext {
     this.timeSeconds = 0; this.tickTag = 0; this.seconds = 0; this.tickType = 0;
     // pawn-physics-kernel.mjs: the walk contexts' depth while they are pushed.
     this.pawnDepth = undefined;
+    this.fallDepth = undefined;
   }
   clear() {
     this.receiver = null; this.instance = null; this.services = null; this.level = null;
@@ -330,6 +331,7 @@ export class ActorTickHost {
       x.tick_unwind(ctx);
       // The walk contexts of a pawn's performPhysics in Rust.
       this.vm.pawnPhysics?.end(c);
+      this.vm.actorPhysics?.end(c);
       c.clear();
       throw error;
     } finally {

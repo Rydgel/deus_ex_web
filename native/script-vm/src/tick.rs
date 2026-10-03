@@ -617,9 +617,14 @@ fn tick_body(
         let physics = a.num(F_PHYSICS);
         if physics != 0.0 && a.num(F_ROLE) != 3.0 {
             // A walking or flying Pawn's APawn::performPhysics in Rust
-            // (pawn_phys.rs), or the callback where its host declines.
-            if !((physics == 1.0 || physics == 4.0) && a.flags & C_PAWN != 0 && !a.host &&
-                crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)) {
+            // (pawn_phys.rs), a falling non-Pawn's AActor::performPhysics
+            // (fall.rs), or the callback where their hosts decline.
+            let done = !a.host && if a.flags & C_PAWN != 0 {
+                (physics == 1.0 || physics == 4.0) && crate::pawn_phys::perform(ctx, a.handle, a.base, delta, physics)
+            } else {
+                physics == 2.0 && crate::fall::perform(ctx, a.handle, a.base, delta)
+            };
+            if !done {
                 unsafe { js_tick_physics(ctx, delta) };
             }
             a.refresh();
