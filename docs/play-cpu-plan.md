@@ -246,4 +246,5 @@ commit (`.work/tools/ab-play.sh`, baseline tree served on a second port).
 
 | Step | Commit | total ms | Phase change |
 |---|---|---:|---|
-| 1.1 moving lights incremental | this commit | 45.5 → 39.8 | tick 21.0 → 17.2 |
+| 1.1 moving lights incremental | c072cd0 | 45.5 → 39.8 | tick 21.0 → 17.2 |
+| 1.2 one moving-light scan | this commit | 39.7 → 39.5 (noise) | lighting 0.75 → 0.23 |

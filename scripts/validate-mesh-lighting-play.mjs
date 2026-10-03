@@ -76,8 +76,17 @@ for (const actor of chosen) {
 const frames = [{ seconds: 20 }, { seconds: 20.02 }];
 const passes = new Map(chosen.map(actor => [actor, []]));
 for (const frame of frames) {
+  // Play hands beginFrame game.movingLights() (one SetupDynamics scan per
+  // frame); the JavaScript instance keeps its own scan, so both sources are
+  // compared: same leaf lists, records and colours.
+  const scanned = game.movingLights();
   lighting.beginFrame({ location: view.location, rotation: view.rotation, seconds: frame.seconds });
-  lightingWasm.beginFrame({ location: view.location, rotation: view.rotation, seconds: frame.seconds });
+  lightingWasm.beginFrame({ location: view.location, rotation: view.rotation, seconds: frame.seconds, lights: scanned });
+  const leafLists = view => [...view.frame.leafLights].map(([leaf, list]) => [leaf, list.map(record =>
+    [record.actor.name, record.index, ...record.location.map(u32), ...['LightType', 'LightBrightness', 'LightRadius',
+      'LightEffect', 'LightHue', 'LightSaturation', 'bSpecialLit'].map(name => record.values[name])])]);
+  assert.ok(scanned.length > 0 && lighting.frame.leafLights.size > 0, 'moving lights reach BSP leaves');
+  assert.deepEqual(leafLists(lightingWasm), leafLists(lighting), 'scanned moving lights give the scan\'s leaf lists');
   frame.viewport = { ...lighting.frame.viewport };
   for (const actor of chosen) {
     const { points,packedPoints,faces,faceWords } = meshes.get(actor);

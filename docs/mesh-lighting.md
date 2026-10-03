@@ -101,6 +101,20 @@ count is not the total lighting work. The live frame avoids 163 of the original
 436 eager records, while moving the needed static-record work into actor
 preparation. Whole-frame timing must include both phases.
 
+One scan per frame (2026-10-03, [Play CPU plan](play-cpu-plan.md) step 1.2).
+The original runs this gate once per drawn frame, in SetupDynamics, after
+`PlayerCalcView`. Play used to scan Level.Actors twice: `game.movingLights()`
+for the light maps, before `PlayerCalcView`, and `beginFrame` for the leaf
+lists. `animate()` now calls `game.movingLights()` once, after
+`PlayerCalcView` and the viewport sizing. `world.syncMovingLights` and
+`beginFrame({ lights })` share that list: the same gate, level and Level.Actors
+order, with the light fields and Location it already read seeded into each
+record. `beginFrame` without `lights` (Inspect) still scans itself.
+`validate-mesh-lighting-play.mjs` hands one view the scanned list and keeps
+the other on its own scan, and requires identical leaf lists (actor, index,
+location bits, light fields) and identical colours. Island browser A/B: the
+`lighting` phase drops from 0.75 to 0.23 ms.
+
 ## SetupForActor (`0x10b08c70`)
 
 State: `Actor` is the light sink. `Zone` is `Actor.Region.Zone`, or the

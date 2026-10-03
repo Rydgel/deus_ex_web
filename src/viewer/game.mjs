@@ -264,7 +264,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     },
     // Render.dll SetupDynamics' per-frame scan of the level actor array
     // (docs/dynamic-lighting.md): live light fields of every moving-light
-    // candidate, e.g. AugLight's Beams, for the world's lightmap pass.
+    // candidate, e.g. AugLight's Beams, for the world's lightmap pass and
+    // the mesh lighting's leaf lists (mesh-lighting-view.mjs beginFrame).
     movingLights() {
       const lights = [];
       for (const actor of runtime.levelFor(player.collisionActor).actors) {
@@ -280,7 +281,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         // SecurityCamera's normal light does not change with its Rotation).
         if (values.LightEffect === 8 || values.LightEffect === 12)
           Object.assign(values, { LightCone: read('LightCone'), Rotation: [...read('Rotation')] });
-        lights.push({ name: actor.name, location: [...read('Location')], values,
+        lights.push({ actor, name: actor.name, location: [...read('Location')], values,
           levelBrightness: runtime.readNamed(read('Level'), 'Brightness') });
       }
       return lights;

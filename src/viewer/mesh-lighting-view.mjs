@@ -43,10 +43,13 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     }
   }
   for (const name of LIGHT_FIELDS) Object.defineProperty(LightValues.prototype, name, { get() { return this.field(name); } });
-  const lightRecord = actor => {
+  const lightRecord = (actor, scanned = null) => {
     let record = frame.lights.get(actor);
     if (record) return record;
     const values = new LightValues(actor);
+    // A light from game.movingLights() brings the fields it already read in
+    // this frame (the same reads, with no script run in between).
+    if (scanned) for (const name of LIGHT_FIELDS) if (Object.hasOwn(scanned.values, name)) values.read.set(name, scanned.values[name]);
     // SetupForActor staggers visibility re-traces by (light.Index ^
     // FrameCount) & 15. Play uses the measured GObjObjects index or a
     // spawn's modeled slot; a pre-placed light without a capture falls back
@@ -56,7 +59,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       index = exportIndex(actor.name);
       manager.diagnostics.add('Mesh-light re-trace phases use map export indices where the original GObjObjects index is unmeasured.');
     }
-    record = { actor, values, location: (read(actor, 'Location') ?? [0, 0, 0]).map(f),
+    record = { actor, values, location: (scanned ? scanned.location : read(actor, 'Location') ?? [0, 0, 0]).map(f),
       index: Number.isInteger(index) ? index : 0 };
     frame.lights.set(actor, record);
     return record;
@@ -65,8 +68,10 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     manager,kernel,
     get frame() { return frame; },
     /** URender's per-frame setup for the main viewport: Frame->Coords, the
-     * viewport clock and SetupDynamics' moving-light leaf lists. */
-    beginFrame({ location, rotation, seconds }) {
+     * viewport clock and SetupDynamics' moving-light leaf lists. `lights`,
+     * Play's game.movingLights() of this frame, stands for the candidate
+     * scan: the same gate over the same level, in Level.Actors order. */
+    beginFrame({ location, rotation, seconds, lights = null }) {
       const level = levelSource();
       if (!level?.model) { frame = null; return; }
       const [forward, right, up] = getAxes(rotation.map(value => value | 0));
@@ -84,6 +89,14 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live };
       // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
       // Filter prepends each onto the leaves it reaches.
+      const filter = record => {
+        for (const leaf of movingLightLeaves(frame.model, record.location, worldLightRadius(record.values))) {
+          const list = frame.leafLights.get(leaf) ?? [];
+          list.unshift(record);
+          frame.leafLights.set(leaf, list);
+        }
+      };
+      if (lights) { for (const light of lights) filter(lightRecord(light.actor, light)); return; }
       for (const actor of level.actors) {
         if (!actor || !read(actor, 'LightType') || read(actor, 'bDeleteMe')) continue;
         // SetupDynamics 0x10b230e8..0x10b2311c rejects these before
@@ -91,12 +104,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         // lazily by lightOf/current if SetupForActor actually needs them.
         if ((read(actor, 'bStatic') || read(actor, 'bNoDelete')) && !read(actor, 'bDynamicLight')) continue;
         if (!read(actor, 'LightBrightness') || !read(actor, 'LightRadius')) continue;
-        const record = lightRecord(actor);
-        for (const leaf of movingLightLeaves(frame.model, record.location, worldLightRadius(record.values))) {
-          const list = frame.leafLights.get(leaf) ?? [];
-          list.unshift(record);
-          frame.leafLights.set(leaf, list);
-        }
+        filter(lightRecord(actor));
       }
     },
     toCamera(point) {

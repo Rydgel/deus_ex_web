@@ -884,7 +884,7 @@ function animate(time) {
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
-    let playerView = null, renderRect = null;
+    let playerView = null, renderRect = null, movingLights = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
@@ -893,14 +893,18 @@ function animate(time) {
         catch(error) { pauseForRuntimeError(error); }
       }
       world.syncMovers(game.collision.movers);
-      if (!runtimeError) {
-        try { world.syncMovingLights(game.movingLights(), game.collision.movers); } catch (error) { pauseForRuntimeError(error); }
-      }
       try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
       if (playerView && !runtimeError) {
         const width = renderer.domElement.width, height = renderer.domElement.height;
         try { renderRect = game.renderViewport(width, height); } catch (error) { pauseForRuntimeError(error); }
         if (renderRect?.render && renderRect.width > 0 && renderRect.height > 0) setViewAspect(renderRect.width / renderRect.height, playerView.fov);
+      }
+      // SetupDynamics' one candidate scan per drawn frame, after
+      // PlayerCalcView as in DrawWorld: the light maps' moving lights and
+      // the mesh lighting's leaf lists below share it.
+      if (!runtimeError) {
+        try { movingLights = game.movingLights(); world.syncMovingLights(movingLights, game.collision.movers); }
+        catch (error) { pauseForRuntimeError(error); }
       }
       phase('tick');
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
@@ -921,7 +925,7 @@ function animate(time) {
     if(meshLighting&&!runtimeError){
       const toUnits=radians=>Math.round(radians*32768/Math.PI);
       const view=playerView??{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
-      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000});}
+      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000,lights:movingLights});}
       catch(error){pauseForRuntimeError(error);}
     }
     phase('lighting');
