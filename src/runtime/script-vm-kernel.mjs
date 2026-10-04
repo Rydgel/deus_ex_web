@@ -197,8 +197,10 @@ export function createScriptVmKernel(instance, memory) {
       modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
     }),
     // URender::OccludeBsp (occlude.rs, docs/bsp-occlusion.md), driven by
-    // bsp-occlusion.mjs over a model and a work block from `alloc`.
-    occlusion: Object.freeze({
+    // bsp-occlusion.mjs over a model and a work block from `alloc`; null when
+    // the loaded core predates it (src/runtime/script-vm.wasm is built
+    // locally by `npm run build:wasm`, not tracked).
+    occlusion: typeof x.occ_run !== 'function' || typeof x.occ_master_frame !== 'function' ? null : Object.freeze({
       memory,
       alloc,
       free,

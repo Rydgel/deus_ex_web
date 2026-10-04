@@ -74,7 +74,9 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       }
       surfaceTextureFlags.push(textureFlags.get(surface.texture));
     }
-    session.setOcclusion(createBspOcclusion((await loadScriptVmKernel()).occlusion, map.model, { surfaceTextureFlags,
+    const kernel = (await loadScriptVmKernel()).occlusion;
+    if (!kernel) throw new Error('the script VM core predates it; run npm run build:wasm');
+    session.setOcclusion(createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
       zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)) }));
   } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
   session.setLipSync(lipSync);
