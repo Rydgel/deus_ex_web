@@ -2,7 +2,8 @@
  * where animate() ran it before the split, with the same error gating; the
  * frame's results come back as plain data for the drawing side. Steps not
  * yet moved here still run from main.mjs. */
-import { handleOf } from '../runtime/script-object-handles.mjs';
+import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
+import { createSpriteScan } from './sprite-scan.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -24,7 +25,26 @@ export function createSimSession(game) {
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
-  const live = { lights: null };
+  const live = { lights: null, meshItems: [] };
+  // RenderIterator construction for the sprite scan: the iterator's
+  // RenderInterface object, owned by the actor's native object. A pre-placed
+  // actor hashes its owned objects by its measured GObjObjects index
+  // (docs/object-index-captures.md).
+  const constructIterator = (cls, outer) => {
+    const linked = [...runtime.linkedClasses].find(candidate => candidate.record.key === (cls.key ?? cls.record?.key));
+    if (!linked) throw new Error(`RenderIteratorClass ${cls.key} is not linked`);
+    const base = runtime.actorLifecycle.construction, native = runtime.instance(outer).nativeObject;
+    if (!native) throw new Error(`${outer.name} has no native object to own its RenderInterface`);
+    if (!Number.isInteger(native.index) && !Number.isInteger(native.hashIndex)) {
+      const measured = runtime.measuredObjectIndex(outer);
+      if (!Number.isInteger(measured)) throw new Error(`${outer.name} has no measured object index for its RenderInterface`);
+      native.hashIndex = measured;
+    }
+    return runtime.constructObject(linked, { outer: native, name: 'None', flags: 0, template: null }, {
+      ...base, validate: () => true, initNativeProperties: () => {}, nativeConstructor: () => {} });
+  };
+  const spriteScan = createSpriteScan(runtime, { player: () => game.player.collisionActor, constructIterator,
+    frand: () => runtime.rng.frand() });
   // Each mover's brush-matrix inputs that never change (class defaults
   // merged), shared by every frame's mover states.
   const moverValues = new Map(game.collision.movers.map(mover => [mover.name, {
@@ -83,6 +103,23 @@ export function createSimSession(game) {
         infoLink = infoLinkText();
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, commands, infoLink };
+    },
+    /** SetupDynamics' sprite scan with the render iterators (sprite-scan.mjs):
+     * the sprite records in draw order. The laser DT_Mesh items stay in
+     * `live.meshItems` for the actor mesh scene. */
+    sprites() {
+      const errors = [];
+      let sprites = [];
+      live.meshItems = [];
+      try { const scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems; }
+      catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, sprites, notes: [...spriteScan.notes] };
+    },
+    /** Render.dll 0x10b25150: a drawn actor's LastRenderTime is its level's
+     * TimeSeconds (actor-render-feedback.mjs). */
+    stamp(handle) {
+      const actor = identityOfHandle(handle), info = runtime.levelFor(game.player.collisionActor).actors[0];
+      runtime.writeNamed(actor, 'LastRenderTime', Math.fround(runtime.readNamed(info, 'TimeSeconds')));
     },
     /** PlayerCalcView outside a frame (mode changes, Player start). */
     view() { const view = plainView(game.view()); lastViewLocation = view.location; return view; },

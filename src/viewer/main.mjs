@@ -407,29 +407,10 @@ async function loadMap(name) {
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
     if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
       {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
-    // Sprites and particles (docs/particles.md), drawn from the live level.
-    let nextSpriteScene=null;
-    if(nextGame){
-      const spriteRuntime=nextGame.doors.scriptRuntime.runtime;
-      nextSpriteScene=createSpriteScene(spriteRuntime,new TextureStore(assets),{
-        player:()=>nextGame.player.collisionActor,displayGamma:nextWorld.displayGamma,
-        frand:()=>spriteRuntime.rng.frand(),
-        constructIterator:(cls,outer)=>{
-          const linked=[...spriteRuntime.linkedClasses].find(candidate=>candidate.record.key===(cls.key??cls.record?.key));
-          if(!linked)throw new Error(`RenderIteratorClass ${cls.key} is not linked`);
-          const base=spriteRuntime.actorLifecycle.construction,native=spriteRuntime.instance(outer).nativeObject;
-          if(!native)throw new Error(`${outer.name} has no native object to own its RenderInterface`);
-          // A pre-placed actor hashes its owned objects by its measured
-          // GObjObjects index (docs/object-index-captures.md).
-          if(!Number.isInteger(native.index)&&!Number.isInteger(native.hashIndex)){
-            const measured=spriteRuntime.measuredObjectIndex(outer);
-            if(!Number.isInteger(measured))throw new Error(`${outer.name} has no measured object index for its RenderInterface`);
-            native.hashIndex=measured;
-          }
-          return spriteRuntime.constructObject(linked,{outer:native,name:'None',flags:0,template:null},{
-            ...base,validate:()=>true,initNativeProperties:()=>{},nativeConstructor:()=>{}});
-        }});
-    }
+    // Sprites and particles (docs/particles.md): the simulation's sprite scan
+    // (sim-session.mjs sprites) drawn by the page.
+    const nextSpriteScene=nextSim?createSpriteScene(assets,new TextureStore(assets),{
+      displayGamma:nextWorld.displayGamma,stamp:handle=>nextSim.stamp(handle)}):null;
     // Light coronas (docs/coronas.md), DrawFrame's corona pass.
     const nextCoronaPass=nextGame?createCoronaPass(nextGame.doors.scriptRuntime.runtime,new TextureStore(assets),{
       model:nextMap.model,exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor,
@@ -979,7 +960,11 @@ function animate(time) {
     // this frame's LaserIterator left it (docs/lasers.md).
     let meshItems=[];
     if(spriteScene&&mode==='play'&&game&&!runtimeError){
-      try{meshItems=spriteScene.update();}catch(error){pauseForRuntimeError(error);}
+      const sprites=sim.sprites();
+      for(const error of sprites.errors)pauseForRuntimeError(error);
+      for(const note of sprites.notes)spriteScene.notes.add(note);
+      try{spriteScene.update(sprites.sprites);}catch(error){pauseForRuntimeError(error);}
+      meshItems=sim.live.meshItems;
       spriteScene.root.visible=true;
     }else if(spriteScene)spriteScene.root.visible=false;
     phase('sprites');
