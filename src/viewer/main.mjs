@@ -20,6 +20,7 @@ import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsy
 import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp } from './display-ramp.mjs';
+import { stateDigest } from '../runtime/state-digest.mjs';
 
 // Script function bodies run in the Rust interpreter by default
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
@@ -68,6 +69,14 @@ const canvasClear = new THREE.Color('#06101b');
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
 const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1';
+// ?seed=N: the shared random stream's srand seed instead of time(NULL), for
+// comparing two runs of one scenario (scripts/validate-sim-split.mjs).
+const seedParam=new URLSearchParams(location.search).get('seed');
+const randomSeed=seedParam===null?undefined:Number(seedParam)>>>0;
+// ?hold=1: the frame loop does nothing until deusExViewer.release(), whose
+// first frame takes a 1/60 s step; with ?seed= and a paused fake clock two
+// runs then see the same frames (scripts/validate-sim-split.mjs).
+let held=new URLSearchParams(location.search).get('hold')==='1';
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -368,7 +377,7 @@ async function loadMap(name) {
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
     try {
       nextGame = await createGame(nextMap, asset, assets, {
-        presentation:true,
+        presentation:true, randomSeed,
         subtitles: subtitlePreference,
         onLightingChanged: changes => nextWorld.updateLighting(changes),
         onConversationSpeech:event=>{void playConversationSpeech(event);},
@@ -870,6 +879,14 @@ window.deusExViewer = { status, framePhases(reset = true) {
   const result = { ...framePhases, runtimeError: runtimeError?.message ?? null, paused };
   if (reset) for (const key of Object.keys(framePhases)) framePhases[key] = 0;
   return result;
+},
+/** Play's state digest (state-digest.mjs): every script property of every
+ * Level.Actors entry, for comparing two runs of one scenario. */
+release() { if (held) held = 'releasing'; },
+stateDigest() {
+  if (mode !== 'play' || !game) return null;
+  const runtime = game.doors.scriptRuntime.runtime;
+  return stateDigest(runtime, runtime.levelFor(game.player.collisionActor));
 } };
 
 // Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
@@ -916,6 +933,8 @@ function gpuEnd() {
 }
 function animate(time) {
   requestAnimationFrame(animate);
+  if (held === 'releasing') { held = false; lastTime = time - 1000 / 60; }
+  if (held) { lastTime = time; return; }
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
