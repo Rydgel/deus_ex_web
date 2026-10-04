@@ -87,6 +87,18 @@ export function buildWindowSceneFrame({location, rotation, width, height, fov, r
     projectionZ: [...projections][0]};
 }
 
+/** Core appTan's qword result for Actor.FOVAngle `fov` as ComputeRenderSize
+ * calls it: the measured value, else the first FPTAN candidate (both
+ * candidates give the same float32 Proj.Z, the only use; buildWindowSceneFrame
+ * checks that). */
+export function sceneFrameTangent(fov) {
+  fov = Math.fround(fov);
+  if (TANGENTS.has(fov)) return TANGENTS.get(fov);
+  const tangents = x87TanCandidates(double(M(X(fov), DEG_HALF)));
+  if (!tangents?.length) throw new Error(`Scene frame requires the original appTan for FOV ${fov}`);
+  return tangents[0];
+}
+
 /** Writes only the recovered fields consumed by native HUD projection. */
 export function writeWindowSceneFrame(W, frame, input) {
   const value = buildWindowSceneFrame(input);

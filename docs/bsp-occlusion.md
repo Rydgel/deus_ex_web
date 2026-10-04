@@ -151,6 +151,21 @@ spans merge) are integer-only, signed comparisons. Under emulation, a Python
 translation matched the original's whole 8 MB heap after each of about
 18,000 randomized calls, with every non-exception instruction covered.
 
+## The master frame
+
+`occ_master_frame` builds the frame from the camera as CreateMasterFrame
+does, on the 80-bit x87 model (`x87.rs`) because it runs before PreRender:
+ComputeRenderCoords' view coordinates (the rotation passes of
+[the scene frame](script-window-scene-frame.md), sine table and all),
+the transposed axes as Uncoords, all of ComputeRenderSize (FX..FY15, Proj,
+RProj, Zoom, PrjXM..PrjYP; four ViewSides as the normalized corner rays
+`(±FX2, ±FY2, Proj.Z)` through Uncoords, with Core appSqrt's qword argument
+and result; four ViewPlanes, their W from Coords.Origin in the instructions'
+two different sum orders), and the zone from UModel::PointRegion (`dist =
+((z·Pz + y·Py) + x·Px) − W`, the back side when below zero or unordered).
+Core appTan's result comes from `sceneFrameTangent`, measured for FOV 75 and
+90 among others.
+
 ## Reference and verification
 
 `scripts/native-occlusion-oracle.py` runs the unchanged CreateMasterFrame
@@ -171,7 +186,9 @@ anywhere in the model's bounds (solid space, outside the level, zone 0) at
 random rotations, six frame sizes and FOV 75 and 90. Every draw list entry,
 every saved polygon's clipped points (X, Y, Z, ScreenX, ScreenY, IntY, RZ
 bits), the NodeFlags, the zones' LastRenderTime, NodesDraw/PolysDraw and the
-child-frame requests with their spans match bit for bit. During development
+child-frame requests with their spans match bit for bit. The port builds
+each frame from the camera itself, and its 57 FSceneNode words and zone
+number match the original CreateMasterFrame's bit for bit as well. During development
 the same comparison also passed 360 more frames on Paris Club, Training,
 Island, Wan Chai Market, Area 51 Page and Hotel, and 360 arbitrary-position
 frames on six maps including AirfieldHeliBase, Endgame4 and DXOnly, with 122
@@ -189,8 +206,6 @@ emulated original.
 
 Explicitly unsupported or pending:
 
-* The master frame is taken from the original in the validator; the Play
-  frame producer (ComputeRenderSize's ViewSides and Prj fields) is pending.
 * Dynamics: SetupDynamics sprites, FDynamicChunk filtering and
   FDynamicFinalChunk::PreRender, hence `Frame->Sprite` and actor
   LastRenderTime. The model's `Dynamics` lists are empty.

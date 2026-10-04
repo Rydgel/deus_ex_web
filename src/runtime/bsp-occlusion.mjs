@@ -10,6 +10,7 @@
  * surfaces), each entry with the nodes whose clipped polygons were saved for
  * it (newest first), and the child-frame requests (mirror and sky) with the
  * span they were given. */
+import { sceneFrameTangent } from './script-window-scene-frame.mjs';
 
 /** Engine.Texture's bools packed into the dword UTexture::PolyFlags (+0x80
  * in the retail layout, docs/object-memory.md "Texture"), bit i for the i-th
@@ -50,6 +51,18 @@ export function occlusionFrameWords(f) {
     f.extraPolyFlags ?? 0];
   if (words.length !== 48) throw new Error(`Occlusion frame has ${words.length} words`);
   return words.map(v => v >>> 0);
+}
+
+function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom = 0 }) {
+  const io = new DataView(new ArrayBuffer(8));
+  io.setFloat64(0, sceneFrameTangent(fov), true);
+  const input = [...location.map(bitsOf), ...rotation.map(v => v >>> 0), width >>> 0, height >>> 0, bitsOf(fov),
+    io.getUint32(0, true), io.getUint32(4, true), bitsOf(orthoZoom)];
+  new Uint32Array(kernel.memory.buffer).set(input, kernel.masterInPtr() >>> 2);
+  kernel.masterFrame();
+  const words = new Uint32Array(kernel.memory.buffer);
+  return { fields: words.slice(kernel.masterOutPtr() >>> 2, (kernel.masterOutPtr() >>> 2) + 58),
+    frame: words.slice(kernel.framePtr() >>> 2, (kernel.framePtr() >>> 2) + 48) };
 }
 
 /** Upload `model` (src/unreal/model.mjs readModel) with each surface's
@@ -99,11 +112,21 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
     bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe];
   let stamp = 0;
+  const setHeader = () => { header[14] = stamp; words().set(header, kernel.modelPtr() >>> 2); };
   return {
+    /** The master FSceneNode (CreateMasterFrame) for a camera: `location`
+     * (three floats), `rotation` ([pitch, yaw, roll] int32), integer
+     * `width` and `height`, Actor.FOVAngle `fov` and Actor.OrthoZoom, with
+     * the zone from this model. Returns `frame`, the words for `run` (its
+     * frame counter, TimeSeconds and option words still to set), and
+     * `fields`: Coords, FX..PrjYP, ViewSides, ViewPlanes and ZoneNumber. */
+    master(camera) {
+      setHeader();
+      return masterFrame(kernel, camera);
+    },
     /** One OccludeBsp call on `frameWords` (occlusionFrameWords). */
     run(frameWords) {
-      header[14] = stamp;
-      words().set(header, kernel.modelPtr() >>> 2);
+      setHeader();
       words().set(frameWords, kernel.framePtr() >>> 2);
       const status = kernel.run(work, workBytes);
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];

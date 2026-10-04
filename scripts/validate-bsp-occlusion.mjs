@@ -10,8 +10,9 @@
  * and 90. Every draw list entry, every saved polygon's clipped points
  * (X, Y, Z, ScreenX, ScreenY, IntY, RZ bits), the NodeFlags, the zones'
  * LastRenderTime, the counters and the child-frame requests with their
- * spans must match bit for bit. The frame itself comes from the original
- * (CreateMasterFrame) and is passed through. */
+ * spans must match bit for bit, and so must the master frame the port
+ * builds from the camera (CreateMasterFrame: ComputeRenderCoords,
+ * ComputeRenderSize, PointRegion). */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -23,7 +24,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { readTexture } from '../src/unreal/textures.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { buildWindowSceneFrame } from '../src/runtime/script-window-scene-frame.mjs';
-import { createBspOcclusion, occlusionFrameWords, texturePolyFlags, OCCLUSION_POINTS,
+import { createBspOcclusion, texturePolyFlags, OCCLUSION_POINTS,
   OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -96,12 +97,16 @@ async function validate(mapName, count, seed, extra = []) {
   const stats = { surfaces: 0, children: 0, zone0: 0 };
   try {
     for (const [i, c] of cases.entries()) {
-      const o = oracle[i], fb = o.frameBits;
-      const r = occlusion.run(occlusionFrameWords({ coords: fb.slice(0, 12), width: c.width, height: c.height,
-        fx: fb[12], fy: fb[13], fx15: fb[14], fy15: fb[15], fx2: fb[16], fy2: fb[17], projZ: fb[21],
-        prj: fb.slice(25, 29), viewSides: fb.slice(29, 41), zoneNumber: o.zoneNumber, frameCounter: c.frameCounter,
-        timeBits: c.timeBits, options: OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES | OCCLUSION_POINTS }));
+      const o = oracle[i];
       const where = `${mapName} case ${i} ${JSON.stringify(c.location.map(v => +v.toFixed(1)))} ${c.rotation} ${c.width}x${c.height}`;
+      // The master frame from the camera: every field CreateMasterFrame made.
+      const master = occlusion.master({ location: c.location.map(Math.fround), rotation: c.rotation, width: c.width,
+        height: c.height, fov: c.fov });
+      assert.deepEqual([...master.fields].map(v => v >>> 0), [...o.frameBits, o.zoneNumber].map(v => v >>> 0), `${where}: master frame`);
+      const words = [...master.frame];
+      words[44] = c.frameCounter; words[45] = c.timeBits;
+      words[46] = OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES | OCCLUSION_POINTS; words[47] = 0;
+      const r = occlusion.run(words);
       for (let list = 0; list < 3; list++) {
         const want = o.draw[list].map(d => ({ iNode: d.iNode, iSurf: d.iSurf, iZone: d.iZone, polyFlags: d.polyFlags >>> 0,
           polys: d.polys.map(p => ({ iNode: p.iNode, points: p.points.map(t => [t[0], t[1], t[2], t[4], t[5], t[6], t[7]].map(v => v >>> 0)) })) }));

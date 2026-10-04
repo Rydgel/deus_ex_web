@@ -206,6 +206,9 @@ export function createScriptVmKernel(instance, memory) {
       framePtr: () => x.occ_frame_ptr() >>> 0,
       statusPtr: () => x.occ_status_ptr() >>> 0,
       run: (work, bytes) => x.occ_run(work >>> 0, bytes >>> 0),
+      masterInPtr: () => x.occ_master_in_ptr() >>> 0,
+      masterOutPtr: () => x.occ_master_out_ptr() >>> 0,
+      masterFrame: () => x.occ_master_frame(),
     }),
   });
 }

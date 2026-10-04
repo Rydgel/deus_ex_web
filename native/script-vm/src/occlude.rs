@@ -1322,3 +1322,202 @@ fn emit_child(kind: u32, i_node: i32, i_surf: i32, zone: u8, span: &SpanBuffer) 
         }
     }
 }
+
+// ---- the master frame (CreateMasterFrame 0x10b15690) -----------------------------
+//
+// Built before URender::PreRender, at the game thread's precision (the
+// model of docs/script-window-scene-frame.md: 64-bit significands), with
+// the x87 model in x87.rs. ComputeRenderCoords (Engine 0x10372580) rotates
+// GMath.ViewCoords by the camera rotation and adds the location; Uncoords
+// is its transpose. ComputeRenderSize (Engine 0x10372980) gives the sizes,
+// projection, clip numbers, ViewSides and ViewPlanes; UModel::PointRegion
+// (Engine 0x103f5db0) the zone at the origin.
+
+use crate::x87::Ext;
+
+/// Input: location bits (3), rotation (3 int32), width, height, FOV bits,
+/// Core appTan's qword result (low, high), Actor.OrthoZoom bits.
+static mut MASTER_IN: [u32; 12] = [0; 12];
+/// Output: the FSceneNode words Coords (+0x34, 12), FX..PrjYP (+0xb8, 17),
+/// ViewSides and ViewPlanes (+0xfc, 28), then ZoneNumber.
+static mut MASTER_OUT: [u32; 58] = [0; 58];
+
+#[no_mangle]
+pub extern "C" fn occ_master_in_ptr() -> *mut u32 {
+    addr_of_mut!(MASTER_IN) as *mut u32
+}
+#[no_mangle]
+pub extern "C" fn occ_master_out_ptr() -> *const u32 {
+    addr_of!(MASTER_OUT) as *const u32
+}
+
+fn ld(bits: u32) -> Ext {
+    Ext::load(bits)
+}
+fn sub(a: Ext, b: Ext) -> Ext {
+    a.add(b.neg())
+}
+/// ((v.x*a.x + v.y*a.y) + v.z*a.z), stored.
+fn dot3(v: [Ext; 3], a: [u32; 3]) -> u32 {
+    v[0].mul(ld(a[0])).add(v[1].mul(ld(a[1]))).add(v[2].mul(ld(a[2]))).store()
+}
+
+/// ComputeRenderCoords' view coordinates (script-window-scene-frame.mjs
+/// viewCoords, Core FCoords::operator/=(FRotator) 0x1011b690).
+fn view_coords(rotation: [i32; 3], location: [u32; 3]) -> [u32; 12] {
+    let s = |angle: i32| crate::rotator_sin(angle);
+    let c = |angle: i32| crate::rotator_sin(angle.wrapping_add(0x4000));
+    let neg = |bits: u32| bits ^ 0x8000_0000;
+    let (pitch, yaw, roll) = (rotation[0], rotation[1], rotation[2]);
+    let one = 0x3f80_0000;
+    let passes: [[[u32; 3]; 4]; 3] = [
+        [[0, 0, 0], [one, 0, 0], [0, c(roll), s(roll)], [0, neg(s(roll)), c(roll)]],
+        [[0, 0, 0], [c(pitch), 0, neg(s(pitch))], [0, one, 0], [s(pitch), 0, c(pitch)]],
+        [[0, 0, 0], [c(yaw), neg(s(yaw)), 0], [s(yaw), c(yaw), 0], [0, 0, one]],
+    ];
+    let mut fields: [[u32; 3]; 4] = [[0, 0, 0], [0, one, 0], [0, 0, neg(one)], [one, 0, 0]];
+    for m in &passes {
+        let mut next = [[0u32; 3]; 4];
+        for i in 0..4 {
+            let v: [Ext; 3] = if i == 0 {
+                [sub(ld(fields[0][0]), ld(m[0][0])), sub(ld(fields[0][1]), ld(m[0][1])), sub(ld(fields[0][2]), ld(m[0][2]))]
+            } else {
+                [ld(fields[i][0]), ld(fields[i][1]), ld(fields[i][2])]
+            };
+            next[i] = [dot3(v, m[1]), dot3(v, m[2]), dot3(v, m[3])];
+        }
+        fields = next;
+    }
+    for k in 0..3 {
+        fields[0][k] = ld(fields[0][k]).add(ld(location[k])).store();
+    }
+    let mut out = [0u32; 12];
+    for i in 0..4 {
+        out[3 * i..3 * i + 3].copy_from_slice(&fields[i]);
+    }
+    out
+}
+
+/// PointRegion's zone number: dist = ((z*Pz + y*Py) + x*Px) - W; the back
+/// side when below 0 or unordered (0x103f5e23..0x103f5e4b).
+fn point_zone(p: [u32; 3]) -> u32 {
+    let count = model(1);
+    if count == 0 {
+        return 0;
+    }
+    let mut index: i32 = 0;
+    let mut last = 0;
+    let mut side = 0;
+    let mut visits = 0;
+    while index != -1 && visits <= count {
+        let node = Node::at(index);
+        let d = sub(
+            ld(p[2]).mul(ld(rd(node.0 + 8))).add(ld(p[1]).mul(ld(rd(node.0 + 4)))).add(ld(p[0]).mul(ld(rd(node.0)))),
+            ld(rd(node.0 + 12)),
+        );
+        let (below, _) = d.compare(Ext::zero(0));
+        side = if below { 0 } else { 1 };
+        last = index;
+        index = node.child(side);
+        visits += 1;
+    }
+    if model(11) == 0 { 0 } else { Node::at(last).zone(side) as u32 }
+}
+
+#[no_mangle]
+pub extern "C" fn occ_master_frame() {
+    let input = unsafe { *addr_of!(MASTER_IN) };
+    let location = [input[0], input[1], input[2]];
+    let rotation = [input[3] as i32, input[4] as i32, input[5] as i32];
+    let (width, height) = (input[6] as i32, input[7] as i32);
+    let coords = view_coords(rotation, location);
+    // Uncoords axes: the transpose.
+    let un = [
+        [coords[3], coords[6], coords[9]],
+        [coords[4], coords[7], coords[10]],
+        [coords[5], coords[8], coords[11]],
+    ];
+    let half = Ext::load_f64(0.5);
+    let xi = Ext::load_i32(width);
+    let fx = xi.store();
+    let fy = Ext::load_i32(height).store();
+    let fx2 = xi.mul(half).store();
+    let fy2 = ld(fy).mul(half).store();
+    let c10001 = Ext::load_f64(f64::from_bits(0x3ff0_0068_db8b_ac71));
+    let fx15 = xi.add(c10001).mul(half).store();
+    let fy15 = ld(fy).add(c10001).mul(half).store();
+    let tan = Ext::load_f64(f64::from_bits(input[9] as u64 | (input[10] as u64) << 32));
+    let hx = ld(fx).mul(half);
+    let proj_z = hx.div(tan).store();
+    let proj_y = sub(half, ld(fy).mul(half)).store();
+    let proj_x = sub(half, hx).store();
+    let one = ld(0x3f80_0000);
+    let rproj = [one.div(ld(proj_x)).store(), one.div(ld(proj_y)).store(), one.div(ld(proj_z)).store()];
+    let zoom = ld(input[11]).div(ld(fx).mul(Ext::load_f64(15.0))).store();
+    let neg_rz = ld(rproj[2]).neg();
+    let prj_xm = ld(fx2).neg().mul(neg_rz).store();
+    let prj_xp = sub(ld(fx), ld(fx2)).mul(ld(rproj[2])).store();
+    let prj_ym = ld(fy2).neg().mul(neg_rz).store();
+    let prj_yp = sub(ld(fy), ld(fy2)).mul(ld(rproj[2])).store();
+    let rot = |v: [u32; 3]| -> [u32; 3] {
+        let e = [ld(v[0]), ld(v[1]), ld(v[2])];
+        [dot3(e, un[0]), dot3(e, un[1]), dot3(e, un[2])]
+    };
+    let signs = [0xbf80_0000_u32, 0x3f80_0000];
+    let o = [ld(coords[0]), ld(coords[1]), ld(coords[2])];
+    let mut sides = [[0u32; 3]; 4];
+    let mut planes = [[0u32; 4]; 4];
+    let unit = Ext::load_f64(1.0);
+    let inverse_root = |sum: Ext| unit.div(sum.store_double().sqrt().store_double());
+    for k in 0..2 {
+        for j in 0..2 {
+            let a = ld(signs[k]).mul(ld(fx2)).store();
+            let b = ld(signs[j]).mul(ld(fy2)).store();
+            let c = proj_z;
+            let inv = inverse_root(ld(a).mul(ld(a)).add(ld(b).mul(ld(b))).add(ld(c).mul(ld(c))));
+            let v = [inv.mul(ld(a)).store(), inv.mul(ld(b)).store(), inv.mul(ld(c)).store()];
+            sides[j + 2 * k] = rot(v);
+        }
+        let p = ld(signs[k]).div(ld(fy2)).store();
+        let q = one.div(ld(proj_z)).store();
+        let inv = inverse_root(ld(p).mul(ld(p)).add(ld(q).mul(ld(q))));
+        let n = rot([0, ld(inv.store()).mul(ld(p)).store(), inv.mul(ld(q)).store()]);
+        let w = ld(n[0]).mul(o[0]).add(o[2].mul(ld(n[2]))).add(o[1].mul(ld(n[1]))).store();
+        planes[k] = [n[0], n[1], n[2], w];
+        let p2 = ld(signs[k]).div(ld(fx2)).store();
+        let q2 = one.div(ld(proj_z)).store();
+        let inv2 = inverse_root(ld(p2).mul(ld(p2)).add(ld(q2).mul(ld(q2))));
+        let m = rot([inv2.mul(ld(p2)).store(), 0, inv2.mul(ld(q2)).store()]);
+        let w2 = ld(m[0]).mul(o[0]).add(o[1].mul(ld(m[1]))).add(o[2].mul(ld(m[2]))).store();
+        planes[k + 2] = [m[0], m[1], m[2], w2];
+    }
+    let zone = point_zone([coords[0], coords[1], coords[2]]);
+    unsafe {
+        let out = &mut *addr_of_mut!(MASTER_OUT);
+        out[..12].copy_from_slice(&coords);
+        out[12..29].copy_from_slice(&[
+            fx, fy, fx15, fy15, fx2, fy2, zoom, proj_x, proj_y, proj_z, rproj[0], rproj[1], rproj[2], prj_xm, prj_ym,
+            prj_xp, prj_yp,
+        ]);
+        for i in 0..4 {
+            out[29 + 3 * i..32 + 3 * i].copy_from_slice(&sides[i]);
+            out[41 + 4 * i..45 + 4 * i].copy_from_slice(&planes[i]);
+        }
+        out[57] = zone;
+        // The frame words occ_run reads.
+        let f = &mut *addr_of_mut!(FRAME);
+        f[..12].copy_from_slice(&coords);
+        f[12] = width as u32;
+        f[13] = height as u32;
+        f[14..20].copy_from_slice(&[fx15, fy15, fx2, fy2, fx, fy]);
+        f[20] = proj_z;
+        f[21..25].copy_from_slice(&[prj_xm, prj_ym, prj_xp, prj_yp]);
+        for i in 0..4 {
+            f[25 + 3 * i..28 + 3 * i].copy_from_slice(&sides[i]);
+        }
+        f[37..41].copy_from_slice(&[0, 0, 0, 0]);
+        f[41] = 0x3f80_0000;
+        f[42] = zone;
+        f[43] = 0;
+    }
+}
