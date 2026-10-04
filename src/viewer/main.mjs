@@ -86,6 +86,38 @@ let held=new URLSearchParams(location.search).get('hold')==='1';
 // onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
 const simVerify=new URLSearchParams(location.search).get('simVerify')==='1';
 const drew={movers:new Set(),sprites:new Set(),actors:new Set(),weapon:new Set()};
+// ?sim=clone: the simulation frame's input and snapshot, and the events
+// between frames, pass through structuredClone after a check that they hold
+// plain data only, as they will to and from a worker (docs/sim-worker.md
+// "Modes"). ?sim=inline (the default) hands them over directly.
+const simMode=new URLSearchParams(location.search).get('sim')==='clone'?'clone':'inline';
+function assertPlain(value,path,seen){
+  if(value===null||typeof value!=='object'){
+    if(typeof value==='function'||typeof value==='symbol')throw new Error(`?sim=clone: ${path} is a ${typeof value}`);
+    return;
+  }
+  if(ArrayBuffer.isView(value)||value instanceof ArrayBuffer||seen.has(value))return;
+  seen.add(value);
+  if(Array.isArray(value)){value.forEach((item,i)=>assertPlain(item,`${path}[${i}]`,seen));return;}
+  if(value instanceof Map){for(const [key,item] of value){assertPlain(key,`${path} key`,seen);assertPlain(item,`${path}.get(${key})`,seen);}return;}
+  if(value instanceof Set){for(const item of value)assertPlain(item,`${path} item`,seen);return;}
+  const prototype=Object.getPrototypeOf(value);
+  if(prototype!==Object.prototype&&prototype!==null)throw new Error(`?sim=clone: ${path} is a ${prototype?.constructor?.name??'class instance'}`);
+  for(const [key,item] of Object.entries(value))assertPlain(item,`${path}.${key}`,seen);
+}
+const crossing=value=>{if(simMode!=='clone')return value;assertPlain(value,'value',new Set());return structuredClone(value);};
+/** The simulation side's handover to the page (sim-session.mjs events), in
+ * order, to the given world, actor mesh layer and view model. */
+function applySimEvents(events,{world:target,actors,weapon}){
+  for(const event of events){
+    if(event.kind==='lighting')target.updateLighting(event.changes);
+    else if(event.kind==='mesh-create')actors?.draw.create(event.creation);
+    else if(event.kind==='mesh-release')actors?.draw.release(event.id);
+    else if(event.kind==='weapon-create')weapon?.create(event.creation);
+    else if(event.kind==='weapon-release')weapon?.release(event.id);
+    else throw new Error(`Unknown simulation event ${event.kind}`);
+  }
+}
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -351,6 +383,9 @@ async function loadMap(name) {
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   let nextWorld, nextGame, nextNpcPreview, nextMeshLighting, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
+  // What the simulation hands the page between frames, in order (sim-session.mjs
+  // events): lighting changes and the mesh layers' creation and release records.
+  const simEvents = [];
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -363,7 +398,7 @@ async function loadMap(name) {
       nextGame = await createGame(nextMap, asset, assets, {
         presentation:true, randomSeed,
         subtitles: subtitlePreference,
-        onLightingChanged: changes => nextWorld.updateLighting(changes),
+        onLightingChanged: changes => simEvents.push({ kind: 'lighting', changes }),
         onConversationSpeech:event=>{void playConversationSpeech(event);},
         onAudioVoice:event=>{void galaxyVoice(event);},
       });
@@ -394,14 +429,14 @@ async function loadMap(name) {
           // Player start logs in a new player; follow the current one.
           player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
           childFrames:nextWorld.mirrors.stats.planes>0,
-          feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{},
+          feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{},route:event=>simEvents.push(event),
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
         nextMeshLighting.kernel=nextNpcPreview.kernel;
         nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
-    nextSim=nextGame?createSimSession(nextGame,{assets}):null;
+    nextSim=nextGame?createSimSession(nextGame,{assets,events:simEvents}):null;
     nextSim?.setScene(nextWorld.stampScene(),nextNpcPreview?.sim??null);
     if(nextMeshLighting)nextSim?.setMeshLighting(nextMeshLighting);
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
@@ -412,12 +447,12 @@ async function loadMap(name) {
         try{nextWeaponGpu=createGpuMesh(renderer,WEAPON_GPU_MESH_CAPACITIES);}
         catch(error){nextWorld.notes.push(`GPU mesh path unavailable for the view model: ${error.message}`);}
       }
-      const draw=nextWeaponDraw=createWeaponOverlayDraw(assets,{gpu:nextWeaponGpu,displayGamma:nextWorld.displayGamma,
+      nextWeaponDraw=createWeaponOverlayDraw(assets,{gpu:nextWeaponGpu,displayGamma:nextWorld.displayGamma,
         feedback:handle=>simVerify?()=>drew.weapon.add(handle):()=>{}});
       nextSim.setWeapon(await createWeaponOverlaySim(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
         {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,
           layout:nextWeaponGpu?createGpuMeshLayout(nextWeaponGpu.capacities):null,
-          onCreate:creation=>draw.create(creation),onRelease:id=>draw.release(id)}));
+          onCreate:creation=>simEvents.push({kind:'weapon-create',creation}),onRelease:id=>simEvents.push({kind:'weapon-release',id})}));
     }
     // Sprites and particles (docs/particles.md): the simulation's sprite scan
     // (sim-session.mjs sprites) drawn by the page.
@@ -428,6 +463,13 @@ async function loadMap(name) {
     nextSim?.setCoronas(createCoronaScan(nextGame.doors.scriptRuntime.runtime,{model:nextMap.model,
       exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor}));
     const nextCoronaPass=nextGame?createCoronaPass(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
+    // The simulation's first events (the startup lighting, the admitted
+    // actors' creation records) reach the page before the first frame, whose
+    // actor meshes are built while the map loads.
+    if(nextSim){
+      applySimEvents(crossing(nextSim.takeEvents()),{world:nextWorld,actors:nextNpcPreview,weapon:nextWeaponDraw});
+      await nextNpcPreview?.draw.ready();
+    }
     coronaPass?.dispose();coronaPass=nextCoronaPass;
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
@@ -449,7 +491,7 @@ async function loadMap(name) {
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     lipSync = nextGame ? createLipSyncChannels({kernel: lipSyncKernel, ...nextGame.lipSyncServices()}) : null;
-    game = nextGame;sim = nextSim;sim?.setPanZones(world.panZoneNames());runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    game = nextGame;sim = nextSim;sim?.setPanZones(world.panZoneNames());sim?.setLipSync(lipSync);runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
@@ -879,7 +921,7 @@ stateDigest() {
 // Host frame-phase timing (docs/play-frame-cost.md): wall-clock ms per animate()
 // phase, read and reset by deusExViewer.framePhases(). Measurement only.
 const framePhases = { frames: 0, tick: 0, lighting: 0, sprites: 0, actors: 0, lightAnimation: 0, textures: 0, lightUpload: 0,
-  fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, ramp: 0, audio: 0, total: 0,
+  fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, ramp: 0, audio: 0, clone: 0, total: 0,
   mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0, gpu: 0, gpuFrames: 0, gpuDisjoint: 0, gpuSupported: 0 };
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
@@ -918,6 +960,19 @@ function gpuEnd() {
   gpuTimer.pending.push(gpuTimer.active);
   gpuTimer.active = null;
 }
+/** One simulation frame (sim-session.mjs frame); ?sim=clone sends the input
+ * and the snapshot through structuredClone (`clone` phase). */
+function simFrame(input) {
+  if (simMode !== 'clone') return sim.frame(input);
+  let mark = performance.now();
+  const sent = crossing(input);
+  framePhases.clone += performance.now() - mark;
+  const snapshot = sim.frame(sent);
+  mark = performance.now();
+  const received = crossing(snapshot);
+  framePhases.clone += performance.now() - mark;
+  return received;
+}
 function animate(time) {
   requestAnimationFrame(animate);
   if (held === 'releasing') { held = false; lastTime = time - 1000 / 60; }
@@ -925,78 +980,78 @@ function animate(time) {
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
-    let playerView = null, renderRect = null, movingLights = null, frame = null;
+    let playerView = null, renderRect = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
-    if (mode === 'play' && game) {
-      // The simulation frame's first steps (sim-session.mjs): the tick,
-      // PlayerCalcView, the render viewport and SetupDynamics' one moving-
-      // light scan per drawn frame, after PlayerCalcView as in DrawWorld (the
-      // light maps' moving lights and the mesh lighting's leaf lists below
-      // share it).
-      frame = sim.begin({ dt, run: !paused && !document.hidden, halted: Boolean(runtimeError),
-        width: renderer.domElement.width, height: renderer.domElement.height, lipSync, aspect: canvasAspect, resizes: resizeCount });
-      for (const error of frame.errors) pauseForRuntimeError(error);
-      world.syncMovers(frame.movers);
-      // The simulation side points its own camera the same way
-      // (play-camera.mjs applyPlayFrame).
-      renderRect = frame.renderRect;
-      if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
-      if (frame.lights) {
-        movingLights = frame.lights;
-        try { world.syncMovingLights(movingLights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
-      }
-      phase('tick');
-      if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
-      const target = frame.target;
-      $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
-      : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
-    } else if (x || y || z) {
+    const playing = mode === 'play' && Boolean(game);
+    if (!playing && (x || y || z)) {
       const forward = new THREE.Vector3(); camera.getWorldDirection(forward);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
       velocity.copy(forward).multiplyScalar(z).addScaledVector(right, x); velocity.y += y;
       velocity.normalize().multiplyScalar(Math.min(dt, .05) * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 900 : 240));
       camera.position.add(velocity); cameraMoved = true;
     }
-    // Draw the current shared-runtime pose; rendering neither chooses an
-    // animation nor advances NPC time — the script runtime owns both.
-    // One lighting frame per main-viewport draw (docs/mesh-lighting.md).
-    // Inspect's free camera lights meshes from its own view.
-    const playing=mode==='play'&&Boolean(game);
-    if(meshLighting&&!runtimeError){
-      const toUnits=radians=>Math.round(radians*32768/Math.PI);
-      const inspect=playing?null:{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
-      for(const error of sim.lightFrame(time/1000,inspect))pauseForRuntimeError(error);
+    // The simulation frame (sim-session.mjs frame, docs/sim-worker.md): the
+    // tick, PlayerCalcView, the render viewport, SetupDynamics' moving-light
+    // scan, the mesh lighting frame, the sprite scan, the actor mesh layer,
+    // the drawn set and its LastRenderTime stamps, the corona pass, the view
+    // model and the HUD paint, in that order, in one call. The rest of this
+    // function draws its snapshot. Inspect sends the free camera; rendering
+    // neither chooses an animation nor advances NPC time.
+    let snap = null;
+    if (sim) {
+      const toUnits = radians => Math.round(radians * 32768 / Math.PI);
+      snap = simFrame({ play: playing, dt, run: !paused && !document.hidden, halted: Boolean(runtimeError),
+        size: [renderer.domElement.width, renderer.domElement.height], aspect: canvasAspect, resizes: resizeCount,
+        seconds: time / 1000, mirrors: world.mirrors.enabled, pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000,
+        inspect: playing ? null : { camera: { position: camera.position.toArray(), quaternion: camera.quaternion.toArray(),
+          fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far },
+          view: { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] },
+          sky: world.sky ? { location: [...world.sky], rotation: [...(world.skyRotation ?? [0, 0, 0])] } : null } });
+      for (const error of snap.errors) pauseForRuntimeError(error);
+      for (const [name, ms] of Object.entries(snap.timings)) framePhases[name] += ms;
+      phaseMark = performance.now();
+      applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
     }
-    phase('lighting');
+    const frame = snap?.begin ?? null;
+    if (playing && frame) {
+      world.syncMovers(frame.movers);
+      // The simulation side points its own camera the same way
+      // (play-camera.mjs applyPlayFrame).
+      renderRect = frame.renderRect;
+      if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
+      if (frame.lights) {
+        try { world.syncMovingLights(frame.lights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
+      }
+      if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
+      const target = frame.target;
+      $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
+      : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
+    }
+    phase('tick');
     // The GPU timer starts before the actor layer, whose mesh passes
     // (docs/gpu-mesh.md) are GPU work submitted during this phase.
     gpuBegin();
-    // SetupDynamics' actor scan (sprites and render iterators) runs first:
-    // a LaserProxy, spawned after its emitter, is drawn as an actor where
-    // this frame's LaserIterator left it (docs/lasers.md).
-    let drawnSprites=[];
-    if(spriteScene&&mode==='play'&&game&&!runtimeError){
-      const sprites=sim.sprites();
-      for(const error of sprites.errors)pauseForRuntimeError(error);
-      for(const note of sprites.notes)spriteScene.notes.add(note);
-      try{spriteScene.update(sprites.sprites);}catch(error){pauseForRuntimeError(error);}
-      drawnSprites=sprites.sprites;
-      spriteScene.root.visible=true;
-    }else if(spriteScene)spriteScene.root.visible=false;
-    phase('sprites');
-    // The actor mesh layer: its simulation half's update with the frame
-    // camera (Inspect: the free camera), then its page half's draw state.
-    if(npcPreview&&!runtimeError){
-      const actors=sim.actors({camera:playing?null:camera});
-      for(const error of actors.errors)pauseForRuntimeError(error);
-      if(actors.frame)try{npcPreview.draw.apply(actors.frame,fromView(camera.position.toArray()));}catch(error){pauseForRuntimeError(error);}
+    // SetupDynamics' actor scan (sprites and render iterators) ran first on
+    // the simulation side: a LaserProxy, spawned after its emitter, is drawn
+    // as an actor where this frame's LaserIterator left it (docs/lasers.md).
+    if (spriteScene) {
+      if (snap?.sprites) {
+        for (const note of snap.sprites.notes) spriteScene.notes.add(note);
+        try { spriteScene.update(snap.sprites.sprites); } catch (error) { pauseForRuntimeError(error); }
+        spriteScene.root.visible = true;
+      } else spriteScene.root.visible = false;
     }
+    phase('sprites');
+    // The actor mesh layer's page half with the frame records.
+    if (npcPreview && snap?.actors)
+      try { npcPreview.draw.apply(snap.actors, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
     phase('actors');
     renderer.info.reset();
     let panInputs = null;
-    if (mode === 'play' && game && !runtimeError) {
-      if (frame.pan) panInputs = { timeSeconds: frame.pan.timeSeconds, zoneSpeeds: name => frame.pan.speeds[name] };
+    if (playing && !runtimeError && frame?.pan) {
+      const pan = frame.pan;
+      panInputs = { timeSeconds: pan.timeSeconds, zoneSpeeds: name => pan.speeds[name] };
     }
     // Light-map animation skips light maps outside the view unless a mirror
     // may draw them.
@@ -1017,37 +1072,16 @@ function animate(time) {
       } catch (error) { pauseForRuntimeError(error); }
     }
     phase('fog');
-    const drawWorld = !renderRect || (renderRect.render && renderRect.width > 0 && renderRect.height > 0);
-    // Render feedback (Render.dll 0x10b25150): the simulation side stamps
-    // the actors its drawn set says the mirror, sky and main passes draw
-    // (sim-session.mjs stamps, drawn-set.mjs), and hands the actor layer's
-    // decision for each mirror pass to its page half.
-    let stampFrame = null;
-    if (sim) {
-      stampFrame = sim.stamps({ size: renderer.getDrawingBufferSize(new THREE.Vector2()), drawWorld,
-        sky: drawWorld ? skyFrame(frame) : null, mirrors: world.mirrors.enabled, sprites: drawnSprites,
-        camera: playing ? null : camera, actorPasses: Boolean(npcPreview) && !runtimeError });
-      for (const error of stampFrame.errors) pauseForRuntimeError(error);
-    }
-    phase('mirrors');
-    // DrawFrame's corona pass and PostRender's view model, the simulation
-    // frame's last world steps (sim-session.mjs coronas, weapon); the page
-    // draws their records after the world. The view model's records and GPU
+    const drawWorld = snap ? snap.drawWorld : true;
+    // Render feedback (Render.dll 0x10b25150) was stamped on the simulation
+    // side (sim-session.mjs stamps, drawn-set.mjs), which hands the actor
+    // layer's decision for each mirror pass to its page half; the corona
+    // pass and the view model ran after it. The view model's records and GPU
     // passes are applied now, before the world's draws.
-    let coronaFrame = null, weaponFrame = null;
-    if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {
-      coronaFrame = sim.coronas({ pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000 });
-      for (const error of coronaFrame.errors) pauseForRuntimeError(error);
-    }
-    phase('coronas');
-    if (drawWorld && mode === 'play' && weaponDraw && !runtimeError) {
-      const weapon = sim.weapon();
-      for (const error of weapon.errors) pauseForRuntimeError(error);
-      weaponFrame = weapon.frame;
-      if (weaponFrame) {
-        weaponSummary = weaponFrame.summary;
-        try { weaponDraw.prepare(weaponFrame, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
-      }
+    const stampFrame = snap?.stamps ?? null, coronaFrame = snap?.coronas ?? null, weaponFrame = snap?.weapon ?? null;
+    if (weaponFrame && weaponDraw) {
+      weaponSummary = weaponFrame.summary;
+      try { weaponDraw.prepare(weaponFrame, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
     }
     phase('weapon');
     if (simVerify) for (const set of Object.values(drew)) set.clear();
@@ -1086,13 +1120,13 @@ function animate(time) {
     }
     phase('render');
     // Coronas close DrawFrame, before PostRender's weapon and HUD.
-    if (coronaFrame?.frame) {
+    if (coronaFrame && coronaPass) {
       try { coronaPass.update(coronaFrame.frame, coronaFrame.width, coronaFrame.height); coronaPass.render(renderer); }
       catch (error) { pauseForRuntimeError(error); }
     }
     phase('coronas');
     framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
-    if (weaponFrame) {
+    if (weaponFrame && weaponDraw) {
       try { weaponDraw.render(renderer, camera, weaponFrame); } catch (error) { pauseForRuntimeError(error); }
       if (simVerify) {
         const problem = sim.verifyWeapon(drew.weapon, handle => weaponDraw.built(handle));
@@ -1104,21 +1138,15 @@ function animate(time) {
       renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
     }
     phase('weapon');
-    if(mode==='play'&&hudRenderer&&playerView){
-      const width=renderer.domElement.width,height=renderer.domElement.height;
-      const hudFrame=sim.hud({width,height,view:playerView});
-      for(const error of hudFrame.errors)pauseForRuntimeError(error);
-      hudRenderer.render(renderer,width,height,hudFrame.commands);
-      updateInfoLinkAccessibility(hudFrame.infoLink);
+    if (snap?.hud && hudRenderer) {
+      hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands);
+      updateInfoLinkAccessibility(snap.hud.infoLink);
     }
     framePhases.hudCalls += drawCalls() - calls;
     phase('hud');
     if (displayRamp) displayRamp.apply(renderer, world.displayGamma.value);
     gpuEnd();
     phase('ramp');
-    // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
-    const audioMs = mode === 'play' ? game?.takeAudioMs?.() ?? 0 : 0;
-    framePhases.hud -= audioMs; framePhases.audio += audioMs;
     $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
     if ($('inspect').checked && time - lastInspect > 150) {
       lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);

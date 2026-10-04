@@ -255,6 +255,7 @@ depends on asynchronous loading. It is not a usable comparison map.
 | 4 actor meshes: simulation and page halves | 9bab54d | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
 | 5 drawn set and stamps on the simulation side | adf3c68 | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
 | 6 coronas and the view model on the simulation side; the view model on the GPU path | 26cf7c1 | against step 5: Island and 02_NYC_Smug walking, Training with the crowbar (CPU path before, GPU path now): identical; against f4fb698: Training (walking, crowbar), 02_NYC_Street, 02_NYC_Smug: identical frames (drawing buffer); `?simVerify=1` with the crowbar |
+| 7 one `sim.frame()` per frame, events queue, `?sim=clone` | (this commit) | against step 6, inline and `?sim=clone`: Island and 02_NYC_Smug walking, Training with the crowbar, 02_NYC_Smug in Inspect (free camera flying): identical; `?simVerify=1&sim=clone` with the crowbar |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
@@ -356,3 +357,46 @@ after the world, as before.
   0.37 → 0.40 ms, frame 12.77 → 12.97 ms, both within run-to-run noise.
   The crowbar's cost is RenderOverlays and its draw, not GetFrame or
   lighting.
+
+Step 7 (`sim-session.mjs` `frame`, `main.mjs` `simFrame`): animate() makes
+one simulation call per frame, `sim.frame(input)`. It runs every step in the
+order and with the gating animate() gave them and returns one snapshot:
+
+- the begin frame (movers, view, render rect, moving lights, sky, frob
+  target, surface pan);
+- the sprite records, the actor layer's frame records, the drawn set's
+  pass decisions, the corona icons and the view model's records;
+- the HUD commands and the InfoLink text;
+- Galaxy's update time, each step's time and the errors, in order;
+- the events queued since the last frame: the mesh layers' creation and
+  release records and the lighting changes.
+
+The page applies the events, then draws only from the snapshot.
+
+- `?sim=clone` passes the input and the snapshot, and the events at map
+  load, through `structuredClone`. It first checks that they hold only
+  plain data: no functions, and no class instances other than Map, Set and
+  typed arrays.
+- Creation records reach the page at the next frame's draw, not when the
+  binding's preparation resolves. The page still allocates GPU slots in
+  creation order, before that frame's passes. At map load the first records
+  are applied, and the actor meshes built, before the first frame.
+- A frame's simulation errors are known before any of it is drawn. A page
+  error (a draw that throws) gates the simulation from the next frame on.
+  So the gating differs from before only on a frame where a step fails.
+- Audio events and lip sync still call the page directly; they cross in
+  step 8.
+- Timings: the simulation side times its steps, and the page adds them to
+  `framePhases` under the same names; `clone` is the structured-clone cost.
+- Cost: inline, Island at 1920×1080, three interleaved pairs against step
+  6: frame median 27.95 → 27.95 ms. `?sim=clone` adds about 3.5 ms
+  (`clone`), with the plain-data check.
+- `structuredClone` of one Island snapshot takes 2.1 ms
+  (`.work/tools/snapshot-cost.mjs`), and 2.0 ms of that is the actor
+  records: 423 records, 311 with SetupForActor's lighting and 84 with a
+  GetFrame plan, as many small nested objects and arrays. The HUD's 128
+  commands take 0.2 ms. A worker would pay this every frame, so step 8
+  packs the plans and lighting into typed arrays. Every value already goes
+  into the GPU mesh path's Float32/Uint32 parameters, so packing loses
+  nothing.
+

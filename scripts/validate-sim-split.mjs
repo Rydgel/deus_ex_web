@@ -14,7 +14,7 @@
 //
 //   node scripts/validate-sim-split.mjs [--a URL] [--b URL] [--map 01_NYC_UNATCOIsland]
 //     [--frames 240] [--every 60] [--walk] [--query a=1&b=2] [--query-a ...] [--query-b ...]
-//     [--preview weapon]
+//     [--preview weapon] [--mode inspect] (Inspect's free camera; --walk flies it)
 //     [--shots DIR] (writes each run's last frame as DIR/<hash>.png)
 //
 // Without --a, a Vite server for this tree serves A; without --b, B is A.
@@ -28,7 +28,7 @@ import {gameDirectory} from './game-directory.mjs';
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-sim-split: no installed game data'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), frames = Number(option('frames', 240)), every = Number(option('every', 60));
-const walk = process.argv.includes('--walk'), preview = option('preview', null);
+const walk = process.argv.includes('--walk'), preview = option('preview', null), viewMode = option('mode', 'play');
 let server = null, a = option('a', null);
 if (!a) {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -64,6 +64,7 @@ async function run(browser, url) {
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
       map, {timeout: 240000});
+    if (viewMode !== 'play') await page.locator('#mode').selectOption(viewMode);
     // A viewer preview (main.mjs previews, e.g. Training's weapon) while the
     // frame loop is held; it needs no frames.
     if (preview) {

@@ -78,14 +78,18 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
  * every other visible LodMesh actor (actor-mesh-sim.mjs createActorMeshSim)
  * drawn by actor-mesh-draw.mjs. `player` is the player actor or a getter for
  * it. With `gpu`, the simulation side keeps its own GPU mesh layout with the
- * page's capacities. */
+ * page's capacities. With `route(event)`, the creation and release records
+ * go there as {kind: 'mesh-create', creation} and {kind: 'mesh-release', id}
+ * (Play's simulation frame queue), and the caller hands them to `draw` and
+ * awaits its ready(); otherwise `draw` takes them directly. */
 export async function createActorMeshScene(runtime,assets,asset,{kernel,player,lighting=null,displayGamma,gpu=null,childFrames=false,
-  feedback=handle=>actorRenderFeedback(runtime,identityOfHandle(handle))}={}) {
+  feedback=handle=>actorRenderFeedback(runtime,identityOfHandle(handle)),route=null}={}) {
   const draw=createActorMeshDraw(assets,{gpu,lit:Boolean(lighting),displayGamma,feedback});
   const sim=await createActorMeshSim(runtime,assets,asset,{kernel,player,lighting,childFrames,
     layout:gpu?createGpuMeshLayout(gpu.capacities):null,
-    onCreate:creation=>draw.create(creation),onRelease:id=>draw.release(id)});
-  await draw.ready();
+    onCreate:route?creation=>route({kind:'mesh-create',creation}):creation=>draw.create(creation),
+    onRelease:route?id=>route({kind:'mesh-release',id}):id=>draw.release(id)});
+  if(!route)await draw.ready();
   const drawOf=id=>draw.bindings.get(id),views=new WeakMap();
   const view=binding=>{let value=views.get(binding);if(!value)views.set(binding,value=bindingView(binding,drawOf));return value;};
   let mainCamera=null;

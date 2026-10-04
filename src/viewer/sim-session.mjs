@@ -24,10 +24,15 @@ export const plainHudCommands = commands => commands.map(command => ({ texture: 
   x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
   ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
 
-/** `assets` is the simulation side's asset store (sprite texture sizes). */
-export function createSimSession(game, { assets = null } = {}) {
+/** `assets` is the simulation side's asset store (sprite texture sizes).
+ * `events` is the ordered queue of what the simulation hands the page
+ * between frames (the actor mesh layer's and the view model's creation and
+ * release records, lighting changes); each frame() snapshot takes it. */
+export function createSimSession(game, { assets = null, events = [] } = {}) {
   const runtime = game.doors.scriptRuntime.runtime;
-  let failed = false, panZones = [], lastViewLocation = null, current = null;
+  let failed = false, panZones = [], lastViewLocation = null, current = null, lipSync = null;
+  // Inspect's free camera, from the page's plain camera state.
+  const inspectCamera = createPlayCamera();
   // Play's camera, pointed as the page points its own (play-camera.mjs); the
   // page's resize count says when its canvas aspect reset the camera.
   const camera = createPlayCamera();
@@ -171,6 +176,94 @@ export function createSimSession(game, { assets = null } = {}) {
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
     setCoronas(scan) { coronaScan = scan; },
+    setLipSync(channels) { lipSync = channels; },
+    /** One frame of the simulation side (docs/sim-worker.md "Frame
+     * protocol"), its steps in the order and with the gating animate()
+     * gave them, as one plain snapshot for the page. `input`: `play` (Play
+     * mode with a game), `dt`, `run` (not paused), `halted` (the page
+     * stopped on an error), `size` (the canvas's drawing buffer), `aspect`
+     * and `resizes` (resize()'s), `seconds` (the viewport clock), `mirrors`
+     * (the mirror toggle), `pixelRatio`, `now` (the corona fade clock,
+     * seconds) and, in Inspect, `inspect` {camera: {position, quaternion,
+     * fov, aspect, near, far}, view: {location, rotation}, sky}. A step's
+     * error stops the gated steps after it; the errors come back in order. */
+    frame(input) {
+      const errors = [], timings = {}, collect = list => { for (const error of list) errors.push(error); };
+      let mark = performance.now();
+      const time = name => { const now = performance.now(); timings[name] = (timings[name] ?? 0) + now - mark; mark = now; };
+      const stopped = () => input.halted || failed, [width, height] = input.size;
+      let inspect = null;
+      if (input.inspect) {
+        const c = input.inspect.camera;
+        inspectCamera.position.fromArray(c.position); inspectCamera.quaternion.fromArray(c.quaternion);
+        inspectCamera.fov = c.fov; inspectCamera.aspect = c.aspect; inspectCamera.near = c.near; inspectCamera.far = c.far;
+        inspectCamera.updateProjectionMatrix(); inspectCamera.updateMatrixWorld();
+        inspect = inspectCamera;
+      }
+      const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
+        coronas: null, weapon: null, hud: null, audioMs: 0, events: null };
+      let begun = null;
+      if (input.play) {
+        begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
+          aspect: input.aspect, resizes: input.resizes });
+        collect(begun.errors);
+        const { errors: _, ...frame } = begun;
+        snapshot.begin = frame;
+      }
+      time('tick');
+      const view = begun?.view ?? null, rect = begun?.renderRect ?? null;
+      const drawWorld = snapshot.drawWorld = !rect || (rect.render && rect.width > 0 && rect.height > 0);
+      if (meshLighting && !stopped()) collect(this.lightFrame(input.seconds, input.inspect?.view ?? null));
+      time('lighting');
+      let sprites = [];
+      if (input.play && !stopped()) {
+        const scanned = this.sprites();
+        collect(scanned.errors);
+        snapshot.sprites = { sprites: scanned.sprites, notes: scanned.notes };
+        sprites = scanned.sprites;
+      }
+      time('sprites');
+      if (actorScene && !stopped()) {
+        const actors = this.actors({ camera: inspect });
+        collect(actors.errors);
+        snapshot.actors = actors.frame;
+      }
+      time('actors');
+      if (drawn) {
+        const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
+        const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect,
+          actorPasses: Boolean(actorScene) && !stopped() });
+        collect(stamps.errors);
+        snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions };
+      }
+      time('mirrors');
+      if (drawWorld && input.play && coronaScan && view && !stopped()) {
+        const coronas = this.coronas({ pixelRatio: input.pixelRatio, now: input.now });
+        collect(coronas.errors);
+        if (coronas.frame) snapshot.coronas = { frame: coronas.frame, width: coronas.width, height: coronas.height };
+      }
+      time('coronas');
+      if (drawWorld && input.play && weaponSim && !stopped()) {
+        const weapon = this.weapon();
+        collect(weapon.errors);
+        snapshot.weapon = weapon.frame;
+      }
+      time('weapon');
+      if (input.play && game.hud && view) {
+        const hud = this.hud({ width, height, view });
+        collect(hud.errors);
+        snapshot.hud = { commands: hud.commands, infoLink: hud.infoLink };
+      }
+      // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
+      snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;
+      time('hud');
+      timings.hud -= snapshot.audioMs; timings.audio = snapshot.audioMs;
+      snapshot.events = events.splice(0);
+      return snapshot;
+    },
+    /** The queued events outside a frame (map load: the first creation
+     * records before the first frame). */
+    takeEvents() { return events.splice(0); },
     setWeapon(overlay) { weaponSim = overlay; },
     /** URender's per-frame mesh lighting setup for the main viewport
      * (mesh-lighting-view.mjs beginFrame) with this frame's moving lights;
