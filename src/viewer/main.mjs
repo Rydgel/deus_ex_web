@@ -6,6 +6,7 @@ import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
+import { createSimSession } from './sim-session.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
@@ -99,7 +100,7 @@ camera.rotation.order = 'YXZ';
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let subtitlePreference = false;
-let game, mode = 'play', paused = false, runtimeError = null;
+let game, sim = null, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null;
@@ -283,24 +284,16 @@ const rotatorAngle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 3276
 // A rotator as the view's Euler (pitch, -yaw, -roll in 'YXZ', as applyPlayerView).
 const rotatorEuler = ([pitchUnits, yawUnits, rollUnits]) =>
   new THREE.Euler(rotatorAngle(pitchUnits), -rotatorAngle(yawUnits), -rotatorAngle(rollUnits), 'YXZ');
-// Render.dll's sky frame (0x10b18410): only when LevelInfo.SkyZone (+0x384)
-// is set; the frame zone's ZoneInfo (LevelInfo when the zone has none)
-// supplies its SkyZone, whose Location is the sky frame's origin and whose
-// Rotation detransforms the view coords (FCoords /= FRotator: roll, pitch,
-// yaw), i.e. the sky view is the SkyZone rotation applied after the view's.
-// In Play the zones' SkyZone is what the original LinkToSkybox set at
-// startup; Inspect uses the map's statically chosen sky.
-function skyFrame() {
-  const runtime = mode === 'play' ? game?.doors?.scriptRuntime?.runtime : null;
-  if (!runtime) return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
-  const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
-  if (!runtime.readNamed(info, 'SkyZone')) return null;
-  const zone = level.pointRegion(fromView(camera.position.toArray()))?.zone ?? info;
-  const sky = runtime.readNamed(zone, 'SkyZone') ?? runtime.readNamed(info, 'SkyZone');
-  return { location: runtime.readNamed(sky, 'Location'), rotation: runtime.readNamed(sky, 'Rotation') };
+// The sky frame: Play's comes with the simulation frame (sim-session.mjs,
+// Render.dll 0x10b18410: the SkyZone's Location and Rotation, the sky view
+// being the SkyZone rotation applied after the view's); Inspect uses the
+// map's statically chosen sky.
+function skyFrame(frame) {
+  if (mode === 'play' && game) return frame?.sky ?? null;
+  return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
 }
-function applyPlayerView() {
-  const view = game.view();
+/** Points the camera along a PlayerCalcView result (sim-session.mjs). */
+function applyPlayerView(view) {
   const angle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
   camera.position.fromArray(toView(view.location));
   pitch = angle(view.rotation[0]); yaw = -angle(view.rotation[1]);
@@ -313,7 +306,7 @@ function resetCamera() {
   if (!map) return;
   hideNpcFocus();
   if (mode === 'play' && game) {
-    game.reset(); world.syncMovers(game.collision.movers);
+    sim.reset(); world.syncMovers(sim.movers());
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();
   }
   const start = map.summary.playerStarts.find(p => p.location);
@@ -322,7 +315,7 @@ function resetCamera() {
   pitch = (start?.rotation?.[0] ?? 0) * Math.PI / 32768;
   yaw = -(start?.rotation?.[1] ?? 0) * Math.PI / 32768;
   camera.rotation.set(pitch, yaw, 0); cameraMoved = false;
-  if (mode === 'play' && game) applyPlayerView();
+  if (mode === 'play' && game) applyPlayerView(sim.view());
 }
 function setMode(next) {
   if (mode === 'play' && next !== 'play') game?.resetInput({releasePhysical:true});
@@ -330,7 +323,7 @@ function setMode(next) {
   resize(); // Inspect uses the whole canvas again; Play takes the screen shape.
   if(mode==='play')hideNpcFocus();
   keys.clear();
-  if (mode === 'play') applyPlayerView();
+  if (mode === 'play') applyPlayerView(sim.view());
   $('play-hint').textContent = '';
   $('controls').textContent = mode === 'play' ? 'Drag to look · Double-click to lock mouse · WASD move · Space jump · X crouch · Shift walk · Right-click use · F center view · Click or Enter fire / use item in hand · 1–9 belt · 0 nanokey ring · Esc menu' : 'Drag to look · Double-click to lock mouse · WASD fly · Q E down / up · Shift faster · Esc menu';
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, X to crouch, right mouse to use, F to center view.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
@@ -464,7 +457,7 @@ async function loadMap(name) {
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     lipSync = nextGame ? createLipSyncChannels({kernel: lipSyncKernel, ...nextGame.lipSyncServices()}) : null;
-    game = nextGame;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    game = nextGame;sim = game ? createSimSession(game) : null;sim?.setPanZones(world.panZoneNames());runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
@@ -611,7 +604,7 @@ function aimPreview(target, point = null) {
     runtime.writeNamed(pawn, 'ViewRotation', rotation);
     runtime.writeNamed(pawn, 'Rotation', [0, rotation[1], 0]);
     game.tick(1 / 60);
-    if (runtime.readNamed(pawn, 'FrobTarget') === target) { applyPlayerView(); return; }
+    if (runtime.readNamed(pawn, 'FrobTarget') === target) { applyPlayerView(sim.view()); return; }
   }
   throw new Error(`Original preview trace did not select ${target.name}: ` +
     `selected=${runtime.readNamed(pawn, 'FrobTarget')?.name ?? 'None'}, ` +
@@ -738,7 +731,7 @@ previews.light = () => {
     });
     aimPreview(lightSwitch); game.use();
     game.tick(.4);
-    world.syncMovers(game.collision.movers);
+    world.syncMovers(sim.movers());
     const lit=runtime.levelFor(player).actors.some(actor=>actor&&/^TriggerLight[0-3]$/.test(actor.name)&&
       runtime.readNamed(actor,'LightBrightness')>0);
     toast(`Room lights ${lit?'on':'off'} · switch mesh is not rendered yet`);
@@ -763,7 +756,7 @@ previews['dark-door'] = () => {
     aimPreview(pair[0]);
     const result=game.use();
     for(let frame=0;frame<260;frame++)game.tick(1/120);
-    world.syncMovers(game.collision.movers);
+    world.syncMovers(sim.movers());
     const open=pair.every(mover=>mover.interpolation.key===1);
     toast(`Dark-room doors ${open?'opened':'closed'} · original padoor fanout found 0 actors`);
     return result;
@@ -938,31 +931,29 @@ function animate(time) {
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
-    let playerView = null, renderRect = null, movingLights = null;
+    let playerView = null, renderRect = null, movingLights = null, frame = null;
     const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
     const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']), y = axis(['KeyE'], ['KeyQ']);
     if (mode === 'play' && game) {
-      if (!paused && !runtimeError && !document.hidden) {
-        try { game.tick(dt); lipSync?.update(dt); }
-        catch(error) { pauseForRuntimeError(error); }
-      }
-      world.syncMovers(game.collision.movers);
-      try { playerView = applyPlayerView(); } catch (error) { pauseForRuntimeError(error); }
-      if (playerView && !runtimeError) {
-        const width = renderer.domElement.width, height = renderer.domElement.height;
-        try { renderRect = game.renderViewport(width, height); } catch (error) { pauseForRuntimeError(error); }
-        if (renderRect?.render && renderRect.width > 0 && renderRect.height > 0) setViewAspect(renderRect.width / renderRect.height, playerView.fov);
-      }
-      // SetupDynamics' one candidate scan per drawn frame, after
-      // PlayerCalcView as in DrawWorld: the light maps' moving lights and
-      // the mesh lighting's leaf lists below share it.
-      if (!runtimeError) {
-        try { movingLights = game.movingLights(); world.syncMovingLights(movingLights, game.collision.movers); }
-        catch (error) { pauseForRuntimeError(error); }
+      // The simulation frame's first steps (sim-session.mjs): the tick,
+      // PlayerCalcView, the render viewport and SetupDynamics' one moving-
+      // light scan per drawn frame, after PlayerCalcView as in DrawWorld (the
+      // light maps' moving lights and the mesh lighting's leaf lists below
+      // share it).
+      frame = sim.begin({ dt, run: !paused && !document.hidden, halted: Boolean(runtimeError),
+        width: renderer.domElement.width, height: renderer.domElement.height, lipSync });
+      for (const error of frame.errors) pauseForRuntimeError(error);
+      world.syncMovers(frame.movers);
+      if (frame.view) playerView = applyPlayerView(frame.view);
+      renderRect = frame.renderRect;
+      if (renderRect?.render && renderRect.width > 0 && renderRect.height > 0) setViewAspect(renderRect.width / renderRect.height, playerView.fov);
+      if (frame.lights) {
+        movingLights = frame.lights;
+        try { world.syncMovingLights(movingLights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
       }
       phase('tick');
       if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
-      const target = game.target();
+      const target = frame.target;
       $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
       : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
     } else if (x || y || z) {
@@ -979,7 +970,7 @@ function animate(time) {
     if(meshLighting&&!runtimeError){
       const toUnits=radians=>Math.round(radians*32768/Math.PI);
       const view=playerView??{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
-      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000,lights:movingLights});}
+      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000,lights:movingLights&&sim.live.lights});}
       catch(error){pauseForRuntimeError(error);}
     }
     phase('lighting');
@@ -1007,7 +998,7 @@ function animate(time) {
     renderer.info.reset();
     let panInputs = null;
     if (mode === 'play' && game && !runtimeError) {
-      try { panInputs = game.surfacePan(); } catch (error) { pauseForRuntimeError(error); }
+      if (frame.pan) panInputs = { timeSeconds: frame.pan.timeSeconds, zoneSpeeds: name => frame.pan.speeds[name] };
     }
     // Light-map animation skips light maps outside the view unless a mirror
     // may draw them.
@@ -1041,7 +1032,7 @@ function animate(time) {
       const box = renderViewportFor(renderRect);
       renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
     }
-    const sky = drawWorld ? skyFrame() : null;
+    const sky = drawWorld ? skyFrame(frame) : null;
     if (sky) {
       skyCamera.copy(camera); skyCamera.position.fromArray(toView(sky.location));
       skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));

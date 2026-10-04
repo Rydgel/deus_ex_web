@@ -352,7 +352,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * its meshes' world matrices at once. A flag alone is not enough: a
      * mesh's updateWorldMatrix(true, false) (mirrors.mjs) recomputes the
      * flagged group and clears its flag without updating the group's other
-     * children. */
+     * children. `movers` are the simulation's mover states
+     * (sim-session.mjs): name, the static brush values, position, rotation
+     * (null when unset) and the collider offset. */
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
@@ -368,7 +370,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           }
         } else {
           moverMatrix.copy(group.userData.baseMatrix);
-          const offset = toView(mover.collider.offset);
+          const offset = toView(mover.offset);
           for (let i = 0; i < 3; i++) moverMatrix.elements[12 + i] += offset[i];
         }
         if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
@@ -380,7 +382,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     /** Play's per-frame moving lights (game.movingLights()) over the current
      * mover offsets; changed tiles upload on the next flushLighting. */
     syncMovingLights(lights, movers = []) {
-      const offsets = new Map(movers.map(mover => [mover.name, mover.collider.offset]));
+      const offsets = new Map(movers.map(mover => [mover.name, mover.offset]));
       const changed = movingLights.update(lights, offsets);
       for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
@@ -437,6 +439,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       }
       phase?.('textures');
     },
+    /** The zone names whose live pan speeds the auto-panned surfaces read. */
+    panZoneNames: () => [...new Set(panned.flatMap(entry => entry.zones.map(zone => zone.name)).filter(Boolean))],
     pannedSurfaces: () => panned.map(entry => ({ flags: entry.surface.flags, pan: [...entry.surface.pan],
       zones: entry.zones.map(zone => zone.name), speeds: entry.zones.map(zone => zone.speeds), plane: entry.plane,
       width: entry.width, height: entry.height, offset: [entry.material.map.offset.x, entry.material.map.offset.y] })),

@@ -23,7 +23,9 @@ const assets = new AssetStore(files), asset = await assets.get('00_Training'), m
 const world = await createWorld(map, asset, assets);
 const game = await createGame(map, asset, assets, { randomSeed: 1, onLightingChanged: changes => world.updateLighting(changes) });
 const input = createPlayerInputFixture(game, { tickSeconds: 1 / 120 });
-const frame = () => world.syncMovingLights(game.movingLights(), game.collision.movers);
+// Play's mover states (sim-session.mjs): name and collider offset.
+const frame = () => world.syncMovingLights(game.movingLights(),
+  game.collision.movers.map(mover => ({ name: mover.name, offset: mover.collider.offset })));
 
 input.tick(60);
 const before = game.movingLights();

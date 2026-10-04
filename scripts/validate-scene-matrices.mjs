@@ -49,7 +49,7 @@ const compare = (scene, label) => {
   // As main.mjs: the scene does not auto-update.
   const scene = new THREE.Scene(); scene.matrixAutoUpdate = false; scene.add(world.root);
   const movers = map.actors.filter(actor => /Mover$/.test(actor.className) && actor.values.Brush > 0)
-    .map(actor => ({name: actor.name, values: actor.values, position: [...actor.values.Location], collider: {offset: [0, 0, 0]}}));
+    .map(actor => ({name: actor.name, values: actor.values, position: [...actor.values.Location], offset: [0, 0, 0]}));
   const groups = [];
   world.root.traverse(object => { if (object.isGroup && object !== world.root && object.children.some(child => child.userData?.actor)) groups.push(object); });
   assert.ok(movers.length >= 2 && groups.length >= 2, 'Smug has mover groups');
@@ -57,7 +57,7 @@ const compare = (scene, label) => {
   for (let frame = 0; frame < 40; frame++) {
     movers.forEach((mover, i) => {
       // Movers start, stop and rotate at different frames.
-      if ((frame + i) % 7 < 4) mover.collider.offset = [frame * 3 + i, -frame * 2, (frame % 5) * 1.5];
+      if ((frame + i) % 7 < 4) mover.offset = [frame * 3 + i, -frame * 2, (frame % 5) * 1.5];
       mover.rotation = i === 1 && frame >= 20 ? [0, frame * 512, 0] : undefined;
     });
     world.syncMovers(movers);

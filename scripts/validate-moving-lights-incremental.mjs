@@ -105,12 +105,13 @@ function lightsFor(frame) {
   return lights;
 }
 function moversFor() {
-  const movers = game.collision.movers;
+  // Play's mover states (sim-session.mjs): name and collider offset.
+  const movers = game.collision.movers.map(mover => ({ name: mover.name, offset: mover.collider.offset }));
   if (!perturbed) return movers;
   if (rand() < 0.05 && movers.length) moverDeltas.set(pick(movers).name, [rand() * 64 - 32, rand() * 64 - 32, rand() * 16 - 8]);
   if (rand() < 0.05 && moverDeltas.size) moverDeltas.delete(pick([...moverDeltas.keys()]));
   return movers.map(mover => ({ name: mover.name,
-    collider: { offset: mover.collider.offset.map((v, i) => v + (moverDeltas.get(mover.name)?.[i] ?? 0)) } }));
+    offset: mover.offset.map((v, i) => v + (moverDeltas.get(mover.name)?.[i] ?? 0)) }));
 }
 
 const keyOf = record => `${record.owner ?? ''}|${record.surfaceIndex}|${record.zone}`;
