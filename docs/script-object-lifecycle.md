@@ -72,14 +72,21 @@ Class loading now retains the original property order and destructor chain.
 `exitProperties` implements the string cleanup above, including fixed arrays of
 strings. Other owning property destructors remain explicit unsupported cases.
 Base destruction leaves ordinary property values and the state continuation
-intact. Registering/allocating identities, AActor's auxiliary native object at
-`+0x314`, native subclass hooks, and final garbage collection remain separate
-work; merely binding an existing record does not claim those operations.
+intact. Registering/allocating identities, native subclass hooks, and final
+garbage collection remain separate work; merely binding an existing record
+does not claim those operations.
 
-`destroyActorBase` implements AActor's destruction prelude when its native
-record explicitly supplies the auxiliary pointer at Actor `+0x314`. A non-null
-pointer is conditionally destroyed, then cleared, before the Core base hook.
-Its concrete native class still determines which destruction callback is bound.
+`destroyActorBase` implements `AActor::Destroy` (thunk `0x10301f8c`, body
+`0x10368f60`). Actor `+0x314` is the reflected `RenderInterface` (its linked
+property offset is `0x314`). A non-null value is conditionally destroyed,
+then cleared, before the Core base hook. Its concrete native class still
+determines which destruction callback is bound. The only objects stored
+there are the render iterators ([particles](particles.md), "Iterators").
+
+When the Outer is a pre-placed map actor, `destroyScriptObject` stores the
+actor's measured GObjObjects index (`hashIndex`) as the retained Outer
+index. That is the index `ScriptObjectRegistry.add` hashed the object by,
+so `~UObject`'s UnhashObject finds it.
 
 `modifyScriptObject` implements the ordinary UObject.Modify body (thunk
 `0x101014d8`, body `0x10150170`). With the undo global at `0x101e3318`

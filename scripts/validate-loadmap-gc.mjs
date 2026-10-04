@@ -4,7 +4,8 @@
  *
  * 1. Original evidence: hash-pinned DLLs, pinned instruction ranges, the
  *    semantic anchors inside them, the imports they call and the vtable slots
- *    that select each Destroy override.
+ *    that select each Destroy override (the render iterators' live Player
+ *    start is validate-island-player-start.mjs).
  * 2. Live Play over 22 resets: the retirement order and effects, the purge of
  *    the whole old generation with GObjAvailable reuse, and bounded memory
  *    (registry length and live count, window heap high-water mark, JS heap).
@@ -57,6 +58,16 @@ const BODIES = {
   dumpLocationDestroy: ['DeusEx', 0x10015120, 0x100151c9, '1b36559c7ff7a7db4d9a1bce10aac85751ddbb635dec4fb7c004c0b265a2417e'],
   closeDumpFile: ['DeusEx', 0x100159d0, 0x10015a06, '180393440adc3cbe2738afcf26c90c20b45135e16fefd40f2434fab5594ac86f'],
   conHistoryDestroy: ['ConSys', 0x1000ca20, 0x1000ca78, 'ad2fb0f6338bdf5a9e55e3f4e20878e3cb583925725192fa3e5ef43e885605b2'],
+  // AActor::Destroy and the render iterators SetupDynamics builds
+  // (script-render-iterator.mjs).
+  actorDestroy: ['Engine', 0x10368f60, 0x10368fbd, '0a7ac6fac610fe75b82dad4354bbe89d9eaf8bcfa18d6480552f2b561b761b14'],
+  renderIteratorConstructor: ['Engine', 0x103d9cf0, 0x103d9da6, '7f525bd47bfc1183e630b2923dc39cb628ac16c89ba10876cee7b1febd945f2d'],
+  laserIteratorConstructor: ['DeusEx', 0x1001a780, 0x1001a7a3, '67ef4dd7084755d58d22b9bc70e353550dc45f77f4338621d4b63100432fb089'],
+  particleIteratorConstructor: ['DeusEx', 0x1000d360, 0x1000d383, '5591d42510f9db2e313202318db4164a8b5ec248dac940322728fa9660d4d0dd'],
+  laserIteratorDestructor: ['DeusEx', 0x1001a710, 0x1001a778, '3f4449f849c25b16f3bad487d36b69e758639173be862e42c7809455b4ab3c7f'],
+  particleIteratorDestructor: ['DeusEx', 0x1000d2f0, 0x1000d358, '91b3c55cb7e179c1165bf8d398c67d1b8e6c17c24fcaa57bb7e9fa4a2b45110c'],
+  laserIteratorDeletingDestructor: ['DeusEx', 0x1001a9c0, 0x1001aa22, '597a442d127cc92abe9beb0e0e48109f1ebafbcec2f2d0cf64bd83bd35b83673'],
+  particleIteratorDeletingDestructor: ['DeusEx', 0x1000d540, 0x1000d5a2, '9b6dc3ebe837458f80f797d7a5f0141d66ceda594e606b1ad33eb2ef3c885302'],
 };
 // The instructions the model rests on, inside the pinned ranges.
 const ANCHORS = [
@@ -78,6 +89,17 @@ const ANCHORS = [
   ['Extension', 0x10037d95, 'e816430100', 'rootWindow SafeDestroy'],
   ['Extension', 0x10037da2, 'ff1540930510', 'AActor::Destroy'],
   ['Extension', 0x100392c3, 'ff155c910510', 'XRootWindow::CleanUp RemoveFromRoot'],
+  ['Engine', 0x10368f8a, '8b8e14030000', 'AActor::Destroy reads RenderInterface (+0x314)'],
+  ['Engine', 0x10368f94, 'ff15089b5910', 'AActor::Destroy: RenderInterface->ConditionalDestroy()'],
+  ['Engine', 0x10368f9a, 'c7861403000000000000', 'AActor::Destroy: RenderInterface = NULL'],
+  ['Engine', 0x10368fa6, 'ff15e09a5910', 'AActor::Destroy: UObject::Destroy'],
+  ['Engine', 0x103d9d24, '894e2c', 'URenderIterator(): Index (+0x2c) = 0'],
+  ['Engine', 0x103d9d27, '894e30', 'URenderIterator(): Observer (+0x30) = NULL'],
+  ['Engine', 0x103d9d2a, 'c706dc964210', 'URenderIterator(): its vtable 0x104296dc'],
+  ['Engine', 0x103d9d3b, '3df0cd5710', 'URenderIterator(): check(GetOuter()->IsA(AActor::StaticClass()))'],
+  ['DeusEx', 0x1001a793, 'ff15d0720210c706d0830210', 'ULaserIterator(): URenderIterator(), then vtable 0x100283d0'],
+  ['DeusEx', 0x1000d373, 'ff15d0720210c706147a0210', 'UParticleIterator(): URenderIterator(), then vtable 0x10027a14'],
+  ['DeusEx', 0x1001aec0, 'ff25dc700210', 'iterator Destroy (+0x24): jmp UObject::Destroy'],
 ];
 const IMPORTS = [
   ['Engine', 0x10599f48, 'Core.dll!?CollectGarbage@UObject@@SAXK@Z'],
@@ -90,6 +112,13 @@ const IMPORTS = [
   ['DeusEx', 0x10027404, 'Extension.dll!?Destroy@APlayerPawnExt@@UAEXXZ'],
   ['DeusEx', 0x10027008, 'CONSYS.dll!?Destroy@DConHistory@@UAEXXZ'],
   ['DeusEx', 0x100270dc, 'Core.dll!?Destroy@UObject@@UAEXXZ'],
+  ['Engine', 0x10599ae0, 'Core.dll!?Destroy@UObject@@UAEXXZ'],
+  ['Engine', 0x10599b58, 'Core.dll!??0UObject@@QAE@XZ'],
+  ['DeusEx', 0x100272d0, 'Engine.dll!??0URenderIterator@@QAE@XZ'],
+  ['DeusEx', 0x1002707c, 'Core.dll!?ConditionalDestroy@UObject@@QAEHXZ'],
+  ['DeusEx', 0x100272cc, 'Engine.dll!??_7URenderIterator@@6B@'],
+  ['DeusEx', 0x100270a0, 'Core.dll!??1UObject@@UAE@XZ'],
+  ['DeusEx', 0x1002709c, 'Core.dll!??3UObject@@SAXPAXI@Z'],
 ];
 // Retail vtable slots: [dll, vtable, slot, target].
 const SLOTS = [
@@ -105,6 +134,10 @@ const SLOTS = [
   ['DeusEx', 0x10027fe8, 0x24, 0x1001ae60],   // ConHistory: jmp DConHistory::Destroy
   ['DeusEx', 0x1002803c, 0x24, 0x1001aec0],   // ConHistoryEvent: jmp UObject::Destroy
   ['DeusEx', 0x10027ad0, 0x24, 0x1001aec0],   // DeusExLog: jmp UObject::Destroy
+  ['DeusEx', 0x100283d0, 0x24, 0x1001aec0],   // LaserIterator: jmp UObject::Destroy
+  ['DeusEx', 0x100283d0, 0x0c, 0x1001a9c0],   // LaserIterator scalar deleting destructor
+  ['DeusEx', 0x10027a14, 0x24, 0x1001aec0],   // ParticleIterator: jmp UObject::Destroy
+  ['DeusEx', 0x10027a14, 0x0c, 0x1000d540],   // ParticleIterator scalar deleting destructor
 ];
 
 function peImage(bytes) {

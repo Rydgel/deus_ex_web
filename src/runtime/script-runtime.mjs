@@ -929,7 +929,7 @@ export class ScriptRuntime {
     if (!fname || !Number.isInteger(fname.index)) throw new Error('Player FName is not interned');
     const object = {
       identity: player, index: -1, hashNext: null, stateFrame: instance.state ?? null,
-      linker: null, linkerIndex: -1, auxiliary: null, outer: packageOuter, flags: 0,
+      linker: null, linkerIndex: -1, outer: packageOuter, flags: 0,
       name: fname.name, nameIndex: fname.index, objectClass: instance.cls,
       destroy: receiver => this.destroyActorBase(receiver),
     };
@@ -1065,10 +1065,14 @@ export class ScriptRuntime {
     if(!object)throw new Error('UObject.Destroy requires native object registration');
     return destroyScriptObject(object,{exitProperties:actor=>this.exitProperties(actor)});
   }
+  /** AActor::Destroy (Engine thunk 0x10301f8c, body 0x10368f60): a non-null
+   * RenderInterface (+0x314, the reflected Actor.RenderInterface) is
+   * ConditionalDestroy'd and cleared, then UObject::Destroy. */
   destroyActorBase(receiver) {
     const object=this.instance(receiver).nativeObject;
-    if(!object||!Object.hasOwn(object,'auxiliary'))throw new Error('AActor.Destroy requires its native auxiliary-object binding');
-    if(object.auxiliary){this.conditionalDestroy(object.auxiliary);object.auxiliary=null;}
+    if(!object)throw new Error('AActor.Destroy requires native object registration');
+    const renderInterface=this.readNamed(receiver,'RenderInterface');
+    if(renderInterface){this.conditionalDestroy(renderInterface);this.writeNamed(receiver,'RenderInterface',null);}
     return this.destroyObjectBase(receiver);
   }
   /** The Destroy virtual (+0x24) of a constructed actor's native vtable. */
@@ -2629,11 +2633,11 @@ export class ScriptRuntime {
           {...lifecycle.construction,nativeConstructor:nativeConstructorFor(context.constructorSelection,{
             constructFlagBase:(object,contract)=>this.constructPlayerFlagBase(object,contract)})});
         // Every SpawnActor product is an actor: ConditionalDestroy reaches its
-        // vtable's Destroy slot. That is AActor::Destroy (auxiliary object slot
-        // empty) -> UObject::Destroy, as on map exports, except for the player
-        // chain's own overrides (script-player-destroy.mjs).
+        // vtable's Destroy slot. That is AActor::Destroy -> UObject::Destroy,
+        // as on map exports, except for the player chain's own overrides
+        // (script-player-destroy.mjs).
         const object=this.instance(identity).nativeObject;
-        if(object){object.auxiliary=null;object.destroy=this.actorDestroyHook(object);}
+        if(object)object.destroy=this.actorDestroyHook(object);
         return identity;
       },
       setRegion:(...values)=>this.setRegion(...values),

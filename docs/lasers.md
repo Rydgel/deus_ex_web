@@ -87,6 +87,10 @@ returns the case's doubles, and XLevel's two moves are recording stubs.
 
 ## Play
 
+- **Construction.** The LaserIterator is built with its recovered class
+  constructor and Destroy, as the ParticleIterator is
+  ([particles](particles.md), "Iterators"). Player start releases it with
+  the old level (`validate-island-player-start.mjs`).
 - **Iterator pass.** The sprite scene's SetupDynamics pass runs a
   LaserIterator through `laserIteratorItems` on the shared appFrand stream,
   using `setScriptRotation`, the zero-Delta MoveActor path. It returns the

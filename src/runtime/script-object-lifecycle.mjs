@@ -17,7 +17,11 @@ export function destroyScriptObject(object,{exitProperties}) {
   exitProperties(object.identity);
   setObjectLinker(object,null,-1);
   // Native +0x14 stores the outer index after the linker has been removed.
-  object.linkerIndex=object.outer?object.outer.index:0;
+  // A pre-placed map actor Outer is not in Play's registry; its measured
+  // GObjObjects index (hashIndex) is the index its owned objects hash by
+  // (ScriptObjectRegistry.add), e.g. a ParticleGenerator's RenderInterface.
+  const outer=object.outer;
+  object.linkerIndex=outer?(Number.isInteger(outer.index)?outer.index:outer.hashIndex??outer.index):0;
 }
 
 export function conditionalDestroyScriptObject(object,{destroy,warning}) {

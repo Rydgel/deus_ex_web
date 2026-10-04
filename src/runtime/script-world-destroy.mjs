@@ -35,7 +35,7 @@ export function mapActorNativeObject(identity, entry, { index = null, destroy } 
   if (index !== null && !Number.isInteger(index)) throw new TypeError('Measured global object index must be an integer or null');
   return {
     identity, index, name: entry.name, flags: entry.flags >>> 0,
-    outer: null, linker: null, linkerIndex: -1, auxiliary: null, destroy,
+    outer: null, linker: null, linkerIndex: -1, destroy,
   };
 }
 
@@ -164,7 +164,7 @@ export function createDestroyedActorLedger({ level, runtime }) {
       clearStore?.(receiver);
       const object = runtime.instance(receiver).nativeObject;
       if (object && saved.flags !== null) {
-        object.flags = saved.flags; object.linker = null; object.linkerIndex = -1; object.auxiliary = null;
+        object.flags = saved.flags; object.linker = null; object.linkerIndex = -1;
       }
     }
     entries.clear();

@@ -159,8 +159,9 @@ the construction registry admits, only these two override it:
   * It passes a non-null `rootWindow` (`+0x894`) to `XWindow::SafeDestroy`,
     nulls `+0x894`, and runs `AActor::Destroy`.
 
-The other actors use `AActor::Destroy`. The remaining classes on this path
-are:
+The other actors use `AActor::Destroy` (`0x10368f60`). It
+ConditionalDestroys a non-null `RenderInterface` (`+0x314`), clears it and
+calls `UObject::Destroy`. The remaining classes on this path are:
 
 | Class | Destroy (`+0x24`) | Behavior |
 | --- | --- | --- |
@@ -169,6 +170,7 @@ are:
 | DumpLocation (`0x10027f94`) | `0x10015120` | `CloseDumpFile` (`0x100159d0`: a non-zero `dumpFile` `+0x9c` is closed, then `dumpFile`=0, `currentDumpLocationIndex` `+0x8c`=-1, `dumpLocationCount` `+0xa0`=0). Each `dumpFileDirectory` (`+0x7c`) FString is emptied and destroyed and the array is zeroed. `player` (`+0xa4`) is zeroed, the scratch block in `currentDumpFileLocation` (`+0x28`) is freed and zeroed, then `UObject::Destroy`. |
 | ConHistory (DeusEx `0x10027fe8`) | jmp ConSys `DConHistory::Destroy` `0x1000ca20` | For each event from `firstEvent` (`+0x50`), it reads `next` (`+0x44`), then calls the event's scalar deleting destructor with 1. `firstEvent` is left set. Then `UObject::Destroy`. |
 | ConHistoryEvent (`0x1002803c`), DeusExLog (`0x10027ad0`) | jmp `UObject::Destroy` | — |
+| LaserIterator (`0x100283d0`), ParticleIterator (`0x10027a14`) | `0x1001aec0`, jmp `UObject::Destroy` | Built by SetupDynamics as an actor's `RenderInterface` ([particles](particles.md), "Iterators"). Pass 1 reaches each one from its actor's `AActor::Destroy` or on its own, whichever comes first in index order. The deleting destructors (`0x1001a9c0`, `0x1000d540`) run `~Class`: ConditionalDestroy, the URenderIterator vtable, ConditionalDestroy, `~UObject`. Then they call `??3UObject`, the ordinary release tail below. |
 
 None of the complete destructors checked here destroys another UObject:
 `~XFlagBase` (`0x1001b530`) and `~APlayerPawnExt` (`0x1001c150`) only
@@ -232,6 +234,16 @@ Measured on Training (`scripts/validate-loadmap-gc.mjs`, 22 Player starts):
   peak RSS fell from 2832 MiB to about 2.0–2.5 GiB. In the 4-job sweep it now
   completes at a 5.4 GiB runner footprint, where it was killed at the
   6144 MiB cap (6191 MiB) before.
+
+Measured on 01_NYC_UNATCOIsland after Play has drawn frames
+(`scripts/validate-island-player-start.mjs`): the page's sprite scan built 8
+LaserIterators and 4 ParticleIterators. Each of two Player starts, taken
+while the opening InfoLink plays, released all 12, and the next frames built
+12 new ones. A ParticleGenerator is a pre-placed export: the in-place reload
+restores its `RenderInterface` to None, so its old iterator is unreachable.
+Before the iterators had their constructor and Destroy, Player start stopped
+in pass 1 ("Object destruction requires its native virtual hook"). The reset
+was left half done, and the HUD snapshot then read a destroyed window.
 
 ## Not modeled or unverified
 

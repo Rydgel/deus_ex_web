@@ -20,7 +20,7 @@ const outer={identity:{name:'FixturePackage'},index:7};
 let nextIndex=20;
 function attach(name,actorClass=cls){
   const actor={name};runtime.attach(actor,actorClass);
-  const record={identity:actor,index:nextIndex++,name,flags:1,outer,linker:null,linkerIndex:-1,auxiliary:null,
+  const record={identity:actor,index:nextIndex++,name,flags:1,outer,linker:null,linkerIndex:-1,
     destroy:identity=>runtime.destroyActorBase(identity)};
   runtime.bindNativeObject(actor,record);level.actors.push(actor);return actor;
 }

@@ -43,7 +43,7 @@ const construction={
   findObject:(scope,name)=>registry.objects.find(object=>object?.outer===scope&&object.name.toLowerCase()===name.toLowerCase()),
   internName,nativeConstructor:constructCameraPoint,
   initNativeProperties:object=>{
-    object.auxiliary=null;object.destroy=actor=>runtime.destroyActorBase(actor);
+    object.destroy=actor=>runtime.destroyActorBase(actor);
     records.set(object.identity,object);
   },
 };

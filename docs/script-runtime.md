@@ -147,8 +147,8 @@ The caller must validate native subclass, network and editor scope and provide
 any reached native world services. Registered objects have separate native
 identity/flags/linker records; Core conditional destruction guards reentrancy,
 releases linked string properties and detaches the old linker export. Native
-Actor destruction handles its explicitly bound auxiliary object before the
-Core base hook. Pending finalization is handled by the separate level cleanup
+Actor destruction releases its RenderInterface (`+0x314`) before the Core
+base hook. Pending finalization is handled by the separate level cleanup
 path below. These lifecycle methods are not wired to Play's partial actor world.
 
 The [level cleanup](script-cleanup.md) preserves the permanent actor-array prefix,

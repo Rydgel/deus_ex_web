@@ -121,7 +121,7 @@ verifyDataLinkPlayDefaults(defaults);
 const construction={
   validate:args=>args.cls===dataLinkClass&&args.outer===outer&&args.template===null,
   registry,findObject:lookup.findObject,internName:name=>names.intern(name),
-  initNativeProperties:object=>{object.auxiliary=null;},
+  initNativeProperties:()=>{},
   nativeConstructor:object=>{
     // This is the recovered inherited Engine.Actor constructor. The strict
     // selection above is separate so an unrelated native subclass cannot reach

@@ -4,6 +4,7 @@
  * yet moved here still run from main.mjs. */
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
 import { createSpriteScan } from './sprite-scan.mjs';
+import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/script-render-iterator.mjs';
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
@@ -53,10 +54,17 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
   // actor hashes its owned objects by its measured GObjObjects index
-  // (docs/object-index-captures.md).
+  // (docs/object-index-captures.md). The class constructor and Destroy are
+  // the recovered native ones (script-render-iterator.mjs).
+  const iteratorNatives = {
+    write: (identity, name, value) => runtime.writeNamed(identity, name, value),
+    isActor: record => runtime.classIsA(runtime.instance(record.identity).cls, runtime.actorClass.record),
+    destroyObjectBase: receiver => runtime.destroyObjectBase(receiver),
+  };
   const constructIterator = (cls, outer) => {
     const linked = [...runtime.linkedClasses].find(candidate => candidate.record.key === (cls.key ?? cls.record?.key));
     if (!linked) throw new Error(`RenderIteratorClass ${cls.key} is not linked`);
+    const row = renderIteratorNativeClass(linked);
     const base = runtime.actorLifecycle.construction, native = runtime.instance(outer).nativeObject;
     if (!native) throw new Error(`${outer.name} has no native object to own its RenderInterface`);
     if (!Number.isInteger(native.index) && !Number.isInteger(native.hashIndex)) {
@@ -65,7 +73,8 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       native.hashIndex = measured;
     }
     return runtime.constructObject(linked, { outer: native, name: 'None', flags: 0, template: null }, {
-      ...base, validate: () => true, initNativeProperties: () => {}, nativeConstructor: () => {} });
+      ...base, validate: () => true, initNativeProperties: () => {},
+      nativeConstructor: object => constructRenderIterator(object, row, iteratorNatives) });
   };
   const spriteScan = createSpriteScan(runtime, { player: () => game.player.collisionActor, constructIterator,
     frand: () => runtime.rng.frand() });

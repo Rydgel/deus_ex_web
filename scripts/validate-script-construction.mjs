@@ -40,13 +40,12 @@ const lookup=createScriptObjectLookup({registry,names,
   classOf:object=>object.objectClass.record,
   superClass:record=>record.linkedClass.base?.record??null,
 });
-const nativeTemplate={auxiliary:null};
 const actor=runtime.constructObject(cls,{outer,template},{
   validate:args=>args.cls===cls&&args.outer===outer&&args.template===template,
   registry,
   findObject:lookup.findObject,
   internName:name=>names.intern(name),
-  initNativeProperties:object=>{object.auxiliary=nativeTemplate.auxiliary;},
+  initNativeProperties:()=>{},
   nativeConstructor:constructCameraPoint,
 });
 const instance=runtime.instance(actor),object=instance.nativeObject;

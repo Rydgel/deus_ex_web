@@ -100,9 +100,20 @@ For a DT_Sprite or DT_SpriteAnimOnce item:
   bOwnerNoSee.
 - **Iterators.** An actor with a RenderIteratorClass gets its
   RenderInterface built the way StaticConstructObject does it (Outer = the
-  actor, class defaults). It then runs the iterator protocol: the script
-  `Init(Camera)`, Observer and Index, and CurrentItem's proxy DrawScale and
-  ScaleGlow writes and FarMoveActor (`particleIteratorItems`).
+  actor, class defaults), then the class constructor
+  (`script-render-iterator.mjs`). URenderIterator's constructor
+  (`0x103d9cf0`) clears Index (`+0x2c`) and Observer (`+0x30`), stores its
+  vtable and checks that the Outer is an Actor. Then the DeusEx default
+  constructor stores the class vtable: ParticleIterator `0x10027a14`,
+  LaserIterator `0x100283d0`. Both vtables' Destroy (`+0x24`) is
+  `0x1001aec0`, a jump to `UObject::Destroy`. The scan then runs the iterator
+  protocol: the script `Init(Camera)`, Observer and Index, and
+  CurrentItem's proxy DrawScale and ScaleGlow writes and FarMoveActor
+  (`particleIteratorItems`).
+- **Release.** `AActor::Destroy` (`0x10368f60`) ConditionalDestroys a
+  non-null RenderInterface and clears it before `UObject::Destroy`. Player
+  start's collection therefore releases every iterator of the old level
+  ([LoadMap collection](script-loadmap-gc.md)).
 - **Drawing.** Each DT_Sprite item and each admitted sprite actor draws as
   a screen-aligned three.js sprite: Fire and Wet textures (SmokePuff1 is a
   FireTexture) from the page's shared live procedural textures, raw colours
