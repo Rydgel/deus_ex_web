@@ -237,7 +237,7 @@ against the previous commit (served from `.work/base`) is exact.
 | 2 HUD command list, InfoLink text | 1547238 | Island, Training: identical digests and pixels |
 | 3 sprite scan and render iterators | 29238ba | Island, Training, 02_NYC_Street: identical |
 | 4 actor meshes: simulation and page halves | 9bab54d | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
-| 5 drawn set and stamps on the simulation side | (this commit) | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
+| 5 drawn set and stamps on the simulation side | adf3c68 | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
