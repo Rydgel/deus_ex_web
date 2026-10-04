@@ -18,6 +18,7 @@ import { createGpuMesh } from './gpu-mesh.mjs';
 import { createGpuMeshLayout, WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlaySim } from './weapon-overlay-sim.mjs';
 import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
+import { packViews } from './mesh-frame-pack.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
@@ -1013,7 +1014,7 @@ function animate(time) {
       phaseMark = performance.now();
       applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
     }
-    const frame = snap?.begin ?? null;
+    const frame = snap?.begin ?? null, words = packViews(snap?.pack);
     if (playing && frame) {
       world.syncMovers(frame.movers);
       // The simulation side points its own camera the same way
@@ -1045,7 +1046,7 @@ function animate(time) {
     phase('sprites');
     // The actor mesh layer's page half with the frame records.
     if (npcPreview && snap?.actors)
-      try { npcPreview.draw.apply(snap.actors, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
+      try { npcPreview.draw.apply(snap.actors, fromView(camera.position.toArray()), words); } catch (error) { pauseForRuntimeError(error); }
     phase('actors');
     renderer.info.reset();
     let panInputs = null;
@@ -1081,7 +1082,7 @@ function animate(time) {
     const stampFrame = snap?.stamps ?? null, coronaFrame = snap?.coronas ?? null, weaponFrame = snap?.weapon ?? null;
     if (weaponFrame && weaponDraw) {
       weaponSummary = weaponFrame.summary;
-      try { weaponDraw.prepare(weaponFrame, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
+      try { weaponDraw.prepare(weaponFrame, fromView(camera.position.toArray()), words); } catch (error) { pauseForRuntimeError(error); }
     }
     phase('weapon');
     if (simVerify) for (const set of Object.values(drew)) set.clear();

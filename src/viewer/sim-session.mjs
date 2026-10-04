@@ -9,6 +9,7 @@ import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
 import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
+import { createMeshFramePack } from './mesh-frame-pack.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -200,8 +201,11 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         inspectCamera.updateProjectionMatrix(); inspectCamera.updateMatrixWorld();
         inspect = inspectCamera;
       }
+      // The frame's packed GetFrame plans and SetupForActor results
+      // (mesh-frame-pack.mjs), a fresh buffer each frame.
+      const pack = createMeshFramePack();
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
-        coronas: null, weapon: null, hud: null, audioMs: 0, events: null };
+        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null };
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
@@ -224,7 +228,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       }
       time('sprites');
       if (actorScene && !stopped()) {
-        const actors = this.actors({ camera: inspect });
+        const actors = this.actors({ camera: inspect, pack });
         collect(actors.errors);
         snapshot.actors = actors.frame;
       }
@@ -244,7 +248,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       }
       time('coronas');
       if (drawWorld && input.play && weaponSim && !stopped()) {
-        const weapon = this.weapon();
+        const weapon = this.weapon({ pack });
         collect(weapon.errors);
         snapshot.weapon = weapon.frame;
       }
@@ -259,6 +263,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       time('hud');
       timings.hud -= snapshot.audioMs; timings.audio = snapshot.audioMs;
       snapshot.events = events.splice(0);
+      snapshot.pack = pack.words();
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation
@@ -281,7 +286,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     /** The actor mesh layer's main-frame update (actor-mesh-sim.mjs) with
      * the frame camera's frustum; with mirrors that may draw, actors only
      * child frames draw are admitted and nothing is culled early. */
-    actors({ camera: inspect = null } = {}) {
+    actors({ camera: inspect = null, pack = null } = {}) {
       const errors = [], view = inspect ?? camera;
       let frame = null;
       try {
@@ -290,7 +295,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
         const children = drawn ? drawn.mayRender(view) : false;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
-          items: inspect ? [] : live.meshItems });
+          items: inspect ? [] : live.meshItems, ...(pack ? { pack } : {}) });
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
     },
@@ -349,14 +354,14 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     },
     /** PostRender's view model (weapon-overlay-sim.mjs) with the main
      * camera, and render feedback for the actors it draws. */
-    weapon() {
+    weapon({ pack = null } = {}) {
       const errors = [];
       let frame = null;
       try {
         camera.updateMatrixWorld();
         weaponFrustum.setFromProjectionMatrix(weaponMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
           camera.coordinateSystem, camera.reversedDepth);
-        frame = weaponSim.frame({ frustum: weaponFrustum });
+        frame = weaponSim.frame({ frustum: weaponFrustum, pack });
         if (frame) {
           const info = runtime.levelFor(game.player.collisionActor).actors[0];
           const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));

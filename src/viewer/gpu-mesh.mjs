@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import {squareRootTable} from '../runtime/dynamic-lighting.mjs';
 import {rsqrtTables} from '../runtime/mesh-lighting.mjs';
 import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
+import {PLAN_HEAD,PLAN_OP,LIGHTING_HEAD,LIGHTING_LIGHT} from './mesh-frame-pack.mjs';
 import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,POSE_FRAGMENT,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV}
   from './gpu-mesh-glsl.mjs';
 
@@ -175,36 +176,73 @@ export function createGpuMesh(renderer,capacities={}) {
     layout.release(handle);
   }
   function touch(slot){dirtyLow=Math.min(dirtyLow,slot);dirtyHigh=Math.max(dirtyHigh,slot);}
-  /** This frame's GetFrame plan (lodmesh-frame.mjs planLodMeshFrame). */
+  /** This frame's GetFrame plan (lodmesh-frame.mjs planLodMeshFrame), or
+   * its packed form {u32, f32, at} (mesh-frame-pack.mjs). */
   function setPose(handle,plan) {
-    const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
-    layout.checkPose(handle,plan);
-    for(let row=0;row<4;row++)for(let i=0;i<3;i++)slotParamsF[fl+row*4+i]=plan.matrix[row][i];
-    for(let i=0;i<3;i++)slotParamsF[fl+16+i]=plan.origin[i];
-    for(let k=0;k<STATES;k++){slotParamsU.fill(0,u+(4+k)*4,u+(5+k)*4);slotParamsF[fl+(5+k)*4]=0;}
-    for(const op of plan.channels){
-      const k=op.channel+1;
-      slotParamsU.set([op.tween?2:1,op.first,op.second,op.blend?1:0],u+(4+k)*4);
-      slotParamsF[fl+(5+k)*4]=op.alpha;
+    const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4,packed=plan.u32?plan:null;
+    if(packed){
+      const {u32,at}=packed;
+      for(let k=0;k<u32[at+15];k++){
+        const base=at+PLAN_HEAD+PLAN_OP*k;
+        if(u32[base+7])throw new Error('GPU mesh: tween count expansion is CPU-only');
+      }
+      for(let k=0;k<u32[at+15];k++)
+        if(u32[at+PLAN_HEAD+PLAN_OP*k+6]!==handle.mesh.V)throw new Error('GPU mesh: partial GetFrame counts are CPU-only');
+    }else layout.checkPose(handle,plan);
+    if(packed){
+      const {u32,f32,at}=packed;
+      for(let row=0;row<4;row++)for(let i=0;i<3;i++)slotParamsF[fl+row*4+i]=f32[at+row*3+i];
+      for(let i=0;i<3;i++)slotParamsF[fl+16+i]=f32[at+12+i];
+      for(let k=0;k<STATES;k++){slotParamsU.fill(0,u+(4+k)*4,u+(5+k)*4);slotParamsF[fl+(5+k)*4]=0;}
+      for(let k=0;k<u32[at+15];k++){
+        const base=at+PLAN_HEAD+PLAN_OP*k,state=u32[base];
+        slotParamsU.set([u32[base+1]?2:1,u32[base+2],u32[base+3],u32[base+4]],u+(4+state)*4);
+        slotParamsF[fl+(5+state)*4]=f32[base+5];
+      }
+    }else{
+      for(let row=0;row<4;row++)for(let i=0;i<3;i++)slotParamsF[fl+row*4+i]=plan.matrix[row][i];
+      for(let i=0;i<3;i++)slotParamsF[fl+16+i]=plan.origin[i];
+      for(let k=0;k<STATES;k++){slotParamsU.fill(0,u+(4+k)*4,u+(5+k)*4);slotParamsF[fl+(5+k)*4]=0;}
+      for(const op of plan.channels){
+        const k=op.channel+1;
+        slotParamsU.set([op.tween?2:1,op.first,op.second,op.blend?1:0],u+(4+k)*4);
+        slotParamsF[fl+(5+k)*4]=op.alpha;
+      }
     }
     slotParamsU[u+8+2]=frame+1;
     touch(slot);
   }
-  /** SetupForActor's result for this frame (mesh-lighting-view setupMesh). */
-  function setLighting(handle,{flags,ambient,scaleGlow,unlit,lights}) {
-    const reserved=layout.reserveLights(lights.length);
+  /** SetupForActor's result for this frame (mesh-lighting-view setupMesh),
+   * or its packed form {u32, f32, at} (mesh-frame-pack.mjs). */
+  function setLighting(handle,lighting) {
+    const packed=lighting.u32?lighting:null,count=packed?packed.u32[packed.at+8]:lighting.lights.length;
+    const reserved=layout.reserveLights(count);
     if(!reserved)return false;
     let lightCount=reserved.start;
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
-    slotParamsU[u+8]=flags>>>0;slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=frame+1;
-    slotParamsU[u+12+1]=lights.length;
-    slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=scaleGlow;
-    slotParamsF[fl+44]=unlit[0];slotParamsF[fl+45]=unlit[1];slotParamsF[fl+46]=unlit[2];
-    for(const light of lights){
-      const at=lightCount*8,{location,color}=light;
-      lightData[at]=location[0];lightData[at+1]=location[1];lightData[at+2]=location[2];lightData[at+3]=light.rradius;
-      lightData[at+4]=color[0];lightData[at+5]=color[1];lightData[at+6]=color[2];lightData[at+7]=0;
-      lightCount++;
+    slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=frame+1;
+    slotParamsU[u+12+1]=count;
+    if(packed){
+      const {u32,f32,at}=packed;
+      slotParamsU[u+8]=u32[at];
+      for(let i=0;i<3;i++){slotParamsF[fl+40+i]=f32[at+1+i];slotParamsF[fl+44+i]=f32[at+5+i];}
+      slotParamsF[fl+43]=f32[at+4];
+      for(let k=0;k<count;k++){
+        const base=at+LIGHTING_HEAD+LIGHTING_LIGHT*k,to=lightCount*8;
+        for(let i=0;i<7;i++)lightData[to+i]=f32[base+i];
+        lightData[to+7]=0;lightCount++;
+      }
+    }else{
+      const {flags,ambient,scaleGlow,unlit,lights}=lighting;
+      slotParamsU[u+8]=flags>>>0;
+      slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=scaleGlow;
+      slotParamsF[fl+44]=unlit[0];slotParamsF[fl+45]=unlit[1];slotParamsF[fl+46]=unlit[2];
+      for(const light of lights){
+        const at=lightCount*8,{location,color}=light;
+        lightData[at]=location[0];lightData[at+1]=location[1];lightData[at+2]=location[2];lightData[at+3]=light.rradius;
+        lightData[at+4]=color[0];lightData[at+5]=color[1];lightData[at+6]=color[2];lightData[at+7]=0;
+        lightCount++;
+      }
     }
     touch(slot);
     return true;

@@ -28,15 +28,16 @@ export function createWeaponOverlayDraw(assets,{gpu=null,displayGamma,feedback=(
     built:handle=>[...handles].some(([id,value])=>value===handle&&draws.get(id)?.ready),
     /** A frame record's state before any draw: the records and decisions
      * in submission order, then the GPU passes. `cameraPosition` is the
-     * render camera in original coordinates (environment UVs). */
-    prepare(frame,cameraPosition){
+     * render camera in original coordinates (environment UVs); `words` the
+     * frame's packed plans and lighting (mesh-frame-pack.mjs). */
+    prepare(frame,cameraPosition,words=null){
       if(errors.length)throw new Error(`${errors[0].actor}: ${errors[0].message}`);
       shown.clear();
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
       for(const {id,record,decision,wireframe} of frame.draws){
         const draw=draws.get(id);
         if(!draw)continue;
-        draw.apply(record,cameraPosition);
+        draw.apply(record,cameraPosition,words);
         if(decision)draw.applyPass(decision);
         if(draw.ready)for(const mesh of draw.root.children)mesh.material.wireframe=wireframe;
         shown.set(id,draw.root.visible);

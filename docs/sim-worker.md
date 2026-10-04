@@ -400,3 +400,15 @@ The page applies the events, then draws only from the snapshot.
   into the GPU mesh path's Float32/Uint32 parameters, so packing loses
   nothing.
 
+Step 8, first part (`mesh-frame-pack.mjs`): each frame's GetFrame plans
+and SetupForActor results are packed into one buffer of 32-bit words. A
+frame record carries an offset into it instead of nested objects. The GPU
+mesh path's `setPose` and `setLighting` read the words directly, and plain
+objects still work where nothing packs them (the validators' wrappers, a
+binding's first plan in its creation record). Each frame gets a fresh
+buffer, which a worker can transfer. `structuredClone` of the Island
+snapshot drops from 2.1 to 0.5 ms (the bare records 0.2 ms, the HUD
+commands 0.16 ms, the words 0.05 ms). Against step 6: Island walking
+inline, Training with the crowbar and 02_NYC_Smug walking under
+`?sim=clone` give identical digests and frames; validate-gpu-mesh passes.
+

@@ -392,7 +392,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         exactOutput:()=>{exactSpheres();return frame.output;},get exactValid(){return exactValid;}}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       /** One main-frame update: the frame record for the page, or null when
-       * the binding is disposed. */
+       * the binding is disposed. With `view.pack` (mesh-frame-pack.mjs) the
+       * record's plan and lighting are offsets into the frame's words. */
       update(view={}){
         if(disposed)return null;
         const record={id,visible:false,childOnly:false};drawnMain=false;
@@ -450,7 +451,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           poseChanged=changed;
         }
         let posed=false;
-        if(poseChanged&&mode==='gpu'){if(planGpu())record.plan=plainPlan(lastPlan);posed=true;}
+        if(poseChanged&&mode==='gpu'){if(planGpu())record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);posed=true;}
         if(poseChanged&&mode==='cpu'){
           // A plan evaluated for this frame before a fallback already posed it.
           if(!posed)getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
@@ -474,7 +475,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
             if(prepared){
               lastSetup=prepared;lastLitFrame=layout.frame+1;
               summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
-              if(layout.reserveLights(prepared.setup.lights.length))record.lighting=plainLighting(prepared);
+              if(layout.reserveLights(prepared.setup.lights.length))
+                record.lighting=view.pack?view.pack.lighting(prepared):plainLighting(prepared);
               else {
                 toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
                 record.posed=posedCopy();

@@ -82,12 +82,13 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
       await Promise.all(pending.values());if(error)throw error;
     },
     /** One frame's overlay pass after the world, with the main camera's
-     * `frustum`: whether Render.dll's gates select a target (the page then
-     * clears Z), each DrawActor submission with its binding's frame record
-     * and main-frustum decision, the lighting frame's coordinates for the
-     * GPU passes, and the actors the frame draws (render feedback). A
-     * submission whose binding is still being prepared is skipped. */
-    frame({frustum}){
+     * `frustum` and the frame's `pack` (mesh-frame-pack.mjs): whether
+     * Render.dll's gates select a target (the page then clears Z), each
+     * DrawActor submission with its binding's frame record and main-frustum
+     * decision, the lighting frame's coordinates for the GPU passes, and the
+     * actors the frame draws (render feedback). A submission whose binding is
+     * still being prepared is skipped. */
+    frame({frustum,pack=null}){
       if(disposed)return null;
       if(error)throw error;
       // A reload's collection releases the old generation's weapons.
@@ -102,7 +103,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
           const {binding}=entry;
           // Canvas.DrawActor -> URender::DrawActor lights the weapon as its
           // own light sink in the main frame (docs/mesh-lighting.md).
-          const record=binding.update({lit:true});
+          const record=binding.update(pack?{lit:true,pack}:{lit:true});
           // three.js's frustum test on the drawn groups (the CPU path's
           // posed bounds; the GPU path's group decisions).
           const decision=binding.passVisibility(frustum);

@@ -292,18 +292,22 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     get viewDependent(){return creation.environment&&mode==='cpu';},
     /** Validation access: the GPU slot and the decoded faces. */
     get gpuHandle(){return gpuHandle;},get groups(){return groups;},get source(){return source;},
-    /** One main-frame record (actor-mesh-sim.mjs update). */
-    apply(record,cameraPosition){
+    /** One main-frame record (actor-mesh-sim.mjs update); `words` is the
+     * frame's packed plans and lighting ({u32, f32}, mesh-frame-pack.mjs)
+     * when the record holds offsets into them. */
+    apply(record,cameraPosition,words=null){
       if(disposed)return false;
+      const plan=typeof record.plan==='number'?{...words,at:record.plan}:record.plan;
+      const lighting=typeof record.lighting==='number'?{...words,at:record.lighting}:record.lighting;
       latest.visible=record.visible;latest.childOnly=record.childOnly;
       if(record.material)latest.material=record.material;
       if(record.posed)latest.posed=record.posed;
       if(record.groups)latest.groups=record.groups;
       if(record.spheres)latest.spheres=record.spheres;
       if(record.colors)latest.colors=record.colors;
-      if(record.plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,record.plan);else if(!source)pendingPlans.push(record.plan);}
+      if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
       if(record.toCpu)toCpu();
-      if(record.lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,record.lighting))
+      if(lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,lighting))
         throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
       if(!ready)return false;
       root.visible=record.visible;
@@ -358,10 +362,10 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
     release(id){bindings.get(id)?.dispose();bindings.delete(id);},
     /** One main frame (actor-mesh-sim.mjs update): the records in order,
      * then the GPU passes with the lighting frame's coordinates. */
-    apply({records,camera},cameraPosition){
+    apply({records,camera},cameraPosition,words=null){
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
       let changed=false;
-      for(const record of records)changed=bindings.get(record.id)?.apply(record,cameraPosition)||changed;
+      for(const record of records)changed=bindings.get(record.id)?.apply(record,cameraPosition,words)||changed;
       if(gpu){if(camera)gpu.setCamera(camera.origin,camera.axes);gpu.run();}
       batches?.flush();
       return changed;
