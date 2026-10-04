@@ -1,105 +1,38 @@
 import * as THREE from 'three';
-import {refValue} from '../runtime/script-vm.mjs';
 import {fromView} from '../unreal/geometry.mjs';
-import {createActorMeshPreview} from './npc-mesh-preview.mjs';
+import {actorRenderFeedback} from './actor-render-feedback.mjs';
+import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
+import {createWeaponOverlaySim} from './weapon-overlay-sim.mjs';
+import {createWeaponOverlayDraw} from './weapon-overlay-draw.mjs';
 
-/** Render.dll's ClearZ + viewing-actor RenderOverlays -> DeusExPlayer.RenderOverlays
- * (Weapon.RenderOverlays, then a non-Weapon inHand's Inventory.RenderOverlays)
- * -> CalcDrawOffset -> Canvas.DrawActor. The script owns placement and
- * animation; this adapter owns only the Canvas draw submission and decoded GPU
- * resources. No fire/state scheduler entry is made here. Evidence:
- * docs/script-weapon-rendering.md. */
-/** `playerSource` is the player actor or a getter for it: Player start logs
- * a new player in, so the viewer passes a getter. */
-export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=null,lighting=null,displayGamma}={}) {
-  const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource;
-  const engine=await assets.get('Engine');
-  const canvasClass=await runtime.loadClass(engine,engine.exportsByPath.get('canvas'));
-  // A typed external Canvas boundary, not a fabricated native UCanvas instance.
-  const canvas={kind:'Canvas',key:'viewer.weapon.canvas',name:'WeaponCanvas'};
-  runtime.attach(canvas,canvasClass);
-  const read=(actor,name)=>runtime.readNamed(actor,name);
-  const scene=new THREE.Scene(),entries=new Map(),pending=new Map();
-  const summary={actor:null,mesh:null,loading:false,draws:0,shading:lighting?'original mesh lighting':'texture-only inspection'};
-  let disposed=false,error=null,index=0x50000000;
-  const prepare=actor=>{
-    const mesh=read(actor,'Mesh');
-    let entry=entries.get(actor);
-    if(entry?.mesh===mesh)return entry;
-    if(entry){scene.remove(entry.preview.root);entry.preview.dispose();entries.delete(actor);}
-    if(pending.has(actor))return null;
-    const task=createActorMeshPreview(runtime,assets,actor,{originalObjectIndex:index++,kernel,drawActor:true,
-      lighting,displayGamma})
-      .then(preview=>{
-        if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){preview.dispose();return;}
-        entries.set(actor,{mesh,preview});scene.add(preview.root);
-      }).catch(cause=>{error=cause;}).finally(()=>pending.delete(actor));
-    pending.set(actor,task);return null;
-  };
-  // Render.dll URender::DrawWorld 0x10b1ce49-0x10b1cec8, after the world:
-  // Target is None for bBehindView (+0x318 bit 0), else ViewTarget (+0x60c) or
-  // the viewport Actor. Outside the editor and with SHOW_Actors (ShowFlags
-  // +0x5fc & 8) it sets GUglyHackFlags|=1, calls RenDev->ClearZ(Frame)
-  // (URenderDevice vtable +0x90), then ProcessEvent(RenderOverlays, Canvas).
-  // DeusExPlayer.RenderOverlays reaches Weapon.RenderOverlays through Super and
-  // then a non-Weapon inHand's Inventory.RenderOverlays.
-  const overlayTarget=()=>{
-    const player=currentPlayer();
-    if(read(player,'bBehindView'))return null;
-    const target=read(player,'ViewTarget')??player;
-    return read(player,'ShowFlags')&8?target:null;
-  };
-  const commands=target=>{
-    const calls=[],previous=runtime.native,wasBoundary=runtime.boundaryNatives.has(467);
-    runtime.boundaryNatives.add(467);
-    runtime.native=call=>{
-      if(call.index!==467)return previous(call);
-      if(call.receiver!==canvas)throw new Error('Player overlay received an unrelated Canvas.DrawActor');
-      const args=Array.from({length:call.argumentCount},(_,i)=>refValue(call.evaluateArgument(i)));
-      if(!args[0])throw new Error('Player overlay Canvas.DrawActor received None');
-      calls.push({actor:args[0],wireframe:Boolean(args[1]),clearZ:Boolean(args[2])});
-    };
-    try {
-      runtime.processEvent(target,'RenderOverlays',[canvas]);
-    } finally {
-      runtime.native=previous;if(!wasBoundary)runtime.boundaryNatives.delete(467);
-    }
-    return calls;
-  };
-  return {scene,summary,
-    // The asynchronous phase only decodes resources. It does not dispatch the
-    // script event or advance an actor; render() is the sole draw event source.
-    async ready(){
-      for(const name of ['Weapon','inHand']){const actor=read(currentPlayer(),name);if(actor)prepare(actor);}
-      await Promise.all(pending.values());if(error)throw error;
-    },
+/** The player's view model as one object (focused checks): its simulation
+ * half (weapon-overlay-sim.mjs: Render.dll's gates, RenderOverlays, the
+ * mesh bindings and render feedback) and its page half
+ * (weapon-overlay-draw.mjs) one after the other in this thread. Play runs
+ * the halves through sim-session.mjs. Evidence:
+ * docs/script-weapon-rendering.md.
+ *
+ * `playerSource` is the player actor or a getter for it: Player start logs
+ * a new player in, so the viewer passes a getter. `gpu` is a GPU mesh
+ * instance of the view model's own (gpu-mesh.mjs). */
+export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=null,lighting=null,displayGamma={value:1},gpu=null}={}) {
+  const draw=createWeaponOverlayDraw(assets,{gpu,displayGamma});
+  const sim=await createWeaponOverlaySim(runtime,assets,playerSource,{kernel,lighting,
+    layout:gpu?createGpuMeshLayout(gpu.capacities):null,onCreate:creation=>draw.create(creation),onRelease:id=>draw.release(id)});
+  const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
+  return {scene:draw.scene,summary:sim.summary,
+    async ready(){await sim.ready();await draw.ready();},
+    /** The overlay pass after the world draw, with the world frame's camera. */
     render(renderer,camera){
-      if(disposed)return;
-      if(error)throw error;
-      for(const {preview} of entries.values())preview.root.visible=false;
-      // A reload's collection releases the old generation's weapons.
-      for(const [actor,entry] of entries)if(runtime.isReleased(actor)||read(actor,'bDeleteMe')||!runtime.levelFor(currentPlayer()).actors.includes(actor)){
-        scene.remove(entry.preview.root);entry.preview.dispose();entries.delete(actor);
-      }
-      summary.draws=0;summary.actor=null;summary.mesh=null;
-      const target=overlayTarget();
-      if(target){
-        renderer.clearDepth();
-        for(const command of commands(target)){
-          summary.actor??=command.actor.name;summary.mesh??=read(command.actor,'Mesh')?.key??null;
-          const entry=prepare(command.actor);if(!entry)continue;
-          for(const {preview} of entries.values())preview.root.visible=false;
-          // Canvas.DrawActor -> URender::DrawActor lights the weapon as its
-          // own light sink in the main frame (docs/mesh-lighting.md).
-          entry.preview.update(fromView(camera.position.toArray()),{lit:true});
-          for(const mesh of entry.preview.root.children)mesh.material.wireframe=command.wireframe;
-          // Canvas.DrawActor's optional ClearZ (default false, 0x10377f3c).
-          if(command.clearZ)renderer.clearDepth();
-          renderer.render(scene,camera);summary.draws++;
-        }
-      }
-      summary.loading=pending.size>0;
+      camera.updateMatrixWorld();
+      frustum.setFromProjectionMatrix(matrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
+        camera.coordinateSystem,camera.reversedDepth);
+      const frame=sim.frame({frustum});
+      if(!frame)return;
+      for(const actor of frame.drawn)actorRenderFeedback(runtime,actor)();
+      draw.prepare(frame,fromView(camera.position.toArray()));
+      draw.render(renderer,camera,frame);
     },
-    dispose(){disposed=true;for(const {preview} of entries.values())preview.dispose();entries.clear();},
+    dispose(){sim.dispose();draw.dispose();},
   };
 }

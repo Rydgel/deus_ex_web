@@ -4,19 +4,22 @@
 // steps 16 ms frames one at a time, optionally holding the forward key, and
 // compares the state digest (src/runtime/state-digest.mjs) at checkpoints.
 // The first pair is the same page twice, which shows the scenario is
-// deterministic; the second compares page A with page B. A screenshot after
-// the last frame is compared too, when the same page reproduces its own
-// pixels (texture decoding is asynchronous). Host measurement of the page,
-// not an original-game reference.
+// deterministic; the second compares page A with page B. The last frame's
+// drawing buffer is compared too, when the same page reproduces its own
+// pixels (texture decoding is asynchronous). It is read with readPixels
+// from a preserved drawing buffer (the page's renderer is patched): under
+// the paused clock Chromium does not always present the canvas, and an
+// element screenshot of 00_Training came out black. Host measurement of the
+// page, not an original-game reference.
 //
 //   node scripts/validate-sim-split.mjs [--a URL] [--b URL] [--map 01_NYC_UNATCOIsland]
 //     [--frames 240] [--every 60] [--walk] [--query a=1&b=2] [--query-a ...] [--query-b ...]
+//     [--preview weapon]
 //     [--shots DIR] (writes each run's last frame as DIR/<hash>.png)
 //
 // Without --a, a Vite server for this tree serves A; without --b, B is A.
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
-import {createHash} from 'node:crypto';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
@@ -25,7 +28,7 @@ import {gameDirectory} from './game-directory.mjs';
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-sim-split: no installed game data'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), frames = Number(option('frames', 240)), every = Number(option('every', 60));
-const walk = process.argv.includes('--walk');
+const walk = process.argv.includes('--walk'), preview = option('preview', null);
 let server = null, a = option('a', null);
 if (!a) {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -49,6 +52,11 @@ const INSTALL = new Date('2001-06-23T12:00:00Z').getTime(), START = INSTALL + 36
 async function run(browser, url) {
   const page = await browser.newPage({viewport: {width: 1280, height: 720}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
+    const response = await route.fetch(), text = await response.text(), from = 'antialias: true })';
+    if (!text.includes(from)) throw new Error('validate-sim-split: the page\'s renderer construction changed');
+    await route.fulfill({response, body: text.replace(from, 'antialias: true, preserveDrawingBuffer: true })')});
+  });
   try {
     await page.clock.install({time: INSTALL});
     await page.goto(url);
@@ -56,6 +64,13 @@ async function run(browser, url) {
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
       map, {timeout: 240000});
+    // A viewer preview (main.mjs previews, e.g. Training's weapon) while the
+    // frame loop is held; it needs no frames.
+    if (preview) {
+      await page.evaluate(name => { const menu = document.getElementById('preview'); menu.value = name;
+        menu.dispatchEvent(new Event('change')); }, preview);
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
     await page.clock.pauseAt(START);
     await page.evaluate(() => window.deusExViewer.release());
     if (walk) await page.keyboard.down('KeyW');
@@ -69,8 +84,23 @@ async function run(browser, url) {
         if (state.error) break;
       }
     }
-    const png = await page.locator('#scene').screenshot(), shot = createHash('sha256').update(png).digest('hex').slice(0, 16);
-    if (option('shots', null)) await writeFile(`${option('shots', null)}/${shot}.png`, png);
+    // The drawing buffer, bottom row first, and as a PNG for --shots.
+    const frame = await page.evaluate(async withPng => {
+      const canvas = document.getElementById('scene'), gl = canvas.getContext('webgl2');
+      const width = gl.drawingBufferWidth, height = gl.drawingBufferHeight, pixels = new Uint8Array(width * height * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      const hex = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pixels))].map(b => b.toString(16).padStart(2, '0')).join('');
+      let png = null;
+      if (withPng) {
+        const out = document.createElement('canvas'); out.width = width; out.height = height;
+        const image = new ImageData(width, height);
+        for (let y = 0; y < height; y++) image.data.set(pixels.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
+        out.getContext('2d').putImageData(image, 0, 0); png = out.toDataURL('image/png').split(',')[1];
+      }
+      return {hex, png, width, height};
+    }, Boolean(option('shots', null)));
+    const shot = frame.hex.slice(0, 16);
+    if (frame.png) await writeFile(`${option('shots', null)}/${shot}.png`, Buffer.from(frame.png, 'base64'));
     return {url, digests, shot, errors};
   } finally { await page.close(); }
 }

@@ -230,6 +230,22 @@ every Level.Actors entry) at checkpoints and the last frame's pixels. The
 same page twice gives identical digests and pixels, so the comparison
 against the previous commit (served from `.work/base`) is exact.
 
+Until step 6 the pixels came from an element screenshot. Under the paused
+clock Chromium did not present 00_Training's canvas, so those screenshots
+were black on both sides, and steps 2–5's Training pixel checks compared
+nothing. The harness now reads the drawing buffer (`readPixels`, with
+`preserveDrawingBuffer` patched into the page) and `--shots` writes it.
+With that, the pre-split commit f4fb698 and step 6 give identical digests
+and identical frames on Training, walking and with the crowbar equipped
+(`--preview weapon`), which covers steps 2–6 there. Island's screenshots
+were real frames; 02_NYC_Street and 02_NYC_Smug (walking, 240 frames) also
+give identical digests and frames from f4fb698 to step 6 with the buffer
+read. `?simVerify=1` with the crowbar equipped finds no difference.
+
+02_NYC_BatteryPark starts in a conversation. There the same page run twice
+differs at some checkpoints, before step 6 too: the conversation's progress
+depends on asynchronous loading. It is not a usable comparison map.
+
 | Step | Commit | Check |
 |---|---|---|
 | Harness: `?seed=`, `?hold=1`, state digest | f4fb698 | same page: identical; a different seed differs at the first checkpoint |
@@ -238,6 +254,7 @@ against the previous commit (served from `.work/base`) is exact.
 | 3 sprite scan and render iterators | 29238ba | Island, Training, 02_NYC_Street: identical |
 | 4 actor meshes: simulation and page halves | 9bab54d | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
 | 5 drawn set and stamps on the simulation side | adf3c68 | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
+| 6 coronas and the view model on the simulation side; the view model on the GPU path | (this commit) | against step 5: Island and 02_NYC_Smug walking, Training with the crowbar (CPU path before, GPU path now): identical; against f4fb698: Training (walking, crowbar), 02_NYC_Street, 02_NYC_Smug: identical frames (drawing buffer); `?simVerify=1` with the crowbar |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
@@ -304,3 +321,38 @@ by the page and applied before the next tick would not be exact.
   iterator item slot a frame does not use kept its last drawn state on the
   simulation side.
 - The weapon view model still stamps from its own draw (step 6).
+
+Step 6 (`corona-scan.mjs`, `weapon-overlay-sim.mjs`,
+`weapon-overlay-draw.mjs`): the corona pass and the view model run on the
+simulation side right after the stamps, in their order (DrawFrame's
+coronas, then PostRender's RenderOverlays); the page draws their records
+after the world, as before.
+
+- Coronas: the line checks, the fade cache and the icon placement run on
+  the simulation side, with the page's fade clock (`now`) and the drawn
+  size from the render rect or the canvas and the pixel ratio. The page
+  draws an icon once its skin has decoded, as before.
+- The view model: Render.dll's gates, RenderOverlays with the scoped
+  Canvas.DrawActor hook, and each submitted actor's mesh binding
+  (`createMeshBinding`, as for level actors) run there. The binding's frame
+  record and its decision for the main camera's frustum
+  (`passVisibility`; the CPU path's posed bounds otherwise) cross to the
+  page, and the session stamps the actors `drawnIn` says are drawn, before
+  the HUD reads them. `createWeaponViewModel` keeps both halves in one
+  thread for the Node display checks.
+- GPU path (per "prefer GPU"): Play's view model has a GPU mesh instance of
+  its own (`WEAPON_GPU_MESH_CAPACITIES`; DeusExItems' largest LodMesh has
+  255 vertices and 17,596 keyframe texels), so its passes run once per
+  frame after the overlay pass is planned, without rerunning the level's.
+  The simulation side keeps the matching layout; a binding that does not
+  fit takes the CPU path.
+- The page applies the view model's records and runs its GPU passes before
+  the world's draws: `gpu.run` resets three.js's state, which would drop
+  the clipped viewport the overlay draws in.
+- `?simVerify=1` compares the view model's stamped actors with the
+  overlay pass's `onAfterRender`.
+- Cost, inline: Training with the crowbar at 1920×1080, three interleaved
+  pairs against step 5 (`.work/tools/ab-weapon.sh`): weapon phase median
+  0.37 → 0.40 ms, frame 12.77 → 12.97 ms, both within run-to-run noise.
+  The crowbar's cost is RenderOverlays and its draw, not GetFrame or
+  lighting.

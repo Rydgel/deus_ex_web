@@ -334,8 +334,10 @@ loosened.
 
 * The CPU path itself (`?gpuMesh=0`, and `?meshBackend=javascript`, which
   also disables the kernel): the reference and the fallback.
-* The first-person weapon (`weapon-view-model.mjs`): one actor, drawn by its
-  own renderer pass; nothing to gain.
+* The first-person weapon in the Node display checks
+  (`weapon-view-model.mjs` without a GPU). In Play the view model has a GPU
+  mesh instance of its own (`WEAPON_GPU_MESH_CAPACITIES`), whose passes run
+  once per frame after the world's ([simulation worker](sim-worker.md) step 6).
 * An actor whose plan needs the tween count expansion, or with more than 32
   selected lights, for that frame (measured counts are recorded below).
 * Exact spheres of ambiguous groups (above), computed from the CPU shadow.

@@ -12,6 +12,7 @@
  *     [--draw-counts] (count submitted mesh groups after timing)
  *     [--fixed-dt seconds] (explicit fixed-step comparison workload, not live FPS)
  *     [--query gpuMesh=1] (viewer URL switches, e.g. the GPU mesh path)
+ *     [--preview weapon] (a viewer preview after the start click, e.g. Training's crowbar)
  *     [--angle metal|gl|vulkan] (ANGLE backend: metal on macOS, gl elsewhere;
  *       Linux headless Chromium ignores metal and falls back to SwiftShader)
  *     [--headed] [--executable /usr/bin/chromium] (a visible window, another Chromium)
@@ -93,6 +94,8 @@ try {
     return noSimulation?Boolean(s?.gameplay?.hud):s?.gameplay?.hud?.health?.head?.displayedHealth===100;},
     noSimulation,{timeout:180000});
   await page.locator('#scene').click({position:{x:600,y:350}});
+  if(option('preview',null))await page.evaluate(name=>{const menu=document.getElementById('preview');menu.value=name;
+    menu.dispatchEvent(new Event('change'));},option('preview',null));
   await page.waitForTimeout(settle);
   if(walk)await page.keyboard.down('KeyW');
   await page.evaluate(()=>window.deusExViewer.framePhases(true));

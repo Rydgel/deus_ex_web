@@ -36,6 +36,10 @@ export function createSimSession(game, { assets = null } = {}) {
   // meshes, the actor mesh layer (actor-mesh-sim.mjs) and the mesh lighting
   // view (mesh-lighting-view.mjs), all simulation-side.
   let drawn = null, actorScene = null, meshLighting = null, moverActors = new Map(), stamped = null;
+  // The corona scan (corona-scan.mjs) and the view model's simulation half
+  // (weapon-overlay-sim.mjs), the frame's last world steps.
+  let coronaScan = null, weaponSim = null, size = null;
+  const weaponFrustum = new THREE.Frustum(), weaponMatrix = new THREE.Matrix4();
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
@@ -166,6 +170,8 @@ export function createSimSession(game, { assets = null } = {}) {
       moverActors = new Map(level.actors.filter(Boolean).map(actor => [actor.name, actor]));
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
+    setCoronas(scan) { coronaScan = scan; },
+    setWeapon(overlay) { weaponSim = overlay; },
     /** URender's per-frame mesh lighting setup for the main viewport
      * (mesh-lighting-view.mjs beginFrame) with this frame's moving lights;
      * `seconds` is the viewport clock (the page's frame time). */
@@ -203,7 +209,7 @@ export function createSimSession(game, { assets = null } = {}) {
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true }) {
       const errors = [], passDecisions = [];
       let mainDecisions = null;
-      stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), bindings: new Map() };
+      stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), bindings: new Map(), weapon: new Set() };
       try {
         const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors });
         // `actorPasses`: the page applies the actor layer's mirror pass
@@ -236,6 +242,40 @@ export function createSimSession(game, { assets = null } = {}) {
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, passDecisions, mainDecisions };
     },
+    /** DrawFrame's corona pass, which closes the world frame
+     * (corona-scan.mjs): the icons over the drawn size, the render rect's or
+     * else the canvas's in CSS pixels (`pixelRatio`). `now` is the fade
+     * clock in seconds. */
+    coronas({ pixelRatio, now }) {
+      const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
+      const width = rect.width / pixelRatio, height = rect.height / pixelRatio;
+      let frame = null;
+      try { frame = coronaScan.update(current.view, width, height, now); }
+      catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, frame, width, height };
+    },
+    /** PostRender's view model (weapon-overlay-sim.mjs) with the main
+     * camera, and render feedback for the actors it draws. */
+    weapon() {
+      const errors = [];
+      let frame = null;
+      try {
+        camera.updateMatrixWorld();
+        weaponFrustum.setFromProjectionMatrix(weaponMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+          camera.coordinateSystem, camera.reversedDepth);
+        frame = weaponSim.frame({ frustum: weaponFrustum });
+        if (frame) {
+          const info = runtime.levelFor(game.player.collisionActor).actors[0];
+          const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
+          for (const actor of frame.drawn)
+            if (!runtime.readNamed(actor, 'bHidden') && !runtime.readNamed(actor, 'bDeleteMe'))
+              runtime.writeNamed(actor, 'LastRenderTime', time);
+          if (stamped) stamped.weapon = new Set(frame.drawn.map(handleOf));
+          frame = { target: frame.target, draws: frame.draws, camera: frame.camera, summary: { ...weaponSim.summary } };
+        }
+      } catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, frame };
+    },
     /** ?simVerify: the frame's drawn set against what three.js drew
      * (onAfterRender of mover meshes, sprites and actor meshes). The page
      * draws a binding once its meshes exist and a sprite once its texture
@@ -256,8 +296,21 @@ export function createSimSession(game, { assets = null } = {}) {
       }
       return null;
     },
+    /** ?simVerify: the view model's stamped actors against what three.js
+     * drew in the overlay pass (`built(handle)`: the page has its meshes). */
+    verifyWeapon(drew, built = () => true) {
+      if (!stamped) return null;
+      const name = handle => identityOfHandle(handle)?.name ?? String(handle);
+      const a = new Set([...stamped.weapon].filter(built).map(name)), b = new Set([...drew].map(name));
+      const onlySim = [...a].filter(x => !b.has(x)), onlyPage = [...b].filter(x => !a.has(x));
+      return onlySim.length || onlyPage.length
+        ? `weapon: only the simulation side ${onlySim.join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}` : null;
+    },
     movers,
     reset() { game.reset(); failed = false; },
+    /** The session's own simulation-side objects (the view model's
+     * bindings); the actor mesh layer belongs to its scene wrapper. */
+    dispose() { weaponSim?.dispose(); },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
      * render viewport, SetupDynamics' moving-light scan, the sky frame, the
      * frob target and the surface pan inputs. `run` is false while the page
@@ -270,6 +323,7 @@ export function createSimSession(game, { assets = null } = {}) {
       if (aspect !== null && resizes !== resizesSeen) {
         camera.aspect = aspect; camera.fov = verticalFov(75, aspect); camera.updateProjectionMatrix(); resizesSeen = resizes;
       }
+      size = [width, height];
       const errors = [], stopped = () => halted || failed;
       const fail = error => { failed = true; errors.push(plainError(error)); };
       if (run && !stopped()) {

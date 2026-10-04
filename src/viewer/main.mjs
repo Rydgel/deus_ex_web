@@ -10,11 +10,14 @@ import { createSimSession } from './sim-session.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
+import { createCoronaScan } from './corona-scan.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
-import { createWeaponViewModel } from './weapon-view-model.mjs';
+import { createGpuMeshLayout, WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
+import { createWeaponOverlaySim } from './weapon-overlay-sim.mjs';
+import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
@@ -82,7 +85,7 @@ let held=new URLSearchParams(location.search).get('hold')==='1';
 // stamps, which writes LastRenderTime) against what three.js drew: the
 // onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
 const simVerify=new URLSearchParams(location.search).get('simVerify')==='1';
-const drew={movers:new Set(),sprites:new Set(),actors:new Set()};
+const drew={movers:new Set(),sprites:new Set(),actors:new Set(),weapon:new Set()};
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -122,7 +125,9 @@ function softwareRenderer(){
   }catch{return false;}
 }
 let gpuMesh=null;
-let weaponViewModel=null;
+// The view model's page half (weapon-overlay-draw.mjs), its own GPU mesh
+// instance and the last frame's summary from the simulation side.
+let weaponDraw=null,weaponGpu=null,weaponSummary=null;
 let meshLighting=null;
 let infoLinkAudioContext=null;
 const conversationAudio=new Map();
@@ -345,7 +350,7 @@ async function loadMap(name) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame, nextNpcPreview, nextWeaponViewModel, nextMeshLighting, nextGpuMesh = null;
+  let nextWorld, nextGame, nextNpcPreview, nextMeshLighting, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -396,27 +401,41 @@ async function loadMap(name) {
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
-    const nextSim=nextGame?createSimSession(nextGame,{assets}):null;
+    nextSim=nextGame?createSimSession(nextGame,{assets}):null;
     nextSim?.setScene(nextWorld.stampScene(),nextNpcPreview?.sim??null);
     if(nextMeshLighting)nextSim?.setMeshLighting(nextMeshLighting);
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
-    if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
-      {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
+    // The player's view model (weapon-overlay-sim.mjs, -draw.mjs), with a GPU
+    // mesh instance of its own: its passes run after the world's.
+    if(nextGame){
+      if(nextGpuMesh){
+        try{nextWeaponGpu=createGpuMesh(renderer,WEAPON_GPU_MESH_CAPACITIES);}
+        catch(error){nextWorld.notes.push(`GPU mesh path unavailable for the view model: ${error.message}`);}
+      }
+      const draw=nextWeaponDraw=createWeaponOverlayDraw(assets,{gpu:nextWeaponGpu,displayGamma:nextWorld.displayGamma,
+        feedback:handle=>simVerify?()=>drew.weapon.add(handle):()=>{}});
+      nextSim.setWeapon(await createWeaponOverlaySim(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
+        {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,
+          layout:nextWeaponGpu?createGpuMeshLayout(nextWeaponGpu.capacities):null,
+          onCreate:creation=>draw.create(creation),onRelease:id=>draw.release(id)}));
+    }
     // Sprites and particles (docs/particles.md): the simulation's sprite scan
     // (sim-session.mjs sprites) drawn by the page.
     const nextSpriteScene=nextSim?createSpriteScene(assets,new TextureStore(assets),{
       displayGamma:nextWorld.displayGamma,stamp:simVerify?handle=>drew.sprites.add(handle):()=>{}}):null;
-    // Light coronas (docs/coronas.md), DrawFrame's corona pass.
-    const nextCoronaPass=nextGame?createCoronaPass(nextGame.doors.scriptRuntime.runtime,new TextureStore(assets),{
-      model:nextMap.model,exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor,
-      displayGamma:nextWorld.displayGamma}):null;
+    // Light coronas (docs/coronas.md), DrawFrame's corona pass: the
+    // simulation's scan (corona-scan.mjs) drawn by the page.
+    nextSim?.setCoronas(createCoronaScan(nextGame.doors.scriptRuntime.runtime,{model:nextMap.model,
+      exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor}));
+    const nextCoronaPass=nextGame?createCoronaPass(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
     coronaPass?.dispose();coronaPass=nextCoronaPass;
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
     meshLighting=nextMeshLighting??null;
     hudRenderer?.dispose();hudRenderer=nextHud;
-    weaponViewModel?.dispose();weaponViewModel=nextWeaponViewModel??null;
+    sim?.dispose();weaponDraw?.dispose();weaponGpu?.dispose();
+    weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     gpuMesh?.dispose();gpuMesh=nextGpuMesh;
     npcPreview=nextNpcPreview??null;
@@ -443,7 +462,9 @@ async function loadMap(name) {
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
   } catch (error) {
-    if(nextWeaponViewModel&&nextWeaponViewModel!==weaponViewModel)nextWeaponViewModel.dispose();
+    if(nextSim&&nextSim!==sim)nextSim.dispose();
+    if(nextWeaponDraw&&nextWeaponDraw!==weaponDraw)nextWeaponDraw.dispose();
+    if(nextWeaponGpu&&nextWeaponGpu!==weaponGpu)nextWeaponGpu.dispose();
     if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();
     if(nextGpuMesh&&nextGpuMesh!==gpuMesh)nextGpuMesh.dispose();
     if (nextWorld && nextWorld !== world) nextWorld.dispose();
@@ -832,7 +853,7 @@ function status() {
     audio:{...audioTransport,contextState:infoLinkAudioContext?.state??'uninitialized',
       active:[...conversationAudio].map(([id,entry])=>({id,sound:entry.sound,started:Boolean(entry.source)}))},
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
-    weaponViewModel:weaponViewModel?.summary??null,
+    weaponViewModel:weaponSummary,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     mirrors: world ? { ...world.mirrors.stats } : null,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
@@ -1008,6 +1029,27 @@ function animate(time) {
         camera: playing ? null : camera, actorPasses: Boolean(npcPreview) && !runtimeError });
       for (const error of stampFrame.errors) pauseForRuntimeError(error);
     }
+    phase('mirrors');
+    // DrawFrame's corona pass and PostRender's view model, the simulation
+    // frame's last world steps (sim-session.mjs coronas, weapon); the page
+    // draws their records after the world. The view model's records and GPU
+    // passes are applied now, before the world's draws.
+    let coronaFrame = null, weaponFrame = null;
+    if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {
+      coronaFrame = sim.coronas({ pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000 });
+      for (const error of coronaFrame.errors) pauseForRuntimeError(error);
+    }
+    phase('coronas');
+    if (drawWorld && mode === 'play' && weaponDraw && !runtimeError) {
+      const weapon = sim.weapon();
+      for (const error of weapon.errors) pauseForRuntimeError(error);
+      weaponFrame = weapon.frame;
+      if (weaponFrame) {
+        weaponSummary = weaponFrame.summary;
+        try { weaponDraw.prepare(weaponFrame, fromView(camera.position.toArray())); } catch (error) { pauseForRuntimeError(error); }
+      }
+    }
+    phase('weapon');
     if (simVerify) for (const set of Object.values(drew)) set.clear();
     let passIndex = 0;
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
@@ -1044,16 +1086,18 @@ function animate(time) {
     }
     phase('render');
     // Coronas close DrawFrame, before PostRender's weapon and HUD.
-    if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {
-      const pr = renderer.getPixelRatio(), box = clipped ? renderViewportFor(renderRect)
-        : [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
-      try { coronaPass.update(playerView, box[2], box[3]); coronaPass.render(renderer); }
+    if (coronaFrame?.frame) {
+      try { coronaPass.update(coronaFrame.frame, coronaFrame.width, coronaFrame.height); coronaPass.render(renderer); }
       catch (error) { pauseForRuntimeError(error); }
     }
     phase('coronas');
     framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
-    if(drawWorld&&mode==='play'&&weaponViewModel&&!runtimeError){
-      try{weaponViewModel.render(renderer,camera);}catch(error){pauseForRuntimeError(error);}
+    if (weaponFrame) {
+      try { weaponDraw.render(renderer, camera, weaponFrame); } catch (error) { pauseForRuntimeError(error); }
+      if (simVerify) {
+        const problem = sim.verifyWeapon(drew.weapon, handle => weaponDraw.built(handle));
+        if (problem) pauseForRuntimeError(new Error(`simVerify: drawn sets differ: ${problem}`));
+      }
     }
     if (clipped) {
       const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];

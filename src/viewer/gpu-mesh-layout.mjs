@@ -7,6 +7,12 @@
 export const GPU_MESH_MAX_LIGHTS=32;
 export const GPU_MESH_CAPACITIES={vertexCapacity:1<<17,faceCapacity:1<<18,cornerCapacity:3<<18,
   slotCapacity:2048,keyframeCapacity:1<<21,lightCapacity:1<<15};
+/** The player view model's own GPU mesh instance (weapon-overlay-draw.mjs).
+ * DeusExItems' largest LodMesh has 255 vertices, 304 faces and 17596
+ * keyframe texels (.work/tools/mesh-sizes.mjs); a binding that does not
+ * fit takes the CPU path. */
+export const WEAPON_GPU_MESH_CAPACITIES={vertexCapacity:1<<13,faceCapacity:1<<14,cornerCapacity:3<<14,
+  slotCapacity:64,keyframeCapacity:1<<19,lightCapacity:1<<10};
 
 export class Arena {
   constructor(capacity){this.capacity=capacity;this.free=[[0,capacity]];this.high=0;}

@@ -75,8 +75,11 @@ the TRACE_ flags).
 
 ## Play
 
-`src/viewer/corona-pass.mjs` runs the pass after the main world draw, before
-the first-person weapon and the HUD, matching DrawFrame ahead of PostRender.
+The simulation side's `src/viewer/corona-scan.mjs` runs the pass after the
+world's drawn set and its stamps, before the first-person weapon and the HUD,
+matching DrawFrame ahead of PostRender. It hands the page a list of icons;
+`src/viewer/corona-pass.mjs` draws them after the main world draw
+([simulation worker](sim-worker.md) step 6).
 
 - **Gates and fade.** It checks the player's Region, then fades the cache
   with the host clock.

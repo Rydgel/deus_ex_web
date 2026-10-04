@@ -94,12 +94,19 @@ mesh lights remain explicit renderer boundaries; see
 
 ## Integration and scope
 
-`createWeaponViewModel(runtime,assets,player)` prepares a typed Canvas drawing
-boundary. Call `render(renderer,camera)` after the world draw and before HUD in
-Play, and `dispose()` when replacing the map. `render` applies the DrawWorld
-gates, clears depth, dispatches the viewing actor's RenderOverlays event and
-draws each submitted DrawActor. `ready()` awaits the Weapon and inHand draw
-resources for focused checks; ordinary frames stage them on demand. The native-467 hook exists only during synchronous RenderOverlays
+`createWeaponOverlaySim(runtime,assets,player)` (`weapon-overlay-sim.mjs`,
+the simulation side) prepares a typed Canvas drawing boundary. Its
+`frame({frustum})` applies the DrawWorld gates, dispatches the viewing
+actor's RenderOverlays event and runs each submitted DrawActor's mesh
+binding (GetFrame planning, SetupForActor, the main-frustum decision); Play
+calls it after the world's drawn set and before the HUD, and stamps
+LastRenderTime for the drawn actors there. `weapon-overlay-draw.mjs` (the
+page) clears depth when the frame has a target and draws each submission;
+in Play the view model has a GPU mesh instance of its own
+([simulation worker](sim-worker.md) step 6). `createWeaponViewModel`
+(`weapon-view-model.mjs`) runs both halves in one thread for focused checks:
+`render(renderer,camera)`, `ready()` (awaits the Weapon and inHand bindings
+and their meshes; ordinary frames stage them on demand) and `dispose()`. The native-467 hook exists only during synchronous RenderOverlays
 and is restored even on an error. SetLocation still goes through the runtime's
 FarMoveActor binding. The script event writes the actual held actor transform,
 as the original does; the next pawn tick places Weapon at its owner's Location.
