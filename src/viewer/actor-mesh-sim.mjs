@@ -366,6 +366,25 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
         return {root:true,groups:bits,spheres};
       },
+      /** Not drawn this frame without an update (an iterator item slot
+       * the frame does not use): the page hides its root. */
+      hide(){drawnMain=false;childOnly=false;return {id,visible:false,childOnly:false};},
+      /** Whether a pass draws this binding, for render feedback: the main
+       * frame (`decision` null and no frustum change) or a mirror pass with
+       * its passVisibility decision. A GPU-path binding draws the groups
+       * the decision shows; a CPU-path one the groups three.js does not
+       * cull with `frustum`. */
+      drawnIn(frustum,decision){
+        if(disposed)return false;
+        const root=decision?decision.root:drawnMain;
+        if(!root)return false;
+        if(mode==='gpu'){
+          const bits=decision?.groups??groupBits();
+          return bits.some(Boolean);
+        }
+        for(const group of groups.values())if(frustum.intersectsSphere(group.bounds.boundingSphere))return true;
+        return false;
+      },
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
        * shadow to the exact CPU pose. Never used by Play. */
@@ -656,7 +675,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         for(const entry of pool)if(entry.binding){entry.binding.dispose();onRelease(entry.binding.id);}
         itemPools.delete(actor);continue;
       }
-      for(let i=used;i<pool.length;i++)if(pool[i].binding)records.push({id:pool[i].binding.id,visible:false,childOnly:false});
+      for(let i=used;i<pool.length;i++)if(pool[i].binding)records.push(pool[i].binding.hide());
     }
   };
   const itemBindings=()=>[...itemPools.values()].flatMap(pool=>pool.map(entry=>entry.binding).filter(Boolean));
@@ -721,6 +740,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       for(const binding of all()){const decision=binding.passVisibility(frustum);if(decision)decisions.set(binding.id,decision);}
       return decisions;
     },
+    /** Every binding, item bindings included. */
+    all,
     /** Iterator item bindings in use (validation access). */
     itemSlots:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,ids:pool.map(entry=>entry.binding?.id??null)})),
     async ready(){await Promise.all(pending.values());},

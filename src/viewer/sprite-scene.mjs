@@ -15,6 +15,8 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
   const root = new THREE.Group(), pool = [], textureCache = new Map(), notes = new Set();
   root.matrixAutoUpdate = false; root.name = 'Sprites';
   let used = 0;
+  // This frame's sprites whose texture has not decoded yet (not drawn).
+  const skipped = new Set();
   const STYLE_BLEND = { 2: 'masked', 3: 'translucent', 4: 'modulated' };
 
   function texture(reference, masked) {
@@ -70,7 +72,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
   function draw({ handle, texture: reference, style, location, drawScale, scaleGlow }) {
     const mode = STYLE_BLEND[style] ?? 'normal';
     const entry = texture(reference, mode === 'masked');
-    if (!entry.texture) return;
+    if (!entry.texture) { skipped.add(handle); return; }
     const object = sprite(), material = object.material;
     if (material.map !== entry.texture) { material.map = entry.texture; material.needsUpdate = true; }
     blend(material, mode);
@@ -84,11 +86,11 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
 
   /** One frame: the simulation's sprite records, in its scan order. */
   function update(sprites) {
-    used = 0;
+    used = 0; skipped.clear();
     for (const record of sprites) draw(record);
     for (let i = used; i < pool.length; i++) { pool[i].visible = false; pool[i].userData.feedback = null; }
   }
 
-  return { root, update, notes, count: () => used,
+  return { root, update, notes, skipped, count: () => used,
     dispose() { for (const object of pool) object.material.dispose(); for (const entry of textureCache.values()) if (!entry.shared) entry.texture?.dispose(); } };
 }

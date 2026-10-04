@@ -4,6 +4,11 @@
  * yet moved here still run from main.mjs. */
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
 import { createSpriteScan } from './sprite-scan.mjs';
+import * as THREE from 'three';
+import { TextureStore } from '../unreal/textures.mjs';
+import { fromView } from '../unreal/geometry.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov } from './play-camera.mjs';
+import { createDrawnSet } from './drawn-set.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -19,9 +24,18 @@ export const plainHudCommands = commands => commands.map(command => ({ texture: 
   x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
   ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
 
-export function createSimSession(game) {
+/** `assets` is the simulation side's asset store (sprite texture sizes). */
+export function createSimSession(game, { assets = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime;
-  let failed = false, panZones = [], lastViewLocation = null;
+  let failed = false, panZones = [], lastViewLocation = null, current = null;
+  // Play's camera, pointed as the page points its own (play-camera.mjs); the
+  // page's resize count says when its canvas aspect reset the camera.
+  const camera = createPlayCamera();
+  let resizesSeen = -1;
+  // The drawn set (drawn-set.mjs) from the page's static brush and mirror
+  // meshes, the actor mesh layer (actor-mesh-sim.mjs) and the mesh lighting
+  // view (mesh-lighting-view.mjs), all simulation-side.
+  let drawn = null, actorScene = null, meshLighting = null, moverActors = new Map(), stamped = null;
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
@@ -45,6 +59,21 @@ export function createSimSession(game) {
   };
   const spriteScan = createSpriteScan(runtime, { player: () => game.player.collisionActor, constructIterator,
     frand: () => runtime.rng.frand() });
+  // A sprite's texture size (Texture.USize/VSize, else its first mip), as
+  // the page's sprite scene sizes it; a sprite draws once its texture has
+  // decoded, here as on the page (sprite-scene.mjs).
+  const spriteTextures = assets ? new TextureStore(assets) : null, spriteSizes = new Map();
+  const spriteSize = (reference, masked) => {
+    const key = `${reference.key ?? `${reference.package}:${reference.index}`}:${masked}`;
+    let entry = spriteSizes.get(key);
+    if (!entry) {
+      spriteSizes.set(key, entry = { size: null });
+      assets.get(reference.package).then(asset => spriteTextures.get(asset, reference.index, masked)).then(data => {
+        entry.size = [data.values.USize ?? data.mips[0].width, data.values.VSize ?? data.mips[0].height];
+      }).catch(error => { entry.failed = error.message; });
+    }
+    return entry.size;
+  };
   // Each mover's brush-matrix inputs that never change (class defaults
   // merged), shared by every frame's mover states.
   const moverValues = new Map(game.collision.movers.map(mover => [mover.name, {
@@ -80,6 +109,8 @@ export function createSimSession(game) {
   }
   return {
     live,
+    /** Whether a step stopped the simulation (diagnostics). */
+    get failed() { return failed; },
     /** The zone names whose live pan speeds the world's auto-panned surfaces
      * read (world.pannedZoneNames). */
     setPanZones(names) { panZones = [...names]; },
@@ -113,6 +144,7 @@ export function createSimSession(game) {
       live.meshItems = [];
       try { const scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems; }
       catch (error) { failed = true; errors.push(plainError(error)); }
+      if (spriteTextures) for (const sprite of sprites) sprite.size = spriteSize(sprite.texture, sprite.style === 2);
       return { errors, sprites, notes: [...spriteScan.notes] };
     },
     /** Render.dll 0x10b25150: a drawn actor's LastRenderTime is its level's
@@ -122,7 +154,108 @@ export function createSimSession(game) {
       runtime.writeNamed(actor, 'LastRenderTime', Math.fround(runtime.readNamed(info, 'TimeSeconds')));
     },
     /** PlayerCalcView outside a frame (mode changes, Player start). */
-    view() { const view = plainView(game.view()); lastViewLocation = view.location; return view; },
+    view() { const view = plainView(game.view()); lastViewLocation = view.location; pointCamera(camera, view); return view; },
+    camera,
+    /** The page's static brush and mirror meshes (world.stampScene) and the
+     * actor mesh layer: the drawn set's inputs. Movers stamp through their
+     * Level.Actors entries by name. */
+    setScene(scene, actors = null) {
+      drawn = scene ? createDrawnSet(scene) : null;
+      actorScene = actors;
+      const level = runtime.levelFor(game.player.collisionActor);
+      moverActors = new Map(level.actors.filter(Boolean).map(actor => [actor.name, actor]));
+    },
+    setMeshLighting(lighting) { meshLighting = lighting; },
+    /** URender's per-frame mesh lighting setup for the main viewport
+     * (mesh-lighting-view.mjs beginFrame) with this frame's moving lights;
+     * `seconds` is the viewport clock (the page's frame time). */
+    lightFrame(seconds, inspect = null) {
+      if (!meshLighting) return [];
+      const errors = [];
+      const toUnits = radians => Math.round(radians * 32768 / Math.PI);
+      const view = inspect ?? current?.view ?? { location: fromView(camera.position.toArray()),
+        rotation: [toUnits(camera.rotation.x), toUnits(-camera.rotation.y), 0] };
+      try { meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights }); }
+      catch (error) { failed = true; errors.push(plainError(error)); }
+      return errors;
+    },
+    /** The actor mesh layer's main-frame update (actor-mesh-sim.mjs) with
+     * the frame camera's frustum; with mirrors that may draw, actors only
+     * child frames draw are admitted and nothing is culled early. */
+    actors({ camera: inspect = null } = {}) {
+      const errors = [], view = inspect ?? camera;
+      let frame = null;
+      try {
+        view.updateMatrixWorld();
+        const frustum = new THREE.Frustum().setFromProjectionMatrix(
+          new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
+        const children = drawn ? drawn.mayRender(view) : false;
+        frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
+          items: inspect ? [] : live.meshItems });
+      } catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, frame };
+    },
+    /** Render feedback for the frame (Render.dll 0x10b25150): the drawn set
+     * of every pass (drawn-set.mjs), stamped where the page's draws stamped
+     * it, before the corona pass, the weapon and the HUD. Returns the actor
+     * layer's decision for each mirror pass in draw order and, when mirrors
+     * drew, the main frame's again. `size` is the drawing buffer's. */
+    stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true }) {
+      const errors = [], passDecisions = [];
+      let mainDecisions = null;
+      stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), bindings: new Map() };
+      try {
+        const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors });
+        // `actorPasses`: the page applies the actor layer's mirror pass
+        // decisions (no runtime error); otherwise its last state draws.
+        const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
+        for (const pass of passes) {
+          drawn.moversIn(pass, stamped.movers);
+          drawn.spritesIn(pass, sprites, stamped.sprites);
+          if (pass.kind === 'sky' || !actorScene) continue;
+          const frustum = drawn.frustum(pass.camera);
+          const decisions = pass.kind === 'mirror' && actorPasses ? actorScene.passVisibility(frustum) : null;
+          if (decisions) passDecisions.push(decisions);
+          for (const binding of bindings)
+            if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
+              stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor);
+            }
+          if (pass === lastMirror && actorPasses) mainDecisions = actorScene.passVisibility(null);
+        }
+        if (mirrored && actorPasses && !mainDecisions && actorScene) mainDecisions = actorScene.passVisibility(null);
+        for (const name of stamped.movers) if (!moverActors.has(name)) stamped.movers.delete(name);
+        const info = runtime.levelFor(game.player.collisionActor).actors[0];
+        const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
+        const shown = actor => !runtime.readNamed(actor, 'bHidden') && !runtime.readNamed(actor, 'bDeleteMe');
+        for (const name of stamped.movers) {
+          const actor = moverActors.get(name);
+          if (actor && shown(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
+        }
+        for (const handle of stamped.sprites) runtime.writeNamed(identityOfHandle(handle), 'LastRenderTime', time);
+        for (const actor of stamped.actors) if (shown(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
+      } catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, passDecisions, mainDecisions };
+    },
+    /** ?simVerify: the frame's drawn set against what three.js drew
+     * (onAfterRender of mover meshes, sprites and actor meshes). The page
+     * draws a binding once its meshes exist and a sprite once its texture
+     * has decoded (`built(id)`, `skipped` sprite handles); the stamps do not
+     * wait for the page, so those are left out of the comparison. */
+    verifyStamps(drew, { built = () => true, skipped = new Set() } = {}) {
+      if (!stamped) return null;
+      const name = value => typeof value === 'number' ? identityOfHandle(value)?.name ?? String(value)
+        : typeof value === 'string' ? value : value.name;
+      const actors = new Set();
+      for (const [id, actor] of stamped.bindings) if (built(id)) actors.add(actor);
+      const want = { movers: stamped.movers, sprites: new Set([...stamped.sprites].filter(handle => !skipped.has(handle))), actors };
+      for (const kind of ['movers', 'sprites', 'actors']) {
+        const a = new Set([...want[kind]].map(name)), b = new Set([...drew[kind]].map(name));
+        const onlySim = [...a].filter(x => !b.has(x)), onlyPage = [...b].filter(x => !a.has(x));
+        if (onlySim.length || onlyPage.length)
+          return `${kind}: only the simulation side ${onlySim.join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}`;
+      }
+      return null;
+    },
     movers,
     reset() { game.reset(); failed = false; },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
@@ -131,7 +264,12 @@ export function createSimSession(game) {
      * pauses the simulation; `halted` while it stopped on an error of its
      * own. A step that throws stops the later gated steps, as
      * pauseForRuntimeError did. */
-    begin({ dt, run, halted, width, height, lipSync = null }) {
+    begin({ dt, run, halted, width, height, lipSync = null, aspect = null, resizes = 0 }) {
+      // The page's resize() since the last frame: the canvas aspect and the
+      // default FOV, before PlayerCalcView points the camera.
+      if (aspect !== null && resizes !== resizesSeen) {
+        camera.aspect = aspect; camera.fov = verticalFov(75, aspect); camera.updateProjectionMatrix(); resizesSeen = resizes;
+      }
       const errors = [], stopped = () => halted || failed;
       const fail = error => { failed = true; errors.push(plainError(error)); };
       if (run && !stopped()) {
@@ -157,6 +295,9 @@ export function createSimSession(game) {
         const pan = game.surfacePan();
         frame.pan = { timeSeconds: pan.timeSeconds, speeds: Object.fromEntries(panZones.map(name => [name, pan.zoneSpeeds(name)])) };
       } catch (error) { fail(error); }
+      if (frame.view) applyPlayFrame(camera, frame.view, frame.renderRect);
+      drawn?.placeMovers(frame.movers);
+      current = frame;
       return frame;
     },
   };

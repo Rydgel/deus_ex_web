@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { POLY, toView, fromView } from '../unreal/geometry.mjs';
+import { MIRROR_RECURSION_LIMIT, mirrorsMayRender, planMirrorPasses } from './mirror-passes.mjs';
+export { MIRROR_RECURSION_LIMIT };
 
 /** Original OccludeBsp reflects Origin and all three axes. Keep the negative
  * determinant: a right-handed lookAt is not the original view. */
@@ -36,11 +38,6 @@ export function mirrorPlanes(model) {
  * PF_Invisible, so only the child shows (validate-mirrors.mjs). */
 export const mirrorDrawFlags = flags => ((flags & 0x47 ? flags : flags | POLY.Invisible) | 0x80000000) >>> 0;
 
-/** OccludeBsp takes the mirror path only while Frame->Recursion (+0x1c) is
- * below 3 (0x10b18881); CreateChildFrame gives a child its parent's
- * Recursion + 1 (0x10b15e4a-0x10b15e5c). Child frames nest to recursion 3. */
-export const MIRROR_RECURSION_LIMIT = 3;
-
 /** Mirrored BSP surfaces of any orientation: static ones grouped by their
  * exact node plane (CreateChildFrame 0x10b15a40 merges child frames only
  * for the same surface, zone and exact clip plane; one child per plane gives
@@ -50,29 +47,18 @@ export const MIRROR_RECURSION_LIMIT = 3;
  * to MIRROR_RECURSION_LIMIT. Masked, modulated and two-sided mirrors remain
  * explicit boundaries; see mirror-surfaces.md. */
 export function createMirrors(notes, displayGamma) {
-  const planes = new Map(), size = new THREE.Vector2(), frustum = new THREE.Frustum();
-  const projection = new THREE.Matrix4(), clipMatrix = new THREE.Matrix4();
+  const planes = new Map(), size = new THREE.Vector2();
   const modelPlanes = new WeakMap();
-  // OccludeBsp's reflected axes have negative handedness.  WebGL's front-face
-  // state is object/material state rather than camera state, so reflecting the
-  // camera alone reverses culling.  Negate its local X axis for submission and
-  // sample the resulting target right-to-left (light-atlas.mjs).  The two
-  // reflections cancel in screen space while keeping each material/program
-  // immutable across the child and parent draws.  Each nesting level reflects
-  // once more, so only odd depths are negated: every child target is then
-  // mirrored against its parent's pixels, and right-to-left sampling holds
-  // at every depth.
-  const submissionHandedness = new THREE.Matrix4().makeScale(-1, 1, 1);
   // Keep one global clipping-plane shader shape for both child and parent
   // draws.  Changing between zero and one planes makes three.js reselect a
   // program for every material on every pass.  A zero normal disables the
   // plane for the parent without changing that compiled shape.
   const renderClip = new THREE.Plane(new THREE.Vector3(), 1), clippingPlanes = [renderClip];
   const stats = { surfaces: 0, opaqueSurfaces: 0, planes: 0, renderedPlanes: 0, depth: 0, scissorPixels: 0, unsupportedSurfaces: 0 };
-  // One pass camera per depth, and one target per depth and sibling: a
-  // frame's children are all sampled by its own draw, and each child's
-  // descendants are finished before that child draws.
-  const cameras = [], targets = new Map();
+  // One target per depth and sibling: a frame's children are all sampled by
+  // its own draw, and each child's descendants are finished before that
+  // child draws.
+  const targets = new Map();
   function targetFor(depth, index) {
     const key = `${depth}:${index}`;
     if (!targets.has(key)) {
@@ -84,33 +70,6 @@ export function createMirrors(notes, displayGamma) {
       targets.set(key, target);
     }
     return targets.get(key);
-  }
-  function screenBounds(group, width, height, viewProjection) {
-    let minX=width,minY=height,maxX=0,maxY=0,found=false;
-    for(const mesh of group.meshes){
-      const position=mesh.geometry.getAttribute('position');if(!position)continue;
-      clipMatrix.multiplyMatrices(viewProjection,mesh.matrixWorld);const e=clipMatrix.elements,a=position.array;
-      for(let i=0;i<a.length;i+=position.itemSize){
-        const x=a[i],y=a[i+1],z=a[i+2],w=e[3]*x+e[7]*y+e[11]*z+e[15];
-        // A surface crossing the eye plane can cover any part of the screen;
-        // retain the full child bounds instead of under-clipping it.
-        if(!(w>0))return {x:0,y:0,width,height};
-        const sx=(e[0]*x+e[4]*y+e[8]*z+e[12])/w*.5+.5;
-        const sy=(e[1]*x+e[5]*y+e[9]*z+e[13])/w*.5+.5;
-        minX=Math.min(minX,sx*width);maxX=Math.max(maxX,sx*width);
-        minY=Math.min(minY,sy*height);maxY=Math.max(maxY,sy*height);found=true;
-      }
-    }
-    if(!found)return null;
-    const x=Math.max(0,Math.floor(minX)-1),y=Math.max(0,Math.floor(minY)-1);
-    const right=Math.min(width,Math.ceil(maxX)+1),top=Math.min(height,Math.ceil(maxY)+1);
-    return right>x&&top>y?{x,y,width:right-x,height:top-y}:null;
-  }
-  /** Rectangle intersection, or null when empty. */
-  function intersect(a, b) {
-    const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
-    const right = Math.min(a.x + a.width, b.x + b.width), top = Math.min(a.y + a.height, b.y + b.height);
-    return right > x && top > y ? { x, y, width: right - x, height: top - y } : null;
   }
   function unsupported(message) { stats.unsupportedSurfaces++; notes.add(message); return null; }
   function surface(model, surfaceIndex, actorName) {
@@ -151,13 +110,8 @@ export function createMirrors(notes, displayGamma) {
    * actor layer knows reflected views may need off-screen actors. */
   function mayRender(source) {
     if (!planes.size) return false;
-    source.updateMatrixWorld();
-    frustum.setFromProjectionMatrix(projection.multiplyMatrices(source.projectionMatrix, source.matrixWorldInverse));
     for (const group of planes.values()) follow(group);
-    for (const group of planes.values())
-      if (group.plane.distanceToPoint(source.position) > 0 &&
-        group.meshes.some(mesh => mesh.visible && frustum.intersectsObject(mesh))) return true;
-    return false;
+    return mirrorsMayRender(source, [...planes.values()]);
   }
   function render(renderer, scene, source, { markers, updateActors, sky } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
@@ -180,40 +134,14 @@ export function createMirrors(notes, displayGamma) {
     for (const group of planes.values()) for (const mesh of group.meshes) visibility.set(mesh, mesh.visible);
     if (markers) markers.visible = false;
     displayGamma.value = 1; // Compose the floor before the original display gamma ramp.
-    const passFrustum = new THREE.Frustum(), viewProjection = new THREE.Matrix4();
-    /** The children of a frame (DrawFrame draws them before it, 0x10b1a336).
-     * `view`: its submitted camera, true (reflected) world matrix, depth,
-     * scissor in its target's pixels and the group it looks through. Each
-     * child renders its own children first, then itself; returns the
-     * children with their targets. */
-    function children(view) {
-      if (view.depth >= MIRROR_RECURSION_LIMIT) return [];
-      viewProjection.multiplyMatrices(view.camera.projectionMatrix, view.camera.matrixWorldInverse);
-      passFrustum.setFromProjectionMatrix(viewProjection);
-      const eye = view.camera.position, found = [];
-      for (const group of planes.values()) {
-        if (group === view.through || !(group.plane.distanceToPoint(eye) > 0) ||
-          !group.meshes.some(mesh => visibility.get(mesh) && passFrustum.intersectsObject(mesh))) continue;
-        // Only the part of the mirror inside this frame's own region shows.
-        const seen = screenBounds(group, size.x, size.y, viewProjection), bounds = seen && intersect(seen, view.scissor);
-        if (bounds) found.push({ group, bounds });
-      }
+    /** Draws a plan's passes (mirror-passes.mjs): each child renders its
+     * own children first, then itself; returns the children with their
+     * targets. */
+    function draw(nodes) {
       const result = [];
-      for (const [index, { group, bounds }] of found.entries()) {
-        const depth = view.depth + 1, child = cameras[depth] ??= new THREE.PerspectiveCamera();
-        const world = new THREE.Matrix4().multiplyMatrices(group.matrix, view.world);
-        child.copy(source, false); child.matrixAutoUpdate = child.matrixWorldAutoUpdate = false;
-        child.matrixWorld.copy(world);
-        if (depth % 2) child.matrixWorld.multiply(submissionHandedness);
-        child.matrixWorldInverse.copy(child.matrixWorld).invert();
-        child.position.setFromMatrixPosition(child.matrixWorld);
-        // This frame's columns [x, x+w) are the child's [W-x-w, W-x): the
-        // child is mirrored against it. The scissor is the target's own, in
-        // its pixels (renderer.setScissor would scale drawing-buffer bounds
-        // by the pixel ratio a second time).
-        const scissor = { x: size.x - bounds.x - bounds.width, y: bounds.y, width: bounds.width, height: bounds.height };
-        const nested = children({ camera: child, world, depth, scissor, through: group });
-        // children() reused the deeper cameras; this child's is intact.
+      for (const node of nodes) {
+        const { group, camera: child, depth, scissor, index } = node;
+        const nested = draw(node.children);
         const target = targetFor(depth, index);
         target.setSize(size.x, size.y);
         target.scissor.set(scissor.x, scissor.y, scissor.width, scissor.height); target.scissorTest = true;
@@ -222,7 +150,7 @@ export function createMirrors(notes, displayGamma) {
         // The mirror's own plane is the child's clip plane; its faces are not
         // part of the reflected view.
         for (const mesh of group.meshes) mesh.visible = false;
-        updateActors?.(fromView(child.position.toArray()), child);
+        updateActors?.(fromView(child.position.toArray()), child, node);
         renderer.setRenderTarget(target); renderer.setClearColor(0, 1);
         renderer.clear();
         // Clip geometry behind the original mirror plane, not the reflected
@@ -230,14 +158,13 @@ export function createMirrors(notes, displayGamma) {
         renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;
         renderer.render(scene, child);
         for (const mesh of group.meshes) mesh.visible = visibility.get(mesh);
-        stats.renderedPlanes++;stats.depth=Math.max(stats.depth,depth);stats.scissorPixels+=bounds.width*bounds.height;
+        stats.renderedPlanes++;stats.depth=Math.max(stats.depth,depth);stats.scissorPixels+=scissor.width*scissor.height;
         result.push({ group, target });
       }
       return result;
     }
     try {
-      const rendered = children({ camera: source, world: source.matrixWorld, depth: 0,
-        scissor: { x: 0, y: 0, width: size.x, height: size.y }, through: null });
+      const rendered = draw(planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh)));
       for (const group of planes.values()) group.active.value = 0;
       for (const { group, target } of rendered) { group.texture.value = target.texture; group.size.value.copy(size); group.active.value = 1; }
       if (sky) notes.add('Mirror views through sky-zone openings are not yet verified.');
@@ -248,10 +175,12 @@ export function createMirrors(notes, displayGamma) {
       renderClip.normal.set(0, 0, 0);renderClip.constant = 1;
       renderer.clippingPlanes = clippingPlanes;
       renderer.setRenderTarget(target); renderer.setClearColor(clearColor, clearAlpha);
-      updateActors?.(fromView(source.position.toArray()), source);
+      updateActors?.(fromView(source.position.toArray()), source, null);
     }
   }
-  const api = { enabled: true, stats, surface, render, mayRender, dispose() { for (const t of targets.values()) t.dispose(); },
+  const api = { enabled: true, stats, surface, render, mayRender, follow,
+    /** The mirror planes (mirror-passes.mjs groups). */
+    groups: () => [...planes.values()], dispose() { for (const t of targets.values()) t.dispose(); },
     /** Validation access (validate-mirrors-play.mjs); never used by Play. */
     targets: () => [...targets.values()] };
   return api;

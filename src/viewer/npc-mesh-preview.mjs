@@ -79,9 +79,9 @@ export async function createTrainingNpcPreview(runtime,assets,asset,{kernel,ligh
  * drawn by actor-mesh-draw.mjs. `player` is the player actor or a getter for
  * it. With `gpu`, the simulation side keeps its own GPU mesh layout with the
  * page's capacities. */
-export async function createActorMeshScene(runtime,assets,asset,{kernel,player,lighting=null,displayGamma,gpu=null,childFrames=false}={}) {
-  const draw=createActorMeshDraw(assets,{gpu,lit:Boolean(lighting),displayGamma,
-    feedback:handle=>actorRenderFeedback(runtime,identityOfHandle(handle))});
+export async function createActorMeshScene(runtime,assets,asset,{kernel,player,lighting=null,displayGamma,gpu=null,childFrames=false,
+  feedback=handle=>actorRenderFeedback(runtime,identityOfHandle(handle))}={}) {
+  const draw=createActorMeshDraw(assets,{gpu,lit:Boolean(lighting),displayGamma,feedback});
   const sim=await createActorMeshSim(runtime,assets,asset,{kernel,player,lighting,childFrames,
     layout:gpu?createGpuMeshLayout(gpu.capacities):null,
     onCreate:creation=>draw.create(creation),onRelease:id=>draw.release(id)});

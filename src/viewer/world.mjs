@@ -3,6 +3,7 @@ import { TextureStore } from '../unreal/textures.mjs';
 import { readModel, triangulateModel } from '../unreal/model.mjs';
 import { buildSurfaceGeometry, POLY, toView, fromView } from '../unreal/geometry.mjs';
 import { brushMatrix } from './transforms.mjs';
+import { moverGroupMatrix } from './mover-matrix.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
 import { readPolys, moverModelFromPolys } from '../unreal/polys.mjs';
@@ -358,20 +359,10 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     syncMovers(movers) {
       for (const mover of movers) {
         const group = moverGroups.get(mover.name); if (!group) continue;
-        const authored = mover.values.Rotation ?? [0, 0, 0], rotation = mover.rotation ?? authored;
-        if (rotation.some((v, i) => (v | 0) !== ((authored[i] ?? 0) | 0))) {
-          // A rotating key (physMovingBrush's NewRotation): the brush matrix of
-          // the live Location and Rotation, as ABrush::ToWorld poses it.
-          moverMatrix.copy(brushMatrix({ ...mover.values, Location: mover.position, Rotation: rotation }));
-          if (!rotatedMovers.has(mover.name)) {
-            rotatedMovers.add(mover.name);
-            const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
-            if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
-          }
-        } else {
-          moverMatrix.copy(group.userData.baseMatrix);
-          const offset = toView(mover.offset);
-          for (let i = 0; i < 3; i++) moverMatrix.elements[12 + i] += offset[i];
+        if (moverGroupMatrix(mover, group.userData.baseMatrix, moverMatrix) && !rotatedMovers.has(mover.name)) {
+          rotatedMovers.add(mover.name);
+          const note = 'Moving lights on a rotated mover use its authored orientation; only its translation reaches them.';
+          if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
         }
         if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
         group.matrix.copy(moverMatrix);
@@ -379,6 +370,25 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       }
     },
     updateLighting,
+    /** What the simulation side needs to know which brush meshes each pass
+     * draws (drawn-set.mjs): each mover group's authored matrix and its
+     * meshes' bounding spheres (identity local matrices), and each mirror
+     * plane with its meshes' bounds and positions. Static for the map. */
+    stampScene() {
+      const ownerOf = new Map([...moverGroups].map(([name, group]) => [group, name]));
+      const meshData = mesh => ({ actor: mesh.userData.actor ?? null, visible: mesh.visible,
+        matrix: [...mesh.matrix.elements], sphere: [...mesh.geometry.boundingSphere.center.toArray(), mesh.geometry.boundingSphere.radius],
+        positions: mesh.geometry.getAttribute('position').array.slice(), owner: ownerOf.get(mesh.parent) ?? null });
+      return {
+        root: [...root.matrixWorld.elements],
+        movers: [...moverGroups].map(([name, group]) => ({ name, base: [...group.userData.baseMatrix.elements],
+          meshes: group.children.filter(child => child.isMesh && child.userData.actor).map(mesh => ({ ...meshData(mesh), positions: null })) })),
+        mirrors: mirrors.groups().map(group => ({ key: group.key, moving: group.moving,
+          plane: { normal: group.plane.normal.toArray(), constant: group.plane.constant },
+          localPlane: group.localPlane ? { normal: group.localPlane.normal.toArray(), constant: group.localPlane.constant } : null,
+          meshes: group.meshes.map(meshData) })),
+      };
+    },
     /** Play's per-frame moving lights (game.movingLights()) over the current
      * mover offsets; changed tiles upload on the next flushLighting. */
     syncMovingLights(lights, movers = []) {

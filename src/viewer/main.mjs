@@ -7,6 +7,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createGame } from './game.mjs';
 import { createSimSession } from './sim-session.mjs';
+import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
@@ -15,7 +16,6 @@ import { createActorMeshScene } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
 import { createWeaponViewModel } from './weapon-view-model.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
-import { actorRenderFeedback } from './actor-render-feedback.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
@@ -78,6 +78,11 @@ const randomSeed=seedParam===null?undefined:Number(seedParam)>>>0;
 // first frame takes a 1/60 s step; with ?seed= and a paused fake clock two
 // runs then see the same frames (scripts/validate-sim-split.mjs).
 let held=new URLSearchParams(location.search).get('hold')==='1';
+// ?simVerify=1: every frame, the simulation side's drawn set (sim-session.mjs
+// stamps, which writes LastRenderTime) against what three.js drew: the
+// onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
+const simVerify=new URLSearchParams(location.search).get('simVerify')==='1';
+const drew={movers:new Set(),sprites:new Set(),actors:new Set()};
 
 const $ = id => document.getElementById(id);
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
@@ -95,8 +100,7 @@ const scene = new THREE.Scene();
 // to be recomputed (twice per frame, sky and main pass). Objects that move
 // update or flag their own (validate-scene-matrices.mjs).
 scene.matrixAutoUpdate = false;
-const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536), skyCamera = camera.clone();
-camera.rotation.order = 'YXZ';
+const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let subtitlePreference = false;
@@ -238,6 +242,9 @@ function updateInfoLinkAccessibility(info){
 // window and the 3D view take the canvas size, so a forced-play letterbox
 // follows the chosen shape.
 const SCREEN_ASPECTS = { window: null, '4:3': 4 / 3, '16:10': 16 / 10 };
+// The canvas aspect resize() gave the camera, and how many resizes ran: the
+// simulation side's camera follows them (play-camera.mjs).
+let canvasAspect = 1, resizeCount = 0;
 let screenAspect = 'window';
 function resize() {
   const box = $('viewport').getBoundingClientRect(), canvas = $('scene');
@@ -258,28 +265,15 @@ function resize() {
     canvas.style.marginLeft = `${Math.floor((box.width - width) / 2)}px`; canvas.style.marginTop = `${Math.floor((box.height - height) / 2)}px`;
   } else for (const name of ['width', 'height', 'marginLeft', 'marginTop']) canvas.style[name] = '';
   renderer.setSize(width, height, false); camera.aspect = width / Math.max(1, height);
-  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(75 / 2)) / camera.aspect));
+  canvasAspect = camera.aspect; resizeCount++;
+  camera.fov = verticalFov(75, camera.aspect);
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe($('viewport'));
-// The original renders the 3D view into the root window's render viewport
-// (XRootWindow PreRender, script-root-render-viewport.mjs): the horizontal
-// FOV spans the rect's width, so a letterbox crops vertically about the
-// rect's centre.
-function setViewAspect(aspect, fov) {
-  if (camera.aspect === aspect && camera.userData.fov === fov) return;
-  camera.aspect = aspect; camera.userData.fov = fov;
-  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) / aspect));
-  camera.updateProjectionMatrix();
-}
 function renderViewportFor(rect) {
   const pr = renderer.getPixelRatio(), height = renderer.domElement.height;
   return [rect.x / pr, (height - rect.y - rect.height) / pr, rect.width / pr, rect.height / pr];
 }
-const rotatorAngle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
-// A rotator as the view's Euler (pitch, -yaw, -roll in 'YXZ', as applyPlayerView).
-const rotatorEuler = ([pitchUnits, yawUnits, rollUnits]) =>
-  new THREE.Euler(rotatorAngle(pitchUnits), -rotatorAngle(yawUnits), -rotatorAngle(rollUnits), 'YXZ');
 // The sky frame: Play's comes with the simulation frame (sim-session.mjs,
 // Render.dll 0x10b18410: the SkyZone's Location and Rotation, the sky view
 // being the SkyZone rotation applied after the view's); Inspect uses the
@@ -288,14 +282,10 @@ function skyFrame(frame) {
   if (mode === 'play' && game) return frame?.sky ?? null;
   return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
 }
-/** Points the camera along a PlayerCalcView result (sim-session.mjs). */
+/** Points the camera along a PlayerCalcView result (sim-session.mjs,
+ * play-camera.mjs). */
 function applyPlayerView(view) {
-  const angle = n => ((n % 65536 + 98304) % 65536 - 32768) * Math.PI / 32768;
-  camera.position.fromArray(toView(view.location));
-  pitch = angle(view.rotation[0]); yaw = -angle(view.rotation[1]);
-  camera.rotation.set(pitch, yaw, -angle(view.rotation[2]));
-  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(view.fov / 2)) / camera.aspect));
-  camera.updateProjectionMatrix();
+  ({ pitch, yaw } = pointCamera(camera, view));
   return view;
 }
 function resetCamera() {
@@ -374,12 +364,14 @@ async function loadMap(name) {
       });
     }
     catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
-    if(nextGame){
+    if(nextGame&&simVerify){
+      // The simulation side stamps the movers it decides are drawn
+      // (sim-session.mjs stamps); ?simVerify records what three.js drew.
       const runtime=nextGame.doors.scriptRuntime.runtime;
       const byName=new Map(runtime.levelFor(nextGame.player.collisionActor).actors.filter(Boolean).map(actor=>[actor.name,actor]));
       nextWorld.root.traverse(mesh=>{
         const actor=mesh.isMesh&&byName.get(mesh.userData.actor);
-        if(actor)mesh.onAfterRender=actorRenderFeedback(runtime,actor);
+        if(actor)mesh.onAfterRender=()=>drew.movers.add(actor.name);
       });
     }
     if(nextGame){
@@ -397,20 +389,23 @@ async function loadMap(name) {
           // Player start logs in a new player; follow the current one.
           player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
           childFrames:nextWorld.mirrors.stats.planes>0,
+          feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{},
           ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
         nextMeshLighting.kernel=nextNpcPreview.kernel;
         nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
-    const nextSim=nextGame?createSimSession(nextGame):null;
+    const nextSim=nextGame?createSimSession(nextGame,{assets}):null;
+    nextSim?.setScene(nextWorld.stampScene(),nextNpcPreview?.sim??null);
+    if(nextMeshLighting)nextSim?.setMeshLighting(nextMeshLighting);
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
     if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
       {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
     // Sprites and particles (docs/particles.md): the simulation's sprite scan
     // (sim-session.mjs sprites) drawn by the page.
     const nextSpriteScene=nextSim?createSpriteScene(assets,new TextureStore(assets),{
-      displayGamma:nextWorld.displayGamma,stamp:handle=>nextSim.stamp(handle)}):null;
+      displayGamma:nextWorld.displayGamma,stamp:simVerify?handle=>drew.sprites.add(handle):()=>{}}):null;
     // Light coronas (docs/coronas.md), DrawFrame's corona pass.
     const nextCoronaPass=nextGame?createCoronaPass(nextGame.doors.scriptRuntime.runtime,new TextureStore(assets),{
       model:nextMap.model,exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor,
@@ -919,12 +914,13 @@ function animate(time) {
       // light maps' moving lights and the mesh lighting's leaf lists below
       // share it).
       frame = sim.begin({ dt, run: !paused && !document.hidden, halted: Boolean(runtimeError),
-        width: renderer.domElement.width, height: renderer.domElement.height, lipSync });
+        width: renderer.domElement.width, height: renderer.domElement.height, lipSync, aspect: canvasAspect, resizes: resizeCount });
       for (const error of frame.errors) pauseForRuntimeError(error);
       world.syncMovers(frame.movers);
-      if (frame.view) playerView = applyPlayerView(frame.view);
+      // The simulation side points its own camera the same way
+      // (play-camera.mjs applyPlayFrame).
       renderRect = frame.renderRect;
-      if (renderRect?.render && renderRect.width > 0 && renderRect.height > 0) setViewAspect(renderRect.width / renderRect.height, playerView.fov);
+      if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
       if (frame.lights) {
         movingLights = frame.lights;
         try { world.syncMovingLights(movingLights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
@@ -945,11 +941,11 @@ function animate(time) {
     // animation nor advances NPC time — the script runtime owns both.
     // One lighting frame per main-viewport draw (docs/mesh-lighting.md).
     // Inspect's free camera lights meshes from its own view.
+    const playing=mode==='play'&&Boolean(game);
     if(meshLighting&&!runtimeError){
       const toUnits=radians=>Math.round(radians*32768/Math.PI);
-      const view=playerView??{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
-      try{meshLighting.beginFrame({location:view.location,rotation:view.rotation,seconds:time/1000,lights:movingLights&&sim.live.lights});}
-      catch(error){pauseForRuntimeError(error);}
+      const inspect=playing?null:{location:fromView(camera.position.toArray()),rotation:[toUnits(pitch),toUnits(-yaw),0]};
+      for(const error of sim.lightFrame(time/1000,inspect))pauseForRuntimeError(error);
     }
     phase('lighting');
     // The GPU timer starts before the actor layer, whose mesh passes
@@ -958,23 +954,22 @@ function animate(time) {
     // SetupDynamics' actor scan (sprites and render iterators) runs first:
     // a LaserProxy, spawned after its emitter, is drawn as an actor where
     // this frame's LaserIterator left it (docs/lasers.md).
-    let meshItems=[];
+    let drawnSprites=[];
     if(spriteScene&&mode==='play'&&game&&!runtimeError){
       const sprites=sim.sprites();
       for(const error of sprites.errors)pauseForRuntimeError(error);
       for(const note of sprites.notes)spriteScene.notes.add(note);
       try{spriteScene.update(sprites.sprites);}catch(error){pauseForRuntimeError(error);}
-      meshItems=sim.live.meshItems;
+      drawnSprites=sprites.sprites;
       spriteScene.root.visible=true;
     }else if(spriteScene)spriteScene.root.visible=false;
     phase('sprites');
+    // The actor mesh layer: its simulation half's update with the frame
+    // camera (Inspect: the free camera), then its page half's draw state.
     if(npcPreview&&!runtimeError){
-      camera.updateMatrixWorld();
-      const frustum=new THREE.Frustum().setFromProjectionMatrix(
-        new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse));
-      const children=world.mirrors.mayRender(camera);
-      try{npcPreview.update(fromView(camera.position.toArray()),{lit:Boolean(meshLighting?.frame),frustum,camera,
-        cull:!children,children,items:meshItems});}catch(error){pauseForRuntimeError(error);}
+      const actors=sim.actors({camera:playing?null:camera});
+      for(const error of actors.errors)pauseForRuntimeError(error);
+      if(actors.frame)try{npcPreview.draw.apply(actors.frame,fromView(camera.position.toArray()));}catch(error){pauseForRuntimeError(error);}
     }
     phase('actors');
     renderer.info.reset();
@@ -1001,13 +996,30 @@ function animate(time) {
       } catch (error) { pauseForRuntimeError(error); }
     }
     phase('fog');
+    const drawWorld = !renderRect || (renderRect.render && renderRect.width > 0 && renderRect.height > 0);
+    // Render feedback (Render.dll 0x10b25150): the simulation side stamps
+    // the actors its drawn set says the mirror, sky and main passes draw
+    // (sim-session.mjs stamps, drawn-set.mjs), and hands the actor layer's
+    // decision for each mirror pass to its page half.
+    let stampFrame = null;
+    if (sim) {
+      stampFrame = sim.stamps({ size: renderer.getDrawingBufferSize(new THREE.Vector2()), drawWorld,
+        sky: drawWorld ? skyFrame(frame) : null, mirrors: world.mirrors.enabled, sprites: drawnSprites,
+        camera: playing ? null : camera, actorPasses: Boolean(npcPreview) && !runtimeError });
+      for (const error of stampFrame.errors) pauseForRuntimeError(error);
+    }
+    if (simVerify) for (const set of Object.values(drew)) set.clear();
+    let passIndex = 0;
     world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
-      updateActors: npcPreview && !runtimeError ? (position, passCamera) => npcPreview.updateView(position, passCamera) : null });
+      updateActors: npcPreview && !runtimeError ? (position, passCamera, node) => {
+        const decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
+        if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
+        npcPreview.draw.pass(decisions ?? new Map(), position);
+      } : null });
     phase('mirrors');
     let calls = drawCalls(); framePhases.mirrorCalls += calls;
     // The ramp pass maps the raw clear colour back to the UI colour.
     renderer.setClearColor(displayRamp ? displayRamp.rawClear(canvasClear, world.displayGamma.value) : canvasClear, 1); renderer.clear();
-    const drawWorld = !renderRect || (renderRect.render && renderRect.width > 0 && renderRect.height > 0);
     const clipped = drawWorld && renderRect && (renderRect.x || renderRect.y
       || renderRect.width !== renderer.domElement.width || renderRect.height !== renderer.domElement.height);
     if (clipped) {
@@ -1025,6 +1037,11 @@ function animate(time) {
       framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
     }
     if (drawWorld) renderer.render(scene, camera);
+    if (simVerify && sim && stampFrame) {
+      const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),
+        skipped: spriteScene?.skipped });
+      if (problem) pauseForRuntimeError(new Error(`simVerify: drawn sets differ: ${problem}`));
+    }
     phase('render');
     // Coronas close DrawFrame, before PostRender's weapon and HUD.
     if (drawWorld && mode === 'play' && coronaPass && playerView && !runtimeError) {

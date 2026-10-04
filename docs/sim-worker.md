@@ -236,7 +236,8 @@ against the previous commit (served from `.work/base`) is exact.
 | 1 header, movers, lights, pan, sky, target | cfd0b02 | Island, Training: identical digests |
 | 2 HUD command list, InfoLink text | 1547238 | Island, Training: identical digests and pixels |
 | 3 sprite scan and render iterators | 29238ba | Island, Training, 02_NYC_Street: identical |
-| 4 actor meshes: simulation and page halves | (this commit) | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
+| 4 actor meshes: simulation and page halves | 9bab54d | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
+| 5 drawn set and stamps on the simulation side | (this commit) | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
@@ -261,12 +262,45 @@ both halves in one thread, for Play and the validators. Details:
   (`AssetStore.loaded`), so the GPU passes see every plan; textures and
   materials follow asynchronously and the binding draws with the latest
   record's state.
-- Still on the main thread's side of the bridge until step 5: the
-  LastRenderTime stamps (`onAfterRender` → `actorRenderFeedback`) and the
-  mirror passes' per-camera decisions (`passVisibility`), which the page
-  asks the simulation side for synchronously.
+- Until step 5 the LastRenderTime stamps (`onAfterRender` →
+  `actorRenderFeedback`) and the mirror passes' per-camera decisions
+  (`passVisibility`) still crossed back from the page synchronously.
 
 All Play's actors are on the GPU path on the maps checked (Training 65,
 Island 305, 02_NYC_Street 272, 10_Paris_Catacombs 241, 15_Area51_Bunker 217;
 `.work/tools/gpu-fallbacks.mjs`); the CPU path remains the reference and the
 fallback (the weapon view model, the software renderer).
+
+Step 5 (`drawn-set.mjs`, `play-camera.mjs`, `mirror-passes.mjs`,
+`mover-matrix.mjs`): the simulation side decides every pass's drawn set and
+stamps LastRenderTime itself, before the corona pass, the weapon and the
+HUD, where the page's draws stamped it. A HUD window reads LastRenderTime
+in its DrawWindow (`ActorDisplayWindow`, lines 640–770), so stamps sent back
+by the page and applied before the next tick would not be exact.
+
+- The Play camera is a function of PlayerCalcView and the render rect
+  whenever the world draws (`applyPlayFrame`); the session keeps its own and
+  follows the page's resizes.
+- The page sends its static brush and mirror meshes once
+  (`world.stampScene`): bounding spheres, matrices, the mirror planes and
+  their vertices. The simulation side poses the mover groups from the
+  mover states with the page's code (`moverGroupMatrix`), plans the mirror
+  passes with the page's planner (`planMirrorPasses`, now also used by
+  `mirrors.mjs`), the sky pass and the main pass, and tests movers, sprites
+  (three.js's sprite sphere, the texture size decoded on the simulation
+  side) and the actor layer's bindings (`drawnIn`: the GPU path's group
+  decisions, the CPU path's bounds) with three.js's frustum math.
+- The actor layer's decision for each mirror pass is computed there and
+  handed to the page in pass order, with the main frame's again after the
+  passes, as `mirrors.mjs` calls `updateActors`.
+- A host change: a binding is stamped once the simulation side has it, and a
+  sprite once its texture has decoded on the simulation side; before, both
+  waited for the page's own decode. The original loads synchronously, and
+  the simulation no longer depends on the page's timing. Under the fixed
+  clock this lands in the same frames (identical digests).
+- `?simVerify=1` compares the stamped set with what three.js's
+  `onAfterRender` reports in every pass (bindings and sprites the page has
+  not built yet are left out). It found one modelling error, fixed: an
+  iterator item slot a frame does not use kept its last drawn state on the
+  simulation side.
+- The weapon view model still stamps from its own draw (step 6).
