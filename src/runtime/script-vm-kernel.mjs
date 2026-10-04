@@ -196,5 +196,16 @@ export function createScriptVmKernel(instance, memory) {
       colourTables: (out, red, green, blue) => x.light_colour_tables(out >>> 0, red | 0, green | 0, blue | 0),
       modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
     }),
+    // URender::OccludeBsp (occlude.rs, docs/bsp-occlusion.md), driven by
+    // bsp-occlusion.mjs over a model and a work block from `alloc`.
+    occlusion: Object.freeze({
+      memory,
+      alloc,
+      free,
+      modelPtr: () => x.occ_model_ptr() >>> 0,
+      framePtr: () => x.occ_frame_ptr() >>> 0,
+      statusPtr: () => x.occ_status_ptr() >>> 0,
+      run: (work, bytes) => x.occ_run(work >>> 0, bytes >>> 0),
+    }),
   });
 }

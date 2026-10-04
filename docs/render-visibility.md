@@ -1,7 +1,7 @@
 # Original dynamic actor visibility
 
 This is a bounded recovery of the original renderer's actor admission path.
-It does **not** recover BSP occlusion or authorize distance/line-of-sight
+It does **not** recover BSP occlusion ([BSP occlusion](bsp-occlusion.md) does) or authorize distance/line-of-sight
 culling. The browser's broad mesh-frustum sphere is host culling, not the
 original visibility contract. Full original visibility remains incomplete.
 
