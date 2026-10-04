@@ -108,12 +108,12 @@ export function createMirrors(notes, displayGamma) {
   /** Whether render() would draw any mirror plane for this source camera:
    * the same plane side and floor-frustum predicate, evaluated early so the
    * actor layer knows reflected views may need off-screen actors. */
-  function mayRender(source) {
+  function mayRender(source, requested = null) {
     if (!planes.size) return false;
     for (const group of planes.values()) follow(group);
-    return mirrorsMayRender(source, [...planes.values()]);
+    return mirrorsMayRender(source, [...planes.values()], undefined, requested);
   }
-  function render(renderer, scene, source, { markers, updateActors, sky } = {}) {
+  function render(renderer, scene, source, { markers, updateActors, sky, requested = null } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
     if (!planes.size) return;
     for (const group of planes.values()) group.active.value = 0;
@@ -125,7 +125,7 @@ export function createMirrors(notes, displayGamma) {
     source.updateMatrixWorld();
     for (const group of planes.values()) for (const mesh of group.meshes) mesh.updateWorldMatrix(true, false);
     for (const group of planes.values()) follow(group);
-    if (!mayRender(source)) return;
+    if (!mayRender(source, requested)) return;
     renderer.getDrawingBufferSize(size);
     const target = renderer.getRenderTarget(), clearColor = renderer.getClearColor(new THREE.Color());
     const clearAlpha = renderer.getClearAlpha();
@@ -164,7 +164,7 @@ export function createMirrors(notes, displayGamma) {
       return result;
     }
     try {
-      const rendered = draw(planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh)));
+      const rendered = draw(planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh), requested));
       for (const group of planes.values()) group.active.value = 0;
       for (const { group, target } of rendered) { group.texture.value = target.texture; group.size.value.copy(size); group.active.value = 1; }
       if (sky) notes.add('Mirror views through sky-zone openings are not yet verified.');

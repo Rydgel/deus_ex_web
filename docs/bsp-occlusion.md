@@ -202,6 +202,50 @@ browser path drew the club behind the walls there: five mirror passes and
 The port takes 0.2–0.8 ms per frame in Node (Wasm), against 30–200 ms for the
 emulated original.
 
+## Play
+
+The simulation side runs OccludeBsp for the main frame every Play frame
+(`sim-session.mjs` `visibility`, in the worker by default): the master frame
+from PlayerCalcView's location, rotation and FOV at the render viewport's
+size, each zone's SkyZone presence (the zone's actor, else the LevelInfo,
+read from the running scripts), DrawWorld's frame counter (one per drawn
+frame) and TimeSeconds, with ShowFlags 0x800 and ShinySurfaces set. The map's
+model and each surface texture's PolyFlags are uploaded once
+(`sim-host.mjs`). The frame's `visibility` carries the nodes whose polygons
+the draw lists keep, the mirror requests' nodes and whether a sky frame was
+made. Then:
+
+* **World.** Each world triangle carries its BSP node
+  (`buildSurfaceGeometry`, world batches). The main pass draws each world
+  mesh through an index of its visible triangles in their own order
+  (`world-visibility.mjs`); the mirror and sky passes draw whole meshes,
+  since child frames' own occlusion is not ported. Mover meshes always draw.
+* **Mirrors.** The main frame's mirror children are the static mirror groups
+  OccludeBsp requested (`mirror-passes.mjs` `requestedGroup`), on the page
+  and in the drawn set alike; deeper levels and mover mirrors keep the
+  frustum test.
+* **Sky.** The sky frame is drawn only when OccludeBsp made one.
+* **Fog.** Only drawn surfaces get a fog map, as SetupForSurf does.
+
+Measurements on the Linux host (1920×1080, interleaved runs):
+
+| View | Before | After |
+| --- | --- | --- |
+| Paris Club spawn, down the tunnel (yaw 32768) | 15 fps, 65.6 ms; 5,632 mirror and 1,386 main calls; fog 11.8 ms | 59 fps, 15.8 ms; 224 mirror and 264 main calls; fog 0 |
+| Paris Club spawn, yaw 40960 | 18 fps, 55.5 ms | 50 fps, 19.6 ms |
+| UNATCO Island start, worker mode, page frame | 13.4–13.9 ms; 1,068 mirror calls | 8.4–8.8 ms; 268 mirror calls |
+
+The tunnel's remaining mirror passes are DeusExMover8 and DeusExMover11, mover
+mirrors waiting for the brush tracker; the remaining main calls are actors,
+whose occlusion waits for the dynamics.
+
+Pixels: deterministic runs (`validate-sim-split.mjs`, base build against
+this) give identical state digests; the last frames differ in 169 of about
+920,000 pixels on Island and 30 on Training, single pixels along polygon
+edges where the span rasterizer and the GPU disagree and the original's
+verdict now applies. Worker and inline modes give the same digests and
+pixels. Training's entrance floor mirror still reflects.
+
 ## Not yet ported
 
 Explicitly unsupported or pending:
@@ -210,8 +254,11 @@ Explicitly unsupported or pending:
   FDynamicFinalChunk::PreRender, hence `Frame->Sprite` and actor
   LastRenderTime. The model's `Dynamics` lists are empty.
 * Child frames: CreateChildFrame and the children's own OccludeBsp (mirror
-  and sky). Requests are reported with their spans.
+  and sky). Requests are reported with their spans; Play draws children
+  through the frustum.
 * The moving brush tracker (Level `+0xfc`): movers' polygons in the BSP.
+  Without it a closed door does not occlude, and mover mirrors keep the
+  frustum test.
 * LeafVolumetricLighting and the draw lists' Volumetrics.
 * WarpZoneInfo portals, span-based render devices, AMD3DClipBspSurf, frames
   taller than the 2880 raster lines (`0x10b50c08..0x10b56608`), and values

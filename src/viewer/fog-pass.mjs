@@ -57,7 +57,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     root, stats,
     /** A light-mapped level surface in a fog zone: its light-map record, atlas
      * tile and the surface triangles' view positions, light UVs and bounds. */
-    addSurface(record, tile, positions, lightUV, lightBounds) {
+    addSurface(record, tile, positions, lightUV, lightBounds, surfaceIndex = -1) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(lightUV, 3));
@@ -66,7 +66,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const fogPage = page(tile.page.index), mesh = new THREE.Mesh(geometry, material(fogPage));
       mesh.matrixAutoUpdate = false; mesh.visible = false; mesh.renderOrder = 1;
       root.add(mesh);
-      surfaces.push({ record, tile, mesh, fogPage, state: null });
+      surfaces.push({ record, tile, mesh, fogPage, state: null, surfaceIndex });
       stats.surfaces = surfaces.length;
     },
     /** A light with VolumeRadius > 0 (class defaults merged). */
@@ -78,8 +78,10 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     },
     /** One frame: `view` {location, rotation} is the frame's eye and view
      * rotation (FSceneNode Coords = ViewCoords / ViewRotation), `frustum`
-     * the drawn view's three.js frustum. */
-    update(view, frustum) {
+     * the drawn view's three.js frustum, `drawn` (optional) the main
+     * frame's drawn surfaces from OccludeBsp: SetupForSurf computes a fog
+     * map only for a surface DrawFrame draws. */
+    update(view, frustum, drawn = null) {
       stats.drawn = 0; stats.texels = 0;
       if (!surfaces.length || !lights.length) return;
       const [x, y, z] = getAxes(view.rotation.map(v => v | 0));
@@ -91,7 +93,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const state = { missFlag: 0 }, dirty = new Set();
       for (const surface of surfaces) {
         const { record, tile, mesh, fogPage } = surface;
-        if (frustum && !frustum.intersectsObject(mesh)) { mesh.visible = false; continue; }
+        if ((drawn && !drawn.has(surface.surfaceIndex)) || (frustum && !frustum.intersectsObject(mesh))) { mesh.visible = false; continue; }
         const { grid } = record.fogGrid();
         const input = { grid: { base: grid.start, stepU: grid.stepU, stepV: grid.stepV }, width: record.width, height: record.height,
           coords, lights: frameLights, state };

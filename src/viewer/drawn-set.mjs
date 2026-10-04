@@ -39,7 +39,8 @@ export function createDrawnSet(scene) {
   const groups = scene.mirrors.map(data => {
     const plane = new THREE.Plane(new THREE.Vector3(...data.plane.normal), data.plane.constant);
     const localPlane = data.localPlane ? new THREE.Plane(new THREE.Vector3(...data.localPlane.normal), data.localPlane.constant) : null;
-    return { key: data.key, moving: data.moving, plane, localPlane, matrix: mirrorMatrix(plane), meshes: data.meshes.map(meshOf) };
+    return { key: data.key, moving: data.moving, plane, localPlane, matrix: mirrorMatrix(plane), meshes: data.meshes.map(meshOf),
+      nodes: data.nodes ?? null };
   });
   const placeMirrors = () => {
     for (const group of groups) {
@@ -74,15 +75,16 @@ export function createDrawnSet(scene) {
     },
     /** Whether the mirror planes may draw for this camera (mirrors.mjs
      * mayRender): the actor layer then admits actors only children draw. */
-    mayRender: camera => mirrorsMayRender(camera, groups),
+    mayRender: (camera, requested = null) => mirrorsMayRender(camera, groups, undefined, requested),
     /** The frame's passes in draw order: the mirror children (when
      * `mirrors`), the sky frame (when `sky`) and the main frame (when
      * `drawWorld`), each with its camera and the mirror group it looks
-     * through. */
-    passes({ camera, sky, drawWorld, size, mirrors = true }) {
-      const passes = [], mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups);
+     * through; `requested` OccludeBsp's mirror requests (mirror-passes.mjs
+     * requestedGroup). */
+    passes({ camera, sky, drawWorld, size, mirrors = true, requested = null }) {
+      const passes = [], mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups, undefined, requested);
       if (mirrored)
-        for (const node of passOrder(planMirrorPasses(camera, groups, size)))
+        for (const node of passOrder(planMirrorPasses(camera, groups, size, undefined, requested)))
           passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node });
       if (sky) {
         skyCamera.copy(camera); skyCamera.position.fromArray(toView(sky.location));

@@ -981,6 +981,13 @@ window.deusExViewer = { status, framePhases(reset = true) {
 release() { if (held) held = 'releasing'; },
 /** ?sim=worker: resolves when no frame is in flight. */
 settled() { return simClient?.settled() ?? Promise.resolve(); },
+/** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
+ * node count, mirror requests, sky, and the world triangles it kept. */
+visibility() {
+  return lastVisibility ? { nodes: lastVisibility.nodes.length, zone: lastVisibility.zone, mirrors: [...lastVisibility.mirrors],
+    sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null,
+    groups: world?.mirrors.groups().map(group => ({ key: group.key, moving: Boolean(group.moving) })) ?? [] } : null;
+},
 stateDigest() {
   if (mode !== 'play' || !game) return null;
   if (simClient) return simClient.call('stateDigest');
@@ -1106,6 +1113,7 @@ function animate(time) {
 }
 /** Draws one simulation snapshot (null: no simulation, Inspect over the
  * world alone). */
+let lastVisibility = null;
 function drawFrame(snap, time) {
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
@@ -1178,7 +1186,12 @@ function drawFrame(snap, time) {
   // Light-map animation skips light maps outside the view unless a mirror
   // may draw them.
   camera.updateMatrixWorld();
-  const viewFrustum = world.mirrors.mayRender(camera) ? null : new THREE.Frustum().setFromProjectionMatrix(
+  // OccludeBsp's main frame (sim-session.mjs visibility, Play): the nodes
+  // it draws, its mirror child requests and whether it made a sky frame.
+  const visible = playing && !runtimeError ? frame?.visibility ?? null : null;
+  lastVisibility = visible;
+  const requested = visible ? new Set(visible.mirrors) : null;
+  const viewFrustum = world.mirrors.mayRender(camera, requested) ? null : new THREE.Frustum().setFromProjectionMatrix(
     new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   // The worker's snapshot animates textures at its frame's post time;
   // on the page the frame is now.
@@ -1193,7 +1206,8 @@ function drawFrame(snap, time) {
     const fogView = playerView ?? snap?.inspect?.view ?? { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] };
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
-        new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)));
+        new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
+        visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null);
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');
@@ -1211,7 +1225,7 @@ function drawFrame(snap, time) {
   phase('weapon');
   if (simVerify) for (const set of Object.values(drew)) set.clear();
   let passIndex = 0;
-  world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky,
+  world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
     updateActors: npcPreview && !runtimeError ? (position, passCamera, node) => {
       const decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
       if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
@@ -1237,7 +1251,11 @@ function drawFrame(snap, time) {
     if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
     framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
   }
-  if (drawWorld) renderer.render(scene, camera);
+  if (drawWorld) {
+    // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
+    if (visible) world.visibility.select(visible.nodes);
+    try { renderer.render(scene, camera); } finally { world.visibility.all(); }
+  }
   if (simVerify && !simClient && stampFrame) {
     const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),
       skipped: spriteScene?.skipped });

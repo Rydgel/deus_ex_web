@@ -64,7 +64,7 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
       geometry.setAttribute(name, new THREE.BufferAttribute(data, source.itemSize));
     }
     const lightUV = geometry.getAttribute('lightUV').array, layers = geometry.getAttribute('lightLayer').array;
-    const faces = [], faceMaterials = [];
+    const faces = [], faceMaterials = [], nodes = [];
     let at = 0;
     for (const mesh of meshes) {
       const count = mesh.geometry.getAttribute('position').count;
@@ -76,6 +76,7 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
         lightUV[i * 3 + 2] = selector * stride + (lightUV[i * 3 + 2] > .5 ? layers[i] + 1 : 0);
       at += count;
       faces.push(...mesh.userData.faces);
+      if (mesh.userData.nodes) nodes.push(...mesh.userData.nodes);
       for (let i = 0; i < mesh.userData.faces.length; i++) faceMaterials.push(mesh.material.userData);
     }
     geometry.computeBoundingSphere();
@@ -84,7 +85,8 @@ export function batchWorldMeshes(root, lightAtlas, enabled, gamma) {
     applyLightAtlas(material, null, enabled, gamma, null, false, array);
     applyTextureSelection(material, textures, stride);
     first.geometry.dispose(); first.geometry = geometry;
-    first.userData = {...first.userData, faces, faceMaterials, lightTextureStride: stride};
+    first.userData = {...first.userData, faces, faceMaterials, lightTextureStride: stride,
+      nodes: nodes.length === faces.length ? Int32Array.from(nodes) : undefined};
     for (const mesh of meshes.slice(1)) { mesh.removeFromParent(); mesh.geometry.dispose(); }
     stats.after -= meshes.length - 1; stats.batches++;
   }

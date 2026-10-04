@@ -16,6 +16,7 @@ import { sharedProceduralTextures } from './procedural-textures.mjs';
 import { createLightFrame } from '../runtime/static-lighting.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { createFogPass } from './fog-pass.mjs';
+import { createWorldVisibility } from './world-visibility.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {
@@ -235,7 +236,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         const g = buildSurfaceGeometry(model, ts, surfaceIndex, material.userData.width, material.userData.height);
         counts.degenerate += g.degenerate; counts.corrected += g.corrected;
         if (!g.positions.length) continue;
-        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], lightLayer: [], faces: [] });
+        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], lightLayer: [], faces: [], nodes: [] });
         const batch = batches.get(key);
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
         for (let i = 0; i < g.positions.length; i += 3) {
@@ -244,6 +245,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           batch.lightLayer.push(tile.page.index);
         }
         for (let i = 0; i < g.positions.length / 9; i++) batch.faces.push(surfaceIndex);
+        // Each triangle's BSP node (world-visibility.mjs).
+        batch.nodes.push(...g.nodes);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
         if (!actorName && lightmap && lit && (await zoneActor(zone)).fog) {
           const fogUV = [], fogBounds = [];
@@ -252,7 +255,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
             fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
-          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds);
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex);
         }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
@@ -284,7 +287,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // World-space geometry: an identity local matrix, never moved itself (a
       // mover's group carries the transform and forces its children).
       mesh.matrixAutoUpdate = false;
-      mesh.userData = { actor: actorName, faces: batch.faces, model: model.entry.name };
+      mesh.userData = { actor: actorName, faces: batch.faces, nodes: Int32Array.from(batch.nodes), model: model.entry.name };
       parent.add(mesh);
       batch.mirror?.meshes.push(mesh);
     }
@@ -317,6 +320,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
   const submissionBatches = batchOpaque ? batchWorldMeshes(root, lightAtlas, lightingEnabled, displayGamma) : null;
+  // The main frame's BSP visibility (world-visibility.mjs), after batching.
+  const visibility = createWorldVisibility(root, map.model.nodes.length);
   const markerPositions = map.actors.filter(a => a.values.Location && a.className !== 'Brush').flatMap(a => toView(a.values.Location));
   const markerGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(markerPositions, 3));
   const markerMaterial = new THREE.PointsMaterial({ color: '#efc176', size: 5, sizeAttenuation: false, depthTest: false });
@@ -349,6 +354,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   }
   const moverMatrix = new THREE.Matrix4();
   const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
+    visibility,
+    /** BSP node → surface index of the world model (bsp-occlusion.mjs results). */
+    nodeSurface: Int32Array.from(map.model.nodes, node => node.surface),
     /** Each mover group's brush matrix; a changed one updates its own and
      * its meshes' world matrices at once. A flag alone is not enough: a
      * mesh's updateWorldMatrix(true, false) (mirrors.mjs) recomputes the
@@ -386,7 +394,10 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         mirrors: mirrors.groups().map(group => ({ key: group.key, moving: group.moving,
           plane: { normal: group.plane.normal.toArray(), constant: group.plane.constant },
           localPlane: group.localPlane ? { normal: group.localPlane.normal.toArray(), constant: group.localPlane.constant } : null,
-          meshes: group.meshes.map(meshData) })),
+          meshes: group.meshes.map(meshData),
+          // The world BSP nodes of a static group's polygons: OccludeBsp's
+          // mirror child requests name one of them.
+          nodes: group.moving ? null : [...new Set(group.meshes.flatMap(mesh => mesh.userData.actor ? [] : [...(mesh.userData.nodes ?? [])]))] })),
       };
     },
     /** Play's per-frame moving lights (game.movingLights()) over the current

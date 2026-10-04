@@ -134,6 +134,13 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);
       return decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st);
     },
+    /** Each zone's SkyZone presence (`skies[i]` truthy: the zone's actor,
+     * or the LevelInfo for a zone without one, has a SkyZone; OccludeBsp
+     * reads it at 0x10b183a8 for a fake-backdrop polygon). */
+    setZoneSkies(skies) {
+      const u = words();
+      for (let i = 0; i < model.zones.length; i++) u[(zones >>> 2) + 4 * i + 2] = skies[i] ? 1 : 0;
+    },
     /** The live NodeFlags byte of node `i` (NF_PolyOccluded 8, NF_BoxOccluded 0x10). */
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
     /** Model.Zones[i].LastRenderTime bits. */

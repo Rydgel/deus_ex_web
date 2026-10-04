@@ -55,11 +55,34 @@ export function intersect(a, b) {
   return right > x && top > y ? { x, y, width: right - x, height: top - y } : null;
 }
 
+/** The world BSP nodes of a static mirror group (null for a moving one):
+ * `group.nodes` when given (drawn-set.mjs), else its world meshes' triangle
+ * nodes (world.mjs `userData.nodes`). */
+export function groupNodes(group) {
+  if (group.nodeSet !== undefined) return group.nodeSet;
+  const nodes = group.nodes !== undefined ? group.nodes
+    : group.moving ? null : group.meshes.flatMap(mesh => mesh.userData?.actor ? [] : [...(mesh.userData?.nodes ?? [])]);
+  return group.nodeSet = nodes ? new Set(nodes) : null;
+}
+
+/** Whether OccludeBsp asked for this group's child frame in the main frame
+ * (`requested`: the mirror requests' nodes; null when occlusion did not
+ * run). A moving group's polygons are not in the world BSP here (the brush
+ * tracker is not ported), so it keeps the frustum test. */
+export function requestedGroup(group, requested) {
+  if (!requested) return true;
+  const nodes = groupNodes(group);
+  if (!nodes) return true;
+  for (const node of requested) if (nodes.has(node)) return true;
+  return false;
+}
+
 /** Whether any mirror plane would draw for this source camera: the plane
  * side and frustum predicate of the first level, so the actor layer knows
  * reflected views may need off-screen actors. `visible(mesh)` is the mesh's
- * visibility. */
-export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible) {
+ * visibility; `requested` OccludeBsp's mirror requests (requestedGroup). */
+export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible, requested = null) {
+  if (requested) groups = groups.filter(group => requestedGroup(group, requested));
   if (!groups.length) return false;
   source.updateMatrixWorld();
   const frustum = new THREE.Frustum().setFromProjectionMatrix(
@@ -70,12 +93,13 @@ export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible)
   return false;
 }
 
-/** The children of the source view, recursively: for each, its group, its
+/** The children of the source view, recursively (the main frame's only
+ * those in `requested`, requestedGroup): for each, its group, its
  * camera (the source's projection, the reflected world matrix with odd
  * depths negated for submission), its depth, its scissor in its target's
  * pixels and its own children, which DrawFrame draws before it (0x10b1a336).
  * `size` is the drawing buffer's size. */
-export function planMirrorPasses(source, groups, size, visible = mesh => mesh.visible) {
+export function planMirrorPasses(source, groups, size, visible = mesh => mesh.visible, requested = null) {
   const passFrustum = new THREE.Frustum(), viewProjection = new THREE.Matrix4();
   function children(view) {
     if (view.depth >= MIRROR_RECURSION_LIMIT) return [];
@@ -83,6 +107,9 @@ export function planMirrorPasses(source, groups, size, visible = mesh => mesh.vi
     passFrustum.setFromProjectionMatrix(viewProjection);
     const eye = view.camera.position, found = [];
     for (const group of groups) {
+      // The main frame takes only the children OccludeBsp made; deeper
+      // levels keep the frustum test until child frames are occluded.
+      if (view.depth === 0 && !requestedGroup(group, requested)) continue;
       if (group === view.through || !(group.plane.distanceToPoint(eye) > 0) ||
         !group.meshes.some(mesh => visible(mesh) && passFrustum.intersectsObject(mesh))) continue;
       // Only the part of the mirror inside this frame's own region shows.

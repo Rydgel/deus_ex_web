@@ -21,12 +21,13 @@ export function buildSurfaceGeometry(model, triangles, surfaceIndex, width, heig
   const surface = model.surfaces[surfaceIndex];
   const sourceNormal = model.vectors[surface.normal];
   const normal = toView(sourceNormal);
-  const positions = [], normals = [], uvs = [];
+  const positions = [], normals = [], uvs = [], nodes = [];
   let degenerate = 0, corrected = 0;
   for (const triangle of triangles) {
     let p = triangle.points.map(index => model.points[index]);
     const alignment = dot(cross(sub(p[1], p[0]), sub(p[2], p[0])), sourceNormal);
     if (Math.abs(alignment) < 1e-6) { degenerate++; continue; }
+    nodes.push(triangle.node);
     // Align every polygon with its authored surface normal, then account for reflection.
     if (alignment > 0) p = [p[0], p[2], p[1]];
     else corrected++;
@@ -36,5 +37,5 @@ export function buildSurfaceGeometry(model, triangles, surfaceIndex, width, heig
     }
   }
   return { positions: new Float32Array(positions), normals: new Float32Array(normals),
-    uvs: new Float32Array(uvs), degenerate, corrected };
+    uvs: new Float32Array(uvs), nodes, degenerate, corrected };
 }

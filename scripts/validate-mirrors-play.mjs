@@ -151,6 +151,16 @@ try {
       runtime.writeNamed(player, 'ViewRotation', [0, yaw, 0]);
     }, c);
     await frames(90);
+    // The player's view can still be moving after the move (it took about
+    // 1.3 s in 02_NYC_Bar): wait until the eye has stayed put for 30 frames,
+    // since the mirror passes now follow OccludeBsp's requests for the actual
+    // view (docs/bsp-occlusion.md "Play").
+    await page.waitForFunction(() => {
+      const eye = window.deusExViewer.status().position?.join(), w = window.__mirrorEye ??= {eye: null, frames: 0};
+      w.frames = eye === w.eye ? w.frames + 1 : 0; w.eye = eye;
+      return w.frames >= 30;
+    }, null, {polling: 'raf', timeout: 60000});
+    await page.evaluate(() => { delete window.__mirrorEye; });
     const stale = c.stale ? await staleCheck(c) : null;
     const read = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(() => {
       const world = window.__deusMirrors.world, s = window.deusExViewer.status();

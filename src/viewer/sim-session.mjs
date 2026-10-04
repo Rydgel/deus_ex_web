@@ -46,6 +46,10 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // The corona scan (corona-scan.mjs) and the view model's simulation half
   // (weapon-overlay-sim.mjs), the frame's last world steps.
   let coronaScan = null, weaponSim = null, size = null;
+  // The original BSP occlusion (bsp-occlusion.mjs) and DrawWorld's frame
+  // counter (0x10b5a700), which schedules its bound tests.
+  let occlusion = null, drawWorlds = 0;
+  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
   const weaponFrustum = new THREE.Frustum(), weaponMatrix = new THREE.Matrix4();
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
@@ -114,6 +118,24 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     const zone = level.pointRegion(location)?.zone ?? info;
     const sky = runtime.readNamed(zone, 'SkyZone') ?? runtime.readNamed(info, 'SkyZone');
     return { location: [...runtime.readNamed(sky, 'Location')], rotation: [...runtime.readNamed(sky, 'Rotation')] };
+  }
+  // DrawWorld's OccludeBsp for the main frame (docs/bsp-occlusion.md
+  // "Play"): the master frame from the view at the render viewport's size,
+  // each zone's SkyZone, the frame counter and TimeSeconds. The nodes whose
+  // polygons the draw lists keep, the mirror child requests' nodes and
+  // whether a sky frame was made. ShowFlags 0x800 and the D3D device's
+  // ShinySurfaces are set in Play.
+  function visibility(view, width, height) {
+    const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
+    occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => Boolean(runtime.readNamed(zone ?? info, 'SkyZone'))));
+    const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
+    f32[0] = runtime.readNamed(info, 'TimeSeconds');
+    words[44] = ++drawWorlds; words[45] = u32[0]; words[46] = 3; words[47] = 0;
+    const result = occlusion.run(words), nodes = [];
+    for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
+    return { nodes: Uint32Array.from(nodes), zone: words[42],
+      mirrors: result.children.filter(child => child.kind === 'mirror').map(child => child.iNode),
+      sky: result.children.some(child => child.kind === 'sky') };
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
   // and queue (raw heap strings) and the displayBuffer's characters that
@@ -185,6 +207,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       moverActors = new Map(level.actors.filter(Boolean).map(actor => [actor.name, actor]));
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
+    setOcclusion(value) { occlusion = value; },
     setCoronas(scan) { coronaScan = scan; },
     setLipSync(channels) { lipSync = channels; },
     /** One frame of the simulation side (docs/sim-worker.md "Frame
@@ -244,7 +267,8 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       time('actors');
       if (drawn) {
         const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
-        const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect,
+        const requested = input.play && begun?.visibility ? new Set(begun.visibility.mirrors) : null;
+        const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
           actorPasses: Boolean(actorScene) && !stopped() });
         collect(stamps.errors);
         snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions };
@@ -302,7 +326,8 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         view.updateMatrixWorld();
         const frustum = new THREE.Frustum().setFromProjectionMatrix(
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
-        const children = drawn ? drawn.mayRender(view) : false;
+        const requested = !inspect && current?.visibility ? new Set(current.visibility.mirrors) : null;
+        const children = drawn ? drawn.mayRender(view, requested) : false;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, ...(pack ? { pack } : {}) });
       } catch (error) { failed = true; errors.push(plainError(error)); }
@@ -313,12 +338,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
      * it, before the corona pass, the weapon and the HUD. Returns the actor
      * layer's decision for each mirror pass in draw order and, when mirrors
      * drew, the main frame's again. `size` is the drawing buffer's. */
-    stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true }) {
+    stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null }) {
       const errors = [], passDecisions = [];
       let mainDecisions = null;
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), bindings: new Map(), weapon: new Set() };
       try {
-        const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors });
+        const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors, requested });
         // `actorPasses`: the page applies the actor layer's mirror pass
         // decisions (no runtime error); otherwise its last state draws.
         const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
@@ -436,7 +461,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (run && !stopped()) {
         try { game.tick(dt); lipSync?.update(dt); } catch (error) { fail(error); }
       }
-      const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, sky: null, target: null, pan: null };
+      const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, sky: null, target: null, pan: null, visibility: null };
       live.lights = null;
       try { frame.view = plainView(game.view()); lastViewLocation = frame.view.location; } catch (error) { fail(error); }
       if (frame.view && !stopped()) {
@@ -450,6 +475,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       // root window's render viewport is empty.
       if (!rect || (rect.render && rect.width > 0 && rect.height > 0)) {
         try { frame.sky = lastViewLocation ? sky(lastViewLocation) : null; } catch (error) { fail(error); }
+        if (occlusion && frame.view && !stopped()) {
+          try { frame.visibility = visibility(frame.view, rect ? rect.width : width, rect ? rect.height : height); }
+          catch (error) { fail(error); }
+          // DrawWorld draws the sky frame only when OccludeBsp made one.
+          if (frame.visibility && !frame.visibility.sky) frame.sky = null;
+        }
       }
       try { const target = game.target(); frame.target = target ? { label: target.label } : null; } catch (error) { fail(error); }
       try {

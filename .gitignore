@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 coverage/
 dist/
+.vite-cache/
 native/**/target/
 src/runtime/lodmesh-kernel.wasm
 src/runtime/script-vm.wasm

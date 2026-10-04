@@ -22,6 +22,8 @@ import { createCoronaScan } from './corona-scan.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { createLipSyncChannels } from '../runtime/galaxy-lipsync-channels.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
+import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
+import { readTexture } from '../unreal/textures.mjs';
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, onConversationSpeech = null, onAudioVoice = null, onProgress = () => {} }) {
@@ -60,6 +62,21 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     onCreate: creation => events.push({ kind: 'weapon-create', creation }), onRelease: id => events.push({ kind: 'weapon-release', id }) }));
   session.setCoronas(createCoronaScan(runtime, { model: map.model, exportName, player }));
   const lipSync = createLipSyncChannels({ kernel: (await loadScriptVmKernel()).lipsync, ...game.lipSyncServices() });
+  // The original BSP occlusion (bsp-occlusion.mjs) over the map's model, with
+  // each surface texture's PolyFlags (UTexture +0x80, the packed bools).
+  try {
+    const textureFlags = new Map(), surfaceTextureFlags = [];
+    for (const surface of map.model.surfaces) {
+      if (!surface.texture) { surfaceTextureFlags.push(0); continue; }
+      if (!textureFlags.has(surface.texture)) {
+        const object = await assets.resolve(asset, surface.texture);
+        textureFlags.set(surface.texture, texturePolyFlags(readTexture(object.asset, object.index).values));
+      }
+      surfaceTextureFlags.push(textureFlags.get(surface.texture));
+    }
+    session.setOcclusion(createBspOcclusion((await loadScriptVmKernel()).occlusion, map.model, { surfaceTextureFlags,
+      zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)) }));
+  } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
   session.setLipSync(lipSync);
   session.setPanZones(panZones);
   return { game, session, actorSim, meshLighting, lipSync, notes, events, hudTextures,
