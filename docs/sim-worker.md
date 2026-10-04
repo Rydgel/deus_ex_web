@@ -412,3 +412,15 @@ commands 0.16 ms, the words 0.05 ms). Against step 6: Island walking
 inline, Training with the crowbar and 02_NYC_Smug walking under
 `?sim=clone` give identical digests and frames; validate-gpu-mesh passes.
 
+Step 8, second part (`sim-host.mjs`): everything on the simulation side of
+a map load now comes from one function, `createSimHost`, in Play's
+construction order: the game, the mesh lighting view, the actor mesh
+layer's simulation half, the session, the view model's simulation half, the
+corona scan and the lip-sync channels. Its inputs are plain data from the
+page's world: the stamp scene, the pan zones, whether the map has mirrors,
+and the capacities of the page's GPU mesh instances. main.mjs builds only
+the page halves around it (the actor draw, the view model draw, the
+sprites, the coronas, the HUD). The worker will run the same function.
+Against step 6: Island, 02_NYC_Smug (walking and Inspect) and Training with
+the crowbar give identical digests and frames.
+

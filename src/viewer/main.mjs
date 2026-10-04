@@ -5,24 +5,19 @@ import { readGlobalConfigBool } from '../unreal/user-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
-import { createGame } from './game.mjs';
-import { createSimSession } from './sim-session.mjs';
+import { createSimHost } from './sim-host.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
-import { createCoronaScan } from './corona-scan.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
-import { createActorMeshScene } from './npc-mesh-preview.mjs';
+import { createActorMeshDraw } from './actor-mesh-draw.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
-import { createGpuMeshLayout, WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
-import { createWeaponOverlaySim } from './weapon-overlay-sim.mjs';
+import { WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
 import { packViews } from './mesh-frame-pack.mjs';
-import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
-import {createLipSyncChannels,mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
-import {loadScriptVmKernel} from '../runtime/script-vm-kernel.mjs';
+import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp } from './display-ramp.mjs';
 import { stateDigest } from '../runtime/state-digest.mjs';
@@ -140,7 +135,9 @@ const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let subtitlePreference = false;
-let game, sim = null, mode = 'play', paused = false, runtimeError = null;
+// The loaded map's simulation side (sim-host.mjs): `game` and its frame
+// session `sim`.
+let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null;
@@ -383,10 +380,7 @@ async function loadMap(name) {
   $('toast').textContent = '';stopInfoLinkPresentation();
   document.exitPointerLock?.(); keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextGame, nextNpcPreview, nextMeshLighting, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
-  // What the simulation hands the page between frames, in order (sim-session.mjs
-  // events): lighting changes and the mesh layers' creation and release records.
-  const simEvents = [];
+  let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
   try {
     const asset = await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -395,16 +389,27 @@ async function loadMap(name) {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
-    try {
-      nextGame = await createGame(nextMap, asset, assets, {
-        presentation:true, randomSeed,
-        subtitles: subtitlePreference,
-        onLightingChanged: changes => simEvents.push({ kind: 'lighting', changes }),
-        onConversationSpeech:event=>{void playConversationSpeech(event);},
-        onAudioVoice:event=>{void galaxyVoice(event);},
-      });
+    // The page's GPU mesh instances (docs/gpu-mesh.md): the level's and the
+    // view model's own; the simulation side keeps layouts with their
+    // capacities.
+    if(gpuMeshParam==='1'||gpuMeshParam!=='0'&&!softwareRenderer()){
+      try{nextGpuMesh=createGpuMesh(renderer);}
+      catch(error){nextWorld.notes.push(`GPU mesh path unavailable: ${error.message}`);}
+      if(nextGpuMesh){
+        try{nextWeaponGpu=createGpuMesh(renderer,WEAPON_GPU_MESH_CAPACITIES);}
+        catch(error){nextWorld.notes.push(`GPU mesh path unavailable for the view model: ${error.message}`);}
+      }
     }
-    catch (error) { nextWorld.notes.push(`Play mode unavailable: ${error.message}`); }
+    // The simulation side (sim-host.mjs): the game, the frame session, the
+    // mesh layers' simulation halves and lip sync.
+    nextHost = await createSimHost(nextMap, asset, assets, { randomSeed, subtitles: subtitlePreference,
+      stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(), childFrames: nextWorld.mirrors.stats.planes > 0,
+      gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
+      meshBackend: new URLSearchParams(location.search).get('meshBackend'),
+      onConversationSpeech: event => { void playConversationSpeech(event); }, onAudioVoice: event => { void galaxyVoice(event); },
+      onProgress: message => { $('gate-message').textContent = message; } });
+    nextWorld.notes.push(...nextHost.notes);
+    nextGame = nextHost.game; nextSim = nextHost.game ? nextHost.session : null;
     if(nextGame&&simVerify){
       // The simulation side stamps the movers it decides are drawn
       // (sim-session.mjs stamps); ?simVerify records what three.js drew.
@@ -415,69 +420,39 @@ async function loadMap(name) {
         if(actor)mesh.onAfterRender=()=>drew.movers.add(actor.name);
       });
     }
-    if(nextGame){
-      $('gate-message').textContent='Preparing original actor meshes…';
-      try{
-        const meshRuntime=nextGame.doors.scriptRuntime.runtime;
-        const exportIndexByName=new Map(asset.pkg.exports.map((entry,i)=>[entry.name,i+1]));
-        nextMeshLighting=createMeshLightingView(meshRuntime,()=>meshRuntime.levelFor(nextGame.player.collisionActor),
-          {exportName:ref=>asset.pkg.exports[ref-1]?.name,exportIndex:name=>exportIndexByName.get(name)});
-        if(gpuMeshParam==='1'||gpuMeshParam!=='0'&&!softwareRenderer()){
-          try{nextGpuMesh=createGpuMesh(renderer);}
-          catch(error){nextWorld.notes.push(`GPU mesh path unavailable: ${error.message}`);}
-        }
-        nextNpcPreview=await createActorMeshScene(nextGame.doors.scriptRuntime.runtime,assets,asset,{gpu:nextGpuMesh,
-          // Player start logs in a new player; follow the current one.
-          player:()=>nextGame.player.collisionActor,lighting:nextMeshLighting,displayGamma:nextWorld.displayGamma,
-          childFrames:nextWorld.mirrors.stats.planes>0,
-          feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{},route:event=>simEvents.push(event),
-          ...(new URLSearchParams(location.search).get('meshBackend')==='javascript'?{kernel:null}:{})});
-        nextMeshLighting.kernel=nextNpcPreview.kernel;
-        nextWorld.notes.push(`${nextNpcPreview.summary.npcs} NPC and ${nextNpcPreview.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
-        for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
-      }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
+    // The page halves: the actor mesh layer's draw (actor-mesh-draw.mjs),
+    // with the simulation side's bindings as Training's NPC focus list.
+    if(nextHost.actorSim){
+      const actorSim=nextHost.actorSim;
+      const draw=createActorMeshDraw(assets,{gpu:nextGpuMesh,lit:Boolean(nextHost.meshLighting),displayGamma:nextWorld.displayGamma,
+        feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{}});
+      const view=binding=>({summary:binding.summary,get location(){return binding.location;},get rotation(){return binding.rotation;}});
+      nextNpcPreview={root:draw.root,draw,summary:actorSim.summary,
+        get actors(){return actorSim.actors.map(view);},get npcActors(){return actorSim.npcActors.map(view);},
+        dispose(){draw.dispose();}};
     }
-    nextSim=nextGame?createSimSession(nextGame,{assets,events:simEvents}):null;
-    nextSim?.setScene(nextWorld.stampScene(),nextNpcPreview?.sim??null);
-    if(nextMeshLighting)nextSim?.setMeshLighting(nextMeshLighting);
-    const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
-    // The player's view model (weapon-overlay-sim.mjs, -draw.mjs), with a GPU
-    // mesh instance of its own: its passes run after the world's.
-    if(nextGame){
-      if(nextGpuMesh){
-        try{nextWeaponGpu=createGpuMesh(renderer,WEAPON_GPU_MESH_CAPACITIES);}
-        catch(error){nextWorld.notes.push(`GPU mesh path unavailable for the view model: ${error.message}`);}
-      }
-      nextWeaponDraw=createWeaponOverlayDraw(assets,{gpu:nextWeaponGpu,displayGamma:nextWorld.displayGamma,
-        feedback:handle=>simVerify?()=>drew.weapon.add(handle):()=>{}});
-      nextSim.setWeapon(await createWeaponOverlaySim(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
-        {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,
-          layout:nextWeaponGpu?createGpuMeshLayout(nextWeaponGpu.capacities):null,
-          onCreate:creation=>simEvents.push({kind:'weapon-create',creation}),onRelease:id=>simEvents.push({kind:'weapon-release',id})}));
-    }
+    const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextHost.hudTextures}):null;
+    nextWeaponDraw=nextGame?createWeaponOverlayDraw(assets,{gpu:nextWeaponGpu,displayGamma:nextWorld.displayGamma,
+      feedback:handle=>simVerify?()=>drew.weapon.add(handle):()=>{}}):null;
     // Sprites and particles (docs/particles.md): the simulation's sprite scan
     // (sim-session.mjs sprites) drawn by the page.
     const nextSpriteScene=nextSim?createSpriteScene(assets,new TextureStore(assets),{
       displayGamma:nextWorld.displayGamma,stamp:simVerify?handle=>drew.sprites.add(handle):()=>{}}):null;
     // Light coronas (docs/coronas.md), DrawFrame's corona pass: the
     // simulation's scan (corona-scan.mjs) drawn by the page.
-    nextSim?.setCoronas(createCoronaScan(nextGame.doors.scriptRuntime.runtime,{model:nextMap.model,
-      exportName:ref=>asset.pkg.exports[ref-1]?.name,player:()=>nextGame.player.collisionActor}));
     const nextCoronaPass=nextGame?createCoronaPass(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
     // The simulation's first events (the startup lighting, the admitted
     // actors' creation records) reach the page before the first frame, whose
     // actor meshes are built while the map loads.
-    if(nextSim){
-      applySimEvents(crossing(nextSim.takeEvents()),{world:nextWorld,actors:nextNpcPreview,weapon:nextWeaponDraw});
-      await nextNpcPreview?.draw.ready();
-    }
+    applySimEvents(crossing(nextHost.events.splice(0)),{world:nextWorld,actors:nextNpcPreview,weapon:nextWeaponDraw});
+    await nextNpcPreview?.draw.ready();
     coronaPass?.dispose();coronaPass=nextCoronaPass;
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
-    meshLighting=nextMeshLighting??null;
+    meshLighting=nextHost.meshLighting??null;
     hudRenderer?.dispose();hudRenderer=nextHud;
-    sim?.dispose();weaponDraw?.dispose();weaponGpu?.dispose();
+    simHost?.dispose();simHost=nextHost;weaponDraw?.dispose();weaponGpu?.dispose();
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     gpuMesh?.dispose();gpuMesh=nextGpuMesh;
@@ -488,11 +463,10 @@ async function loadMap(name) {
     })));
     $('npc-status').hidden=!npcPreview;
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
-    const lipSyncKernel = nextGame ? (await loadScriptVmKernel()).lipsync : null;
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
-    lipSync = nextGame ? createLipSyncChannels({kernel: lipSyncKernel, ...nextGame.lipSyncServices()}) : null;
-    game = nextGame;sim = nextSim;sim?.setPanZones(world.panZoneNames());sim?.setLipSync(lipSync);runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    lipSync = nextGame ? nextHost.lipSync : null;
+    game = nextGame;sim = nextSim;runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
@@ -505,7 +479,7 @@ async function loadMap(name) {
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
   } catch (error) {
-    if(nextSim&&nextSim!==sim)nextSim.dispose();
+    if(nextHost&&nextHost!==simHost)nextHost.dispose?.();
     if(nextWeaponDraw&&nextWeaponDraw!==weaponDraw)nextWeaponDraw.dispose();
     if(nextWeaponGpu&&nextWeaponGpu!==weaponGpu)nextWeaponGpu.dispose();
     if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();
