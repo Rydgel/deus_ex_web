@@ -6,10 +6,11 @@
 import * as THREE from 'three';
 import {squareRootTable} from '../runtime/dynamic-lighting.mjs';
 import {rsqrtTables} from '../runtime/mesh-lighting.mjs';
+import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
 import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,POSE_FRAGMENT,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV}
   from './gpu-mesh-glsl.mjs';
 
-export const GPU_MESH_MAX_LIGHTS=32;
+export {GPU_MESH_MAX_LIGHTS} from './gpu-mesh-layout.mjs';
 const PARAMS_U=9,PARAMS_F=12,STATES=5;
 const f32=Math.fround;
 // 1.4 as a float-float pair: the kernel multiplies ScaleGlow by the f64 1.4.
@@ -17,32 +18,13 @@ const GLOW_HI=f32(1.4),GLOW_LO=f32(1.4-GLOW_HI);
 // D3D diffuse scale (diffuse_channel): float(255*float(1/255)).
 if(f32(255*f32(1/255))!==1)throw new Error('GPU mesh assumes the D3D diffuse scale is exactly 1');
 
-class Arena {
-  constructor(capacity){this.capacity=capacity;this.free=[[0,capacity]];this.high=0;}
-  allocate(count){
-    for(let i=0;i<this.free.length;i++){
-      const [start,size]=this.free[i];
-      if(size<count)continue;
-      if(size===count)this.free.splice(i,1);else this.free[i]=[start+count,size-count];
-      this.high=Math.max(this.high,start+count);
-      return start;
-    }
-    return -1;
-  }
-  release(start,count){
-    this.free.push([start,count]);this.free.sort((a,b)=>a[0]-b[0]);
-    const merged=[];
-    for(const range of this.free){
-      const last=merged.at(-1);
-      if(last&&last[0]+last[1]===range[0])last[1]+=range[1];else merged.push([...range]);
-    }
-    this.free=merged;
-  }
-}
 const rowsFor=count=>Math.max(1,Math.ceil(count/WIDTH));
 
-export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,cornerCapacity=3<<18,
-  slotCapacity=2048,keyframeCapacity=1<<21,lightCapacity=1<<15}={}) {
+/** `layout` (gpu-mesh-layout.mjs) places the texels; the simulation side
+ * keeps its own with the same capacities and calls. */
+export function createGpuMesh(renderer,capacities={}) {
+  const layout=createGpuMeshLayout(capacities);
+  const {vertexCapacity,faceCapacity,cornerCapacity,slotCapacity,keyframeCapacity,lightCapacity}=layout.capacities;
   const gl=renderer.getContext();
   if(!(gl instanceof WebGL2RenderingContext))throw new Error('GPU mesh requires WebGL2');
   if(!gl.getExtension('EXT_color_buffer_float'))throw new Error('GPU mesh requires EXT_color_buffer_float');
@@ -150,65 +132,30 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
   // ---- CPU mirrors of the per-frame parameters
   const slotParamsU=new Uint32Array(slotCapacity*PARAMS_U*4),slotParamsF=new Float32Array(slotCapacity*PARAMS_F*4);
   const lightData=new Float32Array(lightCapacity*8);
-  let lightCount=0,dirtyLow=Infinity,dirtyHigh=-1;
-  const slots=new Arena(slotCapacity),vertexArena=new Arena(vertexCapacity),faceArena=new Arena(faceCapacity);
-  const cornerArena=new Arena(cornerCapacity),keyArena=new Arena(keyframeCapacity);
-  const meshVertexArena=new Arena(vertexCapacity),meshFaceArena=new Arena(faceCapacity),adjacencyArena=new Arena(faceCapacity*3);
+  let dirtyLow=Infinity,dirtyHigh=-1;
+  const {slots,vertexArena,faceArena,cornerArena,keyArena}=layout.arenas;
   let frame=0,current=0,camera=null;
-  const meshes=new Map();
 
-  /** Static mesh data shared by every actor with that mesh. `faces` are
-   * [v0, v1, v2, flags] words in draw order (DrawLodMesh's face list). */
-  function mesh(payload,faceWords) {
-    let record=meshes.get(payload);
-    if(record){record.users++;return record;}
-    const V=payload.frameVertexCount,F=faceWords.length/4;
-    const data=payload.arrays.get(0x60).load().data;
-    const keyTexels=data.byteLength/8;
-    if(!Number.isInteger(keyTexels)||data.byteOffset%2)throw new Error('GPU mesh: unexpected keyframe record layout');
-    const keyBase=keyArena.allocate(keyTexels),faceBase=meshFaceArena.allocate(F),vertBase=meshVertexArena.allocate(V);
-    // Adjacency: each vertex's faces in ascending face order, with repeats
-    // for a vertex that occurs twice in a face, as the kernel adds it twice.
-    const lists=Array.from({length:V},()=>[]);
-    for(let face=0;face<F;face++)for(let k=0;k<3;k++){
-      const v=faceWords[face*4+k];
-      if(v>=V)throw new Error('GPU mesh: face vertex out of range');
-      lists[v].push(face);
-    }
-    const total=lists.reduce((sum,list)=>sum+list.length,0);
-    const adjacencyBase=adjacencyArena.allocate(total+4);
-    if([keyBase,faceBase,vertBase,adjacencyBase].some(base=>base<0))
-      throw new Error('GPU mesh capacity exceeded');
-    const adjacencyStart=Math.ceil(adjacencyBase/4)*4;
-    uploadRange(keyframes,keyBase,4,new Int16Array(data.buffer,data.byteOffset,keyTexels*4));
-    uploadRange(meshFaces,faceBase,4,Uint32Array.from(faceWords));
-    const vertexWords=new Uint32Array(V*2),listWords=new Uint32Array(Math.ceil(total/4)*4);
+  /** A new mesh record's static data: keyframes, faces and the vertex
+   * adjacency lists (gpu-mesh-layout.mjs). */
+  function uploadMesh(record,faceWords) {
+    const data=record.payload.arrays.get(0x60).load().data;
+    uploadRange(keyframes,record.keyBase,4,new Int16Array(data.buffer,data.byteOffset,record.keyTexels*4));
+    uploadRange(meshFaces,record.faceBase,4,Uint32Array.from(faceWords));
+    const total=record.adjacencyCount-4,vertexWords=new Uint32Array(record.V*2),listWords=new Uint32Array(Math.ceil(total/4)*4);
     let at=0;
-    lists.forEach((list,v)=>{vertexWords[v*2]=adjacencyStart+at;vertexWords[v*2+1]=list.length;listWords.set(list,at);at+=list.length;});
-    uploadRange(meshVertices,vertBase,2,vertexWords);
-    if(listWords.length)uploadRange(adjacency,adjacencyStart/4,4,listWords);
-    record={payload,V,F,keyBase,faceBase,vertBase,adjacencyBase,adjacencyCount:total+4,keyTexels,users:1};
-    meshes.set(payload,record);
-    return record;
-  }
-  function releaseMesh(record) {
-    if(--record.users>0)return;
-    meshes.delete(record.payload);
-    keyArena.release(record.keyBase,record.keyTexels);meshFaceArena.release(record.faceBase,record.F);
-    meshVertexArena.release(record.vertBase,record.V);adjacencyArena.release(record.adjacencyBase,record.adjacencyCount);
+    record.lists.forEach((list,v)=>{vertexWords[v*2]=record.adjacencyStart+at;vertexWords[v*2+1]=list.length;listWords.set(list,at);at+=list.length;});
+    uploadRange(meshVertices,record.vertBase,2,vertexWords);
+    if(listWords.length)uploadRange(adjacency,record.adjacencyStart/4,4,listWords);
   }
   const mapWords=(slot,count)=>{const words=new Uint32Array(count*2);for(let i=0;i<count;i++){words[i*2]=slot+1;words[i*2+1]=i;}return words;};
 
-  /** An actor slot: its vertex, face and corner texel ranges. */
-  function allocate(payload,faceWords,{environment=false}={}) {
-    const record=mesh(payload,faceWords);
-    const slot=slots.allocate(1),vbase=vertexArena.allocate(record.V),fbase=faceArena.allocate(record.F);
-    const cbase=cornerArena.allocate(record.F*3);
-    if([slot,vbase,fbase,cbase].some(base=>base<0)){
-      if(slot>=0)slots.release(slot,1);if(vbase>=0)vertexArena.release(vbase,record.V);
-      if(fbase>=0)faceArena.release(fbase,record.F);if(cbase>=0)cornerArena.release(cbase,record.F*3);
-      releaseMesh(record);throw new Error('GPU mesh capacity exceeded');
-    }
+  /** An actor slot: its vertex, face and corner texel ranges. `key` names
+   * the mesh resource (one record per mesh); by default the payload. */
+  function allocate(payload,faceWords,{environment=false,key=payload}={}) {
+    const handle=layout.allocate(key,payload,faceWords,{environment});
+    const {slot,vbase,fbase,cbase,mesh:record}=handle;
+    if(handle.created)uploadMesh(record,faceWords);
     uploadRange(vertexMap,vbase,2,mapWords(slot,record.V));
     uploadRange(faceMap,fbase,2,mapWords(slot,record.F));
     uploadRange(cornerMap,cbase,2,mapWords(slot,record.F*3));
@@ -217,27 +164,25 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
     u[12]=environment?1:0;
     slotParamsF.subarray(slot*PARAMS_F*4,(slot+1)*PARAMS_F*4).fill(0);
     touch(slot);
-    return {slot,vbase,fbase,cbase,mesh:record,environment,released:false};
+    return handle;
   }
   function release(handle) {
-    if(handle.released)return;handle.released=true;
-    const {slot,vbase,fbase,cbase,mesh:record}=handle;
+    if(handle.released)return;
+    const {vbase,fbase,cbase,mesh:record}=handle;
     uploadRange(vertexMap,vbase,2,new Uint32Array(record.V*2));
     uploadRange(faceMap,fbase,2,new Uint32Array(record.F*2));
     uploadRange(cornerMap,cbase,2,new Uint32Array(record.F*6));
-    vertexArena.release(vbase,record.V);faceArena.release(fbase,record.F);cornerArena.release(cbase,record.F*3);
-    slots.release(slot,1);releaseMesh(record);
+    layout.release(handle);
   }
   function touch(slot){dirtyLow=Math.min(dirtyLow,slot);dirtyHigh=Math.max(dirtyHigh,slot);}
   /** This frame's GetFrame plan (lodmesh-frame.mjs planLodMeshFrame). */
   function setPose(handle,plan) {
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
-    if(plan.channels.some(op=>op.fill))throw new Error('GPU mesh: tween count expansion is CPU-only');
+    layout.checkPose(handle,plan);
     for(let row=0;row<4;row++)for(let i=0;i<3;i++)slotParamsF[fl+row*4+i]=plan.matrix[row][i];
     for(let i=0;i<3;i++)slotParamsF[fl+16+i]=plan.origin[i];
     for(let k=0;k<STATES;k++){slotParamsU.fill(0,u+(4+k)*4,u+(5+k)*4);slotParamsF[fl+(5+k)*4]=0;}
     for(const op of plan.channels){
-      if(op.count!==handle.mesh.V)throw new Error('GPU mesh: partial GetFrame counts are CPU-only');
       const k=op.channel+1;
       slotParamsU.set([op.tween?2:1,op.first,op.second,op.blend?1:0],u+(4+k)*4);
       slotParamsF[fl+(5+k)*4]=op.alpha;
@@ -247,8 +192,9 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
   }
   /** SetupForActor's result for this frame (mesh-lighting-view setupMesh). */
   function setLighting(handle,{flags,ambient,scaleGlow,unlit,lights}) {
-    if(lights.length>GPU_MESH_MAX_LIGHTS)return false;
-    if(lightCount+lights.length>lightCapacity)return false;
+    const reserved=layout.reserveLights(lights.length);
+    if(!reserved)return false;
+    let lightCount=reserved.start;
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
     slotParamsU[u+8]=flags>>>0;slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=frame+1;
     slotParamsU[u+12+1]=lights.length;
@@ -303,7 +249,7 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
       upload(paramsU,0,dirtyLow,PARAMS_U,rows,slotParamsU.subarray(dirtyLow*PARAMS_U*4,(dirtyHigh+1)*PARAMS_U*4));
       upload(paramsF,0,dirtyLow,PARAMS_F,rows,slotParamsF.subarray(dirtyLow*PARAMS_F*4,(dirtyHigh+1)*PARAMS_F*4));
     }
-    if(lightCount)uploadRange(lightTexture,0,4,lightData.subarray(0,lightCount*8));
+    if(layout.lightCount)uploadRange(lightTexture,0,4,lightData.subarray(0,layout.lightCount*8));
     // The frame numbers written by setPose/setLighting were frame+1 before
     // the increment above; they now equal `frame`.
     gl.bindVertexArray(vao);
@@ -336,7 +282,7 @@ export function createGpuMesh(renderer,{vertexCapacity=1<<17,faceCapacity=1<<18,
     gl.bindVertexArray(null);
     shared.deusPose.value.sourceTexture=next[0].handle;
     renderer.resetState();
-    dirtyLow=Infinity;dirtyHigh=-1;lightCount=0;
+    dirtyLow=Infinity;dirtyHigh=-1;layout.endFrame();
   }
 
   /** Validation only: the draw shader's environmentUV for every vertex of
@@ -379,9 +325,10 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
   }
 
   return {allocate,release,setPose,setLighting,setCamera,setViewCamera,run,read,environmentUVs,shared,
+    capacities:layout.capacities,
     get frame(){return frame;},
     stats:()=>({slots:slots.high,vertices:vertexArena.high,faces:faceArena.high,corners:cornerArena.high,
-      keyframes:keyArena.high,meshes:meshes.size}),
+      keyframes:keyArena.high,meshes:layout.meshes.size}),
     dispose(){
       for(const target of [tables,keyframes,meshFaces,meshVertices,adjacency,vertexMap,faceMap,cornerMap,paramsU,paramsF,
         lightTexture,...pose.flat(),faceNormals,environmentFaces,vertexLight,environmentNormals,corners])gl.deleteTexture(target.handle);

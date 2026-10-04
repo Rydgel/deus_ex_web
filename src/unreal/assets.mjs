@@ -9,6 +9,8 @@ export class AssetStore {
     this.sourceFiles = [];
     this.files = new Map();
     this.packages = new Map();
+    // Packages whose load has finished, for synchronous callers (loaded()).
+    this.ready = new Map();
     this.configFiles = [];
     // Installed native libraries by lowercase leaf name (System/*.dll), for
     // UPackage::BindPackage's appGetDllHandle. Only names are needed.
@@ -39,10 +41,13 @@ export class AssetStore {
         return { name: file.name, path: file.path, bytes, pkg, exportsByPath };
       })();
       this.packages.set(key, pending);
-      pending.catch(() => this.packages.delete(key));
+      pending.then(value => this.ready.set(key, value), () => this.packages.delete(key));
     }
     return this.packages.get(key);
   }
+
+  /** A package already loaded by get(), or undefined. */
+  loaded(name) { return this.ready.get(name.toLowerCase()); }
 
   async resolve(asset, ref) {
     const entry = objectAt(asset.pkg, ref);

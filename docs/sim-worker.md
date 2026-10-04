@@ -219,3 +219,54 @@ Wasm kernels; the simulation does not write the decoded model.
   and cross-origin isolation headers.
 - The previews in main.mjs (Training helpers) call the runtime directly; in
   worker mode they become worker commands or stay inline-only.
+
+## Progress
+
+`scripts/validate-sim-split.mjs` is the check for every step: it loads a
+map with `?hold=1&seed=1` under a paused Playwright clock, releases the
+frame loop at a fixed time, steps 16 ms frames (walking) and compares the
+state digest (`src/runtime/state-digest.mjs`, every script property of
+every Level.Actors entry) at checkpoints and the last frame's pixels. The
+same page twice gives identical digests and pixels, so the comparison
+against the previous commit (served from `.work/base`) is exact.
+
+| Step | Commit | Check |
+|---|---|---|
+| Harness: `?seed=`, `?hold=1`, state digest | f4fb698 | same page: identical; a different seed differs at the first checkpoint |
+| 1 header, movers, lights, pan, sky, target | cfd0b02 | Island, Training: identical digests |
+| 2 HUD command list, InfoLink text | 1547238 | Island, Training: identical digests and pixels |
+| 3 sprite scan and render iterators | 29238ba | Island, Training, 02_NYC_Street: identical |
+| 4 actor meshes: simulation and page halves | (this commit) | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
+
+Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
+mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
+bounds and frustum decisions, SetupForActor, the CPU lighting pass) and
+`actor-mesh-draw.mjs` (three.js objects, batches, GPU slots, from creation
+and frame records). `npc-mesh-preview.mjs` keeps `createActorMeshScene`,
+`createTrainingNpcPreview` and `createActorMeshPreview` as wrappers that run
+both halves in one thread, for Play and the validators. Details:
+
+- `gpu-mesh-layout.mjs` holds the GPU mesh path's texel allocation and
+  light limits without GL; the page's `gpu-mesh.mjs` and the simulation
+  side each keep one. The simulation side plans the first GetFrame at
+  admission and allocates the slot when the binding is complete, so both
+  sides allocate in creation-record order; a binding whose slot does not
+  fit materializes its plan (the output getLodMeshFrame gives).
+- Both sides resolve a face group's skin with `resolveMeshSkin`
+  (`actor-mesh-skins.mjs`), so a skin the page cannot draw drops the group
+  on both sides; the page decodes the mesh payload from its own asset
+  store (`decodeLodMeshPayload`, the runtime's serializer).
+- The page allocates a binding's GPU slot and applies its first plan when
+  the creation record arrives, synchronously when the package is loaded
+  (`AssetStore.loaded`), so the GPU passes see every plan; textures and
+  materials follow asynchronously and the binding draws with the latest
+  record's state.
+- Still on the main thread's side of the bridge until step 5: the
+  LastRenderTime stamps (`onAfterRender` → `actorRenderFeedback`) and the
+  mirror passes' per-camera decisions (`passVisibility`), which the page
+  asks the simulation side for synchronously.
+
+All Play's actors are on the GPU path on the maps checked (Training 65,
+Island 305, 02_NYC_Street 272, 10_Paris_Catacombs 241, 15_Area51_Bunker 217;
+`.work/tools/gpu-fallbacks.mjs`); the CPU path remains the reference and the
+fallback (the weapon view model, the software renderer).
