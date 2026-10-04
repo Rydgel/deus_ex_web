@@ -159,7 +159,11 @@ host behavior.
   `game` keep this mode.
 - `?sim=clone`: inline, with the snapshot passed through `structuredClone`,
   proving that it carries only plain data.
-- `?sim=worker`: the default once verified.
+- `?sim=worker`: the simulation in the worker (step 8). Verified, and
+  still opt-in. The Training previews, the NPC focus list and
+  `?simVerify=1` need the page modes, and the validators that patch
+  main.mjs to read `game` load the page without `?sim=` (the inline
+  default).
 - `?simVerify=1` (inline only): every frame, the page also reads the live
   runtime the way the drawing modules read it today and compares with the
   snapshot, and three's own culling records the set `onAfterRender` would
@@ -256,6 +260,11 @@ depends on asynchronous loading. It is not a usable comparison map.
 | 5 drawn set and stamps on the simulation side | adf3c68 | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
 | 6 coronas and the view model on the simulation side; the view model on the GPU path | 26cf7c1 | against step 5: Island and 02_NYC_Smug walking, Training with the crowbar (CPU path before, GPU path now): identical; against f4fb698: Training (walking, crowbar), 02_NYC_Street, 02_NYC_Smug: identical frames (drawing buffer); `?simVerify=1` with the crowbar |
 | 7 one `sim.frame()` per frame, events queue, `?sim=clone` | 6342c8e | against step 6, inline and `?sim=clone`: Island and 02_NYC_Smug walking, Training with the crowbar, 02_NYC_Smug in Inspect (free camera flying): identical; `?simVerify=1&sim=clone` with the crowbar |
+| 8a frame plans and lighting packed into one buffer | a7a5b1d | against step 6: Island, Training with the crowbar, 02_NYC_Smug (inline and clone): identical |
+| 8b `sim-host.mjs` builds the simulation side | ad6e73e | against step 6: Island, Smug (walking, Inspect), Training with the crowbar: identical |
+| 8c `?sim=worker` | a66e55c | against step 6 inline: Island, Training, Smug walking and Inspect under the worker: identical digests and frames |
+| 8d snapshots wait in order, posts on late arrival | aad53b8 | lockstep unchanged (Island identical) |
+| 8e the worker merges posts | d4a934c | lockstep unchanged (Island, Training, Smug Inspect identical) |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
