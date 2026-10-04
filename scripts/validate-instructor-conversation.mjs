@@ -9,6 +9,7 @@ import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createHudRenderer} from '../src/viewer/hud.mjs';
+import {plainHudCommands} from '../src/viewer/sim-session.mjs';
 import {createTrainingNpcPreview} from '../src/viewer/npc-mesh-preview.mjs';
 import {WINDOW_TEXT_OFFSETS} from '../src/runtime/script-window-text.mjs';
 import {WINDOW_DESTROY_OFFSETS} from '../src/runtime/script-window-destroy.mjs';
@@ -27,9 +28,10 @@ const tick=(n=1,input=idle)=>{
  if(yaw!==undefined||pitch!==undefined)fixture.place([...game.player.position],{yaw:yaw??0,pitch:pitch??0,zeroVelocity:false});
  fixture.driveLegacy(keys);fixture.tick(n);
 };
-const shell=await host.infoLinkShell(),hud=await createHudRenderer(game.hud,assets,shell);
-const render=()=>hud.render({clearDepth(){},render(){}},1000,700,null,
- {location:game.player.eye,rotation:game.player.viewRotation,fov:75});
+const shell=await host.infoLinkShell(),hud=await createHudRenderer({assets});
+// The simulation paints the window tree; the page draws its plain commands.
+const render=()=>hud.render({clearDepth(){},render(){}},1000,700,plainHudCommands(game.hud.commands(1000,700,
+ {location:game.player.eye,rotation:game.player.viewRotation,fov:75})));
 const preview=await createTrainingNpcPreview(runtime,assets,asset,{kernel:null});
 assert.equal(preview.summary.errors.length,0,JSON.stringify(preview.summary.errors));
 assert.equal(preview.actors.length,18);

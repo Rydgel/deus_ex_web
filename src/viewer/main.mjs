@@ -222,20 +222,16 @@ function stopInfoLinkPresentation(){
   stopGalaxyVoices();
   $('infolink-shell').hidden=true;
 }
-// Accessibility mirrors native TextWindow contents. The pixels are emitted
-// only by the recovered native HUD/GC tree; no independent playback timeline.
-function updateInfoLinkAccessibility(){
-  const bridge=game?.doors?.scriptRuntime,host=bridge?.windowHost;
-  if(!host?.hud)return;
-  const runtime=bridge.runtime,read=(o,k)=>runtime.readNamed(o,k);
-  const info=read(host.hud,'infoLink');
-  $('infolink-shell').hidden=!info;
+// Accessibility mirrors native TextWindow contents (the simulation frame's
+// infoLink, sim-session.mjs). The pixels are emitted only by the recovered
+// native HUD/GC tree; no independent playback timeline.
+function updateInfoLinkAccessibility(info){
   if(!info)return;
-  const text=read(info,'winText');
-  $('infolink-title').textContent=host.raw.read(read(info,'winName'),0x168,'string');
-  $('infolink-queued').textContent=host.raw.read(read(info,'winQueued'),0x168,'string');
-  // Native displayBuffer contains the characters that have actually appeared.
-  $('infolink-text').textContent=host.computerText(text);
+  $('infolink-shell').hidden=!info.visible;
+  if(!info.visible)return;
+  $('infolink-title').textContent=info.title;
+  $('infolink-queued').textContent=info.queued;
+  $('infolink-text').textContent=info.text;
 }
 // Play's screen shape: the window's own, or a fixed one centred in it (like
 // choosing a 1024x768 or 1680x1050 resolution in the original). The root
@@ -407,7 +403,8 @@ async function loadMap(name) {
         for(const error of nextNpcPreview.summary.errors)nextWorld.notes.push(`${error.actor}: ${error.message}`);
       }catch(error){nextWorld.notes.push(`Actor meshes unavailable: ${error.message}`);}
     }
-    const nextHud=nextGame?.hud?await createHudRenderer(nextGame.hud,assets,await nextGame.doors.scriptRuntime.infoLinkShell()):null;
+    const nextSim=nextGame?createSimSession(nextGame):null;
+    const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextSim.hudTextures()}):null;
     if(nextGame)nextWeaponViewModel=await createWeaponViewModel(nextGame.doors.scriptRuntime.runtime,assets,()=>nextGame.player.collisionActor,
       {kernel:nextNpcPreview?.kernel??null,lighting:nextMeshLighting??null,displayGamma:nextWorld.displayGamma});
     // Sprites and particles (docs/particles.md), drawn from the live level.
@@ -457,7 +454,7 @@ async function loadMap(name) {
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
     lipSync = nextGame ? createLipSyncChannels({kernel: lipSyncKernel, ...nextGame.lipSyncServices()}) : null;
-    game = nextGame;sim = game ? createSimSession(game) : null;sim?.setPanZones(world.panZoneNames());runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
+    game = nextGame;sim = nextSim;sim?.setPanZones(world.panZoneNames());runtimeError=null; $('mode').options[0].disabled = !game; setMode(game ? mode : 'inspect'); paused = false;
     const training = Boolean(game) && name === '00_Training';
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
@@ -1062,8 +1059,11 @@ function animate(time) {
     }
     phase('weapon');
     if(mode==='play'&&hudRenderer&&playerView){
-      hudRenderer.render(renderer,renderer.domElement.width,renderer.domElement.height,null,playerView);
-      updateInfoLinkAccessibility();
+      const width=renderer.domElement.width,height=renderer.domElement.height;
+      const hudFrame=sim.hud({width,height,view:playerView});
+      for(const error of hudFrame.errors)pauseForRuntimeError(error);
+      hudRenderer.render(renderer,width,height,hudFrame.commands);
+      updateInfoLinkAccessibility(hudFrame.infoLink);
     }
     framePhases.hudCalls += drawCalls() - calls;
     phase('hud');

@@ -4,17 +4,22 @@
 // steps 16 ms frames one at a time, optionally holding the forward key, and
 // compares the state digest (src/runtime/state-digest.mjs) at checkpoints.
 // The first pair is the same page twice, which shows the scenario is
-// deterministic; the second compares page A with page B. Host measurement
-// of the page, not an original-game reference.
+// deterministic; the second compares page A with page B. A screenshot after
+// the last frame is compared too, when the same page reproduces its own
+// pixels (texture decoding is asynchronous). Host measurement of the page,
+// not an original-game reference.
 //
 //   node scripts/validate-sim-split.mjs [--a URL] [--b URL] [--map 01_NYC_UNATCOIsland]
 //     [--frames 240] [--every 60] [--walk] [--query a=1&b=2] [--query-a ...] [--query-b ...]
+//     [--shots DIR] (writes each run's last frame as DIR/<hash>.png)
 //
 // Without --a, a Vite server for this tree serves A; without --b, B is A.
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
+import {createHash} from 'node:crypto';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
+import {writeFile} from 'node:fs/promises';
 import {gameDirectory} from './game-directory.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -64,7 +69,9 @@ async function run(browser, url) {
         if (state.error) break;
       }
     }
-    return {url, digests, errors};
+    const png = await page.locator('#scene').screenshot(), shot = createHash('sha256').update(png).digest('hex').slice(0, 16);
+    if (option('shots', null)) await writeFile(`${option('shots', null)}/${shot}.png`, png);
+    return {url, digests, shot, errors};
   } finally { await page.close(); }
 }
 
@@ -83,4 +90,7 @@ for (const side of [report.a, report.again, report.b]) {
 const sequence = side => side.digests.map(d => `${d.frame}:${d.digest}`).join(' ');
 assert.equal(sequence(report.again), sequence(report.a), 'the same page twice gives the same digests (deterministic scenario)');
 assert.equal(sequence(report.b), sequence(report.a), 'page B gives page A\'s digests');
-console.log(`validate-sim-split: PASS (${map}, ${frames} frames${walk ? ' walking' : ''}, ${report.a.digests.length} digests)`);
+const pixels = report.again.shot === report.a.shot;
+if (pixels) assert.equal(report.b.shot, report.a.shot, 'page B draws page A\'s last frame');
+else console.log('validate-sim-split: the same page drew different last frames; pixels not compared');
+console.log(`validate-sim-split: PASS (${map}, ${frames} frames${walk ? ' walking' : ''}, ${report.a.digests.length} digests${pixels ? ', same pixels' : ''})`);

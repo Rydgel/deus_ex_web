@@ -1,11 +1,26 @@
 /** Original HUD tiles composited after the world, in original logical pixels.
  * Uses the existing renderer so DSTY_Translucent blends with the actual world.
+ * The commands are the simulation's plain GC commands (sim-session.mjs hud);
+ * their textures decode here from the page's own asset store.
  */
 import * as THREE from 'three';
-export async function createHudRenderer(hud){
+import {TextureStore} from '../unreal/textures.mjs';
+export async function createHudRenderer({assets,preload=[]}){
   const scene=new THREE.Scene(),camera=new THREE.OrthographicCamera(0,1,0,1,-1,1);
   const textures=new Map(),materials=new Map(),batches=[];
+  const images=new Map(),pending=new Map(),store=new TextureStore(assets);
   let count=0,current=null,pendingError=null;
+  async function imageFor(ref){
+    if(images.has(ref.key))return images.get(ref.key);
+    if(!pending.has(ref.key))pending.set(ref.key,(async()=>{
+      const data=await store.get(await assets.get(ref.package),ref.index,'point'),image={key:ref.key,...data.mips[0]};
+      images.set(ref.key,image);return image;
+    })());
+    return pending.get(ref.key);
+  }
+  // The textures the HUD's construction reached decode before its first
+  // frame; a texture a later DrawWindow submits first draws once decoded.
+  await Promise.all(preload.map(imageFor));
   function material(image,style){
     const key=`${image.key}:${style}`;
     if(!textures.has(image.key)){
@@ -71,12 +86,12 @@ export async function createHudRenderer(hud){
     const tint=attrs.tint.array,r=color[0]/255,g=color[1]/255,b=color[2]/255;
     for(let i=p;i<p+18;i+=3){tint[i]=r;tint[i+1]=g;tint[i+2]=b;}
   }
-  function render(renderer,width,height,dialog=null,view=null){
+  function render(renderer,width,height,commands){
     if(pendingError)throw pendingError;
     count=0;current=null;camera.right=width;camera.bottom=height;camera.updateProjectionMatrix();
-    for(const command of hud.commands(width,height,view)){
-      const image=hud.images.get(command.texture.key);
-      if(!image){void hud.imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
+    for(const command of commands){
+      const image=images.get(command.texture.key);
+      if(!image){void imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
       draw({...command,image});
     }
     for(let i=0;i<count;i++){

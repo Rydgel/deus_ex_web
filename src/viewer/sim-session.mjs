@@ -9,6 +9,15 @@ import { handleOf } from '../runtime/script-object-handles.mjs';
 export const plainError = error => ({ name: error?.name ?? 'Error', message: String(error?.message ?? error),
   stack: error?.stack ?? null, travel: error?.travel ?? null, partial: error?.partial ?? null });
 
+/** A HUD texture reference as plain data: the page decodes it from its own
+ * asset store. */
+export const plainTexture = ref => ({ key: ref.key, package: ref.asset.name, index: ref.index });
+/** The window host's GC draw commands (script-window-host.mjs callVirtual)
+ * as plain data. */
+export const plainHudCommands = commands => commands.map(command => ({ texture: plainTexture(command.texture),
+  x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
+  ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
+
 export function createSimSession(game) {
   const runtime = game.doors.scriptRuntime.runtime;
   let failed = false, panZones = [], lastViewLocation = null;
@@ -38,11 +47,43 @@ export function createSimSession(game) {
     const sky = runtime.readNamed(zone, 'SkyZone') ?? runtime.readNamed(info, 'SkyZone');
     return { location: [...runtime.readNamed(sky, 'Location')], rotation: [...runtime.readNamed(sky, 'Rotation')] };
   }
+  // Accessibility mirrors native TextWindow contents: the window, its title
+  // and queue (raw heap strings) and the displayBuffer's characters that
+  // have actually appeared.
+  function infoLinkText() {
+    const host = game.doors.scriptRuntime.windowHost;
+    if (!host?.hud) return null;
+    const read = (object, name) => runtime.readNamed(object, name), info = read(host.hud, 'infoLink');
+    if (!info) return { visible: false };
+    return { visible: true, title: host.raw.read(read(info, 'winName'), 0x168, 'string'),
+      queued: host.raw.read(read(info, 'winQueued'), 0x168, 'string'), text: host.computerText(read(info, 'winText')) };
+  }
   return {
     live,
     /** The zone names whose live pan speeds the world's auto-panned surfaces
      * read (world.pannedZoneNames). */
     setPanZones(names) { panZones = [...names]; },
+    /** The textures the HUD's construction already reached, for the page to
+     * decode before the first frame (createPlayHud did the same). */
+    hudTextures() {
+      return [...game.hud.host.resourceImages.values()].filter(resource => resource.kind === 'texture')
+        .map(resource => plainTexture(resource.ref));
+    },
+    /** The HUD frame after the world's: the window tree's paint
+     * (DrawWindow/PostDrawWindow and the GC natives) as plain GC commands,
+     * Galaxy's update after it (game.mjs: UGameEngine::Draw updates audio
+     * after the frame), then the InfoLink text the page mirrors for
+     * accessibility. An error stops the simulation like the frame's other
+     * steps. */
+    hud({ width, height, view }) {
+      const errors = [];
+      let commands = [], infoLink = null;
+      try {
+        commands = plainHudCommands(game.hud.commands(width, height, view));
+        infoLink = infoLinkText();
+      } catch (error) { failed = true; errors.push(plainError(error)); }
+      return { errors, commands, infoLink };
+    },
     /** PlayerCalcView outside a frame (mode changes, Player start). */
     view() { const view = plainView(game.view()); lastViewLocation = view.location; return view; },
     movers,
