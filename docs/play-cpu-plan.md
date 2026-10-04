@@ -221,7 +221,10 @@ on the page's main thread.
     build-std setup.
   - The gain is bounded by those loops' size once Phases 1–2 are done.
 - **Simulation and drawing overlapped (Phase 7, the user's decision).**
-  Planned on 2026-10-03, after Phase 4's ports stopped showing in fps. The
+  Planned on 2026-10-03, after Phase 4's ports stopped showing in fps;
+  started on 2026-10-04. The design, revised after an inventory of the
+  viewer's simulation accesses, is [Simulation worker](sim-worker.md); the
+  estimates below are the first ones. The
   frame today is the sum of both halves; overlapped, it is the longer one.
   - Drawing is not read-only here: the HUD runs UnrealScript, render
     iterators fire events and move actors, and LastRenderTime stamps feed the
@@ -236,8 +239,8 @@ on the page's main thread.
     work can move to one over an OffscreenCanvas. The runtime already runs
     without a page (bench-sim, the validators), and Wasm instantiates in a
     worker as it does in Node, so the simulation in a worker is the shorter
-    path. Input and sounds then cross as message queues, as do the DOM
-    pieces of the DataLink and window host (about ten runtime files).
+    path. Input and sounds then cross as message queues. (No runtime file
+    uses the DOM; the DataLink's DOM mirror is main.mjs's.)
   - The boundary: the viewer calls 46 runtime and game entry points today
     (`readNamed`, `namedReference`, `levelFor`, `prepareMesh`,
     `getActorMeshTexture`, `movingLights`, `renderViewport`, `surfacePan`,
