@@ -137,6 +137,9 @@ try {
     size:`${width}x${height}`,dpr,noMirrors,noMeshLighting,noSky,noSimulation,fixedDt:fixedDt||null,
     intervalMs:{mean:+(intervals.reduce((a,b)=>a+b,0)/measured).toFixed(2),median:pct(.5),p95:pct(.95),max:pct(1),
       missedVsync:intervals.filter(ms=>ms>20).length},
+    // Drawn frames (deusExViewer.framePhases draws): with ?sim=worker a
+    // display frame without a new snapshot draws nothing.
+    drawIntervalMs:phaseTotals.draws?+(intervals.reduce((a,b)=>a+b,0)/phaseTotals.draws).toFixed(2):null,
     phases:Object.fromEntries(Object.entries(phaseTotals).filter(([key,value])=>typeof value==='number'&&key!=='frames')
       .map(([key,value])=>[key,+(value/Math.max(1,phaseTotals.frames)).toFixed(2)])),
     cpuMsPerFrame:profile?{sampled:perFrame(sampled),...Object.fromEntries([...buckets].sort((a,b)=>b[1]-a[1])

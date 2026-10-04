@@ -20,6 +20,7 @@
  * Evidence and remaining boundaries: docs/script-window-host.md.
  */
 import {createNativeHeap} from './script-native-heap.mjs';
+import {hostNow} from './host-clock.mjs';
 import {bumpReceiverEpoch} from './receiver-epoch.mjs';
 import {nativeWindowLayout, NATIVE_WINDOW_CLASS_SIZES} from './script-window-native-layout.mjs';
 import * as T from './script-window-tree-natives.mjs';
@@ -345,7 +346,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   ]);
   const boundaryLog = [];
   const timerNodes = new Set();
-  let lastTickTime=performance.now()/1000;
+  let lastTickTime=hostNow()/1000;
   const W = {
     heap,
     u8: (o, off) => heap.read(o, off, 'u8'), u16: (o, off) => heap.read(o, off, 'u16'),
@@ -370,7 +371,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     mouseClickLog: win => boundaryLog.push({log:'GLog',text:`Assigning Last Button Window to ${objectFullName(win)}`}),
     canvasComputeRenderSize: () => {},
     // XRootWindow::GetWindowsTickOffset(0) 0x1003a3b0 over the host clock.
-    tickOffset:()=>Timers.windowsTickOffset(performance.now()/1000,lastTickTime),
+    tickOffset:()=>Timers.windowsTickOffset(hostNow()/1000,lastTickTime),
     // XWindow::AddTimer's GMalloc(0x20): a registered node, so pointer walks
     // of the timer lists (XWindow::CleanUp) resolve it.
     allocTimerNode:()=>{const node={windowTimerNode:true};heap.allocate(node,Timers.WINDOW_TIMER.size);timerNodes.add(node);return node;},
@@ -1455,7 +1456,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,
-    tick(root,seconds){lastTickTime=performance.now()/1000;T.rootTick(W,root,f(seconds));},
+    tick(root,seconds){lastTickTime=hostNow()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
     consoleCommands,

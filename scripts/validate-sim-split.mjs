@@ -57,14 +57,21 @@ async function run(browser, url) {
     if (!text.includes(from)) throw new Error('validate-sim-split: the page\'s renderer construction changed');
     await route.fulfill({response, body: text.replace(from, 'antialias: true, preserveDrawingBuffer: true })')});
   });
+  // The page bars hidden (main.mjs setUiHidden): the canvas is the whole
+  // window, whatever the toolbar holds in a mode (?sim=worker has no
+  // previews menu).
+  await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   try {
     await page.clock.install({time: INSTALL});
     await page.goto(url);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
-    await page.locator('#map').selectOption(map);
+    // The page bars are hidden, so the menus are set through the DOM.
+    const choose = (id, value) => page.evaluate(([id, value]) => { const menu = document.getElementById(id); menu.value = value;
+      menu.dispatchEvent(new Event('change')); }, [id, value]);
+    await choose('map', map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
       map, {timeout: 240000});
-    if (viewMode !== 'play') await page.locator('#mode').selectOption(viewMode);
+    if (viewMode !== 'play') await choose('mode', viewMode);
     // A viewer preview (main.mjs previews, e.g. Training's weapon) while the
     // frame loop is held; it needs no frames.
     if (preview) {
@@ -78,9 +85,11 @@ async function run(browser, url) {
     const digests = [];
     for (let frame = 1; frame <= frames; frame++) {
       await page.clock.runFor(16);
+      // ?sim=worker draws each frame when the worker's snapshot arrives.
+      await page.evaluate(() => window.deusExViewer.settled?.());
       if (frame % every === 0 || frame === frames) {
-        const state = await page.evaluate(() => ({digest: window.deusExViewer.stateDigest(),
-          error: window.deusExViewer.status().runtimeError?.message ?? null}));
+        const state = await page.evaluate(async () => ({digest: await window.deusExViewer.stateDigest(),
+          error: window.deusExViewer.status().runtimeError?.message ?? null, camera: window.deusExViewer.status().position}));
         digests.push({frame, ...state});
         if (state.error) break;
       }

@@ -1,4 +1,5 @@
 import {farMoveMode} from './script-vm-render.mjs';
+import {hostNow} from './host-clock.mjs';
 import { execUpdateParticles } from './script-particles.mjs';
 import {setWindowHeightNative} from './script-window-size.mjs';
 import {setTileWindow} from './script-window-tile.mjs';
@@ -362,7 +363,7 @@ export class ScriptRuntime {
       // the host's appSeconds; the mip bias is UBitmap::__Client's
       // TextureLODSet from the installed WindowsClient config.
       resourceServices:{
-        seconds:()=>globalThis.performance.now()/1000,
+        seconds:()=>hostNow()/1000,
         getLazyLoad:()=>this.lazyLoad,setLazyLoad:value=>{this.lazyLoad=value;},
         mipBias:(texture,lodSet)=>{
           const config=this.classLoader.graph.config;

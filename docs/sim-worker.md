@@ -424,3 +424,59 @@ sprites, the coronas, the HUD). The worker will run the same function.
 Against step 6: Island, 02_NYC_Smug (walking and Inspect) and Training with
 the crowbar give identical digests and frames.
 
+Step 8, third part (`sim-worker.mjs`, `sim-client.mjs`, `host-clock.mjs`):
+`?sim=worker` runs the simulation side in a module worker.
+
+- **Boot.** The page hands the worker its `DEUS_EX_*` switches and the
+  game files (File objects from the folder picker, or the dev server's
+  URLs). The worker imports the runtime after setting the switches, then
+  builds each map with `createSimHost` from the same plain options the
+  page uses inline. The page decodes the map for its own world.
+- **Frames.** At most one frame is in flight. At a display frame the page
+  posts frame N+1 if snapshot N has arrived, then draws N, so the worker
+  simulates while the page draws. A display frame that posts nothing adds
+  its dt to the next post. A display frame without a new snapshot draws
+  nothing. Snapshots carry the id of their map load, and the page drops a
+  snapshot of an earlier load (a frame that was in flight when another map
+  loaded).
+- **Clocks.** Galaxy's update clock, the window host's tick offset, the
+  resource services' seconds and LevelInfo's date fields read
+  `host-clock.mjs`. In the worker it follows the page's clocks at the
+  frame's post, frozen for the frame; on the page it is the browser's own,
+  as before.
+- **Input.** Keys, buttons, mouse motion, window pointer samples and input
+  resets queue on the page and run at the start of the worker's next
+  frame, in arrival order. The page's synchronous decisions use the
+  answers of the last snapshot: per key code, whether the last press was
+  handled or consumed (a key not yet seen counts as handled, so it is
+  prevented); for the pointer, whether a modal held the mouse.
+- **Audio.** Galaxy's voice events and the conversation speech events
+  cross with the snapshot. A voice's sound bytes cross once per sound key;
+  a speech's bytes once per line. Both are sliced from the package's
+  buffer. Galaxy's lip-sync channels live in the worker and start and stop
+  at the speech event. The page sends the decoded PCM, the mixer position
+  at each post, and the stops and clears from its playback.
+- **Calls.** Player start (`reset`, then the movers and PlayerCalcView),
+  the mode change's PlayerCalcView and `stateDigest` are processed in order
+  with the frames.
+- **Inspect.** The snapshot carries the camera its frame was culled for,
+  and the page draws it with that camera.
+- **Page clocks.** The page's texture animation (procedural textures,
+  texture frames) runs at the snapshot's post time, the time of the frame
+  it draws; on the page modes it reads the clock as before.
+- **Map load.** The map counts as ready once the worker's replies to the
+  mode change and Player start (PlayerCalcView) have pointed the camera; on
+  the page they are synchronous. A late reply had moved the free camera
+  back one step after Inspect's first frame.
+- **Checks.** Against step 6 inline (`.work/base`), `?sim=worker` gives
+  identical digests and frames on Island and 02_NYC_Smug walking, Training,
+  and Smug in Inspect with the free camera flying.
+- **Page only.** The Training previews, the NPC focus list and
+  `?simVerify=1` drive or read the runtime directly, so they stay on the
+  page modes.
+- **Lockstep.** With `?hold=1` the page draws each snapshot as it arrives,
+  and `deusExViewer.settled()` resolves once no frame is in flight.
+  validate-sim-split waits for it after each step. It awaits `stateDigest`
+  (a promise in worker mode), hides the page bars so the canvas is the
+  whole window in every mode, and sets the menus through the DOM.
+

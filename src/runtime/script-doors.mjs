@@ -1,4 +1,5 @@
 import { preparePlayerLogin } from './script-player-login.mjs';
+import { hostDate } from './host-clock.mjs';
 import { preparePlayerDumpStore } from './script-player-dump.mjs';
 import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
@@ -1370,7 +1371,7 @@ export async function createScriptDoors({
     beginTick: () => { initScriptRunaway(); return {}; },
     endTick: () => {},
     updateTime: info => {
-      const now = new Date();
+      const now = hostDate();
       for (const [name,value] of Object.entries({Year:now.getFullYear(),Month:now.getMonth()+1,
         Day:now.getDate(),DayOfWeek:now.getDay(),Hour:now.getHours(),Minute:now.getMinutes(),
         Second:now.getSeconds(),Millisecond:now.getMilliseconds()})) runtime.writeNamed(info,name,value);

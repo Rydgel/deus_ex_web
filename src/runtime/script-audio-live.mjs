@@ -1,4 +1,5 @@
 import {createGalaxyAudio} from './galaxy-audio.mjs';
+import {hostNow} from './host-clock.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';
 import {buildWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
@@ -149,7 +150,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
 
   /** UGameEngine::Draw's Audio->Update (0x1038f638) for the frame's view. */
   function update(view) {
-    const now = performance.now() / 1000;
+    const now = hostNow() / 1000;
     const elapsed = last === null ? 0 : now - last;
     last = now;
     if (!player() || !view) return;

@@ -11,6 +11,9 @@ export default defineConfig({
     watch: { ignored: ['**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**', '**/.work/**', '**/.claude/worktrees/**'] },
     fs: { deny: ['.env', '.env.*', '**/.git/**', '**/Deus Ex*/**', '**/game/**', '**/reports/**', '**/.cache/**', '**/.work/**', '**/.claude/worktrees/**'] } },
   preview: { host: '127.0.0.1', port: 5174, strictPort: true },
+  // The simulation worker (src/viewer/sim-worker.mjs) imports its runtime
+  // modules dynamically once the page's switches are set.
+  worker: { format: 'es' },
   plugins: [{
     name: 'local-deus-ex-data',
     async configureServer(server) {
