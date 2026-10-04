@@ -37,6 +37,9 @@ DYNAMICS_CACHE, FRAME_COUNTER = 0x10b5a6f0, 0x10b5a700
 # URender::Init (0x10b13460): PointCache (GMalloc 0xfa000, stamps = Stamp),
 # DynamicsCache (GMalloc 0x80000, zeroed) and VectorMem (FMemStack).
 POINT_CACHE, STAMP, VECTOR_MEM = 0x10b56a10, 0x10b56a0c, 0x10b5a6e0
+# Dynamics: GRender, the FDynamicSprite constructor (0x10b233c0) and the
+# thunk of its Setup call (0x10b23431 -> 0x10b010e6 -> 0x10b23910).
+GRENDER, SPRITE_CTOR, SPRITE_SETUP = 0x10b5a718, 0x10b233c0, 0x10b010e6
 CREATE_MASTER_FRAME, OCCLUDE_BSP = 0x10b15690, 0x10b173d0
 CORE_APPTAN = 0x10123260
 GMATH_CTOR = 0x10102978
@@ -74,6 +77,7 @@ class Occlusion(native.NativeCollision):
         self.trap_stub = self.code(b'\xf4')
         cpu.hook_add(UC_HOOK_CODE, self.on_child, begin=self.child_stub, end=self.child_stub)
         cpu.hook_add(UC_HOOK_CODE, self.on_trap_stub, begin=self.trap_stub, end=self.trap_stub)
+        cpu.hook_add(UC_HOOK_CODE, self.on_setup, begin=SPRITE_SETUP, end=SPRITE_SETUP)
         self.vtable = self.alloc(0xc0)
         cpu.mem_write(self.vtable, bytes(cpu.mem_read(URENDER_VTABLE, 0xc0)))
         self.write(self.vtable + 0x68, 'I', self.child_stub)
@@ -121,6 +125,19 @@ class Occlusion(native.NativeCollision):
             'nearClipBits': list(self.read(near_clip, '4I')), 'coordsBits': list(self.read(coords, '12I')),
             'boundsBits': list(self.read(bounds, '4I')) if bounds else None,
             'span': self.span(span)})
+
+    def on_setup(self, cpu, address, size, data):
+        """FDynamicSprite::Setup with the case's screen rectangle and depth:
+        X1..Y2 at +0x98..+0xa4, Z at +8, returns 1 (thiscall, ret 4)."""
+        sprite = cpu.reg_read(UC_X86_REG_ECX)
+        x1, y1, x2, y2, z = self.setup_values
+        self.write(sprite + 0x98, '4i', x1, y1, x2, y2)
+        self.write(sprite + 8, 'I', z)
+        esp = cpu.reg_read(UC_X86_REG_ESP)
+        ret = self.read(esp, 'I')[0]
+        cpu.reg_write(UC_X86_REG_ESP, esp + 8)
+        cpu.reg_write(UC_X86_REG_EAX, 1)
+        cpu.reg_write(UC_X86_REG_EIP, ret)
 
     def call_native(self, address, this, args, control_word, count=0):
         esp = self.stack - 0x100
@@ -228,6 +245,7 @@ class Occlusion(native.NativeCollision):
         self.render = self.alloc(0x100)
         self.write(self.render, 'I', self.vtable)
         self.write(self.render + 0x28, 'I', FEXEC_VTABLE)
+        self.write(GRENDER, 'I', self.render)
         self.dynamics = self.alloc(0x80000)
         self.write(DYNAMICS_CACHE, 'I', self.dynamics)
         self.write(POINT_CACHE, 'I', self.alloc(0xfa000))  # stamps 0 = Stamp at Init
@@ -280,7 +298,26 @@ class Occlusion(native.NativeCollision):
                                  struct.pack('<I', self.viewport) + location + rotation + struct.pack('<I', 0), 0x037f)
         before = self.node_flags()
         times_before = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
+        # OccludeFrame's dynamics bookkeeping (0x10b1a0f6..0x10b1a14a), then
+        # the case's sprites in order (SetupDynamics), all at node 0.
+        post = self.alloc(4 * self.num_nodes)
+        self.write(self.render + 0xec, 'II', 0, post)
+        sprites = []
+        for sprite in case.get('sprites', []):
+            address = self.alloc(0x100)
+            self.setup_values = (sprite['x1'], sprite['y1'], sprite['x2'], sprite['y2'], sprite['zBits'])
+            self.call_native(SPRITE_CTOR, address, struct.pack('<3I', frame, 0, self.alloc(16)), 0x007f)
+            sprites.append(address)
         self.call_native(OCCLUDE_BSP, self.render, struct.pack('<I', frame), 0x007f)
+        drawn = []
+        link = self.read(frame + 0xa4, 'I')[0]
+        while link:
+            span = self.read(link + 0xc, 'I')[0]
+            drawn.append({'sprite': sprites.index(link), 'span': self.span(span)})
+            link = self.read(link + 0x10, 'I')[0]
+        count, post = self.read(self.render + 0xec, 'II')
+        for i in range(count):
+            self.write(self.read(post + 4 * i, 'I')[0], 'II', 0, 0)
         after = self.node_flags()
         times = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
         result = {
@@ -289,6 +326,8 @@ class Occlusion(native.NativeCollision):
                          list(self.read(frame + 0xfc, '28I')),
             'draw': [self.draw_list(self.read(frame + 0x98 + 4 * i, 'I')[0]) for i in range(3)],
             'children': self.children,
+            'sprites': drawn,
+            'uncoordsBits': list(self.read(frame + 0x64, '12I')),
             'zoneTimes': {i: t for i, (t, b) in enumerate(zip(times, times_before)) if t != b},
             'nodeFlags': {i: a for i, (a, b) in enumerate(zip(after, before)) if a != b},
             'counters': list(self.read(self.render + 0x68, '2I')),

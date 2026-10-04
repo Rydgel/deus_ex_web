@@ -48,8 +48,8 @@ export function occlusionFrameWords(f) {
   const words = [...f.coords, f.width, f.height, f.fx15, f.fy15, f.fx2, f.fy2, f.fx, f.fy, f.projZ, ...f.prj,
     ...f.viewSides, ...(f.nearClip ?? [0, 0, 0, 0]), f.mirror ?? 0x3f800000, f.zoneNumber, f.recursion ?? 0,
     f.frameCounter >>> 0, f.timeBits >>> 0, f.options ?? (OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES),
-    f.extraPolyFlags ?? 0];
-  if (words.length !== 48) throw new Error(`Occlusion frame has ${words.length} words`);
+    f.extraPolyFlags ?? 0, ...(f.uncoords ?? new Array(12).fill(0)), f.rprojZ ?? 0, 0, 0, 0];
+  if (words.length !== 64) throw new Error(`Occlusion frame has ${words.length} words`);
   return words.map(v => v >>> 0);
 }
 
@@ -61,8 +61,8 @@ function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom
   new Uint32Array(kernel.memory.buffer).set(input, kernel.masterInPtr() >>> 2);
   kernel.masterFrame();
   const words = new Uint32Array(kernel.memory.buffer);
-  return { fields: words.slice(kernel.masterOutPtr() >>> 2, (kernel.masterOutPtr() >>> 2) + 58),
-    frame: words.slice(kernel.framePtr() >>> 2, (kernel.framePtr() >>> 2) + 48) };
+  return { fields: words.slice(kernel.masterOutPtr() >>> 2, (kernel.masterOutPtr() >>> 2) + 70),
+    frame: words.slice(kernel.framePtr() >>> 2, (kernel.framePtr() >>> 2) + 64) };
 }
 
 /** Upload `model` (src/unreal/model.mjs readModel) with each surface's
@@ -79,7 +79,9 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   const nodes = block(64 * nodeCount), verts = block(8 * model.vertices.length),
     points = block(12 * pointCount + 16), surfs = block(8 * model.surfaces.length),
     bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64),
-    cache = block(8 * Math.max(1, pointCount)), work = block(workBytes);
+    cache = block(8 * Math.max(1, pointCount)), work = block(workBytes),
+    dynamics = block(12 * nodeCount);
+  let sprites = block(24 * 256), spriteCapacity = 256;
   const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
   {
     const u = words(), b = bytes();
@@ -110,7 +112,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     u.fill(0, cache >>> 2, (cache >>> 2) + 2 * Math.max(1, pointCount));
   }
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
-    bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe];
+    bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe,
+    dynamics, sprites, 0, 0];
   let stamp = 0;
   const setHeader = () => { header[14] = stamp; words().set(header, kernel.modelPtr() >>> 2); };
   return {
@@ -124,8 +127,19 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       setHeader();
       return masterFrame(kernel, camera);
     },
-    /** One OccludeBsp call on `frameWords` (occlusionFrameWords). */
-    run(frameWords) {
+    /** One OccludeBsp call on `frameWords` (occlusionFrameWords) with the
+     * frame's sprites (FDynamicSprite after Setup), in SetupDynamics order:
+     * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
+     * and Y1 < Y2 (Setup's checks). */
+    run(frameWords, frameSprites = []) {
+      if (frameSprites.length > spriteCapacity) {
+        free(sprites); blocks.splice(blocks.indexOf(sprites), 1);
+        spriteCapacity = frameSprites.length; sprites = block(24 * spriteCapacity); header[17] = sprites;
+      }
+      const u = words();
+      frameSprites.forEach((sprite, i) => u.set([sprite.key, sprite.x1, sprite.y1, sprite.x2, sprite.y2, sprite.zBits]
+        .map(v => v >>> 0), (sprites >>> 2) + 6 * i));
+      header[18] = frameSprites.length;
       setHeader();
       words().set(frameWords, kernel.framePtr() >>> 2);
       const status = kernel.run(work, workBytes);
@@ -150,9 +164,21 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
 }
 
 function decode(words, status) {
-  const draw = [[], [], []], children = [];
+  const draw = [[], [], []], children = [], sprites = [];
   let i = 0;
   while (i < words.length) {
+    if (words[i] === 0xfffffffe) {
+      const [key, startY, endY, valid] = words.slice(i + 1, i + 5);
+      i += 5;
+      const lines = [];
+      for (let y = startY | 0; y < (endY | 0); y++) {
+        const count = words[i++], line = [];
+        for (let k = 0; k < count; k++, i += 2) line.push([words[i] | 0, words[i + 1] | 0]);
+        lines.push(line);
+      }
+      sprites.push({ key, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines } });
+      continue;
+    }
     if (words[i] === 0xffffffff) {
       const [kind, iNode, iSurf, zone, startY, endY, valid] = words.slice(i + 1, i + 8);
       i += 8;
@@ -178,5 +204,5 @@ function decode(words, status) {
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
-  return { draw, children, nodesDraw: status[2], polysDraw: status[3] };
+  return { draw, children, sprites, nodesDraw: status[2], polysDraw: status[3] };
 }

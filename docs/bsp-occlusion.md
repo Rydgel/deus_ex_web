@@ -151,6 +151,36 @@ spans merge) are integer-only, signed comparisons. Under emulation, a Python
 translation matched the original's whole 8 MB heap after each of about
 18,000 randomized calls, with every non-exception instruction covered.
 
+## Dynamics: which actors are drawn
+
+SetupDynamics (`0x10b22d90`) builds, for each admitted actor in Level.Actors
+order, an FDynamicSprite (`0x10b233c0`): after Setup gives its integer screen
+rectangle and depth Z, the rectangle's corners are deprojected at Z
+(`(X − FX2)·RProj.Z·Z`) and taken to world space through Uncoords (the four
+proxy points), an FRasterPoly holds `[X1, X2)` on each line of `[Y1, Y2)`,
+and an FDynamicChunk for it goes to the head of node 0's list.
+`FDynamicChunk::Filter` (`0x10b23e30`), run by OccludeBsp at each visited
+node, classifies the proxies against the node plane at ±0.01, splits the
+raster along the plane's screen line in 16.16 fixed point when the proxies
+straddle it with at least two crossings, and sends each piece to the child
+on its side, or, at a missing child on an outside side, makes an
+FDynamicFinalChunk on that node side, kept in ascending Z. When OccludeBsp
+reaches a node side's leaf (the two PreRender sites),
+`FDynamicFinalChunk::PreRender` (`0x10b24740`) copies the piece's spans
+still free in that zone (read-only): the first success prepends the sprite to
+`Frame->Sprite`, later ones merge into its span buffer. A subtree OccludeBsp
+skips never filters its chunks. `Frame->Sprite` is the set of actors the
+frame draws (DrawActorSprite stamps LastRenderTime).
+
+The port (`setup_sprites`, `filter_chunks`, `pre_render`) takes each
+sprite's rectangle and Z from the host. The reference calls the original
+FDynamicSprite constructor with Setup supplying the same values, then
+OccludeBsp, and reads `Frame->Sprite` with each sprite's span buffer.
+Uncertain items with no observable effect, from the dynamics notes: chunk
+depth fields are uninitialised in the original (proved not to change the
+final chunks' relative order); FDynamicLight items (moving lights) are not
+filtered here, as they do not affect visibility.
+
 ## The master frame
 
 `occ_master_frame` builds the frame from the camera as CreateMasterFrame
@@ -187,8 +217,10 @@ random rotations, six frame sizes and FOV 75 and 90. Every draw list entry,
 every saved polygon's clipped points (X, Y, Z, ScreenX, ScreenY, IntY, RZ
 bits), the NodeFlags, the zones' LastRenderTime, NodesDraw/PolysDraw and the
 child-frame requests with their spans match bit for bit. The port builds
-each frame from the camera itself, and its 57 FSceneNode words and zone
-number match the original CreateMasterFrame's bit for bit as well. During development
+each frame from the camera itself, and its 57 FSceneNode words, Uncoords
+and zone number match the original CreateMasterFrame's bit for bit as well.
+Each frame also carries up to 23 random sprites (1,598 in all, 418 drawn):
+`Frame->Sprite`'s order and every sprite's merged span buffer match. During development
 the same comparison also passed 360 more frames on Paris Club, Training,
 Island, Wan Chai Market, Area 51 Page and Hotel, and 360 arbitrary-position
 frames on six maps including AirfieldHeliBase, Endgame4 and DXOnly, with 122
@@ -250,9 +282,9 @@ pixels. Training's entrance floor mirror still reflects.
 
 Explicitly unsupported or pending:
 
-* Dynamics: SetupDynamics sprites, FDynamicChunk filtering and
-  FDynamicFinalChunk::PreRender, hence `Frame->Sprite` and actor
-  LastRenderTime. The model's `Dynamics` lists are empty.
+* Dynamics' inputs: SetupDynamics' admission scan and Setup's rectangles
+  (mesh bounds and BoundVisible, the sprite path), hence Play's use of
+  `Frame->Sprite` for actor drawing and LastRenderTime.
 * Child frames: CreateChildFrame and the children's own OccludeBsp (mirror
   and sky). Requests are reported with their spans; Play draws children
   through the frustum.

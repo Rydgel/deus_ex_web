@@ -33,8 +33,11 @@ use core::ptr::{addr_of, addr_of_mut};
 /// count, 8 bounds (7 words: FBox), 9 bound count, 10 zones (4 words: zone
 /// actor key, LastRenderTime bits, its SkyZone (+1, 0 = none), 0), 11 zone count (Model.NumZones), 12
 /// RootOutside, 13 point cache (2 words per point: FTransform, stamp), 14
-/// Stamp, 15 LevelInfo key. Addresses are byte addresses in this memory.
-static mut MODEL: [u32; 16] = [0; 16];
+/// Stamp, 15 LevelInfo key, 16 the dynamics table (3 words per node: pending
+/// chunks, front and back final chunks), 17 the frame's sprites (6 words
+/// each: key, X1, Y1, X2, Y2, Z bits, in SetupDynamics order), 18 their
+/// count. Addresses are byte addresses in this memory.
+static mut MODEL: [u32; 20] = [0; 20];
 /// Frame words (FSceneNode fields, f32 bits unless noted): 0..12 Coords,
 /// 12 X (int), 13 Y (int), 14 FX15, 15 FY15, 16 FX2, 17 FY2, 18 FX, 19 FY,
 /// 20 Proj.Z, 21 PrjXM, 22 PrjYM, 23 PrjXP, 24 PrjYP, 25..37 ViewSides,
@@ -42,8 +45,8 @@ static mut MODEL: [u32; 16] = [0; 16];
 /// counter (0x10b5a700), 45 Level.TimeSeconds, 46 option bits (1 viewer
 /// ShowFlags & 0x800, 2 RenDev ShinySurfaces, 4 URender Toggle; 0x100 asks
 /// the output to carry each saved polygon's points), 47
-/// Viewport ExtraPolyFlags.
-static mut FRAME: [u32; 48] = [0; 48];
+/// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z.
+static mut FRAME: [u32; 64] = [0; 64];
 /// Run results: 0 status, 1 output words, 2 NodesDraw (+0x68), 3 PolysDraw
 /// (+0x6c), 4 child requests, 5 the output's address.
 static mut STATUS: [u32; 8] = [0; 8];
@@ -300,7 +303,9 @@ impl SpanBuffer {
     /// CopyFromRasterUpdate 0x10b21a90 (`update`) and CopyFromRaster
     /// 0x10b21df0: this = the raster's still-free part of `screen`; update
     /// also removes it from `screen`.
-    fn copy_from_raster(&mut self, screen: &mut SpanBuffer, raster_start: i32, raster_end: i32, update: bool) -> bool {
+    /// `lines`: 0 for the polygon raster (lines by absolute Y), else an
+    /// FRasterPoly record (StartY, EndY, lines from StartY).
+    fn copy_from_raster(&mut self, screen: &mut SpanBuffer, raster_start: i32, raster_end: i32, update: bool, lines: u32) -> bool {
         if update && (self.start_y > raster_start || self.end_y < raster_end) {
             // "Illegal span range" warning; the index is left as allocated.
             return false;
@@ -322,7 +327,7 @@ impl SpanBuffer {
         }
         let mut screen_index = screen.line(new_start);
         for y in new_start..new_end {
-            let (x0, x1) = raster(y);
+            let (x0, x1) = if lines == 0 { raster(y) } else { poly_line(lines, y) };
             let mut prev = dest;
             dest += 4;
             let mut s_link = screen_index;
@@ -935,6 +940,10 @@ fn occlude() -> u32 {
     let mut screen = EMPTY;
     screen.alloc_index_for_screen(width, height, GSCENE);
     zone_spans[zone_number as usize] = screen;
+    // SetupDynamics' sprites (0x10b22d90; FDynamicSprite 0x10b233c0), in
+    // Level.Actors order, each with its chunk at the head of node 0.
+    let mut frame_sprite = 0_u32;
+    setup_sprites();
     let mut active: [u8; ZONES] = [0; ZONES];
     active[0] = zone_number;
     let mut active_count = 1_usize;
@@ -1001,7 +1010,8 @@ fn occlude() -> u32 {
                 }
             }
             if state == 0 {
-                // Dynamics[0] Filter: no dynamics yet.
+                // Dynamics[0]: filter the pending chunks (0x10b17c1a).
+                filter_chunks(i_node, outside);
                 let is_front = node.distance(origin) > 0.0;
                 let f = is_front as u32;
                 wr(entry + 4, node.child(1 - f) as u32);
@@ -1035,7 +1045,8 @@ fn occlude() -> u32 {
             let mut is_front = dist > 0.0;
             let zone = node.zone(is_front as u32) & mask8;
             if zone_spans[zone as usize].valid != 0 && (node.child_outside(is_front as u32, outside) || toggle) {
-                // Dynamics[1-IsFront] PreRender: none yet.
+                // Dynamics[1-IsFront] PreRender (0x10b17e72).
+                pre_render(i_node, 1 - is_front as u32, &mut zone_spans[zone as usize], &mut frame_sprite);
             }
             let sign: f32 = if is_front { 1.0 } else { -1.0 };
             let normal = [node.plane(0), node.plane(1), node.plane(2)];
@@ -1104,9 +1115,9 @@ fn occlude() -> u32 {
                             && poly_flags & 0x0400_0001 != 0x0400_0001
                             && poly_flags & 0x0800_0000 == 0
                         {
-                            tspan.copy_from_raster(&mut zone_spans[zone as usize], start_y, end_y, false)
+                            tspan.copy_from_raster(&mut zone_spans[zone as usize], start_y, end_y, false, 0)
                         } else {
-                            tspan.copy_from_raster(&mut zone_spans[zone as usize], start_y, end_y, true)
+                            tspan.copy_from_raster(&mut zone_spans[zone as usize], start_y, end_y, true, 0)
                         };
                         let mut list = if composited != 0 { 2_usize } else { 1 };
                         if !accepted {
@@ -1231,7 +1242,8 @@ fn occlude() -> u32 {
                 if zone_spans[far as usize].valid != 0
                     && (hnode.child_outside(1 - head_front as u32, outside) || toggle)
                 {
-                    // Dynamics[IsFront] PreRender: none yet.
+                    // Dynamics[IsFront] PreRender (0x10b19b37).
+                    pre_render(head, head_front as u32, &mut zone_spans[far as usize], &mut frame_sprite);
                 }
                 let i_far = rd(entry + 4) as i32;
                 if i_far != -1 {
@@ -1283,6 +1295,32 @@ fn occlude() -> u32 {
             }
             dl = rd(dl + 20);
         }
+    }
+    // Frame->Sprite (RenderNext order) with each sprite's span buffer.
+    let mut s = frame_sprite;
+    while s != 0 {
+        emit(0xffff_fffe);
+        emit(rd(s + 4 * SP_KEY));
+        let span = sprite_span(s);
+        emit(span.start_y as u32);
+        emit(span.end_y as u32);
+        emit(span.valid as u32);
+        for y in span.start_y..span.end_y {
+            let mut n = 0;
+            let mut t = rd(span.line(y));
+            while t != 0 {
+                n += 1;
+                t = s_next(t);
+            }
+            emit(n);
+            let mut t = rd(span.line(y));
+            while t != 0 {
+                emit(s_start(t) as u32);
+                emit(s_end(t) as u32);
+                t = s_next(t);
+            }
+        }
+        s = rd(s + 4 * SP_RENDER_NEXT);
     }
     unsafe {
         let status = &mut *addr_of_mut!(STATUS);
@@ -1339,8 +1377,8 @@ use crate::x87::Ext;
 /// Core appTan's qword result (low, high), Actor.OrthoZoom bits.
 static mut MASTER_IN: [u32; 12] = [0; 12];
 /// Output: the FSceneNode words Coords (+0x34, 12), FX..PrjYP (+0xb8, 17),
-/// ViewSides and ViewPlanes (+0xfc, 28), then ZoneNumber.
-static mut MASTER_OUT: [u32; 58] = [0; 58];
+/// ViewSides and ViewPlanes (+0xfc, 28), ZoneNumber, then Uncoords (+0x64, 12).
+static mut MASTER_OUT: [u32; 70] = [0; 70];
 
 #[no_mangle]
 pub extern "C" fn occ_master_in_ptr() -> *mut u32 {
@@ -1492,6 +1530,16 @@ pub extern "C" fn occ_master_frame() {
         planes[k + 2] = [m[0], m[1], m[2], w2];
     }
     let zone = point_zone([coords[0], coords[1], coords[2]]);
+    // Uncoords: Core FCoords::Transpose (0x1011a140): the axes transposed and
+    // the origin -(O·X, O·Y, O·Z), each ((x + y) + z) stored, then negated.
+    let o3 = [ld(coords[0]), ld(coords[1]), ld(coords[2])];
+    let mut uncoords = [0u32; 12];
+    for n in 0..3 {
+        uncoords[n] = dot3(o3, [coords[3 + 3 * n], coords[4 + 3 * n], coords[5 + 3 * n]]) ^ 0x8000_0000;
+    }
+    for n in 0..3 {
+        uncoords[3 + 3 * n..6 + 3 * n].copy_from_slice(&un[n]);
+    }
     unsafe {
         let out = &mut *addr_of_mut!(MASTER_OUT);
         out[..12].copy_from_slice(&coords);
@@ -1504,6 +1552,7 @@ pub extern "C" fn occ_master_frame() {
             out[41 + 4 * i..45 + 4 * i].copy_from_slice(&planes[i]);
         }
         out[57] = zone;
+        out[58..70].copy_from_slice(&uncoords);
         // The frame words occ_run reads.
         let f = &mut *addr_of_mut!(FRAME);
         f[..12].copy_from_slice(&coords);
@@ -1519,5 +1568,320 @@ pub extern "C" fn occ_master_frame() {
         f[41] = 0x3f80_0000;
         f[42] = zone;
         f[43] = 0;
+        f[48..60].copy_from_slice(&uncoords);
+        f[60] = rproj[2];
+    }
+}
+
+
+// ---- dynamics: sprites and chunks (.work/occlude/dynamics-and-drawframe.md) -----------
+//
+// FDynamicSprite (0x10b233c0) after Setup: the screen rectangle and depth are
+// host inputs (Setup's mesh bounds and sprite path are separate). Records in
+// GDynMem, word indices:
+// sprite: key, X1, Y1, X2, Y2, Z, proxies (4 × X, Y, Z, ScreenX, ScreenY),
+// span-buffer present, RenderNext, span buffer (7 words), raster.
+const SP_KEY: u32 = 0;
+const SP_Z: u32 = 5;
+const SP_PROXY: u32 = 6;
+const SP_HAS_SPAN: u32 = 26;
+const SP_RENDER_NEXT: u32 = 27;
+const SP_SPAN: u32 = 28;
+const SP_WORDS: u32 = 36;
+// chunk and final chunk: next, sprite, raster, Z.
+// raster (FRasterPoly): StartY, EndY, then [X0, X1] per line.
+
+fn poly_line(raster: u32, y: i32) -> (i32, i32) {
+    let at = raster + 8 + 8 * (y - rd(raster) as i32) as u32;
+    (rd(at) as i32, rd(at + 4) as i32)
+}
+fn new_raster(start_y: i32, end_y: i32) -> u32 {
+    let r = push(GDYN, 8 * (end_y - start_y).max(0) as u32 + 8, 8);
+    wr(r, start_y as u32);
+    wr(r + 4, end_y as u32);
+    r
+}
+fn set_line(raster: u32, index: i32, x0: i32, x1: i32) {
+    let at = raster + 8 + 8 * index as u32;
+    wr(at, x0 as u32);
+    wr(at + 4, x1 as u32);
+}
+fn dyn_slot(i_node: i32, slot: u32) -> u32 {
+    model(16) + 12 * i_node as u32 + 4 * slot
+}
+fn sprite_span(s: u32) -> SpanBuffer {
+    let b = s + 4 * SP_SPAN;
+    SpanBuffer {
+        start_y: rd(b) as i32,
+        end_y: rd(b + 4) as i32,
+        valid: rd(b + 8) as i32,
+        index: rd(b + 12),
+        mem: rd(b + 16) as usize,
+        mark_mem: rd(b + 20) as usize,
+        mark_top: rd(b + 24),
+    }
+}
+fn set_sprite_span(s: u32, span: &SpanBuffer) {
+    let b = s + 4 * SP_SPAN;
+    for (k, v) in [span.start_y as u32, span.end_y as u32, span.valid as u32, span.index, span.mem as u32,
+        span.mark_mem as u32, span.mark_top].iter().enumerate()
+    {
+        wr(b + 4 * k as u32, *v);
+    }
+}
+/// Prepend a pending chunk to a node (FDynamicChunk 0x10b23da0).
+fn new_chunk(i_node: i32, sprite: u32, raster: u32) {
+    let c = push(GDYN, 16, 8);
+    let slot = dyn_slot(i_node, 0);
+    wr(c, rd(slot));
+    wr(c + 4, sprite);
+    wr(c + 8, raster);
+    wr(slot, c);
+}
+/// FDynamicFinalChunk (0x10b24690): ascending Z, a later equal Z first.
+fn new_final(i_node: i32, sprite: u32, raster: u32, back: u32) {
+    let c = push(GDYN, 16, 8);
+    let z = rf(sprite + 4 * SP_Z);
+    wr(c + 4, sprite);
+    wr(c + 8, raster);
+    wr(c + 12, z.to_bits());
+    let mut link = dyn_slot(i_node, 1 + back);
+    loop {
+        let next = rd(link);
+        if next == 0 {
+            break;
+        }
+        let item_z = rf(next + 12);
+        if !(item_z < z || item_z.is_nan() || z.is_nan()) {
+            break;
+        }
+        link = next;
+    }
+    wr(c, rd(link));
+    wr(link, c);
+}
+
+fn setup_sprites() {
+    let table = model(16);
+    if table == 0 {
+        return;
+    }
+    for i in 0..3 * model(1) {
+        wr(table + 4 * i, 0);
+    }
+    let (input, count) = (model(17), model(18));
+    let rproj_z = ff(60);
+    let (fx2, fy2) = (ff(16), ff(17));
+    let uo = [ff(48), ff(49), ff(50)];
+    let ux = [[ff(51), ff(52), ff(53)], [ff(54), ff(55), ff(56)], [ff(57), ff(58), ff(59)]];
+    for i in 0..count {
+        let rec = input + 24 * i;
+        let (x1, y1, x2, y2) = (rd(rec + 4) as i32, rd(rec + 8) as i32, rd(rec + 12) as i32, rd(rec + 16) as i32);
+        let z = f32::from_bits(rd(rec + 20));
+        let s = push(GDYN, 4 * SP_WORDS, 8);
+        wr(s, rd(rec));
+        for k in 1..6 {
+            wr(s + 4 * k, rd(rec + 4 * k));
+        }
+        wr(s + 4 * SP_HAS_SPAN, 0);
+        wr(s + 4 * SP_RENDER_NEXT, 0);
+        let (x1f, x2f, y1f, y2f) = (x1 as f32, x2 as f32, y1 as f32, y2 as f32);
+        let k = rproj_z * z;
+        let (x1d, x2d) = ((x1f - fx2) * k, (x2f - fx2) * k);
+        let (y1d, y2d) = ((y1f - fy2) * k, (y2f - fy2) * k);
+        let corners = [(x1d, y1d, x1f, y1f), (x2d, y1d, x2f, y1f), (x2d, y2d, x2f, y2f), (x1d, y2d, x1f, y2f)];
+        for (c, (px, py, sx, sy)) in corners.iter().enumerate() {
+            let (a, b, cz) = (px - uo[0], py - uo[1], z - uo[2]);
+            let base = s + 4 * (SP_PROXY + 5 * c as u32);
+            for (n, axis) in ux.iter().enumerate() {
+                wr(base + 4 * n as u32, ((a * axis[0] + b * axis[1]) + cz * axis[2]).to_bits());
+            }
+            wr(base + 12, sx.to_bits());
+            wr(base + 16, sy.to_bits());
+        }
+        // FRasterPoly: [X1, X2) on each line of [Y1, Y2) (Setup checked Y1 < Y2).
+        let r = new_raster(y1, y2);
+        for y in y1..y2 {
+            set_line(r, y - y1, x1, x2);
+        }
+        wr(s + 4 * 35, r);
+        new_chunk(0, s, r);
+    }
+}
+
+/// FDynamicChunk::Filter (0x10b23e30) for every pending chunk of a node.
+fn filter_chunks(i_node: i32, outside: bool) {
+    if model(16) == 0 {
+        return;
+    }
+    let node = Node::at(i_node);
+    let n = [node.plane(0), node.plane(1), node.plane(2), node.plane(3)];
+    let mut c = rd(dyn_slot(i_node, 0));
+    while c != 0 {
+        let (s, r) = (rd(c + 4), rd(c + 8));
+        let proxy = |i: usize, f: u32| rf(s + 4 * (SP_PROXY + 5 * i as u32 + f));
+        let (mut front, mut back) = (0, 0);
+        let mut dist = [0.0_f32; 4];
+        for i in 0..4 {
+            let d = ((proxy(i, 0) * n[0] + proxy(i, 2) * n[2]) + proxy(i, 1) * n[1]) - n[3];
+            if d as f64 > 0.01 {
+                front += 1;
+            }
+            dist[i] = d;
+            if (d as f64) < -0.01 {
+                back += 1;
+            }
+        }
+        let (mut front_raster, mut back_raster) = (r, r);
+        'split: {
+            if front == 0 || back == 0 {
+                break 'split;
+            }
+            let mut cross = [[0.0_f32; 2]; 4];
+            let mut crossings = 0;
+            for i in 0..4 {
+                let prev = (i + 3) & 3;
+                // Dist[prev]*Dist[i] < 0: opposite signs, both nonzero.
+                let (a, b) = (dist[prev], dist[i]);
+                if a != 0.0 && b != 0.0 && (a < 0.0) != (b < 0.0) {
+                    let t = a / (a - b);
+                    cross[crossings] = [
+                        (proxy(i, 3) - proxy(prev, 3)) * t + proxy(prev, 3),
+                        (proxy(i, 4) - proxy(prev, 4)) * t + proxy(prev, 4),
+                    ];
+                    crossings += 1;
+                }
+            }
+            if crossings < 2 {
+                break 'split;
+            }
+            let (r_start, r_end) = (rd(r) as i32, rd(r + 4) as i32);
+            let lines = r_end - r_start;
+            let a_raster = push(GDYN, 8 * lines.max(0) as u32 + 8, 8);
+            let b_raster = push(GDYN, 8 * lines.max(0) as u32 + 8, 8);
+            let (mut c0, mut c1) = (cross[0], cross[1]);
+            if c0[1] > c1[1] {
+                core::mem::swap(&mut c0, &mut c1);
+            }
+            let start_y = fistp(c0[1] - 0.5).max(r_start);
+            let end_y = fistp(c1[1] - 0.5).min(r_end);
+            if start_y > end_y {
+                break 'split;
+            }
+            let top = if start_y > r_start { if dist[0] < 0.0 { b_raster } else { a_raster } } else { 0 };
+            let bottom = if end_y < r_end { if dist[2] < 0.0 { b_raster } else { a_raster } } else { 0 };
+            let (left, right) = if c1[0] < c0[0] {
+                if dist[0] < 0.0 { (b_raster, a_raster) } else { (a_raster, b_raster) }
+            } else if dist[1] < 0.0 {
+                (a_raster, b_raster)
+            } else {
+                (b_raster, a_raster)
+            };
+            for raster in [a_raster, b_raster] {
+                wr(raster, start_y as u32);
+                wr(raster + 4, end_y as u32);
+            }
+            if top != 0 {
+                wr(top, r_start as u32);
+                for y in r_start..start_y {
+                    let (x0, x1) = poly_line(r, y);
+                    set_line(top, y - r_start, x0, x1);
+                }
+            }
+            if bottom != 0 {
+                wr(bottom + 4, r_end as u32);
+                let b_start = rd(bottom) as i32;
+                for y in end_y..r_end {
+                    let (x0, x1) = poly_line(r, y);
+                    set_line(bottom, y - b_start, x0, x1);
+                }
+            }
+            if end_y != start_y {
+                let slope = ((c1[0] - c0[0]) * 65536.0) / (c1[1] - c0[1]);
+                let dx = trunc_i32(slope);
+                let mut x = trunc_i32(((start_y as f32 + 1.0) - c0[1]) * slope + c0[0] * 65536.0);
+                let (l_start, rt_start) = (rd(left) as i32, rd(right) as i32);
+                for y in start_y..end_y {
+                    let (x0, x1) = poly_line(r, y);
+                    set_line(left, y - l_start, x0, x1);
+                    set_line(right, y - rt_start, x0, x1);
+                    let col = x >> 16;
+                    let (lx0, lx1) = poly_line(left, y);
+                    if col < lx1 {
+                        set_line(left, y - l_start, lx0, col);
+                    }
+                    let (rx0, rx1) = poly_line(right, y);
+                    if col > rx0 {
+                        set_line(right, y - rt_start, col, rx1);
+                    }
+                    x = x.wrapping_add(dx);
+                }
+            }
+            back_raster = if rd(b_raster + 4) as i32 <= rd(b_raster) as i32 { 0 } else { b_raster };
+            front_raster = if rd(a_raster + 4) as i32 <= rd(a_raster) as i32 { 0 } else { a_raster };
+        }
+        let csg = node.is_csg();
+        if front != 0 && front_raster != 0 {
+            let child = node.child(1);
+            if child != -1 {
+                new_chunk(child, s, front_raster);
+            } else if outside || csg {
+                new_final(i_node, s, front_raster, 0);
+            }
+        }
+        if back != 0 && back_raster != 0 {
+            let child = node.child(0);
+            if child != -1 {
+                new_chunk(child, s, back_raster);
+            } else if outside && !csg {
+                new_final(i_node, s, back_raster, 1);
+            }
+        }
+        c = rd(c);
+    }
+}
+
+/// MSVC `_ftol` of a value already rounded to the register's precision.
+fn trunc_i32(x: f32) -> i32 {
+    if !(x > -2147483649.0 && x < 2147483648.0) {
+        return i32::MIN;
+    }
+    x as i32
+}
+
+/// FDynamicFinalChunk::PreRender (0x10b24740) for a node side's final chunks.
+fn pre_render(i_node: i32, side: u32, zone_span: &mut SpanBuffer, frame_sprite: &mut u32) {
+    if model(16) == 0 {
+        return;
+    }
+    let mut c = rd(dyn_slot(i_node, 1 + side));
+    while c != 0 {
+        let (s, r) = (rd(c + 4), rd(c + 8));
+        let (start, end) = (rd(r) as i32, rd(r + 4) as i32);
+        if rd(s + 4 * SP_HAS_SPAN) == 0 {
+            let _ = push(GDYN, 0x20, 8); // the FSpanBuffer object
+            let mut span = EMPTY;
+            span.alloc_index(start, end, GDYN);
+            if span.copy_from_raster(zone_span, start, end, false, r) {
+                wr(s + 4 * SP_RENDER_NEXT, *frame_sprite);
+                *frame_sprite = s;
+                wr(s + 4 * SP_HAS_SPAN, 1);
+                set_sprite_span(s, &span);
+            } else {
+                span.release();
+            }
+        } else {
+            let mark = arena_top(GMEM);
+            let _ = push(GMEM, 0x20, 8);
+            let mut temp = EMPTY;
+            temp.alloc_index(start, end, GMEM);
+            if temp.copy_from_raster(zone_span, start, end, false, r) {
+                let mut span = sprite_span(s);
+                span.merge_with(&temp);
+                set_sprite_span(s, &span);
+            }
+            set_top(GMEM, mark);
+        }
+        c = rd(c);
     }
 }

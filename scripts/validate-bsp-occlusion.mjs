@@ -78,6 +78,17 @@ async function validate(mapName, count, seed, extra = []) {
       random() < 0.2 ? Math.floor((random() - 0.5) * 8000) : 0], width, height, fov: random() < 0.5 ? 90 : 75 });
   }
   cases.forEach((c, i) => Object.assign(c, { locationBits: c.location.map(bits), frameCounter: i, timeBits: bits(1 + i / 30) }));
+  // Sprites as Setup leaves them: a screen rectangle with Y1 < Y2 inside the
+  // frame, and a depth in front of the eye.
+  for (const c of cases) {
+    c.sprites = [];
+    const count = Math.floor(random() * 24);
+    for (let k = 0; k < count; k++) {
+      const a = Math.floor(random() * c.width), b = Math.floor(random() * c.width);
+      const y = Math.floor(random() * (c.height - 1)), h = 1 + Math.floor(random() * Math.min(300, c.height - y - 1));
+      c.sprites.push({ x1: Math.min(a, b), x2: Math.max(a, b) + 1, y1: y, y2: y + h, zBits: bits(8 + random() * 4000) });
+    }
+  }
   const zoneActors = [...new Set(model.zones.map(z => z.actor).filter(a => a > 0))].map(index => ({ index }));
   const request = { gameRoot: root, tangents: TANGENTS, cases, model: {
     nodes: model.nodes.map(n => ({ planeBits: n.plane.map(bits), zoneMask: n.zoneMask, vertexPool: n.vertexPool,
@@ -102,11 +113,12 @@ async function validate(mapName, count, seed, extra = []) {
       // The master frame from the camera: every field CreateMasterFrame made.
       const master = occlusion.master({ location: c.location.map(Math.fround), rotation: c.rotation, width: c.width,
         height: c.height, fov: c.fov });
-      assert.deepEqual([...master.fields].map(v => v >>> 0), [...o.frameBits, o.zoneNumber].map(v => v >>> 0), `${where}: master frame`);
+      assert.deepEqual([...master.fields].map(v => v >>> 0), [...o.frameBits, o.zoneNumber, ...o.uncoordsBits].map(v => v >>> 0), `${where}: master frame`);
       const words = [...master.frame];
       words[44] = c.frameCounter; words[45] = c.timeBits;
       words[46] = OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES | OCCLUSION_POINTS; words[47] = 0;
-      const r = occlusion.run(words);
+      const r = occlusion.run(words, c.sprites.map((sprite, key) => ({ key, ...sprite })));
+      assert.deepEqual(r.sprites, o.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${where}: Frame->Sprite`);
       for (let list = 0; list < 3; list++) {
         const want = o.draw[list].map(d => ({ iNode: d.iNode, iSurf: d.iSurf, iZone: d.iZone, polyFlags: d.polyFlags >>> 0,
           polys: d.polys.map(p => ({ iNode: p.iNode, points: p.points.map(t => [t[0], t[1], t[2], t[4], t[5], t[6], t[7]].map(v => v >>> 0)) })) }));
@@ -126,11 +138,12 @@ async function validate(mapName, count, seed, extra = []) {
       stats.surfaces += r.draw.reduce((n, l) => n + l.length, 0);
       stats.children += r.children.length;
       stats.zone0 += o.zoneNumber === 0;
+      stats.sprites = (stats.sprites ?? 0) + c.sprites.length; stats.drawn = (stats.drawn ?? 0) + r.sprites.length;
     }
   } finally {
     occlusion.dispose();
   }
-  console.log(`${mapName}: ${cases.length} frames match (${stats.surfaces} draw lists, ${stats.children} child requests, ${stats.zone0} zone-0 views)`);
+  console.log(`${mapName}: ${cases.length} frames match (${stats.surfaces} draw lists, ${stats.children} child requests, ${stats.zone0} zone-0 views, ${stats.drawn}/${stats.sprites} sprites drawn)`);
 }
 
 // The Paris club entrance tunnel at spawn (the slow view that motivated the
