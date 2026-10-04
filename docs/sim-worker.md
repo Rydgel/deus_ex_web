@@ -254,7 +254,7 @@ depends on asynchronous loading. It is not a usable comparison map.
 | 3 sprite scan and render iterators | 29238ba | Island, Training, 02_NYC_Street: identical |
 | 4 actor meshes: simulation and page halves | 9bab54d | Island, Training, 02_NYC_Street, 02_NYC_Smug (mirrors): identical |
 | 5 drawn set and stamps on the simulation side | adf3c68 | Island, Training, 02_NYC_Street, 02_NYC_Smug: identical; `?simVerify=1` on six maps (600 frames walking) and validate-mirrors-play's four mirror maps |
-| 6 coronas and the view model on the simulation side; the view model on the GPU path | (this commit) | against step 5: Island and 02_NYC_Smug walking, Training with the crowbar (CPU path before, GPU path now): identical; against f4fb698: Training (walking, crowbar), 02_NYC_Street, 02_NYC_Smug: identical frames (drawing buffer); `?simVerify=1` with the crowbar |
+| 6 coronas and the view model on the simulation side; the view model on the GPU path | 26cf7c1 | against step 5: Island and 02_NYC_Smug walking, Training with the crowbar (CPU path before, GPU path now): identical; against f4fb698: Training (walking, crowbar), 02_NYC_Street, 02_NYC_Smug: identical frames (drawing buffer); `?simVerify=1` with the crowbar |
 
 Step 4 split `npc-mesh-preview.mjs` into `actor-mesh-sim.mjs` (admission,
 mesh_reads, GetFrame planning or the CPU GetFrame, the GPU path's group
