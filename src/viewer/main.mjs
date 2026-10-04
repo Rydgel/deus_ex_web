@@ -168,9 +168,8 @@ let weaponDraw=null,weaponGpu=null,weaponSummary=null;
 // files; the last snapshot's input answers and game status; the lip-sync
 // channels' mixer position readers, sampled at each frame's post.
 let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0;
-// The worker's last frame post (the page clock, ms) and the display frames
-// since it.
-let simLastPost=null,simFramesSincePost=0;
+// The worker's last frame post (the page clock, ms).
+let simLastPost=null;
 const lipSyncPositions=new Map();
 let infoLinkAudioContext=null;
 const conversationAudio=new Map();
@@ -542,9 +541,6 @@ async function setFiles(files) {
     simClient?.terminate();
     simClient = createSimClient({ onProgress: message => { $('gate-message').textContent = message; },
       onFrame: lockstep ? snapshot => drawLockstep(snapshot) : null,
-      // A snapshot that missed the display frame after its post (the
-      // simulation is slower than the display): the next frame starts now.
-      onArrive: count => { if (count === 1 && simFramesSincePost > 0) postSimFrame(performance.now()); },
       onFailure: error => pauseForRuntimeError(error) });
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })));
@@ -1033,14 +1029,14 @@ function simFrameInput(time) {
       view: { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] },
       sky: world.sky ? { location: [...world.sky], rotation: [...(world.skyRotation ?? [0, 0, 0])] } : null } };
 }
-/** ?sim=worker: posts the next frame unless one is in flight; its dt is the
- * page time since the last post. */
+/** ?sim=worker: posts a frame; its dt is the page time since the last post
+ * (the worker sums the dts of the posts it merges). */
 function postSimFrame(time) {
-  if (!simClient || !sim || !world || loading || held || simClient.inflight) return false;
+  if (!simClient || !sim || !world || loading || held) return false;
   const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);
-  if (!simClient.post({ ...simFrameInput(time), dt }, { speech: [...lipSyncPositions].map(([id, position]) => [id, position()]),
-    status: !simStatus || simPosts % 15 === 0 })) return false;
-  simLastPost = time; simFramesSincePost = 0; simPosts++;
+  simClient.post({ ...simFrameInput(time), dt }, { speech: [...lipSyncPositions].map(([id, position]) => [id, position()]),
+    status: !simStatus || simPosts % 15 === 0 });
+  simLastPost = time; simPosts++;
   return true;
 }
 /** One simulation frame (sim-session.mjs frame); ?sim=clone sends the input
@@ -1084,11 +1080,10 @@ function animate(time) {
     // a frame still in flight the page posts none and its dt accumulates.
     let snap = null, draw = true;
     if (sim && simClient) {
-      // The oldest arrived snapshot; the next frame posts first when none is
-      // in flight or waiting, so the worker simulates while the page draws.
-      simFramesSincePost++;
+      // Post this display frame's input first, so the worker simulates
+      // while the page draws the oldest arrived snapshot.
+      postSimFrame(time);
       snap = lockstep ? null : simClient.take();
-      if (lockstep || simClient.waiting === 0) postSimFrame(time);
       draw = Boolean(snap);
     } else if (sim) snap = simFrame({ ...simFrameInput(time), dt });
     if (draw) drawFrame(snap, time);
@@ -1120,7 +1115,10 @@ function drawFrame(snap, time) {
     for (const error of snap.errors) pauseForRuntimeError(error);
     // The worker's step times are its own thread's (`worker`); on the page
     // they belong to the frame's phases.
-    for (const [name, ms] of Object.entries(snap.timings)) framePhases[simClient ? 'worker' : name] += ms;
+    for (const [name, ms] of Object.entries(snap.timings)) {
+      if (!simClient) { framePhases[name] += ms; continue; }
+      framePhases.worker += ms; framePhases[`w.${name}`] = (framePhases[`w.${name}`] ?? 0) + ms;
+    }
     phaseMark = performance.now();
     applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
   }

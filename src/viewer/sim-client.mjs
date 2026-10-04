@@ -1,17 +1,18 @@
 /** The page's end of the simulation worker (sim-worker.mjs, ?sim=worker;
- * docs/sim-worker.md "Frame protocol"). At most one frame is in flight;
- * arrived snapshots wait in order until the page takes them, each exactly
- * once. Input commands queue here and go with the next frame.
- * `onFrame(snapshot)` takes each snapshot as it arrives instead (lockstep
- * drawing); `onArrive(waiting)` is told of each arrival otherwise;
- * `onProgress(message)` sees the load's progress and `onFailure(error)` a
- * message the worker could not handle. */
-export function createSimClient({ onProgress = () => {}, onFrame = null, onArrive = () => {}, onFailure = () => {} } = {}) {
+ * docs/sim-worker.md "Frame protocol"). The page posts a frame every display
+ * frame; the worker merges the posts that arrive while it is busy, so it
+ * never waits for the page. Arrived snapshots wait in order until the page
+ * takes them, each exactly once. Input commands queue here and go with the
+ * next post. `onFrame(snapshot)` takes each snapshot as it arrives instead
+ * (lockstep drawing); `onProgress(message)` sees the load's progress and
+ * `onFailure(error)` a message the worker could not handle. */
+export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {} } = {}) {
   const worker = new Worker(new URL('./sim-worker.mjs', import.meta.url), { type: 'module' });
   const pending = new Map(), commands = [], settledWaiters = [];
   // `activeLoad`: the last map load's request id; a snapshot of an earlier
   // load (a frame in flight when the page loaded another map) is dropped.
-  let nextId = 1, ready = null, inflight = false, activeLoad = null;
+  // `outstanding`: posts no snapshot has answered yet.
+  let nextId = 1, ready = null, outstanding = 0, activeLoad = null;
   const waiting = [];
   const settle = () => { for (const resolve of settledWaiters.splice(0)) resolve(); };
   const request = (message, transfer = []) => new Promise((resolve, reject) => {
@@ -31,19 +32,21 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onArriv
         break;
       }
       case 'frame':
-        inflight = false;
+        outstanding = Math.max(0, outstanding - data.posts);
         if (data.load === activeLoad && data.snapshot) {
-          if (onFrame) onFrame(data.snapshot);
-          else { waiting.push(data.snapshot); onArrive(waiting.length); }
+          if (onFrame) onFrame(data.snapshot); else waiting.push(data.snapshot);
         }
-        settle();
+        if (!outstanding) settle();
         break;
       case 'failure': {
         const error = Object.assign(new Error(data.error.message), { stack: data.error.stack });
         if (data.request === 'init') ready?.reject(error);
         const entry = data.id !== null ? pending.get(data.id) : null;
         if (entry) { pending.delete(data.id); entry.reject(error); }
-        else { if (data.request === 'frame') { inflight = false; settle(); } onFailure(error); }
+        else {
+          if (data.request === 'frame') { outstanding = Math.max(0, outstanding - data.posts); if (!outstanding) settle(); }
+          onFailure(error);
+        }
         break;
       }
     }
@@ -59,22 +62,19 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onArriv
     /** `view`, `reset` or `stateDigest`, after the frames posted before it. */
     call: method => request({ type: 'call', method, clock: clock() }),
     queue(command) { commands.push(command); },
-    get inflight() { return inflight; },
-    /** Post one frame unless one is in flight; true when posted. `speech`
-     * holds the lip-sync channels' mixer positions, `status` asks for the
-     * game status. */
+    get outstanding() { return outstanding; },
+    /** Post one frame. `speech` holds the lip-sync channels' mixer
+     * positions, `status` asks for the game status. */
     post(input, { speech = [], status = false } = {}) {
-      if (inflight) return false;
-      inflight = true;
+      outstanding++;
       worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), speech, status });
-      return true;
     },
     /** The oldest snapshot not yet taken, or null. */
     take() { return waiting.shift() ?? null; },
     /** Arrived snapshots not yet taken. */
     get waiting() { return waiting.length; },
-    /** Resolves when no frame is in flight. */
-    settled() { return inflight ? new Promise(resolve => settledWaiters.push(resolve)) : Promise.resolve(); },
+    /** Resolves when every post has its snapshot. */
+    settled() { return outstanding ? new Promise(resolve => settledWaiters.push(resolve)) : Promise.resolve(); },
     terminate() { worker.terminate(); },
   };
 }

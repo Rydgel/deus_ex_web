@@ -509,3 +509,24 @@ and stamps cost more than profiled. From here every simulation-side saving
 1.4 ms) shortens the frame directly, until the simulation reaches the
 page's ~4–5 ms.
 
+Step 8, fifth part (merged posts): the page posts a frame every display
+frame. The worker merges the posts that arrive while it is busy into one
+frame (the latest page state, their dts summed, every command in order),
+so it starts the next frame as soon as it has sent a snapshot. Before, it
+idled about 6 ms a frame waiting for a post that the page sends only after
+its own draw. A call runs the frames posted before it first. A reply says
+how many posts it consumed; `settled()` waits until every post has its
+reply. Lockstep still posts one frame per display frame.
+
+Worker step times per simulated frame (Island 1920×1080, `w.*` phases):
+tick 12.4, actor layer 6.5, HUD 1.7, sprites 1.5, stamps 0.8, audio 0.8,
+lighting 0.25, coronas 0.2, weapon 0.1, about 24 ms in all, with the
+worker now busy for nearly the whole frame. In this batch the
+drawn-frame interval was 23.8, 25.7 and 27.4 ms against 27.9, 30.4 and
+31.1 ms inline: the simulation side's cost is the frame. A CPU profile of
+the worker (`.work/tools/profile-worker.mjs`) puts its self time in the
+script runtime's field access (4 ms), the Rust core (3.9), the actor
+layer's simulation half (2.2), the script VM (1.9), SetupForActor's light
+selection (1.1), script values (1.1) and the Rust VM bridge (0.9). That
+is where the next savings are.
+

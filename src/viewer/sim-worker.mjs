@@ -13,7 +13,9 @@
  *   commands in order, then one simulation frame (sim-session.mjs frame);
  *   replies `frame` with the snapshot, the audio events since the last one,
  *   the input answers and, when asked, the game status. The snapshot's
- *   packed words are transferred.
+ *   packed words are transferred. Posts that arrive while the worker is
+ *   busy merge into one frame (the latest page state, their dts summed,
+ *   every command in order); the reply says how many posts it consumed.
  * - `call` {id, method}: `view`, `reset` (Player start: reset, then the
  *   movers and PlayerCalcView), `stateDigest`.
  *
@@ -94,7 +96,7 @@ async function handle(data) {
       return;
     }
     case 'load': {
-      host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; speechPositions.clear();
+      host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; speechPositions.clear(); pending = null;
       const asset = await assets.get(data.map);
       host = await createSimHost(decodeMap(asset.bytes), asset, assets, { ...data.options,
         onConversationSpeech: event => {
@@ -113,7 +115,7 @@ async function handle(data) {
       return;
     }
     case 'frame': {
-      if (!host?.game) { send({ type: 'frame', load: loadId, snapshot: null }); return; }
+      if (!host?.game) { send({ type: 'frame', load: loadId, posts: data.posts, snapshot: null }); return; }
       setHostClock(data.clock);
       for (const [id, position] of data.speech ?? []) speechPositions.set(id, position);
       const errors = [];
@@ -129,10 +131,12 @@ async function handle(data) {
       snapshot.inspect = data.input.inspect ? { camera: data.input.inspect.camera, view: data.input.inspect.view } : null;
       snapshot.now = data.input.now;
       if (data.status) snapshot.status = { gameplay: host.game.status(), summary: host.actorSim ? structuredClone(host.actorSim.summary) : null };
-      send({ type: 'frame', load: loadId, snapshot }, snapshot.pack ? [snapshot.pack.buffer] : []);
+      send({ type: 'frame', load: loadId, posts: data.posts, snapshot }, snapshot.pack ? [snapshot.pack.buffer] : []);
       return;
     }
     case 'call': {
+      // The frames posted before this call run first.
+      await runPending();
       const game = host?.game;
       let value = null;
       if (game) {
@@ -152,8 +156,29 @@ async function handle(data) {
   }
 }
 
+// Frame posts not yet run, merged, and the scheduled run that takes them
+// once the messages already queued have arrived.
+let pending = null, runScheduled = false;
+function mergeFrame(data) {
+  pending = !pending ? { ...data, commands: [...data.commands], posts: 1 } : { ...data,
+    input: { ...data.input, dt: pending.input.dt + data.input.dt }, commands: [...pending.commands, ...data.commands],
+    status: pending.status || data.status, posts: pending.posts + 1 };
+}
 let chain = Promise.resolve();
+const enqueue = (data, run) => {
+  chain = chain.then(run).catch(error =>
+    send({ type: 'failure', id: data.id ?? null, request: data.type, posts: error?.posts ?? 0, error: errorOf(error) }));
+};
+// A merged frame's run; a failure reports the posts it consumed.
+async function runPending() {
+  const frame = pending; pending = null;
+  if (!frame) return;
+  try { await handle(frame); } catch (error) { throw Object.assign(error, { posts: frame.posts }); }
+}
 self.onmessage = ({ data }) => {
-  chain = chain.then(() => handle(data)).catch(error =>
-    send({ type: 'failure', id: data.id ?? null, request: data.type, error: errorOf(error) }));
+  if (data.type !== 'frame') { enqueue(data, () => handle(data)); return; }
+  mergeFrame(data);
+  if (runScheduled) return;
+  runScheduled = true;
+  setTimeout(() => { runScheduled = false; enqueue({ type: 'frame' }, runPending); }, 0);
 };
