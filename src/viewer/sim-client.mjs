@@ -1,21 +1,23 @@
 /** The page's end of the simulation worker (sim-worker.mjs, ?sim=worker;
- * docs/sim-worker.md "Frame protocol"). At most one frame is in flight: the
- * page posts frame N+1 when snapshot N has arrived, then draws N, so the
- * worker simulates while the page draws. Input commands queue here and go
- * with the next frame. `onFrame(snapshot)` sees each snapshot as it
- * arrives (lockstep drawing); `onProgress(message)` the load's progress;
- * `onFailure(error)` a message the worker could not handle. */
-export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {} } = {}) {
+ * docs/sim-worker.md "Frame protocol"). At most one frame is in flight;
+ * arrived snapshots wait in order until the page takes them, each exactly
+ * once. Input commands queue here and go with the next frame.
+ * `onFrame(snapshot)` takes each snapshot as it arrives instead (lockstep
+ * drawing); `onArrive(waiting)` is told of each arrival otherwise;
+ * `onProgress(message)` sees the load's progress and `onFailure(error)` a
+ * message the worker could not handle. */
+export function createSimClient({ onProgress = () => {}, onFrame = null, onArrive = () => {}, onFailure = () => {} } = {}) {
   const worker = new Worker(new URL('./sim-worker.mjs', import.meta.url), { type: 'module' });
   const pending = new Map(), commands = [], settledWaiters = [];
   // `activeLoad`: the last map load's request id; a snapshot of an earlier
   // load (a frame in flight when the page loaded another map) is dropped.
-  let nextId = 1, ready = null, inflight = false, latest = null, activeLoad = null;
+  let nextId = 1, ready = null, inflight = false, activeLoad = null;
+  const waiting = [];
   const settle = () => { for (const resolve of settledWaiters.splice(0)) resolve(); };
   const request = (message, transfer = []) => new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject });
-    if (message.type === 'load') { activeLoad = id; latest = null; }
+    if (message.type === 'load') { activeLoad = id; waiting.length = 0; }
     worker.postMessage({ ...message, id }, transfer);
   });
   const clock = () => ({ now: performance.now(), date: Date.now() });
@@ -30,7 +32,10 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
       }
       case 'frame':
         inflight = false;
-        if (data.load === activeLoad && data.snapshot) { if (onFrame) onFrame(data.snapshot); else latest = data.snapshot; }
+        if (data.load === activeLoad && data.snapshot) {
+          if (onFrame) onFrame(data.snapshot);
+          else { waiting.push(data.snapshot); onArrive(waiting.length); }
+        }
         settle();
         break;
       case 'failure': {
@@ -64,8 +69,10 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
       worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), speech, status });
       return true;
     },
-    /** The newest snapshot not yet taken, or null. */
-    take() { const snapshot = latest; latest = null; return snapshot; },
+    /** The oldest snapshot not yet taken, or null. */
+    take() { return waiting.shift() ?? null; },
+    /** Arrived snapshots not yet taken. */
+    get waiting() { return waiting.length; },
     /** Resolves when no frame is in flight. */
     settled() { return inflight ? new Promise(resolve => settledWaiters.push(resolve)) : Promise.resolve(); },
     terminate() { worker.terminate(); },

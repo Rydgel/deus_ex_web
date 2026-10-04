@@ -480,3 +480,32 @@ Step 8, third part (`sim-worker.mjs`, `sim-client.mjs`, `host-clock.mjs`):
   (a promise in worker mode), hides the page bars so the canvas is the
   whole window in every mode, and sets the menus through the DOM.
 
+Step 8, fourth part (the frame pipeline): arrived snapshots wait in order
+and each display frame draws the oldest, so none is skipped (each one's
+records and events apply exactly once). A frame posts at a display frame
+when none is in flight or waiting. When a snapshot arrives after the
+display frame that followed its post (the simulation is slower than the
+display), the next frame posts at once, so the worker never idles. When
+the simulation fits in a display frame, posts stay on display frames, one
+frame ahead, with even dt. A post's dt is the page time since the last
+post.
+
+Measured on 2026-10-04 (Linux host, headless Chromium, `--angle gl`,
+Island at 1920×1080, three interleaved pairs, `.work/tools/ab-worker.sh`;
+time between drawn frames, the mean over 300 display frames):
+
+| Run | Inline | Worker |
+|---|---:|---:|
+| 1 | 27.6 ms | 24.3 ms |
+| 2 | 26.1 ms | 22.4 ms |
+| 3 | 35.9 ms | 24.7 ms |
+
+The main thread now spends about 4.3 ms per display frame (render 2.7,
+actor records 0.6, HUD batches 0.4). The worker's frame takes about 22.5 ms
+(its step times), so it is the bottleneck: about 36 → 43 fps here, short
+of the ~55 fps estimated above, because the simulation side's planning
+and stamps cost more than profiled. From here every simulation-side saving
+(the tick's 12 ms first, then the actor layer's 5.5 ms and the HUD's
+1.4 ms) shortens the frame directly, until the simulation reaches the
+page's ~4–5 ms.
+

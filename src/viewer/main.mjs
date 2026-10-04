@@ -167,7 +167,10 @@ let weaponDraw=null,weaponGpu=null,weaponSummary=null;
 // ?sim=worker: the worker's page end (sim-client.mjs), created with the game
 // files; the last snapshot's input answers and game status; the lip-sync
 // channels' mixer position readers, sampled at each frame's post.
-let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0,simDt=0;
+let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0;
+// The worker's last frame post (the page clock, ms) and the display frames
+// since it.
+let simLastPost=null,simFramesSincePost=0;
 const lipSyncPositions=new Map();
 let infoLinkAudioContext=null;
 const conversationAudio=new Map();
@@ -485,7 +488,7 @@ async function loadMap(name) {
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
     hudRenderer?.dispose();hudRenderer=nextHud;
-    simHost?.dispose();simHost=nextHost;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};
+    simHost?.dispose();simHost=nextHost;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     gpuMesh?.dispose();gpuMesh=nextGpuMesh;
@@ -539,6 +542,9 @@ async function setFiles(files) {
     simClient?.terminate();
     simClient = createSimClient({ onProgress: message => { $('gate-message').textContent = message; },
       onFrame: lockstep ? snapshot => drawLockstep(snapshot) : null,
+      // A snapshot that missed the display frame after its post (the
+      // simulation is slower than the display): the next frame starts now.
+      onArrive: count => { if (count === 1 && simFramesSincePost > 0) postSimFrame(performance.now()); },
       onFailure: error => pauseForRuntimeError(error) });
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })));
@@ -1015,6 +1021,28 @@ function gpuEnd() {
   gpuTimer.pending.push(gpuTimer.active);
   gpuTimer.active = null;
 }
+/** A simulation frame's input from the page's state at `time` (the page
+ * clock, ms), without its dt. */
+function simFrameInput(time) {
+  const playing = mode === 'play' && Boolean(game), toUnits = radians => Math.round(radians * 32768 / Math.PI);
+  return { play: playing, run: !paused && !document.hidden, halted: Boolean(runtimeError),
+    size: [renderer.domElement.width, renderer.domElement.height], aspect: canvasAspect, resizes: resizeCount,
+    seconds: time / 1000, mirrors: world.mirrors.enabled, pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000,
+    inspect: playing ? null : { camera: { position: camera.position.toArray(), quaternion: camera.quaternion.toArray(),
+      fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far },
+      view: { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] },
+      sky: world.sky ? { location: [...world.sky], rotation: [...(world.skyRotation ?? [0, 0, 0])] } : null } };
+}
+/** ?sim=worker: posts the next frame unless one is in flight; its dt is the
+ * page time since the last post. */
+function postSimFrame(time) {
+  if (!simClient || !sim || !world || loading || held || simClient.inflight) return false;
+  const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);
+  if (!simClient.post({ ...simFrameInput(time), dt }, { speech: [...lipSyncPositions].map(([id, position]) => [id, position()]),
+    status: !simStatus || simPosts % 15 === 0 })) return false;
+  simLastPost = time; simFramesSincePost = 0; simPosts++;
+  return true;
+}
 /** One simulation frame (sim-session.mjs frame); ?sim=clone sends the input
  * and the snapshot through structuredClone (`clone` phase). */
 function simFrame(input) {
@@ -1030,7 +1058,7 @@ function simFrame(input) {
 }
 function animate(time) {
   requestAnimationFrame(animate);
-  if (held === 'releasing') { held = false; lastTime = time - 1000 / 60; }
+  if (held === 'releasing') { held = false; lastTime = simLastPost = time - 1000 / 60; }
   if (held) { lastTime = time; return; }
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
@@ -1055,23 +1083,14 @@ function animate(time) {
     // drawing snapshot N, so the worker simulates while the page draws; with
     // a frame still in flight the page posts none and its dt accumulates.
     let snap = null, draw = true;
-    if (sim) {
-      const toUnits = radians => Math.round(radians * 32768 / Math.PI);
-      const input = { play: playing, run: !paused && !document.hidden, halted: Boolean(runtimeError),
-        size: [renderer.domElement.width, renderer.domElement.height], aspect: canvasAspect, resizes: resizeCount,
-        seconds: time / 1000, mirrors: world.mirrors.enabled, pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000,
-        inspect: playing ? null : { camera: { position: camera.position.toArray(), quaternion: camera.quaternion.toArray(),
-          fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far },
-          view: { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] },
-          sky: world.sky ? { location: [...world.sky], rotation: [...(world.skyRotation ?? [0, 0, 0])] } : null } };
-      if (simClient) {
-        simDt += dt;
-        if (simClient.post({ ...input, dt: simDt }, { speech: [...lipSyncPositions].map(([id, position]) => [id, position()]),
-          status: !simStatus || simPosts % 15 === 0 })) { simDt = 0; simPosts++; }
-        snap = lockstep ? null : simClient.take();
-        draw = Boolean(snap);
-      } else snap = simFrame({ ...input, dt });
-    }
+    if (sim && simClient) {
+      // The oldest arrived snapshot; the next frame posts first when none is
+      // in flight or waiting, so the worker simulates while the page draws.
+      simFramesSincePost++;
+      snap = lockstep ? null : simClient.take();
+      if (lockstep || simClient.waiting === 0) postSimFrame(time);
+      draw = Boolean(snap);
+    } else if (sim) snap = simFrame({ ...simFrameInput(time), dt });
     if (draw) drawFrame(snap, time);
   }
   framePhases.frames++; framePhases.total += performance.now() - frameStart;
