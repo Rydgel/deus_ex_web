@@ -88,7 +88,8 @@ try {
     const page = await browser.newPage({viewport: {width: 960, height: 640}});
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto(url);
+    // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
+    await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 180000});
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 180000});

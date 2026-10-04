@@ -35,7 +35,8 @@ try {
     await route.fulfill({response, body: (await response.text()) +
       '\nwindow.__deusLasers={get npc(){return npcPreview;},get game(){return game;}};\n'});
   });
-  await page.goto(url);
+  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
+  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

@@ -19,8 +19,9 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 
 const hiddenRoot=new THREE.Group();hiddenRoot.visible=false;
 /** One binding as the earlier previews showed it: its simulation-side
- * state and its page-side root and GPU slot. */
-function bindingView(binding,drawOf,draw=null){
+ * state and its page-side root and GPU slot (Play's NPC focus list and the
+ * validators read these). */
+export function bindingView(binding,drawOf,draw=null){
   return {
     get actor(){return binding.actor;},get summary(){return binding.summary;},get path(){return binding.path;},
     get mesh(){return binding.mesh;},get block(){return binding.block;},

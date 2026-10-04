@@ -35,7 +35,8 @@ try {
     const response = await route.fetch();
     await route.fulfill({response, body: (await response.text()) + hook});
   });
-  await page.goto(url);
+  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
+  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (map !== '00_Training') {
     await page.locator('#map').selectOption(map);

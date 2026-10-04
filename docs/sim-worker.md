@@ -154,16 +154,16 @@ host behavior.
 
 ## Modes
 
-- `?sim=inline`: the worker's frame and the page's draw both run on the main
-  thread, separated by the snapshot. Validators that patch main.mjs to reach
-  `game` keep this mode.
+- `?sim=worker` (the default since 2026-10-04): the simulation in the
+  worker (step 8).
+- `?sim=inline`: the simulation frame and the page's draw both run on the
+  main thread, separated by the snapshot. The Training previews, the NPC
+  focus list and `?simVerify=1` drive or read the runtime on the page, so
+  they need it (`?simVerify=1` implies it). The validators that patch
+  main.mjs to read `game` load `?sim=inline`; validate-sim-split compares
+  the worker with it.
 - `?sim=clone`: inline, with the snapshot passed through `structuredClone`,
   proving that it carries only plain data.
-- `?sim=worker`: the simulation in the worker (step 8). Verified, and
-  still opt-in. The Training previews, the NPC focus list and
-  `?simVerify=1` need the page modes, and the validators that patch
-  main.mjs to read `game` load the page without `?sim=` (the inline
-  default).
 - `?simVerify=1` (inline only): every frame, the page also reads the live
   runtime the way the drawing modules read it today and compares with the
   snapshot, and three's own culling records the set `onAfterRender` would

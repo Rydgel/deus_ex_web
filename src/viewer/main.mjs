@@ -13,6 +13,7 @@ import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
 import { createActorMeshDraw } from './actor-mesh-draw.mjs';
+import { bindingView } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
 import { WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
@@ -83,12 +84,15 @@ let held=new URLSearchParams(location.search).get('hold')==='1';
 // onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
 const simVerify=new URLSearchParams(location.search).get('simVerify')==='1';
 const drew={movers:new Set(),sprites:new Set(),actors:new Set(),weapon:new Set()};
-// ?sim=clone: the simulation frame's input and snapshot, and the events
-// between frames, pass through structuredClone after a check that they hold
-// plain data only, as they do to and from the worker (docs/sim-worker.md
-// "Modes"). ?sim=worker runs the simulation in sim-worker.mjs. ?sim=inline
-// (the default) hands them over directly.
-const simMode=(({clone:'clone',worker:'worker'})[new URLSearchParams(location.search).get('sim')])??'inline';
+// The simulation runs in a module worker by default (sim-worker.mjs,
+// docs/sim-worker.md "Modes"). ?sim=inline runs it on the page and hands its
+// snapshot over directly; ?sim=clone does the same through structuredClone
+// after a check that the input, the snapshot and the events between frames
+// hold plain data only, as they do to and from the worker. The Training
+// previews, the NPC focus list and ?simVerify=1 (which implies inline) drive
+// or read the runtime on the page.
+const simMode=(({inline:'inline',clone:'clone',worker:'worker'})[new URLSearchParams(location.search).get('sim')])
+  ??(simVerify?'inline':'worker');
 // ?hold=1 with ?sim=worker: each snapshot is drawn as it arrives and
 // deusExViewer.settled() waits for it, so a test steps one simulation frame
 // per display frame (scripts/validate-sim-split.mjs).
@@ -164,6 +168,8 @@ let gpuMesh=null;
 // The view model's page half (weapon-overlay-draw.mjs), its own GPU mesh
 // instance and the last frame's summary from the simulation side.
 let weaponDraw=null,weaponGpu=null,weaponSummary=null;
+// The page modes' mesh lighting view (sim-host.mjs; validation access).
+let meshLighting=null;
 // ?sim=worker: the worker's page end (sim-client.mjs), created with the game
 // files; the last snapshot's input answers and game status; the lip-sync
 // channels' mixer position readers, sampled at each frame's post.
@@ -462,9 +468,16 @@ async function loadMap(name) {
       const actorSim=nextHost.actorSim;
       const draw=createActorMeshDraw(assets,{gpu:nextGpuMesh,lit:Boolean(nextHost.meshLighting??nextHost.lit),displayGamma:nextWorld.displayGamma,
         feedback:handle=>simVerify?()=>drew.actors.add(handle):()=>{}});
-      const view=binding=>({summary:binding.summary,get location(){return binding.location;},get rotation(){return binding.rotation;}});
-      nextNpcPreview={root:draw.root,draw,summary:actorSim.summary,
+      // On the page the bindings' views (npc-mesh-preview.mjs bindingView)
+      // join both halves; the worker's bindings are out of reach.
+      const drawOf=id=>draw.bindings.get(id),views=new WeakMap();
+      const view=binding=>{let value=views.get(binding);if(!value)views.set(binding,value=bindingView(binding,drawOf));return value;};
+      nextNpcPreview={root:draw.root,draw,summary:actorSim.summary,kernel:actorSim.kernel??null,
         get actors(){return actorSim.actors.map(view);},get npcActors(){return actorSim.npcActors.map(view);},
+        /** Iterator item bindings in use (validation access, page only). */
+        itemStats:()=>actorSim.itemSlots?.().map(({actor,ids})=>({actor,slots:ids.length,
+          drawn:ids.filter(id=>id!==null&&drawOf(id)?.root.visible).length}))??null,
+        batchStats:()=>draw.batchStats(),proceduralTextures:()=>draw.proceduralTextures(),
         dispose(){draw.dispose();}};
     }
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextHost.hudTextures}):null;
@@ -487,7 +500,7 @@ async function loadMap(name) {
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
     hudRenderer?.dispose();hudRenderer=nextHud;
-    simHost?.dispose();simHost=nextHost;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
+    simHost?.dispose();simHost=nextHost;meshLighting=nextHost.meshLighting??null;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     gpuMesh?.dispose();gpuMesh=nextGpuMesh;

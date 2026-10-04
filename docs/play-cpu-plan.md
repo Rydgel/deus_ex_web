@@ -222,9 +222,12 @@ on the page's main thread.
   - The gain is bounded by those loops' size once Phases 1–2 are done.
 - **Simulation and drawing overlapped (Phase 7, the user's decision).**
   Planned on 2026-10-03, after Phase 4's ports stopped showing in fps;
-  started on 2026-10-04. The design, revised after an inventory of the
-  viewer's simulation accesses, is [Simulation worker](sim-worker.md); the
-  estimates below are the first ones. The
+  started on 2026-10-04 and in place the same day: Play's simulation runs in a
+  module worker by default (`?sim=inline` keeps it on the page). The
+  design and its measurements are in [Simulation worker](sim-worker.md).
+  Island at 1920×1080 went from 26–31 ms to 22–27 ms per drawn frame. The
+  worker's ~23 ms simulation frame is now the bound, short of the
+  estimates below, which are the first ones. The
   frame today is the sum of both halves; overlapped, it is the longer one.
   - Drawing is not read-only here: the HUD runs UnrealScript, render
     iterators fire events and move actors, and LastRenderTime stamps feed the

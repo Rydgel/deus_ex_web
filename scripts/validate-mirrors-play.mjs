@@ -53,7 +53,8 @@ try {
       '\nwindow.__deusMirrors={get world(){return world;},get game(){return game;},get camera(){return camera;},get renderer(){return renderer;}};\n'});
   });
   // --query a=1&b=2: viewer switches, e.g. simVerify=1 (docs/sim-worker.md).
-  await page.goto(option('query', null) ? `${url}/?${option('query', null)}` : url);
+  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
+  await page.goto(`${url.replace(/\/$/, '')}/?${option('query', null) ? `${option('query', null)}&` : ''}sim=inline`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   // The mirror's CSS-pixel screen rectangle, from its mesh bounds.
