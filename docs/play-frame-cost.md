@@ -1,5 +1,47 @@
 # Play frame cost from first principles
 
+## October 4: Firefox and Training's mirrored floor
+
+The user saw 27 fps in Firefox (not Chrome) at Training's Player start on
+the Retina display whenever the mirrored floor was in view. Headed Playwright
+Firefox (`firefox.launch({headless: false})`, 120 Hz) reproduces it; the
+existing profilers are Chromium-only. Firefox's frame phases there:
+`lightUpload` 20-39 ms per drawn frame, against 0.1 ms in Chrome, and
+about 0 when looking away from the floor.
+
+The trigger is the mirror: once `mirrors.mayRender` is true the light-map
+animation drops its frustum test (a reflection may show surfaces outside the
+main view), so every animated light map in the level changes each frame and
+its rectangle is flushed. The cost is Firefox's: each `texSubImage3D` was
+handed the whole 4 MB page and selected its rectangle with `UNPACK_ROW_LENGTH`
+and the skip state, and Firefox copies the whole source view per call
+regardless. `LightAtlas.flush` now hands each call exactly its rectangle's
+bytes (a full-width rectangle is the page's own rows; others are packed into
+a scratch buffer) with zero row and skip state. The GPU bytes are unchanged:
+`validate-light-atlas-upload.mjs` reads every layer back after 240 flushes
+and now also runs with `--browser firefox`.
+
+Interleaved runs, Training Player start, 1440×900 at pixel ratio 2,
+`lightUpload` ms per drawn frame, median [min–max]:
+
+| Upload shape | Chrome (3 pairs) | Firefox headed (2 pairs) |
+|---|---:|---:|
+| whole page + skip state (before) | 0.106 [0.106–0.109] | 38.9 [35.9–38.9] |
+| packed rectangle (now) | 0.247 [0.228–0.248] | 0.31 [0.31–0.31] |
+| page rows from the rectangle's first texel, `ROW_LENGTH` = page | 0.116 [0.107–0.116] | 1.42 [1.38–1.42] |
+| packed by a Uint32 loop | 0.382 [0.354–0.382] (2 pairs) | — |
+
+With the floor in view, Firefox's page work per drawn frame (`total`) falls
+from 42-46 ms to 5.2-5.6 ms and its display interval median is 8.34 ms
+(120 Hz). The packed shape costs Chrome 0.14 ms, which the unpacked row view
+would save at four times Firefox's cost. Open, unmeasured here: with the
+worker, Firefox drew a new frame on 74-88% of display frames in these runs,
+Chrome on all of them. Not changed here: the mirror
+case still animates every light map in the level (`lightAnimation` about
+1.5 ms in both browsers), and mirror child frames still draw the whole scene
+under three.js frustum culling (about 1 ms CPU and 0.5-2 ms GPU in Chrome,
+which holds 120 fps at 1440×960 and 1728×1080, pixel ratio 2).
+
 ## October 3: Island standing still on the Linux host
 
 The user saw about 20 fps on UNATCO Island, standing at Player start, in
@@ -273,7 +315,8 @@ Host rendering only; the texels on the GPU are unchanged
   GPU, checked by the validator), so the page textures are never uploaded and
   each change is sent once.
 - Array rectangles go up with one `texSubImage3D` each under one unpack setup
-  per flush (`UNPACK_IMAGE_HEIGHT` must be the page height for skipped rows).
+  per flush, each from exactly its rectangle's bytes since October 4 (see
+  "Firefox and Training's mirrored floor").
 
 - Animated light maps without moving lights hand the atlas their merged
   bytes: lighting.animate has just set those samples to bytes/255, and the

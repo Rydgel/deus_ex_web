@@ -4,7 +4,7 @@ import * as THREE from 'three';
 export class LightAtlas {
   constructor(size = 1024) {
     this.size = size; this.pages = []; this.tiles = new WeakMap();
-    this.arrayUniform = { value: null }; this.arrayUploaded = false; this.addPage();
+    this.arrayUniform = { value: null }; this.arrayUploaded = false; this.scratch = new Uint8Array(0); this.addPage();
   }
   addPage() {
     if (this.arrayUniform.value) throw new Error('Cannot grow a sealed lightmap texture array');
@@ -99,9 +99,13 @@ export class LightAtlas {
     return tile;
   }
   /** Send deferred tile rectangles; without a renderer the pages re-upload.
-   * Array layers take one texSubImage3D per rectangle straight from the
-   * page's bytes, under one pixel-store setup per flush (the same texels
-   * copyTextureToTexture sends, without its per-call state round trips). */
+   * Array layers take one texSubImage3D per rectangle under one pixel-store
+   * setup per flush (the same texels copyTextureToTexture sends, without its
+   * per-call state round trips). Each call gets a view of exactly its
+   * rectangle's bytes: Firefox copies the whole source view per call
+   * whatever the unpack state selects, so a 4 MB page with skipped rows
+   * cost Training 20-39 ms per frame once a mirror lifted the light-map
+   * frustum test (docs/play-frame-cost.md). */
   flush(renderer) {
     let array = null;
     for (const page of this.pages) {
@@ -121,13 +125,22 @@ export class LightAtlas {
       array ??= this.beginArrayUpload(renderer);
       if (!array) { this.dirtyPage(page); continue; }
       const { gl } = array;
-      for (const [x, y, width, height] of rects) {
-        array.state.pixelStorei(gl.UNPACK_SKIP_PIXELS, x); array.state.pixelStorei(gl.UNPACK_SKIP_ROWS, y);
-        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, page.pixels);
-      }
+      for (const [x, y, width, height] of rects)
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, page.index, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE,
+          this.rectangle(page.pixels, x, y, width, height));
     }
-    if (array) for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS'])
-      array.state.pixelStorei(array.gl[name], 0);
+  }
+  /** A rectangle's texels as one tightly packed view: full-width rows are
+   * already contiguous in the page, others are copied into the scratch. */
+  rectangle(pixels, x, y, width, height) {
+    const size = this.size, row = width * 4;
+    if (width === size) return pixels.subarray(y * size * 4, (y + height) * size * 4);
+    if (this.scratch.length < row * height) this.scratch = new Uint8Array(row * height);
+    for (let r = 0; r < height; r++) {
+      const start = ((y + r) * size + x) * 4;
+      this.scratch.set(pixels.subarray(start, start + row), r * row);
+    }
+    return this.scratch.subarray(0, row * height);
   }
   /** Bind the uploaded array on unit 0 through three's state cache, with the
    * unpack state copyTextureToTexture would set. Null when three still owes
@@ -141,11 +154,9 @@ export class LightAtlas {
     state.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, texture.flipY);
     state.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, texture.premultiplyAlpha);
     state.pixelStorei(gl.UNPACK_ALIGNMENT, texture.unpackAlignment);
-    state.pixelStorei(gl.UNPACK_ROW_LENGTH, this.size);
-    // 3D uploads measure UNPACK_SKIP_ROWS against the image height, which
-    // defaults to the rectangle's own height: it must be the page height.
-    state.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, this.size);
-    state.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
+    // Rectangles arrive tightly packed (rectangle()).
+    for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS', 'UNPACK_SKIP_IMAGES'])
+      state.pixelStorei(gl[name], 0);
     return { gl, state };
   }
   coordinates(tile, point) {

@@ -11,16 +11,20 @@
  *    changes did not re-upload the whole array and GL reports no error.
  *
  *   node scripts/validate-light-atlas-upload.mjs [--url http://127.0.0.1:5173] [--map 00_Training]
- *   (default: its own dev server of this checkout)
+ *     [--browser chromium|firefox]
+ *   (default: its own dev server of this checkout, Chromium). Firefox copies
+ *   each upload's whole source view, so its uploads take another shape
+ *   (light-atlas.mjs flush); --browser firefox checks them there.
  */
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,firefox} from '@playwright/test';
 import {createServer} from 'vite';
 import {gameDirectory} from './game-directory.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
-const map=option('map','00_Training');
+const map=option('map','00_Training'),engine=option('browser','chromium');
+if(engine!=='chromium'&&engine!=='firefox')throw new Error('--browser must be chromium or firefox');
 try{gameDirectory();}catch{console.log('SKIP validate-light-atlas-upload: no installed game data');process.exit(0);}
 // Without --url, a bounded dev server of this checkout (as validate-gpu-mesh).
 let server=null,url=option('url',null);
@@ -33,7 +37,8 @@ if(!url){
   await server.listen();
   url=server.resolvedUrls.local[0].replace(/\/$/,'');
 }
-const browser=await chromium.launch({args:[`--use-angle=${process.platform==='darwin'?'metal':'gl'}`]});
+const browser=engine==='firefox'?await firefox.launch():
+  await chromium.launch({args:[`--use-angle=${process.platform==='darwin'?'metal':'gl'}`]});
 try{
   const page=await browser.newPage({viewport:{width:1440,height:960}});
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -136,6 +141,6 @@ o=vec4(${sampler==='sampler2D'?'texture(t,lm)':'texture(t,vec3(lm,layer))'}.rgb*
   const status=await page.evaluate(()=>window.deusExViewer.status());
   assert.equal(status.runtimeError??null,null,'Play paused');
   assert.deepEqual(errors,[]);
-  console.log(`Light-map atlas: 2D-array layer sampling equals 2D sampling on ${sampling.pixels} pixels (${sampling.distinct} distinct values); `+
+  console.log(`Light-map atlas (${engine}): 2D-array layer sampling equals 2D sampling on ${sampling.pixels} pixels (${sampling.distinct} distinct values); `+
     `on ${map} after 240 flushes, ${play.pages} GPU array layers equal the CPU pages, no page texture was uploaded and ${play.fullUploads} whole-array uploads were owed.`);
 }finally{await browser.close();await server?.close();}

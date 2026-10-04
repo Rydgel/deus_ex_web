@@ -23,8 +23,8 @@ test('lightmap array retains page bytes and sends partial updates to the exact l
   maps[1].pixels[0] = .75;
   atlas.update(maps[1], {partial: true, region: {minU: 0, maxU: 1, minV: 0, maxV: 1}});
   // The page texture (uploaded here) takes three's copy; the array layer
-  // takes one texSubImage3D from the page bytes under the matching unpack
-  // state, and the row/skip state returns to zero afterwards.
+  // takes one texSubImage3D of exactly the rectangle's bytes, packed, with
+  // zero row/skip state (Firefox copies a call's whole source view).
   const copies = [], uploads = [], store = new Map(), handle = {};
   const gl = {TEXTURE0: 0x84c0, TEXTURE_2D_ARRAY: 0x8c1a, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401,
     UNPACK_FLIP_Y_WEBGL: 1, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 2, UNPACK_ALIGNMENT: 3, UNPACK_ROW_LENGTH: 4,
@@ -40,13 +40,22 @@ test('lightmap array retains page bytes and sends partial updates to the exact l
   assert.deepEqual([copies[0].min, copies[0].max, copies[0].at], [[0, 0], [2, 2], [0, 0]]);
   assert.equal(uploads.length, 1);
   assert.deepEqual(uploads[0].args, [gl.TEXTURE_2D_ARRAY, 0, 0, 0, 1, 2, 2, 1, gl.RGBA, gl.UNSIGNED_BYTE]);
-  assert.equal(uploads[0].data, tiles[1].page.pixels);
-  assert.equal(uploads[0].store[gl.UNPACK_ROW_LENGTH], 4); assert.equal(uploads[0].store[gl.UNPACK_IMAGE_HEIGHT], 4);
-  assert.equal(uploads[0].store[gl.UNPACK_SKIP_PIXELS], 0); assert.equal(uploads[0].store[gl.UNPACK_SKIP_ROWS], 0);
+  const page = tiles[1].page.pixels, rows = (x, y, width, height) =>
+    Array.from({length: height}, (_, r) => [...page.subarray(((y + r) * 4 + x) * 4, ((y + r) * 4 + x + width) * 4)]).flat();
+  assert.deepEqual([...uploads[0].data], rows(0, 0, 2, 2));
+  for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS', 'UNPACK_SKIP_IMAGES'])
+    assert.equal(uploads[0].store[gl[name]], 0);
   assert.equal(uploads[0].store[gl.UNPACK_FLIP_Y_WEBGL], false);
-  for (const name of ['UNPACK_ROW_LENGTH', 'UNPACK_IMAGE_HEIGHT', 'UNPACK_SKIP_PIXELS', 'UNPACK_SKIP_ROWS'])
-    assert.equal(store.get(gl[name]), 0);
-  assert.equal(tiles[1].page.pixels[0], Math.round(.75 * 255));
+  assert.equal(page[0], Math.round(.75 * 255));
+  // A full-width rectangle (the whole padded tile) is already contiguous:
+  // the page's own rows, without a copy.
+  atlas.update(maps[1], {partial: true}); uploads.length = 0;
+  atlas.flush({copyTextureToTexture() {}, getContext: () => gl, properties: {get: texture => texture === array ? {__webglTexture: handle, __version: array.version} : {}},
+    state: {activeTexture() {}, bindTexture() {}, pixelStorei(name, value) { store.set(name, value); }}});
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(uploads[0].args, [gl.TEXTURE_2D_ARRAY, 0, 0, 0, 1, 4, 4, 1, gl.RGBA, gl.UNSIGNED_BYTE]);
+  assert.equal(uploads[0].data.buffer, page.buffer);
+  assert.equal(uploads[0].data.byteOffset, page.byteOffset); assert.equal(uploads[0].data.length, 64);
   atlas.update(maps[2]); assert.equal(array.layerUpdates.size, 0);
   atlas.update(maps[0], {partial: true}); atlas.flush(null);
   assert.equal(array.layerUpdates.size, 0);
