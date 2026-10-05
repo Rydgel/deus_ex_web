@@ -246,6 +246,106 @@ node .work/music/phase2/smoke.mjs .work/music/phase2/out intro-long 2000   # exp
 (`.work/music/phase2` also holds `dec.py`, a trace decoder, and `gdis.py`,
 the disassembler used for the translation.)
 
+## Phase 3 handoff (mixer, paused 2026-10-05)
+
+Paused by request before any code was written. No Rust, oracle or
+validator change is committed yet; this section records what was read and
+measured so the work can resume.
+
+**Measured.** Under Unicorn 2.1.4 the oracle CPU starts with CR4 = 0x50200
+(OSFXSR already set) and MXCSR = 0. With MXCSR set to 0x1f80, the code-buffer
+kernel copied by the real 0x10614080(7) runs. The copy is byte-equal to the
+template at 0x10622730. One hand-checked call matches: 8-bit, frac 0x1234,
+step 0x13001, gains 1000/2000 give 0.5555153 / 1.1110305 on frame 0. The
+probe is `.work/mixer/probe_sse.py`; the disassembler is `.work/mixer/gdis.py`
+(`gdis.py START END` or `--hex START END`, preferred-base addresses). Both
+files are in the worktree's gitignored `.work`. `gcc -m32` works on the
+Linux host. The plan is to run the original template natively as a hardware
+cross-check: map 0x1064d000 fixed for its constants and save slot, and copy
+0x603 bytes into RWX memory.
+
+**Read from code (adds to mixer.md §2.5/§2.6; not yet verified by an
+oracle run).**
+
+- Renderer 0x106146a0(buf, size, posA, posB, lenA, lenB). shift = 2;
+  frames = len >> shift. Each loop does mixer(n = min(framesA, framesB)),
+  which is clamped to 512, then the four hooks (all null for DX). Then it
+  converts d00 with fmt into [buf+posA, end) and the wrapped remainder at
+  buf (a 0-frame call is possible), and d04 the same way with fmt | 0x40.
+  Positions advance by `(pos + k<<2) % size` (signed idiv). The loop runs
+  while framesA, framesB and ahead are nonzero. It returns total bytes.
+- Kernel frame count: emulate the 16-bit `dx` counter. Aligned bus0
+  (`edi & 0xf == 0`) does `dx -= 4`. Unaligned stores one prologue frame
+  first, then `dx -= 5`. Then 4 frames per main iteration while dx >= 0
+  (i16), then `dx += 3` and 1 frame per tail step while dx >= 0. So
+  count 0 with an unaligned bus still writes 1 frame, and a count word of
+  0x8000 or more overruns the 0x1040-byte bus (the original corrupts the
+  heap; the translation should fault).
+- Per frame k, with `t = (frac & 0xfffe) + k·(step & ~1)` (64-bit):
+  p = pos + (t >> 16) and w = (t & 0xffff) >> 1. The 8-bit fetches are
+  `(s8)x[p] << 8` and `(s8)x[p+1] << 8`; the 16-bit fetches are i16 at
+  2p and 2p+2. `o = x[p+1]·w + x[p]·(32767 − w)`. Each lane gets
+  `bus += f32(o) · gain` (two roundings, no FMA), where
+  `gain = (s16)arg · 2^-30` (exact). Lane 0 is arg 7 (`tab[0x7fff−P]·V`)
+  and lane 1 is arg 8. Mode bit 2 negates the low words of args 8, 10
+  and 12. The pipelining is proven by reading to give exactly this per
+  frame. The kernel prefetches two frames past the last one; those reads
+  do not affect the output.
+- Conversion 0x10622fe4: mono (`fmt & 1 = 0`) is a no-op. The 16-bit
+  store is `sat16(cvt(x))`, and the add is `sat16(dst + sat16(cvt(x)))`,
+  where cvt rounds to nearest even and gives i32::MIN for NaN or
+  out-of-range values. 8-bit output reads an uninitialised mm5 when
+  `fmt & 0x80 = 0`; mark it unsupported.
+- Mixer 0x10614920 zeroes `n << 3` bytes of all six buses before
+  segmenting. Bus select reads V+0x11 bit 7 once per voice per segment.
+  The buses are 64-byte aligned, so the prologue runs when the bus frame
+  offset is odd.
+
+**Next steps (planned interface).**
+
+1. `native/galaxy-kernel/src/mixer.rs`: a `Mixer` holding six
+   `Vec<f32>` buses of 1040 floats in d00..d14 order. It provides the
+   kernel, the conversion and `render_ring` (0x106146a0 with a ring), plus
+   `pub fn render(&mut self, frames: i32, out: &mut [i16]) -> Result<i32, u32>`
+   (bus A only). Exports: `galaxy_render(frames: u32) -> *const i16`
+   (pins ahead to the galaxy_seq_ahead value or a documented nonzero
+   default, because only zero/nonzero gates the PCM) and
+   `galaxy_fault() -> u32`. Test exports cover buses, fabricated memory
+   regions, a direct kernel call, a direct conversion, the ring and
+   pokes. Planned faults 0x120 (bus overrun), 0x121 (8-bit or mono
+   output) and 0x122 (non-SSE kernel). Mutants: 201 full step, 202 round
+   half away, 203 f64 arithmetic, 204 no saturation. There is a hazard
+   flag for reads of a looped sample's never-written allocation tail
+   `[max(Length, LoopEnd+31), Length+31)`.
+2. Planned sequencer.rs edits, kept small: `Player` gets
+   `pub mixer: crate::mixer::Mixer`; `mix()` zeroes the buses; `mix_voice`
+   reads the bus group from V+0x11 bit 7 and calls the kernel after the K
+   record.
+3. Oracle: a `--real-kernel` flag on
+   scripts/native-galaxy-music-sequencer-oracle.py. It keeps the code
+   buffer (save its pointer before the STUB write), sets MXCSR 0x1f80,
+   records K at the call site 0x106154e0 (args at ESP), and records M/R at
+   the mixer entry and its `ret` 0x1061565b. Each callback calls the
+   renderer on a 176400-byte ring (posA0 = 176400 − 1764,
+   posB = posA + 88200). PCM goes in `<case>.pcm.dig`, with full windows
+   and per-call buses for the first callbacks. New ops: `poke`, `voice`,
+   `data` (FAB memory at 0x50000000), `ring`, `render`, `buses`, `kernel`,
+   `convert`. Fabricated programs pin the counters high so no tick runs
+   without a song.
+4. scripts/validate-galaxy-mixer.mjs: Intro_Music PCM, the fabricated
+   cases, other songs, the native `-m32` cross-check, and mutants
+   201..204. Outputs go to .cache/galaxy-music/mixer.
+
+**Resume.** Read this section and mixer.md §2.5/§2.6, then:
+
+```
+NATIVE_PROBE_PYTHON=/home/rydgel/projects/deus_ex_web/.cache/native-probe-env/bin/python
+$NATIVE_PROBE_PYTHON .work/mixer/probe_sse.py           # kernel runs under Unicorn
+$NATIVE_PROBE_PYTHON .work/mixer/gdis.py 10622730 10622d33   # kernel template
+cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
+  --target wasm32-unknown-unknown --target-dir .work/wasm-target
+```
+
 ## Determinism
 
 Given the voice state, both counters and the sequence of mixer calls, the
