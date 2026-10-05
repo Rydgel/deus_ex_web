@@ -93,10 +93,11 @@ selects which work happens:
 The GPU receives numbers and does the per-vertex, per-face and per-corner
 loops:
 
-1. **Pose pass** (one point per actor vertex): GetFrame's interpolation and
-   publication for the main channel and up to four blend slots, including
-   tween channels, into the world-space pose (the CPU `frame.output`), and
-   the per-channel cache pose (the CPU `entry.vertices`).
+1. **Pose pass** (one point per actor vertex, two draws of three targets,
+   see "Pose pass targets"): GetFrame's interpolation and publication for
+   the main channel and up to four blend slots, including tween channels,
+   into the world-space pose (the CPU `frame.output`), and the per-channel
+   cache pose (the CPU `entry.vertices`).
 2. **Face pass** (one point per actor face): camera-space face normal and
    the drawn test of DrawLodMesh `0x10b0fe60–0x10b0ffc9`; for actors with
    environment faces also the world-space face normal of `meshFaceNormal`.
@@ -169,6 +170,34 @@ actor is not drawn. `count` is always the full vertex count in Play
 (`getLodMeshFrame`'s default `vertexCount`), so the tween's count expansion
 branch never runs there; if a plan ever needs it, that actor takes the CPU
 path for that frame.
+
+**Pose pass targets.** The pose and the five cache poses are six RGBA32F
+targets (96 bytes per texel). They are written by two draws of three
+targets each (`gpu-mesh.mjs` `POSE_PARTS`: pose, main, blend 0; then blend
+1–3). Both draws read the previous side and evaluate every channel, so each
+target receives the value the single draw computed; validate-gpu-mesh
+passes bit-exact on Training and Island (31 tween captures).
+
+The single six-target draw it replaces failed in Chrome on an Apple M2
+(ANGLE over Metal, 2026-10-05). NPCs whose head blend slot started a tween
+at a conversation start, such as Katarina and Arthur dancing in
+10_Paris_Club, or the nurse and JC at the club entrance, drew head spikes
+for some frames. Per-frame readbacks in the user's Chrome localized it.
+The CPU cache pose was right. On the GPU, the blend slot 3 cache pose
+(target 5, the last) read as zero in runs of 8–32 consecutive texels within
+one row (texels 6296–6303 and 6368–6399 in one capture), and the tween
+started from zero there. The other targets were intact at the same texels.
+Keyframe frames hide it, because they ignore the cache pose.
+
+What did not change it: `gl.flush()` or `gl.finish()` after the passes, an
+8 ms busy wait per frame (about 60 fps), `?gpuMesh=0`'s CPU path (no
+glitch), an RTX machine under ANGLE (no glitch). Per-frame readbacks of a
+state target hid it; readbacks of the pose target alone did not.
+Headless Chromium with `--use-angle=metal` on the same Mac never reproduced
+it. The 96 bytes are within Metal's 128-byte implicit image block for
+Apple7+, so the cause is not the documented limit and remains unknown. The
+split rests only on that measurement: with it, the user's repeated
+conversations in the same places show no spikes.
 
 **CPU shadow.** The CPU cache must stay able to produce the exact CPU pose
 on demand (visibility fallback and validation). `planLodMeshFrame` records

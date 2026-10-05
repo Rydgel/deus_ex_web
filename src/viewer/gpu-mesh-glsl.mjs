@@ -67,8 +67,7 @@ export const POSE_FRAGMENT=`${COMMON}${PARAMS}
 uniform usampler2D uVertexMap;uniform isampler2D uKeyframes;
 uniform sampler2D uPrevPose,uPrevState0,uPrevState1,uPrevState2,uPrevState3,uPrevState4;
 uniform uint uFrame;
-layout(location=0) out vec4 oPose;layout(location=1) out vec4 oState0;layout(location=2) out vec4 oState1;
-layout(location=3) out vec4 oState2;layout(location=4) out vec4 oState3;layout(location=5) out vec4 oState4;
+/*POSE_OUTPUTS*/
 vec3 key(uint keyBase,uint V,uint frame,uint i){return vec3(texelFetch(uKeyframes,at(keyBase+frame*V+i),0).xyz);}
 // Keyframe interpolation: X one rounding of delta*alpha+a (x87 extended), Y/Z stored.
 vec3 interpolate(vec3 a,vec3 b,float alpha){
@@ -282,3 +281,14 @@ vec2 environmentUV(vec3 point,vec3 normal,vec3 cameraHi,vec3 cameraLo){
   float rx=B(dx-B(normal.x*twice)),ry=B(dy-B(normal.y*twice));
   return vec2(B(1.0+rx)*0.5,B(1.0+ry)*0.5);}
 `;
+
+const POSE_TARGETS=['oPose','oState0','oState1','oState2','oState3','oState4'];
+/** The pose pass writing only `targets` (names from POSE_TARGETS, in
+ * attachment order); the others are plain globals the compiler drops. Every
+ * part computes the same values from the same inputs (gpu-mesh.mjs
+ * POSE_PARTS, docs/gpu-mesh.md "Pose pass targets"). */
+export function poseFragment(targets){
+  const declarations=POSE_TARGETS.map(name=>{const at=targets.indexOf(name);
+    return at>=0?`layout(location=${at}) out vec4 ${name};`:`vec4 ${name};`;}).join('');
+  return POSE_FRAGMENT.replace('/*POSE_OUTPUTS*/',declarations);
+}

@@ -8,11 +8,16 @@ import {squareRootTable} from '../runtime/dynamic-lighting.mjs';
 import {rsqrtTables} from '../runtime/mesh-lighting.mjs';
 import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
 import {PLAN_HEAD,PLAN_OP,LIGHTING_HEAD,LIGHTING_LIGHT} from './mesh-frame-pack.mjs';
-import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,POSE_FRAGMENT,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV}
+import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,poseFragment,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV}
   from './gpu-mesh-glsl.mjs';
 
 export {GPU_MESH_MAX_LIGHTS} from './gpu-mesh-layout.mjs';
 const PARAMS_U=9,PARAMS_F=12,STATES=5;
+// The pose pass's targets, split into two draws of three (docs/gpu-mesh.md
+// "Pose pass targets"): drawn as one pass of all six RGBA32F targets, Chrome
+// on an Apple M2 (ANGLE over Metal) intermittently lost blocks of the last
+// target, the blend slot 3 cache pose.
+const POSE_PARTS=[['oPose','oState0','oState1'],['oState2','oState3','oState4']];
 const f32=Math.fround;
 // 1.4 as a float-float pair: the kernel multiplies ScaleGlow by the f64 1.4.
 const GLOW_HI=f32(1.4),GLOW_LO=f32(1.4-GLOW_HI);
@@ -29,8 +34,8 @@ export function createGpuMesh(renderer,capacities={}) {
   const gl=renderer.getContext();
   if(!(gl instanceof WebGL2RenderingContext))throw new Error('GPU mesh requires WebGL2');
   if(!gl.getExtension('EXT_color_buffer_float'))throw new Error('GPU mesh requires EXT_color_buffer_float');
-  const drawBuffers=gl.getParameter(gl.MAX_DRAW_BUFFERS);
-  if(drawBuffers<1+STATES)throw new Error(`GPU mesh needs ${1+STATES} draw buffers, device has ${drawBuffers}`);
+  const drawBuffers=gl.getParameter(gl.MAX_DRAW_BUFFERS),targets=Math.max(...POSE_PARTS.map(part=>part.length));
+  if(drawBuffers<targets)throw new Error(`GPU mesh needs ${targets} draw buffers, device has ${drawBuffers}`);
 
   // ---- programs
   const compile=(type,source)=>{
@@ -48,7 +53,8 @@ export function createGpuMesh(renderer,capacities={}) {
     for(let i=0;i<count;i++){const info=gl.getActiveUniform(handle,i);locations.set(info.name,gl.getUniformLocation(handle,info.name));}
     return {handle,locations};
   };
-  const programs={pose:program(POSE_FRAGMENT),face:program(FACE_FRAGMENT),vertex:program(VERTEX_FRAGMENT),
+  const poseParts=POSE_PARTS.map(part=>program(poseFragment(part)));
+  const programs={face:program(FACE_FRAGMENT),vertex:program(VERTEX_FRAGMENT),
     corner:program(CORNER_FRAGMENT)};
   const vao=gl.createVertexArray();
 
@@ -100,13 +106,14 @@ export function createGpuMesh(renderer,capacities={}) {
     if(status!==gl.FRAMEBUFFER_COMPLETE)throw new Error(`GPU mesh framebuffer incomplete: 0x${status.toString(16)}`);
     return {handle,count:attachments.length,attachments};
   };
-  const poseFramebuffers=pose.map(framebuffer);
+  // Per ping-pong side, one framebuffer per pose part (POSE_PARTS order).
+  const poseFramebuffers=pose.map(side=>{let at=0;return POSE_PARTS.map(part=>framebuffer(side.slice(at,at+=part.length)));});
   const faceFramebuffer=framebuffer([faceNormals,environmentFaces]);
   const vertexFramebuffer=framebuffer([vertexLight,environmentNormals]);
   const cornerFramebuffer=framebuffer([corners]);
   {
     // Zero the ping-pong targets so copied-through free texels are defined.
-    for(const fb of poseFramebuffers){
+    for(const fb of poseFramebuffers.flat()){
       gl.bindFramebuffer(gl.FRAMEBUFFER,fb.handle);
       gl.drawBuffers(fb.attachments.map((_,i)=>gl.COLOR_ATTACHMENT0+i));
       for(let i=0;i<fb.count;i++)gl.clearBufferfv(gl.COLOR,i,[0,0,0,0]);
@@ -295,11 +302,15 @@ export function createGpuMesh(renderer,capacities={}) {
     gl.disable(gl.STENCIL_TEST);gl.colorMask(true,true,true,true);
     const previous=pose[current],next=pose[current^1];
     const vRows=rowsFor(vertexArena.high),fRows=rowsFor(faceArena.high),cRows=rowsFor(cornerArena.high);
-    // Pose.
-    let prog=programs.pose;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uVertexMap',vertexMap],['uKeyframes',keyframes],
-      ['uPrevPose',previous[0]],...previous.slice(1).map((target,k)=>[`uPrevState${k}`,target])]);
-    draw(prog,poseFramebuffers[current^1],vertexArena.high?vRows:0);
+    // Pose, one draw per part: each evaluates every channel from the
+    // previous targets and writes its own targets of the next side.
+    let prog;
+    poseParts.forEach((part,i)=>{
+      prog=part;gl.useProgram(prog.handle);setUniforms(prog);
+      bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uVertexMap',vertexMap],['uKeyframes',keyframes],
+        ['uPrevPose',previous[0]],...previous.slice(1).map((target,k)=>[`uPrevState${k}`,target])]);
+      draw(prog,poseFramebuffers[current^1][i],vertexArena.high?vRows:0);
+    });
     current^=1;
     // Faces.
     prog=programs.face;gl.useProgram(prog.handle);setUniforms(prog);
@@ -370,8 +381,8 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
     dispose(){
       for(const target of [tables,keyframes,meshFaces,meshVertices,adjacency,vertexMap,faceMap,cornerMap,paramsU,paramsF,
         lightTexture,...pose.flat(),faceNormals,environmentFaces,vertexLight,environmentNormals,corners])gl.deleteTexture(target.handle);
-      for(const fb of [...poseFramebuffers,faceFramebuffer,vertexFramebuffer,cornerFramebuffer])gl.deleteFramebuffer(fb.handle);
-      for(const prog of Object.values(programs))gl.deleteProgram(prog.handle);
+      for(const fb of [...poseFramebuffers.flat(),faceFramebuffer,vertexFramebuffer,cornerFramebuffer])gl.deleteFramebuffer(fb.handle);
+      for(const prog of [...poseParts,...Object.values(programs)])gl.deleteProgram(prog.handle);
       gl.deleteVertexArray(vao);cornerColors.dispose();renderer.resetState();
     }};
 }
