@@ -292,3 +292,102 @@ counters' initial phases explicitly.
 5. **Output:** the Rust mixer in an AudioWorklet (Wasm) at 44.1 kHz; speech
    and effects stay on Web Audio until the effects path is translated (the
    original mixes them in the same pool, which a later step should follow).
+
+## Phase 5 handoff (browser output, WIP, 2026-10-05)
+
+Paused mid-implementation at the user's request. Branch
+`worktree-agent-aba9719feccacd206` (worktree
+`.claude/worktrees/agent-aba9719feccacd206`).
+
+**Done (committed, WIP).**
+
+- `native/galaxy-kernel/src/host.rs` (`mod host;` in lib.rs): per-op exports
+  `galaxy_host_open(effects_channels, pc, ahead)` (glxInit state, Init's
+  0x1060ebc0, the output open at 44100/16-bit/stereo/flags 7, pinned ring
+  fill), `galaxy_music_load(len)` (glxLoadMusic without the validator dump;
+  input from `galaxy_input(len)` filled with module + 1024 slack),
+  `galaxy_music_unload/stop/start()`, `galaxy_music_control(cmd, arg)`,
+  `galaxy_music_clear_active(first, count)`, `galaxy_music_break()`,
+  `galaxy_music_order()`, `galaxy_music_state()` (order | playing<<8 |
+  songLength<<16 | loaded<<24), `galaxy_set_music_volume(v, mode)`,
+  `galaxy_set_sample_volume(v, mode)`, and a block marked
+  `// TEMPORARY: replaced by the mixer agent's galaxy_render` with
+  `galaxy_render(frames) -> *const i16` (re-pins `ahead`, runs the mixer
+  calls for real, returns silence; 0 on a fault) and `galaxy_fault()`.
+- Node smoke check (not yet a validator): Intro_Music loads (status 0,
+  2.3 ms), start sequence, 3000 × `galaxy_render(882)` in 13.7 ms; the order
+  goes 0xff → 0 → 1 at callback 313 … 11 at 2882. `ahead` pin chosen:
+  172872 bytes (176400 − 882·4, the steady-state fill at a render's start;
+  only nonzero matters). Pan table PC: 64.
+- `src/runtime/galaxy-music-library.mjs` (my section only, for merging with
+  the Update agent's `createMirrorMusicLibrary`): `MUSIC_OP`, `MUSIC_SLACK`,
+  `encodeMusicBatch(id, ops, {owned})` (Int32 [code, a, b] per op, module
+  bytes transferred once), `createMusicLibraryProxy(post)` (the `library`
+  interface; lock depth makes batches; ops outside lock are single-op
+  batches; `order()` = reported order when no unacknowledged order-touching
+  batch, else a replay of the pending ops over the reported state;
+  `report(data)`, `status()`), `connectMusicLibraryPort(port)`,
+  `driveMusicLibrary(library, assets, {song, section} | {unregister})`
+  (validation driver: Update's first-music call order).
+
+**Not done.**
+
+1. The worklet `src/viewer/galaxy-music-worklet.mjs`, self-contained (no
+   imports, so Vite's `new URL(..., import.meta.url)` asset copy works):
+   export `forEachMusicOp`/`decodeMusicBatch` for the Node round-trip check;
+   processor `galaxy-music`: page port messages `init {wasm}`,
+   `connect {port, effectsChannels, pc, ahead}` (a new sim side: close the
+   old port, drop its queued batches, `galaxy_host_open`), `status` (reply on
+   demand only); sim port: `batch` applied on arrival (between callbacks;
+   queued until the wasm is ready); `process()` renders 882-frame callbacks
+   into a 2048-frame Float32 ring whenever it holds < 128 frames (int16 /
+   32768), reuses the PCM view unless the memory buffer changed, posts
+   `{type: 'report', batch, state}` to the sim port after a callback only
+   when the applied batch or the state changed; underruns = quanta short of
+   frames (only a fault or a not-yet-open library can cause them in this
+   pull design); refuse to open unless `sampleRate === 44100`.
+2. **Design change from the user (not yet implemented):** no batches or
+   reports through the page. The page creates a `MessageChannel` per sim
+   side; port2 goes to the sim worker (new worker message `{type: 'music',
+   port}` → `connectMusicLibraryPort`, passed as `musicLibrary` to
+   `createSimHost`), port1 to the worklet node (`connect`), queued until the
+   node exists. ?sim=inline: the page keeps port2 and uses the proxy itself.
+   The page only creates the context/node (on a gesture: one AudioContext
+   `{sampleRate: 44100}` shared with the Web Audio voices, resumed by a
+   document pointerdown/keydown listener), wires ports, and reads status.
+   `?music=0` disables it (for the A/B).
+3. Plumbing: sim-host option `musicLibrary` → createGame → createScriptDoors
+   → `createLiveAudio({library})` (one line in script-doors.mjs, outside my
+   files); sim-host `disposeAudio()` calling
+   `runtime.audio?.dispose?.()`, called by `dispose()`, and by inline
+   `loadMap` before the next host is created (the worker already disposes
+   first); EffectsChannels from DeusEx.ini (clamp 0..32) sent with
+   `connect`; `deusExViewer.status().music` (worklet status on demand, the
+   sim's `library.status()` via `snapshot.status.music`);
+   `deusExViewer.musicScript(args)` → worker `call('musicScript', args)`
+   (sim-client `call(method, args)`).
+4. `scripts/validate-galaxy-music-host.mjs`: Node round-trip of the encoding;
+   headless Chromium (`--autoplay-policy=no-user-gesture-required`, own Vite
+   server; filter `**/.claude/worktrees/**` out of `fs.deny` when the root is
+   a worktree) in ?sim=worker and ?sim=inline: drive Intro_Music section 0,
+   check callbacks render, the order advances, reports reach the sim
+   (`acknowledged == issued`), no console errors; frame-time A/B of the
+   page's `framePhases` with music on vs `?music=0`. Firefox has no
+   Playwright build here (not installed).
+5. Docs: this section becomes "Phase 5: Output"; a note in the Audio row of
+   docs/sim-worker.md.
+
+**Note for the coordinator:** `src/runtime/galaxy-kernel.wasm` is
+gitignored (as are the other kernels), not committed; rebuild it with the
+command below.
+
+**Resume.**
+
+```
+cd .claude/worktrees/agent-aba9719feccacd206
+ln -s ../../../.cache .cache   # and node_modules, Reference, "Deus Ex GOTY Edition" (absolute targets in the main checkout)
+cp ../../../src/runtime/{script-vm,lodmesh-kernel}.wasm src/runtime/
+cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
+  --target wasm32-unknown-unknown --target-dir .work/wasm-target
+cp .work/wasm-target/wasm32-unknown-unknown/release/galaxy_kernel.wasm src/runtime/galaxy-kernel.wasm
+```

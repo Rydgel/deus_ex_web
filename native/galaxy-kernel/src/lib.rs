@@ -19,6 +19,7 @@
 //! error return.
 use std::cell::RefCell;
 
+mod host;
 mod sequencer;
 mod x87;
 pub use sequencer::*;
