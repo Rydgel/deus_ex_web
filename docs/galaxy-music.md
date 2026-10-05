@@ -292,3 +292,77 @@ counters' initial phases explicitly.
 5. **Output:** the Rust mixer in an AudioWorklet (Wasm) at 44.1 kHz; speech
    and effects stay on Web Audio until the effects path is translated (the
    original mixes them in the same pool, which a later step should follow).
+
+## Phase 4 handoff (subsystem music section, 2026-10-05, paused)
+
+Paused on request before any code was written. Branch
+`worktree-agent-acb5392e37c60e38a`, worktree
+`.claude/worktrees/agent-acb5392e37c60e38a`. Nothing passes yet because
+nothing is implemented; the items below are research results from this
+session, read from the disassembly (capstone, `tools/disasm-body.py`).
+
+**Verified by reading the instructions.**
+
+- Update's music section `0x1060a50b..0x1060aa15`, SetVolumes `0x106061b0`,
+  SetInstantMusicVolume `0x10606610` and UnregisterMusic `0x10606e60` match
+  update-transition.md §2.1, §3 and §4 instruction for instruction. One
+  detail to add there: in SetVolumes and SetInstantMusicVolume a nonzero
+  glxSetSampleVolume / glxSetMusicVolume result goes to `appFailAssert`
+  (lines `0x221`, `0x223`, `0x25c`), not to a log line.
+- `Data.Add(1024)` (`0x1060a708..0x1060a735`): `Num += 0x400`; if
+  `Num > Max` (signed): `Max = Num + (3*Num)/8 + 32` (signed division,
+  `cdq; and edx,7; sar 3`), then `FArray::Realloc(1)` through `[0x10699854]`.
+- Engine lazy-array Unload `0x1030cd90`: if SavedPos (`+8`) < 0: Num and Max
+  (`+0x10`, `+0x14`) = 0, `FArray::Realloc(1)` (`[0x10599a20]`), SavedPos
+  negated; otherwise nothing. Load `0x1030cbb0` is the body already in
+  `script-lazy-byte-array.mjs`.
+- The Latency 10..250 and EffectsChannels 0..32 clamps are in `0x10605ad0`
+  (the function containing PostEditChange's SetVolumes call `0x10605b9e`),
+  not in Init `0x10605580`. Whether Init reaches them is open.
+
+**Play facts (headless 00_Intro boot, `.work/gm/probe-song.mjs`).**
+
+- `Level.Song` and `PlayerPawn.Song` are the same opaque resource descriptor
+  (`{asset, index, key: 'intro_music.intro_music', kind: 'Music', name}`,
+  `script-resources.mjs`), not a load-graph UMusic. After boot the player has
+  SongSection 0, CdTrack 255, Transition 3 (PostLogin's Fade). DynamicLoadObject
+  music (credits, PlayMusicWindow) are load-graph objects whose `0x28` lazy
+  record loads through `graph.loadResourceBytes`.
+- Galaxy Update runs from `hud.commands` (`src/viewer/game.mjs:241`), not
+  from `game.tick`; bench-sim never calls it, so its digests cannot change.
+  A per-frame cost measurement needs a loop that calls
+  `runtime.audio.update(view)`.
+- Player start reloads the map package only (`ResetLoaders(GLevel.Outer)`,
+  docs/script-loadmap-gc.md). The music package stays loaded and the
+  reloaded LevelInfo's import resolves to the same UMusic, so LoadMap's
+  collection keeps it (derived, not run): Player start does not unregister
+  the song, and PostLogin's Fade fades and restarts it on the loaded module.
+  A map change to a different song destroys the old UMusic
+  (UnregisterMusic); to the same song it keeps it (derived).
+
+**Planned design (not started).** `src/runtime/galaxy-music.mjs`
+(`createGalaxyMusic`: `+0x888/+0x88c/+0x88d/+0x900`, Update section,
+SetVolumes, SetInstantMusicVolume, UnregisterMusic, a precision-control
+option checked against the oracle's three control words);
+`src/runtime/galaxy-music-library.mjs` (`createMirrorMusicLibrary`, interface
+as given by the coordinator); a `library` option and `dispose()` on
+`createLiveAudio`; galaxy-audio.mjs calls the section after the channel loop
+inside `library.lock()/unlock()`; steady state (Transition 0) only reads
+`library.order()` and writes SongSection when it differs; galaxy-volumes
+shares the subsystem bytes and delegates native 270. Oracle: a music mode in
+`scripts/native-galaxy-audio-oracle.py` (EffectsChannels 16 with idle
+channels, ShowFlags 0, UseReverb 0, recording glx leaves, real Engine lazy
+Load/Unload with an FArray::Realloc leaf, control word per case).
+
+**Resume.**
+
+```
+cd .claude/worktrees/agent-acb5392e37c60e38a
+# gitignored links and binaries (the wasm files are not committed):
+ln -s /home/rydgel/projects/deus_ex_web/{.cache,node_modules,Reference} .
+ln -s "/home/rydgel/projects/deus_ex_web/Deus Ex GOTY Edition" .
+cp /home/rydgel/projects/deus_ex_web/src/runtime/{script-vm,lodmesh-kernel}.wasm src/runtime/
+PY=/home/rydgel/projects/deus_ex_web/.cache/native-probe-env/bin/python
+$PY tools/disasm-body.py "Deus Ex GOTY Edition" Galaxy.dll 1060a500-1060aa20
+node .work/gm/probe-song.mjs 00_Intro      # ~16 s boot, ~1 GB RSS
+```
