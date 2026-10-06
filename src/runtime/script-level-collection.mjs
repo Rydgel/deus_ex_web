@@ -36,7 +36,7 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
   const standIns = new Map([levelRecord, levelPackage, transientPackage, ...packages]
     .filter(Boolean).map(record => [record.identity, record]));
   const engine = { name: 'GameEngine' };
-  const attached = identity => { try { return runtime.instance(identity); } catch { return null; } };
+  const attached = identity => runtime.attachedInstance(identity);
   const recordOf = identity => standIns.get(identity) ?? attached(identity)?.nativeObject ?? null;
   const isActor = record => {
     for (let cls = attached(record.identity)?.cls; cls; cls = cls.base) if (cls === runtime.actorClass) return true;

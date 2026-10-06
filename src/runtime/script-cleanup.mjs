@@ -1,5 +1,6 @@
 import {propertyReference} from './script-values.mjs';
 import {bumpBaseEpoch} from './base-epoch.mjs';
+import {identityOfHandle} from './script-object-handles.mjs';
 
 const objectField=field=>field.metadata.type==='object'||field.metadata.type==='class';
 const structField=field=>field.metadata.type==='struct';
@@ -12,6 +13,11 @@ function elementReference(field,ref,index) {
     const array=ref.get();array[index]=value;ref.set(array);
   });
 }
+// A struct member of the struct value `ref` reads and writes.
+const memberReference=(member,ref)=>propertyReference(member,
+  ()=>ref.get()[member.key],value=>{
+    const struct=ref.get();struct[member.key]=value;ref.set(struct);
+  });
 
 /** Core UStruct.CleanupDestroyed10127170. In play it visits the linked direct
  * object-property list before the struct list; editor mode uses their original
@@ -42,10 +48,7 @@ export function cleanupScriptReferences(fields,reference,services,{editor=false}
       }else{
         const members=field.metadata.structFields;
         if(!Array.isArray(members))throw new Error(`CleanupDestroyed struct is not linked: ${field.key}`);
-        cleanupScriptReferences(members,member=>propertyReference(member,
-          ()=>ref.get()[member.key],value=>{
-            const struct=ref.get();struct[member.key]=value;ref.set(struct);
-          }),services,{editor});
+        cleanupScriptReferences(members,member=>memberReference(member,ref),services,{editor});
       }
     }
   };
@@ -53,6 +56,70 @@ export function cleanupScriptReferences(fields,reference,services,{editor=false}
   else{
     for(const field of fields)if(objectField(field))visit(field);
     for(const field of fields)if(structField(field))visit(field);
+  }
+}
+
+/** Play's cleanupScriptReferences order as a flat list of the object
+ * references it visits, each {key, top, path}: the property's key, its
+ * top-level field's key, and per struct level the property and its
+ * fixed-array index. Null where that routine would throw (a struct that
+ * is not linked), so the caller runs it instead. Host work: the sites are
+ * the same slots in the same order. */
+export function cleanupSites(fields) {
+  const sites=[];
+  const walk=(fields,path)=>{
+    for(const field of fields)if(objectField(field))
+      for(let index=0;index<field.metadata.arrayDim;index++){
+        const at=[...path,{field,index}];
+        sites.push({key:field.key,top:at[0].field.key,path:at});
+      }
+    for(const field of fields)if(structField(field)&&!plainStruct(field)){
+      const members=field.metadata.structFields;
+      if(!Array.isArray(members))return false;
+      for(let index=0;index<field.metadata.arrayDim;index++)if(!walk(members,[...path,{field,index}]))return false;
+    }
+    return true;
+  };
+  return walk(fields,[])?sites:null;
+}
+/** The fields cleanupScriptReferences reads at the top level in play. */
+export const cleanupFields=fields=>fields.filter(field=>objectField(field)||structField(field)&&!plainStruct(field));
+
+// The reference cleanupScriptReferences visits at a site (cleanupSites).
+function siteReference(site,reference) {
+  let ref=null;
+  for(const {field,index} of site.path)
+    ref=elementReference(field,ref===null?reference(field):memberReference(field,ref),index);
+  return ref;
+}
+
+/** cleanupScriptReferences in play over pointers read from an object image:
+ * `sites` (cleanupSites) at their image offsets `offsets` from `base`. A
+ * site under a top-level field in `bound` (the object's host bindings) is
+ * read through `reference`, as that routine reads it. Each referenced object
+ * is validated and asked IsPendingKill once per `verdicts` (one
+ * CleanupDestroyed pass: neither answer changes while the pass clears
+ * references); a pending one's site is cleared through `reference`, as
+ * cleanupScriptReferences clears it. */
+export function cleanupImageSites(sites,offsets,view,base,bound,reference,services,verdicts) {
+  for(let index=0;index<sites.length;index++){
+    const site=sites[index];
+    let target;
+    if(bound!==null&&bound.has(site.top))target=siteReference(site,reference).get();
+    else{
+      const handle=view.getUint32(base+offsets[index],true);
+      target=handle===0?null:identityOfHandle(handle);
+    }
+    if(target===null)continue;
+    let pending=verdicts.get(target);
+    if(pending===undefined){
+      if(typeof services.isValid!=='function'||services.isValid(target)!==true)
+        throw new Error(`CleanupDestroyed found an invalid or unregistered reference: ${site.key}`);
+      if(typeof services.isPendingKill!=='function')throw new Error('CleanupDestroyed requires the native IsPendingKill binding');
+      pending=Boolean(services.isPendingKill(target));
+      verdicts.set(target,pending);
+    }
+    if(pending)siteReference(site,reference).set(null);
   }
 }
 

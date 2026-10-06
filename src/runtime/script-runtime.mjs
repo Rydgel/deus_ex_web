@@ -15,7 +15,7 @@ import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,d
 import {
   zeroValue, copyValue, propertyReference, storageReference, arrayReference, propertyCodec, NO_ELEMENT,
 } from './script-values.mjs';
-import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell, scalarCell } from './script-object-image.mjs';
+import { objectImageCells, readCell, writeCell, readFixedElement, isFixedCell, scalarCell, pointerOffset } from './script-object-image.mjs';
 import { createFrameLocals, FrameStack, LocalCellStorage } from './script-frame-locals.mjs';
 import { releaseHandle } from './script-object-handles.mjs';
 import { loadScriptVmKernel } from './script-vm-kernel.mjs';
@@ -92,7 +92,7 @@ import { addPawn, removePawn } from './pawn-list.mjs';
 import { importText } from './config-text.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
-import { cleanupScriptReferences, cleanupLevelDestroyed } from './script-cleanup.mjs';
+import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
 import { destructScriptObject, freeScriptObject, releaseScriptCameraPoint } from './script-object-release.mjs';
 import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
 import { constructTextParserObject, dispatchTextParserNative, releaseTextParserObject } from './script-text-parser-natives.mjs';
@@ -306,6 +306,27 @@ const localReference=(locals,field)=>{
 };
 // Stage 1d: each class's default image, rebuilt when a class default changes.
 const classImages=new WeakMap();
+// CleanupDestroyed's reference pass over an instance's image, per class
+// cells: the pointer sites in play's visit order (script-cleanup.mjs
+// cleanupSites) and their image offsets; false where a top-level field it
+// reads has no cell (the reference path runs). A bound field's sites are
+// read through the binding (script-cleanup.mjs cleanupImageSites).
+const cleanupPlans=new WeakMap();
+export function cleanupPlan(instance) {
+  const cells=instance.cells,fields=instance.cls.propertyLink;
+  if(!cells||instance.poison)return null;
+  let plan=cleanupPlans.get(cells);
+  if(plan===undefined||plan&&plan.fields!==fields){
+    plan=false;
+    const keys=cleanupFields(fields).map(field=>field.key),sites=cleanupSites(fields);
+    if(sites&&keys.every(key=>cells.has(key))){
+      const offsets=sites.map(site=>pointerOffset(cells.get(site.path[0].field.key),site.path));
+      if(offsets.every(offset=>offset!==null))plan={fields,sites,offsets:Uint32Array.from(offsets)};
+    }
+    cleanupPlans.set(cells,plan);
+  }
+  return plan||null;
+}
 const imageFinalizer=new FinalizationRegistry(token=>{
   if(token.released)return;
   token.released=true;token.arena.release(token.base,token.size);
@@ -1161,6 +1182,19 @@ export class ScriptRuntime {
     if(!instance)throw new Error(`Object is not attached to script runtime: ${receiver?.key??receiver?.name??'None'}`);
     if(instance.nativeObject?.released)throw new Error('Script object allocation has been released');
     return instance;
+  }
+  /** instance() for host lookups that branch on attachment: null where
+   * instance() would throw (not attached, or released). CleanupDestroyed's
+   * reference pass asks this of every resource pointer, and a thrown Error
+   * per pointer cost ~160 ms per sweep (docs/script-cleanup.md). */
+  attachedInstance(receiver) {
+    let instance=this.lastLinkedInstance;
+    if(instance===undefined||receiver!==this.lastLinkedReceiver){
+      instance=receiver?.[this.instanceKey];
+      if(instance!==undefined&&this.instanceKey!==undefined){this.lastLinkedReceiver=receiver;this.lastLinkedInstance=instance;}
+      else instance=this.instances.get(receiver);
+    }
+    return !instance||instance.nativeObject?.released?null:instance;
   }
   /** Core.IsProbing0x10115670 against the actor's live state-frame probe mask.
    * A no-state actor probes everything (the recovered init mask is all ones);
@@ -2703,11 +2737,19 @@ export class ScriptRuntime {
       conditionalDestroy:actor=>this.conditionalDestroy(actor),
     },netForce);
   }
-  cleanupReferences(receiver,{editor=false}={}) {
+  /** UStruct.CleanupDestroyed for one object (script-cleanup.mjs). In play,
+   * an object whose visited fields are all image cells has its pointers read
+   * from the image, with each target's IsValid/IsPendingKill answered once
+   * per `verdicts` (one level pass; a fresh map when absent); otherwise, and
+   * in the editor, the reference traversal runs. */
+  cleanupReferences(receiver,{editor=false,verdicts=null}={}) {
     const services=this.actorLifecycle?.references;
     if(!services)throw new Error('CleanupDestroyed requires native reference validity and pending-kill services');
-    return cleanupScriptReferences(this.instance(receiver).cls.propertyLink,
-      field=>this.fieldReference(receiver,field),services,{editor});
+    const instance=this.instance(receiver),reference=field=>this.fieldReference(receiver,field);
+    const plan=editor?null:cleanupPlan(instance);
+    if(plan)return cleanupImageSites(plan.sites,plan.offsets,instance.arena.view,instance.base,
+      instance.bindings.size?instance.bindings:null,reference,services,verdicts??new Map());
+    return cleanupScriptReferences(instance.cls.propertyLink,reference,services,{editor});
   }
   /** Reflected reference traversal only. A native class Serialize override
    * must separately route its UObject header, native members and base hook. */
@@ -2725,9 +2767,11 @@ export class ScriptRuntime {
   cleanupDestroyed(level,force=false) {
     const lifecycle=this.actorLifecycle;
     if(!lifecycle)throw new Error('CleanupDestroyed requires linked native lifecycle services');
+    // The pass's IsValid/IsPendingKill answers per referenced object.
+    let verdicts=null;
     return cleanupLevelDestroyed(level,{
       read:(actor,name)=>this.readNamed(actor,name),
-      cleanupReferences:(actor,options)=>this.cleanupReferences(actor,options),
+      cleanupReferences:(actor,options)=>this.cleanupReferences(actor,{...options,verdicts:verdicts??=new Map()}),
       release:(actor,flags)=>{
         if(typeof lifecycle.release==='function')lifecycle.release(actor,flags);
         else this.releaseObject(actor,flags);

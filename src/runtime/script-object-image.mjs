@@ -365,6 +365,29 @@ export function nameSlots(cells) {
   return slots;
 }
 
+/** The image offset of the pointer that `path` names from a property's
+ * cell `cell`: per level the property (`field.key`, a struct member below
+ * the top) and its fixed-array index. Null when the path leaves the cells
+ * or does not end at a pointer. */
+export function pointerOffset(cell, path) {
+  let at = 0;
+  for (let level = 0; level < path.length; level++) {
+    const {field, index} = path[level];
+    if (level > 0) {
+      if (cell?.tag !== STRUCT) return null;
+      at += cell.offset;
+      cell = cell.members.find(member => member.key === field.key);
+      if (!cell) return null;
+    }
+    if (cell.tag === FIXED) {
+      if (!(index >= 0 && index < cell.dim)) return null;
+      at += cell.offset + index * cell.stride;
+      cell = cell.element;
+    } else if (index !== 0) return null;
+  }
+  return cell?.tag === POINTER ? at + cell.offset : null;
+}
+
 /** Every object or class pointer inside the cells, struct members and fixed
  * array elements included: their byte offsets relative to the image, in
  * cell order (for handle validators). */

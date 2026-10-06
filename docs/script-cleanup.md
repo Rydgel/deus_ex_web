@@ -107,3 +107,62 @@ a pre-placed crate on a booted Island, with a crate's Target pointing at one
 Tracer, and checks one tick: the chain is released, Target is None, every
 Tracer is released with its slot freed onto the free list, and the crate left
 the actor array while keeping its export for the reload.
+
+## Host reference pass over object images
+
+The reference pass is host work over a faithful routine: in the original it is
+a short C++ loop, but Play ran it as one property reference per visited
+pointer. On 00_Intro the Liberty Island firefight (muzzle flashes, tracers,
+blood drops, shell casings, sparks) puts 128 actors on the Deleted chain every
+1.5–3 seconds, and each pass over the level's 1,200–1,700 actors took
+230–290 ms in the simulation worker: a visible stall every couple of seconds
+(October 6, headless Chromium, Linux host, `.work/tools/hitch-trace.mjs` and
+`.work/tools/worker-spikes.mjs`). Two host costs made it slow:
+
+- The level collection's `attached` asked `ScriptRuntime.instance`, which
+  throws for an identity that is not an attached script object, inside a
+  try/catch. Every texture, mesh and sound pointer threw and caught one
+  Error: 14,000–18,000 per pass, about 160 ms.
+  `ScriptRuntime.attachedInstance` answers null without throwing.
+- Each visited field built a property reference, each fixed-array element a
+  fresh scalar field copy (which misses the descriptor cache), and each struct
+  member a copy of its whole struct.
+
+In play, `ScriptRuntime.cleanupReferences` now reads the pointers from the
+object's image. `cleanupSites` flattens cleanupScriptReferences' play order
+(direct object properties, then struct properties recursively, fixed-array
+slots ascending) into a per-class list of pointer sites, and
+`pointerOffset` gives each its image offset. `cleanupImageSites` reads each
+handle, and reads a site under a host-bound top-level field (Outer, Class,
+Level, a bound Region) through its binding, as the reference traversal does.
+Each referenced object is asked IsValid and IsPendingKill once per level pass:
+neither answer can change while the pass only clears references, and the
+release loop runs after it. A pending target's site is cleared through the
+same reference chain cleanupScriptReferences would build. An object with a
+poisoned cell, a visited field without a cell, or an unlinked struct, and the
+editor branch, keep the reference traversal, which remains the reference.
+
+`scripts/validate-cleanup-image.mjs` checks the translation on Play's state:
+two processes boot 00_Intro (seed 1, 300 frames with the HUD), plant 51 stale
+pointers to one actor in Target, Touching[1], Touching[3] and Region.Zone
+(imaged and bound), mark it bDeleteMe, and run the pass over all 1,101 actors
+with the reference traversal or the image pass. Digests before and after are
+equal across the modes, every planted pointer is cleared, all 1,101 actors
+take the image path, and IsValid runs 1,283 times instead of 8,377.
+
+Measured on the Linux host:
+
+| Workload | before | after |
+|---|---:|---|
+| Reference pass alone, 00_Intro headless, 1,102 actors, warm median | ~81 ms (~110 ms with the throwing lookup) | 2.9 ms |
+| One sweep in Play (inline), 1,200–1,700 actors | 230–290 ms | 75–100 ms with only the lookup fixed; the full pass is the row above |
+| 00_Intro in Play (worker), 45 s, 3 interleaved pairs: draw gaps ≥ 100 ms | 27, 22, 23 | 2, 1, 0 |
+| Same runs: p99 draw gap | 283, 233, 250 ms | 33, 50, 33 ms |
+
+Island's headless tick (`bench-sim --render-feedback`, 3 interleaved pairs)
+is unchanged within noise (median 11.08–12.44 ms before, 11.80–12.05 ms
+after), with the same digest. The remaining loop is about a third of the
+pass; the rest is the bound reads and the registry-backed IsValid answers,
+which stay with the JavaScript level collection, so the walk stays in
+JavaScript for now. The per-class sites and offsets are what a Rust walk over
+the arena would take.
