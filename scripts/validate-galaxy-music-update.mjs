@@ -363,8 +363,6 @@ function replay(c, precision, entry) {
   return results;
 }
 
-// The oracle's SetVolumes ops carry the volume bytes in the case program;
-// the oracle sets them from `volumes` too (see below).
 /** Oracle events in the translation's terms: allocator and archive traffic
  * dropped, FArray::Realloc as [Num, Max], the Mem block's constants checked. */
 function normalize(events) {
@@ -446,12 +444,10 @@ for (const [key, byWord] of scenarios) {
     const kinds = new Set();
     byWord['37f'].forEach((result, i) => {
       const a = normalize(result.events), b = normalize(other[i].events);
-      const glxArgs = list => list.filter(e => e.glx).map(e => `${e.glx}(${e.args})`).join(' ');
       if (JSON.stringify(a.map(e => e.glx === 'setSampleVolume' ? e.args : null)) !== JSON.stringify(b.map(e => e.glx === 'setSampleVolume' ? e.args : null))) kinds.add('sample volume');
       if (JSON.stringify(a.filter(e => e.glx === 'setMusicVolume').map(e => e.args)) !== JSON.stringify(b.filter(e => e.glx === 'setMusicVolume').map(e => e.args))) kinds.add('music volume');
       if (result.state.fade !== other[i].state.fade) kinds.add('MusicFade bits');
       if (a.some(e => e.call === 'unregister' || e.glx === 'startMusic') !== b.some(e => e.call === 'unregister' || e.glx === 'startMusic')) kinds.add('transition end frame');
-      void glxArgs;
     });
     if (kinds.size) differences[word].set(key, [...kinds]);
   }

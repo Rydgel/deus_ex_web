@@ -65,14 +65,17 @@ export function createMirrorMusicLibrary({history = 256} = {}) {
   // op issued outside a batch as a batch of its own (SetInstantMusicVolume
   // runs outside Update's lock). Bounded: the last `history` batches.
   const batches = [];
-  let current = null, depth = 0, total = 0;
+  // One reused buffer for the open batch: an empty lock()..unlock() (every
+  // steady-state Update) allocates nothing.
+  const open = [];
+  let depth = 0, total = 0;
   const commit = batch => {
     batches.push(batch);
     if (batches.length > history) batches.shift();
     total++;
   };
   const record = op => {
-    if (current) { current.push(op); return; }
+    if (depth) { open.push(op); return; }
     commit([op]);
   };
   const volume = (prefix, value, mode) => {
@@ -99,10 +102,10 @@ export function createMirrorMusicLibrary({history = 256} = {}) {
     get totalBatches() { return total; },
     /** The recorded batches since the last call, oldest first. */
     takeBatches() { const out = batches.splice(0); return out; },
-    lock() { if (depth++ === 0) current = []; },
+    lock() { depth++; },
     unlock() {
       if (depth === 0) throw new Error('Galaxy music library: unlock without lock');
-      if (--depth === 0) { const batch = current; current = null; if (batch.length) commit(batch); }
+      if (--depth === 0 && open.length) { commit(open.slice()); open.length = 0; }
     },
     setSampleVolume(value, mode) { record({op: 'setSampleVolume', volume: value, mode}); return volume('sample', value, mode); },
     setMusicVolume(value, mode) { record({op: 'setMusicVolume', volume: value, mode}); return volume('music', value, mode); },
