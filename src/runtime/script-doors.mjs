@@ -2162,7 +2162,10 @@ export async function createScriptDoors({
   // The pre-placed actors' measured global indices, before any startup sound.
   assignMeasuredObjectIndices(runtime,level.actors);
   // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
-  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
+  // callbacks.musicLibrary: the host's Galaxy library (galaxy-music-library.mjs);
+  // createLiveAudio's default is the recording mirror.
+  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event),
+    ...(callbacks.musicLibrary?{library:callbacks.musicLibrary}:{})});
   // XLevel->Engine->Audio, Galaxy's UAudioSubsystem, linked before the map's
   // startup and Login run: PlaySound (+0x74) from ClientHearSound,
   // StopSoundId (+0x78) from execStopSound, and ULevel::DestroyActor's

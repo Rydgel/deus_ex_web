@@ -1,4 +1,8 @@
 import {createGalaxyAudio} from './galaxy-audio.mjs';
+import {createGalaxyMusic} from './galaxy-music.mjs';
+import {createMirrorMusicLibrary} from './galaxy-music-library.mjs';
+import {createMusicObjects} from './galaxy-music-objects.mjs';
+import {createGalaxyVolumes} from './galaxy-volumes.mjs';
 import {hostNow} from './host-clock.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';
 import {buildWindowSceneFrame} from './script-window-scene-frame.mjs';
@@ -38,7 +42,11 @@ export function wavInfo(bytes) {
   return { rate, frames, loop };
 }
 
-export async function createLiveAudio({runtime, level, player, onVoice = null}) {
+/** `library` is the Galaxy library service object (galaxy-music-library.mjs):
+ * the browser host's AudioWorklet proxy, or by default the recording mirror.
+ * It outlives this runtime: the subsystem's music state does not (see
+ * `dispose`). */
+export async function createLiveAudio({runtime, level, player, onVoice = null, library = createMirrorMusicLibrary()}) {
   const read = (object, name) => runtime.readNamed(object, name);
   const config = await runtime.classLoader?.prepareConfig?.();
   const setting = key => {
@@ -49,11 +57,33 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
   const bool = key => /^true$/i.test(setting(key).trim());
   // Init (0x10605580) clamps EffectsChannels to 0..32 and DopplerSpeed to >= 1.
   const channels = Math.max(0, Math.min(32, msvcrtWtoi(setting('EffectsChannels'))));
+  // The subsystem's volume bytes +0x69/+0x6a/+0x6b (UByteProperty: appAtoi,
+  // low byte), shared by Update's category ratio, SetVolumes and the
+  // SetInstant*Volume natives 268-270 (galaxy-volumes.mjs).
+  const volumes = createGalaxyVolumes({musicVolume: msvcrtWtoi(setting('MusicVolume')) & 255,
+    soundVolume: msvcrtWtoi(setting('SoundVolume')) & 255, speechVolume: msvcrtWtoi(setting('SpeechVolume')) & 255});
   const galaxyConfig = {effectsChannels: channels, ambientFactor: f(Number.parseFloat(setting('AmbientFactor'))),
     dopplerSpeed: f(Math.max(1, Number.parseFloat(setting('DopplerSpeed')))),
-    soundVolume: msvcrtWtoi(setting('SoundVolume')) & 255, speechVolume: msvcrtWtoi(setting('SpeechVolume')) & 255,
+    get soundVolume() { return volumes.state.soundVolume; }, get speechVolume() { return volumes.state.speechVolume; },
     useSurround: bool('UseSurround') ? 1 : 0, reverseStereo: bool('ReverseStereo') ? 1 : 0};
   if (bool('Use3dHardware')) throw new Error('Galaxy Use3dHardware voices are not translated');
+
+  // Music (galaxy-music.mjs): UseDigitalMusic, UseCDMusic (refused when
+  // True), Latency (clamped to 10..250 by 0x10605ad0, the function holding
+  // PostEditChange's SetVolumes call; the installed 40 is inside the range).
+  const latency = Math.max(10, Math.min(250, msvcrtWtoi(setting('Latency'))));
+  const musicLog = [];
+  const musicObjects = createMusicObjects({graph: runtime.classLoader?.graph ?? null});
+  const music = createGalaxyMusic({useDigitalMusic: bool('UseDigitalMusic') ? 1 : 0, useCDMusic: bool('UseCDMusic') ? 1 : 0,
+    latency, effectsChannels: channels, volumes: volumes.state}, {
+    library, music: song => musicObjects.music(song), read,
+    write: (object, name, value) => runtime.writeNamed(object, name, value),
+    // GLog lines (DevMusic "Load music"/"Unregister music", the "failed: %i"
+    // warnings); the last 64.
+    log: (name, text) => { musicLog.push({name, text}); if (musicLog.length > 64) musicLog.shift(); },
+  });
+  volumes.music = music;
+  volumes.library = library;
 
   // Every AmbientSound of the level, decoded before the first tick (the
   // update is synchronous; RegisterSound's decode is the host's).
@@ -97,6 +127,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
     return null;
   };
   const galaxy = createGalaxyAudio(galaxyConfig, {
+    library, music,
     listener: () => ({actor: player(), viewTarget: player() ? read(player(), 'ViewTarget') : null}),
     read, atan2: Math.atan2, isValid: () => true,
     isA: (object, key) => { for (let cls = runtime.instance(object).cls; cls; cls = cls.base) if (cls.record.key === key) return true; return false; },
@@ -148,8 +179,10 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
     stopVoice: voice => { voices.delete(voice); onVoice?.({op: 'stop', voice}); },
   });
 
+  let disposed = false;
   /** UGameEngine::Draw's Audio->Update (0x1038f638) for the frame's view. */
   function update(view) {
+    if (disposed) return;
     const now = hostNow() / 1000;
     const elapsed = last === null ? 0 : now - last;
     last = now;
@@ -166,11 +199,30 @@ export async function createLiveAudio({runtime, level, player, onVoice = null}) 
     const c = frame.coords;
     galaxy.update(elapsed, {origin: c.slice(0, 3), x: c.slice(3, 6), y: c.slice(6, 9), z: c.slice(9, 12)});
   }
-  /** A Player-start reload stops every channel (the host's: the original's
-   * level change of the audio subsystem is not traced). */
+  /** A Player-start reload: LoadMap's SetViewport(GetViewport()) stops the
+   * effect channels (0x10605ca6..0x10605cb4) and returns early, so music is
+   * untouched (docs/galaxy-music/update-transition.md §5.3). The map package
+   * reloads in place and the music package stays loaded, so LevelInfo.Song
+   * is the same UMusic and LoadMap's collection keeps it: the new player's
+   * PostLogin transition fades and restarts the section on the loaded
+   * module. */
   function reset() {
     for (let channel = 0; channel < galaxyConfig.effectsChannels; channel++) galaxy.stopSound(channel);
     voices.clear(); last = null;
   }
-  return {galaxy, update, reset, notes, voices, setDigitalVolume: value => { digital = value & 127; }};
+  /** The runtime is dropped (the browser builds a fresh runtime per map):
+   * its UMusic objects go with it. In the original that is LoadMap's
+   * collection destroying them: UMusic::Destroy (Engine 0x10370d4c) calls
+   * Audio->UnregisterMusic (vtable +0x70) for each, and only +0x888 can
+   * hold a handle, so the current song is stopped and unloaded and +0x888
+   * cleared before the next Update. Outside Update: no lock batch.
+   * Same-song map changes differ (the original keeps a UMusic the new
+   * level references, and fades instead of reloading). */
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    if (music.state.current !== null) music.unregisterMusic(music.state.current);
+  }
+  return {galaxy, music, volumes, library, musicLog, update, reset, dispose, notes, voices,
+    setDigitalVolume: value => { digital = value & 127; }};
 }
