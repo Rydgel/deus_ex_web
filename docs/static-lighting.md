@@ -357,6 +357,114 @@ Still to do: the time-varying spatial functions (Searchlight, SlowWave,
 FastWave, CloudCast, Shock, Disco, Interference, Rotor), the texture
 palette LightTypes and volumetric (fog map) lighting.
 
+### Handoff: spatially dynamic effects (WIP, 2026-10-06)
+
+Stopped mid-way at the usage limit. Nothing below is wired into Play or
+validated yet.
+
+**Recovered from instructions (Render.dll):**
+- *When they run.* AddLight (`0x10b08b30`) makes a `bStatic`/`bNoDelete`
+  light with a spatially dynamic effect class 1. ComputeFromActor copies the
+  effect row to info `+0x60` (function), `+0x64` (IsSpatialDynamic) and
+  `+0x68` (IsMergeDynamic). SetupForSurf's per-frame map (cache suffix
+  `0x31`, rebuilt once per `Viewport.CurrentTime` for each drawn surface)
+  handles a class 1 light with `+0x64` set like this: its illumination comes
+  from its shadow bits (cached, suffix `0x15`), and its spatial function
+  runs every rebuild into GMem. The merge (`0x10b03040`) is a plain add (it
+  modulates only effects 1-3) from start index 0. Class 1 lights without the
+  flag cache their spatial bytes (suffix `0x16`) unless `bLightChanged`
+  (actor `+0x28` bit 10) is set. Only drawn surfaces are computed. Each
+  result depends only on the light, the surface and TimeSeconds, so a
+  skipped light map is correct once it is drawn.
+- *Time source.* `[0x10b3df88]` is `Level->Actors(0)` (the LevelInfo, set
+  at `0x10b06e0b` and `0x10b08d45`), and `+0x478` is TimeSeconds.
+- *Bodies.* All use args (LightMap, info, illumination, out), info `+0x1c`
+  rr2 and `+0x24` incidence, plus the falloff table `0x10b34a6c`.
+  - Searchlight: `x = f32(Phase·π/32 + TimeSeconds·35/Period + 2π)`, then
+    `m = fmod(4·atan2(dx,dy) + x, 2π)`. The byte is 0 unless `π ≤ m` and
+    `f32(m) ≤ 3π`; otherwise `cos` entry of
+    `ftol(m·65536·(−1/2π))`, `(c+1)/2`, times `q = (dx²+dy²)·6e-5` when
+    `q < 1`.
+  - Rotor: `6·atan2(dx,dy) + TimeSeconds·3.5`, the same cosine lobe,
+    `s·q + (1−q)` with `q = (dx²+dy²)·1e-4` when `q < 1`.
+  - SlowWave and FastWave: `ftol(tableSqrt(d²))` (`>>2` for FastWave),
+    minus `TimeSeconds·35`, times 1024 (2048), as a sine index;
+    `0.3·sin + 0.7`.
+  - Shock: three sine/cosine factors `0.1·x + 0.9` from
+    `d = ftol(√·8)` and `T = TimeSeconds·4000`.
+  - Disco: lobes from `11·atan2(dx,dy)` and `11·atan2(√(dx²+dy²), dz)`,
+    each `+ TimeSeconds·5`, combined as `c1 + c2 − c1c2`, times `q`
+    (`5e-5`), then `table·(1 − s)`.
+  - Interference: one lobe from `11·atan2(√(dx²+dy²), dz) + TimeSeconds·5`.
+  - CloudCast (`0x10b04380`): forwards to the normal body (time
+    independent).
+  - Shell (`0x10b05740`): `R = tableSqrt(d²)·(1/R)`, kept for
+    `0.8 < R < 1`, byte `(1 − 10·|R − 0.9|)·illumination`, with no table and
+    no incidence.
+- *Transcendental and math calls.* Core appAtan2 (`0x10123280`) is
+  `fld Y; fld X; fpatan` (extended result). Every call site passes
+  `(Y=dx, X=dy)` or `(Y=√h, X=dz)`. appFmod goes to msvcrt `_CIfmod`
+  (fprem, exact), and `_ftol` truncates.
+- *Mesh and fog lighting.* FLightManager::Light (`0x10b027f0`) and the
+  fog loop never call info `+0x60`, so these effects do not change mesh or
+  volumetric lighting.
+- *Moving lights.* EMPGrenade and NanoVirusGrenade spawn an ExplosionLight
+  (a moving class 2 light) with `LE_Shell`. Shell matters through
+  moving-lights.mjs, with illumination `0x7f`.
+
+**Census** (`/tmp` scratch, re-derivable): Searchlight on 06_HongKong_Helibase
+(2 TriggerLights), WanChai_Garage (2), 15_Area51_Page, 99_Endgame1/2/3 (1 each).
+Rotor on 09_NYC_ShipFan (1), 12_Vandenberg_Tunnels (3), 14_Vandenberg_Sub (4).
+Disco on WanChai_Canal (2, LightType 6), WanChai_Underworld (2), 10_Paris_Club (1).
+SlowWave on 09_NYC_Graveyard (1), 09_NYC_ShipBelow (4, Pulse). FastWave on
+99_Endgame2 (1). All of them are class 1, and none is placed with
+CloudCast, Shock, Interference or Shell.
+
+**Written, not yet verified:** `native/script-vm/src/spatial.rs` (registered
+in lib.rs; it compiles). It holds the eight bodies at PC24: f32 ops, plus
+`mul24`/`add24` for operands with double constants, using an
+error-free transform when the f64 result lands on a 24-bit midpoint. It
+also holds `atan_k` (24-bit `k·FPATAN`). The fast path is an f64 atan2 with
+a 2^-39 band; the slow path is a double-double atan2 with an `AMBIGUOUS`
+counter. Exports: `light_spatial(params)`, table pointers, pair
+collection and validation hooks. The table rows were generated with
+Python `decimal` (80 digits). No JavaScript glue, no oracle and no
+validator exist yet.
+
+**Next steps:**
+1. Oracle. Extend `native-dynamic-light-oracle.py` with a
+   `spatialDynamic` case: run at control word 0x007f, set `[0x10b3df88]`
+   to a buffer whose `+0x478` is TimeSeconds, and put LightPeriod and
+   LightPhase at actor `+0x1e6`/`+0x1e7`. Write dynamic-lighting.mjs's sqrt
+   and normal tables into `0x10b3e1b8`/`0x10b34a6c`, and the coords.mjs
+   sines into GMath. Stub appFmod as a Python `math.fmod` hook. Stub
+   appAtan2 as `fld tbyte [slot]`, filled from measured FPATAN results.
+2. Hardware FPATAN probe (`tools/x87-fpatan-probe.c`, mingw plus wine as in
+   validate-x87-ftol-hardware). It measures the extended result for the
+   pairs that spatial.rs collects (`spatial_collect`), at control words
+   0x007f and 0x037f.
+3. `scripts/validate-light-spatial.mjs`. Compare Rust with the oracle on
+   every census light's surfaces at several TimeSeconds, plus synthetic
+   cases: zero and NaN grids, `dx=dy=0`, period 0, large times. Compare
+   the atan fast path with `spatial_set_slow_only(1)` on millions of
+   random pairs. Register the validator in `run-validators.mjs`.
+4. Wiring. In `staticLightMap`, put the class 1 lights with these effects
+   into `animated` with their parameters and rectangle-relative
+   illumination. In light.rs, add a per-light parameter-record word, and
+   have `light_merge` take the frame time and rerun `spatial::run` when it
+   changes. Add the memo token `T<timeSeconds>` in
+   light-animation-kernel.mjs and in the reference `animateLightMap` (via
+   the Rust export). Add Shell to moving-lights.mjs. Then run a headless
+   check on 10_Paris_Club and measure the per-frame cost.
+
+**Open issues:**
+- The light-manager tables are built at init, outside PreRender. Their
+  precision (the 0x037f tables in use against 0x007f tables) is the
+  existing open question.
+- ComputeFromActor's per-light constants (rr2, incidence, rectangle) are
+  modelled at 0x037f; under PC24, 121 of 256 `4093/R²` values differ.
+- CloudCast reuses the 0x037f-modelled normal body.
+
 Two facts recovered from SetupForSurf's listing matter for that wiring:
 - A level surface's static list goes through AddLight with each light's
   shadow mask; the mask pointer advances for every list entry, including

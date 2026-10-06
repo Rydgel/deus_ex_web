@@ -19,6 +19,7 @@ mod fire;
 mod fall;
 mod fly;
 mod light;
+mod spatial;
 mod fog;
 mod gc;
 mod lipsync;
