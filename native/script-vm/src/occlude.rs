@@ -18,8 +18,9 @@
 //! stacks as word arenas; every structure the original allocates there is a
 //! word record, linked by word indices (0 = NULL).
 //!
-//! Not covered yet (explicit): dynamics (SetupDynamics sprites and chunks,
-//! FDynamicLight), LeafVolumetricLighting and volumetric side planes, the
+//! The dynamics' sprites and chunks are here (their rectangles from
+//! setup.rs). Not covered yet (explicit): FDynamicLight items,
+//! LeafVolumetricLighting and volumetric side planes, the
 //! moving-brush tracker (Level+0xfc), the sky and mirror child frames' own
 //! occlusion (requests are reported), WarpZoneInfo portals (none in the
 //! single-player maps), span-based render devices.
@@ -44,7 +45,8 @@ static mut MODEL: [u32; 20] = [0; 20];
 /// 37..41 NearClip, 41 Mirror, 42 ZoneNumber, 43 Recursion, 44 the frame
 /// counter (0x10b5a700), 45 Level.TimeSeconds, 46 option bits (1 viewer
 /// ShowFlags & 0x800, 2 RenDev ShinySurfaces, 4 URender Toggle; 0x100 asks
-/// the output to carry each saved polygon's points), 47
+/// the output to carry each saved polygon's points, 0x200 leaves the
+/// sprites' span buffers out of it), 47
 /// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z.
 static mut FRAME: [u32; 64] = [0; 64];
 /// Run results: 0 status, 1 output words, 2 NodesDraw (+0x68), 3 PolysDraw
@@ -86,19 +88,22 @@ fn wr8(address: u32, value: u8) {
 fn rf(address: u32) -> f32 {
     f32::from_bits(rd(address))
 }
-fn model(i: usize) -> u32 {
+pub(crate) fn model(i: usize) -> u32 {
     unsafe { (*addr_of!(MODEL))[i] }
 }
-fn frame(i: usize) -> u32 {
+pub(crate) fn set_model(i: usize, value: u32) {
+    unsafe { (*addr_of_mut!(MODEL))[i] = value }
+}
+pub(crate) fn frame(i: usize) -> u32 {
     unsafe { (*addr_of!(FRAME))[i] }
 }
-fn ff(i: usize) -> f32 {
+pub(crate) fn ff(i: usize) -> f32 {
     f32::from_bits(frame(i))
 }
 
 /// FISTP under round-to-nearest: ties to even; NaN or out of int32 range
 /// stores the integer indefinite.
-fn fistp(x: f32) -> i32 {
+pub(crate) fn fistp(x: f32) -> i32 {
     if !(x >= -2147483648.0 && x < 2147483648.0) {
         return i32::MIN;
     }
@@ -619,13 +624,13 @@ const MAX_PTS: usize = 24;
 static mut PTS: [[u32; MAX_PTS]; 6] = [[0; MAX_PTS]; 6]; // P0, PXM, PXP, PYM, PYP, PNear
 static mut DIST: [f32; MAX_PTS] = [0.0; MAX_PTS];
 
-struct View {
-    origin: [f32; 3],
-    axes: [[f32; 3]; 3],
-    prj: [f32; 4], // XM, YM, XP, YP
-    proj_z: f32,
-    fx15: f32,
-    fy15: f32,
+pub(crate) struct View {
+    pub(crate) origin: [f32; 3],
+    pub(crate) axes: [[f32; 3]; 3],
+    pub(crate) prj: [f32; 4], // XM, YM, XP, YP
+    pub(crate) proj_z: f32,
+    pub(crate) fx15: f32,
+    pub(crate) fy15: f32,
 }
 
 fn project_clip(w: u32, view: &View, z: f32) {
@@ -775,6 +780,11 @@ fn clip_bsp_surf(i_node: i32, view: &View, stamp: u32) -> (usize, usize) {
 fn bound_visible(bound: u32, view: &View, width: i32, height: i32, fx2: f32, fy2: f32) -> Option<[i32; 4]> {
     let min = [rf(bound), rf(bound + 4), rf(bound + 8)];
     let max = [rf(bound + 12), rf(bound + 16), rf(bound + 20)];
+    bound_visible_box(min, max, view, width, height, fx2, fy2)
+}
+/// BoundVisible on a box's Min and Max (FDynamicSprite::Setup's call).
+pub(crate) fn bound_visible_box(min: [f32; 3], max: [f32; 3], view: &View, width: i32, height: i32, fx2: f32,
+    fy2: f32) -> Option<[i32; 4]> {
     let lo = [min[0] - view.origin[0], min[1] - view.origin[1], min[2] - view.origin[2]];
     let hi = [max[0] - view.origin[0], max[1] - view.origin[1], max[2] - view.origin[2]];
     if (0..3).all(|i| lo[i] <= 0.0 && hi[i] >= 0.0) {
@@ -1301,6 +1311,13 @@ fn occlude() -> u32 {
     while s != 0 {
         emit(0xffff_fffe);
         emit(rd(s + 4 * SP_KEY));
+        if options & 0x200 != 0 {
+            for _ in 0..3 {
+                emit(0);
+            }
+            s = rd(s + 4 * SP_RENDER_NEXT);
+            continue;
+        }
         let span = sprite_span(s);
         emit(span.start_y as u32);
         emit(span.end_y as u32);

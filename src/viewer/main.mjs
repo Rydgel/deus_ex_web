@@ -58,10 +58,13 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
 // walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs) and
 // ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs).
+// ?actorOcclusion=frustum draws and stamps the main frame's actors from the
+// frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
+// (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
-  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS']]) {
+  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -1344,7 +1347,8 @@ function drawFrame(snap, time) {
   if (drawWorld) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
     if (visible) world.visibility.select(visible.nodes);
-    try { renderer.render(scene, camera); } finally { world.visibility.all(); }
+    spriteScene?.mainPass(true);
+    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); }
   }
   if (simVerify && !simClient && stampFrame) {
     const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),

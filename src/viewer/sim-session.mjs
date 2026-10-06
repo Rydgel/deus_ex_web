@@ -12,7 +12,8 @@ import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov } from './pl
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
-import { OCCLUSION_POINTS } from '../runtime/bsp-occlusion.mjs';
+import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusion.mjs';
+import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -49,8 +50,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // (weapon-overlay-sim.mjs), the frame's last world steps.
   let coronaScan = null, weaponSim = null, size = null;
   // The original BSP occlusion (bsp-occlusion.mjs) and DrawWorld's frame
-  // counter (0x10b5a700), which schedules its bound tests.
-  let occlusion = null, drawWorlds = 0;
+  // counter (0x10b5a700), which schedules its bound tests. Unless
+  // ?actorOcclusion=frustum, the main frame's OccludeBsp waits for
+  // SetupDynamics' candidates (`pendingOcclusion`, run by occludeMain) and
+  // its Frame->Sprite decides the main frame's actors.
+  let occlusion = null, drawWorlds = 0, pendingOcclusion = null;
+  const actorOcclusion = actorOcclusionMode() !== 'frustum';
   // DrawFrame's decal block after the main frame's OccludeBsp
   // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
   let decalDraw = null, occlusionFramePtr = null;
@@ -59,7 +64,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
-  const live = { lights: null, meshItems: [] };
+  const live = { lights: null, meshItems: [], sprites: [], iterators: null };
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
   // actor hashes its owned objects by its measured GObjObjects index
@@ -130,24 +135,52 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // polygons the draw lists keep, the mirror child requests' nodes and
   // whether a sky frame was made. ShowFlags 0x800 and the D3D device's
   // ShinySurfaces are set in Play.
-  function visibility(view, width, height) {
+  // With `setupCount`, Setup runs on that many packed candidates first and
+  // `sprites` lists Frame->Sprite's keys (RenderNext order).
+  function visibility(view, width, height, setupCount = -1) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => Boolean(runtime.readNamed(zone ?? info, 'SkyZone'))));
     const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
-    // The decal block clips against the saved polygons' points (option 0x100).
+    // The decal block clips against the saved polygons' points (option
+    // 0x100); Setup's sprites need only their keys (0x200).
     const decals = decalDraw?.wanted(level) ?? false;
-    words[44] = ++drawWorlds; words[45] = u32[0]; words[46] = 3 | (decals ? OCCLUSION_POINTS : 0); words[47] = 0;
+    words[44] = ++drawWorlds; words[45] = u32[0];
+    words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
     const started = performance.now();
-    const result = occlusion.run(words, [], { skipPoints: true }), nodes = [];
+    const result = occlusion.run(words, [], { setupCount, skipPoints: true }), nodes = [];
     for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
     const occluded = performance.now();
     const fragments = decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null;
     return { nodes: Uint32Array.from(nodes), zone: words[42],
       mirrors: result.children.filter(child => child.kind === 'mirror').map(child => child.iNode),
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments,
+      sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): OccludeBsp with its decode, then the decal block.
       ms: { occlusion: occluded - started, decals: performance.now() - occluded } };
+  }
+  // The main frame's dynamics and OccludeBsp (docs/bsp-occlusion.md "Play"):
+  // this frame's sprite records and, from the actor mesh layer, its bindings
+  // (`args`), as Setup candidates in SetupDynamics' order. Frame->Sprite
+  // marks each sprite record's `main` and gives the drawn bindings' ids
+  // (`visibility.main`); the frame's visibility and sky follow.
+  function occludeMain(args = {}) {
+    const pending = pendingOcclusion;
+    pendingOcclusion = null;
+    if (!pending) return null;
+    const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args });
+    const result = visibility(pending.view, pending.width, pending.height, entries.length), main = new Set();
+    for (const sprite of live.sprites) sprite.main = false;
+    for (const key of result.sprites) {
+      const entry = entries[key];
+      if (entry.sprite) entry.sprite.main = true; else main.add(entry.binding.id);
+    }
+    result.main = main;
+    delete result.sprites;
+    pending.frame.visibility = result;
+    // DrawWorld draws the sky frame only when OccludeBsp made one.
+    if (!result.sky) pending.frame.sky = null;
+    return result;
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
   // and queue (raw heap strings) and the displayBuffer's characters that
@@ -195,9 +228,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       const errors = [];
       let sprites = [];
       live.meshItems = [];
-      try { const scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems; }
-      catch (error) { failed = true; errors.push(plainError(error)); }
+      try {
+        const scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems;
+        live.iterators = scanned.iterators;
+      } catch (error) { failed = true; errors.push(plainError(error)); }
       if (spriteTextures) for (const sprite of sprites) sprite.size = spriteSize(sprite.texture, sprite.style === 2);
+      live.sprites = sprites;
       return { errors, sprites, notes: [...spriteScan.notes] };
     },
     /** Render.dll 0x10b25150: a drawn actor's LastRenderTime is its level's
@@ -266,6 +302,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (meshLighting && !stopped()) collect(this.lightFrame(input.seconds, input.inspect?.view ?? null));
       time('lighting');
       let sprites = [];
+      live.sprites = []; live.iterators = null;
       if (input.play && !stopped()) {
         const scanned = this.sprites();
         collect(scanned.errors);
@@ -278,6 +315,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         collect(actors.errors);
         snapshot.actors = actors.frame;
       }
+      // The main frame's OccludeBsp when the actor layer did not run it (no
+      // actor meshes, or a step stopped the simulation): the sprites alone.
+      if (pendingOcclusion) {
+        try { occludeMain(); } catch (error) { failed = true; errors.push(plainError(error)); }
+      }
+      if (snapshot.begin && begun) { snapshot.begin.visibility = begun.visibility; snapshot.begin.sky = begun.sky; }
       time('actors');
       if (drawn) {
         const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
@@ -342,8 +385,14 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
         const requested = !inspect && current?.visibility ? new Set(current.visibility.mirrors) : null;
         const children = drawn ? drawn.mayRender(view, requested) : false;
+        // The main frame's dynamics run after the layer's reads; mirror child
+        // frames then follow OccludeBsp's requests.
+        const occlude = !inspect && pendingOcclusion ? args => {
+          const result = occludeMain(args);
+          return { main: result.main, children: drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false };
+        } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
-          items: inspect ? [] : live.meshItems, ...(pack ? { pack } : {}) });
+          items: inspect ? [] : live.meshItems, occlude, ...(pack ? { pack } : {}) });
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
     },
@@ -355,14 +404,26 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null }) {
       const errors = [], passDecisions = [];
       let mainDecisions = null;
-      stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), bindings: new Map(), weapon: new Set() };
+      stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
+        weapon: new Set() };
       try {
         const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors, requested });
         // `actorPasses`: the page applies the actor layer's mirror pass
         // decisions (no runtime error); otherwise its last state draws.
         const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
+        // OccludeBsp's Frame->Sprite for the main frame (occludeMain); the
+        // mirror and sky passes keep the frustum.
+        const main = inspect ? null : current?.visibility?.main ?? null;
         for (const pass of passes) {
           drawn.moversIn(pass, stamped.movers);
+          if (pass.kind === 'main' && main) {
+            for (const sprite of sprites) if (sprite.main) stamped.sprites.add(sprite.handle);
+            for (const binding of bindings)
+              if (main.has(binding.id) && !stamped.bindings.has(binding.id)) {
+                stamped.occluded.add(binding.actor); stamped.bindings.set(binding.id, binding.actor);
+              }
+            continue;
+          }
           drawn.spritesIn(pass, sprites, stamped.sprites);
           if (pass.kind === 'sky' || !actorScene) continue;
           const frustum = drawn.frustum(pass.camera);
@@ -385,6 +446,10 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         }
         for (const handle of stamped.sprites) runtime.writeNamed(identityOfHandle(handle), 'LastRenderTime', time);
         for (const actor of stamped.actors) if (shown(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
+        // DrawActorSprite (0x10b25150) stamps every Frame->Sprite actor; the
+        // frame's admission already left hidden ones out (an iterator's items
+        // draw whatever their own bHidden).
+        for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, passDecisions, mainDecisions };
     },
@@ -489,11 +554,17 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       // root window's render viewport is empty.
       if (!rect || (rect.render && rect.width > 0 && rect.height > 0)) {
         try { frame.sky = lastViewLocation ? sky(lastViewLocation) : null; } catch (error) { fail(error); }
+        pendingOcclusion = null;
         if (occlusion && frame.view && !stopped()) {
-          try { frame.visibility = visibility(frame.view, rect ? rect.width : width, rect ? rect.height : height); }
-          catch (error) { fail(error); }
-          // DrawWorld draws the sky frame only when OccludeBsp made one.
-          if (frame.visibility && !frame.visibility.sky) frame.sky = null;
+          const [w, h] = rect ? [rect.width, rect.height] : [width, height];
+          // The dynamics wait for the sprite scan and the actor layer.
+          if (actorOcclusion && occlusion.setupSupported) pendingOcclusion = { view: frame.view, width: w, height: h, frame };
+          else {
+            try { frame.visibility = visibility(frame.view, w, h); }
+            catch (error) { fail(error); }
+            // DrawWorld draws the sky frame only when OccludeBsp made one.
+            if (frame.visibility && !frame.visibility.sky) frame.sky = null;
+          }
         }
       }
       try { const target = game.target(); frame.target = target ? { label: target.label } : null; } catch (error) { fail(error); }

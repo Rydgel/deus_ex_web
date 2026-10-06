@@ -308,6 +308,10 @@ export function createScriptVmKernel(instance, memory) {
       masterInPtr: () => x.occ_master_in_ptr() >>> 0,
       masterOutPtr: () => x.occ_master_out_ptr() >>> 0,
       masterFrame: () => x.occ_master_frame(),
+      // FDynamicSprite::Setup (setup.rs) over packed candidates; null in a
+      // core that predates it.
+      setup: typeof x.occ_setup !== 'function' ? null
+        : (candidates, count, out) => x.occ_setup(candidates >>> 0, count >>> 0, out >>> 0) >>> 0,
     }),
     // ADecal::execAttachDecal / execDetachDecal (decal.rs, docs/decals.md),
     // driven by decal-kernel.mjs; null when the loaded core predates them.
