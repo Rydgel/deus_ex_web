@@ -34,6 +34,8 @@ const DEFAULT_MAPS = ['00_Training', '01_NYC_UNATCOIsland', '02_NYC_BatteryPark'
 const maps = (option('maps', null)?.split(',') ?? DEFAULT_MAPS);
 const [WIDTH, HEIGHT] = option('size', '1280x720').split('x').map(Number);
 const planPath = path.join(out, 'plan.json');
+const freeze = !process.argv.includes('--live');
+const onlyViews = option('views', null)?.split(',') ?? null;
 const loadPlan = () => existsSync(planPath) ? JSON.parse(readFileSync(planPath, 'utf8')) : {};
 mkdirSync(out, {recursive: true});
 
@@ -63,7 +65,10 @@ async function play() {
     for (const map of maps) {
       const page = await browser.newPage({viewport: {width: WIDTH, height: HEIGHT}, deviceScaleFactor: 1});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
-      const query = option('query', '');
+      // Frozen (the default): the page holds its frame loop (?hold=1) until
+      // LevelInfo.bPlayersOnly is set, as the original's console sets it
+      // before `open`; --live lets the level run.
+      const query = [freeze ? 'hold=1' : '', option('query', '')].filter(Boolean).join('&');
       await page.goto(`${url}/${query ? `?${query}` : ''}`);
       await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
       if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
@@ -76,6 +81,10 @@ async function play() {
       await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
       const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
+      if (freeze) {
+        await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: true}));
+        await page.evaluate(() => window.deusExViewer.release());
+      }
       await frames(30);
       const start = await page.evaluate(() => window.deusExViewer.viewProbe({}));
       const entry = plan[map] ?? (plan[map] = {start: start.location, startRotation: start.viewRotation,
@@ -99,12 +108,32 @@ async function play() {
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
         shots.push({view: view.name, camera: state, player: {location: probe.location, state: probe.state, physics: probe.physics}});
       }
-      writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, size: [box.width, box.height], ghost, shots, errors}, null, 1));
+      writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, shots, errors}, null, 1));
       console.log(map, `${shots.length} views`, ghost.state, errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
       await page.close();
       writeFileSync(planPath, JSON.stringify(plan, null, 1));
     }
   } finally { await browser.close(); await server?.close(); }
+}
+
+// The game window under Hyprland: floating, WIDTHxHEIGHT and inside the
+// screen. Map loads tile it again, so it is checked before every shot.
+function hyprlandWindow() {
+  const find = () => JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'}))
+    .find(c => c.class.toLowerCase() === 'deusex.exe');
+  const placed = w => w && w.floating && w.size[0] === WIDTH && w.size[1] === HEIGHT && w.at[0] >= 0 && w.at[1] >= 0;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const window = find();
+    if (!window) throw new Error('no deusex.exe window');
+    if (placed(window)) return attempt > 0;
+    const at = `address:${window.address}`;
+    for (const dispatch of [`hl.dsp.window.float({ action = "set", window = "${at}" })`,
+      `hl.dsp.window.resize({ x = ${WIDTH}, y = ${HEIGHT}, relative = false, window = "${at}" })`,
+      `hl.dsp.window.center({ window = "${at}" })`])
+      execFileSync('hyprctl', ['dispatch', dispatch]);
+    execFileSync('sleep', ['2']);
+  }
+  throw new Error('the deusex.exe window does not stay floating at the capture size');
 }
 
 async function original() {
@@ -118,16 +147,49 @@ async function original() {
     game.run(file, timeout);
   };
   const loadWait = Number(option('load-wait', 25000));
+  let current = option('current', null);
   for (const map of maps) {
     const entry = plan[map];
     if (!entry) { console.log(map, 'not in the plan (run `play` first)'); continue; }
     const dir = path.join(out, map); mkdirSync(dir, {recursive: true});
-    post([`cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
-    post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300']);
+    // --reuse: the map is already loaded and ghosted (a retake).
+    if (!process.argv.includes('--reuse')) {
+      // A map visited before in this mission loads its travel state from
+      // Save\\Current (LoadMap ..\\Save\\Current\\<map>.dxs), not the map file:
+      // move that state aside (reversibly) so every capture starts fresh, as Play does.
+      // Leaving a map saves it there, so the map loaded now (--current, then
+      // the last one opened) is left for another first.
+      const travel = path.join(game.GAME, 'Save', 'Current', `${map}.dxs`);
+      if (current === map) {
+        const other = map === '00_Training' ? '01_NYC_UNATCOIsland' : '00_Training';
+        post([`cmd open ${other}`, `sleep ${loadWait}`], loadWait + 60000);
+      }
+      if (existsSync(travel)) {
+        const aside = path.join(out, 'save-current'); mkdirSync(aside, {recursive: true});
+        renameSync(travel, path.join(aside, `${map}-${Date.now()}.dxs`));
+      }
+      post([...(freeze ? ['cmd set LevelInfo bPlayersOnly True', 'sleep 300'] : []), `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
+      current = map;
+      // Hyprland tiles the window again when a map opens: float it back to
+      // the WIDTHxHEIGHT client area (DX_HYPRLAND=1), as before the first map.
+      // It must lie inside the screen: Shot locks the primary surface for the
+      // window's rectangle, and a rectangle past the edge fails
+      // (DDERR_INVALIDPARAMS) and writes a black frame.
+      if (process.env.DX_HYPRLAND === '1') hyprlandWindow();
+      post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300']);
+    }
     for (const view of entry.views) {
+      if (onlyViews && !onlyViews.includes(view.name)) continue;
       const [x, y, z] = view.location, [pitch, yaw, roll] = view.rotation;
       let taken = [];
-      for (let attempt = 0; attempt < 2 && !taken.length; attempt++) {
+      for (let attempt = 0; attempt < 3 && !(taken.length && taken[0].width === WIDTH && taken[0].height === HEIGHT); attempt++) {
+        // A window just placed again shows a stale frame first: let the
+        // device settle and take a throwaway shot.
+        if (process.env.DX_HYPRLAND === '1' && hyprlandWindow()) {
+          const before = game.shots();
+          post(['sleep 3000', 'shot', 'sleep 900']);
+          for (const shot of game.shots().filter(shot => !before.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
+        }
         const before = game.shots();
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`, 'sleep 1500', 'shot', 'sleep 900']);
@@ -139,6 +201,7 @@ async function original() {
         });
       }
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');
+      if (taken.length && (taken[0].width !== WIDTH || taken[0].height !== HEIGHT)) throw new Error(`${map} ${view.name}: the original's frame is ${taken[0].width}x${taken[0].height}, not ${WIDTH}x${HEIGHT}`);
     }
   }
 }

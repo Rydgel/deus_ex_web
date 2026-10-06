@@ -12,8 +12,13 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * Velocity and ViewRotation directly, as the console's SET does
  * (UObject::GlobalSetProperty imports the text into the field; for a
  * non-brush actor nothing else follows). Returns the player's state. */
-export function viewProbe(game, { ghost = false, location = null, rotation = null } = {}) {
+export function viewProbe(game, { playersOnly = false, ghost = false, location = null, rotation = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  // `set LevelInfo bPlayersOnly True`, which the original capture types
+  // before `open` so the new level's LevelInfo starts with it: written here
+  // before the held page's first tick (?hold=1), so Level.Tick runs only the
+  // player from the start (level-tick.mjs).
+  if (playersOnly) runtime.writeNamed(runtime.levelFor(player).actors[0], 'bPlayersOnly', true);
   const read = name => runtime.readNamed(player, name);
   const commands = game.doors.scriptRuntime.windowHost?.consoleCommands;
   const output = [];
@@ -30,5 +35,5 @@ export function viewProbe(game, { ghost = false, location = null, rotation = nul
   const instance = runtime.instance(player), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
   return { location: [...read('Location')], viewRotation: [...read('ViewRotation')], eyeHeight: read('EyeHeight'),
     baseEyeHeight: read('BaseEyeHeight'), physics: read('Physics'), bCollideWorld: read('bCollideWorld'),
-    state: scriptGetStateName(node), output };
+    state: scriptGetStateName(node), playersOnly: runtime.readNamed(runtime.levelFor(player).actors[0], 'bPlayersOnly'), output };
 }
