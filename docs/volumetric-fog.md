@@ -254,8 +254,9 @@ Unverified or host choices, noted:
   flag then sees a different sequence.
 - **Brightness and colour.** Volumetric lights use their steady brightness
   and colour; GlobalLighting's LightType animation is not applied to them.
-- **Not fogged.** Mover surfaces and meshes get no fog. Mirror child views
-  reuse the main frame's fog maps instead of their own frames'.
+- **Not fogged.** Mover surfaces get no fog until the brush tracker; meshes
+  draw unfogged as D3D does ("Mesh fog"). Mirror child views reuse the
+  main frame's fog maps instead of their own frames'.
 - **Gamma.** The display ramp maps the finished frame after the pass
   blends ([lighting](lighting.md), "Display ramp"), as the original's
   SetGammaRamp does. Until 2026-10-03 it applied per fragment, before
@@ -269,52 +270,55 @@ Unverified or host choices, noted:
 - **Draw order.** The early-out flag persists across surfaces in the
   original draw order. Play's surface order differs, which can change
   boundary texels.
-- **Not done yet.** Fog on meshes (DrawMesh's Volumetrics argument) and on
-  movers.
+- **Not done yet.** Fog on movers (with the brush tracker).
 
-## Mesh fog (recovered entry points, not translated)
+## Mesh fog
 
-- **Vtable.** The light manager is the static object `0x10b3d2f0`, with
-  vtable `0x10b2a93c` (set at `0x10b09990`). The SDK's RenderPrivate.h
-  orders the slots Init, Exit, SetupForActor (`0x10b010b9`), SetupForSurf,
-  FinishSurf, FinishActor, Light (`0x10b01271`) and Fog (`0x10b011f4` →
-  `0x10b02c00`).
-- **`Fog(FTransSample& Point, DWORD ExtraFlags)`.** It works only with
-  `ExtraFlags & 0x40000000` (PF_RenderFog) and walks the same sorted
-  volumetric list (`0x10b3db84`…`[0x10b3cad8]`), which SetupForActor builds
-  from the actor's Volumetrics.
-- **Per light.** It runs the same chord integral as the fog-map texels,
-  except that Core's `FVector::operator|` and `SizeSquared` are called out
-  of line, the early-out flag `0x10b4ea00` is shared, and it accumulates a
-  float FPlane at `[ebp-0x50]`.
-- **Accumulation** (`0x10b02e7f–0x10b02f84`). For each light the clamped
-  chord value v is doubled and stored, and a zero skips the light. Then:
-  - `a = min(1, st(2v·fog))`, where fog = VolumeFog/255 (+0x88);
-  - each channel is `min(1, st(2v·colour_c + (1 − a)·old_c))`;
-  - alpha is `min(1, old_A + a)`.
+Recovered 2026-10-06 from Render.dll, D3DDrv.dll (`9e0f8a42…d8ac9f`) and
+GlideDrv.dll; reference: `scripts/native-mesh-fog-oracle.py GAME_ROOT
+[cw]` (vertex fog, D3D DrawGouraudPolygon, and DrawLodMesh's projection and
+face helper into the real D3D vtable, at the render pass's 0x007f).
 
-  The result is the vertex's FPlane fog.
-- **Upload scale.** A fog-map byte is `(255v)·c` capped at 127, so after a
-  ×2 upload it reads `2v·c`, the vertex path's value. Within Render.dll this
-  supports the ×2 seven-bit upload scale used for the fog pass; D3D's RGBA7
-  filler itself is still untraced.
-- **Translation.** `fogVertex` (volumetric-fog.mjs) shares the chord code
-  with the fog-map loop through `chordValue`, with SizeSquared's
-  `(x² + y²) + z²` order. `validate-volumetric-fog.mjs` calls the original
-  Fog (Core's `operator|` and SizeSquared bound natively) for 12 vertices per
-  case after the surface loop, carrying the same early-out flag. All 1,440
-  vertex FPlanes (1,033 fogged) and the final flag match.
-- **D3D** (`UD3DRenderDevice::DrawGouraudPolygon`, `0x100056b0`).
-  - **Gate.** Fog is used when the device field `+0x9d0` is set and
-    `(PolyFlags & 0x40000044) == 0x40000000` (PF_RenderFog, neither
-    translucent nor modulated).
-  - **Specular.** Each vertex's specular is `0xFF` alpha over
-    `fistp(Fog.RGB·K)` from FTransSample `+0x40…+0x48`, so the fog colour is
-    added.
-  - **Diffuse.** The diffuse is `fistp(Light.RGB·scale·K)` (+0x30…+0x38,
-    device scale +0xaa4…) with alpha byte 0x78. Without fog the specular is
-    0 and the alpha 0xff.
-  - **Fog alpha.** Fog.W is not read there.
-- **Still to trace.** DrawLodMesh's two Fog call sites, including where
-  `(1 − Fog.W)` attenuates the lit colour; K at `0x100186a8`; and the
-  `+0x9d0` field. These come before meshes can be fogged in Play.
+- **Render.** DrawLodMesh computes `Fog = FLightManager::Fog(vertex,
+  PolyFlags)` (vtable `+0x1c`, `0x10b10a2f`) once per marked vertex, after
+  Light, and stores it raw at FTransSample `+0x40`. Only frustum and
+  near-plane clipping touch it afterwards (interpolated like Light, each
+  step stored as a float); the face helper's averaging subdivision is dead
+  code, as DrawMesh always sets PF_Flat (`0x10b0d1c9`). Nothing reads Fog.W
+  and no `(1 − Fog.W)` dims the lit colour.
+- **D3D** (`UD3DRenderDevice::DrawGouraudPolygon`, `0x100056b0`). Fog is
+  used when `UseVertexSpecular` (`+0x9d0`) is set and `(PolyFlags &
+  0x40000044) == 0x40000000`: the vertex specular is `0xFF000000 |
+  fistp(st(Fog.c · 255))` (K = 255.0f at `0x100186a8`), the diffuse alpha
+  becomes `0x78`, and SetBlending (`0x10008270`) enables SPECULARENABLE for
+  those faces, so the pixel is `tex·diffuse + fog` (clamped). D3D's own fog
+  (FOGENABLE) is never turned on.
+- **The gate is off in the shipped configuration.** `+0x9d0` starts at 1
+  (`0x10001d1f`), and SetRes clears it for a 3dfx device (`0x1000c248`),
+  without specular Gouraud support (`0x1000c4eb`), or when the config
+  property **UseVertexFog** (`+0x9e4`) is False (`0x1000c72a`). Nothing gives
+  UseVertexFog a default and no shipped INI (DeusEx.ini, Default.ini,
+  User.ini, DefUser.ini) sets it, so **D3D draws no mesh fog**: specular 0,
+  diffuse alpha 0xFF.
+- **Glide** (GlideDrv `0x10707070`) has no gate: it redraws a fogged face
+  with the vertex colour `Fog·255` and `(ONE, ONE_MINUS_SRC_COLOR)`, so
+  `dst = fog + dst·(1 − fog)`. The installed DeusEx.ini selects Glide.
+- **Never fogged** whatever the device: the weapon view model and
+  Canvas.DrawActor (no Volumetrics), bParticles meshes (Fog 0), and actors
+  SetupForActor gates out (bUnlit, RendMap ≠ 5, NoLighting).
+- **Movers** are BSP surfaces (the brush tracker), so their fog is the
+  fog-map pass above, with the same gate (zone bFogZone, the draw item's
+  Volumetrics, not translucent) for mover surfaces with a light map.
+
+**Play** follows the D3D renderer, as the rest of the presentation does
+(mesh lighting, decals, the display ramp): meshes draw unfogged, which is
+what the shipped configuration shows. UseVertexFog = True (specular fog,
+and masked fogged meshes failing the alpha test at `0x78`) and the Glide
+pass are explicitly unsupported options. Mover fog arrives with the brush
+tracker ([BSP occlusion](bsp-occlusion.md)).
+
+Precision: FLightManager::Fog runs in the render pass (24-bit). At
+`0x007f` its FPlanes differ from the `0x037f` results in 328 of 480
+components (cancellation, up to 1,219 ulps), and ComputeFromActor's
+volumetric constants differ too; `fogVertex` and the fog-map loop were
+validated at `0x037f` and are part of the render-pass precision audit.

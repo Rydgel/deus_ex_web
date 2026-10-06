@@ -118,6 +118,13 @@ class FogOracle(lighting.Oracle):
 
 if __name__ == '__main__':
     oracle = FogOracle(Path(sys.argv[1]))
+    # The tables above come from the light manager's init on the game thread.
+    # The per-surface segments run inside DrawWorld, where URender::PreRender
+    # sets 24-bit precision control (docs/bsp-occlusion.md "Precision"):
+    # argv[2] = 0x007f runs them so. The translation was validated at the
+    # default 0x037f; at 0x007f ComputeFromActor's constants already differ
+    # (docs/volumetric-fog.md, the render-pass precision audit).
+    oracle.control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
     cases = json.load(sys.stdin)
     out = []
     for case in cases:

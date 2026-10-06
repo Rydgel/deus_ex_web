@@ -403,8 +403,9 @@ with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
 on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
 music, decals, and the third-person conversation camera with lip sync.
-Open: fog on meshes and movers in Play, the occlusion's moving brush tracker and
-child frames, mirror/sky combinations, zone reverb and Galaxy's mixer for
+Open: the occlusion's moving brush tracker (and with it fog on movers) and
+child frames, the render-pass precision audit (translations validated at
+64-bit precision where the pass runs at 24), mirror/sky combinations, zone reverb and Galaxy's mixer for
 sound effects, time-varying moving lights and spotlights, and original-game
 visual acceptance across maps. SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
@@ -640,6 +641,12 @@ ClipDecal cases on three maps). The decal block stamps LastRenderedTime,
 which DeusExDecal's lifetime reads, and the page draws the fragments with
 D3D's modulated state; mirrors show none, as in the original. Mover
 surfaces wait for the brush tracker ([decals](decals.md)).
+
+**Mesh fog (2026-10-06).** DrawLodMesh computes each vertex's volumetric
+fog, but D3DDrv uses it only when UseVertexFog is set, which no shipped INI
+does, so the shipped D3D configuration draws meshes unfogged, as Play does;
+Glide's fog pass and UseVertexFog are unsupported options. Movers take the
+fog-map pass with the brush tracker ([volumetric fog](volumetric-fog.md#mesh-fog)).
 
 ## 5. Implement the full gameplay systems
 
