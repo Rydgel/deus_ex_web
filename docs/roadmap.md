@@ -397,16 +397,17 @@ of general script compatibility.
 
 **In progress.** Restored so far, each with its evidence below: original
 mesh lighting (CPU kernels and an exact GPU path), static and animated light
-maps, moving lights on light maps, mirrors on every static and mover plane
+maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
+frame and dynamics in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
-on BSP surfaces, ambient sound and script sounds through Galaxy, and the
-third-person conversation camera with lip sync. Open: fog on meshes and
-movers in Play, mirror/sky combinations, SpriteAnimOnce frames, animated
-mesh skins, decals, music, zone reverb and Galaxy's mixer, time-varying
-moving lights and spotlights, BSP occlusion (the draw list that bounds
-per-frame texture, fog and light-map work), and original-game visual
-acceptance across maps. Full Stage 4 acceptance remains open. Frame cost and
+on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
+music, and the third-person conversation camera with lip sync. Open: decals,
+fog on meshes and movers in Play, the occlusion's moving brush tracker and
+child frames, mirror/sky combinations, SpriteAnimOnce frames, animated mesh
+skins, zone reverb and Galaxy's mixer for sound effects, time-varying moving
+lights and spotlights, and original-game visual acceptance across maps. Full
+Stage 4 acceptance remains open. Frame cost and
 the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).
 
@@ -606,6 +607,24 @@ matches the original over 5,348 items, random beams included. DX's
 FDynamicSprite snapshots each item, and DrawActorSprite swaps that snapshot
 into the actor around DrawMesh. Play mirrors this with one LaserProxy
 preview per segment. The Island doorway beams render. See [lasers](lasers.md).
+
+**BSP occlusion (2026-10-04).** Render.dll's OccludeBsp, ClipBspSurf, span
+buffers and BoundVisible run in the Rust core at the render pass's 24-bit
+precision, bit-exact over 144 frames on four maps; the master frame and the
+dynamics (sprite chunks, Filter, PreRender) are bit-exact too. Play draws
+the visible world polygons, requested mirrors, sky and fog surfaces from it
+instead of frustum culling (the Paris club tunnel went from 15 to 59 fps).
+Each actor's Setup rectangle, child frames and the moving brush tracker
+remain ([BSP occlusion](bsp-occlusion.md#what-is-left)).
+
+**Galaxy music (2026-10-06).** Each map plays its song. Galaxy.dll's IT
+loader, sequencer (238 cases, 1.83 million ticks), SSE mixer and
+conversion, and Update's music section (718 oracle cases) are translated
+and bit-equal with the DLL. The library runs in Rust inside an
+AudioWorklet that the simulation worker feeds over a MessageChannel, so
+music costs the main thread nothing per frame. Sound effects still use the
+Web Audio host mapping, and zone reverb remains
+([Galaxy music](galaxy-music.md)).
 
 ## 5. Implement the full gameplay systems
 
