@@ -276,6 +276,104 @@ bodies); Cylinder; and the spatially dynamic effects (Searchlight, SlowWave,
 FastWave, CloudCast, Shock, Disco, Interference, Rotor), which spatial.rs
 runs for class 1 lights only.
 
+### Recovered contract
+
+SetupForSurf's per-frame map (`0x10b08479`–`0x10b08923`) walks the frame's
+light infos; a class 2 light (`0x10b0850f`) gets, every frame and for every
+drawn surface it reaches:
+1. **ComputeFromActor** (`0x10b0100f` → `0x10b05fa0`): brightness
+   `LightBrightness·(1/255)` (`0x10b060b1`), the effect row copied from
+   `0x10b2a0f0` (an effect of 20 or more takes row 0), then **GlobalLighting**
+   through the renderer's vtable (`[0x10b5a718]` +0x88 at `0x10b0611c`,
+   `0x10b05e90`) with the
+   viewport actor's SHOW_PlayerCtrl as `animate`; the colour, colour table,
+   incidence and rectangle as for steady lights.
+2. **Illumination** `0x10b02650` with a null shadow pointer: the whole map
+   `0x7f` (`0x10b08570`–`0x10b08577`).
+3. The row's **spatial function** (`call [info+0x60]`, `0x10b088d5`): the
+   normal body for None, the wavers, Warp and Unused; the spot body for
+   StaticSpot and Spotlight, whose axis is the X axis of `GMath.UnitCoords /
+   Rotation`, or of the ViewRotation when `IsA(APawn)` (`0x10b04f89`–
+   `0x10b04fda`); NonIncidence; Shell.
+4. The **merge** `0x10b03040` with the actor's LightEffect (`+0x1e1`) and the
+   start index `[ebp−0xbc]`, which SetupForSurf zeroes at `0x10b06d91` and
+   never changes: each light's modulation index starts at 0.
+
+The LightType functions (table `0x10b2a284`, [static lighting](static-lighting.md)
+"Light animation") read Level.TimeSeconds, LightPeriod and LightPhase; Flicker
+(`0x10b05af0`) takes table A at the low byte of its first argument, the
+actor's address; Strobe (`0x10b05b30`) flips the global flag at `0x10b49ea8`
+whenever TimeSeconds differs from the time at `0x10b49ea4`, so only frames
+in which some Strobe light is set up flip it.
+
+**The noise and its random stream.** URender::PreRender (`0x10b14560`) calls
+the light manager's noise (`0x10b13080`, through `0x10b30a08`, at
+`0x10b146ae`) unconditionally, every Draw, with the viewport level's
+`Actors(0).TimeSeconds`, after `appEnableFastMath(1)`. Its draws are Core
+`appFrand` (`rand()·(1/32767)`, [the original stream](rng.md)): msvcrt's
+per-thread `rand`, which the game thread shares with UnrealScript's FRand,
+physics and the render iterators. In UGameEngine::Draw that call follows
+PlayerCalcView and Audio->Update and precedes the PreRender event and
+DrawWorld (SetupDynamics' iterator draws). Play advances the noise in the
+simulation at that point of its frame (sim-session.mjs `begin`, after the
+view and before the render viewport) from the game's shared stream
+(`runtime.rng`), and the page's light frame takes its tables
+(`frame.light`, static-lighting.mjs `lightNoiseSnapshot`). Before this
+change the page drew the noise from a host stream of its own; the class 1
+light animation now uses the simulation's noise too. The tables and `last`
+are process-global in the original and survive a LoadMap; Play's start a
+fresh session with `last = 0`, which takes the same reset branch the
+original takes when TimeSeconds steps back.
+
+### Translation
+
+`src/viewer/moving-lights.mjs` dispatches every class 2 light by the effect
+row (`NORMAL_BODY`, `SPOT_BODY`, NonIncidence, Shell) and has no float
+fallback left. Per frame it applies `lightTypeBrightness` with the frame's
+TimeSeconds, noise and the strobe state it shares with the class 1 animation,
+then ComputeFromActor's colour steps; the wavers' spatial bytes go through
+the frame's modulation table (`createLightFrame` `modulation`) from index 0.
+A contribution caches its rectangle's spatial bytes while its light's
+location and fields are unchanged, and rebuilds its addends when its colour
+or noise input changes. The light maps a changing light reaches recompose
+only when drawn (OccludeBsp's drawn surfaces, else the frustum, as the class
+1 animation does): the original rebuilds the per-frame map of drawn
+surfaces only, and a map's texels depend only on that frame's inputs.
+`game.movingLights()` reads LightPeriod and LightPhase for the types that
+use them, a Pawn's ViewRotation for a spot, and gives each light its
+Level.Actors slot (low byte) as the Flicker key, the host's stand-in for the
+actor's address.
+
+### Validation
+
+`native-dynamic-light-oracle.py` `movingFrames` runs the class 2 chain above
+unchanged at `0x007f`: per frame Level.TimeSeconds and tables A and W, per
+light GlobalLighting with the chained strobe state (the actor allocated at
+the light's flicker key), the brightness, colour and colour table, and per
+contribution the radius constants, incidence, rectangle, 0x7f illumination,
+the row's spatial function and the merge from index 0.
+
+`scripts/validate-moving-light-effects.mjs` (headless, UNATCO Island, full
+mode): Island's three BarrelFires plus a lit Flare, a BarrelAmbrosia, a
+turning AlarmLight, 99_Endgame4's Strobe AlarmLight and 14_Vandenberg_Sub's
+Flicker LaserTrigger, over eight frames (advancing, repeated and jumping
+TimeSeconds; one seeded noise stream). 168 light-frames, 2,448
+contributions, 218,232 texels (88,077 lit) and 1,592 composed light maps
+match the original: rectangles, constants, incidence, spatial bytes and
+every composed texel. Pairs: Steady None, FireWaver, TorchWaver,
+WateryShimmer and Spotlight, Strobe Spotlight, Flicker None. Against
+`0x037f` (`ORACLE_CW`) 2,120 of 11,390 checks differ.
+
+`scripts/validate-moving-light-effects-play.mjs` runs Island in the browser
+(default worker mode; `--query sim=inline` too) looking at BarrelFire3: over
+three captured frames, the 15 light maps composed with a BarrelFire (27
+contributions, 6,726 lit texels) equal the oracle's for each frame's own
+inputs, the page's noise is the simulation's, and the fire's light maps
+change every frame. `validate-moving-lights-incremental` now gives both
+worlds a light frame each frame, with probes for Strobe WateryShimmer,
+Flicker FireWaver and a turning spotlight, and still finds the incremental
+mode equal to the full one.
+
 ## Not reproduced / open
 
 * The frustum test in SetupDynamics and OccludeBsp's visibility-driven filter:
@@ -288,14 +386,15 @@ runs for class 1 lights only.
 * Mover polygons: the brush tracker's insertion into the level BSP is not
   recovered. Mover light maps take Filter's straddle test on their own plane,
   follow translation offsets only, and use a float facet.
-* Steady effect-0 moving lights now use the original integer body. Moving spot
-  lights (8, 12), the other normal-effect variants (1–3, 11, 19), and non-steady
-  effect-0 snapshots still use the static float reconstruction with `0x7f`
-  illumination. Their effect/type processing and waver/shimmer random modulation
-  remain unrecovered. LE_Shell (the grenades' ExplosionLight) runs the original
-  body in the Rust core ([static lighting](static-lighting.md#spatially-dynamic-effects));
-  other effects are skipped with a diagnostics note.
-* Non-steady `LightType` functions (`0x10b2a284` table) are not applied.
+* Class 2 lights use the original bodies for every effect the shipped content
+  reaches ("Time-varying moving lights"). Cylinder and the spatially dynamic
+  effects stay unlit with a note for class 2 (no class 2 light has them); the
+  texture-palette LightTypes stay steady.
+* Flicker's key is the light's Level.Actors slot, not the actor's address
+  (unreproducible: it depends on the allocator's history). Strobe's flag
+  flips once per new TimeSeconds on the page for the light maps and,
+  separately, in the simulation for mesh lighting; the original's single flag
+  flips only on frames that set some Strobe light up.
 * Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
   unsupported mesh lighting.
 * Class 2 lights that also sit in a surface's static `LightActors` list would

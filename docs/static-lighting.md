@@ -207,8 +207,10 @@ through a second light-manager object (`0x10b30a08`, call at `0x10b146ae`).
   256 more draws and every slope is re-aimed.
 - W is clamped to [0, 1].
 
-The draws come from the process-wide CRT rand, whose position at each frame
-the browser does not reproduce: Play will feed a host stream.
+The draws come from the game thread's CRT rand (Core appFrand). Since
+2026-10-06 Play advances the noise in the simulation, at PreRender's place in
+the frame, from the game's shared stream, and the page takes its tables
+([moving lights](dynamic-lighting.md) "Time-varying moving lights").
 
 **LightType** (GlobalLighting `0x10b05e90`, table `0x10b2a284`). Each type
 function changes the float brightness, which is then clamped to [0, 1].
@@ -259,9 +261,10 @@ animation off) and the merge for the three effects on 18 random rectangles
   inputs are unchanged is skipped. Without a possible mirror view, level
   light maps outside the camera frustum wait. The merge does not depend on
   which surfaces are drawn, so a skipped map is correct once it is drawn.
-- *Host choices, noted in the viewer.* The noise draws come from a host
-  appFrand stream, and Flicker's entry is the light's export index
-  (low byte) instead of its address.
+- *Host choices, noted in the viewer.* Flicker's entry is the light's export
+  index (low byte) instead of its address. (The noise draws came from a
+  host appFrand stream until 2026-10-06; Play's now come from the game's
+  shared stream in the simulation.)
 - *Not in Play yet.* The texture-palette LightTypes (8, 9). The spatially
   dynamic effects are in Play since 2026-10-06 ("Spatially dynamic
   effects").
@@ -550,8 +553,10 @@ recompute (time token, cache) equals the reference merge, which calls
   applies. Brush light maps always merge. A map that waits is correct when
   it is next drawn, since its bytes depend only on the frame's inputs.
 - *Moving lights.* moving-lights.mjs runs Shell for moving (class 2) lights
-  with illumination `0x7f` and the 24-bit rr2. Moving lights with the
-  time-varying effects stay unlit with a note; no script spawns one.
+  with illumination `0x7f` and the 24-bit rr2. No class 2 light in the
+  shipped content has one of the time-varying effects (the census in
+  [moving lights](dynamic-lighting.md) "Time-varying moving lights"); they
+  stay unlit for class 2 with a note.
 
 `scripts/validate-light-spatial-play.mjs` runs Play headless (`?sim=inline`)
 beside Paris Club's Disco light. All 95 Disco light maps are admitted. 12
@@ -588,7 +593,8 @@ dozen 24-bit roundings).
 - Values outside binary32's normal range, as for the BSP occlusion port:
   for example, squares of displacements below 10⁻¹⁹.
 - `UClient.NoDynamicLights` (class 0 spatially dynamic lights).
-- Moving lights with time-varying effects.
+- Class 2 lights with the spatially dynamic effects (none in the shipped
+  content).
 
 ## Not yet moved
 

@@ -42,7 +42,7 @@ const u32 = value => { bits.setFloat32(0, value, true); return bits.getUint32(0,
 const liveCases = [], liveRecords = [];
 for (const record of idleRecords) for (const contribution of record.moving) {
   const { item, rect, grid, incidence } = contribution, { values, constants } = item;
-  assert.equal(item.originalNormal, true, 'camera light dispatched to original normal path');
+  assert.equal(item.kind, 'normal', 'camera light dispatched to original normal path');
   const facet = record.movingGeometry.facet;
   liveRecords.push(record);
   liveCases.push({ light: { location: item.location, radius: values.LightRadius,

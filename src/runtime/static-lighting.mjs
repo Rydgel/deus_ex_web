@@ -383,7 +383,12 @@ export function animatedLightConstants(frame, { values, ref }, { levelBrightness
  * strobe state and the merge factors per noise entry (`0.95 + 0.05·A`,
  * `0.8 + 0.2·A`, `0.6 + 0.4·W`), each operation rounded to 24 bits from the
  * exact value (the constants are doubles); validate-light-animation
- * compares that path with the x87-model mergeModulation. */
+ * compares that path with the x87-model mergeModulation.
+ *
+ * `advance(timeSeconds, noise)` with a `noise` snapshot (lightNoiseSnapshot:
+ * the simulation advanced the noise at URender::PreRender from the game's
+ * shared appFrand stream, sim-session.mjs) takes its tables; without one the
+ * frame's own noise advances from `frand`. */
 export function createLightFrame(frand) {
   const noise = createLightNoise(frand), strobe = { time: 0, flag: 0 };
   const factors = { 1: new Float64Array(256), 2: new Float64Array(256), 3: new Float64Array(256) };
@@ -400,11 +405,14 @@ export function createLightFrame(frand) {
     }
     return tables[effect];
   };
-  frame.advance = timeSeconds => {
+  frame.advance = (timeSeconds, snapshot = null) => {
     frame.timeSeconds = f(timeSeconds);
     frame.constants = new Map();
     frame.frameIndex++;
-    noise.update(frame.timeSeconds);
+    if (snapshot) {
+      noise.A.set(snapshot.A); noise.W.set(snapshot.W);
+      noise.last = snapshot.last; noise.version = snapshot.version;
+    } else noise.update(frame.timeSeconds);
     for (let i = 0; i < 256; i++) {
       factors[1][i] = mergeFactor(noise.A[i], 0.05, 0.95);
       factors[2][i] = mergeFactor(noise.A[i], 0.2, 0.8);
@@ -414,6 +422,11 @@ export function createLightFrame(frand) {
   };
   return frame;
 }
+
+/** The noise tables a frame needs (A, W) and its step and version, as
+ * plain data for the page (createLightFrame advance). */
+export const lightNoiseSnapshot = noise => ({ A: Float32Array.from(noise.A), W: Float32Array.from(noise.W),
+  last: noise.last, version: noise.version });
 
 /** The merge factor of one noise entry at 24 bits (0x10b03119-0x10b03130):
  * `fld A; fmul qword scale; fadd qword offset`. */

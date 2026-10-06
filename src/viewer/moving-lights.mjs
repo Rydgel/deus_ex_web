@@ -1,13 +1,19 @@
-import { lightAttenuation } from '../unreal/lighting.mjs';
 import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLightRect, nonIncidenceSpatial,
   normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
+import { lightTypeBrightness, spotLightSpatial } from '../runtime/static-lighting.mjs';
+import { fcoordsAxes } from '../runtime/script-pawn-locomotion.mjs';
 
-const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0], f = Math.fround;
-// Remaining normal/spot effect snapshots. Steady effect 0 uses the recovered
-// integer normal body; effect 13 uses the recovered NonIncidence body and
-// effect 14 (Shell: the EMP and nano-virus grenades' ExplosionLight) the
-// original body in the Rust core (spatial.rs).
-const FLOAT_EFFECTS = new Set([0, 1, 2, 3, 8, 11, 12, 19]);
+const MAX = 127 / 255, ORIGIN = [0, 0, 0];
+// The effect table at 0x10b2a0f0 (docs/static-lighting.md): the normal body
+// 0x10b03360 for None, the three wavers, Warp and Unused; the spot body
+// 0x10b04f80 for StaticSpot and Spotlight; NonIncidence 0x10b054e0; Shell
+// 0x10b05740 (spatial.rs). OmniBumpMap is AddLight's class 3. The other
+// rows (Cylinder and the spatially dynamic effects) are not reached by a
+// class 2 light in the shipped content (scripts/census-moving-lights.mjs).
+const NORMAL_BODY = new Set([0, 1, 2, 3, 11, 19]), SPOT_BODY = new Set([8, 12]);
+// The merge-dynamic rows (TorchWaver, FireWaver, WateryShimmer): the merge
+// 0x10b03040 modulates their spatial bytes with the light noise.
+const MODULATED = new Set([1, 2, 3]);
 const add = (a, b) => a.map((v, i) => v + b[i]);
 const union = rects => rects.length ? {
   minU: Math.min(...rects.map(r => r.minU)), maxU: Math.max(...rects.map(r => r.maxU)),
@@ -21,32 +27,36 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
 
 /** Per-frame moving lights over the world's lightmap records: the recovered
  * Render.dll surface path (docs/dynamic-lighting.md) as a lighting.mjs
- * applier. Each light touches only ComputeFromActor's texel rectangle, so
- * `update` returns the records whose texels changed with that region.
+ * applier. A class 2 light is set up for each surface it reaches every
+ * frame (SetupForSurf 0x10b0850f-0x10b088f9): ComputeFromActor with
+ * GlobalLighting's LightType function, the unshadowed illumination (0x7f),
+ * the effect row's spatial body, and the merge 0x10b03040 from index 0,
+ * which modulates the wavers' bytes with the frame's light noise.
+ *
+ * `update(lights, moverOffsets, frame, visible)` takes the frame's light
+ * animation inputs (static-lighting.mjs createLightFrame: Level.TimeSeconds,
+ * the noise tables, the shared strobe state and the modulation tables);
+ * without one every light is taken steady and unmodulated, with a note.
+ * `visible(record)`, when given, says which light maps are drawn: the
+ * original rebuilds the per-frame map only for a drawn surface, so the
+ * incremental mode leaves the others stale and recomposes them, from that
+ * frame's inputs, when they are drawn again (their texels depend on the
+ * frame's inputs only). The full mode, the reference, recomposes all.
  *
  * Host work only, identical texels in both modes: a light map's moving
  * texels depend only on its static copy and its contributions, applied in
- * light order. The incremental mode keeps each light's contributions while
- * its location, values and level brightness (and, for brush light maps, the
- * mover's offset) stay the same, recomposes a light map only when one of its
- * contributions changes, and caches each contribution's per-texel addends so
- * a recomposition replays the same float operations without re-evaluating
- * the spatial functions. A change in the relative order of the remaining
+ * light order. A contribution keeps the spatial bytes of its rectangle
+ * while the light's location and fields (and, for brush light maps, the
+ * mover's offset) stay the same; its per-texel addends are rebuilt when its
+ * colour or modulation changes (a LightType function, a new noise frame).
+ * The incremental mode recomposes a light map only when one of its
+ * contributions changes; a change in the relative order of the remaining
  * lights recomputes every light map, as the full mode does. */
 export function createMovingLights(lighting, model, { mode = movingLightsMode() } = {}) {
   const hsv = new Map(), notes = new Set(), incremental = mode !== 'full';
   // spatial.rs, through the lighting's kernel (null without the core).
   const spatial = lighting.spatial?.ready ? lighting.spatial : null;
-  /** Shell 0x10b05740 for an unshadowed light (illumination 0x7f), with
-   * the render pass's 24-bit rr2 (Shell reads no incidence). */
-  const shellSpatial = (rect, grid, location, constants, write) => {
-    const bytes = spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius,
-      rr2: constants.rr2, incidence: 0, period: 0, phase: 0, time: 0, illumination: null });
-    for (let v = rect.minV, k = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k++) write(u, v, bytes[k]);
-  };
-  const bodyOf = ({ effect, originalNormal }) => effect === 14 ? shellSpatial : originalNormal ? normalLightSpatial
-    : effect === 13 ? nonIncidenceSpatial : null;
-  let signature = null, active = new Set();
+  let signature = null, active = new Set(), frameIndex = -1;
 
   function geometry(record, offset) {
     if (!record.movingGeometry) {
@@ -69,66 +79,52 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       grid: { start: add(start, offset).map(Math.fround), stepU, stepV } };
   }
 
-  /** lighting.mjs applier: adds each light's rectangle onto the static copy. */
+  /** The rectangle's spatial bytes of one contribution (row-major, the
+   * rectangle's width): the effect row's body with illumination 0x7f. */
+  function spatialBytes(entry) {
+    if (entry.spatial) return entry.spatial;
+    const { item, rect, grid, incidence } = entry, { kind, location, constants } = item;
+    const width = rect.maxU - rect.minU, bytes = new Uint8Array(width * (rect.maxV - rect.minV));
+    const write = (u, v, byte) => { bytes[(v - rect.minV) * width + u - rect.minU] = byte; };
+    if (kind === 'shell') {
+      // Shell 0x10b05740 (spatial.rs), with the render pass's 24-bit rr2;
+      // Shell reads no incidence.
+      bytes.set(spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius,
+        rr2: constants.rr2, incidence: 0, period: 0, phase: 0, time: 0, illumination: null }));
+    } else if (kind === 'spot') {
+      spotLightSpatial(rect, grid, location, { ...constants, incidence }, write, 0x7f, { cone: item.cone, axis: item.axis });
+    } else if (kind === 'nonIncidence') nonIncidenceSpatial(rect, grid, location, constants, write);
+    else normalLightSpatial(rect, grid, location, { ...constants, incidence }, write);
+    return entry.spatial = bytes;
+  }
+
+  /** The merge's per-texel addends of one contribution for its light's
+   * current colour (`item.colour`): the sample offsets and the three
+   * channel values. The modulation index counts every rectangle texel from
+   * 0 (the merge's start index at 0x10b088de is 0). */
+  function addends(record, entry) {
+    const { item, rect } = entry, { steps: [red, green, blue], modulate } = item.colour;
+    const bytes = spatialBytes(entry), { width } = record, at = [], amounts = [];
+    let index = 0, k = 0;
+    for (let v = rect.minV; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, index++, k++) {
+      let byte = bytes[k];
+      if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
+      if (!byte) continue;
+      at.push((v * width + u) * 3);
+      amounts.push(colorTableEntry(red, byte) / 255, colorTableEntry(green, byte) / 255, colorTableEntry(blue, byte) / 255);
+    }
+    return { at: Int32Array.from(at), amounts: Float64Array.from(amounts), token: item.colour.token };
+  }
+
+  /** lighting.mjs applier: adds each contribution onto the static copy, the
+   * saturating merge at 127 per channel. */
   function apply(record, contributions) {
-    const { pixels, width } = record, offset = record.movingOffset ?? ORIGIN;
-    let written = 0;
-    for (const { item, rect, grid, incidence } of contributions) {
-      const { originalNormal, constants, location, values } = item, spatialFunction = bodyOf(item);
-      if (spatialFunction) {
-        const [red, green, blue] = constants.steps;
-        spatialFunction(rect, grid, location, originalNormal ? { ...constants, incidence } : constants, (u, v, spatial) => {
-          if (!spatial) return;
-          const at = (v * width + u) * 3; written++;
-          pixels[at] = Math.min(MAX, pixels[at] + colorTableEntry(red, spatial) / 255);
-          pixels[at + 1] = Math.min(MAX, pixels[at + 1] + colorTableEntry(green, spatial) / 255);
-          pixels[at + 2] = Math.min(MAX, pixels[at + 2] + colorTableEntry(blue, spatial) / 255);
-        });
-        continue;
-      }
-      const light = { ...values, Location: location }, color = constants.color;
-      for (let v = rect.minV; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++) {
-        const p = v * width + u, weight = UNSHADOWED * lightAttenuation(light, add(record.points[p], offset), record.normal);
-        if (!weight) continue;
-        written++;
-        for (let c = 0; c < 3; c++) pixels[p * 3 + c] = Math.min(MAX, pixels[p * 3 + c] + color[c] * weight);
-      }
-    }
-    record.movingTexels = written;
-  }
-
-  /** `apply`'s per-texel addends for one contribution, in its visiting
-   * order: the sample offsets and the three channel values it adds. */
-  function addends(record, { item, rect, grid, incidence }) {
-    const { originalNormal, constants, location, values } = item, spatialFunction = bodyOf(item);
-    const { width } = record, offset = record.movingOffset ?? ORIGIN, at = [], amounts = [];
-    if (spatialFunction) {
-      const [red, green, blue] = constants.steps;
-      spatialFunction(rect, grid, location, originalNormal ? { ...constants, incidence } : constants, (u, v, spatial) => {
-        if (!spatial) return;
-        at.push((v * width + u) * 3);
-        amounts.push(colorTableEntry(red, spatial) / 255, colorTableEntry(green, spatial) / 255, colorTableEntry(blue, spatial) / 255);
-      });
-    } else {
-      const light = { ...values, Location: location }, color = constants.color;
-      for (let v = rect.minV; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++) {
-        const p = v * width + u, weight = UNSHADOWED * lightAttenuation(light, add(record.points[p], offset), record.normal);
-        if (!weight) continue;
-        at.push(p * 3);
-        amounts.push(color[0] * weight, color[1] * weight, color[2] * weight);
-      }
-    }
-    return { at: Int32Array.from(at), amounts: Float64Array.from(amounts) };
-  }
-
-  /** `apply` from cached addends: the same capped additions in the same order.
-   * A contribution is rebuilt whenever its light or mover changes, so its
-   * cache never outlives its inputs. */
-  function applyCached(record, contributions) {
     const { pixels } = record;
     let written = 0;
     for (const contribution of contributions) {
-      const { at, amounts } = contribution.addends ??= addends(record, contribution);
+      const cached = contribution.addends;
+      const { at, amounts } = incremental && cached?.token === contribution.item.colour.token ? cached
+        : contribution.addends = addends(record, contribution);
       for (let k = 0, j = 0; k < at.length; k++, j += 3) {
         const i = at[k];
         pixels[i] = Math.min(MAX, pixels[i] + amounts[j]);
@@ -140,24 +136,53 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     record.movingTexels = written;
   }
 
+  /** A light's colour for `frame`: GlobalLighting (0x10b05e90) applies the
+   * LightType function to the brightness (Level.TimeSeconds, the noise's
+   * table A at the light's flicker key, the shared strobe state), then
+   * ComputeFromActor's colour steps; the wavers take the frame's modulation
+   * table. `token` changes exactly when the addends do. */
+  function colourOf(item, frame) {
+    const { values, levelBrightness, effect } = item;
+    const type = values.LightType & 255;
+    if (!frame && type !== 1) notes.add(`Moving light type ${type} is taken steady: no light animation frame was supplied.`);
+    if (type === 8 || type === 9) notes.add(`Light type ${type} (texture palette) is not translated and stays steady.`);
+    const brightness = frame ? lightTypeBrightness(values, { timeSeconds: frame.timeSeconds, noise: frame.noise,
+      strobe: frame.strobe, flickerKey: item.flickerKey }) : null;
+    const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
+    if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
+    const { steps } = movingLightConstants(values, levelBrightness, hsv.get(key), brightness);
+    let modulate = null, noise = '';
+    if (MODULATED.has(effect)) {
+      if (frame) {
+        modulate = frame.modulation(effect);
+        noise = effect === 3 ? `W${frame.noise.version}` : `A${frame.frameIndex}`;
+      } else notes.add('Moving torch, fire and watery lights are unmodulated: no light animation frame was supplied.');
+    }
+    return { steps, modulate, token: `${steps.join(',')}${noise}` };
+  }
+
   function contribution(light) {
     const values = light.values, lightClass = surfaceLightClass(values);
     if (lightClass === 3) notes.add('Moving bump-map lights (LE_OmniBumpMap) add no light-map texels, as in the original.');
     if (lightClass !== 2) return null;
     const effect = values.LightEffect ?? 0;
-    const originalNormal = effect === 0 && values.LightType === 1;
-    if (effect !== 13 && !(effect === 14 && spatial) && !FLOAT_EFFECTS.has(effect)) {
-      notes.add(`Moving lights with effect ${effect} are not implemented and stay unlit.`);
+    const kind = NORMAL_BODY.has(effect) ? 'normal' : SPOT_BODY.has(effect) ? 'spot' : effect === 13 ? 'nonIncidence'
+      : effect === 14 && spatial ? 'shell' : null;
+    if (!kind) {
+      notes.add(effect === 14 ? 'Moving Shell lights need the Rust core (spatial.rs) and stay unlit without it.'
+        : `Moving lights with effect ${effect} are not implemented (no class 2 light reaches it in the shipped maps) and stay unlit.`);
       return null;
     }
-    if (effect !== 13 && effect !== 14 && !originalNormal)
-      notes.add('Moving spot lights and unrecovered normal-light effect/type variants still use the float static-light reconstruction.');
-    if ([1, 2, 3].includes(effect)) notes.add('Moving torch, fire and watery lights omit their per-texel random modulation.');
-    if (values.LightType !== 1) notes.add(`Moving light type ${values.LightType} uses a steady snapshot; its time variation is not active.`);
     const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
     if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
-    return { effect, originalNormal, values, location: light.location.map(Math.fround),
-      constants: movingLightConstants(values, light.levelBrightness, hsv.get(key)) };
+    const item = { name: light.name, effect, kind, values, location: light.location.map(Math.fround), levelBrightness: light.levelBrightness,
+      flickerKey: light.flickerKey ?? 0, constants: movingLightConstants(values, light.levelBrightness, hsv.get(key)) };
+    // The spot body's axis: the X axis of GMath.UnitCoords / Rotation, the
+    // ViewRotation of a Pawn (0x10b04f89-0x10b04fda; game.mjs movingLights
+    // reads the one the body reads).
+    if (kind === 'spot') Object.assign(item, { cone: values.LightCone ?? 0,
+      axis: fcoordsAxes((values.Rotation ?? [0, 0, 0]).map(n => n | 0))[1] });
+    return item;
   }
 
   /** One contribution of `item` to `record` at the mover `offset`, or null
@@ -167,8 +192,8 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     const { facet, grid } = geometry(record, offset);
     const rect = movingLightRect(item.location, item.constants.radius, facet);
     if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) return null;
-    const incidence = item.originalNormal ? normalLightIncidence(item.location, facet, item.constants.rradius) : null;
-    return { item, rect, grid, incidence };
+    const incidence = item.kind === 'normal' || item.kind === 'spot' ? normalLightIncidence(item.location, facet, item.constants.rradius) : null;
+    return { item, rect, grid, incidence, spatial: null, addends: null };
   }
   /** Mover polygons join the level BSP through the brush tracker, which is
    * not recovered; they take Filter's node-plane straddle test alone. */
@@ -202,18 +227,26 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     const dirty = union([previous, region].filter(Boolean));
     record.movingOffset = record.owner ? moverOffsets.get(record.owner) ?? ORIGIN : null;
     record.movingTexels = 0;
+    // Validation: the light frame this composition used.
+    record.movingFrame = frameIndex;
     lighting.setMoving(record, contributions, dirty);
     record.movingRegion = record.movingTexels ? region : null;
     if (previous || record.movingTexels) changed.push({ lightmap: record, region: dirty });
   }
 
-  function updateFull(lights, moverOffsets = new Map()) {
-    const next = JSON.stringify([lights.map(light => [light.location, light.values, light.levelBrightness]), [...moverOffsets]]);
+  function updateFull(lights, moverOffsets = new Map(), frame = null) {
+    frameIndex = frame?.frameIndex ?? -1;
+    const items = lights.map(light => {
+      const item = contribution(light);
+      if (item) item.colour = colourOf(item, frame);
+      return item;
+    });
+    const next = JSON.stringify([lights.map(light => [light.location, light.values, light.levelBrightness]),
+      items.map(item => item?.colour.token ?? null), [...moverOffsets]]);
     if (next === signature) return [];
     signature = next;
     const touched = new Map();
-    for (const light of lights) {
-      const item = contribution(light);
+    for (const item of items) {
       if (!item) continue;
       reachLight(item, moverOffsets, (record, entry) => {
         if (!touched.has(record)) touched.set(record, []);
@@ -241,10 +274,13 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       return count ? `${name}\u0000${count}` : name;
     });
   };
-  const lightSignature = light => JSON.stringify([light.location, light.values, light.levelBrightness]);
+  const lightSignature = light => JSON.stringify([light.location, light.values, light.levelBrightness, light.flickerKey ?? 0]);
   const sameOffset = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
-  function updateIncremental(lights, moverOffsets = new Map()) {
+  // Light maps whose recomposition waits until they are drawn.
+  const stale = new Set();
+  function updateIncremental(lights, moverOffsets = new Map(), frame = null, visible = null) {
+    frameIndex = frame?.frameIndex ?? -1;
     const keys = lightKeys(lights), present = new Set(keys);
     // Movers whose offset changed (a vanished entry counts as changed).
     const moved = new Set();
@@ -279,8 +315,12 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
         if (state) for (const record of state.reach.keys()) dirty.add(record);
         parked.delete(key);
         const item = contribution(light), reach = new Map();
-        if (item) reachLight(item, moverOffsets, (record, entry) => { reach.set(record, entry); dirty.add(record); });
+        if (item) {
+          item.colour = colourOf(item, frame);
+          reachLight(item, moverOffsets, (record, entry) => { reach.set(record, entry); dirty.add(record); });
+        }
         lightStates.set(key, state = { sig, item, reach });
+        continue;
       } else if (moved.size && state.item) {
         for (const record of state.reach.keys()) if (record.owner && moved.has(record.owner)) {
           state.reach.delete(record); dirty.add(record);
@@ -291,10 +331,22 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
           if (entry) { state.reach.set(record, entry); dirty.add(record); }
         }
       }
+      // The frame's colour: a LightType function or a new noise frame
+      // changes the addends, not the spatial bytes.
+      if (state.item) {
+        const colour = colourOf(state.item, frame);
+        if (colour.token !== state.item.colour.token) {
+          state.item.colour = colour;
+          for (const record of state.reach.keys()) dirty.add(record);
+        } else state.item.colour = colour;
+      }
     }
     order = keys;
     const changed = [], states = keys.map(key => lightStates.get(key));
+    for (const record of stale) dirty.add(record);
     for (const record of dirty) {
+      if (visible && !visible(record)) { stale.add(record); continue; }
+      stale.delete(record);
       const contributions = [];
       for (const state of states) { const entry = state.reach.get(record); if (entry) contributions.push(entry); }
       recompose(record, contributions.length ? contributions : null, moverOffsets, changed);
@@ -303,6 +355,6 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     return changed;
   }
 
-  return { apply: incremental ? applyCached : apply, update: incremental ? updateIncremental : updateFull, mode: incremental ? 'incremental' : 'full',
+  return { apply, update: incremental ? updateIncremental : updateFull, mode: incremental ? 'incremental' : 'full',
     notes, records: () => [...active], get surfaces() { return active.size; } };
 }

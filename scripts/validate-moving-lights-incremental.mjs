@@ -16,8 +16,12 @@
  *   Play reads them, plus seeded perturbations (lights leaving and returning
  *   as an ElectricityEmitter's LightType flicker does, changed brightness and
  *   locations, swapped and repeated entries, mover offsets, and probe lights
- *   beside movers for the brush light maps). The perturbations are synthetic
- *   inputs for the bookkeeping, not game states.
+ *   beside movers for the brush light maps: Strobe WateryShimmer, steady
+ *   NonIncidence, Flicker FireWaver and a turning spotlight). The
+ *   perturbations are synthetic inputs for the bookkeeping, not game states.
+ * Both worlds take the same light animation frame (Level.TimeSeconds and a
+ * noise advanced from one seeded stream, as sim-session.mjs hands it), so
+ * the time-varying lights recompose every frame.
  * Each map runs in its own process to bound memory. Requires the local install.
  *
  *   node scripts/validate-moving-lights-incremental.mjs [--map NAME] [--frames N] [--seed N] [--shell 1]
@@ -51,6 +55,8 @@ const { createWorld } = await import('../src/viewer/world.mjs');
 const { createGame } = await import('../src/viewer/game.mjs');
 const { gameDirectory } = await import('./game-directory.mjs');
 const { createPlayerInputFixture } = await import('./player-input-fixture.mjs');
+const { createLightNoise, lightNoiseSnapshot } = await import('../src/runtime/static-lighting.mjs');
+const { createNativeRng } = await import('../src/runtime/rng.mjs');
 
 const mapName = flag('map'), frames = Number(flag('frames', 300));
 const root = gameDirectory(), files = [];
@@ -76,10 +82,14 @@ const rand = () => {
 const pick = list => list[Math.floor(rand() * list.length)];
 const perturbed = mapName !== '00_Training';
 const changes = new Map(), moverDeltas = new Map(), flicker = new Set();
-// Probe lights beside movers: the normal, NonIncidence and float paths.
+// Probe lights beside movers: the normal (Strobe, WateryShimmer),
+// NonIncidence, normal (Flicker, FireWaver) and spot (or Shell) bodies.
 const probes = game.collision.movers.slice(0, 4).map((mover, i) => ({ name: `ProbeLight${i}`, mover,
-  values: { LightType: 1, bStatic: false, bNoDelete: false, bDynamicLight: false, LightBrightness: 180 + i * 20,
-    LightRadius: 12 + i * 4, LightEffect: [0, 13, 1, flag('shell') ? 14 : 0][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false } }));
+  values: { LightType: [5, 1, 4, 1][i], bStatic: false, bNoDelete: false, bDynamicLight: false, LightBrightness: 180 + i * 20,
+    LightRadius: 12 + i * 4, LightEffect: [3, 13, 2, flag('shell') ? 14 : 12][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false,
+    ...(i === 3 ? { LightCone: 40, Rotation: [0, 0, 0] } : {}) } }));
+// The light animation frame both worlds take (sim-session.mjs frame.light).
+const lightNoise = createLightNoise(createNativeRng(0x1badf00d).frand);
 function lightsFor(frame) {
   let lights = game.movingLights();
   if (!perturbed) return lights;
@@ -98,7 +108,8 @@ function lightsFor(frame) {
   }
   for (const probe of probes) if (frame % 90 < 60 + 7 * probe.name.length % 30)
     lights.push({ name: probe.name, location: probe.mover.position.map((v, i) => v + [24, -16, 32][i]),
-      values: { ...probe.values }, levelBrightness: lights[0]?.levelBrightness ?? 1 });
+      values: { ...probe.values, ...(probe.values.Rotation ? { Rotation: [-4096, (frame * 700) & 0xffff, 0] } : {}) },
+      flickerKey: probe.name.length, levelBrightness: lights[0]?.levelBrightness ?? 1 });
   lights = lights.filter(light => !(flicker.has(light.name) && rand() < 0.4));
   if (rand() < 0.03 && lights.length > 1) {
     const i = Math.floor(rand() * lights.length), j = Math.floor(rand() * lights.length);
@@ -126,7 +137,10 @@ function frame(index) {
   const lights = lightsFor(index), movers = moversFor();
   totals.maxLights = Math.max(totals.maxLights, lights.length);
   const timeSeconds = runtime.readNamed(runtime.levelFor(game.player.collisionActor).actors[0], 'TimeSeconds');
+  lightNoise.update(Math.fround(timeSeconds));
+  const light = { timeSeconds: Math.fround(timeSeconds), noise: lightNoiseSnapshot(lightNoise) };
   const results = [full, incremental].map(world => {
+    world.beginLightFrame(light);
     const result = world.syncMovingLights(lights, movers);
     world.updateTextureAnimation(index / 60, { timeSeconds });
     return result;

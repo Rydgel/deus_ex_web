@@ -279,6 +279,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // the mesh lighting's leaf lists (mesh-lighting-view.mjs beginFrame).
     movingLights() {
       const lights = [], actors = runtime.levelFor(player.collisionActor).actors;
+      const isPawn = actor => { for (let c = runtime.instance(actor).cls; c; c = c.base) if (c.record?.key === 'engine.pawn') return true; return false; };
       // The render scan (script-vm-render.mjs) leaves only the actors that
       // pass the gate or that it hands back; each takes the same reads.
       const entries = runtime.scriptVm?.render?.scan(actors, { kinds: RENDER_LIGHT }) ?? null;
@@ -293,11 +294,19 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
         if (!isMovingLightCandidate(values)) continue;
         Object.assign(values, { LightEffect: read('LightEffect'), LightHue: read('LightHue'), LightSaturation: read('LightSaturation'),
           bSpecialLit: read('bSpecialLit') });
+        // GlobalLighting's type functions read LightPeriod and LightPhase
+        // (Pulse, Blink, SubtlePulse).
+        if ([2, 3, 7].includes(LightType & 255)) Object.assign(values, { LightPeriod: read('LightPeriod'), LightPhase: read('LightPhase') });
         // Only the spot effects read the cone and direction (a swivelling
-        // SecurityCamera's normal light does not change with its Rotation).
+        // SecurityCamera's normal light does not change with its Rotation);
+        // the spot body takes a Pawn's ViewRotation (0x10b04f89-0x10b04fa9).
         if (values.LightEffect === 8 || values.LightEffect === 12)
-          Object.assign(values, { LightCone: read('LightCone'), Rotation: [...read('Rotation')] });
-        lights.push({ actor, name: actor.name, location: [...read('Location')], values,
+          Object.assign(values, { LightCone: read('LightCone'),
+            Rotation: [...read(isPawn(actor) ? 'ViewRotation' : 'Rotation')] });
+        // Flicker indexes the noise by the low byte of the actor's address
+        // (0x10b05af0); the host's stand-in is its Level.Actors slot.
+        const slot = entries ? entries[i] >>> RENDER_SHIFT : i;
+        lights.push({ actor, name: actor.name, location: [...read('Location')], values, flickerKey: slot & 0xff,
           levelBrightness: runtime.readNamed(read('Level'), 'Brightness') });
       }
       return lights;

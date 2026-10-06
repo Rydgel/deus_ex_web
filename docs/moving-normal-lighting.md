@@ -14,9 +14,10 @@ the incidence factor. Core.dll is hash-pinned to
 ## Contract recovered before implementation
 
 The 12-byte effect rows at `0x10b2a0f0` select `0x10b01113`, a jump to
-`0x10b03360`, for effects 0, 1, 2, 3, 11, 15 and 19. This increment admits
-steady effect 0 only. Torch/fire/watery modulation, spotlights, bump maps and
-the other effect-specific processing remain outside it.
+`0x10b03360`, for effects 0, 1, 2, 3, 11, 15 and 19. This increment admitted
+steady effect 0 only; the LightType functions, the torch/fire/watery
+modulation and the spotlights followed on 2026-10-06
+([moving lights](dynamic-lighting.md) "Time-varying moving lights").
 
 1. Light-manager initialization `0x10b022fe..0x10b02352` builds 4096 floats
    at `0x10b34a6c`: with `d = sqrt((i+1)/4096)`, the entry is
