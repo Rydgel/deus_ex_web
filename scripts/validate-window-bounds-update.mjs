@@ -5,7 +5,7 @@
  * absolute-bounds/clip computation, the GC bounds copy, the child recursion,
  * the two qsort comparators and the empty-list SortWindowLists path are all
  * checked bit-for-bit against the native run. */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -15,6 +15,8 @@ import {
   boundsUpdateNative, sortWindowListsNative, compareDrawOrder, compareInputOrder,
 } from '../src/runtime/script-window-bounds-update.mjs';
 import { gameDirectory } from './game-directory.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const root = gameDirectory();
 const system = path.join(root, 'System');
@@ -175,3 +177,4 @@ sortMemory.write(rootWindow, O.invalidHeight, 'f32', 0);
 assert.doesNotThrow(() => sortWindowListsNative(rootWindow, null, sortMemory));
 
 console.log(`Window BoundsUpdate/SortWindowLists validator passed: ${checkedWindows} windows across ${Object.keys(fixtures).length} native trees, GC bounds copy, both comparators, empty-list SortWindowLists — all bit-exact vs Extension.dll.`);
+if (assert.enabled) assert.report('validate-window-bounds-update');

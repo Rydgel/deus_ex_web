@@ -79,6 +79,18 @@ assert.ok(section('Engine.PlayerPawn').some(line => line.startsWith('MouseSensit
 assert.equal(classDefault('bDisplayCompletedGoals'), true, 'the defaults reload applied the saved value');
 assert.equal(runtime.namedReference(player, 'bDisplayCompletedGoals').get(), true);
 
+// The bool ImportText (Core 0x10166380) through ScriptConsoleExec: the
+// console's port flags change nothing, a spelling outside 1/True/0/False is
+// NULL, and a required bool then logs BadProperty and skips the call.
+const consoleWarnings = [], warning = runtime.warning;
+runtime.warning = entry => consoleWarnings.push(entry);
+for (const command of ['ShowHud False', 'ShowHud tRUE', 'ShowHud 0', 'ShowHud Maybe', 'ShowHud', 'ShowHud 1'])
+  game.hud.scoped(() => assert.equal(runtime.scriptConsoleExec(player, command), true, command));
+runtime.warning = warning;
+assert.deepEqual(consoleWarnings.map(entry => entry.kind), ['BadProperty', 'BadProperty'],
+  'only "Maybe" and the empty text fail the bool import');
+tick(2);
+
 console.log(`GConfig validated in Play: class defaults load the installed User.ini (bHUDShowAllAugs, logTimeout), ` +
   `and closing the Goals screen runs SaveConfig: ${player_.length} [DeusEx.DeusExPlayer] keys written, ` +
   `${installedSection.length - 1} installed lines unchanged, bDisplayCompletedGoals saved and reloaded into the class default.`);

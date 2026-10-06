@@ -12,7 +12,7 @@ Runs unchanged Render.dll segments over fabricated light infos (FLightInfo,
 The fast square-root table and the fog attenuation table come from the
 light-manager init (0x10b0225b-0x10b022d0, 0x10b020cf-0x10b02112).
 
-  native-volumetric-fog-oracle.py GAME_ROOT < cases.json
+  native-volumetric-fog-oracle.py GAME_ROOT [CONTROL_WORD] < cases.json
 """
 import importlib.util
 import json
@@ -45,7 +45,7 @@ class FogOracle(lighting.Oracle):
         self.write(0x10b5d4cc, 'I', core['?SizeSquared@FVector@@QBEMXZ'])
         self.sqrt_table()                  # fast square-root table 0x10b3e1b8
         self.frame()
-        self.run(0x10b020cf, 0x10b02112)   # fog attenuation table 0x10b38ac8
+        self.init_run(0x10b020cf, 0x10b02112)   # fog attenuation table 0x10b38ac8
         self.case_top = self.alloc_top
 
     def low_frame(self):
@@ -118,13 +118,12 @@ class FogOracle(lighting.Oracle):
 
 if __name__ == '__main__':
     oracle = FogOracle(Path(sys.argv[1]))
-    # The tables above come from the light manager's init on the game thread.
-    # The per-surface segments run inside DrawWorld, where URender::PreRender
-    # sets 24-bit precision control (docs/bsp-occlusion.md "Precision"):
-    # argv[2] = 0x007f runs them so. The translation was validated at the
-    # default 0x037f; at 0x007f ComputeFromActor's constants already differ
-    # (docs/volumetric-fog.md, the render-pass precision audit).
-    oracle.control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
+    # The tables above come from the light manager's init on the game thread
+    # (0x037f). The per-surface segments run inside DrawWorld, where
+    # URender::PreRender sets 24-bit precision control
+    # (docs/render-pass-precision.md): 0x007f by default, argv[2] (or the
+    # audit's ORACLE_CW) to run them at another word.
+    oracle.control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else lighting.native.render_control_word(0x007f)
     cases = json.load(sys.stdin)
     out = []
     for case in cases:

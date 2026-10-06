@@ -4,7 +4,7 @@
  * body — the exec calls the draw sink directly with flagW/flagH literal
  * zeros, so only the exec body hash is asserted.
  */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
@@ -15,6 +15,8 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {readFunctionMetadata} from '../src/unreal/script-metadata.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {buildGc, GcHeap} from './gc-services.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.NATIVE_PROBE_PYTHON || path.join(ROOT, '.cache/native-probe-env/bin/python');
@@ -236,3 +238,4 @@ for (const [i, mutation] of MUTATIONS.entries()) {
 }
 
 console.log(JSON.stringify(report, null, 1));
+if (assert.enabled) assert.report('validate-gc-draw-stretched-texture');

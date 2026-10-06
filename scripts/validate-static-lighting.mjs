@@ -6,8 +6,8 @@
  *
  *   node scripts/validate-static-lighting.mjs [--map 00_Training] [--every 1]
  */
-import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { auditAssert, auditControlWord } from './precision-audit.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -29,7 +29,10 @@ for (const directory of ['Maps', 'System'])
 const mapName = option('map', '00_Training'), every = Number(option('every', 1)), surfaceEvery = Number(option('surfaces', 8));
 const assets = new AssetStore(files), asset = await assets.get(mapName), map = decodeMap(asset.bytes), model = map.model;
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
-const runOracle = cases => JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root],
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs);
+// the light-manager tables stay at the init word.
+const assert = auditAssert(), controlWord = auditControlWord();
+const runOracle = cases => JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, ...(controlWord ? [controlWord] : [])],
   { input: JSON.stringify(cases), maxBuffer: 1 << 30 }));
 const hex = array => Buffer.from(array).toString('hex');
 
@@ -179,6 +182,7 @@ const rsqrtJs = rsqrtTables();
 const rsqrtMismatch = rsqrt ? rsqrt.mantissa.filter((v, i) => v !== u32(rsqrtJs.mantissa[i])).length
   + rsqrt.exponent.filter((v, i) => v !== u32(rsqrtJs.exponent[i])).length : 0;
 let spots = 0, cylinders = 0;
+const problemCounts = {}, problemTexels = { spatial: 0, merged: 0 };
 chain.forEach((c, i) => {
   const problems = [], n = nat.steps[i];
   if (JSON.stringify(n.rects) !== JSON.stringify(c.rect)) problems.push('rect');
@@ -187,6 +191,9 @@ chain.forEach((c, i) => {
   const body = n.spatial ?? n.spots;
   if (body.spatial.some((v, k) => v !== c.spatial[k])) problems.push('spatial');
   if (n.spatial && n.spatial.merged.some((v, k) => ((v ^ c.merged[k]) & 0xffffff) !== 0)) problems.push('merged');
+  for (const problem of problems) problemCounts[problem] = (problemCounts[problem] ?? 0) + 1;
+  problemTexels.spatial += body.spatial.reduce((m, v, k) => m + (v !== c.spatial[k]), 0);
+  if (n.spatial) problemTexels.merged += n.spatial.merged.reduce((m, v, k) => m + (((v ^ c.merged[k]) & 0xffffff) !== 0), 0);
   if (c.cylinder) cylinders++; else if (c.spot) spots++;
   spatialTexels += c.spatial.length; litSpatial += c.spatial.filter(Boolean).length;
   if (problems.length) { chainMismatch++; if (chainFirst.length < 5) chainFirst.push({ step: i, spot: c.spot, problems,
@@ -194,9 +201,11 @@ chain.forEach((c, i) => {
     sample: body.spatial.map((v, k) => [k, v, c.spatial[k]]).filter(([, a, b]) => a !== b).slice(0, 4) }); }
 });
 console.log(JSON.stringify({ zones: model.zones.length, ambient: zoneTriples.length, ambientMismatch, rsqrtMismatch,
-  rsqrtMargin: rsqrtJs.margin, surfaces, lightSteps: chain.length, spots, cylinders, spatialTexels, litSpatial, chainMismatch, chainFirst }));
+  rsqrtMargin: rsqrtJs.margin, surfaces, lightSteps: chain.length, spots, cylinders, spatialTexels, litSpatial, chainMismatch,
+  problemCounts, problemTexels, chainFirst }));
 assert.equal(rsqrtMismatch, 0, 'x^-0.5 power tables match');
 assert.equal(ambientMismatch, 0, 'ambient fill texels match');
 assert.equal(chainMismatch, 0, 'static light rectangles, incidence, colour, spatial bytes and merges match');
-console.log(`validate-static-lighting: PASS (${mapName}: shadow table, ${cases.length} illumination masks, ${texels} texels; ` +
+if (assert.enabled) assert.report('validate-static-lighting');
+else console.log(`validate-static-lighting: PASS (${mapName}: shadow table, ${cases.length} illumination masks, ${texels} texels; ` +
   `${zoneTriples.length} ambients; ${chain.length} static light steps on ${surfaces} surfaces, ${spatialTexels} texels)`);

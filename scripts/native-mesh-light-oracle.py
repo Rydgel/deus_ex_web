@@ -182,7 +182,10 @@ class MeshOracle(dyn.Oracle):
     # -- Light-manager tables ------------------------------------------------------
     def power_tables(self):
         self.write(dyn.STUBS + 0x780, 'f', -0.5)
+        # Built by FLightManager::Init on the game thread (init control word).
+        render, self.control_word = self.control_word, self.init_control_word
         self.call(POWER_TABLES, [RSQRT_MANTISSA, RSQRT_EXPONENT, self.read(dyn.STUBS + 0x780, 'I')[0]])
+        self.control_word = render
         return {'mantissa': list(self.read(RSQRT_MANTISSA, '1024I')), 'exponent': list(self.read(RSQRT_EXPONENT, '512I'))}
 
     # -- Scene fixture -----------------------------------------------------------------

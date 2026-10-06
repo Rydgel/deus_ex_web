@@ -23,3 +23,21 @@ export function decalProbe(game, { place = false, pawn = null } = {}) {
   return { surfList: [...read(shadow, 'SurfList')], hasDecal: read(shadow, 'bHasDecal'), lastRendered: read(shadow, 'LastRenderedTime'),
     time: read(level.actors[0], 'TimeSeconds'), records: level.decals?.store.count ?? 0 };
 }
+
+/** Validation only (validate-volumetric-fog-play.mjs, validate-coronas-play
+ * and other checks of a view): move the player to `location` (optional) and
+ * set its ViewRotation to `rotation`, or aim the view from the eye at the
+ * level actor named `lookAt`, on the simulation side (sim-worker.mjs
+ * `call`, or the page with ?sim=inline). */
+export function placeProbe(game, { location = null, rotation = null, lookAt = null }) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  if (location) runtime.farMoveActor(player, location, 0, 1);
+  if (lookAt) {
+    const target = runtime.levelFor(player).actors.find(a => a?.name === lookAt), at = runtime.readNamed(target, 'Location');
+    const eye = game.view().location, d = at.map((v, i) => v - eye[i]);
+    const units = r => Math.round(r * 32768 / Math.PI);
+    rotation = [(units(Math.atan2(d[2], Math.hypot(d[0], d[1]))) + 65536) % 65536, (units(Math.atan2(d[1], d[0])) + 65536) % 65536, 0];
+  }
+  if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation);
+  return { location: runtime.readNamed(player, 'Location'), rotation };
+}

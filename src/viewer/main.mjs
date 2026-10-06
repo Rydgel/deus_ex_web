@@ -10,7 +10,8 @@ import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
-import { decalProbe } from './decal-probe.mjs';
+import { decalProbe, placeProbe } from './decal-probe.mjs';
+import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
@@ -1061,6 +1062,34 @@ musicDrive(args) {
 decalProbe(args) {
   if (simClient) return simClient.call('decalProbe', args);
   return game ? decalProbe(game, args) : null;
+},
+/** Validation only: view-probe.mjs (the original captures' camera commands)
+ * on the simulation side. */
+viewProbe(args) {
+  if (simClient) return simClient.call('viewProbe', args);
+  return game ? viewProbe(game, args) : null;
+},
+/** Validation only: decal-probe.mjs placeProbe (player location and view
+ * rotation) on the simulation side. */
+placeProbe(args) {
+  if (simClient) return simClient.call('placeProbe', args);
+  return game ? placeProbe(game, args) : null;
+},
+/** The page's fog pass (fog-pass.mjs): its last frame's counters and the
+ * fog meshes it drew. */
+fog() {
+  const fog = world?.fog;
+  return fog ? { stats: { ...fog.stats }, visibleMeshes: fog.root.children.filter(object => object.visible).length } : null;
+},
+/** Show or hide the fog pass (validation: a frame with and without it). */
+showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
+/** The page's corona pass (corona-pass.mjs): the last frame's counters. */
+coronas() { return coronaPass ? { ...coronaPass.stats } : null; },
+/** Draw or skip the corona pass (validation: a frame with and without it). */
+showCoronas(on) {
+  if (!coronaPass) return;
+  if (!on && !coronaPass.__render) { coronaPass.__render = coronaPass.render; coronaPass.render = () => {}; }
+  else if (on && coronaPass.__render) { coronaPass.render = coronaPass.__render; delete coronaPass.__render; }
 },
 /** The last drawn frame's decal fragments (decal-draw.mjs, decal-scene.mjs):
  * per texture the triangles the simulation clipped, and those drawn. */

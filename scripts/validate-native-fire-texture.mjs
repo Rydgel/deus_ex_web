@@ -4,7 +4,7 @@
 // sparks, the fields and the random generator must match byte for byte.
 //
 //   node scripts/validate-native-fire-texture.mjs [--only name-regex]
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -13,6 +13,8 @@ import {gameDirectory} from './game-directory.mjs';
 import {fireConstantTimeTick, redrawSparks, drawFlashRamp, fireTables, firePostLoad, calculateWater, waterRedrawDrops,
   waterConstruct, wetPostLoad, wetConstantTimeTick, setRefractionTable} from '../src/runtime/fire-texture.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
@@ -347,3 +349,4 @@ selected.forEach((c, i) => {
 });
 console.log(JSON.stringify({cases: selected.length, mismatches: mismatches.length, first: mismatches.slice(0, 5)}, null, 1));
 assert.equal(mismatches.length, 0);
+if (assert.enabled) assert.report('validate-native-fire-texture');

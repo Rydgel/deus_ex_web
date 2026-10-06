@@ -1,6 +1,6 @@
 /** Original mirror reference first; browser translation checks are opt-in after
  * those cases exist. Original assets/results stay in the ignored .cache folder. */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +9,8 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { POLY, toView, fromView } from '../src/unreal/geometry.mjs';
 import { gameDirectory } from './game-directory.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System']) for (const name of await readdir(path.join(root, directory)))
@@ -103,3 +105,4 @@ assert.deepEqual(reference.afterChild.map(f => (f >>> 0).toString(16)),
 assert.deepEqual(reference.blends[0].states, [[27, 1], [19, 2], [20, 4]]);
 assert.deepEqual(reference.blends[1].states, [[27, 1], [19, 2], [20, 4], [14, 1]]);
 console.log(`Mirrors: 46 Training surfaces / 4 planes and ${mirroredSurfaces} mirrored surfaces / ${allPlanes.size} node planes in all maps (${JSON.stringify(kinds)}); ${cases.frames.length} reflected frames and clip planes match original instructions; original blend ONE/INVSRCCOLOR and depth writes confirmed.`);
+if (assert.enabled) assert.report('validate-mirrors');

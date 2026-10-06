@@ -2264,6 +2264,13 @@ export class ScriptRuntime {
         // float (the console's bare "AltFire") imports 0.
         const parsed=importText('float',rest);
         args[index]=parsed.value;at=text.length-parsed.rest.length;
+      }else if(field.metadata.type==='bool'&&(field.metadata.arrayDim??1)<=1){
+        // UBoolProperty::ImportText 0x10166380 (config-text.mjs): it never
+        // reads PortFlags, so the console's port flags 1 take the same fixed
+        // spellings ("1"/"True" set, "0"/"False" clear); anything else is NULL.
+        const parsed=importText('bool',rest);
+        if(parsed){args[index]=parsed.value;at=text.length-parsed.rest.length;}
+        else imported=false;
       }else if(field.metadata.type==='object'&&rest===''){
         // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
         // token, which is not "None", and StaticFindObject finds nothing, so

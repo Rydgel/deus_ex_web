@@ -177,13 +177,18 @@ export function createScriptVmKernel(instance, memory) {
         ? new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice() : null,
       miss: () => x.fog_miss(),
       setMiss: value => x.fog_set_miss(value >>> 0),
-      // The certain-rounding fast path (fog.rs texel_fast): `setExact(true)`
-      // runs every texel on the Ext model; `fallbacks` counts the texels the
-      // fast path left to Ext. `check` (validation only) runs the loop on Ext
-      // with the fast path compared on every texel from the same incoming
-      // flag and returns the texels where they differ.
+      // The render pass's precision control 24 (fog.rs): f32 registers
+      // (`Single`), rerun on f64 ones (`Wide`) when a product or quotient
+      // leaves binary32's normal range, and the Ext model rounded to 24 bits
+      // (`Exact`) for non-finite inputs. `setExact(true)` runs every texel on
+      // Exact; `fallbacks` counts the texels with a non-finite input. `check`
+      // (validation only) runs the loop on Exact with Wide and Single
+      // compared on every texel from the same incoming flag and returns the
+      // texels where they differ.
       setExact: on => x.fog_set_exact(on ? 1 : 0),
       fallbacks: () => x.fog_fallbacks() >>> 0,
+      // Texels the f32 registers handed to the f64 ones (fog.rs `Single`).
+      reruns: () => (x.fog_reruns ? x.fog_reruns() : 0) >>> 0,
       resetFallbacks: () => x.fog_reset_fallbacks(),
       check: (width, height, count) => x.fog_check(width >>> 0, height >>> 0, count >>> 0) >>> 0,
       texels: (width, height) => new Uint8Array(memory.buffer, x.fog_out_ptr(), width * height * 4).slice(),
