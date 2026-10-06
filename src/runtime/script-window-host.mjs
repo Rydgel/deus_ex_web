@@ -84,6 +84,9 @@ import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window
 import {activateButtonNative} from './script-window-activate-button.mjs';
 import * as LT from './script-window-large-text.mjs';
 import * as ED from './script-window-edit.mjs';
+import * as LIST from './script-window-list.mjs';
+import {listMemory} from './script-window-list-model.mjs';
+import {gcGetTextExtent as gcTextExtent} from './script-gc-get-text-extent.mjs';
 import {editMemory, cleanUpUndo, setTextVirtual, textChangedRange} from './script-edit-model.mjs';
 import {dispatchEditWindowNative} from './script-window-edit-natives.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
@@ -121,6 +124,7 @@ const FAMILIES = Object.freeze({
   'extension.scrollareawindow': {vtable:A.SCROLL_AREA.vtable},
   'extension.largetextwindow': {vtable: LT.LARGE_TEXT.vtable},
   'extension.editwindow': {vtable: ED.EDIT.vtable},
+  'extension.listwindow': {vtable: LIST.LIST.vtable},
 });
 
 export class WindowHostBoundaryError extends Error {
@@ -142,7 +146,7 @@ export function nativeWindowFamily(cls) {
 /** Classes whose every function/state the HUD tree may reach. */
 const HUD_CLASS_PATHS = Object.freeze([
   ['Extension', ['scalewindow','scalemanagerwindow','clipwindow','scrollareawindow','window', 'textwindow', 'buttonwindow', 'togglewindow', 'tilewindow', 'tabgroupwindow',
-    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'largetextwindow', 'editwindow', 'gc', 'extensionobject']],
+    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'largetextwindow', 'editwindow', 'listwindow', 'gc', 'extensionobject']],
   ['DeusEx', ['deusexrootwindow', 'deusexhud', 'hudbasewindow', 'hudsharedborderwindow', 'hudammodisplay',
     'hudhitdisplay', 'crosshair', 'hudobjectbelt', 'hudobjectslot', 'hudactiveitemsdisplay',
     'hudactiveitemsborderbase', 'hudactiveaugsborder', 'hudactiveitemsborder', 'hudactiveitembase',
@@ -591,6 +595,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         constructWindow: ({object}) => constructWindowNative(object, {...rawServices, coreObjectConstructor: () => {}})});
       case 'extension.largetextwindow': return LT.constructLargeTextWindow(W, win, constructWindowPart);
       case 'extension.editwindow': return ED.constructEditWindow(W, win, constructWindowPart);
+      case 'extension.listwindow': return LIST.constructListWindow(W, win, constructWindowPart);
       default: return boundary(`Window family ${family} has no recovered constructor`);
     }
   }
@@ -657,6 +662,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       });
       case 'extension.largetextwindow': return initLargeText(win, parent);
       case 'extension.editwindow': return ED.initEditWindow(W, win, parent, editEnv);
+      case 'extension.listwindow': return LIST.initListWindow(W, win, parent, listEnv);
       default: return boundary(`Window family ${familyOf(win)} has no recovered Init`);
     }
   }
@@ -721,6 +727,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.radioboxwindow': return radioBoxPreferredSize(win, bW, w, bH, h);
         case 'extension.largetextwindow': return LT.largeTextPreferredSize(W, win, bW, w, bH, h);
         case 'extension.editwindow': return ED.editPreferredSize(W, win, bW, w, bH, h);
+        case 'extension.listwindow': return LIST.listPreferredSize(W, win);              // 0x10033260
         default: return windowPreferredSize(win, bW, w, bH, h);
       }
     },
@@ -739,6 +746,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         });
       if (is(win, 'extension.largetextwindow', 'extension.editwindow'))                 // 0x1002e380 -> 0x10050450
         return LT.largeTextGranularity(W, win, hg, vg, (w, h1, v1) => {
+          const args = [f(h1), f(v1)];
+          processScript(w, 'ParentRequestedGranularity', args);
+          return {h: f(args[0]), v: f(args[1])};
+        });
+      if (is(win, 'extension.listwindow'))                                               // 0x100332c0 -> 0x10050450
+        return LIST.listGranularity(W, win, (w, h1, v1) => {
           const args = [f(h1), f(v1)];
           processScript(w, 'ParentRequestedGranularity', args);
           return {h: f(args[0]), v: f(args[1])};
@@ -787,6 +800,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if (is(win, 'extension.modalwindow')) return Input.modalVisibilityChanged(W, win, visible, T.getRootWindow);
       if (is(win, 'extension.editwindow')) return ED.editVisibilityChanged(W, win, visible, editEnv);
       if (is(win, 'extension.computerwindow')) return Computer.computerVisibilityChanged(W,win,visible);
+      if (is(win, 'extension.listwindow')) return LIST.listVisibilityChanged(W, win, visible, listEnv); // 0x10033d90
       processScript(win, 'VisibilityChanged', [Boolean(visible)]);                     // 0x10003610
     },
     // vtable +0x78, called by InvokeTimers for a nameless timer: XButtonWindow::
@@ -812,6 +826,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.rootwindow': return rootTickVirtual(win, delta);
         case 'extension.computerwindow': return Computer.computerTick(W,win,delta);
         case 'extension.editwindow': return ED.editTick(W, win, delta, editEnv);
+        case 'extension.listwindow': return LIST.listTick(W, win, delta, listEnv);     // 0x10033e50
         default: return undefined;                                                     // 0x10003be0: ret 4
       }
     },
@@ -824,6 +839,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.computerwindow': return Computer.computerDraw(W,win,gc);
         case 'extension.largetextwindow': return LT.largeTextDraw(W, win, gc);
         case 'extension.editwindow': return ED.editDraw(W, win, gc, editEnv);
+        case 'extension.listwindow': return LIST.listDraw(W, win, gc, listEnv);        // 0x10033350
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
       }
     },
@@ -846,6 +862,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // root's typed-character route that reaches it is not.
     keyPressed(win, key) {
       if (is(win, 'extension.editwindow')) return ED.editKeyPressed(W, win, key, editEnv);
+      if (is(win, 'extension.listwindow')) return LIST.listKeyPressed(W, win, key, listEnv); // 0x10033ae0
       return boundary('XWindow::KeyPressed 0x10003830 is not recovered');
     },
   };
@@ -865,6 +882,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     virtualKeyPressed(win, key, repeat) {
       if (is(win, 'extension.computerwindow')) boundary('XComputerWindow::VirtualKeyPressed 0x1000f530 is not recovered');
       if (is(win, 'extension.editwindow')) return ED.editVirtualKeyPressed(W, win, key, repeat, editEnv);
+      if (is(win, 'extension.listwindow')) return LIST.listVirtualKeyPressed(W, win, key, repeat, listEnv); // 0x10033ca0
       return processScript(win, 'VirtualKeyPressed', [key & 0xff, Boolean(repeat)], {result: false});
     },
     // Root vtable +0x124 / +0x12c.
@@ -889,17 +907,21 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // vtable +0xe8 / +0xec: XWindow::ButtonActivated 0x10003d20 / ButtonActivatedRight 0x10003d50.
     buttonActivated: (win, source) => is(win,'extension.scalemanagerwindow')?SM.managerButtonActivated(W,win,source):processScript(win, 'ButtonActivated', [source], {result: false}),
     buttonActivatedRight: (win, source) => processScript(win, 'ButtonActivatedRight', [source], {result: false}),
+    // vtable +0x108 / +0x10c: XWindow::ListRowActivated 0x10003f50 and
+    // ListSelectionChanged 0x10003f90, script bridges with a bool result.
+    listRowActivated: (win, list, row) => processScript(win, 'ListRowActivated', [list, row | 0], {result: false}) ? 1 : 0,
+    listSelectionChanged: (win, list, count, focus) => processScript(win, 'ListSelectionChanged', [list, count | 0, focus | 0], {result: false}) ? 1 : 0,
   });
   const inheritedMousePressed=V.mouseButtonPressed;
-  V.mouseButtonPressed=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseButtonPressed(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMousePressed(W,win,...args,{processScript}):
+  V.mouseButtonPressed=(win,...args)=>is(win,'extension.listwindow')?LIST.listMouseButtonPressed(W,win,...args,listEnv):is(win,'extension.editwindow')?ED.editMouseButtonPressed(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMousePressed(W,win,...args,{processScript}):
     is(win,'extension.buttonwindow')?Input.buttonMousePressed(W,win,...args,
     {processScript,changeButtonAppearance,tickOffset:W.tickOffset,activateButton:(w,key)=>W.native.activateButton(w,key)}):
     is(win,'extension.scalewindow')?SI.scaleMousePressed(W,win,...args):is(win,'extension.scrollareawindow')?SM.scrollMousePressed(W,win,...args):inheritedMousePressed(win,...args);
   const inheritedMouseMoved=V.mouseMoved,inheritedMouseReleased=V.mouseButtonReleased;
-  V.mouseMoved=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseMoved(W,win,...args,editEnv):is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
+  V.mouseMoved=(win,...args)=>is(win,'extension.listwindow')?LIST.listMouseMoved(W,win,...args,listEnv):is(win,'extension.editwindow')?ED.editMouseMoved(W,win,...args,editEnv):is(win,'extension.scalewindow')?SI.scaleMouseMoved(W,win,...args):inheritedMouseMoved(win,...args);
   const inheritedCursorRequested=V.cursorRequested;
   V.cursorRequested=(win,...args)=>is(win,'extension.editwindow')?ED.editCursorRequested(W,win,...args,editEnv):inheritedCursorRequested(win,...args);
-  V.mouseButtonReleased=(win,...args)=>is(win,'extension.editwindow')?ED.editMouseButtonReleased(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMouseReleased(W,win,...args,
+  V.mouseButtonReleased=(win,...args)=>is(win,'extension.listwindow')?LIST.listMouseButtonReleased(W,win,...args,listEnv):is(win,'extension.editwindow')?ED.editMouseButtonReleased(W,win,...args,editEnv):is(win,'extension.togglewindow')?Input.toggleMouseReleased(W,win,...args,
     {processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle:(w,value)=>setToggleNative(w,value,lifecycle.toggle)}):
     is(win,'extension.buttonwindow')?Input.buttonMouseReleased(W,win,...args,
     {processScript,changeButtonAppearance,activateButton:(w,key)=>W.native.activateButton(w,key),isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y)}):
@@ -1045,6 +1067,46 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     keyBuffer: () => editGlobals.keyBuffer,
     get v() { return V; },
   };
+  // ------------------------------------------------------------------
+  // ListWindow (script-window-list.mjs over script-window-list-model.mjs).
+  // Image cells of the list bodies: the shared L"" 0x10099ea8, the sort
+  // column list 0x100a6f28/0x100a7348, the glyph-miss pair 0x100aeba0 and
+  // a stand-in for GetCharSize's out slot; KeyPressed's stack FString.
+  // ------------------------------------------------------------------
+  const readWString = address => { let text = ''; for (let at = address; ; at += 2) { const unit = heap.mem.read(at, 'u16'); if (!unit) return text; text += String.fromCharCode(unit); } };
+  const listMem = {...heap.mem, emptyWString: editGlobals.emptyWString, sortList: heap.allocRaw(0x400), sortCount: heap.allocRaw(4),
+    glyphMiss: heap.allocRaw(0x10), glyphScratch: heap.allocRaw(4),
+    alloc: size => heap.allocRaw(size), free: address => heap.mem.free(address), realloc: (address, size) => heap.realloc(address, size),
+    readString: readWString, allocString: editMem.allocString};
+  const listServices = {mem: listMem, objectAddress: win => heap.addressOf(win),
+    // XWindow::GetGC 0x1004ddc0 / ReleaseGC 0x1004de50.
+    acquireContext: win => heap.addressOf(W.gc.get(win)),
+    releaseContext: (win, _base, gc) => W.gc.release(win, gc ? heap.objectAt(gc) : null),
+    // XGC::GetTextExtent 0x10027bb0(0, &width, &height, text).
+    measureString(_win, gc, outW, outH, text) {
+      const extent = gcTextExtent(heap.objectAt(gc), 0, readWString(text), gcServices);
+      heap.mem.write(outW, 'f32', extent.xExtent); heap.mem.write(outH, 'f32', extent.yExtent);
+    },
+    askParentForReconfigure: win => askParentForReconfigure(win),
+    selectionChanged: (win, receiver, _base, count, focus) => V.listSelectionChanged(heap.objectAt(receiver), win, count, focus),
+    isBlock: address => heap.blockSize(address) !== undefined,
+    scratchString: heap.allocRaw(12),
+  };
+  const listEnv = {
+    L: win => listMemory(win, listServices), listServices,
+    windowInit: (win, parent) => W.initWindow(win, parent),
+    setSelectability: (win, selectable) => T.setSelectability(W, win, selectable),
+    askParentToShowArea: (win, x, y, w, h) => Mouse.askParentToShowArea(W, win, x, y, w, h),
+    playSound: (win, sound, volume, pitch, x, y) => windowPlaySound(W, win, sound ? heap.objectAt(sound) : null, volume, pitch, x, y),
+    processScript: (win, event, args, options) => processScript(win, event, args, options),
+    listRowActivated: (receiver, list, row) => V.listRowActivated(receiver, list, row),
+    isKeyDown: (win, key) => isKeyDownNative(win, key, {read: (object, offset, kind) => heap.read(object, offset, kind)}),
+    tickOffset: () => f(W.tickOffset()),
+    getCursorPos: win => W.native.getCursorPos(win),
+    mouseMoved: (win, x, y) => V.mouseMoved(win, x, y),
+    isFocusWindow: win => { const root = T.getRootWindow(W, win); return Boolean(root && W.ptr(root, T.ROOT.focus) === win); },
+    windowDraw: (win, gc) => processScript(win, 'DrawWindow', [gc]),                  // XWindow::Draw 0x10003bf0
+  };
   // XLargeTextWindow::SetText 0x1002d6b0 / AppendText 0x1002d730 and
   // XEditWindow::SetText 0x1001e260 / AppendText 0x1001e310: the TextWindow
   // exec bodies call these through vtable +0x11c / +0x120.
@@ -1179,6 +1241,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     'extension.textlogwindow': {members: win => W.heap.write(win, 0x168, 'string', ''), destructor: win => W.farray.empty(win, 0x178, 20)},
     // XLargeTextWindow::CleanUp 0x1002d560 / ~XLargeTextWindow 0x100127a0.
     'extension.largetextwindow': {members: win => LT.cleanUpLargeTextWindow(W, win, textCleanUp), destructor: win => LT.destroyLargeTextMembers(W, win)},
+    // XListWindow::CleanUp 0x1002ead0 / ~XListWindow 0x10015de0.
+    'extension.listwindow': {members: win => LIST.cleanUpListWindow(listEnv.L(win)), destructor: win => LIST.destroyListMembers(listEnv.L(win))},
     // XEditWindow::CleanUp 0x1001d0b0 (undo records, then XLargeTextWindow's)
     // / ~XEditWindow 0x10014510 (the undo TArray, then ~XLargeTextWindow).
     'extension.editwindow': {
@@ -1315,6 +1379,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
       const reference=actorRefs(call);if(reference.handled)return reference;
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
+      if(call.index>=1720&&call.index<=1812){
+        const list=LIST.dispatchListWindowNative(W,call,listEnv,refValue);if(list.handled)return list;
+      }
       if(call.index===1860||(call.index>=1880&&call.index<=1921)){
         const edit=dispatchEditWindowNative(W,call,{editServices,textServices:editServices,edit:editEnv});if(edit.handled)return edit;
       }
