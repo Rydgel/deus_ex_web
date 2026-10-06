@@ -159,6 +159,7 @@ pub(crate) struct Player {
     pub trace: Option<Trace>,
     pub ahead_pin: u32,
     pub fault: u32,
+    pub callbacks_done: u32, // callbacks completed without a fault (galaxy_seq_callback_count)
 }
 
 impl Player {
@@ -193,6 +194,7 @@ impl Player {
             trace: None,
             ahead_pin: 0,
             fault: 0,
+            callbacks_done: 0,
         }
     }
 }
@@ -726,7 +728,7 @@ impl Library {
             self.porta(v);
             // Vibrato and pitch envelope (0x1061505e..0x106150ee).
             let ph = (self.vw(v, 0x70) as u32 + self.vw(v, 0x72) as u32) & 0xffff;
-            let lfo = self.table(((self.vb(v, 0x74) as u32) << 6) + (ph >> 10))?;
+            let lfo = self.table(LFO as u32 + ((self.vb(v, 0x74) as u32) << 6) + (ph >> 10))?;
             let e = (self.vw(v, 0x2e) as i32).wrapping_mul(self.vw(v, 0x34) as i16 as i32) >> 15;
             let mut p = lfo.wrapping_mul(self.vw(v, 0x6e) as i16 as i32) >> 8;
             p = p.wrapping_add(e).wrapping_add(self.vw(v, 0x80) as i16 as i32).wrapping_add(self.vw(v, 0x6c) as i32);
@@ -736,7 +738,7 @@ impl Library {
             self.period_to_step(v, p)?;
             // Tremolo (0x106150f3..0x1061515a).
             let ph = (self.vw(v, 0x78) as u32 + self.vw(v, 0x76) as u32) & 0xffff;
-            let lfo = self.table(((self.vb(v, 0x75) as u32) << 6) + (ph >> 10))?;
+            let lfo = self.table(LFO as u32 + ((self.vb(v, 0x75) as u32) << 6) + (ph >> 10))?;
             let x = (lfo.wrapping_mul(self.vw(v, 0x7a) as i16 as i32) >> 8).wrapping_add(self.vw(v, 0x68) as i32);
             self.sw(v, 0x76, ph as u16);
             self.sw(v, 0x66, x.clamp(0, 0x7fff) as u16);
@@ -1057,7 +1059,9 @@ impl Library {
                 self.row = self.row.wrapping_add(1);
             }
         }
-        self.effects()?;
+        if !(ptr == 0 && self.mutant(MUTANT_NO_PATTERN_END_PASS)) {
+            self.effects()?;
+        }
         if self.tick_in_row == 0 {
             count = self.speed as u32;
         }
@@ -1721,6 +1725,17 @@ pub extern "C" fn galaxy_seq_start(effects_channels: u32, section: u32) -> u32 {
     })
 }
 
+/// glxControlMusic(cmd, arg) on its own: the console's MUSICORDER n calls
+/// glxControlMusic(1, atoi(n)) (0x106071a8).
+#[no_mangle]
+pub extern "C" fn galaxy_seq_control(cmd: i32, arg: i32) -> u32 {
+    with_library(|l| {
+        let r = l.control_music(cmd, arg);
+        l.trace_record(b'S', &[r]);
+        r
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn galaxy_seq_pin(voice_counter: u32, tick_counter: u32) {
     with_library(|l| {
@@ -1746,9 +1761,16 @@ pub extern "C" fn galaxy_seq_callbacks(count: u32) -> u32 {
                 l.player.fault = e;
                 return e;
             }
+            l.player.callbacks_done = l.player.callbacks_done.wrapping_add(1);
         }
         0
     })
+}
+
+/// Callbacks completed since the reset (a fault stops the count at the faulting one).
+#[no_mangle]
+pub extern "C" fn galaxy_seq_callback_count() -> u32 {
+    with_library(|l| l.player.callbacks_done)
 }
 
 #[no_mangle]
