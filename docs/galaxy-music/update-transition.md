@@ -828,6 +828,13 @@ over equal the export plus 1024 zero bytes. Afterwards the graph UMusic has Save
 1871, MeetPaul's state change runs UpdateDynamicMusic's `ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade)`.
 That gives 64 fading frames, then section 4 restarts on the loaded module.
 
+**Browser** (`validate-galaxy-music-host.mjs`, headless Chromium, `?sim=worker` and `?sim=inline`):
+
+- 00_Training's first painted frame sends Training_Music's load+start batch to the AudioWorklet library.
+- The order reaches 1 after 8.2–8.3 s of output, and the simulation's `order()` follows the worklet's
+  reports.
+- A map reload unregisters the song (`dispose()`) and the new runtime loads it again.
+
 **State digests.**
 
 - bench-sim's digests do not change: it never paints the HUD, so Galaxy Update never runs.
@@ -864,4 +871,5 @@ That gives 64 fading frames, then section 4 restarts on the loaded module.
 ```
 NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-music-update.mjs [--reuse] [--only NAME]
 node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|00_Training|01_NYC_UNATCOIsland]
+node scripts/validate-galaxy-music-host.mjs [--node-only]   # the browser end to end
 ```
