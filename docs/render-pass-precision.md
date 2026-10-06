@@ -166,6 +166,36 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | Coronas' SingleLineCheck, ParticleIterator FarMoveActor | pass | collision oracles at 0x037f | — | trace.rs, render.rs | not measured |
 | UnrealScript run from the render events (RenderOverlays → Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator `Init(Camera)`, Console PostRender, DeusExPlayer.RenderOverlays) | pass | none | none | script VM (Rust interp + JS): Core float operators on the 64-bit model | not measured; needs a design decision |
 
+## Handoff (2026-10-06, stopped for the usage limit)
+
+Done and verified on this branch: the inventory and audit switch above;
+volumetric fog (fog.rs `Single`/`Wide`/`Exact`, x87-pc24.mjs, oracle at
+0x007f, validate-volumetric-fog, -fast on 404 M texel-lights, -play in
+worker mode); coronas (oracle at 0x007f, validate-coronas, -play in worker
+mode); master merged (spatial lights, occlusion Setup). Unit tests 598/598.
+
+Next step, the static and moving light family (master's spatial work is
+merged; build on `renderPassConstants`): recovered for the port, not yet
+written:
+- FGetHSV (Engine `0x103ec8d0`): every operation in order, with `1.4/255`,
+  `0.01`, `0.7` and `1/255` as double operands; red's `(1−x)·s + x` stays in
+  a register, green and blue store `(1−c)·s` first. Port `fgetHsv` to
+  x87-pc24.mjs's exact ops (they round double operands once).
+- ComputeFromActor: `rr2 = f(f(r·r)·4093)`; colour = `f(f(Level.Brightness ·
+  brightness) · hsv)`; steps `fistp(f(f(c·65536) − 0.5f))`; the camera-space
+  location is `coordsTransform`'s order; incidence is `renderPassConstants`'
+  (point `normalLightIncidence` at it).
+- The rectangle (`0x10b0660e–0x10b06868`) was disassembled: plane distance
+  `((dz·Nz + dy·Ny) + dx·Nx)` stored, `R·R·1.05` (double) `− d²` clamped at
+  a double 0, three table roots, the projected centre and `(u ∓ ru)/scale`
+  stores before FISTP; port `movingLightRect` with p24 ops and recheck.
+- Then the spatial bodies (normal, NonIncidence's double `1.02`, spot,
+  cylinder), GlobalLighting's LightType functions (58 of 1,280 frames
+  differ), and switch the light oracles' default to 0x007f.
+After that: GetFrame and mesh lighting (lodmesh kernel and the GPU shaders
+together), lasers, surface pan, the root viewport and DrawTexture's
+frac-edge case; the script VM in render events needs a design decision.
+
 ## Status and plan
 
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
