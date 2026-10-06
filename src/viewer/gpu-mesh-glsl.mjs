@@ -1,8 +1,10 @@
 /** GLSL for the GPU mesh passes (docs/gpu-mesh.md). Every stored result is
  * computed through the barrier B(): ANGLE compiles to Metal with fast-math,
  * which otherwise contracts a*b+c into a fused multiply-add and reassociates
- * sums. The x87/f64 intermediates of the CPU kernels are float-float pairs
- * (hi, lo); an f32 store is the pair's normalized hi. */
+ * sums. The pose pass is GetFrame at the render pass's precision control 24:
+ * one binary32 operation per x87 operation, each through B(). The lighting
+ * passes keep the CPU kernels' f64 intermediates as float-float pairs (hi,
+ * lo); an f32 store is the pair's normalized hi. */
 
 export const WIDTH=1024;
 
@@ -69,16 +71,12 @@ uniform sampler2D uPrevPose,uPrevState0,uPrevState1,uPrevState2,uPrevState3,uPre
 uniform uint uFrame;
 /*POSE_OUTPUTS*/
 vec3 key(uint keyBase,uint V,uint frame,uint i){return vec3(texelFetch(uKeyframes,at(keyBase+frame*V+i),0).xyz);}
-// Keyframe interpolation: X one rounding of delta*alpha+a (x87 extended), Y/Z stored.
+// (b - a)*alpha + a per axis, each operation one binary32 rounding (GetFrame
+// at the render pass's precision control 24): keyframe interpolation from
+// frame a, or a tween from the cache pose a toward integer frame b.
 vec3 interpolate(vec3 a,vec3 b,float alpha){
-  float dx=B(b.x-a.x);vec2 x=ffAddF(twoProd(dx,alpha),a.x);
-  float y=B(B(B(b.y-a.y)*alpha)+a.y),z=B(B(B(b.z-a.z)*alpha)+a.z);
-  return vec3(x.x,y,z);}
-// Tween: from the f32 cache pose c toward integer frame b; X keeps delta unrounded.
-vec3 tween(vec3 c,vec3 b,float alpha){
-  vec2 x=ffAddF(ffMulF(twoSum(b.x,-c.x),alpha),c.x);
-  float y=B(B(B(b.y-c.y)*alpha)+c.y),z=B(B(B(b.z-c.z)*alpha)+c.z);
-  return vec3(x.x,y,z);}
+  return vec3(B(B(B(b.x-a.x)*alpha)+a.x),B(B(B(b.y-a.y)*alpha)+a.y),B(B(B(b.z-a.z)*alpha)+a.z));}
+float dot24(vec3 v,vec3 r){return B(B(B(v.x*r.x)+B(v.y*r.y))+B(v.z*r.z));}
 void main(){
   uint t=texelIndex();ivec2 p=at(t);
   vec4 prevPose=texelFetch(uPrevPose,p,0);
@@ -98,21 +96,16 @@ void main(){
         float alpha=pf(slot,5+k).x;
         vec3 pose;
         if(ch.x==1u){vec3 a=key(keyBase,V,ch.y,i);pose=alpha>0.0?interpolate(a,key(keyBase,V,ch.z,i),alpha):a;}
-        else pose=alpha>0.0?tween(s[k].xyz,key(keyBase,V,ch.z,i),alpha):s[k].xyz;
+        else pose=alpha>0.0?interpolate(s[k].xyz,key(keyBase,V,ch.z,i),alpha):s[k].xyz;
         s[k]=vec4(pose,1.0);
         if(ch.w==0u){
           vec3 c=vec3(B(pose.x-origin.x),B(pose.y-origin.y),B(pose.z-origin.z));
-          vec2 v0=twoSum(c.x,-m0.x),v1=twoSum(c.y,-m0.y),v2=twoSum(c.z,-m0.z);
-          outp=vec3(ffAdd(ffAdd(ffMulF(v0,r1.x),ffMulF(v1,r1.y)),ffMulF(v2,r1.z)).x,
-            ffAdd(ffAdd(ffMulF(v0,r2.x),ffMulF(v1,r2.y)),ffMulF(v2,r2.z)).x,
-            ffAdd(ffAdd(ffMulF(v0,r3.x),ffMulF(v1,r3.y)),ffMulF(v2,r3.z)).x);
+          vec3 v=vec3(B(c.x-m0.x),B(c.y-m0.y),B(c.z-m0.z));
+          outp=vec3(dot24(v,r1),dot24(v,r2),dot24(v,r3));
         }else{
           vec3 base=key(keyBase,V,0u,i);
           vec3 c=vec3(B(pose.x-base.x),B(pose.y-base.y),B(pose.z-base.z));
-          vec3 r=vec3(ffAdd(ffAdd(twoProd(c.x,r1.x),twoProd(c.y,r1.y)),twoProd(c.z,r1.z)).x,
-            ffAdd(ffAdd(twoProd(c.x,r2.x),twoProd(c.y,r2.y)),twoProd(c.z,r2.z)).x,
-            ffAdd(ffAdd(twoProd(c.x,r3.x),twoProd(c.y,r3.y)),twoProd(c.z,r3.z)).x);
-          outp=vec3(B(r.x+outp.x),B(r.y+outp.y),B(r.z+outp.z));
+          outp=vec3(B(dot24(c,r1)+outp.x),B(dot24(c,r2)+outp.y),B(dot24(c,r3)+outp.z));
         }
       }
       oPose=vec4(outp,1.0);

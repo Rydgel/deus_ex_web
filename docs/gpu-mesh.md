@@ -66,10 +66,12 @@ stored; they are refined with a float-float Newton step. Subnormal results
 may flush to zero on the GPU; none of the compared quantities is subnormal in
 practice, and the validator would show it.
 
-The kernels emulate x87 extended intermediates (GetFrame) or use f64
-intermediates (lighting). The shaders reproduce each of those intermediates
-as a float-float pair (about 48 significant bits) and round to f32 exactly
-where the CPU stores to f32. A float-float value differs from the 64-bit x87
+GetFrame runs at the render pass's precision control 24 (since 2026-10-06,
+[lodmesh-wasm](lodmesh-wasm.md) "Precision control 24"): the pose pass is
+one binary32 operation per x87 operation, each through B(). The lighting
+kernel uses f64 intermediates. The shaders reproduce each of those
+intermediates as a float-float pair (about 48 significant bits) and round to
+f32 exactly where the CPU stores to f32. A float-float value differs from the 64-bit x87
 or 53-bit f64 intermediate only below its 48th bit, so the f32 store agrees
 except when the exact value lies within about 2^-48 relative of an f32
 rounding boundary.

@@ -137,7 +137,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 
 | Routine | Placement | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- |
-| ULodMesh::GetFrame `0x10355360–0x103568e5` (Render's only call through its import is DrawLodMesh `0x10b0ee0f`; no other DLL imports it; virtual-call sites of UMesh::GetFrame `0x103a7780` not traced) | pass | lodmesh-frame oracle (NativeCollision 0x037f; now argv[2]) | validate-lodmesh-frame | `lodmesh-frame.mjs`; lodmesh-kernel `pose`/`pose_double`/`pose_exact`; GLSL `POSE_FRAGMENT` | x87 64-bit + f64 fast path; GLSL float-float | **20 of 46** calls: 7,562 of 29,823 output words (max 1,257 ulps); cache words 182 of 15,472 in 17 calls |
+| ULodMesh::GetFrame `0x10355360–0x103568e5` (Render's only call through its import is DrawLodMesh `0x10b0ee0f`; no other DLL imports it; virtual-call sites of UMesh::GetFrame `0x103a7780` not traced) | pass | lodmesh-frame oracle, **0x007f** | validate-lodmesh-frame (and `--wasm`), validate-gpu-mesh | `lodmesh-frame.mjs`; lodmesh-kernel `pose_single`/`pose_ext24`; GLSL `POSE_FRAGMENT` | **PC 24** (binary32; Ext24 fallback) | was: 20 of 46 calls (7,562 of 29,823 output words, max 1,257 ulps); **now 0**; GPU 227,862 of 227,862 components equal the CPU |
 | DrawLodMesh normals `0x10b0fe60–0x10b0ff85`, `0x10b10863–0x10b10912` | pass | mesh-light oracle, argv[2] (tables now at init) | validate-mesh-lighting | `accumulateFaceNormal`, `vertexNormalPlane`; kernel `light_mesh_job`; GLSL `FACE_FRAGMENT` | f64 + f32 stores | **face 278 of 400, vertex plane 208 of 400** |
 | SetupForActor `0x10b08c70` (ambient, candidates, AddLight, sort, ComputeFromActor) | pass | mesh-light oracle | validate-mesh-lighting(-play) | `mesh-lighting.mjs` `setupForActor`; meshlight.rs `ml_select` | f64 + fround | camera-space light and colour words differ by 1–8 ulps for most actors |
 | FLightManager::Light `0x10b027f0` | pass | mesh-light oracle | validate-mesh-lighting | `lightVertexX87` (reference), `lightVertex` (Play); kernel `light_vertex`; GLSL `VERTEX_FRAGMENT` | x87 / f64 | **1,545 of 3,744** channels (max 522 ulps); **0 of 1,248 D3D diffuse bytes** |
@@ -200,8 +200,8 @@ frac-edge case; the script VM in render events needs a design decision.
 
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
 dynamic light effects (other worktree), mesh fog's oracle default, and on
-this audit's branch volumetric fog, coronas, and the static and moving
-light-map path with its light animation (2026-10-06). The
+this audit's branch volumetric fog, coronas, the static and moving light-map
+path with its light animation, and GetFrame (2026-10-06). The
 families are moved one at a time, starting with what Play computes every
 frame; each keeps the JS reference, the Rust kernel and the GPU shader in
 agreement and switches its oracle default to `0x007f` when its validator

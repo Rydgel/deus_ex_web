@@ -1,6 +1,10 @@
-//! Original GetFrame vertex loops; see docs/lodmesh-wasm.md for native evidence.
-//! No floating arithmetic substitutes for x87: all intermediates round to a
-//! 64-bit significand, with explicit f32 stores at the original instructions.
+//! Original GetFrame vertex loops and DrawLodMesh lighting; see
+//! docs/lodmesh-wasm.md for native evidence. Both run inside the render pass,
+//! under x87 precision control 24 (docs/render-pass-precision.md): every
+//! operation rounds to a 24-bit significand, which for float and int16
+//! operands is one binary32 operation; the `Ext` model with `round24` covers
+//! the operands binary32 cannot (non-finite values, results outside its
+//! normal range).
 use std::cell::RefCell;
 
 #[derive(Clone, Copy)]
@@ -199,6 +203,17 @@ impl Ext {
     }
     fn stored(self) -> Self {
         Self::load(self.store())
+    }
+
+    /// The register value under precision control 24: the significand
+    /// rounded to 24 bits, nearest-even, the exponent kept. After an add,
+    /// subtract or multiply of 24-bit operands (64 >= 2*24 + 2) this is the
+    /// PC 24 result.
+    fn round24(self) -> Self {
+        if self.special != 0 || self.sig == 0 {
+            return self;
+        }
+        Self::normalized(round_right(self.sig as u128, 40), self.exp + 40, self.sign)
     }
 }
 
@@ -635,313 +650,6 @@ fn vertex(work: &[u32], at: usize, axis: usize) -> u32 {
     (((packed >> ((axis % 2) * 16)) as i16) as f32).to_bits()
 }
 
-/// An exact dyadic value `m * 2^e`, kept with at most 62 significant bits.
-/// x87 rounds a result to its 64-bit significand only when the exact value
-/// needs more bits; below 62 bits every x87 add/sub/mul is therefore exact,
-/// and a plain integer operation reproduces it. `neg_zero` carries the sign
-/// of an exact zero (IEEE round-to-nearest rules, as `Ext`).
-#[derive(Clone, Copy)]
-struct Exact {
-    m: i64,
-    e: i32,
-    neg_zero: bool,
-}
-
-const EXACT_BITS: u32 = 62;
-
-impl Exact {
-    #[inline(always)]
-    fn load(bits: u32) -> Option<Self> {
-        let exponent = (bits >> 23) & 255;
-        if exponent == 255 {
-            return None;
-        }
-        let mantissa = (bits & 0x7fffff) as i64;
-        let (m, e) = if exponent == 0 {
-            (mantissa, -149)
-        } else {
-            (mantissa | 0x800000, exponent as i32 - 150)
-        };
-        let negative = bits & 0x80000000 != 0;
-        Some(Self::trimmed(if negative { -m } else { m }, e, negative))
-    }
-
-    /// Drops trailing zero bits; None when more than EXACT_BITS remain.
-    #[inline(always)]
-    fn fitted(m: i64, e: i32, neg_zero: bool) -> Option<Self> {
-        if m == 0 {
-            return Some(Self { m, e: 0, neg_zero });
-        }
-        let value = Self::trimmed(m, e, neg_zero);
-        if 64 - value.m.unsigned_abs().leading_zeros() > EXACT_BITS {
-            None
-        } else {
-            Some(value)
-        }
-    }
-
-    #[inline(always)]
-    fn trimmed(m: i64, e: i32, neg_zero: bool) -> Self {
-        if m == 0 {
-            return Self { m, e: 0, neg_zero };
-        }
-        let zeros = m.trailing_zeros();
-        Self {
-            m: m >> zeros,
-            e: e + zeros as i32,
-            neg_zero: false,
-        }
-    }
-
-    #[inline(always)]
-    fn width(self) -> u32 {
-        64 - self.m.unsigned_abs().leading_zeros()
-    }
-
-    #[inline(always)]
-    fn negative(self) -> bool {
-        if self.m == 0 {
-            self.neg_zero
-        } else {
-            self.m < 0
-        }
-    }
-
-    #[inline(always)]
-    fn neg(self) -> Self {
-        Self {
-            m: -self.m,
-            e: self.e,
-            neg_zero: self.m == 0 && !self.neg_zero,
-        }
-    }
-
-    /// Exact FADD; an exact zero is -0 only when both operands are -0.
-    #[inline(always)]
-    fn add(self, other: Self) -> Option<Self> {
-        if self.m == 0 && other.m == 0 {
-            return Some(Self {
-                m: 0,
-                e: 0,
-                neg_zero: self.neg_zero && other.neg_zero,
-            });
-        }
-        if self.m == 0 {
-            return Some(other);
-        }
-        if other.m == 0 {
-            return Some(self);
-        }
-        let (high, low) = if self.e >= other.e {
-            (self, other)
-        } else {
-            (other, self)
-        };
-        let shift = (high.e - low.e) as u32;
-        if high.width() + shift > EXACT_BITS {
-            return None;
-        }
-        Self::fitted((high.m << shift) + low.m, low.e, false)
-    }
-
-    #[inline(always)]
-    fn sub(self, other: Self) -> Option<Self> {
-        self.add(other.neg())
-    }
-
-    /// Exact FMUL; a zero product takes the operands' sign parity.
-    #[inline(always)]
-    fn mul(self, other: Self) -> Option<Self> {
-        if self.m == 0 || other.m == 0 {
-            return Some(Self {
-                m: 0,
-                e: 0,
-                neg_zero: self.negative() != other.negative(),
-            });
-        }
-        if self.width() + other.width() > EXACT_BITS {
-            return None;
-        }
-        Self::fitted(self.m * other.m, self.e + other.e, false)
-    }
-
-    /// FST to f32, round to nearest even. None where `Ext::store` takes its
-    /// subnormal/overflow branches; those vertices use the `Ext` path.
-    #[inline(always)]
-    fn store(self) -> Option<u32> {
-        if self.m == 0 {
-            return Some(if self.neg_zero { 0x80000000 } else { 0 });
-        }
-        let sign = if self.m < 0 { 0x80000000u32 } else { 0 };
-        let magnitude = self.m.unsigned_abs();
-        let width = self.width() as i32;
-        let mut exponent = width - 1 + self.e;
-        let mut significand = if width > 24 {
-            let shift = (width - 24) as u32;
-            let kept = magnitude >> shift;
-            let rest = magnitude & ((1u64 << shift) - 1);
-            let half = 1u64 << (shift - 1);
-            kept + u64::from(rest > half || (rest == half && kept & 1 != 0))
-        } else {
-            magnitude << (24 - width) as u32
-        };
-        if significand == 1 << 24 {
-            significand >>= 1;
-            exponent += 1;
-        }
-        if !(-126..=127).contains(&exponent) {
-            return None;
-        }
-        Some(sign | (((exponent + 127) as u32) << 23) | (significand as u32 - (1 << 23)))
-    }
-
-    #[inline(always)]
-    fn stored(self) -> Option<Self> {
-        Self::load(self.store()?)
-    }
-}
-
-/// Error bound factor for `pose_double`: 32 units of 2^-53 per unit of term
-/// magnitude. The f64 evaluation of each store's expression and the x87
-/// evaluation (64-bit roundings) of the same expression on the same f32
-/// operands each stay within a few units of 2^-53 of the exact value.
-const DOUBLE_BOUND: f64 = 1.0 / (1u64 << 48) as f64;
-
-/// The f32 store of an x87 value known to lie within `bound` of `value`: the
-/// f32 that every real in [value - bound, value + bound] rounds to (nearest
-/// even), or None when that interval reaches a rounding midpoint or the
-/// result is subnormal, overflowing or non-finite. A zero bound means the
-/// value is exact (all its terms were zero), so its IEEE result is the store.
-#[inline(always)]
-fn certain_f32(value: f64, bound: f64) -> Option<u32> {
-    let rounded = value as f32;
-    if bound == 0.0 && value.is_finite() {
-        return Some(rounded.to_bits());
-    }
-    if !(rounded != 0.0 && rounded.is_finite()) {
-        return None;
-    }
-    let bits = rounded.to_bits();
-    let exponent = (bits >> 23) & 255;
-    if exponent == 0 || exponent >= 254 {
-        return None;
-    }
-    // Spacing above |rounded| is 2^(e - 150); it halves below a power of two.
-    let up = f64::from_bits(((exponent as u64) + 873) << 52);
-    let down = if bits & 0x7fffff == 0 { up * 0.5 } else { up };
-    let magnitude = value.abs();
-    let target = (rounded as f64).abs();
-    if magnitude - bound > target - down * 0.5 && magnitude + bound < target + up * 0.5 {
-        Some(bits)
-    } else {
-        None
-    }
-}
-
-/// The f32 store of x + y for f32 operands x and y. When error-free TwoSum
-/// shows the f64 sum is exact, the x87 sum is the same exact value (its 64-bit
-/// rounding is an identity) and the store rounds it once, zeros and their
-/// signs included (same IEEE rules). Otherwise the certainty test decides.
-#[inline(always)]
-fn certain_sum(x: f64, y: f64) -> Option<u32> {
-    let sum = x + y;
-    let part = sum - x;
-    if (x - (sum - part)) + (y - part) == 0.0 && sum.is_finite() {
-        return Some((sum as f32).to_bits());
-    }
-    certain_f32(sum, (x.abs() + y.abs()) * DOUBLE_BOUND)
-}
-
-/// `pose_exact`'s vertex in f64 with a rounding-certainty test at every f32
-/// store (`certain_f32`); None hands the vertex to `pose_exact`. The product
-/// of two f32 values is exact in both f64 and x87, so its store is direct.
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn pose_double(
-    work: &[u32],
-    layout: &PoseLayout,
-    i: usize,
-    interpolate: bool,
-    alpha: f64,
-    matrix: &[f64; 12],
-    origin: &[f64; 3],
-) -> Option<([u32; 3], [u32; 3])> {
-    let mut values = [0u32; 3];
-    let mut vector = [0f64; 3];
-    let mut vector_error = [0f64; 3];
-    for axis in 0..3 {
-        let a_bits = if layout.tween {
-            work[layout.cache + i * 3 + axis]
-        } else {
-            vertex(work, layout.first + i * 2, axis)
-        };
-        let a = f32::from_bits(a_bits) as f64;
-        if !a.is_finite() {
-            return None;
-        }
-        let value = if interpolate {
-            let b = f32::from_bits(vertex(work, layout.second + i * 2, axis)) as f64;
-            if axis != 0 {
-                let delta = f32::from_bits(certain_sum(b, -a)?) as f64;
-                let product = (delta * alpha) as f32 as f64;
-                certain_sum(product, a)?
-            } else if b == a {
-                // An exact +0 difference and zero product (alpha > 0): x87 and
-                // f64 both compute the exact sum +0 + a.
-                certain_sum(0.0 * alpha, a)?
-            } else {
-                let delta = b - a;
-                let product = delta * alpha;
-                certain_f32(
-                    product + a,
-                    (product.abs() * 2.0 + a.abs() + (b.abs() + a.abs()) * alpha.abs())
-                        * DOUBLE_BOUND,
-                )?
-            }
-        } else {
-            a_bits
-        };
-        values[axis] = value;
-        let v = f32::from_bits(value) as f64;
-        let reference = if layout.blend {
-            f32::from_bits(vertex(work, layout.base_frame + i * 2, axis)) as f64
-        } else {
-            origin[axis]
-        };
-        let component = f32::from_bits(certain_sum(v, -reference)?) as f64;
-        if layout.blend {
-            vector[axis] = component;
-        } else {
-            vector[axis] = component - matrix[axis];
-            vector_error[axis] = (component.abs() + matrix[axis].abs()) * DOUBLE_BOUND;
-        }
-    }
-    let mut output = [0u32; 3];
-    for axis in 0..3 {
-        let row = 3 + axis * 3;
-        let p0 = vector[0] * matrix[row];
-        let p1 = vector[1] * matrix[row + 1];
-        let p2 = vector[2] * matrix[row + 2];
-        let sum = (p0 + p1) + p2;
-        let bound = (p0.abs() + p1.abs() + p2.abs()) * DOUBLE_BOUND
-            + vector_error[0] * matrix[row].abs()
-            + vector_error[1] * matrix[row + 1].abs()
-            + vector_error[2] * matrix[row + 2].abs();
-        let result = certain_f32(sum, bound)?;
-        output[axis] = if layout.blend {
-            let r = f32::from_bits(result) as f64;
-            let previous = f32::from_bits(work[layout.output + i * layout.stride + axis]) as f64;
-            if !previous.is_finite() {
-                return None;
-            }
-            certain_sum(r, previous)?
-        } else {
-            result
-        };
-    }
-    Some((values, output))
-}
-
 /// Word offsets of one `pose` call's scratch layout and its pass kind.
 struct PoseLayout {
     first: usize,
@@ -954,85 +662,154 @@ struct PoseLayout {
     blend: bool,
 }
 
-/// One vertex of `pose` with `Exact` arithmetic, in the `Ext` loop's
-/// operation order and store points, for main, tween and blend passes.
-/// Returns the cache words and output words the `Ext` loop would write, or
-/// None when any intermediate would exceed EXACT_BITS or leave the normal f32
-/// range; the caller then runs `Ext` for this vertex.
+/// A binary32 product as precision control 24 computes it: exact unless the
+/// result left binary32's normal range (`bad`: an underflow, a nonzero
+/// product at or below 2^-126 where the x87 keeps a normal 24-bit value, or
+/// an overflow the x87's exponent would hold).
 #[inline(always)]
-fn pose_exact(
+fn mul24(a: f32, b: f32, bad: &mut bool) -> f32 {
+    let r = a * b;
+    *bad |= !r.is_finite() || (r.abs() <= f32::MIN_POSITIVE && a != 0.0 && b != 0.0);
+    r
+}
+
+/// A binary32 sum: the exact sum of two 24-bit values in binary32's normal or
+/// subnormal range is representable when it is below 2^-126, so only an
+/// overflow can differ from precision control 24.
+#[inline(always)]
+fn add24(a: f32, b: f32, bad: &mut bool) -> f32 {
+    let r = a + b;
+    *bad |= !r.is_finite();
+    r
+}
+
+/// One vertex of `pose` in binary32, GetFrame's loop at the render pass's
+/// precision control 24 (docs/render-pass-precision.md): every operand is a
+/// float or an int16 word, so each x87 operation is one binary32 operation.
+/// Returns the cache words and output words, or None when an operand is not
+/// finite or a result left binary32's range; `pose_ext24` then runs it.
+#[inline(always)]
+fn pose_single(
     work: &[u32],
     layout: &PoseLayout,
     i: usize,
     interpolate: bool,
-    alpha: Exact,
-    matrix: &[Exact; 12],
-    origin: &[Exact; 3],
+    alpha: f32,
+    matrix: &[f32; 12],
+    origin: &[f32; 3],
 ) -> Option<([u32; 3], [u32; 3])> {
+    let mut bad = false;
     let mut values = [0u32; 3];
-    let mut vector = [Exact {
-        m: 0,
-        e: 0,
-        neg_zero: false,
-    }; 3];
+    let mut vector = [0f32; 3];
     for axis in 0..3 {
         let a_bits = if layout.tween {
             work[layout.cache + i * 3 + axis]
         } else {
             vertex(work, layout.first + i * 2, axis)
         };
+        let a = f32::from_bits(a_bits);
+        if !a.is_finite() {
+            return None;
+        }
         let value = if interpolate {
-            let a = Exact::load(a_bits)?;
-            let mut delta = Exact::load(vertex(work, layout.second + i * 2, axis))?.sub(a)?;
-            if axis != 0 {
-                delta = delta.stored()?;
-            }
-            let mut product = delta.mul(alpha)?;
-            if axis != 0 {
-                product = product.stored()?;
-            }
-            product.add(a)?.store()?
+            let b = f32::from_bits(vertex(work, layout.second + i * 2, axis));
+            let delta = add24(b, -a, &mut bad);
+            add24(mul24(delta, alpha, &mut bad), a, &mut bad).to_bits()
         } else {
             a_bits
         };
         values[axis] = value;
         let reference = if layout.blend {
-            Exact::load(vertex(work, layout.base_frame + i * 2, axis))?
+            f32::from_bits(vertex(work, layout.base_frame + i * 2, axis))
         } else {
             origin[axis]
         };
-        let component = Exact::load(value)?.sub(reference)?.stored()?;
-        vector[axis] = if layout.blend {
-            component
-        } else {
-            component.sub(matrix[axis])?
-        };
+        let component = add24(f32::from_bits(value), -reference, &mut bad);
+        vector[axis] = if layout.blend { component } else { add24(component, -matrix[axis], &mut bad) };
     }
     let mut output = [0u32; 3];
     for axis in 0..3 {
         let row = 3 + axis * 3;
-        let result = vector[0]
-            .mul(matrix[row])?
-            .add(vector[1].mul(matrix[row + 1])?)?
-            .add(vector[2].mul(matrix[row + 2])?)?
-            .store()?;
+        let sum = add24(
+            add24(mul24(vector[0], matrix[row], &mut bad), mul24(vector[1], matrix[row + 1], &mut bad), &mut bad),
+            mul24(vector[2], matrix[row + 2], &mut bad),
+            &mut bad,
+        );
         output[axis] = if layout.blend {
-            let previous = work[layout.output + i * layout.stride + axis];
-            Exact::load(result)?.add(Exact::load(previous)?)?.store()?
+            let previous = f32::from_bits(work[layout.output + i * layout.stride + axis]);
+            if !previous.is_finite() {
+                return None;
+            }
+            add24(sum, previous, &mut bad).to_bits()
         } else {
-            result
+            sum.to_bits()
         };
     }
-    Some((values, output))
+    if bad {
+        None
+    } else {
+        Some((values, output))
+    }
+}
+
+/// One vertex on the `Ext` model with each result rounded to 24 bits
+/// (`Ext::round24`): precision control 24 for any operand, NaN and infinity
+/// rules included. Writes the cache and output words.
+fn pose_ext24(work: &mut [u32], layout: &PoseLayout, i: usize, interpolate: bool, alpha: Ext, matrix: &[Ext; 12], origin: &[Ext; 3]) {
+    let vector: [Ext; 3] = std::array::from_fn(|axis| {
+        let at = layout.cache + i * 3 + axis;
+        let a = if layout.tween { work[at] } else { vertex(work, layout.first + i * 2, axis) };
+        let value = if interpolate {
+            let a = Ext::load(a);
+            let delta = Ext::load(vertex(work, layout.second + i * 2, axis)).sub(a).round24();
+            delta.mul(alpha).round24().add(a).round24().store()
+        } else {
+            a
+        };
+        work[at] = value;
+        let reference = if layout.blend {
+            Ext::load(vertex(work, layout.base_frame + i * 2, axis))
+        } else {
+            origin[axis]
+        };
+        let component = Ext::load(value).sub(reference).round24().stored();
+        if layout.blend {
+            component
+        } else {
+            component.sub(matrix[axis]).round24()
+        }
+    });
+    for axis in 0..3 {
+        let row = 3 + axis * 3;
+        let result = vector[0]
+            .mul(matrix[row])
+            .round24()
+            .add(vector[1].mul(matrix[row + 1]).round24())
+            .round24()
+            .add(vector[2].mul(matrix[row + 2]).round24())
+            .round24()
+            .store();
+        let at = layout.output + i * layout.stride + axis;
+        work[at] = if layout.blend { Ext::load(result).add(Ext::load(work[at])).round24().store() } else { result };
+    }
 }
 
 thread_local! { static POSE_COUNTS: std::cell::Cell<[u32; 4]> = const { std::cell::Cell::new([0, 0, 0, 0]) }; }
 
-/// Diagnostics (wrapping counts): 0 exact integer path, 1 and 2 `Ext`
-/// (non-finite operands / exact-width miss), 3 the f64 certain-rounding path.
+/// Diagnostics (wrapping counts): 0 the binary32 path, 1 `pose_ext24` for a
+/// pass with non-finite matrix, origin or alpha words, 2 `pose_ext24` for a
+/// vertex the binary32 path declined, 3 unused.
 #[no_mangle]
 pub extern "C" fn pose_count(kind: u32) -> u32 {
     POSE_COUNTS.with(|counts| counts.get()[kind.min(3) as usize])
+}
+
+fn count_pose(kind: usize) {
+    POSE_COUNTS.with(|c| {
+        let mut v = c.get();
+        v[kind] = v[kind].wrapping_add(1);
+        c.set(v);
+    });
 }
 
 #[no_mangle]
@@ -1040,7 +817,7 @@ pub extern "C" fn pose(count: usize, stride: usize, alpha: u32, tween: u32, blen
     pose_with(count, stride, alpha, tween, blend, true);
 }
 
-fn pose_with(count: usize, stride: usize, alpha: u32, tween: u32, blend: u32, allow_exact: bool) {
+fn pose_with(count: usize, stride: usize, alpha: u32, tween: u32, blend: u32, allow_single: bool) {
     WORK.with_borrow_mut(|work| {
         assert!(stride >= 3 && tween <= 1 && blend <= 1);
         let first = 16;
@@ -1049,141 +826,28 @@ fn pose_with(count: usize, stride: usize, alpha: u32, tween: u32, blend: u32, al
         let cache = base_frame + count * 2;
         let output = cache + count * 3;
         assert!(output + count * stride <= work.len());
-        let matrix: [Ext; 12] = std::array::from_fn(|i| Ext::load(work[i]));
-        let origin: [Ext; 3] = std::array::from_fn(|i| Ext::load(work[12 + i]));
+        let layout = PoseLayout { first, second, base_frame, cache, output, stride, tween: tween != 0, blend: blend != 0 };
         let interpolate = f32::from_bits(alpha) > 0.0;
-        // Finite matrix, origin and alpha admit the exact path; any vertex it
-        // cannot represent exactly falls through to the general `Ext` loop.
-        let layout = PoseLayout {
-            first,
-            second,
-            base_frame,
-            cache,
-            output,
-            stride,
-            tween: tween != 0,
-            blend: blend != 0,
-        };
-        // Finite matrix, origin and alpha words admit the fast paths; loaded
-        // into fixed arrays (no allocation, so Wasm memory cannot grow here).
-        let load_words = |words: &[u32], into: &mut [Exact]| {
-            for (slot, &word) in into.iter_mut().zip(words) {
-                *slot = Exact::load(word)?;
-            }
-            Some(())
-        };
-        let zero = Exact {
-            m: 0,
-            e: 0,
-            neg_zero: false,
-        };
-        let (mut exact_matrix, mut exact_origin) = ([zero; 12], [zero; 3]);
-        let exact = if allow_exact
-            && load_words(&work[..12], &mut exact_matrix).is_some()
-            && load_words(&work[12..15], &mut exact_origin).is_some()
-        {
-            Exact::load(alpha).map(|a| (exact_matrix, exact_origin, a))
-        } else {
-            None
-        };
-        let alpha_bits = alpha;
-        let alpha = Ext::load(alpha);
-        // f64 operands for pose_double (finite whenever `exact` exists).
-        let double = exact.as_ref().map(|_| {
-            (
-                std::array::from_fn::<f64, 12, _>(|i| f32::from_bits(work[i]) as f64),
-                std::array::from_fn::<f64, 3, _>(|i| f32::from_bits(work[12 + i]) as f64),
-                f32::from_bits(alpha_bits) as f64,
-            )
-        });
+        let matrix_ext: [Ext; 12] = std::array::from_fn(|i| Ext::load(work[i]));
+        let origin_ext: [Ext; 3] = std::array::from_fn(|i| Ext::load(work[12 + i]));
+        let alpha_ext = Ext::load(alpha);
+        let matrix: [f32; 12] = std::array::from_fn(|i| f32::from_bits(work[i]));
+        let origin: [f32; 3] = std::array::from_fn(|i| f32::from_bits(work[12 + i]));
+        let alpha = f32::from_bits(alpha);
+        let finite = allow_single && alpha.is_finite() && matrix.iter().chain(origin.iter()).all(|v| v.is_finite());
         for i in 0..count {
-            if let Some((matrix, origin, alpha)) = &double {
-                if let Some((values, posed)) =
-                    pose_double(work, &layout, i, interpolate, *alpha, matrix, origin)
-                {
+            if finite {
+                if let Some((values, posed)) = pose_single(work, &layout, i, interpolate, alpha, &matrix, &origin) {
                     for axis in 0..3 {
                         work[cache + i * 3 + axis] = values[axis];
                         work[output + i * stride + axis] = posed[axis];
                     }
-                    POSE_COUNTS.with(|c| {
-                        let mut v = c.get();
-                        v[3] = v[3].wrapping_add(1);
-                        c.set(v);
-                    });
+                    count_pose(0);
                     continue;
                 }
             }
-            if let Some((matrix, origin, exact_alpha)) = &exact {
-                if let Some((values, posed)) =
-                    pose_exact(work, &layout, i, interpolate, *exact_alpha, matrix, origin)
-                {
-                    for axis in 0..3 {
-                        work[cache + i * 3 + axis] = values[axis];
-                        work[output + i * stride + axis] = posed[axis];
-                    }
-                    POSE_COUNTS.with(|c| {
-                        let mut v = c.get();
-                        v[0] = v[0].wrapping_add(1);
-                        c.set(v);
-                    });
-                    continue;
-                }
-            }
-            // [1]: passes with non-finite operands; [2]: exact width misses.
-            let kind = if exact.is_some() { 2 } else { 1 };
-            POSE_COUNTS.with(|c| {
-                let mut v = c.get();
-                v[kind] = v[kind].wrapping_add(1);
-                c.set(v);
-            });
-            let vector: [Ext; 3] = std::array::from_fn(|axis| {
-                let at = cache + i * 3 + axis;
-                let a = if tween != 0 {
-                    work[at]
-                } else {
-                    vertex(work, first + i * 2, axis)
-                };
-                let value = if interpolate {
-                    let a = Ext::load(a);
-                    let mut delta = Ext::load(vertex(work, second + i * 2, axis)).sub(a);
-                    if axis != 0 {
-                        delta = delta.stored();
-                    }
-                    let mut product = delta.mul(alpha);
-                    if axis != 0 {
-                        product = product.stored();
-                    }
-                    product.add(a).store()
-                } else {
-                    a
-                };
-                work[at] = value;
-                let reference = if blend != 0 {
-                    Ext::load(vertex(work, base_frame + i * 2, axis))
-                } else {
-                    origin[axis]
-                };
-                let component = Ext::load(value).sub(reference).stored();
-                if blend != 0 {
-                    component
-                } else {
-                    component.sub(matrix[axis])
-                }
-            });
-            for axis in 0..3 {
-                let row = 3 + axis * 3;
-                let result = vector[0]
-                    .mul(matrix[row])
-                    .add(vector[1].mul(matrix[row + 1]))
-                    .add(vector[2].mul(matrix[row + 2]))
-                    .store();
-                let at = output + i * stride + axis;
-                work[at] = if blend != 0 {
-                    Ext::load(result).add(Ext::load(work[at])).store()
-                } else {
-                    result
-                };
-            }
+            count_pose(if finite { 2 } else { 1 });
+            pose_ext24(work, &layout, i, interpolate, alpha_ext, &matrix_ext, &origin_ext);
         }
     });
 }
@@ -1229,13 +893,14 @@ mod tests {
         WORK.with_borrow(|work| work.clone())
     }
 
-    /// The exact path must reproduce the `Ext` loop bit for bit: outputs and
-    /// the cache words it leaves, over main, tween and blend passes, plain
-    /// and interpolated, including zeros, signed zeros and non-finite words.
+    /// The binary32 path must reproduce the `Ext` model rounded to 24 bits
+    /// bit for bit: outputs and the cache words it leaves, over main, tween
+    /// and blend passes, plain and interpolated, including zeros, signed
+    /// zeros, tiny values and non-finite words.
     #[test]
-    fn exact_pose_matches_ext() {
+    fn single_pose_matches_ext24() {
         let mut rng = Rng(0x9e3779b97f4a7c15);
-        let (mut vertices, mut covered, mut doubled) = (0u64, 0u64, 0u64);
+        let (mut vertices, mut single) = (0u64, 0u64);
         for case in 0..6000 {
             let count = 1 + (rng.next() % 64) as usize;
             let stride = 3 + (rng.next() % 2) as usize;
@@ -1257,6 +922,7 @@ mod tests {
                     3 => -1.0,
                     4 => rng.f32(1e-6),
                     5 if rng.next().is_multiple_of(64) => f32::NAN,
+                    6 if rng.next().is_multiple_of(16) => rng.f32(1e-30),
                     _ => typical,
                 }
             };
@@ -1289,20 +955,16 @@ mod tests {
                 _ => rng.unit() as f32,
             };
             let reference = run(&work, count, stride, alpha.to_bits(), tween, blend, false);
-            let (before, before_double) = (pose_count(0), pose_count(3));
-            let exact = run(&work, count, stride, alpha.to_bits(), tween, blend, true);
-            covered += pose_count(0).wrapping_sub(before) as u64;
-            doubled += pose_count(3).wrapping_sub(before_double) as u64;
-            assert_eq!(reference, exact, "case {case} tween {tween} blend {blend}");
+            let before = pose_count(0);
+            let fast = run(&work, count, stride, alpha.to_bits(), tween, blend, true);
+            single += pose_count(0).wrapping_sub(before) as u64;
+            assert_eq!(reference, fast, "case {case} tween {tween} blend {blend}");
             vertices += count as u64;
         }
         assert!(vertices > 150_000);
-        // The f64, exact-integer and Ext paths must all be exercised.
-        assert!(
-            doubled > vertices / 4 && covered > 1000 && doubled + covered < vertices,
-            "{doubled} f64 + {covered} exact of {vertices}"
-        );
-        eprintln!("f64 path {doubled}, exact path {covered} of {vertices} vertices");
+        // Both the binary32 path and the Ext24 fallback must be exercised.
+        assert!(single > vertices / 4 && single < vertices, "{single} binary32 of {vertices}");
+        eprintln!("binary32 path {single} of {vertices} vertices");
     }
 }
 
@@ -1346,7 +1008,7 @@ mod bench {
             words[first + i] = a | (b << 16);
         }
         WORK.with_borrow_mut(|work| *work = words.clone());
-        for exact in [true, false] {
+        for single in [true, false] {
             let rounds = 2000;
             let start = std::time::Instant::now();
             for round in 0..rounds {
@@ -1356,13 +1018,12 @@ mod bench {
                     (0.3f32 + round as f32 * 1e-5).to_bits(),
                     0,
                     0,
-                    exact,
+                    single,
                 );
             }
             let ns = start.elapsed().as_nanos() as f64 / (rounds * count) as f64;
             eprintln!(
-                "exact={exact}: {ns:.1} ns/vertex; counts double {} exact {} ext {}+{}",
-                pose_count(3),
+                "single={single}: {ns:.1} ns/vertex; counts binary32 {} ext24 {}+{}",
                 pose_count(0),
                 pose_count(1),
                 pose_count(2)
