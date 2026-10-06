@@ -20,7 +20,10 @@
  *   inputs for the bookkeeping, not game states.
  * Each map runs in its own process to bound memory. Requires the local install.
  *
- *   node scripts/validate-moving-lights-incremental.mjs [--map NAME] [--frames N] [--seed N]
+ *   node scripts/validate-moving-lights-incremental.mjs [--map NAME] [--frames N] [--seed N] [--shell 1]
+ *
+ * `--shell 1` makes the fourth probe an LE_Shell light (the grenades'
+ * ExplosionLight, spatial.rs in the Rust core) instead of a normal one.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -76,7 +79,7 @@ const changes = new Map(), moverDeltas = new Map(), flicker = new Set();
 // Probe lights beside movers: the normal, NonIncidence and float paths.
 const probes = game.collision.movers.slice(0, 4).map((mover, i) => ({ name: `ProbeLight${i}`, mover,
   values: { LightType: 1, bStatic: false, bNoDelete: false, bDynamicLight: false, LightBrightness: 180 + i * 20,
-    LightRadius: 12 + i * 4, LightEffect: [0, 13, 1, 0][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false } }));
+    LightRadius: 12 + i * 4, LightEffect: [0, 13, 1, flag('shell') ? 14 : 0][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false } }));
 function lightsFor(frame) {
   let lights = game.movingLights();
   if (!perturbed) return lights;

@@ -18,7 +18,8 @@
  *   `W<noise version>` for WateryShimmer, nothing otherwise). For numbers
  *   String(a) === String(b) exactly when a === b or both are NaN, and a
  *   light's token kind is fixed by its effect, so the same test runs on the
- *   numbers kept in a Float64Array.
+ *   numbers kept in a Float64Array. A spatially dynamic light's token is
+ *   the frame's TimeSeconds (`T<timeSeconds>`).
  * - Which light maps merge, and the float samples (lighting.mjs).
  *
  * Moved: the colour tables (built from the steps in light.rs when they are
@@ -26,20 +27,23 @@
  * modulation tables (rebuilt by the reference's rule: a new frame object, or
  * a new frameIndex for effects 1-2 or noise version for effect 3, from the
  * frame's factors at that first use), the union reset, the merge and the
- * comparison.
+ * comparison, and the spatially dynamic lights' bytes (spatial.rs, rerun
+ * inside the merge when TimeSeconds changes, from a parameter record and
+ * the light's illumination bytes kept in the block).
  *
  * Blocks come from a per-instance pool of 1 MiB chunks of `kernel.light`
  * memory, all freed by `dispose`. validate-light-animation-rust compares the
  * two every frame. */
 import { animatedLightConstants } from './static-lighting.mjs';
 
-const HEADER = 8, LIGHT_WORDS = 7, CHUNK = 1 << 20;
+const HEADER = 8, LIGHT_WORDS = 8, CHUNK = 1 << 20;
 // Two numbers with the same String() (the reference's memo signature).
 const equal = (a, b) => a === b || (a !== a && b !== b);
 const INT32 = step => Number.isInteger(step) && step >= -0x80000000 && step <= 0x7fffffff;
 
 export function createLightAnimationKernel(kernel) {
-  const light = kernel.light, memory = light.memory;
+  const light = kernel.light, memory = light.memory, spatial = kernel.spatial;
+  const timeBits = new Uint32Array(1), timeFloat = new Float32Array(timeBits.buffer);
   let buffer = null, u8 = null, u32 = null, f64 = null;
   const sync = () => {
     if (memory.buffer !== buffer) {
@@ -93,17 +97,24 @@ export function createLightAnimationKernel(kernel) {
         || base.length !== texels.length || base.length % (width * 3) || !animated.length) return null;
       const height = base.length / (width * 3);
       let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
-      for (const { rect, spatial, effect } of animated) {
+      for (const { rect, spatial: bytes, effect, spatialDynamic } of animated) {
         const { minU: u0, maxU: u1, minV: v0, maxV: v1 } = rect;
         if (![u0, u1, v0, v1].every(Number.isInteger) || !(u0 >= 0 && u0 < u1 && u1 <= width && v0 >= 0 && v0 < v1 && v1 <= height)
-          || !(spatial instanceof Uint8Array) || spatial.length !== (u1 - u0) * (v1 - v0) || !Number.isInteger(effect)) return null;
+          || !(bytes instanceof Uint8Array) || bytes.length !== (u1 - u0) * (v1 - v0) || !Number.isInteger(effect)) return null;
+        if (spatialDynamic && (!spatial || (spatialDynamic.illumination && spatialDynamic.illumination.length !== bytes.length))) return null;
         minU = Math.min(minU, u0); maxU = Math.max(maxU, u1); minV = Math.min(minV, v0); maxV = Math.max(maxV, v1);
       }
       const words = HEADER + LIGHT_WORDS * animated.length, n = base.length;
       const layout = { header: 0, base: words * 4 }, spatialAt = [];
       layout.texels = layout.base + ((n + 15) & ~15);
       let size = layout.texels + ((n + 15) & ~15);
-      for (const { spatial } of animated) { spatialAt.push(size); size += (spatial.length + 15) & ~15; }
+      const paramsAt = [];
+      for (const { spatial: bytes, spatialDynamic } of animated) {
+        spatialAt.push(size); size += (bytes.length + 15) & ~15;
+        // A spatially dynamic light's parameter record and illumination.
+        if (spatialDynamic) { paramsAt.push(size); size += spatial.words * 4 + ((bytes.length + 15) & ~15); }
+        else paramsAt.push(0);
+      }
       const lend = previous && previous.bytes >= size, at = lend ? previous.at : take(size), capacity = lend ? previous.bytes : size;
       const unionBytes = (maxU - minU) * (maxV - minV) * 3;
       if (unionBytes > scratchBytes) { scratch = take(unionBytes); scratchBytes = unionBytes; }
@@ -112,18 +123,29 @@ export function createLightAnimationKernel(kernel) {
       const lights = animated.map(item => {
         let slot = slots.get(item.ref);
         if (!slot) slots.set(item.ref, slot = { at: take(768), constants: null });
-        return { light: item, slot, token: item.effect === 1 || item.effect === 2 ? 1 : item.effect === 3 ? 3 : 0 };
+        return { light: item, slot, token: item.spatialDynamic ? 4 : item.effect === 1 || item.effect === 2 ? 1 : item.effect === 3 ? 3 : 0 };
       });
       sync();
       const h = at >> 2;
       u32[h] = width; u32[h + 1] = minU; u32[h + 2] = maxU; u32[h + 3] = minV; u32[h + 4] = maxV;
       u32[h + 5] = animated.length; u32[h + 6] = at + layout.base; u32[h + 7] = at + layout.texels;
-      animated.forEach(({ rect, spatial, effect }, i) => {
+      animated.forEach(({ rect, spatial: bytes, effect, spatialDynamic }, i) => {
         const w = h + HEADER + i * LIGHT_WORDS;
         u32[w] = rect.minU; u32[w + 1] = rect.maxU; u32[w + 2] = rect.minV; u32[w + 3] = rect.maxV;
         u32[w + 4] = at + spatialAt[i]; u32[w + 5] = lights[i].slot.at;
         u32[w + 6] = effect >= 1 && effect <= 3 ? modulation + (effect - 1) * 65536 : 0;
-        u8.set(spatial, at + spatialAt[i]);
+        u32[w + 7] = 0;
+        u8.set(bytes, at + spatialAt[i]);
+        if (spatialDynamic) {
+          const record = at + paramsAt[i], illumination = spatialDynamic.illumination ? record + spatial.words * 4 : 0;
+          if (illumination) u8.set(spatialDynamic.illumination, illumination);
+          // The bytes just copied hold `spatialDynamic.time`'s result.
+          const words = spatial.record({ ...spatialDynamic, effect, rect }, illumination, at + spatialAt[i],
+            new Uint32Array(buffer, record, spatial.words));
+          timeFloat[0] = spatialDynamic.time ?? 0;
+          words[25] = timeBits[0]; words[26] = spatialDynamic.computed ? 1 : 0;
+          u32[w + 7] = record;
+        }
       });
       u8.set(base, at + layout.base); u8.set(texels, at + layout.texels);
       const rowStart = (minV * width + minU) * 3, rowEnd = ((maxV - 1) * width + maxU) * 3;
@@ -142,7 +164,7 @@ export function createLightAnimationKernel(kernel) {
         for (let i = 0, k = 0; i < count; i++, k += 4) {
           const { light: item, token } = lights[i], { steps } = animatedLightConstants(frame, item, options);
           if (steps.length !== 3) throw new Error(`A light's colour has ${steps.length} steps`);
-          const input = token === 1 ? frame.frameIndex : token === 3 ? frame.noise.version : 0;
+          const input = token === 1 ? frame.frameIndex : token === 3 ? frame.noise.version : token === 4 ? frame.timeSeconds : 0;
           same = same && equal(state[k], steps[0]) && equal(state[k + 1], steps[1]) && equal(state[k + 2], steps[2])
             && equal(state[k + 3], input);
           state[k] = steps[0]; state[k + 1] = steps[1]; state[k + 2] = steps[2]; state[k + 3] = input;
@@ -154,7 +176,8 @@ export function createLightAnimationKernel(kernel) {
         if (slot.constants !== constants) upload(slot, constants);
       }
       for (const effect of handle.effects) ensureModulation(frame, effect);
-      if (!light.merge(handle.at, scratch)) return null;
+      timeFloat[0] = frame.timeSeconds;
+      if (!light.merge(handle.at, scratch, timeBits[0])) return null;
       sync();
       texels.set(u8.subarray(handle.texelsAt + handle.rowStart, handle.texelsAt + handle.rowEnd), handle.rowStart);
       const { minU, maxU, minV, maxV } = handle.union;

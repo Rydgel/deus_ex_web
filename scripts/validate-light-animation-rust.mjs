@@ -20,7 +20,11 @@
 // actors, level brightness giving huge, negative and NaN colour steps,
 // merge factors at ties, 0, 1, negative, huge, infinite and NaN, merges with
 // and without a memo, re-registration into larger and smaller layouts, and a
-// disposed and recreated kernel reusing freed blocks).
+// disposed and recreated kernel reusing freed blocks). Spatially dynamic
+// lights (spatial.rs, rerun inside light_merge when TimeSeconds changes) are
+// compared the same way: on the census maps' Disco, Rotor, Searchlight,
+// SlowWave and FastWave light maps, and as synthetic lights with random
+// grids, illumination and times (repeats keep the bytes).
 //
 //   node scripts/validate-light-animation-rust.mjs [--maps 00_Training,...] [--frames 600] [--no-synthetic] [--bench 600]
 import assert from 'node:assert/strict';
@@ -36,7 +40,7 @@ import { readModel } from '../src/unreal/model.mjs';
 import { readPolys, moverModelFromPolys } from '../src/unreal/polys.mjs';
 import { brushMatrix } from '../src/viewer/transforms.mjs';
 import { createLightFrame, animateLightMap } from '../src/runtime/static-lighting.mjs';
-import { fgetHsv } from '../src/runtime/dynamic-lighting.mjs';
+import { fgetHsv, squareRootTable, normalLightTable } from '../src/runtime/dynamic-lighting.mjs';
 import { createNativeRng } from '../src/runtime/rng.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createLightAnimationKernel } from '../src/runtime/light-animation-kernel.mjs';
@@ -45,7 +49,8 @@ import { gameDirectory } from './game-directory.mjs';
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const flag = name => process.argv.includes(`--${name}`);
 const frames = Number(option('frames', 600)), bench = Number(option('bench', 0));
-const maps = option('maps', '00_Training,02_NYC_BatteryPark,11_Paris_Everett,06_HongKong_WanChai_Underworld,06_HongKong_MJ12lab,03_NYC_MolePeople,15_Area51_Page')
+const maps = option('maps', '00_Training,02_NYC_BatteryPark,11_Paris_Everett,06_HongKong_WanChai_Underworld,06_HongKong_MJ12lab,03_NYC_MolePeople,15_Area51_Page,'
+  + '10_Paris_Club,09_NYC_ShipFan,06_HongKong_WanChai_Garage,09_NYC_ShipBelow,99_Endgame2')
   .split(',').filter(Boolean);
 const kernel = await loadScriptVmKernel();
 const f = Math.fround;
@@ -155,7 +160,7 @@ async function loadLighting(name, choice) {
 
 async function validateMap(name) {
   const { lighting, errors } = await loadLighting(name, kernel);
-  const options = { levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, keyOf: ref => ref & 0xff };
+  const options = { levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, keyOf: ref => ref & 0xff, spatial: lighting.spatial };
   const records = lighting.animatedRecords(), mirrors = new Map();
   const mirror = record => {
     const m = { texels: record.texels.slice(), memo: {} };
@@ -163,9 +168,11 @@ async function validateMap(name) {
     return m;
   };
   records.forEach(mirror);
-  const census = { records: records.length, kernel: records.filter(r => r.lightKernel).length, lights: 0, types: {}, effects: {} };
-  for (const record of records) for (const { values, effect } of record.animated) {
+  const census = { records: records.length, kernel: records.filter(r => r.lightKernel).length, lights: 0, types: {}, effects: {},
+    spatialDynamic: 0 };
+  for (const record of records) for (const { values, effect, spatialDynamic } of record.animated) {
     census.lights++;
+    if (spatialDynamic) census.spatialDynamic++;
     census.types[values.LightType & 255] = (census.types[values.LightType & 255] ?? 0) + 1;
     census.effects[effect] = (census.effects[effect] ?? 0) + 1;
   }
@@ -217,6 +224,7 @@ async function validateMap(name) {
 
 /** Synthetic light maps on a private kernel instance. */
 function synthetic(seed, rounds) {
+  if (!kernel.spatial.ready) kernel.spatial.tables(squareRootTable(), normalLightTable());
   let s = seed;
   const random = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) >>> 8, pick = list => list[random() % list.length];
   const hsvCache = new Map(), hsv = (h, sat) => {
@@ -242,14 +250,32 @@ function synthetic(seed, rounds) {
       const minV = full ? 0 : random() % height, maxV = full ? height : minV + 1 + random() % (height - minV);
       const spatial = Uint8Array.from({ length: (maxU - minU) * (maxV - minV) }, () => pick([0, 0, 255, 1, random() & 255, random() & 255]));
       const actor = random() % 4 ? pick(actors) : { ref: 5000 + random() % 50, values: { ...pick(actors).values, LightType: random() % 10 } };
-      animated.push({ values: actor.values, ref: actor.ref, effect: pick([0, 1, 2, 3, 1, 2, 3, random() % 20]), rect: { minU, maxU, minV, maxV }, spatial });
+      const effect = pick([0, 1, 2, 3, 1, 2, 3, random() % 20, 4, 5, 6, 9, 10, 16, 18]), rect = { minU, maxU, minV, maxV };
+      // A spatially dynamic light: random grid, location, constants and
+      // illumination (or none: 0x7f); its bytes start stale (`computed`
+      // false) or as the bytes of `time`.
+      let spatialDynamic;
+      if ([4, 5, 6, 9, 10, 16, 18].includes(effect) && random() % 4) {
+        const step = () => f(((random() % 2001) - 1000) / 64), R = f(25 * (1 + random() % 64)), rr = f(1 / R);
+        const grid = { start: [0, 1, 2].map(() => f(((random() % 4001) - 2000) / 8)), stepU: [step(), step(), 0], stepV: [0, step(), step()] };
+        const location = grid.start.map(v => f(v + ((random() % 8001) - 4000) / 16));
+        spatialDynamic = { grid, location, rradius: rr, rr2: f(rr * rr * 4093), incidence: f((random() % 1001) / 1000),
+          period: random() & 255, phase: random() & 255, time: 0, computed: false,
+          illumination: random() % 3 ? Uint8Array.from({ length: spatial.length }, () => pick([0, 254, random() & 255])) : null };
+        if (random() % 2) {
+          spatialDynamic.time = f((random() % 1000) / 37);
+          spatial.set(kernel.spatial.run({ ...spatialDynamic, effect, rect, time: spatialDynamic.time }));
+          spatialDynamic.computed = true;
+        }
+      }
+      animated.push({ values: actor.values, ref: actor.ref, effect, rect, spatial, ...(spatialDynamic ? { spatialDynamic } : {}) });
     }
     return { width, base, animated };
   };
   let made = 0, recordCount = 0, mergesDone = 0;
   const types = new Set(), effects = new Set();
   for (let round = 0; round < rounds; round++) {
-    const options = { levelBrightness: f(pick(levels)), hsv, keyOf: ref => ref & 0xff };
+    const options = { levelBrightness: f(pick(levels)), hsv, keyOf: ref => ref & 0xff, spatial: kernel.spatial };
     const records = Array.from({ length: 12 }, () => {
       const r = makeRecord(), texels = r.base.map((b, i) => i % 5 ? b : random() & 255);
       return { ...r, js: texels.slice(), memo: {}, rustTexels: texels.slice(), rustMemo: {}, handle: animationKernel.register(r.base, r.width, r.animated, texels) };
@@ -283,7 +309,10 @@ function synthetic(seed, rounds) {
         r.animated = makeRecord().animated.map(l => {
           const minU = l.rect.minU % width, maxU = Math.min(width, minU + 1 + (l.rect.maxU - l.rect.minU) % 5);
           const minV = l.rect.minV % height, maxV = Math.min(height, minV + 1 + (l.rect.maxV - l.rect.minV) % 5);
-          return { ...l, rect: { minU, maxU, minV, maxV }, spatial: Uint8Array.from({ length: (maxU - minU) * (maxV - minV) }, () => random() & 255) };
+          // A spatially dynamic light keeps its inputs, unshadowed, its new
+          // bytes stale.
+          return { ...l, rect: { minU, maxU, minV, maxV }, spatial: Uint8Array.from({ length: (maxU - minU) * (maxV - minV) }, () => random() & 255),
+            ...(l.spatialDynamic ? { spatialDynamic: { ...l.spatialDynamic, illumination: null, computed: false } } : {}) };
         });
         r.handle = animationKernel.register(r.base, r.width, r.animated, r.rustTexels, r.handle);
         assert.ok(r.handle, 'synthetic re-registration admitted');
@@ -306,7 +335,7 @@ function synthetic(seed, rounds) {
  * on a JavaScript and a kernel lighting. */
 async function benchMap(name) {
   const { lighting } = await loadLighting(name, null);
-  const options = { levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, keyOf: ref => ref & 0xff };
+  const options = { levelBrightness: lighting.levelBrightness, hsv: lighting.hsv, keyOf: ref => ref & 0xff, spatial: lighting.spatial };
   const records = lighting.animatedRecords(), animationKernel = createLightAnimationKernel(kernel);
   const js = records.map(r => ({ r, texels: r.texels.slice(), memo: {} }));
   const rust = records.map(r => ({ r, texels: r.texels.slice(), memo: {}, handle: animationKernel.register(r.baseTexels, r.width, r.animated, r.texels) }));

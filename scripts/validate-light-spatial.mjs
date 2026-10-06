@@ -11,7 +11,10 @@
  * TimeSeconds; then fabricated lights and grids: exact hits (dx = dy = 0),
  * zero illumination, singular (NaN) grids, LightPeriod 0, large times.
  * Checks, per case: the spatial bytes and the sequence of appAtan2 operand
- * pairs the original asked for. Then the FPATAN model: every measured pair's
+ * pairs the original asked for. A moving LE_Shell light (the grenades'
+ * ExplosionLight) through Play's moving-light path on 00_Training: every
+ * light map it reaches against the static copy plus the original Shell
+ * bytes' colour entries. Then the FPATAN model: every measured pair's
  * 24-bit k·FPATAN for k = 4, 6, 11 against spatial.rs, and the f64 fast path
  * against the double-double path on random pairs.
  *
@@ -29,11 +32,13 @@ import { fileURLToPath } from 'node:url';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { ClassDefaults } from '../src/unreal/classes.mjs';
-import { lightmapBasis } from '../src/unreal/lighting.mjs';
+import { lightmapBasis, createLighting } from '../src/unreal/lighting.mjs';
+import { createMovingLights } from '../src/viewer/moving-lights.mjs';
+import { POLY } from '../src/unreal/geometry.mjs';
 import { shadowIllumination } from '../src/runtime/static-lighting.mjs';
 import { rotationSineTable } from '../src/runtime/coords.mjs';
 import { fgetHsv, movingLightConstants, movingLightRect, normalLightIncidence, squareRootTable, normalLightTable,
-  surfaceLightClass } from '../src/runtime/dynamic-lighting.mjs';
+  surfaceLightClass, colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
@@ -227,6 +232,62 @@ cases.forEach((c, i) => {
 });
 
 // ---------------------------------------------------------------------------
+// A moving Shell light in Play's moving-light path (moving-lights.mjs, full
+// mode) on Training's level light maps, against the original body.
+const shellReport = { lights: 0, records: 0, texels: 0, lit: 0, mismatches: 0 };
+{
+  const asset = await assets.get('00_Training'), map = decodeMap(asset.bytes), model = map.model;
+  const lighting = await createLighting(map, asset, assets, { kernel });
+  await lighting.prepare(model);
+  const seen = new Set();
+  for (const t of map.triangles) {
+    const zone = model.nodes[t.node].zones[1], key = `${t.surface}:${zone}`, surface = model.surfaces[t.surface];
+    if (seen.has(key) || surface.flags & (POLY.Invisible | POLY.FakeBackdrop | POLY.Unlit)) continue;
+    seen.add(key);
+    try { lighting.surface(model, t.surface, zone); } catch { /* the world refuses these surfaces too */ }
+  }
+  const moving = createMovingLights(lighting, model, { mode: 'full' });
+  lighting.setMovingApplier(moving.apply);
+  const values = { LightType: 1, LightEffect: 14, LightBrightness: 255, LightRadius: 8, LightHue: 128, LightSaturation: 96,
+    bStatic: false, bNoDelete: false, bDynamicLight: false, bSpecialLit: false };
+  // Beside a few lit surfaces, off their planes.
+  const lit = [...new Set(map.triangles.map(t => t.surface))].filter(i => lighting.recordsFor(model, i).length);
+  for (let k = 0; k < 6; k++) {
+    const surface = model.surfaces[lit[(k * 997) % lit.length]], base = model.points[surface.base], normal = model.vectors[surface.normal];
+    const location = base.map((v, i) => f(v + normal[i] * (24 + 16 * k)));
+    const light = { name: 'ExplosionLight0', location, values: { ...values, LightRadius: 4 + k }, levelBrightness: lighting.levelBrightness };
+    moving.update([light]);
+    const constants = movingLightConstants(light.values, lighting.levelBrightness, fgetHsv(128, 96, 255));
+    shellReport.lights++;
+    const shellCases = [], checks = [];
+    for (const record of moving.records()) {
+      const { facet, start, stepU, stepV } = record.movingGeometry, grid = { start: start.map(f), stepU, stepV };
+      const rect = movingLightRect(location, constants.radius, facet);
+      if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) continue;
+      shellCases.push({ effect: 14, clamp: [record.width, record.height], rect, grid, location, rradius: constants.rradius,
+        rr2: constants.rr2, incidence: 0, time: 0, period: 0, phase: 0, illumination: null });
+      checks.push({ record, rect });
+    }
+    if (!shellCases.length) continue;
+    const native = runOracle({ sines, tables, spatialDynamic: shellCases.map(toOracle), fpatan: {} }, controlWord).spatialDynamic;
+    checks.forEach(({ record, rect }, i) => {
+      const bytes = Buffer.from(native[i].spatial, 'hex'), base = record.staticPixels, MAX = 127 / 255;
+      shellReport.records++;
+      for (let v = rect.minV, k2 = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k2++) {
+        const at = (v * record.width + u) * 3;
+        shellReport.texels++; if (bytes[k2]) shellReport.lit++;
+        for (let c = 0; c < 3; c++) {
+          const expected = bytes[k2] ? f(Math.min(MAX, base[at + c] + colorTableEntry(constants.steps[c], bytes[k2]) / 255)) : base[at + c];
+          if (record.pixels[at + c] !== expected) { shellReport.mismatches++; if (!shellReport.first) shellReport.first = { u, v, c, byte: bytes[k2], got: record.pixels[at + c], expected, base: base[at + c], rect, w: record.width }; }
+        }
+      }
+    });
+  }
+  shellReport.notes = [...moving.notes].filter(note => /effect 14|Shell/.test(note));
+  lighting.dispose();
+}
+
+// ---------------------------------------------------------------------------
 // The FPATAN model. Exact 24-bit k·X from the measured 80-bit X.
 const extended = text => ({ sign: parseInt(text.slice(0, 4), 16) >> 15, exponent: parseInt(text.slice(0, 4), 16) & 0x7fff,
   significand: BigInt(`0x${text.slice(4)}`) });
@@ -288,13 +349,16 @@ spatial.slowOnly(true);
 const fastMismatch = randomInputs.filter(([y, x, k], i) => !Object.is(fastValues[i], spatial.atanK(y, x, k))).length;
 spatial.slowOnly(false);
 
-Object.assign(report, { fpatan: { products, modelMismatch, notCorrectlyRounded, fallbacks: measuredFallbacks, ambiguous: measuredAmbiguous, first: modelFirst },
+Object.assign(report, { movingShell: shellReport, fpatan: { products, modelMismatch, notCorrectlyRounded, fallbacks: measuredFallbacks, ambiguous: measuredAmbiguous, first: modelFirst },
   random: { pairs: randomPairs, fastMismatch, fallbacks: randomFallbacks } });
 console.log(JSON.stringify(report));
 assert.equal(missing, 0, 'every appAtan2 pair the original asked for was measured');
 assert.equal(report.pairMismatches, 0, 'spatial.rs asks for the same appAtan2 operands as the original');
 assert.equal(report.mismatches, 0, 'spatial bytes match the original at 0x007f');
 assert.equal(modelMismatch, 0, 'k·FPATAN at 24 bits matches the hardware for every measured pair');
+assert.ok(shellReport.lit > 0 && shellReport.mismatches === 0 && !shellReport.notes.length,
+  'a moving Shell light adds the original Shell bytes in Play\'s moving-light path');
 assert.equal(fastMismatch, 0, 'the f64 atan fast path agrees with the double-double path');
 console.log(`validate-light-spatial: PASS (${report.cases} cases, ${report.texels} texels, ${report.lit} lit; ` +
-  `${unique.length} FPATAN pairs measured on x87 hardware, ${products} products; ${randomPairs} random fast/slow pairs)`);
+  `${unique.length} FPATAN pairs measured on x87 hardware, ${products} products; ${randomPairs} random fast/slow pairs; ` +
+  `moving Shell ${shellReport.records} light maps, ${shellReport.lit} lit texels)`);

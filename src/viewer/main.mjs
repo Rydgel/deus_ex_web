@@ -1255,10 +1255,14 @@ function drawFrame(snap, time) {
   const requested = visible ? new Set(visible.mirrors) : null;
   const viewFrustum = world.mirrors.mayRender(camera, requested) ? null : new THREE.Frustum().setFromProjectionMatrix(
     new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  // The surfaces OccludeBsp's main frame draws (with no mirror or sky child
+  // frame, whose surfaces it does not list).
+  const drawnSurfaces = visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null;
   // The worker's snapshot animates textures at its frame's post time;
   // on the page the frame is now.
   world.updateTextureAnimation(simClient ? snap?.now : undefined,
-    { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum, phase });
+    { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum,
+      drawn: viewFrustum && visible && !visible.sky ? drawnSurfaces : null, phase });
   world.flushLighting(renderer);
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation
@@ -1269,7 +1273,7 @@ function drawFrame(snap, time) {
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
-        visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null);
+        drawnSurfaces);
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');
