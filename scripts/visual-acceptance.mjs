@@ -37,6 +37,11 @@ const planPath = path.join(out, 'plan.json');
 const freeze = !process.argv.includes('--live');
 const onlyViews = option('views', null)?.split(',') ?? null;
 const loadPlan = () => existsSync(planPath) ? JSON.parse(readFileSync(planPath, 'utf8')) : {};
+// The original's level time when its clock was held (`original` writes it,
+// `play` runs Play's frozen level to the same TimeSeconds before holding it).
+const timesPath = path.join(out, 'times.json');
+const loadTimes = () => existsSync(timesPath) ? JSON.parse(readFileSync(timesPath, 'utf8')) : {};
+const HELD_DILATION = 0.001;
 mkdirSync(out, {recursive: true});
 
 // Views from a start Location: the four axis yaws level, and one looking
@@ -90,6 +95,21 @@ async function play() {
       const entry = plan[map] ?? (plan[map] = {start: start.location, startRotation: start.viewRotation,
         views: viewsFrom(start.location, start.viewRotation[1])});
       const ghost = await page.evaluate(() => window.deusExViewer.viewProbe({ghost: true}));
+      // Level time: run the frozen level to the original's held TimeSeconds
+      // (fast, then at normal speed for the last second), then hold it.
+      const target = loadTimes()[map] ?? null;
+      let held = null;
+      if (target !== null) {
+        held = await page.evaluate(async ({target, dilation}) => {
+          const probe = args => window.deusExViewer.viewProbe(args), frame = () => new Promise(r => requestAnimationFrame(r));
+          let state = await probe({timeDilation: 20});
+          while (state.timeSeconds < target - 1.5) { await frame(); state = await probe({}); }
+          state = await probe({timeDilation: 1});
+          while (state.timeSeconds < target) { await frame(); state = await probe({}); }
+          state = await probe({timeDilation: dilation});
+          return state.timeSeconds;
+        }, {target, dilation: HELD_DILATION});
+      }
       const dir = path.join(out, map); mkdirSync(dir, {recursive: true});
       const box = await page.locator('#scene').boundingBox();
       const buffer = await page.evaluate(() => { const c = document.getElementById('scene'); return [c.width, c.height]; });
@@ -108,8 +128,8 @@ async function play() {
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
         shots.push({view: view.name, camera: state, player: {location: probe.location, state: probe.state, physics: probe.physics}});
       }
-      writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, shots, errors}, null, 1));
-      console.log(map, `${shots.length} views`, ghost.state, errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
+      writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
+      console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${target.toFixed(3)})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
       await page.close();
       writeFileSync(planPath, JSON.stringify(plan, null, 1));
     }
@@ -168,7 +188,8 @@ async function original() {
         const aside = path.join(out, 'save-current'); mkdirSync(aside, {recursive: true});
         renameSync(travel, path.join(aside, `${map}-${Date.now()}.dxs`));
       }
-      post([...(freeze ? ['cmd set LevelInfo bPlayersOnly True', 'sleep 300'] : []), `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
+      post([...(freeze ? ['cmd set LevelInfo bPlayersOnly True', 'sleep 300'] : []), 'cmd set LevelInfo TimeDilation 1', 'sleep 300',
+        `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
       current = map;
       // Hyprland tiles the window again when a map opens: float it back to
       // the WIDTHxHEIGHT client area (DX_HYPRLAND=1), as before the first map.
@@ -176,7 +197,18 @@ async function original() {
       // window's rectangle, and a rectangle past the edge fails
       // (DDERR_INVALIDPARAMS) and writes a black frame.
       if (process.env.DX_HYPRLAND === '1') hyprlandWindow();
-      post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300']);
+      post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300',
+        `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
+      // The held level time, through the live player's Level (old levels'
+      // LevelInfo objects can linger until garbage collection).
+      const dump = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale',
+        'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474'], {encoding: 'utf8', env: process.env});
+      const live = dump.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+) Dilation=(\S+)/.exec(line))
+        .filter(m => m && m[1] !== '0');
+      if (live.length !== 1) throw new Error(`${map}: ${live.length} live players in the original`);
+      const times = loadTimes(); times[map] = Number(live[0][2]);
+      writeFileSync(timesPath, JSON.stringify(times, null, 1));
+      console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
     for (const view of entry.views) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;

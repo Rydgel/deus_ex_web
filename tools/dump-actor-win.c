@@ -5,7 +5,9 @@
  *   wine dump-actor-win.exe <name substring> <field:offset:type[:mask]>...
  *
  * Types: f (float), f3 (three floats), i3 (three ints), u8, u32,
- * bit (u32 at offset & mask), obj (UObject* -> its name), name (FName -> text).
+ * bit (u32 at offset & mask), obj (UObject* -> its name), name (FName -> text),
+ * pf (the float at <mask> inside the object the pointer at <offset> names,
+ * e.g. LevelTime:0xa8:pf:0x478 for Level.TimeSeconds).
  * Offsets are the linked UProperty offsets (UProperty +0x48; bool masks
  * UBoolProperty +0x5c), e.g. Location:0x114:f3 bHidden:0x28:bit:0x2.
  *
@@ -98,6 +100,10 @@ int main(int argc, char **argv) {
         uintptr_t p = read_u32(at); char text[256] = "None";
         if (p) name_text(read_u32(p + OFF_OBJECT_NAME), text, sizeof(text));
         printf(" %s=%s", field, text);
+      } else if (!strcmp(type, "pf")) {
+        uintptr_t p = read_u32(at); float v = 0;
+        if (p) read_mem(p + strtoul(mask ? mask : "0", NULL, 0), &v, 4);
+        printf(" %s=%.9g", field, v);
       } else if (!strcmp(type, "name")) { char text[256]; name_text(read_u32(at), text, sizeof(text)); printf(" %s=%s", field, text); }
     }
     printf("\n");
