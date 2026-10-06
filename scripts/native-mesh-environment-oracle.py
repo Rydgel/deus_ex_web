@@ -21,6 +21,9 @@ class Probe(native.NativeCollision):
                 self.leaves[ptr]=name;del self.thunks[ptr]
                 self.cpu.mem_write(ptr,((b'\xdd\xd8\xdd\xd8' if name=='_CIpow' else b'')+b'\xdd\x05'+struct.pack('<I',self.result) if name in ('pow','_CIpow') else b'')+b'\xc3')
         self.call(0x10b024b0,0,struct.pack('<IIf',0x10b33650,0x10b3d384,-.5))
+        # The tables above come from FLightManager::Init (game thread); the
+        # DrawLodMesh slices run in the render pass (ORACLE_CW, the audit).
+        self.control_word=native.render_control_word()
     def on_instruction(self,cpu,address,size,data):
         name=self.leaves.get(address)
         if name:

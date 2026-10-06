@@ -222,7 +222,7 @@ class FireProbe:
             self.write(esp, 'I', self.done)
             cpu.reg_write(UC_X86_REG_ESP, esp)
             cpu.reg_write(UC_X86_REG_ECX, texture)
-            cpu.reg_write(UC_X86_REG_FPCW, 0x037f)
+            cpu.reg_write(UC_X86_REG_FPCW, native.render_control_word())  # ticked in the render pass (ORACLE_CW)
             # 'redraw' runs RedrawSparks (0x105025b0) alone, without the fire
             # update; 'flash' calls DrawFlashRamp (0x105022f0) with c['flash'] =
             # [X, Y, XD, YD, Color1, Color2].
@@ -321,7 +321,7 @@ class FireProbe:
             self.write(esp, 'I', self.done)
             cpu.reg_write(UC_X86_REG_ESP, esp)
             cpu.reg_write(UC_X86_REG_ECX, texture)
-            cpu.reg_write(UC_X86_REG_FPCW, 0x037f)
+            cpu.reg_write(UC_X86_REG_FPCW, native.render_control_word())  # ticked in the render pass (ORACLE_CW)
             cpu.emu_start(0x10506410, self.done, count=50_000_000)
             steps.append({'field': bytes(cpu.mem_read(fields, len(field))).hex(), 'drops': bytes(cpu.mem_read(texture + 0xe8, 2048)).hex(),
                           'numDrops': self.read(texture + 0xe4, 'i')[0], 'globalPhase': self.read(texture + 0xd0, 'i')[0],

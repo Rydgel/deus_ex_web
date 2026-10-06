@@ -1,10 +1,13 @@
 // Volumetric lighting (fog maps, docs/volumetric-fog.md): ComputeFromActor's
 // volumetric constants (Render.dll 0x10b06868-0x10b06c19) and SetupForSurf's
-// fog-map block (0x10b07162-0x10b07c4a) on the x87 model.
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
+// fog-map block (0x10b07162-0x10b07c4a). They run inside the render pass,
+// under precision control 24 (docs/render-pass-precision.md): the x87 model
+// here rounds every arithmetic result to 24 bits (x87-pc24.mjs).
+import { x87load, x87double, x87int32, x87store, x87cmp } from './script-vm.mjs';
+import { p24mul as x87mul, p24add as x87add, p24div as x87div, p24sub as sub, r24 } from './x87-pc24.mjs';
 import { fistp, tableSqrt, colorTableEntry, squareRootTable } from './dynamic-lighting.mjs';
 
-const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
+const ld = x87load, st = x87store;
 const f = Math.fround;
 const ZERO = ld(0), ONE_F = ld(1), THREE = ld(3), S255 = ld(255);
 const R_SCALE = x87double(25), V_BRIGHT = ld(0.015625), FOG_SCALE = ld(f(1 / 255));
@@ -12,10 +15,25 @@ const io = new DataView(new ArrayBuffer(4));
 const bitsOf = v => (io.setFloat32(0, v, true), io.getUint32(0, true));
 
 /** The inline FCoords::TransformPointBy (Origin subtracted) and
- * TransformVectorBy: each component `(d.x·A.x + d.y·A.y) + d.z·A.z` with the
- * differences and sums kept in 80 bits, stored to float32. `coords` is
- * {origin, x, y, z} (FSceneNode +0x34). */
+ * TransformVectorBy: each component `(d.x·A.x + d.y·A.y) + d.z·A.z`, the
+ * differences and sums held in registers (24-bit significands in the render
+ * pass), stored to float32. `coords` is {origin, x, y, z} (FSceneNode
+ * +0x34). Finite inputs take doubles rounded with r24 (exact, as every
+ * operand is a float32); others the BigInt model. */
 export function coordsTransform(p, coords, point = true) {
+  const { origin, x: ax, y: ay, z: az } = coords;
+  if ([p, origin, ax, ay, az].every(v => Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]))) {
+    const d0 = point ? r24(f(p[0]) - f(origin[0])) : f(p[0]), d1 = point ? r24(f(p[1]) - f(origin[1])) : f(p[1]);
+    const d2 = point ? r24(f(p[2]) - f(origin[2])) : f(p[2]);
+    const row = a => f(r24(r24(r24(d0 * f(a[0])) + r24(d1 * f(a[1]))) + r24(d2 * f(a[2]))));
+    return [row(ax), row(ay), row(az)];
+  }
+  return coordsTransformExact(p, coords, point);
+}
+
+/** coordsTransform on the BigInt PC 24 model (any input; the reference
+ * validate-volumetric-fog compares the double form with). */
+export function coordsTransformExact(p, coords, point = true) {
   const d = [0, 1, 2].map(i => point ? sub(ld(p[i]), ld(coords.origin[i])) : ld(p[i]));
   return [coords.x, coords.y, coords.z].map(a => st(x87add(x87add(x87mul(d[0], ld(a[0])), x87mul(d[1], ld(a[1]))), x87mul(d[2], ld(a[2])))));
 }
@@ -43,7 +61,8 @@ export function volumetricLight({ location, color, brightness, volumeRadius, vol
   const fog = st(x87mul(x87int32(volumeFog & 255), FOG_SCALE));
   // The 256-entry colour table (0x10b06a35-0x10b06b60): BGRA bytes from
   // 16.16 steps of R, G, B and the fog fraction, each capped at 127.
-  const steps = [...color, fog].map(channel => fistp(f(channel * 65536) - .5));
+  // fstp of channel·65536.0 (exact), then fsub 0.5f under PC 24.
+  const steps = [...color, fog].map(channel => fistp(f(f(channel * 65536) - .5)));
   const table = new Uint8Array(256 * 4);
   for (let i = 0; i < 256; i++) {
     table[i * 4] = colorTableEntry(steps[2], i); table[i * 4 + 1] = colorTableEntry(steps[1], i);

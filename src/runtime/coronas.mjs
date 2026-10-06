@@ -1,9 +1,12 @@
 // Light coronas (docs/coronas.md): URender::DrawFrame's corona pass
-// (Render.dll 0x10b1b46a-0x10b1bb06) and its visibility helper 0x10b1bc00
-// on the x87 model.
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
+// (Render.dll 0x10b1b46a-0x10b1bb06) and its visibility helper 0x10b1bc00.
+// The pass runs inside the render pass, under precision control 24
+// (docs/render-pass-precision.md): every arithmetic result is rounded once
+// to a 24-bit significand (x87-pc24.mjs, exact for the double operands).
+import { x87load, x87double, x87int32, x87store, x87cmp } from './script-vm.mjs';
+import { p24mul as x87mul, p24add as x87add, p24div as x87div, p24sub as sub } from './x87-pc24.mjs';
 
-const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
+const ld = x87load, st = x87store;
 const io = new DataView(new ArrayBuffer(4));
 const num = bits => (io.setUint32(0, bits >>> 0, true), io.getFloat32(0, true));
 // Render.dll constants: 1/85 (0x10b2b2e4), 1/84 (0x10b2b2e0), saturation

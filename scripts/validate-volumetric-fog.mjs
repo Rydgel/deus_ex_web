@@ -4,15 +4,21 @@
 // fog loop (first light written from its table, later lights merged through
 // the attenuation table) over random frames, light-map grids and 1-3 lights,
 // with the early-out flag carried in either state. Compared bit-exactly:
-// every light field and table byte, every fog texel and the final flag.
-import assert from 'node:assert/strict';
+// every light field and table byte, every fog texel and the final flag. The
+// segments run at the render pass's control word 0x007f (precision control
+// 24, docs/render-pass-precision.md); ORACLE_CW selects another for the
+// audit.
 import { execFileSync } from 'node:child_process';
+import { auditAssert, auditControlWord } from './precision-audit.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { getAxes } from '../src/runtime/camera.mjs';
-import { coordsTransform, volumetricLight, fogMap, fogMapKernel, fogVertex, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
+import { coordsTransform, coordsTransformExact, volumetricLight, fogMap, fogMapKernel, fogVertex, sortVolumetricLights } from '../src/runtime/volumetric-fog.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
+// ORACLE_CW=0x007f: the precision audit (scripts/precision-audit.mjs) runs the
+// per-surface segments at that word and counts mismatches instead of failing.
+const assert = auditAssert(), controlWord = auditControlWord();
 const f = Math.fround, io = new DataView(new ArrayBuffer(4));
 const bits = v => (io.setFloat32(0, v, true), io.getUint32(0, true));
 let seed = 0x5eed1234;
@@ -53,7 +59,7 @@ for (let c = 0; c < SURFACES + EXTRA; c++) {
   const texels = fogMap({ grid, width, height, coords, lights, state }), surfaceFlag = state.missFlag;
   js.push({ lights, texels, state: { missFlag: surfaceFlag }, vertices: vertices.map(p => fogVertex(p, lights, state)), vertexFlag: state.missFlag });
 }
-const reference = JSON.parse(execFileSync(python, ['scripts/native-volumetric-fog-oracle.py', gameDirectory()],
+const reference = JSON.parse(execFileSync(python, ['scripts/native-volumetric-fog-oracle.py', gameDirectory(), ...(controlWord ? [controlWord] : [])],
   { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 1 << 28 }));
 
 // The Rust core's loop (fog.rs) against the original and the JavaScript.
@@ -68,10 +74,11 @@ inputs.forEach((input, i) => {
     assert.deepEqual([...rust], [...fogMap({ ...input, state: jsState })], `surface ${i}: Rust against JavaScript`);
     assert.equal(state.missFlag, jsState.missFlag, `surface ${i}: Rust early-out flag against JavaScript`);
   }
-  // fog.rs's certain-rounding fast path against Ext on every texel of the
-  // surface just uploaded, from the same incoming flag (fog.check).
+  // fog.rs's f64 PC 24 registers (Wide) against the Ext model rounded to 24
+  // bits (Exact) on every texel of the surface just uploaded, from the same
+  // incoming flag (fog.check).
   kernel.fog.setMiss(input.missFlag); kernel.fog.resetFallbacks();
-  assert.equal(kernel.fog.check(input.width, input.height, input.lights.length), 0, `surface ${i}: fast path against Ext`);
+  assert.equal(kernel.fog.check(input.width, input.height, input.lights.length), 0, `surface ${i}: Wide against Exact`);
   fastFallbacks += kernel.fog.fallbacks();
   rustTexels += input.width * input.height; rustTexelLights += input.width * input.height * input.lights.length;
 });
@@ -98,4 +105,15 @@ cases.forEach((c, i) => {
   if (c.lights.length > 1) merged++;
 });
 assert.ok(lit > 2000 && merged > 50 && inside > 3 && fogVertices > 300, 'cases reach fogged texels, merges, inside-volume lights and fogged vertices');
-console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights and ${vertexCount} mesh vertices (${fogVertices} fogged, FLightManager::Fog) match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels), its fast path matching Ext on every texel and flag (${fastFallbacks} of ${rustTexelLights} texel-lights fall back).`);
+// coordsTransform's doubles (r24) against the BigInt PC 24 model, with
+// magnitudes from 2^-140 to 2^120 so products leave binary32's range.
+let transformChecks = 0;
+for (let k = 0; k < 20000; k++) {
+  const scale = () => 2 ** (Math.floor(random() * 260) - 140) * (random() < 0.5 ? -1 : 1);
+  const v3 = () => [f(scale() * random()), f(scale() * random()), f(scale() * random())];
+  const coords = { origin: v3(), x: v3(), y: v3(), z: v3() }, p = v3(), point = k % 2 === 0;
+  assert.deepEqual(coordsTransform(p, coords, point).map(bits), coordsTransformExact(p, coords, point).map(bits), `transform ${k}: doubles against BigInt`);
+  transformChecks++;
+}
+if (assert.enabled) assert.report('validate-volumetric-fog');
+else console.log(`Volumetric fog: ${cases.length} surfaces, ${texels} texels (${lit} fogged), ${merged} with merged lights, ${inside} inside-volume lights and ${vertexCount} mesh vertices (${fogVertices} fogged, FLightManager::Fog) match the original Render.dll; the Rust loop matches it and JavaScript over ${inputs.length} surfaces (${rustTexels} texels), its f32 and f64 registers matching the Ext model rounded to 24 bits on every texel and flag (${fastFallbacks} of ${rustTexelLights} texel-lights with a non-finite input), at control word 0x007f; ${transformChecks} wide-range transforms equal the BigInt PC 24 model.`);

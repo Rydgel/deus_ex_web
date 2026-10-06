@@ -4,8 +4,8 @@
  * times; GlobalLighting's LightType functions (0x10b05e90) per frame; and the
  * merge's TorchWaver/FireWaver/WateryShimmer modulation (0x10b03040).
  * docs/static-lighting.md "Light animation" records the scope. */
-import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { auditAssert, auditControlWord } from './precision-audit.mjs';
 import { createLightNoise, lightTypeBrightness, mergeModulation, createLightFrame } from '../src/runtime/static-lighting.mjs';
 import { fistp } from '../src/runtime/dynamic-lighting.mjs';
 import { colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
@@ -14,7 +14,9 @@ import { rotationSineTable } from '../src/runtime/coords.mjs';
 import { gameDirectory } from './game-directory.mjs';
 
 const root = gameDirectory(), python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
-const runOracle = cases => JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root],
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert(), controlWord = auditControlWord();
+const runOracle = cases => JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, ...(controlWord ? [controlWord] : [])],
   { input: JSON.stringify(cases), maxBuffer: 1 << 30 }));
 const view = new DataView(new ArrayBuffer(4));
 const u32 = value => { view.setFloat32(0, value, true); return view.getUint32(0, true); };
@@ -118,4 +120,5 @@ assert.equal(report.factorMismatch, 0, 'the double merge factors give the x87 mo
 assert.equal(report.noiseMismatch, 0, 'light noise tables match');
 assert.equal(report.typeMismatch, 0, 'LightType brightness matches');
 assert.equal(report.mergeMismatch, 0, 'merge modulation matches');
-console.log(`validate-light-animation: PASS (${report.noiseSteps} noise frames, ${report.typeFrames} LightType frames, ${report.mergeTexels} merged texels)`);
+if (assert.enabled) assert.report('validate-light-animation');
+else console.log(`validate-light-animation: PASS (${report.noiseSteps} noise frames, ${report.typeFrames} LightType frames, ${report.mergeTexels} merged texels)`);

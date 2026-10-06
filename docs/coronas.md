@@ -59,9 +59,16 @@ the TRACE_ flags).
 
 `src/runtime/coronas.mjs` contains `createCoronaCache`, `coronaDecay`
 (clock and fade), `coronaFade`, `coronaSeen`, `coronaColor` and
-`coronaIcon`, all on the x87 model.
+`coronaIcon`. The pass runs inside the render pass, under x87 precision
+control 24 ([render-pass precision](render-pass-precision.md)), so every
+arithmetic result is rounded once to a 24-bit significand (`x87-pc24.mjs`;
+exact also for the double operands 1/255, 3.0 and 1.0), and the light's
+frame-space location comes from `coordsTransform` at the same precision
+(2026-10-06; the 64-bit model before differed in the DrawIcon arguments of
+92 of the 200 validator frames, 299 of 305 icons).
 
-`validate-coronas.mjs` runs the unchanged code (`native-coronas-oracle.py`):
+`validate-coronas.mjs` runs the unchanged code (`native-coronas-oracle.py`,
+control word `0x007f`):
 - **Setup.** The fade loop, the helper with scripted SingleLineCheck answers
   and Engine's own GetActorIndex, and the draw loop with a recording
   DrawIcon.
@@ -92,7 +99,8 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   an orthographic overlay with the canvas's translucent blend (ONE,
   INVSRCCOLOR); the display ramp maps the finished frame.
 - **Check.** `validate-coronas-play.mjs` looks up at a corona light from a
-  start. On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
+  start, in the default mode with the simulation in the worker
+  (`placeProbe({lookAt})`; `--query sim=inline` runs it on the page). On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
   visible and 1 is drawn. On 03_NYC_Airfield, Light348 is among 13 leaf
   lights, 7 are visible and 4 are drawn. In both, the frame changes with the
   pass and the street lamp shows its glow.

@@ -2,10 +2,12 @@
  * against script-root-render-viewport.mjs, bit for bit on the four frame
  * ints. The original runs unchanged in Unicorn
  * (scripts/native-root-render-viewport-oracle.py). */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {execFileSync} from 'node:child_process';
 import {gameDirectory} from './game-directory.mjs';
 import {rootRenderViewport} from '../src/runtime/script-root-render-viewport.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-root-render-viewport: no installed game data'); process.exit(0); }
@@ -55,3 +57,4 @@ for (const [index, sample] of cases.entries()) {
 const letterbox = reference[0];
 assert.deepEqual(letterbox, [1440, 802, 0, 52], 'MeetPaul letterbox render rect');
 console.log(`PASS validate-root-render-viewport: ${checked} original PreRender frame edits bit-exact (flags, multipliers, specials, clamps); letterbox 1440x802 at (0,52)`);
+if (assert.enabled) assert.report('validate-root-render-viewport');

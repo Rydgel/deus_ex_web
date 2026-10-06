@@ -47,7 +47,10 @@ class Probe(_NATIVE.NativeCollision):
         head, index = frames[0], {address: i for i, address in enumerate(frames)}
         steps = []
         for time in c['times']:
+            # Get/Update/Tick run inside DrawFrame (render pass): ORACLE_CW.
+            self.control_word = _NATIVE.render_control_word()
             self.call(GET, head, struct.pack('<d', float(time)))
+            self.control_word = 0x037f
             result = self.cpu.reg_read(_NATIVE.UC_X86_REG_EAX)
             anim_cur = self.read(head + 0x90, 'I')[0]
             steps.append({'result': index.get(result), 'animCur': index.get(anim_cur) if anim_cur else None,

@@ -4,13 +4,15 @@
 // the float PanU/PanV it leaves must match as bits.
 //
 //   node scripts/validate-native-surface-pan.mjs
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
 import {surfacePan} from '../src/runtime/texture-animation.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const io = new DataView(new ArrayBuffer(4));
 const bits = value => { io.setFloat32(0, value, true); return io.getUint32(0, true); };
@@ -45,3 +47,4 @@ cases.forEach((c, i) => {
 await writeFile(path.join(dir, 'surface-pan-comparison.json'), JSON.stringify({cases: cases.length, mismatches: mismatches.slice(0, 10)}, null, 1));
 console.log(JSON.stringify({cases: cases.length, mismatches: mismatches.length, first: mismatches[0]}));
 assert.equal(mismatches.length, 0);
+if (assert.enabled) assert.report('validate-native-surface-pan');

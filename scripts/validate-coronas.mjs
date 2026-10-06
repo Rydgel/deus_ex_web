@@ -4,12 +4,14 @@
 // new cache slots) and the draw loop's DrawIcon arguments (validity, depth
 // cut, projection, size, hue/saturation colour times brightness) over random
 // frames, lights and caches. Compared bit-exactly.
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { getAxes } from '../src/runtime/camera.mjs';
 import { coordsTransform } from '../src/runtime/volumetric-fog.mjs';
 import { coronaSeen, coronaFade, coronaIcon, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 const f = Math.fround, io = new DataView(new ArrayBuffer(4));
@@ -95,3 +97,4 @@ cases.forEach((c, i) => {
 });
 assert.ok(icons > 100 && created > 50 && behind > 20, 'cases reach drawn icons, new entries and lights behind the eye');
 console.log(`Coronas: ${cases.length} frames (fade loop included), ${seenCount} helper calls (${created} new entries), ${icons} DrawIcon calls and ${behind} lights behind the eye match the original Render.dll.`);
+if (assert.enabled) assert.report('validate-coronas');

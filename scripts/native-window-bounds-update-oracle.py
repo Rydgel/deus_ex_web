@@ -67,7 +67,7 @@ class BoundsProbe(NativeCollision):
 
     def call_void(self, address, this):
         for reg, value in ((UC_X86_REG_ESP, self.stack), (UC_X86_REG_ECX, this),
-                           (UC_X86_REG_FPCW, 0x037f), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)):
+                           (UC_X86_REG_FPCW, _COLLISION.render_control_word()), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)):
             self.cpu.reg_write(reg, value)
         self.write(self.stack, 'I', self.done)
         self.cpu.emu_start(address, self.done + 1, count=4000000)
@@ -76,7 +76,7 @@ class BoundsProbe(NativeCollision):
 
     def call_cdecl2(self, address, arg0, arg1):
         for reg, value in ((UC_X86_REG_ESP, self.stack), (UC_X86_REG_ECX, 0),
-                           (UC_X86_REG_FPCW, 0x037f), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)):
+                           (UC_X86_REG_FPCW, _COLLISION.render_control_word()), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)):
             self.cpu.reg_write(reg, value)
         self.write(self.stack, 'I', self.done)
         self.write(self.stack + 4, 'II', arg0, arg1)

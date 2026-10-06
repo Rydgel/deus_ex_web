@@ -30,6 +30,7 @@ mod percep;
 mod render;
 mod meshlight;
 mod occlude;
+mod p24;
 mod setup;
 mod particles;
 mod pawn_phys;

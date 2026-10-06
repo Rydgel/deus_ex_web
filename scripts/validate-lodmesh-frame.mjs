@@ -1,6 +1,8 @@
 /** Full original GetFrame reference and translation boundary. */
-import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
+import {auditAssert,auditControlWord} from './precision-audit.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert=auditAssert(),controlWord=auditControlWord();
 import {readFile,writeFile} from 'node:fs/promises';
 import {parsePackage} from '../src/unreal/package.mjs';
 import {readObject} from '../src/unreal/objects.mjs';
@@ -53,7 +55,7 @@ if(process.argv.includes('--captured')) {
   const saved=JSON.parse(await readFile('.cache/research/lodmesh-frame-original.json','utf8'));
   assert.deepEqual(saved.specs,rows.map(r=>r.spec),'original capture inputs must match this run');reference=saved.reference;
 }else reference=JSON.parse(execFileSync(process.env.DEUS_EX_NATIVE_PYTHON??process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',
-  ['scripts/native-lodmesh-frame-oracle.py',root],{input:JSON.stringify(rows.map(r=>r.spec)),encoding:'utf8',maxBuffer:24*1024*1024}));
+  ['scripts/native-lodmesh-frame-oracle.py',root,...(controlWord?[controlWord]:[])],{input:JSON.stringify(rows.map(r=>r.spec)),encoding:'utf8',maxBuffer:24*1024*1024}));
 if(process.argv.includes('--reference-only')) {
   await writeFile('.cache/research/lodmesh-frame-original.json',JSON.stringify({specs:rows.map(r=>r.spec),reference}));
   for(const row of reference.cases)for(const step of row.steps)console.log(row.name,step.name,step.count,step.events);
@@ -65,7 +67,7 @@ const bytesEqual=(actual,expected,label)=>{
   const a=Buffer.from(actual.buffer,actual.byteOffset,actual.byteLength),b=Buffer.from(expected,'base64');
   assert.equal(a.length,b.length,label);
   const at=a.findIndex((v,i)=>v!==b[i]);
-  if(at>=0){const aligned=at&~3;assert.fail(`${label} byte ${at}: ${a.readFloatLE(aligned)} vs ${b.readFloatLE(aligned)} (${a.subarray(aligned,aligned+4).toString('hex')} / ${b.subarray(aligned,aligned+4).toString('hex')})`);}
+  if(at>=0){const aligned=at&~3;if(assert.enabled){let n=0,ulps=0;for(let i=0;i+4<=a.length;i+=4)if(a.readUInt32LE(i)!==b.readUInt32LE(i)){n++;ulps=Math.max(ulps,Math.abs(a.readInt32LE(i)-b.readInt32LE(i)));}assert.ok(false,label.replace(/ cache .*/,' cache'));assert.tally(label.replace(/ cache .*/,' cache').replace(/^\S+ \S+/,'step'),n,a.length/4,ulps);return;}assert.fail(`${label} byte ${at}: ${a.readFloatLE(aligned)} vs ${b.readFloatLE(aligned)} (${a.subarray(aligned,aligned+4).toString('hex')} / ${b.subarray(aligned,aligned+4).toString('hex')})`);}
 };
 for(const [rowIndex,row] of rows.entries()) {
   const mesh=decodeLodMeshPayload(row.pkg,row.bytes,row.index),referenceRow=reference.cases[rowIndex];
@@ -104,4 +106,4 @@ for(const [rowIndex,row] of rows.entries()) {
     assert.equal(mesh.arrays.get(0x60).savedPosition,original.lazyPosition,label);
   }
 }
-console.log(`PASS ${rows.reduce((n,r)=>n+r.spec.steps.length,0)} complete original GetFrame calls: LightSwitch and GM_Trench output/padding, all cache bytes, frame wrap/tween, owner/transforms, reduced counts and four additive blends.`);
+if(assert.enabled)assert.report('validate-lodmesh-frame');else console.log(`PASS ${rows.reduce((n,r)=>n+r.spec.steps.length,0)} complete original GetFrame calls: LightSwitch and GM_Trench output/padding, all cache bytes, frame wrap/tween, owner/transforms, reduced counts and four additive blends.`);

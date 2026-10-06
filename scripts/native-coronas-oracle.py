@@ -30,7 +30,10 @@ STUBS = 0x700e0000
 class CoronaOracle(lighting.Oracle):
     def __init__(self, root):
         self.trace_stub, self.icon_stub, self.valid_stub = STUBS, STUBS + 0x40, STUBS + 0x80
-        super().__init__(root, 0x037f)
+        # The pass runs in DrawFrame, inside the render pass: precision
+        # control 24, 0x007f (docs/render-pass-precision.md); ORACLE_CW (the
+        # audit) selects another word.
+        super().__init__(root, lighting.native.render_control_word(0x007f))
         self.cpu.mem_map(STUBS, 0x1000)
         # SingleLineCheck(Hit, Source, End, Start, Flags, Extent, NodeFlags): 7 dwords + FVector = 0x24 bytes.
         self.cpu.mem_write(self.trace_stub, bytes.fromhex('c22400'))

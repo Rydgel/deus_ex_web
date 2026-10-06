@@ -162,6 +162,9 @@ class GcProbe(_NATIVE.NativeCollision):
 
     def __init__(self, root):
         super().__init__(Path(root), IMAGES)
+        # GC natives run from DrawWindow during PaintWindows, inside the render
+        # pass (PostRenderFlash -> PostRenderWindows): ORACLE_CW (the audit).
+        self.control_word = _NATIVE.render_control_word()
         self.events = []
         self.exec_params = []
         self.out_refs = []
