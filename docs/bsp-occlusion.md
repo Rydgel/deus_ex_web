@@ -228,6 +228,13 @@ Island, Wan Chai Market, Area 51 Page and Hotel, and 360 arbitrary-position
 frames on six maps including AirfieldHeliBase, Endgame4 and DXOnly, with 122
 zone-0 views and 203 mirror requests.
 
+The same validator then runs four sequences over models the moving brush
+tracker built: Training with its doors closed, Training with a door raised,
+the Paris Club with its mirror movers turned, and Island (129 frames). The
+oracle's Level holds a tracker whose SurfIsDynamic is Engine's own
+([brush tracker](brush-tracker.md#verification)), and fragments' draw
+lists, coplanar chains and skipped bound tests match as well.
+
 The Paris tunnel at spawn, looking down the tunnel (yaw 32768), draws 6
 surfaces, creates no child frame and stamps no other zone. The frustum-only
 browser path drew the club behind the walls there: five mirror passes and
@@ -349,11 +356,17 @@ made. Then:
   (`buildSurfaceGeometry`, world batches). The main pass draws each world
   mesh through an index of its visible triangles in their own order
   (`world-visibility.mjs`); the mirror and sky passes draw whole meshes,
-  since child frames' own occlusion is not ported. Mover meshes always draw.
+  since child frames' own occlusion is not ported.
+* **Movers.** The moving brush tracker ([brush tracker](brush-tracker.md#play))
+  filters every mover's polygons into the model: Update for each mover the
+  level-actor pass admits runs before OccludeBsp, the main pass draws a
+  mover's polygons the draw lists hold (so closed doors occlude), and
+  nothing stamps a tracked mover. `?moverTracker=off` keeps them out of the
+  BSP, drawn whole and frustum-stamped.
 * **Mirrors.** The main frame's mirror children are the static mirror groups
   OccludeBsp requested (`mirror-passes.mjs` `requestedGroup`), on the page
-  and in the drawn set alike; deeper levels and mover mirrors keep the
-  frustum test.
+  and in the drawn set alike, mover mirrors by their tracked polygon;
+  deeper levels keep the frustum test.
 * **Sky.** The sky frame is drawn only when OccludeBsp made one.
 * **Fog.** Only drawn surfaces get a fog map, as SetupForSurf does.
 * **Actors.** The run waits for SetupDynamics' candidates (`occludeMain`):
@@ -373,7 +386,7 @@ made. Then:
   `main` for the page's main pass (`sprite-scene.mjs` `mainPass`), and
   `stamps()` writes LastRenderTime for every `Frame->Sprite` actor, as
   DrawActorSprite does, the items' proxies included. The mirror and sky
-  passes keep the frustum-tested drawn set, as do movers. A drawn binding's
+  passes keep the frustum-tested drawn set. A drawn binding's
   mesh groups outside the frustum are still left out of the draw (no pixels
   either way). `?actorOcclusion=frustum` (Node: `ACTOR_OCCLUSION=frustum`)
   restores the frustum-tested drawn set for the main frame and runs
@@ -387,8 +400,9 @@ Measurements on the Linux host (1920×1080, interleaved runs):
 | Paris Club spawn, yaw 40960 | 18 fps, 55.5 ms | 50 fps, 19.6 ms |
 | UNATCO Island start, worker mode, page frame | 13.4–13.9 ms; 1,068 mirror calls | 8.4–8.8 ms; 268 mirror calls |
 
-The tunnel's remaining mirror passes are DeusExMover8 and DeusExMover11, mover
-mirrors waiting for the brush tracker; the remaining main calls were actors,
+The tunnel's remaining mirror passes were DeusExMover8 and DeusExMover11,
+mover mirrors, which the brush tracker now puts in the BSP (OccludeBsp asks
+for them only when they are visible); the remaining main calls were actors,
 which the dynamics now occlude (below).
 
 With the dynamics (`profile-play-browser.mjs --no-profile --angle gl`,
@@ -457,23 +471,13 @@ each child frame's SetupDynamics (no excluded actor: a mirror shows the
 player) gives its own `Frame->Sprite` to draw and stamp, replacing the
 frustum-tested drawn set those passes still use.
 
-### 2. The moving brush tracker
+### 2. The moving brush tracker (done)
 
-Recovered 2026-10-06, with an oracle: [brush tracker](brush-tracker.md).
-
-Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
-the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
-tests. Without it closed doors do not occlude, and mover mirrors (the two
-still drawn in the Paris tunnel, DeusExMover8 and DeusExMover11) keep the
-frustum test. Known entry points ([lighting](lighting.md),
-[mirror surfaces](mirror-surfaces.md) "Coplanar mover polygons"):
-construction `0x1037ac40`/`0x1037b5c0`, Update `0x1037a400`, filter
-`0x1037c0c0`, node add `0x1037bb00`, `FPoly::SplitWithPlane` `0x10386ad0`
-(±0.25). Still open: when Update runs (tick or render pass, hence its
-precision), how it removes the previous fragments, and the new nodes' field
-values. Movers' LastRenderTime is still stamped from the frustum-tested
-drawn set; SetupDynamics routes non-static brushes to the tracker, never
-through DrawActorSprite, so what stamps them (if anything) belongs here.
+Ported and in Play on 2026-10-06: [brush tracker](brush-tracker.md). The
+tracker is bit-equal to Engine's over 239 oracle steps, and OccludeBsp over
+the models it builds matches the original with Engine's SurfIsDynamic on
+four maps. Its own open items are decals and fog on movers, collision
+(Stage 5) and SaveGame (Stage 6).
 
 ### 3. Smaller items
 

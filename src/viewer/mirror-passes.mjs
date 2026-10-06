@@ -12,6 +12,10 @@ import { DECAL_LAYER } from './render-layers.mjs';
  * below 3 (0x10b18881); CreateChildFrame gives a child its parent's
  * Recursion + 1 (0x10b15e4a-0x10b15e5c). Child frames nest to recursion 3. */
 export const MIRROR_RECURSION_LIMIT = 3;
+/** In OccludeBsp's mirror requests (sim-session.mjs `visibility`): the
+ * moving brush tracker filtered the movers into the BSP, so a moving
+ * group's requests are named `${mover}:${polygon}` among the nodes. */
+export const TRACKED_MOVER_MIRRORS = 'movers';
 
 // OccludeBsp's reflected axes have negative handedness. WebGL's front-face
 // state is object/material state rather than camera state, so reflecting the
@@ -68,12 +72,13 @@ export function groupNodes(group) {
 
 /** Whether OccludeBsp asked for this group's child frame in the main frame
  * (`requested`: the mirror requests' nodes; null when occlusion did not
- * run). A moving group's polygons are not in the world BSP here (the brush
- * tracker is not ported), so it keeps the frustum test. */
+ * run). A moving group is requested by its key (mover and polygon) when
+ * the brush tracker put the movers in the BSP (TRACKED_MOVER_MIRRORS);
+ * without the tracker it keeps the frustum test. */
 export function requestedGroup(group, requested) {
   if (!requested) return true;
   const nodes = groupNodes(group);
-  if (!nodes) return true;
+  if (!nodes) return !requested.has(TRACKED_MOVER_MIRRORS) || requested.has(group.key);
   for (const node of requested) if (nodes.has(node)) return true;
   return false;
 }

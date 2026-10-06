@@ -1,0 +1,977 @@
+{
+ "about": "Reference cases for Engine's FMovingBrushTracker (notes.md). Run: node .work/tracker/run.mjs [.work/tracker/cases.json] [id ...]. Each step's full oracle output (every added/changed/removed node, surf, point, vector and vert as bit patterns, the tracker's own state and each mover's SavedPos/SavedRot/MoverLink chain) is written to results/<id>.json; results/summary.json holds per-step counts and a 16-hex digest of each step's output. Position specs: {key:k} = BasePos+KeyPos[k], BaseRot+KeyRot[k]; {from,to,alpha} = float32 key interpolation (rotation rounded); {offset:[dx,dy,dz]} added to the placed Location; {hidden:true} sets bHidden. 'frame' = Update(Actor) for every listed non-hidden mover in Level.Actors order (URender::SetupDynamics); 'update' = one Update(actor) (actor null = Update(NULL)). Control words: construct 0x037f unless noted (game-thread precision at LoadMap, not measured), Update 0x007f (inside DrawWorld, PC24). Other keys: 'movers' limits Level.Actors to those movers (map order); 'fillers' prepends a null slot, an actor without a Brush and/or a static brush; 'brief' steps report counts plus a SHA-256 of the full report; {'op':'cycle', mover, count, positions} expands to count brief frames cycling through positions. Coverage of the tracker's basic blocks over all results: coverage.txt (blocks.py).",
+ "cases": [
+  {
+   "id": "training-doors",
+   "map": "00_Training",
+   "purpose": "Double sliding door 16/17 and vertical door 50: closed, half open, open, repeated no-op frames, closing (removal and re-insertion), Update(NULL) re-adding every mover, SurfIsDynamic boundaries. Level.Actors starts with a null slot, an actor without a Brush and a static brush (skipped by the constructor and Update(NULL)).",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover16": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover17": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover17": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover16": {
+       "key": 0
+      },
+      "DeusExMover17": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover50": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover50": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover50": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": null
+    },
+    {
+     "op": "surfIsDynamic",
+     "iSurfs": [
+      0,
+      5332,
+      5333,
+      5482,
+      5483,
+      -1
+     ]
+    }
+   ],
+   "fillers": [
+    "null",
+    "noBrush",
+    "staticBrush"
+   ]
+  },
+  {
+   "id": "training-crossing",
+   "map": "00_Training",
+   "purpose": "DeusExMover50 moved where it straddles many level leaves (37 fragments), the same position again (no-op), a 1-unit move (full re-filter), then home.",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover50",
+     "set": {
+      "DeusExMover50": {
+       "offset": [
+        -34,
+        630,
+        66
+       ]
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover50"
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover50",
+     "set": {
+      "DeusExMover50": {
+       "offset": [
+        -34,
+        630,
+        67
+       ]
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover50",
+     "set": {
+      "DeusExMover50": {
+       "key": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "training-far-hidden-flush",
+   "map": "00_Training",
+   "purpose": "A mover sent 20000 up (DeusExMover.BlowItUp, Mover.PostBeginPlay for irrelevant movers): all fragments dropped in solid; a hidden moved mover is skipped by the frame; Flush removes a mover without re-insertion and an unchanged Update does not bring it back; a later move does; destructor restores the model.",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover6": {
+       "offset": [
+        0,
+        0,
+        20000
+       ]
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover7": {
+       "key": 1,
+       "hidden": true
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover7": {
+       "key": 1,
+       "hidden": false
+      }
+     }
+    },
+    {
+     "op": "flush",
+     "actor": "DeusExMover43"
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover43"
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover43",
+     "set": {
+      "DeusExMover43": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover6": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "destroy"
+    }
+   ]
+  },
+  {
+   "id": "training-construct-pc24",
+   "map": "00_Training",
+   "purpose": "The same construction at PC24 (0x007f) to measure what the unmeasured game-thread precision changes in the load-time fragments; then one door opened at PC24.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover16": {
+       "key": 1
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "club-rotating",
+   "map": "10_Paris_Club",
+   "purpose": "Rotating doors: the mirrored tunnel doors DeusExMover8/11 (32 polygons, yaw), roll door DeusExMover0 (23 polygons), at quarter, half and full keys, then all closed in one frame and a repeated frame. The destructor then restores the model (child links into the removed range reset to -1).",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover8": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover8": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover11": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover11": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover0": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover0": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover8": {
+       "key": 0
+      },
+      "DeusExMover11": {
+       "key": 0
+      },
+      "DeusExMover0": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "frame"
+    },
+    {
+     "op": "destroy"
+    }
+   ]
+  },
+  {
+   "id": "island-pitch",
+   "map": "01_NYC_UNATCOIsland",
+   "purpose": "DeusExMover7 (42 polygons) pitching 16384: half and full, then closed.",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover7": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover7": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover7": {
+       "key": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "intro-coplanar",
+   "map": "00_Intro",
+   "purpose": "DeusExMover0, whose top face lies on the floor surface 7 at Z=-128: fragments appended to the end of the floor's coplanar chains (mirror-surfaces.md); then slid open and closed. The destructor then restores the model (child links into the removed range reset to -1).",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover0": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover0": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "destroy"
+    }
+   ]
+  },
+  {
+   "id": "ship-mirrored-13gon",
+   "map": "09_NYC_Ship",
+   "purpose": "DeusExMover87: 111 polygons including a 13-gon (fragments reach the 14-vertex SplitInHalf), MainScale Y = -1 (negative orientation: FPoly::Transform reverses vertex order), sliding 1268 units across many leaves. The destructor then restores the model (child links into the removed range reset to -1).",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover87": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover87": {
+       "key": 0
+      }
+     }
+    },
+    {
+     "op": "destroy"
+    }
+   ]
+  },
+  {
+   "id": "club-pool-wrap",
+   "map": "10_Paris_Club",
+   "purpose": "DeusExMover11 cycled between alpha 0.25 and key 1 for 153 frames (brief steps: counts and a digest of each full report). Step 41 (full) is where the next-fit node cursor wraps from the end of the node pool to iOriginalTopNode; step 152 (full) is where the vertex cursor wraps in its pool.",
+   "steps": [
+    {
+     "op": "construct",
+     "brief": true
+    },
+    {
+     "op": "cycle",
+     "mover": "DeusExMover11",
+     "count": 40,
+     "positions": [
+      {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      },
+      {
+       "key": 1
+      }
+     ]
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover11": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      }
+     }
+    },
+    {
+     "op": "cycle",
+     "mover": "DeusExMover11",
+     "count": 110,
+     "positions": [
+      {
+       "key": 1
+      },
+      {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      }
+     ]
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover11": {
+       "key": 1
+      }
+     }
+    },
+    {
+     "op": "frame",
+     "set": {
+      "DeusExMover11": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.25
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "ship-split-in-half",
+   "map": "09_NYC_Ship",
+   "movers": [
+    "DeusExMover87"
+   ],
+   "purpose": "Only DeusExMover87 in Level.Actors, placed (found by a random search) where a fragment of its 13-gon reaches 14 vertices, so FilterPoly calls FPoly::SplitInHalf and filters the half recursively; then back home.",
+   "steps": [
+    {
+     "op": "construct"
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "set": {
+      "DeusExMover87": {
+       "locationBits": [
+        1160687862,
+        3298671903,
+        1155659776
+       ],
+       "rotation": [
+        758,
+        14785,
+        3850
+       ]
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "set": {
+      "DeusExMover87": {
+       "key": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-10_Paris_Club-pc64",
+   "map": "10_Paris_Club",
+   "purpose": "Precision sensitivity: construction and one DeusExMover8 update (alpha 0.5, then a 1/3 offset), both at control word 0x037f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover8",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover8": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover8",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover8": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-10_Paris_Club-pc24",
+   "map": "10_Paris_Club",
+   "purpose": "Precision sensitivity: construction and one DeusExMover8 update (alpha 0.5, then a 1/3 offset), both at control word 0x007f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover8",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover8": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover8",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover8": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-01_NYC_UNATCOIsland-pc64",
+   "map": "01_NYC_UNATCOIsland",
+   "purpose": "Precision sensitivity: construction and one DeusExMover7 update (alpha 0.5, then a 1/3 offset), both at control word 0x037f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover7",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover7": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover7",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover7": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-01_NYC_UNATCOIsland-pc24",
+   "map": "01_NYC_UNATCOIsland",
+   "purpose": "Precision sensitivity: construction and one DeusExMover7 update (alpha 0.5, then a 1/3 offset), both at control word 0x007f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover7",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover7": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover7",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover7": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-00_Intro-pc64",
+   "map": "00_Intro",
+   "purpose": "Precision sensitivity: construction and one DeusExMover0 update (alpha 0.5, then a 1/3 offset), both at control word 0x037f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover0",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover0": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover0",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover0": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-00_Intro-pc24",
+   "map": "00_Intro",
+   "purpose": "Precision sensitivity: construction and one DeusExMover0 update (alpha 0.5, then a 1/3 offset), both at control word 0x007f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover0",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover0": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover0",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover0": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-09_NYC_Ship-pc64",
+   "map": "09_NYC_Ship",
+   "purpose": "Precision sensitivity: construction and one DeusExMover87 update (alpha 0.5, then a 1/3 offset), both at control word 0x037f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-09_NYC_Ship-pc24",
+   "map": "09_NYC_Ship",
+   "purpose": "Precision sensitivity: construction and one DeusExMover87 update (alpha 0.5, then a 1/3 offset), both at control word 0x007f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover87",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover87": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-00_Training-pc64",
+   "map": "00_Training",
+   "purpose": "Precision sensitivity: construction and one DeusExMover16 update (alpha 0.5, then a 1/3 offset), both at control word 0x037f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 895,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover16",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover16": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover16",
+     "controlWord": 895,
+     "brief": true,
+     "set": {
+      "DeusExMover16": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "precision-00_Training-pc24",
+   "map": "00_Training",
+   "purpose": "Precision sensitivity: construction and one DeusExMover16 update (alpha 0.5, then a 1/3 offset), both at control word 0x007f; compare the step digests of the -pc64 and -pc24 cases.",
+   "steps": [
+    {
+     "op": "construct",
+     "controlWord": 127,
+     "brief": true
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover16",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover16": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5
+      }
+     }
+    },
+    {
+     "op": "update",
+     "actor": "DeusExMover16",
+     "controlWord": 127,
+     "brief": true,
+     "set": {
+      "DeusExMover16": {
+       "from": 0,
+       "to": 1,
+       "alpha": 0.5,
+       "offset": [
+        0.3333333,
+        0.3333333,
+        0.3333333
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

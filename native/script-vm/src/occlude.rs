@@ -978,7 +978,10 @@ fn occlude() -> u32 {
                 // pop
                 state = 2;
             }
-            if state == 0 && node.render_bound() != -1 {
+            // A node with a render bound tests it, unless the moving brush
+            // tracker owns its surface (0x10b17ae5: SurfIsDynamic; a
+            // fragment's iRenderBound is its mover's chain link).
+            if state == 0 && node.render_bound() != -1 && !crate::tracker::surf_is_dynamic(node.surf()) {
                 let skip_test = node.flags() & 0x10 == 0 && (frame_counter ^ i_node as u32) & 0xf != 0;
                 if !skip_test {
                     node.set_flags(node.flags() & !0x10);

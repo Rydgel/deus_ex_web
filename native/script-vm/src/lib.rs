@@ -32,6 +32,7 @@ mod meshlight;
 mod occlude;
 mod p24;
 mod setup;
+mod tracker;
 mod particles;
 mod pawn_phys;
 mod swim;

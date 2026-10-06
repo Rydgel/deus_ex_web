@@ -65,13 +65,16 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
 // walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs) and
 // ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs).
+// ?moverTracker=off keeps movers out of the BSP (brush-tracker.mjs): drawn
+// whole and frustum-stamped, as before the moving brush tracker.
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
-  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION']]) {
+  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
+  ['moverTracker','DEUS_EX_MOVER_TRACKER']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -1076,6 +1079,12 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** Validation only: mover-probe.mjs (the moving brush tracker's movers) on
+ * the simulation side. */
+async moverProbe(args) {
+  if (simClient) return simClient.call('moverProbe', args);
+  return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
+},
 /** Validation only: decal-probe.mjs placeProbe (player location and view
  * rotation) on the simulation side. */
 placeProbe(args) {
@@ -1391,7 +1400,7 @@ function drawFrame(snap, time) {
   decalScene?.update(visible?.decals ?? null);
   if (drawWorld) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
-    if (visible) world.visibility.select(visible.nodes);
+    if (visible) world.visibility.select(visible.nodes, visible.movers ?? null);
     spriteScene?.mainPass(true);
     try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); }
   }
