@@ -54,11 +54,15 @@ volume, computed on the shared x87 model. Play's ConPlay host
 default) and handles natives 268–270 with it. It lives as long as the host,
 across Player-start reloads, as the subsystem outlives levels.
 
-Not modeled: Play has no music playback, so no song handle exists and 270
-changes only the byte; the browser mixes speech with the per-sound volume
-only, applying neither the subsystem bytes nor the digital volume.
-`UGalaxyAudioSubsystem::Init` and `Update` were not traced for their own use
-of these values.
+In Play the three bytes belong to the live audio subsystem
+(`script-audio-live.mjs` creates the volumes and ConPlay uses them): native
+270 runs the SetInstantMusicVolume translation of galaxy-music.mjs
+(glxSetMusicVolume with UseDigitalMusic, verified with both config flags in
+validate-galaxy-music-update.mjs), 268/269 also send the digital volume to
+the library as glxSetSampleVolume, and Update's category ratio and
+SetVolumes read the live bytes. The browser still mixes speech with the
+per-sound volume only, applying neither the subsystem bytes nor the digital
+volume.
 
 ## Validation
 

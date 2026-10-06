@@ -13,11 +13,13 @@
  *   master volume 0..127 (0x1069817c and the fade target 0x10697ce4, fade step
  *   0x10697ca0 = 0). The new byte replaces SoundVolume (+0x6a) or SpeechVolume
  *   (+0x6b) after the call, so the other one is the stored byte.
- * - SetInstantMusicVolume 0x10606610: float32(clamp(MusicVolume * K, 0, 1));
- *   with a playing song (+0x40) Galaxy 0x1060eb60 and with +0x3c Galaxy
- *   0x1060e9a0 take ftol(that * 127.0); then MusicVolume (+0x69) = the byte.
- *   Play has no music playback, so no song handle exists and only the byte
- *   changes (the handle branches are not modeled).
+ * - SetInstantMusicVolume 0x10606610: float32(clamp(byte * K, 0, 1)); with
+ *   UseDigitalMusic (+0x40) glxSetMusicVolume 0x1060eb60 and with UseCDMusic
+ *   (+0x3c) the CD volume 0x1060e9a0 take ftol(that * 127.0f); then
+ *   MusicVolume (+0x69) = the byte. Its translation is galaxy-music.mjs's
+ *   setInstantMusicVolume: Play sets `music` to the subsystem's music
+ *   (script-audio-live.mjs), whose bytes are this `state`. Without it only
+ *   the byte changes, as both config flags clear would leave it.
  *
  * The three bytes start as the subsystem's config values
  * ([Galaxy.GalaxyAudioSubsystem] MusicVolume/SoundVolume/SpeechVolume). */
@@ -39,19 +41,27 @@ export function createGalaxyVolumes({musicVolume = 0, soundVolume = 0, speechVol
     digitalVolume: null};
   return {
     state,
+    /** galaxy-music.mjs's subsystem music, which handles native 270. */
+    music: null,
+    /** The Galaxy library service object (galaxy-music-library.mjs), which
+     * receives 0x1060ec00(volume, 0) as glxSetSampleVolume. */
+    library: null,
     /** Native 268's audio call (vtable +0x90). */
     setInstantSoundVolume(volume) {
       state.digitalVolume = digitalVolume(volume, state.speechVolume);
+      this.library?.setSampleVolume(state.digitalVolume, 0);
       state.soundVolume = volume & 255;
     },
     /** Native 269's audio call (vtable +0x94). */
     setInstantSpeechVolume(volume) {
       state.digitalVolume = digitalVolume(state.soundVolume, volume);
+      this.library?.setSampleVolume(state.digitalVolume, 0);
       state.speechVolume = volume & 255;
     },
-    /** Native 270's audio call (vtable +0x98), without a playing song. */
+    /** Native 270's audio call (vtable +0x98). */
     setInstantMusicVolume(volume) {
-      state.musicVolume = volume & 255;
+      if (this.music) this.music.setInstantMusicVolume(volume);
+      else state.musicVolume = volume & 255;
     },
   };
 }

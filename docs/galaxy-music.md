@@ -19,7 +19,7 @@ verified against the original under Unicorn (see "Loader: implemented").
 The mixer's SSE kernel, conversion and renderer are verified too (see
 "Phase 3 status", and mixer.md §8), and so is the sequencer (see "Phase 2
 status": every song from sections 0..5 plus synthetic cases, tick by tick).
-The Update report is not verified yet.
+The Update music section is translated and verified (see "Phase 4").
 
 ## Corrections to earlier notes (applied)
 
@@ -353,9 +353,11 @@ Wasm and does not allocate.
 * the music/effects bus placement, about 1 s apart (mixer.md §1.3);
 * heap adjacency and contents behind the two hazards;
 * bus B and the reverb, which are not used by the browser;
-* the other songs and sections, pending the sequencer validation.
-  `validate-galaxy-mixer.mjs --sweep` runs every song and section on the
-  Rust kernel alone and finds no fault.
+* the other songs and sections: their sequencer traces are now verified
+  (Phase 2, all 35 songs × sections 0..5, with the real kernel running in
+  the replay without a fault), but their PCM is not compared with the
+  oracle. `validate-galaxy-mixer.mjs --sweep` runs every song and section on
+  the Rust kernel alone and finds no fault.
 
 **Rerun:**
 
@@ -381,7 +383,9 @@ counters' initial phases explicitly.
 
 - x87 precision control at Galaxy Init and in Update (PC 53 vs 24, the D3D
   FPUSETUP question): the fade end frame, the ±1 of the music volume, and
-  the sqrt pan table (at PC 53 it equals plain doubles).
+  the sqrt pan table (at PC 53 it equals plain doubles). Measured in phase 4:
+  SetVolumes' sample volume is 126 under 0x037f and 127 under 0x027f/0x007f
+  at the installed volumes, and 0x007f rounds Update's dt to 24 bits.
 - The music bus delay (about 1 s) needs a loopback recording.
 - Answered by the sequencer oracle (Phase 2): NULL patterns are skipped in
   the same tick; a section > 0 start keeps speed 48 / tempo 120 and the
@@ -417,11 +421,143 @@ counters' initial phases explicitly.
    **Done** (see "Phase 3 status").
 4. **Subsystem:** the Update music transition and SetVolumes on the shared
    x87 model, fed by the PlayerPawn fields from Play's scripts.
+   **Done** (see "Phase 4").
 5. **Output:** the Rust mixer in an AudioWorklet (Wasm) at 44.1 kHz; speech
    and effects stay on Web Audio until the effects path is translated (the
    original mixes them in the same pool, which a later step should follow).
    **Host done** (see "Phase 5: Output"); audible once the PCM kernel
    replaces the temporary `galaxy_render`.
+
+## Phase 4: Subsystem music section (2026-10-06)
+
+Play's scripts now drive the library. Each Galaxy Update runs the original's
+music section on the PlayerPawn fields that PostLogin's `ClientSetMusic`,
+`MusicEvent` and `DeusExPlayer.UpdateDynamicMusic` write. It loads, fades,
+restarts and unregisters songs through the library service object, and
+writes the library's order position back into SongSection. The details,
+evidence and case list are in
+[update-transition.md §10](galaxy-music/update-transition.md).
+
+**Files.**
+
+- `src/runtime/galaxy-music.mjs`: `createGalaxyMusic(config, services)`
+  returns `{state, update(dt, actor), setVolumes(), setInstantMusicVolume(byte),
+  unregisterMusic(song)}`. It translates:
+  - Update `0x1060a50b..0x1060aa15`;
+  - SetVolumes `0x106061b0`;
+  - SetInstantMusicVolume `0x10606610`;
+  - UnregisterMusic `0x10606e60`;
+  - the UMusic Data lifecycle: Engine's lazy Load `0x1030cbb0` and Unload
+    `0x1030cd90`, and `Data.Add(1024)`.
+
+  `state` holds `+0x888` (current), `+0x88c`, `+0x88d` and `+0x900`
+  (MusicFade). `config.precision` (64, 53 or 24) is the x87 precision
+  control. Play uses 64, which is what galaxy-audio.mjs assumes.
+- `src/runtime/galaxy-music-objects.mjs`: the UMusic behind a
+  `PlayerPawn.Song` reference, which is either a map's LevelInfo.Song import
+  (the resource registry's export reference) or a DynamicLoadObject load-graph
+  object.
+- `src/runtime/galaxy-music-library.mjs`, first section:
+  `createMirrorMusicLibrary()`, a recording host stand-in with no loader
+  and no sequencer. The host transport is the second section.
+- `galaxy-audio.mjs`: Update takes `services.library`'s `lock()` after the
+  viewport test and releases it at the end. It calls `services.music.update`
+  after the channel loop.
+- `script-audio-live.mjs`: `createLiveAudio({..., library})`, which defaults
+  to the mirror. It reads the four fields from the viewport actor, gives
+  `dispose()`, and shares the subsystem's volume bytes with natives 268–270
+  (`galaxy-volumes.mjs`, `script-conplay-live.mjs`).
+
+**Why JavaScript.** Update's body is JavaScript (galaxy-audio.mjs over the
+BigInt x87 model), and this section sits inside it. In the steady state
+(Transition 0) it reads one field, calls `library.order()` once and writes
+one byte: about 0.1 µs per frame, with no allocation and no BigInt work. The
+x87 work runs only while a transition is pending. Measured headless:
+
+| | Median | Notes |
+| --- | --- | --- |
+| Steady state, microbenchmark (lock, update, unlock) | 98–132 ns | per frame |
+| Steady state, in place | 3–5 µs | includes the timing wrapper's own field read and clock calls |
+| Transition frames | 29–38 µs | the load frame is the maximum, 1.6–1.9 ms: it copies 1.4–1.8 MB of module into the grown Data buffer, once per song load |
+| Whole Galaxy Update, with / without the section (interleaved) | 308–314 / 306–312 µs (00_Intro), 821–863 / 834–849 µs (Island) | within noise; the sign flips between runs |
+
+**Verified against the original** (`validate-galaxy-music-update.mjs`):
+
+- 718 cases, 37,496 ops and 32,471 Update frames; every op's events and
+  state are equal.
+- **Tier 1** has recording glx leaves and covers:
+  - Transition 0..6 × Latency 10/40/250 × the six case families;
+  - the control words 0x037f, 0x027f and 0x007f, replayed at 64, 53 and 24
+    bits;
+  - fade-edge, song-flip, failure, large-dt, Destroy, CdTrack, SetVolumes and
+    SetInstantMusicVolume cases.
+- **Tier 2** runs the real library with DX songs and checks the mirror's
+  results and modelled bytes after every op.
+- The original's code paths are covered except the CD audio calls, the
+  exception handlers and the appFailAssert tails.
+
+**Findings.**
+
+- **SetVolumes' sample volume** at the installed volumes (204/255) is 126
+  under 0x037f and 127 under 0x027f or 0x007f. SpeechVolume·(1/255) stays in
+  a register, and at 64 bits it is just below 1.
+- **Under 0x007f** the prologue's dt is rounded to 24 bits, so fades end on a
+  different frame in 13 of 243 scenarios.
+- **Under 0x027f** only one fade-edge case ends on a different frame.
+- **The game thread's control word is still open**: it decides the ±1 above.
+
+**Play** (`validate-galaxy-music-play.mjs`, headless, one map per process):
+
+- **00_Intro.** The first painted frame issues one batch that loads
+  Intro_Music (1,843,231 + 1024 bytes) and starts section 0, with no fade.
+  - SongSection then follows `order()`. It is 0xff with the mirror, which has
+    no sequencer.
+  - Player start issues no library op. The new PostLogin fades for 65 frames
+    (the first has dt 0: the reset restarts the clock) and restarts the
+    section on the loaded module, with no unload or load.
+  - `dispose()` issues glxStopMusic and glxUnloadMusic.
+- **00_Training** goes through the browser host's proxy (createGame's
+  `musicLibrary`). The first frame posts one encoded load+start batch with
+  Training_Music's bytes plus slack, and `dispose()` posts the unregister.
+  Credits_Music by DynamicLoadObject, as CreditsScrollWindow loads it, then
+  the level song, then the credits again: each switch is one batch, and the
+  last reloads the emptied graph UMusic through its linker archive.
+- **01_NYC_UNATCOIsland.** UpdateDynamicMusic's MeetPaul switch
+  (`ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade)`, tick 1871) fades for 64
+  frames, then restarts section 4 on the loaded module.
+
+**State digests.**
+
+- bench-sim's digests do not change, because bench-sim never paints the HUD,
+  so Galaxy Update does not run.
+- Play's state digest (`state-digest.mjs`, the page and the worker) changes
+  after the first painted frame. A field diff of 00_Intro after 300 frames
+  against a run with the section disabled shows exactly two changed fields:
+  the player's Transition (3 → 0) and SongSection (0 → 255).
+- validate-sim-split compares two pages of one build, so it is unaffected.
+
+**Not verified or open.**
+
+- Which x87 control word the game thread uses (§8.1 of
+  update-transition.md).
+- The mirror cannot know a song's length, so it counts a glxControlMusic
+  position above 0 as uncertain. The host's proxy has the same limit until a
+  report arrives.
+- A same-song map change keeps the UMusic in the original and fades. Play
+  builds a fresh runtime per map, and `dispose()` unregisters it, so the next
+  map reloads the song without a fade.
+- The DynamicLoadObject route (credits, PlayMusicWindow) is checked by
+  calling DynamicLoadObject from the validator, not yet by those windows in a
+  map.
+- The CD branch is refused (`UseCDMusic=True` throws). The installed config
+  has it False.
+
+**Rerun.**
+
+```
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-music-update.mjs [--reuse]
+node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|00_Training|01_NYC_UNATCOIsland]
+```
 
 ## Phase 5: Output (browser host, 2026-10-06)
 
@@ -578,6 +714,14 @@ validators.
   its `order()` equals the library's. There are no underruns, faults or
   console errors. After a reload of the map the library is not reconnected,
   and an unregister plus a Training_Music start load and play.
+  Since phase 4 the map's own Update drives this instead of `musicDrive`
+  (2026-10-06): Training's first painted frame loads and starts
+  Training_Music (1,450,961 bytes with the slack, one batch). The order
+  reaches 1 after 8.2–8.3 s, and the simulation's issued and acknowledged
+  counts and `order()` agree with the library. The map reload's
+  `dispose()` unregisters the song, and the new runtime's first Update loads
+  it again: 2 loads in 4 batches, no reconnect, no underruns or faults.
+  This holds in both modes.
 - Main-thread frame time (`framePhases` total per animate(), Training,
   `?sim=worker`, Intro_Music playing against `?music=0`, interleaved pairs
   of 300 frames): 9.89 / 10.12 ms with music, 10.18 / 11.13 ms without
@@ -588,6 +732,7 @@ validators.
 **Not verified.** Firefox (no Playwright Firefox build here; the code uses
 only AudioWorklet, MessagePort transfer, WebAssembly in the worklet and
 `AudioContext({sampleRate})`, all supported there, but untested). Audible
-output waits for the PCM kernel. The Update translation does not drive the
-library yet (the validator drives it).
+output waits for the PCM kernel. Since phase 4 the Update translation drives
+the library (`validate-galaxy-music-play.mjs` checks the proxy path headless
+on 00_Training); `driveMusicLibrary` remains a validation driver.
 

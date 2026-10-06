@@ -187,9 +187,13 @@ stored double, Galaxy's `_ftol`). The Galaxy library's voices are services:
 `fastLineCheck`, `globalLighting`, `sample(sound)` (`{rate}`), `index(actor)`
 and `atan2`. FPATAN is a transcendental: `atan2` is the host's double, which
 can differ from the hardware's extended result in its last bits before the
-float store (the oracle runs it in double too). Not translated: the music
-transition, the zone reverb, the 3D hardware voices and the lip-sync
-sampling (step 12).
+float store (the oracle runs it in double too). The music section (step 14)
+is galaxy-music.mjs's, called after the channel loop inside the library's
+`lock()`/`unlock()` (`services.library`, `services.music`; see
+[galaxy-music](galaxy-music.md) "Phase 4"). Not translated: the zone reverb,
+the 3D hardware voices and the lip-sync sampling (step 12). Update's
+category ratio reads the live SoundVolume/SpeechVolume bytes, which natives
+268/269 change (galaxy-volumes.mjs).
 
 ## Validation
 
@@ -318,5 +322,6 @@ reaches Galaxy (script-destroy.mjs).
 Remaining: runtime spawns' global indices (the seeded spawn registry), the
 demo-recording and networked ProcessRemoteFunction paths, RegisterSound
 (sample decoding and loop points), the Galaxy library's voice functions and
-mixer (how a volume, pan and frequency become samples), music (RegisterMusic,
-the tracker player), then the oracle cases and the Web Audio mapping.
+mixer for effects (how a volume, pan and frequency become samples), then the
+oracle cases and the Web Audio mapping. Music is phase 4/5 of
+[galaxy-music](galaxy-music.md).
