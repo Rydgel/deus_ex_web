@@ -162,19 +162,35 @@ uniformly 1.13–1.41× brighter; see Open.
 
 **Differences.**
 
-1. *Island y0: a skyline seam.* Play draws a 1-pixel vertical line about
-   65 pixels tall from a skyline "antenna" up into the streetlight's glow,
-   plus a short horizontal line. The original's antenna is short.
-   - Both lines lie on the edges of skyline polygon 2244 (Model189,
-     `BatteryPark.Sky.NYskybox2Mbs`, masked, unlit, two-sided, in the sky
-     zone). The vertical edge is at U ≈ −255 texels, the horizontal at
-     V = −2944 = −23×128: both on the texture's wrap seams.
-   - The texture's first columns are opaque from row 8 down, its last
-     from row 24 down, so an edge pixel that samples across the seam shows
-     a tall or a short spike.
-   - Likely cause: the sub-pixel rasterization and texel-centre conventions
-     of D3D7 (as D3DDrv sets up its vertices) against WebGL's. Not yet
-     traced in D3DDrv.dll.
+1. *Pixel centres (fixed).* In the 19 views with at least 1,500
+   strong-gradient pixels, the original's image sat a median (−0.5, −0.5)
+   pixel from Play's: best fit by bilinear resampling, in 1/8-pixel steps.
+   The original's projection explains it:
+   - Render.dll projects to `ScreenX = X·RZ + FX15`, with
+     `FX15 = (SizeX + 1.0001)·0.5` (ComputeRenderSize, bit-exact in
+     `occlude.rs`), and FY15 likewise;
+   - D3DDrv submits screen-space vertices at `ScreenX − 0.5` and
+     `ScreenY − 0.5` (DrawGouraudPolygon `0x1000583c`/`0x1000584f`,
+     DrawComplexSurface `0x10003c0e`/`0x10003c1d`; the 0.5 at `0x1001864c`);
+   - D3D rasterizes such vertices with pixel centres on integer
+     coordinates, half a pixel from WebGL's.
+
+   The original's 3D image therefore sits 0.50005 px right of and below a
+   symmetric projection. Play's camera now carries that view offset
+   (`play-camera.mjs` `setPixelCentre`); sky and mirror passes copy it.
+   DrawTile subtracts the same 0.5 (`0x10005c7a`/`0x10005c8c`), so 2D tiles
+   at integer coordinates land on whole pixels, as Play's HUD draws them.
+   After the change, the measured offset is (0, 0) in all those views
+   (once 0.125), mean differences fall in 18 of 20 recaptured views, and:
+   - *Island y0's skyline line is gone.* It sat on the wrap-seam edges of
+     skyline polygon 2244 (Model189, `BatteryPark.Sky.NYskybox2Mbs`, masked,
+     unlit, two-sided, in the sky zone): a vertical edge at U ≈ −255 texels,
+     a horizontal one at V = −2944 = −23×128. Half a pixel decided whether an
+     edge pixel sampled the texture's first columns (opaque from row 8) or its
+     last (from row 24): a tall or a short "antenna".
+   - *Ocean Lab y2's 36 outlier blocks drop to 2.*
+
+   `compare` reports this offset per view (`subpixel`).
 2. *Ocean Lab y2: the darkest surfaces.* A shadowed pipe
    (`SubBase.Metal.SB_PipeSec_B`) is raw (1,1,1) in the original over a
    200×200 patch, and (0,0,0) in Play: rounding at the bottom of the range.
@@ -185,9 +201,8 @@ uniformly 1.13–1.41× brighter; see Open.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
   chased: it is a known gamma issue of the game on Windows.
-- The two differences above: D3DDrv's vertex and texel conventions at
-  polygon edges and wrap seams, and the rounding of the darkest modulated
-  values.
+- The darkest pixels' rounding (Ocean Lab y2): raw 1 in the original,
+  0 in Play.
 - Captures are frozen. NPCs stand at their map locations in the frame-0
   reference pose, and their startup (InitializePawn) and patrols are not
   compared. A live comparison needs matched level time (`--live` alone

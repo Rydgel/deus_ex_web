@@ -7,7 +7,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createSimHost } from './sim-host.mjs';
 import { createSimClient } from './sim-client.mjs';
-import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
+import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
 import { decalProbe, placeProbe } from './decal-probe.mjs';
@@ -383,6 +383,7 @@ function resize() {
   canvasAspect = camera.aspect; resizeCount++;
   camera.fov = verticalFov(75, camera.aspect);
   camera.updateProjectionMatrix();
+  setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
 }
 new ResizeObserver(resize).observe($('viewport'));
 function renderViewportFor(rect) {
@@ -1272,6 +1273,10 @@ function drawFrame(snap, time) {
     // (play-camera.mjs applyPlayFrame).
     renderRect = frame.renderRect;
     if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
+    // The 3D view's pixel size: the render rect when it draws, else the canvas.
+    const viewSize = renderRect?.render && renderRect.width > 0 && renderRect.height > 0
+      ? [renderRect.width, renderRect.height] : [renderer.domElement.width, renderer.domElement.height];
+    setPixelCentre(camera, ...viewSize);
     if (frame.lights) {
       try { world.syncMovingLights(frame.lights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
     }

@@ -409,9 +409,8 @@ Open: the occlusion's moving brush tracker (and with it fog on movers) and
 child frames, the rest of the render-pass precision audit (light maps,
 meshes and lasers are still validated at 64-bit precision where the pass
 runs at 24; fog and coronas are done), mirror/sky combinations, time-varying
-moving lights and spotlights, the two differences visual acceptance found
-(a wrap-seam line on a masked sky surface, rounding of the darkest pixels),
-and acceptance of live (unfrozen) scenes. SpriteAnimOnce frames and animated mesh skins
+moving lights and spotlights, the darkest-pixel rounding visual acceptance
+found, and acceptance of live (unfrozen) scenes. SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture
 ([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
@@ -718,8 +717,12 @@ worker mode.
 - *Results.* All 70 views of 14 maps line up in geometry, lighting, meshes,
   coronas, mirrors, fog and skies, with a uniform 1.13–1.41× raw brightness
   gap under Wine.
-- *Differences.* A 1-pixel line on a masked sky polygon's wrap seam
-  (Island), and the darkest pixels (raw 1 in the original, 0 in Play).
+- *Pixel centres.* The original's 3D image sat half a pixel right of and
+  below Play's: FX15's +0.5, D3DDrv's −0.5 and D3D's integer pixel centres.
+  Play's camera now carries that offset, and the residual shift is (0, 0).
+  This also removed a 1-pixel line on a masked sky polygon's wrap seam
+  (Island).
+- *Left.* The darkest pixels: raw 1 in the original, 0 in Play.
 `tools/dump-actor-win.c` reads live actor fields from the running original.
 See [visual acceptance](visual-acceptance.md).
 

@@ -242,6 +242,30 @@ function edgeRecall(a, b, w, h, r = 2) {
   }
   return n ? hit / n : 1;
 }
+// The sub-pixel offset of Play's frame against the original's: the shift
+// (1/8-pixel steps, ±1.5 px) of Play's luma, bilinearly resampled and scaled
+// to the original's mean, that best matches the original at its strong
+// gradients. It measured (−0.5, −0.5) before Play took the original's pixel
+// centres (play-camera.mjs setPixelCentre). Null with too few gradients.
+function subpixelOffset(A, B) {
+  const {w, h} = A, la = new Float32Array(w * h), lb = new Float32Array(w * h);
+  let ma = 0, mb = 0;
+  for (let i = 0; i < w * h; i++) { la[i] = luma(A.data, 3 * i); lb[i] = luma(B.data, 3 * i); ma += la[i]; mb += lb[i]; }
+  const gain = ma / Math.max(mb, 1), points = [];
+  for (let y = 40; y < h - 40; y += 2) for (let x = 40; x < w - 40; x += 2)
+    if (Math.hypot(la[y * w + x + 1] - la[y * w + x - 1], la[(y + 1) * w + x] - la[(y - 1) * w + x]) > 12) points.push(y * w + x);
+  if (points.length < 1500) return null;
+  const at = (x, y) => { const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = y0 * w + x0;
+    return (lb[i] * (1 - fx) + lb[i + 1] * fx) * (1 - fy) + (lb[i + w] * (1 - fx) + lb[i + w + 1] * fx) * fy; };
+  let best = null;
+  for (let dy = -1.5; dy <= 1.5; dy += 0.125) for (let dx = -1.5; dx <= 1.5; dx += 0.125) {
+    let e = 0;
+    for (const i of points) { const v = la[i] - gain * at(i % w + dx, Math.floor(i / w) + dy); e += v * v; }
+    if (!best || e < best.e) best = {dx, dy, e};
+  }
+  return [best.dx, best.dy];
+}
+
 function compareOne(a, b, prefix) {
   const A = readRgb(a), B = readRgb(b);
   if (A.w !== B.w || A.h !== B.h) return {error: `size ${A.w}x${A.h} vs ${B.w}x${B.h}`};
@@ -276,6 +300,7 @@ function compareOne(a, b, prefix) {
     ratio: +((m[1][0] + m[1][1] + m[1][2] + 3) / (m[0][0] + m[0][1] + m[0][2] + 3)).toFixed(3),
     mad: +(mad / (3 * n)).toFixed(2),
     edgeRecall: +edgeRecall(EA, EB, w, h).toFixed(3), edgePrecision: +edgeRecall(EB, EA, w, h).toFixed(3),
+    subpixel: subpixelOffset(A, B),
     blockRatio: {min: sorted[0], median: sorted[sorted.length >> 1], max: sorted[sorted.length - 1]},
     outlierBlocks: blocks.map((r, i) => [i % GX, Math.floor(i / GX), r]).filter(([, , r]) => Math.abs(Math.log(r / sorted[sorted.length >> 1])) > Math.log(1.6)),
   };

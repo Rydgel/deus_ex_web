@@ -159,8 +159,9 @@ fog on movers; meshes stay unfogged, as the shipped D3D configuration draws
 them) and child frames, the rest of the render-pass precision audit,
 mirror/sky combinations, spatial and time-varying light effects on moving
 lights and spotlights, the remaining native UI presentation, and the
-differences and live scenes left by [visual acceptance](docs/visual-acceptance.md)
-(14 maps match the original's own frames at matched cameras).
+darkest-pixel rounding and live scenes left by
+[visual acceptance](docs/visual-acceptance.md) (14 maps match the original's
+own frames at matched cameras, down to its pixel centres).
 
 ## Open the viewer
 

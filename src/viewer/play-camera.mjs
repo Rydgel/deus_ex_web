@@ -52,3 +52,19 @@ export function applyPlayFrame(camera, view, renderRect) {
     setViewAspect(camera, renderRect.width / renderRect.height, view.fov);
   return angles;
 }
+
+/** The original's pixel centres. Render.dll projects to ScreenX = X·RZ +
+ * FX15, with FX15 = (SizeX + 1.0001)·0.5 (ComputeRenderSize, occlude.rs);
+ * D3DDrv submits each vertex at ScreenX − 0.5 (DrawGouraudPolygon
+ * 0x1000583c/0x1000584f, DrawComplexSurface 0x10003c0e, the 0.5 at
+ * 0x1001864c); and D3D rasterizes screen-space vertices with pixel centres
+ * on integer coordinates, half a pixel from GL's. Its image therefore sits
+ * 0.50005 px right of and below a symmetric GL projection, as measured
+ * against the original's frames (docs/visual-acceptance.md). `width` and
+ * `height` are the 3D view's size in device pixels. */
+export const PIXEL_CENTRE = 0.50005;
+export function setPixelCentre(camera, width, height) {
+  const view = camera.view;
+  if (view?.enabled && view.fullWidth === width && view.fullHeight === height && view.offsetX === -PIXEL_CENTRE) return;
+  camera.setViewOffset(width, height, -PIXEL_CENTRE, -PIXEL_CENTRE, width, height);
+}
