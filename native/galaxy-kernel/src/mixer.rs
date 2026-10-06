@@ -53,8 +53,11 @@ pub const HAZARD_FOREIGN_READ: u32 = 2;
 /// The kernel wrote below d00 (a negative run count moves the bus pointers
 /// back, 0x1061557f..0x1061559d): the alignment padding of the bus block,
 /// the heap header before it and the non-SSE table block [0x10698344]
-/// (0x28000 bytes, GlobalAlloc'd just before, never read by the SSE path).
-/// Those writes are dropped; writes that land on the buses are kept.
+/// (0x28000 bytes, GlobalAlloc'd by the call just before the bus block's,
+/// 0x1060e1b4; never read by the SSE path). Those writes are dropped; writes
+/// that land on the buses are kept (d00 = align64(block), stride 0x1040,
+/// 0x1060e1d6..0x1060e20d). That the heap places the two blocks adjacently
+/// is what the oracle's allocator does; on Windows it is not measured.
 pub const HAZARD_BUS_UNDERRUN: u32 = 4;
 /// Bytes below d00 the original can write without leaving the table block.
 const BUS_UNDERRUN_LIMIT: i64 = 0x28000;
@@ -380,8 +383,10 @@ impl Library {
             };
             let o = b.wrapping_mul(w).wrapping_add(a.wrapping_mul(32767 - w));
             let fo = o as f32;
-            // Frame by frame, as the original: its 2-frame groups read all three
-            // buses before storing them, and aliasing buses are >= 520 frames apart.
+            // Frame by frame in order: the original's 2-frame groups read all
+            // three buses before storing them, but a group's buses are 0x2080
+            // bytes (1040 frames) apart, so an overlapping write is always one
+            // of an earlier frame, which the in-order loop sees as it does.
             for (j, &r) in rel.iter().enumerate() {
                 let byte = r + 8 * k;
                 if byte < 0 {
@@ -703,6 +708,38 @@ pub extern "C" fn galaxy_mixer_ahead_now() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hand-computed frames: `cvtpi2ps` rounds an odd o above 2^24 to even,
+    /// the product rounds once, the lanes and surround negation, the gain word
+    /// sign-extended from the low 16 bits.
+    #[test]
+    fn kernel_by_hand() {
+        let mut l = Library::new(16);
+        assert_eq!(l.setup_output(64, [1, 1, 0], 44100, 2, 16, 7), OK);
+        let base = 0x5000_0000u32;
+        let mut data = vec![0u8; 64];
+        for f in 0..32 {
+            data[2 * f..2 * f + 2].copy_from_slice(&513i16.to_le_bytes());
+        }
+        l.player.mixer.fab.push((base, data));
+        // frac 2 -> w = 1: o = 513 * 1 + 513 * 32766 = 16809471, f32 16809472 (tie to even).
+        let gain_r = 0xdead_0003u32; // low word 3
+        l.mix_kernel(true, 0, &[1, base / 2, 3, 0x10000, 7, gain_r, 0, 0, 0, 0, 1]).unwrap();
+        let two30 = 2f64.powi(30);
+        let lane0 = ((16809472.0f64 * 7.0) / two30) as f32;
+        let lane1 = ((16809472.0f64 * 3.0) / two30) as f32;
+        assert_eq!(l.player.mixer.buses[0], lane0);
+        assert_eq!(l.player.mixer.buses[1], lane1);
+        assert_eq!(l.player.mixer.buses[2], 0.0); // one frame only (aligned, count 1)
+        // Surround (mode bit 2) negates the R word: the second lane subtracts.
+        l.mix_kernel(true, 0, &[1, base / 2, 3, 0x10000, 7, gain_r, 0, 0, 0, 0, 5]).unwrap();
+        assert_eq!(l.player.mixer.buses[1], lane1 + -lane1);
+        // Odd offset, count 0: the prologue still stores one frame (frac 0: o = 513 * 32767).
+        l.mix_kernel(false, 8, &[0, base / 2, 0, 0x10000, 0x8000, 0, 0, 0, 0, 0, 1]).unwrap();
+        let d04 = BUS_FLOATS;
+        assert_eq!(l.player.mixer.buses[d04 + 2], ((16809472.0f64 * -32768.0) / two30) as f32);
+        assert_eq!(l.player.mixer.buses[d04 + 3], 0.0);
+    }
 
     #[test]
     fn frame_counts() {
