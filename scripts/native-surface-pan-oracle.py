@@ -65,7 +65,9 @@ def main():
         cpu.reg_write(UC_X86_REG_EBP, ebp)
         cpu.reg_write(UC_X86_REG_ESP, stack + 0x400)
         cpu.reg_write(UC_X86_REG_EBX, surf)
-        cpu.reg_write(UC_X86_REG_FPCW, native.render_control_word())  # DrawFrame: ORACLE_CW (audit)
+        # DrawFrame runs in the render pass: precision control 24 (0x007f)
+        # unless ORACLE_CW says otherwise.
+        cpu.reg_write(UC_X86_REG_FPCW, native.render_control_word(0x007f))
         cpu.emu_start(START, END, count=400)
         results.append({'u': struct.unpack('<I', cpu.mem_read(ebp - 0x4c, 4))[0],
                         'v': struct.unpack('<I', cpu.mem_read(ebp - 0x18, 4))[0]})

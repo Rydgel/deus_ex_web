@@ -3,9 +3,13 @@
 // texture-animation.mjs (validate-native-texture-animation) once per drawn
 // frame. In headless Chromium this samples every animated head over a few
 // seconds and checks that each advances, only along its own AnimNext chain,
-// and that every material using it draws the shown frame's texture.
+// and that every material using it draws the shown frame's texture. The
+// auto-panned surfaces' offsets must be surfacePan's for the pan inputs the
+// simulation sent with the frame (sim-session.mjs frame.pan: TimeSeconds and
+// the zones' live speeds). The simulation runs in the worker by default
+// (`--query sim=inline` runs it on the page).
 //
-//   node scripts/validate-texture-animation-play.mjs [--url http://...]
+//   node scripts/validate-texture-animation-play.mjs [--url http://...] [--map MAP] [--query sim=inline]
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -18,14 +22,18 @@ let server = null, url = option('url', null);
 if (!url) {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const {default: base} = await import('../vite.config.mjs');
-  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/')));
+  // The tree may itself sit in .work/ or .claude/worktrees/, which the config denies.
+  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/'))
+    && !(pattern.includes('.claude/worktrees') && root.includes('/.claude/worktrees/')));
   server = await createServer({...base, configFile: false, root, logLevel: 'error',
     server: {...base.server, port: 0, strictPort: false, fs: {...base.server.fs, deny}, watch: null}});
   await server.listen();
   url = server.resolvedUrls.local[0].replace(/\/$/, '');
 }
-const hook = `\nwindow.__deusTextureAnimation={get world(){return world;},get game(){return game;},get camera(){return camera;}};\n`;
-const map = option('map', '00_Training');
+const hook = `\nwindow.__deusTextureAnimation={get world(){return world;},get camera(){return camera;}};\n`;
+// The frame's pan inputs as the page receives them (main.mjs drawFrame).
+const PAN_INPUTS = 'panInputs = { timeSeconds: pan.timeSeconds, zoneSpeeds: name => pan.speeds[name] };';
+const map = option('map', '00_Training'), query = option('query', '');
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 let report;
 try {
@@ -33,10 +41,11 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
-    await route.fulfill({response, body: (await response.text()) + hook});
+    const body = await response.text();
+    if (!body.includes(PAN_INPUTS)) throw new Error('main.mjs no longer builds the frame pan inputs as expected');
+    await route.fulfill({response, body: body.replace(PAN_INPUTS, `${PAN_INPUTS} window.__deusPan = pan;`) + hook});
   });
-  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
+  await page.goto(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (map !== '00_Training') {
     await page.locator('#map').selectOption(map);
@@ -61,17 +70,17 @@ try {
       notes: world.notes.filter(note => /animat/i.test(note))};
   });
   // Auto-pan: each panned group's offset is Render.dll's surfacePan for the
-  // level's TimeSeconds and the viewer-side zone's speeds, over the drawn UVs.
+  // frame's TimeSeconds and the viewer-side zone's speeds, over the drawn UVs.
   report.pan = await page.evaluate(async () => {
     const {surfacePan} = await import('/src/runtime/texture-animation.mjs');
     const {fromView} = await import('/src/unreal/geometry.mjs');
     const v = window.__deusTextureAnimation, out = [];
     for (let k = 0; k < 3; k++) {
       await new Promise(resolve => requestAnimationFrame(resolve));
-      const inputs = v.game?.surfacePan(), viewpoint = fromView(v.camera.position.toArray());
+      const inputs = window.__deusPan, viewpoint = fromView(v.camera.position.toArray());
       for (const entry of v.world.pannedSurfaces()) {
         const side = entry.plane[0] * viewpoint[0] + entry.plane[1] * viewpoint[1] + entry.plane[2] * viewpoint[2] - entry.plane[3] > 0 ? 1 : 0;
-        const name = entry.zones[side], speeds = (name && inputs.zoneSpeeds(name)) ?? entry.speeds[side];
+        const name = entry.zones[side], speeds = (name && inputs.speeds[name]) ?? entry.speeds[side];
         const pan = surfacePan({panU: entry.pan[0], panV: entry.pan[1], flags: entry.flags, speedU: Math.fround(speeds[0]),
           speedV: Math.fround(speeds[1]), timeSeconds: Math.fround(inputs.timeSeconds)});
         out.push({time: inputs.timeSeconds, zone: name, offset: entry.offset,
@@ -89,6 +98,7 @@ assert.ok(report.materials > 0, `${map} has animated surface materials`);
 // Each sample reads the world after a frame's update and the level time the
 // same frame used (the level ticks only inside that frame's update).
 for (const sample of report.pan) assert.deepEqual(sample.offset, sample.expected, `pan at ${sample.time} in ${sample.zone}`);
+assert.ok(report.pan.every(sample => sample.time > 0), 'the frames carry a running TimeSeconds');
 assert.equal(report.undrawn, 0, 'every material draws its head\'s shown frame');
 for (const head of report.heads) {
   const frames = head.frames.filter(Boolean);

@@ -1,4 +1,5 @@
-import {x87load, x87double, x87add, x87neg, x87div, x87mul, x87cmp, x87store, x87ftol, x87int32} from './script-vm.mjs';
+import {x87load, x87double, x87add, x87neg, x87div, x87cmp, x87store, x87ftol, x87int32} from './script-vm.mjs';
+import {p24add, p24mul} from './x87-pc24.mjs';
 
 /** Engine.dll UTexture animation (docs/texture-animation.md): Update
  * 0x103ecb70, Tick 0x103ed0d0, ConstantTimeTick 0x103ed330 and Get
@@ -81,11 +82,15 @@ const PAN_RATE = x87load(35), PAN_SCALE = x87double(256), PAN_UNIT = x87double(1
  * `f32(Surf.PanU + (ftol(Zone.TexUPanSpeed · Level.TimeSeconds · 35f · 256.0)
  * & 0x3ffff) · (1/256))`, and the same for V with TexVPanSpeed under
  * PF_AutoVPan (0x400). `zone` is the draw list's zone actor (the node's zone
- * on the viewer's side, or the LevelInfo). Returns the float pans. */
+ * on the viewer's side, or the LevelInfo). Returns the float pans.
+ *
+ * DrawFrame runs inside the render pass, so each FMUL and the FADD round to
+ * 24 bits (x87 precision control 24, docs/render-pass-precision.md) with the
+ * register's wide exponent; _ftol truncates that register value. */
 export function surfacePan({panU, panV, flags, speedU, speedV, timeSeconds}) {
   const pan = (base, speed) => {
-    const product = x87mul(x87mul(x87mul(x87load(speed), x87load(timeSeconds)), PAN_RATE), PAN_SCALE);
-    return x87store(x87add(x87mul(x87int32(x87ftol(product) & 0x3ffff), PAN_UNIT), x87load(base)));
+    const product = p24mul(p24mul(p24mul(x87load(speed), x87load(timeSeconds)), PAN_RATE), PAN_SCALE);
+    return x87store(p24add(p24mul(x87int32(x87ftol(product) & 0x3ffff), PAN_UNIT), x87load(base)));
   };
   return {
     u: flags & 0x200 ? pan(Math.fround(panU), speedU) : Math.fround(panU),
