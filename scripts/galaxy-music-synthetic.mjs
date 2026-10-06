@@ -3,7 +3,11 @@
  * 35 DX songs never reach; the original glxLoadMusic (native oracle) and the
  * Rust kernel load the same bytes and must dump the same state. Field
  * offsets follow ITTECH (IMPM 0xc0 header, IMPI 0x226 bytes as read at
- * 0x10628c8a, IMPS 0x50). Authored test data only; no original content. */
+ * 0x10628c8a, IMPS 0x50). Authored test data only; no original content.
+ *
+ * sequencerModules() adds playable modules for the module player comparison
+ * (validate-galaxy-music-sequencer.mjs): the effects, slide modes, envelopes
+ * and order/row edge cases the songs never play. */
 
 const u16 = (b, o, v) => { b[o] = v & 0xff; b[o + 1] = (v >> 8) & 0xff; };
 const u32 = (b, o, v) => { u16(b, o, v & 0xffff); u16(b, o + 2, (v >>> 16) & 0xffff); };
@@ -214,5 +218,209 @@ export function syntheticModules() {
     // OrdNum 0x8000 in a short file: the order skip seeks past the end and clamps;
     // the offset tables read nothing and keep their previous (fresh: zero) values.
     {name: 'Synthetic_OrdersPastEnd', bytes: ordersModule(0x8000, [0, 1, 0xff])},
+  ];
+}
+
+// ---- Module player cases -------------------------------------------------------
+
+/** Rows of a pattern from per-channel scripts {ch: {row: {note, ins, vol, fx}}};
+ * fx is an IT effect as text ('J37' = J with 0x37). */
+function scripted(rows, channels) {
+  const out = Array.from({length: rows}, () => []);
+  for (const [ch, script] of Object.entries(channels)) {
+    for (const [row, e] of Object.entries(script)) {
+      const entry = {ch: Number(ch)};
+      for (const k of ['note', 'ins', 'vol']) if (e[k] !== undefined) entry[k] = e[k];
+      if (e.fx) { entry.cmd = e.fx.charCodeAt(0) - 64; entry.val = parseInt(e.fx.slice(1), 16); }
+      out[Number(row)].push(entry);
+    }
+  }
+  return out;
+}
+
+const OFF = 0xff, CUT = 0xfe; // IT === and ^^^
+
+/** Linear slides, sample mode: every effect the songs never play (J, R, K, L,
+ * S3x/S4x waveforms 0..7, SBx loops, SCx, SDx including x >= speed, SEx, T < 0x20
+ * and T20, C to row > 0 with BCD, A00 recalling a foreign parameter, X/S8x/S9x
+ * pans including hard left, O past the end, Q, fine and extra-fine slides),
+ * header pans 0 / 64 / surround, a sample default pan, ping-pong and one-shot
+ * samples, and 9xx / Q / EAx on a pattern's last row (the pattern-end pass). */
+function sequencerLinear() {
+  const samples = [
+    {flg: 0x13, length: 2000, loopStart: 100, loopEnd: 1900, c5: 8363, data: sampleData(2000, 2, 31)},
+    {flg: 0x51, length: 1000, loopStart: 200, loopEnd: 800, c5: 22050, data: sampleData(1000, 1, 32)},
+    {flg: 0x01, length: 300, c5: 16000, data: sampleData(300, 1, 33)},
+    {flg: 0x13, dfp: 0x80 | 10, vol: 40, length: 600, loopStart: 0, loopEnd: 600, c5: 30000, data: sampleData(600, 2, 34)},
+  ];
+  const p0 = pattern(scripted(64, {
+    0: {0: {note: 60, ins: 1, fx: 'J37'}, 2: {fx: 'J47'}, 4: {fx: 'J00'}, 6: {note: 61, fx: 'J5C'}, 8: {fx: 'JFF'},
+      10: {fx: 'A03'}, 11: {fx: 'H11'}, 12: {fx: 'A00'}, 13: {fx: 'A06'}, 14: {fx: 'T10'}, 16: {fx: 'T1F'},
+      18: {fx: 'T20'}, 19: {fx: 'A06'}, 20: {fx: 'T96'}, 24: {note: OFF}, 26: {note: 36, ins: 1, fx: 'J12'},
+      30: {note: CUT}, 32: {note: 60, ins: 1, vol: 32}, 34: {fx: 'Q03'}, 36: {fx: 'Q00'}, 40: {fx: 'SB0'},
+      41: {note: 62, ins: 1, fx: 'J21'}, 44: {fx: 'SB2'}, 48: {fx: 'SC3'}, 50: {note: 64, ins: 1, fx: 'SD3'},
+      52: {note: 65, ins: 1, fx: 'SD7'}, 54: {fx: 'SD2'}, 56: {fx: 'SE2'}, 60: {fx: 'S05'}, 61: {fx: 'S15'}, 63: {fx: 'C05'}},
+    1: {0: {note: 48, ins: 2, fx: 'R48'}, 2: {fx: 'R00'}, 4: {fx: 'S41'}, 5: {fx: 'R26'}, 8: {fx: 'S42'}, 9: {fx: 'R35'},
+      12: {fx: 'S43'}, 13: {fx: 'R4F'}, 16: {fx: 'S47'}, 17: {fx: 'R8F'}, 20: {fx: 'S44'}, 21: {fx: 'RF1'},
+      24: {note: 47, ins: 2, fx: 'D0F'}, 26: {fx: 'DF0'}, 28: {fx: 'D1F'}, 30: {fx: 'DF1'}, 32: {fx: 'DFF'}, 34: {fx: 'D00'},
+      36: {vol: 64}, 38: {fx: 'M40'}, 40: {note: 50, ins: 2, fx: 'O00'}, 42: {fx: 'OFF'}, 44: {fx: 'O00'},
+      46: {note: 50, ins: 2, fx: 'O02'}, 48: {note: 50, ins: 2, fx: 'E01'}, 50: {fx: 'EF2'}, 52: {fx: 'EE5'}, 53: {fx: 'E00'},
+      54: {fx: 'F01'}, 56: {fx: 'FF3'}, 58: {fx: 'FE6'}, 59: {fx: 'F00'}, 60: {note: 52, fx: 'G00'}, 62: {fx: 'G08'}},
+    2: {0: {note: 55, ins: 1, fx: 'H46'}, 2: {fx: 'H00'}, 4: {fx: 'S31'}, 5: {fx: 'H8A'}, 8: {fx: 'S32'}, 9: {fx: 'H2C'},
+      12: {fx: 'S33'}, 13: {fx: 'HF4'}, 16: {fx: 'S37'}, 17: {fx: 'H44'}, 20: {fx: 'S30'}, 22: {fx: 'K05'}, 24: {fx: 'K00'},
+      26: {fx: 'U22'}, 28: {note: 50, ins: 1, fx: 'G10'}, 30: {fx: 'L03'}, 32: {fx: 'L00'}, 34: {note: 70, fx: 'G00'},
+      36: {fx: 'G20'}, 40: {fx: 'HF0'}, 42: {fx: 'H0F'}, 44: {note: 40, ins: 1, fx: 'S34'}, 45: {fx: 'H33'}, 48: {note: 41, ins: 1}},
+    3: {0: {note: 60, ins: 4}, 2: {fx: 'X00'}, 4: {fx: 'X40'}, 6: {fx: 'X80'}, 8: {fx: 'XFF'}, 10: {fx: 'XA0'}, 12: {fx: 'S91'},
+      14: {fx: 'S80'}, 16: {fx: 'S8F'}, 18: {fx: 'F10'}, 20: {fx: 'F00'}, 24: {fx: 'E40'}, 28: {note: 30, ins: 4},
+      30: {fx: 'FF0'}, 32: {fx: 'X84'}, 34: {fx: 'XC4'}, 36: {fx: 'X81'}},
+    4: {0: {note: 72, ins: 3}, 4: {note: 72, ins: 3, fx: 'SD1'}, 8: {fx: 'SC0'}, 12: {note: 84, ins: 3, vol: 10},
+      16: {note: 96, ins: 3, vol: 64}, 20: {note: 119, ins: 3}, 24: {note: 0, ins: 3}, 28: {fx: 'SE1'}, 32: {note: 60, ins: 3, fx: 'SC0'}},
+    5: {0: {note: 50, ins: 1}, 8: {note: 52, ins: 2}},
+    6: {0: {note: 62, ins: 2, fx: 'O10'}, 8: {fx: 'Q31'}},
+    7: {0: {note: 64, ins: 1, fx: 'D04'}, 4: {fx: 'D40'}, 8: {fx: 'D00'}, 12: {fx: 'DF4'}, 16: {fx: 'DE0'}},
+    // Channels 8..10 have no note on the next pattern's first row, so the
+    // pattern-end pass's second run of the ending row's effects shows.
+    8: {1: {note: 57, ins: 1}, 63: {fx: 'O20'}},
+    9: {1: {note: 59, ins: 2}, 63: {fx: 'Q01'}},
+    10: {1: {note: 52, ins: 1, vol: 40}, 63: {fx: 'D3F'}},
+  }));
+  const p1 = pattern(scripted(64, {
+    0: {5: {note: 60, ins: 1}, 10: {fx: 'C12'}},
+    1: {6: {note: 48, ins: 2, fx: 'R48'}},
+    2: {7: {fx: 'H46'}},
+    8: {10: {fx: 'O30'}},
+    9: {10: {fx: 'Q02'}},
+    10: {10: {fx: 'DF2'}},
+  }));
+  const p2 = pattern(scripted(32, {
+    0: {12: {note: 67, ins: 2}, 14: {fx: 'SB0'}, 16: {note: 66, ins: 1}, 18: {fx: 'SB1'}, 31: {fx: 'B00'}},
+    1: {20: {note: OFF}},
+    3: {12: {note: 58, ins: 1}, 31: {fx: 'O05'}},
+    4: {31: {note: 60, ins: 1, fx: 'Q02'}},
+    5: {12: {note: 57, ins: 1}, 31: {fx: 'D1F'}},
+    8: {31: {fx: 'O05'}},
+    9: {31: {fx: 'Q01'}},
+    10: {31: {fx: 'D2F'}},
+  }));
+  return buildIT({name: 'Sequencer linear', flags: 0x09, speed: 6, tempo: 125, orders: [0, 1, 2, 0xff],
+    pans: [32, 32, 32, 32, 32, 0, 64, 100], samples, patterns: [p0, p1, p2]});
+}
+
+/** Amiga slides (no linear bit): porta, fine porta, tone porta, vibrato,
+ * arpeggio and tremolo on Amiga periods, notes across the whole table
+ * (including the 65280 entries below 21), and a C5 speed of 0. */
+function sequencerAmiga() {
+  const samples = [
+    {flg: 0x13, length: 1500, loopStart: 0, loopEnd: 1500, c5: 8363, data: sampleData(1500, 2, 41)},
+    {flg: 0x11, length: 800, loopStart: 100, loopEnd: 700, c5: 44100, data: sampleData(800, 1, 42)},
+    {flg: 0x51, length: 500, loopStart: 50, loopEnd: 450, c5: 11025, data: sampleData(500, 1, 43)},
+    {flg: 0x11, length: 400, loopStart: 0, loopEnd: 400, c5: 0, data: sampleData(400, 1, 44)},
+  ];
+  const p0 = pattern(scripted(48, {
+    0: {0: {note: 60, ins: 1, fx: 'J47'}, 4: {fx: 'E08'}, 8: {fx: 'F08'}, 12: {fx: 'EF4'}, 14: {fx: 'FE8'},
+      16: {note: 72, ins: 1, fx: 'G04'}, 20: {fx: 'G00'}, 24: {fx: 'H48'}, 28: {fx: 'S32'}, 29: {fx: 'H6C'},
+      32: {note: 5, ins: 1}, 36: {note: 20, ins: 1}, 40: {note: 119, ins: 1}, 44: {fx: 'J3C'}},
+    1: {0: {note: 48, ins: 2}, 6: {fx: 'K02'}, 10: {fx: 'L02'}, 14: {note: 36, ins: 2, fx: 'G10'}, 20: {fx: 'E20'}, 24: {fx: 'F20'},
+      30: {note: 50, ins: 2, fx: 'SD2'}},
+    2: {0: {note: 55, ins: 3, fx: 'R46'}, 8: {fx: 'S41'}, 12: {note: 67, ins: 3}, 20: {note: OFF}},
+    3: {0: {note: 60, ins: 4}, 8: {note: 30, ins: 4, fx: 'H22'}},
+  }));
+  const p1 = pattern(scripted(16, {
+    0: {0: {note: 64, ins: 1, fx: 'E04'}},
+    1: {8: {fx: 'A03'}},
+    2: {4: {note: 50, ins: 3, fx: 'O03'}},
+  }));
+  return buildIT({name: 'Sequencer Amiga', flags: 0x01, speed: 4, tempo: 140, orders: [0, 1], samples, patterns: [p0, p1]});
+}
+
+/** Instrument mode: volume, pan and pitch envelopes with loops, sustain and
+ * fade-out, key off with and without a volume envelope, instrument-only rows,
+ * note delay on a key-off note (keymap index 0x80 + ...). */
+function sequencerEnvelopes() {
+  const samples = [
+    {flg: 0x13, length: 1200, loopStart: 0, loopEnd: 1200, c5: 8363, data: sampleData(1200, 2, 51)},
+    {flg: 0x11, length: 700, loopStart: 100, loopEnd: 600, c5: 22050, data: sampleData(700, 1, 52)},
+    {flg: 0x51, length: 500, loopStart: 20, loopEnd: 480, c5: 16000, data: sampleData(500, 1, 53)},
+  ];
+  const env = (flags, nodes, more = {}) => ({flags, nodes, ...more});
+  // IT envelope flags: 1 on, 2 loop, 4 sustain loop (Galaxy: 1 on, 4 loop, 2
+  // sustain; the pitch envelope's sustain bit comes from the pan flags).
+  // Nodes sharing a tick make a zero-length segment.
+  const instruments = [
+    impi({name: 'Looped envelopes', fade: 0x40, keys: k => (k < 60 ? 1 : 2),
+      vol: env(0x07, [[64, 0], [32, 4], [48, 4], [16, 12], [0, 20]], {lpb: 1, lpe: 3, slb: 2, sle: 2}),
+      pan: env(0x07, [[-32, 0], [32, 6], [16, 6], [0, 10]], {lpb: 0, lpe: 3, slb: 1, sle: 2}),
+      pitch: env(0x03, [[0, 0], [16, 5], [8, 5], [-16, 10]], {lpb: 1, lpe: 3, slb: 2, sle: 2})}),
+    impi({name: 'No volume envelope', keys: () => 2, vol: env(0, [[64, 0]]),
+      pan: env(0x03, [[16, 0], [-16, 8], [8, 12]], {slb: 1, sle: 1}),
+      pitch: env(0x05, [[-8, 0], [8, 3], [0, 6]], {lpb: 0, lpe: 2})}),
+    impi({name: 'Sustain and fade', fade: 0x200, keys: () => 3,
+      vol: env(0x03, [[64, 0], [40, 2], [20, 6]], {slb: 1, sle: 1}), pan: env(0, []), pitch: env(0, [])}),
+  ];
+  const p0 = pattern(scripted(32, {
+    0: {0: {note: 60, ins: 1}, 8: {note: OFF}, 14: {note: 62, ins: 1}, 16: {ins: 1}, 20: {note: CUT},
+      22: {note: 64, ins: 1, fx: 'SD2'}, 26: {note: OFF, fx: 'SD1'}},
+    1: {0: {note: 48, ins: 2}, 6: {note: OFF}, 12: {note: 52, ins: 2}, 16: {note: 55, fx: 'G08'}},
+    2: {0: {note: 67, ins: 3}, 4: {note: OFF}, 12: {note: 69, ins: 3}, 18: {note: OFF}},
+    3: {0: {note: 72, ins: 1, fx: 'X20'}, 10: {note: 74, ins: 2}},
+    4: {0: {note: 60, ins: 3, fx: 'H34'}},
+  }));
+  return buildIT({name: 'Sequencer envelopes', flags: 0x0d, speed: 3, tempo: 125, orders: [0, 0xff], samples, instruments, patterns: [p0]});
+}
+
+/** Branches the other modules miss: a channel whose first note is delayed
+ * (SDx without an earlier trigger leaves +0x11 clear, so the mixer takes the
+ * effects-voice path), a delayed note on a default-pan sample, tremolo below
+ * zero, K and L sliding up and both clamps, tone porta without a note after
+ * E/F (the target is left at the porta limit). */
+function sequencerReach() {
+  const samples = [
+    {flg: 0x13, length: 1000, loopStart: 0, loopEnd: 1000, c5: 8363, data: sampleData(1000, 2, 71)},
+    {flg: 0x11, dfp: 0x80 | 50, length: 700, loopStart: 0, loopEnd: 700, c5: 16000, data: sampleData(700, 1, 72)},
+  ];
+  const p0 = pattern(scripted(32, {
+    0: {0: {note: 60, ins: 1, fx: 'SD2'}, 12: {note: 62, ins: 1}},
+    1: {0: {note: 62, ins: 2, fx: 'SD1'}},
+    2: {0: {note: 60, ins: 1, vol: 2}, 1: {fx: 'RFF'}, 2: {fx: 'R00'}, 3: {fx: 'R00'}, 4: {fx: 'R4F'}},
+    3: {0: {note: 60, ins: 1, vol: 4}, 1: {fx: 'L0F'}, 4: {vol: 0x3e}, 5: {fx: 'LF0'}, 6: {fx: 'L00'}},
+    4: {0: {note: 60, ins: 1, vol: 4}, 1: {fx: 'K0F'}, 4: {vol: 0x3e}, 5: {fx: 'KF0'}, 6: {fx: 'K00'}},
+    // Tone porta without a note after E/F: the target stays at the porta limit.
+    5: {0: {note: 48, ins: 1}, 2: {fx: 'F10'}, 4: {fx: 'G08'}, 8: {fx: 'E20'}, 10: {fx: 'G00'}},
+  }));
+  return buildIT({name: 'Sequencer reach', speed: 4, tempo: 150, orders: [0, 0xff], samples, patterns: [p0]});
+}
+
+/** One module per order/row edge case. */
+function sequencerEdges() {
+  const sample = [{flg: 0x11, length: 900, loopStart: 0, loopEnd: 900, c5: 8363, data: sampleData(900, 1, 61)}];
+  const notes = rows => pattern(scripted(rows, {0: {0: {note: 60, ins: 1}}, 1: {1: {note: 64, ins: 1}}}));
+  return [
+    // A00 with no earlier parameter on the channel: F00 stops the song.
+    {name: 'Sequencer_A00Stop', bytes: buildIT({name: 'A00 stop', orders: [0, 0xff], samples: sample,
+      patterns: [pattern(scripted(16, {0: {0: {note: 60, ins: 1}, 3: {fx: 'A00'}}, 1: {1: {note: 64, ins: 1}}}))]})},
+    // SBx on a pattern's last row: the pattern-end pass rearms the loop for ever.
+    {name: 'Sequencer_LoopLastRow', bytes: buildIT({name: 'Loop on the last row', orders: [0, 1, 0xff], samples: sample,
+      patterns: [notes(8), pattern(scripted(16, {0: {4: {fx: 'SB0'}, 15: {fx: 'SB2'}}, 1: {6: {note: 62, ins: 1}}}))]})},
+    // A break to row 40 of an 8-row pattern: the row skip reads past its events.
+    {name: 'Sequencer_BreakPastEnd', bytes: buildIT({name: 'Break past the end', orders: [0, 1, 0xff], samples: sample,
+      patterns: [pattern(scripted(8, {0: {0: {note: 60, ins: 1}, 2: {fx: 'C40'}}})), notes(8)]})},
+    // Every order '+++': the order walk never finds a pattern.
+    {name: 'Sequencer_AllSkipped', bytes: buildIT({name: 'All skipped', orders: [0xfe, 0xfe], samples: sample,
+      patterns: [notes(4)]})},
+    // LoopStart > LoopEnd: the trigger negates the step, and the mixer's runs
+    // count backwards from the loop end.
+    {name: 'Sequencer_ReversedLoop', bytes: buildIT({name: 'Reversed loop', orders: [0, 0xff],
+      patterns: [pattern(scripted(16, {0: {0: {note: 60, ins: 1}, 8: {note: 64, ins: 1, fx: 'SD2'}}, 1: {1: {note: 67, ins: 1}}}))],
+      samples: [{flg: 0x11, length: 1000, loopStart: 600, loopEnd: 200, c5: 8363, data: sampleData(1000, 1, 62)}]})},
+  ];
+}
+
+export function sequencerModules() {
+  return [
+    {name: 'Sequencer_Linear', bytes: sequencerLinear()},
+    {name: 'Sequencer_Amiga', bytes: sequencerAmiga()},
+    {name: 'Sequencer_Envelopes', bytes: sequencerEnvelopes()},
+    {name: 'Sequencer_Reach', bytes: sequencerReach()},
+    ...sequencerEdges(),
   ];
 }

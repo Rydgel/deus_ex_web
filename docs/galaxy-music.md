@@ -17,8 +17,9 @@ The reports were written from disassembly alone; claims marked *derived*
 there still need the oracle runs listed below. The loader (it-loader) is now
 verified against the original under Unicorn (see "Loader: implemented").
 The mixer's SSE kernel, conversion and renderer are verified too (see
-"Phase 3 status", and mixer.md §8). The sequencer is in progress. The
-Update music section is translated and verified (see "Phase 4").
+"Phase 3 status", and mixer.md §8), and so is the sequencer (see "Phase 2
+status": every song from sections 0..5 plus synthetic cases, tick by tick).
+The Update music section is translated and verified (see "Phase 4").
 
 ## Corrections to earlier notes (applied)
 
@@ -187,66 +188,98 @@ event streams (format: it-loader §4.6) and the instrument/sample records with
 their padded data. The kernel does not yet expose typed accessors; phase 2
 adds them next to the sequencer translation.
 
-## Phase 2 status (sequencer, 2026-10-02, in progress)
+## Phase 2 status (sequencer, verified 2026-10-06)
 
-**Done and verified.**
+The module player in `native/galaxy-kernel/src/sequencer.rs` (mixer entry up
+to the inner kernel, voice update with envelopes, sequencer tick, IT
+handler, note delay, ramps, period to step, glxStop/Start/ControlMusic,
+glxSetMusic/SampleVolume, glxInit's and the output open's tails) and the pan
+table model in `x87.rs` equal the original, tick by tick, on every case run.
+Details and the claims each case settles: [sequencer.md](galaxy-music/sequencer.md)
+(tags *verified by X*, §14).
 
-- Oracle `scripts/native-galaxy-music-sequencer-oracle.py` (subclasses the
-  phase-1 loader oracle). Init runs from the DLL: glxInit's tail with the pan
-  table (CPUID flags of the reference machine: MMX, SSE), glxSetCallback(DX's
-  0x10601064), the output open's tail (44100 Hz, 16-bit stereo, flags 7:
-  `0x10697cfc` = 0x47, MIDI-mode periods). Cases are JSON programs (load,
-  start = Update 0x1060a822..0x1060a88d, pin counters, pinned ring fill, 882-frame
-  callbacks). The inner kernel `[0x10698354]` is a recording `ret` stub (14
-  args); trace records M/R/U/T/K/P/L/S/E, one 8-byte SHA-256 digest per tick
-  group. Coverage uses self-deleting per-instruction hooks (no measurable cost).
-- Measured: Unicorn 2.1.4 honours x87 PC; the pan table at PC 64 differs from
-  PC 53 only at entry 0x7fff (32766 vs 32767), PC 24 at 54 entries. Intro
-  first tick: order 0, speed 6, tempo 153, P = 720·65536 + 38550, first
-  voice-update reload 0x2c1999 (1 ms, MIDI mode from the open), as derived.
-- Rust translation `native/galaxy-kernel/src/sequencer.rs` (mixer entry
-  without the PCM kernel, voice update with envelopes, sequencer tick, IT
-  handler, note delay, ramps, period to step, stop/start/control/volumes,
-  setup) and `x87.rs` (exact PC-parameterised pan table). The loader now
-  replays the oracle's bump-heap addresses (`HEAP_BASE`) so voice records and
-  pattern pointers compare raw; the phase-1 dump still writes MARK
-  (`validate-galaxy-music-loader.mjs` passes unchanged).
-- **Intro_Music section 0, counters pinned 0/0: 2449 ticks (2000 callbacks,
-  40 s) bit-equal per tick to the original**, first attempt.
+**Oracle.** `scripts/native-galaxy-music-sequencer-oracle.py` runs the
+original player under Unicorn (glxInit's tail, glxSetCallback, the output
+open's tail, then the case's library calls and 882-frame timer callbacks;
+the inner kernel is a recording stub). The trace per tick group holds the
+globals, the music voice records, the 14 kernel arguments and the refill
+posts; one 8-byte SHA-256 digest per group. Cases are cached per case and
+run over up to four processes. A fault of the original ends a case and is
+located: a mixer call that never returns, an emulator error, or (synthetic
+cases) a heap read outside every live block.
 
-**Written but unverified.** Everything beyond that one case: the other 34
-songs and sections, section > 0 starts, null-pattern skips, same-song section
-switches, chained songs, other counter phases, the instrument envelopes
-(Lebedev uses the pan envelope), Amiga mode (Endgame1/2), every effect not in
-Intro, the generated .rdata tables (formula + the original's exceptions:
-Amiga 110 = 382 and 117 = 255, finetune 7 = 34468) and the Rust pan table
-against Unicorn's (only the oracle side was measured). No mutants run yet.
+**Validator** `scripts/validate-galaxy-music-sequencer.mjs`: the Rust
+kernel replays each case through the `galaxy_seq_*` exports with the
+oracle's callback counts and must give the same digests; a mismatch is
+decoded field by field from both traces.
 
-**Next step.** Write `scripts/validate-galaxy-music-sequencer.mjs`: build the
-case list (every song × sections 0..5 run `until: loop`, margin 64; same-song
-switch at ~500 ticks; Title→Intro chain; 2–3 counter phases; the phase-1
-synthetic modules plus new ones for arpeggio, tremolo, K/L, S3/S4, SBx, SCx,
-SEx, T<0x20, C row > 0, EDx ≥ speed, A00), run the oracle once into
-`.cache/galaxy-music/sequencer` (~8 min for the whole corpus without
-coverage cost), replay exact callback counts in Rust, compare digests, diff
-the first 256 groups' full records on mismatch, check the pan tables (oracle
-should dump PC 64/53/24 tables and the 1112-dword table block at
-0x1063daa0), report coverage with reasons for unreached runs, and catch the
-mutants defined in sequencer.rs (101..109). Then update sequencer.md.
+- 238 cases, 1,833,842 ticks in 1,412,462 callbacks, all equal:
+  - the 35 songs from sections 0..5, each until its first wrap or backward
+    jump plus 64 ticks (no song has fewer than 6 orders);
+  - UNATCO switching from section 0 to 3 after 400 callbacks, Intro switching
+    to section 200 (glxControlMusic returns 0x11, the break still ends the
+    pattern), Title → unload → Intro, Title → unload → Endgame1 section 4;
+  - MUSICORDER 5, −1, −20, 100 and 0 on Intro (glxControlMusic cmd 1, the
+    console's only music command); loop flag 0 (cmd 3, no DX caller);
+  - counter phases: voice update first (Intro), tick first (Endgame1), both
+    in one chunk (Lebedev);
+  - the 9 phase-1 synthetic modules and 9 sequencer modules
+    (`sequencerModules()` in `scripts/galaxy-music-synthetic.mjs`): every
+    effect the songs never play, Amiga slides, envelopes, order/row edges,
+    and the Linear module at music master 127.
+- Three cases end at an original fault, each matched by the kernel's
+  UNSUPPORTED_* stop in the same callback: every order skipped
+  (Sequencer_AllSkipped, Synthetic_OrdersPastEnd: the order walk spins,
+  UNSUPPORTED_SPIN) and a break past the pattern's end
+  (Sequencer_BreakPastEnd: the row skip reads past its events,
+  UNSUPPORTED_READ).
+- Tables: the Rust pan table equals Unicorn's glxInit loop at PC 64, 53 and
+  24 (PC 53 differs from PC 64 at 1 entry, PC 24 at 54); the generated
+  .rdata block (LFO, Amiga, linear, arpeggio, finetune; 1112 dwords) equals
+  the DLL's.
+- Coverage of the original player functions: 2436 of 2680
+  instructions; the 35 unreached runs are listed in the validator with a
+  reason each (MIDI player mode, effects-voice paths, DX calling the volume
+  setters with rate 0, Galaxy commands no IT effect produces, dead code).
+- Mutants 101..109: 8 caught; 105 (pan slew ±0x100) is equivalent for
+  music, since every music pan write sets current and target together and
+  the slew run never executes (coverage).
+- With master's mixer merged, the same replay also runs the real SSE kernel
+  (`mix_kernel`) on all 238 cases without a fault; its PCM is not
+  compared here (phase 3's `validate-galaxy-mixer.mjs` does that).
 
-**Rerun the checks.**
+**Settled by the oracle** (were *derived*): the pattern-end extra pass;
+null patterns skipped in the same tick; a section > 0 start keeps speed 48 /
+tempo 120 and the previous song's tick period (Endgame1 from section 4 plays
+its first order at 48 ticks per row: 459.375-frame ticks fresh, 950.431
+after Title); key off stopping a sample-mode voice at the next voice update;
+loop flag 0; SBx on a pattern's last row rearming itself; a first note
+delayed by EDx mixed through the effects path at volume 0.
+
+**Kernel additions.** Mutant 102 (no pattern-end pass) is implemented;
+`galaxy_seq_control(cmd, arg)` and `galaxy_seq_callback_count()` are new
+exports (additive).
+
+**Open.** The game's counter phases and x87 PC at glxInit stay host
+questions; which sections the game requests is Update's (agent A).
+
+**Rerun.**
 
 ```
-npm run build:wasm
-node scripts/validate-galaxy-music-loader.mjs          # phase 1, unchanged
-NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python
-$NATIVE_PROBE_PYTHON scripts/native-galaxy-music-sequencer-oracle.py "Deus Ex GOTY Edition" \
-  .cache/galaxy-music/modules .work/music/phase2/cases-test2.json .work/music/phase2/out
-node .work/music/phase2/smoke.mjs .work/music/phase2/out intro-long 2000   # expect ALL EQUAL
+cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
+  --target wasm32-unknown-unknown --target-dir .work/wasm-target
+cp .work/wasm-target/wasm32-unknown-unknown/release/galaxy_kernel.wasm src/runtime/galaxy-kernel.wasm
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-music-sequencer.mjs \
+  [--jobs N] [--cases REGEX] [--no-mutants] [--refresh]
 ```
 
-(`.work/music/phase2` also holds `dec.py`, a trace decoder, and `gdis.py`,
-the disassembler used for the translation.)
+The oracle cache is `.cache/galaxy-music/sequencer-corpus` (keyed by the
+oracle and loader scripts, the DLL, each program and module); a cold run
+takes about 20 minutes with four oracle processes of about 1.2 GB each; a
+cached run about 5 minutes (replay with the real SSE kernel, coverage,
+mutants). Run it once on its own before a sweep: `run-validators.mjs` picks
+it up by name and allows ten minutes for a validator without a recorded
+time.
 
 ## Phase 3 status (mixer, 2026-10-06)
 
@@ -320,9 +353,11 @@ Wasm and does not allocate.
 * the music/effects bus placement, about 1 s apart (mixer.md §1.3);
 * heap adjacency and contents behind the two hazards;
 * bus B and the reverb, which are not used by the browser;
-* the other songs and sections, pending the sequencer validation.
-  `validate-galaxy-mixer.mjs --sweep` runs every song and section on the
-  Rust kernel alone and finds no fault.
+* the other songs and sections: their sequencer traces are now verified
+  (Phase 2, all 35 songs × sections 0..5, with the real kernel running in
+  the replay without a fault), but their PCM is not compared with the
+  oracle. `validate-galaxy-mixer.mjs --sweep` runs every song and section on
+  the Rust kernel alone and finds no fault.
 
 **Rerun:**
 
@@ -352,13 +387,13 @@ counters' initial phases explicitly.
   SetVolumes' sample volume is 126 under 0x037f and 127 under 0x027f/0x007f
   at the installed volumes, and 0x007f rounds Update's dt to 24 bits.
 - The music bus delay (about 1 s) needs a loopback recording.
-- NULL patterns skipped rather than played as 64 empty rows (which slots
-  are NULL is now proven, see the loader section); a section > 0 start
-  keeping speed 48 / tempo 120 and the previous song's tick period; the
-  extra tick-0 pass at a pattern end; key-off and note-cut handling; speed
-  vs tempo for clamped Axx. (Answered by the loader oracle: the 1024-byte
-  slack is never read for the 35 songs; GV `0x80` lands in the music master
-  byte, which SetVolumes overwrites.)
+- Answered by the sequencer oracle (Phase 2): NULL patterns are skipped in
+  the same tick; a section > 0 start keeps speed 48 / tempo 120 and the
+  previous song's tick period; the pattern-end pass repeats the ending row's
+  tick-0 effects; key off stops a sample-mode voice at the next voice update.
+  (Answered by the loader oracle: the 1024-byte slack is never read for the
+  35 songs; GV `0x80` lands in the music master byte, which SetVolumes
+  overwrites.)
 - Whether the mixer can read the never-written tail of a looped sample's
   allocation (972 bytes over 119 DX samples). No read was seen in the
   `--sweep` run of 1157 sections × 30 s on the Rust kernel, which flags any
@@ -379,7 +414,8 @@ counters' initial phases explicitly.
 2. **Sequencer oracle:** after the start sequence, call the mixer with a
    fixed request schedule and record the 14 inner-mixer arguments and the
    voice records per tick (Intro from section 0 first, then the edge cases
-   listed in the sequencer report). Translate in Rust.
+   listed in the sequencer report). Translate in Rust. **Done** (see
+   "Phase 2 status").
 3. **Mixer oracle:** install the SSE kernel (`0x10614080(7)`), mix
    fabricated and real voices for N blocks and compare PCM bit-exactly.
    **Done** (see "Phase 3 status").
