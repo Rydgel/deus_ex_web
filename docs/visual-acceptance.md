@@ -191,18 +191,24 @@ uniformly 1.13–1.41× brighter; see Open.
    - *Ocean Lab y2's 36 outlier blocks drop to 2.*
 
    `compare` reports this offset per view (`subpixel`).
-2. *Ocean Lab y2: the darkest surfaces.* A shadowed pipe
-   (`SubBase.Metal.SB_PipeSec_B`) is raw (1,1,1) in the original over a
-   200×200 patch, and (0,0,0) in Play: rounding at the bottom of the range.
-   Not traced.
+2. *The darkest pixels.* A shadowed pipe in Ocean Lab y2
+   (`SubBase.Metal.SB_PipeSec_B`) is raw (1,1,1) over a 200×200 patch in
+   the original.
+   - Before the pixel-centre fix, Play's capture was (0,0,0) there. After
+     it, Play gives 1 over most of the patch, and 0 only on the texture's
+     darkest texels, a few hundred pixels.
+   - Over five views, original raw 1 maps to Play 0 for 6,939 pixels and
+     to 1 or more for 733,665. Original 0 maps to Play 1 or more for
+     18,738 pixels and to 0 for 334,999.
+   - Rounding at the bottom of the range, in both directions; not traced.
 
 ## Open
 
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
   chased: it is a known gamma issue of the game on Windows.
-- The darkest pixels' rounding (Ocean Lab y2): raw 1 in the original,
-  0 in Play.
+- Rounding of the darkest values, at the level of single raw steps
+  (item 2 above).
 - Captures are frozen. NPCs stand at their map locations in the frame-0
   reference pose, and their startup (InitializePawn) and patrols are not
   compared. A live comparison needs matched level time (`--live` alone
