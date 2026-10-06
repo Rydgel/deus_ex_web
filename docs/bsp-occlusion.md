@@ -278,20 +278,102 @@ edges where the span rasterizer and the GPU disagree and the original's
 verdict now applies. Worker and inline modes give the same digests and
 pixels. Training's entrance floor mirror still reflects.
 
-## Not yet ported
+## What is left
 
-Explicitly unsupported or pending:
+In recommended order. Each step keeps the rule above: recover from the
+DLL, port to Rust, match the original under `native-occlusion-oracle.py`,
+then wire into Play.
 
-* Dynamics' inputs: SetupDynamics' admission scan and Setup's rectangles
-  (mesh bounds and BoundVisible, the sprite path), hence Play's use of
-  `Frame->Sprite` for actor drawing and LastRenderTime.
-* Child frames: CreateChildFrame and the children's own OccludeBsp (mirror
-  and sky). Requests are reported with their spans; Play draws children
-  through the frustum.
-* The moving brush tracker (Level `+0xfc`): movers' polygons in the BSP.
-  Without it a closed door does not occlude, and mover mirrors keep the
-  frustum test.
-* LeafVolumetricLighting and the draw lists' Volumetrics.
-* WarpZoneInfo portals, span-based render devices, AMD3DClipBspSurf, frames
-  taller than the 2880 raster lines (`0x10b50c08..0x10b56608`), and values
-  outside binary32's normal range.
+### 1. Setup: each actor's screen rectangle (next)
+
+The dynamics port takes `(rectangle, Z)` per sprite; Play needs Setup
+(`FDynamicSprite::Setup`, `0x10b23910`) to produce them, at 24-bit
+precision. Recovered so far:
+
+* **Mesh path** (DrawType 2 with a Mesh). Z = `((L.z−O.z)·Zz + (L.y−O.y)·Zy)
+  + (L.x−O.x)·Zx` (Location, Coords origin and ZAxis), stored to the sprite;
+  below −0 or unordered rejects unless RendMap is 13–15. Then
+  `Mesh->GetRenderBoundingBox(Actor, 0)` (vslot 0x5c; ULodMesh inherits
+  UMesh's `0x103a6850`), then `BoundVisible(Frame, box, NULL)` (vslot
+  0x80, already ported in `occlude.rs`), then `X1 = _ftol(MinX)`,
+  `X2 = _ftol(MaxX)`, `Y1 = _ftol(MinY)`, `Y2 = _ftol(MaxY)` of the clamped
+  bounds; Setup returns `Y1 < Y2`.
+* **GetRenderBoundingBox** (`0x103a6850..0x103a6b9b`). `src/runtime/
+  render-mesh-bounds.mjs` has its operation order at 64-bit precision; at
+  24 bits every intermediate is a binary32 operation in that order. One
+  difference from that JavaScript: the two frame boxes are combined with
+  Core `FBox::operator+=` (`0x101196a0`), which copies the second box
+  whenever **either** box is invalid (the JavaScript keeps the first when
+  only the second is invalid). Min takes `this <= other ? this : other`,
+  max `this < other ? other : this`.
+* **Sprite path** (DrawType 1 or 7, `0x10b23ada..0x10b23d94`). Texture null
+  rejects. Z as above. `URender::Project` (`0x10b20750`, vslot 0x78):
+  T = (V − Origin) through Coords, Z' = T.z, plus 0.02 when |T.z| < 0.01;
+  RZ = Proj.Z / Z'; ScreenX = T.x·RZ + FX2, ScreenY = T.y·RZ + FY2;
+  Persp = RZ; it fails when Z' ≤ 1. Half width
+  `hw = ((float)USize·DrawScale)·Persp·0.5f`; `X1 = appCeil(ScreenX − hw)`,
+  `X2 = appCeil(hw + ScreenX)` (Core `0x10123300`: msvcrt `ceil` on the
+  double, then an int → float → int round trip); swap if X1 > X2; X1 < 0
+  sets X1 = 0 and then X2 < 0 sets X2 = 0; X2 > Frame.X sets X2 = X and then
+  X1 > X sets X1 = X; reject when X2 ≤ 0 or X1 ≥ X − 1. Y likewise with
+  VSize, clamped to Frame.Y; reject when Y2 ≤ 0, Y1 ≥ Y or Y1 ≥ Y2.
+* **Inputs** for the Rust side: per mesh (once), its box, per-frame boxes
+  (`runtime.prepareMesh(actor)`, array at UMesh `+0xa8`), Scale, Origin,
+  RotOrigin; per actor and frame, Location, Rotation, DrawScale, PrePivot,
+  bParticles (`+0x194 & 4`, factor 1.5), the resolved animation sequence
+  (start frame, frame count) and AnimFrame; per sprite, its texture's
+  USize/VSize and DrawScale.
+* **Reference**: run the real Setup in the oracle with actor and mesh
+  fixtures (the BoundsOracle in `native-render-visibility-oracle.py` already
+  drives GetRenderBoundingBox that way), at control word 0x007f, with a stub
+  for msvcrt `ceil`.
+
+### 2. SetupDynamics' scan and Play's actors
+
+SetupDynamics (`0x10b22d90`) admits actors in Level.Actors order
+([render visibility](render-visibility.md) has the admission rules); the
+excluded actor is the view target in a first-person master frame
+(OccludeFrame). The simulation side already scans in that order with the
+render iterators expanded (`sprite-scan.mjs`, the actor mesh layer); it
+should hand the candidates to `occ_run` in that order. Then Play draws, and
+stamps LastRenderTime for, the actors in `Frame->Sprite` instead of the
+frustum-tested drawn set (`drawn-set.mjs`) for the main frame.
+
+### 3. Child frames
+
+CreateChildFrame (`0x10b15a40`, notes in `.work/occlude/frame-and-clip.md`:
+reuse of an equal child, merged spans, ComputeRenderSize again at 24 bits)
+and OccludeFrame's recursion into the children, newest first, so mirror
+and sky views get their own visible polygons and sprites. The mirror
+child's coords and near-clip plane are already verified
+([mirror surfaces](mirror-surfaces.md)); the sky child's are in
+`.work/occlude/occludebsp.md` (step 14). Play then draws mirror and sky
+passes from their own results instead of whole meshes and the frustum.
+
+### 4. The moving brush tracker
+
+Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
+the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
+tests. Without it closed doors do not occlude, and mover mirrors (the two
+still drawn in the Paris tunnel, DeusExMover8 and DeusExMover11) keep the
+frustum test. Known entry points ([lighting](lighting.md),
+[mirror surfaces](mirror-surfaces.md) "Coplanar mover polygons"):
+construction `0x1037ac40`/`0x1037b5c0`, Update `0x1037a400`, filter
+`0x1037c0c0`, node add `0x1037bb00`, `FPoly::SplitWithPlane` `0x10386ad0`
+(±0.25). Still open: when Update runs (tick or render pass, hence its
+precision), how it removes the previous fragments, and the new nodes' field
+values.
+
+### 5. Smaller items
+
+* LeafVolumetricLighting and the draw lists' Volumetrics (fog light lists).
+* Restricting texture and light-map animation to drawn surfaces, as the
+  original does (`world.updateTextureAnimation` notes it).
+* The 24-bit render precision also applies to earlier translations of code
+  inside DrawWorld that were validated at 0x037f: render admission and mesh
+  bounds, dynamic and mesh lighting.
+
+Explicitly unsupported: WarpZoneInfo portals (none in the single-player
+maps), span-based render devices, AMD3DClipBspSurf, frames taller than the
+2880 raster lines (`0x10b50c08..0x10b56608`), and values outside binary32's
+normal range.

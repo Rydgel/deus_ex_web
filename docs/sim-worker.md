@@ -113,7 +113,7 @@ its own asset store; the worker never sends package bytes.
 | Weapon | the RenderOverlays DrawActor commands and the weapon's plan and lighting |
 | Coronas | the corona icons `{x, y, size, color, skin}` after visibility |
 | HUD | the GC command list `{texture, x, y, width, height, u, v, ul, vl, color, style}` (glyphs are already DrawTile commands) |
-| Audio | Galaxy voice ops (sound bytes once per key), speech start and stop |
+| Audio | Galaxy voice ops (sound bytes once per key), speech start and stop. Galaxy's music does not travel in the snapshot: the library service talks to the music worklet on its own MessageChannel (below) |
 | DOM mirror | InfoLink `{visible, title, queued, text}`, notes |
 
 The main thread keeps no reference to a runtime object.
@@ -183,6 +183,18 @@ host behavior.
   the page decodes speech PCM (`OfflineAudioContext`) and reads the mixer
   position; it sends `{id, pcm}` once and the position each frame, and
   `lipSync.update` runs in the worker.
+- **Music** ([Galaxy music](galaxy-music.md) "Phase 5: Output"). The Galaxy
+  library runs in an AudioWorklet on the page's AudioContext (44100 Hz).
+  The page creates one MessageChannel per simulation side and wires it once:
+  one port to the worklet node, the other to the worker (`{type: 'music',
+  port}`), whose library service (`galaxy-music-library.mjs`) lives as long
+  as the worker. Update's critical sections cross as batches straight to
+  the worklet (module bytes transferred once), and the worklet's
+  `{batch, state}` reports come straight back for `order()`. Nothing about
+  music crosses the page per frame; the page only resumes the context on a
+  gesture and reads status on request. `?sim=inline` keeps the port on the
+  page. `?music=0` leaves the worklet out (the simulation then uses the
+  headless mirror library).
 - **Clocks.** `performance.now()` has a different origin in a worker; the
   Galaxy update and the window host use differences only. Cross-thread
   timestamps add `performance.timeOrigin`.

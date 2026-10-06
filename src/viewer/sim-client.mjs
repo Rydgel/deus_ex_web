@@ -59,8 +59,11 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
     load: (map, options) => request({ type: 'load', map, options }),
-    /** `view`, `reset` or `stateDigest`, after the frames posted before it. */
-    call: method => request({ type: 'call', method, clock: clock() }),
+    /** `view`, `reset`, `stateDigest`, `musicStatus` or `musicDrive`, after
+     * the frames posted before it. */
+    call: (method, args = null) => request({ type: 'call', method, args, clock: clock() }),
+    /** The worker's end of the page's channel to the music worklet. */
+    connectMusic(port) { worker.postMessage({ type: 'music', port }, [port]); },
     queue(command) { commands.push(command); },
     get outstanding() { return outstanding; },
     /** Post one frame. `speech` holds the lip-sync channels' mixer

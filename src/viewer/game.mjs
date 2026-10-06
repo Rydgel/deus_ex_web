@@ -153,10 +153,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
   collision.doorCallbacks.audioVoice=event=>onAudioVoice?.(event);
-  collision.doorCallbacks.musicLibrary=musicLibrary;
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
-    nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged});
+    nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
+    musicLibrary});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   const levelDilation=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeDilation');
   // Conversation subtitles are DeusExPlayer.bSubtitles (globalconfig). The

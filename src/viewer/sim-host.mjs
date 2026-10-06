@@ -9,7 +9,12 @@
  *   world.panZoneNames() and whether the map has mirror planes;
  * - `gpu`, `weaponGpu`: the capacities of the page's GPU mesh instances
  *   (gpu-mesh.mjs), or null where the page has none (the CPU path);
- * - `meshBackend`: 'javascript' keeps the JavaScript GetFrame kernel.
+ * - `meshBackend`: 'javascript' keeps the JavaScript GetFrame kernel;
+ * - `musicLibrary`: Galaxy's music library service (galaxy-music-library.mjs
+ *   connectMusicLibraryPort, the worklet's port), or null for the headless
+ *   mirror. It outlives the map: `disposeAudio()` (also run by `dispose()`)
+ *   lets the live audio unregister its music before the next map's runtime
+ *   issues any library call.
  *
  * Everything the page must apply between frames goes to the session's
  * event queue (sim-session.mjs events). */
@@ -26,11 +31,12 @@ import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.m
 import { readTexture } from '../unreal/textures.mjs';
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
-  gpu = null, weaponGpu = null, meshBackend = null, onConversationSpeech = null, onAudioVoice = null, onProgress = () => {} }) {
+  gpu = null, weaponGpu = null, meshBackend = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
+  onProgress = () => {} }) {
   const events = [], notes = [];
   let game;
   try {
-    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles,
+    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, musicLibrary,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),
       onConversationSpeech: event => onConversationSpeech?.(event), onAudioVoice: event => onAudioVoice?.(event) });
   } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events }; }
@@ -81,6 +87,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
   session.setLipSync(lipSync);
   session.setPanZones(panZones);
-  return { game, session, actorSim, meshLighting, lipSync, notes, events, hudTextures,
-    dispose() { session.dispose(); actorSim?.dispose(); } };
+  let audioDisposed = false;
+  const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
+  return { game, session, actorSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
+    dispose() { disposeAudio(); session.dispose(); actorSim?.dispose(); } };
 }
