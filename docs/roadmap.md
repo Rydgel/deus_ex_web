@@ -404,10 +404,14 @@ surfaces, particles and sprites, light coronas, laser beams, volumetric fog
 on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
 music, and the third-person conversation camera with lip sync. Open: decals,
 fog on meshes and movers in Play, the occlusion's moving brush tracker and
-child frames, mirror/sky combinations, SpriteAnimOnce frames, animated mesh
-skins, zone reverb and Galaxy's mixer for sound effects, time-varying moving
-lights and spotlights, and original-game visual acceptance across maps. Full
-Stage 4 acceptance remains open. Frame cost and
+child frames, mirror/sky combinations, zone reverb and Galaxy's mixer for
+sound effects, time-varying moving lights and spotlights, and original-game
+visual acceptance across maps. SpriteAnimOnce frames and animated mesh skins
+are recovered or checked but unreachable: no shipped class, map actor or
+script uses DT_SpriteAnimOnce or gives an actor an animated texture
+([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
+[texture animation](texture-animation.md#play)). Full Stage 4 acceptance
+remains open. Frame cost and
 the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).
 

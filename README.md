@@ -154,8 +154,7 @@ keeps the dated record.
 **Still open in Stage 4:** decals (Shadow blobs under pawns attach through the
 original AttachDecal but are not drawn), fog on meshes and movers, the moving
 brush tracker and child frames of the occlusion, mirror/sky combinations,
-SpriteAnimOnce frames, animated mesh skins, spatial and time-varying light
-effects on moving lights and spotlights, Galaxy's mixer for sound effects (their
+spatial and time-varying light effects on moving lights and spotlights, Galaxy's mixer for sound effects (their
 volume and pan are a Web Audio host mapping) and zone reverb, the remaining
 native UI presentation, and original-game visual acceptance across maps.
 

@@ -89,6 +89,38 @@ For a DT_Sprite or DT_SpriteAnimOnce item:
 - The style flags come from `0x10b26230`: Style 2, 3 and 4 give PF_Masked,
   PF_Translucent and PF_Modulated. PF_Unlit is set unless the actor is
   lit-capable in the software renderer, so sprites are unlit here.
+- The drawn texture is `Texture->Get(Viewport->CurrentTime)`
+  (`0x10b2547b`, Engine `UTexture::Get`, see
+  [texture animation](texture-animation.md)), so a texture with an AnimNext
+  chain advances as a BSP surface's does.
+
+### DT_SpriteAnimOnce (`0x10b252ac–0x10b25392`, restored at `0x10b254d3`)
+
+Before the size computation, for DrawType 7 only:
+1. `Count` = 1 + the length of the AnimNext chain from Texture (`+0x8c`),
+   stopping at None or at Texture itself.
+2. The class default actor is asserted (`Class+0x4d8`, Defaults.Num) and
+   read (`Class+0x4d4`). `F = Clamp(1.0 − LifeSpan / Default.LifeSpan,
+   0.0, 1.0)`: `fld f32 LifeSpan (+0x50)`, `fdiv f32 Default.LifeSpan`,
+   `fsubr` the double 1.0, passed as a double to Render's Clamp
+   (`0x10b12bf0`: `V < Min` → Min, else `V < Max` → V, else Max; a NaN
+   compares as less, so it gives 0).
+3. `X = f32(Count · F)` (`fild`, `fmul`, `fstp dword`), then
+   `Num = fistp(X − 0.5f)` (`0x10b30748` = 0.5f) under the current rounding,
+   round-to-nearest-even: UE1's appFloor, so `X = 1.0` gives 0.
+4. `Num` is clamped to `[0, Count − 1]` (negative → 0, `≥ Count − 1` →
+   `Count − 1`), and the texture advances `Num` times along AnimNext.
+5. The chosen frame's AnimNext and AnimCur (`+0x8c`, `+0x90`) are saved and
+   set to None for the draw, so its `Get` returns the frame itself (its
+   Update still runs and stamps LastUpdateTime), and restored after it.
+
+The render pass runs at 24-bit precision, so steps 2–3 are binary32
+operations. **Not reachable in the shipped game:** no class default, map
+actor (all 88 maps; 39,787 sprites) or script assigns DT_SpriteAnimOnce,
+and no script package imports a texture with an AnimNext chain (the 205
+animated textures are imported only by maps, for their surfaces). Play
+therefore keeps DT_SpriteAnimOnce sprites on their Texture and notes it;
+the contract above is recorded for completeness, not implemented.
 
 ## Play
 
@@ -137,8 +169,9 @@ Host choices and limits, noted:
 - **Lighting.** Three.js draws sprites without the original's software or
   D3D span clipping. Translucent sprites blend raw colours; the display
   ramp maps the finished frame ([lighting](lighting.md), "Display ramp").
-- **Not translated yet.** DT_SpriteAnimOnce's LifeSpan frame choice (the
-  first frame is drawn), iterator classes other than ParticleIterator and
+- **Not translated yet.** DT_SpriteAnimOnce's LifeSpan frame choice and
+  `Get` on sprite textures (no shipped content reaches either; see
+  "DT_SpriteAnimOnce"), iterator classes other than ParticleIterator and
   LaserIterator (see [lasers](lasers.md)), and the bHighDetail rule.
 - **Visibility.** Play has no BSP occlusion, so every admitted iterator
   runs each frame, as SetupDynamics does. Visibility only decides which
