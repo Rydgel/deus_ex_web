@@ -154,14 +154,14 @@ keeps the dated record.
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
-**Still open in Stage 4:** the occlusion's moving brush tracker (and with it
-fog on movers; meshes stay unfogged, as the shipped D3D configuration draws
-them) and child frames, the rest of the render-pass precision audit,
-mirror/sky combinations, spatial and time-varying light effects on moving
-lights and spotlights, the remaining native UI presentation, and the
-darkest-pixel rounding and live scenes left by
-[visual acceptance](docs/visual-acceptance.md) (14 maps match the original's
-own frames at matched cameras, down to its pixel centres).
+**Still open in Stage 4:** fog and decals on movers (the moving brush
+tracker itself now runs: closed doors occlude), the occlusion's child frames
+and mirror/sky combinations, time-varying moving lights and spotlights,
+UnrealScript inside the render events at the pass's 24-bit precision, the
+remaining native UI presentation (the ListWindow family behind the
+Conversations, Images and Logs screens), and the darkest-pixel rounding and
+live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
+compared with the original's own frames at matched cameras and level time).
 
 ## Open the viewer
 

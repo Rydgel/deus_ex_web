@@ -15,6 +15,8 @@ import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
+import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
+import { TRACKED_MOVER_MIRRORS } from './mirror-passes.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -56,6 +58,10 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // SetupDynamics' candidates (`pendingOcclusion`, run by occludeMain) and
   // its Frame->Sprite decides the main frame's actors.
   let occlusion = null, drawWorlds = 0, pendingOcclusion = null;
+  // The moving brush tracker's movers ({names, actors, indices: their
+  // Level.Actors slots} in its order; null with ?moverTracker=off) and the
+  // rebuild Player start's LoadMap needs.
+  let trackerMovers = null, rebuildOcclusion = null;
   const actorOcclusion = actorOcclusionMode() !== 'frustum';
   // DrawFrame's decal block after the main frame's OccludeBsp
   // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
@@ -144,8 +150,48 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // ShinySurfaces are set in Play.
   // With `setupCount`, Setup runs on that many packed candidates first and
   // `sprites` lists Frame->Sprite's keys (RenderNext order).
+  // SetupDynamics' moving brushes (0x10b230d5): Update for every mover its
+  // level-actor pass admits (render-visibility.mjs dynamicActorRoute,
+  // 0x10b22e1f-0x10b22f2d), in Level.Actors order, at 24 bits, with the
+  // Location and Rotation the frame renders. A hidden mover, the
+  // first-person view target and DrawWorld's excluded actor (0x10b1a161:
+  // none behind the view, else the ViewTarget or the view actor) are not
+  // updated and stay where they were last rendered; so does a mover no
+  // longer in Level.Actors. Only the main frame runs it here: a mirror's
+  // child frame would find every mover where the main frame left it.
+  // HighDetailActors is taken as set (the render device's default).
+  function updateMovers() {
+    const tracker = occlusion?.tracker;
+    if (!trackerMovers || !tracker?.live()) return;
+    const viewer = game.player.collisionActor, level = runtime.levelFor(viewer);
+    const read = (actor, name) => { try { return runtime.readNamed(actor, name); } catch { return undefined; } };
+    const behindView = Boolean(read(viewer, 'bBehindView')), viewTarget = read(viewer, 'ViewTarget') ?? null;
+    const route = { viewActor: viewer, excludedActor: behindView ? null : (viewTarget ?? viewer), read, isBrush: () => true,
+      behindView, viewTarget };
+    const { actors, indices } = trackerMovers;
+    trackerMovers.admitted = 0;
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (indices[i] < 0) continue;
+      if (level.actors[indices[i]] !== actor) {
+        // Moved by the array's compaction, or gone for good (-1).
+        indices[i] = level.actors.indexOf(actor);
+        if (indices[i] < 0) continue;
+      }
+      if (dynamicActorRoute(actor, route) !== 'moving-brush') continue;
+      trackerMovers.admitted++;
+      const location = read(actor, 'Location');
+      for (let k = 0; k < 3; k++) f32b[k] = location[k];
+      tracker.setMover(i, { locationBits: [u32b[0], u32b[1], u32b[2]], rotation: read(actor, 'Rotation') });
+      tracker.update(i);
+    }
+  }
+  const f32b = new Float32Array(3), u32b = new Uint32Array(f32b.buffer);
   function visibility(view, width, height, setupCount = -1) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
+    const moversStarted = performance.now();
+    updateMovers();
+    const moversMs = performance.now() - moversStarted;
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => Boolean(runtime.readNamed(zone ?? info, 'SkyZone'))));
     const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
@@ -157,14 +203,35 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true }), nodes = [];
     for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
+    // The movers' polygons the draw lists hold (tracker surfaces): each
+    // mover's drawn polygon ordinals, by name.
+    let movers = null;
+    if (trackerMovers && occlusion.tracker?.live()) {
+      movers = {};
+      for (const list of result.draw) for (const entry of list) {
+        const owner = occlusion.tracker.surfOwner(entry.iSurf);
+        if (!owner) continue;
+        const name = trackerMovers.names[owner.tag - 0x40000000];
+        (movers[name] ??= []).push(owner.ordinal);
+      }
+    }
+    // The mirror requests: a level node, or a tracked mover's polygon
+    // (mirror-passes.mjs requestedGroup).
+    const mirrors = [];
+    for (const child of result.children) {
+      if (child.kind !== 'mirror') continue;
+      const owner = movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(child.iNode)) : null;
+      mirrors.push(owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : child.iNode);
+    }
+    if (movers) mirrors.push(TRACKED_MOVER_MIRRORS);
     const occluded = performance.now();
     const fragments = decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null;
-    return { nodes: Uint32Array.from(nodes), zone: words[42],
-      mirrors: result.children.filter(child => child.kind === 'mirror').map(child => child.iNode),
-      sky: result.children.some(child => child.kind === 'sky'), decals: fragments,
+    return { nodes: Uint32Array.from(nodes), zone: words[42], mirrors,
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers,
       sprites: result.sprites.map(sprite => sprite.key),
-      // Host timings (ms): OccludeBsp with its decode, then the decal block.
-      ms: { occlusion: occluded - started, decals: performance.now() - occluded } };
+      // Host timings (ms): the movers' Update, OccludeBsp with its decode
+      // (and the movers' draw lists), then the decal block.
+      ms: { movers: moversMs, occlusion: occluded - started, decals: performance.now() - occluded } };
   }
   // The main frame's dynamics and OccludeBsp (docs/bsp-occlusion.md "Play"):
   // this frame's sprite records and, from the actor mesh layer, its bindings
@@ -262,7 +329,22 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       moverActors = new Map(level.actors.filter(Boolean).map(actor => [actor.name, actor]));
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
-    setOcclusion(value) { occlusion = value; },
+    setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
+    setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
+    /** Validation (mover-probe.mjs): each tracked mover's fragment count
+     * and the polygons the last main frame drew, and that frame's drawn
+     * node count, mover mirror requests, host timings and admitted
+     * (updated) movers. */
+    moverState() {
+      const tracker = occlusion?.tracker, last = current?.visibility ?? null;
+      const frame = { nodes: last?.nodes?.length ?? null, moverMirrors: last?.mirrors?.filter(m => typeof m === 'string') ?? null,
+        ms: last?.ms ?? null };
+      if (!trackerMovers || !tracker) return { tracker: false, ...frame };
+      const drawn = last?.movers ?? null;
+      return { tracker: tracker.live(), ...frame, admitted: trackerMovers.admitted ?? null, movers: trackerMovers.names.map((name, i) => ({ name,
+        fragments: tracker.chain(i).length, drawn: drawn ? [...new Set(drawn[name] ?? [])].length : null,
+        polygons: drawn ? [...new Set(drawn[name] ?? [])].sort((a, b) => a - b) : null })) };
+    },
     /** The kernel's decal facade and its frame-words pointer for the decal block. */
     setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },
@@ -422,7 +504,10 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         // mirror and sky passes keep the frustum.
         const main = inspect ? null : current?.visibility?.main ?? null;
         for (const pass of passes) {
-          drawn.moversIn(pass, stamped.movers);
+          // A tracked mover is drawn as level polygons, never through
+          // DrawActorSprite: nothing stamps it (?moverTracker=off: the
+          // frustum-tested set, as before).
+          if (!trackerMovers) drawn.moversIn(pass, stamped.movers);
           if (pass.kind === 'main' && main) {
             for (const sprite of sprites) if (sprite.main) stamped.sprites.add(sprite.handle);
             for (const binding of bindings)
@@ -506,7 +591,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       const actors = new Set();
       for (const [id, actor] of stamped.bindings) if (built(id)) actors.add(actor);
       const want = { movers: stamped.movers, sprites: new Set([...stamped.sprites].filter(handle => !skipped.has(handle))), actors };
-      for (const kind of ['movers', 'sprites', 'actors']) {
+      for (const kind of trackerMovers ? ['sprites', 'actors'] : ['movers', 'sprites', 'actors']) {
         const a = new Set([...want[kind]].map(name)), b = new Set([...drew[kind]].map(name));
         const onlySim = [...a].filter(x => !b.has(x)), onlyPage = [...b].filter(x => !a.has(x));
         if (onlySim.length || onlyPage.length)
@@ -525,7 +610,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         ? `weapon: only the simulation side ${onlySim.join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}` : null;
     },
     movers,
-    reset() { game.reset(); failed = false; },
+    reset() { game.reset(); failed = false; rebuildOcclusion?.(); },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
     dispose() { weaponSim?.dispose(); decalDraw?.dispose(); },

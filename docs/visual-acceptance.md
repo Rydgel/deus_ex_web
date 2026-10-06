@@ -44,6 +44,20 @@ of frame 0, on both sides. Unfrozen captures (`--live`) differed through
 timing alone: in Battery Park, Anna Navarre walks up to the player within
 seconds.
 
+**Held level time.** Pulsing lights, panning surfaces, texture animation
+and spatial light effects follow Level.TimeSeconds, which the two sides
+reach at different moments (load times differ).
+- The original types `set LevelInfo TimeDilation 0.001` after ghosting,
+  which nearly stops its clock, and the driver reads the held TimeSeconds
+  through the live player's Level (`dump-actor-win`, `Level +0xa8`,
+  `TimeSeconds +0x478`) into `.work/acceptance/times.json`.
+- Play then runs its frozen level to that time (dilation 20, then 1 for
+  the last 1.5 s) and holds it at 0.001. Helibase matched to 14 ms
+  (46.797 against 46.783).
+- Before each `open` the original sets TimeDilation back to 1, because SET
+  also changed the class default.
+- Flicker draws random numbers and is not matched.
+
 **Fresh maps.** The original loads a map visited before in the same mission
 from its travel state (`LoadMap: ..\Save\Current\<map>.dxs`), not from the
 map file. A second Battery Park capture showed the first visit's crates and

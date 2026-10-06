@@ -12,7 +12,15 @@
  * LastRenderTime, the counters and the child-frame requests with their
  * spans must match bit for bit, and so must the master frame the port
  * builds from the camera (CreateMasterFrame: ComputeRenderCoords,
- * ComputeRenderSize, PointRegion). */
+ * ComputeRenderSize, PointRegion).
+ *
+ * With the moving brush tracker (docs/brush-tracker.md), a map's movers are
+ * filtered into the model first (construction at PC64, then moved movers'
+ * Update at PC24, as Play runs them) and the oracle gets the resulting
+ * model and a tracker whose SurfIsDynamic is Engine's own: the fragments'
+ * draw lists, their coplanar chains and the skipped bound tests on
+ * fragment nodes (whose iRenderBound links the mover's chain) must match
+ * too. Cameras then include one at a spot near each mover, aimed at it. */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -25,6 +33,9 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, OCCLUSION_POINTS, OCCLUSION_SHOW_PLAYER_CTRL,
   OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
 import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags as textureFlagsOf } from './occlusion-request.mjs';
+import { collectTrackerMovers, trackerMoverSpec, trackerTextureFlags, TRACKER } from '../src/runtime/brush-tracker.mjs';
+import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
+import { readTexture } from '../src/unreal/textures.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) {
@@ -39,7 +50,30 @@ const assets = new AssetStore(files);
 const TANGENTS = occlusionTangents();
 const kernel = (await loadScriptVmKernel()).occlusion;
 
-async function validate(mapName, count, seed, extra = []) {
+/** The oracle's model from the occlusion's memory after the tracker
+ * filtered movers in: every node, vert, point and surface (with its texture
+ * PolyFlags) the arrays hold, and the tracker's original surface count. */
+function trackedModelRequest(occlusion, base) {
+  const t = occlusion.tracker, { nodes, verts, points, surfs } = occlusion.blocks;
+  const u = new Uint32Array(kernel.memory.buffer), i32 = new Int32Array(kernel.memory.buffer), b = new Uint8Array(kernel.memory.buffer);
+  const count = k => t.header(k), range = n => Array.from({ length: n }, (_, i) => i);
+  return { ...base,
+    nodes: range(count(TRACKER.NODES_NUM)).map(i => {
+      const o = (nodes >>> 2) + 16 * i, at = nodes + 64 * i;
+      return { planeBits: [...u.subarray(o, o + 4)], zoneMask: [u[o + 4], u[o + 5]], vertexPool: i32[o + 6], surface: i32[o + 7],
+        back: i32[o + 8], front: i32[o + 9], coplanar: i32[o + 10], collisionBound: i32[o + 11], renderBound: i32[o + 12],
+        zones: [b[at + 52], b[at + 53]], vertexCount: b[at + 54], flags: b[at + 55], leaves: [i32[o + 14], i32[o + 15]] };
+    }),
+    verts: range(count(TRACKER.VERTS_NUM)).map(i => [i32[(verts >>> 2) + 2 * i], i32[(verts >>> 2) + 2 * i + 1]]),
+    pointBits: range(count(TRACKER.POINTS_NUM)).map(i => [...u.subarray((points >>> 2) + 3 * i, (points >>> 2) + 3 * i + 3)]),
+    surfs: range(count(TRACKER.SURFS_NUM)).map(i => ({ texture: i, flags: u[(surfs >>> 2) + 2 * i] })),
+    textures: range(count(TRACKER.SURFS_NUM)).map(i => ({ polyFlags: u[(surfs >>> 2) + 2 * i + 1] })),
+    brushTracker: { originalSurfs: count(TRACKER.SURFS_TOP) } };
+}
+
+const units = r => Math.round(r * 32768 / Math.PI);
+
+async function validate(mapName, count, seed, extra = [], { tracker = null } = {}) {
   const asset = await assets.get(mapName), map = decodeMap(asset.bytes), model = map.model;
   const surfaceTextureFlags = await textureFlagsOf(assets, asset, model);
   let state = seed >>> 0;
@@ -47,6 +81,37 @@ async function validate(mapName, count, seed, extra = []) {
   const spots = map.actors.filter(a => a.values.Location && /PathNode|PlayerStart|PatrolPoint|Inventory|Decoration|ScriptedPawn|Light|Trigger/.test(a.className)).map(a => a.values.Location);
   const sizes = [[640, 480], [1024, 768], [1440, 839], [1920, 1080], [801, 601], [1280, 720]];
   const cases = [...extra];
+  // The tracker's movers at their map placement, then the moved ones
+  // (`tracker.moves`: name, offset, addRotation) updated as a frame would.
+  let movers = null, occlusion = null, fragmentNodes = 0;
+  if (tracker) {
+    movers = await collectTrackerMovers(assets, asset, map);
+    await trackerTextureFlags(assets, asset, movers, object => texturePolyFlags(readTexture(object.asset, object.index).values));
+    const specs = movers.map((m, i) => trackerMoverSpec(m, i, { hidden: m.values.bHidden, location: m.values.Location ?? [0, 0, 0],
+      rotation: m.values.Rotation ?? [0, 0, 0], prePivot: m.values.PrePivot ?? [0, 0, 0] }));
+    occlusion = createBspOcclusion(kernel, model, { surfaceTextureFlags,
+      zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)), tracker: { movers: specs } });
+    assert.equal(occlusion.tracker.construct({ pc64: true }), 0, `${mapName}: tracker construction`);
+    for (const move of tracker.moves ?? []) {
+      const i = movers.findIndex(m => m.name === move.name), v = movers[i].values;
+      const location = (v.Location ?? [0, 0, 0]).map((x, k) => Math.fround(x + (move.offset?.[k] ?? 0)));
+      occlusion.tracker.setMover(i, { locationBits: location.map(bits),
+        rotation: (v.Rotation ?? [0, 0, 0]).map((r, k) => (r + (move.addRotation?.[k] ?? 0)) | 0) });
+      occlusion.tracker.update(i);
+    }
+    fragmentNodes = movers.reduce((n, _, i) => n + occlusion.tracker.chain(i).length, 0);
+    // A camera near each mover (a spot 150 to 700 units away), aimed at it.
+    for (const m of movers) {
+      const at = m.values.Location ?? [0, 0, 0];
+      const spot = spots.map(p => ({ p, d: Math.hypot(...p.map((x, k) => x - at[k])) })).filter(e => e.d > 150 && e.d < 700)
+        .sort((x, y) => x.d - y.d)[0];
+      if (!spot) continue;
+      const eye = spot.p.map((x, k) => x + (k === 2 ? 30 : 0)), d = at.map((x, k) => x - eye[k]);
+      cases.push({ location: eye, rotation: [units(Math.atan2(d[2], Math.hypot(d[0], d[1]))), (units(Math.atan2(d[1], d[0])) + 65536) % 65536, 0],
+        width: 1280, height: 720, fov: 90 });
+    }
+    count += cases.length;
+  }
   while (cases.length < count) {
     const anywhere = random() < 0.4 || !spots.length;
     const p = anywhere ? [0, 1, 2].map(k => model.bounds.min[k] + random() * (model.bounds.max[k] - model.bounds.min[k]))
@@ -67,12 +132,13 @@ async function validate(mapName, count, seed, extra = []) {
       c.sprites.push({ x1: Math.min(a, b), x2: Math.max(a, b) + 1, y1: y, y2: y + h, zBits: bits(8 + random() * 4000) });
     }
   }
-  const request = { gameRoot: root, tangents: TANGENTS, cases, model: occlusionModelRequest(model, surfaceTextureFlags) };
+  occlusion ??= createBspOcclusion(kernel, model, { surfaceTextureFlags,
+    zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
+  const base = occlusionModelRequest(model, surfaceTextureFlags);
+  const request = { gameRoot: root, tangents: TANGENTS, cases, model: tracker ? trackedModelRequest(occlusion, base) : base };
   const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
     { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;
-  const occlusion = createBspOcclusion(kernel, model, { surfaceTextureFlags,
-    zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
-  const flags = model.nodes.map(n => n.flags), times = new Array(model.zones.length).fill(0);
+  const flags = request.model.nodes.map(n => n.flags), times = new Array(model.zones.length).fill(0);
   const stats = { surfaces: 0, children: 0, zone0: 0 };
   try {
     for (const [i, c] of cases.entries()) {
@@ -107,11 +173,14 @@ async function validate(mapName, count, seed, extra = []) {
       stats.children += r.children.length;
       stats.zone0 += o.zoneNumber === 0;
       stats.sprites = (stats.sprites ?? 0) + c.sprites.length; stats.drawn = (stats.drawn ?? 0) + r.sprites.length;
+      if (tracker) for (const list of r.draw) for (const entry of list) if (occlusion.tracker.surfOwner(entry.iSurf))
+        stats.fragments = (stats.fragments ?? 0) + entry.polys.length;
     }
   } finally {
     occlusion.dispose();
   }
-  console.log(`${mapName}: ${cases.length} frames match (${stats.surfaces} draw lists, ${stats.children} child requests, ${stats.zone0} zone-0 views, ${stats.drawn}/${stats.sprites} sprites drawn)`);
+  const with_ = tracker ? ` with ${movers.length} tracked movers${tracker.moves ? ` (${tracker.moves.length} moved)` : ''}, ${fragmentNodes} fragment nodes,` : '';
+  console.log(`${mapName}:${with_} ${cases.length} frames match (${stats.surfaces} draw lists${tracker ? `, ${stats.fragments ?? 0} mover polygons drawn` : ''}, ${stats.children} child requests, ${stats.zone0} zone-0 views, ${stats.drawn}/${stats.sprites} sprites drawn)`);
 }
 
 // The Paris club entrance tunnel at spawn (the slow view that motivated the
@@ -121,4 +190,12 @@ await validate('10_Paris_Club', 40, 7, tunnel);
 await validate('00_Training', 40, 11);
 await validate('01_NYC_UNATCOIsland', 40, 13);
 await validate('12_Vandenberg_Cmd', 24, 23);
+// The moving brush tracker's fragments in the level (docs/brush-tracker.md):
+// Training's doors closed and its first double door raised, the club's
+// mirror movers turned, the Island's doors.
+const raised = ['DeusExMover16', 'DeusExMover17'].map(name => ({ name, offset: [0, 0, 96] }));
+await validate('00_Training', 16, 31, [], { tracker: {} });
+await validate('00_Training', 8, 37, [], { tracker: { moves: raised } });
+await validate('10_Paris_Club', 12, 41, [], { tracker: { moves: ['DeusExMover8', 'DeusExMover11'].map(name => ({ name, addRotation: [0, 6000, 0] })) } });
+await validate('01_NYC_UNATCOIsland', 12, 43, [], { tracker: {} });
 console.log('validate-bsp-occlusion: ok');
