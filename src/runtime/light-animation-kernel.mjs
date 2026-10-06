@@ -37,6 +37,9 @@
 import { animatedLightConstants } from './static-lighting.mjs';
 
 const HEADER = 8, LIGHT_WORDS = 8, CHUNK = 1 << 20;
+// spatial.rs's per-texel cache (eight words a texel) for rectangles up to
+// this many texels; a larger one is recomputed whole every frame.
+const CACHE_TEXELS = 1 << 16;
 // Two numbers with the same String() (the reference's memo signature).
 const equal = (a, b) => a === b || (a !== a && b !== b);
 const INT32 = step => Number.isInteger(step) && step >= -0x80000000 && step <= 0x7fffffff;
@@ -112,7 +115,10 @@ export function createLightAnimationKernel(kernel) {
       for (const { spatial: bytes, spatialDynamic } of animated) {
         spatialAt.push(size); size += (bytes.length + 15) & ~15;
         // A spatially dynamic light's parameter record and illumination.
-        if (spatialDynamic) { paramsAt.push(size); size += spatial.words * 4 + ((bytes.length + 15) & ~15); }
+        if (spatialDynamic) {
+          paramsAt.push(size);
+          size += spatial.words * 4 + ((bytes.length + 15) & ~15) + (bytes.length <= CACHE_TEXELS ? bytes.length * 32 : 0);
+        }
         else paramsAt.push(0);
       }
       const lend = previous && previous.bytes >= size, at = lend ? previous.at : take(size), capacity = lend ? previous.bytes : size;
@@ -144,6 +150,9 @@ export function createLightAnimationKernel(kernel) {
             new Uint32Array(buffer, record, spatial.words));
           timeFloat[0] = spatialDynamic.time ?? 0;
           words[25] = timeBits[0]; words[26] = spatialDynamic.computed ? 1 : 0;
+          // The cache after the illumination bytes, prepared on first use.
+          words[27] = bytes.length <= CACHE_TEXELS ? record + spatial.words * 4 + ((bytes.length + 15) & ~15) : 0;
+          words[28] = 0;
           u32[w + 7] = record;
         }
       });

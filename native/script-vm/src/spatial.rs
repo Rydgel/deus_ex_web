@@ -30,7 +30,7 @@
 //! 0x10b34a6c) are uploaded by the host from dynamic-lighting.mjs; GMath's
 //! sine table is the crate's SINE.
 
-pub(crate) const PARAM_WORDS: usize = 28;
+pub(crate) const PARAM_WORDS: usize = 32;
 // Parameter words of one call (`light_spatial`).
 const P_EFFECT: usize = 0;
 const P_MIN_U: usize = 1;
@@ -51,6 +51,10 @@ const P_OUT: usize = 24; // rectangle-relative spatial bytes
 /// computed.
 pub(crate) const P_DONE_TIME: usize = 25;
 pub(crate) const P_DONE: usize = 26;
+/// `run_frame`'s per-texel cache (eight words a texel, or 0 for none) and
+/// whether it is prepared.
+const P_CACHE: usize = 27;
+const P_CACHE_READY: usize = 28;
 
 static mut SQRT: [u32; 2048] = [0; 2048];
 static mut NORMAL: [f32; 4096] = [0.0; 4096];
@@ -490,8 +494,21 @@ pub extern "C" fn spatial_atan_k(y: f64, x: f64, k: f64) -> f64 {
     atan_k(y, x, k)
 }
 
+
 // ---------------------------------------------------------------------------
 // The bodies.
+//
+// Each body is split at its first time-dependent operation: `prepare` takes
+// a texel's displacement and illumination byte to the values that do not
+// depend on Level.TimeSeconds (an entry of eight words: the illumination
+// byte, 0 when the texel's byte is 0 whatever the time, then the values as
+// float, double or int words, each exactly the value the single loop holds),
+// and `finish` completes the byte from that entry and the
+// frame's constants (`Body::frame`). `run` chains the two per texel, as the
+// original's single loop computes; `run_frame` keeps the entries in a cache
+// (built on its first call) and only finishes them on later frames. Both run
+// the same operations on the same values, so their bytes are equal
+// (validate-light-spatial checks it).
 
 const TWO_PI: f64 = 6.283185307179586; // 0x10b2a6f0
 const EIGHT_PI: f64 = 25.132741228718345; // pushed at 0x10b0395c
@@ -500,13 +517,52 @@ const THREE_PI: f64 = 9.42477796076938; // 0x10b2a6c0
 const NEG_INV_TWO_PI: f64 = -0.15915494309189535; // 0x10b2a6b0
 const PHASE_SCALE: f64 = 0.09817477042468103; // 0x10b2a700 (π/32)
 
+type Entry = [u32; 8];
+const SKIP: Entry = [0; 8];
+#[inline(always)]
+fn word(value: f32) -> u32 {
+    value.to_bits()
+}
+#[inline(always)]
+fn float(word: u32) -> f64 {
+    f32::from_bits(word) as f64
+}
+/// An f64 in two entry words (low, high).
+#[inline(always)]
+fn put(e: &mut Entry, at: usize, value: f64) {
+    let bits = value.to_bits();
+    e[at] = bits as u32;
+    e[at + 1] = (bits >> 32) as u32;
+}
+#[inline(always)]
+fn get(e: &Entry, at: usize) -> f64 {
+    f64::from_bits(e[at] as u64 | (e[at + 1] as u64) << 32)
+}
+
+/// The per-light constants every body reads (info +0x18, +0x1c, +0x24).
+struct Light {
+    rradius: f32,
+    rr2: f32,
+    incidence: f64,
+}
+fn light_of(p: &[u32; PARAM_WORDS]) -> Light {
+    Light { rradius: f32::from_bits(p[P_RRADIUS]), rr2: f32::from_bits(p[P_RR2]), incidence: float(p[P_INCIDENCE]) }
+}
+
+trait Body {
+    type Frame;
+    fn frame(p: &[u32; PARAM_WORDS]) -> Self::Frame;
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry;
+    fn finish(light: &Light, frame: &Self::Frame, entry: &Entry) -> u8;
+}
+
 /// The rectangle walk every body shares: the row start
 /// `(minV·V + start) + minU·U` from stored floats, per row the stored
 /// displacement from the light, per texel the U step added to it; the
-/// illumination byte (0 skips the texel, writing 0) and `texel(dx, dy, dz,
-/// illumination)` for the others.
+/// illumination byte (0 skips the texel) and `texel(dx, dy, dz,
+/// illumination)` for the others, in rectangle order.
 #[inline(always)]
-fn walk<F: FnMut(f32, f32, f32, u32) -> u8>(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8], mut texel: F) {
+fn walk<F: FnMut(usize, f32, f32, f32, u32)>(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, mut texel: F) {
     let w = |i: usize| f32::from_bits(p[i]);
     let (min_u, max_u, min_v, max_v) = (p[P_MIN_U] as i32, p[P_MAX_U] as i32, p[P_MIN_V] as i32, p[P_MAX_V] as i32);
     let (sx, sy, sz) = (w(P_START), w(P_START + 1), w(P_START + 2));
@@ -526,7 +582,7 @@ fn walk<F: FnMut(f32, f32, f32, u32) -> u8>(p: &[u32; PARAM_WORDS], illumination
                 Some(bytes) => bytes[at] as u32,
                 None => 0x7f,
             };
-            out[at] = if b != 0 { texel(dx, dy, dz, b) } else { 0 };
+            texel(at, dx, dy, dz, b);
             at += 1;
             dx += ux;
             dy += uy;
@@ -548,190 +604,265 @@ fn falloff(sum: f32, rr2: f32) -> Option<i32> {
         None
     }
 }
+/// The index from `dz² + dy² + dx²` (Searchlight, Rotor, Disco,
+/// Interference: dy² and dx² stored first) with the two squares.
+#[inline(always)]
+fn falloff_xy(light: &Light, dx: f32, dy: f32, dz: f32) -> Option<(i32, f32, f32)> {
+    let dy2 = dy * dy;
+    let dx2 = dx * dx;
+    falloff(dz * dz + dy2 + dx2, light.rr2).map(|index| (index, dy2, dx2))
+}
 /// The spatial byte: FISTP(float − 0.5)'s low byte.
 #[inline(always)]
 fn byte_of(value: f32) -> u8 {
     fistp(add24(value as f64, -0.5)) as u8
 }
+/// `ftol(angle·65536·(−1/2π))`'s cosine lobe `(cos + 1)·0.5`.
+#[inline(always)]
+fn lobe(angle: f64) -> f64 {
+    let k = ftol(mul24(angle * 65536.0, NEG_INV_TWO_PI));
+    add24(cosine(k), 1.0) * 0.5
+}
 
-/// Searchlight 0x10b03770.
-fn searchlight(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]) as f64, f32::from_bits(p[P_INCIDENCE]) as f64);
-    let time = f32::from_bits(p[P_TIME]) as f64;
-    let period = p[P_PERIOD] & 255;
-    // 0x10b03788-0x10b037ff: TimeSeconds·35/LightPeriod (0 without a
-    // period), plus LightPhase·π/32 and 2π, stored as a float.
-    let t = if period != 0 { r24(mul24(time, 35.0) / period as f64) } else { 0.0 };
-    let phase = mul24((p[P_PHASE] & 255) as f64, PHASE_SCALE);
-    let x = st32(add24(add24(phase, t), TWO_PI)) as f64;
-    walk(p, illumination, out, |dx, dy, dz, b| {
-        let dy2 = dy * dy;
-        let dx2 = dx * dx;
-        let index = match falloff(dz * dz + dy2 + dx2, rr2 as f32) {
-            Some(i) => i,
-            None => return 0,
+/// Searchlight 0x10b03770: entry [b, 4·atan2(dx, dy) (f64), q (f64),
+/// b·table (f64)].
+struct Searchlight;
+impl Body for Searchlight {
+    /// 0x10b03788-0x10b037ff: TimeSeconds·35/LightPeriod (0 without a
+    /// period), plus LightPhase·π/32 and 2π, stored as a float.
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        let time = float(p[P_TIME]);
+        let period = p[P_PERIOD] & 255;
+        let t = if period != 0 { r24(mul24(time, 35.0) / period as f64) } else { 0.0 };
+        let phase = mul24((p[P_PHASE] & 255) as f64, PHASE_SCALE);
+        st32(add24(add24(phase, t), TWO_PI)) as f64
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
+        let (index, dy2, dx2) = match falloff_xy(light, dx, dy, dz) {
+            Some(v) => v,
+            None => return SKIP,
         };
+        let mut e = [b, 0, 0, 0, 0, 0, 0, 0];
+        put(&mut e, 1, atan_k(dx as f64, dy as f64, 4.0));
+        put(&mut e, 3, mul24((dy2 + dx2) as f64, 6e-05));
+        put(&mut e, 5, mul24(b as f64, normal(index)));
+        e
+    }
+    fn finish(light: &Light, x: &f64, e: &Entry) -> u8 {
         // appAtan2(dx, dy)·4 + x as a double, appFmod by 8π.
-        let r = add24(atan_k(dx as f64, dy as f64, 4.0), x);
+        let r = add24(get(e, 1), *x);
         let m = r % EIGHT_PI;
         let m32 = st32(m) as f64;
         if m < PI || !(m32 <= THREE_PI) {
             return 0;
         }
-        let k = ftol(mul24(m32 * 65536.0, NEG_INV_TWO_PI));
-        let mut s = add24(cosine(k), 1.0) * 0.5;
-        let q = mul24((dy2 + dx2) as f64, 6e-05);
+        let mut s = lobe(m32);
+        let q = get(e, 3);
         if q < 1.0 {
             s = mul24(s, q);
         }
-        let v = mul24(mul24(mul24(b as f64, normal(index)), s), incidence);
-        byte_of(st32(v))
-    });
+        byte_of(st32(mul24(mul24(get(e, 5), s), light.incidence)))
+    }
 }
 
-/// Rotor 0x10b03ae0.
-fn rotor(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_INCIDENCE]) as f64);
-    let spin = mul24(f32::from_bits(p[P_TIME]) as f64, 3.5);
-    walk(p, illumination, out, |dx, dy, dz, b| {
-        let dy2 = dy * dy;
-        let dx2 = dx * dx;
-        let index = match falloff(dz * dz + dy2 + dx2, rr2) {
-            Some(i) => i,
-            None => return 0,
+/// Rotor 0x10b03ae0: entry [b, 6·atan2(dx, dy), q, b·table] (f64s).
+struct Rotor;
+impl Body for Rotor {
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        mul24(float(p[P_TIME]), 3.5)
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
+        let (index, dy2, dx2) = match falloff_xy(light, dx, dy, dz) {
+            Some(v) => v,
+            None => return SKIP,
         };
-        let angle = add24(atan_k(dx as f64, dy as f64, 6.0), spin);
-        let k = ftol(mul24(angle * 65536.0, NEG_INV_TWO_PI));
-        let mut s = add24(cosine(k), 1.0) * 0.5;
-        let q = mul24((dy2 + dx2) as f64, 0.0001);
+        let mut e = [b, 0, 0, 0, 0, 0, 0, 0];
+        put(&mut e, 1, atan_k(dx as f64, dy as f64, 6.0));
+        put(&mut e, 3, mul24((dy2 + dx2) as f64, 0.0001));
+        put(&mut e, 5, mul24(b as f64, normal(index)));
+        e
+    }
+    fn finish(light: &Light, spin: &f64, e: &Entry) -> u8 {
+        let mut s = lobe(add24(get(e, 1), *spin));
+        let q = get(e, 3);
         if q < 1.0 {
             s = add24(mul24(s, q), add24(1.0, -q));
         }
-        let v = mul24(mul24(mul24(b as f64, normal(index)), s), incidence);
-        byte_of(st32(v))
-    });
+        byte_of(st32(mul24(mul24(get(e, 5), s), light.incidence)))
+    }
 }
 
-/// SlowWave 0x10b03de0 (`shift` 0, scale 1024) and FastWave 0x10b040b0
-/// (`shift` 2, scale 2048).
-fn wave(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8], shift: u32, scale: f64) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_INCIDENCE]) as f64);
-    let t35 = mul24(f32::from_bits(p[P_TIME]) as f64, 35.0);
-    walk(p, illumination, out, |dx, dy, dz, b| {
+/// SlowWave 0x10b03de0 (SHIFT 0, scale 1024) and FastWave 0x10b040b0
+/// (SHIFT 2, scale 2048): entry [b, ftol(√d²) >> SHIFT, table].
+struct Wave<const SHIFT: u32>;
+impl<const SHIFT: u32> Body for Wave<SHIFT> {
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        mul24(float(p[P_TIME]), 35.0)
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
         let sum = (dy * dy + dz * dz) + dx * dx;
-        let index = match falloff(sum, rr2) {
+        let index = match falloff(sum, light.rr2) {
             Some(i) => i,
-            None => return 0,
+            None => return SKIP,
         };
-        let distance = ftol(table_sqrt(sum.to_bits()) as f64) >> shift;
-        let k = ftol(add24(distance as f64, -t35) * scale);
+        let distance = ftol(table_sqrt(sum.to_bits()) as f64) >> SHIFT;
+        [b, distance as u32, word(normal(index) as f32), 0, 0, 0, 0, 0]
+    }
+    fn finish(light: &Light, t35: &f64, e: &Entry) -> u8 {
+        let scale = if SHIFT == 0 { 1024.0 } else { 2048.0 };
+        let k = ftol(add24(e[1] as i32 as f64, -*t35) * scale);
         let s = add24(mul24(sine(k), 0.3), 0.7);
-        let v = mul24(mul24(mul24(s, normal(index)), b as f64), incidence);
-        byte_of(st32(v))
-    });
+        byte_of(st32(mul24(mul24(mul24(s, float(e[2])), e[0] as f64), light.incidence)))
+    }
 }
 
-/// Shock 0x10b043a0.
-fn shock(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_INCIDENCE]) as f64);
-    let t = mul24(f32::from_bits(p[P_TIME]) as f64, 4000.0);
-    let factor = |angle: f64| add24(mul24(angle, 0.1), 0.9);
-    walk(p, illumination, out, |dx, dy, dz, b| {
+/// Shock 0x10b043a0: entry [b, ftol(√d²·8), table].
+struct Shock;
+impl Body for Shock {
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        mul24(float(p[P_TIME]), 4000.0)
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
         let sum = (dy * dy + dz * dz) + dx * dx;
-        let index = match falloff(sum, rr2) {
+        let index = match falloff(sum, light.rr2) {
             Some(i) => i,
-            None => return 0,
+            None => return SKIP,
         };
         let d = ftol(table_sqrt(sum.to_bits()) as f64 * 8.0);
-        let k1 = ftol(add24(d as f64, t) * -16.0);
+        [b, d as u32, word(normal(index) as f32), 0, 0, 0, 0, 0]
+    }
+    fn finish(light: &Light, t: &f64, e: &Entry) -> u8 {
+        let factor = |angle: f64| add24(mul24(angle, 0.1), 0.9);
+        let d = e[1] as i32;
+        let k1 = ftol(add24(d as f64, *t) * -16.0);
         let a = factor(cosine(k1));
-        let k2 = ftol(add24(d.wrapping_mul(2) as f64, -t) * 16.0);
+        let k2 = ftol(add24(d.wrapping_mul(2) as f64, -*t) * 16.0);
         let ab = mul24(a, factor(sine(k2)));
-        let k3 = ftol(add24((d >> 1) as f64, -t) * 16.0);
+        let k3 = ftol(add24((d >> 1) as f64, -*t) * 16.0);
         let abc = mul24(ab, factor(sine(k3)));
-        let v = mul24(mul24(mul24(abc, normal(index)), b as f64), incidence);
-        byte_of(st32(v))
-    });
+        byte_of(st32(mul24(mul24(mul24(abc, float(e[2])), e[0] as f64), light.incidence)))
+    }
 }
 
-/// Disco 0x10b046f0.
-fn disco(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_INCIDENCE]) as f64);
-    let t = mul24(f32::from_bits(p[P_TIME]) as f64, 5.0);
-    let lobe = |angle: f64| {
-        let k = ftol(mul24(angle * 65536.0, NEG_INV_TWO_PI));
-        add24(cosine(k), 1.0) * 0.5
-    };
-    walk(p, illumination, out, |dx, dy, dz, b| {
-        let dy2 = dy * dy;
-        let dx2 = dx * dx;
-        let index = match falloff(dz * dz + dy2 + dx2, rr2) {
-            Some(i) => i,
-            None => return 0,
+/// Disco 0x10b046f0: entry [b, float(11·atan2(dx, dy)) (stored as a float
+/// by the original), 11·atan2(√(dx² + dy²), dz) (f64), q (f64), table].
+struct Disco;
+impl Body for Disco {
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        mul24(float(p[P_TIME]), 5.0)
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
+        let (index, dy2, dx2) = match falloff_xy(light, dx, dy, dz) {
+            Some(v) => v,
+            None => return SKIP,
         };
-        let a1 = st32(atan_k(dx as f64, dy as f64, 11.0)) as f64;
+        let a1 = st32(atan_k(dx as f64, dy as f64, 11.0));
         let h = dy2 + dx2;
-        let a2 = atan_k(table_sqrt(h.to_bits()) as f64, dz as f64, 11.0);
-        let c1 = st32(lobe(add24(a1, t))) as f64;
-        let c2 = lobe(add24(a2, t));
+        let mut e = [b, word(a1), 0, 0, 0, 0, word(normal(index) as f32), 0];
+        put(&mut e, 2, atan_k(table_sqrt(h.to_bits()) as f64, dz as f64, 11.0));
+        put(&mut e, 4, mul24(h as f64, 5e-05));
+        e
+    }
+    fn finish(light: &Light, t: &f64, e: &Entry) -> u8 {
+        let c1 = st32(lobe(add24(float(e[1]), *t))) as f64;
+        let c2 = lobe(add24(get(e, 2), *t));
         let mut s = add24(add24(c2, c1), -mul24(c2, c1));
-        let q = mul24(h as f64, 5e-05);
+        let q = get(e, 4);
         if q < 1.0 {
             s = mul24(s, q);
         }
-        let v = mul24(mul24(mul24(normal(index), add24(1.0, -s)), b as f64), incidence);
-        byte_of(st32(v))
-    });
+        byte_of(st32(mul24(mul24(mul24(float(e[6]), add24(1.0, -s)), e[0] as f64), light.incidence)))
+    }
 }
 
-/// Interference 0x10b04c80.
-fn interference(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, incidence) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_INCIDENCE]) as f64);
-    let t = mul24(f32::from_bits(p[P_TIME]) as f64, 5.0);
-    walk(p, illumination, out, |dx, dy, dz, b| {
-        let dy2 = dy * dy;
-        let dx2 = dx * dx;
-        let index = match falloff(dz * dz + dy2 + dx2, rr2) {
-            Some(i) => i,
-            None => return 0,
+/// Interference 0x10b04c80: entry [b, 11·atan2(√(dx² + dy²), dz) (f64),
+/// table].
+struct Interference;
+impl Body for Interference {
+    type Frame = f64;
+    fn frame(p: &[u32; PARAM_WORDS]) -> f64 {
+        mul24(float(p[P_TIME]), 5.0)
+    }
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
+        let (index, dy2, dx2) = match falloff_xy(light, dx, dy, dz) {
+            Some(v) => v,
+            None => return SKIP,
         };
         let h = dy2 + dx2;
-        let angle = add24(atan_k(table_sqrt(h.to_bits()) as f64, dz as f64, 11.0), t);
-        let k = ftol(mul24(angle * 65536.0, NEG_INV_TWO_PI));
-        let s = add24(cosine(k), 1.0) * 0.5;
-        let v = mul24(mul24(mul24(s, normal(index)), b as f64), incidence);
-        byte_of(st32(v))
-    });
+        let mut e = [b, 0, 0, word(normal(index) as f32), 0, 0, 0, 0];
+        put(&mut e, 1, atan_k(table_sqrt(h.to_bits()) as f64, dz as f64, 11.0));
+        e
+    }
+    fn finish(light: &Light, t: &f64, e: &Entry) -> u8 {
+        let s = lobe(add24(get(e, 1), *t));
+        byte_of(st32(mul24(mul24(mul24(s, float(e[3])), e[0] as f64), light.incidence)))
+    }
 }
 
 /// Shell 0x10b05740: a ring at 0.8 < √d²/R < 1, peaking at 0.9; no falloff
-/// table or incidence.
-fn shell(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
-    let (rr2, rradius) = (f32::from_bits(p[P_RR2]), f32::from_bits(p[P_RRADIUS]));
-    walk(p, illumination, out, |dx, dy, dz, b| {
+/// table or incidence, nothing time-dependent (entry [b, byte]).
+struct Shell;
+impl Body for Shell {
+    type Frame = ();
+    fn frame(_: &[u32; PARAM_WORDS]) {}
+    fn prepare(light: &Light, dx: f32, dy: f32, dz: f32, b: u32) -> Entry {
         let sum = (dy * dy + dz * dz) + dx * dx;
-        if falloff(sum, rr2).is_none() {
-            return 0;
+        if falloff(sum, light.rr2).is_none() {
+            return SKIP;
         }
-        let r = table_sqrt(sum.to_bits()) * rradius;
-        let r64 = r as f64;
-        if !(r64 < 1.0) || !(r64 > 0.8) {
-            return 0;
+        let r = (table_sqrt(sum.to_bits()) * light.rradius) as f64;
+        if !(r < 1.0) || !(r > 0.8) {
+            return SKIP;
         }
-        let mut e = add24(r64, -0.9);
+        let mut e = add24(r, -0.9);
         if e < 0.0 {
             e = -e;
         }
-        let v = mul24(add24(1.0, -mul24(e, 10.0)), b as f64);
-        byte_of(st32(v))
-    });
+        [b, byte_of(st32(mul24(add24(1.0, -mul24(e, 10.0)), b as f64))) as u32, 0, 0, 0, 0, 0, 0]
+    }
+    fn finish(_: &Light, _: &(), e: &Entry) -> u8 {
+        e[1] as u8
+    }
 }
 
-/// Run `effect`'s spatial function over the parameter record at `params`
-/// (PARAM_WORDS words: the rectangle, grid, location, constants, time,
-/// period, phase, illumination and output addresses). Returns 0 for an
-/// effect this module does not hold.
-pub(crate) fn run(params: &[u32; PARAM_WORDS]) -> u32 {
+/// Every texel prepared and finished at once (the original's loop).
+fn direct<B: Body>(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8]) {
+    let light = light_of(p);
+    let frame = B::frame(p);
+    walk(p, illumination, |at, dx, dy, dz, b| {
+        out[at] = if b == 0 {
+            0
+        } else {
+            let entry = B::prepare(&light, dx, dy, dz, b);
+            if entry[0] == 0 {
+                0
+            } else {
+                B::finish(&light, &frame, &entry)
+            }
+        };
+    });
+}
+/// The cached form: `cache` holds an entry per texel, prepared when
+/// `ready` is false.
+fn cached<B: Body>(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u8], cache: &mut [Entry], ready: bool) {
+    let light = light_of(p);
+    if !ready {
+        walk(p, illumination, |at, dx, dy, dz, b| {
+            cache[at] = if b == 0 { SKIP } else { B::prepare(&light, dx, dy, dz, b) };
+        });
+    }
+    let frame = B::frame(p);
+    for (byte, entry) in out.iter_mut().zip(cache.iter()) {
+        *byte = if entry[0] == 0 { 0 } else { B::finish(&light, &frame, entry) };
+    }
+}
+
+fn dispatch(params: &[u32; PARAM_WORDS], cache: Option<(&mut [Entry], bool)>) -> u32 {
     let (min_u, max_u, min_v, max_v) = (params[P_MIN_U] as i32, params[P_MAX_U] as i32, params[P_MIN_V] as i32, params[P_MAX_V] as i32);
     let area = ((max_u - min_u).max(0) * (max_v - min_v).max(0)) as usize;
     let illumination = if params[P_ILLUMINATION] != 0 {
@@ -740,18 +871,50 @@ pub(crate) fn run(params: &[u32; PARAM_WORDS]) -> u32 {
         None
     };
     let out = unsafe { core::slice::from_raw_parts_mut(params[P_OUT] as usize as *mut u8, area) };
+    macro_rules! go {
+        ($body:ty) => {
+            match cache {
+                Some((entries, ready)) => cached::<$body>(params, illumination, out, &mut entries[..area], ready),
+                None => direct::<$body>(params, illumination, out),
+            }
+        };
+    }
     match params[P_EFFECT] {
-        4 => searchlight(params, illumination, out),
-        5 => wave(params, illumination, out, 0, 1024.0),
-        6 => wave(params, illumination, out, 2, 2048.0),
-        9 => shock(params, illumination, out),
-        10 => disco(params, illumination, out),
-        14 => shell(params, illumination, out),
-        16 => interference(params, illumination, out),
-        18 => rotor(params, illumination, out),
+        4 => go!(Searchlight),
+        5 => go!(Wave<0>),
+        6 => go!(Wave<2>),
+        9 => go!(Shock),
+        10 => go!(Disco),
+        14 => go!(Shell),
+        16 => go!(Interference),
+        18 => go!(Rotor),
         _ => return 0,
     }
     1
+}
+
+/// Run `effect`'s spatial function over the parameter record (PARAM_WORDS
+/// words: the rectangle, grid, location, constants, time, period, phase,
+/// illumination and output addresses) in one pass, as the original does.
+/// Returns 0 for an effect this module does not hold.
+pub(crate) fn run(params: &[u32; PARAM_WORDS]) -> u32 {
+    dispatch(params, None)
+}
+
+/// `run` for a light whose bytes are recomputed every frame: with a cache
+/// address (P_CACHE, eight words per rectangle texel) the time-independent
+/// part is prepared once (P_CACHE_READY) and each call only finishes it.
+pub(crate) fn run_frame(params: &mut [u32; PARAM_WORDS]) -> u32 {
+    if params[P_CACHE] == 0 {
+        return run(params);
+    }
+    let (min_u, max_u, min_v, max_v) = (params[P_MIN_U] as i32, params[P_MAX_U] as i32, params[P_MIN_V] as i32, params[P_MAX_V] as i32);
+    let area = ((max_u - min_u).max(0) * (max_v - min_v).max(0)) as usize;
+    let entries = unsafe { core::slice::from_raw_parts_mut(params[P_CACHE] as usize as *mut Entry, area) };
+    let ready = params[P_CACHE_READY] != 0;
+    let result = dispatch(params, Some((entries, ready)));
+    params[P_CACHE_READY] = 1;
+    result
 }
 
 /// `run` on the record at `params` (an address in this instance's memory).
@@ -759,4 +922,10 @@ pub(crate) fn run(params: &[u32; PARAM_WORDS]) -> u32 {
 pub extern "C" fn light_spatial(params: u32) -> u32 {
     let p = unsafe { &*(params as usize as *const [u32; PARAM_WORDS]) };
     run(p)
+}
+/// `run_frame` on the record at `params` (validation of the cached form).
+#[no_mangle]
+pub extern "C" fn light_spatial_frame(params: u32) -> u32 {
+    let p = unsafe { &mut *(params as usize as *mut [u32; PARAM_WORDS]) };
+    run_frame(p)
 }

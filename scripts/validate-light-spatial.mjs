@@ -209,6 +209,17 @@ for (const c of cases) {
   pairsOf.push(list);
 }
 spatial.collect(0);
+// The cached form light.rs merges with (run_frame): the bytes at the case's
+// time from a fresh cache, at another time, and at the first time again.
+let cachedMismatch = 0, cachedFrames = 0;
+for (const [i, c] of cases.entries()) {
+  const later = f(c.time + 0.37), [first, second, again] = spatial.runFrames(c, [c.time, later, c.time]);
+  const direct = spatial.run({ ...c, time: later });
+  for (const [a, b] of [[first, rust[i]], [second, direct], [again, rust[i]]]) {
+    cachedFrames++;
+    if (Buffer.compare(Buffer.from(a), Buffer.from(b))) cachedMismatch++;
+  }
+}
 
 // FPATAN on the hardware for every distinct pair, at 0x007f and 0x037f.
 const unique = [...new Set(pairsOf.flat())];
@@ -252,7 +263,7 @@ for (let start = 0; start < cases.length;) {
   start = end;
 }
 
-const report = { controlWord, census, realCases, constants: constantReport, cases: cases.length, texels: 0, lit: 0, mismatches: 0, pairMismatches: 0, missing,
+const report = { controlWord, census, realCases, constants: constantReport, cached: { frames: cachedFrames, mismatches: cachedMismatch }, cases: cases.length, texels: 0, lit: 0, mismatches: 0, pairMismatches: 0, missing,
   pairs: unique.length, atanCalls: pairsOf.flat().length, precisionDependent, byEffect: {}, first: [] };
 cases.forEach((c, i) => {
   const expected = Buffer.from(original[i].spatial, 'hex'), got = rust[i];
@@ -393,6 +404,7 @@ Object.assign(report, { movingShell: shellReport, fpatan: { products, modelMisma
   random: { pairs: randomPairs, fastMismatch, fallbacks: randomFallbacks } });
 console.log(JSON.stringify(report));
 assert.equal(missing, 0, 'every appAtan2 pair the original asked for was measured');
+assert.equal(cachedMismatch, 0, 'the cached per-frame form gives the single loop\'s bytes');
 if (controlWord === '0x007f') {
   assert.equal(constantReport.rr2Mismatch, 0, 'rr2 at 24 bits matches ComputeFromActor for every LightRadius');
   assert.equal(constantReport.incidenceMismatch, 0, 'incidence at 24 bits matches ComputeFromActor');

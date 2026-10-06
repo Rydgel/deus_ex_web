@@ -81,7 +81,7 @@ export async function instantiateScriptVm(memory, imports) {
 }
 
 /** spatial.rs's parameter record length (PARAM_WORDS). */
-export const SPATIAL_WORDS = 28;
+export const SPATIAL_WORDS = 32;
 
 export function createScriptVmKernel(instance, memory) {
   const x = instance.exports;
@@ -243,6 +243,26 @@ export function createScriptVmKernel(instance, memory) {
         },
         /** Record the appAtan2 operand pairs of later runs (up to
          * `capacity`), or stop with 0. */
+        /** The cached form (spatial.rs run_frame): `light`'s bytes at each
+         * of `times`, its per-texel cache prepared at the first (validation:
+         * light.rs merges this way). */
+        runFrames(light, times) {
+          if (!tablesSet) throw new Error('spatial.rs tables are not uploaded');
+          const { minU, maxU, minV, maxV } = light.rect, area = Math.max(0, maxU - minU) * Math.max(0, maxV - minV);
+          const padded = (area + 15) & ~15, need = SPATIAL_WORDS * 4 + padded * 2 + area * 32 + 16;
+          const at = alloc(need), illumination = light.illumination ? at + SPATIAL_WORDS * 4 : 0, out = at + SPATIAL_WORDS * 4 + padded;
+          if (light.illumination) new Uint8Array(memory.buffer, illumination, area).set(light.illumination.subarray(0, area));
+          const words = api.record({ ...light, time: times[0] }, illumination, out);
+          words[27] = at + SPATIAL_WORDS * 4 + padded * 2; words[28] = 0;
+          new Uint32Array(memory.buffer, at, SPATIAL_WORDS).set(words);
+          const results = times.map(time => {
+            new Float32Array(memory.buffer, at + 20 * 4, 1)[0] = time;
+            if (!x.light_spatial_frame(at)) throw new Error(`spatial.rs has no body for effect ${light.effect}`);
+            return new Uint8Array(memory.buffer, out, area).slice();
+          });
+          free(at);
+          return results;
+        },
         collect(capacity) {
           if (!capacity) { x.spatial_collect(0, 0); return; }
           if (capacity > pairCapacity) { pairBuffer = alloc(capacity * 16); pairCapacity = capacity; }

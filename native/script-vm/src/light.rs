@@ -113,7 +113,7 @@ pub extern "C" fn light_merge(header: u32, before: u32, time: u32) -> u32 {
                 let params = &mut *(l[L_PARAMS] as usize as *mut [u32; crate::spatial::PARAM_WORDS]);
                 if params[crate::spatial::P_DONE] == 0 || params[crate::spatial::P_DONE_TIME] != time {
                     params[crate::spatial::P_TIME] = time;
-                    crate::spatial::run(params);
+                    crate::spatial::run_frame(params);
                     params[crate::spatial::P_DONE_TIME] = time;
                     params[crate::spatial::P_DONE] = 1;
                 }
