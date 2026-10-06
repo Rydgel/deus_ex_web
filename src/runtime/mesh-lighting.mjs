@@ -4,7 +4,10 @@
  * unlit colour; D3DDrv's diffuse packing. Evidence, precision and remaining
  * limits: docs/mesh-lighting.md. */
 import { x87load, x87double, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
-import { fgetHsv, movingLightConstants, tableSqrt, worldLightRadius, fistp } from './dynamic-lighting.mjs';
+// The 64-bit FGetHSV and ComputeFromActor constants until mesh lighting's
+// translation moves to the render pass's 24 bits (docs/render-pass-precision.md).
+import { fgetHsvExtended as fgetHsv, movingLightConstantsExtended as movingLightConstants, tableSqrt, worldLightRadius, fistp }
+  from './dynamic-lighting.mjs';
 
 const f = Math.fround;
 const scratch = new DataView(new ArrayBuffer(4));

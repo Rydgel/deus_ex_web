@@ -129,7 +129,7 @@ and Engine.dll bodies under Unicorn with Core's `appSqrt` body
 (`fld; fsqrt; ret`) and a bump allocator standing in for `FMemStack::PushBytes`.
 Every other import traps. Cases use Training's real BSP and light maps.
 
-| Check | Cases | Mismatches (control word `0x037f`) |
+| Check | Cases | Mismatches (bodies at `0x007f`, tables at `0x037f`) |
 | --- | ---: | ---: |
 | Square-root table | 2048 entries | 0 |
 | Radius, `1/R`, `4093/R²` | all 256 `LightRadius` bytes | 0 |
@@ -139,10 +139,11 @@ Every other import traps. Cases use Training's real BSP and light maps.
 | Texel rectangles | 438 | 0 |
 | NonIncidence bytes and merged texels | 72,255 texels, 20,035 lit | 0 |
 
-The per-texel loop evaluates extended-precision intermediates in JavaScript
-doubles with float stores at the recovered store points. The 72,255-texel
-comparison shows no difference, but this is a measurement, not a proof.
-Per-light values (`fgetHsv`, colour) use the x87 model.
+The per-texel loop is binary32 arithmetic in the original's operation order
+(precision control 24; see "Precision" below), the double constant 1.02
+rounded exactly; per-light values (`fgetHsv`'s double constants) use the
+BigInt x87 model rounded to 24 bits (`x87-pc24.mjs`). The table above was
+measured at `0x037f` with the earlier 64-bit translation until 2026-10-06.
 
 `scripts/validate-auglight-lighting.mjs` drives Play: F12 spawns the two Beams,
 they pass the gate, 113 light maps gain texels, an unchanged frame recomposes
@@ -194,17 +195,51 @@ over 300 frames against 178,984, and Airfield 52,511 against 200,800. Island
 standing at Player start in the browser (Linux host, 1920×1080): the `tick`
 phase, which holds the moving-light sync, drops by about 3.5 ms.
 
-## Precision boundary: FPU control word
+## Precision: the render pass's 24 bits
 
-Deus Ex's D3DDrv.dll calls `IDirectDraw7::SetCooperativeLevel` with
-`DDSCL_FPUSETUP` (`or ah, 8` at `0x1000b18e`). Under Direct3D 7 that leaves the
-x87 control word in single precision, which would round every intermediate to
-24 bits. The oracle and this translation assume the extended control word
-`0x037f` used by the project's other native comparisons. Under `0x007f`, the
-same oracle builds a different square-root table (248 of 2048 entries) and
-different `4093/R²` values (121 of 256), while the spatial and merge bodies
-still match on the supplied inputs. The control word in the running game
-(D3D, OpenGL or software renderer) has not been measured.
+Everything on this page except the light-manager tables runs inside the
+render pass: URender::PreRender sets x87 precision control 24 until
+PostRender ([render-pass precision](render-pass-precision.md)). Since
+2026-10-06 the translation follows it, and the oracle runs the bodies at
+`0x007f` with the tables built at the init word `0x037f`
+(FLightManager::Init from URender::Init `0x10b1358d`, on the game thread;
+`0x027f` gives the same tables, `0x007f` would change 248 of the 2,048
+square roots).
+
+What changed at 24 bits, from the instructions:
+- **FGetHSV** (Engine `0x103ec8d0`): `value·(1.4/255)`, the appSqrt
+  (`fld qword; fsqrt`), `+ 0.01`, `0.7/…` (all double constants, each
+  rounded once from the exact value) and every later product and sum round
+  to 24 bits. The 64-bit model differed in 1,789 of 2,049 triples.
+- **ComputeFromActor**: `1/R` (`fdivr` of the double 1.0) stays on the stack
+  as a 24-bit value, so `rr2 = f(f(1/R)²·4093)` (121 of 256 radii differed);
+  the colour's `Level.Brightness·brightness` rounds before the channel
+  products; the colour steps' `− 0.5f` rounds.
+- **Incidence** (`0x10b06325–0x10b0639b`): `((dz·Nz + dy·Ny) + dx·Nx)·(1/R)`
+  in binary32 (the static path's 415 of 1,947 Training steps differed).
+- **Rectangle** (`0x10b0660e–0x10b06868`): the plane distance
+  `((dy·Ny + dz·Nz) + dx·Nx)` from stored differences; the disk
+  `R²·1.05 − d²` with the double 1.05 rounded exactly; the projected centre
+  (Z on the stack, X and Y stored); `(u ∓ ru)` rounded before the division
+  by the light-map scale.
+- **Filter** (`0x10b24a30–0x10b24a66`): `((L.z·P.z + L.y·P.y) + P.x·L.x) − W`
+  at 24 bits, for the surface lists and the leaf lists alike.
+- **NonIncidence** (`0x10b05509–0x10b056ab`): the row start's Z sums, the
+  distance `(dy² + dz²) + dx²`, `1.02 − root·(1/R)` (the double 1.02
+  rounded exactly) and the `− 0.5f`.
+
+Checks at `0x007f`: `validate-dynamic-lighting` (above),
+`validate-static-lighting` on every Training surface (15,745 light steps,
+8,891,470 texels), every 4th Island surface, every 3rd NYC Street surface
+(483 cylinder and 332 spot steps) and every Intro and Free Clinic surface
+(the singular bases): 0 mismatches. `validate-normal-moving-lighting`,
+`validate-light-animation`, `validate-light-spatial`,
+`validate-auglight-lighting`, `validate-moving-lights-incremental` and, in
+the browser's default worker mode, `validate-light-spatial-play` pass.
+
+Mesh lighting still takes the 64-bit FGetHSV and constants
+(`fgetHsvExtended`, `movingLightConstantsExtended`) until its own
+translation moves ([render-pass precision](render-pass-precision.md)).
 
 ## Not reproduced / open
 

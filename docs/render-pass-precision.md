@@ -109,19 +109,19 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | Routine | Placement | Doc | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Light-manager tables (sqrt `0x10b0225b`, normal `0x10b022fe`, shadow `0x10b02112`/`0x10b02352`, x^-0.5 `0x10b022d0`/`0x10b024b0`, fog attenuation `0x10b020cf`) | init (URender::Init `0x10b1358d`) | [dynamic lighting](dynamic-lighting.md), [static lighting](static-lighting.md) | dyn, mesh-light, fog oracles; now always `init_control_word` 0x037f | dynamic-, static-, mesh-lighting | `dynamic-lighting.mjs` `squareRootTable`/`normalLightTable`, `static-lighting.mjs` `shadowTable`/`rsqrtTables`; copies in fog.rs, meshlight.rs, lodmesh kernel, GLSL `TABLES` | f64/x87 model, exact | keep 0x037f (0x027f identical) |
-| Engine FGetHSV `0x103ec8d0` (called at `0x10b05ee8` GlobalLighting, `0x10b07fcc` SetupForSurf ambient, `0x10b08dee` SetupForActor) | pass | dynamic lighting | dyn `fgethsv`, argv[2] (0x037f) | validate-dynamic-lighting (reports 0x007f, asserts 0x037f) | `dynamic-lighting.mjs` `fgetHsv` | x87 64-bit model | **1,789 of 2,049** triples differ |
-| ComputeFromActor `0x10b05fa0`: R, 1/R, rr2 `0x10b05fc3–0x10b0602c` | pass | dynamic lighting | dyn `radius_constants`, argv | validate-dynamic-lighting | `movingLightConstants` | f64 | **rr2 121 of 256** radii |
-| ComputeFromActor brightness/colour/table `0x10b060b1`, `0x10b06122`, `0x10b064ff` | pass | dynamic lighting | dyn `color_table` | validate-dynamic-lighting, static | `movingLightConstants`, `colorTableEntry` | x87 model | 0 of 16 (inputs from the 64-bit FGetHSV) |
-| ComputeFromActor incidence `0x10b06325–0x10b0639e` | pass | moving normal lighting | dyn `incidence` | validate-static-lighting | `normalLightIncidence`; spatial branch `renderPassConstants` | x87 model | **415 of 1,947** Training steps (every 8th surface) |
-| ComputeFromActor rectangle `0x10b0660e–0x10b06868` | pass | dynamic lighting | dyn `rect` | dynamic, static | `movingLightRect` | f64 + fround | 0 of 438 / 0 of 1,947 |
-| Ambient fill `0x10b07fd2–0x10b080cf` | pass | static lighting | dyn `ambient` (FGetHSV + fill) | validate-static-lighting | `ambientTexel` | exact products | 0 of 72 zone triples |
+| Engine FGetHSV `0x103ec8d0` (called at `0x10b05ee8` GlobalLighting, `0x10b07fcc` SetupForSurf ambient, `0x10b08dee` SetupForActor) | pass | dynamic lighting | dyn `fgethsv`, **0x007f** | validate-dynamic-lighting | `dynamic-lighting.mjs` `fgetHsv` **PC 24** (mesh lighting: `fgetHsvExtended`, 64-bit) | was: 1,789 of 2,049; **now 0** |
+| ComputeFromActor `0x10b05fa0`: R, 1/R, rr2 `0x10b05fc3–0x10b0602c` | pass | dynamic lighting | dyn `radius_constants`, **0x007f** | validate-dynamic-lighting | `movingLightConstants` **PC 24** | was: rr2 121 of 256; **now 0** |
+| ComputeFromActor brightness/colour/table `0x10b060b1`, `0x10b06122`, `0x10b064ff` | pass | dynamic lighting | dyn `color_table`, **0x007f** | validate-dynamic-lighting, static | `movingLightConstants`, `colorTableEntry` **PC 24** | 0 |
+| ComputeFromActor incidence `0x10b06325–0x10b0639e` | pass | moving normal lighting | dyn `incidence`, **0x007f** | validate-static-lighting | `normalLightIncidence` (= `renderPassConstants`) **PC 24** | was: 415 of 1,947; **now 0** (15,745 Training steps) |
+| ComputeFromActor rectangle `0x10b0660e–0x10b06868` | pass | dynamic lighting | dyn `rect`, **0x007f** | dynamic, static | `movingLightRect` **PC 24** | 0 (34,405 static steps on 5 maps) |
+| Ambient fill `0x10b07fd2–0x10b080cf` | pass | static lighting | dyn `ambient`, **0x007f** | validate-static-lighting | `ambientTexel` (exact at either precision) | 0 |
 | Illumination `0x10b02650` | pass | static lighting | dyn `illumination` | validate-static-lighting | `shadowIllumination` | integer | 0 of 15,754 masks |
-| Normal `0x10b03360`, NonIncidence `0x10b054e0`, spot `0x10b04f80`, cylinder `0x10b04a80` | pass | static, moving normal lighting | dyn `spatial_merge`, `spot_merge` | static, dynamic, normal-moving | `normalLightSpatial`, `nonIncidenceSpatial`, `spotLightSpatial`, `cylinderSpatial` | f64 + fround, x87-model chains | 7 Training steps (11 of 1,277,341 texels); NonIncidence 0 of 72,255; normal 0 of 37,763 (64-bit constants as inputs) |
-| Merge `0x10b03040`, merge modulation `0x10b030f2–0x10b03244` | pass | static lighting | dyn `spatial_merge`, `merge_mod` | static, light-animation | inline merge, `mergeModulation`, light.rs `light_merge`/`light_modulation` | integer / f64 factors | 1 merged texel (Training); modulation 0 of 3,600 |
-| Light noise `0x10b13080` (from PreRender `0x10b146ae`) | pass | static lighting "Light animation" | dyn `noise` | validate-light-animation | `createLightNoise` | x87 ftol + f32 stores | 0 of 240 frames |
-| GlobalLighting `0x10b05e90`, LightType table `0x10b2a284` | pass | static lighting | dyn `light_type` | validate-light-animation | `lightTypeBrightness` | x87 model | **58 of 1,280** frames |
+| Normal `0x10b03360`, NonIncidence `0x10b054e0`, spot `0x10b04f80`, cylinder `0x10b04a80` | pass | static, moving normal lighting | dyn `spatial_merge`, `spot_merge`, **0x007f** | static, dynamic, normal-moving | `normalLightSpatial`, `nonIncidenceSpatial`, `spotLightSpatial`, `cylinderSpatial` **PC 24** | was: 11 of 1.28 M texels; **now 0** (36.3 M texels on 5 maps) |
+| Merge `0x10b03040`, merge modulation `0x10b030f2–0x10b03244` | pass | static lighting | dyn `spatial_merge`, `merge_mod`, **0x007f** | static, light-animation | inline merge, `mergeModulation`, `mergeFactor`, light.rs `light_merge`/`light_modulation` **PC 24** factors | 0 |
+| Light noise `0x10b13080` (from PreRender `0x10b146ae`) | pass | static lighting "Light animation" | dyn `noise`, **0x007f** | validate-light-animation | `createLightNoise` **PC 24** | 0 of 320 frames (an hour-long clock included) |
+| GlobalLighting `0x10b05e90`, LightType table `0x10b2a284` (`0x10b05a10` Pulse, `0x10b05a90` Blink, `0x10b05af0` Flicker, `0x10b05b30` Strobe, `0x10b05b90` SubtlePulse) | pass | static lighting | dyn `light_type`, **0x007f** | validate-light-animation | `lightTypeBrightness` **PC 24** | was: 259 of 2,560 frames; **now 0** |
 | Spatially dynamic effects (Searchlight … Shell) | pass | static lighting (spatial branch) | dyn `spatial_dynamic`, **0x007f** | validate-light-spatial | spatial.rs | binary32 | other branch, at 0x007f already |
-| FDynamicLight::Filter `0x10b24a10` | pass (OccludeBsp) | dynamic lighting | dyn `filter` | dynamic, mesh-lighting | `filterMovingLight`, `movingLightLeaves` | f64 + fround | 0 of 438 surfaces |
+| FDynamicLight::Filter `0x10b24a10` | pass (OccludeBsp) | dynamic lighting | dyn `filter`, **0x007f** | dynamic, mesh-lighting | `filterMovingLight`, `movingLightLeaves` **PC 24** | 0 |
 | Light colour cache decision `0x10b06427–0x10b06600` | pass | [light cache](script-light-cache.md) | light-color-cache (Unicorn default 0x037f) | validate-script-light-cache | host invalidation | labels only | not measured (branch labels) |
 
 ### Volumetric fog
@@ -200,7 +200,8 @@ frac-edge case; the script VM in render events needs a design decision.
 
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
 dynamic light effects (other worktree), mesh fog's oracle default, and on
-this audit's branch volumetric fog and coronas (2026-10-06). The
+this audit's branch volumetric fog, coronas, and the static and moving
+light-map path with its light animation (2026-10-06). The
 families are moved one at a time, starting with what Play computes every
 frame; each keeps the JS reference, the Rust kernel and the GPU shader in
 agreement and switches its oracle default to `0x007f` when its validator

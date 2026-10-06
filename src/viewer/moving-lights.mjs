@@ -41,7 +41,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
    * the render pass's 24-bit rr2 (Shell reads no incidence). */
   const shellSpatial = (rect, grid, location, constants, write) => {
     const bytes = spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius,
-      rr2: f(f(constants.rradius * constants.rradius) * 4093), incidence: 0, period: 0, phase: 0, time: 0, illumination: null });
+      rr2: constants.rr2, incidence: 0, period: 0, phase: 0, time: 0, illumination: null });
     for (let v = rect.minV, k = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k++) write(u, v, bytes[k]);
   };
   const bodyOf = ({ effect, originalNormal }) => effect === 14 ? shellSpatial : originalNormal ? normalLightSpatial

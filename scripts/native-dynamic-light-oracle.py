@@ -670,10 +670,12 @@ class Oracle:
 
 
 def main():
-    # argv[2]: the control word of the per-frame bodies (the render pass runs
-    # at 0x007f; the default stays 0x037f until each translation is moved).
-    # argv[3]: the light-manager init tables' word (default 0x037f).
-    root, control_word = sys.argv[1], int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
+    # argv[2]: the control word of the per-frame bodies: the render pass's
+    # precision control 24, 0x007f, by default (docs/render-pass-precision.md;
+    # the audit's ORACLE_CW also selects it). argv[3]: the light-manager init
+    # tables' word (default 0x037f, the game thread's).
+    root = sys.argv[1]
+    control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else native.render_control_word(0x007f)
     cases = json.load(sys.stdin)
     oracle = Oracle(root, control_word)
     if len(sys.argv) > 3:

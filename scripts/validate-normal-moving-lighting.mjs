@@ -21,7 +21,9 @@ const defaults = new ClassDefaults(assets), f = Math.fround, bits = new DataView
 const u32 = value => { bits.setFloat32(0, value, true); return bits.getUint32(0, true); };
 const float = value => { bits.setUint32(0, value >>> 0, true); return bits.getFloat32(0, true); };
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
-function original(cases, controlWord = '0x037f') {
+// The render pass's control word 0x007f (docs/render-pass-precision.md);
+// the light-manager tables come from the init word 0x037f.
+function original(cases, controlWord = '0x007f') {
   return JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, controlWord],
     { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }));
 }
@@ -112,8 +114,8 @@ for (let i = 0; i < samples.length; i++) {
   texels += spatial.length; lit += spatial.filter(Boolean).length;
 }
 assert.ok(lit > 0);
-const single = original(cases, '0x007f');
+const extended = original(cases, '0x037f');
 console.log(JSON.stringify({ authoredSurfaces: authored, boundaryGrids: samples.length - authored,
-  tableEntries: reference.normalTable.length, texels, lit, mismatches: 0,
-  singlePrecisionDifferences: { table: single.normalTable.filter((v, i) => v !== reference.normalTable[i]).length,
-    spatial: single.spatial.reduce((n, s, i) => n + s.spatial.filter((v, p) => v !== reference.spatial[i].spatial[p]).length, 0) } }));
+  tableEntries: reference.normalTable.length, texels, lit, mismatches: 0, controlWord: '0x007f',
+  extendedPrecisionDifferences: { table: extended.normalTable.filter((v, i) => v !== reference.normalTable[i]).length,
+    spatial: extended.spatial.reduce((n, s, i) => n + s.spatial.filter((v, p) => v !== reference.spatial[i].spatial[p]).length, 0) } }));

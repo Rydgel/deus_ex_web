@@ -4,7 +4,10 @@
  * colour table, FDynamicLight::Filter, the texel rectangle and the
  * NonIncidence spatial bytes merged onto static texels. Requires the local
  * install and NATIVE_PROBE_PYTHON (default .cache/native-probe-env).
- * docs/dynamic-lighting.md records what this does and does not establish. */
+ * docs/dynamic-lighting.md records what this does and does not establish.
+ * The bodies run at the render pass's control word 0x007f (precision
+ * control 24, docs/render-pass-precision.md), the light-manager tables at
+ * the init word 0x037f; a 0x037f run of the bodies is reported only. */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
@@ -108,7 +111,7 @@ for (const light of lights) {
   }
 }
 
-function runOracle(input, controlWord = '0x037f') {
+function runOracle(input, controlWord = '0x007f') {
   return JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, controlWord],
     { input: JSON.stringify(input), encoding: 'utf8', maxBuffer: 1 << 30 }));
 }
@@ -147,18 +150,18 @@ function compare(native, label) {
 }
 
 native = runOracle(cases);
-const extended = compare(native, 'extended precision (0x037f)');
-const single = compare(runOracle(cases, '0x007f'), 'single precision (0x007f)');
-console.log(JSON.stringify([extended, single], null, 1));
-assert.equal(extended.sqrtTable, 0, 'square-root table matches the native initializer');
-assert.equal(extended.radii, 0, 'radius, reciprocal and 4093/R^2 match for every LightRadius byte');
-assert.equal(extended.colors, 0, 'brightness, colour and colour table match');
-assert.equal(extended.hsvDiff, 0, 'FGetHSV matches for every hue and brightness byte sampled');
-assert.equal(extended.filters, 0, 'FDynamicLight::Filter reaches the same surfaces');
-assert.ok(extended.filterSurfaces > 50, 'filter cases reach real Training surfaces');
-assert.equal(extended.rects, 0, 'texel rectangles match');
-assert.equal(extended.spatialDiff, 0, 'NonIncidence spatial bytes match');
-assert.equal(extended.mergedDiff, 0, 'merged texels match');
-assert.ok(extended.litTexels > 1000, 'cases light a meaningful number of texels');
-console.log(`Original moving-light path: ${extended.filterSurfaces} filtered surfaces, ${extended.surfaces} rectangles, ` +
-  `${extended.texels} texels (${extended.litTexels} lit) match under the extended control word.`);
+const render = compare(native, 'render pass (0x007f)');
+const extended = compare(runOracle(cases, '0x037f'), 'bodies at 64-bit precision (0x037f), measured only');
+console.log(JSON.stringify([render, extended], null, 1));
+assert.equal(render.sqrtTable, 0, 'square-root table matches the native initializer');
+assert.equal(render.radii, 0, 'radius, reciprocal and 4093/R^2 match for every LightRadius byte');
+assert.equal(render.colors, 0, 'brightness, colour and colour table match');
+assert.equal(render.hsvDiff, 0, 'FGetHSV matches for every hue and brightness byte sampled');
+assert.equal(render.filters, 0, 'FDynamicLight::Filter reaches the same surfaces');
+assert.ok(render.filterSurfaces > 50, 'filter cases reach real Training surfaces');
+assert.equal(render.rects, 0, 'texel rectangles match');
+assert.equal(render.spatialDiff, 0, 'NonIncidence spatial bytes match');
+assert.equal(render.mergedDiff, 0, 'merged texels match');
+assert.ok(render.litTexels > 1000, 'cases light a meaningful number of texels');
+console.log(`Original moving-light path: ${render.filterSurfaces} filtered surfaces, ${render.surfaces} rectangles, ` +
+  `${render.texels} texels (${render.litTexels} lit) match at the render pass's control word 0x007f.`);

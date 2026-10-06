@@ -85,3 +85,33 @@ export function r24(x) {
   const scale = 2 ** -k;
   return Math.fround(x * scale) / scale;
 }
+
+/** r24 of the exact value s + e, where s is the double nearest it and
+ * |e| ≤ half an ulp of s: r24(s) unless s lies exactly on a 24-bit rounding
+ * midpoint, where the sign of e decides. */
+function r24split(s, e) {
+  const r = r24(s);
+  if (e === 0 || r === s || !Number.isFinite(s)) return r;
+  const other = 2 * s - r;
+  if (other === r || r24(other) !== other) return r;
+  return e > 0 ? Math.max(r, other) : Math.min(r, other);
+}
+
+/** The PC 24 sum of two finite doubles of any precision (a double constant
+ * plus a register value): the exact sum rounded once (TwoSum). */
+export function r24sum(a, b) {
+  const s = a + b, t = s - a, e = (a - (s - t)) + (b - t);
+  return r24split(s, e);
+}
+
+const SPLIT = 134217729; // 2^27 + 1 (Veltkamp)
+/** The PC 24 product of two finite doubles of any precision: the exact
+ * product (Dekker's two-product) rounded once. */
+export function r24prod(a, b) {
+  const p = a * b;
+  if (!Number.isFinite(p) || p === 0) return r24(p);
+  const ca = SPLIT * a, ah = ca - (ca - a), al = a - ah;
+  const cb = SPLIT * b, bh = cb - (cb - b), bl = b - bh;
+  const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+  return r24split(p, e);
+}

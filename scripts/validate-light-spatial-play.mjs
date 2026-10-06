@@ -2,12 +2,15 @@
 // dynamic effects"): on 10_Paris_Club the dance floor's LE_Disco light
 // (Light3) is a class 1 light whose light maps spatial.rs recomputes for
 // every Level.TimeSeconds inside the light.rs merge. Headless Chromium runs
-// Play (?sim=inline), puts the player beside the light and checks that its
+// Play in the default mode (the simulation in the worker; decal-probe.mjs
+// placeProbe moves the player, the light maps are the page's world;
+// `--query sim=inline` runs the simulation on the page), puts the player
+// beside the light and checks that its
 // light maps are admitted, merged when drawn, change from frame to frame and
 // reach the light atlas, with no "not translated" note; it reports the
 // light-animation phase's cost per frame.
 //
-//   node scripts/validate-light-spatial-play.mjs [--url http://...] [--frames 240] [--shots DIR]
+//   node scripts/validate-light-spatial-play.mjs [--url http://...] [--query sim=inline] [--frames 240] [--shots DIR]
 //        [--map NAME --light x,y,z]
 //
 // --map/--light measure another map from stands around another light (for
@@ -48,25 +51,20 @@ try {
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
     await route.fulfill({ response, body: (await response.text()) +
-      '\nwindow.__deusSpatial={get world(){return world;},get game(){return game;}};\n' });
+      '\nwindow.__deusSpatial={get world(){return world;}};\n' });
   });
-  await page.goto(`${url}/?sim=inline`);
+  const query = option('query', '');
+  await page.goto(`${url}/${query ? `?${query}` : ''}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 240000 });
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, { timeout: 240000 });
   const frame = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   // The first stand whose view merges the Disco light maps.
   let stand = null;
-  const start = await page.evaluate(() => {
-    const game = window.__deusSpatial.game, runtime = game.doors.scriptRuntime.runtime;
-    return runtime.readNamed(game.player.collisionActor, 'Location');
-  });
+  const start = (await page.evaluate(() => window.deusExViewer.placeProbe({}))).location;
   for (const [dx, dy, dz, yaw] of stands) {
-    await page.evaluate(({ at, yaw }) => {
-      const game = window.__deusSpatial.game, runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
-      runtime.farMoveActor(player, at, 0, 1);
-      runtime.writeNamed(player, 'ViewRotation', [62000, yaw, 0]);
-    }, { at: dx === 'start' ? start : [light[0] + dx, light[1] + dy, light[2] + dz], yaw });
+    await page.evaluate(({ at, yaw }) => window.deusExViewer.placeProbe({ location: at, rotation: [62000, yaw, 0] }),
+      { at: dx === 'start' ? start : [light[0] + dx, light[1] + dy, light[2] + dz], yaw });
     await frame(30);
     const seen = await page.evaluate(async () => {
       let changed = 0;

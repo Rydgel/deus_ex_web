@@ -2,9 +2,19 @@
  * FDynamicLight::Filter over the level BSP, FLightManager::AddLight's light
  * class, ComputeFromActor's per-light constants and texel rectangle, the
  * normal/NonIncidence spatial functions and the colour table merge. Evidence,
- * precision and remaining limits: docs/dynamic-lighting.md. */
+ * precision and remaining limits: docs/dynamic-lighting.md.
+ *
+ * All of it runs inside the render pass, under x87 precision control 24
+ * (docs/render-pass-precision.md): every add, subtract, multiply, divide and
+ * square root rounds to a 24-bit significand. Float operands make that a
+ * binary32 operation (`f(a op b)` on doubles: the double result rounds
+ * innocuously); a double constant takes x87-pc24.mjs's exact rounding. The
+ * light-manager tables are built at init, on the game thread's 64-bit
+ * precision. `fgetHsvExtended` and `movingLightConstantsExtended` keep the
+ * earlier 64-bit model for mesh lighting until its translation moves. */
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87sqrt, x87store, x87storeDouble,
   x87cmp } from './script-vm.mjs';
+import { p24mul, p24add, p24div, p24sqrt, r24sum, r24prod } from './x87-pc24.mjs';
 
 const f = Math.fround;
 const scratch = new DataView(new ArrayBuffer(4));
@@ -68,6 +78,10 @@ export function surfaceLightClass(values, { noDynamicLights = false } = {}) {
 /** Engine.dll AActor::WorldLightRadius 0x1030d6a0. */
 export const worldLightRadius = values => 25 * ((values.LightRadius & 255) + 1);
 
+/** FDynamicLight::Filter's plane distance (0x10b24a30-0x10b24a66):
+ * `((L.z·P.z + L.y·P.y) + P.x·L.x) − W` at 24 bits, stored. */
+const filterDistance = (px, py, pz, pw, lx, ly, lz) => f(f(f(f(lz * pz) + f(ly * py)) + f(px * lx)) - pw);
+
 /** FDynamicLight::Filter 0x10b24a10 at every BSP node the light reaches:
  * the item moves to the front child when -R < Dist, to the back child when
  * Dist < R, and joins every coplanar surface with a light map and matching
@@ -81,7 +95,7 @@ export function filterMovingLight(model, location, radius, specialLit = false) {
     const index = stack.pop(), node = model.nodes[index];
     if (!node) throw new Error(`Invalid BSP node ${index}`);
     const [px, py, pz, pw] = node.plane;
-    const distance = f(pz * lz + py * ly + px * lx - pw);
+    const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
     if (-radius < distance) {
       if (node.front >= 0) stack.push(node.front);
       if (distance < radius) {
@@ -113,7 +127,7 @@ export function movingLightLeaves(model, location, radius) {
     if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
     const node = model.nodes[stack.pop()];
     const [px, py, pz, pw] = node.plane;
-    const distance = f(pz * lz + py * ly + px * lx - pw);
+    const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
     if (-radius < distance) {
       add(node.leaves[1]);
       if (node.front >= 0) stack.push(node.front);
@@ -128,10 +142,38 @@ export function movingLightLeaves(model, location, radius) {
 
 const K85 = x87load(f(1 / 85)), K84 = x87load(f(1 / 84)), ZERO = x87load(0), ONE = x87load(1);
 
-/** Engine.dll FGetHSV 0x103ec8d0 on the 80-bit model: the brightness
- * response stays on the stack, hue components and the green/blue
- * saturation terms are float stores, red keeps its extended sum. */
+/** Engine.dll FGetHSV 0x103ec8d0, as the render pass runs it (GlobalLighting
+ * 0x10b05ee8, SetupForSurf's ambient 0x10b07fcc, SetupForActor 0x10b08dee):
+ * `b = value·(1.4/255)` (fild, fmul qword) stored and passed to appSqrt as
+ * a double (`fld qword; fsqrt`), `0.7/(√b + 0.01)·b` on the stack and
+ * clamped to [0, 1]; hue components `n·(1/85)` (`1/84` for the last blue
+ * term) stored; `1 − c` per channel, X's kept on the stack, Y's and Z's
+ * stored; saturation `s·(1/255)` (a double) stored; red `(1−x)·s + x` on the
+ * stack, green and blue stored; each channel times the brightness. Every
+ * operation rounds to 24 bits (x87-pc24.mjs, exact for the double
+ * constants). */
 export function fgetHsv(hue, saturation, value) {
+  hue &= 255; saturation &= 255;
+  const scaled = p24mul(x87int32(value & 255), x87double(0.005490196078431372));
+  let brightness = p24mul(p24div(x87double(0.7), p24add(p24sqrt(scaled), x87double(0.01))), x87load(x87store(scaled)));
+  if (x87cmp(brightness, ZERO) === 'lt') brightness = ZERO;
+  else if (x87cmp(brightness, ONE) !== 'lt') brightness = ONE;
+  const product = (n, k) => x87store(p24mul(x87int32(n), k));
+  const [x, y, z] = hue < 86 ? [product(85 - hue, K85), product(hue, K85), 0]
+    : hue < 171 ? [0, product(170 - hue, K85), product(hue - 85, K85)]
+      : [product(hue - 170, K85), 0, product(255 - hue, K84)];
+  const complement = component => p24add(ONE, x87neg(x87load(component)));
+  const s = x87load(x87store(p24mul(x87int32(saturation), x87double(0.00392156862745098))));
+  const red = p24add(p24mul(complement(x), s), x87load(x));
+  const green = x87store(p24add(x87load(x87store(p24mul(x87load(x87store(complement(y))), s))), x87load(y)));
+  const blue = x87store(p24add(x87load(x87store(p24mul(x87load(x87store(complement(z))), s))), x87load(z)));
+  return [x87store(p24mul(red, brightness)), x87store(p24mul(x87load(green), brightness)),
+    x87store(p24mul(x87load(blue), brightness))];
+}
+
+/** FGetHSV on the 64-bit model (validated at 0x037f): mesh lighting's until
+ * its translation moves to the render pass's precision. */
+export function fgetHsvExtended(hue, saturation, value) {
   hue &= 255; saturation &= 255;
   const scaled = x87mul(x87int32(value & 255), x87double(0.005490196078431372));
   let brightness = x87mul(x87div(x87double(0.7), x87add(x87sqrt(x87storeDouble(scaled)), x87double(0.01))),
@@ -151,11 +193,25 @@ export function fgetHsv(hue, saturation, value) {
     x87store(x87mul(x87load(blue), brightness))];
 }
 
-/** ComputeFromActor's per-light constants: radius, reciprocal and squared
- * table scale (0x10b05fd9-0x10b06027), brightness (0x10b060b3), colour
- * (0x10b0612f-0x10b06148) and the colour-table steps (0x10b064ff-0x10b0656d).
- * `hsv` is FGetHSV(hue, saturation, 255); steady lights keep it unchanged. */
+/** ComputeFromActor's per-light constants at 24 bits: radius (WorldLightRadius,
+ * at least 1), `1/R` (`fdivr` of the double 1.0) stored and kept,
+ * `rr2 = (1/R)²·4093` (0x10b05fd9-0x10b06027), brightness
+ * `LightBrightness·(1/255)` (0x10b060b3), colour
+ * `(Level.Brightness·brightness)·hsv` (0x10b0612f-0x10b06148) and the
+ * colour-table steps `fistp(c·65536 − 0.5f)` (0x10b064ff-0x10b0656d). `hsv`
+ * is FGetHSV(hue, saturation, 255); steady lights keep it unchanged. */
 export function movingLightConstants(values, levelBrightness, hsv, typeBrightness = null) {
+  const radius = f(worldLightRadius(values)), clamped = radius > 1 ? radius : 1;
+  const rradius = f(1 / clamped), brightness = typeBrightness ?? f((values.LightBrightness & 255) * f(1 / 255));
+  const scale = f(f(levelBrightness) * f(brightness));
+  const color = hsv.map(channel => f(scale * f(channel)));
+  return { radius, rradius, rr2: f(f(rradius * rradius) * 4093), color,
+    steps: color.map(channel => fistp(f(f(channel * 65536) - .5))) };
+}
+
+/** ComputeFromActor's constants on the 64-bit model (validated at 0x037f):
+ * mesh lighting's until its translation moves. */
+export function movingLightConstantsExtended(values, levelBrightness, hsv, typeBrightness = null) {
   const radius = f(worldLightRadius(values)), clamped = radius > 1 ? radius : 1;
   // GlobalLighting's LightType brightness (static-lighting.mjs
   // lightTypeBrightness) when animated; steady LightBrightness/255 otherwise.
@@ -169,24 +225,29 @@ export function movingLightConstants(values, levelBrightness, hsv, typeBrightnes
 /** Colour table entry for a spatial byte (0x10b06570-0x10b065e0). */
 export const colorTableEntry = (step, spatial) => Math.min(127, (spatial * step) >> 16);
 
-/** ComputeFromActor 0x10b0660e-0x10b06865: the texel rectangle a light can
- * reach on a facet (origin, texture U/V axes, normal) and its light map. */
+/** ComputeFromActor 0x10b0660e-0x10b06865 at 24 bits: the texel rectangle a
+ * light can reach on a facet (origin, texture U/V axes, normal) and its light
+ * map. The plane distance `((dy·Ny + dz·Nz) + dx·Nx)` is stored; the disk
+ * `R²·1.05 − d²` (the double 1.05 rounded exactly) is clamped at 0 and
+ * stored; the projected centre keeps Z on the stack and stores X and Y; the
+ * bounds `(u ∓ ru)/scale` are stored before FISTP. */
 export function movingLightRect(location, radius, facet) {
   const { origin: o, axisU: x, axisV: y, normal: z, pan, scale, clamp } = facet;
-  const [lx, ly, lz] = location;
-  const dx = lx - o[0], dy = ly - o[1], dz = lz - o[2];
-  const plane = f(dy * z[1] + dz * z[2] + dx * z[0]);
-  let disk = radius * radius * 1.05 - plane * plane;
+  const [lx, ly, lz] = location.map(f);
+  const dx = f(lx - o[0]), dy = f(ly - o[1]), dz = f(lz - o[2]);
+  const plane = f(f(f(dy * z[1]) + f(dz * z[2])) + f(dx * z[0]));
+  let disk = f(r24prod(f(radius * radius), 1.05) - f(plane * plane));
   if (disk < 0) disk = 0;
-  const r = tableSqrt(f(disk));
-  const py = f(ly - f(plane * z[1])), px = f(lx - f(plane * z[0])), pz = lz - plane * z[2];
-  const u = f((py - o[1]) * x[1] + (pz - o[2]) * x[2] + (px - o[0]) * x[0] - pan[0]);
-  const v = f((py - o[1]) * y[1] + (pz - o[2]) * y[2] + (px - o[0]) * y[0] - pan[1]);
-  const ru = f(tableSqrt(f(x[0] * x[0] + x[1] * x[1] + x[2] * x[2])) * r);
-  const rv = f(tableSqrt(f(y[0] * y[0] + y[1] * y[1] + y[2] * y[2])) * r);
+  const r = tableSqrt(disk);
+  const pz = f(lz - f(plane * z[2])), py = f(ly - f(plane * z[1])), px = f(lx - f(plane * z[0]));
+  const ex = f(px - o[0]), ey = f(py - o[1]), ez = f(pz - o[2]);
+  const u = f(f(f(f(ey * x[1]) + f(ez * x[2])) + f(ex * x[0])) - pan[0]);
+  const v = f(f(f(f(ey * y[1]) + f(ez * y[2])) + f(ex * y[0])) - pan[1]);
+  const length = a => tableSqrt(f(f(f(a[0] * a[0]) + f(a[1] * a[1])) + f(a[2] * a[2])));
+  const ru = f(length(x) * r), rv = f(length(y) * r);
   return {
-    minU: Math.max(0, fistp(f((u - ru) / scale[0]))), minV: Math.max(0, fistp(f((v - rv) / scale[1]))),
-    maxU: Math.min(clamp[0], fistp(f((ru + u) / scale[0]))), maxV: Math.min(clamp[1], fistp(f((rv + v) / scale[1]))),
+    minU: Math.max(0, fistp(f(f(u - ru) / scale[0]))), minV: Math.max(0, fistp(f(f(v - rv) / scale[1]))),
+    maxU: Math.min(clamp[0], fistp(f(f(ru + u) / scale[0]))), maxV: Math.min(clamp[1], fistp(f(f(rv + v) / scale[1]))),
   };
 }
 
@@ -208,19 +269,24 @@ export function nonIncidenceSpatial(rect, grid, location, constants, write, illu
   const { minU, maxU, minV, maxV } = rect, { rradius, rr2 } = constants, illum = illuminationAt(illumination);
   const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
   const [lx, ly, lz] = location;
+  // Row start (0x10b05509-0x10b0559e): X and Y from stored products and
+  // sums, Z's two sums on the stack, all at 24 bits.
   let rowX = f(f(sx + f(vx * minV)) + f(ux * minU));
   let rowY = f(f(sy + f(vy * minV)) + f(uy * minU));
-  let rowZ = f(vz * minV + sz + uz * minU);
+  let rowZ = f(f(f(vz * minV) + sz) + f(uz * minU));
   for (let v = minV; v < maxV; v++) {
     let dx = f(rowX - lx), dy = f(rowY - ly), dz = f(rowZ - lz);
     for (let u = minU; u < maxU; u++) {
       let spatial = 0;
       const light = illum(u, v);
       if (light) {
-        const distanceSquared = dy * dy + dz * dz + dx * dx;
+        // (dy² + dz²) + dx², stored; then the table index, the root times
+        // 1/R, `1.02 −` it (the double constant, exactly rounded), times
+        // the illumination, stored, less 0.5f (0x10b05632-0x10b056ab).
+        const distanceSquared = f(f(f(dy * dy) + f(dz * dz)) + f(dx * dx));
         if (fistp(f(distanceSquared * rr2)) >>> 0 < 0x1000) {
-          const scaled = (1.02 - tableSqrt(f(distanceSquared)) * rradius) * light;
-          spatial = fistp(f(scaled) - .5) & 0xff;
+          const falloff = r24sum(1.02, -f(tableSqrt(distanceSquared) * rradius));
+          spatial = fistp(f(f(falloff * light) - .5)) & 0xff;
         }
       }
       write(u, v, spatial);
@@ -249,13 +315,15 @@ function getNormalTable() {
 /** Init 0x10b022fe..0x10b02352: a copy of the 4096 normal falloff floats. */
 export const normalLightTable = () => getNormalTable().slice();
 
-/** ComputeFromActor 0x10b06325..0x10b0639e, info +0x24. The displacement
- * components are stored before the Z/Y/X dot and reciprocal multiply. */
+/** ComputeFromActor 0x10b06325..0x10b0639e, info +0x24, at 24 bits: the
+ * displacement components are stored before the Z/Y/X dot and reciprocal
+ * multiply; FCOM with 0 then FCHS when below, so a negative zero stays
+ * negative. */
 export function normalLightIncidence(location, facet, rradius) {
-  const delta = location.map((v, i) => f(v - facet.origin[i])), n = facet.normal;
-  const dot = x87add(x87add(x87mul(x87load(delta[2]), x87load(n[2])),
-    x87mul(x87load(delta[1]), x87load(n[1]))), x87mul(x87load(delta[0]), x87load(n[0])));
-  return Math.abs(x87store(x87mul(dot, x87load(rradius))));
+  const [dx, dy, dz] = location.map((v, i) => f(f(v) - f(facet.origin[i]))), n = facet.normal;
+  const dot = f(f(f(dz * f(n[2])) + f(dy * f(n[1]))) + f(dx * f(n[0])));
+  const incidence = f(dot * f(rradius));
+  return incidence < 0 ? -incidence : incidence;
 }
 
 /** Normal spatial function 0x10b03360. Integer forward differences select
@@ -265,13 +333,14 @@ export function normalLightSpatial(rect, grid, location, constants, write, illum
   const { minU, maxU, minV, maxV } = rect, { rr2, incidence } = constants, illum = illuminationAt(illumination);
   const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
   const [lx, ly, lz] = location;
-  const delta = [f(f(sx - lx + f(ux * minU)) + f(vx * minV)),
-    f(f(f(sy - ly) + f(uy * minU)) + f(vy * minV)), f(uz * minU + f(sz - lz) + vz * minV)];
+  // 0x10b033b4-0x10b0345b at 24 bits: X's start difference stays on the
+  // stack, Y's and Z's are stored; Z's two sums stay on the stack.
+  const delta = [f(f(f(sx - lx) + f(ux * minU)) + f(vx * minV)),
+    f(f(f(sy - ly) + f(uy * minU)) + f(vy * minV)), f(f(f(uz * minU) + f(sz - lz)) + f(vz * minV))];
   const scale = f(rr2 * 4096), table = getNormalTable();
   const coefficient = (a, b) => {
-    const dot = x87add(x87add(x87mul(x87load(a[2]), x87load(b[2])),
-      x87mul(x87load(a[1]), x87load(b[1]))), x87mul(x87load(a[0]), x87load(b[0])));
-    const rounded = fistp(x87store(x87mul(dot, x87load(scale))));
+    const dot = f(f(f(a[2] * b[2]) + f(a[1] * b[1])) + f(a[0] * b[0]));
+    const rounded = fistp(f(dot * scale));
     return rounded >= -0x80000000 && rounded < 0x80000000 ? rounded : -0x80000000;
   };
   let row = coefficient(delta, delta);
@@ -284,8 +353,10 @@ export function normalLightSpatial(rect, grid, location, constants, write, illum
     let distance = row, step = rowU;
     for (let u = minU; u < maxU; u++) {
       const light = illum(u, v);
+      // fild, fmul table, fmul incidence, fadd 2^23f, each at 24 bits
+      // (0x10b036ba-0x10b036d0).
       const byte = light && (distance >>> 0) < 0x1000000
-        ? bitsOf(f(light * table[distance >>> 12] * incidence + 8388608)) & 255 : 0;
+        ? bitsOf(f(f(f(light * table[distance >>> 12]) * incidence) + 8388608)) & 255 : 0;
       write(u, v, byte);
       distance = (distance + step) | 0;
       step = (step + stepUU) | 0;
