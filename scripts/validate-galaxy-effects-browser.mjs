@@ -11,6 +11,8 @@
 //    point is acknowledged soon after)
 //    and some effect voices are Active (the ambient scan's); no fault, no
 //    underrun, no console error; the page started no Web Audio voice;
+//  - 03_NYC_BrooklynBridgeStation (a reverb zone): the worklet installs the
+//    effects reverb (glxSetSampleReverb from Update's reverb tail);
 //  - ?sfx=webaudio: the previous host mapping: Web Audio voices start on the
 //    page and the worklet loads no sample (music only);
 // then the page's main-thread frame time and the worker's frame time with
@@ -36,16 +38,16 @@ await server.listen();
 const url = server.resolvedUrls.local[0].replace(/\/$/, '');
 const browser = await chromium.launch({ args: [`--use-angle=${option('angle', 'gl')}`, '--autoplay-policy=no-user-gesture-required'] });
 
-async function openMap(query) {
+async function openMap(query, mapName = map) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
   page.on('pageerror', error => errors.push(`pageerror: ${error.message}`));
   page.on('console', message => { if (message.type() === 'error') errors.push(`console: ${message.text()}`); });
   await page.goto(`${url}/?${query}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 240000 });
-  await page.evaluate(name => { const menu = document.getElementById('map'); menu.value = name; menu.dispatchEvent(new Event('change')); }, map);
+  await page.evaluate(name => { const menu = document.getElementById('map'); menu.value = name; menu.dispatchEvent(new Event('change')); }, mapName);
   await page.waitForFunction(name => { const s = window.deusExViewer.status(); return s.ready && s.map === name && s.gameplay; },
-    map, { timeout: 400000 });
+    mapName, { timeout: 400000 });
   return { page, errors };
 }
 const musicStatus = page => page.evaluate(() => window.deusExViewer.musicStatus());
@@ -91,6 +93,24 @@ try {
         `first active ${status.library.active.toString(2)}`);
     } finally { await page.close(); }
   }
+  // The zone reverb (UseReverb True): Brooklyn Bridge Station's LevelInfo0 is
+  // a reverb zone, so Update hands its glxReverb over and the worklet installs
+  // the SSE engine on bus B.
+  {
+    const { page, errors } = await openMap('sim=worker', option('reverbMap', '03_NYC_BrooklynBridgeStation'));
+    try {
+      await page.click('#state');
+      await waitFor(page, s => worklet(s)?.open, 'the worklet did not open the library');
+      const s = await waitFor(page, s => worklet(s)?.reverb === 3 && s.library?.live, 'the reverb engine was not installed', 90000);
+      await page.waitForTimeout(3000);
+      const w = worklet(await musicStatus(page));
+      assert.equal(w.reverb, 3, 'hook and context stay installed'); assert.equal(w.fault, 0); assert.equal(w.underruns, 0, 'underruns');
+      assert.equal(w.results.reverb, 0, 'glxSetSampleReverb result');
+      assert.deepEqual(errors, [], 'console errors');
+      console.log(`PASS reverb ?sim=worker ${option('reverbMap', '03_NYC_BrooklynBridgeStation')}: ${w.results.reverbCalls} glxSetSampleReverb call(s), ` +
+        `the SSE engine installed, ${w.results.sampleLoads} samples, ${w.results.voiceOps} voice ops, ${w.callbacks} callbacks, 0 underruns, 0 faults`);
+    } finally { await page.close(); }
+  }
   // The previous host mapping.
   {
     const { page, errors } = await openMap('sim=worker&sfx=webaudio');
@@ -132,8 +152,9 @@ try {
     } finally { await page.close(); }
   }
   const runs = [];
-  for (let i = 0; i < pairs; i++) { runs.push(await frameTime(false)); runs.push(await frameTime(true)); }
+  if (pairs > 0) for (let i = 0; i < pairs; i++) { runs.push(await frameTime(false)); runs.push(await frameTime(true)); }
   const median = values => { const s = values.toSorted((a, b) => a - b); return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+  if (pairs > 0) {
   for (const run of runs) console.log(`  ${run.sfx ? '?sfx=webaudio' : 'Galaxy voices'} main thread ${run.mainMs.toFixed(3)} ms/frame over ${run.frames} frames, ` +
     `rAF median ${run.intervalMedian.toFixed(2)} ms, underruns ${run.underruns}; worker ${run.workerMs.toFixed(3)} ms/frame, its Galaxy Update ${run.audioMs.toFixed(3)} ms`);
   const on = median(runs.filter(run => !run.sfx).map(run => run.mainMs)), off = median(runs.filter(run => run.sfx).map(run => run.mainMs));
@@ -143,6 +164,7 @@ try {
   console.log(`PASS frame time (host measurement, ${pairs} interleaved pairs): main thread median ${on.toFixed(3)} ms/frame with Galaxy voices, ` +
     `${off.toFixed(3)} ms with ?sfx=webaudio (${signed(on - off)} ms); worker ${med('workerMs', false).toFixed(3)} / ${med('workerMs', true).toFixed(3)} ms ` +
     `(${signed(med('workerMs', false) - med('workerMs', true))}); Galaxy Update ${med('audioMs', false).toFixed(3)} / ${med('audioMs', true).toFixed(3)} ms`);
+  }
 } finally {
   await browser.close();
   await server.close();

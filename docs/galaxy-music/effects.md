@@ -158,21 +158,23 @@ browser does not reproduce.
   block align 4): the result and every byte of the record and its Data
   block. Two more synthetic WAVs never return in the original and stop the
   translation with UNSUPPORTED_SPIN.
-* **Voices:** 18 programs with 522 entry calls and 638 timer callbacks
+* **Voices:** 20 programs with 556 entry calls and 1,134 timer callbacks
   (start, control, stop, status/mode/volume control, the sample defaults,
   null voices, restarts, steps 0 to 6.8 frames per frame, surround pan,
   effects master changes and ramps, 16 voices, Intro_Music and an Amiga-mode
-  module playing alongside, 8 seeded random programs): each call's result,
+  module playing alongside, 8 seeded random programs, and 4 programs with
+  the effects reverb installed, changed and freed, reverb.md): each call's result,
   the first 32 voice records after it, the mixer trace (U/T/K/M/R), and the
   renderer's int16 PCM of both buses per callback, all bit-equal; the
-  browser path (`galaxy_render`) in 9 programs against the original renderer
-  at coincident heads, plus Quotes_Music section 4, whose bus-B underrun
-  writes the browser now adds as the original does.
+  browser path (`galaxy_render`) against the original renderer at
+  coincident heads in 8 of them and in Quotes_Music section 4, whose
+  bus-B underrun writes the browser now adds as the original does.
 * **Coverage** of the entries: every unreached run is listed with its
   reason in the validator (other loaders, ADPCM/MPEG/streaming, the ring
   path and stereo pairs, Voice 0, 3D branches).
 * **Mutants** 301–304 (loop end + 1, control keeping the step, default pan
-  ignoring GLX_PANNING, unzeroed pad) are each caught.
+  ignoring GLX_PANNING, unzeroed pad) and the reverb's 305–306 are each
+  caught.
 
 ## 7. Not translated / open
 
