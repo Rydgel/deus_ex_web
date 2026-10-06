@@ -374,6 +374,39 @@ worlds a light frame each frame, with probes for Strobe WateryShimmer,
 Flicker FireWaver and a turning spotlight, and still finds the incremental
 mode equal to the full one.
 
+### Handoff (2026-10-06, stopped for the usage limit)
+
+Done and verified (commits 21ea08b, 6d04fc2): the reach census; class 2
+lights on the original bodies (LightType functions, wavers, spotlights);
+the noise from the shared appFrand stream in the simulation; the
+`movingFrames` oracle; validate-moving-light-effects and its worker-mode
+Play check; validate-moving-lights-incremental, -auglight, -light-spatial
+(-play), -light-animation, -normal-moving-lighting, -island-player-start,
+-particles-play, -lasers-play and the unit tests pass.
+
+Next:
+- **Cost.** Headless, incremental mode: Island 1.2 ms/frame; 10_Paris_
+  Catacombs_Tunnels (76 BarrelFires) 30 ms with every reached map
+  recomposed, 4.2 ms with frustum gating (97 maps a frame). The profile
+  puts it in moving-lights.mjs bookkeeping (per-light JSON signatures,
+  marking every reached map dirty each frame, the visibility test), not the
+  arithmetic. Restructure that (per-record entry lists, a drawn-surface
+  lookup instead of sphere tests), then measure in the browser and move the
+  per-frame composition to light.rs if a measurement still names it. The
+  interleaved A/B against the previous tree (`git archive` of 46d8573 into
+  scratch, `TREE=` for the bench) is not taken yet.
+- **06_HongKong_Helibase (coordinator's case).** TriggerLight4 (Searchlight,
+  hue 0, sat 0, radius 64) is `bNoDelete`: AddLight's class 1, not class 2,
+  so its light maps are the static path's (spatial.rs Searchlight). The
+  helicopter's red in the original must come from SetupForActor choosing it
+  (FLightManager::Light never calls the spatial function). Check whether
+  Play's mesh-lighting selection (mesh-lighting.mjs setupForActor: leaf
+  permeating lights, model.lights) reaches it for BlackHelicopter0, with a
+  mesh-light oracle run on the helicopter's live inputs at the held
+  TimeSeconds; then recapture with scripts/visual-acceptance.mjs.
+- Roadmap Stage 4 entry; mesh lighting's Flicker/Pulse/SubtlePulse
+  (LIGHT_TYPE_UNSUPPORTED) could use the simulation's noise now.
+
 ## Not reproduced / open
 
 * The frustum test in SetupDynamics and OccludeBsp's visibility-driven filter:
