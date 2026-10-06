@@ -78,3 +78,26 @@ pub fn mul(a: f64, b: f64) -> f64 {
 pub fn div(a: f64, b: f64) -> f64 {
     r24(a / b)
 }
+
+/// The PC 24 sum of two finite f64 values of any precision (a register
+/// value plus a double constant, or an FILD'd int wider than 24 bits): the
+/// exact sum (TwoSum) rounded once to 24 bits, the sign of the error
+/// deciding a rounding midpoint (x87-pc24.mjs `r24sum`).
+pub fn sum_exact(a: f64, b: f64) -> f64 {
+    let s = a + b;
+    let t = s - a;
+    let e = (a - (s - t)) + (b - t);
+    let r = r24(s);
+    if e == 0.0 || r == s || !s.is_finite() {
+        return r;
+    }
+    let other = 2.0 * s - r;
+    if other == r || r24(other) != other {
+        return r;
+    }
+    if e > 0.0 {
+        r.max(other)
+    } else {
+        r.min(other)
+    }
+}

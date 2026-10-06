@@ -3,10 +3,13 @@
 //! whose native is one of SetStyle 1212, SetTileColor 1230, SetTextColor
 //! 1240, SetFont 1242, SetAlignments 1256, EnableWordWrap 1258, DrawTexture
 //! 1284 or DrawPattern 1285. Each body transcribes its JavaScript reference
-//! (script-gc-*.mjs, script-gc-draw-model.mjs) step for step: the same f64
-//! intermediates and f32 rounding points, the same heap reads in the same
-//! order, so the bit patterns stored and handed to the canvas are the ones
-//! the JavaScript computes.
+//! (script-gc-*.mjs, script-gc-draw-model.mjs) step for step: the same
+//! rounding points, the same heap reads in the same order, so the bit
+//! patterns stored and handed to the canvas are the ones the JavaScript
+//! computes. The GC draws inside the render pass (PaintWindows from
+//! PostRenderFlash), under x87 precision control 24: the clip helper's
+//! operations and the `+ 0.1` before each _ftol round to 24 bits (p24.rs,
+//! docs/render-pass-precision.md).
 //!
 //! The native heap (script-native-heap.mjs) is a range of the arena: native
 //! address A is `region + (A - HEAP_BASE)` while A is inside [HEAP_BASE,
@@ -39,6 +42,7 @@
 //! body (and raises its error) before any store or canvas call.
 
 use crate::interp::{load32, store32, store8, to_int32, Recv, Run, SELF, UNDEFINED, UNDEF_F64_BITS};
+use crate::p24::{add, div, mul, sub, sum_exact};
 use core::ptr::{addr_of, addr_of_mut};
 
 pub(crate) const GC_EFFECT: u32 = 206;
@@ -170,9 +174,9 @@ fn fbits(v: f64) -> u32 {
     (v as f32).to_bits()
 }
 
-/// ftolBiased: `Math.trunc(v + 0.1) | 0`, which is ToInt32(v + 0.1).
+/// ftolBiased: ToInt32 of `v + 0.1`, the FADD m64 rounded once to 24 bits.
 fn ftol(v: f64) -> i32 {
-    to_int32(v + f64::from_bits(FTOL_BIAS_BITS))
+    to_int32(sum_exact(v, f64::from_bits(FTOL_BIAS_BITS)))
 }
 
 fn cached(cache: *mut [[u32; 3]; CACHE], handle: u32, receiver: u32) -> u32 {
@@ -263,102 +267,104 @@ fn state_body(index: u32, base: u32, a: &[u32; 8]) {
     }
 }
 
-/// The clip helper 0x1002a4f0 (gcClipTile) over s = [x, y, w, h, u, v, ul, vl].
+/// The clip helper 0x1002a4f0 (gcClipTile) over s = [x, y, w, h, u, v, ul, vl]:
+/// the stores f32, the stack values 24-bit (one rounding per FADD, FSUB,
+/// FMUL and FDIV), the FILD'd texture size through `sum_exact`.
 fn clip(base: u32, s: &mut [f64; 8], flag_w: bool, flag_h: bool, tex: u32) {
     let (x, y, w, h, u, v, ul, vl) = (0, 1, 2, 3, 4, 5, 6, 7);
-    s[x] = f(rf(base + G_ORIGIN_X) + s[x]);
-    s[y] = f(rf(base + G_ORIGIN_Y) + s[y]);
-    let clip_left = f(rf(base + G_CLIP_X) + rf(base + G_ORIGIN_X));
-    let clip_top = f(rf(base + G_CLIP_Y) + rf(base + G_ORIGIN_Y));
+    s[x] = f(add(rf(base + G_ORIGIN_X), s[x]));
+    s[y] = f(add(rf(base + G_ORIGIN_Y), s[y]));
+    let clip_left = f(add(rf(base + G_CLIP_X), rf(base + G_ORIGIN_X)));
+    let clip_top = f(add(rf(base + G_CLIP_Y), rf(base + G_ORIGIN_Y)));
 
     if flag_w {
         if !(s[x] >= clip_left) {
-            let d = s[x] - clip_left;
-            s[u] = f(s[u] - d);
-            s[w] = f(d + s[w]);
+            let d = sub(s[x], clip_left);
+            s[u] = f(sub(s[u], d));
+            s[w] = f(add(d, s[w]));
             s[x] = clip_left;
         }
-        let clip_right = clip_left + rf(base + G_CLIP_W);
-        if s[x] + s[w] > clip_right {
-            s[w] = f(clip_right - s[x]);
+        let clip_right = add(clip_left, rf(base + G_CLIP_W));
+        if add(s[x], s[w]) > clip_right {
+            s[w] = f(sub(clip_right, s[x]));
         }
         s[ul] = s[w];
     } else {
         if s[w] > 0.0 && !(s[x] >= clip_left) {
-            let d = s[x] - clip_left;
-            let t = d * s[ul] / s[w];
-            s[ul] = f(t + s[ul]);
-            s[u] = f(s[u] - t);
-            s[w] = f(d + s[w]);
+            let d = sub(s[x], clip_left);
+            let t = div(mul(d, s[ul]), s[w]);
+            s[ul] = f(add(t, s[ul]));
+            s[u] = f(sub(s[u], t));
+            s[w] = f(add(d, s[w]));
             s[x] = clip_left;
         }
         if s[w] > 0.0 {
-            let clip_right = clip_left + rf(base + G_CLIP_W);
-            let dest_right = s[x] + s[w];
+            let dest_right = add(s[x], s[w]);
+            let clip_right = add(clip_left, rf(base + G_CLIP_W));
             if dest_right > clip_right {
-                s[ul] = f((clip_right - dest_right) * s[ul] / s[w] + s[ul]);
-                s[w] = f(clip_right - s[x]);
+                s[ul] = f(add(div(mul(sub(clip_right, dest_right), s[ul]), s[w]), s[ul]));
+                s[w] = f(sub(add(clip_left, rf(base + G_CLIP_W)), s[x]));
             }
         }
         if s[ul] > 0.0 {
             if !(s[u] >= 0.0) {
-                let d = s[u] * s[w] / s[ul];
-                s[w] = f(d + s[w]);
-                s[x] = f(s[x] - d);
-                s[ul] = f(s[u] + s[ul]);
+                let d = div(mul(s[u], s[w]), s[ul]);
+                s[w] = f(add(d, s[w]));
+                s[x] = f(sub(s[x], d));
+                s[ul] = f(add(s[u], s[ul]));
                 s[u] = 0.0;
             }
             let tex_w = r32(tex.wrapping_add(TEX_USIZE)) as i32 as f64;
-            let u_end = s[u] + s[ul];
+            let u_end = add(s[u], s[ul]);
             if u_end > tex_w {
-                s[w] = f((tex_w - u_end) * s[w] / s[ul] + s[w]);
-                s[ul] = f(tex_w - s[u]);
+                s[w] = f(add(div(mul(sum_exact(tex_w, -u_end), s[w]), s[ul]), s[w]));
+                s[ul] = f(sum_exact(tex_w, -s[u]));
             }
         }
     }
 
     if flag_h {
         if !(s[y] >= clip_top) {
-            let d = s[y] - clip_top;
-            s[v] = f(s[v] - d);
-            s[h] = f(d + s[h]);
+            let d = sub(s[y], clip_top);
+            s[v] = f(sub(s[v], d));
+            s[h] = f(add(d, s[h]));
             s[y] = clip_top;
         }
-        let clip_bottom = clip_top + rf(base + G_CLIP_H);
-        if s[y] + s[h] > clip_bottom {
-            s[h] = f(clip_bottom - s[y]);
+        let clip_bottom = add(clip_top, rf(base + G_CLIP_H));
+        if add(s[y], s[h]) > clip_bottom {
+            s[h] = f(sub(clip_bottom, s[y]));
         }
         s[vl] = s[h];
     } else {
         if s[h] > 0.0 && !(s[y] >= clip_top) {
-            let d = s[y] - clip_top;
-            let t = d * s[vl] / s[h];
-            s[vl] = f(t + s[vl]);
-            s[v] = f(s[v] - t);
-            s[h] = f(d + s[h]);
+            let d = sub(s[y], clip_top);
+            let t = div(mul(d, s[vl]), s[h]);
+            s[vl] = f(add(t, s[vl]));
+            s[v] = f(sub(s[v], t));
+            s[h] = f(add(d, s[h]));
             s[y] = clip_top;
         }
         if s[h] > 0.0 {
-            let clip_bottom = clip_top + rf(base + G_CLIP_H);
-            let dest_bottom = s[y] + s[h];
+            let dest_bottom = add(s[y], s[h]);
+            let clip_bottom = add(clip_top, rf(base + G_CLIP_H));
             if dest_bottom > clip_bottom {
-                s[vl] = f((clip_bottom - dest_bottom) * s[vl] / s[h] + s[vl]);
-                s[h] = f(clip_bottom - s[y]);
+                s[vl] = f(add(div(mul(sub(clip_bottom, dest_bottom), s[vl]), s[h]), s[vl]));
+                s[h] = f(sub(add(clip_top, rf(base + G_CLIP_H)), s[y]));
             }
         }
         if s[vl] > 0.0 {
             if !(s[v] >= 0.0) {
-                let d = s[v] * s[h] / s[vl];
-                s[h] = f(d + s[h]);
-                s[y] = f(s[y] - d);
-                s[vl] = f(s[v] + s[vl]);
+                let d = div(mul(s[v], s[h]), s[vl]);
+                s[h] = f(add(d, s[h]));
+                s[y] = f(sub(s[y], d));
+                s[vl] = f(add(s[v], s[vl]));
                 s[v] = 0.0;
             }
             let tex_h = r32(tex.wrapping_add(TEX_VSIZE)) as i32 as f64;
-            let v_end = s[v] + s[vl];
+            let v_end = add(s[v], s[vl]);
             if v_end > tex_h {
-                s[h] = f((tex_h - v_end) * s[h] / s[vl] + s[h]);
-                s[vl] = f(tex_h - s[v]);
+                s[h] = f(add(div(mul(sum_exact(tex_h, -v_end), s[h]), s[vl]), s[h]));
+                s[vl] = f(sum_exact(tex_h, -s[v]));
             }
         }
     }

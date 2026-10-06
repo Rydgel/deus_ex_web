@@ -218,8 +218,8 @@ const MUTATIONS = [
    replace: 'const x2 = f32(x1 + midW + 1);',
    note: 'X2 anchor shifts by one pixel'},
   {file: 'model',
-   find: 'Math.trunc(v + GC_DRAW_FTOL_BIAS)',
-   replace: 'Math.trunc(v + 0.5)',
+   find: 'Math.trunc(r24sum(v, GC_DRAW_FTOL_BIAS))',
+   replace: 'Math.trunc(r24sum(v, 0.5))',
    note: 'coord conversion biases +0.5 instead of the recovered +0.1 constant'},
 ];
 
@@ -233,7 +233,9 @@ for (const [i, mutation] of MUTATIONS.entries()) {
       const name = {module: path.basename(MODULE), model: path.basename(MODEL),
                     stateModel: path.basename(STATE_MODEL)}[key];
       writeFileSync(path.join(dir, name),
-        key === mutation.file ? source.replace(mutation.find, mutation.replace) : text);
+        // The copies import x87-pc24.mjs from src/runtime itself.
+        (key === mutation.file ? source.replace(mutation.find, mutation.replace) : text)
+          .replaceAll("from './x87-pc24.mjs'", "from '../x87-pc24.mjs'"));
     }
     const mutated = await import(url.pathToFileURL(path.join(dir, path.basename(MODULE))).href);
     const failures = await runAll(mutated.gcDrawBorders);
