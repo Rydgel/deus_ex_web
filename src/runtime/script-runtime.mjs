@@ -2264,6 +2264,13 @@ export class ScriptRuntime {
         // float (the console's bare "AltFire") imports 0.
         const parsed=importText('float',rest);
         args[index]=parsed.value;at=text.length-parsed.rest.length;
+      }else if(field.metadata.type==='bool'&&(field.metadata.arrayDim??1)<=1){
+        // UBoolProperty::ImportText 0x10166380 (config-text.mjs): it never
+        // reads PortFlags, so the console's port flags 1 take the same fixed
+        // spellings ("1"/"True" set, "0"/"False" clear); anything else is NULL.
+        const parsed=importText('bool',rest);
+        if(parsed){args[index]=parsed.value;at=text.length-parsed.rest.length;}
+        else imported=false;
       }else if(field.metadata.type==='object'&&rest===''){
         // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
         // token, which is not "None", and StaticFindObject finds nothing, so
@@ -2957,10 +2964,10 @@ export class ScriptRuntime {
         return engine.client;
       },warning:this.warning,
       attachSurfaces:(actor,distance,direction)=>attachDecalSurfaces(actor,distance,direction,{
-        model:this.levelFor(actor)?.model,level:this.levelFor(actor),
+        level:this.levelFor(actor),
         read:(a,n)=>this.readNamed(a,n),
         write:(a,n,v)=>this.writeNamed(a,n,v),
-        frand:()=>{if(typeof this.rng?.frand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');return Math.fround(this.rng.frand());},
+        rand:typeof this.rng?.rand==='function'?()=>this.rng.rand():null,
       }),
     });
     if(call.record?.key==='engine.playerpawn.clienttravel'){

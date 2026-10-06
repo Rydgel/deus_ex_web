@@ -397,16 +397,22 @@ of general script compatibility.
 
 **In progress.** Restored so far, each with its evidence below: original
 mesh lighting (CPU kernels and an exact GPU path), static and animated light
-maps, moving lights on light maps, mirrors on every static and mover plane
+maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
+frame and dynamics in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
-on BSP surfaces, ambient sound and script sounds through Galaxy, and the
-third-person conversation camera with lip sync. Open: fog on meshes and
-movers in Play, mirror/sky combinations, SpriteAnimOnce frames, animated
-mesh skins, decals, music, zone reverb and Galaxy's mixer, time-varying
-moving lights and spotlights, BSP occlusion (the draw list that bounds
-per-frame texture, fog and light-map work), and original-game visual
-acceptance across maps. Full Stage 4 acceptance remains open. Frame cost and
+on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
+music, decals, and the third-person conversation camera with lip sync.
+Open: the occlusion's moving brush tracker (and with it fog on movers) and
+child frames, the render-pass precision audit (translations validated at
+64-bit precision where the pass runs at 24), mirror/sky combinations, zone reverb and Galaxy's mixer for
+sound effects, time-varying moving lights and spotlights, and original-game
+visual acceptance across maps. SpriteAnimOnce frames and animated mesh skins
+are recovered or checked but unreachable: no shipped class, map actor or
+script uses DT_SpriteAnimOnce or gives an actor an animated texture
+([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
+[texture animation](texture-animation.md#play)). Full Stage 4 acceptance
+remains open. Frame cost and
 the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).
 
@@ -606,6 +612,62 @@ matches the original over 5,348 items, random beams included. DX's
 FDynamicSprite snapshots each item, and DrawActorSprite swaps that snapshot
 into the actor around DrawMesh. Play mirrors this with one LaserProxy
 preview per segment. The Island doorway beams render. See [lasers](lasers.md).
+
+**BSP occlusion (2026-10-04).** Render.dll's OccludeBsp, ClipBspSurf, span
+buffers and BoundVisible run in the Rust core at the render pass's 24-bit
+precision, bit-exact over 144 frames on four maps; the master frame and the
+dynamics (sprite chunks, Filter, PreRender) are bit-exact too. Play draws
+the visible world polygons, requested mirrors, sky and fog surfaces from it
+instead of frustum culling (the Paris club tunnel went from 15 to 59 fps).
+Each actor's Setup rectangle, child frames and the moving brush tracker
+remain ([BSP occlusion](bsp-occlusion.md#what-is-left)).
+
+**Galaxy music (2026-10-06).** Each map plays its song. Galaxy.dll's IT
+loader, sequencer (238 cases, 1.83 million ticks), SSE mixer and
+conversion, and Update's music section (718 oracle cases) are translated
+and bit-equal with the DLL. The library runs in Rust inside an
+AudioWorklet that the simulation worker feeds over a MessageChannel, so
+music costs the main thread nothing per frame. Sound effects still use the
+Web Audio host mapping, and zone reverb remains
+([Galaxy music](galaxy-music.md)).
+
+**Decals (2026-10-06).** Shadow blobs under pawns draw in Play, and blood
+pools, scorch marks and bullet holes will when combat spawns them.
+Engine.dll's AttachDecal and DetachDecal (the trace, the surface finder,
+the FDecal quad and Nodes, the MultiDecalLevel grid with non-coplanar
+neighbours) and Render.dll's ClipDecal run in the Rust core, bit-equal to
+the original (49 attach scenarios on each of Training and Island; 655
+ClipDecal cases on three maps). The decal block stamps LastRenderedTime,
+which DeusExDecal's lifetime reads, and the page draws the fragments with
+D3D's modulated state; mirrors show none, as in the original. Mover
+surfaces wait for the brush tracker ([decals](decals.md)).
+
+**Mesh fog (2026-10-06).** DrawLodMesh computes each vertex's volumetric
+fog, but D3DDrv uses it only when UseVertexFog is set, which no shipped INI
+does, so the shipped D3D configuration draws meshes unfogged, as Play does;
+Glide's fog pass and UseVertexFog are unsupported options. Movers take the
+fog-map pass with the brush tracker ([volumetric fog](volumetric-fog.md#mesh-fog)).
+
+**Time-varying spatial lights (2026-10-06).** Render.dll's spatially dynamic
+light effects now run in the Rust core: Searchlight, Rotor, SlowWave,
+FastWave, Shock, Disco, Interference and CloudCast, plus Shell. They run at
+the render pass's 24-bit precision, with Core appAtan2's FPATAN measured on
+x87 hardware.
+- *Evidence.* All 8 Searchlight, 8 Rotor, 5 Disco, 5 SlowWave and 1
+  FastWave lights of the 83 maps match the original bodies: 3,082 cases,
+  377,732 texels, 286,158 measured-FPATAN products.
+- *Play.* The bodies rerun inside the light-map merge for each new
+  Level.TimeSeconds, from a per-texel cache. Animated light maps now merge
+  only for the surfaces OccludeBsp draws. The Paris club's dance floor and
+  the Wan Chai garage searchlights animate, at about 0.8 ms per frame on
+  the Linux host.
+- *Moving lights.* The grenades' Shell ExplosionLight lights moving
+  light maps with the original body.
+- *Precision.* ComputeFromActor's rr2 and incidence are taken at 24 bits
+  for these lights. The rest of the static path is still modelled at 64
+  bits: incidence differs in 875 of 3,952 Training light steps and 13 of
+  1.9 million texels, and the init-time tables' precision is unmeasured.
+  See [static lighting](static-lighting.md#spatially-dynamic-effects).
 
 ## 5. Implement the full gameplay systems
 

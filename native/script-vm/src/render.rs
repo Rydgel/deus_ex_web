@@ -405,6 +405,11 @@ const MB_ZONENUMBER: u32 = MB_ZONE + 2;
 const MB_AMBIENTGLOW: u32 = MB_ZONE + 3;
 /// bNoSmooth 1, bMeshEnviroMap 2, bMeshCurvy 4, bUnlit 8, bSpecialLit 16.
 const MB_SETUP_FLAGS: u32 = MB_ZONE + 4;
+/// FDynamicSprite::Setup's own reads (setup.rs; the pose words hold the
+/// animation actor's): DrawType, bParticles and AnimFrame.
+const MB_DRAWTYPE: u32 = MB_ZONE + 5;
+const MB_OWN_PARTICLES: u32 = MB_ZONE + 6;
+const MB_OWN_ANIMFRAME: u32 = MB_ZONE + 7;
 /// The numeric pose: animation actor, bParticles, DrawScale, Location,
 /// Rotation, PrePivot, AnimFrame, BlendAnimFrame[4].
 const POSE_WORDS: u32 = 17;
@@ -438,7 +443,10 @@ const MESH_SELF_FIELDS: u64 = 1 << R_BHIDDEN
     | 1 << R_PREPIVOT
     | 1 << R_DRAWSCALE
     | 1 << R_BANIMBYOWNER
-    | 1 << R_ROTATION;
+    | 1 << R_ROTATION
+    | 1 << R_DRAWTYPE
+    | 1 << R_BPARTICLES
+    | 1 << R_ANIMFRAME;
 const MESH_ANIM_FIELDS: u64 = 1 << R_BPARTICLES | 1 << R_ANIMFRAME | 1 << R_BLENDANIMFRAME;
 
 #[inline(always)]
@@ -494,7 +502,8 @@ fn drawn_in_world(a: &Obj, h: u32, player: u32, behind: bool, view_target: u32, 
 /// DRAWN_CHILD, drawnInWorld without and with `child`; CHANGED when
 /// MB_LAST_VALID and a numeric pose word differs from the last), Mesh,
 /// Style, ScaleGlow, Location, PrePivot, DrawScale, the animation actor
-/// (bAnimByOwner ? Owner ?? self : self) and the numeric pose.
+/// (bAnimByOwner ? Owner ?? self : self), the numeric pose and the actor's
+/// own DrawType, bParticles and AnimFrame (FDynamicSprite::Setup's).
 #[no_mangle]
 pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, view_target: u32) {
     for k in 0..count {
@@ -538,6 +547,9 @@ pub extern "C" fn mesh_reads(pairs: u32, count: u32, player: u32, behind: u32, v
         }
         store32(word(MB_DRAWSCALE), a.word(R_DRAWSCALE, 0));
         store32(word(MB_ANIMACTOR), anim_actor);
+        store32(word(MB_DRAWTYPE), a.byte(R_DRAWTYPE));
+        store32(word(MB_OWN_PARTICLES), a.flag(R_BPARTICLES) as u32);
+        store32(word(MB_OWN_ANIMFRAME), a.word(R_ANIMFRAME, 0));
         let mut pose = [0u32; POSE_WORDS as usize];
         pose[0] = anim_actor;
         pose[1] = anim.flag(R_BPARTICLES) as u32;

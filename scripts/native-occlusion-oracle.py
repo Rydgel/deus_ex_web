@@ -14,6 +14,15 @@ FPTAN is not authoritative under Unicorn). The frame is built with control
 word 0x037f, as the existing scene-frame oracle does; OccludeBsp runs under
 0x007f, the precision control URender::PreRender sets (appEnableFastMath(1)
 at 0x10b14629: _controlfp(_PC_24, _MCW_PC)).
+
+A case's sprite is either a screen rectangle and depth (the hook below plays
+FDynamicSprite::Setup) or an actor fixture, for which the unchanged Setup
+(0x10b23910) runs: Engine UMesh::GetRenderBoundingBox and GetAnimSeq, Core's
+FBox/FCoords bodies, Render's BoundVisible and Project, Core appCeil. Its one
+import outside the images, msvcrt `ceil`, is a bridge that rounds the double
+toward +infinity with FRNDINT (precision control does not apply to FRNDINT,
+so any x87 ceil gives this exact result). A case with `setupOnly` runs Setup
+on each actor after CreateMasterFrame and skips OccludeBsp.
 """
 import importlib.util
 import json
@@ -40,6 +49,12 @@ POINT_CACHE, STAMP, VECTOR_MEM = 0x10b56a10, 0x10b56a0c, 0x10b5a6e0
 # Dynamics: GRender, the FDynamicSprite constructor (0x10b233c0) and the
 # thunk of its Setup call (0x10b23431 -> 0x10b010e6 -> 0x10b23910).
 GRENDER, SPRITE_CTOR, SPRITE_SETUP = 0x10b5a718, 0x10b233c0, 0x10b010e6
+# FDynamicSprite::Setup's body and the constructor's test of its result.
+SETUP_BODY, CTOR_SETUP_RESULT = 0x10b23910, 0x10b23436
+# UMesh::GetRenderBoundingBox (vslot 0x5c) and GetAnimSeq's thunk (vslot 0x68).
+MESH_BOUNDS, MESH_GET_ANIM_SEQ = 0x103a6850, 0x10301e29
+# msvcrt ceil(double): fld qword [esp+4]; FRNDINT with RC up; ret.
+CEIL_BRIDGE = bytes.fromhex('dd44240483ec04d93c24668b04246625fff3660d00086689442402d96c2402d9fcd92c2483c404c3')
 CREATE_MASTER_FRAME, OCCLUDE_BSP = 0x10b15690, 0x10b173d0
 CORE_APPTAN = 0x10123260
 GMATH_CTOR = 0x10102978
@@ -63,7 +78,7 @@ class Occlusion(native.NativeCollision):
         self.blocks = deque(maxlen=24)
         cpu.hook_add(UC_HOOK_BLOCK, lambda uc, address, size, data: self.blocks.append(address))
         cpu.mem_map(HEAP, HEAP_SIZE)
-        self.heap = HEAP
+        self.heap = self.heap_used = HEAP
         self.tangents = tangents
         self.tan_result = self.alloc(8)
         # appTan body: fld qword [result]; ret (the tangent is injected first).
@@ -78,6 +93,12 @@ class Occlusion(native.NativeCollision):
         cpu.hook_add(UC_HOOK_CODE, self.on_child, begin=self.child_stub, end=self.child_stub)
         cpu.hook_add(UC_HOOK_CODE, self.on_trap_stub, begin=self.trap_stub, end=self.trap_stub)
         cpu.hook_add(UC_HOOK_CODE, self.on_setup, begin=SPRITE_SETUP, end=SPRITE_SETUP)
+        cpu.hook_add(UC_HOOK_CODE, self.on_setup_result, begin=CTOR_SETUP_RESULT, end=CTOR_SETUP_RESULT)
+        self.setup_values, self.setup_result = None, None
+        for address, (dll, symbol) in list(self.thunks.items()):
+            if dll == 'msvcrt.dll' and symbol == 'ceil':
+                cpu.mem_write(address, CEIL_BRIDGE)
+                self.thunks.pop(address)
         self.vtable = self.alloc(0xc0)
         cpu.mem_write(self.vtable, bytes(cpu.mem_read(URENDER_VTABLE, 0xc0)))
         self.write(self.vtable + 0x68, 'I', self.child_stub)
@@ -90,6 +111,10 @@ class Occlusion(native.NativeCollision):
         self.heap += size
         if self.heap > HEAP + HEAP_SIZE:
             raise MemoryError('Occlusion oracle heap exhausted')
+        # A case's fixtures reuse the previous case's memory (run): zeroed.
+        if address < self.heap_used:
+            self.cpu.mem_write(address, bytes(min(size, self.heap_used - address)))
+        self.heap_used = max(self.heap_used, self.heap)
         return address
 
     def code(self, body):
@@ -126,9 +151,15 @@ class Occlusion(native.NativeCollision):
             'boundsBits': list(self.read(bounds, '4I')) if bounds else None,
             'span': self.span(span)})
 
+    def on_setup_result(self, cpu, address, size, data):
+        self.setup_result = cpu.reg_read(UC_X86_REG_EAX)
+
     def on_setup(self, cpu, address, size, data):
         """FDynamicSprite::Setup with the case's screen rectangle and depth:
-        X1..Y2 at +0x98..+0xa4, Z at +8, returns 1 (thiscall, ret 4)."""
+        X1..Y2 at +0x98..+0xa4, Z at +8, returns 1 (thiscall, ret 4). For an
+        actor fixture (no values) the original Setup runs."""
+        if self.setup_values is None:
+            return
         sprite = cpu.reg_read(UC_X86_REG_ECX)
         x1, y1, x2, y2, z = self.setup_values
         self.write(sprite + 0x98, '4i', x1, y1, x2, y2)
@@ -168,6 +199,53 @@ class Occlusion(native.NativeCollision):
                 spans.append([s, e])
             lines.append(spans)
         return {'startY': start_y, 'endY': end_y, 'validLines': valid, 'lines': lines}
+
+    # -- Setup's fixtures -----------------------------------------------------
+    def mesh_fixture(self, mesh):
+        """The UMesh fields GetRenderBoundingBox reads: BoundingBox (+0x28),
+        AnimSeqs (+0x84: Name, Group, StartFrame, NumFrames per 32 bytes),
+        BoundingBoxes (+0xa8, 28 bytes each), Scale, Origin, RotOrigin."""
+        address, vtable = self.alloc(0x200), self.alloc(0x100)
+        self.cpu.mem_write(vtable, struct.pack('<64I', *([self.trap_stub] * 64)))
+        self.write(vtable + 0x5c, 'I', MESH_BOUNDS)
+        self.write(vtable + 0x68, 'I', MESH_GET_ANIM_SEQ)
+        self.write(address, 'I', vtable)
+        self.write(address + 0x28, '7I', *mesh['boxBits'])
+        sequences = mesh.get('sequences', [])
+        data = self.alloc(32 * max(1, len(sequences)))
+        for i, seq in enumerate(sequences):
+            self.write(data + 32 * i, '4i', seq['name'], 0, seq['startFrame'], seq['numFrames'])
+        self.write(address + 0x84, '3I', data, len(sequences), len(sequences))
+        boxes = mesh.get('boxes', [])
+        data = self.alloc(28 * max(1, len(boxes)))
+        for i, box in enumerate(boxes):
+            self.write(data + 28 * i, '7I', *box)
+        self.write(address + 0xa8, '3I', data, len(boxes), len(boxes))
+        self.write(address + 0x100, '6I', *mesh['scaleBits'], *mesh['originBits'])
+        self.write(address + 0x118, '3i', *mesh['rotOrigin'])
+        return address
+
+    def actor_fixture(self, actor):
+        """The AActor fields Setup and GetRenderBoundingBox read."""
+        address = self.alloc(0x600)
+        self.write(address + 0x54, 'iI', actor.get('sequence', 0), actor.get('animFrameBits', 0))
+        self.write(address + 0x114, '3I', *actor['locationBits'])
+        self.write(address + 0x120, '3i', *actor.get('rotation', [0, 0, 0]))
+        self.write(address + 0x164, 'B', actor.get('drawType', 2))
+        texture, mesh = actor.get('texture'), actor.get('mesh')
+        self.write(address + 0x16c, 'I', self.sprite_textures[texture] if texture is not None else 0)
+        self.write(address + 0x174, 'I', self.meshes[mesh] if mesh is not None else 0)
+        self.write(address + 0x17c, 'I', actor.get('drawScaleBits', 0x3f800000))
+        self.write(address + 0x180, '3I', *actor.get('prePivotBits', [0, 0, 0]))
+        self.write(address + 0x18c, 'I', actor.get('scaleGlowBits', 0x3f800000))
+        self.write(address + 0x194, 'I', 4 if actor.get('particles') else 0)
+        return address
+
+    def setup_record(self, sprite, result):
+        """Setup's result and the sprite fields it writes: X1, Y1, X2, Y2,
+        Z, and the sprite path's ScreenX, ScreenY and Persp."""
+        return {'result': result, 'rect': list(self.read(sprite + 0x98, '4i')), 'zBits': self.read(sprite + 8, 'I')[0],
+                'screenBits': list(self.read(sprite + 0xa8, '3I'))}
 
     # -- level fixtures --------------------------------------------------------
     def load(self, request):
@@ -258,6 +336,12 @@ class Occlusion(native.NativeCollision):
         self.mem_stack(GDYNMEM, 0x2000000)
         self.mem_stack(GSCENEMEM, 0x800000)
         self.stacks = {a: self.read(a, '4I') for a in (native_gmem, GDYNMEM, GSCENEMEM, VECTOR_MEM)}
+        self.meshes = [self.mesh_fixture(mesh) for mesh in request.get('meshes', [])]
+        self.sprite_textures = []
+        for texture in request.get('spriteTextures', []):
+            address = self.alloc(0x100)
+            self.write(address + 0x34, 'ii', texture['uSize'], texture['vSize'])
+            self.sprite_textures.append(address)
 
     def node_flags(self):
         raw = bytes(self.cpu.mem_read(self.node_data, 64 * self.num_nodes))
@@ -284,6 +368,15 @@ class Occlusion(native.NativeCollision):
         return out
 
     def run(self, case):
+        # Per-case fixtures (sprites, actors, the post-dynamics list) are
+        # released after the case.
+        mark = self.heap
+        try:
+            return self.run_case(case)
+        finally:
+            self.heap = mark
+
+    def run_case(self, case):
         self.children = []
         for address, fields in self.stacks.items():
             self.write(address, '4I', *fields)
@@ -296,17 +389,36 @@ class Occlusion(native.NativeCollision):
         rotation = struct.pack('<3i', *case['rotation'])
         frame = self.call_native(CREATE_MASTER_FRAME, self.render,
                                  struct.pack('<I', self.viewport) + location + rotation + struct.pack('<I', 0), 0x037f)
+        if case.get('setupOnly'):
+            # Setup alone on each actor (thiscall, the frame its argument).
+            setups = []
+            for actor in case['actors']:
+                sprite = self.alloc(0x100)
+                self.write(sprite + 0x94, 'I', self.actor_fixture(actor))
+                result = self.call_native(SETUP_BODY, sprite, struct.pack('<I', frame), 0x007f)
+                setups.append(self.setup_record(sprite, result))
+            return {'zoneNumber': self.read(frame + 0x18, 'i')[0],
+                    'frameBits': list(self.read(frame + 0x34, '12I')) + list(self.read(frame + 0xb8, '17I')) +
+                                 list(self.read(frame + 0xfc, '28I')),
+                    'uncoordsBits': list(self.read(frame + 0x64, '12I')), 'setups': setups}
         before = self.node_flags()
         times_before = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
         # OccludeFrame's dynamics bookkeeping (0x10b1a0f6..0x10b1a14a), then
         # the case's sprites in order (SetupDynamics), all at node 0.
         post = self.alloc(4 * self.num_nodes)
         self.write(self.render + 0xec, 'II', 0, post)
-        sprites = []
+        sprites, setups = [], []
         for sprite in case.get('sprites', []):
             address = self.alloc(0x100)
-            self.setup_values = (sprite['x1'], sprite['y1'], sprite['x2'], sprite['y2'], sprite['zBits'])
-            self.call_native(SPRITE_CTOR, address, struct.pack('<3I', frame, 0, self.alloc(16)), 0x007f)
+            if 'actor' in sprite:
+                self.setup_values, actor = None, self.actor_fixture(sprite['actor'])
+            else:
+                self.setup_values = (sprite['x1'], sprite['y1'], sprite['x2'], sprite['y2'], sprite['zBits'])
+                actor = self.alloc(16)
+            self.setup_result = None
+            self.call_native(SPRITE_CTOR, address, struct.pack('<3I', frame, 0, actor), 0x007f)
+            if 'actor' in sprite:
+                setups.append(self.setup_record(address, self.setup_result))
             sprites.append(address)
         self.call_native(OCCLUDE_BSP, self.render, struct.pack('<I', frame), 0x007f)
         drawn = []
@@ -327,6 +439,7 @@ class Occlusion(native.NativeCollision):
             'draw': [self.draw_list(self.read(frame + 0x98 + 4 * i, 'I')[0]) for i in range(3)],
             'children': self.children,
             'sprites': drawn,
+            'setups': setups,
             'uncoordsBits': list(self.read(frame + 0x64, '12I')),
             'zoneTimes': {i: t for i, (t, b) in enumerate(zip(times, times_before)) if t != b},
             'nodeFlags': {i: a for i, (a, b) in enumerate(zip(after, before)) if a != b},

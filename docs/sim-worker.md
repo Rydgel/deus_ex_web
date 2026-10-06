@@ -54,9 +54,12 @@ reaches the drawing side's ~8 ms.
    lighting frame (`meshLighting.beginFrame`, the Rust light context).
 5. The sprite scan with the render iterators: RenderInterface construction,
    `Init`, FarMoveActor of the proxies, the shared random stream.
-6. The actor mesh scan: admission, `mesh_reads`, item overrides (the laser
+6. The actor mesh scan: admission, `mesh_reads`, then the main frame's
+   dynamics and OccludeBsp (FDynamicSprite::Setup on the sprite records and
+   the admitted bindings in Level.Actors order, `dynamics-candidates.mjs`;
+   [BSP occlusion](bsp-occlusion.md) "Play"), then item overrides (the laser
    DT_Mesh items, which today are written into the live proxy and restored),
-   GetFrame planning, SetupForActor.
+   GetFrame planning and SetupForActor for the actors the frames draw.
 7. The drawn set for every pass (mirror children, sky, main) and the
    LastRenderTime stamps, at the point where the main render stamps today.
 8. Corona visibility (two collision line checks per leaf light).
@@ -129,10 +132,20 @@ ParticleGenerator's and LaserEmitter's freeze checks. A stamp posted back by
 the page would arrive one tick late, so the worker decides the drawn set and
 the page draws exactly that set.
 
-The rule stays today's host culling ([render visibility](render-visibility.md):
-the frustum sphere is host culling, not the original contract). The worker
-runs three's own math (`Frustum`, `Sphere`, `Box3`; three imports without a
-GL context) on the same inputs:
+The main frame follows the original: its actors are OccludeBsp's
+`Frame->Sprite` ([BSP occlusion](bsp-occlusion.md) "Play"), which the worker
+computes after the sprite scan and the actor layer's reads, and every one of
+them is stamped. The page draws exactly those in the main pass (a binding
+outside it is hidden, or drawn by mirror passes only; a sprite record carries
+`main`, and `sprite-scene.mjs` `mainPass` hides the others for the main
+render). The mirror children and the sky frame keep today's host culling
+([render visibility](render-visibility.md): the frustum sphere is host
+culling, not the original contract) until child frames run their own
+dynamics; so do movers, which the original never stamps through
+DrawActorSprite (a later step). `?actorOcclusion=frustum` restores the
+frustum-tested drawn set for the main frame too. For the host-culled passes
+the worker runs three's own math (`Frustum`, `Sphere`, `Box3`; three imports
+without a GL context) on the same inputs:
 
 - movers: the brush mesh's bounding sphere (static, from the model) under the
   mover's matrix;

@@ -36,7 +36,64 @@ const bitsOf = value => (f32[0] = value, u32[0]);
 
 // occ_run option bits (occlude.rs FRAME word 46).
 export const OCCLUSION_SHOW_PLAYER_CTRL = 1, OCCLUSION_SHINY_SURFACES = 2, OCCLUSION_TOGGLE = 4,
-  OCCLUSION_POINTS = 0x100;
+  OCCLUSION_POINTS = 0x100, OCCLUSION_SPRITE_KEYS = 0x200;
+
+/** FDynamicSprite::Setup's candidate words (setup.rs), one per actor or
+ * render-iterator item SetupDynamics constructs a sprite for: the key the
+ * frame's Frame->Sprite reports, Actor.DrawType, the mesh record
+ * (`meshRecord`; SETUP_MESH_NONE when Mesh is None, SETUP_MESH_UNKNOWN when
+ * it has no record), Texture (SETUP_TEXTURE_*) with its USize and VSize,
+ * Location, Rotation (int32), DrawScale, PrePivot, bParticles, whether
+ * GetAnimSeq(AnimSequence) found a sequence, its StartFrame and NumFrames,
+ * and AnimFrame. Floats are written through the f32 view. */
+export const SETUP = Object.freeze({ KEY: 0, DRAWTYPE: 1, MESH: 2, TEXTURE: 3, USIZE: 4, VSIZE: 5, LOCATION: 6,
+  ROTATION: 9, DRAWSCALE: 12, PREPIVOT: 13, PARTICLES: 16, SEQ: 17, SEQ_START: 18, SEQ_FRAMES: 19, ANIMFRAME: 20,
+  WORDS: 21 });
+export const SETUP_MESH_NONE = 0, SETUP_MESH_UNKNOWN = 1;
+export const SETUP_TEXTURE_NONE = 0, SETUP_TEXTURE_SIZED = 1, SETUP_TEXTURE_UNKNOWN = 2;
+/** Setup's result words: status (SETUP_STATUS), X1, Y1, X2, Y2, Z bits and
+ * the sprite path's ScreenX, ScreenY and Persp bits. */
+export const SETUP_OUT_WORDS = 9;
+export const SETUP_STATUS = Object.freeze({ REJECTED: 0, ACCEPTED: 1, UNKNOWN: 3, UNSUPPORTED: 4 });
+
+/** UMesh::GetAnimSeq (Engine 0x1031c000): the first sequence whose FName is
+ * `name`. FNames compare by index, and names intern case-insensitively
+ * (ASCII folding, script-names.md), so the spellings compare folded. */
+export function setupSequence(sequences, name) {
+  if (typeof name !== 'string') return null;
+  const key = name.toUpperCase();
+  for (const sequence of sequences) if (sequence.name.toUpperCase() === key) return sequence;
+  return null;
+}
+
+/** Pack one Setup candidate at word `at` of `views` (setupCandidates):
+ * `key`, `drawType`, `mesh` (a mesh record or SETUP_MESH_*), `texture`
+ * (null, {uSize, vSize} or 'unknown'), `location`, `rotation`, `drawScale`,
+ * `prePivot`, `particles`, `sequence` (setupSequence's result) and
+ * `animFrame`. */
+export function packSetupCandidate({ u32, f32, i32 }, at, c) {
+  u32[at + SETUP.KEY] = c.key >>> 0;
+  u32[at + SETUP.DRAWTYPE] = c.drawType & 255;
+  u32[at + SETUP.MESH] = c.mesh >>> 0;
+  if (!c.texture) u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_NONE;
+  else if (c.texture === 'unknown') u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_UNKNOWN;
+  else { u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_SIZED; i32[at + SETUP.USIZE] = c.texture.uSize; i32[at + SETUP.VSIZE] = c.texture.vSize; }
+  for (let k = 0; k < 3; k++) {
+    f32[at + SETUP.LOCATION + k] = c.location[k];
+    i32[at + SETUP.ROTATION + k] = c.rotation?.[k] ?? 0;
+    f32[at + SETUP.PREPIVOT + k] = c.prePivot?.[k] ?? 0;
+  }
+  f32[at + SETUP.DRAWSCALE] = c.drawScale;
+  u32[at + SETUP.PARTICLES] = c.particles ? 1 : 0;
+  u32[at + SETUP.SEQ] = c.sequence ? 1 : 0;
+  i32[at + SETUP.SEQ_START] = c.sequence?.startFrame ?? 0;
+  i32[at + SETUP.SEQ_FRAMES] = c.sequence?.numFrames ?? 0;
+  f32[at + SETUP.ANIMFRAME] = c.animFrame ?? 0;
+}
+
+/** A mesh payload's GetRenderBoundingBox fields for meshRecord. */
+export const meshRecordFields = payload => ({ box: payload.boundingBox, boxes: payload.arrays.get(0xa8).data,
+  scale: payload.scale, origin: payload.origin, rotation: payload.rotation });
 
 /** Frame words for occ_run from FSceneNode field bit patterns: `coords` (12
  * f32 bits: Origin, X, Y, Z axes), `width`/`height` (ints), `fx15`, `fy15`,
@@ -116,6 +173,33 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     dynamics, sprites, 0, 0];
   let stamp = 0;
   const setHeader = () => { header[14] = stamp; words().set(header, kernel.modelPtr() >>> 2); };
+  const release = at => { free(at); blocks.splice(blocks.indexOf(at), 1); };
+  const ensureSprites = count => {
+    if (count <= spriteCapacity) return;
+    release(sprites);
+    spriteCapacity = Math.max(count, 2 * spriteCapacity); sprites = block(24 * spriteCapacity); header[17] = sprites;
+  };
+  // Setup's mesh records by mesh key, and its candidate and result blocks.
+  const meshRecords = new Map();
+  let candidates = 0, results = 0, candidateCapacity = 0, views = null;
+  const ensureCandidates = count => {
+    if (count <= candidateCapacity) return;
+    if (candidates) { release(candidates); release(results); }
+    candidateCapacity = Math.max(256, count, 2 * candidateCapacity);
+    candidates = block(4 * SETUP.WORDS * candidateCapacity); results = block(4 * SETUP_OUT_WORDS * candidateCapacity);
+    views = null;
+  };
+  const setupViews = () => {
+    if (!views || views.u32.buffer !== memory.buffer)
+      views = { u32: new Uint32Array(memory.buffer), f32: new Float32Array(memory.buffer), i32: new Int32Array(memory.buffer) };
+    return views;
+  };
+  const setup = count => {
+    if (!kernel.setup) throw new Error('The script VM core predates FDynamicSprite::Setup; run npm run build:wasm');
+    ensureSprites(count);
+    setHeader();
+    return kernel.setup(candidates, count, results);
+  };
   return {
     /** The master FSceneNode (CreateMasterFrame) for a camera: `location`
      * (three floats), `rotation` ([pitch, yaw, roll] int32), integer
@@ -127,26 +211,66 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       setHeader();
       return masterFrame(kernel, camera);
     },
+    /** A mesh's record for Setup (UMesh::GetRenderBoundingBox's fields),
+     * made once per `key`: `box` {min, max, valid} (BoundingBox), `boxes`
+     * the BoundingBoxes array's bytes (28 per FBox), `scale`, `origin`
+     * (floats) and `rotation` (RotOrigin, int32). Returns its address for
+     * the candidates' SETUP.MESH word. */
+    meshRecord(key, { box, boxes, scale, origin, rotation }) {
+      let at = meshRecords.get(key);
+      if (at !== undefined) return at;
+      const data = block(boxes.byteLength);
+      at = block(4 * 18);
+      new Uint8Array(memory.buffer).set(boxes, data);
+      words().set([...box.min.map(bitsOf), ...box.max.map(bitsOf), box.valid ? 1 : 0, ...scale.map(bitsOf),
+        ...origin.map(bitsOf), ...rotation.map(v => v >>> 0), data, boxes.byteLength / 28], at >>> 2);
+      meshRecords.set(key, at);
+      return at;
+    },
+    /** Room for `count` Setup candidates: the memory's u32, f32 and i32
+     * views and `at`, the first candidate's word index (SETUP.WORDS words
+     * each). Valid until the next allocation. */
+    setupCandidates(count) {
+      ensureCandidates(count);
+      return { ...setupViews(), at: candidates >>> 2 };
+    },
+    /** Setup alone on `count` packed candidates with `frameWords`; returns
+     * the results (SETUP_OUT_WORDS words each). Validation access. */
+    setupOnly(frameWords, count) {
+      words().set(frameWords, kernel.framePtr() >>> 2);
+      setup(count);
+      return words().slice(results >>> 2, (results >>> 2) + SETUP_OUT_WORDS * count);
+    },
+    /** Whether the loaded core has FDynamicSprite::Setup (occ_setup). */
+    setupSupported: Boolean(kernel.setup),
+    /** The last run's Setup results (SETUP_OUT_WORDS words per candidate). */
+    setupResults: count => words().slice(results >>> 2, (results >>> 2) + SETUP_OUT_WORDS * count),
     /** One OccludeBsp call on `frameWords` (occlusionFrameWords) with the
      * frame's sprites (FDynamicSprite after Setup), in SetupDynamics order:
      * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
-     * and Y1 < Y2 (Setup's checks). */
-    run(frameWords, frameSprites = []) {
-      if (frameSprites.length > spriteCapacity) {
-        free(sprites); blocks.splice(blocks.indexOf(sprites), 1);
-        spriteCapacity = frameSprites.length; sprites = block(24 * spriteCapacity); header[17] = sprites;
+     * and Y1 < Y2 (Setup's checks); or, with `setupCount`, Setup on that
+     * many packed candidates (setupCandidates) gives them. */
+    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false } = {}) {
+      const viaSetup = setupCount >= 0;
+      ensureSprites(viaSetup ? setupCount : frameSprites.length);
+      if (!viaSetup) {
+        const u = words();
+        frameSprites.forEach((sprite, i) => u.set([sprite.key, sprite.x1, sprite.y1, sprite.x2, sprite.y2, sprite.zBits]
+          .map(v => v >>> 0), (sprites >>> 2) + 6 * i));
+        header[18] = frameSprites.length;
       }
-      const u = words();
-      frameSprites.forEach((sprite, i) => u.set([sprite.key, sprite.x1, sprite.y1, sprite.x2, sprite.y2, sprite.zBits]
-        .map(v => v >>> 0), (sprites >>> 2) + 6 * i));
-      header[18] = frameSprites.length;
       setHeader();
       words().set(frameWords, kernel.framePtr() >>> 2);
+      if (viaSetup) setup(setupCount);
       const status = kernel.run(work, workBytes);
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];
       const st = words().slice(kernel.statusPtr() >>> 2, (kernel.statusPtr() >>> 2) + 8);
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);
-      return decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st);
+      // `stream` is the output's address and length in the kernel memory, for
+      // the decal block (decal-draw.mjs), valid until the next run;
+      // `skipPoints` leaves the saved points to it.
+      return { ...decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st, skipPoints),
+        stream: { at: st[5], words: st[1] } };
     },
     /** Each zone's SkyZone presence (`skies[i]` truthy: the zone's actor,
      * or the LevelInfo for a zone without one, has a SkyZone; OccludeBsp
@@ -163,7 +287,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   };
 }
 
-function decode(words, status) {
+function decode(words, status, skipPoints = false) {
   const draw = [[], [], []], children = [], sprites = [];
   let i = 0;
   while (i < words.length) {
@@ -198,6 +322,7 @@ function decode(words, status) {
     for (let p = 0; p < polyCount; p++) {
       const node = words[i] | 0, count = words[i + 1];
       i += 2;
+      if (skipPoints) { i += 7 * count; polys.push({ iNode: node }); continue; }
       const points = [];
       for (let k = 0; k < count; k++, i += 7) points.push(words.slice(i, i + 7));
       polys.push(count ? { iNode: node, points } : { iNode: node });

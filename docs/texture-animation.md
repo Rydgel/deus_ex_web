@@ -109,7 +109,14 @@ side test uses the main camera's.
 Unverified: the original runs Update only for surfaces in its draw list after
 BSP occlusion, which is not recovered, so a texture out of view keeps
 advancing here instead of advancing once when it reappears. The world notes
-this. Mesh skins with AnimNext still throw as unsupported.
+this. Mesh skins with AnimNext still throw as unsupported, which drops the
+face group; no shipped content reaches that. Of the 205 textures with an
+AnimNext chain (all texture and script packages), only maps import any, and
+none of the 513 texture references in map actors' properties (all 88 maps:
+Skin, MultiSkins, Texture, particle textures) names one. No script, mesh or
+class-default package imports one either, so actor skins and sprites never
+carry an animated texture; animated textures appear only on BSP surfaces
+(census 2026-10-06, scratch scripts not kept).
 
 `scripts/validate-texture-animation-play.mjs [--map]` loads a map in
 headless Chromium. Training's 12 animated heads (Island's 4) advance, each

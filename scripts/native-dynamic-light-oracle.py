@@ -46,6 +46,26 @@ FILTER = 0x10b24a10
 DYNAMIC_LIGHT_VTABLE = 0x10b2b80c
 
 
+def extended_of_double(value):
+    """The 80-bit extended encoding (10 bytes, little-endian) of a double."""
+    bits = struct.unpack('<Q', struct.pack('<d', value))[0]
+    sign, exponent, mantissa = bits >> 63, (bits >> 52) & 0x7ff, bits & ((1 << 52) - 1)
+    if exponent == 0 and mantissa == 0:
+        return struct.pack('<QH', 0, sign << 15)
+    if exponent == 0:  # subnormal: normalize
+        shift = 53 - mantissa.bit_length()
+        mantissa <<= shift
+        exponent = 1 - shift
+    significand = (mantissa | (1 << 52)) << 11
+    return struct.pack('<QH', significand & ((1 << 64) - 1), (sign << 15) | (exponent - 1023 + 16383))
+
+
+# The spatial function of each effect (table 0x10b2a0f0).
+SPATIAL = {4: 0x10b03770, 5: 0x10b03de0, 6: 0x10b040b0, 7: 0x10b04380, 9: 0x10b043a0, 10: 0x10b046f0,
+           14: 0x10b05740, 16: 0x10b04c80, 18: 0x10b03ae0, 0: 0x10b03360, 13: 0x10b054e0}
+LEVEL_INFO = 0x10b3df88    # Level->Actors(0), read for TimeSeconds (+0x478)
+
+
 class Oracle:
     def __init__(self, root, control_word):
         system = Path(root) / 'System'
@@ -110,6 +130,40 @@ class Oracle:
                 x = struct.unpack('<d', uc.mem_read(esp + 4, 8))[0]
                 uc.reg_write(UC_X86_REG_EAX, 1 if x != x else 0)
         cpu.hook_add(UC_HOOK_CODE, on_stub, begin=self.stub_pow, end=self.stub_isnan)
+        # Core appAtan2(Y, X) is `fld Y; fld X; fpatan` (0x10123280); Unicorn's
+        # FPATAN goes through a host double, so the extended result comes
+        # from `self.fpatan` (measured on x87 hardware, keyed by the two
+        # double bit patterns) and is loaded with FLD m80. Every requested
+        # pair is recorded; a pair without a measurement is listed in
+        # `self.atan_missing` and answered from Python's double atan2.
+        # appFmod (msvcrt _CIfmod: an fprem loop, exact for finite
+        # operands) is Python's exact math.fmod loaded as a double.
+        self.stub_atan2 = STUBS + 0x200
+        self.atan_slot = STUBS + 0x220
+        cpu.mem_write(self.stub_atan2, bytes.fromhex('db2d') + struct.pack('<I', self.atan_slot) + bytes.fromhex('c3'))
+        self.stub_fmod = STUBS + 0x240
+        self.fmod_slot = STUBS + 0x260
+        cpu.mem_write(self.stub_fmod, bytes.fromhex('dd05') + struct.pack('<I', self.fmod_slot) + bytes.fromhex('c3'))
+        self.fpatan, self.atan_pairs, self.atan_missing = {}, [], set()
+
+        def on_math(uc, address, size, data):
+            import math
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            if address == self.stub_atan2:
+                yb, xb = struct.unpack('<QQ', uc.mem_read(esp + 4, 16))
+                key = f'{yb:016x}:{xb:016x}'
+                self.atan_pairs.append(key)
+                value = self.fpatan.get(key)
+                if value is None:
+                    self.atan_missing.add(key)
+                    y, x = struct.unpack('<dd', struct.pack('<QQ', yb, xb))
+                    value = extended_of_double(math.atan2(y, x))
+                uc.mem_write(self.atan_slot, value)
+            else:
+                x, y = struct.unpack('<dd', uc.mem_read(esp + 4, 16))
+                uc.mem_write(self.fmod_slot, struct.pack('<d', math.fmod(x, y)))
+        cpu.hook_add(UC_HOOK_CODE, on_math, begin=self.stub_atan2, end=self.stub_atan2)
+        cpu.hook_add(UC_HOOK_CODE, on_math, begin=self.stub_fmod, end=self.stub_fmod)
         # appMemset(dest, value, count): rep stosb.
         self.stub_memset = STUBS + 0x40
         cpu.mem_write(self.stub_memset, bytes.fromhex('57' '8b7c2408' '8b44240c' '8b4c2410' 'f3aa' '5f' 'c3'))
@@ -136,6 +190,10 @@ class Oracle:
                     target = self.stub_frand
                 elif symbol == '?IsA@UObject@@QBEHPAVUClass@@@Z':
                     target = self.stub_isa
+                elif symbol == '?appAtan2@@YANNN@Z':
+                    target = self.stub_atan2
+                elif symbol == '?appFmod@@YANNN@Z':
+                    target = self.stub_fmod
                 elif library == 'core.dll' and symbol in ('?GMath@@3VFGlobalMath@@A', '??_0FCoords@@QAEAAV0@ABVFRotator@@@Z'):
                     target = core_exports[symbol]
                 elif symbol == '?PushBytes@FMemStack@@QAEPAEHH@Z':
@@ -296,6 +354,64 @@ class Oracle:
         self.lightmap_globals(facet)
         self.call(case.get('address', 0x10b04f80), [LIGHTMAP, info, illum, spatial])
         return {'spatial': list(self.read(spatial, f'{width * height}B'))}
+
+    # The light manager's square-root (0x10b3e1b8) and normal falloff
+    # (0x10b34a6c) tables as supplied (float bit patterns), instead of the
+    # init code's, so a spatial body is compared on Play's own tables.
+    def set_tables(self, tables):
+        self.write(SQRT_TABLE, '2048I', *tables['sqrt'])
+        self.write(0x10b34a6c, '4096I', *tables['normal'])
+        self.write(0x10b34a5c, 'B', 1)  # the normal body's local static guard
+
+    # A spatial function of the effect table (SPATIAL) over one light map
+    # rectangle: the light's location, LightPeriod (+0x1e6) and LightPhase
+    # (+0x1e7), info's 1/R (+0x18), rr2 (+0x1c), incidence (+0x24) and
+    # rectangle (+0x34), Level.TimeSeconds at [0x10b3df88]+0x478, the grid
+    # globals and rectangle-relative illumination bytes (null: 0x7f, a
+    # moving light). Returns the rectangle's spatial bytes and the appAtan2
+    # pairs the body asked for, in order.
+    def spatial_dynamic(self, case):
+        if not hasattr(self, 'spatial_buffers'):
+            self.spatial_buffers = (self.alloc(0x100), self.alloc(0x800), self.alloc(0x100), self.alloc(0x600),
+                                    self.alloc(1 << 20), self.alloc(1 << 20))
+        vtable, actor, info, level, illum, out = self.spatial_buffers
+        width, height = case['clamp']
+        minU, maxU, minV, maxV = case['rect']
+        pitch = (width + 7) >> 3
+        stride = pitch * 8
+        if stride * height > (1 << 20) or width * height > (1 << 20):
+            raise ValueError('light map too large for the spatial fixture')
+        self.write(vtable + 0x60, 'I', self.world_light_radius)
+        self.write(actor, 'I', vtable)
+        self.write(actor + 0x114, 'III', *case['location'])
+        self.write(actor + 0x1e1, 'B', case['effect'])
+        self.write(actor + 0x1e6, 'BB', case.get('period', 0), case.get('phase', 0))
+        self.write(info, 'I', actor)
+        constants = case['constants']
+        self.write(info + 0x18, 'II', constants['rradius'], constants['rr2'])
+        self.write(info + 0x24, 'I', constants['incidence'])
+        self.write(info + 0x34, 'iiii', minU, maxU, minV, maxV)
+        self.write(level + 0x478, 'I', case['time'])
+        self.write(LEVEL_INFO, 'I', level)
+        self.write(START, 'III', *case['grid']['start'])
+        self.write(STEP_U, 'III', *case['grid']['stepU'])
+        self.write(STEP_V, 'III', *case['grid']['stepV'])
+        self.write(CLAMP_U, 'ii', width, height)
+        self.write(SIZE_U, 'i', 1 << (width - 1).bit_length())
+        self.write(ILLUM_BYTES, 'i', pitch)
+        self.write(ILLUM_PAD, 'i', stride - width)
+        rw = max(0, maxU - minU)
+        source = bytes.fromhex(case['illumination']) if case.get('illumination') is not None else None
+        buffer = bytearray([0x7f]) * (stride * height)
+        if source is not None:
+            for v in range(minV, maxV):
+                buffer[v * stride + minU:v * stride + maxU] = source[(v - minV) * rw:(v - minV + 1) * rw]
+        self.cpu.mem_write(illum, bytes(buffer))
+        self.cpu.mem_write(out, b'\xcd' * (width * height))
+        self.atan_pairs = []
+        self.call(case.get('address', SPATIAL[case['effect']]), [LIGHTMAP, info, illum, out])
+        rows = [bytes(self.read(out + v * width + minU, f'{rw}B')) for v in range(minV, maxV)] if rw else []
+        return {'spatial': b''.join(rows).hex(), 'pairs': self.atan_pairs}
 
     # The per-frame noise 0x10b13080(time) over a sequence of times.
     def noise(self, case):
@@ -573,6 +689,11 @@ def main():
     out['noise'] = [oracle.noise(case) for case in cases.get('noise', [])]
     out['lightTypes'] = [oracle.light_type(case) for case in cases.get('lightTypes', [])]
     out['mergeMods'] = [oracle.merge_mod(case) for case in cases.get('mergeMods', [])]
+    if cases.get('spatialDynamic'):
+        oracle.fpatan = {key: bytes.fromhex(value)[::-1] for key, value in cases.get('fpatan', {}).items()}
+        oracle.set_tables(cases['tables'])
+        out['spatialDynamic'] = [oracle.spatial_dynamic(case) for case in cases['spatialDynamic']]
+        out['atanMissing'] = sorted(oracle.atan_missing)
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []
     json.dump(out, sys.stdout)

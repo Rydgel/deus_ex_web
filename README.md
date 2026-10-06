@@ -5,10 +5,10 @@ maps, assets, and game behavior. **Stage 3 is complete within its adopted scope:
 Training passes all five runtime criteria across 95 probes, and all 83
 single-player maps reach only boundaries assigned to later stages in the startup
 census. **Stage 4 presentation is in progress**: original mesh, static, animated
-and moving lighting, mirrors, Fire.dll textures, particles, coronas, lasers,
-volumetric fog, ambient sound and the conversation camera with lip sync already
-run from original evidence (see below). See the [completion record and coverage
-limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
+and moving lighting, BSP occlusion, mirrors, Fire.dll textures, particles,
+coronas, lasers, volumetric fog, ambient sound, Galaxy music and the conversation
+camera with lip sync already run from original evidence (see below). See the
+[completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -17,106 +17,80 @@ incomplete work. See [the project rule](AGENTS.md).
 Delivery is **local only**, as requested. No website is deployed; do not publish
 or push further hosting updates unless the user asks.
 
+## How Play runs
+
+- **Simulation in a worker.** By default the game simulation (script ticks,
+  physics, the HUD's window tree, the render scans and Galaxy's Update) runs in
+  a module Web Worker. Each frame it posts a plain-data snapshot that the page
+  draws with three.js/WebGL2. `?sim=inline` keeps the simulation on the page;
+  the Training previews, the NPC focus list and `?simVerify=1` need it. See
+  [simulation worker](docs/sim-worker.md).
+- **Rust core.** Script bytecode runs in the Rust interpreter
+  (`native/script-vm`, compiled to WebAssembly). The same crate holds the
+  tick's event and state dispatch, pawn and actor physics, BSP occlusion, the
+  render and light scans, particles, Fire.dll textures, the light-map merge,
+  the volumetric fog loop and lip-sync analysis. New runtime work goes there
+  first; JavaScript is host glue (three.js, DOM, Web Audio, validators). Each
+  port keeps its JavaScript or oracle reference and a `js`/`verify` URL switch.
+  See [Rust core](docs/rust-core.md).
+- **GPU meshes.** Actor GetFrame interpolation and DrawLodMesh lighting run as
+  WebGL2 passes, bit-exact with the CPU kernels (`?gpuMesh=0` selects the CPU
+  reference; software WebGL keeps it). See [GPU mesh](docs/gpu-mesh.md).
+- **Music.** Galaxy's sequencer and mixer run in Rust inside an AudioWorklet,
+  fed directly by the simulation over a MessageChannel. See
+  [Galaxy music](docs/galaxy-music.md).
+
+Frame cost and the 120 fps target are tracked in
+[play frame cost](docs/play-frame-cost.md) and the
+[Play CPU plan](docs/play-cpu-plan.md).
+
 ## What works
 
 - A JavaScript UE1 package reader shared between Node and browser APIs. All 219
-  installed packages validate, with no unresolved package dependencies.
-- Tagged actor properties and compiled BSP world geometry decode across all 88 maps.
-- A Three.js/WebGL2 viewer with palettes, mipmaps, texture mapping, basic surface
-  flags, static mover transforms, and an original sky-zone pass.
-- Training renders 24,427 triangles, 70 textures, and 25 static movers without
-  render errors. Diagnostics show original surface/texture references, actor
-  positions, wireframe, and unsupported data.
+  installed packages validate, with no unresolved package dependencies. Tagged
+  actor properties and compiled BSP world geometry decode across all 88 maps.
 - Browser folder selection reads the user's local installation without uploading
   game files. The development server can also read this workspace's installation.
-- Static lighting from original shadow masks, inherited light defaults, zone
-  ambient and mover polygon lightmaps, compared at two original-game cameras.
-- Play mode with gravity, jumping, crouching, stairs, BSP and actor collision,
-  translating TriggerToggle doors, and pushed decorations that run their original
-  `DeusExDecoration.Bump`/physics ([rolling evidence](docs/rolling.md)).
-- Using a door runs the original `DeusExMover.Frob` bytecode, so Training's
-  locked and non-frobbable doors refuse as the original does, and like-tagged
-  double doors open through its own `AllActors` fanout
-  ([mover frob evidence](docs/script-mover-frob.md)).
-- Training's light switch runs its original four-light `TriggerToggle` fanout;
-  steady brightness changes rebuild dependent lightmaps and update their atlas
-  tiles ([lighting evidence](docs/script-light-cache.md)).
-- Selected mission and damage triggers, player augmentation startup, and all 18
-  Training direct Speech-to-End DataLink routes execute against the Play actor
-  graph. The InfoLink lifecycle constructs and destroys its six-control shell;
-  selected conversation inventory transfers also run through original scripts
-  ([DataLink scope](docs/script-datalink-live.md),
-  [transfer evidence](docs/script-datavault-image.md)).
-- From Training `PlayerStart1`, held forward movement reaches the spawn
-  door. Use opens that unlocked pair. The Train nano key north of the east
-  wall is picked up into the key ring, and Enter with the ring in hand
-  unlocks the trainer door before a second use opens it
-  ([nano key](docs/script-nanokey.md)). The munitions instructor is farther
-  east and is not reached by this walk.
-- Frobbing a Training munitions instructor runs the original first-person
-  `ConPlay` conversation: the speaker name and speech-text subtitle panel show
-  when the `bSubtitles` preference is on (a discoverable diagnostics toggle,
-  seeded from the installed globalconfig) and hide when off, both with original
-  speech. `Mission00.Timer` — spawned by `DeusExLevelInfo.SpawnScript` and
-  ticked through the shared scheduler — confiscates and destroys the player's
-  remaining inventory while standing at the instructor
-  ([conversation](docs/script-instructor-conversation.md),
-  [window layer](docs/script-window-bounds-update.md),
-  [mission timer](docs/script-mission-timer.md)).
-- Play constructs the original DeusExHUD: health/energy/compass, the ten-slot
-  object belt, ammo, AugLight, frob brackets and log read live state through
-  original scripts and native window/GC translations. InfoLink transmissions
-  use the original frame textures, portraits and bitmap fonts, replacing the
-  browser-styled dialog ([visible HUD scope](docs/script-play-hud.md)). Walk
-  forward from Training's spawn to see Jaime's transmission.
-- Training automatically shows **every visible actor mesh** in Play and Inspect —
-  18 original character/bot meshes plus 46 prop meshes (crates, the crowbar and
-  combat-knife pickups, ammo, plants, datacubes, keypads, security cameras, lights
-  and the nanokey), so the collidable props JC walks into are no longer invisible.
-  **NPC mesh preview → Focus** jumps the inspection camera between the characters.
-  The meshes stay visible after returning to Play or resetting to Player start.
-  They are lit by the original DrawLodMesh lighting (see Stage 4 below);
-  distance LOD remains unfinished, and one procedural NanoKey effect face is
-  skipped. See [preview scope and evidence](docs/npc-mesh-preview.md).
-- Frobbing a Training weapon, ammo, tool, food or key **picks it up** into JC's
-  inventory through the original `HandleItemPickup`/`DoFrob`/`Pickup.Frob` give,
-  and the item's world mesh disappears; a carried item follows JC as a based
-  rider while walking, and **Player start** returns items to the world. See
-  [item pickup](docs/script-item-pickup.md).
-- **Selecting** a picked-up weapon draws it in hand through the original
-  `PutInHand`/`UpdateInHand`/`SwitchWeapon`/`BringUp`/`PlaySelect` path (number
-  keys invoke the original `ActivateBelt N`; the `Crowbar preview` button places
-  JC beside the Training weapons, picks up the crowbar, equips its actual
-  belt slot and faces the stacked crates). Left click or Enter swings the crowbar through the original
-  ticked weapon states and mesh notify. Two hits break a Training crate,
-  spawning its original wood fragments and Lockpick contents; fragments
-  bounce, fade and expire, and Player start restores the crate. The first-person
-  mesh follows original RenderOverlays/CalcDrawOffset and GetFrame and takes the
-  original mesh lighting. See [weapon equip](docs/script-weapon-equip.md),
-  [weapon fire evidence](docs/script-weapon-fire.md),
-  [crate destruction](docs/script-crate-destruction.md), and
-  [weapon rendering](docs/script-weapon-rendering.md).
-- Walking bob executes the original `Engine.PlayerPawn.CheckBob` bytecode from
-  the local installation through the bounded script VM.
-- Unit/format tests, real-data validation commands, and browser regression tests.
-- An optional local native-DLL comparison checks collision directly against the
-  original. Combined world/actor queries match 10,980 rays, 7,320 extent traces,
-  and 402 complete placement chains across Training and Liberty Island.
-  Original walking, falling, landing, camera math and support-base routines have
-  separate native comparisons and are connected to the dry-player slice. Combined
-  physics matches 63 original frames/2,547 queries, and nine moving-door scenes
-  match ordered geometry, movement and events. Whole-scene acceptance remains. See
-  [movement evidence](docs/movement.md) and [level queries](docs/level-queries.md).
+  The map list offers every installed map; the 83 single-player maps are the
+  measured scope.
+- Original LoadMap startup and Login, the original DeusExHUD, the main menu
+  (Escape) and the installed key bindings, routed through the recovered
+  InputEvent → XInputExt → viewport Exec chain.
+- Movement and collision through the original physics routines (walking,
+  falling, landing, ladders, swimming), compared against original DLL execution.
+  Doors and other movers run the original `DeusExMover` scripts and
+  `physMovingBrush`. Pushed decorations run `DeusExDecoration.Bump` and their
+  physics ([movement](docs/movement.md), [swimming](docs/swimming.md),
+  [rolling](docs/rolling.md), [doors](docs/doors.md)).
+- Using things runs the original frob paths: doors, light switches, keypads,
+  DataCubes, the nano key ring, and item pickup into the inventory and object
+  belt ([mover frob](docs/script-mover-frob.md),
+  [item pickup](docs/script-item-pickup.md)).
+- Weapons: number keys run the original `ActivateBelt N`; the crowbar draws in
+  first person through `PutInHand`/`BringUp` and swings through the original
+  ticked weapon states. Two hits break a Training crate into its original
+  fragments and contents ([weapon equip](docs/script-weapon-equip.md),
+  [crate destruction](docs/script-crate-destruction.md)).
+- DataLinks, InfoLink transmissions and first-person and third-person
+  conversations run the original ConPlay scripts, with subtitles, speech and
+  mission timers ([DataLink scope](docs/script-datalink-live.md),
+  [conversation](docs/script-instructor-conversation.md),
+  [conversation camera](docs/conversation-camera.md)).
+- Every visible actor mesh draws with original lighting
+  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md)).
+  Distance LOD remains unfinished.
+- Unit/format tests, real-data validation commands, and browser regression
+  tests. Optional local native-DLL comparisons check translated routines against
+  the original DLLs under an emulator ([native exec diff](docs/native-exec-diff.md),
+  [level queries](docs/level-queries.md)).
 
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
-not every interaction or full campaign compatibility. Remaining Stage 4 work
-includes fog on meshes and movers, mirror/sky combinations, SpriteAnimOnce
-frames, animated mesh skins, decals, music, zone reverb and Galaxy's mixer,
-time-varying moving lights, BSP occlusion and remaining native UI
-presentation. Training is the visual acceptance target; other maps expose
+not every interaction or full campaign compatibility. AI navigation, combat and
+the other gameplay systems are Stage 5; saves and map travel are Stage 6 (map
+travel stops at a labeled `ClientTravel` boundary). Remaining Stage 4 work is
+listed below. Training is the visual acceptance target; other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
-and actual window/tab pause acceptance deferred from Stage 2 remain open. See
-[rendering](docs/rendering.md) and [movement](docs/movement.md).
+and actual window/tab pause acceptance deferred from Stage 2 remain open.
 
 ## Stage 3 completion — 2026-09-28
 
@@ -151,6 +125,9 @@ keeps the dated record.
 - **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
   weapon ([mesh lighting](docs/mesh-lighting.md)), with GetFrame and lighting
   on the GPU, bit-exact with the CPU kernels ([GPU mesh](docs/gpu-mesh.md)).
+- **Visibility:** Render.dll's OccludeBsp, master frame and dynamics in the
+  Rust core, bit-exact; Play draws the polygons, mirrors, sky and fog surfaces
+  it finds visible ([BSP occlusion](docs/bsp-occlusion.md)).
 - **Light maps:** Render.dll's static path, DefaultTexture for untextured
   surfaces ([static lighting](docs/static-lighting.md)); pulse, flicker,
   strobe and waver lights re-merged each frame; moving lights such as AugLight
@@ -164,19 +141,23 @@ keeps the dated record.
   ([fire textures](docs/fire-texture.md)), animated and auto-panned surfaces
   ([texture animation](docs/texture-animation.md)), particles and sprites
   ([particles](docs/particles.md)), light coronas ([coronas](docs/coronas.md)),
-  laser beams ([lasers](docs/lasers.md)) and volumetric fog on BSP surfaces
-  ([volumetric fog](docs/volumetric-fog.md)).
-- **Sound and conversations:** Galaxy's ambient and script sounds
-  ([galaxy audio](docs/galaxy-audio.md)), the third-person conversation camera
-  and letterbox ([conversation camera](docs/conversation-camera.md)) and
-  speech-driven lip sync ([lip sync](docs/lip-sync.md)).
+  laser beams ([lasers](docs/lasers.md)), volumetric fog on BSP surfaces
+  ([volumetric fog](docs/volumetric-fog.md)) and decals such as the Shadow
+  blobs under pawns ([decals](docs/decals.md)).
+- **Sound and music:** Galaxy's ambient and script sounds
+  ([galaxy audio](docs/galaxy-audio.md)) and each map's music, from the
+  original loader, sequencer, mixer and Update music section, bit-exact with
+  Galaxy.dll ([Galaxy music](docs/galaxy-music.md)).
+- **Conversations:** the third-person conversation camera and letterbox
+  ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
+  sync ([lip sync](docs/lip-sync.md)).
 
-Several of these effects run every frame. The heavy loops (mesh posing and
-lighting, Fire.dll ticks, the fog loop, lip sync) run in the Rust/WebAssembly
-core or on the GPU with exact results; the per-map frame cost, the A/B
-measurements and the remaining work toward the 120 fps target are in
-[play frame cost](docs/play-frame-cost.md), [Rust core](docs/rust-core.md) and
-the [Play CPU plan](docs/play-cpu-plan.md).
+**Still open in Stage 4:** the occlusion's moving brush tracker (and with it
+fog on movers; meshes stay unfogged, as the shipped D3D configuration draws
+them) and child frames, the render-pass precision audit, mirror/sky combinations,
+spatial and time-varying light effects on moving lights and spotlights, Galaxy's mixer for sound effects (their
+volume and pan are a Web Audio host mapping) and zone reverb, the remaining
+native UI presentation, and original-game visual acceptance across maps.
 
 ## Open the viewer
 
@@ -194,21 +175,23 @@ present, training loads automatically. Otherwise choose the game folder containi
 Maps, Textures, and System. The local production preview always uses this folder picker.
 Original data is kept outside source control and outside the website build.
 
-Development, production builds and unit tests compile the small authored
-Rust mesh kernel automatically. Play uses it for exact per-vertex animation
-math; scripts and simulation remain JavaScript. If Wasm cannot load, the
-existing JavaScript pose path remains available. See the
-[measurements and fidelity checks](docs/lodmesh-wasm.md).
+`npm run dev`, `npm run build` and `npm test` first compile the three Rust
+crates under `native/` to WebAssembly (`npm run build:wasm`): `script-vm` (the
+simulation core and render kernels), `lodmesh-kernel` (mesh posing) and
+`galaxy-kernel` (music). Rebuild after changing Rust code.
 
-Drag to look around, or double-click to lock the mouse. In **Play**, WASD/arrow
-keys move, Space jumps, Ctrl crouches, Shift walks, and F/right-click uses a door.
-In **Inspect**, WASD/arrow keys fly, Q/E move down/up, and Shift increases speed.
-Escape releases the mouse. **Player start** resets the player and doors in Play,
-or the inspection camera in Inspect. **Diagnostics** provides wireframe, actor markers,
-surface inspection, counts, and format notes. It also offers an original-lighting
-toggle, separate display brightness, and exact reference-camera coordinates.
-Brightness follows the original D3D display curve: 0.60 is the default; 0.40
-leaves framebuffer values unchanged for capture comparisons.
+In **Play**, the installed key bindings apply: WASD moves, Space jumps, X
+crouches, Shift walks, left click fires, right click uses, number keys select
+belt items and Escape opens the main menu. Double-click locks the mouse. In
+**Inspect**, WASD/arrow keys fly, Q/E move down/up, and Shift increases speed.
+**Player start** reloads the map's player start in Play, or resets the
+inspection camera in Inspect. **Diagnostics** provides wireframe, actor markers,
+surface inspection, counts, and format notes. It also offers an
+original-lighting toggle, separate display brightness, conversation subtitles
+and exact reference-camera coordinates. Brightness follows the original D3D
+display curve: 0.60 is the default; 0.40 leaves framebuffer values unchanged
+for capture comparisons. **Hide UI** gives the game view the whole window, and
+**Screen shape** selects the original 4:3 view.
 
 To run the production build locally:
 
@@ -234,15 +217,16 @@ npm run test:browser
 
 For a full validator sweep, use `npm run validate` (four parallel validator
 jobs by default), or explicitly `npm run validate -- --jobs 4`. Use focused
-validators while developing a Stage 3 slice; a full sweep is not required
-after every small change. The runner locates the local native-probe Python
-environment automatically and reports failures and skipped checks separately.
-It also bounds memory. Validators run in their own process groups. A validator
-starts only while the recorded peaks fit the budget (`--mem-budget`, default
-half of physical memory up to 8 GiB). One that passes the per-validator cap
-(`--mem-cap`, default 6 GiB) is killed and reported as failed. On macOS the
-runner measures memory footprint, including compressed and swapped pages, and
-it admits fewer jobs under system memory pressure.
+validators while developing a slice; a full sweep is not required after every
+small change. The runner locates the local native-probe Python environment
+automatically and reports failures and skipped checks separately. It also
+bounds memory. Validators run in their own process groups. A validator starts
+only while the recorded peaks fit the budget (`--mem-budget`, default half of
+physical memory up to 8 GiB). One that passes the per-validator cap
+(`--mem-cap`, default 6 GiB) is killed and reported as failed, as is one that
+exceeds its time limit. On macOS the runner measures memory footprint,
+including compressed and swapped pages, and it admits fewer jobs under system
+memory pressure.
 
 Build before browser testing. One mouse-lock check opens a focused Chromium window;
 that check requires a desktop session. Browser screenshots go into `reports/browser/`.
@@ -282,20 +266,23 @@ static doors. The footprint overlays every height and is not a game screenshot.
 
 The numbered stages and acceptance criteria are in [the roadmap](docs/roadmap.md).
 We are building an independent browser runtime through reverse engineering of the
-original data, UnrealScript bytecode, and native behavior. The current reader does
-not execute Windows binaries. Gameplay uses our own VM and native function
-implementations; SurrealEngine's capabilities do not define our support targets.
+original data, UnrealScript bytecode, and native behavior. The runtime does not
+execute Windows binaries; the original DLLs run only in the optional local
+comparison tools. Gameplay uses our own VM and native function implementations;
+SurrealEngine's capabilities do not define our support targets.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/unreal/` | Binary package, object, map, texture, and geometry decoding |
-| `src/viewer/` | Browser rendering, transforms, camera, controls, and diagnostics |
-| `src/runtime/` | Collision, player/door prototype and bounded original-bytecode VM |
-| `scripts/` | Inventory, validation, inspection, and geometry exports |
+| `src/runtime/` | Script runtime host, natives, collision, physics, Galaxy audio and the Wasm kernel wrappers |
+| `src/viewer/` | Browser rendering, the simulation worker and its page client, HUD, audio output and diagnostics |
+| `native/` | Rust crates compiled to WebAssembly: `script-vm`, `lodmesh-kernel`, `galaxy-kernel` |
+| `scripts/` | Inventory, validators, native oracles, censuses and profiling |
+| `tools/` | Native capture helpers for the original game |
 | `test/`, `browser-tests/` | Synthetic binary fixtures and browser regression checks |
-| `docs/` | Findings, rendering conventions, sources, and roadmap |
+| `docs/` | Findings, recovered contracts, evidence, and the roadmap |
 | `vite.config.mjs` | Code-only build and local development data adapter |
 | `game/`, `reports/`, `.cache/` | Local data, generated output, references; ignored |
 

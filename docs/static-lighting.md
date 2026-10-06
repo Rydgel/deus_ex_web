@@ -165,9 +165,9 @@ What changed in the browser:
   this remains a regional comparison.
 
 Diagnostics, still open:
-- Time-varying effects (Searchlight, SlowWave, FastWave, CloudCast, Shock,
-  Disco, Interference, Rotor) and Shell leave their lights out of the light
-  map, with a note naming the effect.
+- Time-varying effects and Shell need the Rust core (spatial.rs; see
+  "Spatially dynamic effects"); without it their lights stay out of the
+  light map, with a note naming the effect.
 - Class 1 lights are steady snapshots (LightType variation and the
   torch/fire/watery merge modulation are not active), with notes.
 - A class 2 light in a static list is skipped, with a note; none has been
@@ -262,8 +262,9 @@ animation off) and the merge for the three effects on 18 random rectangles
 - *Host choices, noted in the viewer.* The noise draws come from a host
   appFrand stream, and Flicker's entry is the light's export index
   (low byte) instead of its address.
-- *Not in Play yet.* The texture-palette LightTypes (8, 9) and the
-  spatially dynamic effects.
+- *Not in Play yet.* The texture-palette LightTypes (8, 9). The spatially
+  dynamic effects are in Play since 2026-10-06 ("Spatially dynamic
+  effects").
 
 ## Rust kernel
 
@@ -351,11 +352,261 @@ Park and 1.0 on Everett (`play-frame-cost.md`).
   (~0.1 ms when the noise steps) and ~0.1 ms of JavaScript (constants,
   memo, copy-back). Browser frames were not measured here.
 
+## Spatially dynamic effects
+
+Stage 4, 2026-10-06. These are the effect-table rows with
+IsSpatialDynamic: Searchlight, SlowWave, FastWave, CloudCast, Shock, Disco,
+Interference and Rotor. Their spatial bytes change with Level.TimeSeconds.
+Shell (`0x10b05740`) is time independent but was untranslated as well. Its
+user in the shipped content is a moving light: the EMP and nano-virus
+grenades spawn an ExplosionLight with `LE_Shell`.
+
+**Census** (every light of the 83 maps whose effect is one of these). All
+are class 1 lights in BSP light lists:
+
+| Effect | Lights |
+| --- | --- |
+| Searchlight | Helibase (2 TriggerLights, off until triggered), WanChai Garage (2), Area51 Page, Endgame 1, 2 and 3 |
+| Rotor | NYC ShipFan (1), Vandenberg Tunnels (3), Vandenberg Sub (4) |
+| Disco | WanChai Canal (2, LightType BackdropLight), WanChai Underworld (2), Paris Club (1) |
+| SlowWave | NYC Graveyard (1 TriggerLight), NYC ShipBelow (4, Pulse) |
+| FastWave | Endgame 2 (1 TriggerLight) |
+
+No map places CloudCast, Shock, Interference or Shell lights.
+
+### When they run
+
+- **Class.** AddLight (`0x10b08b30`) makes a `bStatic` or `bNoDelete` light
+  with one of these effects class 1. The only exception is
+  `UClient.NoDynamicLights`, under which every such light is class 0; Play
+  never sets it, and that case is noted, not modelled.
+- **Effect row.** ComputeFromActor copies the effect row to info `+0x60`
+  (function), `+0x64` (IsSpatialDynamic) and `+0x68` (IsMergeDynamic).
+- **Per-frame rebuild.** SetupForSurf's per-frame map (GCache suffix
+  `0x31`) is rebuilt at most once per `Viewport.CurrentTime`, and only for
+  a surface that is being drawn. On each rebuild, a class 1 light with
+  `+0x64` set takes its illumination from its shadow bits (cached, suffix
+  `0x15`) and runs its spatial function again into GMem.
+- **Merge.** The merge (`0x10b03040`) only modulates effects 1–3, so for
+  these effects it is a plain saturating add, from start index 0.
+- **Other class 1 lights.** They keep their spatial bytes cached (suffix
+  `0x16`) unless `bLightChanged` (actor `+0x28` bit 10) is set.
+- **Time source.** `[0x10b3df88]` is `Level->Actors(0)`, the LevelInfo,
+  set at `0x10b06e0b` and `0x10b08d45`. `+0x478` is TimeSeconds.
+- **Precision.** SetupForSurf runs inside DrawWorld, so every body and
+  ComputeFromActor run at 24-bit precision ([BSP occlusion](bsp-occlusion.md)).
+- **No mesh or fog use.** FLightManager::Light (`0x10b027f0`, mesh
+  vertices) and the fog loop never call info `+0x60`. These effects
+  therefore change neither mesh lighting nor volumetric lighting.
+
+### The bodies
+
+All bodies share the arguments (LightMap, info, illumination, out). They
+read info `+0x1c` rr2 and `+0x24` incidence, and the falloff table
+`0x10b34a6c` at `index = FISTP(d²·rr2) < 4096`. All share the grid walk of
+the spot body.
+
+- **Searchlight** (`0x10b03770`).
+  - `x = f32(Phase·π/32 + TimeSeconds·35/Period + 2π)`, with no time term
+    when Period is 0.
+  - `m = appFmod(4·atan2(dx, dy) + x, 8π)`. The 8π is pushed at
+    `0x10b0395c`.
+  - The byte is 0 unless `π ≤ m` and `f32(m) ≤ 3π`.
+  - Otherwise the lobe `(cos(ftol(m·65536·(−1/2π))) + 1)·0.5` is taken,
+    scaled by `q = (dx²+dy²)·6e-5` when `q < 1`.
+- **Rotor** (`0x10b03ae0`). The same lobe at `6·atan2(dx, dy) +
+  TimeSeconds·3.5`. When `q = (dx²+dy²)·1e-4 < 1`, it becomes
+  `s·q + (1 − q)`.
+- **SlowWave and FastWave** (`0x10b03de0`, `0x10b040b0`). The sine of
+  `ftol((d − TimeSeconds·35)·1024)`, with `d = ftol(tableSqrt(d²))`.
+  FastWave uses `d >> 2` and 2048. The result is `0.3·sin + 0.7`.
+- **Shock** (`0x10b043a0`). It uses `d = ftol(√·8)` and
+  `T = TimeSeconds·4000`, and multiplies three factors `0.1·x + 0.9`:
+  - the cosine at `(d + T)·−16`;
+  - the sine at `(2d − T)·16`;
+  - the sine at `((d>>1) − T)·16`.
+- **Disco** (`0x10b046f0`).
+  - Two lobes, at `f32(11·atan2(dx, dy)) + TimeSeconds·5` and at
+    `11·atan2(√(dx²+dy²), dz) + TimeSeconds·5`.
+  - They combine as `c1 + c2 − c1c2`, times `q = (dx²+dy²)·5e-5` when
+    `q < 1`.
+  - The byte is then `table·(1 − s)·illumination·incidence`.
+- **Interference** (`0x10b04c80`). The second Disco lobe alone.
+- **CloudCast** (`0x10b04380`). Forwards to the normal body; time
+  independent.
+- **Shell** (`0x10b05740`). `R = tableSqrt(d²)·(1/R)`, kept for
+  `0.8 < R < 1`. The byte is `(1 − 10·|R − 0.9|)·illumination`, with no
+  falloff table and no incidence.
+
+Math calls:
+- Core appAtan2 (`0x10123280`) is `fld Y; fld X; fpatan`. FPATAN's
+  extended result is multiplied by 4, 6 or 11 at 24 bits. Every call site
+  passes `(Y = dx, X = dy)` or `(Y = √(dx²+dy²), X = dz)`.
+- appFmod goes to msvcrt `_CIfmod`, whose fprem loop is exact for finite
+  operands.
+- `_ftol` truncates to 64 bits and keeps the low word.
+
+### Translation (`native/script-vm/src/spatial.rs`)
+
+**Arithmetic.** The bodies use f32 operations wherever both operands are
+floats; at 24-bit precision on binary32's normal range these are the same
+operations. `mul24` and `add24` round an operation with a double constant,
+a large int or an extended value exactly once to 24 bits. When the f64
+result lands exactly on a 24-bit midpoint, an error-free transform decides
+the rounding.
+
+**FPATAN** (`atan_k`):
+- *Model.* The correctly rounded atan2, multiplied by k and rounded to 24
+  bits.
+- *Fast path.* An f64 atan2 (table of atan(k/64) plus series) is used
+  unless the product lies within 2^-39 of a 24-bit midpoint.
+- *Slow path.* Inside that band, a double-double atan2 (about 2^-100)
+  decides. `AMBIGUOUS` counts double-double values within 2^-60 of a
+  midpoint, where FPATAN's own last bit could matter.
+
+**Per-frame cache.** Each body is split at its first time-dependent
+operation:
+- `prepare` keeps exactly the values the single loop holds (the falloff
+  index, FPATAN products, square roots, q, the illumination byte);
+- `finish` completes the byte;
+- `run` chains the two per texel, as the original loop does;
+- `run_frame` prepares a per-texel cache (eight words a texel, for
+  rectangles up to 65,536 texels) and then only finishes it.
+
+**Per-light constants.** `renderPassConstants` (static-lighting.mjs)
+computes ComputeFromActor's rr2 (`float(float(1/R)²·4093)`) and its
+incidence dot in binary32, as the render pass does. The rest of the static
+path still uses the 64-bit `movingLightConstants` / `normalLightIncidence`
+(see "Not yet moved").
+
+### Evidence
+
+**Oracle.** `scripts/native-dynamic-light-oracle.py` (`spatialDynamic`
+cases) runs the eight bodies and CloudCast unchanged under Unicorn:
+- control word `0x007f`;
+- LevelInfo at `[0x10b3df88]`, LightPeriod and LightPhase at actor
+  `+0x1e6`/`+0x1e7`;
+- Play's square-root and normal tables, and coords.mjs's sine table in
+  GMath;
+- appFmod as Python's exact `math.fmod`;
+- appAtan2 as `fld tbyte` of FPATAN measured on the x87 hardware.
+
+**Hardware probe.** `tools/x87-fpatan-probe.c` is built with
+i686-w64-mingw32-gcc and run under Wine on the AMD Ryzen host. It runs
+`fld Y; fld X; fpatan; fstp tbyte` at a given control word.
+
+**`scripts/validate-light-spatial.mjs`** (Linux host, about 15 seconds) uses
+Play's own inputs: facet, grid, rectangle, shadow illumination and
+24-bit constants.
+- *Cases.* Every census light on every surface listing it, at two of six
+  TimeSeconds from 0.01 s to 131,072 s. Then 192 fabricated cases: exact
+  hits (dx = dy = 0), zero illumination, singular (NaN) grids, period 0,
+  times up to 3.5·10⁶ s, and unshadowed (`0x7f`) lights.
+- *Spatial bytes.* 3,082 cases (2,890 from the maps), 377,732 texels,
+  107,532 lit: 0 mismatches. Every case asks for the same appAtan2 operand
+  sequence as the original (262,207 calls, 95,386 distinct pairs).
+- *Contrast.* With the original at `0x037f` instead (`--cw 0x037f`), 45 of
+  216 Paris Club and fabricated cases differ: the precision matters.
+- *FPATAN.* All 95,386 pairs were measured at `0x007f` and `0x037f`, with
+  identical results (FPATAN ignores precision control). For k = 4, 6 and 11,
+  all 286,158 products of the measured results equal spatial.rs. 1,726
+  measured results (1.8 %) are not the correctly rounded extended value,
+  yet no 24-bit product changes. The double-double path decided 15 pairs,
+  and none was ambiguous.
+- *Fast path.* On 1,000,000 random float pairs, the fast path and the
+  double-double path agree (36 fallbacks).
+- *Constants.* rr2 at 24 bits matches ComputeFromActor (`0x10b05fd9`) for
+  all 256 radii; the 64-bit model differs in 121. Incidence
+  (`0x10b06325`) matches on all 1,311 census light/surface pairs; the
+  64-bit model differs in 164. On these lights, the 64-bit constants would
+  change no spatial byte.
+- *Cached form.* At three times per case, `run_frame` equals `run`.
+- *Moving Shell.* An ExplosionLight-style Shell light through
+  moving-lights.mjs on Training reaches 263 light maps. Every one equals the
+  static copy plus the original Shell bytes' colour entries (9,522 lit
+  texels).
+
+**Merge plumbing.** `validate-light-animation-rust` now includes Paris
+Club, NYC ShipFan, WanChai Garage, NYC ShipBelow and Endgame 2, plus
+synthetic spatially dynamic lights. On every frame, the kernel's in-merge
+recompute (time token, cache) equals the reference merge, which calls
+`run` (12 maps, 2,229,768 merges).
+
+### In Play
+
+- *Static map.* `staticLightMap` puts each class 1 light with one of these
+  effects into `animated`, with its spatial.rs inputs (rectangle-relative
+  illumination, grid, location, constants, Period, Phase). Shell lights in
+  a static list run spatial.rs.
+- *Per frame.* The memo token of these lights is `T<TimeSeconds>`.
+  `light_merge` reruns `run_frame` whenever the time differs from that of
+  the bytes it holds.
+- *Reference.* `animateLightMap` calls `run` through the kernel. The
+  `?lightKernel=js` / `LIGHT_KERNEL=js` reference merge still uses the
+  Rust bodies, because no JavaScript copy exists.
+- *Drawn surfaces only.* With OccludeBsp's frame (no mirror or sky child
+  frame), animated level light maps merge only for the surfaces it draws,
+  as the original rebuilds only drawn surfaces. Otherwise the frustum test
+  applies. Brush light maps always merge. A map that waits is correct when
+  it is next drawn, since its bytes depend only on the frame's inputs.
+- *Moving lights.* moving-lights.mjs runs Shell for moving (class 2) lights
+  with illumination `0x7f` and the 24-bit rr2. Moving lights with the
+  time-varying effects stay unlit with a note; no script spawns one.
+
+`scripts/validate-light-spatial-play.mjs` runs Play headless (`?sim=inline`)
+beside Paris Club's Disco light. All 95 Disco light maps are admitted. 12
+merge per frame and 9 change, on every one of 240 frames, and the light
+atlas changes. No "not translated" note appears. With `--map
+06_HongKong_WanChai_Garage --light 3849.45,-988.31,-61.93`, 69 Searchlight
+light maps behave the same way.
+
+**Cost** (Linux host, Ryzen 9 8945HS; the 120 fps target is defined on the
+M2 Pro). Light animation in Play, headless, median per frame: Paris Club
+0.8 ms (12 drawn Disco maps), Garage 0.9 ms. The whole-map merge with
+every animated map merged (`validate-light-animation-rust --bench 300`,
+Node) costs:
+
+| Map | Without the cache | With the cache |
+| --- | ---: | ---: |
+| Helibase | 3.6 ms | 1.8 ms |
+| Paris Club | 2.5 ms | 1.8 ms |
+| Garage | 1.6 ms | 0.9 ms |
+| Vandenberg Sub | — | 1.0 ms |
+| NYC ShipFan | 0.75 ms | 0.46 ms |
+
+Disco's per-frame part costs about 50 ns a texel (two cosine lobes and a
+dozen 24-bit roundings).
+
+### Remaining gaps
+
+- The light-manager tables (square root `0x10b3e1b8`, normal falloff) are
+  built at init, outside PreRender. Play uses the 64-bit builds. Under
+  `0x007f`, 248 of the 2,048 square-root entries differ. The game thread's
+  control word is still unmeasured.
+- An FPATAN whose double-double value sits within 2^-60 of a 24-bit
+  midpoint depends on FPATAN's last bit. None was seen.
+- Values outside binary32's normal range, as for the BSP occlusion port:
+  for example, squares of displacements below 10⁻¹⁹.
+- `UClient.NoDynamicLights` (class 0 spatially dynamic lights).
+- Moving lights with time-varying effects.
+
 ## Not yet moved
 
-Still to do: the time-varying spatial functions (Searchlight, SlowWave,
-FastWave, CloudCast, Shock, Disco, Interference, Rotor), the texture
-palette LightTypes and volumetric (fog map) lighting.
+Still to do: the texture palette LightTypes and volumetric (fog map)
+lighting.
+
+**24-bit precision for the rest of the static path.** SetupForSurf and
+ComputeFromActor run at 24 bits, but the static bodies and constants here
+were validated at `0x037f`. Rerunning `validate-static-lighting`'s chain on
+every 4th Training surface at `0x007f` (oracle tables built at `0x007f`)
+gives:
+- rectangles and colours: still exact;
+- incidence: differs in 875 of 3,952 light steps;
+- normal/spot/NonIncidence bytes: differ in 13 of 1,945,707 texels (8
+  steps);
+- rr2: differs for 121 of 256 radii.
+
+Only the spatially dynamic lights take the 24-bit constants so far.
 
 Two facts recovered from SetupForSurf's listing matter for that wiring:
 - A level surface's static list goes through AddLight with each light's

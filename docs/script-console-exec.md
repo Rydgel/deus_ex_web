@@ -42,6 +42,8 @@ The `ImportText` bodies the bound commands reach:
 | Property | Body | Empty text | Text |
 | --- | --- | --- | --- |
 | `UIntProperty` | `0x10165f00` | value left 0, returns the buffer | `appAtoi` only when the text starts with `-` or a digit; skips every `-`/digit; never NULL |
+| `UFloatProperty` | `0x10166940` | value 0 | `appAtof`, then skips to `,` `)` CR LF; never NULL (so a bare `AltFire` imports 0) |
+| `UBoolProperty` | `0x10166380` | `ReadToken` yields an empty token, which matches no spelling: NULL | `ReadToken(0x400)`, then `appStricmp` against `1`, `True`, `True` (`0x101b1344`, `0x101b1348`, `0x101a7d4c`) to set the bit, `0`, `False`, `False` (`0x101b1354`, `0x101b1358`, `0x101a7dcc`) to clear it; anything else NULL. It never reads its port flags, so the console's flags 1 take the same fixed spellings as config I/O ([config text](script-config.md)), as `ShowHud False` uses |
 | `UObjectProperty` | `0x10166e20` | `ReadToken` (`0x10164cb0`) yields an empty token, not `None`; `StaticFindObject` finds nothing, so it stores None and returns NULL | not linked (explicit boundary) |
 
 So `PutInHand` runs `PutInHand(None)`, and `DropItem` runs `DropItem(None,

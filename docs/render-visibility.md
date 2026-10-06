@@ -139,7 +139,12 @@ perspective FOVs, and the established x87 control word `0x037f`.
 Orthographic projection, non-null span buffers, RenderIterator, mirror frame
 production and BSP/span visibility are not implemented by this helper.
 
-## BSP and visible actor order: unresolved integration
+## BSP and visible actor order
+
+Update: the dynamics, Setup (at the render pass's 24-bit precision) and
+OccludeBsp are now ported and drive Play's main frame
+([BSP occlusion](bsp-occlusion.md) "Setup" and "Play"); the notes below are
+the original recovery that led there.
 
 `FDynamicSprite` construction at `0x10b233c0` does not make an actor
 visible. Successful setup inserts a sprite plus a raster rectangle chunk

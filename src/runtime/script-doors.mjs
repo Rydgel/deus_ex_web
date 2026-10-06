@@ -27,7 +27,7 @@ import { bumpBaseEpoch, noteBaseChange } from './base-epoch.mjs';
 import { setActorZone } from './zone.mjs';
 import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
-import { prepareShadowStartup } from './script-decal.mjs';
+import { prepareShadowStartup, resetLevelDecals } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
 import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
 import { createLiveAudio } from './script-audio-live.mjs';
@@ -1673,8 +1673,8 @@ export async function createScriptDoors({
       : [...initialActorArray, ...level.actors.filter(actor => actor && !initialActorSet.has(actor))];
     level.zoneLastRenderTimes?.fill(0);
     // The reloaded UModel starts with no surface decals; the purged Shadows
-    // run no DetachDecal (script-decal.mjs attachDecalSurfaces).
-    if (reload) level.decalRecords = null;
+    // run no DetachDecal (script-decal.mjs levelDecals).
+    if (reload) resetLevelDecals(level);
     // Restore the serialized map state before any startup callback can observe
     // another actor — the same reload state the original reaches by loading
     // the level. The passes below then run LoadMap's shared schedule.

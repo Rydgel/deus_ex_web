@@ -346,7 +346,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   // The appFrand draws of the light noise come from a host stream: the
   // original's position in the process-wide CRT stream is not reproduced.
   const lightFrame = createLightFrame(createNativeRng(0x11647).frand), lightAnimation = { changed: 0 };
-  if (lighting.animatedRecords().length) notes.add(`${lighting.animatedRecords().length} light maps carry animated lights (pulse, flicker, strobe, torch/fire/watery waver), merged each frame; their noise draws come from a host stream.`);
+  if (lighting.animatedRecords().length) notes.add(`${lighting.animatedRecords().length} light maps carry animated lights (pulse, flicker, strobe, torch/fire/watery waver, the time-varying spatial effects), merged each frame; their noise draws come from a host stream.`);
   function updateLighting(changes) {
     const update = lighting.invalidate(changes);
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
@@ -414,15 +414,21 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * original updates only the textures of surfaces in its draw list; BSP
      * occlusion is not recovered, so every animated texture of the world
      * advances each frame here. */
-    updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null, frustum = null, phase = null } = {}) {
+    updateTextureAnimation(time = clock(), { timeSeconds = 0, zoneSpeeds = null, viewpoint = null, frustum = null, drawn = null,
+      phase = null } = {}) {
       // Light animation: the light manager's noise with Level.TimeSeconds,
       // then the animated class 1 light maps (docs/static-lighting.md). The
-      // original merges only drawn surfaces; with a `frustum` the level's
-      // light maps outside it wait (their merge does not depend on what is
-      // drawn), brush light maps always update.
+      // original rebuilds the per-frame map of drawn surfaces only; with
+      // `drawn` (the level surfaces OccludeBsp's frame draws) the other
+      // level light maps wait, else with a `frustum` those outside it (their
+      // merge, spatially dynamic bytes included, depends only on the frame's
+      // inputs, not on what is drawn); brush light maps always update.
       if (lighting.animatedRecords().length) {
-        const visible = frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
-          new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : undefined;
+        const inView = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
+          : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
+            new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : () => true;
+        let merged = 0;
+        const visible = record => inView(record) && ++merged > 0;
         const start = performance.now(), changed = lighting.animate(lightFrame.advance(timeSeconds), visible);
         lightAnimation.mergeMs = performance.now() - start;
         // A light map composed with moving lights changes as a whole (no
@@ -432,6 +438,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         for (const { lightmap, region } of changed)
           lightAtlas.update(lightmap, region ? { partial: true, region, bytes: lightmap.texels } : { partial: true });
         lightAnimation.changed = changed.length; lightAnimation.ms = performance.now() - start;
+        lightAnimation.merged = merged;
+        lightAnimation.changedSpatial = changed.filter(({ lightmap }) => lightmap.animated.some(light => light.spatialDynamic)).length;
       }
       phase?.('lightAnimation');
       // Fire textures, BSP and mesh skins alike, once per frame.
@@ -478,6 +486,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     /** The light atlas pages' bytes (validators compare them). */
     lightAtlasPages: () => lightAtlas.pages.map(page => page.pixels),
     lightAnimation: () => ({ records: lighting.animatedRecords().length, changed: lightAnimation.changed,
+      merged: lightAnimation.merged, changedSpatial: lightAnimation.changedSpatial,
+      spatialRecords: lighting.animatedRecords().filter(record => record.animated.some(light => light.spatialDynamic)).length,
       ms: lightAnimation.ms, mergeMs: lightAnimation.mergeMs,
       time: lightFrame.timeSeconds, step: lightFrame.noise.last }),
     lighting: { ...lighting.stats, atlasPages: lightAtlas.pages.length }, lightingEnabled, displayGamma,

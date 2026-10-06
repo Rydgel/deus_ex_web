@@ -13,8 +13,12 @@
 //! width, the union rectangle (minU, maxU, minV, maxV), the light count, the
 //! static bytes and texels addresses, then per light its rectangle, spatial
 //! bytes, colour tables (red, green, blue: 3·256 bytes) and modulation table
-//! (64 K bytes, or 0 for an unmodulated light). No statics: the interpreter
-//! instance shares this module's reserved region (build.rs).
+//! (64 K bytes, or 0 for an unmodulated light) and the address of its
+//! spatial.rs parameter record (0 unless its effect is spatially dynamic:
+//! those bytes are recomputed for each new Level.TimeSeconds before the
+//! merge, as SetupForSurf reruns the spatial function on every per-frame
+//! rebuild). No statics: the interpreter instance shares this module's
+//! reserved region (build.rs).
 
 const H_WIDTH: usize = 0;
 const H_MIN_U: usize = 1;
@@ -33,7 +37,8 @@ const L_MAX_V: usize = 3;
 const L_SPATIAL: usize = 4;
 const L_TABLES: usize = 5;
 const L_MODULATION: usize = 6;
-const LIGHT_WORDS: usize = 7;
+const L_PARAMS: usize = 7;
+const LIGHT_WORDS: usize = 8;
 
 unsafe fn bytes<'a>(at: u32, len: usize) -> &'a mut [u8] {
     core::slice::from_raw_parts_mut(at as usize as *mut u8, len)
@@ -78,12 +83,14 @@ fn merge_light(texels: &mut [u8], width: usize, l: &[u32], spatial: &[u8], table
     }
 }
 
-/// animateLightMap after its memo test: the union rectangle's texels are
-/// saved to `before` and reset from the static bytes, every light is merged
-/// in order, and the union is compared with the saved bytes. Returns 1 when a
+/// animateLightMap after its memo test: each spatially dynamic light's
+/// bytes are recomputed when `time` (Level.TimeSeconds float bits) differs
+/// from the time they hold, the union rectangle's texels are saved to
+/// `before` and reset from the static bytes, every light is merged in
+/// order, and the union is compared with the saved bytes. Returns 1 when a
 /// byte changed (the reference returns the union), 0 otherwise.
 #[no_mangle]
-pub extern "C" fn light_merge(header: u32, before: u32) -> u32 {
+pub extern "C" fn light_merge(header: u32, before: u32, time: u32) -> u32 {
     unsafe {
         let h = core::slice::from_raw_parts(header as usize as *const u32, HEADER);
         let width = h[H_WIDTH] as usize;
@@ -101,6 +108,17 @@ pub extern "C" fn light_merge(header: u32, before: u32) -> u32 {
             texels[row..row + row_bytes].copy_from_slice(&base[row..row + row_bytes]);
         }
         let lights = core::slice::from_raw_parts((header as usize + HEADER * 4) as *const u32, count * LIGHT_WORDS);
+        for l in lights.chunks_exact(LIGHT_WORDS) {
+            if l[L_PARAMS] != 0 {
+                let params = &mut *(l[L_PARAMS] as usize as *mut [u32; crate::spatial::PARAM_WORDS]);
+                if params[crate::spatial::P_DONE] == 0 || params[crate::spatial::P_DONE_TIME] != time {
+                    params[crate::spatial::P_TIME] = time;
+                    crate::spatial::run_frame(params);
+                    params[crate::spatial::P_DONE_TIME] = time;
+                    params[crate::spatial::P_DONE] = 1;
+                }
+            }
+        }
         for l in lights.chunks_exact(LIGHT_WORDS) {
             let area = (l[L_MAX_U] - l[L_MIN_U]) as usize * (l[L_MAX_V] - l[L_MIN_V]) as usize;
             let spatial = bytes(l[L_SPATIAL], area);

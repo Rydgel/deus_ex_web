@@ -82,6 +82,49 @@ async function load() {
 const numeric = v => v === undefined || typeof v === 'number';
 const finite3 = v => !!v && v.length === 3 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]);
 
+/** trace.rs's model layout for `model` (header, 64-byte nodes, leaf-hull
+ * words): its byte size and a writer into a Wasm memory at a base, or null
+ * when the model is not eligible (the JavaScript answers its traces). The
+ * trace kernel instance and the script-VM kernel instance (decal-kernel.mjs)
+ * both write it. */
+export function traceModelLayout(model) {
+  const nodes = model?.nodes;
+  if (!Array.isArray(nodes) || !nodes.length || model.rootOutside === undefined) return null;
+  const count = nodes.length;
+  for (let i = 0; i < count; i++) {
+    const node = nodes[i];
+    if (typeof node !== 'object' || node === null) return null;
+    const p = node.plane;
+    if (p == null || typeof p[0] !== 'number' || typeof p[1] !== 'number' || typeof p[2] !== 'number' ||
+      typeof p[3] !== 'number' || !numeric(node.flags) || !numeric(node.vertexCount)) return null;
+  }
+  // Hull words that are not all int32 are not uploaded: every hull then
+  // reads as out of range, and extent traces reaching one fall back.
+  const words = model.leafHulls;
+  let wordCount = Array.isArray(words) ? words.length : 0;
+  for (let i = 0; i < wordCount; i++) if (words[i] !== (words[i] | 0)) { wordCount = 0; break; }
+  const size = HEADER + count * NODE + wordCount * 4;
+  return {size, write(buffer, base) {
+    const wordsAt = base + HEADER + count * NODE;
+    const header = new Uint32Array(buffer, base, HEADER / 4);
+    header[0] = count; header[1] = model.rootOutside ? 1 : 0; header[2] = wordsAt; header[3] = wordCount;
+    const planes = new Float64Array(buffer, base + HEADER, count * NODE / 8);
+    const ints = new Int32Array(buffer, base + HEADER, count * NODE / 4);
+    const link = v => v === -1 ? -1 : Number.isInteger(v) && v >= 0 && v < count ? v : INVALID;
+    for (let i = 0; i < count; i++) {
+      const node = nodes[i], p = node.plane, at = i * (NODE / 8), w = i * (NODE / 4) + 8;
+      planes[at] = p[0]; planes[at + 1] = p[1]; planes[at + 2] = p[2]; planes[at + 3] = p[3];
+      const bound = node.collisionBound;
+      ints[w] = link(node.front);
+      ints[w + 1] = link(node.back);
+      ints[w + 2] = node.flags | 0;
+      ints[w + 3] = bound === -1 ? -1 : Number.isInteger(bound) && bound >= 0 && bound < wordCount ? bound : INVALID;
+      ints[w + 4] = node.vertexCount > 0 ? 1 : 0;
+    }
+    if (wordCount) new Int32Array(buffer, wordsAt, wordCount).set(words);
+  }};
+}
+
 class TraceKernel {
   constructor(exports, arena) {
     this.x = exports;
@@ -115,42 +158,12 @@ class TraceKernel {
     return base;
   }
   upload(model) {
-    const nodes = model.nodes;
-    if (!Array.isArray(nodes) || !nodes.length || model.rootOutside === undefined) return this.ineligible();
-    const count = nodes.length;
-    for (let i = 0; i < count; i++) {
-      const node = nodes[i];
-      if (typeof node !== 'object' || node === null) return this.ineligible();
-      const p = node.plane;
-      if (p == null || typeof p[0] !== 'number' || typeof p[1] !== 'number' || typeof p[2] !== 'number' ||
-        typeof p[3] !== 'number' || !numeric(node.flags) || !numeric(node.vertexCount)) return this.ineligible();
-    }
-    // Hull words that are not all int32 are not uploaded: every hull then
-    // reads as out of range, and extent traces reaching one fall back.
-    const words = model.leafHulls;
-    let wordCount = Array.isArray(words) ? words.length : 0;
-    for (let i = 0; i < wordCount; i++) if (words[i] !== (words[i] | 0)) { wordCount = 0; break; }
-    const size = HEADER + count * NODE + wordCount * 4;
-    const base = this.arena.alloc(size);
+    const layout = traceModelLayout(model);
+    if (!layout) return this.ineligible();
+    const base = this.arena.alloc(layout.size);
     this.views();
-    const buffer = this.arena.memory.buffer, wordsAt = base + HEADER + count * NODE;
-    const header = new Uint32Array(buffer, base, HEADER / 4);
-    header[0] = count; header[1] = model.rootOutside ? 1 : 0; header[2] = wordsAt; header[3] = wordCount;
-    const planes = new Float64Array(buffer, base + HEADER, count * NODE / 8);
-    const ints = new Int32Array(buffer, base + HEADER, count * NODE / 4);
-    const link = v => v === -1 ? -1 : Number.isInteger(v) && v >= 0 && v < count ? v : INVALID;
-    for (let i = 0; i < count; i++) {
-      const node = nodes[i], p = node.plane, at = i * (NODE / 8), w = i * (NODE / 4) + 8;
-      planes[at] = p[0]; planes[at + 1] = p[1]; planes[at + 2] = p[2]; planes[at + 3] = p[3];
-      const bound = node.collisionBound;
-      ints[w] = link(node.front);
-      ints[w + 1] = link(node.back);
-      ints[w + 2] = node.flags | 0;
-      ints[w + 3] = bound === -1 ? -1 : Number.isInteger(bound) && bound >= 0 && bound < wordCount ? bound : INVALID;
-      ints[w + 4] = node.vertexCount > 0 ? 1 : 0;
-    }
-    if (wordCount) new Int32Array(buffer, wordsAt, wordCount).set(words);
-    this.registry.register(model, {base, size});
+    layout.write(this.arena.memory.buffer, base);
+    this.registry.register(model, {base, size: layout.size});
     this.stats.models++;
     return base;
   }

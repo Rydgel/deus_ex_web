@@ -2,9 +2,11 @@ import { lightAttenuation } from '../unreal/lighting.mjs';
 import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLightRect, nonIncidenceSpatial,
   normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
 
-const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0];
+const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0], f = Math.fround;
 // Remaining normal/spot effect snapshots. Steady effect 0 uses the recovered
-// integer normal body; effect 13 uses the recovered NonIncidence body.
+// integer normal body; effect 13 uses the recovered NonIncidence body and
+// effect 14 (Shell: the EMP and nano-virus grenades' ExplosionLight) the
+// original body in the Rust core (spatial.rs).
 const FLOAT_EFFECTS = new Set([0, 1, 2, 3, 8, 11, 12, 19]);
 const add = (a, b) => a.map((v, i) => v + b[i]);
 const union = rects => rects.length ? {
@@ -33,6 +35,17 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
  * lights recomputes every light map, as the full mode does. */
 export function createMovingLights(lighting, model, { mode = movingLightsMode() } = {}) {
   const hsv = new Map(), notes = new Set(), incremental = mode !== 'full';
+  // spatial.rs, through the lighting's kernel (null without the core).
+  const spatial = lighting.spatial?.ready ? lighting.spatial : null;
+  /** Shell 0x10b05740 for an unshadowed light (illumination 0x7f), with
+   * the render pass's 24-bit rr2 (Shell reads no incidence). */
+  const shellSpatial = (rect, grid, location, constants, write) => {
+    const bytes = spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius,
+      rr2: f(f(constants.rradius * constants.rradius) * 4093), incidence: 0, period: 0, phase: 0, time: 0, illumination: null });
+    for (let v = rect.minV, k = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k++) write(u, v, bytes[k]);
+  };
+  const bodyOf = ({ effect, originalNormal }) => effect === 14 ? shellSpatial : originalNormal ? normalLightSpatial
+    : effect === 13 ? nonIncidenceSpatial : null;
   let signature = null, active = new Set();
 
   function geometry(record, offset) {
@@ -60,10 +73,10 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
   function apply(record, contributions) {
     const { pixels, width } = record, offset = record.movingOffset ?? ORIGIN;
     let written = 0;
-    for (const { item: { effect, originalNormal, constants, location, values }, rect, grid, incidence } of contributions) {
-      if (effect === 13 || originalNormal) {
+    for (const { item, rect, grid, incidence } of contributions) {
+      const { originalNormal, constants, location, values } = item, spatialFunction = bodyOf(item);
+      if (spatialFunction) {
         const [red, green, blue] = constants.steps;
-        const spatialFunction = originalNormal ? normalLightSpatial : nonIncidenceSpatial;
         spatialFunction(rect, grid, location, originalNormal ? { ...constants, incidence } : constants, (u, v, spatial) => {
           if (!spatial) return;
           const at = (v * width + u) * 3; written++;
@@ -86,11 +99,11 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
 
   /** `apply`'s per-texel addends for one contribution, in its visiting
    * order: the sample offsets and the three channel values it adds. */
-  function addends(record, { item: { effect, originalNormal, constants, location, values }, rect, grid, incidence }) {
+  function addends(record, { item, rect, grid, incidence }) {
+    const { originalNormal, constants, location, values } = item, spatialFunction = bodyOf(item);
     const { width } = record, offset = record.movingOffset ?? ORIGIN, at = [], amounts = [];
-    if (effect === 13 || originalNormal) {
+    if (spatialFunction) {
       const [red, green, blue] = constants.steps;
-      const spatialFunction = originalNormal ? normalLightSpatial : nonIncidenceSpatial;
       spatialFunction(rect, grid, location, originalNormal ? { ...constants, incidence } : constants, (u, v, spatial) => {
         if (!spatial) return;
         at.push((v * width + u) * 3);
@@ -133,11 +146,11 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     if (lightClass !== 2) return null;
     const effect = values.LightEffect ?? 0;
     const originalNormal = effect === 0 && values.LightType === 1;
-    if (effect !== 13 && !FLOAT_EFFECTS.has(effect)) {
+    if (effect !== 13 && !(effect === 14 && spatial) && !FLOAT_EFFECTS.has(effect)) {
       notes.add(`Moving lights with effect ${effect} are not implemented and stay unlit.`);
       return null;
     }
-    if (effect !== 13 && !originalNormal)
+    if (effect !== 13 && effect !== 14 && !originalNormal)
       notes.add('Moving spot lights and unrecovered normal-light effect/type variants still use the float static-light reconstruction.');
     if ([1, 2, 3].includes(effect)) notes.add('Moving torch, fire and watery lights omit their per-texel random modulation.');
     if (values.LightType !== 1) notes.add(`Moving light type ${values.LightType} uses a steady snapshot; its time variation is not active.`);
