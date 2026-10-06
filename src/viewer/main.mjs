@@ -11,6 +11,7 @@ import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEule
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
 import { decalProbe, placeProbe } from './decal-probe.mjs';
+import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
@@ -1061,6 +1062,12 @@ musicDrive(args) {
 decalProbe(args) {
   if (simClient) return simClient.call('decalProbe', args);
   return game ? decalProbe(game, args) : null;
+},
+/** Validation only: view-probe.mjs (the original captures' camera commands)
+ * on the simulation side. */
+viewProbe(args) {
+  if (simClient) return simClient.call('viewProbe', args);
+  return game ? viewProbe(game, args) : null;
 },
 /** Validation only: decal-probe.mjs placeProbe (player location and view
  * rotation) on the simulation side. */

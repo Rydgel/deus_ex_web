@@ -164,6 +164,7 @@ async function handle(data) {
         else if (data.method === 'stateDigest') value = stateDigest(game.doors.scriptRuntime.runtime,
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
+        else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
         else throw new Error(`Unknown simulation call ${data.method}`);
       }
