@@ -141,6 +141,28 @@ INT bFluid, INT bBrake, INT bBuoyant)`, `retl $0x24`.
   the zone's ZoneFluidFriction. The Engine.u ZoneInfo default for
   ZoneFluidFriction is 1.2f.
 
+## AutonomousPhysics (native 3971, `0x103c8f30`)
+
+PlayerPawn's `CheatFlying` state (the `ghost` cheat) moves through its
+ProcessMove: `Acceleration = Normal(NewAccel)`, `Velocity =
+Normal(NewAccel) * 300`, then `AutonomousPhysics(DeltaTime)`.
+AActor::execAutonomousPhysics (thunk `0x10302d97`) reads the float, then
+rounds each Acceleration component (`+0x150..+0x158`): `fld A`, `fmul`
+10.0f (`0x1042bca8`), msvcrt `_ftol` (`0x10413652`, truncation; the low
+DWORD of the 64-bit result), `fild`, `fmul` the double 0.1 (`0x1042bcb0`),
+`fstp` to the float. With a nonzero Physics (`+0x30`) it calls
+performPhysics (vtable `+0x8c`, APawn::performPhysics for a pawn). This
+physics step comes before the one Actor.Tick runs after the script, so a
+ghost moves twice per tick, as in the original.
+
+`src/runtime/script-doors.mjs` runs it with the 80-bit model
+(`x87load`/`x87mul`/`x87int32`/`x87ftol`/`x87store`) and
+`processActorPhysics`. The product by 10 is exact; the product by 0.1 is
+rounded at the game thread's precision, taken as 64 bits (the control word
+PostRender leaves, [render-pass precision](render-pass-precision.md)); it
+has no oracle case of its own. The visual-acceptance captures reach it
+([visual acceptance](visual-acceptance.md)).
+
 ## Validation
 
 - `scripts/validate-native-flying.mjs` runs `scripts/native-flying-oracle.py`.

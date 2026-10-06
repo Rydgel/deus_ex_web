@@ -71,7 +71,9 @@ async function play() {
         await page.waitForFunction(m => { const s = window.deusExViewer?.status(); return s?.ready && s.map === m; }, map, {timeout: 300000});
       }
       await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
-#app { height: 100vh !important; }`});
+#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: ${WIDTH}px; height: ${HEIGHT}px; }
+#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: ${WIDTH}px !important; height: ${HEIGHT}px !important; }`});
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
       const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
       await frames(30);
@@ -81,6 +83,9 @@ async function play() {
       const ghost = await page.evaluate(() => window.deusExViewer.viewProbe({ghost: true}));
       const dir = path.join(out, map); mkdirSync(dir, {recursive: true});
       const box = await page.locator('#scene').boundingBox();
+      const buffer = await page.evaluate(() => { const c = document.getElementById('scene'); return [c.width, c.height]; });
+      if (buffer[0] !== WIDTH || buffer[1] !== HEIGHT || box.x !== 0 || box.y !== 0 || box.width !== WIDTH || box.height !== HEIGHT)
+        throw new Error(`the scene canvas is ${box.width}x${box.height} at ${box.x},${box.y} (buffer ${buffer.join('x')}), not ${WIDTH}x${HEIGHT}`);
       const shots = [];
       for (const view of entry.views) {
         await page.evaluate(v => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation}), view);
@@ -91,7 +96,7 @@ async function play() {
         });
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
-          clip: {x: box.x, y: box.y, width: Math.round(box.width), height: Math.round(box.height)}});
+          clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
         shots.push({view: view.name, camera: state, player: {location: probe.location, state: probe.state, physics: probe.physics}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, size: [box.width, box.height], ghost, shots, errors}, null, 1));

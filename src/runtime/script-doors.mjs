@@ -3,7 +3,7 @@ import { hostDate } from './host-clock.mjs';
 import { preparePlayerDumpStore } from './script-player-dump.mjs';
 import { prepareLoadMapGame } from './script-loadmap-game.mjs';
 import { ScriptRuntime } from './script-runtime.mjs';
-import { initScriptRunaway, refValue } from './script-vm.mjs';
+import { initScriptRunaway, refValue, x87load, x87double, x87int32, x87mul, x87ftol, x87store } from './script-vm.mjs';
 import { physMovingBrush } from './mover-interpolation.mjs';
 import { moverFinishBounds } from './mover-finish.mjs';
 import { prepareMapProperties } from './script-map-properties.mjs';
@@ -828,6 +828,21 @@ export async function createScriptDoors({
       for (let cls = viewport ? runtime.instance(viewport).cls : null; cls; cls = cls.base)
         if (cls.record.key === 'engine.viewport') viewportClass = true;
       if (viewportClass && viewport.input) viewport.input.resetConfig();
+      return undefined;
+    }
+    if (call.index === 3971) {
+      // AActor::execAutonomousPhysics 0x103c8f30 (PlayerPawn.CheatFlying's
+      // ProcessMove): P_GET_FLOAT DeltaSeconds; each Acceleration component
+      // (+0x150..+0x158) becomes FILD(_ftol(A * 10.0f)) * 0.1 (double
+      // 0x1042bcb0) stored to a float, at the game thread's 64-bit precision;
+      // a nonzero Physics (+0x30) then runs performPhysics (vtable +0x8c),
+      // ahead of the one Actor.Tick runs after the script.
+      if (call.argumentCount !== 1) throw new Error('AutonomousPhysics takes one float argument');
+      const delta = Math.fround(refValue(call.evaluateArgument(0)));
+      const acceleration = runtime.readNamed(call.receiver, 'Acceleration').map(a =>
+        x87store(x87mul(x87int32(x87ftol(x87mul(x87load(a), x87load(10)))), x87double(0.1))));
+      runtime.writeNamed(call.receiver, 'Acceleration', acceleration);
+      if (runtime.readNamed(call.receiver, 'Physics') !== 0) runtime.processActorPhysics(call.receiver, delta);
       return undefined;
     }
     if (call.index === 256) throw new Error(`Unsupported Sleep in selected door script: ${path}`);
