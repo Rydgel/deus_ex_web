@@ -112,7 +112,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | Routine | Placement | Doc | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Light-manager tables (sqrt `0x10b0225b`, normal `0x10b022fe`, shadow `0x10b02112`/`0x10b02352`, x^-0.5 `0x10b022d0`/`0x10b024b0`, fog attenuation `0x10b020cf`) | init (URender::Init `0x10b1358d`) | [dynamic lighting](dynamic-lighting.md), [static lighting](static-lighting.md) | dyn, mesh-light, fog oracles; now always `init_control_word` 0x037f | dynamic-, static-, mesh-lighting | `dynamic-lighting.mjs` `squareRootTable`/`normalLightTable`, `static-lighting.mjs` `shadowTable`/`rsqrtTables`; copies in fog.rs, meshlight.rs, lodmesh kernel, GLSL `TABLES` | f64/x87 model, exact | keep 0x037f (0x027f identical) |
-| Engine FGetHSV `0x103ec8d0` (called at `0x10b05ee8` GlobalLighting, `0x10b07fcc` SetupForSurf ambient, `0x10b08dee` SetupForActor) | pass | dynamic lighting | dyn `fgethsv`, **0x007f** | validate-dynamic-lighting | `dynamic-lighting.mjs` `fgetHsv` **PC 24** (mesh lighting: `fgetHsvExtended`, 64-bit) | was: 1,789 of 2,049; **now 0** |
+| Engine FGetHSV `0x103ec8d0` (called at `0x10b05ee8` GlobalLighting, `0x10b07fcc` SetupForSurf ambient, `0x10b08dee` SetupForActor) | pass | dynamic lighting | dyn `fgethsv`, **0x007f** | validate-dynamic-lighting | `dynamic-lighting.mjs` `fgetHsv` **PC 24** (mesh lighting too) | was: 1,789 of 2,049; **now 0** |
 | ComputeFromActor `0x10b05fa0`: R, 1/R, rr2 `0x10b05fc3–0x10b0602c` | pass | dynamic lighting | dyn `radius_constants`, **0x007f** | validate-dynamic-lighting | `movingLightConstants` **PC 24** | was: rr2 121 of 256; **now 0** |
 | ComputeFromActor brightness/colour/table `0x10b060b1`, `0x10b06122`, `0x10b064ff` | pass | dynamic lighting | dyn `color_table`, **0x007f** | validate-dynamic-lighting, static | `movingLightConstants`, `colorTableEntry` **PC 24** | 0 |
 | ComputeFromActor incidence `0x10b06325–0x10b0639e` | pass | moving normal lighting | dyn `incidence`, **0x007f** | validate-static-lighting | `normalLightIncidence` (= `renderPassConstants`) **PC 24** | was: 415 of 1,947; **now 0** (15,745 Training steps) |
@@ -162,50 +162,68 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | Fire.dll ConstantTimeTick (fire, water, wet) | pass (through Update) | fire oracle (0x037f; ticks ORACLE_CW) | validate-native-fire-texture | fire.rs (integer) | 0 of 1,178 cases |
 | ULaserIterator::CurrentItem `0x1001a1a0` (with Core UnsafeNormal and FVector::Rotation `0x10144390`) | pass (SetupDynamics) | laser oracle, **0x007f** | validate-native-laser, validate-lasers-play (worker) | `script-laser.mjs` **PC 24** (`vectorToRotator24`) | was: 8,021 of 42,785 checks (prevRand, prevLoc, proxy moves, savedLoc/Rot); **now 0** |
 | ParticleIterator::CurrentItem `0x1001ab20` → FarMoveActor | pass (SetupDynamics) | none | validate-particles-play | `particleIteratorItems`, render.rs `far_move` | not measured |
-| XRootWindow::PreRender frame edit `0x1003a7dd–0x1003a8cb` | pass (PreRender event) | root-render-viewport oracle (0x037f; ORACLE_CW) | validate-root-render-viewport | `script-root-render-viewport.mjs` (x87 model) | **443 of 1,783** cases (multipliers past 2^24 included) |
-| GC draw natives (DrawTexture, DrawStretchedTexture, DrawText, DrawPattern, DrawIcon, DrawBox, DrawBorders), GetTextExtent, Intersect, Set*Color | pass (PaintWindows from PostRenderFlash) | GC probes (NativeCollision; ORACLE_CW) | validate-gc-* | `script-gc-*.mjs`, gc.rs (f64 + f32 stores) | DrawTexture **1 of 29** cases (frac-edge); all others 0 |
+| XRootWindow::PreRender frame edit `0x1003a7dd–0x1003a8cb` | pass (PreRender event) | root-render-viewport oracle, **0x007f** | validate-root-render-viewport, validate-island-conversation | `script-root-render-viewport.mjs` **PC 24** | was: 443 of 1,783 cases (multipliers past 2^24 included); **now 0** |
+| Raw background clip list: subtraction `0x1003c1d0`, GetRawBackgroundClipList `0x1003c5f0` (DrawRawBackground `0x1003c720` from PaintWindows) | pass (PostRenderFlash) | root-raw-background oracle, **0x007f** (was the harness's 0x037f; not in the first inventory) | validate-root-raw-background (audit switch added), validate-island-conversation | `script-root-raw-background.mjs` **PC 24** | was: 225 of 2,131 cases; **now 0** |
+| GC tile path: clip helper `0x1002a4f0`, sink conversions `trunc(v + 0.1)` `0x1002a929–0x1002a9f5` (DrawTexture, DrawPattern, DrawIcon, DrawStretchedTexture, DrawBox, DrawBorders; DrawText's conversions) | pass (PaintWindows from PostRenderFlash) | GC probes, **0x007f** | validate-gc-* (49) | `script-gc-draw-model.mjs` `gcClipTile`/`ftolBiased`, gc.rs `clip`/`ftol` **PC 24** | was: DrawTexture 1 of 29 cases (frac-edge); **now 0** |
+| Other GC natives (DrawText's glyph clip and alignment, DrawBorders' band scaling, GetTextExtent, Intersect, Set*Color) | pass (PaintWindows); GetTextExtent possibly also from layout | GC probes, **0x007f** | validate-gc-* | `script-gc-*.mjs` (f64 + f32 stores) | 0 at 0x007f and 0x037f; not re-derived per operation (open) |
 | BoundsUpdate `0x10051160`, SortWindowLists `0x10045140` | ambiguous (ConfigureChild: tick or PaintWindows) | bounds-update oracle (0x037f; ORACLE_CW) | validate-window-bounds-update | `script-window-bounds-update.mjs` | 0 of 138 |
 | ConvertVectorToCoordinates (native 1489, root `0x10039f10`) | pass (DrawWindow) | none in scripts/ | none | `script-window-projection.mjs` (x87 model) | not measured |
 | Coronas' SingleLineCheck, ParticleIterator FarMoveActor | pass | collision oracles at 0x037f | — | trace.rs, render.rs | not measured |
 | UnrealScript run from the render events (RenderOverlays → Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator `Init(Camera)`, Console PostRender, DeusExPlayer.RenderOverlays) | pass | none | none | script VM (Rust interp + JS): Core float operators on the 64-bit model | not measured; needs a design decision |
 
-## Handoff (2026-10-06, stopped for the usage limit)
-
-Done and verified on this branch: the inventory and audit switch above;
-volumetric fog (fog.rs `Single`/`Wide`/`Exact`, x87-pc24.mjs, oracle at
-0x007f, validate-volumetric-fog, -fast on 404 M texel-lights, -play in
-worker mode); coronas (oracle at 0x007f, validate-coronas, -play in worker
-mode); master merged (spatial lights, occlusion Setup). Unit tests 598/598.
-
-Next step, the static and moving light family (master's spatial work is
-merged; build on `renderPassConstants`): recovered for the port, not yet
-written:
-- FGetHSV (Engine `0x103ec8d0`): every operation in order, with `1.4/255`,
-  `0.01`, `0.7` and `1/255` as double operands; red's `(1−x)·s + x` stays in
-  a register, green and blue store `(1−c)·s` first. Port `fgetHsv` to
-  x87-pc24.mjs's exact ops (they round double operands once).
-- ComputeFromActor: `rr2 = f(f(r·r)·4093)`; colour = `f(f(Level.Brightness ·
-  brightness) · hsv)`; steps `fistp(f(f(c·65536) − 0.5f))`; the camera-space
-  location is `coordsTransform`'s order; incidence is `renderPassConstants`'
-  (point `normalLightIncidence` at it).
-- The rectangle (`0x10b0660e–0x10b06868`) was disassembled: plane distance
-  `((dz·Nz + dy·Ny) + dx·Nx)` stored, `R·R·1.05` (double) `− d²` clamped at
-  a double 0, three table roots, the projected centre and `(u ∓ ru)/scale`
-  stores before FISTP; port `movingLightRect` with p24 ops and recheck.
-- Then the spatial bodies (normal, NonIncidence's double `1.02`, spot,
-  cylinder), GlobalLighting's LightType functions (58 of 1,280 frames
-  differ), and switch the light oracles' default to 0x007f.
-After that: GetFrame and mesh lighting (lodmesh kernel and the GPU shaders
-together), lasers, surface pan, the root viewport and DrawTexture's
-frac-edge case; the script VM in render events needs a design decision.
-
 ## Status and plan
 
-Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
-dynamic light effects (other worktree), mesh fog's oracle default, and on
-this audit's branch volumetric fog, coronas, the static and moving light-map
-path with its light animation, GetFrame and mesh lighting (2026-10-06). The
-families are moved one at a time, starting with what Play computes every
-frame; each keeps the JS reference, the Rust kernel and the GPU shader in
-agreement and switches its oracle default to `0x007f` when its validator
-passes there.
+Moved to the render-pass word, each with its oracle default at `0x007f`,
+its validators green there, and (where Play has one) its Play validator run
+in the default worker mode:
+- BSP occlusion, ClipDecal and the spatially dynamic light effects (other
+  worktrees), mesh fog's oracle default;
+- on this audit's branch (2026-10-06): volumetric fog, coronas, the static
+  and moving light-map path with its light animation (FGetHSV,
+  ComputeFromActor, the rectangle, incidence, the spatial bodies, the
+  LightType functions, the noise), GetFrame, mesh lighting (JS, the lodmesh
+  kernel and the GPU shaders, bit-equal), lasers, surface pan, the root
+  viewport, the raw background clip list and the GC tile path.
+
+Costs (interleaved medians, Linux host; family docs give the setups):
+
+| Family | Before | After |
+| --- | --- | --- |
+| Volumetric fog loop (fog.rs, headless, Bar) | 1.06 ms | 0.89 ms |
+| Light maps: Training world build / light animation per frame | 2,200 ms / 2.92 ms | 1,093 ms / 2.70 ms |
+| GetFrame (kernel `pose_speed`, native) | 69.9 ns per vertex | 19.1 ns |
+| Mesh lighting (kernel `light_speed`, native) | 14.98 ns per vertex-light | 10.51 ns |
+| Lasers (`laserCurrentItem`, Node) | 8.98 µs per item | 7.87 µs |
+| Surface pan (`surfacePan`, Node) | 1.73 µs per surface | 1.49 µs |
+| Root viewport (`rootRenderViewport`, Node) | 0.48 µs per call | 0.69 µs (once a frame) |
+| GC clip + 8 conversions (JS reference) | 0.11 µs per tile | 0.27 µs |
+| HUD paint, headless Island, gc.rs in Play's path (238 commands a frame, three alternating processes) | 5.65 ms per frame | 5.72 ms (within the 0.9 ms run-to-run spread) |
+
+Open items:
+- **UnrealScript inside the render events** (RenderOverlays →
+  Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator
+  `Init(Camera)`, Console PostRender, DeusExPlayer.RenderOverlays): the
+  script VM's float operators run on the 64-bit model. Moving them needs a
+  design decision (a per-call precision flag in the Rust interpreter and the
+  JS VM); the VM is unchanged.
+- **Environment mapping** (`mesh-environment.mjs`, GLSL `ENVIRONMENT_UV`):
+  f64 within a 0.00005-texel tolerance, not bit-exact at either word.
+- **Mirror segment** (`mirrors.mjs`): doubles within a 4-ulp tolerance.
+- **The lighting camera transform** (`camera_component`, `toCamera`): a
+  host stage at 24 bits; the original composes the view into GetFrame's
+  matrix.
+- **FPATAN**: hosts use `Math.atan2` (Unicorn's FPATAN is double); exact
+  only away from integer boundaries (lasers' `vectorToRotator24`).
+- **Texture ticks** (Update, Tick, ConstantTimeTick) keep the 64-bit model:
+  0 of 3,988 Get calls differ, but `now − last` of two doubles can round
+  differently at 24 bits, and UTexture::Lock's caller word is not traced.
+- **Other GC natives** (row above), **ConvertVectorToCoordinates** (native
+  1489), **ParticleIterator FarMoveActor** (render.rs) and **coronas'
+  SingleLineCheck**: in the pass, not measured or not re-derived at 24 bits.
+- **BoundsUpdate / SortWindowLists**: ambiguous placement (tick or
+  PaintWindows); 0 of 138 differ.
+- **The game thread's control word** after PostRender's reset (above) and
+  D3D's `DDSCL_FPUSETUP` before URender::Init.
+- `validate-gpu-mesh` runs its page with `?sim=inline` (the GPU kernels
+  read the page's mesh state); the Play checks of the moved families run in
+  worker mode.

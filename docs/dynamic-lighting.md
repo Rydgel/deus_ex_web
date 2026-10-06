@@ -237,9 +237,8 @@ Checks at `0x007f`: `validate-dynamic-lighting` (above),
 `validate-auglight-lighting`, `validate-moving-lights-incremental` and, in
 the browser's default worker mode, `validate-light-spatial-play` pass.
 
-Mesh lighting still takes the 64-bit FGetHSV and constants
-(`fgetHsvExtended`, `movingLightConstantsExtended`) until its own
-translation moves ([render-pass precision](render-pass-precision.md)).
+Mesh lighting takes the same 24-bit FGetHSV and constants since its own
+move ([mesh lighting](mesh-lighting.md) "Precision").
 
 ## Not reproduced / open
 
