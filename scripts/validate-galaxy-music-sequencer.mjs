@@ -32,8 +32,8 @@
  * Oracle outputs are cached per case under .cache/galaxy-music/sequencer-corpus
  * (keyed by the oracle and loader scripts, the DLL, the program and the module
  * hashes); stale cases run over up to --jobs (default 4) oracle processes,
- * logging to sequencer-corpus/logs. The full corpus takes about 15 minutes of
- * oracle time per process. Needs NATIVE_PROBE_PYTHON (default
+ * logging to sequencer-corpus/logs. A cold run takes about 20 minutes with four
+ * processes (about 1.2 GB each); a cached one about 5. Needs NATIVE_PROBE_PYTHON (default
  * .cache/native-probe-env/bin/python) and src/runtime/galaxy-kernel.wasm
  * (npm run build:wasm). */
 import assert from 'node:assert/strict';

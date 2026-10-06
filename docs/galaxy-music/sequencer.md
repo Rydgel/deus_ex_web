@@ -1,12 +1,22 @@
 # C — Galaxy module sequencer (IT music player)
 
-Galaxy.dll SHA256 `606e71d1…` (preferred base 0x10600000). Research only; every
-claim is anchored to an instruction or data address. Status tags:
+Galaxy.dll SHA256 `606e71d1…` (preferred base 0x10600000). Every claim is
+anchored to an instruction or data address. Status tags:
 
 - **[read]** read directly in the instructions cited.
 - **[derived]** follows from the cited code by control-flow reasoning, not yet run.
+- **[verified by X]** the original ran case X under Unicorn and the Rust translation
+  (`native/galaxy-kernel/src/sequencer.rs`) matched it tick for tick
+  (`scripts/validate-galaxy-music-sequencer.mjs`, §14).
 - **[B]** read in the IT loader `0x10628990`; agent B owns the loader and should confirm.
 - **[host]** depends on run-time history or the host's render sizes; not deterministic from the song.
+
+Since 2026-10-06 the whole player described here (the mixer entry up to the
+inner kernel, voice update, sequencer tick, IT handler, note delay, ramps,
+period to step and the library entries Update calls) is verified on 238
+cases: every DX song from sections 0..5, switches, chains, MUSICORDER, three
+counter phases and synthetic modules for everything the songs never play.
+The few runs no case reaches are listed with their reason in the validator.
 
 Raw offsets only. "voice" = Galaxy's 0xa0-byte voice record; "ch" = music channel 0..31.
 
@@ -136,15 +146,21 @@ Per call [read]:
 
 A row therefore lasts `speed` ticks; speed 1 parses every tick.
 
-**Pattern-end extra pass [derived]**: when a pattern ends (step 4) the effect loop runs with
-tick 0 on the old row, then `0x10615710` advances the order and calls the handler again in
-the **same** tick, which parses row 0 of the next pattern and runs the effect loop again
-with tick 0. Tick-0 actions of the last parsed row (or the row that set the break) execute
-twice: 9xx re-sets the sample position, EAx/EBx fine volume slides apply twice, E9x
-retriggers, EDx with x=0 retriggers, E6x decrements the global loop counter twice. Fine porta
+**Pattern-end extra pass [verified by Sequencer_Linear; songs]**: when a pattern ends
+(step 4) the effect loop runs with tick 0 on the old row, then `0x10615710` advances the
+order and calls the handler again in the **same** tick, which parses row 0 of the next
+pattern and runs the effect loop again with tick 0. Tick-0 actions of the last parsed row
+(or the row that set the break) execute twice: 9xx re-sets the sample position, EAx/EBx
+fine volume slides apply twice, E9x retriggers, EDx with x=0 retriggers. Fine porta
 (E1x/E2x) is cleared by the row-0 clear before the next voice update, so it is not doubled.
-In the shipped songs, pattern-ending rows carry 86 O (9xx) and 22 Q (E9x) commands (scan of
-all 35 songs in conversion order).
+A note on the next pattern's row 0 overrides most of this on its channel, so the case puts
+O/Q/fine slides on ending rows of channels that row 0 leaves alone; the kernel mutant that
+skips the pass (102) is caught there. E6x on a pattern's last row: while its loop goes on,
+the first run sets the break flag and the pass skips E6x (it needs the flag clear); on the
+run that brings the counter to 0 no break is set, so the pass runs E6x again with the
+counter at 0, which re-arms the loop: the pattern loops for ever (Sequencer_LoopLastRow,
+600 callbacks, four passes). In the shipped songs, pattern-ending rows carry 86 O (9xx)
+and 22 Q (E9x) commands (scan of all 35 songs in conversion order).
 
 ### 2.4 Order list (`0x10615710`)
 
@@ -167,12 +183,20 @@ When no pattern is current (`0x10615860..0x10615a4e`) [read]:
    skipped** (loop back to 2). The loader converts only patterns with a non-zero file offset
    (`0x10629a14..0x10629a1f`) [B]; IT's empty patterns (offset 0) are therefore skipped
    instead of playing 64 empty rows. 21 songs have such an entry at order 2 (25 songs have
-   at least one). [derived]
+   at least one). [verified by the song cases, e.g. HongKong_Music.s2: section 2 lands on
+   the null order 2 and the first tick plays order 3, row 0; mutant 103, which waits a tick
+   on a null pattern, is caught]
 5. Else (past the end or 0xff): `playing = 0`, `order = 0xff`; if loop flag, `playing = 1`
    and continue at 2 (wraps to order 0 → step 3 resets speed/tempo/pan). [read] If the loop
    flag is 0 the callback is called and, since it returns no pattern, the walk still restarts
    order 0 within this tick, with `playing = 0` stopping later ticks
-   (`0x10615a15..0x10615a4e`) [derived; DX never clears the loop flag].
+   (`0x10615a15..0x10615a4e`) [verified by Sequencer_Linear.loopFlag0, which sets the flag
+   with glxControlMusic(3, 0); DX itself never calls cmd 3 (its only callers are
+   `0x106071a8` cmd 1 and `0x1060a863` cmd 2)].
+6. With every order `+++` (or null) the walk never finds a pattern and the original spins
+   inside the tick for ever [verified by Sequencer_AllSkipped and Synthetic_OrdersPastEnd:
+   the original's mixer call does not return; the kernel stops with UNSUPPORTED_SPIN after
+   0x400 order steps in the same callback].
 
 The new pattern's first row is parsed in the same sequencer tick.
 
@@ -194,15 +218,25 @@ The new pattern's first row is parsed in the same sequencer tick.
 - `glxControlMusic` (`0x1060d0e0`): cmd 1 and 2: `N = arg`; if `N < 0`, `N += order + 2`;
   if `N > [0x1069834a]` return 0x11 (no change); else `order = N − 1`. Cmd 1 also sets the
   break flag and zeroes `[0x10697cdc]` (ring fill count) under a nested lock. Cmd 3: loop
-  flag = arg.
+  flag = arg. The comparison is signed (`jg`). [verified by Intro_Music.musicorder, the
+  console's MUSICORDER n = cmd 1 with atoi(n): order n plays from the next row tick; −1 is
+  the next order; −20 leaves the order byte at 245, past the end, so the walk wraps to
+  order 0 with the header's speed/tempo/pans; 100 returns 0x11 and changes nothing (no
+  break). Intro_Music.switchPastEnd: Update's start with section 200 gets 0x11 from cmd 2,
+  but Update still sets the break flag, so the current pattern ends at the next row tick
+  and the next order plays.]
 
-Consequence [derived]: section N is reached by the first sequencer tick's `order++`. For
-N = 0 (or N past the end) the order wraps through 0 and speed/tempo/pans are reset from the
-header. **For N > 0 nothing is reset**: speed stays 48 and tempo 120 from the reset, the
-tick period stays whatever `[0x1069818c]` held (the previous song's, or glxInit's), and the
-voices' pans stay 0x4000, until an Fxx in the pattern recomputes them. In the shipped songs
-most orders start with both A and T on row 0 (table from a scan of all songs); orders
-without them would play at speed 48.
+Consequence [verified by the song cases s1..s5, Endgame1_Music.s4 and
+Title-Endgame1s4.chain]: section N is reached by the first sequencer tick's `order++`. For
+N = 0 (or N past the end, where glxControlMusic returns 0x11 and changes nothing) the order
+wraps through 0 and speed/tempo/pans are reset from the header. **For N > 0 nothing is
+reset**: speed stays 48 and tempo 120 from the reset, the tick period stays whatever
+`[0x1069818c]` held, and the voices' pans stay 0x4000, until an Fxx in the pattern
+recomputes them. Measured: Endgame1 from section 1 or 4 plays its first order at 48 ticks
+per row with the output open's MIDI-mode periods (tick 459.375 frames, voice update 44.1
+frames = 1 ms); after Title (tempo 116) the same section keeps speed 48 / tempo 120 but
+ticks at Title's 950.431 frames. Orders whose first row has A and T (most of them)
+recompute speed and both periods in their first tick, before the counters reload.
 
 ## 3. Global state (sequencer)
 
@@ -571,7 +605,7 @@ on this path:
   unknown (see the D3D FPUSETUP memory note).
 - `m` for the master volume: `ftol(fade * MusicVolume * 127.0f)` in SetVolumes (agent A).
 
-## 11. Walk-through: Intro_Music from section 0 [derived]
+## 11. Walk-through: Intro_Music from section 0 [verified by Intro_Music.s0]
 
 Load: speed 48 / tempo 120 placeholders, IS 6, IT 153. Update: SetVolumes sets m; start;
 `glxControlMusic(2, 0)` → order 0xff; break = 1. First sequencer tick: order 0 → speed 6,
@@ -585,16 +619,24 @@ the output is set by the free-running counter (§2.1).
    both expire in one chunk the voice update runs first and uses the previous tick's effect
    state; otherwise it runs a fixed offset before or after each tick. The first tick of a new
    song also comes at an arbitrary point, with the previous song's period. The translation
-   has to pick a phase; the oracle must pin both counters.
+   takes the phase as an input: three pinned phases (voice update first, tick first, both in
+   one chunk; Intro, Endgame1, Lebedev) are [verified by *.phase-*], and the mutant that runs
+   the tick before the voice update (101) is caught. Which phase the game starts with stays
+   [host].
 2. **Pan slew rate [host]**: ±0x200 per mixer chunk, and chunk lengths depend on the render
-   request sizes of `0x106146a0`/`0x106142a0`.
-3. **Section > 0 start [derived]**: speed 48, tempo 120 and the stale period until an Fxx;
-   pans not reset. Needs an oracle run and, ideally, the game's SongSection usage (agent A).
-4. **Pattern-end extra tick-0 pass [derived]**, including the 86 O and 22 Q on ending rows.
-5. **Null patterns skipped [derived]** (order 2 in 21 songs) and the section mapping that
-   results.
-6. **D00/E00/F00 recalling foreign params [derived]**, resolved in conversion order (≈250).
-7. **Key off → voice stops at the next voice update [derived]** for sample-mode songs.
+   request sizes of `0x106146a0`/`0x106142a0`. For music the slew never runs: every music pan
+   write sets current and target together (§8.4); coverage shows the slew run
+   `0x1061532d` unreached over the whole corpus, so its rate matters only for effect voices.
+3. **Section > 0 start**: answered in §2.5 [verified]. Which sections the game requests is
+   agent A's (Update / DeusExPlayer's dynamic music).
+4. **Pattern-end extra tick-0 pass**: §2.3 [verified].
+5. **Null patterns skipped**: §2.4 [verified].
+6. **D00/E00/F00 recalling foreign params**: resolved by the loader in conversion order
+   (phase 1, byte-equal) and played as the resolved command by the songs that use them, e.g.
+   BatteryPark order 3, row 22, ch 10 [verified by BatteryPark_Music.s0 and .s3].
+7. **Key off → voice stops at the next voice update** for sample-mode songs [verified by
+   Sequencer_Linear and Title_Music; mutant 104 caught]; with a volume envelope the fades run
+   instead [verified by Sequencer_Envelopes].
 8. Inner mixer: which of A/B is left, the surround and interpolation implementations, and
    the output converter `[0x10697ca4]` (agent D).
 9. DX values of `[0x10697d18]` (rate), `[0x1068828d]` (SFX voices) and `[0x10697cfc]`
@@ -602,14 +644,29 @@ the output is set by the free-running counter (§2.1).
 10. Not analysed: track handlers `0x106168b0` (mode 0, MIDI) and `0x10615a60` (mode 4), MIDI
     paths in the voice update, the 'AE'/'AM' formats, instrument-mode envelope details beyond
     §9, the loader's instrument path (`0x10628c3a` onward).
-11. Edge cases read but not exercised by the songs: break to a row ≥ the pattern length (no
-    bounds check in the skip loop); SBx on a pattern's last row (counter decremented twice per
-    pass, can loop forever); EDx with a key-off note (keymap index 0x80+); porta without a
-    note after E/F (target left at the porta limit); all orders null/+++ (the order walk
-    spins).
-12. Pan table precision (PC at glxInit) and `_ftol` edge at i = 0x7fff.
+11. Edge cases the songs never reach, now run on the original with synthetic modules:
+    break to a row ≥ the pattern length: the skip loop reads past the pattern's events
+    [verified by Sequencer_BreakPastEnd: the oracle stops at the first heap read outside every
+    live block, in the same callback as the kernel's UNSUPPORTED_READ]; SBx on a pattern's last
+    row [Sequencer_LoopLastRow, see §2.3]; EDx with a key-off note (keymap index 0x80+, which
+    reads the instrument's envelope block as a sample index) [Sequencer_Envelopes]; porta
+    without a note after E/F (target left at the porta limit) [Sequencer_Reach]; all orders
+    null/+++ [§2.4 item 6]; LoopStart > LoopEnd (the trigger negates the step and the mixer
+    hands the kernel negative run counts, e.g. −1053) [Sequencer_ReversedLoop]; a channel
+    whose first note is an EDx delay keeps `+0x11 = 0`, so the mixer picks the effects master
+    and buses for it, and its volume stays 0 (the row's default volume reads `+0x42`, which no
+    trigger has set yet), so it plays silently until a volume event or a normal trigger
+    [Sequencer_Reach].
+12. Pan table precision (PC at glxInit) and `_ftol` edge at i = 0x7fff. The Rust x87 model
+    equals Unicorn's glxInit loop at PC 64, 53 and 24 (§14). PC 53 differs from PC 64 at one
+    entry (0x7fff) and PC 24 at 54; at the installed music volume (master 76) no K argument
+    can show the PC 53/64 difference (B at pan 0 needs a level above 16384, which takes
+    master 127), so Sequencer_Linear.volume127 catches mutant 109. The game's PC stays open.
 
 ## 13. How I would probe this
+
+(The plan as written before the oracle existed; it is implemented as
+`scripts/native-galaxy-music-sequencer-oracle.py`, see §14.)
 
 Unicorn oracle over the unmodified DLL (reuse the loader/mapping from
 `scripts/native-galaxy-audio-oracle.py`):
@@ -637,3 +694,45 @@ Unicorn oracle over the unmodified DLL (reuse the loader/mapping from
    S8x (BatteryPark order 3, row 22, ch 10); key off (Title order 9, row 0, ch 10); SDx
    (HongKong order 4); A40 (NavalBase order 8); Endgame1 (Amiga); Lebedev (instruments); the
    same song with different counter phases to bound item 12.1.
+
+## 14. Verification (2026-10-06)
+
+`scripts/validate-galaxy-music-sequencer.mjs` against
+`scripts/native-galaxy-music-sequencer-oracle.py` (stub inner kernel):
+
+- **Setup** as the oracle runs it: glxInit's state section and tail (CPUID
+  MMX + SSE, FPCW 0x037f), `0x1060ebc0(16)`, glxSetCallback(`0x10601064`),
+  the output open's tail (44100 Hz, 16-bit stereo, flags 7), then per case
+  SetVolumes' two setters (sample 127, music 76 = MusicVolume 153, or 127),
+  glxLoadMusic, the setters again, Update's start sequence, pinned counters
+  (0/0 unless a phase case), ring fill 1, and 882-frame callbacks.
+- **Trace** per tick group: M/R around each mixer call, U after each voice
+  update pass, T after each tick and the ramps (globals of §3, the current
+  pattern header, the music voice records), K for each kernel call (voice,
+  bus offsets, 11 arguments), P refill posts, L/S library results, E the end
+  state (256 voices, the CHAN records, every pattern header).
+- **Cases** (238; songs `<Song>.s<N>`, others by name): every song × sections
+  0..5 until the loop + 64 ticks; `UNATCO_Music.switch0to3`,
+  `Intro_Music.switchPastEnd`; `Title-Intro.chain`, `Title-Endgame1s4.chain`;
+  `Intro_Music.musicorder`; `Sequencer_Linear.loopFlag0`;
+  `Intro_Music.phase-voiceFirst`, `Endgame1_Music.phase-tickFirst`,
+  `Lebedev_Music.phase-sameChunk`; the phase-1 synthetic modules and
+  `Sequencer_{Linear, Amiga, Envelopes, Reach, A00Stop, LoopLastRow,
+  BreakPastEnd, AllSkipped, ReversedLoop}` with heap reads checked;
+  `Sequencer_Linear.volume127`.
+- **Result**: every case equal (1,833,842 ticks in 1,412,462 callbacks); the
+  three original faults (§2.4 item 6, §12 item 11) stop the kernel in the
+  same callback with UNSUPPORTED_SPIN or UNSUPPORTED_READ; pan tables equal
+  at PC 64/53/24; .rdata tables equal (the formulas of §10 with the
+  original's exceptions: Amiga entries 110 = 382 and 117 = 255, finetune 7 =
+  34468).
+- **Coverage** of the twelve original functions (mixer entry, period to
+  step, sequencer tick, IT handler, note delay, ramps, glxStop/Start/
+  ControlMusic, glxSetMusic/SampleVolume, DX's callback): 2436 of 2680
+  instructions; the 35 runs no case reaches are listed in the validator
+  (`UNREACHED`) with a reason each.
+- **Mutants**: 101 tick before voice update, 102 no pattern-end pass, 103
+  null pattern waits a tick, 104 key off keeps the voice, 106 linear period
+  low bits rounded, 107 run count without +1, 108 arpeggio offsets swapped,
+  109 the PC 53 pan table: each caught by some case. 105 (pan slew ±0x100)
+  is equivalent for music: no music pan write leaves current ≠ target.
