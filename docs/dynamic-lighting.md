@@ -240,6 +240,42 @@ the browser's default worker mode, `validate-light-spatial-play` pass.
 Mesh lighting takes the same 24-bit FGetHSV and constants since its own
 move ([mesh lighting](mesh-lighting.md) "Precision").
 
+## Time-varying moving lights (2026-10-06)
+
+The moving-light path above covered steady LightEffect 0, NonIncidence and
+Shell. This section covers what remains of AddLight's class 2: the LightType
+functions, the merge-dynamic wavers and the spotlights, as far as the shipped
+content reaches them.
+
+### Reach
+
+`scripts/census-moving-lights.mjs` (original data only: the Actor classes of
+every `System/*.u` package with their class defaults, every actor of the 83
+single-player maps over its class defaults, and the ScriptText of the
+packages for run-time assignments and `Spawn` calls) gives the class 2
+sources:
+
+| (LightType, LightEffect) | Sources |
+| --- | --- |
+| Steady / None | SecurityCamera (217 placed), CageLight (155), Gray (11), Lamp3 (9), HKMarketLight (2), GrayCarcass (1); script-lit Lamp*, CageLight, AlarmUnit, ElectricityEmitter (toggles None/Steady), radioactive Barrel1, WayBeacon (already the original normal body) |
+| Steady / NonIncidence | Beam (AugLight), MuzzleFlash, ExplosionLight, HighLight (TAD), AutoTurretGun, ConLight, Fireball, PlasmaBolt, DartFlare, FireballRocket (already translated) |
+| Steady / Shell | ExplosionLight of the EMP and nano-virus grenades (already translated) |
+| **Steady / FireWaver** | BarrelFire (240 placed in 19 maps: Island 3, Mole People 27, Catacombs Tunnels 76, …); Fire, spawned by burning pawns, decorations and the player (the first of each set keeps its light) |
+| **Steady / WateryShimmer** | BarrelAmbrosia (23 placed in 11 maps), BarrelVirus (7 in 3), WeaponNanoSword (1 placed, and the player's when drawn) |
+| **Steady / TorchWaver** | Flare, once lit (107 placed unlit; `LightFlare` sets `LT_Steady`) |
+| **Steady / Spotlight** | AlarmLight (23 placed in 8 maps, PHYS_Rotating at yaw 98,304 a second), lit by `Trigger` or `bIsOn` |
+| **Strobe / Spotlight** | AlarmLight ×4 in 99_Endgame4, `bIsOn` |
+| **Flicker / None** | LaserTrigger ×1 in 14_Vandenberg_Sub (map-set light, `bIsOn`) |
+
+No script assigns a LightType other than None or Steady, and the only
+LightEffect assignment is Shell. SmokelessFire (FireWaver) is spawned only
+in multiplayer. Unreached by class 2, documented and not implemented:
+Pulse, Blink, SubtlePulse, BackdropLight and the texture-palette types;
+StaticSpot, Warp and Unused (whose rows would take the spot and normal
+bodies); Cylinder; and the spatially dynamic effects (Searchlight, SlowWave,
+FastWave, CloudCast, Shock, Disco, Interference, Rotor), which spatial.rs
+runs for class 1 lights only.
+
 ## Not reproduced / open
 
 * The frustum test in SetupDynamics and OccludeBsp's visibility-driven filter:
