@@ -39,8 +39,10 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     if(text==null)throw new Error(`Galaxy ${key} is not in DeusEx.ini [Galaxy.GalaxyAudioSubsystem]`);
     return msvcrtWtoi(text)&255; // UByteProperty::ImportText: appAtoi, low byte.
   };
-  const galaxy=config?createGalaxyVolumes({musicVolume:galaxyByte('MusicVolume'),
-    soundVolume:galaxyByte('SoundVolume'),speechVolume:galaxyByte('SpeechVolume')}):null;
+  // Play's live audio owns the subsystem's bytes (script-audio-live.mjs), so
+  // natives 268-270 reach its music and library; without it, a local copy.
+  const galaxy=runtime.audio?.volumes??(config?createGalaxyVolumes({musicVolume:galaxyByte('MusicVolume'),
+    soundVolume:galaxyByte('SoundVolume'),speechVolume:galaxyByte('SpeechVolume')}):null);
   const load=(asset,path)=>runtime.loadClass(asset,asset.exportsByPath.get(path));
   const [playClass,historyClass,historyEventClass,cameraClass,lightClass]=await Promise.all([
     load(deus,'conplay'),load(conSys,'conhistory'),load(conSys,'conhistoryevent'),

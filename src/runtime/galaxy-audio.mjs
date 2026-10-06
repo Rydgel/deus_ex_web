@@ -9,9 +9,10 @@ import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x
  * `voicePlaying(voice)` (0x1060cf00(voice, 2, 0, 0) != 0),
  * `startVoice(index, sample, frequency, volume, pan)` (0x10612310, 2D),
  * `controlVoice(voice, frequency, volume, pan)` (0x1060d280) and
- * `stopVoice(voice)` (0x10618410). The music transition, the 3D hardware path
- * (Use3dHardware is False in the installed DeusEx.ini) and the lip-sync
- * sampling of a speaking pawn are outside this module.
+ * `stopVoice(voice)` (0x10618410). The music section is galaxy-music.mjs's,
+ * reached through `services.music` inside `services.library`'s lock; the 3D
+ * hardware path (Use3dHardware is False in the installed DeusEx.ini) and the
+ * lip-sync sampling of a speaking pawn are outside this module.
  *
  * World services: `listener()` the viewport Actor and its ViewTarget,
  * `read(object, name)`, `isA(object, key)`, `index(actor)` the UObject index
@@ -45,6 +46,9 @@ export function createGalaxyAudio(config, services) {
   const channelCount = config.effectsChannels;
   const state = { channels: Array.from({ length: channelCount }, RECORD), counter: 0 };
   const { read } = services;
+  // Music: the library service object and the music section
+  // (galaxy-music.mjs); both optional, so the channel logic runs alone too.
+  const library = services.library ?? null, music = services.music ?? null;
   const listenerLocation = () => {
     const { actor, viewTarget } = services.listener();
     return read(viewTarget ?? actor, 'Location');
@@ -89,13 +93,22 @@ export function createGalaxyAudio(config, services) {
   };
   const ambientVolume = actor => x87mul(x87mul(x87int32(read(actor, 'SoundVolume') & 0xff), X(config.ambientFactor)), INV_255);
 
-  /** 0x10609510 without the music transition and 3D/lip-sync branches.
+  /** 0x10609510 without the 3D/lip-sync branches and the zone reverb tail.
    * `deltaTime` is the elapsed time since the last Update (the original reads
    * appSecondsSlow against `+0x880`); it is clamped to [0, 1] here as at
    * 0x106095aa. `coords` is the listener FCoords: origin, x, y, z axes. */
   function update(deltaTime, coords) {
     const { actor: viewActor, viewTarget } = services.listener();
     if (!viewActor) return;
+    // 0x10609549 EnterCriticalSection .. 0x1060abd6 LeaveCriticalSection: the
+    // rest of Update runs under the Galaxy lock, so the music section's
+    // library calls form one batch (galaxy-music-library.mjs).
+    library?.lock();
+    try { updateLocked(viewActor, viewTarget, deltaTime, coords); }
+    finally { library?.unlock(); }
+  }
+
+  function updateLocked(viewActor, viewTarget, deltaTime, coords) {
     let dt = x87double(deltaTime);
     if (lt(x87cmp(dt, ZERO))) dt = ZERO;
     else if (!lt(x87cmp(dt, ONE))) dt = ONE;
@@ -221,6 +234,10 @@ export function createGalaxyAudio(config, services) {
         if (!channel.voice) throw new Error('Galaxy Update: voice start failed (original appFailAssert)');
       }
     }
+    // The music section 0x1060a50b..0x1060aa15 (galaxy-music.mjs), on the
+    // prologue's clamped dt; the zone reverb tail that follows is not
+    // translated.
+    music?.update(dt, viewActor);
   }
 
   /** StopSoundId (DEUS_EX, 0x10607ef0): stop the first channel whose Id
