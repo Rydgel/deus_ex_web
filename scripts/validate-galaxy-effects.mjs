@@ -31,6 +31,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
+import {createGalaxyAudio} from '../src/runtime/galaxy-audio.mjs';
 import {gameDirectory} from './game-directory.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -49,7 +50,7 @@ const VOICE = 0xa0, RECORD_VOICES = 32, VOICE_BASE = 0x1068dca0;
 const AHEAD = 7056;
 const UNSUPPORTED_SPIN = 0x108, SPIN_MARK = 0xfffffffe;
 const MUTANTS = {301: 'smpl loop end + 1', 302: 'control keeps the step', 303: 'default pan ignores GLX_PANNING',
-  304: 'pad bytes not zeroed'};
+  304: 'pad bytes not zeroed', 305: 'reverb kernel without the cross-feed', 306: 'reverb low-pass weights swapped'};
 
 // ---- samples --------------------------------------------------------------------------
 
@@ -139,7 +140,29 @@ function voiceProgram(samples, extra = []) {
     {op: 'pin', voiceCounter: 0, tickCounter: 0}, ...extra];
 }
 
-function cases(waves, synthetic, realNames) {
+/** A glxReverb as Update's reverb tail builds it (galaxy-audio.mjs) for a
+ * zone, with the setup's FCOS input and the model's result for it (the
+ * oracle replaces Unicorn's double-precision FCOS with it; the coefficient
+ * it yields equals the hardware's at every reachable input,
+ * validate-galaxy-reverb.mjs). */
+function reverbOp(zone, cosOf) {
+  let words = null;
+  const listener = {Region: {'engine.actor.pointregion.zone': {bReverbZone: true, ...zone}}};
+  createGalaxyAudio({effectsChannels: 16, ambientFactor: 0.7, dopplerSpeed: 6500, soundVolume: 204, speechVolume: 255, useSurround: 0,
+    reverseStereo: 0, useReverb: 1}, {listener: () => ({actor: listener, viewTarget: null}),
+    read: (object, name) => name === 'Location' ? [0, 0, 0] : name === 'ShowFlags' ? 0 : object[name],
+    library: {lock() {}, unlock() {}, setSampleReverb: w => { words = w; return 0; }}})
+    .update(0, {origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1]});
+  const block = Buffer.from(words?.buffer ?? new ArrayBuffer(0x6c), 0, 0x6c);
+  const cos = cosOf(block.readUInt32LE(0x10));
+  const part = (b, at) => [b.readBigUInt64LE(at).toString(16), b.readUInt16LE(at + 8).toString(16)];
+  return {op: 'sampleReverb', block: block.toString('hex'), cos: [[...part(cos, 0), ...part(cos, 10)]]};
+}
+const ROOM = {MasterGain: 100, CutoffHz: 6000, Delay: [20, 34, 0, 0, 0, 0], Gain: [150, 70, 0, 0, 0, 0]};
+const GARAGE = {MasterGain: 255, CutoffHz: 1000, Delay: [40, 70, 10, 5, 3, 1], Gain: [44, 140, 30, 20, 10, 5]};
+const SILENT = {MasterGain: 0, CutoffHz: 6000, Delay: [20, 34, 0, 0, 0, 0], Gain: [150, 70, 0, 0, 0, 0]};
+
+function cases(waves, synthetic, realNames, cosOf) {
   const [beep, baby, hum, plasma, phone, tv, spark, lam, door] = realNames;
   const out = [];
   out.push({name: 'load-shipped', program: [...waves.keys()].map(sample => ({op: 'loadSample', sample}))});
@@ -215,6 +238,34 @@ function cases(waves, synthetic, realNames) {
   // coincident heads (validate-galaxy-mixer.mjs checks the two-head ring).
   out.push({name: 'quotes-s4-browser', program: [{op: 'load', module: 'Quotes_Music'}, {op: 'start', section: 4},
     {op: 'pin', voiceCounter: 0, tickCounter: 0}, {op: 'ahead', value: AHEAD}, {op: 'heads', same: true}, run(250)]});
+  // The effects reverb: glxSetSampleReverb installing, changing and freeing
+  // the SSE engine, the renderer's hook on (d04, d0c) between the mix and the
+  // conversions, with voices and with music.
+  const reverbVoices = [
+    {op: 'startSample', voice: 1, sample: plasma, freq: 44100, vol: 0x7fff, pan: 0x2000},
+    {op: 'startSample', voice: 2, sample: hum, freq: 22050, vol: 0x6000, pan: 0x6000},
+    {op: 'startSample', voice: 3, sample: beep, freq: 22050, vol: 0x7fff, pan: 0x4000},
+    reverbOp(ROOM, cosOf), run(12), reverbOp(ROOM, cosOf), run(2),
+    reverbOp(GARAGE, cosOf), {op: 'startSample', voice: 4, sample: spark, freq: 22050, vol: 0x7fff, pan: 0x7000}, run(20),
+    reverbOp(SILENT, cosOf), run(4), reverbOp(ROOM, cosOf), run(6),
+    {op: 'stopSample', slot: 0}, {op: 'stopSample', slot: 1}, {op: 'stopSample', slot: 2}, {op: 'stopSample', slot: 3}, run(30)];
+  out.push({name: 'reverb-voices', program: voiceProgram([plasma, hum, beep, spark], reverbVoices)});
+  out.push({name: 'reverb-voices-browser', program: voiceProgram([plasma, hum, beep, spark], [{op: 'heads', same: true}, ...reverbVoices])});
+  out.push({name: 'reverb-music-browser', program: voiceProgram([hum, baby], [{op: 'heads', same: true}, {op: 'load', module: 'Intro_Music'},
+    {op: 'start', section: 0}, reverbOp(GARAGE, cosOf), {op: 'startSample', voice: 1, sample: hum, freq: 22050, vol: 0x7fff, pan: 0x3000},
+    {op: 'startSample', voice: 9, sample: baby, freq: 16000, vol: 0x7fff, pan: 0x5000}, run(40)])});
+  {
+    const r = rng(500), ops = [];
+    for (let i = 0; i < 40; i++) {
+      const k = r() % 6;
+      if (k === 0) ops.push(reverbOp({MasterGain: r() % 256, CutoffHz: r() % 44101, Delay: Array.from({length: 6}, () => r() % 256),
+        Gain: Array.from({length: 6}, () => r() % 256)}, cosOf));
+      else if (k < 3) ops.push({op: 'startSample', voice: 1 + r() % 16, sample: pick(r, realNames), freq: pick(r, [22050, 11025, 44100, 30000]),
+        vol: pick(r, [0x7fff, 0x4000, 0x80]), pan: pick(r, [0, 0x4000, 0x7fff, 0xc000])});
+      else ops.push(run(1 + r() % 5));
+    }
+    out.push({name: 'reverb-random', program: voiceProgram(realNames, ops)});
+  }
   // Random programs of the subsystem's kind of calls.
   // No ping-pong sample here: glxControlSample recomputes a positive step even
   // on a ping-pong loop's backward pass (0x1060d30e), so the next run count is
@@ -300,6 +351,7 @@ function replay(x, c, samples, modules, mutant) {
   let spun = false, peak = 0;
   const check = what => { const f = x.galaxy_fault(); if (f) throw new Error(`${c.name} ${what}: fault 0x${f.toString(16)}`); };
   const voices = result => Buffer.concat([u32(result), Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_voices_ptr(), RECORD_VOICES * VOICE))]);
+  const mem = () => new Uint8Array(x.memory.buffer);
   const ptr = slot => slot == null ? 0 : VOICE_BASE + slot * VOICE;
   for (const s of c.program) {
     if (s.op === 'loadSample') {
@@ -334,6 +386,13 @@ function replay(x, c, samples, modules, mutant) {
     } else if (s.op === 'sampleVolume') {
       const result = x.galaxy_set_sample_volume(s.volume, s.mode) >>> 0;
       g.pull(); g.record('V', voices(result)); g.close();
+    } else if (s.op === 'sampleReverb') {
+      mem().set(Buffer.from(s.block, 'hex'), x.galaxy_reverb_block());
+      const result = x.galaxy_set_sample_reverb() >>> 0;
+      check('sampleReverb');
+      const state = x.galaxy_reverb_state();
+      const header = state & 2 ? Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_reverb_ctx(), 0xc8)) : Buffer.alloc(0xc8);
+      g.pull(); g.record('Y', Buffer.concat([u32(result), u32(state & 3), header])); g.close();
     } else if (s.op === 'heads') same = s.same;
     else if (s.op === 'ahead') x.galaxy_seq_ahead(s.value);
     else if (s.op === 'poke') { if (!x.galaxy_poke(s.address, s.value)) throw new Error(`poke ${s.address.toString(16)}`); }
@@ -434,7 +493,15 @@ const UNREACHED = {
   0x1060cf5c: 'the status of a 3D voice (+0x11 bit 2; Use3dHardware False)',
   0x1061848a: 'the release of a 3D voice (Use3dHardware False)',
   0x10618503: 'the ring buffer free (types 0xe000, 0x40)',
-  0x10614796: 'effects reverb hook [0x10688288]: validate-galaxy-reverb.mjs (glxSetSampleReverb)',
+  // glxSetSampleReverb and the reverb setup
+  0x1061147b: 'the 3DNow and MMX reverb engines (0x106220e7, 0x1062135b): the CPU has SSE, which selects 0x10622d33',
+  0x10611577: 'EAX reverb properties on a free (output type 3 or 5): output type 0',
+  0x10610e9e: 'the EAX branch of the setup (output type 3 or 5): output type 0, so the setup returns after the six taps',
+  0x10611221: 'a refused block (Volume outside [-1, 1], HFDamp above the rate): Update never builds one; validate-galaxy-reverb.mjs runs them natively',
+  ...Object.fromEntries([0x10610af7, 0x10610b89, 0x10610c15, 0x10610ca1, 0x10610d2c, 0x10610db8].map(a => [a,
+    'a zero delay Time (0.001f instead): Update clamps Time to at least 0.001; validate-galaxy-reverb.mjs runs it natively'])),
+  ...Object.fromEntries([0x10610b0c, 0x10610b9e, 0x10610c2a, 0x10610cb6, 0x10610d41, 0x10610dcd].map(a => [a,
+    'a delay gain 1 - Gain of exactly 1 (0.999f instead): Update clamps Gain to at least 0.001; validate-galaxy-reverb.mjs runs it natively'])),
   // renderer: the hooks other than the effects reverb (null for DX, docs/galaxy-music/mixer.md §3)
   0x1061476c: 'music reverb hook [0x10684ea8]: only the unreferenced "AE  " loader installs it',
   0x106147c0: 'music chorus hook [0x10698388]: its setter has no caller',
@@ -459,10 +526,12 @@ const samples = new Map([...waves, ...synthetic]);
 const lower = new Map([...waves.keys()].map(k => [k.toLowerCase(), k]));
 const realNames = REAL.map(n => { const k = lower.get(n.toLowerCase()); if (!k) throw new Error(`no shipped sound ${n}`); return k; });
 const only = args.includes('--cases') ? new Set(args[args.indexOf('--cases') + 1].split(',')) : null;
-const list = cases(waves, synthetic, realNames).filter(c => !only || only.has(c.name));
-await runOracle(list, samples);
 const {instance} = await WebAssembly.instantiate(await readFile(WASM));
 const x0 = instance.exports;
+x0.galaxy_reset(16); x0.galaxy_seq_setup(64);
+const cosOf = hf => { const p = x0.galaxy_reverb_cos(hf); return Buffer.from(new Uint8Array(x0.memory.buffer, p, 20)); };
+const list = cases(waves, synthetic, realNames, cosOf).filter(c => !only || only.has(c.name));
+await runOracle(list, samples);
 let lastRing = 0;
 const x = Object.assign(Object.create(null), x0, {
   galaxy_mixer_ring: n => (lastRing = x0.galaxy_mixer_ring(n)), galaxy_mixer_ring_ptr: () => lastRing,
@@ -480,9 +549,9 @@ for (const c of list) {
   let rust;
   try { rust = replay(x, c, samples, modules, 0); } catch (e) { fail(`${c.name}: ${e.message}`); continue; }
   const d = firstDiff(rust.digests, oracleDig), p = firstDiff(chunks(rust.pcm, sameHeads ? 8 : 16), oraclePcm);
-  const loads = c.program.filter(s => s.op === 'loadSample').length, voiceOps = c.program.filter(s => /Sample|Voice|sampleVolume/.test(s.op) && s.op !== 'loadSample').length;
+  const loads = c.program.filter(s => s.op === 'loadSample').length, voiceOps = c.program.filter(s => /Sample|Voice|sampleVolume/.test(s.op) && !['loadSample', 'sampleReverb'].includes(s.op)).length, reverbOps = c.program.filter(s => s.op === 'sampleReverb').length;
   totalGroups += oracleDig.length; totalCallbacks += oraclePcm.length; totalLoads += loads; totalVoiceOps += voiceOps;
-  const label = `${c.name}: ${loads} loads, ${voiceOps} voice ops, ${oraclePcm.length} callbacks${sameHeads ? ' (galaxy_render, coincident heads)' : ''}, ${oracleDig.length} groups`;
+  const label = `${c.name}: ${loads} loads, ${voiceOps} voice ops, ${reverbOps ? `${reverbOps} reverb changes, ` : ""}${oraclePcm.length} callbacks${sameHeads ? ' (galaxy_render, coincident heads)' : ''}, ${oracleDig.length} groups`;
   if (d >= 0 || p >= 0) {
     const why = d >= 0 ? explain(await readFile(path.join(CACHE, `${c.name}.full`)), rust.records, d, oracleDig) : '';
     fail(`${label}: trace group ${d}, PCM callback ${p}${why ? `: ${why}` : ''}`);

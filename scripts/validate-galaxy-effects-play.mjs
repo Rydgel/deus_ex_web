@@ -31,7 +31,7 @@ import {fileURLToPath} from 'node:url';
 const argv = process.argv.slice(2);
 const option = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
 if (argv[0] !== 'child') {
-  const maps = argv.includes('--map') ? [option('map')] : ['01_NYC_UNATCOIsland', '00_Training'];
+  const maps = argv.includes('--map') ? [option('map')] : ['01_NYC_UNATCOIsland', '03_NYC_BrooklynBridgeStation', '00_Training'];
   for (const map of maps) {
     const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'child', map, option('frames', '600')],
       {encoding: 'utf8', maxBuffer: 1 << 26});
@@ -145,10 +145,20 @@ assert.ok(status.samples > 0, 'some sounds registered');
 assert.ok(results.voiceOps > 0, 'voice ops reached the worklet');
 assert.ok(peak > 0, 'the output is not silent');
 starts = startsSeen.size;
+// The listener's zone reverb (UseReverb True in the installed DeusEx.ini):
+// Update hands each changed glxReverb over; on a reverb map the SSE engine is
+// installed with the setup's parameters for that zone.
+const reverbState = processor.kernel.reverbState(), listenerZone = (() => {
+  const viewActor = game.player.collisionActor, target = runtime.readNamed(viewActor, 'ViewTarget') ?? viewActor;
+  return runtime.readNamed(target, 'Region')?.['engine.actor.pointregion.zone'] ?? null;
+})();
+const zoneReverb = listenerZone ? Boolean(runtime.readNamed(listenerZone, 'bReverbZone')) : false;
+assert.equal(Boolean(reverbState & 1), zoneReverb, `the reverb hook follows the listener zone's bReverbZone (${listenerZone?.name})`);
+if (map === '03_NYC_BrooklynBridgeStation') assert.ok(zoneReverb, 'the station is a reverb zone');
 // A Player start: SetViewport's StopSound loop stops every voice.
 const before = processor.kernel.active();
 // Island's start has six ambient voices; Training's first room has none.
-if (map === '01_NYC_UNATCOIsland') assert.ok(before, 'voices active before the Player start');
+if (map !== '00_Training') assert.ok(before, 'voices active before the Player start');
 audio.reset();
 await settle(); await turn();
 assert.equal(processor.kernel.active(), 0, 'the Player start stopped every voice');
@@ -163,6 +173,7 @@ const notes = [...audio.notes];
 const sortedTimes = renderTimes.toSorted((a, b) => a - b), at = q => sortedTimes[Math.min(sortedTimes.length - 1, Math.floor(q * sortedTimes.length))];
 const report = {frames: FRAMES, quanta, callbacks: processor.stats.callbacks, batches: status.batches, reports: status.reports,
   samples: status.samples, sampleBytes: status.sampleBytes, voiceOps: results.voiceOps, voiceStarts: starts, maxActive,
+  reverb: {zone: listenerZone?.name ?? null, bReverbZone: zoneReverb, calls: results.reverbCalls, installed: Boolean(reverbState & 1)},
   renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1))},
   channelChecks: checks, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
   notes: notes.slice(0, 8)};

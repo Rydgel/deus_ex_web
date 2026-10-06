@@ -217,7 +217,8 @@ class Probe(n.NativeCollision):
 # single-address hooks, so the original code runs at emulator speed.
 #
 # Executed from the DLLs: Galaxy Update 0x10609510 (whole: prologue, idle
-# channel loop, music section, reverb tail with UseReverb 0), SetVolumes
+# channel loop, music section, reverb tail: UseReverb +0x44 and the listener's
+# zone from the case, glxSetSampleReverb a leaf recording its block), SetVolumes
 # 0x106061b0, SetInstantMusicVolume 0x10606610, UnregisterMusic 0x10606e60,
 # Engine's lazy-array Load 0x1030cbb0 / Unload 0x1030cd90 / byte-array
 # serializer 0x1030cca0, Core FArray::Realloc 0x10145440. Tier 2 also runs
@@ -251,7 +252,7 @@ FARRAY_REALLOC = 0x10145440
 CORE_GETFULLNAME, CORE_LOGF, CORE_FAILASSERT, CORE_COMPACT, CORE_GMALLOC = 0x1010240f, 0x10102a95, 0x10102c70, 0x10102950, 0x101a7c44
 CLEAR_VOICE, BREAK_FLAG, ORDER_READ = 0x1060a83d, 0x1060a88d, 0x1060aa09
 # The bodies the translation covers, for instruction coverage.
-COVERAGE = [(0x1060a50b, 0x1060aa15, 'Update music section'), (0x106061b0, 0x10606325, 'SetVolumes'),
+COVERAGE = [(0x1060a50b, 0x1060aa15, 'Update music section'), (0x1060aa15, 0x1060abbc, 'Update reverb tail'), (0x106061b0, 0x10606325, 'SetVolumes'),
             (0x10606610, 0x106066f1, 'SetInstantMusicVolume'), (0x10606e60, 0x10606fe8, 'UnregisterMusic'),
             (0x1030cbb0, 0x1030cc31, 'Engine lazy Load'), (0x1030cd90, 0x1030cde9, 'Engine lazy Unload')]
 MSTUB = 0x700f8000  # appSecondsSlow, GMalloc Realloc, archive methods
@@ -316,6 +317,7 @@ class MusicProbe(lo.Oracle):
         self.modules = Path(modules) if modules else None
         cpu.mem_map(GMEM, GMEM_SIZE)
         self.this = self.alloc(0x910); self.viewport = self.alloc(0x40); self.actor = self.alloc(0x700)
+        self.zone = self.alloc(0x400)
         self.frame = self.alloc(0x30); self.clock = self.alloc(8); self.text = self.alloc(0x200)
         self.write(self.viewport + 0x30, 'I', self.actor)
         self.write(self.frame, '12f', 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
@@ -371,6 +373,9 @@ class MusicProbe(lo.Oracle):
         sp = self.esp()
         args = list(self.read(sp + 4, f'{count}i')) if count else []
         event = {'glx': name, 'args': args}
+        if name == 'setSampleReverb':
+            # The glxReverb Update built (its stack block), not its address.
+            event = {'glx': name, 'block': bytes(cpu.mem_read(args[0], 0x6c)).hex()}
         if name == 'loadMusic':
             tag, size_, data_, length, pos = self.read(args[0], '5I')
             music = next((m for m in self.musics.values() if self.read(m['object'] + 0x34, 'I')[0] == data_), None)
@@ -549,7 +554,22 @@ class MusicProbe(lo.Oracle):
     def pointer(self, name):
         return self.musics[name]['object'] if name else 0
 
+    def set_zone(self, zone):
+        """The listener's Region.Zone (AActor +0xc8): null, or a ZoneInfo with
+        bReverbZone (+0x3bc bit 0), MasterGain +0x3c4, CutoffHz +0x3c8,
+        Delay[6] +0x3cc, Gain[6] +0x3d2."""
+        if zone is None:
+            self.write(self.actor + 0xc8, 'I', 0); return
+        self.cpu.mem_write(self.zone, bytes(0x400))
+        self.write(self.zone + 0x3bc, 'I', zone.get('bits', 1 if zone.get('reverb') else 0))
+        self.write(self.zone + 0x3c4, 'B', zone.get('masterGain', 0) & 0xff)
+        self.write(self.zone + 0x3c8, 'i', zone.get('cutoffHz', 0))
+        self.write(self.zone + 0x3cc, '6B', *[v & 0xff for v in zone.get('delay', [0] * 6)])
+        self.write(self.zone + 0x3d2, '6B', *[v & 0xff for v in zone.get('gain', [0] * 6)])
+        self.write(self.actor + 0xc8, 'I', self.zone)
+
     def set_actor(self, fields):
+        if 'zone' in fields: self.set_zone(fields['zone'])
         if 'song' in fields: self.write(self.actor + 0x670, 'I', self.pointer(fields['song']))
         for key, offset in (('section', 0x674), ('cdTrack', 0x675), ('transition', 0x676)):
             if key in fields: self.write(self.actor + offset, 'B', fields[key] & 0xff)
@@ -585,7 +605,7 @@ class MusicProbe(lo.Oracle):
         t = self.this
         cpu.mem_write(t, bytes(0x910))
         self.write(t, 'I', at(0x1063d0e4))
-        self.write(t + 0x3c, '3I', config.get('useCDMusic', 0), config.get('useDigitalMusic', 1), 0)
+        self.write(t + 0x3c, '3I', config.get('useCDMusic', 0), config.get('useDigitalMusic', 1), config.get('useReverb', 0))
         self.write(t + 0x60, '2i', config.get('latency', 40), config.get('effectsChannels', 16))
         self.write(t + 0x69, '3B', config.get('musicVolume', 153), config.get('soundVolume', 204), config.get('speechVolume', 255))
         self.write(t + 0x7c, 'I', self.viewport)

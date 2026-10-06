@@ -33,6 +33,10 @@ Ops (each W/V record closes a digest group):
   {"op":"stopSample","slot":s|null}                          record V
   {"op":"controlVoice","slot":s|null,"cmd","p1","p2"}        record V
   {"op":"sampleVolume","volume":v,"mode":m}                  glxSetSampleVolume; record V
+  {"op":"sampleReverb","block":H,"cos":[[xSig,xSE,cSig,cSE],...]}  glxSetSampleReverb(&block)
+      (the 0x6c-byte glxReverb H); FCOS's result for each listed input (hex
+      significand, sign/exponent) replaces Unicorn's; record Y = u32 result,
+      u32 flags (1 hook = the SSE kernel, 2 a context), the context's first 0xc8 bytes
   {"op":"heads","same":bool}   following callbacks render with posB = posA (the
       renderer's resync placement, which the browser uses: bus A stored, then
       bus B added onto the same frames); per-callback PCM is that segment
@@ -45,7 +49,9 @@ Outputs as the sequencer oracle's --real-kernel mode (<case>.dig, .full,
 """
 import hashlib, importlib.util, json, struct, sys, time
 from pathlib import Path
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP
+from unicorn import UC_HOOK_CODE
+from unicorn import x86_const
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP, UC_X86_REG_FPSW
 
 s = importlib.util.spec_from_file_location('seq', Path(__file__).with_name('native-galaxy-music-sequencer-oracle.py'))
 seq = importlib.util.module_from_spec(s); s.loader.exec_module(seq)
@@ -53,6 +59,8 @@ lo, at, orig = seq.lo, seq.at, seq.orig
 
 LOAD_SAMPLE, START_SAMPLE, CONTROL_SAMPLE, CONTROL_VOICE, STOP_SAMPLE = 0x10618e60, 0x10612310, 0x1060d280, 0x1060cf00, 0x10618410
 SET_SAMPLE_VOLUME = 0x1060ec00
+SET_SAMPLE_REVERB, REVERB_FCOS, REVERB_HOOK, REVERB_CTX, REVERB_KERNEL = 0x106113d0, 0x10610ac1, 0x10688288, 0x10688284, 0x10622d33
+FP = [getattr(x86_const, f'UC_X86_REG_FP{i}') for i in range(8)]
 EFFECT_HEAP, EFFECT_HEAP_SIZE = 0x60000000, 0x04000000
 MUTEX_BASE = 0x1000
 VOICES, VOICE = seq.VOICES, seq.VOICE
@@ -67,6 +75,9 @@ FUNCTIONS = [
     (0x1060d280, 0x1060d366, 'glxControlSample 0x1060d280'),
     (0x1060cf00, 0x1060d0d3, 'glxControlVoice 0x1060cf00'),
     (0x10618410, 0x1061858b, 'glxStopSample 0x10618410'),
+    (0x106113d0, 0x10611610, 'glxSetSampleReverb 0x106113d0'),
+    (0x106109f0, 0x1061122f, 'reverb setup 0x106109f0'),
+    (0x10622d33, 0x10622f1b, 'SSE reverb kernel 0x10622d33'),
 ]
 
 
@@ -101,6 +112,22 @@ class EffectsOracle(seq.MixerOracle):
         self.sample_addr = {}
         self.same_heads = False
         self.pattern = None
+        # The reverb setup's FCOS (0x10610ac1): Unicorn computes it in double,
+        # so its result is replaced by the case's value for that input.
+        self.cos_table, self.cos_pending = {}, None
+        self.cpu.hook_add(UC_HOOK_CODE, self.on_fcos, None, at(REVERB_FCOS), at(REVERB_FCOS + 2))
+        self.reverb_block = self.alloc(0x70)
+
+    def on_fcos(self, cpu, address, size, data):
+        top = (cpu.reg_read(UC_X86_REG_FPSW) >> 11) & 7
+        if address == at(REVERB_FCOS):
+            x = cpu.reg_read(FP[top])
+            if tuple(x) not in self.cos_table:
+                raise RuntimeError(f'reverb FCOS input {x} has no case value')
+            self.cos_pending = self.cos_table[tuple(x)]
+        elif address == at(REVERB_FCOS + 2) and self.cos_pending is not None:
+            cpu.reg_write(FP[top], self.cos_pending)
+            self.cos_pending = None
 
     def case_start(self):
         super().case_start()
@@ -201,6 +228,16 @@ class EffectsOracle(seq.MixerOracle):
             self.record(b'V', self.voices_record(result)); self.end_group()
         elif op == 'heads':
             self.same_heads = bool(step['same'])
+        elif op == 'sampleReverb':
+            # glxSetSampleReverb(&block), as Update calls it (0x1060ab8e).
+            for xs, xe, cs, ce in step.get('cos', []):
+                self.cos_table[(int(xs, 16), int(xe, 16))] = (int(cs, 16), int(ce, 16))
+            cpu.mem_write(self.reverb_block, bytes.fromhex(step['block']))
+            result = self.ccall(SET_SAMPLE_REVERB, self.reverb_block)
+            hook, ctx = self.read(at(REVERB_HOOK), 'I')[0], self.read(at(REVERB_CTX), 'I')[0]
+            flag = (1 if hook == at(REVERB_KERNEL) else 0 if hook == 0 else 4) | (2 if ctx else 0)
+            header = bytes(cpu.mem_read(ctx, 0xc8)) if ctx else bytes(0xc8)
+            self.record(b'Y', struct.pack('<II', result, flag) + header); self.end_group()
         else:
             super().other_op(step, info)
 

@@ -20,6 +20,7 @@
 use std::cell::RefCell;
 
 mod effects;
+mod ext;
 mod host;
 mod mixer;
 mod reverb;
@@ -27,6 +28,7 @@ mod sequencer;
 mod x87;
 pub use effects::*;
 pub use mixer::*;
+pub use reverb::*;
 pub use sequencer::*;
 
 // glxLoadMusic results (GALAXY.H GLXERR_* numbering, as returned by the DLL).
@@ -257,6 +259,8 @@ pub struct Library {
     player: sequencer::Player,
     /// Samples and effect-voice state (effects.rs).
     effects: effects::Effects,
+    /// The effects reverb (reverb.rs).
+    reverb: reverb::Reverb,
 }
 
 impl Library {
@@ -314,6 +318,7 @@ impl Library {
             heap_top: HEAP_BASE,
             player: sequencer::Player::new(),
             effects: effects::Effects::new(),
+            reverb: reverb::Reverb::new(),
         };
         library.set_sample_channels(effects_channels as u32);
         library

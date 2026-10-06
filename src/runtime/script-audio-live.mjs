@@ -79,6 +79,10 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     get soundVolume() { return volumes.state.soundVolume; }, get speechVolume() { return volumes.state.speechVolume; },
     useSurround: bool('UseSurround') ? 1 : 0, reverseStereo: bool('ReverseStereo') ? 1 : 0};
   if (bool('Use3dHardware')) throw new Error('Galaxy Use3dHardware voices are not translated');
+  // UseReverb (+0x44): Update's reverb tail hands the listener zone's
+  // glxReverb to the library (galaxy-audio.mjs); it reaches a mixer only with
+  // Galaxy's own voices (below), as the reverb hook runs on bus B.
+  galaxyConfig.useReverb = bool('UseReverb') ? 1 : 0;
 
   // Music (galaxy-music.mjs): UseDigitalMusic, UseCDMusic (refused when
   // True), Latency (clamped to 10..250 by 0x10605ad0, the function holding
@@ -99,6 +103,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   // Effects through the library's own voices (above).
   const galaxyVoices = Boolean(library?.effects) && globalThis.DEUS_EX_SFX !== 'webaudio';
   if (galaxyVoices) await library.ready();
+  if (!galaxyVoices) galaxyConfig.useReverb = 0;
 
   // Every AmbientSound of the level, decoded before the first tick (the
   // update is synchronous; RegisterSound's decode is the host's).

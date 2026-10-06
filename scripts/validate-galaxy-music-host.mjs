@@ -38,7 +38,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
-import { MUSIC_OP, MUSIC_SLACK, encodeMusicBatch, createMusicLibraryProxy, driveMusicLibrary }
+import { MUSIC_OP, OP_ARITY, MUSIC_SLACK, encodeMusicBatch, createMusicLibraryProxy, driveMusicLibrary }
   from '../src/runtime/galaxy-music-library.mjs';
 import { readMusicExport } from '../src/unreal/music-module.mjs';
 
@@ -78,6 +78,20 @@ const turn = () => new Promise(resolve => setTimeout(resolve, 0));
   worklet.forEachMusicOp(received, (code, x, y, module) => decoded.push([code, module ? [...module] : x, module ? null : y]));
   assert.deepEqual(decoded, expected, 'decoded ops differ from the encoded ones');
   console.log(`PASS encoding: ${ops.length} ops (3 modules, ${received.modules.reduce((n, m) => n + m.byteLength, 0)} bytes) round-trip`);
+  // The effect ops' arities (docs/galaxy-audio.md "Effects through Galaxy's mixer").
+  assert.deepEqual({ ...worklet.ARITY }, { ...OP_ARITY }, 'worklet and library op arities differ');
+  const wav = new Uint8Array(600).map((_, i) => i), reverb = Int32Array.from({ length: 27 }, (_, i) => i * 0x01010101 - 7);
+  const effect = [['loadSample', wav, 0x60000000], ['startSample', 3, 0x60000000, 22050, 0x7fff, 0xc000, 1], ['controlSample', 0x1068dd40, -1, 5, 6],
+    ['stopSample', 0x1068dd40], ['setSampleReverb', reverb], ['setBreakFlag']];
+  const enc = encodeMusicBatch(8, effect);
+  const back = structuredClone(enc.message, { transfer: enc.transfer }), seen = [];
+  worklet.forEachMusicOp(back, (code, a, b, blob, opArgs) => seen.push([code, blob ? [...blob] : null, [...opArgs]]));
+  assert.deepEqual(seen.map(([code]) => code), effect.map(([name]) => MUSIC_OP[name]), 'effect op codes');
+  assert.deepEqual(seen[0][1], [...wav]); assert.equal(seen[0][2][2] >>> 0, 0x60000000);
+  assert.deepEqual(seen[1][2], [3, 0x60000000, 22050, 0x7fff, 0xc000, 1]);
+  assert.deepEqual(seen[2][2], [0x1068dd40, -1, 5, 6]); assert.deepEqual(seen[3][2], [0x1068dd40]);
+  assert.deepEqual(seen[4][2], [...reverb]); assert.deepEqual(seen[5][2], [0, 0]);
+  console.log(`PASS effect ops: ${effect.length} ops of arities ${effect.map(([name]) => OP_ARITY[MUSIC_OP[name]]).join('/')} round-trip`);
 }
 
 // ---- 2. proxy batching and the order mirror ----------------------------------

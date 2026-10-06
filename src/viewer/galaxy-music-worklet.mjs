@@ -62,7 +62,7 @@ export function forEachMusicOp(message, visit) {
 export function createMusicKernel(exports) {
   const x = exports;
   const results = { load: null, control: null, stop: null, start: null, unload: null, sampleLoads: 0, sampleMismatches: 0,
-    lastSample: null, voiceOps: 0, reverb: null };
+    lastSample: null, voiceOps: 0, reverb: null, reverbCalls: 0 };
   return {
     open(effectsChannels, pc, ahead) { return x.galaxy_host_open(effectsChannels, pc, ahead); },
     apply(code, a, b, module, args = null) {
@@ -99,8 +99,9 @@ export function createMusicKernel(exports) {
         case OPS.controlSample: results.voiceOps++; return x.galaxy_sample_control(args[0] >>> 0, args[1], args[2], args[3]);
         case OPS.stopSample: results.voiceOps++; return x.galaxy_sample_stop(args[0] >>> 0);
         case OPS.setSampleReverb: {
-          const block = new Int32Array(x.memory.buffer, x.galaxy_reverb_block(), 27);
-          block.set(args);
+          // glxSetSampleReverb(&Reverb): Update's 0x6c-byte block as 27 words.
+          new Uint8Array(x.memory.buffer, x.galaxy_reverb_block(), 0x6c).set(new Uint8Array(args.buffer, args.byteOffset, 0x6c));
+          results.reverbCalls++;
           return results.reverb = x.galaxy_set_sample_reverb();
         }
         default: throw new Error(`Unknown Galaxy music op ${code}`);
@@ -109,6 +110,7 @@ export function createMusicKernel(exports) {
     state: () => x.galaxy_music_state() >>> 0,
     active: () => x.galaxy_effects_active() >>> 0,
     voicesPtr: () => x.galaxy_voices_ptr(),
+    reverbState: () => x.galaxy_reverb_state() >>> 0,
     render: frames => x.galaxy_render(frames),
     fault: () => x.galaxy_fault(),
     memory: () => x.memory.buffer,
@@ -233,7 +235,8 @@ export class GalaxyMusicProcessor extends Base {
 
   status() {
     return { ...this.stats, open: this.open, connected: Boolean(this.sim), queued: this.queue.length, fill: this.fill,
-      state: this.open ? this.kernel.state() : null, results: this.kernel ? { ...this.kernel.results } : null };
+      state: this.open ? this.kernel.state() : null, reverb: this.open ? this.kernel.reverbState() & 3 : null,
+      results: this.kernel ? { ...this.kernel.results } : null };
   }
 }
 

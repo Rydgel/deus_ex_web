@@ -27,7 +27,7 @@ use crate::sequencer::{Region, UNSUPPORTED_READ};
 /// Each of the six buses d00 d04 d08 d0c d10 d14 is 0x1040 bytes, 64-byte
 /// aligned, carved from [0x10698184] (0x1060e1c8..0x1060e20d).
 pub const BUS_BYTES: usize = 0x1040;
-const BUS_FLOATS: usize = BUS_BYTES / 4;
+pub(crate) const BUS_FLOATS: usize = BUS_BYTES / 4;
 /// Bus indices of the two groups: A = music (V+0x11 bit 7), B = everything else.
 const GROUP_A: [usize; 3] = [0, 2, 4];
 const GROUP_B: [usize; 3] = [1, 3, 5];
