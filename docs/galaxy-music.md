@@ -15,8 +15,10 @@ implementation, from the hash-pinned GOTY `System/Galaxy.dll` (base
 
 The reports were written from disassembly alone; claims marked *derived*
 there still need the oracle runs listed below. The loader (it-loader) is now
-verified against the original under Unicorn (see "Loader: implemented");
-the sequencer, mixer and Update reports are not yet.
+verified against the original under Unicorn (see "Loader: implemented").
+The mixer's SSE kernel, conversion and renderer are verified too (see
+"Phase 3 status", and mixer.md §8). The sequencer is in progress, and the
+Update report is not verified yet.
 
 ## Corrections to earlier notes (applied)
 
@@ -246,6 +248,91 @@ node .work/music/phase2/smoke.mjs .work/music/phase2/out intro-long 2000   # exp
 (`.work/music/phase2` also holds `dec.py`, a trace decoder, and `gdis.py`,
 the disassembler used for the translation.)
 
+## Phase 3 status (mixer, 2026-10-06)
+
+The module player now produces PCM. `native/galaxy-kernel/src/mixer.rs`
+translates three original routines and wires them into the sequencer's mixer
+entry. Details, evidence and findings are in
+[mixer.md §8](galaxy-music/mixer.md).
+
+* **Translated:**
+  * the SSE mixing kernel (template 0x10622730);
+  * the SSE conversion (template 0x10622fe4): the 16-bit store for bus A and
+    the saturating add for bus B;
+  * the renderer 0x106146a0.
+
+  The sequencer's `mix_voice` calls the kernel after its K record, and
+  `mix` zeroes the six buses.
+
+**Bit-exact** against the original running under Unicorn
+(`native-galaxy-music-sequencer-oracle.py --real-kernel`):
+
+* 11 song cases. In each, the sequencer trace, both buses' int16 PCM per
+  20 ms callback, the six float32 buses of the first 8 callbacks, and the
+  browser path `galaxy_render` are all equal. The cases are:
+  * Intro section 0, 2000 callbacks;
+  * Intro at another counter phase;
+  * Title, UNATCO, HongKong, Lebedev, Endgame1 and Area51;
+  * NavalBase, OceanLab2 and Quotes.
+* 17 fabricated programs (1198 groups). They make direct kernel and
+  conversion calls and run the renderer on synthetic voices. They cover the
+  edges listed in mixer.md §7A: 8- and 16-bit samples, the steps listed
+  there, counts 0..9 and 511..513 at odd bus offsets, the pans, `v = 0`,
+  saturation, denormals and conversions out of range.
+
+**Also checked:**
+
+* The same kernel and conversion programs give byte-identical results on the
+  host CPU, running the original templates natively. So Unicorn's SSE/MMX
+  arithmetic is exact for this code.
+* Coverage: kernel template 443 of 443 instructions.
+* Mutants 201–204 are caught.
+
+**New original behaviour found and modelled:**
+
+* **Negative run counts** (Quotes): the bus pointers move back, and the next
+  run writes over the neighbouring buses.
+* **Reads 1–2 bytes before a sample** (NavalBase, OceanLab2, Area51, MJ12):
+  the `step & ~1` drift on the backward pass of a ping-pong loop that starts
+  at frame 0.
+
+Both are bit-equal to the oracle and flagged as hazards. The game's values
+depend on its heap, which is unmeasured. No read of the loader's
+never-written sample tails was seen.
+
+**Interface** (the browser host builds on these):
+
+* `galaxy_render(frames: u32) -> *const i16` returns 2·frames interleaved
+  int16 samples, or 0 on a fault.
+* `galaxy_fault() -> u32` gives the fault code.
+* `Library::render(&mut self, frames: i32, out: &mut [i16]) -> Result<i32, u32>`
+  is the Rust form.
+
+Call order: `galaxy_reset(16)`, `galaxy_seq_setup(pc)`, load, start, then
+`galaxy_render(882)` once per 20 ms of output, buffered. The output depends on
+where mixer calls start, so a different request size gives a different (not
+the original's) schedule. `galaxy_render` takes 81–110 µs (median) per call in
+Wasm and does not allocate.
+
+**Open:**
+
+* the timer thread's MXCSR (0x1f80 assumed);
+* the music/effects bus placement, about 1 s apart (mixer.md §1.3);
+* heap adjacency and contents behind the two hazards;
+* bus B and the reverb, which are not used by the browser;
+* the other songs and sections, pending the sequencer validation.
+  `validate-galaxy-mixer.mjs --sweep` runs every song and section on the
+  Rust kernel alone and finds no fault.
+
+**Rerun:**
+
+```
+cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
+  --target wasm32-unknown-unknown --target-dir .work/wasm-target
+cp .work/wasm-target/wasm32-unknown-unknown/release/galaxy_kernel.wasm src/runtime/galaxy-kernel.wasm
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-mixer.mjs [--refresh] [--sweep]
+```
+
 ## Determinism
 
 Given the voice state, both counters and the sequence of mixer calls, the
@@ -271,7 +358,13 @@ counters' initial phases explicitly.
   slack is never read for the 35 songs; GV `0x80` lands in the music master
   byte, which SetVolumes overwrites.)
 - Whether the mixer can read the never-written tail of a looped sample's
-  allocation (972 bytes over 119 DX samples).
+  allocation (972 bytes over 119 DX samples). No read was seen in the
+  `--sweep` run of 1157 sections × 30 s on the Rust kernel, which flags any
+  such read. This is a sweep, not a proof.
+- The heap memory the kernel reads 1–2 bytes before a sample, and the
+  adjacency of the GlobalAlloc blocks that Quotes' negative run counts write
+  into (mixer.md §8.3).
+- The timer thread's MXCSR (0x1f80 assumed).
 - Counter phases are free-running from library init.
 
 ## Plan
@@ -287,6 +380,7 @@ counters' initial phases explicitly.
    listed in the sequencer report). Translate in Rust.
 3. **Mixer oracle:** install the SSE kernel (`0x10614080(7)`), mix
    fabricated and real voices for N blocks and compare PCM bit-exactly.
+   **Done** (see "Phase 3 status").
 4. **Subsystem:** the Update music transition and SetVolumes on the shared
    x87 model, fed by the PlayerPawn fields from Play's scripts.
 5. **Output:** the Rust mixer in an AudioWorklet (Wasm) at 44.1 kHz; speech

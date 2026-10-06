@@ -1,10 +1,14 @@
 # D — Galaxy.dll software mixer and output
 
-Research notes only (no code changed). Galaxy.dll SHA256 `606e71d1…`, preferred
-base `0x10600000`. Every claim cites the instruction or data address it comes
-from. Field names are `V+0xNN` (voice record) unless a string confirms a name;
-"likely" marks an interpretation. Everything here is read from code; nothing
-was run. The items that still need a measurement are listed in §6 and §7.
+Galaxy.dll SHA256 `606e71d1…`, preferred base `0x10600000`. Every claim
+cites the instruction or data address it comes from. Field names are
+`V+0xNN` (voice record) unless a string confirms a name; "likely" marks an
+interpretation. §0–§7 were written from code before anything was run. The
+SSE kernel (§2.5), the conversion (§2.6), the renderer (§1.3) and the bus
+clear (§1.4) are now translated (`native/galaxy-kernel/src/mixer.rs`) and
+verified against the original under Unicorn and on the host CPU. §8 has the
+evidence, the corrections and what is still open. The items that still need
+a measurement are listed in §6, §7 and §8.5.
 
 ## 0. Corrections and headline findings
 
@@ -435,9 +439,15 @@ It likely means a stereo pair. It is **not** the streamed bit: the streamed bit 
 * **Pipelining:** two frames are pre-computed. The main loop stores four frames per
   iteration (`0x10622918..0x10622a05`). A one-frame `movlps` prologue runs when bus0
   is not 16-byte aligned (`0x10622889..0x10622912`), and a one-frame tail runs at
-  `0x10622a15..0x10622a92` (`psubw mm3, mm4` steps the weights back one frame). By my
-  reading every stored frame k gets exactly `o_k` above. The kernel reads up to two
-  sample pairs past the last frame; this does not affect the output.
+  `0x10622a15..0x10622a92` (`psubw mm3, mm4` steps the weights back one frame). Every
+  stored frame k gets exactly `o_k` above; this is verified (§8). The kernel reads up
+  to two sample pairs past the last frame; this does not affect the output.
+* **Frame count** (§8.2): the count is the 16-bit `dx`. When bus0 is not 16-byte
+  aligned, the prologue stores one frame **before** the count is tested, so a run
+  of count 0 at an odd bus frame still adds one frame.
+* **Lanes:** gain lane 0 (the first float of a stereo bus frame, the left output
+  sample) is kernel arg 7 = `tab[0x7fff − P]·V >> 15`; lane 1 is arg 8 =
+  `tab[P]·V >> 15`. Mode bit 2 negates the low word of args 8, 10 and 12.
 * **Chunk dependence.** The kernel uses `step & ~1` and `frac & ~1`, while the outer
   update (§2.3) uses the full step. The kernel's positions and weights therefore drift
   from the true 16.16 position by up to `k · (step & 1)` / 65536 within a call, and
@@ -458,6 +468,9 @@ Called as `conv(bus, frames, dst, fmt)`. It processes `frames << (fmt & 1)` scal
 Installed: bus A is converted with fmt `0x07` (overwrite) and bus B with fmt `0x47`
 (saturating add). An out-of-int32 float would convert to `0x80000000` and saturate to
 −32768. That would need more than 65536 full-scale voices, so it cannot happen.
+Verified for both 16-bit paths (§8). The 8-bit paths are not translated. With
+`fmt & 0x80 = 0` they add `mm5`, which is set only when `fmt & 0x80`, so they
+add whatever the previous MMX code left there (`0x10623009..0x1062301a`).
 
 ### 2.7 Non-SSE kernels (not the reference path; listed so they are not mistaken for it)
 
@@ -596,8 +609,8 @@ Installed: bus A is converted with fmt `0x07` (overwrite) and bus B with fmt `0x
 8. **Not read:** the 3DNow and MMX kernels in detail; the x86 kernel beyond its
    dispatch; the hardware-3D path (`0x10612800`, `0x106126f0`); the decoders
    `0x1061a690`, `0x1061a170`, `0x10619800`.
-9. **SSE pipelining** (§2.5) is by reading. The oracle must confirm it with odd bus
-   offsets and n = 1..8.
+9. ~~**SSE pipelining** (§2.5) is by reading.~~ Verified (§8): odd bus offsets,
+   n = 0..9, 15..17 and 511..513, full template coverage.
 
 ## 7. How I would probe this
 
@@ -666,3 +679,207 @@ live-capture technique):
 * **Record the output** (loopback) while one frame starts a short click sound and a
   music section change (or `0x1060d0e0` mode 2). The offset between them should be
   about `ring − D` if §1.3 is right.
+
+## 8. Phase 3: translation and verification (2026-10-06)
+
+### 8.1 What runs
+
+* **Rust:** `native/galaxy-kernel/src/mixer.rs` contains:
+  * the kernel (`mix_kernel`), called from `sequencer.rs`'s `mix_voice` after
+    the K record;
+  * the bus clear (`clear_buses`, from `mix`);
+  * the conversion;
+  * `render_ring` (0x106146a0 over a staging ring);
+  * `render` (the same loop, bus A only, for the browser).
+
+  The six buses are one `Vec<f32>` in d00..d14 order at stride 0x1040, as
+  glxInit carves them (`0x1060e1d6..0x1060e20d`: `d00 = align64(block)`).
+* **Oracle:** `scripts/native-galaxy-music-sequencer-oracle.py --real-kernel`.
+  * The code buffer keeps the kernel and conversion that the real
+    0x10614080(7) copied (setup 0x106231d1: kernel 0x603 bytes, then the
+    conversion 0x1ed bytes). The oracle checks this copy against the
+    templates.
+  * MXCSR is 0x1f80. Unicorn 2.1.4 starts with MXCSR 0 and with CR4 =
+    0x50200, which already has OSFXSR set.
+  * Each 20 ms callback calls the renderer on a 176400-byte ring. The first
+    callback wraps at the end of the ring, and bus B is half a ring ahead.
+  * K is recorded at the call site 0x106154e0, before the kernel modifies its
+    stack arguments. M and R are recorded at the mixer entry and at its `ret`.
+    The trace is byte-equal to the stub mode's, which checks the hook points.
+  * Fabricated programs drive the kernel, the conversion and the renderer
+    directly, with synthetic voice records and sample memory at FAB =
+    0x50000000.
+* **Host CPU:** `scripts/native-galaxy-mixer-hw.c` (`gcc -m32`) copies the
+  two templates into executable memory and the page 0x1064d000 (gain
+  vectors, mask, 2^-30, saved ESP) to a fixed mapping. It then runs the
+  oracle's kernel and conversion programs natively.
+
+### 8.2 Evidence
+
+`node scripts/validate-galaxy-mixer.mjs` checks the following.
+
+* **Songs:** 11 cases. For each it compares the sequencer trace, the int16
+  PCM of both buses per callback, the six float32 buses after every mixer
+  call of the first 8 callbacks, and `galaxy_render`'s bus-A output. All
+  are bit-equal.
+
+  | Case | Section | Callbacks |
+  | --- | --- | --- |
+  | Intro | 0 | 2000 (40 s, 2449 ticks) |
+  | Intro, counters at another phase | 0 | 400 |
+  | Title, UNATCO, HongKong, Lebedev (instrument mode), Endgame1 (Amiga), Area51 | 0 | 500 each |
+  | NavalBase | 0 | 400 |
+  | OceanLab2 | 2 | 250 |
+  | Quotes | 4 | 250 |
+
+* **Fabricated programs:** 17 programs, 1198 groups, all bit-equal.
+  * **Kernel calls:** 3 × 278 direct calls:
+    * 8- and 16-bit samples;
+    * steps 0x10000, 0x8000, 0x10001, 0x17fff, 0xffff, 1, 3, 0x2fffe,
+      0x7fffe and negative steps;
+    * fractions 0, 1, 0x8000 and 0xffff;
+    * counts 0..9, 15..17 and 511..513 at bus frame offsets 0..7;
+    * gain words 0, ±1, 0x7fff and 0x8000, plus values above 16 bits;
+    * surround on and off;
+    * buses prefilled with denormals, signed zeros, and tiny and large
+      values, or zeroed.
+  * **Conversions:** 270 direct calls:
+    * ties ±0.5, ±1.5, ±2.5 and ±3.5;
+    * ±32767.5 and the saturation edges;
+    * ±2^31, values out of range, ±inf, quiet and signalling NaN, and
+      denormals;
+    * the store and add formats 0x07/0x47/0x87/0xc7, and mono 0x06/0x46
+      (a no-op);
+    * 0..520 frames.
+  * **Renderer:** 13 programs of synthetic voices:
+    * forward loops, ping-pong in both directions, one-shot ends including
+      an exact division, and key-off release;
+    * pans 0, 0x3fff, 0x7fff and 0xc000, plus surround, ramps, the pan
+      envelope term and both sends;
+    * `v = 0` skips, a step of 0, and master 0;
+    * saturation of the bus A store and of the bus B add onto a ring
+      filled with 0x7f00;
+    * request sizes 1..8 and 511..513;
+    * 48 voices, and 3 random programs.
+  * **Count 0 at an odd offset:** 381 runs of count ≤ 0 at odd bus offsets
+    in `mix-count-zero`.
+* **Unicorn against the hardware:** all 1104 kernel and conversion
+  operations give the same bytes on the host CPU (AMD, Linux, MXCSR 0x1f80)
+  as under Unicorn. So Unicorn's `cvtpi2ps`, `mulps`, `addps`, `cvtps2pi`,
+  `cvtss2si`, `pmaddwd`, `packssdw` and `paddsw` are exact here, including
+  for denormals and NaN.
+* **Coverage:**
+  * kernel template: 443 of 443 instructions;
+  * conversion: 75 of 154; the unreached part is the 8-bit paths, which are
+    not translated;
+  * renderer: 174 of 222; the unreached part is the four effect-hook
+    calls, which are null for DX.
+* **Mutants:** each is caught.
+  * 201, full step: by 10 programs;
+  * 202, round half away: by 12;
+  * 203, f64 arithmetic: by 16;
+  * 204, no saturation: by 6.
+* **Rust unit tests** (`cargo test`):
+  * hand-computed frames: o = 16809471 rounds to 16809472 under
+    `cvtpi2ps`, the gain word is sign-extended from 16 bits, surround
+    negation, and the count-0 prologue frame;
+  * conversion edges;
+  * frame counts.
+
+### 8.3 Corrections and findings
+
+* **Negative run counts write over the buses.** Quotes_Music reaches this in
+  all five sections within 30 s.
+  * The cause is a 9xx offset that puts a voice below the start of its
+    backward ping-pong loop. With bound − pos > 0 and step < 0, the run count
+    `(d<<16 − frac)/step + 1` is negative (−6752 in Quotes section 4).
+  * At an aligned bus offset the kernel stores no frame for that run (the
+    count word is negative; §2.5 frame count). The mixer then
+    adds the negative count to `remaining`, which grows from 157 to 6909, and
+    moves the bus pointers 54 KB back (`0x1061557f..0x1061559d`).
+  * The next run writes 6909 frames from there. Those writes cover the non-SSE
+    table block before the bus block (allocated just before it,
+    `0x1060e1b4`, never read on the SSE path) and the buses d00..d10 at
+    shifted frames.
+  * The model keeps the six buses as one block, applies the writes that land
+    on them, and drops the writes below d00 (`HAZARD_BUS_UNDERRUN`). This is
+    bit-equal to the oracle, whose allocator places the blocks in call order.
+    Whether Windows' heap does the same is not measured. If it does not,
+    the original writes over other heap data there.
+* **Reads before a sample.** For a backward run, `step & ~1` moves the kernel
+  up to `count/65536` frames below the true position. When the loop start is
+  the sample's first frame, the last frame reads `x[start − 1]`, which is 1
+  or 2 bytes before the allocation. NavalBase, OceanLab2 (16-bit), Area51
+  and MJ12 (8-bit) all reach this the same way: a ping-pong loop from frame 0
+  on its backward pass, with the last frame at position −1.
+  * The original reads heap memory there: a block header or a neighbour,
+    depending on the platform. That byte's weight is at most about
+    `count/2` of 32767.
+  * The model reads the neighbouring allocation of the bump-heap address
+    model, or 0 in a block's 16-byte rounding gap, and flags
+    `HAZARD_FOREIGN_READ`. The oracle zeroes its heap between cases, so the
+    two agree, and the cases are bit-equal. The game's value is unknown.
+* **Never-written sample tails** (the loader's 972 bytes): no read in the
+  sweep (`HAZARD_UNWRITTEN_TAIL` never set).
+* **Count 0 at an odd bus offset** stores one frame (§2.5). In
+  `mix-count-zero` this is reached by a loop shorter than one step: the
+  position drifts past the loop end, and a count-0 run then pulls it back by
+  the loop length.
+
+### 8.4 Interface
+
+* Rust: `pub fn render(&mut self, frames: i32, out: &mut [i16]) -> Result<i32, u32>`
+  on `Library`. It returns the frames rendered; fewer than `frames` only when
+  `ahead` is 0. It does not allocate.
+* Wasm exports:
+  * `galaxy_render(frames: u32) -> *const i16`: 2·frames interleaved int16
+    (left, right), valid until the next call, or 0 on a fault. It first pins
+    `ahead` (0x10697cdc) to the `galaxy_seq_ahead` value, or to
+    `DEFAULT_AHEAD` = 7056 when none was set. Only zero or nonzero gates the
+    mixer, so the PCM does not depend on the value.
+  * `galaxy_fault() -> u32`: the fault code, sticky until `galaxy_reset`.
+  * Faults: 0x120 bus write past d14 or far below d00; 0x121 8-bit output
+    or an odd ring position; 0x122 the dispatch would not pick the SSE
+    kernel (no `galaxy_seq_setup`); 0x106 a read with no model memory.
+  * `galaxy_mixer_hazards() -> u32`: bit 1 unwritten tail, 2 foreign read,
+    4 bus underrun.
+  * Validator-only exports: `galaxy_mixer_buses`, `_memory`, `_kernel`,
+    `_scratch`, `_convert`, `_ring`, `galaxy_render_ring`, `galaxy_poke`,
+    `galaxy_voices_ptr`, `galaxy_mixer_bus_log*`, `galaxy_mixer_ahead_now`.
+* **Chunk schedule.** The output depends on where mixer calls start (§2.5,
+  §5). To reproduce the original's schedule, call `galaxy_render(882)` once
+  per 20 ms of output (one timer callback at Latency 40 and 44.1 kHz) and
+  buffer the result. Do not call it per 128-frame AudioWorklet quantum.
+* **Cost:** a median of 81–110 µs per `galaxy_render(882)` in Node's Wasm
+  (p99 about 200 µs) over the whole corpus.
+
+### 8.5 Open
+
+* The timer thread's MXCSR on the reference machine. 0x1f80 is assumed (the
+  Windows default; Galaxy has no `ldmxcsr`).
+* The bus placement (§1.3, music about 1 s behind effects) and the
+  CrossOver open path (§6.1, §6.3).
+* The real heap's contents next to sample allocations
+  (`HAZARD_FOREIGN_READ`) and the block adjacency behind
+  `HAZARD_BUS_UNDERRUN`.
+* Bus B in the browser: effects stay on Web Audio. The bus B path
+  (`render_ring`, the add conversion) is verified but not wired in.
+* Reverb (§3) and the non-SSE kernels (§2.7) are not translated.
+* The other songs and sections depend on the sequencer validation. The
+  `--sweep` option runs the Rust kernel alone over all 35 songs and 1157
+  sections (1500 callbacks each). It finds no fault, which checks
+  robustness, not fidelity.
+
+### 8.6 Rerun
+
+```
+cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
+  --target wasm32-unknown-unknown --target-dir .work/wasm-target
+cp .work/wasm-target/wasm32-unknown-unknown/release/galaxy_kernel.wasm src/runtime/galaxy-kernel.wasm
+cargo test --manifest-path native/galaxy-kernel/Cargo.toml --target-dir .work/native-target
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-mixer.mjs [--refresh] [--sweep]
+```
+
+The oracle outputs (about 25 s to produce) are cached in
+`.cache/galaxy-music/mixer` and keyed by the oracle scripts and the case
+list. The host-CPU check builds `.cache/galaxy-music/mixer/hw/galaxy-mixer-hw`.
