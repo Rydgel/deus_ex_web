@@ -612,8 +612,13 @@ for (const c of songs) {
   const t = firstDiff(rust.digests, oracleDig), p = firstDiff(rust.pcm, oraclePcm);
   const busEqual = Buffer.compare(Buffer.from(rust.buses), oracleBus) === 0;
   const fullEqual = Buffer.compare(rust.full, oracleFull) === 0;
+  // galaxy_render adds bus B onto bus A's frames. Bus B is silent for a song
+  // unless a negative run count moved the bus pointers over it
+  // (HAZARD_BUS_UNDERRUN, Quotes); that song's browser path is compared with
+  // the original renderer at coincident heads by validate-galaxy-effects.mjs
+  // (case quotes-s4-browser).
   const render = runSongRender(ex, c, modules[c.program[0].module], 0, callbacks);
-  const r = firstDiff(render, oraclePcm.map(d => d.subarray(0, 8)));
+  const r = rust.hazards & 4 ? -1 : firstDiff(render, oraclePcm.map(d => d.subarray(0, 8)));
   songResults[c.name] = {callbacks, ticks: oracleDig.length - 1, traceFirstDiff: t, pcmFirstDiff: p, renderFirstDiff: r,
     busEqual, fullEqual, hazards: rust.hazards};
   const label = `${c.name}: ${callbacks} callbacks, ${oracleDig.length - 1} ticks`;
@@ -630,7 +635,7 @@ for (const c of songs) {
       for (let i = 0; i < 2 * CALLBACK_BYTES; i += 2) if (a.readInt16LE(i) !== o.readInt16LE(i)) { where = ` (bus ${i < CALLBACK_BYTES ? 'A' : 'B'} sample ${(i % CALLBACK_BYTES) / 2}: ${a.readInt16LE(i)} vs ${o.readInt16LE(i)})`; break; }
     }
     fail(`${label}: PCM ${p} render ${r} buses ${busEqual} full ${fullEqual}${where}`);
-  } else console.log(`${label}: trace, PCM (both buses), buses of ${BUS_WINDOW} callbacks and galaxy_render all bit-equal${rust.hazards ? `, hazards ${rust.hazards}` : ''}`);
+  } else console.log(`${label}: trace, PCM (both buses), buses of ${BUS_WINDOW} callbacks and ${rust.hazards & 4 ? 'galaxy_render (by validate-galaxy-effects)' : 'galaxy_render'} all bit-equal${rust.hazards ? `, hazards ${rust.hazards}` : ''}`);
 }
 
 // 2. Fabricated programs.

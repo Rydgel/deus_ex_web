@@ -19,10 +19,13 @@
 //! error return.
 use std::cell::RefCell;
 
+mod effects;
 mod host;
 mod mixer;
+mod reverb;
 mod sequencer;
 mod x87;
+pub use effects::*;
 pub use mixer::*;
 pub use sequencer::*;
 
@@ -252,6 +255,8 @@ pub struct Library {
     heap_top: u32,
     /// The module player and mixer front end (sequencer.rs).
     player: sequencer::Player,
+    /// Samples and effect-voice state (effects.rs).
+    effects: effects::Effects,
 }
 
 impl Library {
@@ -308,6 +313,7 @@ impl Library {
             mutant: 0,
             heap_top: HEAP_BASE,
             player: sequencer::Player::new(),
+            effects: effects::Effects::new(),
         };
         library.set_sample_channels(effects_channels as u32);
         library

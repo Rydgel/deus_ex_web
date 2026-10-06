@@ -202,6 +202,7 @@ struct Memory<'a> {
     regions: &'a [(u32, u32, Region)],
     instruments: &'a [Option<Instrument>],
     patterns: &'a [Option<Pattern>],
+    effects: &'a [crate::effects::EffectSample],
     fab: &'a [(u32, Vec<u8>)],
     own: Option<View<'a>>,
     hazards: u32,
@@ -244,6 +245,9 @@ impl<'a> Memory<'a> {
             }
             Region::PatternHeader(p) => (&self.patterns[p as usize].as_ref()?.header[..], (0, 0)),
             Region::Events(p) => (&self.patterns[p as usize].as_ref()?.events, (0, 0)),
+            // The WAV loader zeroes the 31 bytes after the data (0x10619acc), so
+            // no part of an effect sample's allocation is unwritten.
+            Region::Effect(i) => (&self.effects[i as usize].data, (0, 0)),
         };
         Some(View { base: start, bytes, tail })
     }
@@ -365,6 +369,7 @@ impl Library {
             regions: &player.regions,
             instruments: &self.instruments,
             patterns: &self.patterns,
+            effects: &self.effects.samples,
             fab: &player.mixer.fab,
             own: None,
             hazards: 0,
@@ -404,6 +409,20 @@ impl Library {
         let hazards = mem.hazards | if underrun { HAZARD_BUS_UNDERRUN } else { 0 };
         self.player.mixer.hazards |= hazards;
         Ok(())
+    }
+
+    /// The renderer's effect hooks after a mixer call of `k` frames
+    /// (0x10614762..0x10614807), each `fn(ctx, dry, send, k, 0)` when both
+    /// the function and its context are set: music reverb [0x10684ea8] on
+    /// (d00, d08), effects reverb [0x10688288] on (d04, d0c), music chorus
+    /// [0x10698388] on (d00, d10), effects chorus [0x106981c8] on (d04, d14).
+    /// Only the effects reverb is reachable for DX (docs/galaxy-music/mixer.md
+    /// §3); it runs when glxSetSampleReverb installed it (reverb.rs).
+    pub(crate) fn effect_hooks(&mut self, k: i32) -> Result<(), u32> {
+        if k == 0 {
+            return Ok(());
+        }
+        self.reverb_hook(k)
     }
 
     /// The conversion of bus `bus` from frame `first`, `frames` frames, into `dst`.
@@ -448,8 +467,8 @@ impl Library {
     /// The renderer 0x106146a0(ring, size, posA, posB, lenA, lenB): mixer
     /// calls of n = min(framesA, framesB) frames (clamped to 512 by the
     /// mixer) while both lengths and `ahead` are nonzero; after each, the
-    /// effect hooks (null for DX: the music units are never installed and
-    /// the effects reverb is not translated), bus A converted with the
+    /// effect hooks (`effect_hooks`: only the effects reverb is reachable
+    /// for DX), bus A converted with the
     /// output format (store) at posA and bus B with `fmt | 0x40` (saturating
     /// add) at posB, both wrapping at the ring's end. Returns bytes.
     pub fn render_ring(&mut self, ring: &mut [i16], pos_a: i32, pos_b: i32, len_a: i32, len_b: i32) -> Result<i32, u32> {
@@ -471,6 +490,7 @@ impl Library {
             self.trace_words(b'M', &[n as u32]);
             let k = self.mix(n)?;
             self.trace_words(b'R', &[k as u32]);
+            self.effect_hooks(k)?;
             self.log_buses();
             self.convert_ring(ring, 0, k, pa, fmt, shift)?;
             self.convert_ring(ring, 1, k, pb, fmt | 0x40, shift)?;
@@ -487,12 +507,18 @@ impl Library {
         Ok(total)
     }
 
-    /// 0x106146a0 for one request of `frames` frames, bus A only: the mixer
-    /// calls and their order are the renderer's, bus A (d00, the music) is
-    /// converted with the output format into `out` as interleaved stereo
-    /// int16. Bus B's saturating add into the ring is not produced (the
-    /// browser plays effects on Web Audio). Returns the frames rendered,
-    /// fewer than `frames` only when `ahead` is zero. No allocation.
+    /// 0x106146a0 for one request of `frames` frames with both heads at the
+    /// same output position: the mixer calls and their order are the
+    /// renderer's; after each, bus A (d00, the music) is converted with the
+    /// output format (store) into `out` as interleaved stereo int16, then
+    /// bus B (d04, effects and speech) with `fmt | 0x40` (saturating add)
+    /// onto the same frames. That is the renderer's own placement when posA
+    /// equals posB (the start-up and underrun resync, 0x10614381..0x10614471);
+    /// the original's steady state puts bus B about a ring ahead of bus A
+    /// (docs/galaxy-music/mixer.md §1.3, derived), a host timing the browser
+    /// does not reproduce. The effect hooks run between the mix and the
+    /// conversions as in the renderer (`effect_hooks`). Returns the frames
+    /// rendered, fewer than `frames` only when `ahead` is zero. No allocation.
     pub fn render(&mut self, frames: i32, out: &mut [i16]) -> Result<i32, u32> {
         self.check_kernel()?;
         let fmt = self.player.output_format;
@@ -510,8 +536,10 @@ impl Library {
             self.trace_words(b'M', &[(frames - done) as u32]);
             let k = self.mix(frames - done)?;
             self.trace_words(b'R', &[k as u32]);
+            self.effect_hooks(k)?;
             self.log_buses();
             self.convert_bus(0, 0, k, &mut out[2 * done as usize..], fmt)?;
+            self.convert_bus(1, 0, k, &mut out[2 * done as usize..], fmt | 0x40)?;
             done += k;
         }
         Ok(done)
