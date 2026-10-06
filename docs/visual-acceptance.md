@@ -130,35 +130,51 @@ left first. The `play` step writes `.work/acceptance/plan.json`; `original` read
 
 ## Results
 
-### Fourteen maps, frozen (2026-10-06)
+### Twenty-six maps, frozen at held level time (2026-10-07)
 
-Each map has five views. All 70 frames are 1280×720, taken on the Linux
-host under Wine 11.17 (D3D), Play's after the pixel-centre fix below. The
-columns are ranges or minima over each map's five views. The sub-pixel
-offset is listed for views with enough strong gradients (—: none).
+Each map has five views. All 130 frames are 1280×720, taken on the Linux
+host under Wine 11.17 (D3D). Play's frames include the pixel-centre fix
+below. Both sides' level clocks were held at the same TimeSeconds, matched
+to within 16 ms (46.77–46.82 s). The columns are ranges or minima over each
+map's five views. The sub-pixel offset is listed for views with enough
+strong gradients (—: none); over those 36 views the median is (0, 0).
 
 | Map | Play / original | Mean abs. diff. | Edge recall (min) | Edge precision (min) | Outlier blocks | Sub-pixel offset |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| 00_Training | 1.27–1.40 | 1.21–4.24 | 0.92 | 0.94 | 0 | (0, 0), (0.125, 0) |
-| 01_NYC_UNATCOIsland | 1.28–1.33 | 1.43–3.27 | 0.94 | 0.95 | 12 | (0, 0) |
+| 00_Training | 1.27–1.40 | 1.21–4.23 | 0.92 | 0.94 | 0 | (0, 0), (0.125, 0) |
+| 01_NYC_UNATCOHQ | 1.22–1.32 | 3.26–4.58 | 0.94 | 0.95 | 0 | (0, 0), (0.125, 0) |
+| 01_NYC_UNATCOIsland | 1.29–1.33 | 1.43–3.27 | 0.94 | 0.95 | 0 | (0, 0) |
 | 02_NYC_BatteryPark | 1.13–1.35 | 0.35–3.80 | 0.96 | 0.96 | 0 | (0, 0) |
+| 02_NYC_Smug | 1.30–1.37 | 0.81–1.31 | 0.97 | 0.58 | 0 | — |
+| 03_NYC_747 | 1.34–1.45 | 1.89–2.84 | 0.93 | 0.89 | 11 | (0, 0), (0, 0.25) |
 | 03_NYC_AirfieldHeliBase | 1.34–1.38 | 2.22–3.66 | 0.92 | 0.66 | 0 | — |
-| 04_NYC_Street | 1.37–1.39 | 1.47–2.27 | 0.92 | 0.93 | 7 | — |
-| 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.46–4.15 | 0.94 | 0.74 | 0 | — |
+| 03_NYC_BrooklynBridgeStation | 1.28–1.40 | 0.80–2.25 | 0.96 | 0.67 | 0 | — |
+| 04_NYC_Street | 1.36–1.39 | 1.47–2.27 | 0.91 | 0.93 | 7 | — |
+| 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.46–4.12 | 0.94 | 0.74 | 0 | — |
+| 06_HongKong_Helibase | 1.21–1.35 | 2.90–5.87 | 0.96 | 0.93 | 25 | (0, 0) |
+| 06_HongKong_VersaLife | 1.24–1.34 | 3.31–5.52 | 0.96 | 0.97 | 0 | (0, -0.25) |
 | 06_HongKong_WanChai_Market | 1.27–1.35 | 1.35–2.30 | 0.94 | 0.97 | 0 | (0, -0.375), (0, 0), (0.125, 0) |
 | 08_NYC_Bar | 1.34–1.40 | 1.64–3.18 | 0.92 | 0.96 | 0 | (0, 0) |
+| 09_NYC_Dockyard | 1.30–1.40 | 1.46–3.96 | 0.90 | 0.90 | 0 | (0, 0) |
 | 09_NYC_Ship | 1.26–1.39 | 1.58–3.46 | 0.86 | 0.30 | 0 | (0, -0.25) |
+| 10_Paris_Chateau | 1.32–1.37 | 1.51–2.41 | 0.89 | 0.88 | 13 | (0, 0) |
 | 10_Paris_Club | 1.33–1.37 | 1.00–1.83 | 0.95 | 0.57 | 0 | — |
 | 11_Paris_Cathedral | 1.15–1.29 | 0.26–1.04 | 0.65 | 0.21 | 0 | — |
-| 12_Vandenberg_Cmd | 1.21–1.37 | 0.49–1.59 | 0.89 | 0.79 | 0 | — |
-| 14_OceanLab_Lab | 1.16–1.36 | 1.34–3.85 | 0.97 | 0.96 | 2 | (0, 0) |
-| 15_Area51_Bunker | 1.30–1.37 | 0.90–1.74 | 0.77 | 0.71 | 19 | — |
+| 11_Paris_Everett | 1.33–1.37 | 1.29–2.57 | 0.91 | 0.90 | 0 | (0, 0) |
+| 12_Vandenberg_Cmd | 1.22–1.37 | 0.49–1.71 | 0.83 | 0.79 | 1 | — |
+| 12_Vandenberg_Gas | 1.30–1.36 | 0.93–1.31 | 0.89 | 0.94 | 0 | — |
+| 14_OceanLab_Lab | 1.16–1.42 | 1.41–3.82 | 0.94 | 0.95 | 0 | (0, 0) |
+| 14_Oceanlab_Silo | 1.25–1.40 | 0.86–2.42 | 0.91 | 0.97 | 0 | (0, -0.125), (0, 0) |
+| 15_Area51_Bunker | 1.29–1.37 | 0.85–1.45 | 0.82 | 0.71 | 8 | — |
+| 15_Area51_Entrance | 1.29–1.30 | 0.86–2.52 | 0.91 | 0.89 | 0 | (0, 0) |
 
 Every view was also inspected side by side.
 
-**Matching.** Geometry, BSP lighting, meshes, coronas, mirrors, fog, the
-skies and decorations line up in all 70 views. Play's raw frame is
-uniformly 1.13–1.41× brighter; see Open.
+**Matching.** Geometry, BSP lighting (pulsing lights included, now that
+time is held), coronas, mirrors, fog, the skies and decorations line up in
+122 of 130 views. Play's raw frame is uniformly 1.13–1.45× brighter; see
+Open. Before time was held, Helibase y1 and Dockyard y1/y2 differed through
+LT_Pulse phase alone.
 
 **Flags explained by the metric or by timing.**
 
@@ -176,6 +192,15 @@ uniformly 1.13–1.41× brighter; see Open.
     (`actor-tick.mjs`). The rotor's phase therefore depends on elapsed time.
 
 **Differences.**
+
+0. *Mesh lighting of single actors (open, with the lighting work).* With
+   time held, Helibase's BlackHelicopter0 is deep red in the original (lit
+   by TriggerLight4, a static Searchlight, hue 0, saturation 0, brightness
+   200, 370 units away) and gold in Play. 747 y2's yellow robotic arm is 2–3×
+   brighter in Play than the frame's ratio. The BSP around both matches, so
+   the suspects are the inputs of the per-actor light gather
+   ([mesh lighting](mesh-lighting.md) "Candidates"): the leaf's permeating
+   list, the line checks, the fade schedule, or a light's initial state.
 
 1. *Pixel centres (fixed).* In the 19 views with at least 1,500
    strong-gradient pixels, the original's image sat a median (−0.5, −0.5)
