@@ -21,11 +21,10 @@ import path from 'node:path';
 import { gameDirectory } from './game-directory.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
-import { readTexture } from '../src/unreal/textures.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
-import { buildWindowSceneFrame } from '../src/runtime/script-window-scene-frame.mjs';
-import { createBspOcclusion, texturePolyFlags, OCCLUSION_POINTS,
-  OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
+import { createBspOcclusion, OCCLUSION_POINTS, OCCLUSION_SHOW_PLAYER_CTRL,
+  OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
+import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags as textureFlagsOf } from './occlusion-request.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) {
@@ -37,33 +36,12 @@ for (const directory of ['Maps', 'System', 'Textures'])
   for (const name of await readdir(path.join(root, directory)))
     files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 const assets = new AssetStore(files);
-const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
-const bits = value => (f32[0] = value, u32[0]);
-// Core appTan's measured qword results for FOV 75 and 90 (the table in
-// script-window-scene-frame.mjs), keyed by the double argument the frame
-// producer passes, for the oracle's Engine ComputeRenderSize.
-const TANGENTS = {};
-const io = new DataView(new ArrayBuffer(8));
-for (const [fov, result] of [[75, '3fe88df153d6a676'], [90, '3fefffffffffffff']])
-  buildWindowSceneFrame({ location: [0, 0, 0], rotation: [0, 0, 0], width: 64, height: 64, fov, appTan: argument => {
-    io.setFloat64(0, argument, true);
-    TANGENTS[io.getBigUint64(0, true).toString(16).padStart(16, '0')] = result;
-    io.setBigUint64(0, BigInt(`0x${result}`), true);
-    return io.getFloat64(0, true);
-  } });
+const TANGENTS = occlusionTangents();
 const kernel = (await loadScriptVmKernel()).occlusion;
 
 async function validate(mapName, count, seed, extra = []) {
   const asset = await assets.get(mapName), map = decodeMap(asset.bytes), model = map.model;
-  const textureFlags = new Map(), surfaceTextureFlags = [];
-  for (const surface of model.surfaces) {
-    if (!surface.texture) { surfaceTextureFlags.push(0); continue; }
-    if (!textureFlags.has(surface.texture)) {
-      const object = await assets.resolve(asset, surface.texture);
-      textureFlags.set(surface.texture, texturePolyFlags(readTexture(object.asset, object.index).values));
-    }
-    surfaceTextureFlags.push(textureFlags.get(surface.texture));
-  }
+  const surfaceTextureFlags = await textureFlagsOf(assets, asset, model);
   let state = seed >>> 0;
   const random = () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 2 ** 32);
   const spots = map.actors.filter(a => a.values.Location && /PathNode|PlayerStart|PatrolPoint|Inventory|Decoration|ScriptedPawn|Light|Trigger/.test(a.className)).map(a => a.values.Location);
@@ -89,17 +67,7 @@ async function validate(mapName, count, seed, extra = []) {
       c.sprites.push({ x1: Math.min(a, b), x2: Math.max(a, b) + 1, y1: y, y2: y + h, zBits: bits(8 + random() * 4000) });
     }
   }
-  const zoneActors = [...new Set(model.zones.map(z => z.actor).filter(a => a > 0))].map(index => ({ index }));
-  const request = { gameRoot: root, tangents: TANGENTS, cases, model: {
-    nodes: model.nodes.map(n => ({ planeBits: n.plane.map(bits), zoneMask: n.zoneMask, vertexPool: n.vertexPool,
-      surface: n.surface, back: n.back, front: n.front, coplanar: n.coplanar, collisionBound: n.collisionBound,
-      renderBound: n.renderBound, zones: n.zones, vertexCount: n.vertexCount, flags: n.flags, leaves: n.leaves })),
-    verts: model.vertices.map(v => [v.point, v.side]), pointBits: model.points.map(p => p.map(bits)),
-    surfs: model.surfaces.map((s, i) => ({ texture: i, flags: s.flags >>> 0 })),
-    textures: surfaceTextureFlags.map(polyFlags => ({ polyFlags })),
-    boundBits: model.renderBounds.map(b => [...b.min.map(bits), ...b.max.map(bits), b.valid ? 1 : 0]),
-    zones: model.zones.map(z => ({ actor: z.actor })), zoneActors, rootOutside: model.rootOutside, numZones: model.zones.length,
-  } };
+  const request = { gameRoot: root, tangents: TANGENTS, cases, model: occlusionModelRequest(model, surfaceTextureFlags) };
   const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
     { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;
   const occlusion = createBspOcclusion(kernel, model, { surfaceTextureFlags,

@@ -24,8 +24,8 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
-  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51};
-const MB_WORDS=52,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
+  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54};
+const MB_WORDS=55,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
 
 /** A plain texture reference for the page's asset store. */
 const plainRef=reference=>({key:reference.key,package:reference.asset?.name,index:reference.index});

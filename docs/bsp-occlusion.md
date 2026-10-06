@@ -234,6 +234,101 @@ browser path drew the club behind the walls there: five mirror passes and
 The port takes 0.2–0.8 ms per frame in Node (Wasm), against 30–200 ms for the
 emulated original.
 
+## Setup: each actor's screen rectangle
+
+`FDynamicSprite::Setup` (`0x10b23910..0x10b23d9c`) gives the constructor
+its integer rectangle `[X1, X2) × [Y1, Y2)` and depth Z. It runs inside
+DrawWorld, so at 24 bits, and so do its callees. The port is
+`native/script-vm/src/setup.rs` (`occ_setup`), binary32 in the
+instructions' order. First it copies ScaleGlow, DrawScale, Location and
+Rotation into the sprite (DrawActorSprite draws from those copies).
+
+* **Mesh path** (DrawType 2 with a Mesh; any other DrawType but 1 and 7
+  rejects). Z = `((L.z−O.z)·Zz + (L.y−O.y)·Zy) + (L.x−O.x)·Zx` (Location,
+  Coords origin and ZAxis), stored to the sprite; below −0 or unordered
+  rejects unless RendMap is 13–15. Then `Mesh->GetRenderBoundingBox(Actor,
+  0)` (vslot 0x5c; ULodMesh inherits UMesh's `0x103a6850`), then
+  `BoundVisible(Frame, box, NULL)` (vslot 0x80, `occlude.rs`
+  `bound_visible_box`), then `X1 = _ftol(MinX)`, `X2 = _ftol(MaxX)`,
+  `Y1 = _ftol(MinY)`, `Y2 = _ftol(MaxY)` of the clamped bounds; Setup
+  returns `Y1 < Y2` (X1 < X2 is not required: the raster rows are then
+  empty).
+* **GetRenderBoundingBox** (Engine `0x103a6850..0x103a6b9b`). GetAnimSeq
+  (`0x1031c000`) takes the first sequence with the actor's own AnimSequence
+  FName. With one and AnimFrame ≥ 0 (double 0.0, unordered skips), the
+  phase is `(AnimFrame + 1.0) · NumFrames` stored as a float, `fistp(phase
+  − 0.5f)` the frame, `i % NumFrames + StartFrame` and `(i + 1) % NumFrames
+  + StartFrame` the two BoundingBoxes entries (no bounds check), combined
+  by Core `FBox::operator+=` (`0x101196a0`): with both valid, Min =
+  `this <= other ? this : other`, Max = `this < other ? other : this`
+  (unordered keeps this for Min, takes other for Max); otherwise the
+  second box is copied, IsValid included. Without, the mesh's
+  BoundingBox. The factor is 1.5 (double) for bParticles (`+0x194 & 4`),
+  else DrawScale; Max = `(factor·Scale)·(Max − Origin) + 1`, Min likewise
+  `− 1` (FVector operators), and the box is valid whatever its source was.
+  The coords are GMath.UnitCoords `/=` RotOrigin, then `/=` the actor's
+  Rotation (Core `0x1011b690`: roll, pitch and yaw passes, each axis
+  `((v.x·r.x + v.y·r.y) + v.z·r.z)` per row), with origin Location +
+  PrePivot; Core `Transpose` (`0x1011a140`: columns, origin −(O·X, O·Y,
+  O·Z)); `FBox::TransformBy` (`0x101198f0`): the eight corners X-major, each
+  `(P − origin)` through the rows; Min takes a corner only when strictly
+  smaller, Max when larger or unordered.
+* **Sprite path** (DrawType 1 or 7, `0x10b23ada..0x10b23d94`). A null
+  Texture rejects. Z as above. `URender::Project` (`0x10b20750`, vslot
+  0x78): T = (V − Origin) stored, then through Coords; Z' = T.z, but
+  `T.z + 0.02` (double, rounded once) when |T.z| < 0.01 (double; NaN takes
+  this branch); RZ = Proj.Z / Z'; ScreenX = T.x·RZ + FX2, ScreenY =
+  T.y·RZ + FY2, Persp = RZ, all stored; it fails unless Z' > 1.0. Half
+  width `hw = ((USize·DrawScale)·Persp)·0.5f` stored; `X1 =
+  appCeil(ScreenX − hw)`, `X2 = appCeil(hw + ScreenX)`: Core `0x10123300`
+  passes the float as a double to msvcrt `ceil` and `_ftol`s the result;
+  Setup then does `fild; fstp dword; fld; fistp`. Swap if X1 > X2; X1 < 0
+  sets X1 = 0 and then X2 < 0 sets X2 = 0; X2 > Frame.X sets X2 = X and
+  then X1 > X sets X1 = X; reject when X2 ≤ 0 or X1 ≥ X − 1. Y likewise
+  with VSize, clamped to Frame.Y; reject when Y2 ≤ 0, Y1 ≥ Y or Y1 ≥ Y2.
+* **Host inputs** (`bsp-occlusion.mjs`): a mesh record once per mesh
+  (`meshRecord`: BoundingBox, the BoundingBoxes bytes, Scale, Origin,
+  RotOrigin), and per candidate (`packSetupCandidate`, SETUP words)
+  DrawType, the mesh record, the texture's USize/VSize, Location, Rotation,
+  DrawScale, PrePivot, bParticles, GetAnimSeq's sequence (`setupSequence`:
+  FNames compare case-folded) and AnimFrame. `occ_setup` writes each
+  result (status, rectangle, Z, and the sprite path's ScreenX, ScreenY,
+  Persp) and appends the accepted ones, in order, to occ_run's sprite list.
+  A candidate whose mesh has no record or whose texture size the host does
+  not know yet reports UNKNOWN and is not handed on; a frame box index the
+  original would read outside the array reports UNSUPPORTED.
+
+Unsupported: the orthographic RendMaps 13–15 and SHOW_ActorIcons (`0x20`:
+DrawScale 1 and AActor's default texture); Play's viewer has RendMap 5 and
+ShowFlags 0x480c.
+
+**Reference.** `native-occlusion-oracle.py` builds actor, mesh (a vtable
+with GetRenderBoundingBox and GetAnimSeq) and texture fixtures with only
+the fields these bodies read. A case sprite with an `actor` runs the real
+Setup inside the constructor, and `setupOnly` cases call Setup directly
+after CreateMasterFrame, at control word 0x007f. Setup's one import outside
+the loaded images, msvcrt `ceil`, is bridged by an x87 stub that rounds the
+double with FRNDINT under rounding control "up". FRNDINT is exact and
+precision control does not apply to it, so this assumes only that msvcrt's
+`ceil` returns the exact ceiling; msvcrt.dll itself is not part of the
+reference.
+
+`node scripts/validate-sprite-setup.mjs` boots 00_Training and
+01_NYC_UNATCOIsland through Play's createGame, ticks 30 frames and packs
+every Level.Actors entry with a preparable mesh or any texture
+(hidden ones too: Setup does not read bHidden), plus synthetic meshes
+(random boxes, frame boxes, sequences, negative scales, RotOrigin) and
+actors of every DrawType, sprites near the view plane included. 48 cameras
+per map (the player's view at two sizes, cameras looking at random actors,
+and synthetic scenes) give **111,060 Setup calls** (Training 16,812,
+Island 94,248; 85,336 sprite and 20,835 mesh calls, 26,107 accepted;
+2,074 through the frame-box pair; 759 with Persp above 8000, the
+near-plane step among them) whose return value, X1..Y2, Z and ScreenX,
+ScreenY, Persp match bit for bit. 12 more frames per map run the real
+actors through the original constructor, Setup and OccludeBsp against
+occ_setup and occ_run: Frame->Sprite and every sprite's span buffer match
+(1,672 of 9,725 set-up sprites drawn).
+
 ## Play
 
 The simulation side runs OccludeBsp for the main frame every Play frame
@@ -284,51 +379,7 @@ In recommended order. Each step keeps the rule above: recover from the
 DLL, port to Rust, match the original under `native-occlusion-oracle.py`,
 then wire into Play.
 
-### 1. Setup: each actor's screen rectangle (next)
-
-The dynamics port takes `(rectangle, Z)` per sprite; Play needs Setup
-(`FDynamicSprite::Setup`, `0x10b23910`) to produce them, at 24-bit
-precision. Recovered so far:
-
-* **Mesh path** (DrawType 2 with a Mesh). Z = `((L.z−O.z)·Zz + (L.y−O.y)·Zy)
-  + (L.x−O.x)·Zx` (Location, Coords origin and ZAxis), stored to the sprite;
-  below −0 or unordered rejects unless RendMap is 13–15. Then
-  `Mesh->GetRenderBoundingBox(Actor, 0)` (vslot 0x5c; ULodMesh inherits
-  UMesh's `0x103a6850`), then `BoundVisible(Frame, box, NULL)` (vslot
-  0x80, already ported in `occlude.rs`), then `X1 = _ftol(MinX)`,
-  `X2 = _ftol(MaxX)`, `Y1 = _ftol(MinY)`, `Y2 = _ftol(MaxY)` of the clamped
-  bounds; Setup returns `Y1 < Y2`.
-* **GetRenderBoundingBox** (`0x103a6850..0x103a6b9b`). `src/runtime/
-  render-mesh-bounds.mjs` has its operation order at 64-bit precision; at
-  24 bits every intermediate is a binary32 operation in that order. One
-  difference from that JavaScript: the two frame boxes are combined with
-  Core `FBox::operator+=` (`0x101196a0`), which copies the second box
-  whenever **either** box is invalid (the JavaScript keeps the first when
-  only the second is invalid). Min takes `this <= other ? this : other`,
-  max `this < other ? other : this`.
-* **Sprite path** (DrawType 1 or 7, `0x10b23ada..0x10b23d94`). Texture null
-  rejects. Z as above. `URender::Project` (`0x10b20750`, vslot 0x78):
-  T = (V − Origin) through Coords, Z' = T.z, plus 0.02 when |T.z| < 0.01;
-  RZ = Proj.Z / Z'; ScreenX = T.x·RZ + FX2, ScreenY = T.y·RZ + FY2;
-  Persp = RZ; it fails when Z' ≤ 1. Half width
-  `hw = ((float)USize·DrawScale)·Persp·0.5f`; `X1 = appCeil(ScreenX − hw)`,
-  `X2 = appCeil(hw + ScreenX)` (Core `0x10123300`: msvcrt `ceil` on the
-  double, then an int → float → int round trip); swap if X1 > X2; X1 < 0
-  sets X1 = 0 and then X2 < 0 sets X2 = 0; X2 > Frame.X sets X2 = X and then
-  X1 > X sets X1 = X; reject when X2 ≤ 0 or X1 ≥ X − 1. Y likewise with
-  VSize, clamped to Frame.Y; reject when Y2 ≤ 0, Y1 ≥ Y or Y1 ≥ Y2.
-* **Inputs** for the Rust side: per mesh (once), its box, per-frame boxes
-  (`runtime.prepareMesh(actor)`, array at UMesh `+0xa8`), Scale, Origin,
-  RotOrigin; per actor and frame, Location, Rotation, DrawScale, PrePivot,
-  bParticles (`+0x194 & 4`, factor 1.5), the resolved animation sequence
-  (start frame, frame count) and AnimFrame; per sprite, its texture's
-  USize/VSize and DrawScale.
-* **Reference**: run the real Setup in the oracle with actor and mesh
-  fixtures (the BoundsOracle in `native-render-visibility-oracle.py` already
-  drives GetRenderBoundingBox that way), at control word 0x007f, with a stub
-  for msvcrt `ceil`.
-
-### 2. SetupDynamics' scan and Play's actors
+### 1. SetupDynamics' scan and Play's actors (next)
 
 SetupDynamics (`0x10b22d90`) admits actors in Level.Actors order
 ([render visibility](render-visibility.md) has the admission rules); the
@@ -339,7 +390,7 @@ should hand the candidates to `occ_run` in that order. Then Play draws, and
 stamps LastRenderTime for, the actors in `Frame->Sprite` instead of the
 frustum-tested drawn set (`drawn-set.mjs`) for the main frame.
 
-### 3. Child frames
+### 2. Child frames
 
 CreateChildFrame (`0x10b15a40`, notes in `.work/occlude/frame-and-clip.md`:
 reuse of an equal child, merged spans, ComputeRenderSize again at 24 bits)
@@ -350,7 +401,7 @@ child's coords and near-clip plane are already verified
 `.work/occlude/occludebsp.md` (step 14). Play then draws mirror and sky
 passes from their own results instead of whole meshes and the frustum.
 
-### 4. The moving brush tracker
+### 3. The moving brush tracker
 
 Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
 the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
@@ -364,7 +415,7 @@ construction `0x1037ac40`/`0x1037b5c0`, Update `0x1037a400`, filter
 precision), how it removes the previous fragments, and the new nodes' field
 values.
 
-### 5. Smaller items
+### 4. Smaller items
 
 * LeafVolumetricLighting and the draw lists' Volumetrics (fog light lists).
 * Restricting texture and light-map animation to drawn surfaces, as the
