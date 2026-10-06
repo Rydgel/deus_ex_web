@@ -862,9 +862,19 @@ live-capture technique):
 * The real heap's contents next to sample allocations
   (`HAZARD_FOREIGN_READ`) and the block adjacency behind
   `HAZARD_BUS_UNDERRUN`.
-* Bus B in the browser: effects stay on Web Audio. The bus B path
-  (`render_ring`, the add conversion) is verified but not wired in.
-* Reverb (§3) and the non-SSE kernels (§2.7) are not translated.
+* ~~Bus B in the browser.~~ Wired (2026-10-06): `render` (galaxy_render)
+  stores bus A, then adds bus B onto the same frames, the renderer's own
+  placement when posB equals posA. The effect voices are the library's
+  ([effects](effects.md)). The browser path is compared with the original
+  renderer at coincident heads in validate-galaxy-effects.mjs, including
+  Quotes_Music section 4, where the underrun writes music onto d04.
+* ~~Reverb (§3).~~ Translated (2026-10-06): the renderer's effects hook
+  runs the SSE reverb kernel between the mix and the conversions
+  ([reverb](reverb.md)). The non-SSE kernels (§2.7) are not translated.
+* Cost with effects: on Island, `galaxy_render(882)` takes 135 µs median
+  (p99 244 µs) with music and six or seven effect voices, and 143 µs with
+  the reverb on Brooklyn Bridge Station (validate-galaxy-effects-play.mjs,
+  Node's Wasm on the Linux host).
 * The other songs and sections depend on the sequencer validation. The
   `--sweep` option runs the Rust kernel alone over all 35 songs and 1157
   sections (1500 callbacks each). It finds no fault, which checks

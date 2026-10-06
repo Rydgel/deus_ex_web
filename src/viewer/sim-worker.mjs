@@ -16,11 +16,12 @@
  *   packed words are transferred. Posts that arrive while the worker is
  *   busy merge into one frame (the latest page state, their dts summed,
  *   every command in order); the reply says how many posts it consumed.
- * - `music` {port}: the page's channel to Galaxy's music worklet
+ * - `music` {port}: the page's channel to Galaxy's worklet
  *   (galaxy-music-output.mjs). The library service on it
- *   (galaxy-music-library.mjs) lives as long as the worker, across map
- *   loads; batches go to the worklet and its reports come back on the port,
- *   never through the page.
+ *   (galaxy-music-library.mjs; music and, with its sample registry, the
+ *   effect voices) lives as long as the worker, across map loads; batches
+ *   go to the worklet and its reports come back on the port, never through
+ *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
  *   movers and PlayerCalcView), `stateDigest`, `decalProbe` and `placeProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
@@ -106,7 +107,7 @@ async function handle(data) {
       send({ type: 'ready' });
       return;
     }
-    case 'music': musicLibrary = music.connectMusicLibraryPort(data.port); return;
+    case 'music': musicLibrary = music.connectMusicLibraryPort(data.port, { effects: true }); return;
     case 'load': {
       // The old map's audio unregisters its music first (sim-host.mjs
       // disposeAudio), so that batch reaches the worklet before any of the

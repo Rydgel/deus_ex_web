@@ -627,9 +627,8 @@ loader, sequencer (238 cases, 1.83 million ticks), SSE mixer and
 conversion, and Update's music section (718 oracle cases) are translated
 and bit-equal with the DLL. The library runs in Rust inside an
 AudioWorklet that the simulation worker feeds over a MessageChannel, so
-music costs the main thread nothing per frame. Sound effects still use the
-Web Audio host mapping, and zone reverb remains
-([Galaxy music](galaxy-music.md)).
+music costs the main thread nothing per frame. Sound effects and zone
+reverb followed the same day (below) ([Galaxy music](galaxy-music.md)).
 
 **Decals (2026-10-06).** Shadow blobs under pawns draw in Play, and blood
 pools, scorch marks and bullet holes will when combat spawns them.
@@ -668,6 +667,38 @@ x87 hardware.
   bits: incidence differs in 875 of 3,952 Training light steps and 13 of
   1.9 million texels, and the init-time tables' precision is unmeasured.
   See [static lighting](static-lighting.md#spatially-dynamic-effects).
+
+**Sound effects and zone reverb through Galaxy's mixer (2026-10-06).**
+Ambient sounds and script PlaySound now play through Galaxy's own voices
+and mixer, in the music worklet, instead of the Web Audio mapping
+(`?sfx=webaudio` keeps that for A/B).
+- *Translated.* Galaxy.dll's glxLoadSample (the WAV loader),
+  glxStartSample, glxControlSample, glxControlVoice and glxStopSample, in
+  Rust ([effects](galaxy-music/effects.md)). Also the effects reverb: Update's
+  zone block, glxSetSampleReverb, its x87 setup and its SSE kernel
+  ([reverb](galaxy-music/reverb.md)). UseReverb is installed True; 21 zones
+  in 16 maps reverb, e.g. Brooklyn Bridge Station.
+- *Evidence.*
+  - The sample entries match the DLL under Unicorn: all 549 shipped WAVs
+    load identically, and 25 cases (556 voice calls, 1,134 callbacks)
+    match in both buses' PCM.
+  - The reverb setup was run natively on this host's x87 for every
+    reachable CutoffHz. FCOS is not correctly rounded at 5,820 of the
+    44,101 inputs, but the stored coefficients equal the model's at all of
+    them.
+  - 414 whole parameter blocks match, and so do 264 native SSE kernel
+    calls.
+- *Play.* The simulation worker sends Update's sample ops to the worklet
+  in batches, and the worklet reports back which voices are still active.
+  Island plays its six ambient voices with no underrun.
+- *Cost.* On Island, in worker mode, with 3 interleaved pairs:
+  - main thread 3.31 against 3.26 ms per frame, the Galaxy Update 0.86
+    against 0.77 ms;
+  - the worklet's 20 ms render is 135 µs median (p99 244 µs) with music
+    and six effect voices, and 143 µs with reverb on.
+- *Not covered.* The MP3 effect Menu_SpeechTest stays silent, and speech
+  keeps its own transport. The ring heads' spacing and the game thread's
+  x87 control word are unmeasured.
 
 ## 5. Implement the full gameplay systems
 

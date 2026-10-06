@@ -1,11 +1,11 @@
-# Galaxy audio subsystem (research, in progress)
+# Galaxy audio subsystem
 
-Play plays only speech today (DataLink and conversations through Web Audio).
-Sound effects, ambient sounds and music reach the engine's `PlaySound`
-bookkeeping (channel ids, [script-sound](script-sound.md)) and the instant
-volumes ([galaxy-volumes](galaxy-volumes.md)) but no browser voice. This note
-records the original subsystem, then its translation
-(`src/runtime/galaxy-audio.mjs`) and how Play uses it.
+Play's sound effects, ambient sounds and music go through Galaxy's own
+library: the translated subsystem (`src/runtime/galaxy-audio.mjs`) drives
+the library's voices and music in an AudioWorklet, with the zone reverb
+("Effects through Galaxy's mixer" below). Conversation and DataLink speech
+keeps its own Web Audio transport. This note records the original
+subsystem, then its translation and how Play uses it.
 
 The audio device is `UGalaxyAudioSubsystem` (`DeusEx.ini`
 `AudioDevice=Galaxy.GalaxyAudioSubsystem`), Galaxy.dll SHA256
@@ -190,8 +190,10 @@ can differ from the hardware's extended result in its last bits before the
 float store (the oracle runs it in double too). The music section (step 14)
 is galaxy-music.mjs's, called after the channel loop inside the library's
 `lock()`/`unlock()` (`services.library`, `services.music`; see
-[galaxy-music](galaxy-music.md) "Phase 4"). Not translated: the zone reverb,
-the 3D hardware voices and the lip-sync sampling (step 12). Update's
+[galaxy-music](galaxy-music.md) "Phase 4"), then the reverb tail
+([reverb](galaxy-music/reverb.md) §2; `config.useReverb`, the listener's
+Region.Zone, `services.library.setSampleReverb`). Not translated: the 3D
+hardware voices and the lip-sync sampling (step 12). Update's
 category ratio reads the live SoundVolume/SpeechVolume bytes, which natives
 268/269 change (galaxy-volumes.mjs).
 
@@ -249,9 +251,11 @@ AmbientSound later, Warehouse's dogs). A sample the host cannot decode plays as
 an empty voice that finishes at once, and is noted. Voices are host records with a clock: a
 voice's position advances by the elapsed time times its last frequency;
 with the WAV's own `smpl` loop it wraps between the loop points, and without
-one it finishes after its frames. That is what `voicePlaying` reports.
-Galaxy's sample loader and mixer are not translated. The browser
-(`main.mjs galaxyVoice`) plays each voice as a buffer source at
+one it finishes after its frames. That is what `voicePlaying` reports
+under the Web Audio mapping (`?sfx=webaudio`, `?music=0`, headless runs),
+and before the worklet first reports with Galaxy's voices (next section).
+Under that mapping the browser (`main.mjs galaxyVoice`) plays each voice as
+a buffer source at
 `frequency/rate` with the WAV's loop points, a stereo panner at
 `pan/16383.5 - 1` (0xc000 surround centred) and a gain of
 `volume/32767 · digital/127`. That volume and pan law is the host's mapping
@@ -319,9 +323,87 @@ Location. Both are in the oracle's random sequences. Play links ULevel's
 `XLevel->Engine->Audio` (`level.engine.audio`) so DestroyActor's NoteDestroy
 reaches Galaxy (script-destroy.mjs).
 
+## Effects through Galaxy's mixer (2026-10-06)
+
+Play's effect voices are Galaxy's own, mixed by the translated library in
+the music worklet on bus B with the music on bus A, as the original's single
+voice pool does. `?sfx=webaudio` keeps the Web Audio mapping above, for A/B.
+
+**Library side** ([effects](galaxy-music/effects.md),
+`native/galaxy-kernel/src/effects.rs`): glxLoadSample with its WAV loader
+(RegisterSound's call), glxStartSample, glxControlSample, glxControlVoice
+(the status poll) and glxStopSample. The mixer already mixed the effect
+slots; `galaxy_render` now stores bus A and adds bus B onto the same frames
+(the renderer's placement at coincident heads). The effects reverb is the
+renderer's hook between the mix and the conversions
+([reverb](galaxy-music/reverb.md), `reverb.rs`).
+
+**Transport** (`galaxy-music-library.mjs`, `galaxy-music-worklet.mjs`):
+
+* the library service gains the ops loadSample, startSample, controlSample,
+  stopSample and setSampleReverb (variable arity, `OP_ARITY`). Update's
+  calls cross as one batch per critical section, as music's do; a PlaySound
+  outside Update (its StopSound) is a batch of one. Nothing crosses the
+  page in worker mode.
+* RegisterSound runs on the simulation side, as on the original's game
+  thread: the service's sample registry (`createSampleRegistry`, its own
+  kernel instance) runs glxLoadSample at once, so Update has the record's
+  C4Speed for its frequency, and the loadSample op carries the WAV bytes
+  once. The worklet runs the same loader from the same empty sample heap
+  and checks that the handle matches.
+* The voice handle is glxStartSample's fixed voice, `0x1068dc00 + 0xa0 ·
+  (channel + 1)`.
+* The worklet reports each effect voice's Active byte with the order
+  (`report.active`). `voiceActive()` returns it, replaying the ops not yet
+  acknowledged (a start sets Active, a stop clears it). In the original,
+  the mixer thread also clears Active asynchronously to Update's read.
+* Before the first report (the worklet opens on the page's first gesture),
+  the voice status comes from the host clock. A load path that is not
+  translated (the MP3 Menu_SpeechTest) gives a silent host voice that
+  finishes at once, and is noted.
+* `dispose()` stops the voices with the map, as SetViewport's StopSound
+  loop does at a Player start.
+* UseReverb comes from DeusEx.ini (True as installed). Update hands the
+  listener zone's glxReverb over each time it changes.
+
+**What the simulation reads back is unchanged.** The voice status is the
+library's Active byte, and PlaySound's result is the channel logic's.
+Speech keeps its transport, so `GetSpeechLength` (computed from the sound
+data) and lip sync are unaffected. Lip sync reads the speech source's
+position on the page, as before (validate-island-lipsync passes). Moving
+speech onto Galaxy's voices would need the MPEG decoder (`0x10620b30`,
+streamed ring voices), which is not translated.
+
+**Verification.**
+
+| Validator | What it shows |
+| --- | --- |
+| `validate-galaxy-effects.mjs` | The library entries and the reverb setter/renderer under Unicorn: 549 shipped and 14 synthetic WAVs, 25 cases, 556 voice calls, 1,134 callbacks, both buses' PCM bit-equal, the browser path at coincident heads, mutants 301–306. |
+| `validate-galaxy-reverb.mjs` | The reverb setup and SSE kernel run natively on real x87/SSE (reverb.md §5). |
+| `validate-galaxy-music-update.mjs` | Update's reverb tail against the original Update (13 cases × 3 control words, 246 setter blocks). |
+| `validate-galaxy-effects-play.mjs` | Headless Play driving the worklet processor under Node in real time. Island: 7 samples, 3,812 voice ops, 3,618 voice-table checks against the channels, Active in sync, no underrun. Brooklyn Bridge Station: the reverb installed. Training. |
+| `validate-galaxy-effects-browser.mjs` | Headless Chromium, worker mode. Island: Galaxy voices active, 0 handle mismatches, 0 underruns, no Web Audio voice. Brooklyn Bridge Station: the reverb engine installed. `?sfx=webaudio`: Web Audio voices and no worklet sample. Frame-time pairs. |
+
+**Cost** (Linux host, Island, worker mode, 3 interleaved pairs):
+- The main thread takes 3.31 ms per frame against 3.26 ms with
+  `?sfx=webaudio`.
+- The worker's Galaxy Update takes 0.86 ms against 0.77 ms: the voice ops
+  are now encoded and posted.
+- The worklet's `galaxy_render(882)` per 20 ms callback has a median of
+  135 µs (p99 244 µs) with music and six effect voices, and 143 µs with
+  the reverb on.
+
+**Open.**
+- The original's two ring heads put effects about a ring ahead of music
+  (mixer.md §1.3; derived and unmeasured). The browser plays both buses
+  at the same output position.
+- The timer thread's MXCSR is assumed to be 0x1f80.
+- The game thread's x87 control word is open: 0x007f would change the
+  reverb coefficients.
+- The MPEG and ADPCM sample paths and the 3D voices are not translated.
+
 Remaining: runtime spawns' global indices (the seeded spawn registry), the
-demo-recording and networked ProcessRemoteFunction paths, RegisterSound
-(sample decoding and loop points), the Galaxy library's voice functions and
-mixer for effects (how a volume, pan and frequency become samples), then the
-oracle cases and the Web Audio mapping. Music is phase 4/5 of
+demo-recording and networked ProcessRemoteFunction paths, the lip-sync
+sampling of Galaxy-played speech (speech keeps its transport), and
+UnregisterSound (Play never destroys a USound). Music is phase 4/5 of
 [galaxy-music](galaxy-music.md).

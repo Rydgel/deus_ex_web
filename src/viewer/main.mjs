@@ -31,6 +31,12 @@ import { createMusicOutput } from './galaxy-music-output.mjs';
 import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
 import { msvcrtWtoi } from '../runtime/script-text-parser.mjs';
 
+// Sound effects and ambient sounds play through Galaxy's own mixer in the
+// music worklet (docs/galaxy-audio.md "Effects through Galaxy's mixer");
+// ?sfx=webaudio keeps the previous Web Audio host mapping (main.mjs
+// galaxyVoice), for A/B. Without the worklet (?music=0) effects use it too.
+const sfxParam=new URLSearchParams(location.search).get('sfx');
+if(sfxParam)globalThis.DEUS_EX_SFX=sfxParam;
 // Script function bodies run in the Rust interpreter by default
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
 const scriptVmParam=new URLSearchParams(location.search).get('scriptVm');
@@ -323,7 +329,7 @@ async function connectMusic(files){
   try{
     musicOutput.configure({effectsChannels:await readEffectsChannels(files)});
     if(simClient)simClient.connectMusic(musicOutput.simulationPort());
-    else if(!pageMusicLibrary)pageMusicLibrary=connectMusicLibraryPort(musicOutput.simulationPort());
+    else if(!pageMusicLibrary)pageMusicLibrary=connectMusicLibraryPort(musicOutput.simulationPort(),{effects:true});
   }catch(error){musicError=String(error?.message??error);}
 }
 function musicStatus(output=musicOutput?.status()??null){

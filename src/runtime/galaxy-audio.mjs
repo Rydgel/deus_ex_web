@@ -1,3 +1,4 @@
+import { x87Arithmetic } from './galaxy-music.mjs';
 import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x87store, x87storeDouble,
   x87sqrt, x87ftol, x87safeNormal } from './script-vm.mjs';
 
@@ -36,6 +37,13 @@ const RECORD = () => ({ voice: null, actor: null, id: 0, is3D: 0, sound: null, l
 
 /** appSqrt: FLD m64; FSQRT on the double the caller stored. */
 const appSqrt = sum => x87sqrt(x87storeDouble(sum));
+// The reverb tail's floats (0x1063d6c4 0.002f, 0x1063d6c0 0.001f, 0x1063d6bc
+// 0.34f, 0x1063d6b8 0.999f), the glxReverb size in dwords, the log name.
+const TIME_SCALE = X(0.0020000000949949026), MIN_F = X(0.0010000000474974513), MAX_TIME = X(0.3400000035762787),
+  MAX_GAIN = X(0.9990000128746033);
+const REVERB_WORDS = 27, WARNING = 767;
+const bitsView = new DataView(new ArrayBuffer(4));
+const floatBits = value => (bitsView.setFloat32(0, value, true), bitsView.getInt32(0, true));
 /** (dx*dx + dy*dy) + dz*dz over float differences, kept extended. */
 function distanceSquared(a, b) {
   const [dx, dy, dz] = [0, 1, 2].map(i => sub(X(a[i]), X(b[i])));
@@ -44,7 +52,13 @@ function distanceSquared(a, b) {
 
 export function createGalaxyAudio(config, services) {
   const channelCount = config.effectsChannels;
-  const state = { channels: Array.from({ length: channelCount }, RECORD), counter: 0 };
+  // `reverb`: the glxReverb Update last handed the library (+0x88e, zeroed by
+  // Init 0x10605f54), as 27 int32 words.
+  const state = { channels: Array.from({ length: channelCount }, RECORD), counter: 0, reverb: new Int32Array(REVERB_WORDS) };
+  // The reverb tail's products at the game thread's precision control
+  // (64 bits in Play; the music validator also replays 53 and 24).
+  const { mul: precisionMul } = x87Arithmetic(config.precision ?? 64);
+  const reverbBlock = new Int32Array(REVERB_WORDS);
   const { read } = services;
   // Music: the library service object and the music section
   // (galaxy-music.mjs); both optional, so the channel logic runs alone too.
@@ -93,7 +107,7 @@ export function createGalaxyAudio(config, services) {
   };
   const ambientVolume = actor => x87mul(x87mul(x87int32(read(actor, 'SoundVolume') & 0xff), X(config.ambientFactor)), INV_255);
 
-  /** 0x10609510 without the 3D/lip-sync branches and the zone reverb tail.
+  /** 0x10609510 without the 3D/lip-sync branches.
    * `deltaTime` is the elapsed time since the last Update (the original reads
    * appSecondsSlow against `+0x880`); it is clamped to [0, 1] here as at
    * 0x106095aa. `coords` is the listener FCoords: origin, x, y, z axes. */
@@ -235,9 +249,46 @@ export function createGalaxyAudio(config, services) {
       }
     }
     // The music section 0x1060a50b..0x1060aa15 (galaxy-music.mjs), on the
-    // prologue's clamped dt; the zone reverb tail that follows is not
-    // translated.
+    // prologue's clamped dt, then the reverb tail.
     music?.update(dt, viewActor);
+    reverbTail(viewTarget ?? viewActor);
+  }
+
+  /** Update's reverb tail 0x1060aa15..0x1060ab93: a zeroed glxReverb; with
+   * UseReverb (+0x44) and the listener's Region.Zone (AActor +0xc8) a reverb
+   * zone (bReverbZone, +0x3bc bit 0): Volume (+0xc) = f32(MasterGain · 1/255),
+   * HFDamp (+0x10) = f32(clamp(CutoffHz, 0, 44100)), and six Delay pairs
+   * (+0x34 + 8i) of Time = f32(clamp(Delay[i] · 0.002f, 0.001f, 0.34f)) and
+   * Gain = f32(clamp(Gain[i] · (1/255)f, 0.001f, 0.999f)). When it differs
+   * from the last one handed over (+0x88e, REPE CMPSD), it is copied there
+   * and passed to glxSetSampleReverb (0x106113d0, a library call inside
+   * Update's lock); a nonzero result is logged. The listener is the
+   * viewport Actor's ViewTarget, else the Actor ([ebp-0x40]). */
+  function reverbTail(listener) {
+    reverbBlock.fill(0);
+    if (config.useReverb) {
+      const zone = read(listener, 'Region')?.['engine.actor.pointregion.zone'] ?? null;
+      if (zone && read(zone, 'bReverbZone')) {
+        reverbBlock[3] = floatBits(f32(precisionMul(x87int32(read(zone, 'MasterGain') & 0xff), INV_255)));
+        const cutoff = read(zone, 'CutoffHz') | 0;
+        reverbBlock[4] = floatBits(f32(x87int32(cutoff < 0 ? 0 : cutoff >= 44100 ? 44100 : cutoff)));
+        const delays = read(zone, 'Delay'), gains = read(zone, 'Gain');
+        for (let i = 0; i < 6; i++) {
+          let time = precisionMul(x87int32(delays[i] & 0xff), TIME_SCALE);
+          time = lt(x87cmp(time, MIN_F)) ? MIN_F : lt(x87cmp(time, MAX_TIME)) ? time : MAX_TIME;
+          let gain = precisionMul(x87int32(gains[i] & 0xff), INV_255F);
+          gain = lt(x87cmp(gain, MIN_F)) ? MIN_F : lt(x87cmp(gain, MAX_GAIN)) ? gain : MAX_GAIN;
+          reverbBlock[13 + 2 * i] = floatBits(f32(time));
+          reverbBlock[14 + 2 * i] = floatBits(f32(gain));
+        }
+      }
+    }
+    let same = true;
+    for (let i = 0; i < REVERB_WORDS; i++) if (reverbBlock[i] !== state.reverb[i]) { same = false; break; }
+    if (same) return;
+    state.reverb.set(reverbBlock);
+    const result = library?.setSampleReverb?.(reverbBlock.slice()) ?? 0;
+    if (result) services.log?.(WARNING, `glxSetSampleReverb(&Reverb) failed: ${result}`);
   }
 
   /** StopSoundId (DEUS_EX, 0x10607ef0): stop the first channel whose Id

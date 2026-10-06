@@ -11,6 +11,8 @@ implementation, from the hash-pinned GOTY `System/Galaxy.dll` (base
 | [it-loader](galaxy-music/it-loader.md) | `glxLoadMusic` and the Impulse Tracker loader, in-memory layouts, effect translation |
 | [sequencer](galaxy-music/sequencer.md) | tick timing, order list, row and effect processing, channel state to voice parameters |
 | [mixer](galaxy-music/mixer.md) | the timer thread, voice pool, buses, SSE kernel, pan/volume, reverb, determinism |
+| [effects](galaxy-music/effects.md) | glxLoadSample's WAV loader and the sample voices (start, control, status, stop) |
+| [reverb](galaxy-music/reverb.md) | Update's zone block, glxSetSampleReverb, the x87 setup and the SSE reverb kernel |
 | [census](galaxy-music/census.txt) | IT header and sample flags of the 35 songs |
 
 The reports were written from disassembly alone; claims marked *derived*
@@ -352,7 +354,8 @@ Wasm and does not allocate.
 * the timer thread's MXCSR (0x1f80 assumed);
 * the music/effects bus placement, about 1 s apart (mixer.md §1.3);
 * heap adjacency and contents behind the two hazards;
-* bus B and the reverb, which are not used by the browser;
+* ~~bus B and the reverb, which are not used by the browser~~ (wired
+  2026-10-06, [effects](galaxy-music/effects.md), [reverb](galaxy-music/reverb.md));
 * the other songs and sections: their sequencer traces are now verified
   (Phase 2, all 35 songs × sections 0..5, with the real kernel running in
   the replay without a fault), but their PCM is not compared with the
@@ -562,9 +565,10 @@ node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|00_Training|01_NYC_U
 ## Phase 5: Output (browser host, 2026-10-06)
 
 Play's music is the library itself: the Rust kernel runs in an AudioWorklet
-and plays bus A. Speech and effect voices stay on Web Audio
-(`galaxyVoice`, `playConversationSpeech`); the library's effect voices stay
-idle.
+and plays bus A. Since 2026-10-06 its effect voices play there too, on bus
+B with the zone reverb ([galaxy-audio](galaxy-audio.md) "Effects through
+Galaxy's mixer"; `?sfx=webaudio` keeps the Web Audio mapping `galaxyVoice`).
+Conversation speech keeps its own transport (`playConversationSpeech`).
 
 **Threads.** The original mixes on a winmm timer thread (§1.3 of
 [mixer](galaxy-music/mixer.md)) and the game thread's Update calls glx*

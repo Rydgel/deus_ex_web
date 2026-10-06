@@ -112,6 +112,8 @@ pub(crate) enum Region {
     Sample(u16, u16),
     PatternHeader(u16),
     Events(u16),
+    /// An effect sample's Data allocation (effects.rs), by registry index.
+    Effect(u16),
 }
 
 /// Comparison trace (format in scripts/native-galaxy-music-sequencer-oracle.py).
@@ -223,6 +225,7 @@ impl Library {
             r.push((pattern.addr, 0x28, Region::PatternHeader(p as u16)));
             r.push((pattern.events_addr, pattern.events.len() as u32, Region::Events(p as u16)));
         }
+        self.effect_regions(&mut r);
         r.sort_by_key(|e| e.0);
         self.player.regions = r;
     }
@@ -247,6 +250,7 @@ impl Library {
             Region::Sample(s, k) => self.instruments[s as usize].as_ref().unwrap().data[k as usize].as_ref().unwrap(),
             Region::PatternHeader(p) => &self.patterns[p as usize].as_ref().unwrap().header,
             Region::Events(p) => &self.patterns[p as usize].as_ref().unwrap().events,
+            Region::Effect(i) => &self.effects.samples[i as usize].data,
         }
     }
 
@@ -283,27 +287,27 @@ impl Library {
     fn pattern_ptr(&self, idx: u8) -> u32 {
         self.patterns[idx as usize].as_ref().map_or(0, |p| p.addr)
     }
-    fn table(&self, i: u32) -> Result<i32, u32> {
+    pub(crate) fn table(&self, i: u32) -> Result<i32, u32> {
         self.player.tables.get(i as usize).copied().ok_or(UNSUPPORTED_TABLE_READ)
     }
 
     // Voice record fields (raw 0xa0-byte layout at 0x1068dca0).
-    fn vb(&self, v: usize, o: usize) -> u8 {
+    pub(crate) fn vb(&self, v: usize, o: usize) -> u8 {
         self.voices[v * VOICE + o]
     }
-    fn vw(&self, v: usize, o: usize) -> u16 {
+    pub(crate) fn vw(&self, v: usize, o: usize) -> u16 {
         get16(&self.voices, v * VOICE + o)
     }
-    fn vd(&self, v: usize, o: usize) -> u32 {
+    pub(crate) fn vd(&self, v: usize, o: usize) -> u32 {
         get32(&self.voices, v * VOICE + o)
     }
-    fn sb(&mut self, v: usize, o: usize, x: u8) {
+    pub(crate) fn sb(&mut self, v: usize, o: usize, x: u8) {
         self.voices[v * VOICE + o] = x;
     }
-    fn sw(&mut self, v: usize, o: usize, x: u16) {
+    pub(crate) fn sw(&mut self, v: usize, o: usize, x: u16) {
         put16(&mut self.voices, v * VOICE + o, x);
     }
-    fn sd(&mut self, v: usize, o: usize, x: u32) {
+    pub(crate) fn sd(&mut self, v: usize, o: usize, x: u32) {
         put32(&mut self.voices, v * VOICE + o, x);
     }
 

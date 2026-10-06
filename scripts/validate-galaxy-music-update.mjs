@@ -157,6 +157,30 @@ for (const useDigitalMusic of [1, 0]) {
     instant.push({op: 'setInstantMusicVolume', value}, {op: 'setVolumes'});
   add(`instant/digital${useDigitalMusic}`, {config: {...BASE, useDigitalMusic}, musics: {}, actor: {transition: 0}, subsystem: {fadeBits: 0x3f000000}, ops: instant});
 }
+// The reverb tail 0x1060aa15..0x1060ab93: UseReverb, the listener's
+// Region.Zone, the block and the cache compare (glxSetSampleReverb a leaf).
+const REVERB_ZONE = {reverb: 1, masterGain: 100, cutoffHz: 6000, delay: [20, 34, 0, 0, 0, 0], gain: [150, 70, 0, 0, 0, 0]};
+const frame = extra => ({op: 'update', dt: 1 / 60, ...extra});
+add('reverb/enter-leave', {config: {...BASE, useReverb: 1}, musics: {}, actor: {transition: 0}, ops: [frame(),
+  frame({set: {zone: REVERB_ZONE}}), frame(), frame({set: {zone: {...REVERB_ZONE, masterGain: 101}}}), frame(),
+  frame({set: {zone: {...REVERB_ZONE, reverb: 0}}}), frame(), frame({set: {zone: {...REVERB_ZONE, bits: 0xfffffffe}}}),
+  frame({set: {zone: {...REVERB_ZONE, bits: 3}}}), frame({set: {zone: null}}), frame()]});
+add('reverb/off', {config: {...BASE, useReverb: 0}, musics: {}, actor: {transition: 0},
+  ops: [frame({set: {zone: REVERB_ZONE}}), frame(), frame({set: {zone: {...REVERB_ZONE, cutoffHz: 1000}}})]});
+const edgeZones = [];
+for (const cutoffHz of [-5, -0x80000000, 0, 1, 1000, 8000, 11027, 44099, 44100, 44101, 50000, 0x7fffffff])
+  edgeZones.push({...REVERB_ZONE, cutoffHz});
+for (const byte of [0, 1, 2, 3, 169, 170, 171, 254, 255]) {
+  edgeZones.push({...REVERB_ZONE, delay: [byte, 255 - byte, byte, 1, 0, 255], gain: [byte, 255 - byte, 0, 1, 254, 255], masterGain: byte});
+}
+add('reverb/edges', {config: {...BASE, useReverb: 1}, musics: {}, actor: {transition: 0},
+  ops: edgeZones.flatMap(zone => [frame({set: {zone}}), frame()])});
+const randomZone = () => ({reverb: 1, masterGain: Math.floor(random() * 256), cutoffHz: Math.floor(random() * 60000) - 5000,
+  delay: Array.from({length: 6}, () => Math.floor(random() * 256)), gain: Array.from({length: 6}, () => Math.floor(random() * 256))});
+add('reverb/random', {config: {...BASE, useReverb: 1}, musics: {}, actor: {transition: 0},
+  ops: Array.from({length: 60}, () => frame({set: {zone: random() < 0.1 ? null : randomZone()}}))});
+add('reverb/result', {config: {...BASE, useReverb: 1}, musics: {}, actor: {transition: 0}, returns: {setSampleReverb: [0x11, 0, 7]},
+  ops: [frame({set: {zone: REVERB_ZONE}}), frame({set: {zone: null}}), frame({set: {zone: REVERB_ZONE}})], cws: [0x037f]});
 // Tier 2: the real library on DX songs.
 const tier2 = (name, body) => cases.push({name: `tier2/${name}`, tier: 2, cw: 0x037f, config: BASE, ...body});
 tier2('intro-first', {musics: {A: {module: 'Intro_Music'}}, actor: {song: 'A', section: 0, cdTrack: 255, transition: 3},
@@ -236,7 +260,7 @@ function replay(c, precision, entry) {
   }
   const mirrorState = {desync: false};
   const glx = (name, args, call, extra = {}) => {
-    const event = {glx: name, args, ...extra};
+    const event = args === null ? {glx: name, ...extra} : {glx: name, args, ...extra};
     events.push(event);
     const queue = c.tier === 1 ? scripted[name] : real.results[name];
     event.result = queue?.length ? queue.shift() : 0;
@@ -272,6 +296,8 @@ function replay(c, precision, entry) {
       mirror?.clearVoiceActive(first, count);
     },
     setBreakFlag: () => { events.push({breakFlag: 1}); mirror?.setBreakFlag(); },
+    setSampleReverb: words => glx('setSampleReverb', null, () => 0,
+      {block: Buffer.from(words.buffer, words.byteOffset, words.byteLength).toString('hex')}),
     order: () => {
       const value = c.tier === 1 ? orderByte.value : real.orders.shift();
       if (mirror && !mirrorState.desync && mirror.order() !== value) throw new Error(`mirror order ${mirror.order()}, the library ${value}`);
@@ -307,7 +333,15 @@ function replay(c, precision, entry) {
     };
     musics[name] = music;
   }
-  const actor = {Song: c.actor?.song ?? null, SongSection: c.actor?.section ?? 0, CdTrack: c.actor?.cdTrack ?? 0, Transition: c.actor?.transition ?? 0};
+  const actor = {Song: c.actor?.song ?? null, SongSection: c.actor?.section ?? 0, CdTrack: c.actor?.cdTrack ?? 0, Transition: c.actor?.transition ?? 0,
+    Region: {'engine.actor.pointregion.zone': null}};
+  // The listener's Region.Zone as the runtime reads a ZoneInfo (bReverbZone is
+  // bit 0 of the bitfield dword +0x3bc).
+  const setZone = zone => {
+    actor.Region = {'engine.actor.pointregion.zone': zone === null ? null : {bReverbZone: Boolean((zone.bits ?? (zone.reverb ? 1 : 0)) & 1),
+      MasterGain: zone.masterGain ?? 0, CutoffHz: zone.cutoffHz ?? 0, Delay: zone.delay ?? [0, 0, 0, 0, 0, 0], Gain: zone.gain ?? [0, 0, 0, 0, 0, 0]}};
+  };
+  if (c.actor && 'zone' in c.actor) setZone(c.actor.zone);
   const volumes = {musicVolume: c.config.musicVolume, soundVolume: c.config.soundVolume, speechVolume: c.config.speechVolume};
   const trace = event => {
     if (event.op === 'setVolumes') events.push({call: 'setVolumes'});
@@ -325,7 +359,9 @@ function replay(c, precision, entry) {
   Object.assign(music.state, {current: sub.current ?? null, cdTrack: sub.cdTrack ?? 0xff, section: sub.section ?? 0,
     fade: floatOf(sub.fadeBits ?? 0x3f800000)});
   const audio = createGalaxyAudio({effectsChannels: c.config.effectsChannels, ambientFactor: 0.7, dopplerSpeed: 6500,
-    soundVolume: c.config.soundVolume, speechVolume: c.config.speechVolume, useSurround: 0, reverseStereo: 0}, {
+    soundVolume: c.config.soundVolume, speechVolume: c.config.speechVolume, useSurround: 0, reverseStereo: 0,
+    useReverb: c.config.useReverb ?? 0, precision}, {
+    log: (name, text) => events.push({log: name, text}),
     listener: () => ({actor, viewTarget: null}),
     read: (object, name) => name === 'Location' ? [0, 0, 0] : name === 'ShowFlags' ? 0 : object[name],
     library, music});
@@ -333,8 +369,10 @@ function replay(c, precision, entry) {
   const results = [];
   for (const op of c.ops) {
     events.length = 0;
-    if (op.set) for (const [key, value] of Object.entries(op.set))
-      actor[{song: 'Song', section: 'SongSection', cdTrack: 'CdTrack', transition: 'Transition'}[key]] = value;
+    if (op.set) for (const [key, value] of Object.entries(op.set)) {
+      if (key === 'zone') setZone(value);
+      else actor[{song: 'Song', section: 'SongSection', cdTrack: 'CdTrack', transition: 'Transition'}[key]] = value;
+    }
     if ('order' in op) orderByte.value = op.order;
     if (op.returns) for (const [k, v] of Object.entries(op.returns)) scripted[k] = [...v];
     const record = {op: op.op};
