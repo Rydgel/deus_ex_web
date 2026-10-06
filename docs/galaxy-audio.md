@@ -319,6 +319,65 @@ Location. Both are in the oracle's random sequences. Play links ULevel's
 `XLevel->Engine->Audio` (`level.engine.audio`) so DestroyActor's NoteDestroy
 reaches Galaxy (script-destroy.mjs).
 
+## Effects through Galaxy's mixer (WIP handoff, 2026-10-06)
+
+**Done and verified (commit 35b8188):** the library side of effect voices
+in `native/galaxy-kernel/src/effects.rs`: glxLoadSample with the WAV loader,
+glxStartSample, glxControlSample, glxControlVoice, glxStopSample. The mixer
+already mixed the effect slots onto bus B. `galaxy_render` now stores bus A,
+then adds bus B onto the same frames (the renderer's placement at
+coincident heads). The contract and evidence are in
+[galaxy-music/effects.md](galaxy-music/effects.md).
+`scripts/validate-galaxy-effects.mjs` (with the oracle
+`native-galaxy-effects-oracle.py`) is bit-equal on all 549 shipped WAVs, 14
+synthetic WAVs, 20 voice programs (both buses' PCM), the browser path and
+Quotes_Music's bus-B underrun, with coverage and four mutants.
+validate-galaxy-mixer and validate-galaxy-music-host still pass.
+
+**Done in this WIP commit, partly verified:**
+- Wire format: variable-arity ops (`OP_ARITY`) with loadSample,
+  startSample, controlSample, stopSample and setSampleReverb.
+- `createSampleRegistry` (the simulation's own kernel instance runs
+  RegisterSound's glxLoadSample, so Update gets C4Speed at once); the
+  worklet runs the same loader and checks that the handle matches.
+- Active reports (`report.active`) and `voiceActive()`, a mirror of the
+  ops not yet acknowledged.
+- `script-audio-live.mjs`: Galaxy voices by default, `?sfx=webaudio`
+  (`DEUS_EX_SFX`) for the old host mapping. A host clock answers the voice
+  status until the worklet first reports. dispose() stops the voices.
+- The worker and the inline page create effect-capable proxies.
+- `scripts/validate-galaxy-effects-play.mjs` passes headless on Island (7
+  samples, 2016 voice ops, 1822 channel/voice-table checks, Active in sync,
+  output not silent, no underrun) and on Training.
+- `scripts/validate-galaxy-effects-browser.mjs` (Chromium, worker mode):
+  the last run shows it working on Island (9 samples, 21,099 voice ops, 0
+  mismatches, 0 underruns, voices 10–15 Active). It timed out only because
+  its wait asks for `acknowledged === issued`, and a batch is issued every
+  frame. Next fix: compare with `issued - 1`, or drop that condition.
+
+**Next steps:**
+1. Fix that predicate, then run the browser A/B and the frame-time pairs.
+2. Reverb (§3 of mixer.md; UseReverb=True is installed). Reverb zones exist
+   in 16 maps, for example 03_NYC_BrooklynBridgeStation's LevelInfo0 and
+   00_Intro's ZoneInfo1; there is none in Island. The work:
+   - In JS, Update's block `0x1060aa15..0x1060ab93` and the
+     `setSampleReverb` op whenever the block differs from `+0x88e`.
+   - In Rust (`reverb.rs`): the setter 0x106113d0, the setup 0x106109f0
+     (x87, fcos ×3, fyl2x ×6) and the SSE kernel 0x10622d33. The kernel's
+     algorithm was read (three 0x4000-frame stereo lines at ctx+0xc8,
+     +0x200c8 and +0x40108; ctx size 0x60188, zeroed by the setup).
+   - The worklet already decodes op 14. It needs the exports
+     `galaxy_reverb_block` and `galaxy_set_sample_reverb`.
+   - Measure the setup on this host's real x87, for example by running the
+     DLL function natively with `gcc -m32`, as native-galaxy-mixer-hw.c
+     does.
+3. Docs (mixer.md §8.5, the roadmap's Stage 4 entry), and the cost of
+   `galaxy_render` with effects.
+
+Speech and lip sync are unchanged: conversation speech keeps its own
+transport, so `GetSpeechLength` and the lip-sync positions are not
+affected.
+
 Remaining: runtime spawns' global indices (the seeded spawn registry), the
 demo-recording and networked ProcessRemoteFunction paths, RegisterSound
 (sample decoding and loop points), the Galaxy library's voice functions and

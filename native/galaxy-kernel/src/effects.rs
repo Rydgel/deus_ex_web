@@ -101,6 +101,18 @@ impl Library {
     /// returns the glxSample's address, 0 when the loader gives none (the
     /// record allocation then leaks, as in the original), or a fault.
     pub fn glx_load_sample(&mut self, input: &[u8], flags: u32) -> Result<u32, u32> {
+        // A load that faults (an untranslated path) leaves the sample heap as it
+        // was, so that the host's two library instances (the simulation's
+        // registry and the worklet's) keep allocating the same addresses.
+        let top = self.effects.heap_top;
+        let result = self.glx_load_sample_inner(input, flags);
+        if result.is_err() {
+            self.effects.heap_top = top;
+        }
+        result
+    }
+
+    fn glx_load_sample_inner(&mut self, input: &[u8], flags: u32) -> Result<u32, u32> {
         if flags & 8 != 0 {
             return Err(UNSUPPORTED_STREAMING);
         }
@@ -600,6 +612,13 @@ pub extern "C" fn galaxy_sample_stop(voice: u32) -> u32 {
 pub extern "C" fn galaxy_voice_control(voice: u32, command: i32, p1: i32, p2: i32) -> u32 {
     let r = with_library(|l| l.glx_control_voice(voice, command, p1, p2));
     code(r)
+}
+
+/// Clears the sticky fault (the simulation's sample registry, which only
+/// loads samples and goes on after an untranslated loader).
+#[no_mangle]
+pub extern "C" fn galaxy_clear_fault() {
+    with_library(|l| l.player.fault = 0);
 }
 
 #[no_mangle]

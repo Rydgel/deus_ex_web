@@ -13,13 +13,25 @@ import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
 
 /** Galaxy's channel logic (galaxy-audio.mjs) over the live level: ambient
  * sounds from Update's scan, and PlaySound through execPlaySound and the
- * player's ClientHearSound (docs/galaxy-audio.md "Play"). Voices are host records with a clock, and
- * each start/control/stop goes to `onVoice` for the browser's Web Audio.
+ * player's ClientHearSound (docs/galaxy-audio.md "Play").
  *
- * Host contract (not Galaxy's mixer, which is not translated): a voice plays
- * the sound's WAV at `frequency / rate`, loops between the WAV's own `smpl`
- * loop points when it has them, and finishes after its frames otherwise; its
- * clock advances by the elapsed time times its last frequency each Update. */
+ * Voices, by the library service (`library`):
+ * - Galaxy's own (a worklet library proxy with `effects`, unless
+ *   DEUS_EX_SFX is 'webaudio'): RegisterSound runs glxLoadSample in the
+ *   proxy's sample registry, and the voices are the library's
+ *   (glxStartSample, glxControlSample, glxStopSample, glxControlVoice's
+ *   status), mixed on bus B in the worklet (docs/galaxy-audio.md "Effects
+ *   through Galaxy's mixer"). Until the worklet first reports (its library
+ *   opens on the page's first gesture), the status comes from the host
+ *   clock below.
+ * - the Web Audio host mapping (?sfx=webaudio, ?music=0, headless): voices
+ *   are host records with a clock, and each start/control/stop goes to
+ *   `onVoice` for the browser's Web Audio.
+ *
+ * Host clock (not Galaxy's mixer): a voice plays the sound at `frequency /
+ * rate`, loops between the WAV's own `smpl` loop points when it has them,
+ * and finishes after its frames otherwise; its clock advances by the elapsed
+ * time times its last frequency each Update. */
 const f = Math.fround;
 
 /** RIFF WAVE: sample rate, frame count and the first `smpl` loop. */
@@ -84,6 +96,9 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   });
   volumes.music = music;
   volumes.library = library;
+  // Effects through the library's own voices (above).
+  const galaxyVoices = Boolean(library?.effects) && globalThis.DEUS_EX_SFX !== 'webaudio';
+  if (galaxyVoices) await library.ready();
 
   // Every AmbientSound of the level, decoded before the first tick (the
   // update is synchronous; RegisterSound's decode is the host's).
@@ -96,6 +111,20 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: asset.pkg.exports[index - 1]});
     const start = asset.pkg.exports[index - 1].serialOffset + decoded.lazy.inlineOffset;
     const bytes = decoded.bytes ?? asset.bytes.slice(start, start + decoded.lazy.byteCount);
+    if (galaxyVoices) {
+      // RegisterSound 0x10606af0: glxLoadSample(&Mem{Data, Num}, 2) on the
+      // FSoundData bytes. The registry's record gives Update its C4Speed.
+      const entry = library.registerSample(sound.key, bytes);
+      if (!entry.handle) {
+        notes.add(entry.fault
+          ? `${sound.key}: glxLoadSample path not translated (fault 0x${entry.fault.toString(16)}); the sound is silent`
+          : `${sound.key}: glxLoadSample returned no sample; the sound is silent`);
+      }
+      const loop = entry.handle && entry.type & 8 ? {start: entry.loopStart, end: entry.loopEnd} : null;
+      const sample = {sound, handle: entry.handle, rate: entry.c4Speed ?? 22050, frames: entry.length ?? 0, loop};
+      samples.set(sound, sample);
+      return sample;
+    }
     if (decoded.lazy.formatName.toLowerCase() !== 'wav') { notes.add(`${sound.key}: ${decoded.lazy.formatName} sample`); return null; }
     const sample = {sound, bytes, ...wavInfo(bytes)};
     samples.set(sound, sample);
@@ -104,7 +133,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   async function prepareSample(sound) {
     if (!sound || samples.has(sound)) return;
     await runtime.prepareResource(sound);
-    decodeSample(sound);
+    // Galaxy's voices register a sound when Update first needs it (step 11).
+    if (!galaxyVoices) decodeSample(sound);
   }
   for (const actor of level.actors) if (actor) {
     try { await prepareSample(read(actor, 'AmbientSound')); } catch (error) { notes.add(String(error?.message ?? error)); }
@@ -164,8 +194,27 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       }
       return sample;
     },
-    voicePlaying: voice => voices.get(voice)?.playing ?? false,
+    voicePlaying: voice => {
+      const host = voices.get(voice);
+      // glxControlVoice(voice, GLX_GETSTATUS): the library's Active byte once
+      // the worklet reports; the host clock before that.
+      if (galaxyVoices && host && !host.silent && library.live()) return library.voiceActive(voice) !== 0;
+      return host?.playing ?? false;
+    },
     startVoice: (channel, sample, frequency, volume, pan) => {
+      if (galaxyVoices) {
+        // glxStartSample(channel + 1, sample, ...) (0x1060a435): the voice is
+        // the fixed slot's. A sound the translated loader cannot register
+        // is a silent host voice that finishes at once (noted).
+        if (!sample.handle) {
+          const silentVoice = -(nextVoice++);
+          voices.set(silentVoice, {sample, frequency, volume, pan, position: 0, playing: false, silent: true});
+          return silentVoice;
+        }
+        const voice = library.startSample(channel, sample.handle, frequency, volume, pan, 0);
+        voices.set(voice, {sample, frequency, volume, pan, position: 0, playing: true});
+        return voice;
+      }
       const voice = nextVoice++;
       voices.set(voice, {sample, frequency, volume, pan, position: 0, playing: true});
       if (sample.bytes) onVoice?.({op: 'start', voice, channel, sound: sample.sound.key, bytes: sample.bytes, rate: sample.rate,
@@ -173,10 +222,17 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       return voice;
     },
     controlVoice: (voice, frequency, volume, pan) => {
-      Object.assign(voices.get(voice), {frequency, volume, pan});
+      const host = voices.get(voice);
+      Object.assign(host, {frequency, volume, pan});
+      if (galaxyVoices) { if (!host.silent) library.controlSample(voice, frequency, volume, pan); return; }
       onVoice?.({op: 'control', voice, frequency, volume, pan, digital});
     },
-    stopVoice: voice => { voices.delete(voice); onVoice?.({op: 'stop', voice}); },
+    stopVoice: voice => {
+      const host = voices.get(voice);
+      voices.delete(voice);
+      if (galaxyVoices) { if (host && !host.silent) library.stopSample(voice); return; }
+      onVoice?.({op: 'stop', voice});
+    },
   });
 
   let disposed = false;
@@ -221,8 +277,17 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   function dispose() {
     if (disposed) return;
     disposed = true;
+    // The library outlives this runtime: its effect voices stop with the map,
+    // as SetViewport's StopSound loop (0x10605ca6..0x10605cb4) stops them at
+    // a Player start (the original's map change of the subsystem is not
+    // traced).
+    if (galaxyVoices) {
+      library.lock();
+      for (let channel = 0; channel < galaxyConfig.effectsChannels; channel++) galaxy.stopSound(channel);
+      library.unlock();
+    }
     if (music.state.current !== null) music.unregisterMusic(music.state.current);
   }
-  return {galaxy, music, volumes, library, musicLog, update, reset, dispose, notes, voices,
+  return {galaxy, music, volumes, library, musicLog, update, reset, dispose, notes, voices, galaxyVoices,
     setDigitalVolume: value => { digital = value & 127; }};
 }
