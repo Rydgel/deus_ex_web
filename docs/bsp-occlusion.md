@@ -352,6 +352,8 @@ passes from their own results instead of whole meshes and the frustum.
 
 ### 4. The moving brush tracker
 
+Recovered 2026-10-06, with an oracle: [brush tracker](brush-tracker.md).
+
 Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
 the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
 tests. Without it closed doors do not occlude, and mover mirrors (the two
