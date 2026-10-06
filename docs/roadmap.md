@@ -630,6 +630,27 @@ music costs the main thread nothing per frame. Sound effects still use the
 Web Audio host mapping, and zone reverb remains
 ([Galaxy music](galaxy-music.md)).
 
+**Time-varying spatial lights (2026-10-06).** Render.dll's spatially dynamic
+light effects now run in the Rust core: Searchlight, Rotor, SlowWave,
+FastWave, Shock, Disco, Interference and CloudCast, plus Shell. They run at
+the render pass's 24-bit precision, with Core appAtan2's FPATAN measured on
+x87 hardware.
+- *Evidence.* All 8 Searchlight, 8 Rotor, 5 Disco, 5 SlowWave and 1
+  FastWave lights of the 83 maps match the original bodies: 3,082 cases,
+  377,732 texels, 286,158 measured-FPATAN products.
+- *Play.* The bodies rerun inside the light-map merge for each new
+  Level.TimeSeconds, from a per-texel cache. Animated light maps now merge
+  only for the surfaces OccludeBsp draws. The Paris club's dance floor and
+  the Wan Chai garage searchlights animate, at about 0.8 ms per frame on
+  the Linux host.
+- *Moving lights.* The grenades' Shell ExplosionLight lights moving
+  light maps with the original body.
+- *Precision.* ComputeFromActor's rr2 and incidence are taken at 24 bits
+  for these lights. The rest of the static path is still modelled at 64
+  bits: incidence differs in 875 of 3,952 Training light steps and 13 of
+  1.9 million texels, and the init-time tables' precision is unmeasured.
+  See [static lighting](static-lighting.md#spatially-dynamic-effects).
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,
