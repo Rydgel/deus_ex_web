@@ -67,7 +67,7 @@ METHODS = {
     'preferredSize': R(0x10033260), 'granularity': R(0x100332c0), 'draw': R(0x10033350),
     'mouseButtonPressed': R(0x10033750), 'mouseMoved': R(0x100338c0), 'mouseButtonReleased': R(0x100339c0),
     'keyPressed': R(0x10033ae0), 'virtualKeyPressed': R(0x10033ca0), 'visibilityChanged': R(0x10033d90),
-    'tick': R(0x10033e50),
+    'tick': R(0x10033e50), 'scaleDraw': R(0x1003fb10),
 }
 LIST_VTABLE, WINDOW_VTABLE = R(0x1005b998), R(0x10059930)
 SCRIPT_NAMES = {R(0x1009b340): 'MouseButtonPressed', R(0x1009b3e0): 'MouseMoved', R(0x1009b394): 'MouseButtonReleased',
@@ -328,7 +328,8 @@ class ListFamilyOracle(_PROBE.ListWindowProbe):
             self.write(case['canvasTable'] + 0x5c, 'I', self.drawtile_stub)
         if case.get('renderTable'):
             self.write(case['renderTable'] + 0x7c, 'I', self.glyph_stub)
-        self.write(case['window'], 'I', self.list_vtable)
+        if not case.get('noVtable'):
+            self.write(case['window'], 'I', self.list_vtable)
         for parent in case.get('parents', []):
             self.write(parent, 'I', self.parent_vtable)
         self.write(self.tick_cell, 'I', case.get('tickOffset', 0))

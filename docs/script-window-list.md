@@ -1,5 +1,8 @@
 # XListWindow row/column model and sort evidence
 
+The family as a whole (construction, lifecycle, all natives 1720–1812, Draw,
+input and the Play host wiring) is in [the ListWindow family](script-window-list-family.md).
+
 Authority is the shipped Extension.dll SHA-256
 `93c35502d3c6fe61ecbecc7dba526d09281a9fbce16ee045061b1a4d8b916d9c`
 (preferred image base `0x10000000`; the Unicorn oracle maps it at
@@ -237,5 +240,5 @@ check can see the behavior it pins.
 - Sorting of rows whose stored ids collide is still exact — the ported
   qsort reproduces the original permutation — but this state is only
   reachable through hand-built heaps, not through the bound natives.
-- `GetTopChild`/style/visibility natives outside the 14 bound methods are
-  separate subsystems.
+- The remaining ListWindow natives, Draw and input are covered by the
+  family harness ([ListWindow family](script-window-list-family.md)).

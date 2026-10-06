@@ -174,8 +174,9 @@ if(target==='MedicalBot'){
   assert.ok(completed.some(row=>row.receiver===area&&row.key==='deusex.personascrollareawindow.stylechanged'));
   assert.equal(completed.filter(row=>row.key==='deusex.personahealthactionbuttonwindow.initwindow').length,12,
     'both authored sets of six health-region controls initialize');
-  // Native vtable slots are guarded instead of inheriting a base implementation.
-  assert.throws(()=>W.v.draw(scale,null),/scalewindow.draw native override/);
+  // XScaleWindow::Draw 0x1003fb10 is the recovered native slot (script-window-scale-draw.mjs,
+  // checked against the original body by validate-window-list-family.mjs); it runs on the scale's GC.
+  const scaleGc=W.ptr(scale,0x134);assert.ok(scaleGc,'the scale window owns a GC');W.v.draw(scale,scaleGc);
   W.v.tick(scale,0); // No repeat active: original native returns without script Tick.
   // Exercise the recovered removal virtual on the real constructed manager.
   // This isolates notification dispatch; full recursive screen cleanup remains guarded.

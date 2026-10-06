@@ -209,6 +209,8 @@ export function dispatchWindowHostNative(W, call) {
     case 1651: W.setI32(win,0x1d0,Math.max(1,arg(0,0)|0));break;
     case 1652: {const sounds=[arg(0,null),arg(1,null),arg(2,null)];sounds.forEach((v,i)=>W.setPtr(win,0x1f4+4*i,v));break;}
     case 1680: W.native.setClipPosition(win,arg(0,0)|0,arg(1,0)|0);break;
+    // ClipWindow.ForceChildSize exec 0x1000cb70 (both defaults TRUE) -> 0x1000b9f0.
+    case 1689: S.forceClipChildSize(W,win,arg(0,true)?1:0,arg(1,true)?1:0);break;
     case 1681: {
       // Both lvalues are captured before writing. The first write may alias
       // the receiver's row; read that row only afterward (original b5e0).

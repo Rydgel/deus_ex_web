@@ -6,6 +6,11 @@
  * window class, or the first error with the script stack that reached it.
  * A census of reach, not a fidelity check.
  *
+ * A `MenuScreen...` entry (MenuScreenLoadGame, MenuScreenSaveGame) opens the
+ * main menu and activates the MenuMain button whose buttonDefaults invoke
+ * that class, through XButtonWindow::ActivateButton like a click. They are
+ * not in the default list: both stop at the save-game directory (Stage 6).
+ *
  *   node scripts/census-ui-screens.mjs [--map 00_Training] [--screens ShowInventoryWindow,...]
  */
 import {readFile, readdir} from 'node:fs/promises';
@@ -42,16 +47,27 @@ for (const screen of screens) {
     catch (error) { failedStack ??= [...stack]; throw error; }
     finally { stack.pop(); }
   };
-  const top = () => {
+  const topWindow = () => {
     const rootWindow = runtime.namedReference(player, 'rootWindow').get();
     let window = rootWindow ? W.ptr(rootWindow, 0x140) : 0;
     while (window && W.u8(window, 0x28) < 2) window = W.ptr(window, 0x144);
-    return window ? runtime.instance(window).cls.record.key : null;
+    return window || null;
+  };
+  const top = () => { const window = topWindow(); return window ? runtime.instance(window).cls.record.key : null; };
+  // MenuMain's button for a menu screen class (MenuUIMenuWindow buttonDefaults[i].invoke).
+  const openFromMainMenu = screenClass => {
+    game.hud.scoped(() => runtime.scriptConsoleExec(player, 'ShowMainMenu'));
+    input.tick(5);
+    const menu = topWindow(), defaults = runtime.readNamed(menu, 'buttonDefaults'), buttons = runtime.readNamed(menu, 'winButtons');
+    const index = defaults.findIndex(entry => Object.entries(entry).find(([key]) => key.endsWith('.invoke'))?.[1]?.key === `deusex.${screenClass.toLowerCase()}`);
+    if (index < 0) throw new Error(`MenuMain has no button invoking ${screenClass}`);
+    game.hud.scoped(() => W.native.activateButton(buttons[index], 1));
+    return true;
   };
   const result = {screen};
   try {
     input.tick(30);
-    result.opened = game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
+    result.opened = screen.startsWith('MenuScreen') ? openFromMainMenu(screen) : game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
     input.tick(10);
     result.window = top();
     game.windowKey('Escape', true); game.windowKey('Escape', false);

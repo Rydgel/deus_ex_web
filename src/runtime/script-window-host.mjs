@@ -85,6 +85,7 @@ import {activateButtonNative} from './script-window-activate-button.mjs';
 import * as LT from './script-window-large-text.mjs';
 import * as ED from './script-window-edit.mjs';
 import * as LIST from './script-window-list.mjs';
+import {scaleDraw} from './script-window-scale-draw.mjs';
 import {listMemory} from './script-window-list-model.mjs';
 import {gcGetTextExtent as gcTextExtent} from './script-gc-get-text-extent.mjs';
 import {editMemory, cleanUpUndo, setTextVirtual, textChangedRange} from './script-edit-model.mjs';
@@ -840,6 +841,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.largetextwindow': return LT.largeTextDraw(W, win, gc);
         case 'extension.editwindow': return ED.editDraw(W, win, gc, editEnv);
         case 'extension.listwindow': return LIST.listDraw(W, win, gc, listEnv);        // 0x10033350
+        case 'extension.scalewindow': return scaleDraw(W, win, gc);                     // 0x1003fb10 (no script DrawWindow)
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
       }
     },
@@ -928,17 +930,6 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     is(win,'extension.scalewindow')?SI.scaleMouseReleased(W,win,...args):inheritedMouseReleased(win,...args);
   const inheritedShowArea=V.childRequestedShowArea;
   V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
-  // The four new families override these native slots. Until translated,
-  // reject them explicitly instead of silently using Window/TabGroup behavior.
-  for(const [family,methods] of Object.entries({
-    'extension.scalewindow':['draw'],
-  }))for(const method of methods){
-    const inherited=V[method];V[method]=(win,...args)=>{
-      if(is(win,family))return boundary(`${family}.${method} native override is not recovered`);
-      if(!inherited)return boundary(`Window.${method} script bridge is not recovered`);
-      return inherited(win,...args);
-    };
-  }
   W.v = V;
 
   // ------------------------------------------------------------------
@@ -1016,12 +1007,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // the edit bodies: the shared L"" 0x10099ea8, the clipboard FString
   // 0x1009ae00, ConvertScriptString's static FString 0x100aead0 with its
   // init flag 0x100aeac8 and run scratch 0x100add98, the filterText
-  // character slot, the InsertText temp FString (a native stack temporary)
-  // and KeyPressed's static two-character buffer 0x1009b318.
+  // character slot, the InsertText temp FString (a native stack temporary),
+  // KeyPressed's static two-character buffer 0x1009b318 and the text copy
+  // EnableSingleLineEditing/EnableUppercaseOnly (1887/1889) take on the stack.
   // ------------------------------------------------------------------
   const editGlobals = {emptyWString: heap.allocRaw(4), clipboard: heap.allocRaw(12), convertBuffer: heap.allocRaw(12),
     convertFlag: heap.allocRaw(4), convertRun: heap.allocRaw(0x1000), charSlot: heap.allocRaw(8), scratchInsert: heap.allocRaw(12),
-    keyBuffer: heap.allocRaw(4)};
+    keyBuffer: heap.allocRaw(4), scratchCopy: heap.allocRaw(12)};
   const editMem = {...heap.mem, ...editGlobals,
     alloc: size => heap.allocRaw(size),
     readString(address) { let text = ''; for (let at = address; ; at += 2) { const unit = heap.mem.read(at, 'u16'); if (!unit) return text; text += String.fromCharCode(unit); } },

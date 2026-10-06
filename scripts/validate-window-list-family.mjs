@@ -36,6 +36,7 @@ import {gcCopyGC} from '../src/runtime/script-gc-copy-gc.mjs';
 import {gcGetTextExtent} from '../src/runtime/script-gc-get-text-extent.mjs';
 import {listMemory} from '../src/runtime/script-window-list-model.mjs';
 import * as CLEAN from '../src/runtime/script-window-list.mjs';
+import * as SCALE from '../src/runtime/script-window-scale-draw.mjs';
 import {refValue} from '../src/runtime/script-vm.mjs';
 import {loadExtensionNatives, encodeParam} from './native-exec-diff-lib.mjs';
 import {gameDirectory} from './game-directory.mjs';
@@ -249,19 +250,45 @@ function makeWorld() {
     spec.after?.(win, w);
     return win;
   };
+  // A scale window image with the members XScaleWindow::Draw reads.
+  w.makeScale = spec => {
+    const win = {name: 'Scale'};
+    heap.allocate(win, 0x300);
+    W.setU32(win, 0, 0x1005bab4);
+    const t = () => makeTexture(16, 16);
+    W.setU8(win, 0x14c, spec.vertical ? 1 : 0);
+    W.setPtr(win, 0x150, spec.noScaleTexture ? null : t()); W.setPtr(win, 0x154, t());
+    W.setPtr(win, 0x158, spec.ticks ? t() : null);
+    W.setPtr(win, 0x15c, spec.caps ? t() : null); W.setPtr(win, 0x160, spec.caps ? t() : null);
+    W.setU32(win, 0x164, spec.flags ?? 0);
+    W.setPtr(win, 0x168, spec.borderPattern ? t() : null);
+    W.setF32(win, 0x16c, spec.scaleBorder ?? 0); W.setF32(win, 0x170, spec.thumbBorder ?? 0);
+    W.setU32(win, 0x174, 0x11223344); W.setU32(win, 0x178, 0x55667788);
+    W.setU8(win, 0x17c, 2); W.setU8(win, 0x17d, 3); W.setU8(win, 0x17e, 4);
+    [0x8090a0b0, 0xc0d0e0f0, 0x01020304].forEach((c, i) => { for (let b = 0; b < 4; b++) W.setU8(win, 0x17f + 4 * i + b, (c >>> (8 * b)) & 255); });
+    W.setI32(win, 0x1c4, spec.numTicks ?? 10); W.setI32(win, 0x1cc, spec.span ?? 1);
+    (spec.geometry ?? []).forEach((v, i) => W.setF32(win, 0x200 + 4 * i, v));
+    W.setF32(win, 0x250, spec.start ?? 2); W.setF32(win, 0x254, spec.end ?? 150);
+    return win;
+  };
   return w;
 }
 
 // ---------------------------------------------------------------------------
 // Canonical dump over a byte reader (JS heap or oracle image + blocks).
 // ---------------------------------------------------------------------------
-function dump(read, canonOf, base, gcBase) {
+function dump(read, canonOf, base, gcBase, kind = 'list') {
   const u32 = at => (read(at) | read(at + 1) << 8 | read(at + 2) << 16 | read(at + 3) << 24) >>> 0;
   const i32 = at => u32(at) | 0;
   const text = (data, num) => { let s = ''; for (let i = 0; i < num; i++) { const u = read(data + 2 * i) | read(data + 2 * i + 1) << 8; if (!u) break; s += String.fromCharCode(u); } return s; };
   const str = at => { const data = u32(at), num = i32(at + 4); return {data: canonOf(data), num, max: i32(at + 8), text: data && num > 0 ? text(data, num) : null}; };
   const window = [];
-  for (let o = 4; o < 0x1d0; o += 4) window.push(canonOf(u32(base + o)));
+  for (let o = 4; o < (kind === 'scale' ? 0x270 : 0x1d0); o += 4) window.push(canonOf(u32(base + o)));
+  if (kind === 'scale') {
+    const out = {window};
+    if (gcBase) { const words = []; for (let o = 4; o < GC.size; o += 4) words.push(canonOf(u32(gcBase + o))); out.gc = words; }
+    return out;
+  }
   const rows = [], rdata = u32(base + 0x170), rnum = i32(base + 0x174);
   for (let i = 0; i < rnum && rdata; i++) {
     const node = u32(rdata + 4 * i);
@@ -536,6 +563,18 @@ method('tick idle', {prep: pressed}, 'tick', [bits(0.25)]);
 // ---------------------------------------------------------------------------
 // Run one case in a fresh world: `M` is the module for the measured call.
 // ---------------------------------------------------------------------------
+// XScaleWindow::Draw (the scroll area's scrollbars around an overflowing list).
+// Geometry +0x200..+0x24c: scale x/y/w/h, thumb x/y/w/h, tick x/y/w/h, cap1 u/v/w/h, cap2 u/v/w/h.
+const scaleGeometry = [0, 0, 15, 160, 1.5, 33.25, 12, 41.75, 2, 3, 9, 4, 0, 0, 12, 5, 1, 2, 12, 6];
+const scaleCase = (name, spec) => cases.push({name, scale: spec, method: 'scaleDraw', args: [drawGc], options: {draw: true}});
+scaleCase('scale vertical plain', {vertical: true, geometry: scaleGeometry});
+scaleCase('scale vertical stretched border caps', {vertical: true, flags: 3, scaleBorder: 2, thumbBorder: 1.5, borderPattern: true, caps: true, geometry: scaleGeometry});
+scaleCase('scale horizontal caps ticks', {flags: 0x10, caps: true, ticks: true, numTicks: 6, span: 2, geometry: [3, 1, 170.5, 14, 40.25, 2, 30.5, 11, 0, 2, 4, 9, 0, 0, 5, 11, 1, 1, 6, 11], end: 160.5});
+scaleCase('scale vertical ticks from start', {vertical: true, flags: 4, ticks: true, numTicks: 7, geometry: scaleGeometry, start: 1.25, end: 151.75});
+scaleCase('scale vertical ticks span odd', {vertical: true, flags: 0x15, ticks: true, numTicks: 9, span: 3, geometry: [0, 0, 15, 160, 1.5, 33.25, 12, 41.75, 2.5, 3, 9, 3.5, 0, 0, 12, 5, 1, 2, 12, 6], start: 0.3, end: 133.7});
+scaleCase('scale border swallows track', {vertical: true, scaleBorder: 9, borderPattern: true, caps: true, thumbBorder: 30, geometry: scaleGeometry});
+scaleCase('scale no textures', {vertical: true, noScaleTexture: true, geometry: [0, 0, 0, 0, 1, 2, 0, 5]});
+
 const natives = await loadExtensionNatives();
 const shapeOf = index => { const n = natives.get(index); if (!n) throw new Error(`native ${index} is not registered`); return n; };
 const FLOAT_ARGS = new Set(['mouseButtonPressed', 'mouseMoved', 'mouseButtonReleased']);
@@ -557,13 +596,14 @@ function methodJs(M, w, which) {
     virtualKeyPressed: (win, key, repeat) => ({eax: M.listVirtualKeyPressed(W, win, key, repeat, env)}),
     visibilityChanged: (win, visible) => M.listVisibilityChanged(W, win, visible, env),
     tick: (win, delta) => M.listTick(W, win, fromBits(delta), env),
+    scaleDraw: (win, gc) => (M.scaleDraw ?? SCALE.scaleDraw)(W, win, gc),
   };
   return table[which];
 }
 function runCase(c, M) {
   const w = makeWorld(), {heap, W, mem} = w;
   w.current = {...c.options};
-  const win = w.makeList(CLEAN, {...c.spec});
+  const win = c.scale ? w.makeScale(c.scale) : w.makeList(CLEAN, {...c.spec});
   if (c.options.hotKey) {
     const s = c.options.hotKey, hot = heap.addressOf(win) + 0x1c0, at = heap.realloc(0, (s.length + 1) * 2);
     for (let i = 0; i < s.length; i++) mem.write(at + 2 * i, 'u16', s.charCodeAt(i));
@@ -598,15 +638,16 @@ function runCase(c, M) {
     } else {
       const words = args.map((a, i) => (a && typeof a === 'object' && 'cell' in a) ? a : (a && typeof a === 'object') ? w.address(a)
         : FLOAT_ARGS.has(c.method) && i < 2 ? bits(a) : a >>> 0);
-      request = {method: c.method, args: words, controlWord: c.method === 'draw' ? 0x007f : 0x037f};
+      request = {method: c.method, args: words, controlWord: ['draw', 'scaleDraw'].includes(c.method) ? 0x007f : 0x037f, noVtable: Boolean(c.scale)};
       const jsArgs = ['preferredSize', 'granularity'].includes(c.method) ? [] : FLOAT_ARGS.has(c.method) ? [bits(args[0]), bits(args[1]), ...args.slice(2)] : args;
       result = methodJs(M, w, c.method)(win, ...jsArgs) ?? {};
     }
   } catch (e) { error = e; }
   w.recording = false;
   const gcBase = c.options.draw ? w.address(w.drawGc) : 0;
-  const js = error ? {error: error.stack} : {events: w.events, result, state: dump(at => heap.bytes[at - IMAGE_BASE], w.canon, w.address(win), gcBase)};
-  return {js, base: w.address(win), gcBase, request: {name: c.name, image, blocks, window: w.address(win), parents: w.parents.map(w.address),
+  const kind = c.scale ? 'scale' : 'list';
+  const js = error ? {error: error.stack} : {events: w.events, result, state: dump(at => heap.bytes[at - IMAGE_BASE], w.canon, w.address(win), gcBase, kind)};
+  return {js, base: w.address(win), gcBase, kind, request: {name: c.name, image, blocks, window: w.address(win), parents: w.parents.map(w.address),
     ...request, keys: Object.fromEntries(Object.entries(c.options.keys ?? {})), isFocus: c.options.isFocus ?? 0,
     tickOffset: c.options.tickOffset ?? 0, cursorPos: c.options.cursorPos ?? [0, 0], scriptResult: c.options.scriptResult ?? 0,
     activateResults: Object.fromEntries(Object.entries(w.current.activateResults ?? {}).map(([k, v]) => [String(k), v])),
@@ -642,7 +683,7 @@ function expectedOf(c, o, run) {
     }
     return ptr;
   };
-  const expected = {events: o.events, state: dump(read, canon, run.base, run.gcBase)};
+  const expected = {events: o.events, state: dump(read, canon, run.base, run.gcBase, run.kind)};
   if (c.native !== undefined) {
     const raw = Buffer.from(o.result, 'hex'), word = raw.readUInt32LE(0), kind = run.js.result?.kind;
     if (kind === 'IntProperty' || kind === 'ObjectProperty') expected.result = canon(word);
@@ -722,16 +763,22 @@ const MUTATIONS = [
   {find: "if (L.read(L.base + LIST.anchorLine, 'u32') === node) L.write(L.base + LIST.anchorLine, 'u32', 0);", replace: '', note: 'DeleteRow keeps a dangling anchor'},
   {find: "if (visible && !L.read(L.base + LIST.focusLine, 'u32') && rowsNum(L) > 0) setRow(W, L, env, rowAt(L, 0), 1, 1, 0);", replace: '', note: 'VisibilityChanged does not select row 0'},
   {find: "if ((clicks | 0) > 1 && lineSize > 0 && num > 0) {", replace: "if ((clicks | 0) > 0 && lineSize > 0 && num > 0) {", note: 'Single click activates'},
+  {file: 'scale', find: "pattern(x, y, w, h, 0, 0, 0, a.stretch ? 0 : h, a.texture);", replace: "pattern(x, y, w, h, 0, 0, 0, a.stretch ? h : 0, a.texture);", note: 'Scale stretch flag inverted (vertical)'},
+  {file: 'scale', find: "if (!(flags & 4)) { first = 1; count--; }", replace: "if (!(flags & 4)) { first = 1; }", note: 'Scale draws one tick too many'},
+  {file: 'scale', find: "x = S(p24add(r(x), r(a.borderWidth)));", replace: "x = S(p24add(r(x), r(0)));", note: 'Scale border does not inset x'},
 ];
-const source = readFileSync(path.join(ROOT, 'src/runtime/script-window-list.mjs'), 'utf8');
+const sources = {list: readFileSync(path.join(ROOT, 'src/runtime/script-window-list.mjs'), 'utf8'),
+  scale: readFileSync(path.join(ROOT, 'src/runtime/script-window-scale-draw.mjs'), 'utf8')};
 const caught = [], missed = [];
 for (const [i, mutation] of MUTATIONS.entries()) {
+  const source = sources[mutation.file ?? 'list'];
   const hits = source.split(mutation.find).length - 1;
   if (hits !== 1) { console.error(`mutation ${i} (${mutation.note}): find string occurs ${hits} times`); process.exit(1); }
   const file = path.join(ROOT, 'src/runtime', `.mut-list-family-${process.pid}-${i}.mjs`);
   writeFileSync(file, source.replace(mutation.find, mutation.replace));
   try {
-    const M = await import(url.pathToFileURL(file).href);
+    const mutated = await import(url.pathToFileURL(file).href);
+    const M = mutation.file === 'scale' ? {...CLEAN, scaleDraw: mutated.scaleDraw} : mutated;
     let detail = null;
     for (const c of cases) {
       const expected = expectations.get(c.name);

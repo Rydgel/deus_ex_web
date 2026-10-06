@@ -102,3 +102,12 @@ The native family layout, root tick, actor reference and scene-frame modules
 record their original addresses and comparison suites separately. The GC
 dispatcher only marshals script references, bool DWORDs, colors, texture/font
 pointers and raw float words into the already recovered GC bodies.
+
+## ListWindow family (2026-10-06)
+
+`extension.listwindow` (XListWindow) is admitted: construction, Init,
+CleanUp/destructor, natives 1720–1812, Draw and the input/visibility/tick
+overrides, with the list services (GMalloc, GetGC/ReleaseGC, GetTextExtent,
+image cells) supplied by the host. The persona Conversations, Images and Logs
+screens open, draw and close in Play. XScaleWindow::Draw is no longer a
+boundary. See [the ListWindow family](script-window-list-family.md).
