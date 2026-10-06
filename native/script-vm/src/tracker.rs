@@ -228,6 +228,41 @@ fn round24(s: f64, e: f64) -> f64 {
 fn is_f32(x: f64) -> bool {
     (x as f32) as f64 == x || x.is_nan()
 }
+/// Veltkamp split: hi + lo == x, each with at most 26 significant bits.
+fn split(x: f64) -> (f64, f64) {
+    let c = 134217729.0 * x; // 2^27 + 1
+    let hi = c - (c - x);
+    (hi, x - hi)
+}
+/// a / b rounded once to a 24-bit significand (normal range), for a double
+/// operand (FDIV of a binary32 value by a double such as Core appTan's
+/// result): the double quotient decides unless it is a binary32 midpoint,
+/// where the sign of a - mid * b, computed exactly, does.
+fn div24(a: f64, b: f64) -> f64 {
+    let q = a / b;
+    let r = q as f32;
+    if !q.is_finite() || r as f64 == q {
+        return r as f64;
+    }
+    let rd = r as f64;
+    let bits = r.to_bits();
+    let other = if (rd > q) == (r > 0.0) { f32::from_bits(bits - 1) } else { f32::from_bits(bits + 1) } as f64;
+    let mid = (rd + other) * 0.5;
+    if q != mid {
+        return rd;
+    }
+    // mid * b exactly as p + e (Dekker), then the sign of a - p - e.
+    let p = mid * b;
+    let ((mh, ml), (bh, bl)) = (split(mid), split(b));
+    let e = ((mh * bh - p) + mh * bl + ml * bh) + ml * bl;
+    let residual = (a - p) - e; // a and p agree to within a factor of two: a - p is exact
+    let above = if b > 0.0 { residual > 0.0 } else { residual < 0.0 }; // the true quotient is above mid
+    if residual == 0.0 {
+        // An exact tie: round to even.
+        return if bits & 1 == 0 { rd } else { other };
+    }
+    if above == (other > rd) { other } else { rd }
+}
 
 impl Fp for P24 {
     fn ld(bits: u32) -> Self {
@@ -256,7 +291,10 @@ impl Fp for P24 {
         P24(round24(s, e))
     }
     fn div(self, o: Self) -> Self {
-        P24(((self.0 as f32) / (o.0 as f32)) as f64)
+        if is_f32(self.0) && is_f32(o.0) {
+            return P24(((self.0 as f32) / (o.0 as f32)) as f64);
+        }
+        P24(div24(self.0, o.0))
     }
     fn sqrt(self) -> Self {
         // The 64-bit root rounded to 24 bits: a square root of a binary32

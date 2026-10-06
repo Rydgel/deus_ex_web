@@ -55,7 +55,13 @@ const C_SEQ: u32 = 17;
 const C_SEQ_START: u32 = 18;
 const C_SEQ_FRAMES: u32 = 19;
 const C_ANIMFRAME: u32 = 20;
-pub(crate) const CW: u32 = 21;
+/// Bit 0: SetupDynamics does not construct this actor's sprite in a root
+/// frame (Recursion 0): the excluded actor OccludeFrame passes (0x10b1a161:
+/// the ViewTarget, else the view actor, unless bBehindView) and the
+/// ViewTarget (0x10b22e3c..0x10b22e57, Recursion 0 and not bBehindView).
+/// A child frame passes no excluded actor and skips no ViewTarget.
+const C_FLAGS: u32 = 21;
+pub(crate) const CW: u32 = 22;
 
 // Mesh record words: BoundingBox (+0x28: Min, Max, IsValid), Scale (+0x100),
 // Origin (+0x10c), RotOrigin (+0x118), then BoundingBoxes (+0xa8): the
@@ -79,6 +85,8 @@ const UNKNOWN: u32 = 3;
 /// A frame box index the original would read outside BoundingBoxes, or a
 /// sequence with no frames (idiv by zero): unsupported.
 const UNSUPPORTED: u32 = 4;
+/// Not constructed in this frame (C_FLAGS bit 0 in a root frame).
+const NOT_CONSTRUCTED: u32 = 5;
 
 #[inline(always)]
 fn rd(address: u32) -> u32 {
@@ -456,7 +464,8 @@ fn setup(c: u32, r: u32, view: &View) -> u32 {
 }
 
 /// Setup for `count` candidates at `candidates` (CW words each) on the
-/// frame words: results to `out` (OW words each); the accepted ones, in
+/// frame words (a root frame skips the candidates C_FLAGS excludes): results
+/// to `out` (OW words each); the accepted ones, in
 /// order, become occ_run's sprite list (MODEL 17, 6 words each: key, X1, Y1,
 /// X2, Y2, Z bits), whose capacity the host keeps at least `count`. Returns
 /// the number accepted.
@@ -465,9 +474,14 @@ pub extern "C" fn occ_setup(candidates: u32, count: u32, out: u32) -> u32 {
     let view = view();
     let list = model(17);
     let mut accepted = 0;
+    let root = frame(43) == 0;
     for i in 0..count {
         let c = candidates + 4 * CW * i;
         let r = out + 4 * OW * i;
+        if root && rd(c + 4 * C_FLAGS) & 1 != 0 {
+            wr(r, NOT_CONSTRUCTED);
+            continue;
+        }
         let status = setup(c, r, &view);
         wr(r, status);
         if status == ACCEPTED && list != 0 {
