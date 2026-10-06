@@ -121,6 +121,10 @@ export function planMirrorPasses(source, groups, size, visible = mesh => mesh.vi
       const depth = view.depth + 1, camera = new THREE.PerspectiveCamera();
       const world = new THREE.Matrix4().multiplyMatrices(group.matrix, view.world);
       camera.copy(source, false); camera.matrixAutoUpdate = camera.matrixWorldAutoUpdate = false;
+      // The original's half-pixel centre (play-camera.mjs setPixelCentre) is
+      // a screen-space shift: an odd depth's target is sampled right to
+      // left, so its horizontal offset is reversed to land the same way.
+      if (depth % 2 && camera.view?.enabled) { camera.view.offsetX = -camera.view.offsetX; camera.updateProjectionMatrix(); }
       // ClipDecal empties every fragment in a mirror frame (docs/decals.md).
       camera.layers.disable(DECAL_LAYER);
       camera.matrixWorld.copy(world);

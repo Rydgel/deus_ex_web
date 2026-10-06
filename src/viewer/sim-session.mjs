@@ -8,7 +8,7 @@ import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/s
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
-import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov } from './play-camera.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov, setPixelCentre } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
@@ -572,7 +572,13 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         const pan = game.surfacePan();
         frame.pan = { timeSeconds: pan.timeSeconds, speeds: Object.fromEntries(panZones.map(name => [name, pan.zoneSpeeds(name)])) };
       } catch (error) { fail(error); }
-      if (frame.view) applyPlayFrame(camera, frame.view, frame.renderRect);
+      if (frame.view) {
+        applyPlayFrame(camera, frame.view, frame.renderRect);
+        // The page's camera takes the original's pixel centres for the same
+        // view size (main.mjs), so mirror planning sees the same bounds.
+        const viewSize = rect?.render && rect.width > 0 && rect.height > 0 ? [rect.width, rect.height] : size;
+        setPixelCentre(camera, ...viewSize);
+      }
       drawn?.placeMovers(frame.movers);
       current = frame;
       return frame;

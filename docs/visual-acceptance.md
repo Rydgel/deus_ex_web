@@ -177,7 +177,11 @@ uniformly 1.13–1.41× brighter; see Open.
 
    The original's 3D image therefore sits 0.50005 px right of and below a
    symmetric projection. Play's camera now carries that view offset
-   (`play-camera.mjs` `setPixelCentre`); sky and mirror passes copy it.
+   (`play-camera.mjs` `setPixelCentre`), and so does the simulation side's
+   copy, so both plan the same mirror passes. Sky passes copy it. Odd-depth
+   mirror children reverse its horizontal part, because their target is
+   sampled right to left. Before that, Training's floor reflection measured
+   (−1, 0); after it, (0, 0).
    DrawTile subtracts the same 0.5 (`0x10005c7a`/`0x10005c8c`), so 2D tiles
    at integer coordinates land on whole pixels, as Play's HUD draws them.
    After the change, the measured offset is (0, 0) in all those views
