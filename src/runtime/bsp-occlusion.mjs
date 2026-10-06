@@ -131,7 +131,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * frame's sprites (FDynamicSprite after Setup), in SetupDynamics order:
      * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
      * and Y1 < Y2 (Setup's checks). */
-    run(frameWords, frameSprites = []) {
+    run(frameWords, frameSprites = [], { skipPoints = false } = {}) {
       if (frameSprites.length > spriteCapacity) {
         free(sprites); blocks.splice(blocks.indexOf(sprites), 1);
         spriteCapacity = frameSprites.length; sprites = block(24 * spriteCapacity); header[17] = sprites;
@@ -146,7 +146,11 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];
       const st = words().slice(kernel.statusPtr() >>> 2, (kernel.statusPtr() >>> 2) + 8);
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);
-      return decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st);
+      // `stream` is the output's address and length in the kernel memory, for
+      // the decal block (decal-draw.mjs), valid until the next run;
+      // `skipPoints` leaves the saved points to it.
+      return { ...decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st, skipPoints),
+        stream: { at: st[5], words: st[1] } };
     },
     /** Each zone's SkyZone presence (`skies[i]` truthy: the zone's actor,
      * or the LevelInfo for a zone without one, has a SkyZone; OccludeBsp
@@ -163,7 +167,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   };
 }
 
-function decode(words, status) {
+function decode(words, status, skipPoints = false) {
   const draw = [[], [], []], children = [], sprites = [];
   let i = 0;
   while (i < words.length) {
@@ -198,6 +202,7 @@ function decode(words, status) {
     for (let p = 0; p < polyCount; p++) {
       const node = words[i] | 0, count = words[i + 1];
       i += 2;
+      if (skipPoints) { i += 7 * count; polys.push({ iNode: node }); continue; }
       const points = [];
       for (let k = 0; k < count; k++, i += 7) points.push(words.slice(i, i + 7));
       polys.push(count ? { iNode: node, points } : { iNode: node });

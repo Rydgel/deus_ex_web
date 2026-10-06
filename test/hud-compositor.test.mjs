@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import {createHudRenderer} from '../src/viewer/hud.mjs';
+import {AssetStore} from '../src/unreal/assets.mjs';
+import {decodePixels} from '../src/unreal/textures.mjs';
 
 // Previous compositor's one-tile geometry, retained at this representation
 // boundary. Native GC/Window behavior is covered by validate-play-hud.mjs.
@@ -18,11 +20,36 @@ function tile(command,image){
     uv:new Float32Array([us,vs,ue,vs,us,ve,ue,vs,ue,ve,us,ve]),tint};
 }
 
+// A package of P8 HUD textures sharing one Palette export, read through the
+// same TextureStore path as Play's (plain {key,package,index} refs,
+// sim-session.mjs plainTexture).
+function texturePackage(name,textures){
+  const compact=n=>{const out=[(n>=64?0x40:0)|(n&63)];for(n>>=6;n;n>>=7)out.push((n>=128?0x80:0)|(n&127));return out;};
+  const u32=n=>[n&255,n>>8&255,n>>16&255,n>>>24];
+  const paletteIndex=textures.length+1,palette=[255,0,255,255,10,20,30,255,200,150,100,255];
+  const exports=[],chunks=[],start=20;let offset=start;
+  const add=(path,className,payload)=>{exports.push({name:path,path,className,serialOffset:offset,serialSize:payload.length,flags:0});chunks.push(payload);offset+=payload.length;};
+  for(const {path,width,height,pixels} of textures){
+    const head=[1,0x05,...compact(paletteIndex),0,1],data=[...compact(pixels.length),...pixels];
+    add(path,'Texture',[...head,...u32(offset+head.length+4+data.length),...data,
+      ...u32(width),...u32(height),Math.log2(width),Math.log2(height)]);
+  }
+  add('HudPalette','Palette',[0,...compact(palette.length/4),...palette]);
+  const bytes=new Uint8Array(offset);for(let i=0,at=start;i<chunks.length;at+=chunks[i++].length)bytes.set(chunks[i],at);
+  return {name,bytes,pkg:{version:68,names:[{name:'None'},{name:'Palette'}],imports:[],exports},
+    images:textures.map(({path,width,height,pixels},i)=>({key:`${name}.${path}`,ref:{key:`${name}.${path}`,package:name,index:i+1},
+      ...decodePixels({width,height,data:Uint8Array.from(pixels)},0,Uint8Array.from(palette),'point')}))};
+}
+
 test('HUD batches consecutive materials without changing the ordered tile stream',async()=>{
-  const images=new Map(['font','portrait'].map(key=>[key,{key,width:128,height:64,data:new Uint8Array(128*64*4)}]));
+  const pkg=texturePackage('HudTest',[
+    {path:'font',width:128,height:64,pixels:Array.from({length:128*64},(_,i)=>i%3)},
+    {path:'portrait',width:64,height:128,pixels:Array.from({length:64*128},(_,i)=>1+i%2)}]);
+  const images=new Map(pkg.images.map(image=>[image.key,image])),ref=key=>images.get(`HudTest.${key}`).ref;
+  const assets=new AssetStore([]);let loaded=false;
+  assets.get=async name=>{if(loaded)throw new Error('Unexpected missing image');assert.equal(name,'HudTest');return pkg;};
   let commands=[],actual=[],drawCalls=0;
-  const hud={images,commands:()=>commands,imageFor:()=>{throw new Error('Unexpected missing image');}};
-  const compositor=await createHudRenderer(hud);
+  const compositor=await createHudRenderer({assets,preload:pkg.images.map(image=>image.ref)});loaded=true;
   const renderer={clearDepth(){},render(scene){
     actual=[];drawCalls=0;
     for(const mesh of scene.children.filter(mesh=>mesh.visible).sort((a,b)=>a.renderOrder-b.renderOrder)){
@@ -31,7 +58,9 @@ test('HUD batches consecutive materials without changing the ordered tile stream
       assert.equal(geometry.drawRange.start,0);assert.equal(count%6,0);
       assert.equal(material.depthWrite,false);assert.equal(material.depthTest,false);assert.equal(material.transparent,true);
       assert.equal(material.forceSinglePass,true);
-      const image=[...images.values()].find(image=>image.data===material.uniforms.map.value.image.data);
+      const map=material.uniforms.map.value.image;
+      const image=[...images.values()].find(image=>image.width===map.width&&image.height===map.height);
+      assert.deepEqual(map.data,image.data);
       const style=material.blending===THREE.CustomBlending?(material.blendSrc===THREE.DstColorFactor?4:3):
         material.fragmentShader.includes('discard')?2:1;
       assert.equal(material.blendDst,style===4?THREE.SrcColorFactor:THREE.OneMinusSrcColorFactor);
@@ -46,10 +75,10 @@ test('HUD batches consecutive materials without changing the ordered tile stream
       }
     }
   }};
-  const command=(image='font',style=2,extra={})=>({texture:{key:image},x:1.25,y:2.5,width:7,height:11,u:3,v:5,style,...extra});
+  const command=(image='font',style=2,extra={})=>({texture:ref(image),x:1.25,y:2.5,width:7,height:11,u:3,v:5,style,...extra});
   try{
     const verify=()=>{
-      compositor.render(renderer,1440,960);
+      compositor.render(renderer,1440,960,commands);
       const expected=commands.map(command=>tile(command,images.get(command.texture.key))).filter(Boolean);
       assert.deepEqual(actual,expected,'Float32 tile attributes, material and triangle order match the former compositor');
       const runs=expected.reduce((count,t,i)=>count+Number(!i||t.image!==expected[i-1].image||t.style!==expected[i-1].style),0);

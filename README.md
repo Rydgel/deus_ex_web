@@ -141,8 +141,9 @@ keeps the dated record.
   ([fire textures](docs/fire-texture.md)), animated and auto-panned surfaces
   ([texture animation](docs/texture-animation.md)), particles and sprites
   ([particles](docs/particles.md)), light coronas ([coronas](docs/coronas.md)),
-  laser beams ([lasers](docs/lasers.md)) and volumetric fog on BSP surfaces
-  ([volumetric fog](docs/volumetric-fog.md)).
+  laser beams ([lasers](docs/lasers.md)), volumetric fog on BSP surfaces
+  ([volumetric fog](docs/volumetric-fog.md)) and decals such as the Shadow
+  blobs under pawns ([decals](docs/decals.md)).
 - **Sound and music:** Galaxy's ambient and script sounds
   ([galaxy audio](docs/galaxy-audio.md)) and each map's music, from the
   original loader, sequencer, mixer and Update music section, bit-exact with
@@ -151,9 +152,9 @@ keeps the dated record.
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
-**Still open in Stage 4:** decals (Shadow blobs under pawns attach through the
-original AttachDecal but are not drawn), fog on meshes and movers, the moving
-brush tracker and child frames of the occlusion, mirror/sky combinations,
+**Still open in Stage 4:** the occlusion's moving brush tracker (and with it
+fog on movers; meshes stay unfogged, as the shipped D3D configuration draws
+them) and child frames, the render-pass precision audit, mirror/sky combinations,
 spatial and time-varying light effects on moving lights and spotlights, Galaxy's mixer for sound effects (their
 volume and pan are a Web Audio host mapping) and zone reverb, the remaining
 native UI presentation, and original-game visual acceptance across maps.

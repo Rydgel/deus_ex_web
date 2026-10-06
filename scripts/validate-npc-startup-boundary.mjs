@@ -136,4 +136,4 @@ const invoke=(actor,index)=>runtime.invokeNative({receiver:actor,index,argumentC
 invoke(scientist,529);assert.equal(level.pawnList,scientist);assert.equal(get(scientist,'NextPawn'),jaime);
 invoke(scientist,530);assert.equal(level.pawnList,jaime);assert.equal(get(scientist,'NextPawn'),jaime);
 invoke(jaime,529);assert.equal(get(jaime,'NextPawn'),jaime);
-console.log('NPC PreBeginPlay: real list/collision/relevance/field writes, native Shadow construction, BSP surface attach and inherited BeginPlay; MultiDecalLevel grid collection remains documented. Disabled-decals BeginPlay destroys the spawned Shadow.');
+console.log('NPC PreBeginPlay: real list/collision/relevance/field writes, native Shadow construction, BSP surface attach (decal.rs, validate-decal-attach) and inherited BeginPlay. Disabled-decals BeginPlay destroys the spawned Shadow.');
