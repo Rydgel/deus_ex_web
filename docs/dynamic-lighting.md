@@ -222,7 +222,9 @@ still match on the supplied inputs. The control word in the running game
   lights (8, 12), the other normal-effect variants (1–3, 11, 19), and non-steady
   effect-0 snapshots still use the static float reconstruction with `0x7f`
   illumination. Their effect/type processing and waver/shimmer random modulation
-  remain unrecovered. Other effects are skipped with a diagnostics note.
+  remain unrecovered. LE_Shell (the grenades' ExplosionLight) runs the original
+  body in the Rust core ([static lighting](static-lighting.md#spatially-dynamic-effects));
+  other effects are skipped with a diagnostics note.
 * Non-steady `LightType` functions (`0x10b2a284` table) are not applied.
 * Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
   unsupported mesh lighting.

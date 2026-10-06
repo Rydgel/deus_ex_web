@@ -21,11 +21,12 @@ import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh
 import {meshFaceGroups,resolveMeshSkin} from './actor-mesh-skins.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
+import {SETUP,setupSequence} from '../runtime/bsp-occlusion.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
-  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51};
-const MB_WORDS=52,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
+  ZONE:47,ILEAF:48,ZONENUMBER:49,AMBIENTGLOW:50,SETUP_FLAGS:51,DRAWTYPE:52,OWN_PARTICLES:53,OWN_ANIMFRAME:54};
+const MB_WORDS=55,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
 
 /** A plain texture reference for the page's asset store. */
 const plainRef=reference=>({key:reference.key,package:reference.asset?.name,index:reference.index});
@@ -84,7 +85,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null}) {
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
     'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
-    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee']);
+    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType']);
   const read=(object,name)=>object===actor&&Object.hasOwn(own,name)?own[name]():runtime.readNamed(object,name);
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');
@@ -337,7 +338,46 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     }
     const groupBits=()=>[...groups.values()].map(group=>group.mainVisible?1:0);
     let mainCamera=null,drawnMain=false;
-    return {id,actor,creation,dispose,mesh:meshReference,get block(){return block;},
+    /** This frame's block offset (mesh_reads words), or -1. */
+    const blockAt=reads=>{
+      if(!reads||!block)return -1;
+      const {u32}=reads.views();
+      return u32[block>>2]&MS_OK?block>>2:-1;
+    };
+    /** Whether the root frame admits the actor (SetupDynamics' scan:
+     * docs/render-visibility.md), as update() decides it. */
+    const admitted=(reads,at=blockAt(reads))=>at>=0?Boolean(reads.views().u32[at+MB.STATUS]&MS_DRAWN)
+      :visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+    // GetAnimSeq's last answer (setupSequence) for Setup's candidate.
+    let setupName,setupHit=null;
+    /** FDynamicSprite::Setup's candidate words (bsp-occlusion.mjs SETUP) at
+     * `at`: the actor's own fields from this frame's block, or read; for a
+     * render-iterator item (`item`) its snapshot's Location, Rotation and
+     * DrawScale, which DrawActorSprite would write into the actor. */
+    function packSetup({u32,f32,i32},at,key,record,reads,item=null){
+      u32[at+SETUP.KEY]=key>>>0;u32[at+SETUP.MESH]=record>>>0;u32[at+SETUP.TEXTURE]=0;u32[at+SETUP.USIZE]=0;u32[at+SETUP.VSIZE]=0;
+      const b=item?-1:blockAt(reads);
+      if(b>=0){
+        const w=reads.views().u32;
+        u32[at+SETUP.DRAWTYPE]=w[b+MB.DRAWTYPE];
+        for(let k=0;k<3;k++){
+          u32[at+SETUP.LOCATION+k]=w[b+MB.LOCATION+k];u32[at+SETUP.ROTATION+k]=w[b+MB.POSE+6+k];
+          u32[at+SETUP.PREPIVOT+k]=w[b+MB.PREPIVOT+k];
+        }
+        u32[at+SETUP.DRAWSCALE]=w[b+MB.DRAWSCALE];u32[at+SETUP.PARTICLES]=w[b+MB.OWN_PARTICLES];
+        u32[at+SETUP.ANIMFRAME]=w[b+MB.OWN_ANIMFRAME];
+      }else{
+        const location=item?item.location:own.Location(),rotation=item?item.rotation:own.Rotation(),pivot=own.PrePivot();
+        u32[at+SETUP.DRAWTYPE]=own.DrawType()&255;
+        for(let k=0;k<3;k++){f32[at+SETUP.LOCATION+k]=location[k];i32[at+SETUP.ROTATION+k]=rotation[k];f32[at+SETUP.PREPIVOT+k]=pivot[k];}
+        f32[at+SETUP.DRAWSCALE]=item?item.drawScale:own.DrawScale();u32[at+SETUP.PARTICLES]=own.bParticles()?1:0;
+        f32[at+SETUP.ANIMFRAME]=own.AnimFrame();
+      }
+      const name=own.AnimSequence();
+      if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
+      u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
+    }
+    return {id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,get block(){return block;},
       get viewDependent(){return hasEnvironment&&mode==='cpu';},
       get path(){return mode;},
       readMesh(){try{return own.Mesh();}catch{return undefined;}},
@@ -400,19 +440,22 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // This frame's mesh_reads words (MB), or -1.
         const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
         const verify=at>=0&&view.reads.verify;
-        let rootVisible=at>=0?Boolean(u32[at+MB.STATUS]&MS_DRAWN)
-          :visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+        let rootVisible=admitted(view.reads,at);
         if(verify)verifyReads(u32,f32,at);
         // `view.children`: mirror child frames will draw this frame.
         childOnly=!rootVisible&&Boolean(view.children&&(at>=0?childVisible&&u32[at+MB.STATUS]&MS_DRAWN_CHILD:childVisible?.(actor,own)));
         mainCamera=view.camera??null;
+        // `view.main`: the ids in the main frame's Frame->Sprite (OccludeBsp,
+        // docs/bsp-occlusion.md "Play"). An admitted actor outside it is not
+        // drawn by the main frame; mirror child frames may still draw it.
+        if(view.main&&rootVisible&&!childOnly&&!view.main.has(id)){if(!view.children)return record;childOnly=true;}
         if(childOnly)rootVisible=true;
         if(!rootVisible)return record;
         // Render.dll only draws, and so only calls GetFrame for, actors in
         // the view. Outside the frustum even a conservative bound of every
         // pose is culled here; three.js would cull each group anyway, so
         // render feedback is unchanged. Mirror frames disable this (view.cull).
-        if(view.cull&&view.frustum){
+        if(view.cull&&view.frustum&&!view.main){
           if(at>=0){
             const l=at+MB.LOCATION,p=at+MB.PREPIVOT;
             cullSphere.center.set(f32[l+1]+f32[p+1],f32[l+2]+f32[p+2],-(f32[l]+f32[p]));
@@ -461,6 +504,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         if(mode==='gpu'){
           mainVisible=false;
           const assign=(group,visible)=>{group.mainVisible=visible;mainVisible||=visible;};
+          // A Frame->Sprite actor draws whole (DrawMesh); leaving out the
+          // groups outside the frustum, which draw no pixels, is host culling.
           if(view.frustum)decideGroups(view.frustum,assign);else for(const group of groups.values())assign(group,true);
           const bits=groupBits();
           if(!lastAppliedGroups||bits.some((bit,i)=>bit!==lastAppliedGroups[i]))record.groups=bits;
@@ -614,13 +659,14 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // so the membership set is rebuilt only then. Every actor's Mesh is read
   // every update through an accessor (actor-fields.mjs) kept in Level.Actors
   // order.
-  let live=null,liveEpoch=-1,liveList=[],meshReaders=[];
+  let live=null,liveEpoch=-1,liveList=[],meshReaders=[],levelIndex=new Map();
   const meshAccessors=new Map();
   const reconcile=(reads=null)=>{
     if(disposed||!level)return;
     const epoch=actorsEpoch();
     if(epoch!==liveEpoch||!live){
       live=new Set(level.actors);liveEpoch=epoch;liveList=[...live];
+      levelIndex=new Map();level.actors.forEach((actor,i)=>{if(actor&&!levelIndex.has(actor))levelIndex.set(actor,i);});
       const next=new Map();
       meshReaders=liveList.map(actor=>{
         if(!actor)return null;
@@ -681,6 +727,17 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     }
   };
   const itemBindings=()=>[...itemPools.values()].flatMap(pool=>pool.map(entry=>entry.binding).filter(Boolean));
+  /** This frame's iterator items with the binding drawItems will update for
+   * each (the same slots), where one exists. */
+  const itemCandidates=items=>{
+    const counts=new Map(),out=[];
+    for(const item of items){
+      const slot=counts.get(item.actor)??0;counts.set(item.actor,slot+1);
+      const binding=itemPools.get(item.actor)?.[slot]?.binding;
+      if(binding)out.push({item,binding});
+    }
+    return out;
+  };
   // The bindings' per-frame reads in one Rust pass (render.rs mesh_reads)
   // before their updates, which write none of the fields it reads: each
   // binding's block, or null when the pass cannot run (the script VM has no
@@ -719,13 +776,21 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** One main frame: every binding's frame record in update order, then the
      * mesh lighting frame's coordinates for the GPU passes. `view.lit` marks
      * the main viewport frame, whose drawn actors get one SetupForActor/Light
-     * pass each; mirror frames reuse those colours. */
+     * pass each; mirror frames reuse those colours. `view.occlude`, when
+     * given, runs the main frame's dynamics after this frame's reads: called
+     * with the bindings, the iterator items' bindings and the reads, it
+     * returns {main, children}, the binding ids in Frame->Sprite and whether
+     * mirror child frames draw (sim-session.mjs). */
     update(view={}){
       const records=[];
       frameViewer=null;frameViewer=viewer();
       try{
         const reads=meshReads();
         reconcile(reads);
+        if(view.occlude){
+          const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex});
+          view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children};
+        }
         for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
         drawItems(view.items??[],view,records);
       }finally{frameViewer=null;}

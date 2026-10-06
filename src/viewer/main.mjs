@@ -58,10 +58,13 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
 // walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs) and
 // ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs).
+// ?actorOcclusion=frustum draws and stamps the main frame's actors from the
+// frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
+// (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
 for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','DEUS_EX_MESH_LIGHT'],
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
-  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS']]) {
+  ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -1299,10 +1302,14 @@ function drawFrame(snap, time) {
   const requested = visible ? new Set(visible.mirrors) : null;
   const viewFrustum = world.mirrors.mayRender(camera, requested) ? null : new THREE.Frustum().setFromProjectionMatrix(
     new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  // The surfaces OccludeBsp's main frame draws (with no mirror or sky child
+  // frame, whose surfaces it does not list).
+  const drawnSurfaces = visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null;
   // The worker's snapshot animates textures at its frame's post time;
   // on the page the frame is now.
   world.updateTextureAnimation(simClient ? snap?.now : undefined,
-    { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum, phase });
+    { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum,
+      drawn: viewFrustum && visible && !visible.sky ? drawnSurfaces : null, phase });
   world.flushLighting(renderer);
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation
@@ -1313,7 +1320,7 @@ function drawFrame(snap, time) {
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
-        visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null);
+        drawnSurfaces);
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');
@@ -1362,7 +1369,8 @@ function drawFrame(snap, time) {
   if (drawWorld) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
     if (visible) world.visibility.select(visible.nodes);
-    try { renderer.render(scene, camera); } finally { world.visibility.all(); }
+    spriteScene?.mainPass(true);
+    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); }
   }
   if (simVerify && !simClient && stampFrame) {
     const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),

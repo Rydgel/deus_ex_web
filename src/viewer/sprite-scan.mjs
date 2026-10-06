@@ -10,6 +10,12 @@
  * A LaserIterator's items are DT_Mesh LaserProxy snapshots (docs/lasers.md);
  * scan() returns them, in order, for the actor mesh scene to draw.
  *
+ * Every record and mesh item carries `order`, its place in SetupDynamics'
+ * sequence: the actor's Level.Actors index times 65536 plus the item's
+ * number within its iterator, so the dynamics (docs/bsp-occlusion.md
+ * "Play") can merge them with the actor mesh layer's bindings; scan() also
+ * returns the iterating actors, which draw only through their items.
+ *
  * Not translated yet, noted: DT_SpriteAnimOnce's frame choice, iterator
  * classes other than ParticleIterator and LaserIterator, the bHighDetail
  * rule and fog. */
@@ -23,13 +29,14 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
   /** One frame: the level actor array in order, after the tick. Returns the
    * sprite records and the iterator items that draw as meshes. */
   function scan({ firstPerson = true } = {}) {
-    const sprites = [], meshItems = [];
+    const sprites = [], meshItems = [], iterators = new Set();
     const viewer = player(), level = runtime.levelFor(viewer);
     const read = (actor, name) => runtime.readNamed(actor, name);
+    let order = 0;
     const record = (actor, { location, drawScale, scaleGlow }) => {
       const reference = read(actor, 'Texture');
       if (!reference) return;
-      sprites.push({ handle: handleOf(actor),
+      sprites.push({ handle: handleOf(actor), order,
         texture: { key: reference.key ?? null, package: reference.asset?.name, index: reference.index },
         style: read(actor, 'Style') & 255, location: [...location], drawScale, scaleGlow });
     };
@@ -38,8 +45,9 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
     // iterator: an iterator may run script, so the scan resumes after it with
     // the viewer's ViewTarget read again. Without it, every actor in order.
     const actors = level.actors, render = runtime.scriptVm?.render ?? null;
-    const visit = actor => {
+    const visit = (actor, index) => {
       if (!actor || actor === viewer) return;
+      order = index * 65536;
       let hidden;
       try { hidden = read(actor, 'bHidden'); } catch { return; }
       if (hidden) return;
@@ -53,13 +61,15 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
       if (read(actor, 'RenderIteratorClass')) {
         const iterator = ensureRenderInterface(runtime, actor, constructIterator);
         if (!iterator) return;
+        iterators.add(actor);
         const kind = runtime.instance(iterator).cls.record.key;
         if (kind === 'deusex.laseriterator') {
           for (const item of laserIteratorItems(runtime, iterator, actor, viewer, {
             processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args), frand })) {
             const drawType = read(item.actor, 'DrawType') & 255;
-            if (drawType === 2) meshItems.push(item);
+            if (drawType === 2) meshItems.push({ ...item, order });
             else if (drawType === 1 || drawType === 7) record(item.actor, item);
+            order++;
           }
           return;
         }
@@ -71,6 +81,7 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
           processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args),
           farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) })) {
           if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) record(item.actor, item);
+          order++;
         }
         return;
       }
@@ -83,13 +94,13 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
     for (let start = 0; ;) {
       const entries = render?.scan(actors, { start, kinds: RENDER_SPRITE | RENDER_ITERATOR, viewer,
         viewTarget: firstPerson ? read(viewer, 'ViewTarget') : null, firstPerson }) ?? null;
-      if (!entries) { for (let i = start; i < actors.length; i++) visit(actors[i]); break; }
-      for (const entry of entries) visit(actors[entry >>> RENDER_SHIFT]);
+      if (!entries) { for (let i = start; i < actors.length; i++) visit(actors[i], i); break; }
+      for (const entry of entries) visit(actors[entry >>> RENDER_SHIFT], entry >>> RENDER_SHIFT);
       const last = entries[entries.length - 1];
       if (!entries.length || !(last & RENDER_ITERATOR)) break;
       start = (last >>> RENDER_SHIFT) + 1;
     }
-    return { sprites, meshItems };
+    return { sprites, meshItems, iterators };
   }
   return { scan, notes };
 }

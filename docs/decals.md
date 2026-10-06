@@ -207,6 +207,12 @@ shipped decal can attach to a mover surface).
   layer darkens about 3,500 pixels and brightens none. `decalProbe` on the
   viewer API places the player and reads the state on the simulation side.
 
+Cost (Linux host, headless worker-side session on 01_NYC_UNATCOIsland,
+1920×1080, interleaved runs, medians over 240 frames): the decal block takes
+0.012–0.016 ms a frame; OccludeBsp with points saved takes 0.14–0.18 ms
+against 0.15–0.16 ms without (noise). The frame's `visibility.ms` records
+both.
+
 Host choices, noted:
 - Fragments are drawn from their world points with the page's projection.
   ClipDecal's screen clamp for points flagged outside the view is not

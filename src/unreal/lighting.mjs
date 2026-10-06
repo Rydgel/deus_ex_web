@@ -2,7 +2,7 @@ import { ClassDefaults } from './classes.mjs';
 import { readObject } from './objects.mjs';
 import { cross, dot, sub } from './geometry.mjs';
 import { staticLightMap, ambientTexel, animateLightMap } from '../runtime/static-lighting.mjs';
-import { fgetHsv } from '../runtime/dynamic-lighting.mjs';
+import { fgetHsv, squareRootTable, normalLightTable } from '../runtime/dynamic-lighting.mjs';
 import { scriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createLightAnimationKernel } from '../runtime/light-animation-kernel.mjs';
 
@@ -170,6 +170,12 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
   const usedLights = new Set(), caches = new WeakMap(), cacheRecords = new Set(), bySurface = new WeakMap(), owned = [];
   const chosenKernel = kernel !== undefined ? kernel : lightKernelMode() === 'js' ? null : scriptVmKernel;
   const animationKernel = chosenKernel ? createLightAnimationKernel(chosenKernel) : null;
+  // spatial.rs (docs/static-lighting.md "Spatially dynamic effects") in the
+  // merge kernel's instance, whose light_merge reruns it; the reference
+  // merge calls the same instance's export. Without the core these lights
+  // stay out of the light maps, with a note.
+  const spatialKernel = (chosenKernel ?? scriptVmKernel)?.spatial ?? null;
+  if (spatialKernel && !spatialKernel.ready) spatialKernel.tables(squareRootTable(), normalLightTable());
   let movingApplier = null;
 
   // Moving lights (docs/dynamic-lighting.md) add onto a copy of the static
@@ -229,7 +235,8 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
     });
     const { facet, grid } = geometry(result), animated = [];
     result.baseTexels = staticLightMap({ width, height, ambient: ambientCache.get(ambientKey), lights, shadowBits: model.lightBits,
-      shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv, animated });
+      shadowOffset: lightMap.dataOffset, facet, grid, levelBrightness, notes, hsv, animated, spatial: spatialKernel,
+      timeSeconds: lightFrame?.timeSeconds ?? 0 });
     result.animated = animated;
     if (animated.length) animatedRecords.add(result); else animatedRecords.delete(result);
     const texels = result.texels = result.baseTexels.slice();
@@ -246,7 +253,7 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
   // Light animation (docs/static-lighting.md): the current frame's inputs,
   // and every light map with an animated class 1 light.
   let lightFrame = null;
-  const animatedRecords = new Set(), animationOptions = { levelBrightness, hsv, keyOf: ref => ref & 0xff };
+  const animatedRecords = new Set(), animationOptions = { levelBrightness, hsv, keyOf: ref => ref & 0xff, spatial: spatialKernel };
 
   function updateActor(ref, values = {}) {
     if (!Number.isInteger(ref) || ref <= 0) throw new TypeError(`Invalid lighting actor reference: ${ref}`);
@@ -258,6 +265,8 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
 
   return {
     stats, notes, hsv, levelBrightness,
+    /** The kernel's spatial.rs interface (null without the core). */
+    spatial: spatialKernel,
     /** The light map's texel grid as SetupForSurf sees it (fog maps share it). */
     gridFor(result) { return geometry(result).grid; },
     async prepare(model) { await Promise.all([...new Set(model.lights.filter(Boolean))].map(actor)); },

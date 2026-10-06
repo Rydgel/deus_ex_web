@@ -173,9 +173,11 @@ skips never filters its chunks. `Frame->Sprite` is the set of actors the
 frame draws (DrawActorSprite stamps LastRenderTime).
 
 The port (`setup_sprites`, `filter_chunks`, `pre_render`) takes each
-sprite's rectangle and Z from the host. The reference calls the original
-FDynamicSprite constructor with Setup supplying the same values, then
-OccludeBsp, and reads `Frame->Sprite` with each sprite's span buffer.
+sprite's rectangle and Z from `occ_setup` (the next section) or, for
+validation, straight from the host. The reference calls the original
+FDynamicSprite constructor with Setup supplying the same values, or running
+on actor fixtures, then OccludeBsp, and reads `Frame->Sprite` with each
+sprite's span buffer.
 Uncertain items with no observable effect, from the dynamics notes: chunk
 depth fields are uninitialised in the original (proved not to change the
 final chunks' relative order); FDynamicLight items (moving lights) are not
@@ -234,10 +236,106 @@ browser path drew the club behind the walls there: five mirror passes and
 The port takes 0.2–0.8 ms per frame in Node (Wasm), against 30–200 ms for the
 emulated original.
 
+## Setup: each actor's screen rectangle
+
+`FDynamicSprite::Setup` (`0x10b23910..0x10b23d9c`) gives the constructor
+its integer rectangle `[X1, X2) × [Y1, Y2)` and depth Z. It runs inside
+DrawWorld, so at 24 bits, and so do its callees. The port is
+`native/script-vm/src/setup.rs` (`occ_setup`), binary32 in the
+instructions' order. First it copies ScaleGlow, DrawScale, Location and
+Rotation into the sprite (DrawActorSprite draws from those copies).
+
+* **Mesh path** (DrawType 2 with a Mesh; any other DrawType but 1 and 7
+  rejects). Z = `((L.z−O.z)·Zz + (L.y−O.y)·Zy) + (L.x−O.x)·Zx` (Location,
+  Coords origin and ZAxis), stored to the sprite; below −0 or unordered
+  rejects unless RendMap is 13–15. Then `Mesh->GetRenderBoundingBox(Actor,
+  0)` (vslot 0x5c; ULodMesh inherits UMesh's `0x103a6850`), then
+  `BoundVisible(Frame, box, NULL)` (vslot 0x80, `occlude.rs`
+  `bound_visible_box`), then `X1 = _ftol(MinX)`, `X2 = _ftol(MaxX)`,
+  `Y1 = _ftol(MinY)`, `Y2 = _ftol(MaxY)` of the clamped bounds; Setup
+  returns `Y1 < Y2` (X1 < X2 is not required: the raster rows are then
+  empty).
+* **GetRenderBoundingBox** (Engine `0x103a6850..0x103a6b9b`). GetAnimSeq
+  (`0x1031c000`) takes the first sequence with the actor's own AnimSequence
+  FName. With one and AnimFrame ≥ 0 (double 0.0, unordered skips), the
+  phase is `(AnimFrame + 1.0) · NumFrames` stored as a float, `fistp(phase
+  − 0.5f)` the frame, `i % NumFrames + StartFrame` and `(i + 1) % NumFrames
+  + StartFrame` the two BoundingBoxes entries (no bounds check), combined
+  by Core `FBox::operator+=` (`0x101196a0`): with both valid, Min =
+  `this <= other ? this : other`, Max = `this < other ? other : this`
+  (unordered keeps this for Min, takes other for Max); otherwise the
+  second box is copied, IsValid included. Without, the mesh's
+  BoundingBox. The factor is 1.5 (double) for bParticles (`+0x194 & 4`),
+  else DrawScale; Max = `(factor·Scale)·(Max − Origin) + 1`, Min likewise
+  `− 1` (FVector operators), and the box is valid whatever its source was.
+  The coords are GMath.UnitCoords `/=` RotOrigin, then `/=` the actor's
+  Rotation (Core `0x1011b690`: roll, pitch and yaw passes, each axis
+  `((v.x·r.x + v.y·r.y) + v.z·r.z)` per row), with origin Location +
+  PrePivot; Core `Transpose` (`0x1011a140`: columns, origin −(O·X, O·Y,
+  O·Z)); `FBox::TransformBy` (`0x101198f0`): the eight corners X-major, each
+  `(P − origin)` through the rows; Min takes a corner only when strictly
+  smaller, Max when larger or unordered.
+* **Sprite path** (DrawType 1 or 7, `0x10b23ada..0x10b23d94`). A null
+  Texture rejects. Z as above. `URender::Project` (`0x10b20750`, vslot
+  0x78): T = (V − Origin) stored, then through Coords; Z' = T.z, but
+  `T.z + 0.02` (double, rounded once) when |T.z| < 0.01 (double; NaN takes
+  this branch); RZ = Proj.Z / Z'; ScreenX = T.x·RZ + FX2, ScreenY =
+  T.y·RZ + FY2, Persp = RZ, all stored; it fails unless Z' > 1.0. Half
+  width `hw = ((USize·DrawScale)·Persp)·0.5f` stored; `X1 =
+  appCeil(ScreenX − hw)`, `X2 = appCeil(hw + ScreenX)`: Core `0x10123300`
+  passes the float as a double to msvcrt `ceil` and `_ftol`s the result;
+  Setup then does `fild; fstp dword; fld; fistp`. Swap if X1 > X2; X1 < 0
+  sets X1 = 0 and then X2 < 0 sets X2 = 0; X2 > Frame.X sets X2 = X and
+  then X1 > X sets X1 = X; reject when X2 ≤ 0 or X1 ≥ X − 1. Y likewise
+  with VSize, clamped to Frame.Y; reject when Y2 ≤ 0, Y1 ≥ Y or Y1 ≥ Y2.
+* **Host inputs** (`bsp-occlusion.mjs`): a mesh record once per mesh
+  (`meshRecord`: BoundingBox, the BoundingBoxes bytes, Scale, Origin,
+  RotOrigin), and per candidate (`packSetupCandidate`, SETUP words)
+  DrawType, the mesh record, the texture's USize/VSize, Location, Rotation,
+  DrawScale, PrePivot, bParticles, GetAnimSeq's sequence (`setupSequence`:
+  FNames compare case-folded) and AnimFrame. `occ_setup` writes each
+  result (status, rectangle, Z, and the sprite path's ScreenX, ScreenY,
+  Persp) and appends the accepted ones, in order, to occ_run's sprite list.
+  A candidate whose mesh has no record or whose texture size the host does
+  not know yet reports UNKNOWN and is not handed on; a frame box index the
+  original would read outside the array reports UNSUPPORTED.
+
+Unsupported: the orthographic RendMaps 13–15 and SHOW_ActorIcons (`0x20`:
+DrawScale 1 and AActor's default texture); Play's viewer has RendMap 5 and
+ShowFlags 0x480c.
+
+**Reference.** `native-occlusion-oracle.py` builds actor, mesh (a vtable
+with GetRenderBoundingBox and GetAnimSeq) and texture fixtures with only
+the fields these bodies read. A case sprite with an `actor` runs the real
+Setup inside the constructor, and `setupOnly` cases call Setup directly
+after CreateMasterFrame, at control word 0x007f. Setup's one import outside
+the loaded images, msvcrt `ceil`, is bridged by an x87 stub that rounds the
+double with FRNDINT under rounding control "up". FRNDINT is exact and
+precision control does not apply to it, so this assumes only that msvcrt's
+`ceil` returns the exact ceiling; msvcrt.dll itself is not part of the
+reference.
+
+`node scripts/validate-sprite-setup.mjs` boots 00_Training and
+01_NYC_UNATCOIsland through Play's createGame, ticks 30 frames and packs
+every Level.Actors entry with a preparable mesh or any texture
+(hidden ones too: Setup does not read bHidden), plus synthetic meshes
+(random boxes, frame boxes, sequences, negative scales, RotOrigin) and
+actors of every DrawType, sprites near the view plane included. 48 cameras
+per map (the player's view at two sizes, cameras looking at random actors,
+and synthetic scenes) give **111,060 Setup calls** (Training 16,812,
+Island 94,248; 85,336 sprite and 20,835 mesh calls, 26,107 accepted;
+2,074 through the frame-box pair; 759 with Persp above 8000, the
+near-plane step among them) whose return value, X1..Y2, Z and ScreenX,
+ScreenY, Persp match bit for bit. 12 more frames per map run the real
+actors through the original constructor, Setup and OccludeBsp against
+occ_setup and occ_run: Frame->Sprite and every sprite's span buffer match
+(1,672 of 9,725 set-up sprites drawn).
+
 ## Play
 
 The simulation side runs OccludeBsp for the main frame every Play frame
-(`sim-session.mjs` `visibility`, in the worker by default): the master frame
+(`sim-session.mjs` `visibility`, in the worker by default), with
+SetupDynamics' sprites (below): the master frame
 from PlayerCalcView's location, rotation and FOV at the render viewport's
 size, each zone's SkyZone presence (the zone's actor, else the LevelInfo,
 read from the running scripts), DrawWorld's frame counter (one per drawn
@@ -258,6 +356,28 @@ made. Then:
   frustum test.
 * **Sky.** The sky frame is drawn only when OccludeBsp made one.
 * **Fog.** Only drawn surfaces get a fog map, as SetupForSurf does.
+* **Actors.** The run waits for SetupDynamics' candidates (`occludeMain`):
+  after the sprite scan (`sprite-scan.mjs`: DT_Sprite actors and
+  render-iterator items, each with its Level.Actors order) and the actor
+  layer's reads (`actor-mesh-sim.mjs` `update`: `mesh_reads`, then the
+  `occlude` callback before any binding is posed).
+  `dynamics-candidates.mjs` merges, in Level.Actors order, the bindings the
+  root frame admits (the iterating actors left out), the iterator items'
+  bindings (their snapshot's Location, Rotation and DrawScale) and the
+  sprite records, packs each as Setup's candidate (`packSetup`: the
+  binding's block words, else its accessors; a mesh record once per mesh)
+  and OccludeBsp gives `Frame->Sprite`'s keys (option 0x200: no span
+  buffers in the output). The main frame then draws and stamps exactly
+  those actors: a binding outside it is not posed or lit (or, when mirrors
+  may draw, it is posed for their passes only), a sprite record carries
+  `main` for the page's main pass (`sprite-scene.mjs` `mainPass`), and
+  `stamps()` writes LastRenderTime for every `Frame->Sprite` actor, as
+  DrawActorSprite does, the items' proxies included. The mirror and sky
+  passes keep the frustum-tested drawn set, as do movers. A drawn binding's
+  mesh groups outside the frustum are still left out of the draw (no pixels
+  either way). `?actorOcclusion=frustum` (Node: `ACTOR_OCCLUSION=frustum`)
+  restores the frustum-tested drawn set for the main frame and runs
+  OccludeBsp in `begin()` as before.
 
 Measurements on the Linux host (1920×1080, interleaved runs):
 
@@ -268,8 +388,29 @@ Measurements on the Linux host (1920×1080, interleaved runs):
 | UNATCO Island start, worker mode, page frame | 13.4–13.9 ms; 1,068 mirror calls | 8.4–8.8 ms; 268 mirror calls |
 
 The tunnel's remaining mirror passes are DeusExMover8 and DeusExMover11, mover
-mirrors waiting for the brush tracker; the remaining main calls are actors,
-whose occlusion waits for the dynamics.
+mirrors waiting for the brush tracker; the remaining main calls were actors,
+which the dynamics now occlude (below).
+
+With the dynamics (`profile-play-browser.mjs --no-profile --angle gl`,
+UNATCO Island at Player start, worker mode, 1920×1080, 600 frames; three
+interleaved rounds of each mode, medians; the simulation frame is the
+worker's steps per snapshot):
+
+| Island start | `?actorOcclusion=frustum` | Frame->Sprite |
+| --- | --- | --- |
+| Standing: simulation frame | 24.5 ms (tick 13.2, actors 6.3, sprites 1.5, stamps 0.8) | 14.2 ms (tick 7.8, actors 3.4 with Setup and OccludeBsp, sprites 0.4, stamps 0.1) |
+| Standing: drawn frame interval; main draw calls | 25.6 ms; 411 | 16.7 ms (vsync); 82 |
+| Walking: simulation frame | 27.9 ms (tick 15.0, actors 6.5) | 16.0 ms (tick 8.4, actors 3.3) |
+| Walking: drawn frame interval; main draw calls | 29.0 ms; 397 | 17.1 ms; 63 |
+
+The start view draws 10–11 mesh actors instead of about 300 (with the page's
+simulation inline, about 29 → 18–21 ms per frame). The tick and the sprite
+scan get shorter too, which fits the actors the main frame no longer draws
+keeping an old LastRenderTime (stasis, LastRendered), the original's rule;
+that part is not broken down further. The drawn set's own cost (pose
+planning, lighting, stamps) shrinks with the set. (The frustum column's tick
+includes OccludeBsp, which `begin()` runs there; with the dynamics it runs
+inside the actors step.)
 
 Pixels: deterministic runs (`validate-sim-split.mjs`, base build against
 this) give identical state digests; the last frames differ in 169 of about
@@ -278,68 +419,31 @@ edges where the span rasterizer and the GPU disagree and the original's
 verdict now applies. Worker and inline modes give the same digests and
 pixels. Training's entrance floor mirror still reflects.
 
+With the dynamics: `?actorOcclusion=frustum` against the previous commit
+gives identical digests and the same last frame on Island and Training (240
+frames walking, inline), so the switch restores the old behavior exactly.
+Frame->Sprite against the frustum set draws identical pixels at the start of
+Island (frame 2, and frame 60 walking), Training and the Paris Club spawn;
+Training's 240-frame walk gives the same digests as before, while Island's
+differ from frame 60 on (other LastRenderTime stamps, then stasis). Worker
+and inline modes give the same digests and pixels standing on Island (240
+frames). Walking on Training they matched in two of five runs; in the other
+three the last checkpoint (frame 240) differed, once between two inline runs
+as well, and a per-actor comparison of such a case found only the player's
+state different (the previous commit matched in its one run there). Walking
+on Island they differ at one checkpoint in both this build and the previous
+commit (frame 180 there), a host divergence that predates the dynamics.
+These run-to-run differences are not resolved. validate-gpu-mesh,
+validate-mirrors-play (also with `?simVerify=1`), validate-lasers-play and
+validate-particles-play pass.
+
 ## What is left
 
 In recommended order. Each step keeps the rule above: recover from the
 DLL, port to Rust, match the original under `native-occlusion-oracle.py`,
 then wire into Play.
 
-### 1. Setup: each actor's screen rectangle (next)
-
-The dynamics port takes `(rectangle, Z)` per sprite; Play needs Setup
-(`FDynamicSprite::Setup`, `0x10b23910`) to produce them, at 24-bit
-precision. Recovered so far:
-
-* **Mesh path** (DrawType 2 with a Mesh). Z = `((L.z−O.z)·Zz + (L.y−O.y)·Zy)
-  + (L.x−O.x)·Zx` (Location, Coords origin and ZAxis), stored to the sprite;
-  below −0 or unordered rejects unless RendMap is 13–15. Then
-  `Mesh->GetRenderBoundingBox(Actor, 0)` (vslot 0x5c; ULodMesh inherits
-  UMesh's `0x103a6850`), then `BoundVisible(Frame, box, NULL)` (vslot
-  0x80, already ported in `occlude.rs`), then `X1 = _ftol(MinX)`,
-  `X2 = _ftol(MaxX)`, `Y1 = _ftol(MinY)`, `Y2 = _ftol(MaxY)` of the clamped
-  bounds; Setup returns `Y1 < Y2`.
-* **GetRenderBoundingBox** (`0x103a6850..0x103a6b9b`). `src/runtime/
-  render-mesh-bounds.mjs` has its operation order at 64-bit precision; at
-  24 bits every intermediate is a binary32 operation in that order. One
-  difference from that JavaScript: the two frame boxes are combined with
-  Core `FBox::operator+=` (`0x101196a0`), which copies the second box
-  whenever **either** box is invalid (the JavaScript keeps the first when
-  only the second is invalid). Min takes `this <= other ? this : other`,
-  max `this < other ? other : this`.
-* **Sprite path** (DrawType 1 or 7, `0x10b23ada..0x10b23d94`). Texture null
-  rejects. Z as above. `URender::Project` (`0x10b20750`, vslot 0x78):
-  T = (V − Origin) through Coords, Z' = T.z, plus 0.02 when |T.z| < 0.01;
-  RZ = Proj.Z / Z'; ScreenX = T.x·RZ + FX2, ScreenY = T.y·RZ + FY2;
-  Persp = RZ; it fails when Z' ≤ 1. Half width
-  `hw = ((float)USize·DrawScale)·Persp·0.5f`; `X1 = appCeil(ScreenX − hw)`,
-  `X2 = appCeil(hw + ScreenX)` (Core `0x10123300`: msvcrt `ceil` on the
-  double, then an int → float → int round trip); swap if X1 > X2; X1 < 0
-  sets X1 = 0 and then X2 < 0 sets X2 = 0; X2 > Frame.X sets X2 = X and then
-  X1 > X sets X1 = X; reject when X2 ≤ 0 or X1 ≥ X − 1. Y likewise with
-  VSize, clamped to Frame.Y; reject when Y2 ≤ 0, Y1 ≥ Y or Y1 ≥ Y2.
-* **Inputs** for the Rust side: per mesh (once), its box, per-frame boxes
-  (`runtime.prepareMesh(actor)`, array at UMesh `+0xa8`), Scale, Origin,
-  RotOrigin; per actor and frame, Location, Rotation, DrawScale, PrePivot,
-  bParticles (`+0x194 & 4`, factor 1.5), the resolved animation sequence
-  (start frame, frame count) and AnimFrame; per sprite, its texture's
-  USize/VSize and DrawScale.
-* **Reference**: run the real Setup in the oracle with actor and mesh
-  fixtures (the BoundsOracle in `native-render-visibility-oracle.py` already
-  drives GetRenderBoundingBox that way), at control word 0x007f, with a stub
-  for msvcrt `ceil`.
-
-### 2. SetupDynamics' scan and Play's actors
-
-SetupDynamics (`0x10b22d90`) admits actors in Level.Actors order
-([render visibility](render-visibility.md) has the admission rules); the
-excluded actor is the view target in a first-person master frame
-(OccludeFrame). The simulation side already scans in that order with the
-render iterators expanded (`sprite-scan.mjs`, the actor mesh layer); it
-should hand the candidates to `occ_run` in that order. Then Play draws, and
-stamps LastRenderTime for, the actors in `Frame->Sprite` instead of the
-frustum-tested drawn set (`drawn-set.mjs`) for the main frame.
-
-### 3. Child frames
+### 1. Child frames (next)
 
 CreateChildFrame (`0x10b15a40`, notes in `.work/occlude/frame-and-clip.md`:
 reuse of an equal child, merged spans, ComputeRenderSize again at 24 bits)
@@ -348,9 +452,14 @@ and sky views get their own visible polygons and sprites. The mirror
 child's coords and near-clip plane are already verified
 ([mirror surfaces](mirror-surfaces.md)); the sky child's are in
 `.work/occlude/occludebsp.md` (step 14). Play then draws mirror and sky
-passes from their own results instead of whole meshes and the frustum.
+passes from their own results instead of whole meshes and the frustum, and
+each child frame's SetupDynamics (no excluded actor: a mirror shows the
+player) gives its own `Frame->Sprite` to draw and stamp, replacing the
+frustum-tested drawn set those passes still use.
 
-### 4. The moving brush tracker
+### 2. The moving brush tracker
+
+Recovered 2026-10-06, with an oracle: [brush tracker](brush-tracker.md).
 
 Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
 the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
@@ -362,9 +471,11 @@ construction `0x1037ac40`/`0x1037b5c0`, Update `0x1037a400`, filter
 `0x1037c0c0`, node add `0x1037bb00`, `FPoly::SplitWithPlane` `0x10386ad0`
 (±0.25). Still open: when Update runs (tick or render pass, hence its
 precision), how it removes the previous fragments, and the new nodes' field
-values.
+values. Movers' LastRenderTime is still stamped from the frustum-tested
+drawn set; SetupDynamics routes non-static brushes to the tracker, never
+through DrawActorSprite, so what stamps them (if anything) belongs here.
 
-### 5. Smaller items
+### 3. Smaller items
 
 * LeafVolumetricLighting and the draw lists' Volumetrics (fog light lists).
 * Restricting texture and light-map animation to drawn surfaces, as the
@@ -372,6 +483,12 @@ values.
 * The 24-bit render precision also applies to earlier translations of code
   inside DrawWorld that were validated at 0x037f: render admission and mesh
   bounds, dynamic and mesh lighting.
+* The main frame's actors: SetupDynamics' bHighDetail rule and the render
+  iterators other than ParticleIterator and LaserIterator (the sprite
+  scan's limits); an actor the page has no mesh binding or decoded sprite
+  texture for is not a candidate, so it is neither drawn nor stamped (as
+  before); the sprites' LeafLights and Volumetrics (fog on actors) are not
+  read from the dynamics yet.
 
 Explicitly unsupported: WarpZoneInfo portals (none in the single-player
 maps), span-based render devices, AMD3DClipBspSurf, frames taller than the

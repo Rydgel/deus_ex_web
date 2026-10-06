@@ -180,7 +180,10 @@ export function cylinderSpatial(rect, grid, location, constants, write, illumina
   }
 }
 
-const NORMAL_BODY = new Set([0, 1, 2, 3, 11, 19]);
+const NORMAL_BODY = new Set([0, 1, 2, 3, 7, 11, 19]);
+// Effect rows with IsSpatialDynamic whose body is time-varying (spatial.rs);
+// CloudCast (7) forwards to the normal body. Shell (14) is spatial.rs too.
+export const SPATIAL_DYNAMIC = new Set([4, 5, 6, 9, 10, 16, 18]);
 const EFFECT_NAMES = ['None', 'TorchWaver', 'FireWaver', 'WateryShimmer', 'Searchlight', 'SlowWave', 'FastWave', 'CloudCast',
   'StaticSpot', 'Shock', 'Disco', 'Warp', 'Spotlight', 'NonIncidence', 'Shell', 'OmniBumpMap', 'Interference', 'Cylinder',
   'Rotor', 'Unused'];
@@ -193,12 +196,15 @@ const EFFECT_NAMES = ['None', 'TorchWaver', 'FireWaver', 'WateryShimmer', 'Searc
  * `lights` are the light map's list entries in order: `{values, location}`
  * with `values` the actor's properties (null for a rejected entry). Class 0
  * lights are exact. Class 1 lights (bNoDelete or animated) take this
- * frame-independent snapshot: their LightType and merge-dynamic effects
- * (TorchWaver, FireWaver, WateryShimmer) do not vary yet. Class 2 lights
- * from a static list (merged unshadowed each frame) and spatially dynamic
- * effects are omitted, with `notes`. */
+ * frame-independent snapshot here; `animated` collects the ones the frame
+ * changes (LightType, merge modulation, and the spatially dynamic effects,
+ * whose bytes spatial.rs recomputes for each TimeSeconds: `spatial` is the
+ * kernel's spatial.rs interface and `timeSeconds` the time of the bytes
+ * computed now). Class 2 lights from a static list (merged unshadowed each
+ * frame) are omitted, with `notes`; so are Shell and the spatially dynamic
+ * effects without `spatial`. */
 export function staticLightMap({ width, height, ambient, lights, shadowBits, shadowOffset, facet, grid, levelBrightness, notes, hsv,
-  animated = null }) {
+  animated = null, spatial = null, timeSeconds = 0 }) {
   const texels = new Uint8Array(width * height * 3);
   for (let p = 0; p < width * height; p++) texels.set(ambient, p * 3);
   const pitch = (width + 7) >> 3, stride = pitch * 8;
@@ -208,14 +214,19 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
     if (lightClass === null || lightClass === 3) return;
     if (lightClass === 2) { notes?.add('A moving light listed in a static light map is not merged (none seen so far).'); return; }
     const effect = values.LightEffect ?? 0;
-    const spot = effect === 8 || effect === 12, cylinder = effect === 17;
-    if (!NORMAL_BODY.has(effect) && effect !== 13 && !spot && !cylinder) {
+    const spot = effect === 8 || effect === 12, cylinder = effect === 17, dynamic = SPATIAL_DYNAMIC.has(effect), shell = effect === 14;
+    if (!NORMAL_BODY.has(effect) && effect !== 13 && !spot && !cylinder && !((dynamic || shell) && spatial?.ready)) {
       notes?.add(`Light effect ${EFFECT_NAMES[effect] ?? effect} is not translated; those lights are left out of static light maps.`);
       return;
     }
-    // A class 1 light whose LightType or merge varies per frame is merged by
-    // animateLightMap each frame from its cached spatial bytes.
-    const moving = lightClass === 1 && animated && (ANIMATED_TYPES.has(values.LightType & 255) || [1, 2, 3].includes(effect));
+    if (dynamic && lightClass === 0) {
+      notes?.add('A spatially dynamic light in the static cache (UClient.NoDynamicLights) is not modelled.');
+      return;
+    }
+    // A class 1 light whose LightType, merge or spatial bytes vary per
+    // frame is merged by animateLightMap each frame from its spatial bytes.
+    const moving = lightClass === 1 && animated && (ANIMATED_TYPES.has(values.LightType & 255) || [1, 2, 3].includes(effect) || dynamic);
+    if (dynamic && !moving) return;
     if (lightClass === 1) {
       if ([8, 9].includes(values.LightType & 255)) notes?.add(`Light type ${values.LightType} (texture palette) is not translated and stays steady.`);
       if (!values.bStatic) notes?.add('bNoDelete lights (TriggerLight) take script brightness changes through explicit invalidation.');
@@ -226,9 +237,11 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
     const illumination = { bytes: shadowIllumination(shadowBits, shadowOffset + index * pitch * height, width, height), stride };
     const [red, green, blue] = constants.steps;
     let cached = null;
+    const area = (rect.maxU - rect.minU) * (rect.maxV - rect.minV);
     if (moving) {
-      cached = new Uint8Array((rect.maxU - rect.minU) * (rect.maxV - rect.minV));
-      animated.push({ values, effect, rect, spatial: cached, ref });
+      cached = new Uint8Array(area);
+      animated.push({ values, effect, rect, spatial: cached, ref,
+        ...(dynamic ? { spatialDynamic: spatialInputs(rect, grid, location, constants, facet, values, illumination, timeSeconds) } : {}) });
     }
     const write = moving ? (u, v, spatial) => { cached[(v - rect.minV) * (rect.maxU - rect.minU) + u - rect.minU] = spatial; } : (u, v, spatial) => {
       if (!spatial) return;
@@ -238,7 +251,12 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
       texels[at + 2] = Math.min(127, texels[at + 2] + colorTableEntry(blue, spatial));
     };
     const incidence = cylinder ? 0 : normalLightIncidence(location, facet, constants.rradius);
-    if (cylinder) cylinderSpatial(rect, grid, location, constants, write, illumination);
+    if (dynamic || shell) {
+      const inputs = dynamic ? animated.at(-1).spatialDynamic : spatialInputs(rect, grid, location, constants, facet, values, illumination, 0);
+      const bytes = spatial.run({ ...inputs, effect, rect });
+      inputs.computed = true;
+      for (let v = rect.minV, k = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k++) write(u, v, bytes[k]);
+    } else if (cylinder) cylinderSpatial(rect, grid, location, constants, write, illumination);
     else if (spot) spotLightSpatial(rect, grid, location, { ...constants, incidence }, write, illumination,
       { cone: values.LightCone ?? 0, axis: fcoordsAxes((values.Rotation ?? [0, 0, 0]).map(n => n | 0))[1] });
     else if (effect === 13) nonIncidenceSpatial(rect, grid, location, constants, write, illumination);
@@ -247,12 +265,41 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
   return texels;
 }
 const surfaceLightClassOf = surfaceLightClass;
+
+/** ComputeFromActor's rr2 (0x10b0601d-0x10b06027) and incidence
+ * (0x10b06325-0x10b0639b) at the render pass's 24-bit precision: every
+ * operand is a float, so each operation is a binary32 one. `rradius` is the
+ * stored 1/R (the same at either precision). dynamic-lighting.mjs
+ * movingLightConstants and normalLightIncidence still model 64 bits; the
+ * spatial.rs lights take these (validate-light-spatial compares them with
+ * the original at 0x007f). */
+export function renderPassConstants(location, facet, rradius) {
+  const [dx, dy, dz] = location.map((v, i) => f(v - facet.origin[i])), n = facet.normal;
+  const dot = f(f(f(dz * f(n[2])) + f(dy * f(n[1]))) + f(dx * f(n[0])));
+  // FCOM with 0 then FCHS when below: a negative zero stays negative.
+  const incidence = f(dot * rradius);
+  return { rr2: f(f(rradius * rradius) * 4093), incidence: incidence < 0 ? -incidence : incidence };
+}
+
+/** A spatial.rs light's inputs (kernel `spatial.run` / `record`): the grid,
+ * location, ComputeFromActor's 1/R, rr2 and incidence (renderPassConstants),
+ * LightPeriod and LightPhase, the rectangle-relative illumination bytes and
+ * the time of the bytes held. */
+function spatialInputs(rect, grid, location, constants, facet, values, illumination, timeSeconds) {
+  const rw = rect.maxU - rect.minU, bytes = new Uint8Array(rw * (rect.maxV - rect.minV));
+  for (let v = rect.minV; v < rect.maxV; v++)
+    bytes.set(illumination.bytes.subarray(v * illumination.stride + rect.minU, v * illumination.stride + rect.maxU), (v - rect.minV) * rw);
+  return { grid, location, rradius: constants.rradius, ...renderPassConstants(location, facet, constants.rradius),
+    period: values.LightPeriod ?? 0, phase: values.LightPhase ?? 0, illumination: bytes, time: f(timeSeconds), computed: false };
+}
 const ANIMATED_TYPES = new Set([2, 3, 4, 5, 7]);
 
 /** The class 1 part of SetupForSurf's per-frame map: from the static bytes,
  * each animated light (staticLightMap's `animated`) merged with this
  * frame's GlobalLighting colour and, for TorchWaver, FireWaver and
- * WateryShimmer, the merge modulation from index 0 (0x10b088de passes 0).
+ * WateryShimmer, the merge modulation from index 0 (0x10b088de passes 0);
+ * a spatially dynamic light's bytes first, through `options.spatial`
+ * (spatial.rs) at the frame's TimeSeconds.
  * `frame` is {timeSeconds, noise, strobe, factors} from createLightFrame.
  * Writes `texels` in place over the animated rectangles (reset to `base`
  * first) and returns the changed texel region, or null. */
@@ -261,10 +308,18 @@ export function animateLightMap(base, texels, width, animated, frame, options, m
   // Every input of the merge: each light's colour steps and, for the
   // wavers, the noise table it reads (A each frame, W on a new step).
   if (memo) {
-    const signature = animated.map(light => `${constantsOf(light).signature}/${light.effect === 1 || light.effect === 2 ? `A${frame.frameIndex}`
-      : light.effect === 3 ? `W${frame.noise.version}` : ''}`).join(';');
+    const signature = animated.map(light => `${constantsOf(light).signature}/${light.spatialDynamic ? `T${frame.timeSeconds}`
+      : light.effect === 1 || light.effect === 2 ? `A${frame.frameIndex}` : light.effect === 3 ? `W${frame.noise.version}` : ''}`).join(';');
     if (memo.signature === signature) return null;
     memo.signature = signature;
+  }
+  // SetupForSurf reruns a spatially dynamic light's function on every
+  // per-frame rebuild; its bytes depend on TimeSeconds only.
+  for (const light of animated) {
+    const inputs = light.spatialDynamic;
+    if (!inputs || (inputs.computed && inputs.time === frame.timeSeconds)) continue;
+    light.spatial.set(options.spatial.run({ ...inputs, effect: light.effect, rect: light.rect, time: frame.timeSeconds }));
+    inputs.time = frame.timeSeconds; inputs.computed = true;
   }
   let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
   for (const { rect } of animated) {
