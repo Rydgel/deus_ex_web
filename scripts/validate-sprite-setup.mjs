@@ -12,7 +12,10 @@
  *   seen from the player's view and from cameras looking at actors;
  * - the whole chain: the same actors through the original sprite
  *   constructor, Setup and OccludeBsp against occ_setup + occ_run, comparing
- *   Frame->Sprite and each sprite's span buffer.
+ *   Frame->Sprite and each sprite's span buffer;
+ * - Play's packing: the actor mesh layer's candidates (mesh_reads words,
+ *   dynamics-candidates.mjs) against the same fields read by name, word for
+ *   word, in Level.Actors order.
  * Every Setup result (return value, X1, Y1, X2, Y2, Z, and the sprite path's
  * ScreenX, ScreenY and Persp) must match bit for bit. */
 import assert from 'node:assert/strict';
@@ -26,6 +29,8 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { readTexture } from '../src/unreal/textures.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createGame } from '../src/viewer/game.mjs';
+import { createActorMeshSim } from '../src/viewer/actor-mesh-sim.mjs';
+import { packDynamics } from '../src/viewer/dynamics-candidates.mjs';
 import { createBspOcclusion, packSetupCandidate, setupSequence, meshRecordFields, SETUP, SETUP_OUT_WORDS,
   SETUP_STATUS, SETUP_MESH_NONE, OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
 import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags } from './occlusion-request.mjs';
@@ -183,7 +188,43 @@ async function playActors(asset, ticks) {
       animSequence: read(actor, 'AnimSequence'), animFrame: f32(read(actor, 'AnimFrame')) });
   }
   const view = game.view();
-  return { actors, meshes, view: { location: view.location.map(f32), rotation: [...view.rotation], fov: view.fov } };
+  return { game, actors, meshes, view: { location: view.location.map(f32), rotation: [...view.rotation], fov: view.fov } };
+}
+
+/** Play's packing (actor-mesh-sim.mjs packSetup through packDynamics) for
+ * the actor mesh layer's bindings against packSetupCandidate on the fields
+ * read by name; returns the number of candidates compared and how many came
+ * from mesh_reads blocks. */
+async function comparePlayPacking(game, asset, occlusion, where) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  const level = runtime.levelFor(player), read = (actor, name) => runtime.readNamed(actor, name);
+  const actorSim = await createActorMeshSim(runtime, assets, asset, { player: () => game.player.collisionActor });
+  await actorSim.ready();
+  let compared = 0, fromBlocks = 0;
+  try {
+    actorSim.update({ occlude: args => {
+      const entries = packDynamics(occlusion, args);
+      const got = occlusion.setupCandidates(entries.length), words = got.u32.slice(got.at, got.at + SETUP.WORDS * entries.length);
+      const scratch = new ArrayBuffer(4 * SETUP.WORDS * entries.length);
+      const want = { u32: new Uint32Array(scratch), f32: new Float32Array(scratch), i32: new Int32Array(scratch) };
+      let last = -1;
+      entries.forEach((entry, i) => {
+        const actor = entry.binding.actor, index = level.actors.indexOf(actor);
+        assert.ok(index > last, `${where}: candidates in Level.Actors order`);
+        last = index;
+        if (entry.binding.block && args.reads) fromBlocks++;
+        packSetupCandidate(want, SETUP.WORDS * i, { key: i, drawType: read(actor, 'DrawType'), mesh: words[SETUP.WORDS * i + SETUP.MESH],
+          texture: null, location: read(actor, 'Location'), rotation: read(actor, 'Rotation'), drawScale: read(actor, 'DrawScale'),
+          prePivot: read(actor, 'PrePivot'), particles: read(actor, 'bParticles'), animFrame: read(actor, 'AnimFrame'),
+          sequence: setupSequence(entry.binding.payload.sequences, read(actor, 'AnimSequence')) });
+        assert.deepEqual([...words.subarray(SETUP.WORDS * i, SETUP.WORDS * (i + 1))], [...want.u32.subarray(SETUP.WORDS * i, SETUP.WORDS * (i + 1))],
+          `${where}: ${actor.name}'s Setup candidate words`);
+        compared++;
+      });
+      return { main: new Set(), children: false };
+    } });
+  } finally { actorSim.dispose(); }
+  return { compared, fromBlocks };
 }
 
 /** A camera at `distance` from `target` looking at it. */
@@ -206,6 +247,9 @@ async function validate(mapName, seed) {
   const names = nameTable(), stats = {};
   try {
     const play = await playActors(asset, 30);
+    const packing = await comparePlayPacking(play.game, asset, occlusion, mapName);
+    assert.ok(packing.compared > 0, `${mapName}: no Play candidates`);
+    stats['Play candidates packed (mesh_reads)'] = `${packing.compared} (${packing.fromBlocks})`;
     // Meshes: the real ones, then synthetic ones.
     const meshes = new Map();
     for (const [key, payload] of play.meshes) meshes.set(key, meshEntry(key, payload, names));

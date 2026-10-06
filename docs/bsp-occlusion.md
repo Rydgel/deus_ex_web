@@ -173,9 +173,11 @@ skips never filters its chunks. `Frame->Sprite` is the set of actors the
 frame draws (DrawActorSprite stamps LastRenderTime).
 
 The port (`setup_sprites`, `filter_chunks`, `pre_render`) takes each
-sprite's rectangle and Z from the host. The reference calls the original
-FDynamicSprite constructor with Setup supplying the same values, then
-OccludeBsp, and reads `Frame->Sprite` with each sprite's span buffer.
+sprite's rectangle and Z from `occ_setup` (the next section) or, for
+validation, straight from the host. The reference calls the original
+FDynamicSprite constructor with Setup supplying the same values, or running
+on actor fixtures, then OccludeBsp, and reads `Frame->Sprite` with each
+sprite's span buffer.
 Uncertain items with no observable effect, from the dynamics notes: chunk
 depth fields are uninitialised in the original (proved not to change the
 final chunks' relative order); FDynamicLight items (moving lights) are not
@@ -332,7 +334,8 @@ occ_setup and occ_run: Frame->Sprite and every sprite's span buffer match
 ## Play
 
 The simulation side runs OccludeBsp for the main frame every Play frame
-(`sim-session.mjs` `visibility`, in the worker by default): the master frame
+(`sim-session.mjs` `visibility`, in the worker by default), with
+SetupDynamics' sprites (below): the master frame
 from PlayerCalcView's location, rotation and FOV at the render viewport's
 size, each zone's SkyZone presence (the zone's actor, else the LevelInfo,
 read from the running scripts), DrawWorld's frame counter (one per drawn
@@ -353,6 +356,28 @@ made. Then:
   frustum test.
 * **Sky.** The sky frame is drawn only when OccludeBsp made one.
 * **Fog.** Only drawn surfaces get a fog map, as SetupForSurf does.
+* **Actors.** The run waits for SetupDynamics' candidates (`occludeMain`):
+  after the sprite scan (`sprite-scan.mjs`: DT_Sprite actors and
+  render-iterator items, each with its Level.Actors order) and the actor
+  layer's reads (`actor-mesh-sim.mjs` `update`: `mesh_reads`, then the
+  `occlude` callback before any binding is posed).
+  `dynamics-candidates.mjs` merges, in Level.Actors order, the bindings the
+  root frame admits (the iterating actors left out), the iterator items'
+  bindings (their snapshot's Location, Rotation and DrawScale) and the
+  sprite records, packs each as Setup's candidate (`packSetup`: the
+  binding's block words, else its accessors; a mesh record once per mesh)
+  and OccludeBsp gives `Frame->Sprite`'s keys (option 0x200: no span
+  buffers in the output). The main frame then draws and stamps exactly
+  those actors: a binding outside it is not posed or lit (or, when mirrors
+  may draw, it is posed for their passes only), a sprite record carries
+  `main` for the page's main pass (`sprite-scene.mjs` `mainPass`), and
+  `stamps()` writes LastRenderTime for every `Frame->Sprite` actor, as
+  DrawActorSprite does, the items' proxies included. The mirror and sky
+  passes keep the frustum-tested drawn set, as do movers. A drawn binding's
+  mesh groups outside the frustum are still left out of the draw (no pixels
+  either way). `?actorOcclusion=frustum` (Node: `ACTOR_OCCLUSION=frustum`)
+  restores the frustum-tested drawn set for the main frame and runs
+  OccludeBsp in `begin()` as before.
 
 Measurements on the Linux host (1920×1080, interleaved runs):
 
@@ -363,8 +388,29 @@ Measurements on the Linux host (1920×1080, interleaved runs):
 | UNATCO Island start, worker mode, page frame | 13.4–13.9 ms; 1,068 mirror calls | 8.4–8.8 ms; 268 mirror calls |
 
 The tunnel's remaining mirror passes are DeusExMover8 and DeusExMover11, mover
-mirrors waiting for the brush tracker; the remaining main calls are actors,
-whose occlusion waits for the dynamics.
+mirrors waiting for the brush tracker; the remaining main calls were actors,
+which the dynamics now occlude (below).
+
+With the dynamics (`profile-play-browser.mjs --no-profile --angle gl`,
+UNATCO Island at Player start, worker mode, 1920×1080, 600 frames; three
+interleaved rounds of each mode, medians; the simulation frame is the
+worker's steps per snapshot):
+
+| Island start | `?actorOcclusion=frustum` | Frame->Sprite |
+| --- | --- | --- |
+| Standing: simulation frame | 24.5 ms (tick 13.2, actors 6.3, sprites 1.5, stamps 0.8) | 14.2 ms (tick 7.8, actors 3.4 with Setup and OccludeBsp, sprites 0.4, stamps 0.1) |
+| Standing: drawn frame interval; main draw calls | 25.6 ms; 411 | 16.7 ms (vsync); 82 |
+| Walking: simulation frame | 27.9 ms (tick 15.0, actors 6.5) | 16.0 ms (tick 8.4, actors 3.3) |
+| Walking: drawn frame interval; main draw calls | 29.0 ms; 397 | 17.1 ms; 63 |
+
+The start view draws 10–11 mesh actors instead of about 300 (with the page's
+simulation inline, about 29 → 18–21 ms per frame). The tick and the sprite
+scan get shorter too, which fits the actors the main frame no longer draws
+keeping an old LastRenderTime (stasis, LastRendered), the original's rule;
+that part is not broken down further. The drawn set's own cost (pose
+planning, lighting, stamps) shrinks with the set. (The frustum column's tick
+includes OccludeBsp, which `begin()` runs there; with the dynamics it runs
+inside the actors step.)
 
 Pixels: deterministic runs (`validate-sim-split.mjs`, base build against
 this) give identical state digests; the last frames differ in 169 of about
@@ -373,24 +419,28 @@ edges where the span rasterizer and the GPU disagree and the original's
 verdict now applies. Worker and inline modes give the same digests and
 pixels. Training's entrance floor mirror still reflects.
 
+With the dynamics: `?actorOcclusion=frustum` against the previous commit
+gives identical digests and the same last frame on Island and Training (240
+frames walking, inline), so the switch restores the old behavior exactly.
+Frame->Sprite against the frustum set draws identical pixels at the start of
+Island (frame 2, and frame 60 walking), Training and the Paris Club spawn;
+Training's 240-frame walk gives the same digests as before, while Island's
+differ from frame 60 on (other LastRenderTime stamps, then stasis). Worker
+and inline modes give the same digests and pixels standing on Island (240
+frames) and walking on Training (two of four runs: the other two differed in
+the player's state only, at frame 240); walking on Island they differ at one
+checkpoint in both this build and the previous commit (frame 180 there), a
+host divergence that predates the dynamics. validate-gpu-mesh,
+validate-mirrors-play (also with `?simVerify=1`), validate-lasers-play and
+validate-particles-play pass.
+
 ## What is left
 
 In recommended order. Each step keeps the rule above: recover from the
 DLL, port to Rust, match the original under `native-occlusion-oracle.py`,
 then wire into Play.
 
-### 1. SetupDynamics' scan and Play's actors (next)
-
-SetupDynamics (`0x10b22d90`) admits actors in Level.Actors order
-([render visibility](render-visibility.md) has the admission rules); the
-excluded actor is the view target in a first-person master frame
-(OccludeFrame). The simulation side already scans in that order with the
-render iterators expanded (`sprite-scan.mjs`, the actor mesh layer); it
-should hand the candidates to `occ_run` in that order. Then Play draws, and
-stamps LastRenderTime for, the actors in `Frame->Sprite` instead of the
-frustum-tested drawn set (`drawn-set.mjs`) for the main frame.
-
-### 2. Child frames
+### 1. Child frames (next)
 
 CreateChildFrame (`0x10b15a40`, notes in `.work/occlude/frame-and-clip.md`:
 reuse of an equal child, merged spans, ComputeRenderSize again at 24 bits)
@@ -399,9 +449,12 @@ and sky views get their own visible polygons and sprites. The mirror
 child's coords and near-clip plane are already verified
 ([mirror surfaces](mirror-surfaces.md)); the sky child's are in
 `.work/occlude/occludebsp.md` (step 14). Play then draws mirror and sky
-passes from their own results instead of whole meshes and the frustum.
+passes from their own results instead of whole meshes and the frustum, and
+each child frame's SetupDynamics (no excluded actor: a mirror shows the
+player) gives its own `Frame->Sprite` to draw and stamp, replacing the
+frustum-tested drawn set those passes still use.
 
-### 3. The moving brush tracker
+### 2. The moving brush tracker
 
 Engine's FMovingBrushTracker (Level `+0xfc`) inserts mover polygons into
 the world BSP; OccludeBsp asks its vslot 3 (SurfIsDynamic) to skip bound
@@ -413,9 +466,11 @@ construction `0x1037ac40`/`0x1037b5c0`, Update `0x1037a400`, filter
 `0x1037c0c0`, node add `0x1037bb00`, `FPoly::SplitWithPlane` `0x10386ad0`
 (±0.25). Still open: when Update runs (tick or render pass, hence its
 precision), how it removes the previous fragments, and the new nodes' field
-values.
+values. Movers' LastRenderTime is still stamped from the frustum-tested
+drawn set; SetupDynamics routes non-static brushes to the tracker, never
+through DrawActorSprite, so what stamps them (if anything) belongs here.
 
-### 4. Smaller items
+### 3. Smaller items
 
 * LeafVolumetricLighting and the draw lists' Volumetrics (fog light lists).
 * Restricting texture and light-map animation to drawn surfaces, as the
@@ -423,6 +478,12 @@ values.
 * The 24-bit render precision also applies to earlier translations of code
   inside DrawWorld that were validated at 0x037f: render admission and mesh
   bounds, dynamic and mesh lighting.
+* The main frame's actors: SetupDynamics' bHighDetail rule and the render
+  iterators other than ParticleIterator and LaserIterator (the sprite
+  scan's limits); an actor the page has no mesh binding or decoded sprite
+  texture for is not a candidate, so it is neither drawn nor stamped (as
+  before); the sprites' LeafLights and Volumetrics (fog on actors) are not
+  read from the dynamics yet.
 
 Explicitly unsupported: WarpZoneInfo portals (none in the single-player
 maps), span-based render devices, AMD3DClipBspSurf, frames taller than the

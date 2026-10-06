@@ -18,8 +18,9 @@
 //! stacks as word arenas; every structure the original allocates there is a
 //! word record, linked by word indices (0 = NULL).
 //!
-//! Not covered yet (explicit): dynamics (SetupDynamics sprites and chunks,
-//! FDynamicLight), LeafVolumetricLighting and volumetric side planes, the
+//! The dynamics' sprites and chunks are here (their rectangles from
+//! setup.rs). Not covered yet (explicit): FDynamicLight items,
+//! LeafVolumetricLighting and volumetric side planes, the
 //! moving-brush tracker (Level+0xfc), the sky and mirror child frames' own
 //! occlusion (requests are reported), WarpZoneInfo portals (none in the
 //! single-player maps), span-based render devices.
@@ -44,7 +45,8 @@ static mut MODEL: [u32; 20] = [0; 20];
 /// 37..41 NearClip, 41 Mirror, 42 ZoneNumber, 43 Recursion, 44 the frame
 /// counter (0x10b5a700), 45 Level.TimeSeconds, 46 option bits (1 viewer
 /// ShowFlags & 0x800, 2 RenDev ShinySurfaces, 4 URender Toggle; 0x100 asks
-/// the output to carry each saved polygon's points), 47
+/// the output to carry each saved polygon's points, 0x200 leaves the
+/// sprites' span buffers out of it), 47
 /// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z.
 static mut FRAME: [u32; 64] = [0; 64];
 /// Run results: 0 status, 1 output words, 2 NodesDraw (+0x68), 3 PolysDraw
@@ -1309,6 +1311,13 @@ fn occlude() -> u32 {
     while s != 0 {
         emit(0xffff_fffe);
         emit(rd(s + 4 * SP_KEY));
+        if options & 0x200 != 0 {
+            for _ in 0..3 {
+                emit(0);
+            }
+            s = rd(s + 4 * SP_RENDER_NEXT);
+            continue;
+        }
         let span = sprite_span(s);
         emit(span.start_y as u32);
         emit(span.end_y as u32);

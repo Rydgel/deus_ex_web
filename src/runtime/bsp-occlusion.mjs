@@ -36,7 +36,7 @@ const bitsOf = value => (f32[0] = value, u32[0]);
 
 // occ_run option bits (occlude.rs FRAME word 46).
 export const OCCLUSION_SHOW_PLAYER_CTRL = 1, OCCLUSION_SHINY_SURFACES = 2, OCCLUSION_TOGGLE = 4,
-  OCCLUSION_POINTS = 0x100;
+  OCCLUSION_POINTS = 0x100, OCCLUSION_SPRITE_KEYS = 0x200;
 
 /** FDynamicSprite::Setup's candidate words (setup.rs), one per actor or
  * render-iterator item SetupDynamics constructs a sprite for: the key the
@@ -241,6 +241,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       setup(count);
       return words().slice(results >>> 2, (results >>> 2) + SETUP_OUT_WORDS * count);
     },
+    /** Whether the loaded core has FDynamicSprite::Setup (occ_setup). */
+    setupSupported: Boolean(kernel.setup),
     /** The last run's Setup results (SETUP_OUT_WORDS words per candidate). */
     setupResults: count => words().slice(results >>> 2, (results >>> 2) + SETUP_OUT_WORDS * count),
     /** One OccludeBsp call on `frameWords` (occlusionFrameWords) with the
