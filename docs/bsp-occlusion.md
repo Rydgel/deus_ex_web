@@ -427,10 +427,13 @@ Island (frame 2, and frame 60 walking), Training and the Paris Club spawn;
 Training's 240-frame walk gives the same digests as before, while Island's
 differ from frame 60 on (other LastRenderTime stamps, then stasis). Worker
 and inline modes give the same digests and pixels standing on Island (240
-frames) and walking on Training (two of four runs: the other two differed in
-the player's state only, at frame 240); walking on Island they differ at one
-checkpoint in both this build and the previous commit (frame 180 there), a
-host divergence that predates the dynamics. validate-gpu-mesh,
+frames). Walking on Training they matched in two of five runs; in the other
+three the last checkpoint (frame 240) differed, once between two inline runs
+as well, and a per-actor comparison of such a case found only the player's
+state different (the previous commit matched in its one run there). Walking
+on Island they differ at one checkpoint in both this build and the previous
+commit (frame 180 there), a host divergence that predates the dynamics.
+These run-to-run differences are not resolved. validate-gpu-mesh,
 validate-mirrors-play (also with `?simVerify=1`), validate-lasers-play and
 validate-particles-play pass.
 
