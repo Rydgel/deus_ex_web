@@ -405,7 +405,7 @@ on BSP surfaces, ambient sound, script sounds, sound effects and zone reverb
 through Galaxy's mixer, Galaxy music, decals, and the third-person
 conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
-Fourteen maps match the original's own frames at matched cameras
+Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
 Open: fog and decals on movers, the occlusion's child frames, mirror/sky
 combinations, time-varying moving lights and spotlights, UnrealScript inside
