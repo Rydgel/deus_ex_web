@@ -678,6 +678,14 @@ validators.
   its `order()` equals the library's. There are no underruns, faults or
   console errors. After a reload of the map the library is not reconnected,
   and an unregister plus a Training_Music start load and play.
+  Since phase 4 the map's own Update drives this instead of `musicDrive`
+  (2026-10-06): Training's first painted frame loads and starts
+  Training_Music (1,450,961 bytes with the slack, one batch). The order
+  reaches 1 after 8.2–8.3 s, and the simulation's issued and acknowledged
+  counts and `order()` agree with the library. The map reload's
+  `dispose()` unregisters the song, and the new runtime's first Update loads
+  it again: 2 loads in 4 batches, no reconnect, no underruns or faults.
+  This holds in both modes.
 - Main-thread frame time (`framePhases` total per animate(), Training,
   `?sim=worker`, Intro_Music playing against `?music=0`, interleaved pairs
   of 300 frames): 9.89 / 10.12 ms with music, 10.18 / 11.13 ms without

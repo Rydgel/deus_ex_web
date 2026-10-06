@@ -19,11 +19,14 @@
 //     against Galaxy.dll): the same sequencer trace (U/T/K/P records) for
 //     Intro_Music section 0 over 2000 callbacks.
 // Browser (headless Chromium, this tree's own Vite server), ?sim=worker and
-// ?sim=inline: after a gesture the worklet opens the library, a driven
-// Intro_Music start renders callbacks, the order advances to 1, the reports
-// reach the simulation side (acknowledged == issued, its order() equals the
-// library's), no fault or underrun, no console errors; then a map reload
-// keeps the library (no reconnect) and a second song start still flows.
+// ?sim=inline: after a gesture the worklet opens the library; the map's own
+// Galaxy Update (phase 4, galaxy-music.mjs) has loaded and started its
+// LevelInfo.Song (Training_Music) in its first batch, the order advances to
+// 1, the reports reach the simulation side (acknowledged == issued, its
+// order() equals the library's), no fault or underrun, no console errors;
+// then a map reload keeps the library (no reconnect): the old runtime's
+// dispose() unregisters the song and the new runtime's first Update loads it
+// again.
 // Last, the page's main-thread frame time with music playing against
 // ?music=0, interleaved pairs (framePhases total per animate()).
 // Firefox is not automated here (no Playwright Firefox build installed).
@@ -239,9 +242,10 @@ try {
       await page.click('#state');
       let status = await waitMusic(page, s => worklet_(s)?.open, 'the worklet did not open the library');
       assert.equal(status.context, 'running');
-      const driven = await page.evaluate(() => window.deusExViewer.musicDrive({ song: 'Intro_Music', section: 0 }));
+      // Update's first-music batch, issued by the map's first painted frame.
       const started = Date.now();
-      status = await waitMusic(page, s => worklet_(s)?.loads === 1 && libraryOrder(s) === 1, 'the order did not reach 1');
+      status = await waitMusic(page, s => worklet_(s)?.loads === 1 && libraryOrder(s) === 1, 'the order did not reach 1', 60000);
+      const driven = { bytes: status.library.moduleBytes };
       const seconds = (Date.now() - started) / 1000;
       // The simulation side has the report for every batch it issued.
       status = await waitMusic(page, s => s.library && s.library.acknowledged === s.library.issued && s.library.order === libraryOrder(s),
@@ -255,10 +259,8 @@ try {
       await page.evaluate(() => { const menu = document.getElementById('map'); menu.dispatchEvent(new Event('change')); });
       await page.waitForFunction(revision => { const s = window.deusExViewer.status(); return s.ready && s.revision > revision; },
         await page.evaluate(() => window.deusExViewer.status().revision), { timeout: 240000 });
-      await page.evaluate(() => window.deusExViewer.musicDrive({ unregister: true }));
-      await page.evaluate(() => window.deusExViewer.musicDrive({ song: 'Training_Music', section: 0 }));
       const after = await waitMusic(page, s => worklet_(s)?.loads === 2 && s.library?.acknowledged === s.library?.issued
-        && libraryOrder(s) === 0, 'the second start did not flow after the map reload');
+        && (worklet_(s)?.state & 0x100), 'the reloaded map did not unregister and load its song again', 60000);
       const w2 = worklet_(after);
       assert.equal(w2.connects, 1, 'the map reload reconnected the library');
       assert.equal(w2.results.load, 0); assert.equal(w2.results.unload, 0); assert.equal(w2.fault, 0); assert.equal(w2.underruns, 0);
@@ -277,8 +279,7 @@ try {
       await page.click('#state');
       if (music) {
         await waitMusic(page, s => worklet_(s)?.open, 'the worklet did not open the library');
-        await page.evaluate(() => window.deusExViewer.musicDrive({ song: 'Intro_Music', section: 0 }));
-        await waitMusic(page, s => libraryOrder(s) === 0, 'Intro did not start');
+        await waitMusic(page, s => worklet_(s)?.loads === 1 && (worklet_(s)?.state & 0x100), 'the map\'s song did not start', 60000);
       }
       await page.waitForTimeout(3000);
       await page.evaluate(() => window.deusExViewer.framePhases(true));
