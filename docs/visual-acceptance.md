@@ -119,25 +119,26 @@ left first. The `play` step writes `.work/acceptance/plan.json`; `original` read
 ### Fourteen maps, frozen (2026-10-06)
 
 Each map has five views. All 70 frames are 1280×720, taken on the Linux
-host under Wine 11.17 (D3D). The columns are ranges or minima over each
-map's five views.
+host under Wine 11.17 (D3D), Play's after the pixel-centre fix below. The
+columns are ranges or minima over each map's five views. The sub-pixel
+offset is listed for views with enough strong gradients (—: none).
 
-| Map | Play / original | Mean abs. diff. | Edge recall (min) | Edge precision (min) | Outlier blocks |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 00_Training | 1.27–1.40 | 1.22–4.28 | 0.93 | 0.93 | 0 |
-| 01_NYC_UNATCOIsland | 1.28–1.33 | 1.45–3.53 | 0.92 | 0.95 | 12 |
-| 02_NYC_BatteryPark | 1.13–1.35 | 0.36–3.91 | 0.94 | 0.95 | 0 |
-| 03_NYC_AirfieldHeliBase | 1.34–1.38 | 2.22–3.66 | 0.90 | 0.64 | 0 |
-| 04_NYC_Street | 1.37–1.38 | 1.41–2.28 | 0.90 | 0.91 | 3 |
-| 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.47–4.13 | 0.94 | 0.74 | 0 |
-| 06_HongKong_WanChai_Market | 1.27–1.35 | 1.37–2.53 | 0.94 | 0.96 | 0 |
-| 08_NYC_Bar | 1.34–1.39 | 1.65–3.21 | 0.92 | 0.95 | 0 |
-| 09_NYC_Ship | 1.25–1.39 | 1.58–3.45 | 0.89 | 0.31 | 0 |
-| 10_Paris_Club | 1.33–1.37 | 1.00–1.85 | 0.94 | 0.56 | 0 |
-| 11_Paris_Cathedral | 1.15–1.29 | 0.26–1.10 | 0.33 | 0.16 | 0 |
-| 12_Vandenberg_Cmd | 1.21–1.37 | 0.50–1.63 | 0.86 | 0.80 | 0 |
-| 14_OceanLab_Lab | 1.17–1.31 | 1.51–3.46 | 0.96 | 0.96 | 36 |
-| 15_Area51_Bunker | 1.30–1.37 | 0.93–1.75 | 0.75 | 0.72 | 20 |
+| Map | Play / original | Mean abs. diff. | Edge recall (min) | Edge precision (min) | Outlier blocks | Sub-pixel offset |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 00_Training | 1.27–1.40 | 1.21–4.24 | 0.92 | 0.94 | 0 | (0, 0), (0.125, 0) |
+| 01_NYC_UNATCOIsland | 1.28–1.33 | 1.43–3.27 | 0.94 | 0.95 | 12 | (0, 0) |
+| 02_NYC_BatteryPark | 1.13–1.35 | 0.35–3.80 | 0.96 | 0.96 | 0 | (0, 0) |
+| 03_NYC_AirfieldHeliBase | 1.34–1.38 | 2.22–3.66 | 0.92 | 0.66 | 0 | — |
+| 04_NYC_Street | 1.37–1.39 | 1.47–2.27 | 0.92 | 0.93 | 7 | — |
+| 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.46–4.15 | 0.94 | 0.74 | 0 | — |
+| 06_HongKong_WanChai_Market | 1.27–1.35 | 1.35–2.30 | 0.94 | 0.97 | 0 | (0, -0.375), (0, 0), (0.125, 0) |
+| 08_NYC_Bar | 1.34–1.40 | 1.64–3.18 | 0.92 | 0.96 | 0 | (0, 0) |
+| 09_NYC_Ship | 1.26–1.39 | 1.58–3.46 | 0.86 | 0.30 | 0 | (0, -0.25) |
+| 10_Paris_Club | 1.33–1.37 | 1.00–1.83 | 0.95 | 0.57 | 0 | — |
+| 11_Paris_Cathedral | 1.15–1.29 | 0.26–1.04 | 0.65 | 0.21 | 0 | — |
+| 12_Vandenberg_Cmd | 1.21–1.37 | 0.49–1.59 | 0.89 | 0.79 | 0 | — |
+| 14_OceanLab_Lab | 1.16–1.36 | 1.34–3.85 | 0.97 | 0.96 | 2 | (0, 0) |
+| 15_Area51_Bunker | 1.30–1.37 | 0.90–1.74 | 0.77 | 0.71 | 19 | — |
 
 Every view was also inspected side by side.
 
