@@ -5,8 +5,8 @@
  * reciprocal-root tables, DrawLodMesh's normal blocks and D3D's diffuse
  * packing. --reference-only records the original results before the
  * JavaScript translation is exercised. Contract: docs/mesh-lighting.md. */
-import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { auditAssert, auditControlWord } from './precision-audit.mjs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -28,7 +28,9 @@ const defaults = new ClassDefaults(assets), model = map.model, f = Math.fround, 
 const u32 = value => { view.setFloat32(0, value, true); return view.getUint32(0, true); };
 const float = value => { view.setUint32(0, value >>> 0, true); return view.getFloat32(0, true); };
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
-const original = cases => JSON.parse(execFileSync(python, ['scripts/native-mesh-light-oracle.py', root],
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert(), controlWord = auditControlWord(), cwArgs = controlWord ? [controlWord] : [];
+const original = cases => JSON.parse(execFileSync(python, ['scripts/native-mesh-light-oracle.py', root, ...cwArgs],
   { input: JSON.stringify(cases), encoding: 'utf8', maxBuffer: 1 << 30 }));
 
 let seed = 0x5eed;
@@ -171,7 +173,7 @@ const filterCases = { model: { nodes: model.nodes.map(n => [...n.plane, n.surfac
   filters: movingLights.map(light => ({ location: light.location, radius: light.values.LightRadius & 255,
     brightness: light.values.LightBrightness & 255, type: 1, effect: light.values.LightEffect & 255,
     specialLit: Boolean(light.values.bSpecialLit) })) };
-const filterReference = JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root],
+const filterReference = JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, ...cwArgs],
   { input: JSON.stringify(filterCases), encoding: 'utf8', maxBuffer: 1 << 30 })).filters;
 
 const reference = original(cases);
@@ -274,6 +276,11 @@ for (const [s, entry] of scenes.entries()) {
     frame.vertices.forEach((vertex, i) => {
       const exact = lightVertexX87(setup, vertex.point, vertex.normal, 0x4000);
       assert.deepEqual(exact.map(u32), expected.vertices[i].slice(0, 3), `${label}: vertex ${i} (x87 model)`);
+      if (assert.enabled) {
+        const off = exact.filter((v, c) => u32(v) !== expected.vertices[i][c]).length;
+        assert.tally('vertex Light channels', off, 3, Math.max(...exact.map((v, c) => Math.abs(u32(v) - expected.vertices[i][c]))));
+        assert.tally('vertex D3D diffuse', d3dDiffuse(exact) !== d3dDiffuse(expected.vertices[i].slice(0, 3).map(float)) ? 1 : 0, 1);
+      }
     });
     // The double-precision Play path against the exact translation, on the
     // oracle's vertices and 400 more around the actor.
@@ -301,4 +308,5 @@ for (const [s, entry] of scenes.entries()) {
 report.setup = { actors: scenes.length, calls: setupCalls, lightInfos: infos, traces, vertices: vertexCount };
 report.doublePath = { vertices: fastVertices, channelsOff: floatMismatch, maxUlps, diffuseBytesOff: byteMismatch };
 console.log(JSON.stringify(report));
-console.log('Mesh lighting matches the original Render.dll/D3DDrv.dll bodies on these cases.');
+if (assert.enabled) assert.report('validate-mesh-lighting');
+else console.log('Mesh lighting matches the original Render.dll/D3DDrv.dll bodies on these cases.');

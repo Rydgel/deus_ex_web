@@ -45,7 +45,7 @@ class FogOracle(lighting.Oracle):
         self.write(0x10b5d4cc, 'I', core['?SizeSquared@FVector@@QBEMXZ'])
         self.sqrt_table()                  # fast square-root table 0x10b3e1b8
         self.frame()
-        self.run(0x10b020cf, 0x10b02112)   # fog attenuation table 0x10b38ac8
+        self.init_run(0x10b020cf, 0x10b02112)   # fog attenuation table 0x10b38ac8
         self.case_top = self.alloc_top
 
     def low_frame(self):

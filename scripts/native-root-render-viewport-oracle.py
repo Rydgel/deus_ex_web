@@ -12,6 +12,7 @@ bridge. Reads JSON cases on stdin:
 Prints {"results": [[X, Y, XB, YB], ...]} (the node's +0xa8/+0xac/+0xb0/+0xb4).
 """
 import importlib.util
+import os
 import json
 from pathlib import Path
 import struct
@@ -46,8 +47,10 @@ def main():
         cpu.reg_write(UC_X86_REG_EBP, locals_ + 0x80)
         cpu.reg_write(UC_X86_REG_ESP, probe.stack)
         # The same x87 state as the harness's call(): control word 0x037f
-        # (64-bit precision, round to nearest), empty stack.
-        cpu.reg_write(UC_X86_REG_FPCW, 0x037f)
+        # (64-bit precision, round to nearest), empty stack. XRootWindow's
+        # PreRender runs from the PreRender event inside the render pass:
+        # ORACLE_CW (the precision audit) overrides the word.
+        cpu.reg_write(UC_X86_REG_FPCW, int(os.environ.get('ORACLE_CW', '0x037f'), 0))
         cpu.reg_write(UC_X86_REG_FPSW, 0)
         cpu.reg_write(UC_X86_REG_FPTAG, 0xffff)
         cpu.emu_start(START, END, count=100000)

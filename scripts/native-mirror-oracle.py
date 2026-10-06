@@ -20,7 +20,9 @@ D3D_HASH = '9e0f8a4293de6edb4f88b1ba9972fe98b4e80a1115f9667e57f8ef3d51d8ac9f'
 
 class Oracle(lighting.Oracle):
     def __init__(self, root):
-        super().__init__(root, 0x037f)
+        # The pass runs in DrawFrame (render pass); ORACLE_CW (the precision
+        # audit, docs/render-pass-precision.md) overrides the 0x037f default.
+        super().__init__(root, lighting.native.render_control_word())
         core = self.core.exports()
         for lib, symbol, slot in self.render.imports():
             if lib == 'core.dll' and symbol in core:

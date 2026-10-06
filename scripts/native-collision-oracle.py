@@ -21,6 +21,18 @@ try:
 except ImportError:
     sys.exit('Install unicorn==2.1.4 in a virtualenv and set NATIVE_PROBE_PYTHON to its Python executable.')
 
+def render_control_word(default=0x037f):
+    """The x87 control word for an oracle's render-pass segments.
+
+    URender::PreRender sets precision control 24 (0x007f) until PostRender
+    (docs/render-pass-precision.md). An oracle passes its own default; the
+    ORACLE_CW environment variable (the precision audit, set by validators
+    through scripts/precision-audit.mjs) overrides it."""
+    import os
+    value = os.environ.get('ORACLE_CW')
+    return int(value, 0) if value else default
+
+
 HASHES = {
     'Engine.dll': '0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4',
     'Core.dll': '8bf3039e14f849942ee70a95bdf26cf1f636245926e30106bbe58b7097eba7e4',
@@ -178,9 +190,15 @@ class NativeCollision:
     def read(self, address, fmt):
         return struct.unpack('<' + fmt, self.cpu.mem_read(address, struct.calcsize('<' + fmt)))
 
+    # The x87 control word of each call. 0x037f (64-bit precision) is the
+    # established word of the game-thread translations; render-pass oracles
+    # set 0x007f, URender::PreRender's precision control 24
+    # (docs/render-pass-precision.md).
+    control_word = 0x037f
+
     def call(self, address, this, args):
         for reg, value in [(UC_X86_REG_ESP, self.stack), (UC_X86_REG_ECX, this),
-                           (UC_X86_REG_FPCW, 0x037f), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)]:
+                           (UC_X86_REG_FPCW, self.control_word), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)]:
             self.cpu.reg_write(reg, value)
         self.write(self.stack, 'I', self.done)
         self.cpu.mem_write(self.stack + 4, args)

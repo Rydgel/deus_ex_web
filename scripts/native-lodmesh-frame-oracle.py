@@ -123,7 +123,12 @@ class Probe(mesh.Probe):
             args = struct.pack('<II12fII', self.output, stride, *step.get('coords', IDENTITY),
                                self.actors['actor'], self.count_cell)
             before = {name: bytes(self.cpu.mem_read(a, 0x700)).hex() for name, a in self.actors.items()}
+            # GetFrame's only caller is DrawLodMesh (Render 0x10b0ee0f), inside
+            # the render pass: argv[2] (render_control_word) sets its x87
+            # control word; the mesh load above stays at the game thread's.
+            loading, self.control_word = self.control_word, self.render_control_word
             self.call(0x10355360, self.object, args)
+            self.control_word = loading
             after = {name: bytes(self.cpu.mem_read(a, 0x700)).hex() for name, a in self.actors.items()}
             assert before == after, 'GetFrame unexpectedly changed actor storage'
             caches = {}
@@ -142,4 +147,5 @@ class Probe(mesh.Probe):
 
 if __name__ == '__main__':
     probe = Probe(Path(sys.argv[1]))
+    probe.render_control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
     print(json.dumps({'cases': [probe.run_frames(sample) for sample in json.load(sys.stdin)]}))

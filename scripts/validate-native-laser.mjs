@@ -6,10 +6,12 @@
 // Index past every beam, savedLoc already moved, no proxy). Compared per
 // item: every FarMoveActor/MoveActor argument, prevLoc, prevRand, savedLoc,
 // savedRot, nextItem and the appFrand draws.
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { laserCurrentItem } from '../src/runtime/script-laser.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 const io = new DataView(new ArrayBuffer(4));
@@ -75,3 +77,4 @@ cases.forEach((c, ci) => {
 });
 assert.ok(randomItems > 1000 && saved > 100, 'cases reach the random beam and the savedLoc branch');
 console.log(`ULaserIterator::CurrentItem: ${items} items over ${cases.length} iterators match the original (${moves} proxy moves, ${randomItems} random-beam items, ${draws} appFrand draws).`);
+if (assert.enabled) assert.report('validate-native-laser');

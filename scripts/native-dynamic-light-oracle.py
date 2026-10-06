@@ -53,6 +53,11 @@ class Oracle:
         self.engine = native.Image(system / 'Engine.dll')
         self.core = native.Image(system / 'Core.dll')
         self.control_word = control_word
+        # The light-manager tables come from FLightManager::Init, which
+        # URender::Init (0x10b1358d) calls on the game thread, before any
+        # render pass: they are built at this word whatever control_word the
+        # per-frame bodies run at (docs/render-pass-precision.md).
+        self.init_control_word = 0x037f
         cpu = self.cpu = Uc(UC_ARCH_X86, UC_MODE_32)
         for image in (self.render, self.engine, self.core):
             cpu.mem_map(image.base, (image.size + 4095) & ~4095)
@@ -170,8 +175,9 @@ class Oracle:
     def read(self, address, fmt):
         return struct.unpack('<' + fmt, bytes(self.cpu.mem_read(address, struct.calcsize('<' + fmt))))
 
-    def reset_fpu(self):
-        for register, value in [(UC_X86_REG_FPCW, self.control_word), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)]:
+    def reset_fpu(self, control_word=None):
+        word = self.control_word if control_word is None else control_word
+        for register, value in [(UC_X86_REG_FPCW, word), (UC_X86_REG_FPSW, 0), (UC_X86_REG_FPTAG, 0xffff)]:
             self.cpu.reg_write(register, value)
 
     def frame(self):
@@ -184,6 +190,11 @@ class Oracle:
     def run(self, start, stop, count=0):
         self.reset_fpu()
         self.cpu.emu_start(start, stop, count=count)
+
+    def init_run(self, start, stop):
+        """A light-manager init segment, at the init control word."""
+        self.reset_fpu(self.init_control_word)
+        self.cpu.emu_start(start, stop)
 
     def call(self, address, args, this=None):
         """cdecl/thiscall with a halt return address."""
@@ -212,12 +223,12 @@ class Oracle:
     def sqrt_table(self):
         self.frame()
         self.cpu.reg_write(UC_X86_REG_EBX, 0)
-        self.run(0x10b0225b, 0x10b022d0)
+        self.init_run(0x10b0225b, 0x10b022d0)
         return list(self.read(SQRT_TABLE, '2048I'))
 
     def normal_table(self):
         self.frame()
-        self.run(0x10b022fe, 0x10b02352)
+        self.init_run(0x10b022fe, 0x10b02352)
         return list(self.read(0x10b34a6c, '4096I'))
 
     # Light-manager init 0x10b02112-0x10b0225b (the local 8x8 shadow weight
@@ -227,9 +238,9 @@ class Oracle:
             return list(self.read(0x10b3cae0, '512I'))
         self.frame()
         self.cpu.reg_write(UC_X86_REG_EBX, 0)
-        self.run(0x10b02112, 0x10b0225b)
+        self.init_run(0x10b02112, 0x10b0225b)
         self.cpu.reg_write(UC_X86_REG_EBX, 0)
-        self.run(0x10b02352, 0x10b0243e)
+        self.init_run(0x10b02352, 0x10b0243e)
         self.shadow_ready = True
         return list(self.read(0x10b3cae0, '512I'))
 
@@ -265,7 +276,7 @@ class Oracle:
     # Init 0x10b022d0-0x10b022e4: the x^-0.5 tables (0x10b33650, 0x10b3d384).
     def rsqrt_tables(self):
         self.frame()
-        self.run(0x10b022d0, 0x10b022e4)
+        self.init_run(0x10b022d0, 0x10b022e4)
         return {'mantissa': list(self.read(0x10b33650, '1024I')), 'exponent': list(self.read(0x10b3d384, '512I'))}
 
     # GMath's UnitCoords and trig table for Core's FCoords /= FRotator; the
@@ -543,10 +554,15 @@ class Oracle:
 
 
 def main():
+    # argv[2]: the control word of the per-frame bodies (the render pass runs
+    # at 0x007f; the default stays 0x037f until each translation is moved).
+    # argv[3]: the light-manager init tables' word (default 0x037f).
     root, control_word = sys.argv[1], int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
     cases = json.load(sys.stdin)
     oracle = Oracle(root, control_word)
-    out = {'controlWord': control_word}
+    if len(sys.argv) > 3:
+        oracle.init_control_word = int(sys.argv[3], 0)
+    out = {'controlWord': control_word, 'initControlWord': oracle.init_control_word}
     if cases.get('sqrtTable'):
         out['sqrtTable'] = oracle.sqrt_table()
     if cases.get('normalTable'):

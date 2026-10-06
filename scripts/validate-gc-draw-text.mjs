@@ -8,7 +8,7 @@
  * block, the five-record realize cache, the underline second-emit, and
  * the PushGC/Intersect/PopGC frame around it.
  */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
@@ -21,6 +21,8 @@ import {gameDirectory} from './game-directory.mjs';
 import {buildCanvas, buildFont, buildGc, buildTexture, GcHeap,
         makeTexCache, resolveBits, DRAW_STUB, GLYPH_STUB, LOCK_STUB,
         UNLOCK_STUB} from './gc-services.mjs';
+// ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
+const assert = auditAssert();
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.NATIVE_PROBE_PYTHON || path.join(ROOT, '.cache/native-probe-env/bin/python');
@@ -257,3 +259,4 @@ for (const [i, mutation] of MUTATIONS.entries()) {
 }
 
 console.log(JSON.stringify(report, null, 1));
+if (assert.enabled) assert.report('validate-gc-draw-text');
