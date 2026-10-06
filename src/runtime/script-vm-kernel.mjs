@@ -80,6 +80,9 @@ export async function instantiateScriptVm(memory, imports) {
   return x;
 }
 
+/** spatial.rs's parameter record length (PARAM_WORDS). */
+export const SPATIAL_WORDS = 28;
+
 export function createScriptVmKernel(instance, memory) {
   const x = instance.exports;
   if (x.__heap_base.value > memory.buffer.byteLength) throw new Error('Script VM kernel statics exceed its memory');
@@ -192,10 +195,74 @@ export function createScriptVmKernel(instance, memory) {
       memory,
       alloc,
       free,
-      merge: (header, before) => x.light_merge(header >>> 0, before >>> 0),
+      merge: (header, before, time = 0) => x.light_merge(header >>> 0, before >>> 0, time >>> 0),
       colourTables: (out, red, green, blue) => x.light_colour_tables(out >>> 0, red | 0, green | 0, blue | 0),
       modulation: (factors, out) => x.light_modulation(factors >>> 0, out >>> 0),
     }),
+    // Render.dll's time-varying spatial light functions and Shell
+    // (spatial.rs, docs/static-lighting.md "Spatially dynamic effects"):
+    // `tables` uploads the light manager's square-root and normal tables
+    // (dynamic-lighting.mjs) once; `run` computes one light's rectangle of
+    // spatial bytes. The rest serves validation. null when the loaded core
+    // predates it.
+    spatial: typeof x.light_spatial !== 'function' ? null : (() => {
+      let scratch = 0, scratchBytes = 0, tablesSet = false, pairBuffer = 0, pairCapacity = 0;
+      const record = new Uint32Array(SPATIAL_WORDS);
+      const api = {
+        words: SPATIAL_WORDS,
+        tables(sqrt, normal) {
+          new Uint32Array(memory.buffer, x.spatial_sqrt_ptr(), 2048).set(sqrt);
+          new Float32Array(memory.buffer, x.spatial_normal_ptr(), 4096).set(normal);
+          tablesSet = true;
+        },
+        get ready() { return tablesSet; },
+        /** Fill a parameter record (SPATIAL_WORDS u32) for `light`: effect,
+         * rect, grid {start, stepU, stepV}, location, rradius, rr2,
+         * incidence, time, period, phase; `illumination` and `out` are
+         * addresses in this memory (0: 0x7f everywhere). */
+        record(light, illumination, out, into = record) {
+          const { rect, grid } = light, view = new Float32Array(into.buffer, into.byteOffset, SPATIAL_WORDS);
+          into.fill(0);
+          into[0] = light.effect; into[1] = rect.minU; into[2] = rect.maxU; into[3] = rect.minV; into[4] = rect.maxV;
+          view.set(grid.start, 5); view.set(grid.stepU, 8); view.set(grid.stepV, 11); view.set(light.location, 14);
+          view[17] = light.rradius; view[18] = light.rr2; view[19] = light.incidence; view[20] = light.time ?? 0;
+          into[21] = light.period & 255; into[22] = light.phase & 255; into[23] = illumination >>> 0; into[24] = out >>> 0;
+          return into;
+        },
+        /** One light's rectangle-relative spatial bytes (a copy). */
+        run(light) {
+          if (!tablesSet) throw new Error('spatial.rs tables are not uploaded');
+          const { minU, maxU, minV, maxV } = light.rect, area = Math.max(0, maxU - minU) * Math.max(0, maxV - minV);
+          const need = SPATIAL_WORDS * 4 + ((area + 15) & ~15) * 2;
+          if (need > scratchBytes) { scratch = alloc(need); scratchBytes = need; }
+          const illumination = light.illumination ? scratch + SPATIAL_WORDS * 4 : 0, out = scratch + SPATIAL_WORDS * 4 + ((area + 15) & ~15);
+          if (light.illumination) new Uint8Array(memory.buffer, illumination, area).set(light.illumination.subarray(0, area));
+          new Uint32Array(memory.buffer, scratch, SPATIAL_WORDS).set(api.record(light, illumination, out));
+          if (!x.light_spatial(scratch)) throw new Error(`spatial.rs has no body for effect ${light.effect}`);
+          return new Uint8Array(memory.buffer, out, area).slice();
+        },
+        /** Record the appAtan2 operand pairs of later runs (up to
+         * `capacity`), or stop with 0. */
+        collect(capacity) {
+          if (!capacity) { x.spatial_collect(0, 0); return; }
+          if (capacity > pairCapacity) { pairBuffer = alloc(capacity * 16); pairCapacity = capacity; }
+          x.spatial_collect(pairBuffer, capacity);
+        },
+        /** The recorded pairs as [Y bits, X bits, ...] (BigUint64Array). */
+        pairs() {
+          const count = x.spatial_pair_count();
+          if (count > pairCapacity) throw new Error(`spatial.rs recorded ${count} atan pairs past the capacity ${pairCapacity}`);
+          return new BigUint64Array(memory.buffer, pairBuffer, count * 2).slice();
+        },
+        fallbacks: () => x.spatial_fallbacks() >>> 0,
+        ambiguous: () => x.spatial_ambiguous() >>> 0,
+        resetCounts: () => x.spatial_reset_counts(),
+        slowOnly: on => x.spatial_set_slow_only(on ? 1 : 0),
+        atanK: (y, xv, k) => x.spatial_atan_k(y, xv, k),
+        atanDd: (y, xv) => { x.spatial_atan_dd(y, xv); return [...new Float64Array(memory.buffer, x.spatial_dd_ptr(), 2)]; },
+      };
+      return Object.freeze(api);
+    })(),
     // URender::OccludeBsp (occlude.rs, docs/bsp-occlusion.md), driven by
     // bsp-occlusion.mjs over a model and a work block from `alloc`; null when
     // the loaded core predates it (src/runtime/script-vm.wasm is built

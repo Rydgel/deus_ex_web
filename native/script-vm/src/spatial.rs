@@ -30,7 +30,7 @@
 //! 0x10b34a6c) are uploaded by the host from dynamic-lighting.mjs; GMath's
 //! sine table is the crate's SINE.
 
-const PARAM_WORDS: usize = 28;
+pub(crate) const PARAM_WORDS: usize = 28;
 // Parameter words of one call (`light_spatial`).
 const P_EFFECT: usize = 0;
 const P_MIN_U: usize = 1;
@@ -42,7 +42,7 @@ const P_LOCATION: usize = 14; // 3 float bits
 const P_RRADIUS: usize = 17;
 const P_RR2: usize = 18;
 const P_INCIDENCE: usize = 19;
-const P_TIME: usize = 20; // Level.TimeSeconds float bits
+pub(crate) const P_TIME: usize = 20; // Level.TimeSeconds float bits
 const P_PERIOD: usize = 21;
 const P_PHASE: usize = 22;
 const P_ILLUMINATION: usize = 23; // rectangle-relative bytes, or 0 for 0x7f
@@ -55,11 +55,12 @@ pub(crate) const P_DONE: usize = 26;
 static mut SQRT: [u32; 2048] = [0; 2048];
 static mut NORMAL: [f32; 4096] = [0.0; 4096];
 static mut PARAMS: [u32; PARAM_WORDS] = [0; PARAM_WORDS];
-/// Atan pairs (Y bits, X bits) recorded while `COLLECT` is set (validation).
-const MAX_PAIRS: usize = 1 << 18;
-static mut PAIRS: [u64; MAX_PAIRS * 2] = [0; MAX_PAIRS * 2];
+/// Atan pairs (Y bits, X bits) recorded into a host buffer of `CAPACITY`
+/// pairs while `PAIRS` is nonzero (validation); `PAIR_COUNT` counts every
+/// pair, also those past the capacity.
+static mut PAIRS: u32 = 0;
+static mut CAPACITY: u32 = 0;
 static mut PAIR_COUNT: u32 = 0;
-static mut COLLECT: u32 = 0;
 /// Atan evaluations decided by the double-double path, and those whose
 /// double-double value lay within 2^-60 of a 24-bit midpoint.
 static mut FALLBACKS: u32 = 0;
@@ -81,17 +82,16 @@ pub extern "C" fn spatial_params_ptr() -> *mut u32 {
     core::ptr::addr_of_mut!(PARAMS) as *mut u32
 }
 #[no_mangle]
-pub extern "C" fn spatial_pairs_ptr() -> *const u64 {
-    core::ptr::addr_of!(PAIRS) as *const u64
-}
-#[no_mangle]
 pub extern "C" fn spatial_pair_count() -> u32 {
     unsafe { PAIR_COUNT }
 }
+/// Record atan pairs into `buffer` (`capacity` pairs of two u64), or stop
+/// with 0.
 #[no_mangle]
-pub extern "C" fn spatial_collect(on: u32) {
+pub extern "C" fn spatial_collect(buffer: u32, capacity: u32) {
     unsafe {
-        COLLECT = on;
+        PAIRS = buffer;
+        CAPACITY = capacity;
         PAIR_COUNT = 0;
     }
 }
@@ -453,10 +453,12 @@ fn round24_dd(v: Dd) -> f64 {
 #[inline(never)]
 fn atan_k(y: f64, x: f64, k: f64) -> f64 {
     unsafe {
-        if COLLECT != 0 && (PAIR_COUNT as usize) < MAX_PAIRS {
-            let at = PAIR_COUNT as usize * 2;
-            (*core::ptr::addr_of_mut!(PAIRS))[at] = y.to_bits();
-            (*core::ptr::addr_of_mut!(PAIRS))[at + 1] = x.to_bits();
+        if PAIRS != 0 {
+            if PAIR_COUNT < CAPACITY {
+                let at = (PAIRS as usize + PAIR_COUNT as usize * 16) as *mut u64;
+                *at = y.to_bits();
+                *at.add(1) = x.to_bits();
+            }
             PAIR_COUNT += 1;
         }
     }
@@ -492,6 +494,7 @@ pub extern "C" fn spatial_atan_k(y: f64, x: f64, k: f64) -> f64 {
 // The bodies.
 
 const TWO_PI: f64 = 6.283185307179586; // 0x10b2a6f0
+const EIGHT_PI: f64 = 25.132741228718345; // pushed at 0x10b0395c
 const PI: f64 = 3.141592653589793; // 0x10b2a6d0
 const THREE_PI: f64 = 9.42477796076938; // 0x10b2a6c0
 const NEG_INV_TWO_PI: f64 = -0.15915494309189535; // 0x10b2a6b0
@@ -568,9 +571,9 @@ fn searchlight(p: &[u32; PARAM_WORDS], illumination: Option<&[u8]>, out: &mut [u
             Some(i) => i,
             None => return 0,
         };
-        // appAtan2(dx, dy)·4 + x as a double, fmod 2π.
+        // appAtan2(dx, dy)·4 + x as a double, appFmod by 8π.
         let r = add24(atan_k(dx as f64, dy as f64, 4.0), x);
-        let m = r % TWO_PI;
+        let m = r % EIGHT_PI;
         let m32 = st32(m) as f64;
         if m < PI || !(m32 <= THREE_PI) {
             return 0;
