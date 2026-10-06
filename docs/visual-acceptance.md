@@ -29,6 +29,35 @@ and CheatFlying's AutonomousPhysics ([ladders and flying](ladder-flying.md#auton
 In both, the camera eye is Location + 40 (EyeHeight), the player is in
 state CheatFlying with Physics PHYS_Flying, and the HUD is hidden.
 
+**Frozen levels.** By default both sides freeze the level from its first
+tick, so actor positions and animation don't depend on how long each side
+took to load:
+- The original types `set LevelInfo bPlayersOnly True` before `open`. SET
+  also changes the class default, so the new level's LevelInfo starts with it.
+- Play loads with `?hold=1`, and its frame loop holds until view-probe.mjs has
+  written bPlayersOnly. Level.Tick then runs only the player (tickType 1,
+  `level-tick.mjs`) on both sides.
+
+In a frozen level, NPCs never run their StartUp state, so InitializePawn
+doesn't run. They keep their map location and mesh, in the reference pose
+of frame 0, on both sides. Unfrozen captures (`--live`) differed through
+timing alone: in Battery Park, Anna Navarre walks up to the player within
+seconds.
+
+**Fresh maps.** The original loads a map visited before in the same mission
+from its travel state (`LoadMap: ..\Save\Current\<map>.dxs`), not from the
+map file. A second Battery Park capture showed the first visit's crates and
+Anna's walk. Before opening a map again, the driver opens another map and
+moves that `.dxs` aside to `.work/acceptance/save-current/`, so each capture
+starts from the map file, as Play does.
+
+**The original's own state.** `tools/dump-actor-win.c` reads named objects'
+fields from the running DeusEx.exe, at the linked property offsets
+(UProperty `+0x48`, bool masks `+0x5c`). It is how the travel-state load
+showed up: in that run Anna had bInitialized=1 and stood at (1079, 1807,
+367). Build it with
+`i686-w64-mingw32-gcc -O2 -o dump-actor-win.exe tools/dump-actor-win.c -lpsapi`.
+
 **Views.** From the player's start Location, rounded to integers so both
 consoles get the same floats: the four axis yaws (from the start yaw rounded
 to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
@@ -36,8 +65,13 @@ to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
 **Frames.** Both are raw framebuffers at 1280×720.
 
 - The original's are its own `Shot` bitmaps (numpad `*`), the framebuffer
-  before the gamma ramp. Under Hyprland the game window is tiled, so it is
-  floated and sized to a 1280×720 client area first.
+  before the gamma ramp. Under Hyprland, which tiles the window again on
+  every map load, `DX_HYPRLAND=1` checks before each shot that the window is
+  floating, 1280×720 and inside the screen. Shot locks the primary surface
+  for the window rectangle, and a rectangle past the screen edge fails
+  (`DDERR_INVALIDPARAMS`) with a black frame. After it places the window, it
+  takes one throwaway shot, because the first frame after a resize is
+  stale.
 - Play's are captured at Brightness 0.4, whose display ramp
   (`pow(x, 1/(2.5·0.4))`) is the identity. The scene canvas is pinned to
   1280×720 at the page origin, and the page UI is hidden.
@@ -65,50 +99,98 @@ node scripts/visual-acceptance.mjs play --maps 00_Training
 WINEPREFIX=$HOME/.wine-deusex DX_WINE=/usr/bin/wine DX_GAME="$HOME/.wine-deusex/drive_c/Deus Ex GOTY Edition" node ad/scripts/original-game.mjs launch 00_Training.dx
 ```
 
-On Hyprland, float and size the window, then take the original's frames
-and compare:
+Then take the original's frames (`DX_HYPRLAND=1` keeps the window placed
+under Hyprland) and compare:
 
 ```bash
-hyprctl dispatch 'hl.dsp.window.float({ action = "set", window = "class:deusex.exe" })'
+WINEPREFIX=$HOME/.wine-deusex DX_WINE=/usr/bin/wine DX_GAME="$HOME/.wine-deusex/drive_c/Deus Ex GOTY Edition" DX_HYPRLAND=1 node scripts/visual-acceptance.mjs original --maps 00_Training --load-wait 40000
 ```
 
 ```bash
-hyprctl dispatch 'hl.dsp.window.resize({ x = 1280, y = 720, relative = false, window = "class:deusex.exe" })'
+node scripts/visual-acceptance.mjs compare
 ```
 
-```bash
-WINEPREFIX=$HOME/.wine-deusex DX_WINE=/usr/bin/wine DX_GAME="$HOME/.wine-deusex/drive_c/Deus Ex GOTY Edition" node scripts/visual-acceptance.mjs original --maps 00_Training
-```
-
-```bash
-node scripts/visual-acceptance.mjs compare --maps 00_Training
-```
-
-The `play` step writes `.work/acceptance/plan.json`; `original` reads it.
+`--views y3 --reuse` retakes one view on the map already loaded, and
+`--current <map>` names the map the running game has loaded, so it is
+left first. The `play` step writes `.work/acceptance/plan.json`; `original` reads it.
 
 ## Results
 
-### 00_Training (2026-10-06)
+### Fourteen maps, frozen (2026-10-06)
 
-Five views from the start (-1149, 826, -80):
+Each map has five views. All 70 frames are 1280×720, taken on the Linux
+host under Wine 11.17 (D3D). The columns are ranges or minima over each
+map's five views.
 
-| View | Play / original | Mean abs. diff. | Edge recall | Edge precision | Outlier blocks |
+| Map | Play / original | Mean abs. diff. | Edge recall (min) | Edge precision (min) | Outlier blocks |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| y0 | 1.28 | 2.99 | 0.882 | 0.901 | 0 |
-| y1 | 1.32 | 1.41 | 0.927 | 0.900 | 0 |
-| y2 | 1.40 | 1.97 | 1.000 | 1.000 | 0 |
-| y3 | 1.31 | 1.28 | 0.979 | 0.981 | 0 |
-| down | 1.26 | 4.33 | 0.881 | 0.904 | 0 |
+| 00_Training | 1.27–1.40 | 1.22–4.28 | 0.93 | 0.93 | 0 |
+| 01_NYC_UNATCOIsland | 1.28–1.33 | 1.45–3.53 | 0.92 | 0.95 | 12 |
+| 02_NYC_BatteryPark | 1.13–1.35 | 0.36–3.91 | 0.94 | 0.95 | 0 |
+| 03_NYC_AirfieldHeliBase | 1.34–1.38 | 2.22–3.66 | 0.90 | 0.64 | 0 |
+| 04_NYC_Street | 1.37–1.38 | 1.41–2.28 | 0.90 | 0.91 | 3 |
+| 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.47–4.13 | 0.94 | 0.74 | 0 |
+| 06_HongKong_WanChai_Market | 1.27–1.35 | 1.37–2.53 | 0.94 | 0.96 | 0 |
+| 08_NYC_Bar | 1.34–1.39 | 1.65–3.21 | 0.92 | 0.95 | 0 |
+| 09_NYC_Ship | 1.25–1.39 | 1.58–3.45 | 0.89 | 0.31 | 0 |
+| 10_Paris_Club | 1.33–1.37 | 1.00–1.85 | 0.94 | 0.56 | 0 |
+| 11_Paris_Cathedral | 1.15–1.29 | 0.26–1.10 | 0.33 | 0.16 | 0 |
+| 12_Vandenberg_Cmd | 1.21–1.37 | 0.50–1.63 | 0.86 | 0.80 | 0 |
+| 14_OceanLab_Lab | 1.17–1.31 | 1.51–3.46 | 0.96 | 0.96 | 36 |
+| 15_Area51_Bunker | 1.30–1.37 | 0.93–1.75 | 0.75 | 0.72 | 20 |
 
-Geometry, the mirror floor's reflections, the plants, lights and the
-emblem line up; no block is missing or extra. Play's raw frame is 1.26–1.40×
-brighter, uniformly (block ratios 0.89–1.49). This is the gap already
-recorded under Wine ([lighting](lighting.md), "Display ramp"); it is not
-chased here.
+Every view was also inspected side by side.
+
+**Matching.** Geometry, BSP lighting, meshes, coronas, mirrors, fog, the
+skies and decorations line up in all 70 views. Play's raw frame is
+uniformly 1.13–1.41× brighter; see Open.
+
+**Flags explained by the metric or by timing.**
+
+- *Low edge scores, no visible difference.* The low precision minima (Ship
+  y2, Paris Club y1/y3, MJ12 lab y1, Airfield y1) and the Cathedral's low
+  recall and precision (y1/y3) are flat, nearly black walls. There the
+  strongest 5% of gradients are texture noise.
+- *Outlier blocks from time-dependent content.*
+  - Island y2, Street y3 and Area 51 y1: the skies' panning clouds, which
+    follow Level.TimeSeconds.
+  - Area 51 y0: the helicopter's rotor blur. Rendered actors still animate
+    in a frozen level: AActor::Tick advances animation before its
+    players-only return, in the original (live read: BlackHelicopter0 at
+    AnimFrame 0.686 in a level frozen from load) as in Play
+    (`actor-tick.mjs`). The rotor's phase therefore depends on elapsed time.
+
+**Differences.**
+
+1. *Island y0: a skyline seam.* Play draws a 1-pixel vertical line about
+   65 pixels tall from a skyline "antenna" up into the streetlight's glow,
+   plus a short horizontal line. The original's antenna is short.
+   - Both lines lie on the edges of skyline polygon 2244 (Model189,
+     `BatteryPark.Sky.NYskybox2Mbs`, masked, unlit, two-sided, in the sky
+     zone). The vertical edge is at U ≈ −255 texels, the horizontal at
+     V = −2944 = −23×128: both on the texture's wrap seams.
+   - The texture's first columns are opaque from row 8 down, its last
+     from row 24 down, so an edge pixel that samples across the seam shows
+     a tall or a short spike.
+   - Likely cause: the sub-pixel rasterization and texel-centre conventions
+     of D3D7 (as D3DDrv sets up its vertices) against WebGL's. Not yet
+     traced in D3DDrv.dll.
+2. *Ocean Lab y2: the darkest surfaces.* A shadowed pipe
+   (`SubBase.Metal.SB_PipeSec_B`) is raw (1,1,1) in the original over a
+   200×200 patch, and (0,0,0) in Play: rounding at the bottom of the range.
+   Not traced.
 
 ## Open
 
-- The uniform 1.25–1.4× raw brightness gap under Wine (a CrossOver capture
-  on the Mac matched more closely).
-- NPC poses and animation time differ between the two runs; actor regions
-  are compared loosely.
+- The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
+  capture on the Mac matched more closely. The user does not want it
+  chased: it is a known gamma issue of the game on Windows.
+- The two differences above: D3DDrv's vertex and texel conventions at
+  polygon edges and wrap seams, and the rounding of the darkest modulated
+  values.
+- Captures are frozen. NPCs stand at their map locations in the frame-0
+  reference pose, and their startup (InitializePawn) and patrols are not
+  compared. A live comparison needs matched level time (`--live` alone
+  differs through timing).
+- Captures come from one Wine/D3D host. D3D behaviour that depends on the
+  driver is not separated from the original's own.

@@ -401,13 +401,17 @@ maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
 frame and dynamics in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
-on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
-music, decals, and the third-person conversation camera with lip sync.
+on BSP surfaces, ambient sound, script sounds, sound effects and zone reverb
+through Galaxy's mixer, Galaxy music, decals, and the third-person
+conversation camera with lip sync. Fourteen maps match the original's own
+frames at matched cameras ([visual acceptance](visual-acceptance.md)).
 Open: the occlusion's moving brush tracker (and with it fog on movers) and
-child frames, the render-pass precision audit (translations validated at
-64-bit precision where the pass runs at 24), mirror/sky combinations, zone reverb and Galaxy's mixer for
-sound effects, time-varying moving lights and spotlights, and original-game
-visual acceptance across maps. SpriteAnimOnce frames and animated mesh skins
+child frames, the rest of the render-pass precision audit (light maps,
+meshes and lasers are still validated at 64-bit precision where the pass
+runs at 24; fog and coronas are done), mirror/sky combinations, time-varying
+moving lights and spotlights, the two differences visual acceptance found
+(a wrap-seam line on a masked sky surface, rounding of the darkest pixels),
+and acceptance of live (unfrozen) scenes. SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture
 ([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
@@ -699,6 +703,25 @@ and mixer, in the music worklet, instead of the Web Audio mapping
 - *Not covered.* The MP3 effect Menu_SpeechTest stays silent, and speech
   keeps its own transport. The ring heads' spacing and the game thread's
   x87 control word are unmeasured.
+
+**Visual acceptance against the original (2026-10-06).**
+`scripts/visual-acceptance.mjs` takes matched-camera raw frames on both
+sides: the original DeusEx.exe under Wine (its own Shot bitmaps) and Play in
+worker mode.
+- *Same inputs.* Both run `ghost` and `ShowHud False`, then set Location and
+  ViewRotation. Play runs them through the original console chain, which
+  now imports bool parameters (Core `0x10166380`), and CheatFlying's
+  AutonomousPhysics (native 3971, `0x103c8f30`) is translated.
+- *Frozen levels.* Both freeze the level from its first tick with
+  bPlayersOnly. The original reloads a revisited map from its travel state,
+  so that state is moved aside first.
+- *Results.* All 70 views of 14 maps line up in geometry, lighting, meshes,
+  coronas, mirrors, fog and skies, with a uniform 1.13–1.41× raw brightness
+  gap under Wine.
+- *Differences.* A 1-pixel line on a masked sky polygon's wrap seam
+  (Island), and the darkest pixels (raw 1 in the original, 0 in Play).
+`tools/dump-actor-win.c` reads live actor fields from the running original.
+See [visual acceptance](visual-acceptance.md).
 
 ## 5. Implement the full gameplay systems
 

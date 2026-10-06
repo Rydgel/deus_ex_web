@@ -36,9 +36,11 @@ or push further hosting updates unless the user asks.
 - **GPU meshes.** Actor GetFrame interpolation and DrawLodMesh lighting run as
   WebGL2 passes, bit-exact with the CPU kernels (`?gpuMesh=0` selects the CPU
   reference; software WebGL keeps it). See [GPU mesh](docs/gpu-mesh.md).
-- **Music.** Galaxy's sequencer and mixer run in Rust inside an AudioWorklet,
-  fed directly by the simulation over a MessageChannel. See
-  [Galaxy music](docs/galaxy-music.md).
+- **Music and sound.** Galaxy's sequencer and mixer run in Rust inside an
+  AudioWorklet, fed directly by the simulation over a MessageChannel: music,
+  sound-effect voices and zone reverb (`?sfx=webaudio` keeps the older Web
+  Audio effects path). See [Galaxy music](docs/galaxy-music.md) and
+  [galaxy audio](docs/galaxy-audio.md).
 
 Frame cost and the 120 fps target are tracked in
 [play frame cost](docs/play-frame-cost.md) and the
@@ -144,20 +146,21 @@ keeps the dated record.
   laser beams ([lasers](docs/lasers.md)), volumetric fog on BSP surfaces
   ([volumetric fog](docs/volumetric-fog.md)) and decals such as the Shadow
   blobs under pawns ([decals](docs/decals.md)).
-- **Sound and music:** Galaxy's ambient and script sounds
-  ([galaxy audio](docs/galaxy-audio.md)) and each map's music, from the
-  original loader, sequencer, mixer and Update music section, bit-exact with
-  Galaxy.dll ([Galaxy music](docs/galaxy-music.md)).
+- **Sound and music:** Galaxy's ambient and script sounds, effect voices and
+  zone reverb through its own mixer ([galaxy audio](docs/galaxy-audio.md)),
+  and each map's music, from the original loader, sequencer, mixer and Update
+  music section, bit-exact with Galaxy.dll ([Galaxy music](docs/galaxy-music.md)).
 - **Conversations:** the third-person conversation camera and letterbox
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
 **Still open in Stage 4:** the occlusion's moving brush tracker (and with it
 fog on movers; meshes stay unfogged, as the shipped D3D configuration draws
-them) and child frames, the render-pass precision audit, mirror/sky combinations,
-spatial and time-varying light effects on moving lights and spotlights, Galaxy's mixer for sound effects (their
-volume and pan are a Web Audio host mapping) and zone reverb, the remaining
-native UI presentation, and original-game visual acceptance across maps.
+them) and child frames, the rest of the render-pass precision audit,
+mirror/sky combinations, spatial and time-varying light effects on moving
+lights and spotlights, the remaining native UI presentation, and the
+differences and live scenes left by [visual acceptance](docs/visual-acceptance.md)
+(14 maps match the original's own frames at matched cameras).
 
 ## Open the viewer
 

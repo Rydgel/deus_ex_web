@@ -1424,7 +1424,7 @@ function drawFrame(snap, time) {
     lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);
     const hit = raycaster.intersectObjects(world.root.children, true).find(h => h.object.isMesh);
     const surface = hit && (hit.object.userData.faceMaterials?.[hit.faceIndex] ?? hit.object.material.userData);
-    $('surface-info').textContent = hit ? `${surface.key}\n${surface.width} × ${surface.height} · ${surface.mipCount} mips\nSurface ${hit.object.userData.faces[hit.faceIndex]} · ${hit.object.userData.actor ?? 'world'}\nFlags 0x${surface.flags.toString(16)}` : 'No surface under the crosshair.';
+    $('surface-info').textContent = hit ? `${surface.key}\n${surface.width} × ${surface.height} · ${surface.mipCount} mips\nSurface ${hit.object.userData.faces?.[hit.faceIndex] ?? '—'} · ${hit.object.userData.actor ?? hit.object.name ?? 'world'}\nFlags 0x${(surface.flags ?? 0).toString(16)}` : 'No surface under the crosshair.';
   }
   if (live) { camera.position.copy(live.position); camera.quaternion.copy(live.quaternion); camera.updateMatrixWorld(); }
 }

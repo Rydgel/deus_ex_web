@@ -215,15 +215,21 @@ function writeRgb(file, w, h, data) {
   execFileSync('magick', ['-size', `${w}x${h}`, '-depth', '8', 'rgb:-', file], {input: data});
 }
 const luma = (d, i) => 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+// Sobel edges: each frame's strongest 5% of gradient magnitudes (at least
+// 4 luma steps), so the threshold follows the frame. A fixed threshold
+// counted the uniform raw brightness gap as extra or missing edges in dark
+// views.
 function edges(img) {
-  const {w, h, data} = img, L = new Float32Array(w * h), E = new Uint8Array(w * h);
+  const {w, h, data} = img, L = new Float32Array(w * h), G = new Float32Array(w * h), E = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) L[i] = luma(data, 3 * i);
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const p = (dx, dy) => L[(y + dy) * w + x + dx];
     const gx = p(1, -1) + 2 * p(1, 0) + p(1, 1) - p(-1, -1) - 2 * p(-1, 0) - p(-1, 1);
     const gy = p(-1, 1) + 2 * p(0, 1) + p(1, 1) - p(-1, -1) - 2 * p(0, -1) - p(1, -1);
-    E[y * w + x] = Math.hypot(gx, gy) > 48 ? 1 : 0;
+    G[y * w + x] = Math.hypot(gx, gy);
   }
+  const threshold = Math.max(4, Float32Array.from(G).sort()[Math.floor(0.95 * G.length)]);
+  for (let i = 0; i < w * h; i++) E[i] = G[i] >= threshold ? 1 : 0;
   return E;
 }
 // Share of `a`'s edge pixels with an edge of `b` within `r` pixels.
