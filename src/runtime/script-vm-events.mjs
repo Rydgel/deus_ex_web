@@ -90,10 +90,12 @@ export class EventHost {
     // The call cache (dispatch.rs CALLS): on unless RUST_CALLS=0.
     this.callsAt = x.vm_calls_ptr();
     const calls = arena.alloc(CALL_SLOTS * CALL_SLOT);
+    // The allocation may grow the Wasm memory, detaching the earlier view.
+    const callsView = arena.view;
     arena.bytes.fill(0, calls, calls + CALL_SLOTS * CALL_SLOT);
-    view.setUint32(this.callsAt, calls, true);
-    view.setUint32(this.callsAt + 4, CALL_SLOTS, true);
-    view.setUint32(this.callsAt + 8, CALLS_DISABLED ? 0 : 1, true);
+    callsView.setUint32(this.callsAt, calls, true);
+    callsView.setUint32(this.callsAt + 4, CALL_SLOTS, true);
+    callsView.setUint32(this.callsAt + 8, CALLS_DISABLED ? 0 : 1, true);
   }
   /** A lowering was replaced: the slots that run its code, and the call
    * slots keyed by it as the caller, are resolved again. Its code is

@@ -217,11 +217,33 @@ per-native list validators still pass.
 
 In Play (headless, `scripts/census-ui-screens.mjs`): Conversations, Images
 and Logs open, paint at 1432×1268 and close with Escape on 00_Training and
-01_NYC_UNATCOIsland (11/11 screens on Training). A fresh game has empty
-lists; a local probe that added 40 log lines, and one that ran the original
-`AllImages` cheat exec (35 images), showed the rows sorted, row 0 selected by
-VisibilityChanged, the image shown through ListSelectionChanged, and the
-scrollbar drawn.
+01_NYC_UNATCOIsland (11/11 screens on both maps). A fresh game has empty
+lists, so `scripts/validate-window-list-play.mjs` (an integration check, not
+an original comparison) adds 40 log lines through the original
+DeusExPlayer.AddLog and opens the Logs screen: 40 rows newest first, row 0
+selected by VisibilityChanged, the scrollbar drawn, then a press, drag,
+release and double click through the root's mouse route, Down/Up/End/Home
+through ListWindow.uc's VirtualKeyPressed, and Escape. A local probe that ran
+the original `AllImages` cheat exec (35 images) also showed the Images list
+selecting its first image and displaying it through ListSelectionChanged.
+
+## Handoff (2026-10-06, work stopped at the usage limit)
+
+* Done and verified: the family (commits 35a4347, 3727626), the family diff
+  280/280 with 19/19 mutations, `validate-window-list-play.mjs` (passes), the
+  window validator sweep (82 passed, scene-frame skipped as before),
+  text-layout-diff, datacube-read, keypad, the 14 per-native list validators,
+  `npm test` 598/598. Census: 11/11 on 00_Training in one process; on
+  01_NYC_UNATCOIsland all 11 open, draw and close, but split over two
+  processes (8 + 3).
+* Not yet verified: the one-process Island census died creating its ninth
+  game at `EventHost.attach` (`script-vm-events.mjs`): a DataView captured
+  before the call-cache `arena.alloc` was stale after that allocation grew
+  the Wasm memory. The fix (re-read `arena.view` after the allocation) is in
+  this WIP commit; the rerun was interrupted.
+* Next: rerun `node scripts/census-ui-screens.mjs --map 01_NYC_UNATCOIsland`
+  (expect 11/11 in one process), then `npm test` and
+  `node scripts/run-validators.mjs --filter validate-window --jobs 2`.
 
 ## Boundaries and open items
 
