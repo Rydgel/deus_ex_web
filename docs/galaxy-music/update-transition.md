@@ -612,8 +612,12 @@ UMusic objects (`galaxy-music-objects.mjs`):
   - Its initial state is the original's after `UMusic::Serialize`: SavedPos is the negated position of
     Data's compact count, `Num = Max = OriginalSize`, and Handle is 0.
   - Load re-reads the package bytes when SavedPos is positive.
-- **A DynamicLoadObject Music** is a load-graph object. It uses the graph's `+0x28` record and lazy
-  loader. This path is written but not reached by a map yet.
+- **A DynamicLoadObject Music** comes back as an export reference whose `loadRecord` is the load-graph
+  UMusic. That object's `+0x28` record, `+0x48` and lazy loader are used.
+  - DynamicLoadObject of a level song's path returns the same reference as `LevelInfo.Song`, with
+    `loadRecord` attached. The adapter is created once per reference, so one state serves both.
+  - This route is checked by calling DynamicLoadObject from the validator (§10.5), not yet by the
+    credits or PlayMusicWindow scripts in a map.
 
 ### 10.2 Corrections found while translating
 
@@ -806,7 +810,19 @@ with the HUD painted every frame (Galaxy Update follows it, `0x1038f638`).
 
 **00_Training** goes through the browser host's proxy (`createGame({musicLibrary})`). The first frame posts
 one encoded batch: the load+start ops with Training_Music's 1,449,937 + 1024 bytes. `order()` gives
-SongSection 0xff, and `dispose()` posts the unregister.
+SongSection 0xff.
+
+The validator then calls DynamicLoadObject for Credits_Music, by CreditsScrollWindow's route: the
+prefetched package, then StaticLoadObject over the load graph. Three switches follow, each one batch of
+unregister, load and start:
+
+- to Credits_Music (FastFade);
+- to the level song (Instant);
+- to Credits_Music again (Instant).
+
+The last switch reloads the graph UMusic's emptied Data through its linker archive, and the bytes it hands
+over equal the export plus 1024 zero bytes. Afterwards the graph UMusic has SavedPos positive,
+`Num = Max = 0`, no Data and Handle −1. `dispose()` posts the unregister.
 
 **01_NYC_UNATCOIsland**, W held. The first frame loads LibertyIsland_Music and starts section 0. At tick
 1871, MeetPaul's state change runs UpdateDynamicMusic's `ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade)`.
@@ -838,7 +854,8 @@ That gives 64 fading frames, then section 4 restarts on the loaded module.
   without a fade.
 - **SetViewport's attach.** Its SetVolumes and its `Transition = 1` for a viewport actor with a Song are not
   modelled. Play has no SetViewport, and NewMusic's SetVolumes precedes every load.
-- The load-graph UMusic path (DynamicLoadObject music).
+- The DynamicLoadObject route reached by the credits and PlayMusicWindow scripts in a map (the validator
+  calls DynamicLoadObject itself).
 - The CD branch.
 - The zone reverb tail.
 

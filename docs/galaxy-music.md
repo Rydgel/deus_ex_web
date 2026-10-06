@@ -483,6 +483,9 @@ x87 work runs only while a transition is pending. Measured headless:
 - **00_Training** goes through the browser host's proxy (createGame's
   `musicLibrary`). The first frame posts one encoded load+start batch with
   Training_Music's bytes plus slack, and `dispose()` posts the unregister.
+  Credits_Music by DynamicLoadObject, as CreditsScrollWindow loads it, then
+  the level song, then the credits again: each switch is one batch, and the
+  last reloads the emptied graph UMusic through its linker archive.
 - **01_NYC_UNATCOIsland.** UpdateDynamicMusic's MeetPaul switch
   (`ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade)`, tick 1871) fades for 64
   frames, then restarts section 4 on the loaded module.
@@ -507,8 +510,9 @@ x87 work runs only while a transition is pending. Measured headless:
 - A same-song map change keeps the UMusic in the original and fades. Play
   builds a fresh runtime per map, and `dispose()` unregisters it, so the next
   map reloads the song without a fade.
-- The load-graph UMusic adapter (DynamicLoadObject music: credits,
-  PlayMusicWindow) is written but not exercised by a map yet.
+- The DynamicLoadObject route (credits, PlayMusicWindow) is checked by
+  calling DynamicLoadObject from the validator, not yet by those windows in a
+  map.
 - The CD branch is refused (`UseCDMusic=True` throws). The installed config
   has it False.
 

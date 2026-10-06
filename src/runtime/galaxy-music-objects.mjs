@@ -15,11 +15,11 @@
  *   package, negated), Num = Max = the module size, the bytes; Handle 0.
  *   Load re-reads the package bytes (src/unreal/music-module.mjs, the same
  *   lazy array) when Unload has emptied the array.
- * - A DynamicLoadObject Music (CreditsScrollWindow, PlayMusicWindow) is a
- *   load-graph object whose +0x28 record the graph's loader filled
- *   (script-music-load.mjs); Load runs the graph's lazy loader on its linker
- *   archive, Realloc follows the graph's array storage. Not exercised by a
- *   Play map yet.
+ * - A DynamicLoadObject Music (CreditsScrollWindow, PlayMusicWindow) is an
+ *   export reference whose `loadRecord` is the load-graph object the graph's
+ *   loader filled (script-music-load.mjs): its +0x28 record and +0x48 are
+ *   used, Load runs the graph's lazy loader on its linker archive, and
+ *   Realloc follows the graph's array storage.
  *
  * Storage is host memory: Data is a Uint8Array (export references) or the
  * graph's array; a reallocated tail the original leaves uninitialised
@@ -108,9 +108,12 @@ export function createMusicObjects({graph = null} = {}) {
     music(song) {
       let entry = objects.get(song);
       if (entry) return entry;
-      if (song?.resourceConstructed === 'Engine.Music' && song.instanceValues instanceof Map) {
+      // A DynamicLoadObject result is an export reference whose loadRecord
+      // is the load graph's UMusic: that object's own fields are used.
+      const record = song?.loadRecord ?? song;
+      if (record?.resourceConstructed === 'Engine.Music' && record.instanceValues instanceof Map) {
         if (!graph) throw new Error('Galaxy music: a load-graph Music needs the class loader graph');
-        entry = graphMusic(song, graph);
+        entry = graphMusic(record, graph);
       } else if (song?.kind === 'Music' && song.asset?.pkg && Number.isInteger(song.index)) entry = exportMusic(song);
       else throw new Error(`Galaxy music: ${song?.key ?? song} is not a loaded Music object`);
       objects.set(song, entry);

@@ -64,4 +64,5 @@ Stage 3 complete. Galaxy's Update now loads, plays and unloads the songs
 `ClientSetMusic` selects, including the Data lifecycle (Load, Add(1024),
 Handle = -1, Unload): [galaxy-music](galaxy-music.md) "Phase 4". A
 DynamicLoadObject UMusic goes through `galaxy-music-objects.mjs`'s
-load-graph adapter, which no map has reached yet.
+load-graph adapter (validate-galaxy-music-play.mjs loads Credits_Music this
+way, plays it, and reloads its emptied Data through the linker archive).

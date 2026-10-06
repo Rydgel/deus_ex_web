@@ -26,8 +26,11 @@
  * 00_Training, through the browser host's transport (createGame's
  *  musicLibrary option, createMusicLibraryProxy): the first painted frame
  *  posts one batch, the load+start sequence with Training_Music's bytes and
- *  slack; SongSection follows the proxy's order(); dispose posts
- *  UnregisterMusic's two calls.
+ *  slack; SongSection follows the proxy's order(). A DynamicLoadObject Music
+ *  (Credits_Music, the load-graph UMusic), the level song and the credits
+ *  again each switch in one batch, the last reloading the graph UMusic's
+ *  emptied Data through its linker archive; dispose posts UnregisterMusic's
+ *  two calls.
  * 01_NYC_UNATCOIsland, W held until MeetPaul: UpdateDynamicMusic's
  *  conversation switch ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade) fades
  *  and restarts section 4 on the loaded module.
@@ -103,8 +106,38 @@ if (proxy) {
   const moduleSize = readMusicExport(song.asset, song.index).bytes.length;
   assert.deepEqual([posted[0].modules.length, posted[0].modules[0].byteLength], [1, moduleSize + 1024], 'the module with its slack');
   assert.equal(read(player, 'SongSection'), 0xff, 'SongSection from the proxy\'s order (glxControlMusic(2, 0) leaves 0xff)');
+  // A DynamicLoadObject Music (CreditsScrollWindow.StartMusic's route: the
+  // prefetched package, StaticLoadObject over the load graph), then the
+  // level song, then the credits again: the graph UMusic's Data is emptied
+  // by Unload and reloaded through its linker archive.
+  const path = 'Credits_Music.Credits_Music';
+  await runtime.prefetchDynamicLoadPackage(path);
+  const credits = runtime.loadPreparedDynamicObject({classRef: runtime.resourceRegistry().nativeClass('Engine.Music'),
+    outer: null, name: path, filename: null, flags: 0, sandbox: null});
+  assert.equal(credits.loadRecord?.resourceConstructed, 'Engine.Music', 'a load-graph UMusic');
+  const creditsSize = readMusicExport(credits.asset, credits.index).bytes.length;
+  const SWITCH = ['stopMusic', 'unloadMusic', 'setSampleVolume', 'setMusicVolume', 'loadMusic', 'setSampleVolume', 'setMusicVolume',
+    'stopMusic', 'clearVoiceActive', 'startMusic', 'controlMusic', 'setBreakFlag'];
+  const switchTo = (song, transition) => {
+    runtime.writeNamed(player, 'Song', song); runtime.writeNamed(player, 'SongSection', 0); runtime.writeNamed(player, 'Transition', transition);
+    const before = posted.length;
+    for (let i = 0; i < 120 && read(player, 'Transition'); i++) { simulatedMs += 1000 / 60; game.tick(1 / 60); game.hud.commands(1440, 960, game.view()); }
+    return posted.slice(before).filter(message => message.modules.length);
+  };
+  const toCredits = switchTo(credits, 4), toLevel = switchTo(song, 1), creditsAgain = switchTo(credits, 1);
+  for (const [label, batches, size] of [['credits', toCredits, creditsSize], ['level song', toLevel, moduleSize], ['credits again', creditsAgain, creditsSize]]) {
+    assert.deepEqual(batches.map(decode), [SWITCH], `${label}: unregister, load and start in one batch`);
+    assert.equal(batches[0].modules[0].byteLength, size + 1024, `${label}: module bytes plus slack`);
+  }
+  const reloaded = new Uint8Array(creditsAgain[0].modules[0]), exported = readMusicExport(credits.asset, credits.index).bytes;
+  assert.ok(exported.every((b, i) => reloaded[i] === b) && reloaded.subarray(exported.length).every(b => b === 0),
+    'the archive reload hands over the export bytes and 1024 zero bytes');
+  const record = credits.loadRecord.instanceValues.get(0x28);
+  assert.deepEqual([record.savedPosition > 0, record.bytes.num, record.bytes.max, record.bytes.data, credits.loadRecord.instanceValues.get(0x48)],
+    [true, 0, 0, null, -1], 'the graph UMusic: Data unloaded, Handle -1');
+  const switches = posted.length;
   audio.dispose();
-  assert.deepEqual(posted.slice(1).map(decode), [['stopMusic'], ['unloadMusic']], 'dispose: UnregisterMusic');
+  assert.deepEqual(posted.slice(switches).map(decode), [['stopMusic'], ['unloadMusic']], 'dispose: UnregisterMusic');
   console.log(JSON.stringify({map, song: song.key, batches: posted.length, first: decode(posted[0]), moduleBytes: posted[0].modules[0].byteLength,
     status: proxy.status()}));
   process.exit(0);
