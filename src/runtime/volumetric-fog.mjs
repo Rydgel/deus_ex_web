@@ -3,7 +3,7 @@
 // fog-map block (0x10b07162-0x10b07c4a). They run inside the render pass,
 // under precision control 24 (docs/render-pass-precision.md): the x87 model
 // here rounds every arithmetic result to 24 bits (x87-pc24.mjs).
-import { x87load, x87double, x87int32, x87store, x87cmp, x87mul as mul64, x87add as add64, x87neg } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87store, x87cmp } from './script-vm.mjs';
 import { p24mul as x87mul, p24add as x87add, p24div as x87div, p24sub as sub, r24 } from './x87-pc24.mjs';
 import { fistp, tableSqrt, colorTableEntry, squareRootTable } from './dynamic-lighting.mjs';
 
@@ -36,13 +36,6 @@ export function coordsTransform(p, coords, point = true) {
 export function coordsTransformExact(p, coords, point = true) {
   const d = [0, 1, 2].map(i => point ? sub(ld(p[i]), ld(coords.origin[i])) : ld(p[i]));
   return [coords.x, coords.y, coords.z].map(a => st(x87add(x87add(x87mul(d[0], ld(a[0])), x87mul(d[1], ld(a[1]))), x87mul(d[2], ld(a[2])))));
-}
-
-/** The same transform with 64-bit registers: the coronas' draw loop
- * (coronas.mjs) still translates the pass at that precision. */
-export function coordsTransformExtended(p, coords, point = true) {
-  const d = [0, 1, 2].map(i => point ? add64(ld(p[i]), x87neg(ld(coords.origin[i]))) : ld(p[i]));
-  return [coords.x, coords.y, coords.z].map(a => st(add64(add64(mul64(d[0], ld(a[0])), mul64(d[1], ld(a[1]))), mul64(d[2], ld(a[2])))));
 }
 
 /** The fog attenuation table (light-manager init 0x10b020cf-0x10b0210f):

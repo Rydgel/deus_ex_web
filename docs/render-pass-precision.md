@@ -152,7 +152,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | --- | --- | --- | --- | --- | --- |
 | OccludeBsp `0x10b173d0`, ClipBspSurf, BoundVisible, span buffers | pass | occlusion oracle **0x007f** | validate-bsp-occlusion | occlude.rs (binary32) | done |
 | ClipDecal `0x10b1bda0` and DrawFrame's decal block | pass | decal-render oracle **0x007f** | validate-decal-render | decal.rs (binary32) | done |
-| Corona pass `0x10b1b46a–0x10b1bb06` (fade, helper `0x10b1bc00`, draw loop) | pass (DrawFrame) | coronas oracle (0x037f; ORACLE_CW) | validate-coronas | `coronas.mjs` (x87 model) | **92 of 200** frames' DrawIcon calls (299 of 305 icons) |
+| Corona pass `0x10b1b46a–0x10b1bb06` (fade, helper `0x10b1bc00`, draw loop) | pass (DrawFrame) | coronas oracle, **0x007f** since the move | validate-coronas, validate-coronas-play (worker) | `coronas.mjs` **PC 24** | was: 92 of 200 frames' DrawIcon calls (299 of 305 icons); **now 0** |
 | Mirror segment `0x10b1886d–0x10b18b93` | pass (OccludeBsp) | mirror oracle (0x037f; ORACLE_CW) | validate-mirrors (4-ulp tolerance) | `mirrors.mjs` (doubles) | within tolerance |
 | Surface pan `0x10b1a59a–0x10b1a72a` | pass (DrawFrame) | surface-pan oracle (0x037f; ORACLE_CW) | validate-native-surface-pan | `surfacePan` (x87 model) | **240 of 400** fabricated cases |
 | UTexture Get/Update/Tick/ConstantTimeTick (`0x103212e0`, `0x103ecb70`, `0x103ed0d0`, `0x103ed330`) | pass: DrawFrame's `Texture->Update` (vtable `+0x78`), DrawActorSprite `0x10b2547b`; also UTexture::Lock | texture-animation oracle (0x037f; ORACLE_CW) | validate-native-texture-animation | `texture-animation.mjs` | 0 of 3,988 Get calls |
@@ -170,7 +170,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
 dynamic light effects (other worktree), mesh fog's oracle default, and on
-this audit's branch volumetric fog (2026-10-06). The
+this audit's branch volumetric fog and coronas (2026-10-06). The
 families are moved one at a time, starting with what Play computes every
 frame; each keeps the JS reference, the Rust kernel and the GPU shader in
 agreement and switches its oracle default to `0x007f` when its validator

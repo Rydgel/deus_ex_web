@@ -1073,6 +1073,14 @@ fog() {
 },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
+/** The page's corona pass (corona-pass.mjs): the last frame's counters. */
+coronas() { return coronaPass ? { ...coronaPass.stats } : null; },
+/** Draw or skip the corona pass (validation: a frame with and without it). */
+showCoronas(on) {
+  if (!coronaPass) return;
+  if (!on && !coronaPass.__render) { coronaPass.__render = coronaPass.render; coronaPass.render = () => {}; }
+  else if (on && coronaPass.__render) { coronaPass.render = coronaPass.__render; delete coronaPass.__render; }
+},
 /** The last drawn frame's decal fragments (decal-draw.mjs, decal-scene.mjs):
  * per texture the triangles the simulation clipped, and those drawn. */
 decals() {
