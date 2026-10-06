@@ -23,6 +23,11 @@
  *     no load.
  *  4. dispose() (the runtime dropped on a map change: LoadMap's collection
  *     destroying the UMusic) unregisters it: glxStopMusic, glxUnloadMusic.
+ * 00_Training, through the browser host's transport (createGame's
+ *  musicLibrary option, createMusicLibraryProxy): the first painted frame
+ *  posts one batch, the load+start sequence with Training_Music's bytes and
+ *  slack; SongSection follows the proxy's order(); dispose posts
+ *  UnregisterMusic's two calls.
  * 01_NYC_UNATCOIsland, W held until MeetPaul: UpdateDynamicMusic's
  *  conversation switch ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade) fades
  *  and restarts section 4 on the loaded module.
@@ -31,7 +36,7 @@
  * per-frame cost in the steady state and on transition frames, and Galaxy
  * Update with and without it, interleaved.
  *
- *   node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|01_NYC_UNATCOIsland]
+ *   node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|00_Training|01_NYC_UNATCOIsland]
  */
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
@@ -40,7 +45,7 @@ import {fileURLToPath} from 'node:url';
 
 const argv = process.argv.slice(2);
 if (argv[0] !== 'child') {
-  const maps = argv.includes('--map') ? [argv[argv.indexOf('--map') + 1]] : ['00_Intro', '01_NYC_UNATCOIsland'];
+  const maps = argv.includes('--map') ? [argv[argv.indexOf('--map') + 1]] : ['00_Intro', '00_Training', '01_NYC_UNATCOIsland'];
   for (const map of maps) {
     const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'child', map], {encoding: 'utf8', maxBuffer: 1 << 26});
     if (child.status !== 0) throw new Error(`${map} child failed:\n${child.stderr.slice(-6000)}`);
@@ -74,11 +79,36 @@ const root = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${root}/${directory}`)) files.push({path: `${directory}/${name}`, read: () => readFile(`${root}/${directory}/${name}`)});
 const assets = new AssetStore(files), asset = await assets.get(map);
-const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
+// 00_Training goes through the browser host's transport instead of the
+// mirror: createGame's musicLibrary option, the proxy that encodes each lock
+// batch for the AudioWorklet (galaxy-music-library.mjs, phase 5).
+const {createMusicLibraryProxy, MUSIC_OP} = await import('../src/runtime/galaxy-music-library.mjs');
+const posted = [];
+const proxy = map === '00_Training' ? createMusicLibraryProxy(message => posted.push(message)) : null;
+const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true,
+  ...(proxy ? {musicLibrary: proxy} : {})});
 const runtime = game.doors.scriptRuntime.runtime, audio = runtime.audio, library = audio.library;
 const read = (object, name) => runtime.readNamed(object, name);
 const levelInfo = () => runtime.levelFor(game.player.collisionActor).actors[0];
-assert.equal(library.kind, 'mirror', 'the default library is the recording mirror');
+assert.equal(library.kind, proxy ? undefined : 'mirror', 'the default library is the recording mirror');
+if (proxy) {
+  assert.equal(library, proxy, 'createLiveAudio got the host library');
+  const names = Object.fromEntries(Object.entries(MUSIC_OP).map(([name, code]) => [code, name]));
+  const decode = message => Array.from({length: message.ops.length / 3}, (_, i) => names[message.ops[i * 3]]);
+  const song = read(levelInfo(), 'Song'), player = game.player.collisionActor;
+  for (let i = 0; i < 3; i++) { simulatedMs += 1000 / 60; game.tick(1 / 60); game.hud.commands(1440, 960, game.view()); }
+  assert.equal(posted.length, 1, 'one batch in three frames');
+  assert.deepEqual(decode(posted[0]), ['setSampleVolume', 'setMusicVolume', 'loadMusic', 'setSampleVolume', 'setMusicVolume',
+    'stopMusic', 'clearVoiceActive', 'startMusic', 'controlMusic', 'setBreakFlag'], 'the load+start batch');
+  const moduleSize = readMusicExport(song.asset, song.index).bytes.length;
+  assert.deepEqual([posted[0].modules.length, posted[0].modules[0].byteLength], [1, moduleSize + 1024], 'the module with its slack');
+  assert.equal(read(player, 'SongSection'), 0xff, 'SongSection from the proxy\'s order (glxControlMusic(2, 0) leaves 0xff)');
+  audio.dispose();
+  assert.deepEqual(posted.slice(1).map(decode), [['stopMusic'], ['unloadMusic']], 'dispose: UnregisterMusic');
+  console.log(JSON.stringify({map, song: song.key, batches: posted.length, first: decode(posted[0]), moduleBytes: posted[0].modules[0].byteLength,
+    status: proxy.status()}));
+  process.exit(0);
+}
 library.takeBatches();
 
 // Timing of the music section in place (real clock; the page clock is pinned).

@@ -440,10 +440,10 @@ x87 work runs only while a transition is pending. Measured headless:
 
 | | Median | Notes |
 | --- | --- | --- |
-| Steady state, microbenchmark (lock, update, unlock) | 105–118 ns | per frame |
+| Steady state, microbenchmark (lock, update, unlock) | 98–132 ns | per frame |
 | Steady state, in place | 3–5 µs | includes the timing wrapper's own field read and clock calls |
 | Transition frames | 29–38 µs | the load frame is the maximum, 1.6–1.9 ms: it copies 1.4–1.8 MB of module into the grown Data buffer, once per song load |
-| Whole Galaxy Update, with / without the section (interleaved) | 308 / 306 µs (00_Intro), 863 / 849 µs (Island) | within noise |
+| Whole Galaxy Update, with / without the section (interleaved) | 308–314 / 306–312 µs (00_Intro), 821–863 / 834–849 µs (Island) | within noise; the sign flips between runs |
 
 **Verified against the original** (`validate-galaxy-music-update.mjs`):
 

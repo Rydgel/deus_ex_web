@@ -60,5 +60,8 @@ Music through them and reuses the texture loader's `serializeLazyBytes`
 BeginLoad/CreateExport/EndLoad queue and checks the registration, the
 vtables, FileType, `Data` (every byte) and `OriginalSize` against an
 independent parse of each export. The map census then has the three endgames
-Stage 3 complete. Music playback itself (the audio subsystem's song handle,
-`ClientSetMusic` reaching Galaxy) is not implemented.
+Stage 3 complete. Galaxy's Update now loads, plays and unloads the songs
+`ClientSetMusic` selects, including the Data lifecycle (Load, Add(1024),
+Handle = -1, Unload): [galaxy-music](galaxy-music.md) "Phase 4". A
+DynamicLoadObject UMusic goes through `galaxy-music-objects.mjs`'s
+load-graph adapter, which no map has reached yet.

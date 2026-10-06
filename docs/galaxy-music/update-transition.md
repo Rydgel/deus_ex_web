@@ -1,6 +1,6 @@
 # A. Galaxy subsystem music path: Update transition, UnregisterMusic, library API
 
-Research only. Galaxy.dll SHA256 `606e71d1…` (base `0x10600000`), Engine.dll at its
+§0–§9 are the research. The translation and its verification against the original are §10. Galaxy.dll SHA256 `606e71d1…` (base `0x10600000`), Engine.dll at its
 preferred base. Every claim has an instruction address. Field names come from a
 string, an SDK header or an export symbol; otherwise they are `+0xNN`.
 "Unnamed" means no string or symbol names the function.
@@ -27,6 +27,8 @@ string, an SDK header or an export symbol; otherwise they are `+0xNN`.
 4. **`0x106300f4` is `jmp [0x10699ab8]` = MSVCRT `_ftol`** (an import thunk), not a Galaxy-owned `_ftol`.
 5. **"The original's level change of the subsystem is not traced"** (galaxy-audio.md, Play section) is now
    closed (§5.3): LoadMap's SetViewport calls are no-ops for music.
+6. **SetVolumes' and SetInstantMusicVolume's library results go to `appFailAssert`**, not to a log line, and
+   **SetVolumes' sample volume is 126 under PC 64** (127 under PC 53/24). See §10.2.
 
 ## 1. State and inputs (raw offsets)
 
@@ -238,7 +240,9 @@ if +0x3c: same value -> 0x1060e9a0(v, 0)        ; 0x106062e0..0x1060630c (no che
 ```
 
 `_ftol` (MSVCRT) truncates the PC-rounded extended product. With MusicVolume=153: nM = f32(0.6) = `0x3f19999a`
-and ftol(1.0·nM·127) = 76. With MusicFade<0 the volume is 0.
+and ftol(1.0·nM·127) = 76. With MusicFade<0 the volume is 0. With SoundVolume 204 and SpeechVolume 255 the
+sample volume is `ftol(sp·127)` with `sp` = 255·K still in a register: 126 under PC 64, 127 under PC 53/24
+(measured, §10.4). A nonzero setter result reaches `appFailAssert` (lines 0x221, 0x223).
 
 **SetInstantMusicVolume (`0x10606610`)** uses the argument byte (`0x1060662c`/`0x10606632`) instead of
 `+0x69`, with the same clamp. It does not apply MusicFade: it calls glxSetMusicVolume(ftol(nM'·127), 0)
@@ -457,7 +461,7 @@ voice enable byte (start/stop/sample-voices). `+0x0d` holds an instrument index 
    - Then UnregisterMusic(Title_Music), with its glxStopMusic and glxUnloadMusic.
    - In the same frame NewMusic loads Intro_Music: `glxLoadMusic(&Mem{len = OriginalSize+1024}, 2)` → IT
      loader `0x10628990`.
-   - It then sets volumes (sample 127; music ftol(f32(0.6)·127) = 76) and starts:
+   - It then sets volumes (sample 126 under PC 64, 127 under PC 53/24; music ftol(f32(0.6)·127) = 76) and starts:
      glxStopMusic (→4), clear voice `+0xf` 16..47, glxStartMusic, glxControlMusic(2,0) → `[0x10698201]=0xff`,
      `[0x10697ca8]=1`. Last, Transition=0.
 3. Later frames write `Actor+0x674 = [0x10698201]`: 0xff until the sequencer applies the jump, then the
@@ -488,21 +492,17 @@ CrossOver bottle `DeusEx.log`, 11_Paris_Everett → 03_NYC_747: "Unloading: Pack
 path: the old song is gone before the first Update, so the new song starts with no fade (`+0x888=0`,
 `+0x88c=0xff`). **Whether a map change fades depends on whether GC destroys the old UMusic.**
 
-### 7.5 Browser port today (read-only grep of `src/`)
-- No code reads or writes Song, SongSection, CdTrack or Transition. A grep of src for these names, for
-  ClientSetMusic, MTRAN, Register/UnregisterMusic and UpdateDynamicMusic finds nothing.
-- PostLogin runs as script (`src/runtime/script-player-login.mjs:64`), so ClientSetMusic and
-  UpdateDynamicMusic write the fields into the object image and nothing consumes them.
-- `galaxy-audio.mjs:90` says it translates "0x10609510 without the music transition".
-- `galaxy-volumes.mjs` setInstantMusicVolume only stores the byte.
-- `script-music-load.mjs` keeps `UMusic.Data` resident. The original empties it right after glxLoadMusic
-  (`Unload`, `0x1060a7c8` → Engine `0x1030cd90`: SavedPos<0 ⇒ Num=Max=0, Realloc, SavedPos negated).
+### 7.5 Browser port (phase 4)
+Translated and wired; see §10. (Before phase 4 nothing read the four PlayerPawn fields, galaxy-volumes.mjs
+only stored the music byte and `script-music-load.mjs` kept Data resident; §10.1 replaces all three.)
 
 ## 8. Unresolved branches / open questions
 
 1. **x87 precision control** for the fade compare and the volume `_ftol` products: PC=53 (CRT) vs PC=24 (the
    D3D FPUSETUP question, still open in memory). It decides the frame on which `done` fires when
-   `fade ≈ Latency·k`, and the ±1 of the music volume.
+   `fade ≈ Latency·k`, and the ±1 of the music volume. The oracle measures all three words (§10.4): PC 64
+   gives sample volume 126 and PC 53/24 give 127; PC 24 also rounds the prologue's dt. The translation
+   matches each at its own precision; which one the game uses is still open.
 2. **`Data.Add(1024)` padding** is uninitialized `appRealloc` memory, and `Mem.length` includes it. Agent B:
    does the IT loader `0x10628990` ever read past `OriginalSize`? If it does, the original is
    nondeterministic there.
@@ -519,7 +519,8 @@ path: the old song is gone before the first Update, so the new song starts with 
    (`[0x10698348]`, up to 64 for IT). Can a module use more than 32 music voices? If so, the voices above 32
    keep sounding across a restart (agent C/D).
 6. **The initial `+0x888`/`+0x88d`** (no constructor store) are assumed zero; not observable (§1).
-7. **The player's state in 00_Intro** under forced-play ConPlay (§7.3 step 5) is not verified at runtime.
+7. **The player's state in 00_Intro** under forced-play ConPlay (§7.3 step 5) is not verified in the
+   original. In Play (headless, about 14 s) no section switch happens (§10.2).
 8. **glxLoadMusic returning 1** (module still loaded) is possible only if `+0x888` was cleared without an
    unload. No such path was found, but it is not proved impossible: for example UMusic::Destroy of a Handle=0
    object that equals `+0x888` while another module is loaded.
@@ -568,3 +569,282 @@ New Game → 00_Intro (and a same-song section change via the `MUSICORDER` conso
 DeusExPlayer combat trigger) yields the order of "Galaxy SetViewport", "Unregister music" and "Load music",
 plus any "failed: %i" lines. That confirms §7.3 without visuals. Fade duration needs audio capture or
 timestamped logs (`-log` has none); propose an RDTSC-stamped hook only if a fade-timing dispute appears.
+
+## 10. Translation and verification (phase 4, 2026-10-06)
+
+### 10.1 What runs in Play
+
+The music section of Update, SetVolumes, SetInstantMusicVolume and UnregisterMusic are translated in
+`src/runtime/galaxy-music.mjs`. The UMusic Data lifecycle StartNewMusic drives is translated there too:
+Engine's lazy Load `0x1030cbb0` through the shared `script-lazy-byte-array.mjs`, Unload `0x1030cd90`, and
+`Add(1024)`.
+
+`galaxy-audio.mjs` runs Update in this order:
+
+1. It takes `library.lock()` after the viewport test (`0x10609549`).
+2. It runs the channel logic.
+3. It calls the music section with the prologue's clamped dt.
+4. It releases the lock at the end (`0x1060abd6`).
+
+The zone reverb tail (§2.5) is still not translated.
+
+`script-audio-live.mjs`:
+
+- **Fields.** Reads the four PlayerPawn fields from the viewport actor through `runtime.readNamed`, and
+  writes SongSection and Transition through `runtime.writeNamed`.
+- **Config.** Takes UseDigitalMusic, UseCDMusic, MusicVolume, Latency and EffectsChannels from
+  `DeusEx.ini [Galaxy.GalaxyAudioSubsystem]`:
+  - Latency is clamped to 10..250 and EffectsChannels to 0..32. Both clamps are in `0x10605ad0`, the
+    PostEditChange body (vtable `+0x40`, which also calls SetVolumes at `0x10605b9e`), not in Init. Whether
+    construction reaches PostEditChange is not traced; the installed values are inside both ranges.
+  - `UseCDMusic=True` is refused with an error. The CD calls (`glxStopCDAudio`, `glxStartCDAudio`, the CD
+    volume `0x1060e9a0`) are not translated. The `+0x88c` byte is translated, because it steers the
+    transition whatever UseCDMusic says.
+- **Volume bytes.** Owns the subsystem's three volume bytes and shares them:
+  - with Update's category ratio, which now reads the live SoundVolume and SpeechVolume;
+  - with natives 268–270, which now reach the library. 268 and 269 call `setSampleVolume`; 270 runs
+    SetInstantMusicVolume.
+
+UMusic objects (`galaxy-music-objects.mjs`):
+
+- **A map's `LevelInfo.Song` import** reaches `PlayerPawn.Song` as the resource registry's export
+  reference. Its UMusic state is kept per reference.
+  - Its initial state is the original's after `UMusic::Serialize`: SavedPos is the negated position of
+    Data's compact count, `Num = Max = OriginalSize`, and Handle is 0.
+  - Load re-reads the package bytes when SavedPos is positive.
+- **A DynamicLoadObject Music** is a load-graph object. It uses the graph's `+0x28` record and lazy
+  loader. This path is written but not reached by a map yet.
+
+### 10.2 Corrections found while translating
+
+- **Library results in SetVolumes and SetInstantMusicVolume.** A nonzero result goes to `appFailAssert`
+  (lines `0x221`, `0x223`, `0x25c`; texts `0x106498fc`, `0x106498a4`, `0x10649948`), not to a log line.
+  The volumes passed are always 0..127, where the setters return 0.
+- **The SetVolumes sample volume** is not always 127. `sp = fild(+0x6b)·K` stays in a register. Under PC 64,
+  255·K is just below 1, so `ftol(sp·127)` is **126**; under PC 53 or 24 it is 127. The §7.3 step 2 value
+  ("sample 127") holds only for those control words. SetInstantSound/SpeechVolume store `float32(Speech·K)`
+  first and so give 127 under every control word.
+- **The music volume expression** is `(fade·nM)·127` in that order (`0x106062a4..0x106062af`), though the
+  assert text reads `127*NormMusicVolume*Max(MusicFade,0.f)`.
+- **`Data.Add(1024)`** (`0x1060a708..0x1060a735`) does `Num += 0x400`. If `Num > Max` (signed), it sets
+  `Max = Num + (3·Num)/8 + 32` (signed division: `cdq; and edx,7; sar 3`) and calls `FArray::Realloc(1)`.
+  After Serialize `Max = Num`, so a load always reallocates. Core's `FArray::Realloc` (`0x10145440`) is
+  `GMalloc->Realloc(Data, Max·ElementSize, "FArray")`.
+- **Engine Unload `0x1030cd90`.** If SavedPos (`+8`) is negative: `Num = Max = 0`, `Realloc(1)`, then
+  SavedPos is negated. Otherwise it does nothing.
+- **Under PC 24 the prologue's dt is rounded too.** The FSUB `appSecondsSlow() - [+0x880]`
+  (`0x1060959b`) rounds the elapsed time to 24 bits before the store.
+- **§8.7 in Play.** In Play's headless 00_Intro (not the original), about 14 s of frames gave no section
+  switch: the player is neither Conversation nor Interpolating there.
+
+### 10.3 Oracle
+
+`scripts/native-galaxy-audio-oracle.py GAME_ROOT CASES --music OUT [--modules DIR]` runs on the phase-1
+loader oracle's machine:
+
+- Galaxy.dll rebased, with Engine and Core.
+- glxInit's state section and `glxSetSampleVoices(16)` executed.
+- The `.data` snapshot restored per case.
+
+It calls the real Update `0x10609510` with these settings:
+
+- EffectsChannels idle channels, reset by Init's StopSound loop;
+- ShowFlags 0, so there is no ambient scan;
+- UseReverb 0, so the reverb tail compares equal and sends nothing.
+
+It also calls SetVolumes, SetInstantMusicVolume and `vtbl+0x70` (UnregisterMusic, as UMusic::Destroy
+calls it), each with the case's x87 control word.
+
+The fabricated inputs:
+
+- **Viewport Actor bytes:** `+0x670..+0x676`.
+- **Subsystem fields:** `+0x3c`, `+0x40`, `+0x60`, `+0x64`, `+0x69..0x6b`, `+0x888`, `+0x88c`, `+0x88d`,
+  `+0x900`.
+- **UMusic objects:**
+  - the real FLazyLoader vtable `0x104267fc`;
+  - an archive (SavedAr) over a stream that holds Data's compact count at SavedPos 0x40, then the bytes;
+  - Data either resident (SavedPos negative) or emptied.
+
+Real code runs for Engine's Load and Unload, its byte-array serializer `0x1030cca0` and Core's
+`FArray::Realloc`. The leaves are:
+
+- the critical sections and MSVCRT (phase 1);
+- appSecondsSlow on the case clock, with GTimestamp 0;
+- `GMalloc->Realloc` on a bump heap (new bytes filled with 0xcd, so the slack is recognisable);
+- GetFullName, `"Music <Pkg>.<Name>"`;
+- Logf, formatted and recorded;
+- appFailAssert, which aborts the op;
+- the archive's Serialize, CountBytes, Tell and Seek, and the compact-index operator.
+
+Tier 1 also makes every glx* function a recording leaf returning the case's scripted code. Tier 2 runs the
+real library on DX songs.
+
+Each op records, in order:
+
+- every glx call with its arguments and result;
+- for glxLoadMusic, its Mem block: tag `'MEMO'`, `0xc`, whose Data, the length, whether the first
+  OriginalSize bytes are the module, and the slack (1024 bytes the original never writes);
+- each voice `+0x0f` clear (from the store at `0x1060a83d`);
+- the break flag store (`0x1060a88d`);
+- the order read (`0x1060aa09`);
+- the UnregisterMusic and SetVolumes entries;
+- the lazy Load and Unload entries with SavedPos;
+- each `FArray::Realloc` with Num and Max;
+- the Logf lines;
+- faults.
+
+After each op it records:
+
+- MusicFade's bits, `+0x888`, `+0x88c`, `+0x88d`;
+- the Actor's `+0x674..0x676`;
+- the volume bytes;
+- each UMusic's Handle, SavedPos, Data, Num and Max;
+- tier 2 only: the library globals of §9, voices `+0x0d..+0x10`, and the slot counts.
+
+Instruction coverage is recorded with block hooks:
+
+| Body | Reached | Not reached |
+| --- | --- | --- |
+| Update music section `0x1060a50b..0x1060aa15` | 234/333 | glxStopCDAudio and glxStartCDAudio, and the exception handlers |
+| SetVolumes | 86/113 | the `< 0.0` clamp a byte cannot reach, the two appFailAssert tails, the CD branch |
+| SetInstantMusicVolume | 55/70 | the same three kinds |
+| UnregisterMusic | 65/106 | the instructions after the two appFailAssert calls (the leaf aborts there), the exception handlers |
+| Engine lazy Load | 50/51 | the null-`this` arm |
+| Engine lazy Unload | 34/34 | |
+
+### 10.4 Verification
+
+`scripts/validate-galaxy-music-update.mjs` builds the cases, runs the oracle (about 16 s), and replays every
+case through `createGalaxyAudio` + `createGalaxyMusic`, at the case's precision (0x037f → 64, 0x027f → 53,
+0x007f → 24). It compares every op's events and state; all are equal.
+
+**Tier 1: 711 cases.**
+
+Six families, each crossed with Transition 0..6 × Latency 10/40/250 (dt 1/60, plus jittered dt at
+Latency 40), × the three control words:
+
+- first start;
+- A→B;
+- A→A with a new section;
+- A→None;
+- current section 0xff;
+- new section 0xff.
+
+Special cases, also under the three control words unless marked:
+
+- a mid-fade flip back to the current song (no unregister, no reload);
+- a mid-fade flip to a third song;
+- a mid-fade Transition change;
+- UseDigitalMusic 0, at a first start and at A→B;
+- failures (0x037f only): glxLoadMusic returning 1, 2, 3 and 0x11; glxControlMusic 0x11; glxUnloadMusic 2;
+- large dt that jumps past the threshold, for Fade, FastFade and SlowFade;
+- unordered and out-of-range dt;
+- fade-edge cases: dt stepped by single ulps around the threshold, for Fade at Latency 10, 40 and 250, and
+  for FastFade and SlowFade at 40;
+- the same UMusic reloaded after an unregister (Load re-reads the archive);
+- CdTrack steering without UseCDMusic;
+- Transition 7, 200 and 255;
+- UMusic::Destroy: of the current song; mid-fade; of a non-current handled song (assert
+  `Music==CurrentMusic`); of None (assert `Music`);
+- a same-song restart from section 0xff;
+- the order write-back over 16 values;
+- a SetVolumes grid: MusicVolume {0, 1, 128, 153, 254, 255} × SoundVolume {0, 32, 204, 255} ×
+  SpeechVolume {0, 128, 255} × 11 MusicFade values (±0, 0.5, 1, 1.5, −0.1, a denormal, NaN, …) ×
+  UseDigitalMusic;
+- SetInstantMusicVolume over 18 dword values (low byte and clamp) × UseDigitalMusic.
+
+**Tier 2: 7 cases.** The real library runs Intro, Training, Title and Lebedev:
+
+- first start, then Destroy;
+- Intro→Training with a fade;
+- Intro section changes, including section 40 > song length 28, which the library refuses with 0x11 and
+  logs;
+- Lebedev→None;
+- Title→Intro→Title, a reload of Title;
+- Destroy mid-fade;
+- UseDigitalMusic 0.
+
+The replay feeds the translation the real library's results. The mirror library runs alongside, and its own
+results and modelled bytes are compared after every op: order, break flag, playing, module loaded, the
+`0x10698200` flag, the music and sample master/step/target. The mirror matches until it meets the refused
+section-40 control. It cannot know a song length, so it counts that call as uncertain and stops being
+compared for the rest of that case.
+
+**Totals:** 37,496 ops, 32,471 Update frames, 108,545 events, 215 mirror state checks.
+
+**Sensitivity.** Replaying 50 of the 0x037f cases at 53 bits fails all 50.
+
+**How the control words differ in the original.** These are the same programs; 243 scenarios run under all
+three words:
+
+| Against 0x037f | Scenarios differing | Sample volume | Music volume | MusicFade bits | Fade end frame |
+| --- | --- | --- | --- | --- | --- |
+| 0x027f | 210 | 210 (127 instead of 126) | 1 | 1 | 1 (a fade-edge FastFade case) |
+| 0x007f | 210 | 210 | 13 | 75 | 13 (fade-edge Fade cases end a frame later, FastFade ones a frame earlier) |
+
+The translation matches each control word at its own precision. Which word the game thread uses during
+Update is still open (§8.1). Play runs at 64, as galaxy-audio.mjs does.
+
+### 10.5 Play behaviour and its evidence
+
+`scripts/validate-galaxy-music-play.mjs` boots each map headless in its own process, on a simulated clock,
+with the HUD painted every frame (Galaxy Update follows it, `0x1038f638`).
+
+**00_Intro** (the mirror library):
+
+- **First frame.** One batch: SetVolumes (126, 76), glxLoadMusic of 1,843,231 + 1024 bytes, SetVolumes,
+  stop, clear voices 16..47, start, glxControlMusic(2, 0), break flag. Transition becomes 0, the Handle −1,
+  and Data is emptied. The log reads `Load music: Music Intro_Music.Intro_Music`.
+- **Idle frames.** No music ops follow. The only batch is MissionIntro's `SetInstantSoundVolume(32)`
+  (`setSampleVolume(127)`). SongSection is 255: the mirror's order, since it has no sequencer.
+- **Player start** (`game.reset()`) issues no library op. The reloaded LevelInfo holds the same Song
+  reference. The new PostLogin's Fade gives 65 SetVolumes frames, with the music volume falling 76 → 0,
+  then the restart batch with no unload or load. This is the original's LoadMap as §5.3 derives it: the
+  map package reloads in place, the music package stays loaded, and the collection keeps the UMusic the
+  new LevelInfo references.
+- **`dispose()`.** Issues glxStopMusic and glxUnloadMusic, each outside a lock, and clears `+0x888`.
+
+**00_Training** goes through the browser host's proxy (`createGame({musicLibrary})`). The first frame posts
+one encoded batch: the load+start ops with Training_Music's 1,449,937 + 1024 bytes. `order()` gives
+SongSection 0xff, and `dispose()` posts the unregister.
+
+**01_NYC_UNATCOIsland**, W held. The first frame loads LibertyIsland_Music and starts section 0. At tick
+1871, MeetPaul's state change runs UpdateDynamicMusic's `ClientSetMusic(Level.Song, 4, 255, MTRAN_Fade)`.
+That gives 64 fading frames, then section 4 restarts on the loaded module.
+
+**State digests.**
+
+- bench-sim's digests do not change: it never paints the HUD, so Galaxy Update never runs.
+- Play's `state-digest.mjs` digest changes from the first painted frame. A field diff of 00_Intro after 300
+  frames, against the same run with the section disabled, shows exactly two changed fields:
+  `JCDentonMale0.Transition` 3 → 0 and `SongSection` 0 → 255.
+- Any digest reference taken before phase 4 from a painted run is stale for those two fields. No checked-in
+  validator holds one.
+
+**Cost** (host timing, Linux host):
+
+- **Steady state** (Transition 0): a microbenchmark of lock, update and unlock gives 98–132 ns per frame;
+  in place it is 3–5 µs, which includes the timing wrapper.
+- **Transition frames:** median 29–38 µs. The song-load frame is 1.6–1.9 ms, for the copy of the module
+  into the grown Data buffer.
+- **Galaxy Update**, with and without the section, interleaved: 308–314 / 306–312 µs median on 00_Intro and
+  821–863 / 834–849 µs on Island, over two runs each. The difference is within noise; its sign flips between runs.
+
+### 10.6 Still open
+
+- The game thread's control word (§8.1).
+- The mirror's and the host proxy's song length: unknown until the library reports it.
+- **Same-song map changes.** The original keeps the UMusic and fades; Play disposes the runtime and reloads
+  without a fade.
+- **SetViewport's attach.** Its SetVolumes and its `Transition = 1` for a viewport actor with a Song are not
+  modelled. Play has no SetViewport, and NewMusic's SetVolumes precedes every load.
+- The load-graph UMusic path (DynamicLoadObject music).
+- The CD branch.
+- The zone reverb tail.
+
+**Rerun.**
+
+```
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-galaxy-music-update.mjs [--reuse] [--only NAME]
+node scripts/validate-galaxy-music-play.mjs [--map 00_Intro|00_Training|01_NYC_UNATCOIsland]
+```
