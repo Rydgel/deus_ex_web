@@ -8,7 +8,7 @@ import { auditAssert } from './precision-audit.mjs';
 import { execFileSync } from 'node:child_process';
 import { gameDirectory } from './game-directory.mjs';
 import { getAxes } from '../src/runtime/camera.mjs';
-import { coordsTransform } from '../src/runtime/volumetric-fog.mjs';
+import { coordsTransformExtended as coordsTransform } from '../src/runtime/volumetric-fog.mjs';
 import { coronaSeen, coronaFade, coronaIcon, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
 // ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
 const assert = auditAssert();

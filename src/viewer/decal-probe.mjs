@@ -23,3 +23,13 @@ export function decalProbe(game, { place = false, pawn = null } = {}) {
   return { surfList: [...read(shadow, 'SurfList')], hasDecal: read(shadow, 'bHasDecal'), lastRendered: read(shadow, 'LastRenderedTime'),
     time: read(level.actors[0], 'TimeSeconds'), records: level.decals?.store.count ?? 0 };
 }
+
+/** Validation only (validate-volumetric-fog-play.mjs and other checks of a
+ * view): move the player to `location` and set its ViewRotation, on the
+ * simulation side (sim-worker.mjs `call`, or the page with ?sim=inline). */
+export function placeProbe(game, { location, rotation }) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  runtime.farMoveActor(player, location, 0, 1);
+  runtime.writeNamed(player, 'ViewRotation', rotation);
+  return { location: runtime.readNamed(player, 'Location') };
+}

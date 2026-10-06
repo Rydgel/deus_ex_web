@@ -1,6 +1,7 @@
 # Volumetric fog (fog maps)
 
-Stage 4, 2026-10-02. Volumetric lights fill fog zones with lit haze. The
+Stage 4, 2026-10-02 (24-bit render-pass precision since 2026-10-06).
+Volumetric lights fill fog zones with lit haze. The
 single-player maps have 104 lights with `VolumeRadius > 0` and 67 `bFogZone`
 zones, each in 29 maps. This note records the original path. The fog-map
 computation is translated and oracle-exact, and Play draws it (see "Play").
@@ -94,129 +95,107 @@ Authority:
 
 ## Translation and verification
 
+Everything below runs inside the render pass, so it executes under x87
+precision control 24 ([render-pass precision](render-pass-precision.md)):
+every add, subtract, multiply and divide rounds to a 24-bit significand,
+with the x87's exponent range. The translation follows that since
+2026-10-06; until then it modelled 64-bit registers, which the original
+does not use here.
+
 `src/runtime/volumetric-fog.mjs` contains `coordsTransform`,
-`volumetricLight`, `sortVolumetricLights`, `fogMap` and `FOG_ATTENUATION`.
+`volumetricLight`, `sortVolumetricLights`, `fogMap`, `fogVertex` and
+`FOG_ATTENUATION`. The reference bodies run on the BigInt x87 model with
+each result rounded to 24 bits (`x87-pc24.mjs`, `p24add` and the others);
+every operand is a loaded float, the double constants 25.0 and 65536.0 or
+a small integer, all 24-bit values, so that is the PC 24 result.
+`coordsTransform` computes finite inputs in doubles rounded with `r24`
+(the 24-bit rounding with the wide exponent) and others on the BigInt
+model. ComputeFromActor's volumetric tail at 24 bits
+(`0x10b06baa–0x10b06c03`): `1/R` is rounded before it is squared
+(`fdivr` then `fld st0; fmul st1`), `|L|²` is a 24-bit sum when `fcomp`
+compares it with the stored R², and the colour-table step's `fsub 0.5f`
+rounds too.
 
 `validate-volumetric-fog.mjs` runs the unchanged Render.dll segments
-(`native-volumetric-fog-oracle.py`). ComputeFromActor runs from `0x10b06873`
+(`native-volumetric-fog-oracle.py`, control word `0x007f`; the light-manager
+tables at the init word `0x037f`). ComputeFromActor runs from `0x10b06873`
 and from `0x10b06a35` with a table buffer, skipping the GCache lookup. The
-fog loop runs over the same lights in depth order.
+fog loop runs over the same lights in depth order, then FLightManager::Fog
+over twelve mesh vertices per case.
 - **Coverage.** 120 random frames, light-map grids and 1–3 lights, with the
   early-out flag starting in either state.
-- **Result.** Every light field and colour-table byte, all 10,687 fog
-  texels (7,162 fogged, 80 surfaces with merged lights, 65 inside-volume
-  lights) and the final flag match.
+- **Result.** Every light field and colour-table byte, all 11,533 fog
+  texels (8,240 fogged, 80 surfaces with merged lights, 69 inside-volume
+  lights), the 1,440 vertex fog planes and the final flags match.
+- **The 64-bit model, measured.** Against the original at `0x007f`, the
+  previous translation differed in `1/R²` for 92 and `|L|²` for 71 of the
+  light infos and in 528 of the 960 vertex planes; its fog texels matched
+  on these cases. On the captured Play inputs below it differs in 41 (Bar),
+  78 (WanChai Market), 44 (Ship) and 335 (BatteryPark) of 41 million
+  texels, and in two final early-out flags.
+- **Transforms.** 20,000 transforms with magnitudes from 2⁻¹⁴⁰ to 2¹²⁰
+  give the same bits through the doubles and the BigInt model.
 
-**Rust core.** `native/script-vm/src/fog.rs` runs the same per-texel loop on
-the exact 80-bit `Ext` model.
+**Rust core.** `native/script-vm/src/fog.rs` runs the same per-texel loop,
+generic over three register models (`Reg`):
+- **`Single`**: native f32 arithmetic, which is the PC 24 result as long as
+  no product or quotient leaves binary32's normal range. A sum of floats
+  whose exact value is subnormal is exact, so only products and quotients
+  are tested: one at or below 2⁻¹²⁶ in magnitude (an exact zero included)
+  sets `bad`, and the texel reruns on `Wide` from the same incoming flag.
+  Overflow is excluded by bounds checked once per light (|L| ≤ 2³⁰, R² and
+  |L|² ≤ 2⁶², 1/R and 1/R² ≤ 1, brightness ≤ 2⁸) and per texel
+  (|P| ≤ 2³⁰): the largest intermediate is then below 2¹²⁶.
+- **`Wide`**: f64 values rounded by `p24.rs`'s `r24` after each operation,
+  exact for finite operands (the f64 rounding is innocuous before the
+  24-bit one, 53 ≥ 2·24 + 2; f64 subnormals are unreachable from floats in
+  these few operations).
+- **`Exact`**: the 80-bit `Ext` model with `Ext::round24` after each
+  operation, which also follows the x87's NaN and infinity rules. A light
+  with a non-finite word or a non-finite texel position runs on it.
 - **Interface.** `kernel.fog` in script-vm-kernel.mjs, wrapped by
-  `fogMapKernel`. The JavaScript keeps the per-light constants, colour tables
-  and the three grid transforms; the early-out flag persists in the module
-  like the original global.
-- **Check.** The same validator runs the Rust loop on the 120 oracle cases
-  and on 1,500 more surfaces against the JavaScript (137,827 texels). All
-  match.
+  `fogMapKernel`. The JavaScript keeps the per-light constants, colour
+  tables and the three grid transforms; the early-out flag persists in the
+  module like the original global. `fog.setExact` / `fog_set_exact` runs
+  every texel on `Exact` (FOG_EXACT=1 from Node), `fog.fallbacks` counts
+  non-finite texels, `fog.reruns` the texels `Single` handed to `Wide`.
+  `fog.check` (validation only) runs the loop on `Exact` with `Wide` and
+  `Single` compared on every texel from the same incoming flag.
 - **Memory.** Its statics (a 64K-texel output buffer) raise the kernel's
   `__heap_base` to `0x1931d0`, within the 2 MB object-arena reserve.
-
-**Fast path.** `texel_fast` in fog.rs evaluates each texel's operations in
-f64 and keeps a result only where it is already the Ext result. Otherwise
-it returns nothing and the texel reruns on Ext from the same incoming
-early-out flag. The fast path never writes the flag. The method is the one
-in `x87-fast.mjs` and lodmesh-kernel's `pose_double`.
-- **Rule.** The f64 value and the Ext value both lie within a bound E of
-  the exact real computed from the stored f32 inputs. An FST is taken only
-  when every real within E of the f64 value rounds to the same normal f32
-  (`certain_f32`; no zero, subnormal, top-binade or non-finite results). A
-  comparison of unstored values is taken only when its margin exceeds E.
-- **Bounds.** Each E is at least 1.5 times Higham's γₙ on the
-  absolute-value expression: n·2⁻⁵³ for f64 plus n·2⁻⁶⁴ for Ext, with n
-  the roundings on the deepest path. A 2⁻¹⁰⁰⁰ term covers f64 subnormals.
-  Products of two f32s are exact in both models.
-
-  | Value | Roundings | E |
-  |---|---|---|
-  | `dot` store | 2 | 4u·(\|pz·lz\| + \|py·ly\| + \|px·lx\|) |
-  | `pp` (unstored), its store | 2 | 4u·pp |
-  | early-out `pp·d² − dd > pp·R²` | 4 / 3 | 8u·(\|pp·d²\| + dd + pp·R²) |
-  | `h2` store | 4 | 8u·(\|d²\| + dd/pp) |
-  | chord value `v` (both branches) | 5 | 8u·\|v\|abs |
-  | first light `st(v·255)` | 6 | 10u·255·\|v\|abs |
-
-  Here u = 2⁻⁵³ and \|v\|abs is v's expression with every term taken
-  positive. Cancellation therefore falls back: a ray through the light's
-  centre (h2 ≈ 0), dot ≈ 0, or a short chord (`outer ≈ inner`).
-- **Exact by construction.** These are computed in native f32 and must be
-  normal and finite.
-  - `t = dot/length`, `s = t − length` and `R² − h2`: Ext rounds the
-    exact quotient or difference of two f32s to 64 bits, then FST rounds
-    it to 24. That double rounding is innocuous (64 ≥ 2·24 + 2). The
-    64-bit rounding changes such a result only where it lies more than
-    2⁻⁴⁹ (relative) from every f32 midpoint. A difference is exact in 64
-    bits unless the exponents differ by more than 40, and then lies within
-    2⁻³⁹ of the larger operand. A quotient is never a midpoint and lies at
-    least 2⁻⁴⁹ from one.
-  - `hn = st(h2·R⁻²)` and the later lights' `st(vf·255)`: each rounds an
-    exact product once, as the native multiply does.
-  - Comparisons of stored f32s are exact natively. The Ext compare quirks
-    (unordered, an infinity pair) need non-finite operands. A light with a
-    non-finite word runs on Ext, and so does a non-finite texel position.
-- **Decisions on v.** v's sign must be certain and nonzero. A −0 passes
-  `below(v, 0)`, stores as `0x80000000` and clamps to 1.0. `store(v) ≥ 1.0`
-  is decided against 1 − 2⁻²⁵, the midpoint that rounds to the even 1.0.
-  A light whose brightness word is 0 has v = ±0 on every chord, so its
-  texels always fall back.
-- **Interface.** `fog.setExact` / `fog_set_exact` runs every texel on Ext;
-  FOG_EXACT=1 sets it from Node through `fogMapKernel`. `fog.fallbacks`
-  counts fallbacks. `fog.check` (validation only) runs the loop on Ext,
-  runs the fast path on every texel from the same incoming flag, and counts
-  the texels where they differ.
 - **Check.** Two validators cover it.
-  - `validate-volumetric-fog.mjs` runs `fog.check` on all 1,620 surfaces,
-    with 0 differences. 19,728 of 275,830 texel-lights fall back, nearly
-    all on its brightness-0 lights. Its 120 oracle cases pass through the
-    fast path and again with FOG_EXACT=1.
+  - `validate-volumetric-fog.mjs` runs the Rust loop on the 120 oracle
+    cases and on 1,500 more surfaces against the JavaScript (137,442
+    texels), and `fog.check` on all 1,620: 0 differences.
   - `validate-volumetric-fog-fast.mjs` replays real Play inputs.
     `volumetric-fog-capture.mjs` builds a world headless, swaps
     `fog-pass.mjs`'s kernel for a recording wrapper through a resolve hook,
     and drives `world.fog.update` over 240 deterministic views per map
-    (cached in `.cache/volumetric-fog-inputs/`; `--capture` refreshes them). The maps are 02_NYC_Bar,
-    06_HongKong_WanChai_Market, 09_NYC_Ship and 02_NYC_BatteryPark. Views
-    sit inside and around the volumes and facing fog surfaces, plus the
-    PlayerStarts and validate-volumetric-fog-play's view. One frame in
-    eight sends every fog surface.
+    (cached in `.cache/volumetric-fog-inputs/`; `--capture` refreshes them).
+    The maps are 02_NYC_Bar, 06_HongKong_WanChai_Market, 09_NYC_Ship and
+    02_NYC_BatteryPark. Views sit inside and around the volumes and facing
+    fog surfaces, plus the PlayerStarts and validate-volumetric-fog-play's
+    view. One frame in eight sends every fog surface.
   - Each frame replays in Play's surface order with the flag carried. Over
-    45,050,740 texel-lights (447,910 surface maps), `fog.check` finds 0
-    differences in index or flag. The fast and Ext-only maps and final
-    flags are equal, and the replayed flag chain equals Play's.
-  - Fallbacks: Bar 111 (0.0015%), WanChai Market 366 (0.0048%), Ship 173
-    (0.0029%) and BatteryPark 120 (0.0005%).
-  - Many lights, by hand with `--maps`: 02_NYC_Underground (20 volumetric
-    lights, 242,620,360 texel-lights) and 03_NYC_AirfieldHeliBase (10,
-    116,158,220) show 0 differences, with 1,791 (0.0007%) and 222 (0.0002%)
-    fallbacks.
-  - No shipped map has an always-fallback light. The 88 maps hold 105
-    volumetric lights in 30 maps, and none has a zero VolumeBrightness or
-    LightBrightness byte.
+    45,050,740 texel-lights (447,910 surface maps, recaptured with the
+    24-bit Play), `fog.check` finds 0 differences in index or flag. The
+    fast and `Exact`-only maps and final flags are equal, and the replayed
+    flag chain equals Play's. No texel has a non-finite input; `Single`
+    reran 10 (Bar), 36 (WanChai Market), 21 (Ship) and 9 (BatteryPark)
+    texels on `Wide` (zero products).
+  - Many lights, by hand with `--maps`: 02_NYC_Underground (20
+    volumetric lights, 242,620,360 texel-lights) and 03_NYC_AirfieldHeliBase
+    (10, 116,158,220) show 0 differences and no non-finite input.
 - **Speed.** `validate-volumetric-fog-fast.mjs --bench` times the kernel
-  loop with its uploads over the 211 frustum-culled view frames, Ext only
-  against the fast path. It runs headless on the M2 Pro, interleaved, and
-  reports medians of 7.
-
-  | Map | Texel-lights per frame | Ext only (ms) | Fast (ms) | Speed-up |
-  |---|---|---|---|---|
-  | 02_NYC_Bar | 28,288 | 18.73 | 0.91 | 20.6× |
-  | 06_HongKong_WanChai_Market | 30,893 | 15.85 | 0.89 | 17.8× |
-  | 09_NYC_Ship | 22,209 | 6.67 | 0.40 | 16.8× |
-  | 02_NYC_BatteryPark | 86,930 | 18.31 | 0.98 | 18.8× |
-  | 02_NYC_Underground (`--maps`, 3 passes) | 768,547 | 136.46 | 5.34 | 25.6× |
-  | 03_NYC_AirfieldHeliBase (`--maps`, 3 passes) | 341,769 | 56.49 | 2.37 | 23.9× |
-
-  A whole headless `world.fog.update` on validate-volumetric-fog-play's
-  view (264 surfaces, 29,668 texels) drops from 21.0 to 2.2 ms. Most of
-  the rest is JavaScript per surface: the three grid transforms on the JS
-  x87 model, the light words and tables rebuilt and uploaded per surface,
-  and the atlas copy. Browser timings are not measured here.
+  loop with its uploads over the 211 frustum-culled view frames, `Exact`
+  only against the fast registers (headless, Linux host, interleaved,
+  medians of 7): Bar 26.9 against 0.81 ms, WanChai Market 21.7 against
+  0.73, Ship 9.8 against 0.40, BatteryPark 26.1 against 0.96. Against the
+  previous 64-bit loop's certified f64 fast path, interleaved in one
+  process over the same inputs (medians of 15): Bar 1.06 → 0.89 ms,
+  WanChai Market 0.85 → 0.76, Ship 0.49 → 0.45, BatteryPark 1.06 → 1.06.
+  `coordsTransform`'s grid transforms, three per surface, moved from the
+  BigInt model to doubles. Browser timings are not measured here.
 
 ## Play
 
@@ -240,9 +219,13 @@ in `x87-fast.mjs` and lodmesh-kernel's `pose_double`.
   at the light UVs, doubling the seven-bit channels as the light-map shader
   does.
 - **Check.** `validate-volumetric-fog-play.mjs` stands in 02_NYC_Bar's
-  Light90 volume. 919 fog-zone surfaces are collected, 264 in view get fog
-  maps (29,668 texels) through the Rust loop, and the frame changes with the
-  pass. The haze takes the light's blue and thickens with distance.
+  Light90 volume, in the default mode with the simulation in the worker
+  (`placeProbe` moves the player there; `--query sim=inline` runs it on the
+  page). 919 fog-zone surfaces are collected, the 7 that OccludeBsp draws
+  in that view get fog maps (8,704 texels) through the Rust loop, and the
+  frame changes with the pass (2026-10-06; before occlusion, 264 surfaces
+  in the frustum did). The haze takes the light's blue and thickens with
+  distance.
 
 Unverified or host choices, noted:
 - **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
@@ -319,6 +302,7 @@ tracker ([BSP occlusion](bsp-occlusion.md)).
 
 Precision: FLightManager::Fog runs in the render pass (24-bit). At
 `0x007f` its FPlanes differ from the `0x037f` results in 328 of 480
-components (cancellation, up to 1,219 ulps), and ComputeFromActor's
-volumetric constants differ too; `fogVertex` and the fog-map loop were
-validated at `0x037f` and are part of the render-pass precision audit.
+components (cancellation, up to 1,219 ulps). `fogVertex`, the fog-map loop
+and ComputeFromActor's volumetric constants now follow precision control
+24 and match the original at `0x007f` (see "Translation and
+verification"); `fogVertex` is not used in Play.

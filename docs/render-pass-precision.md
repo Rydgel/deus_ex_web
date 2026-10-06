@@ -128,9 +128,9 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 
 | Routine | Placement | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- |
-| ComputeFromActor volumetric tail `0x10b06873–0x10b068dd`, `0x10b06a35–0x10b06c1c` | pass | volumetric-fog oracle, argv[2] (0x037f) | validate-volumetric-fog | `volumetric-fog.mjs` `volumetricLight` | x87 model | **invRadiusSq 92, distanceSq 71** of ~240 lights |
-| Fog loop `0x10b073bb–0x10b07c44` | pass | same | same | JS `fogMap`; fog.rs `texel_index`/`texel_fast` | Ext 64-bit + certified f64 fast path | 0 of 10,687 texels (120 cases) |
-| FLightManager::Fog `0x10b02c00` | pass (DrawLodMesh `0x10b10a2f`) | fog oracle (0x037f); mesh-fog oracle (default **0x007f**, no validator) | validate-volumetric-fog | `fogVertex` (not in Play) | x87 model | **528 of 960** vertex planes |
+| ComputeFromActor volumetric tail `0x10b06873–0x10b068dd`, `0x10b06a35–0x10b06c1c` | pass | volumetric-fog oracle, **0x007f** since the move | validate-volumetric-fog | `volumetric-fog.mjs` `volumetricLight` | **PC 24** (x87-pc24.mjs) | was: invRadiusSq 92, distanceSq 71 of ~240 lights; **now 0** |
+| Fog loop `0x10b073bb–0x10b07c44`, the grid and light transforms | pass | same | validate-volumetric-fog, validate-volumetric-fog-fast | JS `fogMap`, `coordsTransform`; fog.rs `texel_index` over `Single`/`Wide`/`Exact` | **PC 24** | was: 0 of 11,533 oracle texels, 498 of 41 M captured Play texels; **now 0** |
+| FLightManager::Fog `0x10b02c00` | pass (DrawLodMesh `0x10b10a2f`) | fog oracle **0x007f**; mesh-fog oracle (default 0x007f, no validator) | validate-volumetric-fog | `fogVertex` (not in Play) | **PC 24** | was: 528 of 960 vertex planes; **now 0** |
 | Fog map draw (D3D, GLSL `fog-pass.mjs`) | pass | — | validate-volumetric-fog-play | fog-pass.mjs | channel doubling only | — |
 
 ### Meshes
@@ -169,7 +169,8 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 ## Status and plan
 
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
-dynamic light effects (other worktree), mesh fog's oracle default. The
+dynamic light effects (other worktree), mesh fog's oracle default, and on
+this audit's branch volumetric fog (2026-10-06). The
 families are moved one at a time, starting with what Play computes every
 frame; each keeps the JS reference, the Rust kernel and the GPU shader in
 agreement and switches its oracle default to `0x007f` when its validator

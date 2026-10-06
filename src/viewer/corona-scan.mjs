@@ -1,5 +1,5 @@
 import { getAxes } from '../runtime/camera.mjs';
-import { coordsTransform } from '../runtime/volumetric-fog.mjs';
+import { coordsTransformExtended as coordsTransform } from '../runtime/volumetric-fog.mjs';
 import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon } from '../runtime/coronas.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 

@@ -274,6 +274,18 @@ impl Ext {
         Self::load(self.store())
     }
 
+    /// The register value under precision control 24 (the render pass,
+    /// docs/render-pass-precision.md): the significand rounded to 24 bits,
+    /// nearest-even, the exponent kept. Applied to the 64-bit result of an
+    /// add, multiply, divide or square root of 24-bit operands it gives the
+    /// PC 24 result (64 >= 2*24 + 2).
+    pub fn round24(self) -> Self {
+        if self.special != 0 || self.sig == 0 {
+            return self;
+        }
+        Self::normalized(round_right(self.sig as u128, 40), self.exp + 40, self.sign)
+    }
+
     /// FSTL m64 kept in the model: the significand rounded to 53 bits.
     pub fn store_double(self) -> Self {
         if self.special != 0 || self.sig == 0 {

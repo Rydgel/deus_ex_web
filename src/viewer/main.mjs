@@ -10,7 +10,7 @@ import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
-import { decalProbe } from './decal-probe.mjs';
+import { decalProbe, placeProbe } from './decal-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
@@ -1059,6 +1059,20 @@ decalProbe(args) {
   if (simClient) return simClient.call('decalProbe', args);
   return game ? decalProbe(game, args) : null;
 },
+/** Validation only: decal-probe.mjs placeProbe (player location and view
+ * rotation) on the simulation side. */
+placeProbe(args) {
+  if (simClient) return simClient.call('placeProbe', args);
+  return game ? placeProbe(game, args) : null;
+},
+/** The page's fog pass (fog-pass.mjs): its last frame's counters and the
+ * fog meshes it drew. */
+fog() {
+  const fog = world?.fog;
+  return fog ? { stats: { ...fog.stats }, visibleMeshes: fog.root.children.filter(object => object.visible).length } : null;
+},
+/** Show or hide the fog pass (validation: a frame with and without it). */
+showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
 /** The last drawn frame's decal fragments (decal-draw.mjs, decal-scene.mjs):
  * per texture the triangles the simulation clipped, and those drawn. */
 decals() {
