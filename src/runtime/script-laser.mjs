@@ -1,9 +1,14 @@
 // DeusEx LaserIterator beams (docs/lasers.md): ULaserIterator::CurrentItem
-// (DeusEx.dll 0x1001a1a0) on the x87 model, and the render-iterator protocol
-// that draws a LaserEmitter's beam as LaserProxy segments.
-import { rotatorToVector, vectorToRotator } from './script-decoration-primitives.mjs';
+// (DeusEx.dll 0x1001a1a0), and the render-iterator protocol that draws a
+// LaserEmitter's beam as LaserProxy segments. CurrentItem runs from
+// SetupDynamics, inside the render pass, so it and Core's UnsafeNormal and
+// FVector::Rotation run at x87 precision control 24
+// (docs/render-pass-precision.md): the x87 model here rounds every result to
+// 24 bits (x87-pc24.mjs), the double constants included.
+import { rotatorToVector } from './script-decoration-primitives.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87storeDouble, x87sqrt, x87cmp } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87neg, x87store, x87storeDouble, x87cmp } from './script-vm.mjs';
+import { p24add as x87add, p24mul as x87mul, p24div as x87div, p24sqrt as x87sqrt, r24prod } from './x87-pc24.mjs';
 
 const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
 const ONE = x87double(1), ZERO = x87double(0);
@@ -20,6 +25,19 @@ function unsafeNormal([x, y, z]) {
 }
 
 const lessOrUnordered = c => c === 'lt' || c === 'un';
+
+/** Core FVector::Rotation (0x10144390) at 24 bits: yaw `ftol(atan2(y, x)·K)`,
+ * pitch `ftol(atan2(z, √(y² + x²))·K)` with K the embedded double
+ * 10430.219195527361 (0x10178050), the sum and appSqrt's FSQRT at 24 bits and
+ * each product rounded once from the exact value. FPATAN (unaffected by
+ * precision control) is the host's Math.atan2, as in
+ * script-decoration-primitives.mjs vectorToRotator. */
+function vectorToRotator24(vector) {
+  const [x, y, z] = vector.map(Math.fround), K = 10430.219195527361;
+  if (![x, y, z].every(Number.isFinite)) throw new Error('Original nonfinite vector rotation is not implemented');
+  const root = st(x87sqrt(x87add(x87mul(ld(y), ld(y)), x87mul(ld(x), ld(x)))));
+  return [Math.trunc(r24prod(Math.atan2(z, root), K)) | 0, Math.trunc(r24prod(Math.atan2(y, x), K)) | 0, 0];
+}
 
 /** ULaserIterator::CurrentItem on a plain iterator state (mutated in place):
  * {beams: 8 × {active, location, rotation, length, numSegments}, index,
@@ -81,7 +99,7 @@ export function laserCurrentItem(state, ownerLocation, frand) {
     const dy = st(sub(ld(y), ld(pl[1]))), dx = st(sub(ld(x), ld(pl[0])));
     const nzExt = x87add(dz, ld(z)), ny = st(x87add(ld(dy), ld(y))), nx = st(x87add(ld(dx), ld(x)));
     const nz = st(nzExt);
-    rotation = vectorToRotator([st(sub(ld(pl[0]), ld(nx))), st(sub(ld(pl[1]), ld(ny))), st(sub(ld(pl[2]), nzExt))]);
+    rotation = vectorToRotator24([st(sub(ld(pl[0]), ld(nx))), st(sub(ld(pl[1]), ld(ny))), st(sub(ld(pl[2]), nzExt))]);
     state.prevLoc = [nx, ny, nz];
     state.prevRand = n;
   }

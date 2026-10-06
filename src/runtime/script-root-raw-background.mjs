@@ -11,11 +11,16 @@
  * An XClipRect is the six dwords of XWindow +0xd4: originX, originY, clipX,
  * clipY, clipWidth, clipHeight. Rects are kept as raw u32 bits (the original
  * copies them with rep movsd); the arithmetic follows each fld/fadd/fsub/fstp
- * on the x87 model, keeping the values the original holds on the FPU stack
- * unrounded. Checked against the DLL by scripts/validate-root-raw-background.mjs.
+ * on the x87 model, keeping the values the original holds on the FPU stack in
+ * the register. DrawRawBackground runs from PaintWindows, inside the render
+ * pass, so each FADD and FSUB rounds to 24 bits (x87 precision control 24,
+ * x87-pc24.mjs; docs/render-pass-precision.md) and those register values are
+ * 24-bit. Checked against the DLL at 0x007f by
+ * scripts/validate-root-raw-background.mjs.
  */
 import {O, ROOT, bottomChild, higherSibling} from './script-window-tree-natives.mjs';
-import {x87load, x87add as A, x87neg as N, x87store, x87cmp} from './script-vm.mjs';
+import {x87load, x87neg as N, x87store, x87cmp} from './script-vm.mjs';
+import {p24add as A} from './x87-pc24.mjs';
 import {gcDrawPattern} from './script-gc-draw-pattern.mjs';
 import {gcDrawStretchedTexture} from './script-gc-draw-stretched-texture.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';

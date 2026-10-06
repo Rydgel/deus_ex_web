@@ -172,10 +172,13 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         filter(lightRecord(actor));
       }
     },
+    /** ComputeFromActor's camera-space location (TransformPointBy of the
+     * frame coords, 0x10b06035-0x10b06095) at the render pass's 24 bits:
+     * `(d.x·A.x + d.y·A.y) + d.z·A.z` with d = P − Origin. */
     toCamera(point) {
       const { origin, axes } = frame;
-      const dx = point[0] - origin[0], dy = point[1] - origin[1], dz = point[2] - origin[2];
-      return axes.map(axis => f(dx * axis[0] + dy * axis[1] + dz * axis[2]));
+      const dx = f(f(point[0]) - origin[0]), dy = f(f(point[1]) - origin[1]), dz = f(f(point[2]) - origin[2]);
+      return axes.map(axis => f(f(f(dx * axis[0]) + f(dy * axis[1])) + f(dz * axis[2])));
     },
     /** SetupForActor for one DrawLodMesh pass of `actor`: the selected
      * lights, ambient and ScaleGlow, the actor poly flags and the unlit

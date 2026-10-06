@@ -264,6 +264,53 @@ modulated faces it then emits `pow(2·src, g)/2`, which blends to
 visible bright band across every face. Translucent faces are exact there
 only for black or white sources.
 
+## Precision: the render pass's 24 bits
+
+DrawLodMesh, SetupForActor, Light and D3DDrv's DrawGouraudPolygon run inside
+the render pass, under x87 precision control 24
+([render-pass precision](render-pass-precision.md)). Since 2026-10-06 the
+translation follows it: one binary32 operation per x87 operation, double
+constants rounded once from the exact value. From the instructions:
+- **Face normal** (`0x10b0fe60–0x10b0ff85`): `a = p2 − p0` and `bx` on the
+  stack, `by`, `bz` stored, `n = b × a`, `((n.x² + n.y²) + n.z²) + ε`. The
+  back-face dot (`0x10b0ffa3–0x10b0ffbb`) sums `(x + z) + y`, times
+  Frame.Mirror.
+- **Vertex normal** (`0x10b10863–0x10b1090f`): `((x² + y²) + z²) + ε`, the
+  scaled components, `W = (P.x·n.x + P.y·n.y) + P.z·n.z`.
+- **Light** (`0x10b027f0`): every step of the x87 reference rounds to 24
+  bits; `ScaleGlow·1.4` rounds the exact product of the double 1.4.
+- **SetupForActor**: the candidate distance `(dz² + dy²) + dx²` of 24-bit
+  differences, `R²` rounded before the compare, the key
+  `((1 − √d²/R)·brightness)·1024` (`0x10b090a7–0x10b09194`); the glow
+  `AmbientGlow·(1/255)` or `fsin(CurrentTime·8)·0.2 + 0.25` (doubles,
+  `0x10b08da6–0x10b08dde`); the fade `tagFade·(1/255)` kept on the stack for
+  the colour products (`0x10b097ed–0x10b0980c`); FGetHSV and ComputeFromActor
+  as on light maps ([moving lights](dynamic-lighting.md) "Precision"); the
+  camera-space light location is TransformPointBy at 24 bits; Blink's
+  `TimeSeconds·2293760` rounds before the division.
+- **D3D diffuse**: unchanged (`L·1.0·255` has one rounding either way).
+
+`lightVertexX87` runs the reference on the BigInt model with each result
+rounded to 24 bits; `lightVertex`, the kernel's `light_vertex`/
+`light_mesh_job`, meshlight.rs `ml_select` and the GPU passes are binary32.
+
+Evidence at `0x007f` (the mesh-light oracle's default now, tables at
+`0x037f`): `validate-mesh-lighting`: the light-manager tables, 400 face and
+400 vertex normal cases, 2,049 D3D diffuse cases, 52 SetupForActor calls
+(220 light infos: ambient, camera-space location, 1/R, colour; visibility
+caches) and 1,248 lit vertices match; `lightVertex` equals the reference on
+22,048 vertices. The 64-bit translation differed in 278 face and 208 vertex
+normal cases and 1,545 of 3,744 Light channels (no D3D byte).
+`validate-mesh-lighting-play` (24 live Training passes, 100 lights, 2,520
+vertices) and `validate-gpu-mesh` (Training and Island: 227,928 pose
+components and 701,505 colour channels equal to the CPU kernels) pass.
+Cost: the kernel's `light_speed` bench (800 vertices, 8 lights, native,
+five alternating runs) went from 14.98 to 10.51 ns per vertex-light.
+
+The environment-mapping normals and UVs (`mesh-environment.mjs`, the GPU's
+`ENVIRONMENT_UV`) keep their f64 form within the stated tolerance; they are
+not moved.
+
 ## Wasm translation boundary
 
 The September 28 Island profile attributed about 19 ms/frame specifically to

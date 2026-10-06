@@ -66,10 +66,11 @@ stored; they are refined with a float-float Newton step. Subnormal results
 may flush to zero on the GPU; none of the compared quantities is subnormal in
 practice, and the validator would show it.
 
-The kernels emulate x87 extended intermediates (GetFrame) or use f64
-intermediates (lighting). The shaders reproduce each of those intermediates
-as a float-float pair (about 48 significant bits) and round to f32 exactly
-where the CPU stores to f32. A float-float value differs from the 64-bit x87
+GetFrame and the lighting run at the render pass's precision control 24
+(since 2026-10-06, [lodmesh-wasm](lodmesh-wasm.md) "Precision control 24",
+[mesh lighting](mesh-lighting.md) "Precision"): the passes are one binary32
+operation per x87 operation, each through B(); float-float pairs remain only
+inside `divRN`, the correctly rounded division. A float-float value differs from the 64-bit x87
 or 53-bit f64 intermediate only below its 48th bit, so the f32 store agrees
 except when the exact value lies within about 2^-48 relative of an f32
 rounding boundary.
@@ -227,31 +228,37 @@ itself the first GetFrame.
 
 ## Face, vertex and corner passes: DrawLodMesh lighting on the GPU
 
-These reproduce `light_mesh_job` in `native/lodmesh-kernel/src/lib.rs`:
+These reproduce `light_mesh_job` in `native/lodmesh-kernel/src/lib.rs`, at
+the render pass's precision control 24 since 2026-10-06 (one binary32
+operation per x87 operation, each through B(); [mesh lighting](mesh-lighting.md)
+"Precision"):
 
-* camera point: `st(Σ (p − o)·axis)` with the differences and products exact
-  (float-float), one rounding, as `camera_component`;
-* face normal: `a = p2 − p0` and `bx = p0x − p1x` unrounded, `by`, `bz`
-  stored, `n = st(b × a)` per component with its products and difference in
-  float-float, `scale = tableRsqrt(st(|n|² + ε))`, `face = n·scale` (f32);
-  `ε = 0x3a83126f`;
-* drawn: not `PF_Invisible` and (`PF_TwoSided` or `face·p0 < 0`, the dot
-  product in float-float);
+* camera point: TransformPointBy's `((p − o).x·A.x + (p − o).y·A.y) +
+  (p − o).z·A.z`, as `camera_component` (a host stage: the original's
+  GetFrame composes the view into its matrix);
+* face normal: `a = p2 − p0`, `b = p0 − p1`, `n = b × a` with each product
+  and difference rounded, `scale = tableRsqrt(((n.x² + n.y²) + n.z²) + ε)`,
+  `face = n·scale`; `ε = 0x3a83126f`;
+* drawn: not `PF_Invisible` and (`PF_TwoSided` or
+  `(face.x·p0.x + face.z·p0.z) + face.y·p0.y < 0`);
 * vertex normal: f32 sums of the face normals in ascending face order,
-  `scale = tableRsqrt(st(|N|² + ε))`, plane `(st(N·scale), st(p·N·scale))`
-  with the unrounded scaled components, as the kernel does;
-* `Light`: per light `dist2 = st(dxe·dx + dy² + dz²)` (float-float),
-  `dist = tableSqrt(dist2)`, `factor = 1 − dist/R`, the diffuse and mirrored
-  specular terms and the colour accumulation with the kernel's f32 stores,
-  f64 intermediates as float-float; `min(1, sum·ScaleGlow·1.4 + ambient)`;
+  `scale = tableRsqrt(((N.x² + N.y²) + N.z²) + ε)`, plane `n = N·scale` and
+  `W = (P.x·n.x + P.y·n.y) + P.z·n.z`;
+* `Light`: per light `dist2 = (dx² + dy²) + dz²`, `dist = tableSqrt(dist2)`,
+  `factor = 1 − dist/R`, the diffuse and mirrored specular terms and the
+  colour accumulation, each operation binary32, the two quotients correctly
+  rounded (`divRN`: the float-float quotient, then one step toward the exact
+  remainder when it reaches half the spacing); `min(1, sum·glow + ambient)`
+  with `glow = ScaleGlow·1.4` rounded once from the exact product on the CPU
+  (parameter F10.w);
 * diffuse byte: `FISTP(st(L·scale·255))`, nearest-even, `scale =
   st(255·st(1/255))`, as `diffuse_channel`.
 
 `tableSqrt` and `tableRsqrt` are the light manager's tables
 (`squareRootTable`, `rsqrtTables`), uploaded as integer textures and indexed
 by the float's bits exactly as the kernel does. Because they index by bits,
-their inputs are the values that must agree bit for bit; that is why the
-sums before them are float-float.
+their inputs are the values that must agree bit for bit, which binary32
+operations through B() give.
 
 **Corner rules** (the kernel's final loop), per corner `(face i, vertex v)`
 with `flags = faceFlags | actorFlags`: `PF_Modulated` gives colour 1; a

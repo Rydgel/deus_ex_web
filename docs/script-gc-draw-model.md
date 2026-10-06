@@ -88,9 +88,22 @@ In-place mutation of eight caller stack slots `{x, y, w, h, u, v, ul, vl}`:
 3. All comparisons are x87 `fcomp` condition-code tests: **unordered (NaN)
    operands skip the branch** rather than taking it — the JS model encodes
    this with `!(a >= b)` / explicit NaN-skipping forms, not `!(a <= b)`.
-   Every stored slot is `fstp f32` (single rounding); intermediates stay in
-   extended precision — `Math.fround` on stores plus f64 intermediates is
-   oracle-verified bit-exact on every emitted integer.
+   Every stored slot is `fstp f32`. The GC draws from PaintWindows, inside
+   the render pass, under x87 precision control 24
+   ([render-pass precision](render-pass-precision.md)): every FADD, FSUB,
+   FMUL and FDIV rounds to 24 bits, so the values the body keeps on the
+   stack (the clip deltas, the right and bottom edges, the texture-edge end)
+   are 24-bit register values. Since 2026-10-06 `gcClipTile` and gc.rs
+   `clip` round each operation once (`r24`; the FILD'd USize/VSize, an int
+   that can pass 24 bits, through `r24sum`), in the body's order
+   (`0x1002a4f0–0x1002a814`). All 49 GC validators pass at `0x007f` (the
+   probes' default now); against `0x037f` only DrawTexture's `frac-edge`
+   differs. `GC_NATIVE=verify` over validate-island-conversation's 7,137
+   HUD frames found no difference between gc.rs and the JavaScript. Cost:
+   the JavaScript clip and eight conversions went from 0.11 to 0.27 µs per
+   tile (Node, interleaved); Island's headless HUD paint with gc.rs, 5.65
+   against 5.72 ms per frame (three alternating processes, within their
+   0.9 ms spread).
 
 ## Sink `0x1002a820` → the DrawTile boundary
 
@@ -115,7 +128,11 @@ Coordinate conversion is MSVCRT `_ftol` (`0x78004dc1`) reached through IAT
 thunk `0x1005480a`.  The shipped MSVCRT `_ftol` does `fnstcw; or ah,0xc;
 fldcw; fistp qword; fldcw` — it forces RC=truncate, so conversion is
 **`trunc(value + 0.1)`**, NOT round-to-nearest.  `+0.1` is the f64 constant
-at `0x1005e470` (`0x3fb999999999999a`).
+at `0x1005e470` (`0x3fb999999999999a`), added by `fadd qword`
+(`0x1002a935` and seven more): at precision control 24 that sum rounds once
+to 24 bits (`r24sum`), so a slot within half a 24-bit ulp below an integer
+minus 0.1 converts to the integer (DrawTexture's `frac-edge` case: 16, where
+the 64-bit sum gives 15).
 
 ```
 X  = f32( trunc(clippedX + 0.1) * hMultiplier )   // imul, then i32→f32
@@ -229,10 +246,12 @@ helper's pixel-tracking mode, not proportional UV.
   is implemented per the body for the other draws; its branches are
   oracle-covered indirectly by proportional-mode equivalents only — flagged
   honestly as the one path with no DrawTexture-level coverage.
-- Extended-precision x87 intermediates are approximated by f64 with f32
-  stores; every emitted integer is proven bit-exact by the oracle, but a
-  pathological extended-precision-boundary input could in principle diverge
-  without a case covering it.
+- The clip helper and the conversions are translated at 24 bits (above).
+  DrawText's own glyph clip, its alignment arithmetic, DrawBorders' band
+  scaling and GetTextExtent keep f64 intermediates with f32 stores: they
+  match the GC probes at `0x007f` and `0x037f` on every validator case, but
+  are not re-derived operation by operation at 24 bits (open item in
+  render-pass precision).
 - **`DrawActor` (1288) is intentionally unimplemented.**  It enters the 3D
   mesh-rendering path — `DrawActor` draws an `Actor` through the render
   interface's mesh pipeline, not the 2D tile emitter — so it is the

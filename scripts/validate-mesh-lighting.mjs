@@ -240,9 +240,10 @@ for (const [s, entry] of scenes.entries()) {
   const manager = createMeshLightManager(), expectedFrames = reference.setups[s];
   const lightObjects = new Map([...entry.lights.values()].map(light =>
     [light.id, { actor: light.id, index: light.index, location: light.location, values: light.values }]));
+  // ComputeFromActor's TransformPointBy at the render pass's 24 bits.
   const camera = point => {
-    const d = point.map((c, i) => c - entry.origin[i]);
-    return [entry.axes.x, entry.axes.y, entry.axes.z].map(axis => f(d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]));
+    const d = point.map((c, i) => f(f(c) - f(entry.origin[i])));
+    return [entry.axes.x, entry.axes.y, entry.axes.z].map(axis => f(f(f(d[0] * axis[0]) + f(d[1] * axis[1])) + f(d[2] * axis[2])));
   };
   for (const [frameIndex, frame] of entry.frames.entries()) {
     const expected = expectedFrames[frameIndex], label = `${entry.name} frame ${frameIndex}`;

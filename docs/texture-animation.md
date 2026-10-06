@@ -78,13 +78,30 @@ list's zone actor (`+0x34`). The BSP occlusion pass (`0x10b173d0`) sets it:
 (retail Zones at `+0x104`, stride `0x18`) or the LevelInfo. `PF_SmallWavy`
 (`0x2000`) follows; no map has a wavy surface.
 
-`surfacePan` (texture-animation.mjs) translates the pan.
+`surfacePan` (texture-animation.mjs) translates the pan. DrawFrame runs
+inside the render pass, under x87 precision control 24
+([render-pass precision](render-pass-precision.md)), so since 2026-10-06
+each of the three FMULs (`speed·time`, `·35f`, `·256.0`), the `·(1/256)`
+and the FADD round to 24 bits with the register's wide exponent
+(`x87-pc24.mjs`), and `_ftol` truncates that value.
 `scripts/validate-native-surface-pan.mjs` runs that instruction range of
 Render.dll on fabricated surfaces, zones and levels
-(`native-surface-pan-oracle.py`; msvcrt `_ftol` is the truncating x87
-sequence of the mesh-light oracle). 400 cases match as bits: every flag
-combination, int16 pans, speeds and times with zeros, infinities, NaN and
-products past the int32 range. Without the `0x3ffff` mask, 238 fail.
+(`native-surface-pan-oracle.py`, control word `0x007f`, `ORACLE_CW`
+overrides it; msvcrt `_ftol` is the truncating x87 sequence of the
+mesh-light oracle). 400 cases match as bits: every flag combination, int16
+pans, speeds and times with zeros, infinities, NaN and products past the
+int32 range. Without the `0x3ffff` mask, 238 fail. The 64-bit translation
+failed 240 of the 400 at `0x007f` (the `speed·time·35` product's rounding
+moves the truncated pan), and the 24-bit one fails the same 240 against
+`0x037f`. Cost (Node, seven interleaved rounds over 1,000 surfaces, U and
+V panned): median 1.73 µs per surface before, 1.49 µs at 24 bits.
+
+The texture ticks (Update, Tick, ConstantTimeTick) keep the 64-bit model:
+at `0x007f` they matched the oracle on all 3,988 Get calls, but they are
+reached both from DrawFrame and from UTexture::Lock, and `now − last` (two
+doubles) can round differently at 24 bits than through 64 bits and a float
+store; which control word each caller runs under is not traced (open item
+in render-pass precision).
 
 ## Play
 
@@ -119,7 +136,10 @@ carry an animated texture; animated textures appear only on BSP surfaces
 (census 2026-10-06, scratch scripts not kept).
 
 `scripts/validate-texture-animation-play.mjs [--map]` loads a map in
-headless Chromium. Training's 12 animated heads (Island's 4) advance, each
-change follows the chain's AnimNext, and every material draws the shown
-frame. Each panned group's offset equals surfacePan for the frame's
-TimeSeconds and zone (Training's SkyZoneInfo1, Island's SkyZoneInfo3).
+headless Chromium, with the simulation in the worker (the default;
+`--query sim=inline` runs it on the page). Training's 12 animated heads
+(Island's 4) advance, each change follows the chain's AnimNext, and every
+material draws the shown frame. Each panned group's offset equals
+surfacePan for the pan inputs the frame carried from the simulation
+(sim-session.mjs `frame.pan`: a running TimeSeconds and the zone's live
+speeds; Training's SkyZoneInfo1, Island's SkyZoneInfo3).

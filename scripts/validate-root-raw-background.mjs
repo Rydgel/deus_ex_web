@@ -8,12 +8,15 @@
  * zero and negative extents, infinities, NaN, signed zeros), the letterbox
  * ConWindowActive sets with SetRenderViewport, and window trees mixing
  * bDrawRawBackground, visibility and nesting. */
-import assert from 'node:assert/strict';
+import { auditAssert } from './precision-audit.mjs';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {subtractClipRect, rawBackgroundClipList} from '../src/runtime/script-root-raw-background.mjs';
 import {gameDirectory} from './game-directory.mjs';
+// The oracle runs at the render pass's 0x007f; ORACLE_CW=0x037f measures the
+// other word (precision-audit.mjs).
+const assert = auditAssert();
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const python = process.env.NATIVE_PROBE_PYTHON;
@@ -111,7 +114,7 @@ cases.forEach((c, i) => {
   else { const {W, root: rootWin} = mockWindows(c); got = rawBackgroundClipList(W, rootWin); }
   const want = results[i];
   rects += want.length; if (want.length) nonEmpty++;
-  if (hex(got) !== hex(want))
-    assert.fail(`case ${i} (${c.kind}) differs\n  js:     ${hex(got)}\n  native: ${hex(want)}\n  case: ${JSON.stringify(c)}`);
+  assert.equal(hex(got), hex(want), `case ${i} (${c.kind}) differs`);
 });
 console.log(JSON.stringify({ok: true, cases: cases.length, nonEmpty, rects}));
+if (assert.enabled) assert.report('validate-root-raw-background');

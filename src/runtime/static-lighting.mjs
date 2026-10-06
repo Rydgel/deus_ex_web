@@ -1,9 +1,13 @@
 /** Static lights on BSP light maps through Render.dll's light-manager path
- * (docs/static-lighting.md). */
+ * (docs/static-lighting.md). SetupForSurf and everything it calls run inside
+ * the render pass, under x87 precision control 24
+ * (docs/render-pass-precision.md): float operations are binary32 ones
+ * (`f(a op b)`), double constants take x87-pc24.mjs's exact rounding. */
 import { fistp, normalLightTable, surfaceLightClass, movingLightConstants, movingLightRect, normalLightIncidence,
   normalLightSpatial, nonIncidenceSpatial, colorTableEntry } from './dynamic-lighting.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87store, x87ftol, x87cmp } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87neg, x87store, x87ftol, x87cmp } from './script-vm.mjs';
+import { p24mul, p24add, p24div, r24sum, r24prod } from './x87-pc24.mjs';
 import { rotatorSin } from './coords.mjs';
 
 const f = Math.fround;
@@ -105,12 +109,13 @@ export function tableRsqrt(value) {
   return f(RSQRT.mantissa[(bits >>> 13) & 0x3ff] * RSQRT.exponent[bits >>> 23]);
 }
 
-/** The spot body's cone constants (0x10b04ffc-0x10b05053): c = 1 -
- * LightCone/256 on the stack, 1/(1-c) stored, then c/(1-c) and c². */
+/** The spot body's cone constants (0x10b05002-0x10b05053) at 24 bits:
+ * c = 1 − LightCone/256 on the stack, 1/(1−c) stored and kept, then
+ * (1/(1−c))·c and c². */
 export function spotConstants(cone) {
-  const c = x87add(x87double(1), x87neg(x87mul(x87int32(cone & 255), x87double(0.00390625))));
-  const inverse = x87div(x87double(1), x87add(x87double(1), x87neg(c)));
-  return { k4: x87store(inverse), k14: x87store(x87mul(inverse, c)), k10: x87store(x87mul(c, c)) };
+  const c = p24add(x87double(1), x87neg(p24mul(x87int32(cone & 255), x87double(0.00390625))));
+  const inverse = p24div(x87double(1), p24add(x87double(1), x87neg(c)));
+  return { k4: x87store(inverse), k14: x87store(p24mul(inverse, c)), k10: x87store(p24mul(c, c)) };
 }
 
 /** Spot spatial function 0x10b04f80 (LE_StaticSpot, LE_Spotlight). `axis`
@@ -119,32 +124,32 @@ export function spotConstants(cone) {
  * illumination: the falloff index FISTP(float(d²)·rr2) (zero at 4096 and
  * above), zero unless the axis dot is positive and dot² exceeds d²·c²; then
  * s = (rsqrt(d²)·dot·k4 − k14) and the byte is the low byte of
- * FISTP(float(s²·table·illumination·incidence) − 0.5). Displacements and
- * sums follow the float stores in doubles; the s chain runs on the x87
- * model. */
+ * FISTP(float(s²·table·illumination·incidence) − 0.5). At 24 bits every
+ * operand is a float or a byte, so each step is a binary32 operation
+ * (0x10b0517b-0x10b05243); the cone test compares the stored d²·c² and dot²
+ * products. */
 export function spotLightSpatial(rect, grid, location, constants, write, illumination, { cone, axis }) {
   const { minU, maxU, minV, maxV } = rect, { rr2, incidence } = constants;
   const { k4, k14, k10 } = spotConstants(cone), table = NORMAL;
   const illum = typeof illumination === 'number' ? () => illumination : (u, v) => illumination.bytes[v * illumination.stride + u];
   const [sx, sy, sz] = grid.start, [ux, uy, uz] = grid.stepU, [vx, vy, vz] = grid.stepV;
   const [lx, ly, lz] = location, [ax, ay, az] = axis;
-  const K4 = x87load(k4), K14 = x87neg(x87load(k14)), INC = x87load(incidence);
   let rowX = f(f(f(minV * vx) + sx) + f(minU * ux));
   let rowY = f(f(sy + f(minV * vy)) + f(minU * uy));
-  let rowZ = x87store(x87add(x87add(x87mul(x87int32(minV), x87load(vz)), x87load(sz)), x87mul(x87int32(minU), x87load(uz))));
+  let rowZ = f(f(f(minV * vz) + sz) + f(minU * uz));
   for (let v = minV; v < maxV; v++) {
     let dx = f(rowX - lx), dy = f(rowY - ly), dz = f(rowZ - lz);
     for (let u = minU; u < maxU; u++) {
       let byte = 0;
       const light = illum(u, v);
       if (light) {
-        const sum = dz * dz + dy * dy + dx * dx, distance = f(sum), index = fistp(f(sum * rr2));
+        const distance = f(f(f(dz * dz) + f(dy * dy)) + f(dx * dx)), index = fistp(f(distance * rr2));
         if (index >>> 0 < 0x1000) {
-          const dot = az * dz + ay * dy + ax * dx, dot32 = f(dot);
-          if (dot > 0 && distance * k10 < dot32 * dot32) {
-            const s = x87add(x87mul(x87mul(x87load(tableRsqrt(distance)), x87load(dot32)), K4), K14);
-            const value = x87store(x87mul(x87mul(x87mul(x87mul(s, s), x87load(table[index])), x87int32(light)), INC));
-            byte = fistp(value - 0.5) & 255;
+          const dot = f(f(f(az * dz) + f(ay * dy)) + f(ax * dx));
+          if (dot > 0 && f(distance * k10) < f(dot * dot)) {
+            const s = f(f(f(tableRsqrt(distance) * dot) * k4) - k14);
+            const value = f(f(f(f(s * s) * table[index]) * light) * incidence);
+            byte = fistp(f(value - 0.5)) & 255;
           }
         }
       }
@@ -157,9 +162,10 @@ export function spotLightSpatial(rect, grid, location, constants, write, illumin
 const NORMAL = normalLightTable();
 
 /** Cylinder spatial function 0x10b04a80 (LE_Cylinder): the horizontal
- * distance only, `(1 − (dx² + dy²)·(1/R)²)·illumination` stored as a float,
- * less 0.5 through FISTP, kept when positive (low byte), else 0. There is no
- * radius cut beyond the texel rectangle. Same grid walk as the spot body. */
+ * distance only, `(1 − ((dy² + dx²)·(1/R))·(1/R))·illumination` stored as a
+ * float, less 0.5f through FISTP, kept when positive (low byte), else 0;
+ * each step at 24 bits (0x10b04bb9-0x10b04bee). There is no radius cut
+ * beyond the texel rectangle. Same grid walk as the spot body. */
 export function cylinderSpatial(rect, grid, location, constants, write, illumination) {
   const { minU, maxU, minV, maxV } = rect, { rradius } = constants;
   const illum = typeof illumination === 'number' ? () => illumination : (u, v) => illumination.bytes[v * illumination.stride + u];
@@ -167,12 +173,12 @@ export function cylinderSpatial(rect, grid, location, constants, write, illumina
   const [lx, ly, lz] = location;
   let rowX = f(f(f(minV * vx) + sx) + f(minU * ux));
   let rowY = f(f(f(minV * vy) + sy) + f(minU * uy));
-  let rowZ = x87store(x87add(x87add(x87mul(x87int32(minV), x87load(vz)), x87load(sz)), x87mul(x87int32(minU), x87load(uz))));
+  let rowZ = f(f(f(minV * vz) + sz) + f(minU * uz));
   for (let v = minV; v < maxV; v++) {
     let dx = f(rowX - lx), dy = f(rowY - ly), dz = f(rowZ - lz);
     for (let u = minU; u < maxU; u++) {
-      const value = f((1 - (dy * dy + dx * dx) * rradius * rradius) * illum(u, v));
-      const n = fistp(value - 0.5);
+      const value = f(f(1 - f(f(f(f(dy * dy) + f(dx * dx)) * rradius) * rradius)) * illum(u, v));
+      const n = fistp(f(value - 0.5));
       write(u, v, n <= 0 ? 0 : n & 255);
       dx = f(dx + ux); dy = f(dy + uy); dz = f(dz + uz);
     }
@@ -267,18 +273,12 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
 const surfaceLightClassOf = surfaceLightClass;
 
 /** ComputeFromActor's rr2 (0x10b0601d-0x10b06027) and incidence
- * (0x10b06325-0x10b0639b) at the render pass's 24-bit precision: every
- * operand is a float, so each operation is a binary32 one. `rradius` is the
- * stored 1/R (the same at either precision). dynamic-lighting.mjs
- * movingLightConstants and normalLightIncidence still model 64 bits; the
- * spatial.rs lights take these (validate-light-spatial compares them with
- * the original at 0x007f). */
+ * (0x10b06325-0x10b0639b) at the render pass's 24-bit precision: the same
+ * values as dynamic-lighting.mjs movingLightConstants and
+ * normalLightIncidence (validate-light-spatial compares them with the
+ * original at 0x007f). */
 export function renderPassConstants(location, facet, rradius) {
-  const [dx, dy, dz] = location.map((v, i) => f(v - facet.origin[i])), n = facet.normal;
-  const dot = f(f(f(dz * f(n[2])) + f(dy * f(n[1]))) + f(dx * f(n[0])));
-  // FCOM with 0 then FCHS when below: a negative zero stays negative.
-  const incidence = f(dot * rradius);
-  return { rr2: f(f(rradius * rradius) * 4093), incidence: incidence < 0 ? -incidence : incidence };
+  return { rr2: f(f(rradius * rradius) * 4093), incidence: normalLightIncidence(location, facet, rradius) };
 }
 
 /** A spatial.rs light's inputs (kernel `spatial.run` / `record`): the grid,
@@ -381,8 +381,9 @@ export function animatedLightConstants(frame, { values, ref }, { levelBrightness
 /** One frame's light animation inputs: the noise refresh with
  * Level.TimeSeconds (once a drawn frame, as the renderer does), the shared
  * strobe state and the merge factors per noise entry (`0.95 + 0.05·A`,
- * `0.8 + 0.2·A`, `0.6 + 0.4·W`) in doubles; validate-light-animation
- * compares that double path with the x87-model mergeModulation. */
+ * `0.8 + 0.2·A`, `0.6 + 0.4·W`), each operation rounded to 24 bits from the
+ * exact value (the constants are doubles); validate-light-animation
+ * compares that path with the x87-model mergeModulation. */
 export function createLightFrame(frand) {
   const noise = createLightNoise(frand), strobe = { time: 0, flag: 0 };
   const factors = { 1: new Float64Array(256), 2: new Float64Array(256), 3: new Float64Array(256) };
@@ -405,14 +406,18 @@ export function createLightFrame(frand) {
     frame.frameIndex++;
     noise.update(frame.timeSeconds);
     for (let i = 0; i < 256; i++) {
-      factors[1][i] = noise.A[i] * 0.05 + 0.95;
-      factors[2][i] = noise.A[i] * 0.2 + 0.8;
-      factors[3][i] = noise.W[i] * 0.4 + 0.6;
+      factors[1][i] = mergeFactor(noise.A[i], 0.05, 0.95);
+      factors[2][i] = mergeFactor(noise.A[i], 0.2, 0.8);
+      factors[3][i] = mergeFactor(noise.W[i], 0.4, 0.6);
     }
     return frame;
   };
   return frame;
 }
+
+/** The merge factor of one noise entry at 24 bits (0x10b03119-0x10b03130):
+ * `fld A; fmul qword scale; fadd qword offset`. */
+export const mergeFactor = (noise, scale, offset) => r24sum(r24prod(noise, scale), offset);
 
 /** The light manager's per-frame noise (0x10b13080), called once a frame
  * with Level.TimeSeconds (0x10b146a5): `step = ftol(time·35)`; table A
@@ -421,15 +426,17 @@ export function createLightFrame(frand) {
  * step, the slopes S (0x10b4f644) of the 16·(step−last) entries from
  * last·16 are re-aimed, `(A − W)/16`, and the other entries advance by
  * `(step − last)·S`; otherwise (the first call, a jump) W takes 256 more
- * draws and every slope is re-aimed. W is clamped to [0, 1]. `frand` is the
- * host's appFrand stream (the original's position in the CRT stream is not
- * reproduced). */
+ * draws and every slope is re-aimed. W is clamped to [0, 1]. At 24 bits
+ * (PreRender calls it right after setting precision control 24,
+ * 0x10b146ae): `time·35` rounds before `_ftol`, and `n·S + W` rounds the
+ * product first. `frand` is the host's appFrand stream (the original's
+ * position in the CRT stream is not reproduced). */
 export function createLightNoise(frand) {
   const A = new Float32Array(256), W = new Float32Array(256), S = new Float32Array(256);
   // `version` counts the updates that can change W (a new step or a reset).
   const state = { A, W, S, last: 0, version: 0 };
   state.update = timeSeconds => {
-    const step = x87ftol(x87mul(x87load(f(timeSeconds)), x87double(35)));
+    const step = x87ftol(p24mul(x87load(f(timeSeconds)), x87double(35)));
     if (step !== state.last || state.last === 0) state.version++;
     for (let i = 0; i < 256; i++) A[i] = f(frand());
     const last = state.last;
@@ -438,7 +445,7 @@ export function createLightNoise(frand) {
     } else {
       const start = Math.imul(last, 16) & 0xff, end = Math.imul(step, 16) & 0xff, n = (step - last) & 0xff;
       for (let c = start; c !== end; c = (c + 1) & 0xff) S[c] = f((A[c] - W[c]) * 0.0625);
-      for (let c = end; c !== start; c = (c + 1) & 0xff) W[c] = f(n * S[c] + W[c]);
+      for (let c = end; c !== start; c = (c + 1) & 0xff) W[c] = f(f(n * S[c]) + W[c]);
     }
     for (let i = 0; i < 256; i++) W[i] = W[i] < 0 ? 0 : W[i] < 1 ? W[i] : 1;
     state.last = step;
@@ -457,14 +464,17 @@ export function createLightNoise(frand) {
  * unchanged. The flicker entry is chosen by the low byte of the actor's
  * address in the original; `flickerKey` is the host's stand-in. Texture
  * palette types (8, 9) are not translated and stay steady. With animation
- * off (the viewport actor's SHOW_PlayerCtrl clear) every type is steady. */
+ * off (the viewport actor's SHOW_PlayerCtrl clear) every type is steady.
+ * The type functions (0x10b05a10, 0x10b05a90, 0x10b05b90) run at 24 bits:
+ * `TimeSeconds·2293760.0` rounds before the period division and the phase
+ * sum, and the sine's `·0.39 + 0.6` (doubles) round exactly once each. */
 export function lightTypeBrightness(values, { timeSeconds, noise, strobe, flickerKey = 0, animate = true }) {
   let brightness = f((values.LightBrightness & 255) * f(1 / 255));
   const type = animate ? values.LightType & 255 : 1, time = x87load(f(timeSeconds));
   const angle = (divisor, scale, offset) => {
     const phase = (values.LightPhase & 255) << 8;
-    const a = x87ftol(x87add(x87div(x87mul(time, x87double(2293760)), x87int32(divisor)), x87int32(phase)));
-    return scale === undefined ? a : x87store(x87mul(x87add(x87mul(x87load(rotatorSin(a)), x87double(scale)), x87double(offset)), x87load(brightness)));
+    const a = x87ftol(p24add(p24div(p24mul(time, x87double(2293760)), x87int32(divisor)), x87int32(phase)));
+    return scale === undefined ? a : x87store(p24mul(p24add(p24mul(x87load(rotatorSin(a)), x87double(scale)), x87double(offset)), x87load(brightness)));
   };
   if (type === 0) brightness = 0;
   else if (type === 2) brightness = angle(Math.max(1, values.LightPeriod & 255), 0.39, 0.6);
@@ -483,13 +493,14 @@ export function lightTypeBrightness(values, { timeSeconds, noise, strobe, flicke
 /** The merge's per-texel modulation of the merge-dynamic effects (0x10b030f2
  * -0x10b03244): TorchWaver `spatial·(0.95 + 0.05·A[i])`, FireWaver
  * `spatial·(0.8 + 0.2·A[i])`, WateryShimmer `spatial·(0.6 + 0.4·W[i])`, the
- * product stored as a float, less 0.5, through FISTP (its low byte); `i`
- * runs on from the merge's start index, one per rectangle texel. */
+ * product stored as a float, less 0.5f, through FISTP (its low byte); `i`
+ * runs on from the merge's start index, one per rectangle texel. Every
+ * operation at 24 bits (BigInt model). */
 export function mergeModulation(effect, noise) {
   const [table, scale, offset] = effect === 1 ? [noise.A, 0.05, 0.95] : effect === 2 ? [noise.A, 0.2, 0.8] : [noise.W, 0.4, 0.6];
-  const S = x87double(scale), O = x87double(offset);
+  const S = x87double(scale), O = x87double(offset), HALF = x87load(0.5);
   return (spatial, index) => {
-    const factor = x87add(x87mul(x87load(table[index & 0xff]), S), O);
-    return fistp(x87store(x87mul(factor, x87int32(spatial))) - 0.5) & 255;
+    const factor = p24add(p24mul(x87load(table[index & 0xff]), S), O);
+    return fistp(x87store(p24add(x87load(x87store(p24mul(factor, x87int32(spatial)))), x87neg(HALF)))) & 255;
   };
 }

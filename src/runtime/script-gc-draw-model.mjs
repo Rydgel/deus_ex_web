@@ -33,10 +33,17 @@
  * FPU RC field to truncate (or ah,0x0c) then fistp — i.e. C-style (int)cast
  * of (value + 0.1), NOT round-to-nearest.
  *
+ * The GC draws from PaintWindows (XRootWindow::PostRender, reached from
+ * PostRenderFlash), inside the render pass: x87 precision control 24
+ * (docs/render-pass-precision.md). Every FADD, FSUB, FMUL and FDIV of the clip
+ * helper and the `+ 0.1` before each _ftol round to 24 bits with the
+ * register's wide exponent (x87-pc24.mjs).
+ *
  * Evidence: disassembly of the bodies above (scripts/native-gc-draw-probe.py
  * runs them unmodified under Unicorn); docs/script-gc-draw-model.md.
  */
 import {GC, GC_DLL, GC_FLAGS, gcMemory} from './script-gc-state-model.mjs';
+import {r24, r24sum} from './x87-pc24.mjs';
 
 const freeze = Object.freeze;
 
@@ -88,10 +95,18 @@ export const bitsToF32 = b => { U32[0] = b >>> 0; return F32[0]; };
 /**
  * MSVCRT _ftol applied to the x87 value st0 after the caller's f64 +0.1 bias:
  * the real body switches RC to truncate and fistp's, so the result is the
- * toward-zero integer of (v + 0.1).  `|0` keeps the low eax dword, matching
- * the i64 -> eax truncation for out-of-range inputs.
+ * toward-zero integer of (v + 0.1), the sum rounded once to 24 bits (FADD
+ * m64 at precision control 24).  `|0` keeps the low eax dword, matching the
+ * i64 -> eax truncation for out-of-range inputs.
  */
-export const ftolBiased = v => Math.trunc(v + GC_DRAW_FTOL_BIAS) | 0;
+export const ftolBiased = v => Math.trunc(r24sum(v, GC_DRAW_FTOL_BIAS)) | 0;
+
+// The clip helper's x87 operations at precision control 24 on 24-bit
+// register values (x87-pc24.mjs r24: the f64 result rounded once more is
+// the PC 24 result). The texture-edge stage's FILD'd USize/VSize, an int
+// that can exceed 24 bits, goes through r24sum instead.
+const add = (a, b) => r24(a + b), sub = (a, b) => r24(a - b);
+const mul = (a, b) => r24(a * b), div = (a, b) => r24(a / b);
 
 export class GcDrawBoundaryError extends Error {
   constructor(message, {kind = 'BOUNDARY', offset = null, value = undefined} = {}) {
@@ -153,108 +168,109 @@ export function gcCallDrawTile(L, command) {
  * `tex` is the texture heap pointer; its i32 +0x34/+0x38 fields are read only
  * on the proportional path, exactly where the body reads them.
  *
- * Every store into `s` is f32-rounded (the body's fstp dword); intermediates
- * stay in f64, matching the x87's extended-precision stack values closely
- * enough that the oracle proves bit-equality on the emitted ints.
+ * Every store into `s` is f32-rounded (the body's fstp dword); the values the
+ * body keeps on the stack (the clip deltas, the right/bottom edges, the
+ * texture-edge end) are 24-bit register values, one rounding per FADD, FSUB,
+ * FMUL and FDIV in the body's order (0x1002a4f0-0x1002a814).
  */
 export function gcClipTile(L, s, flagW, flagH, tex) {
   const base = L.base;
   const readF = off => L.read(base + off, 'f32');
 
   // *x += orgX; *y += orgY; clipLeft = clipX + orgX; clipTop = clipY + orgY.
-  s.x = f32(readF(GC.originX) + s.x);
-  s.y = f32(readF(GC.originY) + s.y);
-  const clipLeft = f32(readF(GC.clipX) + readF(GC.originX));
-  const clipTop = f32(readF(GC.clipY) + readF(GC.originY));
+  s.x = f32(add(readF(GC.originX), s.x));
+  s.y = f32(add(readF(GC.originY), s.y));
+  const clipLeft = f32(add(readF(GC.clipX), readF(GC.originX)));
+  const clipTop = f32(add(readF(GC.clipY), readF(GC.originY)));
 
   if (flagW) {
     // Pixel-tracking mode (srcW == 0): UVs follow the clipped pixels 1:1.
     if (!(s.x >= clipLeft)) {                       // *x < clipLeft or unordered
-      const d = s.x - clipLeft;
-      s.u = f32(s.u - d);
-      s.w = f32(d + s.w);
+      const d = sub(s.x, clipLeft);
+      s.u = f32(sub(s.u, d));
+      s.w = f32(add(d, s.w));
       s.x = clipLeft;
     }
-    const clipRight = clipLeft + readF(GC.clipWidth);
-    if (s.x + s.w > clipRight)                      // ordered destRight > clipRight
-      s.w = f32(clipRight - s.x);
+    const clipRight = add(clipLeft, readF(GC.clipWidth));
+    if (add(s.x, s.w) > clipRight)                  // ordered destRight > clipRight
+      s.w = f32(sub(clipRight, s.x));
     s.ul = s.w;
   } else {
     // Proportional UV mode (srcW != 0).
     if (s.w > 0 && !(s.x >= clipLeft)) {
-      const d = s.x - clipLeft;
-      const t = d * s.ul / s.w;
-      s.ul = f32(t + s.ul);
-      s.u = f32(s.u - t);
-      s.w = f32(d + s.w);
+      const d = sub(s.x, clipLeft);
+      const t = div(mul(d, s.ul), s.w);
+      s.ul = f32(add(t, s.ul));
+      s.u = f32(sub(s.u, t));
+      s.w = f32(add(d, s.w));
       s.x = clipLeft;
     }
     if (s.w > 0) {
-      const clipRight = clipLeft + readF(GC.clipWidth);
-      const destRight = s.x + s.w;
+      const destRight = add(s.x, s.w);
+      const clipRight = add(clipLeft, readF(GC.clipWidth));
       if (destRight > clipRight) {
-        s.ul = f32((clipRight - destRight) * s.ul / s.w + s.ul);
-        s.w = f32(clipRight - s.x);
+        s.ul = f32(add(div(mul(sub(clipRight, destRight), s.ul), s.w), s.ul));
+        s.w = f32(sub(add(clipLeft, readF(GC.clipWidth)), s.x));
       }
     }
     if (s.ul > 0) {
       if (!(s.u >= 0)) {                            // *u < 0 or unordered
-        const d = s.u * s.w / s.ul;
-        s.w = f32(d + s.w);
-        s.x = f32(s.x - d);
-        s.ul = f32(s.u + s.ul);
+        const d = div(mul(s.u, s.w), s.ul);
+        s.w = f32(add(d, s.w));
+        s.x = f32(sub(s.x, d));
+        s.ul = f32(add(s.u, s.ul));
         s.u = 0;
       }
       const texW = L.read(tex + GC_DRAW.textureUSize, 'i32');
-      const uEnd = s.u + s.ul;
+      const uEnd = add(s.u, s.ul);
       if (uEnd > texW) {
-        s.w = f32((texW - uEnd) * s.w / s.ul + s.w);
-        s.ul = f32(texW - s.u);
+        s.w = f32(add(div(mul(r24sum(texW, -uEnd), s.w), s.ul), s.w));
+        s.ul = f32(r24sum(texW, -s.u));
       }
     }
   }
 
   if (flagH) {
     if (!(s.y >= clipTop)) {
-      const d = s.y - clipTop;
-      s.v = f32(s.v - d);
-      s.h = f32(d + s.h);
+      const d = sub(s.y, clipTop);
+      s.v = f32(sub(s.v, d));
+      s.h = f32(add(d, s.h));
       s.y = clipTop;
     }
-    const clipBottom = clipTop + readF(GC.clipHeight);
-    if (s.y + s.h > clipBottom)
-      s.h = f32(clipBottom - s.y);
+    const clipBottom = add(clipTop, readF(GC.clipHeight));
+    if (add(s.y, s.h) > clipBottom)
+      s.h = f32(sub(clipBottom, s.y));
     s.vl = s.h;
   } else {
     if (s.h > 0 && !(s.y >= clipTop)) {
-      const d = s.y - clipTop;
-      const t = d * s.vl / s.h;
-      s.vl = f32(t + s.vl);
-      s.v = f32(s.v - t);
-      s.h = f32(d + s.h);
+      const d = sub(s.y, clipTop);
+      const t = div(mul(d, s.vl), s.h);
+      s.vl = f32(add(t, s.vl));
+      s.v = f32(sub(s.v, t));
+      s.h = f32(add(d, s.h));
       s.y = clipTop;
     }
     if (s.h > 0) {
-      const clipBottom = clipTop + readF(GC.clipHeight);
-      const destBottom = s.y + s.h;
+      const destBottom = add(s.y, s.h);
+      const clipBottom = add(clipTop, readF(GC.clipHeight));
       if (destBottom > clipBottom) {
-        s.vl = f32((clipBottom - destBottom) * s.vl / s.h + s.vl);
-        s.h = f32(clipBottom - s.y);
+        s.vl = f32(add(div(mul(sub(clipBottom, destBottom), s.vl), s.h), s.vl));
+        s.h = f32(sub(add(clipTop, readF(GC.clipHeight)), s.y));
       }
     }
     if (s.vl > 0) {
       if (!(s.v >= 0)) {
-        const d = s.v * s.h / s.vl;
-        s.h = f32(d + s.h);
-        s.y = f32(s.y - d);
-        s.vl = f32(s.v + s.vl);
+        const d = div(mul(s.v, s.h), s.vl);
+        s.h = f32(add(d, s.h));
+        s.y = f32(sub(s.y, d));
+        s.vl = f32(add(s.v, s.vl));
         s.v = 0;
       }
       const texH = L.read(tex + GC_DRAW.textureVSize, 'i32');
-      const vEnd = s.v + s.vl;
+      const vEnd = add(s.v, s.vl);
       if (vEnd > texH) {
-        s.h = f32((texH - vEnd) * s.h / s.vl + s.h);
-        s.vl = f32(texH - s.v);
+        s.h = f32(add(div(mul(r24sum(texH, -vEnd), s.h), s.vl), s.h));
+        s.vl = f32(r24sum(texH, -s.v));
       }
     }
   }

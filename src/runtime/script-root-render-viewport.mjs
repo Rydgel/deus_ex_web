@@ -9,14 +9,20 @@
 // integer h/vMultiplier (+0x730/+0x734) and truncated by MSVCRT _ftol:
 //   x0 = ftol(hm*renderX + XB)      y0 = ftol(vm*renderY + YB)
 //   x1 = ftol(hm*renderWidth + x0)  y1 = ftol(vm*renderHeight + y0)
-// with each product and sum unrounded on the x87 stack (FILD/FMUL m32/FIADD),
-// then x0/y0 raised to XB/YB and x1/y1 lowered to X+XB/Y+YB (int32 sums,
-// signed compares). vMultiplier passes through a float32 store first
-// (FSTP/FLD m32 at 0x1003a833).
-import { x87add, x87ftol, x87int32, x87load, x87mul } from './script-vm.mjs';
+// with each product and sum on the x87 stack (FILD/FMUL m32/FIADD), then
+// x0/y0 raised to XB/YB and x1/y1 lowered to X+XB/Y+YB (int32 sums, signed
+// compares). vMultiplier passes through a float32 store first (FSTP/FLD m32
+// at 0x1003a833).
+//
+// PreRender runs from the PreRender event, after URender::PreRender set x87
+// precision control 24 (docs/render-pass-precision.md): the FILDs are exact,
+// each FMUL and FIADD rounds to 24 bits with the register's wide exponent
+// (x87-pc24.mjs), and _ftol truncates that value.
+import { x87ftol, x87int32, x87load } from './script-vm.mjs';
+import { p24add, p24mul } from './x87-pc24.mjs';
 
 const f32 = Math.fround;
-const scaled = (multiplier, value, base) => x87ftol(x87add(x87mul(multiplier, x87load(value)), x87int32(base)));
+const scaled = (multiplier, value, base) => x87ftol(p24add(p24mul(multiplier, x87load(value)), x87int32(base)));
 
 /** The frame after PreRender's edit: {render, x, y, width, height} with the
  * incoming frame {x, y, width, height} (XB, YB, X, Y). */

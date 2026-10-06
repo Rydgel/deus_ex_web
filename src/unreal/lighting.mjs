@@ -191,7 +191,7 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
   }
 
   // The original's per-light colour and the zone ambients through Engine
-  // FGetHSV on the x87 model (docs/static-lighting.md).
+  // FGetHSV at the render pass's 24-bit precision (docs/static-lighting.md).
   const hsvCache = new Map(), ambientCache = new Map();
   const hsv = (hue, saturation) => {
     const key = (hue & 255) << 8 | saturation & 255;

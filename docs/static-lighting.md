@@ -595,18 +595,45 @@ dozen 24-bit roundings).
 Still to do: the texture palette LightTypes and volumetric (fog map)
 lighting.
 
-**24-bit precision for the rest of the static path.** SetupForSurf and
-ComputeFromActor run at 24 bits, but the static bodies and constants here
-were validated at `0x037f`. Rerunning `validate-static-lighting`'s chain on
-every 4th Training surface at `0x007f` (oracle tables built at `0x007f`)
-gives:
-- rectangles and colours: still exact;
-- incidence: differs in 875 of 3,952 light steps;
-- normal/spot/NonIncidence bytes: differ in 13 of 1,945,707 texels (8
-  steps);
-- rr2: differs for 121 of 256 radii.
+**24-bit precision for the rest of the static path (done 2026-10-06).**
+SetupForSurf and everything it calls run at 24 bits
+([render-pass precision](render-pass-precision.md)), and so does the
+translation now; the oracle runs at `0x007f` with the light-manager tables
+at the init word. From the instructions:
+- **Spot** (`0x10b04f80`): `1/(1−c)` is a 24-bit value on the stack before
+  `·c` (k14); the row start's Z sums, `d² = (dz² + dy²) + dx²`, the axis dot,
+  the cone test of the two stored products `d²·c²` and `dot²`, and the
+  `s` chain `((rsqrt·dot)·k4 − k14)² · table · illumination · incidence`
+  are binary32 operations, then `− 0.5f`.
+- **Cylinder** (`0x10b04a80`): `1 − ((dy² + dx²)·(1/R))·(1/R)` (the double
+  1.0 is exact), times the illumination, `− 0.5f`, each at 24 bits.
+- **Normal** (`0x10b03360`): the start differences and sums, the six
+  coefficient dots and `illumination·table·incidence + 2^23` at 24 bits.
+- **NonIncidence, the constants, incidence and rectangle**: see
+  [moving lights](dynamic-lighting.md) "Precision".
+- **Light animation**: the noise's `TimeSeconds·35` rounds before `_ftol`
+  and `n·S + W` rounds the product; Pulse, Blink and SubtlePulse
+  (`0x10b05a10`, `0x10b05a90`, `0x10b05b90`) round `TimeSeconds·2293760.0`
+  before the period division and phase sum, and `sin·0.39 + 0.6` (or
+  `0.09`, `0.9`) once per operation from the exact value; the merge factors
+  `A·0.05 + 0.95` (and the others) likewise (`mergeFactor`; Play's factor
+  table and light.rs take those 24-bit factors).
 
-Only the spatially dynamic lights take the 24-bit constants so far.
+Before, at `0x007f` against the 64-bit translation: incidence differed in
+875 of 3,952 Training steps, the spatial bytes in 13 of 1,945,707 texels,
+rr2 for 121 of 256 radii, FGetHSV for 1,789 of 2,049 triples, and the
+LightType brightness in 259 of 2,560 frames of validate-light-animation's
+cases (an hour-long clock included). Now every check matches at `0x007f`
+(the maps and counts are in [moving lights](dynamic-lighting.md)
+"Precision").
+
+Cost (Linux host, headless, interleaved A/B in one process against the
+previous tree, medians): world build (light maps included) Training 2,200
+→ 1,093 ms (the spot `s` chain left the BigInt model), Island 1,734 →
+1,630 ms; light animation per frame Training 2.92 → 2.70 ms, Island 0.19 →
+0.21, Paris Club 2.10 → 2.15 (9 samples; within noise); twelve moving lights
+recomputed every frame Training 0.92 → 0.81 ms, Island 2.18 → 2.09, Paris
+Club 2.16 → 1.85.
 
 Two facts recovered from SetupForSurf's listing matter for that wiring:
 - A level surface's static list goes through AddLight with each light's

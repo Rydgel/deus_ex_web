@@ -1,42 +1,24 @@
-/** ULodMesh::GetFrame 10355360..103568e5; docs/script-lodmesh-frame.md. */
+/** ULodMesh::GetFrame 10355360..103568e5; docs/script-lodmesh-frame.md.
+ *
+ * GetFrame's only caller is DrawLodMesh (Render 0x10b0ee0f), inside the render
+ * pass, so it and the Core FCoords operators it calls run under x87 precision
+ * control 24 (docs/render-pass-precision.md): every add, subtract, multiply
+ * and divide rounds to a 24-bit significand. Every operand is a float, an
+ * int16 vertex word or a small integer, so each operation is a binary32 one
+ * (`f(a op b)`: the double result rounds innocuously). Non-finite values
+ * follow IEEE single rules rather than the x87's NaN payload choice (not
+ * modelled; no shipped mesh or actor reaches one). */
 import {findSequence,LodMeshError} from './lodmesh.mjs';
 import {rotatorSin} from './coords.mjs';
-import {x87load,x87store,x87add,x87neg,x87mul,x87div} from './script-vm.mjs';
-import {unambiguousF32,ulps53,exactSum} from './x87-fast.mjs';
-const ld=x87load,st=x87store,f=Math.fround,sub=(a,b)=>x87add(a,x87neg(b));
+const f=Math.fround;
 const identity=()=>[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
-const dot=(v,row)=>st(x87add(x87add(x87mul(v[0],ld(row[0])),x87mul(v[1],ld(row[1]))),x87mul(v[2],ld(row[2]))));
-const transformExtended=(v,coords,point)=>{
-  const local=v.map((x,i)=>point?sub(ld(x),ld(coords[0][i])):ld(x));
-  return coords.slice(1).map(row=>dot(local,row));
-};
-// Fast exact form of transformExtended (x87-fast.mjs): the same f32 loads,
-// evaluated in doubles. A store whose double evaluation is exact (TwoSum; the
-// f32 products are always exact) is that value; otherwise the rounding must
-// be certain within a bound covering the double and 64-bit x87 evaluations
-// (32 units of 2^-53 per term magnitude). Any other element takes the x87 model.
-const REFERENCE_FRAME=typeof process!=='undefined'&&process.env?.LODMESH_FRAME_REFERENCE==='1';
-const BOUND=ulps53(32);
+/** Core's inline TransformPointBy (Origin subtracted) / TransformVectorBy:
+ * `(d.x·A.x + d.y·A.y) + d.z·A.z` per axis, at 24 bits. */
 function transform(v,coords,point) {
-  if(REFERENCE_FRAME)return transformExtended(v,coords,point);
-  const x0=f(v[0]),x1=f(v[1]),x2=f(v[2]);
-  let l0=x0,l1=x1,l2=x2,e0=0,e1=0,e2=0,f32Local=true;
-  if(point){
-    const o=coords[0],o0=f(o[0]),o1=f(o[1]),o2=f(o[2]);
-    l0=x0-o0;l1=x1-o1;l2=x2-o2;f32Local=false;
-    e0=(Math.abs(x0)+Math.abs(o0))*BOUND;e1=(Math.abs(x1)+Math.abs(o1))*BOUND;e2=(Math.abs(x2)+Math.abs(o2))*BOUND;
-  }
+  const o=coords[0];
+  const l0=point?f(f(v[0])-f(o[0])):f(v[0]),l1=point?f(f(v[1])-f(o[1])):f(v[1]),l2=point?f(f(v[2])-f(o[2])):f(v[2]);
   const out=[0,0,0];
-  for(let k=0;k<3;k++){
-    const row=coords[k+1],r0=f(row[0]),r1=f(row[1]),r2=f(row[2]);
-    const p0=l0*r0,p1=l1*r1,p2=l2*r2,s1=p0+p1,s=s1+p2;
-    let stored;
-    if(f32Local&&exactSum(p0,p1,s1)&&exactSum(s1,p2,s))stored=f(s);
-    else stored=unambiguousF32(s,(Math.abs(p0)+Math.abs(p1)+Math.abs(p2))*BOUND
-      +e0*Math.abs(r0)+e1*Math.abs(r1)+e2*Math.abs(r2));
-    if(stored===undefined)return transformExtended(v,coords,point);
-    out[k]=stored;
-  }
+  for(let k=0;k<3;k++){const r=coords[k+1];out[k]=f(f(f(l0*f(r[0]))+f(l1*f(r[1])))+f(l2*f(r[2])));}
   return out;
 }
 const compose=(coords,matrix)=>coords.map((v,i)=>transform(v,matrix,i===0));
@@ -86,8 +68,8 @@ function acquire(mesh,key,cache) {
   if(!entry){entry=cache.create(key,20+12*mesh.frameVertexCount);entry.mesh=mesh;}
   return {entry,existing};
 }
-// Native FISTP uses nearest-even on the extended (phase - .5) value. Phase is
-// f32, so this subtraction is exact in a JS double throughout the valid range.
+// Native FISTP uses nearest-even on (phase - .5f). Phase is a float of at most
+// 2^22 here, so the subtraction is exact at 24 bits (and in a double).
 function frameInteger(phase) {
   const v=phase-0.5,lo=Math.floor(v),fraction=v-lo;
   const result=fraction<0.5?lo:fraction>0.5?lo+1:(lo%2===0?lo:lo+1);
@@ -95,18 +77,13 @@ function frameInteger(phase) {
     throw new LodMeshError('GetFrame animation phase exceeds the original valid vertex domain');
   return result;
 }
-// X keeps subtraction/product extended; Y/Z store both before the final add.
+// `(b - a)·t + a` per axis: X keeps its difference and product on the stack,
+// Y/Z store them, which at 24 bits is the same rounding.
 function interpolate(a,b,t) {
-  const alpha=ld(t);
-  return a.map((value,i)=>{
-    const base=ld(value);
-    let delta=sub(ld(b[i]),base);if(i)delta=ld(st(delta));
-    let product=x87mul(delta,alpha);if(i)product=ld(st(product));
-    return st(x87add(product,base));
-  });
+  const alpha=f(t);
+  return a.map((value,i)=>{const base=f(value);return f(f(f(f(b[i])-base)*alpha)+base);});
 }
 const vectorAt=(array,index)=>Array.from(array.subarray(index*3,index*3+3));
-const above=(a,b)=>{const d=sub(a,ld(b));return d.nan===undefined&&!d.neg&&(d.inf||d.sig!==0n);};
 
 /** GetFrame's coordinate setup (10355360.., the matrix the vertex loops
  * use): caller coords, then Location+PrePivot, the actor and mesh rotations,
@@ -114,34 +91,13 @@ const above=(a,b)=>{const d=sub(a,ld(b));return d.nan===undefined&&!d.neg&&(d.in
  * reads the actor's Location, PrePivot and Rotation in the original order. */
 export function lodMeshFrameMatrix(mesh,coords,scaleFactor,value) {
   let matrix=[0,1,2,3].map(i=>coords.slice(i*3,i*3+3).map(f));
-  // An f32 product is exact in x87 and in a double; its store is one rounding.
-  const scale=REFERENCE_FRAME?mesh.scale.map(v=>st(x87mul(ld(v),ld(scaleFactor))))
-    :mesh.scale.map(v=>f(f(v)*f(scaleFactor)));
+  const scale=mesh.scale.map(v=>f(f(v)*f(scaleFactor)));
   if(scale.some(v=>v===0||!Number.isFinite(v)))throw new LodMeshError('GetFrame zero/nonfinite scale is unsupported');
   const location=value('Location'),prePivot=value('PrePivot');
-  matrix[0]=matrix[0].map((v,i)=>{
-    const extended=()=>st(sub(ld(v),x87add(ld(location[i]),ld(prePivot[i]))));
-    if(REFERENCE_FRAME)return extended();
-    const a=f(location[i]),b=f(prePivot[i]),x=f(v),t=a+b,d=x-t;
-    if(exactSum(a,b,t)&&exactSum(x,-t,d))return f(d);
-    return unambiguousF32(d,(Math.abs(x)+Math.abs(a)+Math.abs(b))*BOUND)??extended();
-  });
+  matrix[0]=matrix[0].map((v,i)=>f(f(v)-f(f(location[i])+f(prePivot[i]))));
   matrix=rotate(rotate(matrix,value('Rotation')),mesh.rotation);
   matrix=compose(matrix,identity()); // Core FScale's zero-shear pass.
-  matrix=matrix.map((v,row)=>v.map((x,i)=>{
-    const extended=()=>st(row?x87mul(ld(x),ld(scale[i])):x87div(ld(x),ld(scale[i])));
-    if(REFERENCE_FRAME)return extended();
-    if(row){
-      // An exact f32 product; a non-finite one keeps the x87 NaN/inf model.
-      const product=f(x)*f(scale[i]);
-      return Number.isFinite(product)?f(product):extended();
-    }
-    // The x87 quotient is the exact quotient rounded to 64 bits; the double
-    // one is within 2^-53 of it: accept only a certain f32 rounding.
-    const q=f(x)/f(scale[i]);
-    return unambiguousF32(q,Math.abs(q)*ulps53(4))??extended();
-  }));
-  return matrix;
+  return matrix.map((v,row)=>v.map((x,i)=>row?f(f(x)*scale[i]):f(f(x)/scale[i])));
 }
 
 /** GetFrame's per-call setup shared by the full evaluation and the plan:
@@ -165,10 +121,7 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
   const main=acquire(mesh,mainKey,cache);
   const scaleFactor=read(services,animationActor,'bParticles')?1:read(services,actor,'DrawScale');
   const matrix=lodMeshFrameMatrix(mesh,coords,scaleFactor,name=>read(services,actor,name));
-  // These operands stay constant for every vertex and blend slot in this
-  // call. Reuse their exact x87 loads; retain every original store/order.
   const kernel=services.kernel;
-  const loadedMatrix=kernel?null:matrix.map(row=>row.map(ld)),loadedOrigin=kernel?null:mesh.origin.map(ld);
   const frameVertex=(frame,i)=>{
     const at=(frame*mesh.frameVertexCount+i)*8;
     if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
@@ -185,15 +138,17 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
     if(!(frame>=0)&&existing) {
       count=Math.min(count,entry.valid);entry.valid=count;vertexCount=count-special;
       const targetFrame=sequence?.startFrame??0;
-      let alpha=st(sub(ld(1),x87div(ld(frame),ld(entry.frame))));
+      let alpha=f(1-f(frame/f(entry.frame)));
       if(entry.sequence!==name)entry.completion=0;
       if(entry.sequence!==name||!(alpha>=0)||alpha>1){
-        entry.frame=sequence?st(x87div(ld(-1),ld(sequence.numFrames))):0;entry.sequence=name;alpha=0;
+        entry.frame=sequence?f(-1/sequence.numFrames):0;entry.sequence=name;alpha=0;
       }
-      const completion=x87add(x87mul(sub(ld(1),ld(entry.completion)),ld(alpha)),ld(entry.completion));
-      entry.completion=st(completion);
+      // Compared on the stack before its store, which at 24 bits is the
+      // same value: (1 - completion)·alpha + completion against .97f.
+      const completion=f(f(f(1-f(entry.completion))*alpha)+f(entry.completion));
+      entry.completion=completion;
       let fill=null;
-      if(above(completion,f(0.97))) {
+      if(completion>f(0.97)) {
         alpha=0;
         if(count<available){
           fill=[count,available];
@@ -207,8 +162,8 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
     vertexCount=count-special;entry.valid=count;
     let first=0,second=0,fraction=0;
     if(sequence) {
-      const phase=st(x87mul(ld(frame>=0?frame:0),ld(sequence.numFrames))),integer=frameInteger(phase);
-      fraction=st(sub(ld(phase),ld(integer)));
+      const phase=f((frame>=0?frame:0)*sequence.numFrames),integer=frameInteger(phase);
+      fraction=f(phase-integer);
       first=sequence.startFrame+integer%sequence.numFrames;second=sequence.startFrame+((integer+1)|0)%sequence.numFrames;
     }
     return {channel,blend:channel>=0,tween:false,entry,count,fill:null,first,second,alpha:fraction};
@@ -250,17 +205,19 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
     for(const frame of frames)frameVertex(frame,op.count-1);
     if(op.fill)frameVertex(op.second,op.fill[1]-1);
   };
+  // The vertex less the mesh Origin (or a blend's absolute frame zero),
+  // stored; less the matrix origin for the main pose; the three axis dots;
+  // a blend adds onto the output. Each operation at 24 bits.
   function publishVertex(i,pose,blend) {
-    const origin=blend?frameVertex(0,i).map(ld):loadedOrigin;
+    const origin=blend?frameVertex(0,i):mesh.origin;
     const vector=pose.map((v,j)=>{
-      const component=ld(st(sub(ld(v),origin[j])));
-      return blend?component:sub(component,loadedMatrix[0][j]);
+      const component=f(f(v)-f(origin[j]));
+      return blend?component:f(component-matrix[0][j]);
     });
-    const result=loadedMatrix.slice(1).map(row=>st(x87add(
-      x87add(x87mul(vector[0],row[0]),x87mul(vector[1],row[1])),x87mul(vector[2],row[2]))));
     for(let j=0;j<3;j++){
+      const row=matrix[j+1],result=f(f(f(vector[0]*row[0])+f(vector[1]*row[1]))+f(vector[2]*row[2]));
       const at=i*stride+j*4;
-      out.setFloat32(at,blend?st(x87add(ld(result[j]),ld(out.getFloat32(at,true)))):result[j],true);
+      out.setFloat32(at,blend?f(result+out.getFloat32(at,true)):result,true);
     }
   }
   context.blendLease=slot=>{

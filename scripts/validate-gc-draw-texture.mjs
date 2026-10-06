@@ -213,12 +213,12 @@ const MUTATIONS = [
    replace: 'L.read(L.base + GC.textFloats + 4 * i',
    note: 'DrawTile color sourced from textFloats +0x6c instead of tilePlane +0x58'},
   {file: 'model',
-   find: 's.x = f32(readF(GC.originX) + s.x);',
+   find: 's.x = f32(add(readF(GC.originX), s.x));',
    replace: 's.x = f32(s.x);',
    note: 'clip drops the originX add (origin/scale transform site)'},
   {file: 'model',
-   find: 'Math.trunc(v + GC_DRAW_FTOL_BIAS)',
-   replace: 'Math.trunc(v + 0.5)',
+   find: 'Math.trunc(r24sum(v, GC_DRAW_FTOL_BIAS))',
+   replace: 'Math.trunc(r24sum(v, 0.5))',
    note: 'coord conversion biases +0.5 instead of the recovered +0.1 constant'},
   {file: 'model',
    find: 'Math.imul(ftolBiased(s.x), hMult)',
@@ -236,7 +236,9 @@ for (const [i, mutation] of MUTATIONS.entries()) {
       const name = {module: path.basename(MODULE), model: path.basename(MODEL),
                     stateModel: path.basename(STATE_MODEL)}[key];
       writeFileSync(path.join(dir, name),
-        key === mutation.file ? source.replace(mutation.find, mutation.replace) : text);
+        // The copies import x87-pc24.mjs from src/runtime itself.
+        (key === mutation.file ? source.replace(mutation.find, mutation.replace) : text)
+          .replaceAll("from './x87-pc24.mjs'", "from '../x87-pc24.mjs'"));
     }
     const mutated = await import(url.pathToFileURL(path.join(dir, path.basename(MODULE))).href);
     const failures = await runAll(mutated.gcDrawTexture);

@@ -89,10 +89,14 @@ SecurityCamera0's green ceiling light without runtime/render errors. The image
 and diagnostic JSON are ignored files at `.cache/stage4-normal-light-browser.*`.
 This is a browser smoke check, not an original-game image comparison.
 
-The live renderer's FPU control word remains unmeasured; the established
-comparison convention is `0x037f`, with `0x007f` reported separately. The latter
-changes 3,249 normal-table entries; no spatial byte differs on these sampled
-inputs (which retain the extended-run constants). The
+Precision (2026-10-06): the body runs inside the render pass, under precision
+control 24 ([render-pass precision](render-pass-precision.md)). The
+translation computes its row start, coefficient dots and per-texel
+`illumination·table·incidence + 2^23` as binary32 operations, and the
+validator runs the original at `0x007f` with the normal table built at the
+init word `0x037f` (at `0x007f` the table itself would differ in 3,249
+entries; FLightManager::Init runs on the game thread). The constants come from
+the 24-bit ComputeFromActor ([moving lights](dynamic-lighting.md)). The
 existing whole-BSP filter, mover-transform, grid-construction and static-map
 precision limitations still apply. Numerical comparisons alone do not establish
 original-game visual acceptance. Mesh lighting, spotlight/effect processing and

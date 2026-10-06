@@ -71,6 +71,9 @@ def build_windows(probe, windows, root_spec):
 
 def main():
     probe = _PROBE.ListWindowProbe(Path(sys.argv[1]))
+    # DrawRawBackground runs from XRootWindow::PaintWindows, inside the render
+    # pass: precision control 24 (0x007f) unless ORACLE_CW says otherwise.
+    probe.control_word = _PROBE._NATIVE.render_control_word(0x007f)
     cases = json.load(sys.stdin)
     results = []
     for case in cases:

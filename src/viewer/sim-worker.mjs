@@ -23,7 +23,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe` and `placeProbe` (validation), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `placeProbe` and `laserProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
@@ -31,7 +31,7 @@
  * errors). */
 // `loadId`: the map load (its request id) that frames belong to.
 let host = null, loadId = null, assets = null, decodeMap = null, createSimHost = null, setHostClock = null, plainError = null, stateDigest = null,
-  decalProbe = null, placeProbe = null;
+  decalProbe = null, placeProbe = null, laserProbe = null;
 // Galaxy's music library service and its module (set by `music`).
 let musicLibrary = null, music = null;
 // Audio events since the last snapshot; sound bytes cross once per key.
@@ -100,7 +100,7 @@ async function handle(data) {
         import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs')]);
       decodeMap = map.decodeMap; createSimHost = simHost.createSimHost; setHostClock = clock.setHostClock; music = library;
       plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe;
-      placeProbe = probe.placeProbe;
+      placeProbe = probe.placeProbe; laserProbe = probe.laserProbe;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
         : async () => { throw new Error(`Native library bytes are not served: ${file.path}`); } })));
@@ -167,6 +167,7 @@ async function handle(data) {
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
+        else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
         else throw new Error(`Unknown simulation call ${data.method}`);
       }
       // Events the call queued (Player start's lighting and mesh records)

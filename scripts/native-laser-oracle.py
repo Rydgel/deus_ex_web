@@ -97,8 +97,9 @@ class LaserOracle(collision.NativeCollision):
         for index in case['indices']:
             self.write(this + 0x2c, 'i', index)
             self.calls = []
-            # CurrentItem runs inside SetupDynamics (render pass): ORACLE_CW.
-            self.control_word = collision.render_control_word()
+            # CurrentItem runs inside SetupDynamics, in the render pass:
+            # precision control 24 (0x007f) unless ORACLE_CW says otherwise.
+            self.control_word = collision.render_control_word(0x007f)
             result = self.call(CURRENT_ITEM, this, b'')
             self.control_word = 0x037f
             items.append({'returned': 'proxy' if result == proxy else 'owner' if result == owner else hex(result),

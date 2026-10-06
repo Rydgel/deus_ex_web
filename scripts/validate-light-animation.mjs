@@ -2,11 +2,12 @@
  * original Render.dll (scripts/native-dynamic-light-oracle.py): the per-frame
  * light noise (0x10b13080) over irregular, repeated, backward and jumping
  * times; GlobalLighting's LightType functions (0x10b05e90) per frame; and the
- * merge's TorchWaver/FireWaver/WateryShimmer modulation (0x10b03040).
+ * merge's TorchWaver/FireWaver/WateryShimmer modulation (0x10b03040), at
+ * the render pass's control word 0x007f (docs/render-pass-precision.md).
  * docs/static-lighting.md "Light animation" records the scope. */
 import { execFileSync } from 'node:child_process';
 import { auditAssert, auditControlWord } from './precision-audit.mjs';
-import { createLightNoise, lightTypeBrightness, mergeModulation, createLightFrame } from '../src/runtime/static-lighting.mjs';
+import { createLightNoise, lightTypeBrightness, mergeModulation, createLightFrame, mergeFactor } from '../src/runtime/static-lighting.mjs';
 import { fistp } from '../src/runtime/dynamic-lighting.mjs';
 import { colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
 import { createNativeRng } from '../src/runtime/rng.mjs';
@@ -32,17 +33,21 @@ for (let k = 0; k < 80; k++) {
   t = r === 0 ? t : r === 1 ? t - 0.05 : r === 2 ? t + 0.6 : r === 3 ? t + 0.457 : t + (1 + random() % 40) / 1000;
   times.push(f(Math.max(0, t)));
 }
-const noiseCases = [0, 7, -3].map(last => {
-  const rng = createNativeRng(0x5eed + last), frand = Array.from({ length: 512 * times.length }, () => rng.frand());
-  return { last, times, frand };
+// A late clock (an hour of play): the 24-bit products TimeSeconds·35 and
+// TimeSeconds·2293760 lose their low bits there.
+const late = [];
+for (let k = 0, t2 = 1800 + (random() % 1000) / 7; k < 80; k++) { t2 += (1 + random() % 40) / 1000; late.push(f(t2)); }
+const noiseCases = [[0, times], [7, times], [-3, times], [51000, late]].map(([last, list]) => {
+  const rng = createNativeRng(0x5eed + last), frand = Array.from({ length: 512 * list.length }, () => rng.frand());
+  return { last, times: list, frand };
 });
 // Light types 0-7 (8, 9 are not translated), several periods/phases, per frame.
 const typeCases = [];
-for (const type of [0, 1, 2, 3, 4, 5, 6, 7]) for (let k = 0; k < 4; k++) {
-  const light = { type, brightness: random() & 255, period: k === 0 ? 0 : random() & 255, phase: random() & 255 };
-  const frames = times.slice(0, 40).map(time => ({ time, A: Array.from({ length: 256 }, () => u32(f((random() % 1000) / 999))),
+for (const type of [0, 1, 2, 3, 4, 5, 6, 7]) for (let k = 0; k < 8; k++) {
+  const light = { type, brightness: random() & 255, period: k % 4 === 0 ? 0 : random() & 255, phase: random() & 255 };
+  const frames = (k < 4 ? times : late).slice(0, 40).map(time => ({ time, A: Array.from({ length: 256 }, () => u32(f((random() % 1000) / 999))),
     brightness: u32(f((light.brightness & 255) * f(1 / 255))) }));
-  typeCases.push({ light, frames, strobe: [u32(0), 0], animate: k === 3 ? 0 : 1 });
+  typeCases.push({ light, frames, strobe: [u32(0), 0], animate: k % 4 === 3 ? 0 : 1 });
 }
 // Merge modulation: effects 1-3, random rectangles, spatial bytes and tables.
 const mergeCases = [];
@@ -105,7 +110,8 @@ for (let k = 0; k < 32; k++) {
   frame.advance(k < 16 ? k * 0.0137 : 100 + k);
   if (k >= 16) for (let i = 0; i < 256; i++) { frame.noise.A[i] = f((random() % 100000) / 99999); frame.noise.W[i] = f((random() % 100000) / 99999); }
   for (let i = 0; i < 256; i++) {
-    frame.factors[1][i] = frame.noise.A[i] * 0.05 + 0.95; frame.factors[2][i] = frame.noise.A[i] * 0.2 + 0.8; frame.factors[3][i] = frame.noise.W[i] * 0.4 + 0.6;
+    frame.factors[1][i] = mergeFactor(frame.noise.A[i], 0.05, 0.95); frame.factors[2][i] = mergeFactor(frame.noise.A[i], 0.2, 0.8);
+    frame.factors[3][i] = mergeFactor(frame.noise.W[i], 0.4, 0.6);
   }
   for (const effect of [1, 2, 3]) {
     const exact = mergeModulation(effect, frame.noise);
@@ -116,7 +122,7 @@ for (let k = 0; k < 32; k++) {
   }
 }
 console.log(JSON.stringify(report));
-assert.equal(report.factorMismatch, 0, 'the double merge factors give the x87 modulation bytes');
+assert.equal(report.factorMismatch, 0, 'the 24-bit merge factors give the x87 modulation bytes');
 assert.equal(report.noiseMismatch, 0, 'light noise tables match');
 assert.equal(report.typeMismatch, 0, 'LightType brightness matches');
 assert.equal(report.mergeMismatch, 0, 'merge modulation matches');

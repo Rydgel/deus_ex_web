@@ -478,7 +478,7 @@ DrawTexture or DrawPattern is lowered to GC_EFFECT: the context object, the
 arguments in order with SELF, dispatchGcNative's conversions (f32 bits,
 pack() of a Color variable, addressOf of an object) and the body,
 transcribed from script-gc-*.mjs and the draw model's clip and sink with the
-same f64 intermediates and f32 roundings. The DrawTile command goes to the
+same roundings (24-bit since 2026-10-06, script-gc-draw-model.md). The DrawTile command goes to the
 host's callVirtual, so the command list keeps its order with the natives
 still in JavaScript (DrawText, DrawBorders, the window natives). The bodies
 run only while the window host paints and its own dispatch would reach

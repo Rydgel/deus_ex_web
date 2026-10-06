@@ -247,7 +247,9 @@ for (const [i, mutation] of MUTATIONS.entries()) {
   try {
     for (const [key, text] of Object.entries(sources))
       writeFileSync(path.join(dir, basenames[key]),
-        key === mutation.file ? source.replace(mutation.find, mutation.replace) : text);
+        // The copies import x87-pc24.mjs from src/runtime itself.
+        (key === mutation.file ? source.replace(mutation.find, mutation.replace) : text)
+          .replaceAll("from './x87-pc24.mjs'", "from '../x87-pc24.mjs'"));
     const mutated = await import(url.pathToFileURL(path.join(dir, path.basename(MODULE))).href);
     const failures = await runAll(mutated.gcDrawText);
     assert.ok(failures.length > 0,

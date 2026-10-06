@@ -2,8 +2,14 @@
  * candidate gathering, sort, visibility cache and fades; FLightManager::Light's
  * per-vertex diffuse and specular sum; DrawLodMesh's face/vertex normals and
  * unlit colour; D3DDrv's diffuse packing. Evidence, precision and remaining
- * limits: docs/mesh-lighting.md. */
-import { x87load, x87double, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
+ * limits: docs/mesh-lighting.md.
+ *
+ * All of it runs inside the render pass, under x87 precision control 24
+ * (docs/render-pass-precision.md): float operands make each x87 operation a
+ * binary32 one (`f(a op b)`); a double constant takes x87-pc24.mjs's exact
+ * rounding. */
+import { x87load, x87double, x87neg, x87store, x87cmp, x87int32, x87ftol } from './script-vm.mjs';
+import { p24add as x87add, p24mul as x87mul, p24div as x87div, r24prod, r24sum } from './x87-pc24.mjs';
 import { fgetHsv, movingLightConstants, tableSqrt, worldLightRadius, fistp } from './dynamic-lighting.mjs';
 
 const f = Math.fround;
@@ -41,24 +47,31 @@ const NORMAL_EPSILON = floatOf(0x3a83126f); // 0x10b2ac2c, 0.001f
 /** DrawLodMesh 0x10b0fe60-0x10b0ff85: the face normal of (v0, v1, v2),
  * normalized with the table reciprocal root and added to the three vertex
  * normals in place. `normals[i]` are mutable float triples. Returns the unit
- * face normal the back-face test uses. */
+ * face normal the back-face test uses. At 24 bits: `a = p2 − p0` and
+ * `bx = p0x − p1x` stay on the stack, `by`, `bz` are stored; `n = b × a`
+ * with each product rounded; `|n|²` as `(x² + y²) + z²`, plus ε. */
 export function accumulateFaceNormal(p0, p1, p2, n0, n1, n2) {
-  const ax = p2[0] - p0[0], ay = p2[1] - p0[1], az = p2[2] - p0[2];
-  const bz = f(p0[2] - p1[2]), by = f(p0[1] - p1[1]), bx = p0[0] - p1[0];
-  const nz = f(bx * ay - by * ax), ny = f(bz * ax - bx * az), nx = f(by * az - bz * ay);
-  const scale = tableRsqrt(f(nx * nx + ny * ny + nz * nz + NORMAL_EPSILON));
+  const ax = f(p2[0] - p0[0]), ay = f(p2[1] - p0[1]), az = f(p2[2] - p0[2]);
+  const bz = f(p0[2] - p1[2]), by = f(p0[1] - p1[1]), bx = f(p0[0] - p1[0]);
+  const nz = f(f(bx * ay) - f(by * ax)), ny = f(f(bz * ax) - f(bx * az)), nx = f(f(by * az) - f(bz * ay));
+  const scale = tableRsqrt(f(f(f(f(nx * nx) + f(ny * ny)) + f(nz * nz)) + NORMAL_EPSILON));
   const face = [f(nx * scale), f(ny * scale), f(nz * scale)];
   for (const normal of [n0, n1, n2]) for (let i = 0; i < 3; i++) normal[i] = f(face[i] + normal[i]);
   return face;
 }
 
+/** DrawLodMesh 0x10b0ffa3-0x10b0ffbb: the back-face test's dot,
+ * `(n.x·p.x + n.z·p.z) + n.y·p.y` at 24 bits (times Frame.Mirror, ±1). */
+export const faceDot = (face, p0) => f(f(f(face[0] * p0[0]) + f(face[2] * p0[2])) + f(face[1] * p0[1]));
+
 /** DrawLodMesh 0x10b10863-0x10b1090f: normalize a summed vertex normal and
- * return the plane [x, y, z, W] with W = N·P from the unrounded components. */
+ * return the plane [x, y, z, W] with W = (P.x·n.x + P.y·n.y) + P.z·n.z, each
+ * operation at 24 bits. */
 export function vertexNormalPlane(point, normal) {
   const [x, y, z] = normal;
-  const scale = tableRsqrt(f(x * x + y * y + z * z + NORMAL_EPSILON));
-  const ex = scale * x, ey = scale * y, ez = scale * z;
-  return [f(ex), f(ey), f(ez), f(point[0] * ex + point[1] * ey + point[2] * ez)];
+  const scale = tableRsqrt(f(f(f(f(x * x) + f(y * y)) + f(z * z)) + NORMAL_EPSILON));
+  const ex = f(scale * x), ey = f(scale * y), ez = f(scale * z);
+  return [ex, ey, ez, f(f(f(point[0] * ex) + f(point[1] * ey)) + f(point[2] * ez))];
 }
 
 /** DrawLodMesh 0x10b10924-0x10b10942: Fatness displaces a vertex along its
@@ -99,11 +112,17 @@ export function d3dDiffuse(light, scale = D3D_MAX_COLOR_SCALE) {
 // texture-palette types need tables that are not recovered; the caller gets
 // `unsupported` and the brightness is left as the steady value.
 export const LIGHT_TYPE_UNSUPPORTED = new Set([2, 4, 7, 8, 9]);
-export function lightTypeBrightness(light, brightness, timeSeconds, strobe) {
+// `renderPass`: the render pass's 24-bit Blink phase (SetupForActor). Galaxy's
+// ambient volume (script-audio-live.mjs) calls GlobalLighting from
+// Audio->Update, before PreRender, and keeps the double form.
+export function lightTypeBrightness(light, brightness, timeSeconds, strobe, renderPass = false) {
   switch (light.LightType & 255) {
     case 0: return 0;
-    case 3: { // Blink 0x10b05a90
-      const phase = Math.trunc(timeSeconds * 2293760 / ((light.LightPeriod & 255) + 1) + (light.LightPhase & 255) * 256);
+    case 3: { // Blink 0x10b05a90 (static-lighting.mjs lightTypeBrightness at 24 bits)
+      const phase = renderPass
+        ? x87ftol(x87add(x87div(x87mul(x87load(f(timeSeconds)), x87double(2293760)),
+          x87int32((light.LightPeriod & 255) + 1)), x87int32((light.LightPhase & 255) << 8)))
+        : Math.trunc(timeSeconds * 2293760 / ((light.LightPeriod & 255) + 1) + (light.LightPhase & 255) * 256);
       return phase & 1 ? 0 : brightness;
     }
     case 5: { // Strobe 0x10b05b30: one global toggle per new Level.TimeSeconds.
@@ -211,14 +230,17 @@ export function setupForActor(manager, actor, scene) {
   const tags = new Map(), list = [], identity = light => light.actor ?? light;
   const consider = (light, fade) => {
     if (list.length >= 120 || tags.get(identity(light))?.stamp === stamp) return;
-    const values = light.values, dx = light.location[0] - actor.location[0];
-    const dy = light.location[1] - actor.location[1], dz = light.location[2] - actor.location[2];
-    const dist2 = f(dz * dz + dy * dy + dx * dx);
+    // 0x10b090a7-0x10b09194 at 24 bits: the differences on the stack,
+    // (dz² + dy²) + dx² stored, R² against it, the key
+    // `(1 − √d²/R)·brightness·1024.0` stored before FISTP.
+    const values = light.values, dx = f(f(light.location[0]) - f(actor.location[0]));
+    const dy = f(f(light.location[1]) - f(actor.location[1])), dz = f(f(light.location[2]) - f(actor.location[2]));
+    const dist2 = f(f(f(dz * dz) + f(dy * dy)) + f(dx * dx));
     const radius = f(worldLightRadius(values));
-    if (Boolean(values.bSpecialLit) !== Boolean(actor.bSpecialLit) || !(radius * radius > dist2)) return;
+    if (Boolean(values.bSpecialLit) !== Boolean(actor.bSpecialLit) || !(f(radius * radius) > dist2)) return;
     let brightness = values.LightBrightness & 255, r = radius;
     if ((values.LightEffect & 255) === 17) { brightness = f(brightness * 0.75); r = f(r * 0.75); }
-    const key = fistp(f((1 - tableSqrt(dist2) / r) * brightness * 1024));
+    const key = fistp(f(f(f(1 - f(tableSqrt(dist2) / r)) * brightness) * 1024));
     const tag = { stamp, key, fade };
     tags.set(identity(light), tag);
     list.push({ light, key, tag });
@@ -264,8 +286,12 @@ export function setupForActor(manager, actor, scene) {
  * empty result the light selection fills. */
 export function setupAmbient(actor, scene) {
   const zone = actor.zone ?? scene.levelInfo;
+  // 0x10b08da6-0x10b08dde at 24 bits: AmbientGlow·(1/255) (a double), or for
+  // 255 `fsin(CurrentTime·8.0)·0.2 + 0.25` (FSIN is the host's sin; the
+  // products and sum round exactly once each).
   const glow = f((actor.AmbientGlow & 255) === 255
-    ? Math.sin(scene.viewport.currentTime * 8) * 0.2 + 0.25 : (actor.AmbientGlow & 255) * (1 / 255));
+    ? r24sum(r24prod(Math.sin(r24prod(scene.viewport.currentTime, 8)), 0.2), 0.25)
+    : r24prod(actor.AmbientGlow & 255, 1 / 255));
   const hsv = cachedHsv(zone.ambient[1], zone.ambient[2], zone.ambient[0]);
   const ambient = [f(glow + hsv[0]), f(glow + hsv[1]), f(glow + hsv[2])];
   return { ambient, scaleGlow: f(actor.ScaleGlow), lights: [], flags: 0, traced: [] };
@@ -288,12 +314,14 @@ export function finishSetup(manager, actor, scene, result, added) {
     if (LIGHT_TYPE_UNSUPPORTED.has(type)) manager.diagnostics.add(`LightType ${type} function is not applied to mesh lighting`);
     const levelBrightness = f(scene.levelInfo.brightness);
     const brightness = f(lightTypeBrightness(values, f((values.LightBrightness & 255) * f(1 / 255)),
-      scene.levelInfo.timeSeconds, manager.strobe));
+      scene.levelInfo.timeSeconds, manager.strobe, true));
     const hsv = cachedHsv(values.LightHue, values.LightSaturation, 255);
     const constants = cachedConstants(values, levelBrightness, hsv);
     const color = brightness === f((values.LightBrightness & 255) * f(1 / 255)) ? constants.color
-      : hsv.map(channel => f(levelBrightness * brightness * channel));
-    const fade = tagFade * (1 / 255);
+      : movingLightConstants(values, levelBrightness, hsv, brightness).color;
+    // 0x10b097ed-0x10b0980c: fild fade, fmul the double 1/255, kept on the
+    // stack for the three colour products.
+    const fade = r24prod(tagFade, 1 / 255);
     result.lights.push({ light, location: scene.worldToCamera(light.location), radius: constants.radius,
       rradius: constants.rradius, color: color.map(channel => f(fade * channel)) });
   }
@@ -303,10 +331,11 @@ export function finishSetup(manager, actor, scene, result, added) {
 const ld = x87load, st = x87store, sub = (a, b) => x87add(a, x87neg(b));
 const X_ZERO = x87load(0), X_ONE = x87double(1), X_ONE_HALF = x87double(1.5), X_SIX = x87double(6), X_GLOW = x87double(1.4);
 
-/** FLightManager::Light (0x10b027f0) on the 80-bit model: every x87 register
- * value keeps its extended precision and every float store rounds, in the
- * original order. This is the reference translation; `lightVertex` below is
- * the double-precision path Play uses (measured against this one). */
+/** FLightManager::Light (0x10b027f0) on the BigInt x87 model at precision
+ * control 24 (x87-pc24.mjs: each operation rounded once to 24 bits, the
+ * double constants 1.0, 1.5, 6.0 and 1.4 included), in the original order
+ * with its float stores. This is the reference translation; `lightVertex`
+ * below is the binary32 path Play uses. */
 export function lightVertexX87(setup, point, plane, flags) {
   let r = 0.5, g = 0.5, b = 0.5;
   if (!(flags & PF.Unlit)) {
@@ -347,36 +376,38 @@ export function lightVertexX87(setup, point, plane, flags) {
 }
 
 /** FLightManager::Light (0x10b027f0) for a camera-space `point` with normal
- * plane `plane` [x, y, z, W]; returns the clamped [r, g, b]. JavaScript
- * doubles stand in for the extended registers between the recovered float
- * stores; see docs/mesh-lighting.md for the measured difference. */
+ * plane `plane` [x, y, z, W]; returns the clamped [r, g, b]. Every operation
+ * is binary32 (precision control 24 with float operands), `ScaleGlow·1.4`
+ * (a double) rounded once from the exact product; validate-mesh-lighting
+ * compares it with the original and with lightVertexX87. */
 export function lightVertex(setup, point, plane, flags) {
   let r = 0, g = 0, b = 0;
   if (flags & PF.Unlit) r = g = b = 0.5;
   else {
-    const [px, py, pz] = point, [nx, ny, nz, nw] = plane;
-    const p2 = f(px * px + py * py + pz * pz);
+    const px = f(point[0]), py = f(point[1]), pz = f(point[2]);
+    const nx = f(plane[0]), ny = f(plane[1]), nz = f(plane[2]), nw = f(plane[3]);
+    const p2 = f(f(f(px * px) + f(py * py)) + f(pz * pz));
     for (const info of setup.lights) {
       const [lx, ly, lz] = info.location;
-      const dz = f(lz - pz), dy = f(ly - py), dxe = lx - px, dx = f(dxe);
-      const dist2 = f(dxe * dx + dy * dy + dz * dz), dist = tableSqrt(dist2);
-      const c = (dy * ny + dz * nz + dx * nx) / dist + 1;
-      let diffuse = f(c * c - 1.5);
-      if (diffuse < 0) diffuse = 0;
-      const plane2 = f(2 * (lz * nz + ly * ny + lx * nx - nw));
-      const rx = f(lx - f(nx * plane2)), ry = f(ly - f(ny * plane2)), rz = f(lz - f(nz * plane2));
-      const specular = rx * px + rz * pz + ry * py - p2;
-      const total = specular > 0 ? specular * specular * 6 / (dist2 * p2) + diffuse : diffuse;
-      const amount = total * (1 - dist * info.rradius);
+      const dz = f(lz - pz), dy = f(ly - py), dx = f(lx - px);
+      const dist2 = f(f(f(dx * dx) + f(dy * dy)) + f(dz * dz)), dist = tableSqrt(dist2);
+      const c = f(f(f(f(f(dy * ny) + f(dz * nz)) + f(dx * nx)) / dist) + 1);
+      let diffuse = f(f(c * c) - 1.5);
+      if (!(diffuse >= 0)) diffuse = 0;
+      const planeDot = f(f(f(f(lz * nz) + f(ly * ny)) + f(lx * nx)) - nw), s2 = f(planeDot + planeDot);
+      const rx = f(lx - f(s2 * nx)), ry = f(ly - f(s2 * ny)), rz = f(lz - f(s2 * nz));
+      const specular = f(f(f(f(rx * px) + f(rz * pz)) + f(ry * py)) - p2);
+      const total = specular > 0 ? f(f(f(f(specular * specular) * 6) / f(dist2 * p2)) + diffuse) : diffuse;
+      const amount = f(total * f(1 - f(dist * info.rradius)));
       if (amount > 0) {
         const [cr, cg, cb] = info.color;
-        r = f(amount * cr + r);
+        r = f(f(amount * cr) + r);
         g = f(f(amount * cg) + g);
         b = f(f(amount * cb) + b);
       }
     }
   }
-  const scale = setup.scaleGlow * 1.4, [ar, ag, ab] = setup.ambient;
-  const clamp = value => (value > 1 ? 1 : f(value));
-  return [clamp(r * scale + ar), clamp(g * scale + ag), clamp(b * scale + ab)];
+  const scale = r24prod(f(setup.scaleGlow), 1.4), [ar, ag, ab] = setup.ambient;
+  const clamp = value => (value > 1 ? 1 : value);
+  return [clamp(f(f(r * scale) + ar)), clamp(f(f(g * scale) + ag)), clamp(f(f(scale * b) + ab))];
 }

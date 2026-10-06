@@ -368,7 +368,11 @@ class MeshOracle(dyn.Oracle):
 
 
 def main():
-    root, control_word = sys.argv[1], int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x037f
+    # The render pass's precision control 24 by default (argv[2] or the
+    # audit's ORACLE_CW select another word); the light-manager tables come
+    # from the init word 0x037f.
+    root = sys.argv[1]
+    control_word = int(sys.argv[2], 0) if len(sys.argv) > 2 else dyn.native.render_control_word(0x007f)
     cases = json.load(sys.stdin)
     out = {'controlWord': control_word}
     oracle = MeshOracle(root, control_word)

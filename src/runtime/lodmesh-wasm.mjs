@@ -60,10 +60,10 @@ export function createLodMeshKernel(instance) {
     return mesh;
   };
   const kernel={name:'rust-wasm',
-    /** Diagnostics: vertices posed by the exact integer path and by the
-     * general extended-precision loop (docs/lodmesh-wasm.md). */
-    poseCounts:()=>poseCount?{double:poseCount(3)>>>0,exact:poseCount(0)>>>0,
-      nonFinite:poseCount(1)>>>0,extended:poseCount(2)>>>0}:null,
+    /** Diagnostics: vertices posed by the binary32 path and by the Ext
+     * model rounded to 24 bits, for a pass with non-finite words and for a
+     * declined vertex (docs/lodmesh-wasm.md). */
+    poseCounts:()=>poseCount?{single:poseCount(0)>>>0,nonFinite:poseCount(1)>>>0,extended:poseCount(2)>>>0}:null,
     run({source,frameVertexCount,count,first=0,second=0,alpha=0,
     tween=false,blend=false,entry,output,stride,matrix,origin}) {
     if(count<=0)return;

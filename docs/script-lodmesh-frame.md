@@ -2,6 +2,12 @@
 
 ## Contract recovered before implementation
 
+Precision (2026-10-06): GetFrame runs only from DrawLodMesh, inside the
+render pass, at x87 precision control 24, so every operation below rounds to
+a 24-bit significand; the "extended" notes say where a value stays on the x87
+stack. The translation and the oracle follow that ([lodmesh-wasm](lodmesh-wasm.md)
+"Precision control 24").
+
 Authority: GOTY Engine.dll SHA-256
 `0c3a8b18239ca98ae132506a1bd966cb5d91c6852e650e179cb15860832c20b4`
 and Core.dll `8bf3039e14f849942ee70a95bdf26cf1f636245926e30106bbe58b7097eba7e4`.

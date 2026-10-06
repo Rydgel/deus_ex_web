@@ -67,20 +67,35 @@ Authority:
      to savedLoc/savedRot, so the last item's snapshot sits there too.
 
 `laserCurrentItem` (`src/runtime/script-laser.mjs`) translates CurrentItem
-on the x87 model:
-- Core's FRotator::Vector is `rotatorToVector`.
-- UnsafeNormal is translated in place: FSQRT and the double store.
-- `FVector::Rotation` is `vectorToRotator`, the hardware-validated
-  FPATAN path (docs/script-pawn-locomotion.md).
+on the x87 model at the render pass's precision control 24 (since
+2026-10-06): CurrentItem runs from SetupDynamics, between URender::PreRender
+and PostRender ([render-pass precision](render-pass-precision.md)).
+- Every add, multiply, divide and FSQRT rounds to 24 bits with the x87's wide
+  exponent (`x87-pc24.mjs` `p24*`); loads and the float stores are unchanged.
+- Core's FRotator::Vector is `rotatorToVector` (table lookups, unaffected).
+- UnsafeNormal is translated in place: FSQRT and the double store (exact of
+  a 24-bit value).
+- `FVector::Rotation` (Core `0x10144390`) is `vectorToRotator24`: the root
+  `√(y² + x²)` at 24 bits, FPATAN as the host's `Math.atan2` (precision
+  control does not affect FPATAN), and the product with the embedded double
+  `10430.219195527361` (`0x10178050`) rounded once from the exact value
+  before the truncating `ftol`. The 64-bit `vectorToRotator` stays the
+  game-thread form (docs/script-pawn-locomotion.md).
 
 `validate-native-laser.mjs` runs the unchanged DeusEx.dll body with Core's
-FGlobalMath, UnsafeNormal and Rotation (`native-laser-oracle.py`). appFrand
-returns the case's doubles, and XLevel's two moves are recording stubs.
+FGlobalMath, UnsafeNormal and Rotation (`native-laser-oracle.py`), under
+control word `0x007f` (`ORACLE_CW` overrides it). appFrand returns the
+case's doubles, and XLevel's two moves are recording stubs.
 - **Coverage.** 160 iterators: 1–3 active beams with inactive slots
   between, straight and random beams, zero segments, Index past every
   beam, MaxItems 0, a moved savedLoc and no proxy.
 - **Result.** All 5,348 items match: every move argument, prevLoc, prevRand,
-  savedLoc, savedRot, nextItem and appFrand draw.
+  savedLoc, savedRot, nextItem and appFrand draw. The 64-bit translation
+  matched the oracle at `0x037f` but failed 8,021 of 42,785 checks at
+  `0x007f` (prevRand, prevLoc, the proxy moves, savedLoc and savedRot).
+- **Cost.** Over the same 5,348 items, seven interleaved rounds (Node, Linux
+  host): median 8.98 µs per item for the 64-bit model, 7.87 µs at 24 bits.
+  Island's five doorway beams have 55 items.
 - **Sensitivity.** Rounding X's end point to float32 fails the comparison.
 - **Limitation.** Unicorn evaluates FPATAN in double precision, so the
   oracle's Rotation agrees with the host's only away from integer boundaries.
@@ -104,11 +119,15 @@ returns the case's doubles, and XLevel's two moves are recording stubs.
   does. GetFrame and mesh lighting therefore see the snapshot. Items draw
   whatever the proxy's bHidden.
 
-`validate-lasers-play.mjs` checks this on 01_NYC_UNATCOIsland. Beside
-LaserTrigger0–4's doorway beams:
+`validate-lasers-play.mjs` checks this on 01_NYC_UNATCOIsland, with the
+simulation in the worker (the default; decal-probe.mjs `placeProbe` and
+`laserProbe` act and read on the simulation side, the page's actor mesh
+draw reports which item bindings it shows). Beside LaserTrigger0–4's
+doorway beams:
 - each emitter has its LaserIterator;
 - CalcTrace adds 158-unit beams (10 segments, MaxItems 11);
-- the segments in view draw (44);
+- the segments in view draw (33 of 55 in the validator's view since BSP
+  occlusion; the same with the 64-bit model and with `--query sim=inline`);
 - drawn proxies keep a current LastRenderTime;
 - there is no runtime error.
 

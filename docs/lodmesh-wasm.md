@@ -21,8 +21,10 @@ sequence lookup, owner selection, matrix construction, cache identity/leases,
 negative-frame tween decisions/completion and the four-slot call order.
 
 * Source vertices are three signed i16 components in an eight-byte record.
-* Normal interpolation stores local pose in the existing f32 cache. X retains
-  subtraction/product in extended precision; Y/Z store each to f32 first.
+* Normal interpolation stores local pose in the existing f32 cache. X keeps
+  its subtraction and product on the stack, Y/Z store each to f32 first; at
+  the render pass's 24-bit precision both are the same binary32 operations
+  (see "Precision control 24" below).
 * Tween interpolation uses the existing cached pose and the target frame.
   Zero alpha keeps the cache unchanged. Completion/count expansion stays in JS.
 * Main publication subtracts mesh origin with f32 stores, then coordinate
@@ -34,10 +36,10 @@ negative-frame tween decisions/completion and the four-slot call order.
 
 Wasm exposes f32/f64 rather than the original x87 format
 ([WebAssembly numeric types](https://webassembly.org/docs/portability/)). The
-kernel therefore needs integer software arithmetic retaining a 64-bit
-significand, nearest-even rounding at each original operation and f32 store,
-signed zeros and the existing original NaN-selection rules. Ordinary Rust f32
-or f64 expressions would not establish fidelity. Integer ABI arguments and
+kernel was first written for 64-bit registers, which needed integer software
+arithmetic retaining a 64-bit significand. GetFrame runs inside the render
+pass, under precision control 24 (since 2026-10-06, "Precision control 24"
+below), where one binary32 operation per x87 operation is exact. Integer ABI arguments and
 linear-memory buffers avoid per-operation JS/Wasm calls and NaN conversion.
 
 Existing unsupported GetFrame branches and native heap/exception services
@@ -89,7 +91,41 @@ also cannot show a rate above 60 fps. Raw profiles are
 `.cache/perf/unatco-{render,no-lighting,wasm-lighting-v2,wasm-final}.cpuprofile`,
 outside Git.
 
-## Exact integer posing
+## Precision control 24 (2026-10-06)
+
+GetFrame's only caller is DrawLodMesh (Render `0x10b0ee0f`), inside the
+render pass, which URender::PreRender runs with x87 precision control 24
+([render-pass precision](render-pass-precision.md)). Every add, subtract and
+multiply of the loops, and every operation of the matrix setup (Core's
+FCoords operators included), rounds to a 24-bit significand. Every operand is
+a float or an int16 vertex word, so each is one binary32 operation.
+
+* `lodmesh-frame.mjs` computes the matrix, the cache scalars (tween alpha,
+  completion against `.97f`, phase, fraction) and the vertex loops in
+  binary32 (`Math.fround` per operation).
+* The kernel's `pose_single` runs a vertex in Rust f32. A non-finite operand,
+  or a product at or below 2^-126 (where the x87 keeps a normal 24-bit value
+  that binary32 would denormalize) or overflowing, hands the vertex to
+  `pose_ext24`: the `Ext` model with `round24` after each operation, which
+  also follows the x87's NaN rules. `poseCounts()` reports both.
+* The GPU pose pass (`gpu-mesh-glsl.mjs`) is the same binary32 operations,
+  each through the barrier B() ([GPU meshes](gpu-mesh.md)).
+
+Evidence: `node scripts/validate-lodmesh-frame.mjs` and `--wasm` match all 46
+original GetFrame calls at control word `0x007f`, the oracle's default now
+(the 64-bit translation differed in 20 of them: 7,562 of 29,823 output words,
+up to 1,257 ulps, and 182 cache words). The Rust test
+`single_pose_matches_ext24` compares every cache and output word of both
+paths over 6,000 random calls (193,690 vertices, 190,616 on binary32) with
+zeros, −0, NaN, tiny words and negative alpha. `validate-gpu-mesh` (Training
+and Island, 101 captures): 227,862 of 227,862 GPU pose components equal the
+CPU kernel's bits.
+
+Cost: the `pose_speed` bench (800 vertices, native, five alternating runs)
+went from 69.9 ns per vertex (the f64 certain-rounding path below) to 19.1.
+The sections below describe the 64-bit kernel this replaced.
+
+## Exact integer posing (64-bit registers, superseded)
 
 The x87 model rounds to a 64-bit significand only when a result needs more
 bits. `pose_exact` (in `native/lodmesh-kernel/src/lib.rs`) runs each vertex of
