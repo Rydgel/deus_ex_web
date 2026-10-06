@@ -23,6 +23,24 @@ vec2 ffMulF(vec2 a,float b){vec2 p=twoProd(a.x,b);return fastTwoSum(p.x,B(p.y+B(
 vec2 ffMul(vec2 a,vec2 b){vec2 p=twoProd(a.x,b.x);return fastTwoSum(p.x,B(p.y+B(B(a.x*b.y)+B(a.y*b.x))));}
 vec2 ffDiv(vec2 a,vec2 b){float q=B(a.x/b.x);vec2 r=ffAdd(a,-ffMulF(b,q));float q2=B(r.x/b.x);
   vec2 r2=ffAdd(r,-ffMulF(b,q2));return ffAddF(fastTwoSum(q,q2),B(r2.x/b.x));}
+// The correctly rounded binary32 quotient (a GPU division may be 2 ulp off):
+// q from the float-float quotient (within about 2^-46 of a/b), then one step
+// toward the exact remainder r = a - q*b (exact as a pair) when |r/b|
+// reaches half the spacing on that side of q (a quarter of q's ulp below a
+// power of two). A quotient of two floats is never a rounding midpoint.
+// Normal-range quotients only (the lighting's).
+float divRN(float a,float b){
+  float q=ffDiv(vec2(a,0.0),vec2(b,0.0)).x;
+  if(!(abs(q)<3.0e38)||abs(q)<1.0e-37)return q;
+  vec2 r=ffAdd(vec2(a,0.0),-twoProd(q,b));
+  if(r.x==0.0)return q;
+  uint bits=floatBitsToUint(abs(q));
+  bool bigger=((r.x>0.0)==(b>0.0))==(q>0.0);
+  float ulp=uintBitsToFloat((bits&0x7f800000u)-0x0b800000u);
+  float halfStep=B(ulp*((bigger||(bits&0x7fffffu)!=0u)?0.5:0.25));
+  if(abs(r.x)<B(abs(b)*halfStep))return q;
+  float stepped=uintBitsToFloat(bigger?bits+1u:bits-1u);
+  return q<0.0?-stepped:stepped;}
 ivec2 at(uint t){return ivec2(int(t&1023u),int(t>>10));}
 `;
 
@@ -55,7 +73,7 @@ void main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-
 // U2 actorFlags,lightStart,poseFrame,lightFrame   U3 environment,lightCount,0,0
 // U4+k channel k (main, blend 0..3): mode(0 off,1 keyframe,2 tween),first,second,blend
 // F0 matrix row 0 (m0)  F1..F3 rows 1..3  F4 mesh origin  F5+k channel alpha
-// F10 ambient rgb, ScaleGlow   F11 unlit rgb
+// F10 ambient rgb, ScaleGlow*1.4 (24-bit)   F11 unlit rgb
 export const PARAMS=`
 uniform usampler2D uParamsU;uniform sampler2D uParamsF;
 uvec4 pu(uint slot,int k){return texelFetch(uParamsU,ivec2(k,int(slot)),0);}
@@ -114,14 +132,13 @@ void main(){
   oState0=s[0];oState1=s[1];oState2=s[2];oState3=s[3];oState4=s[4];
 }`;
 
-// The lighting frame's camera transform (kernel camera_component): exact
-// differences and products, one rounding of the sum.
+// The lighting frame's camera transform (kernel camera_component):
+// TransformPointBy at the render pass's 24 bits, (d.x*A.x + d.y*A.y) + d.z*A.z.
 export const CAMERA=`
 uniform vec3 uCameraOrigin,uCameraX,uCameraY,uCameraZ;
 float cameraComponent(vec3 p,vec3 axis){
-  vec2 s=ffAdd(ffAdd(ffMulF(twoSum(p.x,-uCameraOrigin.x),axis.x),ffMulF(twoSum(p.y,-uCameraOrigin.y),axis.y)),
-    ffMulF(twoSum(p.z,-uCameraOrigin.z),axis.z));
-  return s.x;}
+  float dx=B(p.x-uCameraOrigin.x),dy=B(p.y-uCameraOrigin.y),dz=B(p.z-uCameraOrigin.z);
+  return B(B(B(dx*axis.x)+B(dy*axis.y))+B(dz*axis.z));}
 vec3 toCamera(vec3 p){return vec3(cameraComponent(p,uCameraX),cameraComponent(p,uCameraY),cameraComponent(p,uCameraZ));}
 `;
 
@@ -143,12 +160,12 @@ void main(){
   oFace=vec4(0.0);oEnvironment=vec4(0.0);
   if(lit){
     vec3 p0=toCamera(w0),p1=toCamera(w1),p2=toCamera(w2);
-    vec2 ax=twoSum(p2.x,-p0.x),ay=twoSum(p2.y,-p0.y),az=twoSum(p2.z,-p0.z),bx=twoSum(p0.x,-p1.x);
-    float bz=B(p0.z-p1.z),by=B(p0.y-p1.y);
-    float nz=ffAdd(ffMul(bx,ay),-ffMulF(ax,by)).x,ny=ffAdd(ffMulF(ax,bz),-ffMul(bx,az)).x,nx=ffAdd(ffMulF(az,by),-ffMulF(ay,bz)).x;
-    float scale=tableRsqrt(ffAddF(ffAdd(ffAdd(twoProd(nx,nx),twoProd(ny,ny)),twoProd(nz,nz)),EPSILON).x);
+    // DrawLodMesh 0x10b0fe60..0x10b0ffbb at 24 bits (accumulateFaceNormal, faceDot).
+    float ax=B(p2.x-p0.x),ay=B(p2.y-p0.y),az=B(p2.z-p0.z),bx=B(p0.x-p1.x),bz=B(p0.z-p1.z),by=B(p0.y-p1.y);
+    float nz=B(B(bx*ay)-B(by*ax)),ny=B(B(bz*ax)-B(bx*az)),nx=B(B(by*az)-B(bz*ay));
+    float scale=tableRsqrt(B(B(B(B(nx*nx)+B(ny*ny))+B(nz*nz))+EPSILON));
     vec3 n=vec3(B(nx*scale),B(ny*scale),B(nz*scale));
-    float dot=ffAdd(ffAdd(twoProd(n.x,p0.x),twoProd(n.y,p0.y)),twoProd(n.z,p0.z)).x;
+    float dot=B(B(B(n.x*p0.x)+B(n.z*p0.z))+B(n.y*p0.y));
     uint flags=face.w|u2.x;
     bool drawn=(face.w&1u)==0u&&((face.w&0x100u)!=0u||dot<0.0);
     oFace=vec4(n,drawn?((flags&0x400000u)!=0u?2.0:1.0):0.0);
@@ -166,7 +183,7 @@ void main(){
  * attachment 1 the environment vertex normal (meshVertexNormalsInto). */
 export const VERTEX_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}
 uniform usampler2D uVertexMap,uMeshVertices,uAdjacency;uniform sampler2D uPose,uFaces,uEnvironmentFaces,uLights;
-uniform uint uFrame;uniform vec2 uGlow;
+uniform uint uFrame;
 layout(location=0) out vec4 oLight;layout(location=1) out vec4 oEnvironment;
 uint adjacent(uint k){uvec4 v=texelFetch(uAdjacency,at(k>>2),0);uint c=k&3u;return c==0u?v.x:c==1u?v.y:c==2u?v.z:v.w;}
 void main(){
@@ -189,42 +206,44 @@ void main(){
   }
   if(!lit)return;
   vec3 P=toCamera(texelFetch(uPose,at(u1.y+map.y),0).xyz);
-  float scale=tableRsqrt(ffAddF(ffAdd(ffAdd(twoProd(N.x,N.x),twoProd(N.y,N.y)),twoProd(N.z,N.z)),EPSILON).x);
-  vec2 ex=twoProd(scale,N.x),ey=twoProd(scale,N.y),ez=twoProd(scale,N.z);
-  float nx=ex.x,ny=ey.x,nz=ez.x;
-  float nw=ffAdd(ffAdd(ffMulF(ex,P.x),ffMulF(ey,P.y)),ffMulF(ez,P.z)).x;
+  // DrawLodMesh 0x10b10863..0x10b1090f and FLightManager::Light at the
+  // render pass's 24 bits (the kernel's light_vertex): one binary32
+  // operation each, the two quotients correctly rounded (divRN).
+  float scale=tableRsqrt(B(B(B(B(N.x*N.x)+B(N.y*N.y))+B(N.z*N.z))+EPSILON));
+  float nx=B(scale*N.x),ny=B(scale*N.y),nz=B(scale*N.z);
+  float nw=B(B(B(P.x*nx)+B(P.y*ny))+B(P.z*nz));
   uint flags=u2.x;
   vec3 sum=vec3(0.0);
   if((flags&0x400000u)!=0u)sum=vec3(0.5);
   else{
-    float p2=ffAdd(ffAdd(twoProd(P.x,P.x),twoProd(P.y,P.y)),twoProd(P.z,P.z)).x;
+    float p2=B(B(B(P.x*P.x)+B(P.y*P.y))+B(P.z*P.z));
     for(uint l=0u;l<u3.y;l++){
       vec4 L=texelFetch(uLights,at((u2.y+l)*2u),0),C=texelFetch(uLights,at((u2.y+l)*2u+1u),0);
-      float dz=B(L.z-P.z),dy=B(L.y-P.y);vec2 dxe=twoSum(L.x,-P.x);float dx=dxe.x;
-      float dist2=ffAdd(ffAdd(ffMulF(dxe,dx),twoProd(dy,dy)),twoProd(dz,dz)).x;
+      float dz=B(L.z-P.z),dy=B(L.y-P.y),dx=B(L.x-P.x);
+      float dist2=B(B(B(dx*dx)+B(dy*dy))+B(dz*dz));
       float dist=tableSqrt(dist2);
-      vec2 factor=ffAddF(-twoProd(dist,L.w),1.0);
-      if(!(factor.x>0.0))continue;
-      vec2 c=ffAddF(ffDiv(ffAdd(ffAdd(twoProd(dy,ny),twoProd(dz,nz)),twoProd(dx,nx)),vec2(dist,0.0)),1.0);
-      float diffuse=ffAddF(ffMul(c,c),-1.5).x;
-      if(diffuse<0.0)diffuse=0.0;
-      float plane2=B(2.0*ffAddF(ffAdd(ffAdd(twoProd(L.z,nz),twoProd(L.y,ny)),twoProd(L.x,nx)),-nw).x);
-      float rx=B(L.x-B(nx*plane2)),ry=B(L.y-B(ny*plane2)),rz=B(L.z-B(nz*plane2));
-      vec2 specular=ffAddF(ffAdd(ffAdd(twoProd(rx,P.x),twoProd(rz,P.z)),twoProd(ry,P.y)),-p2);
-      vec2 total=vec2(diffuse,0.0);
-      if(specular.x>0.0)total=ffAddF(ffDiv(ffMulF(ffMul(specular,specular),6.0),twoProd(dist2,p2)),diffuse);
-      vec2 amount=ffMul(total,factor);
-      if(amount.x>0.0){
-        sum.x=ffAddF(ffMulF(amount,C.x),sum.x).x;
-        sum.y=B(ffMulF(amount,C.y).x+sum.y);
-        sum.z=B(ffMulF(amount,C.z).x+sum.z);
+      float factor=B(1.0-B(dist*L.w));
+      if(!(factor>0.0))continue;
+      float c=B(divRN(B(B(B(dy*ny)+B(dz*nz))+B(dx*nx)),dist)+1.0);
+      float diffuse=B(B(c*c)-1.5);
+      if(!(diffuse>=0.0))diffuse=0.0;
+      float planeDot=B(B(B(B(L.z*nz)+B(L.y*ny))+B(L.x*nx))-nw),s2=B(planeDot+planeDot);
+      float rx=B(L.x-B(s2*nx)),ry=B(L.y-B(s2*ny)),rz=B(L.z-B(s2*nz));
+      float specular=B(B(B(B(rx*P.x)+B(rz*P.z))+B(ry*P.y))-p2);
+      float total=diffuse;
+      if(specular>0.0)total=B(divRN(B(B(specular*specular)*6.0),B(dist2*p2))+diffuse);
+      float amount=B(total*factor);
+      if(amount>0.0){
+        sum.x=B(B(amount*C.x)+sum.x);
+        sum.y=B(B(amount*C.y)+sum.y);
+        sum.z=B(B(amount*C.z)+sum.z);
       }
     }
   }
+  // F10.w: ScaleGlow*1.4 rounded once from the exact product (gpu-mesh.mjs).
   vec4 f10=pf(slot,10);
-  vec2 glow=ffMulF(uGlow,f10.w);
-  oLight=vec4(min(1.0,ffAddF(ffMulF(glow,sum.x),f10.x).x),min(1.0,ffAddF(ffMulF(glow,sum.y),f10.y).x),
-    min(1.0,ffAddF(ffMulF(glow,sum.z),f10.z).x),1.0);
+  float glow=f10.w;
+  oLight=vec4(min(1.0,B(B(sum.x*glow)+f10.x)),min(1.0,B(B(sum.y*glow)+f10.y)),min(1.0,B(B(glow*sum.z)+f10.z)),1.0);
 }`;
 
 /** Corner pass: the kernel's final loop. Modulated corners and corners of

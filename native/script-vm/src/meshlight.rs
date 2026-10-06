@@ -285,10 +285,13 @@ pub extern "C" fn ml_select(
         }
         let s = slot(light, true);
         let (lx, ly, lz) = (float(word(s, 6)), float(word(s, 7)), float(word(s, 8)));
-        let (dx, dy, dz) = (lx - ax, ly - ay, lz - az);
-        let dist2 = f(dz * dz + dy * dy + dx * dx);
+        // SetupForActor 0x10b090a7-0x10b09194 at the render pass's 24 bits
+        // (mesh-lighting.mjs setupForActor): every operation is one binary32
+        // rounding of float operands.
+        let (dx, dy, dz) = (f(lx - ax), f(ly - ay), f(lz - az));
+        let dist2 = f(f(f(dz * dz) + f(dy * dy)) + f(dx * dx));
         let radius = f(25.0 * ((word(s, 4) & 255) + 1) as f64);
-        if ((word(s, 5) & SL_SPECIAL) != 0) != (special_lit != 0) || !(radius * radius > dist2) {
+        if ((word(s, 5) & SL_SPECIAL) != 0) != (special_lit != 0) || !(f(radius * radius) > dist2) {
             return;
         }
         let mut brightness = (word(s, 3) & 255) as f64;
@@ -297,7 +300,7 @@ pub extern "C" fn ml_select(
             brightness = f(brightness * 0.75);
             r = f(r * 0.75);
         }
-        let key = fistp(f((1.0 - table_sqrt(dist2) / r) * brightness * 1024.0));
+        let key = fistp(f(f(f(1.0 - f(table_sqrt(dist2) / r)) * brightness) * 1024.0));
         list[*n] = Item { light, slot: s, key, fade };
         *n += 1;
     };

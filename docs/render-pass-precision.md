@@ -56,6 +56,9 @@ frame, whatever the word was before the first frame.
   normal table in 3,249 of 4,096. The oracles therefore build them at an
   init word (`0x037f`) separate from the per-frame word. Open: whether D3D's
   `DDSCL_FPUSETUP` (`0x1000b18e`) ran before URender::Init.
+* Galaxy Update's ambient-sound volume, which calls URender::GlobalLighting
+  from Audio->Update (`script-audio-live.mjs`): before PreRender, so it keeps
+  the double LightType form (`lightTypeBrightness` without `renderPass`).
 * PlayerCalcView, CreateMasterFrame, Galaxy Update (lip sync, music), the
   level tick (physics, script Tick, ParticleGenerator.Tick → native 3017
   UpdateParticles, animation tick, TweenBlendAnim), AttachDecal/DetachDecal,
@@ -138,9 +141,9 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | Routine | Placement | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- |
 | ULodMesh::GetFrame `0x10355360–0x103568e5` (Render's only call through its import is DrawLodMesh `0x10b0ee0f`; no other DLL imports it; virtual-call sites of UMesh::GetFrame `0x103a7780` not traced) | pass | lodmesh-frame oracle, **0x007f** | validate-lodmesh-frame (and `--wasm`), validate-gpu-mesh | `lodmesh-frame.mjs`; lodmesh-kernel `pose_single`/`pose_ext24`; GLSL `POSE_FRAGMENT` | **PC 24** (binary32; Ext24 fallback) | was: 20 of 46 calls (7,562 of 29,823 output words, max 1,257 ulps); **now 0**; GPU 227,862 of 227,862 components equal the CPU |
-| DrawLodMesh normals `0x10b0fe60–0x10b0ff85`, `0x10b10863–0x10b10912` | pass | mesh-light oracle, argv[2] (tables now at init) | validate-mesh-lighting | `accumulateFaceNormal`, `vertexNormalPlane`; kernel `light_mesh_job`; GLSL `FACE_FRAGMENT` | f64 + f32 stores | **face 278 of 400, vertex plane 208 of 400** |
-| SetupForActor `0x10b08c70` (ambient, candidates, AddLight, sort, ComputeFromActor) | pass | mesh-light oracle | validate-mesh-lighting(-play) | `mesh-lighting.mjs` `setupForActor`; meshlight.rs `ml_select` | f64 + fround | camera-space light and colour words differ by 1–8 ulps for most actors |
-| FLightManager::Light `0x10b027f0` | pass | mesh-light oracle | validate-mesh-lighting | `lightVertexX87` (reference), `lightVertex` (Play); kernel `light_vertex`; GLSL `VERTEX_FRAGMENT` | x87 / f64 | **1,545 of 3,744** channels (max 522 ulps); **0 of 1,248 D3D diffuse bytes** |
+| DrawLodMesh normals `0x10b0fe60–0x10b0ff85`, `0x10b10863–0x10b10912`, back-face dot `0x10b0ffa3` | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting, validate-gpu-mesh | `accumulateFaceNormal`, `faceDot`, `vertexNormalPlane`; kernel `light_mesh_job`; GLSL `FACE_FRAGMENT` | **PC 24** | was: face 278 of 400, vertex plane 208 of 400; **now 0** |
+| SetupForActor `0x10b08c70` (ambient, candidates, AddLight, sort, ComputeFromActor) | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting(-play) | `mesh-lighting.mjs` `setupForActor`; meshlight.rs `ml_select` | **PC 24** | was: camera-space light and colour words 1–8 ulps off; **now 0** (52 calls, 220 infos) |
+| FLightManager::Light `0x10b027f0` | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting, validate-gpu-mesh | `lightVertexX87` (BigInt PC 24 reference), `lightVertex`; kernel `light_vertex`; GLSL `VERTEX_FRAGMENT` (`divRN`) | **PC 24** | was: 1,545 of 3,744 channels; **now 0**; GPU 701,505 colour channels equal the CPU |
 | D3D diffuse `0x10005942–0x100059ac` | pass | mesh-light oracle | validate-mesh-lighting | `d3dDiffuse`; kernel `diffuse_channel`; GLSL `CORNER_FRAGMENT` | exact | 0 |
 | Environment mapping `0x10b101d3–0x10b10314`, `0x10b0bae9–0x10b0bbbc` | pass | mesh-environment oracle (tables at init, slices ORACLE_CW) | validate-mesh-environment (tolerance 0.00005 texel) | `mesh-environment.mjs`; GLSL `ENVIRONMENT_UV` | f64, not bit-exact | within tolerance |
 | GetRenderBoundingBox `0x103a6850`, BoundVisible `0x10b162e0`, FDynamicSprite::Setup `0x10b23910` | pass | render-visibility oracle (0x037f, BoundsOracle rejects other words) | validate-render-mesh-bounds, validate-render-visibility | JS reference (not in Play); Rust occlude.rs and the Setup branch in binary32 | x87 model (JS) | superseded by the binary32 Rust ports (other worktree); JS references not re-measured |
@@ -201,7 +204,7 @@ frac-edge case; the script VM in render events needs a design decision.
 Moved to the render-pass word: BSP occlusion, ClipDecal, the spatially
 dynamic light effects (other worktree), mesh fog's oracle default, and on
 this audit's branch volumetric fog, coronas, the static and moving light-map
-path with its light animation, and GetFrame (2026-10-06). The
+path with its light animation, GetFrame and mesh lighting (2026-10-06). The
 families are moved one at a time, starting with what Play computes every
 frame; each keeps the JS reference, the Rust kernel and the GPU shader in
 agreement and switches its oracle default to `0x007f` when its validator

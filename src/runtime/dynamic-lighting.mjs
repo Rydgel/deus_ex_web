@@ -10,9 +10,8 @@
  * binary32 operation (`f(a op b)` on doubles: the double result rounds
  * innocuously); a double constant takes x87-pc24.mjs's exact rounding. The
  * light-manager tables are built at init, on the game thread's 64-bit
- * precision. `fgetHsvExtended` and `movingLightConstantsExtended` keep the
- * earlier 64-bit model for mesh lighting until its translation moves. */
-import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87sqrt, x87store, x87storeDouble,
+ * precision. */
+import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87sqrt, x87store,
   x87cmp } from './script-vm.mjs';
 import { p24mul, p24add, p24div, p24sqrt, r24sum, r24prod } from './x87-pc24.mjs';
 
@@ -171,28 +170,6 @@ export function fgetHsv(hue, saturation, value) {
     x87store(p24mul(x87load(blue), brightness))];
 }
 
-/** FGetHSV on the 64-bit model (validated at 0x037f): mesh lighting's until
- * its translation moves to the render pass's precision. */
-export function fgetHsvExtended(hue, saturation, value) {
-  hue &= 255; saturation &= 255;
-  const scaled = x87mul(x87int32(value & 255), x87double(0.005490196078431372));
-  let brightness = x87mul(x87div(x87double(0.7), x87add(x87sqrt(x87storeDouble(scaled)), x87double(0.01))),
-    x87load(x87store(scaled)));
-  if (x87cmp(brightness, ZERO) === 'lt') brightness = ZERO;
-  else if (x87cmp(brightness, ONE) !== 'lt') brightness = ONE;
-  const product = (n, k) => x87store(x87mul(x87int32(n), k));
-  const [x, y, z] = hue < 86 ? [product(85 - hue, K85), product(hue, K85), 0]
-    : hue < 171 ? [0, product(170 - hue, K85), product(hue - 85, K85)]
-      : [product(hue - 170, K85), 0, product(255 - hue, K84)];
-  const complement = component => x87add(ONE, x87neg(x87load(component)));
-  const s = x87load(x87store(x87mul(x87int32(saturation), x87double(0.00392156862745098))));
-  const red = x87add(x87mul(complement(x), s), x87load(x));
-  const green = x87store(x87add(x87load(x87store(x87mul(x87load(x87store(complement(y))), s))), x87load(y)));
-  const blue = x87store(x87add(x87load(x87store(x87mul(x87load(x87store(complement(z))), s))), x87load(z)));
-  return [x87store(x87mul(red, brightness)), x87store(x87mul(x87load(green), brightness)),
-    x87store(x87mul(x87load(blue), brightness))];
-}
-
 /** ComputeFromActor's per-light constants at 24 bits: radius (WorldLightRadius,
  * at least 1), `1/R` (`fdivr` of the double 1.0) stored and kept,
  * `rr2 = (1/R)²·4093` (0x10b05fd9-0x10b06027), brightness
@@ -207,19 +184,6 @@ export function movingLightConstants(values, levelBrightness, hsv, typeBrightnes
   const color = hsv.map(channel => f(scale * f(channel)));
   return { radius, rradius, rr2: f(f(rradius * rradius) * 4093), color,
     steps: color.map(channel => fistp(f(f(channel * 65536) - .5))) };
-}
-
-/** ComputeFromActor's constants on the 64-bit model (validated at 0x037f):
- * mesh lighting's until its translation moves. */
-export function movingLightConstantsExtended(values, levelBrightness, hsv, typeBrightness = null) {
-  const radius = f(worldLightRadius(values)), clamped = radius > 1 ? radius : 1;
-  // GlobalLighting's LightType brightness (static-lighting.mjs
-  // lightTypeBrightness) when animated; steady LightBrightness/255 otherwise.
-  const reciprocal = 1 / clamped, brightness = typeBrightness ?? f((values.LightBrightness & 255) * f(1 / 255));
-  const scale = x87mul(x87load(levelBrightness), x87load(brightness));
-  const color = hsv.map(channel => x87store(x87mul(scale, x87load(channel))));
-  return { radius, rradius: f(reciprocal), rr2: f(reciprocal * reciprocal * 4093), color,
-    steps: color.map(channel => fistp(f(channel * 65536) - .5)) };
 }
 
 /** Colour table entry for a spatial byte (0x10b06570-0x10b065e0). */

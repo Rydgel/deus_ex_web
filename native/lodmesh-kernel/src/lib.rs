@@ -319,13 +319,45 @@ fn diffuse_channel(value: f32) -> f32 {
     (nearest_even(input) as u32 & 255) as f32 / 255.0
 }
 
+/// TransformPointBy at the render pass's 24 bits, the order of
+/// ComputeFromActor's camera-space location (0x10b06035-0x10b06095) and
+/// mesh-lighting-view.mjs `toCamera`: `(d.x·A.x + d.y·A.y) + d.z·A.z` with
+/// d = P − Origin, each operation one binary32 rounding.
 fn camera_component(point: [f32; 3], origin: [f32; 3], axis: [f32; 3]) -> f32 {
-    let dx = point[0] as f64 - origin[0] as f64;
-    let dy = point[1] as f64 - origin[1] as f64;
-    let dz = point[2] as f64 - origin[2] as f64;
-    (dx * axis[0] as f64 + dy * axis[1] as f64 + dz * axis[2] as f64) as f32
+    let dx = point[0] - origin[0];
+    let dy = point[1] - origin[1];
+    let dz = point[2] - origin[2];
+    (dx * axis[0] + dy * axis[1]) + dz * axis[2]
 }
 
+/// The 24-bit rounding of the exact product of a float and a double
+/// (precision control 24 with a double operand, such as ScaleGlow·1.4):
+/// Dekker's two-product, then the f32 rounding with the error deciding a
+/// rounding midpoint (x87-pc24.mjs r24prod). Finite normal-range results.
+fn r24_product(a: f32, b: f64) -> f32 {
+    let a = a as f64;
+    let p = a * b;
+    let split = |x: f64| {
+        let c = 134_217_729.0 * x;
+        let h = c - (c - x);
+        (h, x - h)
+    };
+    let ((ah, al), (bh, bl)) = (split(a), split(b));
+    let e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+    let r = p as f32 as f64;
+    if e == 0.0 || r == p || !p.is_finite() {
+        return r as f32;
+    }
+    let other = 2.0 * p - r;
+    if other == r || other as f32 as f64 != other {
+        return r as f32;
+    }
+    (if e > 0.0 { r.max(other) } else { r.min(other) }) as f32
+}
+
+/// FLightManager::Light (0x10b027f0) at the render pass's precision control
+/// 24 (mesh-lighting.mjs `lightVertex`): every operation is one binary32
+/// operation; `glow` is ScaleGlow·1.4 rounded once from the exact product.
 // `!(x > 0.0)` deliberately treats NaN like a non-positive factor.
 #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 fn light_vertex(
@@ -334,7 +366,7 @@ fn light_vertex(
     plane: [f32; 4],
     flags: u32,
     ambient: [f32; 3],
-    scale_glow: f32,
+    glow: f32,
     tables: &[u32],
 ) -> [f32; 3] {
     let [px, py, pz] = point;
@@ -345,55 +377,41 @@ fn light_vertex(
         (0.0f32, 0.0f32, 0.0f32)
     };
     if flags & 0x400000 == 0 {
-        let p2 = (px as f64 * px as f64 + py as f64 * py as f64 + pz as f64 * pz as f64) as f32;
+        let p2 = (px * px + py * py) + pz * pz;
         for &[lx, ly, lz, rradius, cr, cg, cb] in lights {
-            let dz = (lz as f64 - pz as f64) as f32;
-            let dy = (ly as f64 - py as f64) as f32;
-            let dxe = lx as f64 - px as f64;
-            let dx = dxe as f32;
-            let dist2 = (dxe * dx as f64 + dy as f64 * dy as f64 + dz as f64 * dz as f64) as f32;
+            let dz = lz - pz;
+            let dy = ly - py;
+            let dx = lx - px;
+            let dist2 = (dx * dx + dy * dy) + dz * dz;
             let dist = table_sqrt(dist2, tables);
             // amount = total * factor below; total is >= 0, +inf or NaN, so a
             // factor that is not positive leaves amount > 0 false.
-            let factor = 1.0 - dist as f64 * rradius as f64;
+            let factor = 1.0 - dist * rradius;
             if !(factor > 0.0) {
                 continue;
             }
-            let c = (dy as f64 * ny as f64 + dz as f64 * nz as f64 + dx as f64 * nx as f64)
-                / dist as f64
-                + 1.0;
-            let mut diffuse = (c * c - 1.5) as f32;
-            if diffuse < 0.0 {
+            let c = ((dy * ny + dz * nz) + dx * nx) / dist + 1.0;
+            let mut diffuse = c * c - 1.5;
+            if !(diffuse >= 0.0) {
                 diffuse = 0.0;
             }
-            let plane2 = (2.0
-                * (lz as f64 * nz as f64 + ly as f64 * ny as f64 + lx as f64 * nx as f64
-                    - nw as f64)) as f32;
-            let rx = (lx as f64 - (nx as f64 * plane2 as f64) as f32 as f64) as f32;
-            let ry = (ly as f64 - (ny as f64 * plane2 as f64) as f32 as f64) as f32;
-            let rz = (lz as f64 - (nz as f64 * plane2 as f64) as f32 as f64) as f32;
-            let specular =
-                rx as f64 * px as f64 + rz as f64 * pz as f64 + ry as f64 * py as f64 - p2 as f64;
-            let total = if specular > 0.0 {
-                specular * specular * 6.0 / (dist2 as f64 * p2 as f64) + diffuse as f64
-            } else {
-                diffuse as f64
-            };
+            let plane_dot = ((lz * nz + ly * ny) + lx * nx) - nw;
+            let s2 = plane_dot + plane_dot;
+            let rx = lx - s2 * nx;
+            let ry = ly - s2 * ny;
+            let rz = lz - s2 * nz;
+            let specular = ((rx * px + rz * pz) + ry * py) - p2;
+            let total = if specular > 0.0 { (specular * specular * 6.0) / (dist2 * p2) + diffuse } else { diffuse };
             let amount = total * factor;
             if amount > 0.0 {
-                r = (amount * cr as f64 + r as f64) as f32;
-                g = ((amount * cg as f64) as f32 as f64 + g as f64) as f32;
-                b = ((amount * cb as f64) as f32 as f64 + b as f64) as f32;
+                r = amount * cr + r;
+                g = amount * cg + g;
+                b = amount * cb + b;
             }
         }
     }
-    let scale = scale_glow as f64 * 1.4;
-    let finish = |value: f64| if value > 1.0 { 1.0 } else { value as f32 };
-    [
-        finish(r as f64 * scale + ambient[0] as f64),
-        finish(g as f64 * scale + ambient[1] as f64),
-        finish(b as f64 * scale + ambient[2] as f64),
-    ]
+    let finish = |value: f32| if value > 1.0 { 1.0 } else { value };
+    [finish(r * glow + ambient[0]), finish(g * glow + ambient[1]), finish(glow * b + ambient[2])]
 }
 
 /// Upload immutable DrawLodMesh face indices and flags from the start of WORK.
@@ -480,32 +498,28 @@ fn light_mesh_job(
         let p0 = point(vertices[0]);
         let p1 = point(vertices[1]);
         let p2 = point(vertices[2]);
-        let ax = p2[0] as f64 - p0[0] as f64;
-        let ay = p2[1] as f64 - p0[1] as f64;
-        let az = p2[2] as f64 - p0[2] as f64;
-        let bz = (p0[2] as f64 - p1[2] as f64) as f32;
-        let by = (p0[1] as f64 - p1[1] as f64) as f32;
-        let bx = p0[0] as f64 - p1[0] as f64;
-        let nz = (bx * ay - by as f64 * ax) as f32;
-        let ny = (bz as f64 * ax - bx * az) as f32;
-        let nx = (by as f64 * az - bz as f64 * ay) as f32;
-        let length = (nx as f64 * nx as f64
-            + ny as f64 * ny as f64
-            + nz as f64 * nz as f64
-            + NORMAL_EPSILON as f64) as f32;
+        // DrawLodMesh 0x10b0fe60-0x10b0ff85 at 24 bits (accumulateFaceNormal).
+        let ax = p2[0] - p0[0];
+        let ay = p2[1] - p0[1];
+        let az = p2[2] - p0[2];
+        let bz = p0[2] - p1[2];
+        let by = p0[1] - p1[1];
+        let bx = p0[0] - p1[0];
+        let nz = bx * ay - by * ax;
+        let ny = bz * ax - bx * az;
+        let nx = by * az - bz * ay;
+        let length = ((nx * nx + ny * ny) + nz * nz) + NORMAL_EPSILON;
         let scale = table_rsqrt(length, tables);
         let face = [nx * scale, ny * scale, nz * scale];
         for vertex in vertices {
             for axis in 0..3 {
                 let old = f32::from_bits(work[normals_at + vertex * 3 + axis]);
-                work[normals_at + vertex * 3 + axis] =
-                    ((face[axis] as f64 + old as f64) as f32).to_bits();
+                work[normals_at + vertex * 3 + axis] = (face[axis] + old).to_bits();
             }
         }
         let face_flags = faces[at + 3];
-        let dot = face[0] as f64 * p0[0] as f64
-            + face[1] as f64 * p0[1] as f64
-            + face[2] as f64 * p0[2] as f64;
+        // The back-face dot (0x10b0ffa3-0x10b0ffbb): (x + z) + y at 24 bits.
+        let dot = (face[0] * p0[0] + face[2] * p0[2]) + face[1] * p0[1];
         if face_flags & 1 == 0 && (face_flags & 0x100 != 0 || dot < 0.0) {
             work[drawn_at + i] = 1;
             for vertex in vertices {
@@ -514,6 +528,7 @@ fn light_mesh_job(
         }
     }
 
+    let glow = r24_product(scale_glow, 1.4);
     // Each light's seven words, read once for all vertices, into reused
     // scratch (a call allocates only when a mesh outgrows it).
     let (mut lights, mut converted) = LIGHT_SCRATCH.with_borrow_mut(|scratch| {
@@ -535,21 +550,12 @@ fn light_mesh_job(
             std::array::from_fn(|axis| f32::from_bits(work[camera_at + i * 3 + axis]));
         let normal: [f32; 3] =
             std::array::from_fn(|axis| f32::from_bits(work[normals_at + i * 3 + axis]));
-        let length = (normal[0] as f64 * normal[0] as f64
-            + normal[1] as f64 * normal[1] as f64
-            + normal[2] as f64 * normal[2] as f64
-            + NORMAL_EPSILON as f64) as f32;
+        // DrawLodMesh 0x10b10863-0x10b1090f at 24 bits (vertexNormalPlane).
+        let length = ((normal[0] * normal[0] + normal[1] * normal[1]) + normal[2] * normal[2]) + NORMAL_EPSILON;
         let scale = table_rsqrt(length, tables);
-        let extended = normal.map(|value| scale as f64 * value as f64);
-        let plane = [
-            extended[0] as f32,
-            extended[1] as f32,
-            extended[2] as f32,
-            (point[0] as f64 * extended[0]
-                + point[1] as f64 * extended[1]
-                + point[2] as f64 * extended[2]) as f32,
-        ];
-        let light = light_vertex(&lights, point, plane, flags, ambient, scale_glow, tables);
+        let n = normal.map(|value| scale * value);
+        let plane = [n[0], n[1], n[2], (point[0] * n[0] + point[1] * n[1]) + point[2] * n[2]];
+        let light = light_vertex(&lights, point, plane, flags, ambient, glow, tables);
         for axis in 0..3 {
             work[vertex_light_at + i * 3 + axis] = light[axis].to_bits();
         }

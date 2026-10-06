@@ -43,3 +43,16 @@ test('the wide exponent: no denormalization before the store', () => {
   assert.equal(r24(2 ** -200 * 3), 2 ** -200 * 3);
   assert.equal(r24(1 + 2 ** -30), 1);
 });
+
+test('r24sum and r24prod round the exact double result once', async () => {
+  const { r24sum, r24prod } = await import('../src/runtime/x87-pc24.mjs');
+  const { x87double: d } = await import('../src/runtime/script-vm.mjs');
+  for (let i = 0; i < 20000; i++) {
+    const a = value(), b = (random() - 0.5) * 2 ** Math.floor(random() * 20 - 10);
+    assert.equal(r24prod(a, b), x87store(p24mul(x87load(a), d(b))), `product ${a} ${b}`);
+    assert.equal(r24sum(a, b), x87store(p24add(x87load(a), d(b))), `sum ${a} ${b}`);
+  }
+  // A product landing exactly on a 24-bit midpoint in double: the error decides.
+  const a = f(1 + 2 ** -23), b = 1 + 2 ** -24 + 2 ** -52;
+  assert.equal(r24prod(a, b), x87store(p24mul(x87load(a), d(b))));
+});

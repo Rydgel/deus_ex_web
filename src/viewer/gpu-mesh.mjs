@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import {squareRootTable} from '../runtime/dynamic-lighting.mjs';
 import {rsqrtTables} from '../runtime/mesh-lighting.mjs';
+import {r24prod} from '../runtime/x87-pc24.mjs';
 import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
 import {PLAN_HEAD,PLAN_OP,LIGHTING_HEAD,LIGHTING_LIGHT} from './mesh-frame-pack.mjs';
 import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,poseFragment,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV}
@@ -19,8 +20,8 @@ const PARAMS_U=9,PARAMS_F=12,STATES=5;
 // target, the blend slot 3 cache pose.
 const POSE_PARTS=[['oPose','oState0','oState1'],['oState2','oState3','oState4']];
 const f32=Math.fround;
-// 1.4 as a float-float pair: the kernel multiplies ScaleGlow by the f64 1.4.
-const GLOW_HI=f32(1.4),GLOW_LO=f32(1.4-GLOW_HI);
+// FLightManager::Light's ScaleGlow*1.4 (a double constant), rounded once from
+// the exact product as the render pass's precision control 24 does.
 // D3D diffuse scale (diffuse_channel): float(255*float(1/255)).
 if(f32(255*f32(1/255))!==1)throw new Error('GPU mesh assumes the D3D diffuse scale is exactly 1');
 
@@ -233,7 +234,7 @@ export function createGpuMesh(renderer,capacities={}) {
       const {u32,f32,at}=packed;
       slotParamsU[u+8]=u32[at];
       for(let i=0;i<3;i++){slotParamsF[fl+40+i]=f32[at+1+i];slotParamsF[fl+44+i]=f32[at+5+i];}
-      slotParamsF[fl+43]=f32[at+4];
+      slotParamsF[fl+43]=r24prod(f32[at+4],1.4);
       for(let k=0;k<count;k++){
         const base=at+LIGHTING_HEAD+LIGHTING_LIGHT*k,to=lightCount*8;
         for(let i=0;i<7;i++)lightData[to+i]=f32[base+i];
@@ -242,7 +243,7 @@ export function createGpuMesh(renderer,capacities={}) {
     }else{
       const {flags,ambient,scaleGlow,unlit,lights}=lighting;
       slotParamsU[u+8]=flags>>>0;
-      slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=scaleGlow;
+      slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=r24prod(f32(scaleGlow),1.4);
       slotParamsF[fl+44]=unlit[0];slotParamsF[fl+45]=unlit[1];slotParamsF[fl+46]=unlit[2];
       for(const light of lights){
         const at=lightCount*8,{location,color}=light;
@@ -283,7 +284,6 @@ export function createGpuMesh(renderer,capacities={}) {
       gl.uniform3fv(u.get('uCameraOrigin'),camera.origin);gl.uniform3fv(u.get('uCameraX'),camera.axes[0]);
       gl.uniform3fv(u.get('uCameraY'),camera.axes[1]);gl.uniform3fv(u.get('uCameraZ'),camera.axes[2]);
     }
-    if(u.get('uGlow'))gl.uniform2f(u.get('uGlow'),GLOW_HI,GLOW_LO);
   };
 
   /** Run this frame's passes; afterwards three.js state is reset. */
