@@ -402,8 +402,8 @@ frame and dynamics in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
 on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
-music, and the third-person conversation camera with lip sync. Open: decals,
-fog on meshes and movers in Play, the occlusion's moving brush tracker and
+music, decals, and the third-person conversation camera with lip sync.
+Open: fog on meshes and movers in Play, the occlusion's moving brush tracker and
 child frames, mirror/sky combinations, zone reverb and Galaxy's mixer for
 sound effects, time-varying moving lights and spotlights, and original-game
 visual acceptance across maps. SpriteAnimOnce frames and animated mesh skins
@@ -629,6 +629,17 @@ AudioWorklet that the simulation worker feeds over a MessageChannel, so
 music costs the main thread nothing per frame. Sound effects still use the
 Web Audio host mapping, and zone reverb remains
 ([Galaxy music](galaxy-music.md)).
+
+**Decals (2026-10-06).** Shadow blobs under pawns draw in Play, and blood
+pools, scorch marks and bullet holes will when combat spawns them.
+Engine.dll's AttachDecal and DetachDecal (the trace, the surface finder,
+the FDecal quad and Nodes, the MultiDecalLevel grid with non-coplanar
+neighbours) and Render.dll's ClipDecal run in the Rust core, bit-equal to
+the original (49 attach scenarios on each of Training and Island; 655
+ClipDecal cases on three maps). The decal block stamps LastRenderedTime,
+which DeusExDecal's lifetime reads, and the page draws the fragments with
+D3D's modulated state; mirrors show none, as in the original. Mover
+surfaces wait for the brush tracker ([decals](decals.md)).
 
 ## 5. Implement the full gameplay systems
 

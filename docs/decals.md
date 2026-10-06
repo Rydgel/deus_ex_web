@@ -138,7 +138,7 @@ error injected into the radius fails the comparison. Not reached by any
 case: the noItem, noSurface, rotationParallel and offPlane gates and the
 24-point assert.
 
-## Drawing (recovered, not yet in Play)
+## Drawing
 
 URender::DrawFrame (`0x10b1b0ca–0x10b1b34d`) draws a surface's decals
 immediately after its DrawComplexSurface when `!RenDev->SpanBased &&
@@ -168,15 +168,64 @@ destroys decals not drawn for a second) and draws with PolyFlags exactly
 
 `scripts/native-decal-render-oracle.py` runs the unchanged ClipDecal, the
 D3D DrawGouraudPolygon against a recording device and the whole decal block
-on frames built by the original CreateMasterFrame and OccludeBsp (935
-ClipDecal cases on Training, Island and the Paris club tunnel; a float32
-re-derivation matched all of them and 12,000 more).
+on frames built by the original CreateMasterFrame and OccludeBsp.
+
+**Port.** `clip_decal` in decal.rs is ClipDecal in binary32 (the render
+pass's precision), operation for operation. `decal_clip_frame` walks the
+main frame's OccludeBsp output with its saved points (option `0x100`): for
+each draw item whose surface holds FDecals, each decal in TArray order and
+each saved polygon its Nodes admit, it writes the fragment's world points and
+the U and V dot products. `validate-decal-render.mjs` asks the oracle for
+frames (Training at random cameras and its mirror floor, Island, the Paris
+club tunnel's mirrors) with synthetic decals and compares every ClipDecal:
+655 cases, 258 nonempty, 1,078 points bit-equal in camera-space position, U
+and V, mirror child frames included. A 0.01-unit change to the lift fails it.
+The 107 mover cases are skipped (the mover rotation is not ported, as no
+shipped decal can attach to a mover surface).
+
+## Play
+
+- **Simulation side** (`src/runtime/decal-draw.mjs`, `sim-session.mjs`
+  `visibility`): when the level holds FDecals and Client.Decals is set, the
+  main frame's OccludeBsp saves its points and the decal block runs after
+  it. Each nonempty fragment stamps its actor's `LastRenderedTime` with
+  Level.TimeSeconds. The fragments become view-space triangles (a fan per
+  fragment) with `tu = f(f(U / DrawScale) · f(1 / f(USize · Scale)))`, V
+  likewise, grouped by texture (the actor's Texture, the viewer's Sprite
+  when set, else the level's DefaultTexture), and travel in the frame's
+  `visibility` record.
+- **Page** (`src/viewer/decal-scene.mjs`): one mesh per texture, blend
+  DST_COLOR/SRC_COLOR, no depth write, LEQUAL, no culling, linear
+  filtering with nearest mip selection and a −0.5 LOD bias, drawn before the
+  translucent world surfaces. Decals sit on their own three.js layer
+  (`render-layers.mjs`), which the mirror and sky cameras leave out.
+- **Check.** `validate-decals-play.mjs` (worker mode by default, or
+  `--query sim=inline`) stands the player a few metres from JaimeReyes0 in
+  Training looking at its feet: the drawn pawn's Shadow attaches, the
+  Shadow's LastRenderedTime equals TimeSeconds, its FlatFXTex40 fragments
+  reach the page, and rendering the same frame with and without the decal
+  layer darkens about 3,500 pixels and brightens none. `decalProbe` on the
+  viewer API places the player and reads the state on the simulation side.
+
+Host choices, noted:
+- Fragments are drawn from their world points with the page's projection.
+  ClipDecal's screen clamp for points flagged outside the view is not
+  applied; the fragments lie inside the saved polygons, which OccludeBsp
+  already clipped to the view.
+- The fragment order is the occlusion stream's, not DrawFrame's pass order
+  (the occluding list is key-sorted there); modulated blends commute up to
+  the framebuffer's rounding, and every decal is drawn before the
+  translucent surfaces.
+- Mirror child frames draw no decals, as the original's ClipDecal returns
+  nothing there; sky child frames draw none either, where the original
+  would (unexercised).
+- Texture sampling follows the D3D state as far as WebGL allows; D3D's mip
+  choice and texture upload rules are device behaviour.
 
 ## Open
 
-- The decal pass in Play: ClipDecal in the Rust occlusion run, the stamp,
-  the page's modulated fan pass.
 - Movers: what the brush tracker writes into a mover surface's base and
-  normal (with the tracker itself, [BSP occlusion](bsp-occlusion.md)).
-- The game-thread control word (above); sky child frames were not
-  exercised for decals.
+  normal (with the tracker itself, [BSP occlusion](bsp-occlusion.md)), and
+  ClipDecal's mover rotation.
+- Decals in sky child frames.
+- The game-thread control word (above).

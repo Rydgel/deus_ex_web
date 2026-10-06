@@ -93,6 +93,8 @@ export function createDecalStore(kernel, decalModel, { capacity = 256 } = {}) {
   }
   return {
     get capacity() { return capacity; },
+    /** The FDecal records in use (every surface's). */
+    get count() { return new Uint32Array(kernel.memory.buffer, at, HEADER_WORDS)[3]; },
     /** execAttachDecal's surface path after the gates: `level` is the
      * clamped MultiDecalLevel. Returns the result word, the exit, the
      * surfaces SurfList gains (in order) and the rand() calls made. */

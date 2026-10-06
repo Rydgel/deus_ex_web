@@ -9,6 +9,9 @@ import { createSimHost } from './sim-host.mjs';
 import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
+import { createDecalScene } from './decal-scene.mjs';
+import { decalProbe } from './decal-probe.mjs';
+import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
@@ -145,6 +148,8 @@ const scene = new THREE.Scene();
 // update or flag their own (validate-scene-matrices.mjs).
 scene.matrixAutoUpdate = false;
 const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
+// The main frame draws decals; child frames (mirrors, sky) do not (decal-scene.mjs).
+camera.layers.enable(DECAL_LAYER);
 const raycaster = new THREE.Raycaster();
 let assets, world, map, currentMap, loading = false, drag = false, yaw = 0, pitch = 0;
 let subtitlePreference = false;
@@ -153,7 +158,7 @@ let subtitlePreference = false;
 let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeError = null;
 let hudRenderer=null;
 let npcPreview=null;
-let spriteScene=null,coronaPass=null;
+let spriteScene=null,coronaPass=null,decalScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
 // default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
 // selects the CPU kernels, which stay the reference and the fallback. A
@@ -538,6 +543,9 @@ async function loadMap(name) {
     // Light coronas (docs/coronas.md), DrawFrame's corona pass: the
     // simulation's scan (corona-scan.mjs) drawn by the page.
     const nextCoronaPass=nextGame?createCoronaPass(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
+    // Decals (docs/decals.md): DrawFrame's decal block on the simulation
+    // side (decal-draw.mjs), its fragments drawn by the page.
+    const nextDecalScene=nextSim?createDecalScene(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
     // The simulation's first events (the startup lighting, the admitted
     // actors' creation records) reach the page before the first frame, whose
     // actor meshes are built while the map loads.
@@ -547,6 +555,9 @@ async function loadMap(name) {
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
     if(spriteScene)scene.add(spriteScene.root);
+    if(decalScene){scene.remove(decalScene.root);decalScene.dispose();}
+    decalScene=nextDecalScene;
+    if(decalScene)scene.add(decalScene.root);
     hudRenderer?.dispose();hudRenderer=nextHud;
     simHost?.dispose();simHost=nextHost;meshLighting=nextHost.meshLighting??null;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
@@ -1043,6 +1054,17 @@ musicDrive(args) {
   if (simClient) return simClient.call('musicDrive', args);
   return driveMusicLibrary(pageMusicLibrary, assets, args);
 },
+/** Validation only: decal-probe.mjs on the simulation side. */
+decalProbe(args) {
+  if (simClient) return simClient.call('decalProbe', args);
+  return game ? decalProbe(game, args) : null;
+},
+/** The last drawn frame's decal fragments (decal-draw.mjs, decal-scene.mjs):
+ * per texture the triangles the simulation clipped, and those drawn. */
+decals() {
+  return { groups: (lastVisibility?.decals ?? []).map(group => ({ texture: group.texture.key, triangles: group.positions.length / 9 })),
+    drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
+},
 /** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
  * node count, mirror requests, sky, and the world triangles it kept. */
 visibility() {
@@ -1305,7 +1327,7 @@ function drawFrame(snap, time) {
   }
   const sky = drawWorld ? skyFrame(frame) : null;
   if (sky) {
-    skyCamera.copy(camera); skyCamera.position.fromArray(toView(sky.location));
+    skyCamera.copy(camera); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(sky.location));
     skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));
     const markersVisible = world.markers.visible; world.markers.visible = false;
     const npcVisible=npcPreview?.root.visible;if(npcPreview)npcPreview.root.visible=false;
@@ -1313,6 +1335,8 @@ function drawFrame(snap, time) {
     if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
     framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
   }
+  // The decal block's fragments for this frame (sim-session.mjs visibility).
+  decalScene?.update(visible?.decals ?? null);
   if (drawWorld) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
     if (visible) world.visibility.select(visible.nodes);

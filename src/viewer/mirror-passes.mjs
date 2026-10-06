@@ -6,6 +6,7 @@
  * `matrixWorld` and a `geometry` whose bounding sphere and positions three.js
  * would use. */
 import * as THREE from 'three';
+import { DECAL_LAYER } from './render-layers.mjs';
 
 /** OccludeBsp takes the mirror path only while Frame->Recursion (+0x1c) is
  * below 3 (0x10b18881); CreateChildFrame gives a child its parent's
@@ -120,6 +121,8 @@ export function planMirrorPasses(source, groups, size, visible = mesh => mesh.vi
       const depth = view.depth + 1, camera = new THREE.PerspectiveCamera();
       const world = new THREE.Matrix4().multiplyMatrices(group.matrix, view.world);
       camera.copy(source, false); camera.matrixAutoUpdate = camera.matrixWorldAutoUpdate = false;
+      // ClipDecal empties every fragment in a mirror frame (docs/decals.md).
+      camera.layers.disable(DECAL_LAYER);
       camera.matrixWorld.copy(world);
       if (depth % 2) camera.matrixWorld.multiply(submissionHandedness);
       camera.matrixWorldInverse.copy(camera.matrixWorld).invert();

@@ -22,14 +22,15 @@
  *   loads; batches go to the worklet and its reports come back on the port,
  *   never through the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
  * Everything that crosses is plain data (sim-session.mjs plainError for
  * errors). */
 // `loadId`: the map load (its request id) that frames belong to.
-let host = null, loadId = null, assets = null, decodeMap = null, createSimHost = null, setHostClock = null, plainError = null, stateDigest = null;
+let host = null, loadId = null, assets = null, decodeMap = null, createSimHost = null, setHostClock = null, plainError = null, stateDigest = null,
+  decalProbe = null;
 // Galaxy's music library service and its module (set by `music`).
 let musicLibrary = null, music = null;
 // Audio events since the last snapshot; sound bytes cross once per key.
@@ -93,11 +94,11 @@ async function handle(data) {
   switch (data.type) {
     case 'init': {
       for (const [name, value] of Object.entries(data.flags)) globalThis[name] = value;
-      const [{ AssetStore }, map, simHost, clock, session, digest, library] = await Promise.all([import('../unreal/assets.mjs'),
+      const [{ AssetStore }, map, simHost, clock, session, digest, library, probe] = await Promise.all([import('../unreal/assets.mjs'),
         import('../unreal/map.mjs'), import('./sim-host.mjs'), import('../runtime/host-clock.mjs'), import('./sim-session.mjs'),
-        import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs')]);
+        import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs')]);
       decodeMap = map.decodeMap; createSimHost = simHost.createSimHost; setHostClock = clock.setHostClock; music = library;
-      plainError = session.plainError; stateDigest = digest.stateDigest;
+      plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
         : async () => { throw new Error(`Native library bytes are not served: ${file.path}`); } })));
@@ -161,6 +162,7 @@ async function handle(data) {
         else if (data.method === 'reset') { host.session.reset(); value = { movers: host.session.movers(), view: host.session.view() }; }
         else if (data.method === 'stateDigest') value = stateDigest(game.doors.scriptRuntime.runtime,
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
+        else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else throw new Error(`Unknown simulation call ${data.method}`);
       }
       // Events the call queued (Player start's lighting and mesh records)

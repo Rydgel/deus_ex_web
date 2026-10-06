@@ -11,6 +11,8 @@ import { fromView } from '../unreal/geometry.mjs';
 import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
+import { createDecalDraw } from '../runtime/decal-draw.mjs';
+import { OCCLUSION_POINTS } from '../runtime/bsp-occlusion.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -49,6 +51,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // The original BSP occlusion (bsp-occlusion.mjs) and DrawWorld's frame
   // counter (0x10b5a700), which schedules its bound tests.
   let occlusion = null, drawWorlds = 0;
+  // DrawFrame's decal block after the main frame's OccludeBsp
+  // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
+  let decalDraw = null, occlusionFramePtr = null;
   const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
   const weaponFrustum = new THREE.Frustum(), weaponMatrix = new THREE.Matrix4();
   // The live records of this frame's moving-light scan, for the simulation
@@ -130,12 +135,15 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => Boolean(runtime.readNamed(zone ?? info, 'SkyZone'))));
     const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
-    words[44] = ++drawWorlds; words[45] = u32[0]; words[46] = 3; words[47] = 0;
-    const result = occlusion.run(words), nodes = [];
+    // The decal block clips against the saved polygons' points (option 0x100).
+    const decals = decalDraw?.wanted(level) ?? false;
+    words[44] = ++drawWorlds; words[45] = u32[0]; words[46] = 3 | (decals ? OCCLUSION_POINTS : 0); words[47] = 0;
+    const result = occlusion.run(words, [], { skipPoints: true }), nodes = [];
     for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
     return { nodes: Uint32Array.from(nodes), zone: words[42],
       mirrors: result.children.filter(child => child.kind === 'mirror').map(child => child.iNode),
-      sky: result.children.some(child => child.kind === 'sky') };
+      sky: result.children.some(child => child.kind === 'sky'),
+      decals: decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null };
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
   // and queue (raw heap strings) and the displayBuffer's characters that
@@ -208,6 +216,8 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
     setOcclusion(value) { occlusion = value; },
+    /** The kernel's decal facade and its frame-words pointer for the decal block. */
+    setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },
     setLipSync(channels) { lipSync = channels; },
     /** One frame of the simulation side (docs/sim-worker.md "Frame
@@ -442,7 +452,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     reset() { game.reset(); failed = false; },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
-    dispose() { weaponSim?.dispose(); },
+    dispose() { weaponSim?.dispose(); decalDraw?.dispose(); },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
      * render viewport, SetupDynamics' moving-light scan, the sky frame, the
      * frob target and the surface pan inputs. `run` is false while the page

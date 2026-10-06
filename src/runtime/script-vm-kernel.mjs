@@ -235,6 +235,9 @@ export function createScriptVmKernel(instance, memory) {
       storeInit: (at, surfaces, capacity) => x.decal_store_init(at >>> 0, surfaces >>> 0, capacity >>> 0),
       storeGrow: (from, to, capacity) => x.decal_store_grow(from >>> 0, to >>> 0, capacity >>> 0),
       recordWords: () => x.decal_record_words(),
+      clipFrame: (model, store, frame, stream, words, out, cap) =>
+        x.decal_clip_frame(model >>> 0, store >>> 0, frame >>> 0, stream >>> 0, words >>> 0, out >>> 0, cap >>> 0) >>> 0,
+      clipTest: (input, out) => x.decal_clip_test(input >>> 0, out >>> 0) >>> 0,
     }),
   });
 }

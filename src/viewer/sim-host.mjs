@@ -84,6 +84,10 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     if (!kernel) throw new Error('the script VM core predates it; run npm run build:wasm');
     session.setOcclusion(createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
       zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)) }));
+    // DrawFrame's decal block runs over the same frames (decal-draw.mjs).
+    const decals = (await loadScriptVmKernel()).decals;
+    if (decals) session.setDecalKernel(decals, () => kernel.framePtr());
+    else notes.push('Decals unavailable: the script VM core predates decal.rs; run npm run build:wasm');
   } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
   session.setLipSync(lipSync);
   session.setPanZones(panZones);
