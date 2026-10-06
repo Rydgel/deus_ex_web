@@ -11,6 +11,7 @@
  * it (newest first), and the child-frame requests (mirror and sky) with the
  * span they were given. */
 import { sceneFrameTangent } from './script-window-scene-frame.mjs';
+import { createTrackerHost, trackerCapacities, TRACKER } from './brush-tracker.mjs';
 
 /** Engine.Texture's bools packed into the dword UTexture::PolyFlags (+0x80
  * in the retail layout, docs/object-memory.md "Texture"), bit i for the i-th
@@ -128,16 +129,20 @@ function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom
  * sky (`zoneSkies[i]`, 0 for none). `kernel` is the script-VM kernel's
  * `occlusion` facade. */
 export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneActors = [], zoneSkies = [],
-  workBytes = 32 << 20 } = {}) {
+  workBytes = 32 << 20, tracker = null } = {}) {
   const { memory, alloc, free } = kernel;
   const nodeCount = model.nodes.length, pointCount = model.points.length;
   const blocks = [];
   const block = bytes => { const at = alloc(Math.max(16, bytes)); blocks.push(at); return at; };
-  const nodes = block(64 * nodeCount), verts = block(8 * model.vertices.length),
-    points = block(12 * pointCount + 16), surfs = block(8 * model.surfaces.length),
+  // With movers (`tracker.movers`, brush-tracker.mjs), every model block at
+  // the size the moving brush tracker can grow it to.
+  const caps = tracker ? trackerCapacities(model, tracker.movers) : { nodes: nodeCount, verts: model.vertices.length,
+    points: pointCount, surfs: model.surfaces.length };
+  const nodes = block(64 * caps.nodes), verts = block(8 * caps.verts),
+    points = block(12 * caps.points + 16), surfs = block(8 * caps.surfs),
     bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64),
-    cache = block(8 * Math.max(1, pointCount)), work = block(workBytes),
-    dynamics = block(12 * nodeCount);
+    cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
+    dynamics = block(12 * caps.nodes);
   let sprites = block(24 * 256), spriteCapacity = 256;
   const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
   {
@@ -166,13 +171,23 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       u[(zones >>> 2) + 4 * i] = (zoneActors[i] ?? 0) >>> 0;
       u[(zones >>> 2) + 4 * i + 2] = (zoneSkies[i] ?? 0) >>> 0;
     }
-    u.fill(0, cache >>> 2, (cache >>> 2) + 2 * Math.max(1, pointCount));
+    u.fill(0, cache >>> 2, (cache >>> 2) + 2 * Math.max(1, caps.points));
   }
+  const trackerHost = tracker ? createTrackerHost(kernel, model, tracker.movers,
+    { at: { nodes, verts, points, surfs }, caps, block, words: () => new Uint32Array(memory.buffer) }) : null;
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
     bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe,
     dynamics, sprites, 0, 0];
   let stamp = 0;
-  const setHeader = () => { header[14] = stamp; words().set(header, kernel.modelPtr() >>> 2); };
+  const setHeader = () => {
+    header[14] = stamp;
+    // The tracker's counts (Nodes, Verts, Points, Surfs grow with it).
+    if (trackerHost) {
+      header[1] = trackerHost.header(TRACKER.NODES_NUM); header[3] = trackerHost.header(TRACKER.VERTS_NUM);
+      header[5] = trackerHost.header(TRACKER.POINTS_NUM); header[7] = trackerHost.header(TRACKER.SURFS_NUM);
+    }
+    words().set(header, kernel.modelPtr() >>> 2);
+  };
   const release = at => { free(at); blocks.splice(blocks.indexOf(at), 1); };
   const ensureSprites = count => {
     if (count <= spriteCapacity) return;
@@ -281,6 +296,10 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     },
     /** The live NodeFlags byte of node `i` (NF_PolyOccluded 8, NF_BoxOccluded 0x10). */
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
+    /** The moving brush tracker (brush-tracker.mjs) over this model, or
+     * null without movers; `blocks` are the model's own. */
+    tracker: trackerHost,
+    blocks: { nodes, verts, points, surfs },
     /** Model.Zones[i].LastRenderTime bits. */
     zoneTime: i => words()[(zones >>> 2) + 4 * i + 1],
     dispose() { for (const at of blocks.splice(0)) free(at); },

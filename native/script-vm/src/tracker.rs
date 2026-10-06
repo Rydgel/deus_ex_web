@@ -259,7 +259,9 @@ impl Fp for P24 {
         P24(((self.0 as f32) / (o.0 as f32)) as f64)
     }
     fn sqrt(self) -> Self {
-        P24(core::arch::wasm32::f32_sqrt(self.0 as f32) as f64)
+        // The 64-bit root rounded to 24 bits: a square root of a binary32
+        // value is never within 2^-64 of a 24-bit tie unless it is exact.
+        P24(f32::from_bits(Ext::load((self.0 as f32).to_bits()).sqrt().store()) as f64)
     }
     fn neg(self) -> Self {
         P24(-self.0)
@@ -472,7 +474,7 @@ const P_IBRUSHPOLY: u32 = 63;
 const P_TEXKEY: u32 = 64;
 const P_PAN: u32 = 65;
 const P_TEXFLAGS: u32 = 66;
-const P_ORDINAL: u32 = 67;
+
 
 fn pv(p: u32, k: u32) -> [u32; 3] {
     let a = p + 4 * k;
@@ -596,7 +598,6 @@ fn sync_model() {
     set_model(3, h(H_VERTS_NUM));
     set_model(5, h(H_POINTS_NUM));
     set_model(7, h(H_SURFS_NUM));
-    set_model(19, if h(H_LIVE) != 0 { h(H_SURFS_TOP) } else { 0 });
 }
 
 // ---- construction --------------------------------------------------------------------
@@ -1052,9 +1053,7 @@ fn sphere<F: Fp>(copies: u32, count: u32) -> [u32; 4] {
             }
         }
     }
-    let r = F::ld(w).st64().sqrt().st64();
-    // fst qword keeps st0; fmul qword 1.001 on the unstored root.
-    let _ = r;
+    // fst qword keeps st0: fmul qword 1.001 on the unstored root.
     let root = F::ld(w).st64().sqrt();
     [center[0], center[1], center[2], root.mul(F::ldc(1.001)).st()]
 }
@@ -1260,7 +1259,7 @@ fn filter_poly<F: Fp>(s: u32, mut i_node: u32, mut coplanar: i32, mut poly: u32,
                     if f != -1 {
                         filter_poly::<F>(s, f as u32, coplanar, front, child_outside(n, 1, outside), tail);
                     } else if child_outside(n, 1, outside) {
-                        add_node(s, i_node, coplanar, 1, front, tail);
+                        add_node::<F>(s, i_node, coplanar, 1, front, tail);
                     }
                     poly = back;
                     back = new_poly();
@@ -1274,7 +1273,7 @@ fn filter_poly<F: Fp>(s: u32, mut i_node: u32, mut coplanar: i32, mut poly: u32,
             let f = nd(n, N_FRONT) as i32;
             if f == -1 {
                 if outside {
-                    add_node(s, i_node, coplanar, 1, poly, tail);
+                    add_node::<F>(s, i_node, coplanar, 1, poly, tail);
                 }
                 return;
             }
@@ -1284,7 +1283,7 @@ fn filter_poly<F: Fp>(s: u32, mut i_node: u32, mut coplanar: i32, mut poly: u32,
             let b = nd(n, N_BACK) as i32;
             if b == -1 {
                 if outside {
-                    add_node(s, i_node, coplanar, 0, poly, tail);
+                    add_node::<F>(s, i_node, coplanar, 0, poly, tail);
                 }
                 return;
             }
@@ -1315,7 +1314,7 @@ fn alloc_point() -> u32 {
 }
 
 /// AddNode (0x1037bb00).
-fn add_node(s: u32, parent: u32, coplanar: i32, node_type: u32, poly: u32, tail: &mut u32) {
+fn add_node<F: Fp>(s: u32, parent: u32, coplanar: i32, node_type: u32, poly: u32, tail: &mut u32) {
     let ty = node_type;
     let mut link_type = node_type;
     let mut link_parent = parent;
@@ -1379,7 +1378,7 @@ fn add_node(s: u32, parent: u32, coplanar: i32, node_type: u32, poly: u32, tail:
     let b = pv(poly, P_BASE);
     let nn = pv(poly, P_NORMAL);
     set_nflags(n, 0x20);
-    let w = P::w(b, nn);
+    let w = F::ld(b[1]).mul(F::ld(nn[1])).add(F::ld(b[2]).mul(F::ld(nn[2]))).add(F::ld(b[0]).mul(F::ld(nn[0]))).st();
     wr(n + N_PLANE, nn[0]);
     wr(n + N_PLANE + 4, nn[1]);
     wr(n + N_PLANE + 8, nn[2]);
@@ -1395,7 +1394,10 @@ fn add_node(s: u32, parent: u32, coplanar: i32, node_type: u32, poly: u32, tail:
         set_nflags(n, nflags(n) | 2);
     }
     if coplanar != -1 && !different {
-        let side = P::side(l, n) as u32;
+        // Against the chain end: ((L.z*N.z + L.y*N.y) + L.x*N.x) < 0.0.
+        let d = F::ld(nd(l, 8)).mul(F::ld(nn[2])).add(F::ld(nd(l, 4)).mul(F::ld(nn[1])))
+            .add(F::ld(nd(l, 0)).mul(F::ld(nn[0])));
+        let side = lt(d, F::ldc(0.0)) as u32;
         wr8(n + N_ZONE, rd8(l + N_ZONE + side));
         wr(n + N_LEAF, rd(l + N_LEAF + 4 * side));
         wr8(n + N_ZONE + 1, rd8(l + N_ZONE + 1 - side));
@@ -1482,4 +1484,65 @@ fn add_node(s: u32, parent: u32, coplanar: i32, node_type: u32, poly: u32, tail:
     wr(l + child, i);
     wr(*tail, i);
     *tail = n + N_RENDER;
+}
+
+/// Flush(Actor) (0x1037a290): RemoveActorNodes alone (no MarkForUpdate, no
+/// SavedPos change); reached only from the editor.
+#[no_mangle]
+pub extern "C" fn trk_flush(actor: u32) {
+    if h(H_LIVE) == 0 || actor >= h(H_MOVER_COUNT) {
+        return;
+    }
+    remove_actor_nodes(actor);
+    sync_model();
+}
+
+/// SurfIsDynamic (0x1037ac10).
+#[no_mangle]
+pub extern "C" fn trk_surf_is_dynamic(i_surf: i32) -> u32 {
+    (i_surf >= h(H_SURFS_TOP) as i32) as u32
+}
+
+/// FArray::Remove (Core 0x101454f0) of everything past `keep`: with a
+/// nonzero count, Max becomes Num when (3*Num < 2*Max or the slack is at
+/// least 16 KB) and (the slack is above 64 or Num is 0).
+fn remove_tail(num_at: usize, max_at: usize, keep: u32, size: u32) {
+    let num = h(num_at);
+    if num <= keep {
+        return;
+    }
+    set_h(num_at, keep);
+    let max = h(max_at);
+    if (3 * keep < 2 * max || (max - keep) * size >= 0x4000) && (max - keep > 0x40 || keep == 0) {
+        set_h(max_at, keep);
+    }
+}
+
+/// The destructor (0x1037b0b0): every array back to its construction Num
+/// (FArray::Remove, which may shrink Max), then any static child link past
+/// the node count cleared. ZoneMask ORs and sphere-filter bits stay.
+#[no_mangle]
+pub extern "C" fn trk_destroy() {
+    if h(H_LIVE) == 0 {
+        return;
+    }
+    remove_tail(H_SURFS_NUM, H_SURFS_MAX, h(H_SURFS_TOP), 64);
+    remove_tail(H_POINTS_NUM, H_POINTS_MAX, h(H_PTOP), 12);
+    remove_tail(H_VECTORS_NUM, H_VECTORS_MAX, h(H_VECTORS_TOP), 12);
+    remove_tail(H_NODES_NUM, H_NODES_MAX, h(H_TOP), 64);
+    remove_tail(H_VERTS_NUM, H_VERTS_MAX, h(H_VTOP), 8);
+    let count = h(H_NODES_NUM);
+    for i in 0..count {
+        let n = node(i);
+        for off in [N_FRONT, N_BACK, N_PLANE_LINK] {
+            if nd(n, off) as i32 >= count as i32 {
+                wr(n + off, u32::MAX);
+            }
+        }
+    }
+    for k in [H_NODEMAPS_NUM, H_NODEMAPS_MAX, H_OWNERS_NUM, H_OWNERS_MAX, H_HELPER_NUM, H_HELPER_MAX] {
+        set_h(k, 0);
+    }
+    set_h(H_LIVE, 0);
+    sync_model();
 }

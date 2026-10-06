@@ -31,6 +31,7 @@ mod render;
 mod meshlight;
 mod occlude;
 mod setup;
+mod tracker;
 mod particles;
 mod pawn_phys;
 mod swim;

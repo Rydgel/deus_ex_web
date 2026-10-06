@@ -312,6 +312,14 @@ export function createScriptVmKernel(instance, memory) {
       // core that predates it.
       setup: typeof x.occ_setup !== 'function' ? null
         : (candidates, count, out) => x.occ_setup(candidates >>> 0, count >>> 0, out >>> 0) >>> 0,
+      // Engine's moving brush tracker on the same model (tracker.rs,
+      // brush-tracker.mjs); null in a core that predates it.
+      trackerHeaderPtr: typeof x.trk_header_ptr !== 'function' ? null : () => x.trk_header_ptr() >>> 0,
+      trackerConstruct: pc64 => x.trk_construct(pc64 >>> 0) >>> 0,
+      trackerUpdate: (actor, pc64) => x.trk_update(actor | 0, pc64 >>> 0) >>> 0,
+      trackerFlush: actor => x.trk_flush(actor >>> 0),
+      trackerSurfIsDynamic: surf => x.trk_surf_is_dynamic(surf | 0) >>> 0,
+      trackerDestroy: () => x.trk_destroy(),
     }),
     // ADecal::execAttachDecal / execDetachDecal (decal.rs, docs/decals.md),
     // driven by decal-kernel.mjs; null when the loaded core predates them.

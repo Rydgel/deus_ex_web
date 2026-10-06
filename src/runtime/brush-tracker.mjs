@@ -1,0 +1,120 @@
+/** Engine's moving brush tracker in the Rust core (native/script-vm/src/
+ * tracker.rs; docs/brush-tracker.md), on the occlusion model's memory
+ * (bsp-occlusion.mjs): the host sizes every block the tracker can reach,
+ * writes the movers and their brush polygons, and reads the model back.
+ *
+ * A mover spec: `tag` (the owner word the tracker writes into NodeMaps,
+ * VertOwners and PointHelper; any nonzero value), `flags` (bStatic 1,
+ * bHidden 2), `locationBits`, `rotation` (int32), `prePivotBits`,
+ * `mainScale` and `postScale` ({scaleBits, sheerRateBits, sheerAxis}),
+ * `specialLit` and `polys`: each {baseBits, normalBits, textureUBits,
+ * textureVBits, vertexBits (at most 16), flags, textureKey, textureFlags,
+ * iBrushPoly, pan [U, V]}. */
+
+// tracker.rs header words.
+export const TRACKER = Object.freeze({ NODES: 0, NODES_NUM: 1, NODES_MAX: 2, TOP: 3, VERTS: 4, VERTS_NUM: 5,
+  VERTS_MAX: 6, VTOP: 7, POINTS: 8, POINTS_NUM: 9, POINTS_MAX: 10, PTOP: 11, FIRST_POINT: 12, POINTS_CAP: 13,
+  VECTORS: 14, VECTORS_NUM: 15, VECTORS_MAX: 16, VECTORS_TOP: 17, VECTORS_CAP: 18, SURFS: 19, SURFS_NUM: 20,
+  SURFS_MAX: 21, SURFS_TOP: 22, DSURFS: 23, SURFS_CAP: 24, MOVERS: 25, MOVER_COUNT: 26, NODEMAPS: 27,
+  NODEMAPS_NUM: 28, NODEMAPS_MAX: 29, OWNERS: 30, OWNERS_NUM: 31, OWNERS_MAX: 32, HELPER: 33, HELPER_NUM: 34,
+  HELPER_MAX: 35, NODE_CURSOR: 36, VERT_CURSOR: 37, FREE_HEAD: 38, CURRENT: 39, NORMAL: 40, LIST_STALE: 43,
+  SCRATCH: 44, SCRATCH_BYTES: 45, NODES_CAP: 46, VERTS_CAP: 47, LIVE: 48, STATUS: 49, HELPER_CAP: 50, WORDS: 56 });
+/** Mover record words (MV per mover). */
+export const MOVER = Object.freeze({ TAG: 0, FLAGS: 1, LOCATION: 2, ROTATION: 5, PREPIVOT: 8, MAINSCALE: 11,
+  POSTSCALE: 16, SAVEDPOS: 21, SAVEDROT: 24, MOVERLINK: 27, POLYS: 28, POLY_COUNT: 29, SPECIALLIT: 30, WORDS: 40 });
+/** Polygon record words (FPoly). */
+export const POLY = Object.freeze({ BASE: 0, NORMAL: 3, TEXU: 6, TEXV: 9, VERT: 12, FLAGS: 60, NUMV: 61,
+  ILINK: 62, IBRUSHPOLY: 63, TEXKEY: 64, PAN: 65, TEXFLAGS: 66, WORDS: 68 });
+/** Dynamic surface record words. */
+export const DSURF = Object.freeze({ TEXKEY: 0, FLAGS: 1, PBASE: 2, VNORMAL: 3, VTEXU: 4, VTEXV: 5, LIGHTMAP: 6,
+  BRUSHPOLY: 7, PAN: 8, ACTOR: 9, WORDS: 16 });
+
+/** The block sizes the tracker can reach for a model and its movers:
+ * nodes min(2N + 512, 65536) (never below N), verts 2V + 512, a surface
+ * and three vectors and a base point per polygon, and dynamic points
+ * bounded by the dynamic vertex pool (every used point is one used vert). */
+export function trackerCapacities(model, movers) {
+  const polys = movers.reduce((n, m) => n + m.polys.length, 0);
+  const nodes = model.nodes.length, verts = model.vertices.length;
+  const nodeCap = Math.max(nodes, Math.min(2 * nodes + 512, 65536)), vertCap = 2 * verts + 512;
+  return { polys, nodes: nodeCap, verts: vertCap, surfs: model.surfaces.length + polys,
+    vectors: model.vectors.length + 3 * polys, points: model.points.length + polys + (vertCap - verts),
+    nodeMaps: nodeCap - nodes, owners: vertCap - verts, helper: vertCap - verts };
+}
+
+/** The tracker over an occlusion's blocks (`at`: nodes, verts, points,
+ * surfs; their capacities in `caps`), with its own blocks from `block`. */
+export function createTrackerHost(kernel, model, movers, { at, caps, block, words, scratchBytes = 8 << 20 }) {
+  if (!kernel.trackerHeaderPtr) throw new Error('The script VM core predates the brush tracker; run npm run build:wasm');
+  const vectors = block(12 * caps.vectors), dsurfs = block(4 * DSURF.WORDS * Math.max(1, caps.polys)),
+    moverBlock = block(4 * MOVER.WORDS * Math.max(1, movers.length)),
+    polyBlock = block(4 * POLY.WORDS * Math.max(1, caps.polys)), nodeMaps = block(8 * Math.max(1, caps.nodeMaps)),
+    owners = block(4 * Math.max(1, caps.owners)), helper = block(4 * Math.max(1, caps.helper)),
+    scratch = block(scratchBytes);
+  const header = new Array(TRACKER.WORDS).fill(0);
+  Object.assign(header, {
+    [TRACKER.NODES]: at.nodes, [TRACKER.NODES_NUM]: model.nodes.length, [TRACKER.NODES_MAX]: model.nodes.length,
+    [TRACKER.VERTS]: at.verts, [TRACKER.VERTS_NUM]: model.vertices.length, [TRACKER.VERTS_MAX]: model.vertices.length,
+    [TRACKER.POINTS]: at.points, [TRACKER.POINTS_NUM]: model.points.length, [TRACKER.POINTS_MAX]: model.points.length,
+    [TRACKER.POINTS_CAP]: caps.points, [TRACKER.VECTORS]: vectors, [TRACKER.VECTORS_NUM]: model.vectors.length,
+    [TRACKER.VECTORS_MAX]: model.vectors.length, [TRACKER.VECTORS_CAP]: caps.vectors, [TRACKER.SURFS]: at.surfs,
+    [TRACKER.SURFS_NUM]: model.surfaces.length, [TRACKER.SURFS_MAX]: model.surfaces.length, [TRACKER.DSURFS]: dsurfs,
+    [TRACKER.SURFS_CAP]: caps.surfs, [TRACKER.MOVERS]: moverBlock, [TRACKER.MOVER_COUNT]: movers.length,
+    [TRACKER.NODEMAPS]: nodeMaps, [TRACKER.OWNERS]: owners, [TRACKER.HELPER]: helper,
+    [TRACKER.SCRATCH]: scratch, [TRACKER.SCRATCH_BYTES]: scratchBytes, [TRACKER.NODES_CAP]: caps.nodes,
+    [TRACKER.VERTS_CAP]: caps.verts, [TRACKER.HELPER_CAP]: caps.helper });
+  const headerAt = () => kernel.trackerHeaderPtr() >>> 2;
+  {
+    const u = words();
+    u.set(header.map(v => v >>> 0), headerAt());
+    model.vectors.forEach((v, i) => { for (let k = 0; k < 3; k++) u[(vectors >>> 2) + 3 * i + k] = bits(v[k]); });
+    let polyAt = polyBlock >>> 2;
+    movers.forEach((m, i) => {
+      const o = (moverBlock >>> 2) + MOVER.WORDS * i;
+      u.fill(0, o, o + MOVER.WORDS);
+      const scale = s => [...s.scaleBits, s.sheerRateBits, s.sheerAxis];
+      u.set([m.tag, m.flags, ...m.locationBits, ...m.rotation, ...m.prePivotBits, ...scale(m.mainScale),
+        ...scale(m.postScale)].map(v => v >>> 0), o);
+      // AMover::PostLoad (0x103af80f): SavedPos (-12345, ...), SavedRot (123, 456, 789).
+      u.set([bits(-12345), bits(-12345), bits(-12345), 123, 456, 789, 0xffffffff, polyAt << 2, m.polys.length,
+        m.specialLit ? 1 : 0], o + MOVER.SAVEDPOS);
+      for (const p of m.polys) {
+        u.fill(0, polyAt, polyAt + POLY.WORDS);
+        u.set([...p.baseBits, ...p.normalBits, ...p.textureUBits, ...p.textureVBits].map(v => v >>> 0), polyAt);
+        p.vertexBits.forEach((v, k) => u.set(v.map(x => x >>> 0), polyAt + POLY.VERT + 3 * k));
+        u[polyAt + POLY.FLAGS] = p.flags >>> 0; u[polyAt + POLY.NUMV] = p.vertexBits.length;
+        u[polyAt + POLY.IBRUSHPOLY] = p.iBrushPoly >>> 0; u[polyAt + POLY.TEXKEY] = (p.textureKey ?? 0) >>> 0;
+        u[polyAt + POLY.PAN] = ((p.pan[0] & 0xffff) | (p.pan[1] << 16)) >>> 0;
+        u[polyAt + POLY.TEXFLAGS] = (p.textureFlags ?? 0) >>> 0;
+        polyAt += POLY.WORDS;
+      }
+    });
+  }
+  const h = i => words()[headerAt() + i];
+  const mover = i => (moverBlock >>> 2) + MOVER.WORDS * i;
+  return {
+    blocks: { vectors, dsurfs, moverBlock, polyBlock, nodeMaps, owners, helper },
+    header: h,
+    /** GNewBrushTracker: AddBrush every mover, then Update(NULL) at the
+     * game thread's precision (`pc64`, the assumption: docs/brush-tracker.md). */
+    construct({ pc64 = true } = {}) { return kernel.trackerConstruct(pc64 ? 1 : 0); },
+    /** Update(mover `i`, or NULL for -1); SetupDynamics' calls are PC24. */
+    update(i, { pc64 = false } = {}) { return kernel.trackerUpdate(i, pc64 ? 1 : 0); },
+    flush: i => kernel.trackerFlush(i),
+    surfIsDynamic: s => kernel.trackerSurfIsDynamic(s),
+    destroy: () => kernel.trackerDestroy(),
+    /** A mover's Location (float bits), Rotation and bHidden. */
+    setMover(i, { locationBits, rotation, hidden }) {
+      const u = words(), o = mover(i);
+      if (locationBits) u.set(locationBits.map(v => v >>> 0), o + MOVER.LOCATION);
+      if (rotation) u.set(rotation.map(v => v >>> 0), o + MOVER.ROTATION);
+      if (hidden !== undefined) u[o + MOVER.FLAGS] = hidden ? u[o + MOVER.FLAGS] | 2 : u[o + MOVER.FLAGS] & ~2;
+    },
+    /** A mover's record words (validation and Play's mover drawing). */
+    moverWords: i => words().slice(mover(i), mover(i) + MOVER.WORDS),
+    live: () => h(TRACKER.LIVE) !== 0,
+  };
+}
+
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function bits(value) { f32[0] = value; return u32[0]; }
