@@ -160,6 +160,7 @@ pub(crate) struct Player {
     pub ahead_pin: u32,
     pub fault: u32,
     pub callbacks_done: u32, // callbacks completed without a fault (galaxy_seq_callback_count)
+    pub mixer: crate::mixer::Mixer, // the six buses and mixer state (mixer.rs)
 }
 
 impl Player {
@@ -195,6 +196,7 @@ impl Player {
             ahead_pin: 0,
             fault: 0,
             callbacks_done: 0,
+            mixer: crate::mixer::Mixer::new(),
         }
     }
 }
@@ -494,6 +496,7 @@ impl Library {
         let of = self.player.output_format as i32;
         let out_shift = (of & 1) + ((of >> 1) & 1);
         let mut done: i32 = 0;
+        self.clear_buses(n, bus_shift as u32);
         if n <= 0 {
             return Ok(0);
         }
@@ -604,7 +607,8 @@ impl Library {
         let km = self.player.kernel_mode as i32;
         let interpolate = if step0 >= 0x10000 { 0 } else { 2 };
         let mode = ((self.vb(v, 0x4c) as i32 >> 2) & 1) | ((pan_word >> 13) & 4) | (((km >> 1) & 2) & interpolate);
-        let master = if self.vb(v, 0x11) & 0x80 != 0 { self.music_master } else { self.player.sfx_master } as i8 as i32;
+        let music = self.vb(v, 0x11) & 0x80 != 0; // bus group A (0x106152c0)
+        let master = if music { self.music_master } else { self.player.sfx_master } as i8 as i32;
         let mm = (master * master) << 1;
         let target = self.vw(v, 0x16) as i32 & 0x7fff;
         let mut d = target - (pan_word & 0x7fff);
@@ -673,6 +677,8 @@ impl Library {
                     }
                     tr.record(b'K', &k);
                 }
+                self.mix_kernel(music, offset, &[count as u32, pos as u32, frac as u32, step as u32, b as u32, a as u32,
+                    s1b as u32, s1a as u32, s2b as u32, s2a as u32, mode as u32])?;
             }
             let t = step.wrapping_mul(count).wrapping_add(frac);
             self.sw(v, 0x4a, t as u16);

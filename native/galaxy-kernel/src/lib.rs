@@ -19,8 +19,11 @@
 //! error return.
 use std::cell::RefCell;
 
+mod host;
+mod mixer;
 mod sequencer;
 mod x87;
+pub use mixer::*;
 pub use sequencer::*;
 
 // glxLoadMusic results (GALAXY.H GLXERR_* numbering, as returned by the DLL).

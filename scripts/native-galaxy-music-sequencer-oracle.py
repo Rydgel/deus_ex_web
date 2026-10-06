@@ -75,16 +75,26 @@ and pan-table-pc24.bin (the same loop 0x1060e254..0x1060e285 rerun under FPCW
 0x027f / 0x007f), tables.bin (the 1112 .rdata dwords at 0x1063daa0) and
 coverage-functions.json (every instruction of FUNCTIONS). Files are written
 through a rename, so several processes may share OUT_DIR on disjoint cases.
+At the end of a run without --window: coverage.json (this run's union, in
+the per-function report form) and summary.json (the run's case infos without
+coverage, merged into the file's when --cases; with several processes the
+per-case JSON files are the authoritative record), plus pan-table.bin (PC 64).
+
+--real-kernel (phase 3, scripts/validate-galaxy-mixer.mjs): the code buffer keeps the
+real SSE kernel and each callback runs the renderer 0x106146a0; see MixerOracle
+below for the extra outputs (<case>.pcm.dig, .pcm, .bus, native-code.bin) and
+the fabricated-program ops. The trace records are the same as without it.
 
 Usage: native-galaxy-music-sequencer-oracle.py GAME_ROOT MODULE_DIRS CASES_JSON OUT_DIR
-       [--cases a,b] [--window A:B] [--no-coverage]
+       [--cases a,b] [--window A:B] [--no-coverage] [--real-kernel]
 MODULE_DIRS: comma-separated directories of <Song>.it files.
 """
 import hashlib, importlib.util, json, os, struct, sys, time
 from pathlib import Path
 from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UcError
 from unicorn.x86_const import (UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_EDX, UC_X86_REG_ESI, UC_X86_REG_ESP,
-                               UC_X86_REG_EBP, UC_X86_REG_EIP, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG)
+                               UC_X86_REG_EBP, UC_X86_REG_EIP, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG,
+                               UC_X86_REG_MXCSR)
 
 s = importlib.util.spec_from_file_location('loader', Path(__file__).with_name('native-galaxy-music-oracle.py'))
 lo = importlib.util.module_from_spec(s); s.loader.exec_module(lo)
@@ -345,7 +355,8 @@ class SequencerOracle(lo.Oracle):
         self.group, self.digests, self.full, self.groups = hashlib.sha256(), [], [], 0
         self.ticks_since_loop, self.last_order, self.loop_seen = 0, None, False
         info = {'callbacks': 0, 'mixerCalls': 0, 'ticks': 0, 'steps': [], 'fault': None}
-        ahead = 0
+        self.ahead = 0
+        self.case_start()
         try:
             for step in program:
                 op = step['op']
@@ -380,11 +391,11 @@ class SequencerOracle(lo.Oracle):
                     self.write(at(0x10698204), 'I', step['voiceCounter'] & 0xffffffff)
                     self.write(at(0x1069834c), 'I', step['tickCounter'] & 0xffffffff)
                 elif op == 'ahead':
-                    ahead = step['value']
+                    self.ahead = step['value']
                 elif op == 'run':
-                    self.run_callbacks(step, ahead, info, check_reads)
+                    self.run_callbacks(step, info, check_reads)
                 else:
-                    raise ValueError(op)
+                    self.other_op(step, info)
         except Fault:
             pass
         self.record(b'E', self.end_state())
@@ -392,7 +403,7 @@ class SequencerOracle(lo.Oracle):
         info['ticks'] = self.groups - 1
         return info
 
-    def run_callbacks(self, step, ahead, info, check_reads):
+    def run_callbacks(self, step, info, check_reads):
         count = step.get('callbacks')
         cap, margin = step.get('cap', 40000), step.get('margin', 64)
         self.live = sorted(self.heap.blocks.items())
@@ -406,17 +417,9 @@ class SequencerOracle(lo.Oracle):
                     break
                 if count is None and (self.ticks_since_loop >= margin or self.groups >= cap):
                     break
-                self.write(at(0x10697cdc), 'I', ahead)
-                remaining = CALLBACK_FRAMES
+                self.write(at(0x10697cdc), 'I', self.ahead)
                 try:
-                    while remaining:
-                        self.record(b'M', struct.pack('<I', remaining))
-                        k = self.mixer_call(*self.buses, remaining)
-                        self.record(b'R', struct.pack('<I', k))
-                        info['mixerCalls'] += 1
-                        if k == 0:
-                            raise Fault('spin', 'the mixer rendered nothing')
-                        remaining -= k
+                    self.callback(info)
                 except Fault as f:
                     info['fault'] = {'kind': f.kind, 'detail': f.detail, 'callback': info['callbacks'] + done,
                                      'runCallback': done, 'group': self.groups}
@@ -429,14 +432,209 @@ class SequencerOracle(lo.Oracle):
                 self.cpu.hook_del(self.read_hook)
                 self.read_hook = None
 
+    def case_start(self):
+        pass
 
-def function_instructions(root):
+    def callback(self, info):
+        """One 20 ms timer callback: mixer calls of n = remaining frames (a
+        fault of the original raises Fault)."""
+        remaining = CALLBACK_FRAMES
+        while remaining:
+            self.record(b'M', struct.pack('<I', remaining))
+            k = self.mixer_call(*self.buses, remaining)
+            self.record(b'R', struct.pack('<I', k))
+            info['mixerCalls'] += 1
+            if k == 0:
+                raise Fault('spin', 'the mixer rendered nothing')
+            remaining -= k
+
+    def other_op(self, step, info):
+        raise ValueError(step['op'])
+
+
+# ---- phase 3: the real mixing kernel (--real-kernel) ---------------------------
+# The code buffer keeps the SSE kernel and conversion the output open's
+# 0x10614080(7) copied (setup 0x106231d1: kernel 0x603 bytes, then the
+# conversion 0x1ed bytes); MXCSR is the Windows thread default 0x1f80. Each
+# callback runs the renderer 0x106146a0 on a 1-second staging ring; K/M/R are
+# recorded by hooks at the call site 0x106154e0 (arguments before the kernel
+# modifies them), the mixer entry and its `ret`, so the trace equals the stub
+# mode's. Fabricated programs (ops below) drive the kernel, the conversion
+# and the renderer directly with synthetic voices and sample memory.
+RENDER, KERNEL_CALL, MIXER_RET = 0x106146a0, 0x106154e0, 0x1061565b
+KERNEL_TEMPLATE, KERNEL_SIZE, CONV_TEMPLATE, CONV_SIZE = 0x10622730, 0x603, 0x10622fe4, 0x1ed
+CONSTANTS_PAGE = 0x1064d000  # gains 0x1064d2b0.., mask 0x1064d2e0, 2^-30 0x1064d2f0, ESP slot 0x1064d32c
+BUS_BYTES = 0x1040
+FAB, FAB_SIZE = 0x50000000, 0x00100000  # fabricated sample memory (same model addresses in the Rust kernel)
+RING_SIZE, CALLBACK_BYTES = 176400, CALLBACK_FRAMES * 4
+RING_A0, RING_D = RING_SIZE - CALLBACK_BYTES // 2, RING_SIZE // 2  # the first callback wraps; B half a ring ahead
+PCM_FULL, BUS_WINDOW = 64, 8  # callbacks with full PCM kept, callbacks whose mixer calls dump the six buses
+MIXER_FUNCTIONS = [(RENDER, 0x10614912, 'renderer 0x106146a0')]
+TEMPLATES = [(KERNEL_TEMPLATE, KERNEL_TEMPLATE + KERNEL_SIZE, 'SSE kernel template 0x10622730'),
+             (CONV_TEMPLATE, CONV_TEMPLATE + CONV_SIZE, 'SSE conversion template 0x10622fe4')]
+
+
+class MixerOracle(SequencerOracle):
+    """Fabricated-program ops (real-kernel mode only):
+      {"op":"poke","address":A,"width":1|2|4,"value":v}  a library global
+      {"op":"voice","slot":s,"hex":H}        a raw 0xa0-byte voice record
+      {"op":"data","address":A,"hex":H}      sample memory inside FAB
+      {"op":"buses","hex":H}                 the six buses d00..d14 (6 x 0x1040 bytes)
+      {"op":"ring","size":S,"fill":W}        staging ring of S bytes filled with word W
+      {"op":"render","posA","posB","lenA","lenB"}  the renderer on that ring (ahead written
+          first); record Q = u32 bytes, the ring, the six buses, voices [0, first+channels)
+      {"op":"kernel","music":0|1,"offset":bytes,"args":[count,pos,frac,step,L,R,s1L,s1R,s2L,s2R,mode]}
+          one direct kernel call on the group's buses at that offset; record Z = the group's 3 buses
+      {"op":"convert","bus":i,"first":f,"frames":n,"fmt":m,"hex":H}  conv(bus+8f, n, dst, m)
+          on dst prefilled with H; record C = dst
+    Q, Z and C each close a digest group."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        cpu = self.cpu
+        self.conv = self.read(at(0x10697ca4), 'I')[0]
+        self.kernel_code = self.conv - KERNEL_SIZE
+        for code, template, size in ((self.kernel_code, KERNEL_TEMPLATE, KERNEL_SIZE), (self.conv, CONV_TEMPLATE, CONV_SIZE)):
+            if bytes(cpu.mem_read(code, size)) != bytes(cpu.mem_read(at(template), size)):
+                raise RuntimeError(f'code buffer does not hold the template {template:#x}')
+        cpu.mem_map(FAB, FAB_SIZE)
+        self.ring = self.alloc(RING_SIZE)
+        self.scratch = self.alloc(0x4000)
+        self.heap_high = lo.HEAP
+        for address, cb in ((KERNEL_CALL, self.on_kernel_call), (MIXER, self.on_mixer_enter), (MIXER_RET, self.on_mixer_return)):
+            cpu.hook_add(UC_HOOK_CODE, cb, None, at(address), at(address))
+
+    def case_start(self):
+        cpu = self.cpu
+        self.write(at(0x10698354), 'I', self.kernel_code)
+        cpu.reg_write(UC_X86_REG_MXCSR, 0x1f80)
+        for bus in self.buses:  # GlobalAlloc(GPTR) zeroed them; they live outside the .data snapshot
+            cpu.mem_write(bus, bytes(BUS_BYTES))
+        cpu.mem_write(self.ring, bytes(RING_SIZE))
+        cpu.mem_write(FAB, bytes(FAB_SIZE))
+        # The heap's rounding gaps keep a previous case's bytes; zero what any case
+        # used, so a kernel read that leaves its sample (Rust: HAZARD_FOREIGN_READ)
+        # sees what the model sees.
+        cpu.mem_write(lo.HEAP, bytes(self.heap_high - lo.HEAP))
+        self.ring_size, self.pos_a, self.pos_b = RING_SIZE, RING_A0, (RING_A0 + RING_D) % RING_SIZE
+        self.pcm_digests, self.pcm_full, self.bus_full = [], [], []
+        self.callbacks, self.mixer_calls, self.in_run = 0, 0, False
+
+    def raw_call(self, address, *args):
+        cpu = self.cpu
+        cpu.reg_write(UC_X86_REG_ESP, self.stack)
+        self.write(self.stack, f'{1 + len(args)}I', self.done, *[a & 0xffffffff for a in args])
+        cpu.emu_start(address, self.done + 1, count=0)
+        if cpu.reg_read(UC_X86_REG_EIP) != self.done:
+            raise RuntimeError(f'{address:#x} did not return')
+        return cpu.reg_read(UC_X86_REG_EAX)
+
+    # -- hooks ---------------------------------------------------------------
+    def on_kernel_call(self, cpu, address, size, data):
+        args = list(self.read(cpu.reg_read(UC_X86_REG_ESP), '14I'))
+        voice = (orig(cpu.reg_read(UC_X86_REG_ESI)) - 0x14 - VOICES) // VOICE
+        music = self.read(at(VOICES) + voice * VOICE + 0x11, 'B')[0] & 0x80
+        for k in range(3):
+            args[k] = (args[k] - self.buses[2 * k + (0 if music else 1)]) & 0xffffffff
+        self.record(b'K', struct.pack('<15I', voice, *args))
+
+    def on_mixer_enter(self, cpu, address, size, data):
+        self.record(b'M', struct.pack('<I', self.read(cpu.reg_read(UC_X86_REG_ESP) + 0x1c, 'I')[0]))
+        self.mixer_calls += 1
+
+    def on_mixer_return(self, cpu, address, size, data):
+        self.record(b'R', struct.pack('<I', cpu.reg_read(UC_X86_REG_EAX)))
+        if self.in_run and self.callbacks < BUS_WINDOW:
+            self.bus_full.append(self.six_buses())
+
+    def six_buses(self):
+        return b''.join(bytes(self.cpu.mem_read(b, BUS_BYTES)) for b in self.buses)
+
+    def ring_bytes(self, pos, length, size=RING_SIZE):
+        first = min(length, size - pos)
+        return bytes(self.cpu.mem_read(self.ring + pos, first)) + bytes(self.cpu.mem_read(self.ring, length - first))
+
+    # -- callbacks -------------------------------------------------------------
+    def callback(self, info):
+        """One 20 ms timer callback through the renderer: both heads advance 882 frames."""
+        calls, self.in_run = self.mixer_calls, True
+        got = self.ccall(RENDER, self.ring, RING_SIZE, self.pos_a, self.pos_b, CALLBACK_BYTES, CALLBACK_BYTES)
+        self.in_run = False
+        info['mixerCalls'] += self.mixer_calls - calls
+        if got != CALLBACK_BYTES:
+            raise RuntimeError(f'renderer returned {got}')
+        a, b = self.ring_bytes(self.pos_a, CALLBACK_BYTES), self.ring_bytes(self.pos_b, CALLBACK_BYTES)
+        self.pcm_digests.append(hashlib.sha256(a).digest()[:8] + hashlib.sha256(b).digest()[:8])
+        if self.callbacks < PCM_FULL:
+            self.pcm_full.append(a + b)
+        self.pos_a = (self.pos_a + CALLBACK_BYTES) % RING_SIZE
+        self.pos_b = (self.pos_b + CALLBACK_BYTES) % RING_SIZE
+        self.callbacks += 1
+
+    # -- fabricated programs ---------------------------------------------------
+    def other_op(self, step, info):
+        cpu, op = self.cpu, step['op']
+        if op == 'poke':
+            self.write(at(step['address']), {1: 'B', 2: 'H', 4: 'I'}[step['width']], step['value'])
+        elif op == 'voice':
+            cpu.mem_write(at(VOICES) + step['slot'] * VOICE, bytes.fromhex(step['hex']))
+        elif op == 'data':
+            blob = bytes.fromhex(step['hex'])
+            if not (FAB <= step['address'] and step['address'] + len(blob) <= FAB + FAB_SIZE):
+                raise ValueError('data outside FAB')
+            cpu.mem_write(step['address'], blob)
+        elif op == 'buses':
+            blob = bytes.fromhex(step['hex'])
+            for i, bus in enumerate(self.buses):
+                cpu.mem_write(bus, blob[i * BUS_BYTES:(i + 1) * BUS_BYTES])
+        elif op == 'ring':
+            self.ring_size = step['size']
+            cpu.mem_write(self.ring, struct.pack('<H', step['fill'] & 0xffff) * (self.ring_size // 2))
+        elif op == 'render':
+            self.write(at(0x10697cdc), 'I', self.ahead)
+            got = self.ccall(RENDER, self.ring, self.ring_size, step['posA'], step['posB'], step['lenA'], step['lenB'])
+            first, channels = self.read(at(0x1068828d), 'B')[0], self.read(at(0x10698348), 'B')[0]
+            self.record(b'Q', struct.pack('<I', got) + bytes(cpu.mem_read(self.ring, self.ring_size)) + self.six_buses()
+                        + bytes(cpu.mem_read(at(VOICES), (first + channels) * VOICE)))
+            self.end_group()
+        elif op == 'kernel':
+            g = 0 if step['music'] else 1
+            buses = [self.buses[g + 2 * k] + step['offset'] for k in range(3)]
+            self.raw_call(self.kernel_code, *buses, *step['args'])
+            self.record(b'Z', b''.join(bytes(cpu.mem_read(self.buses[g + 2 * k], BUS_BYTES)) for k in range(3)))
+            self.end_group()
+        elif op == 'convert':
+            blob = bytes.fromhex(step['hex'])
+            cpu.mem_write(self.scratch, blob)
+            self.raw_call(self.conv, self.buses[step['bus']] + 8 * step['first'], step['frames'], self.scratch, step['fmt'])
+            self.record(b'C', bytes(cpu.mem_read(self.scratch, len(blob))))
+            self.end_group()
+        else:
+            raise ValueError(op)
+
+    def write_outputs(self, out, name, info):
+        self.heap_high = max(self.heap_high, self.heap.top)
+        (out / f'{name}.pcm.dig').write_bytes(b''.join(self.pcm_digests))
+        (out / f'{name}.pcm').write_bytes(b''.join(self.pcm_full))
+        (out / f'{name}.bus').write_bytes(b''.join(self.bus_full))
+        info['pcmSha256'] = hashlib.sha256(b''.join(self.pcm_digests)).hexdigest()
+
+    def native_code(self, root):
+        """The two templates and the constants page at the preferred base, for
+        the host-CPU harness scripts/native-galaxy-mixer-hw.c."""
+        image = lo.n.Image(Path(root) / 'System' / 'Galaxy.dll', lo.GALAXY)
+        def va(a, n):
+            return image.data[image.offset(a - image.base):image.offset(a - image.base) + n]
+        return va(KERNEL_TEMPLATE, KERNEL_SIZE) + va(CONV_TEMPLATE, CONV_SIZE) + va(CONSTANTS_PAGE, 0x1000)
+
+
+def function_instructions(root, functions=FUNCTIONS):
     """Every non-nop instruction of FUNCTIONS: [(start, end, name, [(address, text)])]."""
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     image = lo.n.Image(Path(root) / 'System' / 'Galaxy.dll', lo.GALAXY)
     out = []
-    for start, end, name in FUNCTIONS:
+    for start, end, name in functions:
         code = image.data[image.offset(start - image.base):image.offset(end - image.base)]
         insns = [(i.address, f'{i.mnemonic} {i.op_str}'.strip()) for i in md.disasm(code, start)]
         out.append((start, end, name, [(a, t) for a, t in insns if t != 'nop']))
@@ -468,11 +666,46 @@ class Coverage:
         self.hooks = {}
         self.cpu.ctl_remove_cache(G, G + 0x100000)
 
+    def report(self):
+        return [{'function': name, 'start': start, 'end': end, 'instructions': [[a, t] for a, t in insns],
+                 'covered': sorted(a for a, _ in insns if a in self.covered)} for start, end, name, insns in self.functions]
+
 
 def write_atomic(path, data):
     tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
     tmp.write_bytes(data if isinstance(data, bytes) else data.encode())
     os.replace(tmp, path)
+
+
+class TemplateCoverage(Coverage):
+    """Coverage of the templates as executed from the code buffer."""
+    def __init__(self, cpu, functions, code):
+        self.cpu, self.functions, self.covered, self.hooks = cpu, functions, set(), {}
+        self.place = {}
+        for start, _, _, insns in functions:
+            base = code[start]
+            for a, _ in insns:
+                self.place[base + a - start] = a
+                self.hooks[a] = cpu.hook_add(UC_HOOK_CODE, self.on_instruction, None, base + a - start, base + a - start)
+
+    def on_instruction(self, cpu, address, size, data):
+        a = self.place[address]
+        self.covered.add(a)
+        h = self.hooks.pop(a, None)
+        if h is not None:
+            cpu.hook_del(h)
+
+
+def template_instructions(root):
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    image = lo.n.Image(Path(root) / 'System' / 'Galaxy.dll', lo.GALAXY)
+    out = []
+    for start, end, name in TEMPLATES:
+        code = image.data[image.offset(start - image.base):image.offset(end - image.base)]
+        insns = [(i.address, f'{i.mnemonic} {i.op_str}'.strip()) for i in md.disasm(code, start)]
+        out.append((start, end, name, [(a, t) for a, t in insns if t != 'nop']))
+    return out
 
 
 def main():
@@ -491,12 +724,22 @@ def main():
     for d in module_dirs:
         for p in Path(d).glob('*.it'):
             modules[p.stem] = p.read_bytes()
-    oracle = SequencerOracle(root)
-    functions = function_instructions(root)
+    real = '--real-kernel' in args
+    oracle = (MixerOracle if real else SequencerOracle)(root)
+    functions = function_instructions(root) + (function_instructions(root, MIXER_FUNCTIONS) if real else [])
+    measure = '--no-coverage' not in args and not window
+    templates = None
+    if real:
+        write_atomic(out / 'native-code.bin', oracle.native_code(root))
+        if measure:
+            templates = TemplateCoverage(oracle.cpu, template_instructions(root),
+                                         {KERNEL_TEMPLATE: oracle.kernel_code, CONV_TEMPLATE: oracle.conv})
     sha = lambda b: hashlib.sha256(b).hexdigest()
     meta = {'galaxy': lo.GALAXY, 'oracle': sha(Path(__file__).read_bytes()), 'loader': sha(Path(lo.__file__).read_bytes()),
-            'full': FULL, 'panTables': {str(pc): sha(t) for pc, t in oracle.pan_tables.items()}, 'tables': sha(oracle.tables)}
+            'full': FULL, 'realKernel': real, 'panTableSha256': sha(oracle.pan_table),
+            'panTables': {str(pc): sha(t) for pc, t in oracle.pan_tables.items()}, 'tables': sha(oracle.tables)}
     if not window:
+        write_atomic(out / 'pan-table.bin', oracle.pan_table)
         for pc, table in oracle.pan_tables.items():
             write_atomic(out / f'pan-table-pc{pc}.bin', table)
         write_atomic(out / 'tables.bin', oracle.tables)
@@ -504,20 +747,25 @@ def main():
             [{'function': name, 'start': start, 'end': end, 'instructions': [[a, t] for a, t in insns]}
              for start, end, name, insns in functions]))
         write_atomic(out / 'oracle.json', json.dumps(meta, indent=1))
+    done, covered = {}, set()
     for case in cases:
         started = time.time()
-        oracle.window = window or (0, FULL)
-        coverage = None if window or '--no-coverage' in args else Coverage(oracle.cpu, functions)
-        info = oracle.run_case(case['program'], modules, case.get('checkReads', False))
         name = case['name']
+        oracle.window = window or (0, FULL)
+        coverage = Coverage(oracle.cpu, functions) if measure else None
+        info = oracle.run_case(case['program'], modules, case.get('checkReads', False))
         info.update({k: v for k, v in meta.items() if k in ('galaxy', 'oracle', 'loader')})
         info['program'] = case['program']
         info['checkReads'] = case.get('checkReads', False)
         info['digestSha256'] = sha(b''.join(oracle.digests))
+        if real:
+            oracle.write_outputs(out, name, info)
+        info['programSha256'] = sha(json.dumps(case['program'], sort_keys=True).encode())
         info['moduleSha256'] = {m['module']: sha(modules[m['module']]) for m in case['program'] if m['op'] == 'load'}
         info['seconds'] = round(time.time() - started, 2)
         if coverage is not None:
             coverage.close()
+            covered |= coverage.covered
             info['coverage'] = sorted(coverage.covered)
         if window:
             info['window'] = list(window)
@@ -527,8 +775,25 @@ def main():
             write_atomic(out / f'{name}.dig', b''.join(oracle.digests))
             write_atomic(out / f'{name}.full', b''.join(oracle.full))
             write_atomic(out / f'{name}.json', json.dumps(info))
+            done[name] = {k: v for k, v in info.items() if k != 'coverage'}
         fault = f", fault {info['fault']['kind']} at callback {info['fault']['callback']}" if info['fault'] else ''
         print(f"{name}: {info['ticks']} ticks, {info['callbacks']} callbacks{fault}, {info['seconds']}s", file=sys.stderr, flush=True)
+    if not window:
+        if measure:
+            report = [{'function': name, 'start': start, 'end': end, 'instructions': [[a, t] for a, t in insns],
+                       'covered': sorted(a for a, _ in insns if a in covered)} for start, end, name, insns in functions]
+            if templates is not None:
+                templates.close()
+                report += templates.report()
+            write_atomic(out / 'coverage.json', json.dumps(report))
+        # Merged with the file's cases at the end, so processes sharing OUT_DIR
+        # with --cases rarely lose each other's entries (the per-case JSON is
+        # the authoritative record).
+        summary_file = out / 'summary.json'
+        summary = json.loads(summary_file.read_text()) if summary_file.exists() and '--cases' in args else {}
+        summary.update({k: meta[k] for k in ('galaxy', 'oracle', 'loader', 'panTableSha256', 'full', 'realKernel')})
+        summary.setdefault('cases', {}).update(done)
+        write_atomic(out / 'summary.json', json.dumps(summary, indent=1))
 
 
 if __name__ == '__main__':

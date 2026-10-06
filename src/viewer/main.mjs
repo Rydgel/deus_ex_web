@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { AssetStore } from '../unreal/assets.mjs';
-import { readGlobalConfigBool } from '../unreal/user-config.mjs';
+import { readGlobalConfigBool, parseIniValue } from '../unreal/user-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
@@ -23,6 +23,9 @@ import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp } from './display-ramp.mjs';
 import { stateDigest } from '../runtime/state-digest.mjs';
+import { createMusicOutput } from './galaxy-music-output.mjs';
+import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
+import { msvcrtWtoi } from '../runtime/script-text-parser.mjs';
 
 // Script function bodies run in the Rust interpreter by default
 // (docs/rust-core.md R2b); ?scriptVm=js keeps the JavaScript VM.
@@ -178,6 +181,14 @@ let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPost
 let simLastPost=null;
 const lipSyncPositions=new Map();
 let infoLinkAudioContext=null;
+// Galaxy's music (docs/galaxy-music.md "Phase 5: Output"): an AudioWorklet
+// owns the library (galaxy-music-output.mjs); the simulation talks to it on
+// its own MessageChannel, the worker's end or, with ?sim=inline, the page's
+// `pageMusicLibrary`. ?music=0 leaves the worklet out (the simulation then
+// uses the headless mirror library), for A/B measurements.
+const musicEnabled=new URLSearchParams(location.search).get('music')!=='0';
+const musicOutput=musicEnabled?createMusicOutput():null;
+let pageMusicLibrary=null,musicError=null;
 const conversationAudio=new Map();
 // Galaxy's lip-sync channels for the speech being played (docs/lip-sync.md).
 let lipSync=null;
@@ -273,9 +284,42 @@ function toast(message) { $('toast').textContent = message; setTimeout(() => { i
 async function activateInfoLinkAudio(){
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(!AudioContextClass)throw new Error('This browser cannot decode the original DataLink audio');
-  infoLinkAudioContext??=new AudioContextClass();
+  // One context for the Web Audio voices, the speech and Galaxy's music
+  // worklet, at Galaxy's output rate (the installed OutputRate, 44100 Hz).
+  if(!infoLinkAudioContext){
+    infoLinkAudioContext=new AudioContextClass({sampleRate:44100});
+    musicOutput?.start(infoLinkAudioContext).catch(error=>{musicError=String(error?.message??error);});
+  }
   if(infoLinkAudioContext.state==='suspended')await infoLinkAudioContext.resume();
   return infoLinkAudioContext;
+}
+// Music plays on every map: any gesture creates or resumes the context
+// (browsers start audio only after one).
+if(musicOutput)for(const type of ['pointerdown','keydown'])
+  document.addEventListener(type,()=>{if(infoLinkAudioContext?.state!=='running')activateInfoLinkAudio().catch(()=>{});},true);
+/** Galaxy's EffectsChannels from DeusEx.ini, clamped to 0..32 as the
+ * subsystem's Init (0x10605580) does; the worklet opens the library with it. */
+async function readEffectsChannels(files){
+  const file=files.find(entry=>String(entry.path).replaceAll('\\','/').split('/').pop().toLowerCase()==='deusex.ini');
+  if(!file)throw new Error('DeusEx.ini is not among the game files');
+  const data=await file.read(),text=new TextDecoder('latin1').decode(data instanceof Uint8Array?data:new Uint8Array(data));
+  const value=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','EffectsChannels');
+  if(value===undefined)throw new Error('Galaxy EffectsChannels is not in DeusEx.ini');
+  return Math.max(0,Math.min(32,msvcrtWtoi(value)));
+}
+/** A new simulation side's music library: the worker gets its end of the
+ * channel; ?sim=inline keeps one library on the page for its lifetime. */
+async function connectMusic(files){
+  if(!musicOutput)return;
+  try{
+    musicOutput.configure({effectsChannels:await readEffectsChannels(files)});
+    if(simClient)simClient.connectMusic(musicOutput.simulationPort());
+    else if(!pageMusicLibrary)pageMusicLibrary=connectMusicLibraryPort(musicOutput.simulationPort());
+  }catch(error){musicError=String(error?.message??error);}
+}
+function musicStatus(output=musicOutput?.status()??null){
+  return {enabled:musicEnabled,error:musicError,context:infoLinkAudioContext?.state??'uninitialized',output,
+    library:simClient?simStatus?.music??null:pageMusicLibrary?.status()??null};
 }
 function stopInfoLinkPresentation(){
   stopConversationAudio();
@@ -447,7 +491,11 @@ async function loadMap(name) {
       stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(), childFrames: nextWorld.mirrors.stats.planes > 0,
       gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
       meshBackend: new URLSearchParams(location.search).get('meshBackend') };
+    // On the page the old map's audio unregisters its music before the next
+    // map's runtime is built (the worker does the same at its load).
+    if (!simClient) simHost?.disposeAudio?.();
     nextHost = simClient ? remoteHost(await simClient.load(name, hostOptions)) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
+      musicLibrary: pageMusicLibrary,
       onConversationSpeech: event => { void playConversationSpeech(event); }, onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
     nextWorld.notes.push(...nextHost.notes);
@@ -558,6 +606,7 @@ async function setFiles(files) {
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })));
   }
+  await connectMusic(files);
   const names = [...next.files.values()].filter(f => /\.(dx|unr)$/i.test(f.path)).map(f => f.name).sort();
   if (!names.length) throw new Error('No maps found. Choose the game folder containing Maps, Textures, and System.');
   assets = next;
@@ -958,7 +1007,7 @@ function status() {
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: simClient ? simStatus?.gameplay ?? null : game?.status() ?? null, sim: simMode,
-    galaxy:{...galaxyAudio,voices:galaxyVoices.size},
+    galaxy:{...galaxyAudio,voices:galaxyVoices.size},music:musicStatus(),
     audio:{...audioTransport,contextState:infoLinkAudioContext?.state??'uninitialized',
       active:[...conversationAudio].map(([id,entry])=>({id,sound:entry.sound,started:Boolean(entry.source)}))},
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
@@ -981,6 +1030,19 @@ window.deusExViewer = { status, framePhases(reset = true) {
 release() { if (held) held = 'releasing'; },
 /** ?sim=worker: resolves when no frame is in flight. */
 settled() { return simClient?.settled() ?? Promise.resolve(); },
+/** Galaxy's music, freshly read: the worklet's counters and the
+ * simulation's library service (sent to the worker and back). */
+async musicStatus() {
+  const output = musicOutput ? await musicOutput.refresh() : null;
+  return { ...musicStatus(output), library: simClient ? await simClient.call('musicStatus') : pageMusicLibrary?.status() ?? null };
+},
+/** Validation only (galaxy-music-library.mjs driveMusicLibrary): Update's
+ * library calls for a song and section, or `{unregister: true}`, issued by
+ * the simulation side's library service. */
+musicDrive(args) {
+  if (simClient) return simClient.call('musicDrive', args);
+  return driveMusicLibrary(pageMusicLibrary, assets, args);
+},
 /** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
  * node count, mirror requests, sky, and the world triangles it kept. */
 visibility() {
