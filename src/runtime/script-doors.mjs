@@ -435,7 +435,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
-  nativeHud = false,
+  nativeHud = false, musicLibrary = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -2162,7 +2162,8 @@ export async function createScriptDoors({
   // The pre-placed actors' measured global indices, before any startup sound.
   assignMeasuredObjectIndices(runtime,level.actors);
   // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
-  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event)});
+  runtime.audio=await createLiveAudio({runtime,level,player:()=>playerActor,onVoice:event=>callbacks.audioVoice?.(event),
+    ...(musicLibrary?{library:musicLibrary}:{})});
   // XLevel->Engine->Audio, Galaxy's UAudioSubsystem, linked before the map's
   // startup and Login run: PlaySound (+0x74) from ClientHearSound,
   // StopSoundId (+0x78) from execStopSound, and ULevel::DestroyActor's
