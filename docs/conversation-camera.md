@@ -86,12 +86,17 @@ original fills the unrendered bars black.
 * The subtraction `0x1003c1d0` cuts each rect present on entry into up to four
   strips (top, bottom, left, right). The first nonempty strip replaces the
   rect, the rest are appended, and rects with a non-positive width or height
-  are compacted out in order. Several sums stay unrounded on the x87 stack
-  (the clipped bottom and the right and bottom edges used for the strips), so
+  are compacted out in order. Several sums stay on the x87 stack (the
+  clipped bottom and the right and bottom edges used for the strips), so
   the translation follows each `fld`/`fadd`/`fsub`/`fstp` on the x87 model.
+  PaintWindows runs inside the render pass (PostRenderFlash), under x87
+  precision control 24 ([render-pass precision](render-pass-precision.md)):
+  since 2026-10-06 each FADD and FSUB rounds to 24 bits (`x87-pc24.mjs`
+  `p24add`), so those stack values are 24-bit.
 
 `validate-root-raw-background` runs `0x1003c1d0` and `0x1003c5f0` unchanged in
-Unicorn (Core's FArray::Add/Remove through the probe FMalloc) on 2,131 cases
+Unicorn at control word `0x007f` (`ORACLE_CW` overrides it; the 64-bit
+translation differed in 225 of the 2,131 cases there) (Core's FArray::Add/Remove through the probe FMalloc) on 2,131 cases
 (random and edge rects including infinities, NaN, signed zeros and huge
 values; the conversation letterbox; window trees mixing visibility,
 `bDrawRawBackground` and nesting): every rect matches bit for bit, in order.
@@ -171,9 +176,12 @@ before `FSceneNode::ComputeRenderSize`:
   (`+0x5dc..+0x5e8`) scale by the integer `hMultiplier/vMultiplier`
   (`+0x730/+0x734`; vMultiplier passes through a float32 store) and truncate
   through MSVCRT `_ftol`: `x0 = ftol(hm*renderX + XB)`,
-  `x1 = ftol(hm*renderWidth + x0)`, the same for y, each product and sum
-  unrounded on the x87 stack. x0/y0 are raised to XB/YB and x1/y1 lowered to
+  `x1 = ftol(hm*renderWidth + x0)`, the same for y, each product and sum on
+  the x87 stack. x0/y0 are raised to XB/YB and x1/y1 lowered to
   X+XB/Y+YB; the frame becomes XB = x0, YB = y0, X = x1 - x0, Y = y1 - y0.
+  PreRender runs from the PreRender event, after URender::PreRender set
+  precision control 24: the FILDs are exact and each FMUL and FIADD rounds
+  to 24 bits before `_ftol` truncates.
 
 ComputeRenderSize then projects with that X (horizontal FOV across the rect's
 width), the Canvas gets `ClipX/ClipY` and `SetClip(XB, YB, X, Y)`, and the
@@ -183,21 +191,26 @@ and the four floats; `EnableRendering` (1512) is turned off only by
 DeusExRootWindow.ShowSnapshot when `UIBackground` is 1 or 2 (default 0).
 
 `rootRenderViewport` (script-root-render-viewport.mjs) is the translation, on
-the x87 model. The window host writes the scene frame at the clipped size and
+the x87 model at 24 bits (`x87-pc24.mjs`, since 2026-10-06). The window host writes the scene frame at the clipped size and
 exposes `renderViewport`; Play's viewer draws the sky, scene and weapon passes
 inside that rect (viewport and scissor, camera aspect from the rect, the
 horizontal FOV kept) and the HUD over the whole canvas. With rendering off it
 draws no 3D. In MeetPaul the band is the area between the bars.
 
 `validate-root-render-viewport` runs `0x1003a7dd..0x1003a8cb` unchanged in
-Unicorn (Extension rebased, x87 control word 0x037f) on 1,783 cases: flag
+Unicorn (Extension rebased, x87 control word 0x007f; `ORACLE_CW` overrides
+it, and the 64-bit translation differed in 443 of the cases there, the
+multipliers past 2^24 among them) on 1,783 cases: flag
 combinations, multipliers up to INT_MIN/INT_MAX and above 2^24, float
 specials, signed zeros, denormals, NaN, infinities, clamps on both sides and
 odd frames. All four frame ints match. Three of four planted mutations fail
 it (no float32 store of vMultiplier, x1 from the clamped x0, double instead of
 x87 arithmetic); the survivor (`>=` in the clamp) is equivalent.
 `validate-island-conversation` checks on every clipped frame that the render
-rect is exactly the band between the two raw-background bars.
+rect is exactly the band between the two raw-background bars (2,849 clipped
+frames with the 24-bit translations, 2026-10-06). Cost: MeetPaul's clipped
+letterbox at multiplier 1 (seven interleaved Node rounds) went from 0.48 to
+0.69 µs per call, once per frame.
 
 ## The intro (00_Intro, forced play)
 
