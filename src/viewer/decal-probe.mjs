@@ -41,3 +41,25 @@ export function placeProbe(game, { location = null, rotation = null, lookAt = nu
   if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation);
   return { location: runtime.readNamed(player, 'Location'), rotation };
 }
+
+/** Validation only (validate-lasers-play.mjs): the level's LaserEmitters,
+ * their iterators' active beams and proxies, and the actor mesh layer's
+ * iterator item slots (actor-mesh-sim.mjs itemSlots: binding ids, null when
+ * free), read on the simulation side. */
+export function laserProbe(game, actorSim) {
+  const runtime = game.doors.scriptRuntime.runtime, level = runtime.levelFor(game.player.collisionActor);
+  const read = (a, n) => runtime.readNamed(a, n);
+  const emitters = level.actors.filter(a => { try { return a && runtime.instance(a).cls.record.key === 'deusex.laseremitter'; } catch { return false; } });
+  return {
+    emitters: emitters.map(e => {
+      const it = read(e, 'RenderInterface');
+      const beams = it ? read(it, 'Beams').filter(b => b['deusex.laseriterator.sbeam.bactive']) : [];
+      return { iterator: it ? runtime.instance(it).cls.record.key : null, on: read(e, 'bIsOn'), frozen: read(e, 'bFrozen'),
+        maxItems: it ? read(it, 'MaxItems') : 0, beams: beams.map(b => ({ length: b['deusex.laseriterator.sbeam.length'],
+          segments: b['deusex.laseriterator.sbeam.numsegments'] })), proxy: read(e, 'proxy').name,
+        proxyLast: read(read(e, 'proxy'), 'LastRenderTime') };
+    }),
+    slots: actorSim?.itemSlots?.() ?? null,
+    time: read(level.actors[0], 'TimeSeconds'),
+  };
+}

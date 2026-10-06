@@ -3,9 +3,12 @@
 // LaserEmitter's LaserIterator, the emitter's CalcTrace adds its beam,
 // ULaserIterator::CurrentItem walks the proxy along it, and the actor mesh
 // scene draws the LaserBeam segments at the item snapshots, with no runtime
-// error.
+// error. By default the simulation runs in the worker: decal-probe.mjs
+// placeProbe and laserProbe act and read there, and the page's actor mesh
+// draw reports which item bindings it shows (`--query sim=inline` runs the
+// simulation on the page).
 //
-//   node scripts/validate-lasers-play.mjs [--url http://...] [--shot FILE]
+//   node scripts/validate-lasers-play.mjs [--url http://...] [--query sim=inline] [--shot FILE]
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -14,12 +17,14 @@ import {gameDirectory} from './game-directory.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-lasers-play: no installed game data'); process.exit(0); }
-const map = '01_NYC_UNATCOIsland', shot = option('shot', null);
+const map = '01_NYC_UNATCOIsland', shot = option('shot', null), query = option('query', '');
 let server = null, url = option('url', null);
 if (!url) {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const {default: base} = await import('../vite.config.mjs');
-  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/')));
+  // The tree may itself sit in .work/ or .claude/worktrees/, which the config denies.
+  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/'))
+    && !(pattern.includes('.claude/worktrees') && root.includes('/.claude/worktrees/')));
   server = await createServer({...base, configFile: false, root, logLevel: 'error',
     server: {...base.server, port: 0, strictPort: false, fs: {...base.server.fs, deny}, watch: null}});
   await server.listen();
@@ -33,36 +38,21 @@ try {
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
     await route.fulfill({response, body: (await response.text()) +
-      '\nwindow.__deusLasers={get npc(){return npcPreview;},get game(){return game;}};\n'});
+      '\nwindow.__deusLasers={get npc(){return npcPreview;}};\n'});
   });
-  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
+  await page.goto(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});
-  await page.evaluate(() => {
-    const game = window.__deusLasers.game, runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
-    runtime.farMoveActor(player, [1920, -1069, -60], 0, 1);
-    runtime.writeNamed(player, 'ViewRotation', [65536 - 2500, 16384, 0]);
-  });
+  await page.evaluate(() => window.deusExViewer.placeProbe({location: [1920, -1069, -60], rotation: [65536 - 2500, 16384, 0]}));
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   await frames(150);
-  report = await page.evaluate(() => {
-    const game = window.__deusLasers.game, runtime = game.doors.scriptRuntime.runtime, level = runtime.levelFor(game.player.collisionActor);
-    const read = (a, n) => runtime.readNamed(a, n);
-    const emitters = level.actors.filter(a => { try { return a && runtime.instance(a).cls.record.key === 'deusex.laseremitter'; } catch { return false; } });
-    return {
-      emitters: emitters.map(e => {
-        const it = read(e, 'RenderInterface');
-        const beams = it ? read(it, 'Beams').filter(b => b['deusex.laseriterator.sbeam.bactive']) : [];
-        return {iterator: it ? runtime.instance(it).cls.record.key : null, on: read(e, 'bIsOn'), frozen: read(e, 'bFrozen'),
-          maxItems: it ? read(it, 'MaxItems') : 0, beams: beams.map(b => ({length: b['deusex.laseriterator.sbeam.length'],
-            segments: b['deusex.laseriterator.sbeam.numsegments']})), proxy: read(e, 'proxy').name,
-          proxyLast: read(read(e, 'proxy'), 'LastRenderTime')};
-      }),
-      time: read(level.actors[0], 'TimeSeconds'), items: window.__deusLasers.npc.itemStats(),
-      runtimeError: window.deusExViewer.status().runtimeError?.message ?? null,
-    };
+  report = await page.evaluate(async () => {
+    const probe = await window.deusExViewer.laserProbe(), draw = window.__deusLasers.npc.draw;
+    // The page shows an item binding once its record has been applied.
+    const items = probe.slots.map(({actor, ids}) => ({actor, slots: ids.length,
+      drawn: ids.filter(id => id !== null && draw.bindings.get(id)?.root.visible).length}));
+    return {emitters: probe.emitters, time: probe.time, items, runtimeError: window.deusExViewer.status().runtimeError?.message ?? null};
   });
   if (shot) await page.screenshot({path: shot});
   report.pageErrors = errors;
