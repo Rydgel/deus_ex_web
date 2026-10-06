@@ -106,6 +106,52 @@ Intro (a mover appended to the floor's coplanar chains) and the Ship (a
 can reach but one (a coplanar leaf whose chain end faces against the
 fragment).
 
+## Port handoff (WIP, 2026-10-06; stopped at the usage limit)
+
+**Done, not verified, not built.** `native/script-vm/src/tracker.rs` is a
+first draft of the whole port, written from `.work/tracker/notes.md` and
+the disassembly re-read for this: Core's FCoords `*=`/`/=` FScale (shear
+slots X.y, X.z, Y.x, Y.z, Z.x, Z.y; `/=` negates the snapped rate, so a
+zero rate is −0) and FRotator (yaw/pitch/roll and the inverse order, the
+`*=FCoords` compose of TransformPointBy/TransformVectorBy), BuildCoords
+(the transpose and `sgn(MainScale) × PostScale.Orientation()`),
+FPoly::Transform (TextureU/V by VectorXform; base and vertices
+`((V − PrePivot) stored) by PointXform stored + Location stored`; reversal
+when Orientation < 0.0), SafeNormal, FBox/FSphere (center x/y from stored
+sums, z from the unstored one; W strict max of d², then
+`sqrt((double)W) × 1.001`), PrecomputeSphereFilter (both operand orders),
+SplitWithPlaneFast (Dx unstored in X, Dy/Dz stored; t stored), SplitInHalf,
+FilterPoly, AddNode (next-fit node search with the cursor moved as it
+scans; vertex runs bounded by `c + n < Num`; the zone/leaf and ZoneMask
+rules; `__allshl` zero past 63) and AllocPoint (FArray growth
+`Num + 3·Num/8 + 32`). Arithmetic is generic over the precision: `Ext`
+(PC64, the construct default the oracle assumes) and `P24` (exact single
+rounding, also with double constants).
+
+It is **not registered in `lib.rs`** (the crate builds without it) and does
+not compile yet: `add_node` still calls placeholders `P::w(b, nn)` and
+`P::side(l, n)`, which must become the generic `F` arithmetic
+(`W = f32((B.y·N.y + B.z·N.z) + B.x·N.x)`; side = `((L.z·N.z + L.y·N.y) +
+L.x·N.x) < 0.0` with N the new node's plane), so `add_node` needs the `F`
+type parameter; `sphere()` has a leftover unused `r`. Nothing below has
+run against the oracle.
+
+**Next steps:** fix those, add `mod tracker;`, then the host side in
+`bsp-occlusion.mjs` (blocks at the tracker's sizes: nodes `min(2N+512,
+65536)`, verts `2V+512`, points original + Σpolys + (V+512), vectors +3
+and surfs +1 per polygon, NodeMaps/VertOwners/PointHelper, mover records
+of 40 words, FPoly records of 68 words, a GMem scratch block; the header
+layout is at the top of tracker.rs), a tracked copy of `.work/tracker`'s
+`run.mjs` request builder and `cases.json`, and
+`scripts/validate-brush-tracker.mjs` comparing each step's report with the
+oracle (full reports field by field; brief steps by recomputing Python's
+`json.dumps(sort_keys)` SHA-256 with the oracle's `newBlocks` inserted).
+Then occlude.rs's SurfIsDynamic in the render-bound gate (`0x10b17adb`:
+skip the bound test when the tracker exists and `iSurf >= original
+surfs`; tracker.rs sets MODEL word 19), and Play (Update for admitted
+movers before `occ_run`, movers drawn from the draw lists, a
+`?moverTracker=off` switch).
+
 ## Open
 
 - The port: the tracker on the Rust occlusion's node memory (pools sized as
