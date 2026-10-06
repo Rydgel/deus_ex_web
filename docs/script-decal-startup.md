@@ -52,9 +52,7 @@ override BeginPlay. `Decal.Destroyed` calls DetachDecal then Super.Destroyed.
    tests the complete word.
 4. If Texture (+0x16c) is null, log the original diagnostic and return false.
 5. Otherwise clamp signed MultiDecalLevel above 4 to 4 (store at 0x103e7351),
-   then enter the BSP attachment path. Its successful surface/geometry work remains
-   an explicit boundary until recovered. Do not disable Client.Decals or clear
-   Shadow.Texture to evade this path.
+   then enter the BSP attachment path ([decals](decals.md)).
 
 `execDetachDecal` (0x103e9a30) advances the parameter cursor and returns directly
 when SurfList.Num <= 0 (0x103e9a67..0x103e9a6f -> 0x103e9c1d). Nonempty lists
@@ -91,16 +89,11 @@ Client.Decals binding, positive BSP attachment, nonempty detachment, Shadow.Tick
 final release and the subsequent pawn initialization dependencies remain open.
 No production setting disables decals to bypass these requirements.
 
-## Attachment record ownership
+## Surface attachment
 
-A successful attachment records its texture-keyed owner in the live level's
-`decalRecords` (DetachDecal releases it). The original keeps FDecal entries
-on the loaded level's own UModel surfaces (`FBspSurf.Decals`, SDK
-`UnObj.h:213,458-467`), and LoadMap loads that model fresh. The decoded map
-model is shared by every Play instance and by Player-start reloads, so the
-records live on the level object, and a reload clears them with the other
-per-load level fields. Before 2026-09-27 they were stored on the shared model.
-That carried Shadow owners across reloads and kept every discarded game
-reachable, about 300 MB each: a `createGame` loop grew 300 MB per boot, and
-`validate-player-tick-order` peaked at 5.4 GB. Now dropped games are
-collected, and that validator peaks at 2.8 GB.
+The positive surface path (the trace, FindSurface, the FDecal quad, Nodes,
+the MultiDecalLevel grid) and the nonempty DetachDecal are recovered and run
+in the Rust core, bit-equal to the original: see [decals](decals.md). Each
+loaded level owns its FDecal store; a Player-start reload drops it, as
+LoadMap loads the UModel fresh. Before 2026-10-06 a JavaScript stand-in kept
+one record per texture and attached only the first surface; it is gone.

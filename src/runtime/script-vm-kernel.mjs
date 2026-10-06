@@ -55,9 +55,19 @@ async function load() {
   const module = await compileScriptVm();
   // The module's shadow stack and statics end below 2 MiB (build.rs).
   const memory = new WebAssembly.Memory({initial: 32});
-  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module)}});
+  const instance = await WebAssembly.instantiate(module, {env: {memory, ...kernelOnlyImports(module), ...decalImports}});
   return createScriptVmKernel(instance, memory);
 }
+
+// AttachDecal's host services in the kernel instance (decal.rs, decal-kernel.mjs):
+// the shared rand() stream and a decal actor's live Texture id, answered by
+// the call in flight.
+let decalHost = null;
+export const setDecalHost = host => { decalHost = host; };
+const decalImports = {
+  decal_rand: () => decalHost.rand(),
+  decal_texture: actor => decalHost.texture(actor),
+};
 
 /** Core FGlobalMath's sine table into an instance's SINE static. */
 function uploadSineTable(x, memory) {
@@ -211,6 +221,20 @@ export function createScriptVmKernel(instance, memory) {
       masterInPtr: () => x.occ_master_in_ptr() >>> 0,
       masterOutPtr: () => x.occ_master_out_ptr() >>> 0,
       masterFrame: () => x.occ_master_frame(),
+    }),
+    // ADecal::execAttachDecal / execDetachDecal (decal.rs, docs/decals.md),
+    // driven by decal-kernel.mjs; null when the loaded core predates them.
+    decals: typeof x.decal_attach !== 'function' ? null : Object.freeze({
+      memory,
+      alloc,
+      free,
+      ioPtr: () => x.decal_io_ptr() >>> 0,
+      attach: (model, store) => x.decal_attach(model >>> 0, store >>> 0),
+      detach: store => x.decal_detach(store >>> 0),
+      storeSize: (surfaces, capacity) => x.decal_store_size(surfaces >>> 0, capacity >>> 0) >>> 0,
+      storeInit: (at, surfaces, capacity) => x.decal_store_init(at >>> 0, surfaces >>> 0, capacity >>> 0),
+      storeGrow: (from, to, capacity) => x.decal_store_grow(from >>> 0, to >>> 0, capacity >>> 0),
+      recordWords: () => x.decal_record_words(),
     }),
   });
 }

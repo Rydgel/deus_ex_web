@@ -2957,10 +2957,10 @@ export class ScriptRuntime {
         return engine.client;
       },warning:this.warning,
       attachSurfaces:(actor,distance,direction)=>attachDecalSurfaces(actor,distance,direction,{
-        model:this.levelFor(actor)?.model,level:this.levelFor(actor),
+        level:this.levelFor(actor),
         read:(a,n)=>this.readNamed(a,n),
         write:(a,n,v)=>this.writeNamed(a,n,v),
-        frand:()=>{if(typeof this.rng?.frand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');return Math.fround(this.rng.frand());},
+        rand:typeof this.rng?.rand==='function'?()=>this.rng.rand():null,
       }),
     });
     if(call.record?.key==='engine.playerpawn.clienttravel'){

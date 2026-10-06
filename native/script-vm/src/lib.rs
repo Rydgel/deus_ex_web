@@ -12,6 +12,7 @@
 mod hash;
 mod move_actor;
 mod move_pawn;
+mod decal;
 mod dispatch;
 mod interp;
 mod level;
