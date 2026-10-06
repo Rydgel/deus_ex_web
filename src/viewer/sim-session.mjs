@@ -138,12 +138,16 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     // The decal block clips against the saved polygons' points (option 0x100).
     const decals = decalDraw?.wanted(level) ?? false;
     words[44] = ++drawWorlds; words[45] = u32[0]; words[46] = 3 | (decals ? OCCLUSION_POINTS : 0); words[47] = 0;
+    const started = performance.now();
     const result = occlusion.run(words, [], { skipPoints: true }), nodes = [];
     for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
+    const occluded = performance.now();
+    const fragments = decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null;
     return { nodes: Uint32Array.from(nodes), zone: words[42],
       mirrors: result.children.filter(child => child.kind === 'mirror').map(child => child.iNode),
-      sky: result.children.some(child => child.kind === 'sky'),
-      decals: decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null };
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments,
+      // Host timings (ms): OccludeBsp with its decode, then the decal block.
+      ms: { occlusion: occluded - started, decals: performance.now() - occluded } };
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
   // and queue (raw heap strings) and the displayBuffer's characters that
