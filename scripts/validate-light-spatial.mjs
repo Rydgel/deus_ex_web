@@ -10,7 +10,9 @@
  * per-light constants, rectangle and shadow illumination), at several
  * TimeSeconds; then fabricated lights and grids: exact hits (dx = dy = 0),
  * zero illumination, singular (NaN) grids, LightPeriod 0, large times.
- * Checks, per case: the spatial bytes and the sequence of appAtan2 operand
+ * Checks, per case: ComputeFromActor's rr2 and incidence at 24 bits
+ * (static-lighting.mjs renderPassConstants against the original segments at
+ * 0x007f), the spatial bytes and the sequence of appAtan2 operand
  * pairs the original asked for. A moving LE_Shell light (the grenades'
  * ExplosionLight) through Play's moving-light path on 00_Training: every
  * light map it reaches against the static copy plus the original Shell
@@ -35,7 +37,7 @@ import { ClassDefaults } from '../src/unreal/classes.mjs';
 import { lightmapBasis, createLighting } from '../src/unreal/lighting.mjs';
 import { createMovingLights } from '../src/viewer/moving-lights.mjs';
 import { POLY } from '../src/unreal/geometry.mjs';
-import { shadowIllumination } from '../src/runtime/static-lighting.mjs';
+import { shadowIllumination, renderPassConstants } from '../src/runtime/static-lighting.mjs';
 import { rotationSineTable } from '../src/runtime/coords.mjs';
 import { fgetHsv, movingLightConstants, movingLightRect, normalLightIncidence, squareRootTable, normalLightTable,
   surfaceLightClass, colorTableEntry } from '../src/runtime/dynamic-lighting.mjs';
@@ -121,14 +123,14 @@ for (const mapName of mapNames) {
       const constants = movingLightConstants(v, levelBrightness, fgetHsv(v.LightHue ?? 0, v.LightSaturation ?? 0, 255));
       const rect = movingLightRect(location, constants.radius, facet);
       if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) continue;
-      const incidence = normalLightIncidence(location, facet, constants.rradius);
+      const { rr2, incidence } = renderPassConstants(location, facet, constants.rradius);
       const full = shadowIllumination(model.lightBits, lm.dataOffset + light * pitch * height, width, height), stride = pitch * 8;
       const rw = rect.maxU - rect.minU, illumination = new Uint8Array(rw * (rect.maxV - rect.minV));
       for (let y = rect.minV; y < rect.maxV; y++) illumination.set(full.subarray(y * stride + rect.minU, y * stride + rect.maxU), (y - rect.minV) * rw);
       lights.add(ref);
       for (const time of [TIMES[steps % TIMES.length], TIMES[(steps + 3) % TIMES.length]]) {
         cases.push({ source: `${mapName}:${ref}:${index}`, effect: v.LightEffect, clamp: [width, height], rect, grid, location,
-          rradius: constants.rradius, rr2: constants.rr2, incidence, time: f(time + (random() % 1000) / 4096),
+          rradius: constants.rradius, rr2, incidence, time: f(time + (random() % 1000) / 4096), radius: v.LightRadius & 255, facet,
           period: v.LightPeriod ?? 0, phase: v.LightPhase ?? 0, illumination });
       }
       steps++;
@@ -137,6 +139,44 @@ for (const mapName of mapNames) {
   census.push({ map: mapName, lights: lights.size, surfaces, steps });
 }
 const realCases = cases.length;
+
+// ComputeFromActor's rr2 (every LightRadius) and each real case's incidence
+// at 0x007f against renderPassConstants.
+const facetBits = facet => ({ origin: facet.origin.map(u32), axisU: facet.axisU.map(u32), axisV: facet.axisV.map(u32),
+  normal: facet.normal.map(u32), pan: facet.pan.map(u32), scale: facet.scale.map(u32), clamp: facet.clamp });
+const constantReport = { radii: 256, rr2Mismatch: 0, incidences: 0, incidenceMismatch: 0, rr2At64: 0, incidenceAt64: 0 };
+{
+  const radii = [...Array(256).keys()], native = runOracle({ radii }).radii;
+  radii.forEach((radius, i) => {
+    const constants = movingLightConstants({ LightRadius: radius, LightBrightness: 255 }, 1, [1, 1, 1]);
+    if (native[i][2] !== u32(renderPassConstants([0, 0, 0], { origin: [0, 0, 0], normal: [0, 0, 1] }, constants.rradius).rr2))
+      constantReport.rr2Mismatch++;
+    if (native[i][2] !== u32(constants.rr2)) constantReport.rr2At64++;
+  });
+  const seen = new Set(), list = [];
+  for (const c of cases.slice(0, realCases)) {
+    const key = `${c.location}|${c.facet.origin}|${c.facet.normal}`;
+    if (seen.has(key)) continue;
+    seen.add(key); list.push(c);
+  }
+  for (let start = 0; start < list.length; start += 2000) {
+    const part = list.slice(start, start + 2000);
+    const native = runOracle({ incidence: part.map(c => ({ light: { location: c.location, brightness: 1, radius: c.radius },
+      facet: facetBits(c.facet), rradius: u32(c.rradius) })) }).incidence;
+    part.forEach((c, i) => {
+      constantReport.incidences++;
+      if (native[i] !== u32(c.incidence)) constantReport.incidenceMismatch++;
+      if (native[i] !== u32(normalLightIncidence(c.location, c.facet, c.rradius))) constantReport.incidenceAt64++;
+    });
+  }
+  // What the 64-bit constants would change: spatial bytes of the real cases.
+  constantReport.texelsChangedAt64 = 0;
+  for (const c of cases.slice(0, realCases)) {
+    const at64 = movingLightConstants({ LightRadius: c.radius, LightBrightness: 255 }, 1, [1, 1, 1]).rr2;
+    const a = spatial.run(c), b = spatial.run({ ...c, rr2: at64, incidence: normalLightIncidence(c.location, c.facet, c.rradius) });
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) constantReport.texelsChangedAt64++;
+  }
+}
 
 // Fabricated cases: every body, exact hits, zeros, NaN grids, edge times.
 for (const effect of SPATIAL_EFFECTS) for (let k = 0; k < 24; k++) {
@@ -212,7 +252,7 @@ for (let start = 0; start < cases.length;) {
   start = end;
 }
 
-const report = { controlWord, census, realCases, cases: cases.length, texels: 0, lit: 0, mismatches: 0, pairMismatches: 0, missing,
+const report = { controlWord, census, realCases, constants: constantReport, cases: cases.length, texels: 0, lit: 0, mismatches: 0, pairMismatches: 0, missing,
   pairs: unique.length, atanCalls: pairsOf.flat().length, precisionDependent, byEffect: {}, first: [] };
 cases.forEach((c, i) => {
   const expected = Buffer.from(original[i].spatial, 'hex'), got = rust[i];
@@ -265,7 +305,7 @@ const shellReport = { lights: 0, records: 0, texels: 0, lit: 0, mismatches: 0 };
       const rect = movingLightRect(location, constants.radius, facet);
       if (rect.minU >= rect.maxU || rect.minV >= rect.maxV) continue;
       shellCases.push({ effect: 14, clamp: [record.width, record.height], rect, grid, location, rradius: constants.rradius,
-        rr2: constants.rr2, incidence: 0, time: 0, period: 0, phase: 0, illumination: null });
+        rr2: renderPassConstants(location, facet, constants.rradius).rr2, incidence: 0, time: 0, period: 0, phase: 0, illumination: null });
       checks.push({ record, rect });
     }
     if (!shellCases.length) continue;
@@ -353,6 +393,10 @@ Object.assign(report, { movingShell: shellReport, fpatan: { products, modelMisma
   random: { pairs: randomPairs, fastMismatch, fallbacks: randomFallbacks } });
 console.log(JSON.stringify(report));
 assert.equal(missing, 0, 'every appAtan2 pair the original asked for was measured');
+if (controlWord === '0x007f') {
+  assert.equal(constantReport.rr2Mismatch, 0, 'rr2 at 24 bits matches ComputeFromActor for every LightRadius');
+  assert.equal(constantReport.incidenceMismatch, 0, 'incidence at 24 bits matches ComputeFromActor');
+}
 assert.equal(report.pairMismatches, 0, 'spatial.rs asks for the same appAtan2 operands as the original');
 assert.equal(report.mismatches, 0, 'spatial bytes match the original at 0x007f');
 assert.equal(modelMismatch, 0, 'k·FPATAN at 24 bits matches the hardware for every measured pair');

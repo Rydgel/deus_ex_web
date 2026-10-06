@@ -8,6 +8,11 @@
 // light-animation phase's cost per frame.
 //
 //   node scripts/validate-light-spatial-play.mjs [--url http://...] [--frames 240] [--shots DIR]
+//        [--map NAME --light x,y,z]
+//
+// --map/--light measure another map from stands around another light (for
+// instance 06_HongKong_Helibase's Searchlight TriggerLight2 at
+// -256,-400,684); the checks stay the same.
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
@@ -16,10 +21,13 @@ import { gameDirectory } from './game-directory.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-light-spatial-play: no installed game data'); process.exit(0); }
-const map = '10_Paris_Club', frames = Number(option('frames', 240)), shots = option('shots', null);
+const map = option('map', '10_Paris_Club'), frames = Number(option('frames', 240)), shots = option('shots', null);
 // Light3 (LE_Disco, LightRadius 34) and places beside it to look from.
-const light = [-175.8588409423828, -321.5807189941406, 169.49195861816406];
-const stands = [[0, 300, -60, 49152], [300, 0, -60, 32768], [0, -300, -60, 16384], [-300, 0, -60, 0], [0, 0, -100, 0]];
+const light = option('light', '-175.8588409423828,-321.5807189941406,169.49195861816406').split(',').map(Number);
+// [dx, dy, dz, yaw] from the light; `start` stays at the player start,
+// turning to the yaws listed.
+const stands = [[0, 300, -60, 49152], [300, 0, -60, 32768], [0, -300, -60, 16384], [-300, 0, -60, 0], [0, 0, -100, 0],
+  ...[0, 16384, 32768, 49152].map(yaw => ['start', 0, 0, yaw])];
 let server = null, url = option('url', null);
 if (!url) {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -49,12 +57,16 @@ try {
   const frame = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   // The first stand whose view merges the Disco light maps.
   let stand = null;
+  const start = await page.evaluate(() => {
+    const game = window.__deusSpatial.game, runtime = game.doors.scriptRuntime.runtime;
+    return runtime.readNamed(game.player.collisionActor, 'Location');
+  });
   for (const [dx, dy, dz, yaw] of stands) {
     await page.evaluate(({ at, yaw }) => {
       const game = window.__deusSpatial.game, runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
       runtime.farMoveActor(player, at, 0, 1);
       runtime.writeNamed(player, 'ViewRotation', [62000, yaw, 0]);
-    }, { at: [light[0] + dx, light[1] + dy, light[2] + dz], yaw });
+    }, { at: dx === 'start' ? start : [light[0] + dx, light[1] + dy, light[2] + dz], yaw });
     await frame(30);
     const seen = await page.evaluate(async () => {
       let changed = 0;
@@ -89,11 +101,12 @@ try {
 console.log(JSON.stringify(report, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
-assert.ok(report.stand, 'a stand beside Light3 draws its Disco light maps');
-assert.ok(report.spatialRecords > 0, 'the Disco light maps carry a spatially dynamic light');
-assert.ok(!report.notes.some(note => /Disco.*not translated/.test(note)), 'no "Light effect Disco is not translated" note');
+assert.ok(report.stand, 'a stand beside the light draws its light maps');
+assert.ok(report.spatialRecords > 0, 'light maps carry a spatially dynamic light');
+assert.ok(!report.notes.some(note => /not translated/.test(note) && /Searchlight|SlowWave|FastWave|Shock|Disco|Interference|Rotor|Shell/.test(note)),
+  'no "Light effect ... is not translated" note for these effects');
 assert.ok(report.timeAdvanced, 'Level.TimeSeconds advances');
-assert.ok(report.framesWithSpatialChanges > report.frames / 2, 'the Disco light maps change on most frames');
+assert.ok(report.framesWithSpatialChanges > report.frames / 2, 'the spatially dynamic light maps change on most frames');
 assert.ok(report.atlasChanged, 'the changes reach the light atlas');
-console.log(`validate-light-spatial-play: PASS (${map}: ${report.spatialRecords} Disco light maps, ${report.medianChangedSpatial} changed ` +
+console.log(`validate-light-spatial-play: PASS (${map}: ${report.spatialRecords} spatially dynamic light maps, ${report.medianChangedSpatial} changed ` +
   `per frame (median), light animation ${report.medianMs.toFixed(2)} ms/frame median)`);

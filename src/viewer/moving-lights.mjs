@@ -2,7 +2,7 @@ import { lightAttenuation } from '../unreal/lighting.mjs';
 import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLightRect, nonIncidenceSpatial,
   normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
 
-const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0];
+const MAX = 127 / 255, UNSHADOWED = 0x7f / 255, ORIGIN = [0, 0, 0], f = Math.fround;
 // Remaining normal/spot effect snapshots. Steady effect 0 uses the recovered
 // integer normal body; effect 13 uses the recovered NonIncidence body and
 // effect 14 (Shell: the EMP and nano-virus grenades' ExplosionLight) the
@@ -37,10 +37,11 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
   const hsv = new Map(), notes = new Set(), incremental = mode !== 'full';
   // spatial.rs, through the lighting's kernel (null without the core).
   const spatial = lighting.spatial?.ready ? lighting.spatial : null;
-  /** Shell 0x10b05740 for an unshadowed light (illumination 0x7f). */
+  /** Shell 0x10b05740 for an unshadowed light (illumination 0x7f), with
+   * the render pass's 24-bit rr2 (Shell reads no incidence). */
   const shellSpatial = (rect, grid, location, constants, write) => {
-    const bytes = spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius, rr2: constants.rr2, incidence: 0,
-      period: 0, phase: 0, time: 0, illumination: null });
+    const bytes = spatial.run({ effect: 14, rect, grid, location, rradius: constants.rradius,
+      rr2: f(f(constants.rradius * constants.rradius) * 4093), incidence: 0, period: 0, phase: 0, time: 0, illumination: null });
     for (let v = rect.minV, k = 0; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, k++) write(u, v, bytes[k]);
   };
   const bodyOf = ({ effect, originalNormal }) => effect === 14 ? shellSpatial : originalNormal ? normalLightSpatial

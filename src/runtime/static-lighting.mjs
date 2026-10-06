@@ -266,15 +266,30 @@ export function staticLightMap({ width, height, ambient, lights, shadowBits, sha
 }
 const surfaceLightClassOf = surfaceLightClass;
 
+/** ComputeFromActor's rr2 (0x10b0601d-0x10b06027) and incidence
+ * (0x10b06325-0x10b0639b) at the render pass's 24-bit precision: every
+ * operand is a float, so each operation is a binary32 one. `rradius` is the
+ * stored 1/R (the same at either precision). dynamic-lighting.mjs
+ * movingLightConstants and normalLightIncidence still model 64 bits; the
+ * spatial.rs lights take these (validate-light-spatial compares them with
+ * the original at 0x007f). */
+export function renderPassConstants(location, facet, rradius) {
+  const [dx, dy, dz] = location.map((v, i) => f(v - facet.origin[i])), n = facet.normal;
+  const dot = f(f(f(dz * f(n[2])) + f(dy * f(n[1]))) + f(dx * f(n[0])));
+  // FCOM with 0 then FCHS when below: a negative zero stays negative.
+  const incidence = f(dot * rradius);
+  return { rr2: f(f(rradius * rradius) * 4093), incidence: incidence < 0 ? -incidence : incidence };
+}
+
 /** A spatial.rs light's inputs (kernel `spatial.run` / `record`): the grid,
- * location, ComputeFromActor's 1/R, rr2 and incidence, LightPeriod and
- * LightPhase, the rectangle-relative illumination bytes and the time of
- * the bytes held. */
+ * location, ComputeFromActor's 1/R, rr2 and incidence (renderPassConstants),
+ * LightPeriod and LightPhase, the rectangle-relative illumination bytes and
+ * the time of the bytes held. */
 function spatialInputs(rect, grid, location, constants, facet, values, illumination, timeSeconds) {
   const rw = rect.maxU - rect.minU, bytes = new Uint8Array(rw * (rect.maxV - rect.minV));
   for (let v = rect.minV; v < rect.maxV; v++)
     bytes.set(illumination.bytes.subarray(v * illumination.stride + rect.minU, v * illumination.stride + rect.maxU), (v - rect.minV) * rw);
-  return { grid, location, rradius: constants.rradius, rr2: constants.rr2, incidence: normalLightIncidence(location, facet, constants.rradius),
+  return { grid, location, rradius: constants.rradius, ...renderPassConstants(location, facet, constants.rradius),
     period: values.LightPeriod ?? 0, phase: values.LightPhase ?? 0, illumination: bytes, time: f(timeSeconds), computed: false };
 }
 const ANIMATED_TYPES = new Set([2, 3, 4, 5, 7]);
