@@ -292,102 +292,174 @@ counters' initial phases explicitly.
 5. **Output:** the Rust mixer in an AudioWorklet (Wasm) at 44.1 kHz; speech
    and effects stay on Web Audio until the effects path is translated (the
    original mixes them in the same pool, which a later step should follow).
+   **Host done** (see "Phase 5: Output"); audible once the PCM kernel
+   replaces the temporary `galaxy_render`.
 
-## Phase 5 handoff (browser output, WIP, 2026-10-05)
+## Phase 5: Output (browser host, 2026-10-06)
 
-Paused mid-implementation at the user's request. Branch
-`worktree-agent-aba9719feccacd206` (worktree
-`.claude/worktrees/agent-aba9719feccacd206`).
+Play's music is the library itself: the Rust kernel runs in an AudioWorklet
+and plays bus A. Speech and effect voices stay on Web Audio
+(`galaxyVoice`, `playConversationSpeech`); the library's effect voices stay
+idle.
 
-**Done (committed, WIP).**
+**Threads.** The original mixes on a winmm timer thread (§1.3 of
+[mixer](galaxy-music/mixer.md)) and the game thread's Update calls glx*
+under the same lock. In the browser:
 
-- `native/galaxy-kernel/src/host.rs` (`mod host;` in lib.rs): per-op exports
-  `galaxy_host_open(effects_channels, pc, ahead)` (glxInit state, Init's
-  0x1060ebc0, the output open at 44100/16-bit/stereo/flags 7, pinned ring
-  fill), `galaxy_music_load(len)` (glxLoadMusic without the validator dump;
-  input from `galaxy_input(len)` filled with module + 1024 slack),
-  `galaxy_music_unload/stop/start()`, `galaxy_music_control(cmd, arg)`,
-  `galaxy_music_clear_active(first, count)`, `galaxy_music_break()`,
-  `galaxy_music_order()`, `galaxy_music_state()` (order | playing<<8 |
-  songLength<<16 | loaded<<24), `galaxy_set_music_volume(v, mode)`,
-  `galaxy_set_sample_volume(v, mode)`, and a block marked
-  `// TEMPORARY: replaced by the mixer agent's galaxy_render` with
-  `galaxy_render(frames) -> *const i16` (re-pins `ahead`, runs the mixer
-  calls for real, returns silence; 0 on a fault) and `galaxy_fault()`.
-- Node smoke check (not yet a validator): Intro_Music loads (status 0,
-  2.3 ms), start sequence, 3000 × `galaxy_render(882)` in 13.7 ms; the order
-  goes 0xff → 0 → 1 at callback 313 … 11 at 2882. `ahead` pin chosen:
-  172872 bytes (176400 − 882·4, the steady-state fill at a render's start;
-  only nonzero matters). Pan table PC: 64.
-- `src/runtime/galaxy-music-library.mjs` (my section only, for merging with
-  the Update agent's `createMirrorMusicLibrary`): `MUSIC_OP`, `MUSIC_SLACK`,
-  `encodeMusicBatch(id, ops, {owned})` (Int32 [code, a, b] per op, module
-  bytes transferred once), `createMusicLibraryProxy(post)` (the `library`
-  interface; lock depth makes batches; ops outside lock are single-op
-  batches; `order()` = reported order when no unacknowledged order-touching
-  batch, else a replay of the pending ops over the reported state;
-  `report(data)`, `status()`), `connectMusicLibraryPort(port)`,
-  `driveMusicLibrary(library, assets, {song, section} | {unregister})`
-  (validation driver: Update's first-music call order).
+| Original | Browser |
+| --- | --- |
+| library state (glxInit, voices, song) | the worklet's kernel instance (`src/viewer/galaxy-music-worklet.mjs`) |
+| timer callback 0x106142a0, every 20 ms | a callback of exactly 882 frames whenever the worklet's ring holds less than one 128-frame quantum |
+| mixer calls of n = remaining frames (≤ 512) | the same: `galaxy_render(882)` re-pins `ahead` and runs the mixer entry until the callback is rendered |
+| Update's glx* calls under the lock | one batch per critical section, from the simulation's `library` service |
+| Update's read of `[0x10698201]` | `library.order()` (below) |
 
-**Not done.**
+**Files.**
 
-1. The worklet `src/viewer/galaxy-music-worklet.mjs`, self-contained (no
-   imports, so Vite's `new URL(..., import.meta.url)` asset copy works):
-   export `forEachMusicOp`/`decodeMusicBatch` for the Node round-trip check;
-   processor `galaxy-music`: page port messages `init {wasm}`,
-   `connect {port, effectsChannels, pc, ahead}` (a new sim side: close the
-   old port, drop its queued batches, `galaxy_host_open`), `status` (reply on
-   demand only); sim port: `batch` applied on arrival (between callbacks;
-   queued until the wasm is ready); `process()` renders 882-frame callbacks
-   into a 2048-frame Float32 ring whenever it holds < 128 frames (int16 /
-   32768), reuses the PCM view unless the memory buffer changed, posts
-   `{type: 'report', batch, state}` to the sim port after a callback only
-   when the applied batch or the state changed; underruns = quanta short of
-   frames (only a fault or a not-yet-open library can cause them in this
-   pull design); refuse to open unless `sampleRate === 44100`.
-2. **Design change from the user (not yet implemented):** no batches or
-   reports through the page. The page creates a `MessageChannel` per sim
-   side; port2 goes to the sim worker (new worker message `{type: 'music',
-   port}` → `connectMusicLibraryPort`, passed as `musicLibrary` to
-   `createSimHost`), port1 to the worklet node (`connect`), queued until the
-   node exists. ?sim=inline: the page keeps port2 and uses the proxy itself.
-   The page only creates the context/node (on a gesture: one AudioContext
-   `{sampleRate: 44100}` shared with the Web Audio voices, resumed by a
-   document pointerdown/keydown listener), wires ports, and reads status.
-   `?music=0` disables it (for the A/B).
-3. Plumbing: sim-host option `musicLibrary` → createGame → createScriptDoors
-   → `createLiveAudio({library})` (one line in script-doors.mjs, outside my
-   files); sim-host `disposeAudio()` calling
-   `runtime.audio?.dispose?.()`, called by `dispose()`, and by inline
-   `loadMap` before the next host is created (the worker already disposes
-   first); EffectsChannels from DeusEx.ini (clamp 0..32) sent with
-   `connect`; `deusExViewer.status().music` (worklet status on demand, the
-   sim's `library.status()` via `snapshot.status.music`);
-   `deusExViewer.musicScript(args)` → worker `call('musicScript', args)`
-   (sim-client `call(method, args)`).
-4. `scripts/validate-galaxy-music-host.mjs`: Node round-trip of the encoding;
-   headless Chromium (`--autoplay-policy=no-user-gesture-required`, own Vite
-   server; filter `**/.claude/worktrees/**` out of `fs.deny` when the root is
-   a worktree) in ?sim=worker and ?sim=inline: drive Intro_Music section 0,
-   check callbacks render, the order advances, reports reach the sim
-   (`acknowledged == issued`), no console errors; frame-time A/B of the
-   page's `framePhases` with music on vs `?music=0`. Firefox has no
-   Playwright build here (not installed).
-5. Docs: this section becomes "Phase 5: Output"; a note in the Audio row of
-   docs/sim-worker.md.
+- `native/galaxy-kernel/src/host.rs`: one thin export per library call:
+  `galaxy_host_open(effectsChannels, pc, ahead)` (glxInit's state, Init's
+  0x1060ebc0, the output open), `galaxy_music_load(len)` (glxLoadMusic
+  without the validators' dump), `galaxy_music_unload/stop/start()`,
+  `galaxy_music_control(cmd, arg)`, `galaxy_music_clear_active(first,
+  count)` (Update's voice +0x0f stores), `galaxy_music_break()` (Update's
+  `[0x10697ca8] = 1`), `galaxy_music_order()`, `galaxy_music_state()`,
+  `galaxy_set_music_volume/galaxy_set_sample_volume(v, mode)`. Until the
+  mixer agent's PCM kernel lands, a block marked `TEMPORARY` provides
+  `galaxy_render(frames) -> *const i16` and `galaxy_fault()`: the
+  sequencer, voice update and per-voice hand-off run for real, and the PCM
+  is silence.
+- `src/runtime/galaxy-music-library.mjs` (the transport section):
+  `createMusicLibraryProxy(post)`, `connectMusicLibraryPort(port)`,
+  `encodeMusicBatch`, `MUSIC_OP`, `MUSIC_SLACK`, and `driveMusicLibrary`
+  (validation only: Update's first-music call order for a song and section).
+- `src/viewer/galaxy-music-worklet.mjs`: the processor `galaxy-music`.
+- `src/viewer/galaxy-music-output.mjs`: the page's part (node, channels,
+  status).
 
-**Note for the coordinator:** `src/runtime/galaxy-kernel.wasm` is
-gitignored (as are the other kernels), not committed; rebuild it with the
-command below.
+**Batches.** The proxy turns each call into an op `[code, a, b]`; the ops
+between `lock()` and `unlock()` (nested locks count, as the critical
+section is recursive) cross as one batch, a call outside a lock as a batch
+of one, an empty critical section as nothing. A batch is an Int32Array plus
+the module buffers, transferred, so a module's bytes cross once. The worklet
+applies a batch whole when it arrives, which is always between two
+callbacks: the same atomicity Update has against the timer callback.
 
-**Resume.**
+**Channels.** Nothing about music crosses the page per frame. The page
+creates one MessageChannel per simulation side and hands one port to the
+worklet node and the other to the simulation: the worker (`{type: 'music',
+port}`, sim-worker.mjs), or the page's own library with `?sim=inline`.
+The library service lives as long as its simulation side (the worker, or
+the page), across map loads, as the original's library lives as long as the
+subsystem. A new simulation side (new game files, hence a new worker)
+reopens the library in the worklet.
 
-```
-cd .claude/worktrees/agent-aba9719feccacd206
-ln -s ../../../.cache .cache   # and node_modules, Reference, "Deus Ex GOTY Edition" (absolute targets in the main checkout)
-cp ../../../src/runtime/{script-vm,lodmesh-kernel}.wasm src/runtime/
-cargo build --manifest-path native/galaxy-kernel/Cargo.toml --locked --release \
-  --target wasm32-unknown-unknown --target-dir .work/wasm-target
-cp .work/wasm-target/wasm32-unknown-unknown/release/galaxy_kernel.wasm src/runtime/galaxy-kernel.wasm
-```
+**Order read-back.** After applying a batch, and after a callback that
+changed it, the worklet posts `{type: 'report', batch, state}` to the
+simulation (`state` = order | playing << 8 | song length << 16 | loaded <<
+24). `order()` returns the reported order when the report covers every
+batch the simulation issued; otherwise it replays the unacknowledged ops
+that touch the order over the reported state: glxLoadMusic's reset seeds
+0xff (when nothing is loaded or playing), glxControlMusic 1|2 stores
+value − 1 (relative values add order + 2; a position past the reported song
+length is refused, as the original's 0x11). Two assumptions are labelled in
+the code: a pending load is taken to succeed, and a control after a pending
+load is taken to be in range (the song length is not known yet). Sequencer
+progress between reports is not modelled. This is host timing: in the
+original the mixer thread also advances the order asynchronously to
+Update's read.
+
+**Startup and lifetime.**
+
+- The context is the page's AudioContext created at `{sampleRate: 44100}`
+  (the installed OutputRate) on the first gesture (any pointerdown or
+  keydown when music is on); the Web Audio voices and speech share it. The
+  worklet refuses any other rate.
+- The page fetches `galaxy-kernel.wasm` and posts the bytes; the worklet
+  compiles them (some worklet scopes have no fetch). Batches that arrive
+  first wait in the worklet until the library is open.
+- `galaxy_host_open(EffectsChannels, 64, 172872)`: EffectsChannels from
+  DeusEx.ini (16, clamped to 0..32 as Init does); pan table built at x87
+  precision control 64 (the sequencer oracle's 0x037f; open question
+  above); the ring fill `ahead` (0x10697cdc) pinned to 176400 − 882·4 bytes
+  before every callback. The mixer only tests `ahead` against 0, so any
+  nonzero pin renders the same; glxControlMusic(1)'s ring flush
+  (`ahead = 0`) has nothing to flush here and the next callback re-pins it.
+- Map change: `createSimHost` takes `musicLibrary` and passes it through
+  `createGame` and `createScriptDoors` to `createLiveAudio({library})`.
+  `disposeAudio()` (also run by `dispose()`) calls the live audio's
+  `dispose()`, which issues UnregisterMusic; the worker disposes the old
+  host before building the next, and the page (`?sim=inline`) calls
+  `disposeAudio()` before building the next host, so that batch reaches the
+  worklet before any of the next map's. On the page, a map load that fails
+  after this point leaves the old map running without its music
+  registration (host limitation).
+- `?music=0`: no worklet and no channel; `createLiveAudio` gets no library
+  (the headless mirror).
+
+**Output.** Bus A as the store path converts it to int16 (the PCM kernel's
+contract), played as float = int16 / 32768, stereo, interleaved left, right.
+The ring holds at most 882 + 127 frames (about 23 ms). Underruns count the
+quanta played as silence while the library is open (only a fault can cause
+one in this pull schedule); audio device glitches are not visible to the
+worklet. No volume control exists in the viewer.
+
+**Host timing, not the original's.**
+
+- The callback schedule is fixed (882 frames back to back); the original's
+  play-cursor jitter and the request lengths it causes are not reproduced.
+- A batch takes effect at the next callback, about 0 to 23 ms of output
+  later; in the original, Update's changes reach the next timer callback.
+- The original writes music about one ring (1 s) behind the play cursor
+  (§1.3, derived and unmeasured); the browser plays it within one callback.
+- The counters (0x10698204, 0x1069834c) run free from the library's open,
+  as in the original, so a song's first tick phase depends on when it
+  starts.
+
+**Status.** `deusExViewer.status().music`: `{enabled, error, context,
+output: {running, error, worklet}, library}`, with the worklet's counters
+(`open`, `connects`, `batches`, `ops`, `loads`, `callbacks`, `quanta`,
+`underruns`, `reports`, `fault`, `error`, `state`, the last load/control
+results) and the simulation's (`issued`, `acknowledged`, `order`,
+`reportedOrder`, `reports`, module bytes; in the worker they ride the
+game status the snapshot already carries every 15th frame).
+`deusExViewer.musicStatus()` returns fresh copies; `deusExViewer.musicDrive({song, section} |
+{unregister: true})` issues Update's library calls (validation).
+
+**Verification** (`scripts/validate-galaxy-music-host.mjs`, Linux host,
+headless Chromium with `--use-angle=gl`). These are host checks; the
+translated entries themselves are verified by the loader and sequencer
+validators.
+
+- Node: the batch encoding round-trips through structured clone into the
+  worklet's decoder (11 ops, 3 modules; whole-buffer modules transferred,
+  views copied). The proxy makes one batch per critical section (nested
+  locks, empty sections send nothing), and its order mirror and reports
+  behave as described above. The worklet processor runs under Node with
+  Intro_Music section 0 driven through the proxy: 701 callbacks from 4824
+  quanta, the order at 0, 1, 2 at callbacks 1, 314, 628, and the proxy's
+  `order()` equal to the library's.
+- Host path against the oracle-verified path: `galaxy_host_open` plus the
+  per-op exports and `galaxy_render(882)` give the same sequencer trace
+  (U/T/K/P/E records, 66,952 over 2000 Intro_Music callbacks) as
+  `galaxy_seq_setup/load/start/callbacks` with the same counters and ring
+  pin. Leaving out the `setBreakFlag` op changes the digest.
+- Browser, `?sim=worker` and `?sim=inline`, 00_Training: after a gesture
+  the worklet opens the library. A driven Intro_Music start (1,844,255
+  bytes with the slack) reaches order 1 after 6.5 s (313 callbacks of
+  20 ms). The simulation's acknowledged count equals its issued count and
+  its `order()` equals the library's. There are no underruns, faults or
+  console errors. After a reload of the map the library is not reconnected,
+  and an unregister plus a Training_Music start load and play.
+- Main-thread frame time (`framePhases` total per animate(), Training,
+  `?sim=worker`, Intro_Music playing against `?music=0`, interleaved pairs
+  of 300 frames): 9.89 / 10.12 ms with music, 10.18 / 11.13 ms without
+  (medians 10.01 and 10.66). An earlier 200-frame pair gave 10.08 against
+  10.05. The difference is within run-to-run noise (other agents were
+  running oracles on the machine). No underruns during the measurement.
+
+**Not verified.** Firefox (no Playwright Firefox build here; the code uses
+only AudioWorklet, MessagePort transfer, WebAssembly in the worklet and
+`AudioContext({sampleRate})`, all supported there, but untested). Audible
+output waits for the PCM kernel. The Update translation does not drive the
+library yet (the validator drives it).
+
