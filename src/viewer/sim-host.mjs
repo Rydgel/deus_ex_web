@@ -28,6 +28,7 @@ import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { createLipSyncChannels } from '../runtime/galaxy-lipsync-channels.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
+import { collectTrackerMovers, moverTrackerMode, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
@@ -82,8 +83,39 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     }
     const kernel = (await loadScriptVmKernel()).occlusion;
     if (!kernel) throw new Error('the script VM core predates it; run npm run build:wasm');
-    session.setOcclusion(createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
-      zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)) }));
+    // Engine's moving brush tracker (brush-tracker.mjs, docs/brush-tracker.md)
+    // on the same model: its movers with their polygons' texture PolyFlags.
+    let trackerMovers = null;
+    if (moverTrackerMode() !== 'off' && kernel.trackerHeaderPtr) {
+      trackerMovers = await collectTrackerMovers(assets, asset, map);
+      await trackerTextureFlags(assets, asset, trackerMovers,
+        object => texturePolyFlags(readTexture(object.asset, object.index).values), textureFlags);
+    }
+    // A fresh model and tracker: at load, and at each LoadMap that Player
+    // start makes (the original deletes the tracker and loads the level
+    // anew, then GNewBrushTracker after the actor start-up, 0x1038dfb5).
+    let current = null;
+    const buildOcclusion = () => {
+      current?.dispose();
+      const level = runtime.levelFor(player()), index = new Map();
+      level.actors.forEach((actor, i) => { if (actor && !index.has(actor.name)) index.set(actor.name, i); });
+      const movers = (trackerMovers ?? []).filter(m => index.has(m.name)).sort((a, b) => index.get(a.name) - index.get(b.name));
+      const read = (actor, name) => runtime.readNamed(actor, name);
+      const actors = movers.map(m => level.actors[index.get(m.name)]);
+      const specs = trackerMovers ? movers.map((m, i) => trackerMoverSpec(m, i, { hidden: read(actors[i], 'bHidden'),
+        location: read(actors[i], 'Location'), rotation: read(actors[i], 'Rotation'), prePivot: read(actors[i], 'PrePivot') })) : null;
+      current = createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
+        zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)), tracker: specs ? { movers: specs } : null });
+      // The constructor's Update(NULL) at the game thread's control word,
+      // unmeasured: PC64 is the assumption (docs/brush-tracker.md "Precision").
+      if (specs) {
+        const status = current.tracker.construct({ pc64: true });
+        if (status) throw new Error(`the brush tracker's blocks are too small (status ${status})`);
+      }
+      session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
+    };
+    buildOcclusion();
+    session.setOcclusionRebuild(buildOcclusion);
     // DrawFrame's decal block runs over the same frames (decal-draw.mjs).
     const decals = (await loadScriptVmKernel()).decals;
     if (decals) session.setDecalKernel(decals, () => kernel.framePtr());

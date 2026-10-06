@@ -6,14 +6,27 @@
  * (`userData.nodes`), so a mesh draws the main frame through an index of its
  * visible triangles, in their own order, and everything else (mirror and
  * sky passes, whose child frames' own occlusion is not ported yet) through
- * its whole geometry. Mover meshes are not in the world BSP here (the brush
- * tracker is not ported) and always draw whole. */
+ * its whole geometry. With the moving brush tracker (brush-tracker.mjs) a
+ * mover's polygons are BSP fragments: its meshes draw the main frame
+ * through the triangles of the polygons the draw lists hold (`movers`: name
+ * to polygon ordinals; each mover triangle carries its polygon in
+ * `userData.faces`); a polygon with any fragment drawn draws whole (the
+ * depth test hides the rest). Without the tracker they draw whole. */
 import * as THREE from 'three';
 
 export function createWorldVisibility(root, nodeCount) {
-  const meshes = [];
+  const meshes = [], movers = [];
   root.traverse(object => {
     const nodes = object.userData?.nodes;
+    if (object.isMesh && typeof object.userData.actor === 'string' && !object.userData.backdrop && object.userData.faces?.length) {
+      const geometry = object.geometry, triangles = object.userData.faces.length;
+      if (geometry.index || geometry.getAttribute('position').count !== 3 * triangles) return;
+      const index = new THREE.BufferAttribute(new Uint32Array(3 * triangles), 1);
+      index.setUsage(THREE.DynamicDrawUsage);
+      movers.push({ mesh: object, geometry, name: object.userData.actor, faces: object.userData.faces, index, count: 0,
+        visible: object.visible, selected: false });
+      return;
+    }
     if (!object.isMesh || object.userData.actor || !nodes?.length) return;
     const geometry = object.geometry, triangles = nodes.length;
     if (geometry.index || geometry.getAttribute('position').count !== 3 * triangles)
@@ -28,10 +41,26 @@ export function createWorldVisibility(root, nodeCount) {
   for (const entry of meshes) stats.triangles += entry.nodes.length;
   return {
     stats,
-    /** The main frame's visible nodes (Uint32Array, any order); null keeps
-     * whole meshes. */
-    select(nodes) {
+    /** The main frame's visible nodes (Uint32Array, any order) and the
+     * movers' drawn polygons (`moverPolys`, or null: whole movers); null
+     * nodes keep whole meshes. */
+    select(nodes, moverPolys = null) {
       if (!nodes) { this.all(); return; }
+      for (const entry of movers) {
+        const polys = moverPolys?.[entry.name];
+        entry.selected = Boolean(moverPolys);
+        if (!entry.selected) continue;
+        const drawn = new Set(polys ?? []), out = entry.index.array;
+        let count = 0;
+        for (let t = 0; t < entry.faces.length; t++)
+          if (drawn.has(entry.faces[t])) { out[count++] = 3 * t; out[count++] = 3 * t + 1; out[count++] = 3 * t + 2; }
+        entry.count = count;
+        if (count) { entry.index.clearUpdateRanges(); entry.index.addUpdateRange(0, count); entry.index.needsUpdate = true; }
+        entry.visible = entry.mesh.visible;
+        entry.mesh.visible = entry.visible && count > 0;
+        entry.geometry.setIndex(entry.index);
+        entry.geometry.setDrawRange(0, count);
+      }
       if (!sameNodes(shown, nodes)) {
         visible.fill(0);
         for (const node of nodes) visible[node] = 1;
@@ -60,6 +89,12 @@ export function createWorldVisibility(root, nodeCount) {
     },
     /** Whole meshes again (mirror and sky passes, Inspect). */
     all() {
+      for (const entry of movers) {
+        if (!entry.selected) continue;
+        entry.mesh.visible = entry.visible;
+        entry.geometry.setIndex(null); entry.geometry.setDrawRange(0, Infinity);
+        entry.selected = false;
+      }
       if (!selected) return;
       for (const entry of meshes) {
         entry.mesh.visible = entry.visible;

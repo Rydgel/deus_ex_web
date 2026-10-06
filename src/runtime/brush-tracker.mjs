@@ -11,6 +11,62 @@
  * textureVBits, vertexBits (at most 16), flags, textureKey, textureFlags,
  * iBrushPoly, pan [U, V]}. */
 
+import { readModel } from '../unreal/model.mjs';
+import { readPolys } from '../unreal/polys.mjs';
+import { ClassDefaults } from '../unreal/classes.mjs';
+
+/** MOVER_TRACKER=off (Node) or ?moverTracker=off keeps movers out of the
+ * BSP: drawn whole, frustum-stamped (the earlier Play behaviour). */
+export const moverTrackerMode = () => (typeof process !== 'undefined' && process.env?.MOVER_TRACKER)
+  || globalThis.DEUS_EX_MOVER_TRACKER || 'on';
+
+/** The constructor's movers (0x1037ace1): every actor with a Brush whose
+ * class is a Brush and which is not bStatic, in map order, with its merged
+ * defaults and brush polygons (readPolys). The shipped ones are all Movers
+ * (a non-static non-Mover brush is a GError in the original). */
+export async function collectTrackerMovers(assets, asset, map) {
+  const defaults = new ClassDefaults(assets), movers = [];
+  for (const a of map.actors) {
+    if (!(a.values.Brush > 0)) continue;
+    const classes = await defaults.lineage(asset, asset.pkg.exports[a.index - 1].classIndex);
+    if (!classes.includes('engine.brush')) continue;
+    const values = await defaults.forActor(asset, a);
+    if (values.bStatic) continue;
+    if (!classes.includes('engine.mover')) throw new Error(`${a.name}: a non-static brush that is not a Mover (GError in the original)`);
+    const brush = readModel(asset.pkg, asset.bytes, a.values.Brush);
+    movers.push({ name: a.name, classes, values, polys: readPolys(asset.pkg, asset.bytes, brush.polygons) });
+  }
+  return movers;
+}
+
+/** An FScale's words as the tracker reads them (SheerAxis defaults to SHEER_ZX). */
+export const scaleWords = s => ({ scaleBits: (s?.scale ?? [1, 1, 1]).map(bits), sheerRateBits: bits(s?.shearRate ?? 0),
+  sheerAxis: s?.shearAxis ?? 5 });
+
+/** Each collected mover polygon's texture PolyFlags (`textureFlags`,
+ * UTexture +0x80 as bsp-occlusion.mjs texturePolyFlags reads it; 0 without
+ * a texture). `cache` maps texture references to flags. */
+export async function trackerTextureFlags(assets, asset, movers, readFlags, cache = new Map()) {
+  for (const mover of movers) for (const polygon of mover.polys) {
+    if (!polygon.texture) { polygon.textureFlags = 0; continue; }
+    if (!cache.has(polygon.texture)) cache.set(polygon.texture, readFlags(await assets.resolve(asset, polygon.texture)));
+    polygon.textureFlags = cache.get(polygon.texture);
+  }
+}
+
+/** Mover `i`'s spec (tag 0x40000000 + i) from a collected mover and its
+ * current bHidden, Location, Rotation and PrePivot; MainScale, PostScale
+ * and bSpecialLit come from its merged defaults. */
+export function trackerMoverSpec(mover, i, { hidden, location, rotation, prePivot }) {
+  const v = mover.values;
+  return { tag: 0x40000000 + i, flags: hidden ? 2 : 0, specialLit: Boolean(v.bSpecialLit),
+    locationBits: [...location].map(bits), rotation: [...rotation].map(r => r | 0), prePivotBits: [...prePivot].map(bits),
+    mainScale: scaleWords(v.MainScale), postScale: scaleWords(v.PostScale),
+    polys: mover.polys.map(p => ({ baseBits: p.base.map(bits), normalBits: p.normal.map(bits), textureUBits: p.textureU.map(bits),
+      textureVBits: p.textureV.map(bits), vertexBits: p.vertices.map(x => x.map(bits)), flags: p.flags >>> 0, textureKey: 0,
+      textureFlags: p.textureFlags ?? 0, iBrushPoly: p.brushPolygon, pan: p.pan })) };
+}
+
 // tracker.rs header words.
 export const TRACKER = Object.freeze({ NODES: 0, NODES_NUM: 1, NODES_MAX: 2, TOP: 3, VERTS: 4, VERTS_NUM: 5,
   VERTS_MAX: 6, VTOP: 7, POINTS: 8, POINTS_NUM: 9, POINTS_MAX: 10, PTOP: 11, FIRST_POINT: 12, POINTS_CAP: 13,
@@ -112,6 +168,24 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
     },
     /** A mover's record words (validation and Play's mover drawing). */
     moverWords: i => words().slice(mover(i), mover(i) + MOVER.WORDS),
+    /** Mover `i`'s fragment nodes (MoverLink, then each iRenderBound). */
+    chain(i) {
+      const out = [], u = words(), count = h(TRACKER.NODES_NUM);
+      let link = u[mover(i) + MOVER.MOVERLINK] | 0;
+      while (link !== -1 && link >= 0 && link < count && out.length < count) {
+        out.push(link);
+        link = u[(h(TRACKER.NODES) >>> 2) + 16 * link + 12] | 0;
+      }
+      return out;
+    },
+    /** A tracker surface's mover index (its tag - 0x40000000 when the host
+     * tagged movers so) and polygon ordinal, or null for a level surface. */
+    surfOwner(iSurf) {
+      const top = h(TRACKER.SURFS_TOP);
+      if (!h(TRACKER.LIVE) || iSurf < top || iSurf >= h(TRACKER.SURFS_NUM)) return null;
+      const u = words(), o = (dsurfs >>> 2) + DSURF.WORDS * (iSurf - top);
+      return { tag: u[o + DSURF.ACTOR], ordinal: u[o + DSURF.BRUSHPOLY] };
+    },
     live: () => h(TRACKER.LIVE) !== 0,
   };
 }

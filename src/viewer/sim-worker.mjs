@@ -166,6 +166,7 @@ async function handle(data) {
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
+        else if (data.method === 'moverProbe') value = (await import('./mover-probe.mjs')).moverProbe(game, host.session, data.args ?? {});
         else throw new Error(`Unknown simulation call ${data.method}`);
       }
       // Events the call queued (Player start's lighting and mesh records)

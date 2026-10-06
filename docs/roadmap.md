@@ -398,12 +398,12 @@ of general script compatibility.
 **In progress.** Restored so far, each with its evidence below: original
 mesh lighting (CPU kernels and an exact GPU path), static and animated light
 maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
-frame and dynamics in the Rust core), mirrors on every static and mover plane
+frame, dynamics and the moving brush tracker in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
 on BSP surfaces, ambient sound and script sounds through Galaxy, Galaxy
 music, decals, and the third-person conversation camera with lip sync.
-Open: the occlusion's moving brush tracker (and with it fog on movers) and
+Open: fog and decals on movers, the occlusion's
 child frames, the render-pass precision audit (translations validated at
 64-bit precision where the pass runs at 24), mirror/sky combinations, zone reverb and Galaxy's mixer for
 sound effects, time-varying moving lights and spotlights, and original-game
@@ -622,6 +622,18 @@ instead of frustum culling (the Paris club tunnel went from 15 to 59 fps).
 Each actor's Setup rectangle, child frames and the moving brush tracker
 remain ([BSP occlusion](bsp-occlusion.md#what-is-left)).
 
+**Moving brush tracker (2026-10-06).** Engine's FMovingBrushTracker runs in
+the Rust core, bit-equal to the original over 239 oracle steps on five maps
+(construction, Update, Flush, SurfIsDynamic and destruction). OccludeBsp
+over the models it builds matches the original with Engine's SurfIsDynamic
+on four maps. In Play each admitted mover is updated before the main
+frame's OccludeBsp and drawn from the draw lists, so closed doors occlude
+what lies behind them (Island's UNATCO HQ doors: 24 nodes drawn instead of
+149). The pixels are unchanged, and mover mirrors are requested through
+their polygons. Tracked movers are not stamped, as in the original, where
+only DrawActorSprite stamps. Fog and decals on movers, collision (Stage 5)
+and SaveGame (Stage 6) remain ([brush tracker](brush-tracker.md)).
+
 **Galaxy music (2026-10-06).** Each map plays its song. Galaxy.dll's IT
 loader, sequencer (238 cases, 1.83 million ticks), SSE mixer and
 conversion, and Update's music section (718 oracle cases) are translated
@@ -640,13 +652,13 @@ the original (49 attach scenarios on each of Training and Island; 655
 ClipDecal cases on three maps). The decal block stamps LastRenderedTime,
 which DeusExDecal's lifetime reads, and the page draws the fragments with
 D3D's modulated state; mirrors show none, as in the original. Mover
-surfaces wait for the brush tracker ([decals](decals.md)).
+surfaces are not wired to the brush tracker's surfaces yet ([decals](decals.md)).
 
 **Mesh fog (2026-10-06).** DrawLodMesh computes each vertex's volumetric
 fog, but D3DDrv uses it only when UseVertexFog is set, which no shipped INI
 does, so the shipped D3D configuration draws meshes unfogged, as Play does;
 Glide's fog pass and UseVertexFog are unsupported options. Movers take the
-fog-map pass with the brush tracker ([volumetric fog](volumetric-fog.md#mesh-fog)).
+fog-map pass on the brush tracker's surfaces, still to wire ([volumetric fog](volumetric-fog.md#mesh-fog)).
 
 **Time-varying spatial lights (2026-10-06).** Render.dll's spatially dynamic
 light effects now run in the Rust core: Searchlight, Rotor, SlowWave,

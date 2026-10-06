@@ -296,13 +296,17 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     },
     /** The live NodeFlags byte of node `i` (NF_PolyOccluded 8, NF_BoxOccluded 0x10). */
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
+    /** Node `i`'s iSurf (a child request names its node, not its surface). */
+    nodeSurf: i => words()[(nodes >>> 2) + 16 * i + 7] | 0,
     /** The moving brush tracker (brush-tracker.mjs) over this model, or
      * null without movers; `blocks` are the model's own. */
     tracker: trackerHost,
     blocks: { nodes, verts, points, surfs },
     /** Model.Zones[i].LastRenderTime bits. */
     zoneTime: i => words()[(zones >>> 2) + 4 * i + 1],
-    dispose() { for (const at of blocks.splice(0)) free(at); },
+    // The tracker goes first (the original deletes GBrushTracker before the
+    // level it filtered into: travel and LoadMap, docs/brush-tracker.md).
+    dispose() { if (trackerHost?.live()) trackerHost.destroy(); for (const at of blocks.splice(0)) free(at); },
   };
 }
 

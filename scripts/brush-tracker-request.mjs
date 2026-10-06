@@ -4,15 +4,11 @@
  * cases' position specs (scripts/brush-tracker-cases.json). */
 import { execFileSync } from 'node:child_process';
 import { decodeMap } from '../src/unreal/map.mjs';
-import { readModel } from '../src/unreal/model.mjs';
-import { readPolys } from '../src/unreal/polys.mjs';
-import { ClassDefaults } from '../src/unreal/classes.mjs';
+import { collectTrackerMovers, scaleWords } from '../src/runtime/brush-tracker.mjs';
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 export const bits = v => (f32[0] = v, u32[0]);
 const fround = Math.fround;
-const scaleOf = s => ({ scaleBits: (s?.scale ?? [1, 1, 1]).map(bits), sheerRateBits: bits(s?.shearRate ?? 0),
-  sheerAxis: s?.shearAxis ?? 5 });
 
 /** The oracle's `model` and `actors` for a map, plus each mover's key
  * positions for the position specs. */
@@ -33,26 +29,18 @@ export async function buildMap(assets, mapName) {
     surfs: m.surfaces.map(s => ({ texture: textureKey(s.texture), flags: s.flags >>> 0, base: s.base, normal: s.normal,
       textureU: s.textureU, textureV: s.textureV, lightMap: s.lightMap, brushPoly: s.brushPolygon, pan: s.pan })),
   };
-  const defaults = new ClassDefaults(assets), actors = [], movers = {};
-  for (const a of map.actors) {
-    if (!(a.values.Brush > 0)) continue;
-    const classes = await defaults.lineage(asset, asset.pkg.exports[a.index - 1].classIndex);
-    if (!classes.includes('engine.brush')) continue;
-    const v = await defaults.forActor(asset, a);
-    if (v.bStatic) continue;
-    if (!classes.includes('engine.mover')) throw new Error(`${a.name}: a non-static brush that is not a Mover (GError in the original)`);
-    const brush = readModel(asset.pkg, asset.bytes, a.values.Brush);
-    const polys = readPolys(asset.pkg, asset.bytes, brush.polygons);
+  const actors = [], movers = {};
+  for (const { name, classes, values: v, polys } of await collectTrackerMovers(assets, asset, map)) {
     const location = v.Location ?? [0, 0, 0], rotation = v.Rotation ?? [0, 0, 0];
-    actors.push({ name: a.name, classes, flags: ((v.bStatic ? 1 : 0) | (v.bHidden ? 2 : 0)) >>> 0,
+    actors.push({ name, classes, flags: ((v.bStatic ? 1 : 0) | (v.bHidden ? 2 : 0)) >>> 0,
       specialLit: Boolean(v.bSpecialLit), locationBits: location.map(bits), rotation,
-      prePivotBits: (v.PrePivot ?? [0, 0, 0]).map(bits), mainScale: scaleOf(v.MainScale), postScale: scaleOf(v.PostScale),
+      prePivotBits: (v.PrePivot ?? [0, 0, 0]).map(bits), mainScale: scaleWords(v.MainScale), postScale: scaleWords(v.PostScale),
       brush: { polys: polys.map(p => ({ baseBits: p.base.map(bits), normalBits: p.normal.map(bits),
         textureUBits: p.textureU.map(bits), textureVBits: p.textureV.map(bits), vertexBits: p.vertices.map(x => x.map(bits)),
         flags: p.flags >>> 0, texture: textureKey(p.texture), iBrushPoly: p.brushPolygon, pan: p.pan })) } });
     const key = i => v[`KeyPos[${i}]`] ?? (i === 0 ? v.KeyPos : undefined) ?? [0, 0, 0];
     const keyRot = i => v[`KeyRot[${i}]`] ?? (i === 0 ? v.KeyRot : undefined) ?? [0, 0, 0];
-    movers[a.name] = { basePos: v.BasePos ?? location, baseRot: v.BaseRot ?? rotation, key, keyRot,
+    movers[name] = { basePos: v.BasePos ?? location, baseRot: v.BaseRot ?? rotation, key, keyRot,
       location, rotation, polys: polys.length };
   }
   return { map, model, actors, movers, textures: [...textureKeys.keys()] };

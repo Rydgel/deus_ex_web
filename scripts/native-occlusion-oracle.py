@@ -23,6 +23,12 @@ import outside the images, msvcrt `ceil`, is a bridge that rounds the double
 toward +infinity with FRNDINT (precision control does not apply to FRNDINT,
 so any x87 ceil gives this exact result). A case with `setupOnly` runs Setup
 on each actor after CreateMasterFrame and skips OccludeBsp.
+
+A model with `brushTracker` is a level the moving brush tracker has filtered
+movers into (docs/brush-tracker.md): ULevel+0xfc gets a tracker object whose
+vslot 3 is Engine's unchanged FMovingBrushTracker::SurfIsDynamic (0x1037ac10,
+`iSurf >= iOriginalSurfs` at +0x20), which OccludeBsp calls before a node's
+bound test (0x10b17ae5); its other slots trap.
 """
 import importlib.util
 import json
@@ -56,6 +62,7 @@ MESH_BOUNDS, MESH_GET_ANIM_SEQ = 0x103a6850, 0x10301e29
 # msvcrt ceil(double): fld qword [esp+4]; FRNDINT with RC up; ret.
 CEIL_BRIDGE = bytes.fromhex('dd44240483ec04d93c24668b04246625fff3660d00086689442402d96c2402d9fcd92c2483c404c3')
 CREATE_MASTER_FRAME, OCCLUDE_BSP = 0x10b15690, 0x10b173d0
+SURF_IS_DYNAMIC = 0x1037ac10  # Engine FMovingBrushTracker vslot 3
 CORE_APPTAN = 0x10123260
 GMATH_CTOR = 0x10102978
 
@@ -306,6 +313,14 @@ class Occlusion(native.NativeCollision):
         self.write(actors, 'I', self.level_info)
         self.write(self.level + 0x2c, 'III', actors, 1, 1)
         self.write(self.level + 0x98, 'I', m)
+        if model.get('brushTracker') is not None:
+            tracker_vtable = self.alloc(0x40)
+            self.cpu.mem_write(tracker_vtable, struct.pack('<16I', *([self.trap_stub] * 16)))
+            self.write(tracker_vtable + 0xc, 'I', SURF_IS_DYNAMIC)
+            tracker = self.alloc(0x68)
+            self.write(tracker, 'I', tracker_vtable)
+            self.write(tracker + 0x20, 'i', model['brushTracker']['originalSurfs'])
+            self.write(self.level + 0xfc, 'I', tracker)
         # Viewer, viewport, render device and the renderer.
         self.actor = self.alloc(0x1000)
         self.write(self.actor + 0xac, 'I', self.level)
