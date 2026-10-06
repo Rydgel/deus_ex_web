@@ -7,7 +7,8 @@
 //  - Galaxy's voices: the worklet opened the library; every sound the
 //    simulation registered reached it once with the registry's handle; voice
 //    ops arrive (Update's starts and controls, nothing through the page);
-//    the reports reach the simulation side (live, acknowledged == issued)
+//    the reports reach the simulation side (live; the batch last issued at a
+//    point is acknowledged soon after)
 //    and some effect voices are Active (the ambient scan's); no fault, no
 //    underrun, no console error; the page started no Web Audio voice;
 //  - ?sfx=webaudio: the previous host mapping: Web Audio voices start on the
@@ -58,6 +59,13 @@ async function waitFor(page, predicate, what, timeout = 60000) {
   }
 }
 const worklet = s => s.output?.worklet;
+/** The simulation issues a batch every frame, so `acknowledged === issued`
+ * is rarely seen at a poll: wait until the worklet has acknowledged the
+ * batch that was the last issued when the wait began. */
+async function waitAcknowledged(page, what, timeout = 10000) {
+  const target = (await musicStatus(page)).library.issued;
+  return waitFor(page, s => s.library.acknowledged >= target, what, timeout);
+}
 
 try {
   // Galaxy's voices (the default).
@@ -66,10 +74,10 @@ try {
     try {
       await page.click('#state');
       await waitFor(page, s => worklet(s)?.open, 'the worklet did not open the library');
-      const status = await waitFor(page, s => worklet(s)?.results?.sampleLoads > 0 && s.library?.live && s.library.acknowledged === s.library.issued
-        && s.library.active !== 0, 'no effect voice became active', 90000);
+      const status = await waitFor(page, s => worklet(s)?.results?.sampleLoads > 0 && s.library?.live && s.library.active !== 0,
+        'no effect voice became active', 90000);
       await page.waitForTimeout(4000);
-      const after = await waitFor(page, s => s.library.acknowledged === s.library.issued, 'reports lag', 10000);
+      const after = await waitAcknowledged(page, 'the reports stopped reaching the simulation');
       const w = worklet(after), lib = after.library, page_ = await page.evaluate(() => window.deusExViewer.status().galaxy);
       assert.equal(w.error, null, w.error); assert.equal(w.fault, 0, `fault 0x${w.fault.toString(16)}`);
       assert.equal(w.underruns, 0, 'underruns');
@@ -116,7 +124,10 @@ try {
       const sorted = intervals.toSorted((a, b) => a - b);
       const s = await musicStatus(page);
       assert.deepEqual(errors, [], 'console errors');
-      return { sfx, mainMs: phases.total / phases.frames, frames: phases.frames, worker: phases.worker ?? null,
+      // The worker's steps per frame (framePhases.worker sums them) and its
+      // Galaxy Update (sim-session.mjs timings.audio, game.takeAudioMs).
+      return { sfx, mainMs: phases.total / phases.frames, frames: phases.frames, workerMs: phases.worker / phases.frames,
+        audioMs: (phases['w.audio'] ?? 0) / phases.frames,
         intervalMedian: sorted[sorted.length >> 1], underruns: worklet(s).underruns };
     } finally { await page.close(); }
   }
@@ -124,11 +135,14 @@ try {
   for (let i = 0; i < pairs; i++) { runs.push(await frameTime(false)); runs.push(await frameTime(true)); }
   const median = values => { const s = values.toSorted((a, b) => a - b); return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
   for (const run of runs) console.log(`  ${run.sfx ? '?sfx=webaudio' : 'Galaxy voices'} main thread ${run.mainMs.toFixed(3)} ms/frame over ${run.frames} frames, ` +
-    `rAF median ${run.intervalMedian.toFixed(2)} ms, underruns ${run.underruns}${run.worker ? `, worker ${JSON.stringify(run.worker)}` : ''}`);
+    `rAF median ${run.intervalMedian.toFixed(2)} ms, underruns ${run.underruns}; worker ${run.workerMs.toFixed(3)} ms/frame, its Galaxy Update ${run.audioMs.toFixed(3)} ms`);
   const on = median(runs.filter(run => !run.sfx).map(run => run.mainMs)), off = median(runs.filter(run => run.sfx).map(run => run.mainMs));
   assert.ok(runs.every(run => run.underruns === 0), 'underruns while measuring');
-  console.log(`PASS frame time (host measurement): main thread median ${on.toFixed(3)} ms/frame with Galaxy voices, ${off.toFixed(3)} ms with ?sfx=webaudio ` +
-    `(${(on - off >= 0 ? '+' : '') + (on - off).toFixed(3)} ms)`);
+  const signed = v => (v >= 0 ? '+' : '') + v.toFixed(3);
+  const med = (key, sfx) => median(runs.filter(run => run.sfx === sfx).map(run => run[key]));
+  console.log(`PASS frame time (host measurement, ${pairs} interleaved pairs): main thread median ${on.toFixed(3)} ms/frame with Galaxy voices, ` +
+    `${off.toFixed(3)} ms with ?sfx=webaudio (${signed(on - off)} ms); worker ${med('workerMs', false).toFixed(3)} / ${med('workerMs', true).toFixed(3)} ms ` +
+    `(${signed(med('workerMs', false) - med('workerMs', true))}); Galaxy Update ${med('audioMs', false).toFixed(3)} / ${med('audioMs', true).toFixed(3)} ms`);
 } finally {
   await browser.close();
   await server.close();

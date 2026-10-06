@@ -77,6 +77,10 @@ const library = createMusicLibraryProxy((message, transfer) => channel.port2.pos
 channel.port2.onmessage = ({data}) => library.report(data);
 processor.page({type: 'connect', port: channel.port1, effectsChannels: 16, pc: 64, ahead: 176400 - 882 * 4});
 while (!processor.open) await turn();
+// The worklet's render cost per 20 ms callback (host measurement, real time:
+// performance.now is the simulated clock here).
+const renderTimes = [], render = processor.kernel.render;
+processor.kernel.render = frames => { const t = process.hrtime.bigint(); const r = render(frames); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
 
 const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, musicLibrary: library});
 const runtime = game.doors.scriptRuntime.runtime, audio = runtime.audio;
@@ -156,8 +160,10 @@ audio.dispose();
 await settle(); await turn();
 assert.equal(processor.kernel.active(), 0, 'dispose() stopped every voice');
 const notes = [...audio.notes];
+const sortedTimes = renderTimes.toSorted((a, b) => a - b), at = q => sortedTimes[Math.min(sortedTimes.length - 1, Math.floor(q * sortedTimes.length))];
 const report = {frames: FRAMES, quanta, callbacks: processor.stats.callbacks, batches: status.batches, reports: status.reports,
   samples: status.samples, sampleBytes: status.sampleBytes, voiceOps: results.voiceOps, voiceStarts: starts, maxActive,
+  renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1))},
   channelChecks: checks, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
   notes: notes.slice(0, 8)};
 console.log(JSON.stringify(report));
