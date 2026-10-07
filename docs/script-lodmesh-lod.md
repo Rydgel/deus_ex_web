@@ -213,8 +213,20 @@ corners; [GPU mesh](gpu-mesh.md#distance-lod)).
   whenever the view moves (on the CPU shadow too) and a draw path that takes
   camera-space positions, per mirror frame as well; this is the existing
   host-stage item, left open.
-* Mirror frames reuse the main frame's selection, pose and lighting (the
-  original runs DrawLodMesh per frame with that frame's coords).
+* *Child frames.* Each mirror and sky frame's DrawLodMesh selects from that
+  frame's own Coords and FX (DrawActorSprite passes Frame->Coords;
+  OccludeFrame's ComputeRenderSize fields, carried by `sim-session.mjs`
+  frames). Play computes that selection for every binding a child frame
+  draws (`actor-mesh-sim.mjs` `frameLod`) and compares the state it would
+  draw (count, flags, start and, while morphing, the detail; or full
+  detail) with the main frame's. Every pass still draws the main frame's
+  pose, LOD and lighting: a child frame whose state differs is recorded
+  (lod-probe.mjs `frames`) and counted, not drawn differently. GetFrame is
+  not rerun per frame: the original calls it in each DrawLodMesh, so an
+  actor seen in a mirror also advances a tween once per child frame, and
+  the child frame's own count comes from that call; Play takes the frame's
+  request (clamped to the main frame's returned count when that was
+  clamped). In the checked mirror views no child frame differed (below).
 * The first-person weapon is not selected: its overlay frame has no LOD
   inputs in Play; at its depth the original's ratio keeps it at full detail
   (not measured).
@@ -228,7 +240,9 @@ gpuMesh=0]` (worker mode): from the start, four directions and twelve far
 actors, lod-probe.mjs reports each drawn binding's inputs and results; the
 same inputs through the original ranges must give the same detail bits,
 count, flags, start, admitted faces and vertices, and the page must draw
-them (the CPU geometry's corners, or the GPU corner pass's dwords). The GPU
+them (the CPU geometry's corners, or the GPU corner pass's dwords). Each
+child frame's selection goes through the oracle too; `--mirrors` views the
+map's mirror polygons from in front instead of the far actors. The GPU
 passes are compared with the CPU path by `validate-gpu-mesh` (below and
 [GPU mesh](gpu-mesh.md#distance-lod)).
 
@@ -237,6 +251,8 @@ passes are compared with the CPU path by `validate-gpu-mesh` (below and
 | Island, GPU path | PASS: 108 drawn rows over 17 views, 13 meshes; 59 with the LOD flag and morphing, 8 below ModelVerts (down to 11); 102 GPU corner-pass comparisons |
 | Island, `gpuMesh=0` | PASS: the same 108 rows; 105 comparisons of the page's CPU geometry |
 | BatteryPark, GPU path | PASS: 99 drawn rows over 17 views, 8 meshes, all at full detail. The view writes did not change the drawn set (the boat, Anna, JC and near props in every view), which suggests the start's arrival camera holds the view; not investigated |
+| Training, `--mirrors` (16 views in front of its mirror polygons) | PASS: 32 child-frame selections (the player in the mirrors) equal the original's; all draw what the main frame's does |
+| Paris Club, `--mirrors` (24 views) | PASS: 26 drawn rows, 4 morphing, 2 below ModelVerts; 14 child-frame selections (the player, Female1, props) equal the original's; all draw what the main frame's does |
 | `validate-gpu-mesh` (Training, Island, `?sim=inline`) | PASS: on Island 293,583 final-pose components and 555,756 corner dwords equal the CPU path, colours 0 bytes off, visibility 0 mismatches; 201 LOD captures, all morphing, 96 with dropped faces (half of 16 far views at MLOD 2) |
 
 **Cost** (interleaved A/B on the Linux host, AMD Radeon 780M, Island's

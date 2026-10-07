@@ -143,6 +143,26 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     lodDrawn=selection?meshLod.after(selection,lastReturned,frame.output):null;
     if(lodDrawn&&!lodDrawn.state.active&&!lodDrawn.state.morph)lodDrawn=null;
   }
+  /** A child frame's DrawLodMesh selection (its own Coords and FX, the
+   * actor's inputs of this frame's update) and whether it draws what the
+   * main frame's does: the same count, flags, start and, while morphing, the
+   * same detail; or full detail in both. Play draws the main frame's state
+   * in every pass, so a differing frame is recorded (lod-probe.mjs) and
+   * counted, not drawn differently. GetFrame is not rerun: the frame's
+   * returned count is its request, clamped to the main frame's when the
+   * main GetFrame returned less (a tween's valid count). */
+  function frameLod(lodFrame){
+    if(!meshLod||!lastLod?.inputs)return;
+    const {inputs}=lastLod,selection=meshLod.select(lodFrame,inputs.location,inputs.drawScale,inputs.lodBias);
+    const key=(chosen,count)=>{
+      if(!chosen?.active)return 'full';
+      const s=lodMorphScalars(meshLod.topology,chosen,count);
+      return s.active?`${s.count}:${s.start}:${s.morph}:${s.morph?Math.fround(chosen.detail):''}`:'full';
+    };
+    const mainSelection=lastLod.selection,clamp=lastReturned<(mainSelection?.requested??fullCount);
+    const main=key(mainSelection,lastReturned),here=key(selection,clamp?Math.min(selection.requested,lastReturned):selection.requested);
+    (lastLod.frames??=[]).push({index:lodFrame.index??null,frame:lodFrame,selection,same:main===here,main,here});
+  }
   /** What the page needs to draw the LOD state: the resolved corners and
    * wedge dwords (null at full resolution). */
   const lodRecord=()=>({resolved:lodDrawn?.resolved?Int32Array.from(lodDrawn.resolved):null,
@@ -480,10 +500,11 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
        * `inFrame` null: the main frame again): drawn when its Frame->Sprite
        * holds the binding, and then, on the GPU path, the groups the pass
        * frustum keeps. Null when the frame did not pose it. */
-      framePass(frustum,inFrame){
+      framePass(frustum,inFrame,lodFrame=null){
         if(disposed||(!drawnMain&&!childOnly))return null;
         const root=frustum===null?drawnMain:inFrame;
         if(!root)return {root:false};
+        if(lodFrame&&frustum!==null)frameLod(lodFrame);
         if(mode!=='gpu')return {root:true};
         if(frustum===null)return {root:true,groups:groupBits()};
         const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
@@ -530,7 +551,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       update(view={}){
         if(disposed)return null;
         const record={id,visible:false,childOnly:false};drawnMain=false;
-        if(lastLod)lastLod.updated=false;
+        if(lastLod){lastLod.updated=false;lastLod.frames=[];}
         // This frame's mesh_reads words (MB), or -1.
         const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
         const verify=at>=0&&view.reads.verify;
@@ -956,9 +977,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** A child frame's pass decisions (OccludeFrame, sim-session.mjs
      * stamps): every posed binding's, drawn when `ids` (its Frame->Sprite)
      * holds it; `frustum` null and `ids` null: the main frame's again. */
-    framePasses(frustum,ids){
-      const decisions=new Map();
-      for(const binding of all()){const decision=binding.framePass(frustum,ids?ids.has(binding.id):true);if(decision)decisions.set(binding.id,decision);}
+    framePasses(frustum,ids,lod=null){
+      const decisions=new Map(),frameLod=lod&&frustum!==null?{...lodFrame(lod,lodSettings),index:lod.index??null}:null;
+      for(const binding of all()){
+        const inFrame=ids?ids.has(binding.id):true;
+        const decision=binding.framePass(frustum,inFrame,inFrame?frameLod:null);if(decision)decisions.set(binding.id,decision);
+      }
       return decisions;
     },
     /** Every binding, item bindings included. */

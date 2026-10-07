@@ -161,8 +161,8 @@ keeps the dated record.
   sync ([lip sync](docs/lip-sync.md)).
 
 **Still open in Stage 4:** UnrealScript inside the render events at the
-pass's 24-bit precision; the LOD morph's world-space rounding and per-mirror
-selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
+pass's 24-bit precision; the LOD morph's world-space rounding and drawing a
+mirror frame's own differing selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
 camera views (the ViewportWindow family runs, its world pass is not drawn,
 [computer terminals](docs/script-window-computer-terminals.md)); per-frame fog
 maps in mirror and sky frames; the darkest-pixel rounding and

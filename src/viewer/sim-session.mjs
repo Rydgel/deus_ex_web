@@ -334,10 +334,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const frames = result.frames.map(frame => {
       const drawnHere = drawnOf(frame.draw);
       const owner = frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(frame.iNode)) : null;
+      // Its DrawLodMesh inputs: the frame's Coords and FX (ComputeRenderSize
+      // fields +0x34 and +0xb8; docs/script-lodmesh-lod.md "Play").
+      const fieldFloats = new Float32Array(Uint32Array.from(frame.fields.slice(0, 13)).buffer);
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
-        sprites: frame.sprites.map(sprite => sprite.key) };
+        sprites: frame.sprites.map(sprite => sprite.key),
+        lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
     // (docs/script-lodmesh-lod.md "Play").
@@ -681,7 +685,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.frame) {
             const frame = pass.frame, ids = frame.main ?? new Set(), frustum = drawn.frustum(pass.camera);
             for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
-            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids) : null;
+            // DrawLodMesh in this frame selects from its own Coords and FX.
+            const fov = current?.view?.fov;
+            const lod = !inspect && frame.lod && fov !== undefined ? { ...frame.lod, fov, index: frame.index } : null;
+            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, lod) : null;
             for (const id of ids) {
               const binding = byId.get(id);
               if (!binding) continue;

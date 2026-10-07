@@ -9,7 +9,13 @@
 // give the same detail bits, requested count, flags and morph start, and
 // the same admitted faces and distinct vertices as the page draws.
 //
-//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--url http://...]
+// Child frames: each mirror or sky frame that draws a binding reports that
+// frame's own selection (its Coords and FX); it goes through the oracle too,
+// and the run counts the frames whose selection draws what the main frame's
+// does. --mirrors views the map's mirror polygons from in front instead of
+// the far actors.
+//
+//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--mirrors] [--url http://...]
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
@@ -18,6 +24,10 @@ import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {meshOracleSpec} from './lodmesh-lod-cases.mjs';
+import {readFile, readdir} from 'node:fs/promises';
+import {AssetStore} from '../src/unreal/assets.mjs';
+import {decodeMap} from '../src/unreal/map.mjs';
+import {surfaceTextureFlags} from './occlusion-request.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 let root;
@@ -25,6 +35,29 @@ try { root = gameDirectory(); } catch { console.log('SKIP validate-lodmesh-lod-p
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) { console.log('SKIP validate-lodmesh-lod-play: no native probe environment'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), query = option('query', '');
+const mirrorViews = process.argv.includes('--mirrors');
+/** Cameras in front of the map's mirror polygons (PF_Mirrored, surface or
+ * texture flags), at 160 and 420 units along the normal, eye height above. */
+async function mirrorCameras() {
+  const files = [];
+  for (const dir of ['Maps', 'System', 'Textures'])
+    for (const name of await readdir(`${root}/${dir}`)) files.push({path: `${dir}/${name}`, read: () => readFile(`${root}/${dir}/${name}`)});
+  const assets = new AssetStore(files), asset = await assets.get(map), model = decodeMap(asset.bytes).model;
+  const flags = await surfaceTextureFlags(assets, asset, model), seen = new Set(), cameras = [];
+  model.nodes.forEach(n => {
+    if (n.vertexCount < 3 || !(((model.surfaces[n.surface].flags | flags[n.surface]) >>> 0) & 0x08000000)) return;
+    const c = [0, 0, 0];
+    for (let k = 0; k < n.vertexCount; k++) { const p = model.points[model.vertices[n.vertexPool + k].point]; for (let j = 0; j < 3; j++) c[j] += p[j] / n.vertexCount; }
+    const key = c.map(v => Math.round(v / 64)).join(',');
+    if (seen.has(key)) return; seen.add(key);
+    for (const d of [160, 420]) {
+      const eye = c.map((v, j) => v + n.plane[j] * d + (j === 2 ? (Math.abs(n.plane[2]) > 0.7 ? 0 : 0) : 0));
+      if (Math.abs(n.plane[2]) > 0.7) eye[2] = c[2] + 120 * Math.sign(n.plane[2]);
+      cameras.push({eye, at: c});
+    }
+  });
+  return cameras.slice(0, Number(option('mirror-views', 16)));
+}
 let server = null, url = option('url', null);
 if (!url) {
   const tree = fileURLToPath(new URL('..', import.meta.url));
@@ -65,25 +98,36 @@ try {
     const entry = ranked[Math.floor(k * ranked.length / (count + 1))];
     if (entry && !far.includes(entry)) far.push(entry);
   }
-  const views = [{name: 'start'}, ...[0, 16384, 32768, 49152].map(yaw => ({name: `yaw ${yaw}`, rotation: [65000, yaw, 0]})),
+  const units = r => Math.round(r * 32768 / Math.PI);
+  const views = mirrorViews ? (await mirrorCameras()).map(({eye, at}, k) => {
+    const d = at.map((v, j) => v - eye[j]);
+    return {name: `mirror view ${k}`, location: eye, rotation: [(units(Math.atan2(d[2], Math.hypot(d[0], d[1]))) + 65536) % 65536,
+      (units(Math.atan2(d[1], d[0])) + 65536) % 65536, 0]};
+  }) : [{name: 'start'}, ...[0, 16384, 32768, 49152].map(yaw => ({name: `yaw ${yaw}`, rotation: [65000, yaw, 0]})),
     ...far.map(entry => ({name: `look at ${entry.actor} (${Math.round(entry.distance)})`, lookAt: entry.actor}))];
   for (const view of views) {
+    if (view.location) { await page.evaluate(args => window.deusExViewer.placeProbe(args), {location: view.location, rotation: view.rotation}); await frames(10); }
     if (view.rotation || view.lookAt) await page.evaluate(args => window.deusExViewer.placeProbe(args), {rotation: view.rotation ?? null, lookAt: view.lookAt ?? null});
     await frames(30);
-    // Two probes around the page's read: a binding whose rows agree was
-    // drawn by the page from the frame the probe reports.
+    // Two probes around the page's read, with drawn frames in between (the
+    // GPU passes run when the page draws): a binding whose rows agree was
+    // drawn by the page from the state the probe reports.
     const sample = await page.evaluate(async () => {
       await window.deusExViewer.settled();
-      const sim = await window.deusExViewer.lodProbe({}), drawn = window.deusExViewer.meshLod();
+      const sim = await window.deusExViewer.lodProbe({});
+      for (let k = 0; k < 2; k++) await new Promise(requestAnimationFrame);
+      const drawn = window.deusExViewer.meshLod();
+      for (let k = 0; k < 2; k++) await new Promise(requestAnimationFrame);
       await window.deusExViewer.settled();
       return {sim, drawn, again: await window.deusExViewer.lodProbe({})};
     });
     const again = new Map((sample.again ?? []).map(row => [row.id, JSON.stringify(row)]));
     samples.push({yaw: view.name, sim: sample.sim, drawn: sample.drawn,
       stable: new Set((sample.sim ?? []).filter(row => again.get(row.id) === JSON.stringify(row)).map(row => row.id))});
-    const drawnRows = (sample.sim ?? []).filter(row => row.drawn);
-    console.error(`${view.name}: ${drawnRows.length} drawn, ${drawnRows.filter(row => row.state?.active).length} reduced` +
-      ` [${drawnRows.map(row => `${row.actor}:${row.returned}`).join(' ')}]`);
+    const drawnRows = (sample.sim ?? []).filter(row => row.drawn || row.frames?.length);
+    console.error(`${view.name}: ${drawnRows.length} drawn, ${drawnRows.filter(row => row.state?.active).length} reduced, ` +
+      `${drawnRows.reduce((n, row) => n + (row.frames?.length ?? 0), 0)} child-frame draws` +
+      ` [${drawnRows.map(row => `${row.actor}:${row.returned}${row.frames?.length ? `+${row.frames.length}f` : ''}`).join(' ')}]`);
   }
   console.error(`eye ${eye.location.map(Math.round)}; far: ${far.map(entry => `${entry.actor}@${entry.location.map(Math.round)}`).join(' ')}`);
   runtimeError = await page.evaluate(() => window.deusExViewer.status().runtimeError?.message ?? null);
@@ -93,32 +137,52 @@ assert.equal(runtimeError, null, 'no runtime error');
 assert.ok(samples.length >= 5, 'samples from the views');
 
 // The oracle cases: one per drawn row with the LOD on, grouped by mesh.
-const byMesh = new Map(), checks = [];
+const byMesh = new Map(), checks = [], frameChecks = [];
 for (const sample of samples) {
   const drawn = new Map((sample.drawn ?? []).map(entry => [entry.id, entry]));
   for (const row of sample.sim ?? []) {
-    if (!row.drawn) continue;
+    if (!row.drawn && !row.frames?.length) continue;
     const key = `${row.meshPackage}:${row.meshIndex}`;
     if (!byMesh.has(key)) byMesh.set(key, {pack: row.meshPackage, index: row.meshIndex, cases: []});
     const entry = byMesh.get(key), name = `${sample.yaw}:${row.id}:${row.actor}`;
-    entry.cases.push({name, settings: row.frame.settings, lodBiasBits: row.inputs.lodBiasBits, drawScaleBits: row.inputs.drawScaleBits,
-      locationBits: row.inputs.locationBits, fovBits: row.frame.fovBits, fxBits: row.frame.fxBits, coordsBits: row.frame.coordsBits,
-      tanBits: null, returnedCount: row.returned});
-    checks.push({key, name, row, page: sample.stable.has(row.id) ? drawn.get(row.id) ?? null : null});
+    const inputs = {settings: row.frame.settings, lodBiasBits: row.inputs.lodBiasBits, drawScaleBits: row.inputs.drawScaleBits,
+      locationBits: row.inputs.locationBits, fovBits: row.frame.fovBits, tanBits: null};
+    if (row.drawn) {
+      entry.cases.push({name, ...inputs, fxBits: row.frame.fxBits, coordsBits: row.frame.coordsBits, returnedCount: row.returned});
+      checks.push({key, name, row, tanBits: row.frame.tanBits, page: sample.stable.has(row.id) ? drawn.get(row.id) ?? null : null});
+    }
+    // Each child frame's own selection (the returned count is not rerun).
+    for (const [k, frame] of (row.frames ?? []).entries()) {
+      const frameName = `${name}:frame${frame.index ?? k}`;
+      entry.cases.push({name: frameName, ...inputs, fxBits: frame.fxBits, coordsBits: frame.coordsBits,
+        returnedCount: Math.max(1, frame.selection.requested)});
+      frameChecks.push({key, name: frameName, row, frame, tanBits: row.frame.tanBits});
+    }
   }
 }
-assert.ok(checks.length > 0, 'drawn actor meshes with the LOD');
+assert.ok(checks.length + frameChecks.length > 0, 'drawn actor meshes with the LOD');
+const allChecks = [...checks, ...frameChecks];
 const doubleHex = value => { const v = new DataView(new ArrayBuffer(8)); v.setFloat64(0, value, true); return v.getBigUint64(0, true).toString(16).padStart(16, '0'); };
 const {lodMeshTanArgument, bitsFloat} = await import('../src/runtime/lodmesh-lod.mjs');
 const specs = [], meshes = new Map();
 for (const [key, entry] of byMesh) {
-  for (const c of entry.cases) c.tanBits = {[doubleHex(lodMeshTanArgument(bitsFloat(c.fovBits)))]: checks.find(k => k.name === c.name).row.frame.tanBits};
+  for (const c of entry.cases) c.tanBits = {[doubleHex(lodMeshTanArgument(bitsFloat(c.fovBits)))]: allChecks.find(k => k.name === c.name).tanBits};
   const {spec, topology} = await meshOracleSpec(root, entry.pack, entry.index, entry.cases);
   specs.push(spec); meshes.set(key, {topology, at: specs.length - 1});
 }
 const reference = JSON.parse(execFileSync(python, ['scripts/native-lodmesh-lod-oracle.py', root],
   {input: JSON.stringify(specs), encoding: 'utf8', maxBuffer: 256 << 20}));
-const tally = {rows: checks.length, active: 0, morph: 0, reduced: 0, minCount: Infinity, meshes: byMesh.size, pageCompared: 0};
+const tally = {rows: checks.length, active: 0, morph: 0, reduced: 0, minCount: Infinity, meshes: byMesh.size, pageCompared: 0,
+  frames: frameChecks.length, framesSame: 0, framesDiffer: []};
+for (const check of frameChecks) {
+  const {at} = meshes.get(check.key), original = reference.meshes[at].cases.find(c => c.name === check.name);
+  const {frame} = check, label = `${check.name} (${specs[at].name})`;
+  assert.equal(frame.selection.detailBits, original.selection.detailBits, `${label}: child frame detail bits`);
+  assert.equal(frame.selection.requested, original.selection.requested, `${label}: child frame requested count`);
+  assert.equal(frame.selection.active, Boolean(original.selection.active), `${label}: child frame LOD flag`);
+  assert.equal(frame.selection.morph, Boolean(original.selection.morph), `${label}: child frame morph flag`);
+  if (frame.same) tally.framesSame++; else tally.framesDiffer.push(`${check.name}: main ${frame.main}, frame ${frame.here}`);
+}
 for (const check of checks) {
   const {at, topology} = meshes.get(check.key), original = reference.meshes[at].cases.find(c => c.name === check.name);
   const {row, page} = check, label = `${check.name} (${specs[at].name})`;
@@ -154,4 +218,6 @@ for (const check of checks) {
 console.log(`validate-lodmesh-lod-play: PASS (${map}${query ? `, ${query}` : ''}: ${tally.rows} drawn LOD rows over ${samples.length} views, ` +
   `${tally.meshes} meshes; ${tally.active} with reduced topology, ${tally.morph} morphing, ${tally.reduced} below ModelVerts ` +
   `(down to ${tally.minCount === Infinity ? '-' : tally.minCount}); the selection, flags, start, admitted faces and vertices equal ` +
-  `the original's, and the page draws them (${tally.pageCompared} compared, ${tally.gpu ?? 0} on the GPU path))`);
+  `the original's, and the page draws them (${tally.pageCompared} compared, ${tally.gpu ?? 0} on the GPU path); ` +
+  `${tally.frames} child-frame selections equal the original's, ${tally.framesSame} draw what the main frame's does` +
+  `${tally.framesDiffer.length ? `, ${tally.framesDiffer.length} differ (${tally.framesDiffer.slice(0, 4).join('; ')})` : ''})`);
