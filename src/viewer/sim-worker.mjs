@@ -169,6 +169,7 @@ async function handle(data) {
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
         else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
         else if (data.method === 'moverProbe') value = (await import('./mover-probe.mjs')).moverProbe(game, host.session, data.args ?? {});
+        else if (data.method === 'moverDecalProbe') value = (await import('./mover-probe.mjs')).moverDecalProbe(game, host.session, data.args ?? {});
         else throw new Error(`Unknown simulation call ${data.method}`);
       }
       // Events the call queued (Player start's lighting and mesh records)

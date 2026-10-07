@@ -40,29 +40,29 @@ use core::ptr::{addr_of, addr_of_mut};
 // ---- header (host-filled; counters kept here) --------------------------------
 
 pub(crate) const H_NODES: usize = 0;
-const H_NODES_NUM: usize = 1;
+pub(crate) const H_NODES_NUM: usize = 1;
 const H_NODES_MAX: usize = 2;
 const H_TOP: usize = 3;
-const H_VERTS: usize = 4;
-const H_VERTS_NUM: usize = 5;
+pub(crate) const H_VERTS: usize = 4;
+pub(crate) const H_VERTS_NUM: usize = 5;
 const H_VERTS_MAX: usize = 6;
 const H_VTOP: usize = 7;
-const H_POINTS: usize = 8;
-const H_POINTS_NUM: usize = 9;
+pub(crate) const H_POINTS: usize = 8;
+pub(crate) const H_POINTS_NUM: usize = 9;
 const H_POINTS_MAX: usize = 10;
 const H_PTOP: usize = 11;
 const H_FIRST_POINT: usize = 12;
-const H_POINTS_CAP: usize = 13;
-const H_VECTORS: usize = 14;
-const H_VECTORS_NUM: usize = 15;
+pub(crate) const H_POINTS_CAP: usize = 13;
+pub(crate) const H_VECTORS: usize = 14;
+pub(crate) const H_VECTORS_NUM: usize = 15;
 const H_VECTORS_MAX: usize = 16;
 const H_VECTORS_TOP: usize = 17;
 const H_VECTORS_CAP: usize = 18;
 const H_SURFS: usize = 19;
-const H_SURFS_NUM: usize = 20;
+pub(crate) const H_SURFS_NUM: usize = 20;
 const H_SURFS_MAX: usize = 21;
 pub(crate) const H_SURFS_TOP: usize = 22;
-const H_DSURFS: usize = 23;
+pub(crate) const H_DSURFS: usize = 23;
 const H_SURFS_CAP: usize = 24;
 const H_MOVERS: usize = 25;
 const H_MOVER_COUNT: usize = 26;
@@ -88,6 +88,10 @@ const H_VERTS_CAP: usize = 47;
 pub(crate) const H_LIVE: usize = 48;
 const H_STATUS: usize = 49;
 const H_HELPER_CAP: usize = 50;
+/// Bumped by every Update that rebuilt a mover (and by construction's
+/// Update(NULL)): the host's sign that the level model changed (decal.rs
+/// `decal_model_sync`). Not an original field.
+pub(crate) const H_GENERATION: usize = 51;
 const H_WORDS: usize = 56;
 
 /// Header words; 49 is the last call's status (0 ok, 1 a block was too
@@ -105,6 +109,10 @@ fn h(i: usize) -> u32 {
 #[inline(always)]
 fn set_h(i: usize, v: u32) {
     unsafe { (*addr_of_mut!(HEADER))[i] = v }
+}
+/// A header word (decal.rs reads the tracked arrays through it).
+pub(crate) fn header(i: usize) -> u32 {
+    h(i)
 }
 /// The tracker exists (Level->BrushTracker): occlude.rs's SurfIsDynamic.
 pub(crate) fn surf_is_dynamic(i_surf: i32) -> bool {
@@ -859,6 +867,9 @@ fn update(actor: i32, pc64: bool) {
         e = next;
     }
     set_h(H_LIST_STALE, (head != -1) as u32);
+    if head != -1 {
+        set_h(H_GENERATION, h(H_GENERATION).wrapping_add(1));
+    }
 }
 
 /// MarkForUpdate (0x1037c4f0).

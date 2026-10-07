@@ -395,6 +395,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         fragments: tracker.chain(i).length, drawn: drawn ? [...new Set(drawn[name] ?? [])].length : null,
         polygons: drawn ? [...new Set(drawn[name] ?? [])].sort((a, b) => a - b) : null })) };
     },
+    /** Validation (mover-probe.mjs): the last main frame's decal fragments
+     * (decal-draw.mjs groups: texture, view-space triangle positions). */
+    decalFragments() { return current?.visibility?.decals ?? null; },
     /** The kernel's decal facade and its frame-words pointer for the decal block. */
     setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },

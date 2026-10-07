@@ -48,9 +48,10 @@ most 4; [decal startup](script-decal-startup.md)):
    Actor's Texture equals this decal's Texture, else at the end: entries
    group by texture, newest first within a group. SurfList gains the
    surface. If the surface's Actor is a Mover, MoverRotation is copied from
-   it and `SetBase(Owner, 1)` is called; every level-BSP surface Actor in the
-   83 shipped maps is a Brush (368,255 surfaces), so this branch is
-   unreachable in the shipped game.
+   it and `SetBase(Owner, 1)` is called (`0x103e79d6..0x103e79fe`). Every
+   level-BSP surface Actor in the 83 shipped maps is a Brush (368,255
+   surfaces); the Movers' surfaces are the ones the moving brush tracker
+   adds (see "Movers").
 6. **Quad.** Radius `f(sqrt(double(DS·DS·USize·USize·0.5)))` (VSize is not
    read). With an explicit DecalDir, its projection P on the plane and
    `W = P × N` give the diagonals `normalize(P̂ + Ŵ)` and `normalize(P̂ − Ŵ)`;
@@ -106,8 +107,9 @@ each surface's FDecal list as a linked list of records in TArray order.
 Engine.Decal natives in `script-runtime.mjs` call it through
 `script-decal.mjs`, which passes the shared stream's rand() and each decal
 actor's live Texture. A Player-start reload drops the store (LoadMap loads
-the model fresh) and a dropped level frees its blocks. The Mover branch is a
-labelled boundary (fault 6).
+the model fresh) and a dropped level frees its blocks. The Mover branch
+copies MoverRotation and reports `SetBase(Owner, 1)` to its host (see
+"Movers").
 
 The JavaScript surface path this replaced was not the original: it probed
 along DecalDir instead of the trace, kept one record per texture, attached
@@ -126,7 +128,8 @@ Vertices bits, Nodes, MoverRotation) must be equal.
 
 | Map | Scenarios | AttachDecal calls | Exits | Neighbour FDecals |
 | --- | ---: | ---: | --- | ---: |
-| 00_Training | 49 | 87 | 82 attached, 3 trace misses, 1 pan flags; the Mover boundary | 10 |
+| 00_Training | 49 | 87 | 83 attached, 3 trace misses, 1 pan flags; 1 Mover branch | 10 |
+| 00_Training, tracked model (`--tracker`) | 65 | 111 | 90 attached, 6 trace misses, 13 no surface, 2 pan flags; 11 Mover branches | 28 |
 | 01_NYC_UNATCOIsland | 49 | 87 | 83 attached, 2 trace misses, 2 pan flags | 13 |
 
 All bit-equal. Scenarios: Shadows under pawns and the player start (both
@@ -187,7 +190,7 @@ vertex by `GMath.UnitCoords *= FRotator(Actor.Rotation − MoverRotation)`
 TransformPointBy, at 24 bits. Of the 762 cases, 107 are on Mover surfaces
 and bit-equal; 13 of those are nonempty with a nonzero rotation delta. With
 the moving brush tracker, mover surfaces are in the level BSP, so this path
-is reachable. Play does not attach decals to them yet (see "Open").
+is reachable (see "Movers").
 
 ## Play
 
@@ -234,18 +237,78 @@ Host choices, noted:
 - Texture sampling follows the D3D state as far as WebGL allows; D3D's mip
   choice and texture upload rules are device behaviour.
 
+## Movers
+
+With the moving brush tracker ([brush tracker](brush-tracker.md)) each
+mover polygon is an FBspSurf whose Actor is the Mover, and its fragments
+are solid nodes of the level model where the mover was last rendered.
+AttachDecal's LineCheck and FindSurface run over that model, so a decal can
+attach to a door:
+
+- **Mover branch** (`0x103e79d6..0x103e79fe`): FDecal.MoverRotation is the
+  Mover's Rotation (`+0x120`) and `this->SetBase(Owner, 1)` follows. The
+  grid's neighbour FDecals do not take the branch (their MoverRotation stays
+  zero).
+- **Nodes.** UModel::PostLoad built Surf.Nodes at load, so a tracker
+  surface's list is empty and so is its FDecal.Nodes; the decal block then
+  clips the decal against every drawn fragment of the surface.
+- **Following the mover.** Update rewrites a tracker surface's base point
+  and vectors in place, the FDecal's Vertices stay relative to the base,
+  and ClipDecal turns them by `Actor.Rotation − MoverRotation` (above).
+
+**Reference.** `validate-decal-attach.mjs --tracker` builds the model the
+tracker filters Training's 25 movers into (two of them raised 96 units by
+an Update at 24 bits; `brush-tracker.mjs trackedModel`). The oracle gives
+every tracker surface a Mover with its Rotation and runs UModel::PostLoad
+over the original nodes only. Scenario 9 of `native-decal-cases.py` adds
+16 bullet holes, scorch marks and blood splats on mover fragments, their
+Owner the surface's Mover as TraceHitSpawner spawns them. All 65 scenarios
+are bit-equal, with 11 Mover branches: MoverRotation, the one SetBase call,
+its NewBase (the Owner) and bNotifyActor 1.
+
+**The port.** `decal_attach` writes MoverRotation from the surface record
+(the Mover's Rotation, words 6..8) and sets IO word 54. The host
+(`script-decal.mjs attachDecalSurfaces`) then runs the recovered
+`AActor::SetBase(decal, Owner)` with notification. `decal_clip_frame`
+passes `Rotation − MoverRotation` (int subtraction) to ClipDecal on Mover
+surfaces.
+
+**Play.** `sim-host.mjs` sets `level.decalSource`
+(`brush-tracker.mjs trackerDecalSource`) when it builds the tracker:
+
+- `levelDecals` uploads the decal model and its trace model from the
+  tracked model, with room for the tracker's points. A store made before
+  the tracker existed grows into the tracker's surfaces (`setModel`,
+  decal.rs `decal_store_resize`). GNewBrushTracker also runs after the
+  actor start-up in the original.
+- After that, `followDecalTracker` keeps the model current. When the
+  tracker's generation word (header 51, bumped by every Update that rebuilt
+  a mover) has moved, `decal_model_sync` rewrites the nodes, verts, points,
+  vectors, tracker surfaces and trace nodes from the tracker's arrays. Every
+  Mover surface's Rotation word is also refreshed from its actor. This runs
+  before each AttachDecal, and before the decal block when a tracker
+  surface holds an FDecal.
+
+Checks of the plumbing (the port against itself):
+`validate-decal-attach --tracker` lays each scenario's store out again
+after its first operation, and compares a model synced after three more
+Updates with a fresh upload (a run without the sync fails).
+`validate-decals-play` (worker mode) faces DeusExMover16's largest fragment
+in Training and spawns a BulletHole on it as TraceHitSpawner does. Its
+SurfList holds the tracker surface, its Base is the Mover, and its 6
+fragment points are drawn 0.75 units off the tracked plane. They stay on
+the plane when the mover is raised 16 units (their centre moves with it) and
+when it is turned 2048 units. With ClipDecal's rotation left out, the
+turned check fails.
+
+Host choices, noted:
+- SetBase runs when the native returns, not between the FDecal entry and
+  the quad. Its events (Detach and Attach on the bases, the decal's
+  BaseChange) then see the finished FDecal lists, which no script reads.
+- Rotation words are read from the movers' actors at each call. ClipDecal
+  and the Mover branch read `Surf.Actor->Rotation` at theirs.
+
 ## Open
 
-- Movers. With the brush tracker
-  ([brush tracker](brush-tracker.md)), mover fragments are solid nodes of
-  the level model. AttachDecal's trace can then hit a door, and its Mover
-  branch is reachable. That branch copies MoverRotation and calls
-  `SetBase(Owner, 1)` on the decal (`0x103e79d6..0x103e79fe`). The tracker
-  leaves a mover surface's Surf.Nodes empty, so its FDecal.Nodes are empty
-  and the decal block clips it against every fragment drawn.
-  - Still to do: the decal kernel's model and trace model built from the
-    tracked model, the Mover branch in decal.rs (fault 6 today), and the
-    mover rotation in `decal_clip_frame`.
-  - ClipDecal's mover rotation itself is ported and verified (above).
 - Decals in sky child frames.
 - The game-thread control word (above).

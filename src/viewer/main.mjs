@@ -1089,6 +1089,10 @@ async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
 },
+async moverDecalProbe(args) {
+  if (simClient) return simClient.call('moverDecalProbe', args);
+  return game && sim ? (await import('./mover-probe.mjs')).moverDecalProbe(game, sim, args) : null;
+},
 /** Validation only: decal-probe.mjs placeProbe (player location and view
  * rotation) on the simulation side. */
 placeProbe(args) {

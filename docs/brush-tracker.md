@@ -369,8 +369,6 @@ lists is not drawn.
   mover's SavedPos to (−1, −1, −1) and builds a new tracker. Play has no
   SaveGame yet; `buildOcclusion` in `sim-host.mjs` is the rebuild to call.
   Travel uses the same rebuild once maps travel (Stage 6).
-- **Decals on movers.** AttachDecal on a tracker surface (the trace may hit
-  fragment nodes) and the decal block over mover surfaces are not wired.
 - **Fog on movers.** Mover surfaces get no fog map. SetupForSurf on drawn
   tracker surfaces is the next step.
 - **Child frames.** Mirror and sky passes draw movers whole until child
