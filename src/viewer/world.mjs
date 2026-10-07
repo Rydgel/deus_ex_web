@@ -248,14 +248,18 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         // Each triangle's BSP node (world-visibility.mjs).
         batch.nodes.push(...g.nodes);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
-        if (!actorName && lightmap && lit && (await zoneActor(zone)).fog) {
+        // A level surface in a fog zone; every lit mover polygon of a map
+        // with fog zones, whose zone is its drawn fragments' (fog-pass.mjs,
+        // the brush tracker).
+        if (lightmap && lit && (actorName ? anyFogZone : (await zoneActor(zone)).fog)) {
           const fogUV = [], fogBounds = [];
           for (let i = 0; i < g.positions.length; i += 3) {
             fogUV.push(...lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))));
             fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
-          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex);
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex,
+            actorName ? { name: actorName, parent } : null);
         }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
@@ -293,14 +297,14 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     }
   }
 
+  // Each zone's bFogZone (SetupForSurf's gate), for the movers' fog.
+  const fogZones = new Uint8Array(Math.max(1, map.model.zones?.length ?? 0));
+  for (let zone = 0; zone < fogZones.length; zone++) fogZones[zone] = (await zoneActor(zone)).fog ? 1 : 0;
+  const anyFogZone = fogZones.some(Boolean);
   await addModel(map.model, map.triangles, root);
   for (const actor of map.actors) {
     if (!(actor.values.VolumeRadius > 0)) continue;
     fog.addLight(await classDefaults.forActor(asset, actor));
-  }
-  if (fog.stats.surfaces && fog.stats.lights) {
-    root.add(fog.root);
-    notes.add(`${fog.stats.surfaces} fog-zone surfaces draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; mover surfaces and meshes get no fog.`);
   }
   for (const actor of map.actors.filter(a => /Mover$/.test(a.className) && a.values.Brush > 0)) {
     try {
@@ -318,6 +322,10 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       group.updateMatrixWorld(true);
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
+  }
+  if (fog.stats.surfaces && fog.stats.lights) {
+    root.add(fog.root);
+    notes.add(`${fog.stats.surfaces} fog-zone and mover surfaces draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; meshes get no fog (D3D's shipped configuration).`);
   }
   const submissionBatches = batchOpaque ? batchWorldMeshes(root, lightAtlas, lightingEnabled, displayGamma) : null;
   // The main frame's BSP visibility (world-visibility.mjs), after batching.
@@ -355,6 +363,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const moverMatrix = new THREE.Matrix4();
   const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
     visibility,
+    /** Whether a zone's actor (or the LevelInfo) is bFogZone. */
+    fogZone: zone => Boolean(fogZones[zone]),
     /** BSP node → surface index of the world model (bsp-occlusion.mjs results). */
     nodeSurface: Int32Array.from(map.model.nodes, node => node.surface),
     /** Each mover group's brush matrix; a changed one updates its own and

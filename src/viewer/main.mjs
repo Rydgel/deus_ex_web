@@ -1369,7 +1369,8 @@ function drawFrame(snap, time) {
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
-        drawnSurfaces);
+        drawnSurfaces, { movers: visible?.movers ?? null, moverZones: visible?.moverZones ?? null,
+          moverFacets: visible?.moverFacets ?? null, fogZone: world.fogZone });
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');

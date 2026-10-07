@@ -187,6 +187,20 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
       const u = words(), o = (dsurfs >>> 2) + DSURF.WORDS * (iSurf - top);
       return { tag: u[o + DSURF.ACTOR], ordinal: u[o + DSURF.BRUSHPOLY] };
     },
+    /** A tracker surface's pBase point and vTextureU, vTextureV and vNormal
+     * vectors (float values) where the last Update left them, flat
+     * [base, u, v, normal], or null for a level surface. */
+    surfaceFacet(iSurf) {
+      const top = h(TRACKER.SURFS_TOP);
+      if (!h(TRACKER.LIVE) || iSurf < top || iSurf >= h(TRACKER.SURFS_NUM)) return null;
+      const u = words(), f = new Float32Array(u.buffer), o = (dsurfs >>> 2) + DSURF.WORDS * (iSurf - top);
+      const point = (h(TRACKER.POINTS) >>> 2) + 3 * u[o + DSURF.PBASE], out = [f[point], f[point + 1], f[point + 2]];
+      for (const k of [DSURF.VTEXU, DSURF.VTEXV, DSURF.VNORMAL]) {
+        const at = (vectors >>> 2) + 3 * u[o + k];
+        out.push(f[at], f[at + 1], f[at + 2]);
+      }
+      return out;
+    },
     live: () => h(TRACKER.LIVE) !== 0,
   };
 }

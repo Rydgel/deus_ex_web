@@ -609,6 +609,47 @@ the models it builds matches the original with Engine's SurfIsDynamic on
 four maps. Its own open items are decals and fog on movers, collision
 (Stage 5) and SaveGame (Stage 6).
 
+### Handoff, 2026-10-07 (work in progress)
+
+Stopped at the usage limit. The branch holds these commits:
+- 12d7db8, f4a6cb5 and 224b7fe: child frames, verified bit-equal and in Play.
+- 63f61f6: decals on movers, verified (see [decals](decals.md), "Movers").
+
+This WIP commit adds fog on movers. Done and verified:
+- `brush-tracker.mjs surfaceFacet` gives a drawn tracker surface's pBase
+  and vectors.
+- `sim-session` visibility carries them as `moverFacets`, beside
+  `moverZones`.
+- `fog-pass.mjs` builds a mover polygon's lattice with `lightmapBasis` over
+  those vectors and the Brush's light-map index. SetupForSurf takes the
+  index from the Brush for dynamic surfaces (`0x10b06e2c..0x10b06e4a`).
+- A polygon is fogged when one of its drawn fragments lies in a bFogZone
+  zone.
+- `world.mjs` registers lit mover polygons on maps that have fog zones.
+- `validate-volumetric-fog-play` passed in worker mode. On 02_NYC_Bar, the
+  4×8 fog map of DeusExMover9's polygon 4 is equal to Render.dll's loop
+  (`native-volumetric-fog-oracle.py`).
+
+Not yet verified:
+- `validate-mirrors-play` timed out on its last run. That run came after
+  the fog edits, but the cause was not examined, so treat it as a possible
+  regression from the fog meshes now parented to mover groups.
+- `npm test` has not been run since the fog edits.
+
+Next steps:
+1. Rerun `validate-mirrors-play`, `validate-decals-play`, `validate-gpu-mesh`
+   and `npm test`, and fix the mirrors timeout.
+2. Update the docs: `volumetric-fog.md` ("Not fogged" and "Not done yet"
+   become movers fogged, with the whole-polygon host choice),
+   `brush-tracker.md` (the "Fog on movers" open item) and a roadmap entry
+   for decals and fog on movers.
+3. Child-frame cost. The interleaved A/B (scratch `ab-cf.sh`) finished
+   rounds 1 and 2 of "on" and round 1 of "off" for Island, Club, Smug and
+   Training. Later runs failed because source edits broke the running
+   server. Rerun three rounds, using a rotation-only Paris Club placement,
+   and write "Child frames: cost" below, which the Child frames section
+   already points to.
+
 ### 3. Smaller items
 
 * LeafVolumetricLighting and the draw lists' Volumetrics (fog light lists).

@@ -192,21 +192,27 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       zone: region?.['engine.actor.pointregion.zonenumber'] ?? 0 };
   }
   // A frame's drawn nodes (Uint32Array) and the tracked movers' polygon
-  // ordinals its draw lists hold, by mover name (null without the tracker).
+  // ordinals its draw lists hold, by mover name (null without the tracker),
+  // with each draw item's iZone alongside (`moverZones`: SetupForSurf's
+  // fog-zone test reads the item's zone) and each drawn polygon's surface
+  // pBase and vectors as the tracker holds them (`moverFacets`, by ordinal:
+  // SetupForSurf's light-map lattice of a dynamic surface).
   function drawnOf(draw) {
     const nodes = [];
     for (const list of draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
-    let movers = null;
+    let movers = null, moverZones = null, moverFacets = null;
     if (trackerMovers && occlusion.tracker?.live()) {
-      movers = {};
+      movers = {}; moverZones = {}; moverFacets = {};
       for (const list of draw) for (const entry of list) {
         const owner = occlusion.tracker.surfOwner(entry.iSurf);
         if (!owner) continue;
         const name = trackerMovers.names[owner.tag - 0x40000000];
         (movers[name] ??= []).push(owner.ordinal);
+        (moverZones[name] ??= []).push(entry.iZone);
+        (moverFacets[name] ??= {})[owner.ordinal] ??= occlusion.tracker.surfaceFacet(entry.iSurf);
       }
     }
-    return { nodes: Uint32Array.from(nodes), movers };
+    return { nodes: Uint32Array.from(nodes), movers, moverZones, moverFacets };
   }
   // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null.
   function spanBounds(span) {
@@ -234,7 +240,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0 } : null });
-    const { nodes, movers } = drawnOf(result.draw);
+    const { nodes, movers, moverZones, moverFacets } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
     const mirrors = [];
@@ -258,7 +264,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         sprites: frame.sprites.map(sprite => sprite.key) };
     });
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height],
-      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers,
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverZones, moverFacets,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
