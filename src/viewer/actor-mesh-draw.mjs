@@ -53,7 +53,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   // The latest record's state, applied when the meshes exist.
   const latest={visible:Boolean(creation.visible),childOnly:false,material:null,posed:creation.posed,colors:null,groups:null,
     spheres:creation.spheres,lod:null};
-  const pendingPlans=[];
+  const pendingPlans=[];let pendingLod=null;
   function core(){
     if(disposed)return;
     const {payload,faces,faceWords}=source;
@@ -63,6 +63,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       bases={vbase:gpuHandle.vbase,cbase:gpuHandle.cbase};
       if(creation.plan)gpu.setPose(gpuHandle,creation.plan);
       for(const plan of pendingPlans.splice(0))gpu.setPose(gpuHandle,plan);
+      if(pendingLod){gpu.setLod(gpuHandle,pendingLod);pendingLod=null;}
     }
   }
   const sourceEntry=meshSource(assets,meshes,creation.mesh);
@@ -268,8 +269,10 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
         environment:environmentGroup,batchEntry:null,split:false};
       geometry.setAttribute('deusLight',new THREE.BufferAttribute(lightColors,3).setUsage(THREE.DynamicDrawUsage));
       if(gpuSlot){
-        geometry.setAttribute('deusVertexTexel',new THREE.BufferAttribute(
-          Float32Array.from(indices,index=>bases.vbase+index),1));
+        // The slot's first ordinary vertex texel: each corner adds its
+        // resolved wedge's vertex (gpuBeginVertex).
+        const ordinaryTexel=bases.vbase+(source.payload.scalarBits.get(0x184)|0);
+        geometry.setAttribute('deusVertexTexel',new THREE.BufferAttribute(new Float32Array(indices.length).fill(ordinaryTexel),1));
         geometry.setAttribute('deusCornerTexel',new THREE.BufferAttribute(
           Float32Array.from(corners,corner=>bases.cbase+corner),1));
       }
@@ -322,6 +325,17 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
      * geometry draws under the LOD and their distinct vertices, the groups
      * the LOD empties and whether the root is shown. */
     lodStats(){
+      if(mode==='gpu'&&gpuHandle&&source){
+        // The GPU path: the corner pass's resolved dwords for this slot.
+        const words=gpu.read('cornerWedges',gpuHandle.cbase,gpuHandle.mesh.F*3);
+        let faces=0,dropped=0;const vertices=new Set();
+        for(let i=0;i<words.length;i+=3){
+          if(words[i]>=0xfffffffe){dropped++;continue;}
+          faces++;for(let k=0;k<3;k++)vertices.add(words[i+k]&0xffff);
+        }
+        return {id,path:mode,ready,visible:root.visible,lod:dropped?{faces,vertices:vertices.size,
+          emptyGroups:null}:null,gpuFaces:faces,gpuVertices:vertices.size,faces:source.faces.length};
+      }
       const resolved=latest.lod?.resolved??null;
       let faces=0;const vertices=new Set();
       if(resolved)for(let i=0;i<resolved.length;i+=3){if(resolved[i]<0)continue;faces++;vertices.add(resolved[i]).add(resolved[i+1]).add(resolved[i+2]);}
@@ -347,6 +361,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const lodChanged=record.lod!==undefined;
       if(lodChanged)latest.lod=record.lod.resolved?record.lod:null;
       if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
+      if(record.lodParams&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setLod(gpuHandle,record.lodParams);else if(!source)pendingLod=record.lodParams;}
       if(record.toCpu)toCpu();
       if(lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,lighting))
         throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
@@ -429,22 +444,28 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
   };
 }
 
-/** The GPU draw path's begin_vertex (docs/gpu-mesh.md): the corner's pose
- * texel with the viewer reflection, its corner colour and, for environment
- * groups, the environment UV from the pass camera. `deusGpu` 0 keeps the
- * CPU path's attributes for an actor that fell back. */
+/** The GPU draw path's begin_vertex (docs/gpu-mesh.md): the corner's
+ * resolved wedge (the LOD's collapsed vertex and U/V bytes, or the corner's
+ * own), its final-pose texel with the viewer reflection, its corner colour
+ * and, for environment groups, the environment UV from the pass camera. A
+ * face the LOD drops collapses to a point. `deusGpu` 0 keeps the CPU path's
+ * attributes for an actor that fell back. */
 function gpuBeginVertex(environment){
   return `vec3 transformed;
 if (deusGpu > 0.5) {
-  int deusV = int(deusVertexTexel), deusC = int(deusCornerTexel);
-  vec3 deusP = texelFetch(deusPose, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
+  int deusC = int(deusCornerTexel);
+  uint deusW = texelFetch(deusCornerWedges, ivec2(deusC & 1023, deusC >> 10), 0).x;
+  bool deusDropped = deusW >= 0xfffffffeu;
+  int deusV = int(deusVertexTexel) + (deusDropped ? 0 : int(deusW & 0xffffu));
+  vec3 deusP = deusDropped ? vec3(0.0) : texelFetch(deusPose, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
   transformed = vec3(deusP.y, deusP.z, -deusP.x);
   uvec4 deusBytes = texelFetch(deusCorners, ivec2(deusC & 1023, deusC >> 10), 0);
   vDeusLight = vec3(texelFetch(deusByteColors, ivec2(int(deusBytes.x), 0), 0).x,
     texelFetch(deusByteColors, ivec2(int(deusBytes.y), 0), 0).x, texelFetch(deusByteColors, ivec2(int(deusBytes.z), 0), 0).x);
 ${environment?`  vec3 deusN = texelFetch(deusEnvironmentNormals, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
   vMapUv = ( mapTransform * vec3( environmentUV(deusP, deusN, deusCameraHi, deusCameraLo), 1 ) ).xy;
-`:''}} else {
+`:`  vMapUv = ( mapTransform * vec3( float((deusW >> 16) & 255u) / 256.0, float(deusW >> 24) / 256.0, 1 ) ).xy;
+`}} else {
   transformed = vec3( position );
   vDeusLight = deusLight;
 }`;

@@ -79,8 +79,9 @@ Frame cost and the 120 fps target are tracked in
   [conversation](docs/script-instructor-conversation.md),
   [conversation camera](docs/conversation-camera.md)).
 - Every visible actor mesh draws with original lighting
-  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md)).
-  Distance LOD remains unfinished.
+  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md))
+  and DrawLodMesh's distance LOD ([LOD](docs/script-lodmesh-lod.md); `?meshLod=off`
+  draws full detail).
 - Unit/format tests, real-data validation commands, and browser regression
   tests. Optional local native-DLL comparisons check translated routines against
   the original DLLs under an emulator ([native exec diff](docs/native-exec-diff.md),
@@ -126,7 +127,10 @@ keeps the dated record.
 
 - **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
   weapon ([mesh lighting](docs/mesh-lighting.md)), with GetFrame and lighting
-  on the GPU, bit-exact with the CPU kernels ([GPU mesh](docs/gpu-mesh.md)).
+  on the GPU, bit-exact with the CPU kernels ([GPU mesh](docs/gpu-mesh.md));
+  DrawLodMesh's distance LOD (count selection, vertex morph, collapsed faces
+  and interpolated UVs, bit-equal to Render.dll at the pass's 24 bits) on both
+  paths ([LOD](docs/script-lodmesh-lod.md)).
 - **Visibility:** Render.dll's OccludeBsp, master frame and dynamics in the
   Rust core, bit-exact; Play draws the polygons, mirrors, sky and fog surfaces
   it finds visible ([BSP occlusion](docs/bsp-occlusion.md)).
@@ -158,7 +162,8 @@ keeps the dated record.
 tracker itself now runs: closed doors occlude), the occlusion's child frames
 and mirror/sky combinations, time-varying moving lights and spotlights,
 UnrealScript inside the render events at the pass's 24-bit precision, the
-non-steady light types in mesh lighting, the darkest-pixel rounding and
+non-steady light types in mesh lighting, the LOD morph's world-space rounding
+and per-mirror selection ([LOD](docs/script-lodmesh-lod.md#play)), the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 

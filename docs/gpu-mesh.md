@@ -167,10 +167,11 @@ written by every evaluation, and a tween reads the previous one. The GPU
 keeps it in state textures that are ping-ponged each frame: the pose pass
 draws every allocated vertex, recomputing dirty actors and copying the pose
 and the in-flight cache poses of the others, so no state is lost while an
-actor is not drawn. `count` is always the full vertex count in Play
-(`getLodMeshFrame`'s default `vertexCount`), so the tween's count expansion
-branch never runs there; if a plan ever needs it, that actor takes the CPU
-path for that frame.
+actor is not drawn. Each channel's count and fill start (GetFrame's
+in/out count and the tween's count expansion) bound the loop per vertex
+since the distance LOD (2026-10-07, "Distance LOD" below): a vertex at or
+above the count keeps its cache pose and its output, one in a fill takes
+the target frame.
 
 **Pose pass targets.** The pose and the five cache poses are six RGBA32F
 targets (96 bytes per texel). They are written by two draws of three
@@ -275,6 +276,80 @@ draw shader computes `writeMeshEnvironmentUV` per corner from the render
 camera (three.js `cameraPosition`, which is the mirror camera in mirror
 passes, as `updateView` passes today).
 
+## Distance LOD
+
+Added 2026-10-07 ([LOD](script-lodmesh-lod.md)). DrawLodMesh's selection,
+post-frame morph and reduced corners are translated in
+`src/runtime/lodmesh-lod.mjs` and `native/lodmesh-kernel/src/lod.rs`
+(228 original cases bit-equal); Play's simulation side selects per drawn
+binding and plans GetFrame with the requested count, and sends the
+post-frame scalars (`lodMorphScalars`: returned count, morph start, flags,
+the 24-bit inverse) as the record's `lodParams`. The GPU then runs the rest:
+
+* **Pose pass:** per channel count and fill start (U9, U10.x), above.
+* **Morph pass** (`MORPH_FRAGMENT`, one point per vertex, into the final
+  pose target): the vertex loop of `morphLodMesh`, one binary32 operation
+  each through B(): alpha = `(i − start)·inverse`, clamped to 1, and per
+  axis `((t − v)·alpha) + v` toward the collapse target's posed position;
+  w holds the stored alpha. It runs for a slot whose pose or LOD parameters
+  changed this frame; otherwise the final pose stays.
+* **Corner pass** (`RESOLVE_FRAGMENT`, one point per slot corner, R32UI):
+  `lodMeshCorners` — FaceLevel admission, the CollapseWedgeThus walk below
+  the count (at most 64 steps; the shipped chains are at most 9), and the
+  U/V lerp `FISTP(((next − cur)·alpha) + cur)` from the final pose's alpha;
+  the corner's own wedge without the LOD flag. Dropped faces are
+  0xffffffff. Memoization by wedge does not change the dwords.
+* **Face, vertex and corner passes** take each face's vertices from the
+  resolved dwords (every slot, LOD or not: without the flag they are the
+  faces' own), so the normals, the drawn test, Light and the unlit rule
+  run over the reduced faces as DrawLodMesh does. While the flag holds the
+  vertex and corner passes walk a static per-mesh list per vertex (every
+  face corner whose wedge chain reaches the vertex, in face and corner
+  order, `gpu-mesh-layout.mjs lodVertexLists`) and keep the entries whose
+  corner resolved to that vertex: the same faces in the same order as the
+  exact adjacency of the reduced faces.
+* **Draw:** each corner fetches its dword (`deusCornerWedges`), its vertex
+  texel (`deusVertexTexel` is now the slot's first ordinary vertex) and,
+  outside environment groups, its U/V bytes / 256; a dropped face collapses
+  to a point.
+
+Static per mesh: the faces' wedges and FaceLevel (`meshLodFaces`), the
+Wedges with CollapseWedgeThus (`meshWedges`, its own arena), the per-vertex
+list offsets with CollapsePointThus (`meshLodVertices`) and the lists
+(`lodLists`, their own arena). Per slot: the final pose and the corner
+dwords. A mesh without LOD arrays cannot take the GPU path (none ships).
+
+**Visibility.** Each group's certificate boxes cover the closure of its
+corners under the LOD (every vertex of its wedge chains and their collapse
+targets, `actor-mesh-lod.mjs closure`), so they stay conservative for any
+count and morph; exact spheres come from the CPU shadow with the CPU LOD
+applied (the CPU path's corners), and a group with no admitted face is not
+drawn on either path.
+
+**Validation.** validate-gpu-mesh compares, for every captured actor, the
+final pose with the CPU path's (the CPU LOD on the exact output) and each
+slot corner's dword with `lodMeshCorners`', and runs the colour and drawn
+checks over the reduced faces. On Island it first looks at 16 far actor
+meshes, half of them with URender's MLOD at 2 (`setLodSettings`, eight times
+the shipped 0.25) so counts drop far enough to drop faces; coverage now
+requires LOD actors, morphing ones and ones with dropped faces. 2026-10-07:
+293,583 final-pose components and 555,756 corner dwords equal, 201 LOD
+captures (96 with dropped faces), colours and visibility unchanged at 0.
+
+**Unpublished vertices.** With a count below the mesh's, vertices at or
+above the main channel's count keep the output they had (the original's
+GMem buffer holds garbage there). No later channel exceeds that count and
+no drawn corner or morph target reaches those vertices, so the two paths
+may hold different values there without drawing anything different;
+validate-gpu-mesh compares the published vertices.
+
+**Cost** (interleaved, Linux host, Island idle at 1440×960, worker mode,
+`?meshLod=off` against the default, 3 pairs with `--gpu`): GPU time per
+frame 2.02 → 2.05 ms, the actors phases within their run-to-run spread
+([LOD](script-lodmesh-lod.md#play) has the table). Walking the LOD lists for
+every slot with the LOD flag cost 0.86 ms; they are walked only below
+ModelVerts.
+
 ## Visibility and render feedback
 
 Today three.js culls each draw group by `geometry.boundingSphere`, computed
@@ -374,8 +449,8 @@ loosened.
   (`weapon-view-model.mjs` without a GPU). In Play the view model has a GPU
   mesh instance of its own (`WEAPON_GPU_MESH_CAPACITIES`), whose passes run
   once per frame after the world's ([simulation worker](sim-worker.md) step 6).
-* An actor whose plan needs the tween count expansion, or with more than 32
-  selected lights, for that frame (measured counts are recorded below).
+* An actor with more than 32 selected lights, for that frame (measured
+  counts are recorded below).
 * Exact spheres of ambiguous groups (above), computed from the CPU shadow.
 * Fatness, fog and volumetric lights, which the CPU path does not implement
   either (see [mesh lighting](mesh-lighting.md)).

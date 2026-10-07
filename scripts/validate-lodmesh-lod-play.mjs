@@ -50,11 +50,21 @@ try {
   await frames(60);
   // Views: the start, four directions, and the farthest actor meshes (the
   // ones the LOD reduces most), looked at from the start.
+  // --from x,y,z: start from another place (an open area of the map).
+  const from = option('from', null);
+  if (from) { await page.evaluate(location => window.deusExViewer.placeProbe({location}), from.split(',').map(Number)); await frames(30); }
   const listed = await page.evaluate(() => window.deusExViewer.lodProbe({list: true}));
   const eye = await page.evaluate(() => window.deusExViewer.placeProbe({}));
-  const far = (listed ?? []).filter(entry => entry.location && entry.actor)
+  // The farthest are often behind walls: take the farthest few and others
+  // spread over the actors beyond 1,500 units.
+  const ranked = (listed ?? []).filter(entry => entry.location && entry.actor)
     .map(entry => ({...entry, distance: Math.hypot(...entry.location.map((v, i) => v - eye.location[i]))}))
-    .sort((a, b) => b.distance - a.distance).slice(0, Number(option('far', 8)));
+    .filter(entry => entry.distance > 1500).sort((a, b) => b.distance - a.distance);
+  const count = Number(option('far', 12)), far = [...ranked.slice(0, count >> 1)];
+  for (let k = 1; far.length < count && k <= count; k++) {
+    const entry = ranked[Math.floor(k * ranked.length / (count + 1))];
+    if (entry && !far.includes(entry)) far.push(entry);
+  }
   const views = [{name: 'start'}, ...[0, 16384, 32768, 49152].map(yaw => ({name: `yaw ${yaw}`, rotation: [65000, yaw, 0]})),
     ...far.map(entry => ({name: `look at ${entry.actor} (${Math.round(entry.distance)})`, lookAt: entry.actor}))];
   for (const view of views) {
@@ -71,7 +81,11 @@ try {
     const again = new Map((sample.again ?? []).map(row => [row.id, JSON.stringify(row)]));
     samples.push({yaw: view.name, sim: sample.sim, drawn: sample.drawn,
       stable: new Set((sample.sim ?? []).filter(row => again.get(row.id) === JSON.stringify(row)).map(row => row.id))});
+    const drawnRows = (sample.sim ?? []).filter(row => row.drawn);
+    console.error(`${view.name}: ${drawnRows.length} drawn, ${drawnRows.filter(row => row.state?.active).length} reduced` +
+      ` [${drawnRows.map(row => `${row.actor}:${row.returned}`).join(' ')}]`);
   }
+  console.error(`eye ${eye.location.map(Math.round)}; far: ${far.map(entry => `${entry.actor}@${entry.location.map(Math.round)}`).join(' ')}`);
   runtimeError = await page.evaluate(() => window.deusExViewer.status().runtimeError?.message ?? null);
 } finally { await browser.close(); await server?.close(); }
 assert.deepEqual(pageErrors, [], 'no page errors');
@@ -83,7 +97,7 @@ const byMesh = new Map(), checks = [];
 for (const sample of samples) {
   const drawn = new Map((sample.drawn ?? []).map(entry => [entry.id, entry]));
   for (const row of sample.sim ?? []) {
-    if (!row.drawn || row.path !== 'cpu') continue;
+    if (!row.drawn) continue;
     const key = `${row.meshPackage}:${row.meshIndex}`;
     if (!byMesh.has(key)) byMesh.set(key, {pack: row.meshPackage, index: row.meshIndex, cases: []});
     const entry = byMesh.get(key), name = `${sample.yaw}:${row.id}:${row.actor}`;
@@ -118,8 +132,15 @@ for (const check of checks) {
   if (finalMorph) assert.equal(row.state.start, original.state.start, `${label}: morph start`);
   const admitted = original.faces.filter(face => face.admitted), vertices = new Set(admitted.flatMap(face => face.vertices));
   assert.equal(row.admitted, admitted.length, `${label}: admitted faces`);
-  if (finalActive) assert.equal(row.vertices, vertices.size, `${label}: distinct vertices`);
-  if (page?.ready) {
+  if (finalActive && row.path === 'cpu') assert.equal(row.vertices, vertices.size, `${label}: distinct vertices`);
+  if (page?.ready && row.path === 'gpu') {
+    // The GPU path: the corner pass's resolved dwords (every face's own at
+    // full detail).
+    const all = new Set(original.faces.flatMap(face => face.vertices ?? []));
+    assert.equal(page.gpuFaces, admitted.length, `${label}: faces the GPU resolves`);
+    assert.equal(page.gpuVertices, finalActive ? vertices.size : all.size, `${label}: vertices the GPU resolves`);
+    tally.pageCompared++; tally.gpu = (tally.gpu ?? 0) + 1;
+  } else if (page?.ready) {
     if (finalActive) {
       assert.ok(page.lod, `${label}: the page draws the reduced faces`);
       assert.equal(page.lod.faces, admitted.length, `${label}: faces the page draws`);
@@ -133,4 +154,4 @@ for (const check of checks) {
 console.log(`validate-lodmesh-lod-play: PASS (${map}${query ? `, ${query}` : ''}: ${tally.rows} drawn LOD rows over ${samples.length} views, ` +
   `${tally.meshes} meshes; ${tally.active} with reduced topology, ${tally.morph} morphing, ${tally.reduced} below ModelVerts ` +
   `(down to ${tally.minCount === Infinity ? '-' : tally.minCount}); the selection, flags, start, admitted faces and vertices equal ` +
-  `the original's, and the page draws them (${tally.pageCompared} compared))`);
+  `the original's, and the page draws them (${tally.pageCompared} compared, ${tally.gpu ?? 0} on the GPU path))`);

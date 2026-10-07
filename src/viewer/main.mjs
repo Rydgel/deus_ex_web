@@ -546,6 +546,8 @@ async function loadMap(name) {
         itemStats:()=>actorSim.itemSlots?.().map(({actor,ids})=>({actor,slots:ids.length,
           drawn:ids.filter(id=>id!==null&&drawOf(id)?.root.visible).length}))??null,
         batchStats:()=>draw.batchStats(),proceduralTextures:()=>draw.proceduralTextures(),
+        /** Validation only (?sim=inline): URender's LOD settings (actor-mesh-sim.mjs). */
+        setLodSettings:settings=>actorSim.setLodSettings?.(settings)??null,resetLodSettings:()=>actorSim.resetLodSettings?.(),
         dispose(){draw.dispose();}};
     }
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextHost.hudTextures}):null;

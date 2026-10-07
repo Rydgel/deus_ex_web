@@ -66,6 +66,23 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
     return entry;
   };
   return {topology,
+    /** Every frame vertex a corner of `faceIndices` can draw under any
+     * count: its wedge collapse chain's vertices and their collapse targets
+     * (a morph moves a vertex toward its target), sorted. */
+    closure(faceIndices){
+      const {faces:wedgesOf,wedges,collapseWedges,collapsePoints}=topology,set=new Set();
+      for(const face of faceIndices)for(let corner=0;corner<3;corner++){
+        let wedge=wedgesOf[face*4+corner];
+        for(let steps=0;steps<=wedges.length;steps++){
+          const vertex=wedges[wedge]&0xffff;
+          set.add(vertex+special);set.add(collapsePoints[vertex]+special);
+          const next=collapseWedges[wedge];
+          if(next===wedge)break;
+          wedge=next;
+        }
+      }
+      return [...set].sort((a,b)=>a-b);
+    },
     /** The selection for this frame (selectLodMesh) from the actor's
      * Location, DrawScale and LODBias. */
     select(frame,location,drawScale,lodBias){

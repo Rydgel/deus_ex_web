@@ -70,14 +70,27 @@ void main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-
 
 // Per-slot parameter rows (uParamsU RGBA32UI, uParamsF RGBA32F), one row per slot:
 // U0 keyBase,V,faceBase,F   U1 vertBase(mesh CSR),vbase,fbase,cbase
-// U2 actorFlags,lightStart,poseFrame,lightFrame   U3 environment,lightCount,0,0
+// U2 actorFlags,lightStart,poseFrame,lightFrame   U3 environment,lightCount,wedgeBase,special
 // U4+k channel k (main, blend 0..3): mode(0 off,1 keyframe,2 tween),first,second,blend
+// U9 channels 0..3, U10.x channel 4: GetFrame count | fill start << 16
+// U10.yzw the LOD: returned ordinary count C, morph start (int), flags (1 LOD, 2 morph)
+// U11 lodFrame, the morph's inverse (float bits), 0, 0
 // F0 matrix row 0 (m0)  F1..F3 rows 1..3  F4 mesh origin  F5+k channel alpha
 // F10 ambient rgb, ScaleGlow*1.4 (24-bit)   F11 unlit rgb
 export const PARAMS=`
 uniform usampler2D uParamsU;uniform sampler2D uParamsF;
 uvec4 pu(uint slot,int k){return texelFetch(uParamsU,ivec2(k,int(slot)),0);}
 vec4 pf(uint slot,int k){return texelFetch(uParamsF,ivec2(k,int(slot)),0);}
+`;
+
+// The resolved corner dwords (RESOLVE_FRAGMENT) and the LOD vertex lists
+// (gpu-mesh-layout.mjs lodVertexLists): a corner's vertex, and whether a
+// list entry is a corner that resolved to this vertex.
+export const CORNERS=`
+uniform usampler2D uCornerWedges,uLodVertices,uLodLists;
+const uint DROPPED=0xfffffffeu;
+uint cornerWedge(uint cbase,uint corner){return texelFetch(uCornerWedges,at(cbase+corner),0).x;}
+uint lodEntry(uint k){uvec4 v=texelFetch(uLodLists,at(k>>2),0);uint c=k&3u;return c==0u?v.x:c==1u?v.y:c==2u?v.z:v.w;}
 `;
 
 /** Pose pass: GetFrame's interpolation and publication (lodmesh-frame.mjs
@@ -107,13 +120,21 @@ void main(){
     if(pu(slot,2).z==uFrame){
       uvec4 u0=pu(slot,0);uint keyBase=u0.x,V=u0.y;
       vec3 m0=pf(slot,0).xyz,r1=pf(slot,1).xyz,r2=pf(slot,2).xyz,r3=pf(slot,3).xyz,origin=pf(slot,4).xyz;
-      vec3 outp=vec3(0.0);
+      uvec4 u9=pu(slot,9);uint counts[5];counts[0]=u9.x;counts[1]=u9.y;counts[2]=u9.z;counts[3]=u9.w;counts[4]=pu(slot,10).x;
+      // A vertex at or above a channel's count keeps its cache pose and the
+      // output it had (GetFrame's loops stop at the count).
+      vec3 outp=prevPose.xyz;
       for(int k=0;k<5;k++){
         uvec4 ch=pu(slot,4+k);
         if(ch.x==0u)continue;
+        uint count=counts[k]&0xffffu,fill=counts[k]>>16;
+        if(i>=count)continue;
         float alpha=pf(slot,5+k).x;
         vec3 pose;
-        if(ch.x==1u){vec3 a=key(keyBase,V,ch.y,i);pose=alpha>0.0?interpolate(a,key(keyBase,V,ch.z,i),alpha):a;}
+        // A tween's count expansion fills the cache from the target frame
+        // (its alpha is then 0).
+        if(i>=fill)pose=key(keyBase,V,ch.z,i);
+        else if(ch.x==1u){vec3 a=key(keyBase,V,ch.y,i);pose=alpha>0.0?interpolate(a,key(keyBase,V,ch.z,i),alpha):a;}
         else pose=alpha>0.0?interpolate(s[k].xyz,key(keyBase,V,ch.z,i),alpha):s[k].xyz;
         s[k]=vec4(pose,1.0);
         if(ch.w==0u){
@@ -132,6 +153,72 @@ void main(){
   oState0=s[0];oState1=s[1];oState2=s[2];oState3=s[3];oState4=s[4];
 }`;
 
+/** Morph pass: DrawLodMesh's post-frame range 0x10b0ee34..0x10b0ef6e
+ * (lodmesh-lod.mjs morphLodMesh) on the posed vertices, into the final
+ * pose the lighting and the draw read; w is the vertex's stored alpha (0
+ * outside the morph). A slot neither posed nor re-selected this frame keeps
+ * its final pose. */
+export const MORPH_FRAGMENT=`${COMMON}${PARAMS}
+uniform usampler2D uVertexMap,uLodVertices;uniform sampler2D uPose;uniform uint uFrame;
+out vec4 oFinal;
+void main(){
+  uint t=texelIndex();uvec2 map=texelFetch(uVertexMap,at(t),0).xy;
+  if(map.x==0u)discard;
+  uint slot=map.x-1u;uvec4 u2=pu(slot,2),u10=pu(slot,10),u11=pu(slot,11);
+  if(u2.z!=uFrame&&u11.x!=uFrame)discard;
+  vec4 p=texelFetch(uPose,at(t),0);
+  oFinal=vec4(p.xyz,0.0);
+  uint special=pu(slot,3).w,i=map.y;
+  if((u10.w&2u)==0u||i<special)return;
+  int o=int(i-special),start=int(u10.z);
+  if(o<=start||o>=int(u10.y))return;
+  float alpha=B(float(o-start)*uintBitsToFloat(u11.y));
+  if(!(1.0>alpha))alpha=1.0;
+  uvec4 u1=pu(slot,1);uint target=texelFetch(uLodVertices,at(u1.x+i),0).z;
+  if(target==0u)return;
+  vec3 T=texelFetch(uPose,at(u1.y+special+target),0).xyz;
+  oFinal=vec4(B(B(B(T.x-p.x)*alpha)+p.x),B(B(B(T.y-p.y)*alpha)+p.y),B(B(B(T.z-p.z)*alpha)+p.z),alpha);
+}`;
+
+/** Corner pass for the LOD: DrawLodMesh 0x10b0fc6f..0x10b0fe60
+ * (lodmesh-lod.mjs lodMeshCorners): each slot corner's packed wedge dword
+ * (vertex word, U, V); 0xffffffff for a face above the count, 0xfffffffe
+ * for a wedge that never collapses below it (the original loops forever).
+ * Without the LOD flag the corner's own wedge. Run when the slot's LOD
+ * parameters changed; otherwise its dwords stay. */
+export const RESOLVE_FRAGMENT=`${COMMON}${PARAMS}
+uniform usampler2D uCornerMap,uLodFaces,uWedges;uniform sampler2D uFinal;uniform uint uFrame;
+out uint oWedge;
+uint lerpByte(uint from,uint to,float alpha){
+  float value=B(B(float(int(to)-int(from))*alpha)+float(from));return uint(int(roundEven(value)))&255u;}
+void main(){
+  uint t=texelIndex();uvec2 map=texelFetch(uCornerMap,at(t),0).xy;
+  if(map.x==0u)discard;
+  uint slot=map.x-1u;uvec4 u10=pu(slot,10);
+  if(pu(slot,11).x!=uFrame)discard;
+  uvec4 u0=pu(slot,0),u1=pu(slot,1),u3=pu(slot,3);
+  uint f=map.y/3u,k=map.y-f*3u;
+  uvec4 face=texelFetch(uLodFaces,at(u0.z+f),0);
+  uint own=k==0u?face.x:k==1u?face.y:face.z;
+  uvec2 wedge=texelFetch(uWedges,at(u3.z+own),0).xy;
+  if((u10.w&1u)==0u){oWedge=wedge.x;return;}
+  uint count=u10.y;
+  if(face.w>count){oWedge=0xffffffffu;return;}
+  uint x=own,packed=wedge.x,next=wedge.y;
+  for(int n=0;n<64&&(packed&0xffffu)>=count;n++){x=next;uvec2 e=texelFetch(uWedges,at(u3.z+x),0).xy;packed=e.x;next=e.y;}
+  if((packed&0xffffu)>=count){oWedge=0xfffffffeu;return;}
+  uint vertex=packed&0xffffu;
+  if((u10.w&2u)!=0u&&int(vertex)>int(u10.z)){
+    float alpha=texelFetch(uFinal,at(u1.y+u3.w+vertex),0).w;
+    if(floatBitsToUint(alpha)!=0u&&next!=x){
+      uint other=texelFetch(uWedges,at(u3.z+next),0).x;
+      uint u=(packed>>16)&255u,v=packed>>24,nu=(other>>16)&255u,nv=other>>24;
+      if(u!=nu||v!=nv)packed=vertex|(lerpByte(u,nu,alpha)<<16)|(lerpByte(v,nv,alpha)<<24);
+    }
+  }
+  oWedge=packed;
+}`;
+
 // The lighting frame's camera transform (kernel camera_component):
 // TransformPointBy at the render pass's 24 bits, (d.x*A.x + d.y*A.y) + d.z*A.z.
 export const CAMERA=`
@@ -145,7 +232,7 @@ vec3 toCamera(vec3 p){return vec3(cameraComponent(p,uCameraX),cameraComponent(p,
 /** Face pass: DrawLodMesh 0x10b0fe60..0x10b0ffc9 (kernel light_mesh_job's
  * face loop) in camera space; w = 0 not drawn, 1 drawn, 2 drawn and
  * PF_Unlit. Attachment 1: meshFaceNormal on the world pose. */
-export const FACE_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}
+export const FACE_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}${CORNERS}
 uniform usampler2D uFaceMap,uMeshFaces;uniform sampler2D uPose;uniform uint uFrame;
 layout(location=0) out vec4 oFace;layout(location=1) out vec4 oEnvironment;
 void main(){
@@ -156,8 +243,14 @@ void main(){
   if(!lit&&!environment)discard;
   uvec4 u0=pu(slot,0),u1=pu(slot,1);
   uvec4 face=texelFetch(uMeshFaces,at(u0.z+map.y),0);
-  vec3 w0=texelFetch(uPose,at(u1.y+face.x),0).xyz,w1=texelFetch(uPose,at(u1.y+face.y),0).xyz,w2=texelFetch(uPose,at(u1.y+face.z),0).xyz;
+  // The corners' vertices from their resolved wedges (the LOD's collapsed
+  // ones; at full detail the face's own). A dropped face adds nothing.
+  uint c0=cornerWedge(u1.w,map.y*3u),c1=cornerWedge(u1.w,map.y*3u+1u),c2=cornerWedge(u1.w,map.y*3u+2u);
   oFace=vec4(0.0);oEnvironment=vec4(0.0);
+  if(c0>=DROPPED||c1>=DROPPED||c2>=DROPPED)return;
+  uint special=pu(slot,3).w;
+  face.xyz=uvec3(special+(c0&0xffffu),special+(c1&0xffffu),special+(c2&0xffffu));
+  vec3 w0=texelFetch(uPose,at(u1.y+face.x),0).xyz,w1=texelFetch(uPose,at(u1.y+face.y),0).xyz,w2=texelFetch(uPose,at(u1.y+face.z),0).xyz;
   if(lit){
     vec3 p0=toCamera(w0),p1=toCamera(w1),p2=toCamera(w2);
     // DrawLodMesh 0x10b0fe60..0x10b0ffbb at 24 bits (accumulateFaceNormal, faceDot).
@@ -181,7 +274,7 @@ void main(){
 
 /** Vertex pass: the kernel's vertex normal, normal plane and light_vertex;
  * attachment 1 the environment vertex normal (meshVertexNormalsInto). */
-export const VERTEX_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}
+export const VERTEX_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}${CORNERS}
 uniform usampler2D uVertexMap,uMeshVertices,uAdjacency;uniform sampler2D uPose,uFaces,uEnvironmentFaces,uLights;
 uniform uint uFrame;
 layout(location=0) out vec4 oLight;layout(location=1) out vec4 oEnvironment;
@@ -192,10 +285,20 @@ void main(){
   uint slot=map.x-1u;uvec4 u2=pu(slot,2),u3=pu(slot,3);
   bool lit=u2.w==uFrame,environment=u3.x!=0u&&u2.z==uFrame;
   if(!lit&&!environment)discard;
-  uvec4 u1=pu(slot,1);uvec2 list=texelFetch(uMeshVertices,at(u1.x+map.y),0).xy;
+  uvec4 u1=pu(slot,1);
   vec3 N=vec3(0.0),E=vec3(0.0);
+  // The faces containing the vertex in face order: at full detail its own
+  // list; with the LOD the list entries whose corner resolved to it.
+  // Below ModelVerts corners may collapse; at the full count (a morph alone)
+  // every corner keeps its own vertex, so the exact list holds (a dropped
+  // face there adds a zero normal and is not drawn).
+  uvec4 lodRow=pu(slot,10);bool lod=(lodRow.w&1u)!=0u&&lodRow.y<pu(slot,0).y-pu(slot,3).w;
+  uvec2 list=lod?texelFetch(uLodVertices,at(u1.x+map.y),0).xy:texelFetch(uMeshVertices,at(u1.x+map.y),0).xy;
   for(uint j=0u;j<list.y;j++){
-    uint face=u1.z+adjacent(list.x+j);
+    uint face;
+    if(lod){uint e=lodEntry(list.x+j),c=cornerWedge(u1.w,(e>>2)*3u+(e&3u));
+      if(c>=DROPPED||u3.w+(c&0xffffu)!=map.y)continue;face=u1.z+(e>>2);}
+    else face=u1.z+adjacent(list.x+j);
     if(lit){vec3 n=texelFetch(uFaces,at(face),0).xyz;N=vec3(B(n.x+N.x),B(n.y+N.y),B(n.z+N.z));}
     if(u3.x!=0u){vec3 n=texelFetch(uEnvironmentFaces,at(face),0).xyz;E=vec3(B(E.x+n.x),B(E.y+n.y),B(E.z+n.z));}
   }
@@ -250,7 +353,7 @@ void main(){
  * vertices no drawn face contains are white; a drawn PF_Unlit face at or
  * before this face that contains the vertex replaces its light with the unlit
  * colour (the in-order overwrite); diffuse bytes are FISTP(L*255). */
-export const CORNER_FRAGMENT=`${COMMON}${PARAMS}
+export const CORNER_FRAGMENT=`${COMMON}${PARAMS}${CORNERS}
 uniform usampler2D uCornerMap,uMeshFaces,uMeshVertices,uAdjacency;uniform sampler2D uFaces,uLight;uniform uint uFrame;
 out uvec4 oColor;
 uint adjacent(uint k){uvec4 v=texelFetch(uAdjacency,at(k>>2),0);uint c=k&3u;return c==0u?v.x:c==1u?v.y:c==2u?v.z:v.w;}
@@ -263,12 +366,22 @@ void main(){
   uvec4 u0=pu(slot,0),u1=pu(slot,1);
   uint f=map.y/3u,k=map.y-f*3u;
   uvec4 face=texelFetch(uMeshFaces,at(u0.z+f),0);
-  uint v=k==0u?face.x:k==1u?face.y:face.z;
+  uint c=cornerWedge(u1.w,map.y);
+  if(c>=DROPPED){oColor=uvec4(255u,255u,255u,1u);return;}
+  uint special=pu(slot,3).w,v=special+(c&0xffffu);
   if(((face.w|u2.x)&0x40u)!=0u){oColor=uvec4(255u,255u,255u,1u);return;}
-  uvec2 list=texelFetch(uMeshVertices,at(u1.x+v),0).xy;
+  // Below ModelVerts corners may collapse; at the full count (a morph alone)
+  // every corner keeps its own vertex, so the exact list holds (a dropped
+  // face there adds a zero normal and is not drawn).
+  uvec4 lodRow=pu(slot,10);bool lod=(lodRow.w&1u)!=0u&&lodRow.y<pu(slot,0).y-pu(slot,3).w;
+  uvec2 list=lod?texelFetch(uLodVertices,at(u1.x+v),0).xy:texelFetch(uMeshVertices,at(u1.x+v),0).xy;
   bool lit=false,unlit=false;
   for(uint j=0u;j<list.y;j++){
-    uint other=adjacent(list.x+j);float w=texelFetch(uFaces,at(u1.z+other),0).w;
+    uint other;
+    if(lod){uint e=lodEntry(list.x+j),o=cornerWedge(u1.w,(e>>2)*3u+(e&3u));
+      if(o>=DROPPED||special+(o&0xffffu)!=v)continue;other=e>>2;}
+    else other=adjacent(list.x+j);
+    float w=texelFetch(uFaces,at(u1.z+other),0).w;
     if(w>0.5){lit=true;if(w>1.5&&other<=f)unlit=true;}
   }
   if(!lit){oColor=uvec4(255u,255u,255u,1u);return;}

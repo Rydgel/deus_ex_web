@@ -779,6 +779,30 @@ Training and Island. The Load/Save Game screens stop at the save-game
 directory (native 3013, Stage 6). See
 [ListWindow family](script-window-list-family.md).
 
+**Mesh distance LOD (2026-10-07).** DrawLodMesh's LOD now runs in Play on
+both mesh paths: the requested vertex count from distance, FOV, frame width,
+DrawScale and LODBias, GetFrame at that count, the vertex morph toward the
+collapse targets, FaceLevel admission, the wedge collapse and the
+interpolated U/V bytes, with the normals, lighting and draw over the reduced
+faces.
+- *Evidence.* Re-derived from Render.dll at the render pass's 24 bits: the
+  morph gate is byte +48 bit 0, appTan's extended FPTAN result is stored once
+  as a float (a real-x87 probe under Wine confirms the model on 208,181
+  FOVs), and URender::Init's 0.25/1/1/1 are the shipped settings. 228 oracle
+  cases over six meshes are bit-equal for the JavaScript reference and the
+  Rust kernel; at 0x037f the oracle differs in 665 checks.
+- *Play.* `validate-lodmesh-lod-play` checks every drawn binding's selection,
+  flags, start, admitted faces and vertices against the original ranges in
+  worker mode (Island: 108 drawn rows, 59 morphing, 8 below ModelVerts, on
+  both paths); the GPU morph and corner passes are bit-equal with the CPU
+  path in `validate-gpu-mesh` (201 LOD captures, 96 with dropped faces). GPU
+  time per frame 2.02 → 2.05 ms on Island (A/B). `?meshLod=off` draws full
+  detail.
+- *Left.* The morph rounds in Play's world space (the original's GetFrame
+  output is camera space), mirror frames reuse the main frame's selection,
+  and the particle and wire branches are not ported. See
+  [LOD](script-lodmesh-lod.md).
+
 **Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and
 wired: WinDrv's window procedure, XGameEngineExt::Key, UEngine::Key
 (Console.KeyType), XInputExt::Key, XRootWindow::Key/HandleKeyboard and the

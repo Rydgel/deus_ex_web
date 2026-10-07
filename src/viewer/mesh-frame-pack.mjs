@@ -8,7 +8,7 @@
  * Plan at `at`: matrix (4 rows of 3 floats), origin (3 floats), the channel
  * op count n, then n ops of 8 words: state (the channel + 1, the base
  * channel being -1), tween, first, second, blend, alpha (float), count,
- * fill.
+ * fill start (the count without a tween fill).
  * Lighting at `at`: flags, ambient (3 floats), ScaleGlow (float), unlit (3
  * floats), the light count n, then n lights of 7 floats: location, rradius,
  * colour. */
@@ -34,7 +34,7 @@ export function createMeshFramePack(capacity = 8192) {
       ops.forEach((op, k) => {
         const base = at + PLAN_HEAD + PLAN_OP * k;
         u32[base] = op.channel + 1; u32[base + 1] = op.tween ? 1 : 0; u32[base + 2] = op.first; u32[base + 3] = op.second;
-        u32[base + 4] = op.blend ? 1 : 0; f32[base + 5] = op.alpha; u32[base + 6] = op.count; u32[base + 7] = op.fill ? 1 : 0;
+        u32[base + 4] = op.blend ? 1 : 0; f32[base + 5] = op.alpha; u32[base + 6] = op.count; u32[base + 7] = op.fill ? op.fill[0] : op.count;
       });
       return at;
     },
