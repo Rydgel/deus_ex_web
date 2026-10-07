@@ -227,23 +227,26 @@ through ListWindow.uc's VirtualKeyPressed, and Escape. A local probe that ran
 the original `AllImages` cheat exec (35 images) also showed the Images list
 selecting its first image and displaying it through ListSelectionChanged.
 
-## Handoff (2026-10-06, work stopped at the usage limit)
+## Status (2026-10-07)
 
-* Done and verified: the family (commits 35a4347, 3727626), the family diff
-  280/280 with 19/19 mutations, `validate-window-list-play.mjs` (passes), the
-  window validator sweep (82 passed, scene-frame skipped as before),
-  text-layout-diff, datacube-read, keypad, the 14 per-native list validators,
-  `npm test` 598/598. Census: 11/11 on 00_Training in one process; on
-  01_NYC_UNATCOIsland all 11 open, draw and close, but split over two
-  processes (8 + 3).
-* Not yet verified: the one-process Island census died creating its ninth
-  game at `EventHost.attach` (`script-vm-events.mjs`): a DataView captured
-  before the call-cache `arena.alloc` was stale after that allocation grew
-  the Wasm memory. The fix (re-read `arena.view` after the allocation) is in
-  this WIP commit; the rerun was interrupted.
-* Next: rerun `node scripts/census-ui-screens.mjs --map 01_NYC_UNATCOIsland`
-  (expect 11/11 in one process), then `npm test` and
-  `node scripts/run-validators.mjs --filter validate-window --jobs 2`.
+Complete for the persona list screens; open items below.
+
+* Family diff: 280/280 identical (69 natives, 14 list bodies, the scale
+  draw), 19/19 mutations detected.
+* `validate-window-list-play.mjs` passes; the window validator sweep is 83
+  passed, 1 skipped (`validate-window-scene-frame`, skipped before this work),
+  0 failed; `npm test` 598/598; text-layout-diff, datacube-read, keypad and
+  the 14 per-native list validators pass.
+* `scripts/census-ui-screens.mjs` now runs each screen in its own child Node
+  process, so memory no longer piles up across games (a single process ran out
+  of its 4 GB JavaScript heap at the ninth Island game). 11 of 11 screens open,
+  draw and close on both 00_Training and 01_NYC_UNATCOIsland.
+  `--screens MenuScreenLoadGame,MenuScreenSaveGame` records both at native
+  3013 (below).
+* `EventHost.attach` (`src/runtime/script-vm-events.mjs`) re-reads the arena
+  view after the call-cache allocation: that allocation can grow the Wasm
+  memory and detach the view taken before it (seen creating the ninth game in
+  one process).
 
 ## Boundaries and open items
 
