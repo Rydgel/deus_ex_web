@@ -776,9 +776,16 @@ now admitted in Play's window host:
 caught. The Conversations, Images and Logs screens open, draw and close in
 Play, and `scripts/census-ui-screens.mjs` passes 11 of 11 player screens on
 Training and Island. The Load/Save Game screens stop at the save-game
-directory (native 3013, Stage 6). List hot keys are translated, but typed
-characters don't reach windows in Play yet. See
+directory (native 3013, Stage 6). See
 [ListWindow family](script-window-list-family.md).
+
+**Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and
+wired: WinDrv's window procedure, XGameEngineExt::Key, UEngine::Key
+(Console.KeyType), XInputExt::Key, XRootWindow::Key/HandleKeyboard and the
+KeyPressed bodies with Alt accelerators. 15 oracle cases (81 steps) are
+identical and 12 mutations are caught. Play types into the Say line, Goals
+notes, the New Game name and a computer login, and reaches list hot keys
+and accelerators. See [typed characters](script-window-typed-keys.md).
 
 ## 5. Implement the full gameplay systems
 

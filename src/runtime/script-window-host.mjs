@@ -79,6 +79,7 @@ import {rootRenderViewport} from './script-root-render-viewport.mjs';
 import {setToggleNative} from './script-window-toggle-set.mjs';
 import * as Timers from './script-window-timers.mjs';
 import * as Input from './script-window-input.mjs';
+import * as TK from './script-window-typed-keys.mjs';
 import * as Mouse from './script-window-mouse.mjs';
 import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
 import {activateButtonNative} from './script-window-activate-button.mjs';
@@ -92,6 +93,8 @@ import {editMemory, cleanUpUndo, setTextVirtual, textChangedRange} from './scrip
 import {dispatchEditWindowNative} from './script-window-edit-natives.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
 import {enableTextAsAcceleratorNative} from './script-window-text.mjs';
+import {textWindowGetText} from './script-text-get-text.mjs';
+import {textWindowGetTextLength} from './script-text-get-text-length.mjs';
 import {releaseHandle} from './script-object-handles.mjs';
 
 const f = Math.fround;
@@ -192,6 +195,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const root=runtime.readNamed(actor,'rootWindow');
       return Boolean(root&&Input.rootProcess(W,root,key,action,delta));
     },
+    // XInputExt::Key 0x1002d2b0's IsA(APlayerPawnExt) and XRootWindow::Key.
+    isPlayerPawnExt:actor=>isA(actor,'extension.playerpawnext'),
+    rootKey:(root,key)=>TK.rootKey(W,root,key),
     hostBinding:(key,action)=>input.hostBinding(key,action),
     flushRenderDevice:allow=>input.flushRenderDevice?.(allow),
     // ResetInput clears UInput's held table before WinDrv polls the platform.
@@ -860,12 +866,26 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // EditActivated 0x10004050 are script bridges with a bool result.
     textChanged: (win, edit, modified) => processScript(win, 'TextChanged', [edit, Boolean(modified)], {result: false}) ? 1 : 0,
     editActivated: (win, edit, modified) => processScript(win, 'EditActivated', [edit, Boolean(modified)], {result: false}) ? 1 : 0,
-    // vtable +0xc8 KeyPressed: only XEditWindow's 0x10021290 is recovered; the
-    // root's typed-character route that reaches it is not.
+    // vtable +0xc8 KeyPressed, reached by the root's typed-character route
+    // (XRootWindow::HandleKeyboard, docs/script-window-typed-keys.md): Edit
+    // 0x10021290, List 0x10033ae0, Modal and Root 0x10037510, every other
+    // admitted family the XWindow bridge 0x10003830.
     keyPressed(win, key) {
-      if (is(win, 'extension.editwindow')) return ED.editKeyPressed(W, win, key, editEnv);
-      if (is(win, 'extension.listwindow')) return LIST.listKeyPressed(W, win, key, listEnv); // 0x10033ae0
-      return boundary('XWindow::KeyPressed 0x10003830 is not recovered');
+      switch (TK.keyPressedBody(familyOf(win))) {
+        case 'XEditWindow::KeyPressed': return ED.editKeyPressed(W, win, key, editEnv);
+        case 'XListWindow::KeyPressed': return LIST.listKeyPressed(W, win, key, listEnv);
+        case 'XModalWindow::KeyPressed': return TK.modalKeyPressed(W, win, key,
+          {processScript, buildAcceleratorTable: F.buildAcceleratorTable, getRootWindow: T.getRootWindow,
+            topChild: T.topChild, lowerSibling: T.lowerSibling});
+        default: return TK.windowKeyPressed(processScript, win, key);
+      }
+    },
+    // vtable +0xd0: XWindow::AcceleratorKeyPressed 0x10003a80 in every family.
+    acceleratorKeyPressed: (win, key) => TK.windowAcceleratorKeyPressed(processScript, win, key),
+    // Root vtable +0x128: XRootWindow::HandleKeyboard 0x1003b720.
+    handleKeyboard(root, key) {
+      if (!is(root, 'extension.rootwindow')) boundary('HandleKeyboard reached a non-root window');
+      return TK.handleKeyboard(W, root, key, {topChild: T.topChild, lowerSibling: T.lowerSibling, getRootWindow: T.getRootWindow});
     },
   };
   // Mouse position, hit-test and focus virtuals (vtable +0x60, +0x8c,
@@ -1013,7 +1033,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const editGlobals = {emptyWString: heap.allocRaw(4), clipboard: heap.allocRaw(12), convertBuffer: heap.allocRaw(12),
     convertFlag: heap.allocRaw(4), convertRun: heap.allocRaw(0x1000), charSlot: heap.allocRaw(8), scratchInsert: heap.allocRaw(12),
-    keyBuffer: heap.allocRaw(4), scratchCopy: heap.allocRaw(12)};
+    keyBuffer: heap.allocRaw(4), scratchCopy: heap.allocRaw(12), textResult: heap.allocRaw(12)};
   const editMem = {...heap.mem, ...editGlobals,
     alloc: size => heap.allocRaw(size),
     readString(address) { let text = ''; for (let at = address; ; at += 2) { const unit = heap.mem.read(at, 'u16'); if (!unit) return text; text += String.fromCharCode(unit); } },
@@ -1377,6 +1397,19 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if(call.index===1860||(call.index>=1880&&call.index<=1921)){
         const edit=dispatchEditWindowNative(W,call,{editServices,textServices:editServices,edit:editEnv});if(edit.handled)return edit;
       }
+      // TextWindow.GetText 1552 (exec 0x10046cd0: the +0x168 FString copied
+      // into the result) and GetTextLength 1553 (0x10046d70), the validated
+      // script-text-get-text*.mjs bodies over a result cell.
+      if(call.index===1552||call.index===1553){
+        if(call.argumentCount!==0)boundary(`TextWindow native ${call.index} takes no parameters`);
+        const out=editGlobals.textResult;
+        if(call.index===1553){textWindowGetTextLength(call.receiver,out,editServices);return {handled:true,value:heap.mem.read(out,'i32')};}
+        for(let i=0;i<12;i+=4)heap.mem.write(out+i,'u32',0);
+        textWindowGetText(call.receiver,out,editServices);
+        const value=editMem.readString(heap.mem.read(out,'u32')||editGlobals.emptyWString);
+        const data=heap.mem.read(out,'u32');if(data)heap.mem.free(data);
+        return {handled:true,value};
+      }
       const gc=dispatchGcNative(heap,gcServices,call);
       return gc.handled?gc:dispatchWindowHostNative(W,call);
     },
@@ -1527,6 +1560,14 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       else if(action===3&&key>=0&&key<input.platformKeys.length)input.platformKeys[key]=0;
       try{return consoleCommands.inputEvent(key,action,delta);}
       finally{Object.assign(input,saved);}
+    },
+    /** One WM_CHAR/WM_SYSCHAR character unit from the platform: WinDrv's
+     * ViewportWndProc drops 0x0d, then Client->Engine->Key (XGameEngineExt::Key,
+     * docs/script-window-typed-keys.md). Returns {handled, console}. */
+    typedKey(char){
+      if(!Number.isInteger(char)||char<0||char>0xffff)throw new TypeError('A typed character is one UTF-16 code unit');
+      if(char===0x0d)return {handled:false,console:false,filtered:true};
+      return consoleCommands.key(char);
     },
     /** Platform-side ResetInput. Blur/hidden handlers pass releasePhysical;
      * other native reset sites preserve the event-fed physical snapshot. */

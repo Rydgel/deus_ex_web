@@ -538,7 +538,8 @@ method('mouseButtonReleased double outside', {prep: pressed}, 'mouseButtonReleas
 method('mouseButtonReleased double hidden', {prep: pressed, parentHidden: true}, 'mouseButtonReleased', [4, 20, 1, 3]);
 method('mouseButtonReleased right', {prep: pressed}, 'mouseButtonReleased', [4, 20, 2, 2], {scriptResult: 1});
 const hotRows = [...rowsABC, [1730, 'Golf;1'], [1730, 'apple;2'], [1730, 'avocado;3']];
-for (const [key, tag] of [[0x67, 'g'], [0x41, 'A'], [0x5f, 'underscore'], [0x2e, 'dot'], [0, 'nul']])
+for (const [key, tag] of [[0x67, 'g'], [0x41, 'A'], [0x5f, 'underscore'], [0x2e, 'dot'], [0, 'nul'],
+  [0xe9, 'e-acute'], [0x20ac, 'euro'], [0x08, 'backspace']])
   method(`keyPressed ${tag}`, {prep: hotRows}, 'keyPressed', [key]);
 method('keyPressed repeat cycles', {prep: [...hotRows, [1751, '$row1']]}, 'keyPressed', [0x61], {hotKey: 'aa'});
 method('keyPressed prefix', {prep: hotRows}, 'keyPressed', [0x76], {hotKey: 'a'});
