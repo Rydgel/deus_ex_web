@@ -178,10 +178,16 @@ each saved polygon its Nodes admit, it writes the fragment's world points and
 the U and V dot products. `validate-decal-render.mjs` asks the oracle for
 frames (Training at random cameras and its mirror floor, Island, the Paris
 club tunnel's mirrors) with synthetic decals and compares every ClipDecal:
-655 cases, 258 nonempty, 1,078 points bit-equal in camera-space position, U
+762 cases, 286 nonempty, 1,192 points bit-equal in camera-space position, U
 and V, mirror child frames included. A 0.01-unit change to the lift fails it.
-The 107 mover cases are skipped (the mover rotation is not ported, as no
-shipped decal can attach to a mover surface).
+
+On a Mover's surface (`0x10b1bfa3..0x10b1c0df`), ClipDecal first turns each
+vertex by `GMath.UnitCoords *= FRotator(Actor.Rotation − MoverRotation)`
+(Core `0x1011ac80`, the tracker's `mul_rotator`) through an inlined
+TransformPointBy, at 24 bits. Of the 762 cases, 107 are on Mover surfaces
+and bit-equal; 13 of those are nonempty with a nonzero rotation delta. With
+the moving brush tracker, mover surfaces are in the level BSP, so this path
+is reachable. Play does not attach decals to them yet (see "Open").
 
 ## Play
 
@@ -230,8 +236,16 @@ Host choices, noted:
 
 ## Open
 
-- Movers: what the brush tracker writes into a mover surface's base and
-  normal (with the tracker itself, [BSP occlusion](bsp-occlusion.md)), and
-  ClipDecal's mover rotation.
+- Movers. With the brush tracker
+  ([brush tracker](brush-tracker.md)), mover fragments are solid nodes of
+  the level model. AttachDecal's trace can then hit a door, and its Mover
+  branch is reachable. That branch copies MoverRotation and calls
+  `SetBase(Owner, 1)` on the decal (`0x103e79d6..0x103e79fe`). The tracker
+  leaves a mover surface's Surf.Nodes empty, so its FDecal.Nodes are empty
+  and the decal block clips it against every fragment drawn.
+  - Still to do: the decal kernel's model and trace model built from the
+    tracked model, the Mover branch in decal.rs (fault 6 today), and the
+    mover rotation in `decal_clip_frame`.
+  - ClipDecal's mover rotation itself is ported and verified (above).
 - Decals in sky child frames.
 - The game-thread control word (above).

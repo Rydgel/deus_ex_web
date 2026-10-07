@@ -325,13 +325,13 @@ fn lt<F: Fp>(a: F, b: F) -> bool {
 // ---- Core's FCoords -----------------------------------------------------------------
 
 /// An FCoords as float bits: Origin, XAxis, YAxis, ZAxis.
-type Coords = [[u32; 3]; 4];
+pub(crate) type Coords = [[u32; 3]; 4];
 const ONE: u32 = 0x3f80_0000;
-const UNIT: Coords = [[0, 0, 0], [ONE, 0, 0], [0, ONE, 0], [0, 0, ONE]];
+pub(crate) const UNIT: Coords = [[0, 0, 0], [ONE, 0, 0], [0, ONE, 0], [0, 0, ONE]];
 
 /// FVector::TransformVectorBy (Core 0x10119e40): ((v.x*A.x + v.y*A.y) +
 /// v.z*A.z) per axis A, each output stored.
-fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
+pub(crate) fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
     let mut out = [0; 3];
     for k in 0..3 {
         let a = c[1 + k];
@@ -339,7 +339,7 @@ fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
     }
     out
 }
-fn ld3<F: Fp>(v: [u32; 3]) -> [F; 3] {
+pub(crate) fn ld3<F: Fp>(v: [u32; 3]) -> [F; 3] {
     [F::ld(v[0]), F::ld(v[1]), F::ld(v[2])]
 }
 /// FCoords::operator*=(FCoords) (0x1011a710): the origin through
@@ -363,7 +363,7 @@ const fn neg(b: u32) -> u32 {
     b ^ 0x8000_0000
 }
 /// FCoords::operator*=(FRotator) (0x1011ac80): yaw, pitch, roll.
-fn mul_rotator<F: Fp>(c: &mut Coords, r: [i32; 3]) {
+pub(crate) fn mul_rotator<F: Fp>(c: &mut Coords, r: [i32; 3]) {
     let (p, y, l) = (r[0], r[1], r[2]);
     compose::<F>(c, &[[0; 3], [cos(y), sin(y), 0], [neg(sin(y)), cos(y), 0], [0, 0, ONE]]);
     compose::<F>(c, &[[0; 3], [cos(p), 0, sin(p)], [0, ONE, 0], [neg(sin(p)), 0, cos(p)]]);

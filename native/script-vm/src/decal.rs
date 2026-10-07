@@ -1002,7 +1002,24 @@ fn fv(b: V) -> [f32; 3] {
 /// points `poly`): the fragment's world points and, per point, the U and V
 /// dot products before the division by DrawScale. Returns the count.
 fn clip_decal(coords: &[f32; 12], uncoords: &[f32; 12], base: [f32; 3], normal: [f32; 3], verts: &[[f32; 3]; 4],
-    poly: &[[f32; 3]], out: &mut [[f32; 5]; 24]) -> Result<usize, u32> {
+    poly: &[[f32; 3]], mover: Option<[i32; 3]>, out: &mut [[f32; 5]; 24]) -> Result<usize, u32> {
+    // On a Mover's surface (0x10b1bfa3..0x10b1c0df): each vertex through
+    // GMath.UnitCoords *= FRotator(Actor.Rotation - MoverRotation) (Core
+    // 0x1011ac80), as the inlined TransformPointBy, at the pass's 24 bits.
+    let mut rotated = *verts;
+    if let Some(delta) = mover {
+        use crate::tracker::{ld3, mul_rotator, tvb, Fp, P24, UNIT};
+        let mut c = UNIT;
+        mul_rotator::<P24>(&mut c, delta);
+        for v in rotated.iter_mut() {
+            let b = [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()];
+            let o = ld3::<P24>(c[0]);
+            let d = [P24::ld(b[0]).sub(o[0]), P24::ld(b[1]).sub(o[1]), P24::ld(b[2]).sub(o[2])];
+            let r = tvb::<P24>(d, &c);
+            *v = [f32::from_bits(r[0]), f32::from_bits(r[1]), f32::from_bits(r[2])];
+        }
+    }
+    let verts = &rotated;
     let mut n = normal;
     let ss = (n[0] * n[0] + n[1] * n[1]) + n[2] * n[2];
     if !((ss as f64) < 1e-8) {
@@ -1175,7 +1192,8 @@ pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u
                     if listed {
                         let vb = st.vertices(r);
                         let verts = [fv(vb[0]), fv(vb[1]), fv(vb[2]), fv(vb[3])];
-                        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], &mut frag) {
+                        // No FDecal is on a Mover surface yet (AttachDecal's Mover branch is fault 6).
+                        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], None, &mut frag) {
                             Ok(0) => {}
                             Ok(n) => {
                                 let need = 3 + 5 * n as u32;
@@ -1236,7 +1254,13 @@ pub extern "C" fn decal_clip_test(inp: u32, out: u32) -> u32 {
             poly[k] = [r(43 + 3 * k as u32), r(44 + 3 * k as u32), r(45 + 3 * k as u32)];
         }
         let mut frag = [[0f32; 5]; 24];
-        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], &mut frag) {
+        // Words 115..118: a Mover surface flag and Actor.Rotation - MoverRotation.
+        let mover = if word(inp + 4 * 115) != 0 {
+            Some([word(inp + 4 * 116) as i32, word(inp + 4 * 117) as i32, word(inp + 4 * 118) as i32])
+        } else {
+            None
+        };
+        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], mover, &mut frag) {
             Ok(n) => {
                 for k in 0..n {
                     for c in 0..5 {
