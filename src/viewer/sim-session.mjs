@@ -110,25 +110,37 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         if (found.length) strobeSurfaces.set(index, found);
       });
     }
-    // The level surfaces drawn (the brush tracker's fragment nodes, past the
-    // level model's, are movers' polygons: their light maps are the movers').
-    const drawn = new Set();
-    for (const node of visible.nodes) if (node < model.nodes.length) drawn.add(model.nodes[node].surface);
+    // A new TimeSeconds is needed for a flip, and some Strobe light to call.
+    timeSeconds = Math.fround(timeSeconds);
+    if (lights.strobe.time === timeSeconds) return;
+    let moving = null;
+    for (const light of scanned ?? [])
+      if ((light.values.LightType & 255) === 5 && surfaceLightClass(light.values) === 2) (moving ??= []).push(light);
+    if (!strobeSurfaces.size && !moving) return;
     const live = actor => {
       const values = { LightType: read(actor, 'LightType'), LightBrightness: read(actor, 'LightBrightness'), bStatic: read(actor, 'bStatic'),
         bNoDelete: read(actor, 'bNoDelete'), bDynamicLight: read(actor, 'bDynamicLight'), LightEffect: read(actor, 'LightEffect') };
       return (values.LightType & 255) === 5 && surfaceLightClass(values) === 1;
     };
-    let any = false;
-    for (const [surface, actors] of strobeSurfaces) if (drawn.has(surface) && actors.some(live)) { any = true; break; }
-    if (!any) for (const light of scanned ?? []) {
-      if ((light.values.LightType & 255) !== 5 || surfaceLightClass(light.values) !== 2) continue;
-      for (const surface of filterMovingLight(model, light.location, worldLightRadius(light.values), Boolean(light.values.bSpecialLit)))
-        if (drawn.has(surface)) { any = true; break; }
-      if (any) break;
+    // The level surfaces drawn (the brush tracker's fragment nodes, past the
+    // level model's, are movers' polygons: their light maps are the movers').
+    let any = false, drawn = null;
+    for (const node of visible.nodes) {
+      if (node >= model.nodes.length) continue;
+      const actors = strobeSurfaces.get(model.nodes[node].surface);
+      if (actors && actors.some(live)) { any = true; break; }
+    }
+    if (!any && moving) {
+      drawn = new Set();
+      for (const node of visible.nodes) if (node < model.nodes.length) drawn.add(model.nodes[node].surface);
+      for (const light of moving) {
+        for (const surface of filterMovingLight(model, light.location, worldLightRadius(light.values), Boolean(light.values.bSpecialLit)))
+          if (drawn.has(surface)) { any = true; break; }
+        if (any) break;
+      }
     }
     // The Strobe function's test (0x10b05b30): a new TimeSeconds flips the flag.
-    if (any && lights.strobe.time !== timeSeconds) { lights.strobe.time = timeSeconds; lights.strobe.flag ^= 1; }
+    if (any) { lights.strobe.time = timeSeconds; lights.strobe.flag ^= 1; }
   }
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
