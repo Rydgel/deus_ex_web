@@ -90,6 +90,7 @@ export async function createHudRenderer({assets,preload=[]}){
     if(pendingError)throw pendingError;
     count=0;current=null;camera.right=width;camera.bottom=height;camera.updateProjectionMatrix();
     for(const command of commands){
+      if(command.kind==='viewport')continue;
       const image=images.get(command.texture.key);
       if(!image){void imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
       draw({...command,image});

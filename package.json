@@ -18,6 +18,8 @@
     "validate:game": "node scripts/validate-game.mjs",
     "validate:viewer": "node scripts/validate-viewer.mjs",
     "export:training": "node scripts/export-map.mjs",
+    "build:embed": "node embed/build.mjs",
+    "build:terminal": "node embed/terminal/build.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

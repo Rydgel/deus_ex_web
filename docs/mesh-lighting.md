@@ -210,7 +210,8 @@ then multiplied by `fade · (1/255)`.
 Steady and BackdropLight do nothing; Pulse and SubtlePulse scale it by a
 `GMath` sine entry indexed by `Level.TimeSeconds`, `LightPeriod` and
 `LightPhase`; Blink and Strobe zero it on alternate phases; Flicker reads a
-per-frame random table at `0x10b4fa44`. The brightness is clamped to `[0, 1]`.
+per-frame random table at `0x10b4fa44`. The brightness is clamped to `[0, 1]`. Translated since 2026-10-07 ("LightType
+functions, Strobe and the noise" below).
 
 ## Light (`0x10b027f0`)
 
@@ -398,9 +399,98 @@ static model ([brush tracker](brush-tracker.md) "Collision"), and an actor
 whose region is set after GNewBrushTracker (one that moves) takes its leaf
 from the tracked BSP in the original.
 
+## LightType functions, Strobe and the noise (2026-10-07)
+
+**Contract.** ComputeFromActor (`0x10b05fa0`) calls URender::GlobalLighting
+through the render vtable (`[0x10b5a718]+0x88`, at `0x10b0611c`) with
+`animate = (ShowFlags >> 11) & 1` and the light's `LightBrightness·(1/255)`
+as the in/out brightness, before the colour product. GlobalLighting
+(`0x10b05e90`) indexes the type table `0x10b2a284`: Pulse `0x10b05a10`,
+Blink `0x10b05a90`, Flicker `0x10b05af0` (table A of the light noise at
+`0x10b4fa44`, at the low byte of the actor's address; below 0.5 the light is
+dark, otherwise `A·brightness`), Strobe `0x10b05b30` (dark while the global
+flag at `0x10b49ea8` is set; the flag flips whenever Level.TimeSeconds
+differs from the time kept at `0x10b49ea4`), SubtlePulse `0x10b05b90`;
+Steady and BackdropLight return the brightness. The clamp to `[0, 1]`
+follows. Everything runs inside the render pass at precision control 24.
+The same function and the same globals serve three callers: SetupForSurf's
+light maps, SetupForActor's meshes and Galaxy's ambient volume
+(Audio->Update, game thread, before PreRender, so at 64 bits and with the
+previous frame's table A).
+
+**Translation.** `static-lighting.mjs` `lightTypeBrightness` is the one
+body for all three (`brightness` in/out, `precision: 'pc64'` for Galaxy);
+the separate float form mesh-lighting.mjs had (Blink and Strobe only) is
+gone, and `finishSetup` takes the shared body. `light-globals.mjs` keeps,
+per runtime, what the original keeps in Render.dll's globals: one Strobe
+state, the light noise (advanced in the simulation, sim-session.mjs
+`begin`, from the game's shared appFrand stream), the previous frame's
+table A (Galaxy's) and the Flicker key. The key stands in for the actor's
+address (unreproducible: allocator history): the light's map export index
+for a map actor, else its Level.Actors slot, low byte, the same key the
+light maps use. The texture-palette types (8, 9) are not translated; mesh
+lighting keeps them steady and notes it. Census (`census-moving-lights.mjs`
+`lightTypes`): 122 Flicker, 128 Pulse, 13 SubtlePulse, 8 Strobe and 2
+BackdropLight map lights; no Blink and no palette light.
+
+**One Strobe flag.** The flag flips at most once per Level.TimeSeconds,
+on the first Strobe call of a frame, and only frames that make such a call
+flip it; every later call in the frame sees the flipped flag, so the order
+of the callers within a frame does not matter, only whether one calls.
+The simulation decides it for all three: SetupForActor's own calls (mesh
+lighting runs in the simulation), Galaxy's, and the light maps' calls,
+which `lightMapStrobe` (sim-session.mjs) derives from the main frame's
+drawn level surfaces: a drawn surface whose static light list holds a live
+class 1 Strobe light, or a moving class 2 Strobe light that the
+SetupDynamics filter puts on a drawn surface. The frame's flag goes to the
+page with the light noise (`frame.light.strobe`, world.mjs
+`beginLightFrame`), whose class 1 merge then reads it without flipping.
+Approximations: the movers' own polygons (the tracker's fragment nodes)
+are not searched for Strobe lights, and the Strobe lists are taken once
+from the lights that are Strobe at load (no script sets LightType to
+Strobe, per the census).
+
+**Evidence.**
+- `validate-mesh-light-types` (native-mesh-light-oracle.py with per-frame
+  TimeSeconds, noise table A, Strobe state, GMath sines and flicker keys):
+  52 mesh actors on six maps (Wan Chai Underworld, MJ12 lab, Wan Chai canal,
+  Training, the NYC hotel, Helibase), 416 frames (advancing, repeated and
+  jumping TimeSeconds), 1,192 light infos (Pulse 64, Flicker 88, Strobe 64,
+  SubtlePulse 64, BackdropLight 32) and the Strobe state after each call
+  (56 flips) match at `0x007f`; at `0x037f` 1,017 of 2,026 comparisons fail.
+- `validate-light-animation`: the `pc64` form against the oracle at
+  `0x037f`, 2,560 frames, no mismatch (Galaxy's caller).
+- `validate-mesh-light-types-play` (headless browser, worker mode,
+  `meshLightProbe`): Training's ScientistFemale0 under the Flicker Light536,
+  90 frames: every light info's brightness equals `lightTypeBrightness` of
+  that frame's Level.TimeSeconds, the simulation's table A, the export-index
+  key and the Strobe state before the call, every colour equals the
+  constants at that brightness times the fade, the table changes every frame
+  and the Flicker colour takes 43 values. With `--map
+  06_HongKong_WanChai_Underworld --actor HKTukTuk2 --light Light227`: the
+  Pulse light, 87 frames, a new colour each frame. Strobe is not exercised
+  in Play by this check (the oracle covers it).
+- `validate-gpu-mesh` (Training and Island, GPU equal to the CPU kernels
+  with the type functions in the light infos), `validate-mesh-lighting`,
+  `validate-mesh-lighting-play`, `validate-moving-light-effects(-play)`,
+  `validate-light-spatial-play` and the unit tests pass.
+
+**Cost** (headless Chromium in worker mode, 1920×1080, interleaved rounds,
+medians; scratch `ab-browser.mjs`). 824a92b against 1869442 on UNATCO
+Island, six rounds each: the worker's frame 14.99 → 15.51 ms (its actor
+phase 3.51 → 3.72), the page 3.24 → 3.43 ms, within the run-to-run spread.
+The follow-up (0c4ff1f: the Strobe scan returns early when no flip can
+happen and builds the drawn-surface set only for a moving Strobe light;
+Steady lights skip the type call) against 824a92b, five rounds each: Island
+actor phase 4.05 → 3.89 ms (worker 16.00 → 15.90), Wan Chai Underworld
+(Pulse, Flicker and Strobe lights) 3.32 → 3.05 ms (worker 15.83 → 15.56).
+The type functions stay in JavaScript: no measurement names them.
+
 ## Not reproduced / open
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.
-* Flicker's random table and the texture-palette light types (8, 9).
+* The texture-palette light types (8, 9), steady with a note; no map light
+  uses them. Flicker's key is the export index or Level.Actors slot, not the
+  actor's address.
 * `GCache` eviction: an evicted item restarts the fades as a new cache.
 * Spot cones: the per-vertex path ignores them in the original too.

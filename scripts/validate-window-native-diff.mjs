@@ -19,7 +19,9 @@ const RECEIVER_SIZE=0x800;
 // Window-host natives whose recovered bodies are self-contained receiver
 // reads/writes (optionally with AskParentForReconfigure).
 const NATIVES=[1424,1474,1487,1495,1500,1510,1511,1512,1513,1514,1515,1516,1517,1518,1521,1522,1555,1559,1560,1561,1562,1563,
-  1564,1572,1573,1595,1596,1597,1620,1621,1622,1624,1625,1629,1630,1631,1632,1633,1634,1635,1637,1641,1651,1652,1689,1701,1702,1703,1840,1841,1842,1843,1844];
+  1564,1572,1573,1595,1596,1597,1620,1621,1622,1623,1624,1625,1626,1627,1628,1629,1630,1631,1632,1633,1634,1635,1637,1639,1641,1644,1651,1652,
+  1663,1664,1665,1666,1667,1668,1689,1701,1702,1703,1840,1841,1842,1843,1844,
+  1945,1946,1947,1948,1950,1951,1955,1956];
 // FString receiver fields a native reads, with the texts each case cycles
 // through. Their 12 raw bytes hold oracle-local pointers and are not compared.
 const STRINGS={
@@ -33,6 +35,8 @@ const EDGES={
   FloatProperty:[0,-0,1.5,-3.25,3.4028234663852886e38,1e-45],
   ObjectProperty:[0,0x0bad0c0d],
   'struct:color':[[0,0,0,0],[0x12,0x34,0x56,0x78],[0xff,0x80,0x01,0xfe]],
+  'struct:vector':[[0,0,0],[1.5,-3.25,1e-45],[3.4028234663852886e38,-0,0.1]],
+  'struct:rotator':[[0,0,0],[1,-1,0x7fffffff],[-0x80000000,65536,-16384]],
 };
 const scriptValue=(shape,value)=>shape.kind==='struct:color'
   ?Object.fromEntries(['r','g','b','a'].map((key,i)=>[`core.object.color.${key}`,value[i]]))
@@ -115,6 +119,23 @@ for(const [index,old,values] of [
   const native=natives.get(index),bytes=patternBytes(RECEIVER_SIZE,index),view=new DataView(bytes.buffer);
   old.forEach((v,i)=>view.setFloat32((index===1701?0x178:0x170)+i*4,v,true));
   plan.push({native,values,bytes,strings:[],oracle:{id:`${index}:comparison:${plan.length}`,exec:native.exec,
+    this:Buffer.from(bytes).toString('hex'),params:native.params.map((shape,i)=>encodeParam(shape,values[i]))}});
+}
+// Focused Scale/ScaleManager x87 branches (docs/script-window-scale-settings.md):
+// [native, {receiver offset: float32}, {offset: u32}, arguments].
+for(const [index,floats,words,values] of [
+  [1667,{0x16c:NaN},{},[3]],[1667,{0x16c:3},{},[NaN]],[1667,{0x16c:-0},{},[0]],[1667,{0x16c:Infinity},{},[Infinity]],
+  [1666,{0x164:NaN,0x168:2},{},[3,2]],[1666,{0x164:NaN,0x168:2},{},[3,4]],[1666,{0x164:1,0x168:2},{},[1,NaN]],[1666,{0x164:-0,0x168:0},{},[0,-0]],
+  [1627,{0x16c:NaN},{},[2,[1,2,3,4]]],[1627,{0x16c:2},{},[NaN,[1,2,3,4]]],[1628,{0x170:-0},{},[0,[5,6,7,8]]],[1628,{0x170:1},{},[-Infinity]],
+  [1623,{},{},[0x0bad0c0d,true,NaN,NaN]],[1623,{},{},[0,false,-0,-Infinity]],[1623,{},{},[0x0bad0c0d,true,Infinity,1e-45]],
+  // GetValue: value and range modes, an empty or one-tick count (midpoint), NaN and infinite ranges.
+  ...[[0,10,3,-2.5,8.25],[16,10,3,-2.5,8.25],[0,1,0,1,3],[16,0,0,1,3],[0,0x80000000,5,0,1],[0,7,2,NaN,1],[16,7,2,-Infinity,Infinity],[0,7,9,1,1]]
+    .map(([flags,count,position,from,to])=>[1644,{0x1d4:from,0x1d8:to},{0x164:flags,0x1c4:count,0x1c8:position},[]]),
+]){
+  const native=natives.get(index),bytes=patternBytes(RECEIVER_SIZE,index*31+plan.length),view=new DataView(bytes.buffer);
+  for(const [offset,v] of Object.entries(floats))view.setFloat32(Number(offset),v,true);
+  for(const [offset,v] of Object.entries(words))view.setUint32(Number(offset),v>>>0,true);
+  plan.push({native,values,bytes,strings:[],oracle:{id:`${index}:focused:${plan.length}`,exec:native.exec,
     this:Buffer.from(bytes).toString('hex'),params:native.params.map((shape,i)=>encodeParam(shape,values[i]))}});
 }
 const results=runOracle(plan.map(entry=>entry.oracle));

@@ -6,7 +6,7 @@
 import { fistp, normalLightTable, surfaceLightClass, movingLightConstants, movingLightRect, normalLightIncidence,
   normalLightSpatial, nonIncidenceSpatial, colorTableEntry } from './dynamic-lighting.mjs';
 import { fcoordsAxes } from './script-pawn-locomotion.mjs';
-import { x87load, x87double, x87int32, x87neg, x87store, x87ftol, x87cmp } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87neg, x87store, x87ftol, x87cmp, x87mul, x87div, x87add } from './script-vm.mjs';
 import { p24mul, p24add, p24div, r24sum, r24prod } from './x87-pc24.mjs';
 import { rotatorSin } from './coords.mjs';
 
@@ -488,16 +488,28 @@ export function createLightNoise(frand) {
  * address in the original; `flickerKey` is the host's stand-in. Texture
  * palette types (8, 9) are not translated and stay steady. With animation
  * off (the viewport actor's SHOW_PlayerCtrl clear) every type is steady.
- * The type functions (0x10b05a10, 0x10b05a90, 0x10b05b90) run at 24 bits:
- * `TimeSeconds·2293760.0` rounds before the period division and the phase
- * sum, and the sine's `·0.39 + 0.6` (doubles) round exactly once each. */
-export function lightTypeBrightness(values, { timeSeconds, noise, strobe, flickerKey = 0, animate = true }) {
-  let brightness = f((values.LightBrightness & 255) * f(1 / 255));
-  const type = animate ? values.LightType & 255 : 1, time = x87load(f(timeSeconds));
+ * The type functions (0x10b05a10, 0x10b05a90, 0x10b05b90) run at 24 bits
+ * inside the render pass: `TimeSeconds·2293760.0` rounds before the period
+ * division and the phase sum, and the sine's `·0.39 + 0.6` (doubles) round
+ * exactly once each.
+ *
+ * The same GlobalLighting serves the light maps (ComputeFromActor from
+ * SetupForSurf), mesh lighting (ComputeFromActor from SetupForActor) and
+ * Galaxy's ambient volume (Audio->Update, before PreRender). `brightness`
+ * is the in/out float (ComputeFromActor's LightBrightness·(1/255) by
+ * default, Galaxy's volume); `precision: 'pc64'` runs the type functions
+ * on the 64-bit x87 model for the game thread's callers. */
+export function lightTypeBrightness(values, { timeSeconds, noise, strobe, flickerKey = 0, animate = true, brightness: input = null,
+  precision = 'pc24' }) {
+  let brightness = input ?? f((values.LightBrightness & 255) * f(1 / 255));
+  const type = animate ? values.LightType & 255 : 1;
+  // Steady lights (most calls) return before any x87 work.
+  if (type === 1) return brightness < 0 ? 0 : brightness < 1 ? brightness : 1;
   const angle = (divisor, scale, offset) => {
-    const phase = (values.LightPhase & 255) << 8;
-    const a = x87ftol(p24add(p24div(p24mul(time, x87double(2293760)), x87int32(divisor)), x87int32(phase)));
-    return scale === undefined ? a : x87store(p24mul(p24add(p24mul(x87load(rotatorSin(a)), x87double(scale)), x87double(offset)), x87load(brightness)));
+    const pc64 = precision === 'pc64', mul = pc64 ? x87mul : p24mul, div = pc64 ? x87div : p24div, add = pc64 ? x87add : p24add;
+    const time = x87load(f(timeSeconds)), phase = (values.LightPhase & 255) << 8;
+    const a = x87ftol(add(div(mul(time, x87double(2293760)), x87int32(divisor)), x87int32(phase)));
+    return scale === undefined ? a : x87store(mul(add(mul(x87load(rotatorSin(a)), x87double(scale)), x87double(offset)), x87load(brightness)));
   };
   if (type === 0) brightness = 0;
   else if (type === 2) brightness = angle(Math.max(1, values.LightPeriod & 255), 0.39, 0.6);

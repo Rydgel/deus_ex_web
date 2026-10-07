@@ -313,6 +313,8 @@ export function createScriptVmKernel(instance, memory) {
       masterInPtr: () => x.occ_master_in_ptr() >>> 0,
       masterOutPtr: () => x.occ_master_out_ptr() >>> 0,
       masterFrame: () => x.occ_master_frame(),
+      // CreateChildFrame's inputs and OccludeFrame's recursion switch (occlude.rs CHILD_IN).
+      childInPtr: typeof x.occ_child_in_ptr !== 'function' ? null : () => x.occ_child_in_ptr() >>> 0,
       // FDynamicSprite::Setup (setup.rs) over packed candidates; null in a
       // core that predates it.
       setup: typeof x.occ_setup !== 'function' ? null
@@ -338,6 +340,8 @@ export function createScriptVmKernel(instance, memory) {
       storeSize: (surfaces, capacity) => x.decal_store_size(surfaces >>> 0, capacity >>> 0) >>> 0,
       storeInit: (at, surfaces, capacity) => x.decal_store_init(at >>> 0, surfaces >>> 0, capacity >>> 0),
       storeGrow: (from, to, capacity) => x.decal_store_grow(from >>> 0, to >>> 0, capacity >>> 0),
+      storeResize: (from, to, surfaces, capacity) => x.decal_store_resize(from >>> 0, to >>> 0, surfaces >>> 0, capacity >>> 0),
+      modelSync: (model, pointCapacity) => x.decal_model_sync(model >>> 0, pointCapacity >>> 0) >>> 0,
       recordWords: () => x.decal_record_words(),
       clipFrame: (model, store, frame, stream, words, out, cap) =>
         x.decal_clip_frame(model >>> 0, store >>> 0, frame >>> 0, stream >>> 0, words >>> 0, out >>> 0, cap >>> 0) >>> 0,

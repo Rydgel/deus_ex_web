@@ -7,7 +7,9 @@ import {hostNow} from './host-clock.mjs';
 import {fastLineCheck} from './fast-line-check.mjs';
 import {buildWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {decodeSoundResource} from './script-sound-resource.mjs';
-import {lightTypeBrightness, LIGHT_TYPE_UNSUPPORTED} from './mesh-lighting.mjs';
+import {LIGHT_TYPE_UNSUPPORTED} from './mesh-lighting.mjs';
+import {lightTypeBrightness} from './static-lighting.mjs';
+import {lightGlobals} from './light-globals.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
 
@@ -145,7 +147,9 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     try { await prepareSample(read(actor, 'AmbientSound')); } catch (error) { notes.add(String(error?.message ?? error)); }
   }
 
-  const strobe = {last: null, on: 0};
+  // Render.dll's Strobe state and light noise, shared with the light maps and
+  // mesh lighting (light-globals.mjs).
+  const globals = lightGlobals(runtime);
   const voices = new Map();
   // Galaxy's digital master volume: the louder of SoundVolume and
   // SpeechVolume on 0..127 (galaxy-volumes.mjs).
@@ -182,7 +186,12 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       const values = {LightType: realtime ? read(actor, 'LightType') : 1, LightPeriod: read(actor, 'LightPeriod'), LightPhase: read(actor, 'LightPhase')};
       const type = values.LightType & 255;
       if (LIGHT_TYPE_UNSUPPORTED.has(type)) notes.add(`LightType ${type} function is not applied to ambient volume`);
-      let brightness = type < 10 ? f(lightTypeBrightness(values, volume, read(read(actor, 'Level'), 'TimeSeconds'), strobe)) : volume;
+      // URender::GlobalLighting from Audio->Update, before PreRender: the
+      // game thread's precision (64-bit, the assumption: render-pass
+      // precision), the noise table A of the previous PreRender, the shared
+      // Strobe state; Flicker's key is the actor's (as the light maps').
+      let brightness = type < 10 ? f(lightTypeBrightness(values, {timeSeconds: read(read(actor, 'Level'), 'TimeSeconds'), brightness: volume,
+        noise: {A: globals.previousA}, strobe: globals.strobe, flickerKey: globals.flickerKeyOf(actor), precision: 'pc64'})) : volume;
       if (!(brightness >= 0)) brightness = 0; else if (!(brightness < 1)) brightness = 1;
       return brightness;
     },

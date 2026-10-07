@@ -298,6 +298,39 @@ add('synthetic-mover-surface', [
     note='synthetic: the first FindSurface result for this location may differ from the hit node surface; '
          'MoverRotation is only written when the selected surface is the overridden one')
 
+# 9. With the moving brush tracker (a tracked model: `originalNodes`):
+# bullet holes, scorch marks and blood splats on movers' fragments. The trace
+# meets the fragment as a level node, FindSurface walks the fragment's
+# coplanar chain, the Mover branch copies MoverRotation and asks for
+# SetBase(Owner, 1); the surface's Nodes are empty.
+if 'originalNodes' in model:
+    fragments = [n for n in range(model['originalNodes'], len(model['nodes']))
+                 if model['nodes'][n]['vertexCount'] >= 3 and model['surfs'][model['nodes'][n]['surface']].get('mover')]
+    rng.shuffle(fragments)
+    made = 0
+    for n in fragments:
+        if made >= 16:
+            break
+        poly = node_polygon(n)
+        normal = vec(model['surfs'][model['nodes'][n]['surface']]['normal'])
+        centroid = [sum(p[k] for p in poly) / len(poly) for k in range(3)]
+        start = [centroid[k] + normal[k] * 24 for k in range(3)]
+        hit = trace(start, [centroid[k] - normal[k] * 24 for k in range(3)])
+        if not hit:
+            continue
+        hn = [f(b) for b in hit['normalBits']]
+        kind = ['BulletHole', 'ScorchMark', 'BloodSplat'][made % 3]
+        base = {'actor': 'm', 'owner': f'surface:{model["nodes"][n]["surface"]}', 'locationBits': offset_bits(hit['locationBits'], hn), 'rotation': rotator(hn),
+                'texture': TEX[kind], 'multiDecalLevel': [0, 2, 4][made % 3]}
+        ops = [{'op': 'attach', **base, 'drawScale': round(rng.uniform(0.3, 1.2), 3), 'args': [32, [0.1, 0.1, 0]]}]
+        if made % 2:
+            ops += [{'op': 'detach', 'actor': 'm'},
+                    {'op': 'attach', **base, 'drawScale': 1.0, 'args': [100], 'rand': msvc_rand(rng.randrange(1 << 31), 64)}]
+        ops.append({'op': 'detach', 'actor': 'm'})
+        add(f'mover-fragment-{kind}-{n}', ops)
+        made += 1
+
+
 # Run at 0x037f and compare with 0x027f / 0x007f.
 def run_all(control_word):
     out = []

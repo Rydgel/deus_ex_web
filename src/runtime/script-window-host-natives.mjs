@@ -4,6 +4,7 @@
 import {setButtonTexturesNative} from './script-window-set-button-textures.mjs';
 import {setButtonColorsNative} from './script-window-set-button-colors.mjs';
 import * as S from './script-window-scroll-children.mjs';
+import * as SS from './script-window-scale-settings.mjs';
 import {enableScrollAreaScrolling,setScrollAreaDistance,setScrollAreaMargins,autoHideScrollAreaBars} from './script-window-scroll-area.mjs';
 import {refValue} from './script-vm.mjs';
 import * as T from './script-window-tree-natives.mjs';
@@ -147,6 +148,27 @@ export function dispatchWindowHostNative(W, call) {
       W.setU32(win,0x5d8,W.u32(win,0x5d8)|2);
       for(let i=0;i<4;i++)W.setF32(win,0x5dc+4*i,arg(i,0));break;
     case 1515: W.setU32(win,0x5d8,W.u32(win,0x5d8)&~2);W.setU32(win,0x5dc,0);W.setU32(win,0x5e0,0);break; // ResetRenderViewport 0x10039e90
+    // ViewportWindow leaves (Extension.dll, docs/script-window-viewport.md).
+    case 1945: bits(0x14c,1,arg(0,true));break;                    // EnableViewport 0x1004a640 (exec 0x1004b630)
+    case 1946: {                                                    // SetFOVAngle 0x1004a660 (exec 0x1004b6a0, default 90)
+      let a=Math.fround(arg(0,90));if(a>179)a=179;                  // above 179.0f: 179.0f
+      W.setF32(win,0x150,a<0.1||Number.isNaN(a)?Math.fround(0.1):a);break; // below double 0.1 or NaN: 0.1f
+    }
+    case 1947: bits(0x14c,4,arg(0,true));break;                    // ShowViewportActor 0x1004a6b0
+    case 1948: bits(0x14c,8,arg(0,true));break;                    // ShowWeapons 0x1004a6d0
+    case 1950: {                                                    // SetRelativeLocation 0x1004a6f0
+      const v=arg(0,null),c=Array.isArray(v)?v:['x','y','z'].map(k=>v?.[`core.object.vector.${k}`]??0);
+      c.forEach((x,i)=>W.setF32(win,0x170+4*i,x));break;
+    }
+    case 1951: {                                                    // SetRelativeRotation 0x1004a710
+      const r=arg(0,null),c=Array.isArray(r)?r:['pitch','yaw','roll'].map(k=>r?.[`core.object.rotator.${k}`]??0);
+      c.forEach((x,i)=>W.setI32(win,0x188+4*i,x|0));break;
+    }
+    case 1955: { // SetDefaultTexture 0x1004a730: an omitted color is R=G=B=0xff
+      // with the FFrame* slot's high byte as alpha (exec 0x1004b95d), 0 here.
+      const color=arg(1,null);W.setPtr(win,0x154,arg(0,null));W.setU32(win,0x158,color?packed(color):0x00ffffff);break;
+    }
+    case 1956: bits(0x14c,2,arg(0,true));break;                    // ClearZBuffer 0x1004a750
     case 1516: { // SetRawBackground 0x10039eb0; the omitted color's alpha byte
       // is the stale high byte of the caller's FFrame pointer slot (exec
       // 0x1003cc0d stores only R/G/B), 0 for a game stack below 16 MB.
@@ -205,6 +227,27 @@ export function dispatchWindowHostNative(W, call) {
     case 1638: S.scaleThumbSpan(W,win,arg(0,1));break;
     case 1640: W.native.setTickPosition(win,arg(0,0)|0);break;
     case 1641: value=W.i32(win,0x1c8);break;
+    // ScaleWindow/ScaleManagerWindow settings and values (docs/script-window-scale-settings.md).
+    case 1623: SS.scaleTickTexture(W,win,arg(0,null),arg(1,true)?1:0,arg(2,0),arg(3,0));break;   // exec 0x10040670
+    case 1626: SS.scaleBorderPattern(W,win,arg(0,null));break;                                     // exec 0x10040910
+    // Exec 0x10040980 / 0x10040a20: an omitted colour is R=G=B=0xff over the
+    // FFrame* argument slot, whose high byte (alpha) is modelled as 0.
+    case 1627: SS.scaleBorder(W,win,0x16c,0x174,arg(0,0),omittedColor(0x00ffffff)(arg(1,null)));break;
+    case 1628: SS.scaleBorder(W,win,0x170,0x178,arg(0,0),omittedColor(0x00ffffff)(arg(1,null)));break;
+    case 1639: value=SS.scaleThumbSpan(W,win);break;                                                // exec 0x10040ee0
+    case 1642: SS.scaleValueRange(W,win,arg(0,0),arg(1,0));break;                                   // exec 0x10040fd0
+    case 1643: SS.scaleValue(W,win,arg(0,0));break;                                                 // exec 0x10041060
+    case 1644: value=SS.scaleGetValue(W,win);break;                                                 // exec 0x100410d0
+    case 1645: {const values=SS.scaleGetValues(W,win);out(0,values.from);out(1,values.to);break;}   // exec 0x10041110
+    case 1660: S.managerSetButtons(W,win,arg(0,null),arg(1,null));break;                            // exec 0x100427e0 -> 0x10041b30
+    case 1661: SS.managerValueField(W,win,arg(0,null));break;                                       // exec 0x10042870 -> 0x10041c70
+    case 1662: S.managerSetScale(W,win,arg(0,null));break;                                          // exec 0x100428e0 -> 0x10041bd0
+    case 1663: SS.managerOrientation(W,win,arg(0,0));break;                                         // exec 0x10042950
+    case 1664: SS.managerStretch(W,win,0,arg(0,true)?1:0);break;                                    // exec 0x100429c0
+    case 1665: SS.managerStretch(W,win,1,arg(0,true)?1:0);break;                                    // exec 0x10042a40
+    case 1666: SS.managerMargins(W,win,arg(0,0),arg(1,0));break;                                    // exec 0x10042ac0
+    case 1667: SS.managerSpacing(W,win,arg(0,0));break;                                             // exec 0x10042b80
+    case 1668: SS.managerAlignments(W,win,arg(0,0),arg(1,0));break;                                 // exec 0x10042c00
     case 1650: W.native.moveThumb(win,arg(0,0)&255);break;
     case 1651: W.setI32(win,0x1d0,Math.max(1,arg(0,0)|0));break;
     case 1652: {const sounds=[arg(0,null),arg(1,null),arg(2,null)];sounds.forEach((v,i)=>W.setPtr(win,0x1f4+4*i,v));break;}

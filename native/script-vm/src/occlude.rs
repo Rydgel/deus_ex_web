@@ -50,7 +50,8 @@ static mut MODEL: [u32; 20] = [0; 20];
 /// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z.
 static mut FRAME: [u32; 64] = [0; 64];
 /// Run results: 0 status, 1 output words, 2 NodesDraw (+0x68), 3 PolysDraw
-/// (+0x6c), 4 child requests, 5 the output's address.
+/// (+0x6c), 4 child requests (all over the frames), 5 the output's address,
+/// 6 the root frame's output words (the child frames' records follow).
 static mut STATUS: [u32; 8] = [0; 8];
 
 #[no_mangle]
@@ -881,7 +882,30 @@ pub extern "C" fn occ_run(work: u32, bytes: u32) -> i32 {
         // Arena bases are never NULL; keep 0 meaning NULL.
         let status = &mut *addr_of_mut!(STATUS);
         *status = [0; 8];
-        let result = occlude();
+        // CreateMasterFrame's FSceneNode and screen span (GSceneMem).
+        let master = new_record();
+        let f = &*addr_of!(FRAME);
+        for (k, v) in f.iter().enumerate() {
+            wr(master + 4 * k as u32, *v);
+        }
+        wr(master + 4 * FR_ISURF, u32::MAX);
+        let mut screen = EMPTY;
+        screen.alloc_index_for_screen(frame(12) as i32, frame(13) as i32, GSCENE);
+        set_frame_span(master, &screen);
+        let mut result = occlude(master);
+        status[6] = (arena_top(OUT) - arenas[OUT][0]) / 4;
+        // OccludeFrame's recursion (0x10b1a267..0x10b1a27c): each child,
+        // newest first, with its own SetupDynamics and OccludeBsp, then its
+        // children.
+        if result == 0 && (*addr_of!(CHILD_IN))[6] & 1 != 0 && !*addr_of!(OVERFLOW) {
+            let mut index = 1;
+            result = occlude_children(master, &mut index);
+            let f = &mut *addr_of_mut!(FRAME);
+            for (k, v) in f.iter_mut().enumerate() {
+                *v = rd(master + 4 * k as u32);
+            }
+        }
+        let status = &mut *addr_of_mut!(STATUS);
         status[0] = if *addr_of!(OVERFLOW) { 2 } else { result };
         status[1] = (arena_top(OUT) - arenas[OUT][0]) / 4;
         status[5] = arenas[OUT][0];
@@ -890,7 +914,7 @@ pub extern "C" fn occ_run(work: u32, bytes: u32) -> i32 {
 }
 
 #[allow(unused_assignments)]
-fn occlude() -> u32 {
+fn occlude(rec: u32) -> u32 {
     let num_nodes = model(1);
     if num_nodes == 0 {
         return 0;
@@ -942,14 +966,14 @@ fn occlude() -> u32 {
     // Zones[ZoneNumber].LastRenderTime = TimeSeconds (0x10b1768d).
     wr(zones + 16 * zone_number as u32 + 4, time_bits);
 
-    // The screen span (CreateMasterFrame, GSceneMem) and the 64 zone spans.
+    // The 64 zone spans; the frame's own (CreateMasterFrame's screen span or
+    // a child's merged span, GSceneMem) is struct-copied into its zone's
+    // (0x10b17a12): lines and spans are shared with the frame's.
     let mut zone_spans = [EMPTY; ZONES];
     for span in zone_spans.iter_mut() {
         span.alloc_index(0, 0, GDYN);
     }
-    let mut screen = EMPTY;
-    screen.alloc_index_for_screen(width, height, GSCENE);
-    zone_spans[zone_number as usize] = screen;
+    zone_spans[zone_number as usize] = frame_span(rec);
     // SetupDynamics' sprites (0x10b22d90; FDynamicSprite 0x10b233c0), in
     // Level.Actors order, each with its chunk at the head of node 0.
     let mut frame_sprite = 0_u32;
@@ -1145,9 +1169,15 @@ fn occlude() -> u32 {
                         {
                             // PF_FakeBackdrop with the zone's SkyZone: the sky frame
                             // (0x10b18390..0x10b1882f), then the next coplanar without
-                            // a draw list or Release. Its occlusion is not run here yet.
-                            emit_child(1, cur, 0, zone, &tspan);
+                            // a draw list or Release.
+                            // The request carries CreateChildFrame's iZone: the
+                            // SkyZone's Region.ZoneNumber (+0xd0).
+                            let sky = rd(zones + 16 * zone as u32 + 8);
+                            emit_child(1, cur, 0, rd(sky + 24) as u8, &tspan);
                             children += 1;
+                            let bounds = if toggle { None } else { Some(raster_bounds()) };
+                            create_child_frame(rec, &tspan, 0, rd(sky + 24) as u8, frame(41),
+                                [frame(37), frame(38), frame(39), frame(40)], &sky_coords(sky), bounds, 1, cur);
                             break 'poly;
                         }
                         if poly_flags & 0x0800_0000 != 0 && frame(43) < 3 && options & 1 != 0 {
@@ -1158,6 +1188,9 @@ fn occlude() -> u32 {
                             } else {
                                 emit_child(0, cur, 0, zone, &tspan);
                                 children += 1;
+                                let (coords, near) = mirror_child(cur);
+                                let bounds = if toggle { None } else { Some(raster_bounds()) };
+                                create_child_frame(rec, &tspan, 0, zone, frame(41) ^ 0x8000_0000, near, &coords, bounds, 0, cur);
                                 list = 0;
                                 if composited == 0 {
                                     poly_flags |= 1;
@@ -1343,10 +1376,11 @@ fn occlude() -> u32 {
         s = rd(s + 4 * SP_RENDER_NEXT);
     }
     unsafe {
+        // URender+0x68/+0x6c count over the whole DrawWorld (every frame).
         let status = &mut *addr_of_mut!(STATUS);
-        status[2] = nodes_draw;
-        status[3] = polys_draw;
-        status[4] = children;
+        status[2] += nodes_draw;
+        status[3] += polys_draw;
+        status[4] += children;
     }
     0
 }
@@ -1391,6 +1425,7 @@ fn emit_child(kind: u32, i_node: i32, i_surf: i32, zone: u8, span: &SpanBuffer) 
 // projection, clip numbers, ViewSides and ViewPlanes; UModel::PointRegion
 // (Engine 0x103f5db0) the zone at the origin.
 
+use crate::tracker::{Fp, P24};
 use crate::x87::Ext;
 
 /// Input: location bits (3), rotation (3 int32), width, height, FOV bits,
@@ -1489,77 +1524,14 @@ pub extern "C" fn occ_master_frame() {
     let rotation = [input[3] as i32, input[4] as i32, input[5] as i32];
     let (width, height) = (input[6] as i32, input[7] as i32);
     let coords = view_coords(rotation, location);
-    // Uncoords axes: the transpose.
-    let un = [
-        [coords[3], coords[6], coords[9]],
-        [coords[4], coords[7], coords[10]],
-        [coords[5], coords[8], coords[11]],
-    ];
-    let half = Ext::load_f64(0.5);
-    let xi = Ext::load_i32(width);
-    let fx = xi.store();
-    let fy = Ext::load_i32(height).store();
-    let fx2 = xi.mul(half).store();
-    let fy2 = ld(fy).mul(half).store();
-    let c10001 = Ext::load_f64(f64::from_bits(0x3ff0_0068_db8b_ac71));
-    let fx15 = xi.add(c10001).mul(half).store();
-    let fy15 = ld(fy).add(c10001).mul(half).store();
-    let tan = Ext::load_f64(f64::from_bits(input[9] as u64 | (input[10] as u64) << 32));
-    let hx = ld(fx).mul(half);
-    let proj_z = hx.div(tan).store();
-    let proj_y = sub(half, ld(fy).mul(half)).store();
-    let proj_x = sub(half, hx).store();
-    let one = ld(0x3f80_0000);
-    let rproj = [one.div(ld(proj_x)).store(), one.div(ld(proj_y)).store(), one.div(ld(proj_z)).store()];
-    let zoom = ld(input[11]).div(ld(fx).mul(Ext::load_f64(15.0))).store();
-    let neg_rz = ld(rproj[2]).neg();
-    let prj_xm = ld(fx2).neg().mul(neg_rz).store();
-    let prj_xp = sub(ld(fx), ld(fx2)).mul(ld(rproj[2])).store();
-    let prj_ym = ld(fy2).neg().mul(neg_rz).store();
-    let prj_yp = sub(ld(fy), ld(fy2)).mul(ld(rproj[2])).store();
-    let rot = |v: [u32; 3]| -> [u32; 3] {
-        let e = [ld(v[0]), ld(v[1]), ld(v[2])];
-        [dot3(e, un[0]), dot3(e, un[1]), dot3(e, un[2])]
-    };
-    let signs = [0xbf80_0000_u32, 0x3f80_0000];
-    let o = [ld(coords[0]), ld(coords[1]), ld(coords[2])];
-    let mut sides = [[0u32; 3]; 4];
-    let mut planes = [[0u32; 4]; 4];
-    let unit = Ext::load_f64(1.0);
-    let inverse_root = |sum: Ext| unit.div(sum.store_double().sqrt().store_double());
-    for k in 0..2 {
-        for j in 0..2 {
-            let a = ld(signs[k]).mul(ld(fx2)).store();
-            let b = ld(signs[j]).mul(ld(fy2)).store();
-            let c = proj_z;
-            let inv = inverse_root(ld(a).mul(ld(a)).add(ld(b).mul(ld(b))).add(ld(c).mul(ld(c))));
-            let v = [inv.mul(ld(a)).store(), inv.mul(ld(b)).store(), inv.mul(ld(c)).store()];
-            sides[j + 2 * k] = rot(v);
-        }
-        let p = ld(signs[k]).div(ld(fy2)).store();
-        let q = one.div(ld(proj_z)).store();
-        let inv = inverse_root(ld(p).mul(ld(p)).add(ld(q).mul(ld(q))));
-        let n = rot([0, ld(inv.store()).mul(ld(p)).store(), inv.mul(ld(q)).store()]);
-        let w = ld(n[0]).mul(o[0]).add(o[2].mul(ld(n[2]))).add(o[1].mul(ld(n[1]))).store();
-        planes[k] = [n[0], n[1], n[2], w];
-        let p2 = ld(signs[k]).div(ld(fx2)).store();
-        let q2 = one.div(ld(proj_z)).store();
-        let inv2 = inverse_root(ld(p2).mul(ld(p2)).add(ld(q2).mul(ld(q2))));
-        let m = rot([inv2.mul(ld(p2)).store(), 0, inv2.mul(ld(q2)).store()]);
-        let w2 = ld(m[0]).mul(o[0]).add(o[1].mul(ld(m[1]))).add(o[2].mul(ld(m[2]))).store();
-        planes[k + 2] = [m[0], m[1], m[2], w2];
-    }
+    let tan = f64::from_bits(input[9] as u64 | (input[10] as u64) << 32);
+    let size = render_size::<Ext>(&coords, width, height, tan, input[11]);
+    let [fx, fy, fx15, fy15, fx2, fy2, zoom, proj_x, proj_y, proj_z, rx, ry, rz, prj_xm, prj_ym, prj_xp, prj_yp] = size.f;
+    let rproj = [rx, ry, rz];
+    let (sides, planes) = (size.sides, size.planes);
     let zone = point_zone([coords[0], coords[1], coords[2]]);
-    // Uncoords: Core FCoords::Transpose (0x1011a140): the axes transposed and
-    // the origin -(O·X, O·Y, O·Z), each ((x + y) + z) stored, then negated.
-    let o3 = [ld(coords[0]), ld(coords[1]), ld(coords[2])];
-    let mut uncoords = [0u32; 12];
-    for n in 0..3 {
-        uncoords[n] = dot3(o3, [coords[3 + 3 * n], coords[4 + 3 * n], coords[5 + 3 * n]]) ^ 0x8000_0000;
-    }
-    for n in 0..3 {
-        uncoords[3 + 3 * n..6 + 3 * n].copy_from_slice(&un[n]);
-    }
+    // Uncoords: Core FCoords::Transpose (0x1011a140).
+    let uncoords = uncoords::<Ext>(&coords);
     unsafe {
         let out = &mut *addr_of_mut!(MASTER_OUT);
         out[..12].copy_from_slice(&coords);
@@ -1593,6 +1565,484 @@ pub extern "C" fn occ_master_frame() {
     }
 }
 
+
+/// ComputeRenderSize's fields: FX, FY, FX15, FY15, FX2, FY2, Zoom, Proj
+/// (3), RProj (3), PrjXM, PrjYM, PrjXP, PrjYP; ViewSides; ViewPlanes.
+struct RenderSize {
+    f: [u32; 17],
+    sides: [[u32; 3]; 4],
+    planes: [[u32; 4]; 4],
+}
+
+/// Engine FSceneNode::ComputeRenderSize (0x10372980) at precision F (the
+/// master frame's at the game thread's 64 bits, a child's at DrawWorld's
+/// 24), with Core appTan's qword result `tan` for the frame's argument.
+fn render_size<F: Fp>(coords: &[u32; 12], width: i32, height: i32, tan: f64, ortho: u32) -> RenderSize {
+    // Uncoords axes: the transpose.
+    let un = [
+        [coords[3], coords[6], coords[9]],
+        [coords[4], coords[7], coords[10]],
+        [coords[5], coords[8], coords[11]],
+    ];
+    let ld = F::ld;
+    let half = F::ldc(0.5);
+    let xi = F::ldc(width as f64);
+    let fx = xi.st();
+    let fy = F::ldc(height as f64).st();
+    let fx2 = xi.mul(half).st();
+    let fy2 = ld(fy).mul(half).st();
+    let c10001 = F::ldc(f64::from_bits(0x3ff0_0068_db8b_ac71));
+    let fx15 = xi.add(c10001).mul(half).st();
+    let fy15 = ld(fy).add(c10001).mul(half).st();
+    let tan = F::ldc(tan);
+    let hx = ld(fx).mul(half);
+    let proj_z = hx.div(tan).st();
+    let proj_y = half.sub(ld(fy).mul(half)).st();
+    let proj_x = half.sub(hx).st();
+    let one = ld(0x3f80_0000);
+    let rproj = [one.div(ld(proj_x)).st(), one.div(ld(proj_y)).st(), one.div(ld(proj_z)).st()];
+    let zoom = ld(ortho).div(ld(fx).mul(F::ldc(15.0))).st();
+    let neg_rz = ld(rproj[2]).neg();
+    let prj_xm = ld(fx2).neg().mul(neg_rz).st();
+    let prj_xp = ld(fx).sub(ld(fx2)).mul(ld(rproj[2])).st();
+    let prj_ym = ld(fy2).neg().mul(neg_rz).st();
+    let prj_yp = ld(fy).sub(ld(fy2)).mul(ld(rproj[2])).st();
+    let dot = |v: [F; 3], a: [u32; 3]| v[0].mul(ld(a[0])).add(v[1].mul(ld(a[1]))).add(v[2].mul(ld(a[2]))).st();
+    let rot = |v: [u32; 3]| -> [u32; 3] {
+        let e = [ld(v[0]), ld(v[1]), ld(v[2])];
+        [dot(e, un[0]), dot(e, un[1]), dot(e, un[2])]
+    };
+    let signs = [0xbf80_0000_u32, 0x3f80_0000];
+    let o = [ld(coords[0]), ld(coords[1]), ld(coords[2])];
+    let mut sides = [[0u32; 3]; 4];
+    let mut planes = [[0u32; 4]; 4];
+    let unit = F::ldc(1.0);
+    let inverse_root = |sum: F| unit.div(sum.st64().sqrt().st64());
+    for k in 0..2 {
+        for j in 0..2 {
+            let a = ld(signs[k]).mul(ld(fx2)).st();
+            let b = ld(signs[j]).mul(ld(fy2)).st();
+            let c = proj_z;
+            let inv = inverse_root(ld(a).mul(ld(a)).add(ld(b).mul(ld(b))).add(ld(c).mul(ld(c))));
+            let v = [inv.mul(ld(a)).st(), inv.mul(ld(b)).st(), inv.mul(ld(c)).st()];
+            sides[j + 2 * k] = rot(v);
+        }
+        let p = ld(signs[k]).div(ld(fy2)).st();
+        let q = one.div(ld(proj_z)).st();
+        let inv = inverse_root(ld(p).mul(ld(p)).add(ld(q).mul(ld(q))));
+        let n = rot([0, ld(inv.st()).mul(ld(p)).st(), inv.mul(ld(q)).st()]);
+        let w = ld(n[0]).mul(o[0]).add(o[2].mul(ld(n[2]))).add(o[1].mul(ld(n[1]))).st();
+        planes[k] = [n[0], n[1], n[2], w];
+        let p2 = ld(signs[k]).div(ld(fx2)).st();
+        let q2 = one.div(ld(proj_z)).st();
+        let inv2 = inverse_root(ld(p2).mul(ld(p2)).add(ld(q2).mul(ld(q2))));
+        let m = rot([inv2.mul(ld(p2)).st(), 0, inv2.mul(ld(q2)).st()]);
+        let w2 = ld(m[0]).mul(o[0]).add(o[1].mul(ld(m[1]))).add(o[2].mul(ld(m[2]))).st();
+        planes[k + 2] = [m[0], m[1], m[2], w2];
+    }
+    RenderSize {
+        f: [fx, fy, fx15, fy15, fx2, fy2, zoom, proj_x, proj_y, proj_z, rproj[0], rproj[1], rproj[2], prj_xm, prj_ym,
+            prj_xp, prj_yp],
+        sides,
+        planes,
+    }
+}
+
+/// Uncoords from Coords at precision F (Core FCoords::Transpose 0x1011a140;
+/// CreateChildFrame inlines it at 0x10b15e7b..0x10b15fa7): the axes
+/// transposed and the origin -(O·X, O·Y, O·Z), each ((x + y) + z) stored,
+/// then negated.
+fn uncoords<F: Fp>(coords: &[u32; 12]) -> [u32; 12] {
+    let o = [F::ld(coords[0]), F::ld(coords[1]), F::ld(coords[2])];
+    let mut out = [0u32; 12];
+    for n in 0..3 {
+        let a = [coords[3 + 3 * n], coords[4 + 3 * n], coords[5 + 3 * n]];
+        out[n] = o[0].mul(F::ld(a[0])).add(o[1].mul(F::ld(a[1]))).add(o[2].mul(F::ld(a[2]))).st() ^ 0x8000_0000;
+    }
+    for n in 0..3 {
+        out[3 + 3 * n..6 + 3 * n].copy_from_slice(&[coords[3 + n], coords[6 + n], coords[9 + n]]);
+    }
+    out
+}
+
+// ---- child frames (CreateChildFrame 0x10b15a40; OccludeFrame 0x10b19fc0) ----------
+//
+// Inside DrawWorld, so at 24-bit precision: the mirror and sky coordinates
+// (Core's FVector and FCoords bodies) are binary32 arithmetic in their
+// instructions' order, and the child's ComputeRenderSize is render_size at
+// P24 (its FX15/FY15 constant, FOV argument and appTan quotient are double
+// operands rounded once).
+
+/// Child-frame inputs: 0 Actor.FOVAngle bits (the core reads only the
+/// tangent below), 1 Actor.OrthoZoom bits, 2-3 Core appTan's qword result
+/// for the child's argument (d64 of FOVAngle * 0.008726646259971648 rounded
+/// to 24 bits), 4 the Setup candidates' address (0: none), 5 their count, 6
+/// option bits (1: occlude the children; without it the requests are only
+/// reported).
+static mut CHILD_IN: [u32; 8] = [0; 8];
+
+#[no_mangle]
+pub extern "C" fn occ_child_in_ptr() -> *mut u32 {
+    addr_of_mut!(CHILD_IN) as *mut u32
+}
+
+// Frame records (GSceneMem words): the frame words (FRAME's layout), then
+// Parent, Sibling, Child, iSurf, the span buffer (7 words), the kind of the
+// request that made it (0 mirror, 1 sky), that request's node, the visit
+// index, and ComputeRenderSize's fields as MASTER_OUT holds them (Coords,
+// FX..PrjYP, ViewSides, ViewPlanes).
+const FR_PARENT: u32 = 64;
+const FR_SIBLING: u32 = 65;
+const FR_CHILD: u32 = 66;
+const FR_ISURF: u32 = 67;
+const FR_SPAN: u32 = 68;
+const FR_KIND: u32 = 75;
+const FR_NODE: u32 = 76;
+const FR_INDEX: u32 = 77;
+const FR_FIELDS: u32 = 78;
+const FR_WORDS: u32 = FR_FIELDS + 57;
+
+fn new_record() -> u32 {
+    let r = push(GSCENE, 4 * FR_WORDS, 8);
+    for k in 0..FR_WORDS {
+        wr(r + 4 * k, 0);
+    }
+    r
+}
+fn fw(rec: u32, k: u32) -> u32 {
+    rd(rec + 4 * k)
+}
+fn set_fw(rec: u32, k: u32, v: u32) {
+    wr(rec + 4 * k, v)
+}
+fn frame_span(rec: u32) -> SpanBuffer {
+    let b = rec + 4 * FR_SPAN;
+    SpanBuffer {
+        start_y: rd(b) as i32,
+        end_y: rd(b + 4) as i32,
+        valid: rd(b + 8) as i32,
+        index: rd(b + 12),
+        mem: rd(b + 16) as usize,
+        mark_mem: rd(b + 20) as usize,
+        mark_top: rd(b + 24),
+    }
+}
+fn set_frame_span(rec: u32, span: &SpanBuffer) {
+    let b = rec + 4 * FR_SPAN;
+    for (k, v) in [span.start_y as u32, span.end_y as u32, span.valid as u32, span.index, span.mem as u32,
+        span.mark_mem as u32, span.mark_top].iter().enumerate()
+    {
+        wr(b + 4 * k as u32, *v);
+    }
+}
+
+/// The FScreenBounds OccludeBsp passes (0x10b188ce, 0x10b187d7): the raster's
+/// MinX, StartY, MaxX, EndY as floats.
+fn raster_bounds() -> [f32; 4] {
+    let b = unsafe { *addr_of!(RASTER_BOX) };
+    [b[2] as f32, b[0] as f32, b[3] as f32, b[1] as f32]
+}
+
+fn coords_of(words: &[u32; 12]) -> [[f32; 3]; 4] {
+    let g = |k: usize| f32::from_bits(words[k]);
+    [[g(0), g(1), g(2)], [g(3), g(4), g(5)], [g(6), g(7), g(8)], [g(9), g(10), g(11)]]
+}
+fn coords_bits(c: &[[f32; 3]; 4]) -> [u32; 12] {
+    let mut out = [0u32; 12];
+    for i in 0..4 {
+        for k in 0..3 {
+            out[3 * i + k] = c[i][k].to_bits();
+        }
+    }
+    out
+}
+fn frame_coords() -> [u32; 12] {
+    let mut out = [0u32; 12];
+    for (k, v) in out.iter_mut().enumerate() {
+        *v = frame(k);
+    }
+    out
+}
+
+/// The mirror child's Coords and NearClip (0x10b188ce..0x10b18b1e) for the
+/// frame's Coords and node `i_node`'s plane N, W.
+fn mirror_child(i_node: i32) -> ([u32; 12], [u32; 4]) {
+    let node = Node::at(i_node);
+    let n = [node.plane(0), node.plane(1), node.plane(2)];
+    let w = node.plane(3);
+    let [o, x, y, z] = coords_of(&frame_coords());
+    // A - N * f32(2 * (A | N)), A | N = ((N.z*A.z + N.y*A.y) + N.x*A.x)
+    // (FVector::operator| 0x10117710, operator* 0x101177c0, operator- 0x10117780).
+    let reflect = |a: [f32; 3]| -> [f32; 3] {
+        let d = (n[2] * a[2] + n[1] * a[1]) + n[0] * a[0];
+        let s = d + d;
+        [a[0] - s * n[0], a[1] - s * n[1], a[2] - s * n[2]]
+    };
+    let z2 = reflect(z);
+    let y2 = reflect(y);
+    // FVector::MirrorByVector (Core 0x10119f00) and MirrorByPlane (0x10119f80):
+    // d = (N.y*V.y + N.x*V.x) + V.z*N.z (- W), V - N * (d + d).
+    let mirror = |v: [f32; 3], plane_w: Option<f32>| -> [f32; 3] {
+        let mut d = (n[1] * v[1] + n[0] * v[0]) + v[2] * n[2];
+        if let Some(w) = plane_w {
+            d = d - w;
+        }
+        let d2 = d + d;
+        [v[0] - d2 * n[0], v[1] - d2 * n[1], v[2] - d2 * n[2]]
+    };
+    let x2 = mirror(x, None);
+    let o2 = mirror(o, Some(w));
+    // NearClip: the plane in the frame's view, negated (0x10b189e7..0x10b18afd).
+    let v = [
+        (x[2] * n[2] + x[1] * n[1]) + n[0] * x[0],
+        (y[2] * n[2] + y[1] * n[1]) + n[0] * y[0],
+        (z[2] * n[2] + z[1] * n[1]) + n[0] * z[0],
+    ];
+    // Origin.TransformVectorBy(Coords) (Core 0x10119e40), then | V.
+    let t = [
+        (o[0] * x[0] + o[1] * x[1]) + o[2] * x[2],
+        (o[0] * y[0] + o[1] * y[1]) + o[2] * y[2],
+        (o[0] * z[0] + o[1] * z[1]) + o[2] * z[2],
+    ];
+    let tv = (v[2] * t[2] + v[1] * t[1]) + v[0] * t[0];
+    let pw = w - tv;
+    let near = [(-v[0]).to_bits(), (-v[1]).to_bits(), (-v[2]).to_bits(), (-pw).to_bits()];
+    (coords_bits(&[o2, x2, y2, z2]), near)
+}
+
+/// The sky child's Coords (0x10b184b1..0x10b187d1): the frame's Coords with
+/// its origin moved to zero (Origin - Origin), turned by the SkyZone's roll,
+/// pitch and yaw (FCoords *= FCoords, Core 0x1011a710, over GMath's trig
+/// table), then moved to the SkyZone's Location. `sky` is the zone's sky
+/// record: Location bits (3), Rotation (pitch, yaw, roll), Region.ZoneNumber.
+fn sky_coords(sky: u32) -> [u32; 12] {
+    let mut c = coords_of(&frame_coords());
+    for k in 0..3 {
+        c[0][k] = c[0][k] - c[0][k];
+    }
+    let s = |a: i32| f32::from_bits(crate::rotator_sin(a));
+    let co = |a: i32| f32::from_bits(crate::rotator_sin(a.wrapping_add(0x4000)));
+    let (pitch, yaw, roll) = (rd(sky + 12) as i32, rd(sky + 16) as i32, rd(sky + 20) as i32);
+    let passes = [
+        [[1.0, 0.0, 0.0], [0.0, co(roll), s(roll)], [0.0, -s(roll), co(roll)]],
+        [[co(pitch), 0.0, -s(pitch)], [0.0, 1.0, 0.0], [s(pitch), 0.0, co(pitch)]],
+        [[co(yaw), -s(yaw), 0.0], [s(yaw), co(yaw), 0.0], [0.0, 0.0, 1.0]],
+    ];
+    for m in &passes {
+        let tvb = |v: [f32; 3]| -> [f32; 3] {
+            let mut out = [0.0_f32; 3];
+            for k in 0..3 {
+                out[k] = (v[0] * m[k][0] + v[1] * m[k][1]) + v[2] * m[k][2];
+            }
+            out
+        };
+        // The pass origin is (0, 0, 0): Origin - 0.
+        let o = [c[0][0] - 0.0, c[0][1] - 0.0, c[0][2] - 0.0];
+        c = [tvb(o), tvb(c[1]), tvb(c[2]), tvb(c[3])];
+    }
+    for k in 0..3 {
+        c[0][k] = c[0][k] + rf(sky + 4 * k as u32);
+    }
+    coords_bits(&c)
+}
+
+/// URender::CreateChildFrame (0x10b15a40): merge into an equal child of
+/// `parent` (Level, iSurf, Parent, each NearClip component equal or
+/// unordered, ZoneNumber) or make a new one (prepended), with its own
+/// ComputeRenderSize; returns the child's record.
+#[allow(clippy::too_many_arguments)]
+fn create_child_frame(parent: u32, span: &SpanBuffer, i_surf: i32, zone: u8, mirror: u32, near: [u32; 4],
+    coords: &[u32; 12], bounds: Option<[f32; 4]>, kind: u32, i_node: i32) -> u32 {
+    let same = |a: u32, b: u32| {
+        let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+        x == y || x.is_nan() || y.is_nan()
+    };
+    let mut c = fw(parent, FR_CHILD);
+    while c != 0 {
+        if fw(c, FR_ISURF) as i32 == i_surf
+            && fw(c, FR_PARENT) == parent
+            && (0..4).all(|k| same(fw(c, 37 + k as u32), near[k]))
+            && fw(c, 42) == zone as u32
+        {
+            let mut s = frame_span(c);
+            s.merge_with(span);
+            set_frame_span(c, &s);
+            if let Some(b) = bounds {
+                // Expand only (0x10b15b09..0x10b15bb2): the new value when the
+                // old is below it or unordered.
+                let (fx2, fy2, rz) = (f32::from_bits(fw(c, 16)), f32::from_bits(fw(c, 17)), f32::from_bits(fw(c, 60)));
+                let nr = -rz;
+                let values = [(21, (b[0] - fx2) * nr), (23, (b[2] - fx2) * rz), (22, (b[1] - fy2) * nr),
+                    (24, (b[3] - fy2) * rz)];
+                for (k, v) in values {
+                    let old = f32::from_bits(fw(c, k));
+                    if old < v || old.is_nan() || v.is_nan() {
+                        set_prj(c, k, v.to_bits());
+                    }
+                }
+            }
+            return c;
+        }
+        c = fw(c, FR_SIBLING);
+    }
+    let f = new_record();
+    for k in 0..FR_WORDS {
+        set_fw(f, k, fw(parent, k));
+    }
+    set_fw(f, 42, zone as u32);
+    set_fw(f, FR_ISURF, i_surf as u32);
+    set_fw(f, 43, fw(parent, 43) + 1);
+    set_fw(f, 41, mirror);
+    for k in 0..4 {
+        set_fw(f, 37 + k as u32, near[k]);
+    }
+    for k in 0..12 {
+        set_fw(f, k as u32, coords[k]);
+    }
+    let un = uncoords::<P24>(coords);
+    for k in 0..12 {
+        set_fw(f, 48 + k as u32, un[k]);
+    }
+    set_fw(f, FR_PARENT, parent);
+    set_fw(f, FR_SIBLING, fw(parent, FR_CHILD));
+    set_fw(f, FR_CHILD, 0);
+    set_fw(parent, FR_CHILD, f);
+    set_fw(f, FR_KIND, kind);
+    set_fw(f, FR_NODE, i_node as u32);
+    // ComputeRenderSize (Engine, at DrawWorld's precision).
+    let input = unsafe { *addr_of!(CHILD_IN) };
+    let tan = f64::from_bits(input[2] as u64 | (input[3] as u64) << 32);
+    let size = render_size::<P24>(coords, fw(f, 12) as i32, fw(f, 13) as i32, tan, input[1]);
+    let r = &size.f;
+    for (k, v) in [(14, r[2]), (15, r[3]), (16, r[4]), (17, r[5]), (18, r[0]), (19, r[1]), (20, r[9]), (60, r[12])] {
+        set_fw(f, k, v);
+    }
+    for k in 0..4 {
+        for j in 0..3 {
+            set_fw(f, 25 + 3 * k as u32 + j as u32, size.sides[k][j]);
+        }
+    }
+    for k in 0..12 {
+        set_fw(f, FR_FIELDS + k as u32, coords[k]);
+    }
+    for k in 0..17 {
+        set_fw(f, FR_FIELDS + 12 + k as u32, r[k]);
+    }
+    for k in 0..4 {
+        for j in 0..3 {
+            set_fw(f, FR_FIELDS + 29 + 3 * k as u32 + j as u32, size.sides[k][j]);
+        }
+        for j in 0..4 {
+            set_fw(f, FR_FIELDS + 41 + 4 * k as u32 + j as u32, size.planes[k][j]);
+        }
+    }
+    for (k, v) in [(21, r[13]), (22, r[14]), (23, r[15]), (24, r[16])] {
+        set_prj(f, k, v);
+    }
+    if let Some(b) = bounds {
+        let (fx2, fy2, rz) = (f32::from_bits(r[4]), f32::from_bits(r[5]), f32::from_bits(r[12]));
+        let nr = -rz;
+        set_prj(f, 21, ((b[0] - fx2) * nr).to_bits());
+        set_prj(f, 23, ((b[2] - fx2) * rz).to_bits());
+        set_prj(f, 22, ((b[1] - fy2) * nr).to_bits());
+        set_prj(f, 24, ((b[3] - fy2) * rz).to_bits());
+    }
+    let mut s = EMPTY;
+    s.alloc_index(0, 0, GSCENE);
+    s.merge_with(span);
+    set_frame_span(f, &s);
+    f
+}
+
+/// A Prj word (21 PrjXM, 22 PrjYM, 23 PrjXP, 24 PrjYP) in the frame words and
+/// the fields.
+fn set_prj(rec: u32, k: u32, v: u32) {
+    set_fw(rec, k, v);
+    set_fw(rec, FR_FIELDS + 12 + 13 + (k - 21), v);
+}
+
+/// OccludeFrame on each child of `parent`, newest first (0x10b1a267): the
+/// child's frame words, its SetupDynamics (Setup on the candidates; no
+/// excluded actor in a child), its record in the output, its OccludeBsp,
+/// then its own children.
+fn occlude_children(parent: u32, index: &mut u32) -> u32 {
+    let mut c = fw(parent, FR_CHILD);
+    while c != 0 {
+        unsafe {
+            let f = &mut *addr_of_mut!(FRAME);
+            for (k, v) in f.iter_mut().enumerate() {
+                *v = rd(c + 4 * k as u32);
+            }
+        }
+        set_fw(c, FR_INDEX, *index);
+        *index += 1;
+        let input = unsafe { *addr_of!(CHILD_IN) };
+        if input[4] != 0 {
+            let scratch = push(GDYN, 4 * crate::setup::OW * input[5].max(1), 8);
+            crate::setup::occ_setup(input[4], input[5], scratch);
+        } else {
+            set_model(18, 0);
+        }
+        let slot = emit_frame(c);
+        let result = occlude(c);
+        if result != 0 {
+            return result;
+        }
+        wr(slot, (arena_top(OUT) - (slot + 4)) / 4);
+        let result = occlude_children(c, index);
+        if result != 0 {
+            return result;
+        }
+        c = fw(c, FR_SIBLING);
+    }
+    0
+}
+
+/// A child frame's record in the output: 0xfffffffd, its visit index, its
+/// parent's, the request kind and node, Recursion, ZoneNumber, Mirror,
+/// NearClip (4), the fields (57), Uncoords (12), its span buffer as a
+/// request carries it, and the word count of its OccludeBsp output, which
+/// follows (returns that count's address).
+fn emit_frame(c: u32) -> u32 {
+    emit(0xffff_fffd);
+    emit(fw(c, FR_INDEX));
+    emit(fw(fw(c, FR_PARENT), FR_INDEX));
+    emit(fw(c, FR_KIND));
+    emit(fw(c, FR_NODE));
+    emit(fw(c, 43));
+    emit(fw(c, 42));
+    emit(fw(c, 41));
+    for k in 37..41 {
+        emit(fw(c, k));
+    }
+    for k in 0..57 {
+        emit(fw(c, FR_FIELDS + k));
+    }
+    for k in 48..60 {
+        emit(fw(c, k));
+    }
+    let span = frame_span(c);
+    emit(span.start_y as u32);
+    emit(span.end_y as u32);
+    emit(span.valid as u32);
+    for y in span.start_y..span.end_y {
+        let mut n = 0;
+        let mut s = rd(span.line(y));
+        while s != 0 {
+            n += 1;
+            s = s_next(s);
+        }
+        emit(n);
+        let mut s = rd(span.line(y));
+        while s != 0 {
+            emit(s_start(s) as u32);
+            emit(s_end(s) as u32);
+            s = s_next(s);
+        }
+    }
+    emit(0);
+    arena_top(OUT) - 4
+}
 
 // ---- dynamics: sprites and chunks (.work/occlude/dynamics-and-drawframe.md) -----------
 //

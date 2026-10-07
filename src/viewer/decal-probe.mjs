@@ -63,3 +63,18 @@ export function laserProbe(game, actorSim) {
     time: read(level.actors[0], 'TimeSeconds'),
   };
 }
+
+/** Validation only (validate-mesh-light-types-play.mjs): `{watch: name}`
+ * keeps the mesh light setups of the actor named (mesh-lighting-view.mjs
+ * `watch`) from the next frame on; `{take: true}` returns and clears them,
+ * with the actor's Location; run on the simulation side. */
+export function meshLightProbe(meshLighting, game, { watch = null, take = false } = {}) {
+  if (!meshLighting) return null;
+  if (watch) { meshLighting.watch = { name: watch, records: [] }; return { watching: watch }; }
+  if (!take || !meshLighting.watch) return null;
+  const runtime = game.doors.scriptRuntime.runtime, level = runtime.levelFor(game.player.collisionActor);
+  const actor = level.actors.find(a => a?.name === meshLighting.watch.name);
+  const records = meshLighting.watch.records;
+  meshLighting.watch.records = [];
+  return { records, location: actor ? runtime.readNamed(actor, 'Location') : null };
+}

@@ -5,6 +5,7 @@
 import { readTexture } from '../src/unreal/textures.mjs';
 import { buildWindowSceneFrame } from '../src/runtime/script-window-scene-frame.mjs';
 import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
+import { TRACKER } from '../src/runtime/brush-tracker.mjs';
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 export const bits = value => (f32[0] = value, u32[0]);
@@ -51,4 +52,25 @@ export function occlusionModelRequest(model, textureFlags) {
     boundBits: model.renderBounds.map(b => [...b.min.map(bits), ...b.max.map(bits), b.valid ? 1 : 0]),
     zones: model.zones.map(z => ({ actor: z.actor })), zoneActors, rootOutside: model.rootOutside, numZones: model.zones.length,
   };
+}
+
+/** The oracle's model from the occlusion's memory after the tracker
+ * filtered movers in: every node, vert, point and surface (with its texture
+ * PolyFlags) the arrays hold, and the tracker's original surface count. */
+export function trackedModelRequest(occlusion, base, memory) {
+  const t = occlusion.tracker, { nodes, verts, points, surfs } = occlusion.blocks;
+  const u = new Uint32Array(memory.buffer), i32 = new Int32Array(memory.buffer), b = new Uint8Array(memory.buffer);
+  const count = k => t.header(k), range = n => Array.from({ length: n }, (_, i) => i);
+  return { ...base,
+    nodes: range(count(TRACKER.NODES_NUM)).map(i => {
+      const o = (nodes >>> 2) + 16 * i, at = nodes + 64 * i;
+      return { planeBits: [...u.subarray(o, o + 4)], zoneMask: [u[o + 4], u[o + 5]], vertexPool: i32[o + 6], surface: i32[o + 7],
+        back: i32[o + 8], front: i32[o + 9], coplanar: i32[o + 10], collisionBound: i32[o + 11], renderBound: i32[o + 12],
+        zones: [b[at + 52], b[at + 53]], vertexCount: b[at + 54], flags: b[at + 55], leaves: [i32[o + 14], i32[o + 15]] };
+    }),
+    verts: range(count(TRACKER.VERTS_NUM)).map(i => [i32[(verts >>> 2) + 2 * i], i32[(verts >>> 2) + 2 * i + 1]]),
+    pointBits: range(count(TRACKER.POINTS_NUM)).map(i => [...u.subarray((points >>> 2) + 3 * i, (points >>> 2) + 3 * i + 3)]),
+    surfs: range(count(TRACKER.SURFS_NUM)).map(i => ({ texture: i, flags: u[(surfs >>> 2) + 2 * i] })),
+    textures: range(count(TRACKER.SURFS_NUM)).map(i => ({ polyFlags: u[(surfs >>> 2) + 2 * i + 1] })),
+    brushTracker: { originalSurfs: count(TRACKER.SURFS_TOP) } };
 }

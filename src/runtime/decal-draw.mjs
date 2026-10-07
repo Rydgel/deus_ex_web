@@ -18,6 +18,7 @@
 import { toView } from '../unreal/geometry.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 import { identityOfHandle } from './script-object-handles.mjs';
+import { followDecalTracker, levelDecals } from './script-decal.mjs';
 
 const f = Math.fround;
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
@@ -51,7 +52,11 @@ export function createDecalDraw(runtime, kernel) {
      * its frame words, `viewer` the viewport actor. Returns the texture
      * groups ({texture, positions, uvs}, view space, triangles). */
     frame(level, viewer, framePtr, stream) {
-      const decals = level.decals, info = level.actors[0];
+      // The tracker came after the first AttachDecal: its model now.
+      const decals = level.decalSource !== level.decals.source ? levelDecals(level) : level.decals, info = level.actors[0];
+      // FDecals on the moving brush tracker's surfaces: their base points
+      // where the last Update left them, and their Movers' Rotation now.
+      if (decals.source && decals.store.anyFrom(decals.source.firstSurface)) followDecalTracker(decals);
       let words;
       for (;;) {
         if (!cap) { cap = 1 << 14; out = kernel.alloc(4 * cap); }

@@ -40,7 +40,9 @@ export const sceneFrameMeasuredFovs = Object.freeze([...TANGENTS.keys()]);
 const sub = (a, b) => A(a, N(b));
 const dot = (v, axis) => S(A(A(M(v[0], X(axis[0])), M(v[1], X(axis[1]))), M(v[2], X(axis[2]))));
 
-function viewCoords(rotation, location) {
+/** Core FCoords::operator/=(FRotator) (0x1011b690): the roll, pitch and yaw
+ * passes over [Origin, XAxis, YAxis, ZAxis], each row stored as float32. */
+function divideRotator(fields, rotation) {
   const [pitch, yaw, roll] = rotation;
   const s = rotatorSin, c = angle => s((angle + 0x4000) | 0);
   const passes = [
@@ -48,11 +50,21 @@ function viewCoords(rotation, location) {
     [[0, 0, 0], [c(pitch), 0, -s(pitch)], [0, 1, 0], [s(pitch), 0, c(pitch)]],
     [[0, 0, 0], [c(yaw), -s(yaw), 0], [s(yaw), c(yaw), 0], [0, 0, 1]],
   ];
-  let fields = [[0, 0, 0], [0, 1, 0], [0, 0, -1], [1, 0, 0]];
   for (const matrix of passes) fields = fields.map((field, i) => {
     const value = i === 0 ? field.map((v, j) => sub(X(v), X(matrix[0][j]))) : field.map(X);
     return [dot(value, matrix[1]), dot(value, matrix[2]), dot(value, matrix[3])];
   });
+  return fields;
+}
+
+/** GMath.UnitCoords / rotation: {origin, xAxis, yAxis, zAxis}. */
+export function coordsDivideRotator(rotation) {
+  const [origin, xAxis, yAxis, zAxis] = divideRotator([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], rotation);
+  return {origin, xAxis, yAxis, zAxis};
+}
+
+function viewCoords(rotation, location) {
+  const fields = divideRotator([[0, 0, 0], [0, 1, 0], [0, 0, -1], [1, 0, 0]], rotation);
   fields[0] = fields[0].map((v, i) => S(A(X(v), X(location[i]))));
   return fields.flat();
 }

@@ -414,6 +414,8 @@ export class ScriptRuntime {
     this.states=new Map();this.structs=new Map();this.structLayouts=new Map();this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
     this.eventsEnabled=true;
     this.conversationLists=new Map();
+    // Every object each prepared ConversationList's load reaches (prepareConversations).
+    this.conversationListObjects=new Map();
     this.conversationLifecycle=conversationLifecycle;
     this.windowLifecycle=windowLifecycle;
     this.conversationEventNative=createConversationEventsNativeService({
@@ -2015,8 +2017,19 @@ export class ScriptRuntime {
     const index=provider.indexFor(className,objectName);
     return Number.isInteger(index)?index:null;
   }
-  /** Prepare canonical reflected fields for a mission list and its source
-   * nodes. This does not perform native StaticLoadObject/PostLoad ownership. */
+  /** Prepare canonical reflected fields for a mission list and every object
+   * its load reaches. ConBindEvents loads the list through StaticLoadObject:
+   * each serialized object reference Preload reads goes through IndexToObject,
+   * whose CreateExport appends the export to GObjLoaded, and EndLoad preloads
+   * every appended entry (docs/script-linker-imports.md,
+   * docs/script-end-load.md). So the whole graph the list reaches in its
+   * package (ConItem chain, Conversations, ConFlagRef/ConEvent chains,
+   * ConSpeech, ConChoice, jumpCon targets) is loaded before BindConversations,
+   * whichever path later reads it: ConPlay, DataLinkPlay or ConPlayBark
+   * (docs/script-conversation-binding.md, "Loaded graph"). Every reference
+   * the list's exports serialize is a tagged ObjectProperty; their Outers are
+   * the package root. This does not perform native StaticLoadObject/PostLoad
+   * ownership. */
   async prepareConversations(missionNumber=0,packageName='DeusExConText') {
     if(!Number.isInteger(missionNumber)||missionNumber<0)throw new Error('Invalid conversation mission');
     const path=`ConList_Mission${String(missionNumber).padStart(2,'0')}`;
@@ -2033,9 +2046,24 @@ export class ScriptRuntime {
       seen.add(item);await this.prepareObject(item);
       await this.prepareObject(this.readNamed(item,'ConObject'));
     }
+    const loaded=new Set([list]),queue=[list];
+    while(queue.length){
+      const object=queue.pop();
+      await this.prepareObject(object);
+      for(const field of this.instance(object).cls.propertyLink){
+        if(field.metadata?.type!=='object'||field.key.startsWith('core.object.'))continue;
+        const value=this.fieldReference(object,field).get();
+        for(const target of Array.isArray(value)?value:[value]){
+          // Imports (ConSys/DeusEx classes) belong to their own packages' linkers.
+          if(!target||target.asset!==asset||loaded.has(target))continue;
+          loaded.add(target);queue.push(target);
+        }
+      }
+    }
     const conSys=await this.objects.assets.get('ConSys');
     this.conversationItemClass=await this.loadClass(conSys,conSys.exportsByPath.get('conlistitem'));
     this.conversationLists.set(key,list);
+    this.conversationListObjects.set(key,[...loaded]);
     return list;
   }
   /** Recovered DeusEx mission wrapper with explicit native loading services. */
@@ -2271,6 +2299,12 @@ export class ScriptRuntime {
         const parsed=importText('bool',rest);
         if(parsed){args[index]=parsed.value;at=text.length-parsed.rest.length;}
         else imported=false;
+      }else if(field.metadata.type==='string'&&(field.metadata.arrayDim??1)<=1){
+        // UStrProperty::ImportText 0x10167980: port flags 1 lack
+        // PPF_Delimited (2), so the FString takes the whole remaining text
+        // (to a NUL) and the buffer comes back unchanged; never NULL.
+        const end=rest.indexOf('\0');
+        args[index]=end<0?rest:rest.slice(0,end);
       }else if(field.metadata.type==='object'&&rest===''){
         // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
         // token, which is not "None", and StaticFindObject finds nothing, so
@@ -2968,6 +3002,12 @@ export class ScriptRuntime {
         read:(a,n)=>this.readNamed(a,n),
         write:(a,n,v)=>this.writeNamed(a,n,v),
         rand:typeof this.rng?.rand==='function'?()=>this.rng.rand():null,
+        // The Mover branch's AActor::SetBase(Owner, 1), the recovered one.
+        setBase:(a,target)=>{
+          const level=this.levelFor(a);
+          const dispatch=(x,name,args)=>this.dispatchSpawnedEvent(x===level?.hash?.levelInfo?level.actors[0]:x,name,args);
+          return setBase(a,target,dispatch,true);
+        },
       }),
     });
     if(call.record?.key==='engine.playerpawn.clienttravel'){

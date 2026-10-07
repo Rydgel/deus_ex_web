@@ -126,14 +126,16 @@ limits in the linked document. The [roadmap](docs/roadmap.md#4-restore-the-remai
 keeps the dated record.
 
 - **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
-  weapon ([mesh lighting](docs/mesh-lighting.md)), with GetFrame and lighting
-  on the GPU, bit-exact with the CPU kernels ([GPU mesh](docs/gpu-mesh.md));
-  DrawLodMesh's distance LOD (count selection, vertex morph, collapsed faces
-  and interpolated UVs, bit-equal to Render.dll at the pass's 24 bits) on both
-  paths ([LOD](docs/script-lodmesh-lod.md)).
-- **Visibility:** Render.dll's OccludeBsp, master frame and dynamics in the
-  Rust core, bit-exact; Play draws the polygons, mirrors, sky and fog surfaces
-  it finds visible ([BSP occlusion](docs/bsp-occlusion.md)).
+  weapon, with every LightType ([mesh lighting](docs/mesh-lighting.md)), with
+  GetFrame and lighting on the GPU, bit-exact with the CPU kernels
+  ([GPU mesh](docs/gpu-mesh.md)); DrawLodMesh's distance LOD (count
+  selection, vertex morph, collapsed faces and interpolated UVs, bit-equal to
+  Render.dll at the pass's 24 bits) on both paths ([LOD](docs/script-lodmesh-lod.md)).
+- **Visibility:** Render.dll's OccludeBsp, master frame, dynamics, moving
+  brush tracker and mirror/sky child frames in the Rust core, bit-exact; Play
+  draws each frame's polygons, mirrors, sky and fog surfaces from its own
+  result ([BSP occlusion](docs/bsp-occlusion.md)), and decals and fog on movers
+  ([brush tracker](docs/brush-tracker.md)).
 - **Light maps:** Render.dll's static path, DefaultTexture for untextured
   surfaces ([static lighting](docs/static-lighting.md)); pulse, flicker,
   strobe and waver lights re-merged each frame; moving lights such as AugLight
@@ -158,12 +160,12 @@ keeps the dated record.
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
-**Still open in Stage 4:** fog and decals on movers (the moving brush
-tracker itself now runs: closed doors occlude), the occlusion's child frames
-and mirror/sky combinations, time-varying moving lights and spotlights,
-UnrealScript inside the render events at the pass's 24-bit precision, the
-non-steady light types in mesh lighting, the LOD morph's world-space rounding
-and per-mirror selection ([LOD](docs/script-lodmesh-lod.md#play)), the darkest-pixel rounding and
+**Still open in Stage 4:** UnrealScript inside the render events at the
+pass's 24-bit precision; the LOD morph's world-space rounding and per-mirror
+selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
+camera views (the ViewportWindow family runs, its world pass is not drawn,
+[computer terminals](docs/script-window-computer-terminals.md)); per-frame fog
+maps in mirror and sky frames; the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 

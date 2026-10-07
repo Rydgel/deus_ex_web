@@ -202,6 +202,10 @@ including the `ConEventRandomLabel` head, `ConSpeech`) for every non-bark,
 non-DataLink conversation a present pawn can invoke, and prepares
 `Conversation.IsSpeakingActor`. In Training this is `MunitionsTrooperFrob`,
 `MunitionsTrooperTake` and `JaimeBark`.
+Since the mission list's load now attaches its whole graph, bark and DataLink
+conversations included ([binding](script-conversation-binding.md#loaded-graph)),
+this walk finds those objects already attached and only selects the
+candidates and their reset baseline.
 
 `scripts/validate-instructor-conversation.mjs` enters through actual
 HighlightCenterObject targeting and public `game.use()`. It verifies both owners,

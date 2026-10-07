@@ -30,7 +30,7 @@ import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { createLipSyncChannels } from '../runtime/galaxy-lipsync-channels.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
-import { collectTrackerMovers, moverTrackerMode, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
+import { collectTrackerMovers, moverTrackerMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
@@ -65,7 +65,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     notes.push(`${actorSim.summary.npcs} NPC and ${actorSim.summary.props} prop meshes render live original poses and original mesh lighting in Play. ${meshLod === 'off' ? 'Distance LOD is off (?meshLod=off). ' : ''}Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
     for (const error of actorSim.summary.errors) notes.push(`${error.actor}: ${error.message}`);
   } catch (error) { notes.push(`Actor meshes unavailable: ${error.message}`); }
-  const session = createSimSession(game, { assets, events });
+  const session = createSimSession(game, { assets, events, exportName });
   session.setScene(stampScene, actorSim);
   if (meshLighting) session.setMeshLighting(meshLighting);
   const hudTextures = game.hud ? session.hudTextures() : null;
@@ -120,6 +120,9 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
         const status = current.tracker.construct({ pc64: true });
         if (status) throw new Error(`the brush tracker's blocks are too small (status ${status})`);
       }
+      // AttachDecal and the decal block over the level model as the tracker
+      // holds it (script-decal.mjs levelDecals, docs/decals.md "Movers").
+      level.decalSource = specs ? trackerDecalSource(current, map.model, kernel.memory, actors, read) : null;
       session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
       occlusionNow = current;
     };

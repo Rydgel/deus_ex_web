@@ -106,6 +106,9 @@ const selected = option('maps', null)?.split(',');
 const maps = (await readdir(path.join(root, 'Maps'))).filter(n => n.toLowerCase().endsWith('.dx') && !/^dxmp_/i.test(n))
   .map(n => path.basename(n, '.dx')).filter(n => !selected || selected.includes(n)).sort();
 const mapLights = {}, reach = new Map();
+// Every lit light by LightType, whatever its class: mesh lighting
+// (SetupForActor's GlobalLighting) takes static and moving lights alike.
+const lightTypes = new Map();
 const note = (key, source) => { const entry = reach.get(key) ?? { pair: key, sources: new Map() }; entry.sources.set(source, (entry.sources.get(source) ?? 0) + 1); reach.set(key, entry); };
 for (const map of maps) {
   const asset = await assets.get(map), decoded = decodeMap(asset.bytes), rows = {};
@@ -116,6 +119,11 @@ for (const map of maps) {
     const className = lineage[0], scripted = writers.some(w => w.class === className && w.target === 'self');
     if (!values.LightType && !scripted) continue;
     const lit = Boolean(values.LightType), candidate = lit && isMovingLightCandidate(values);
+    if (lit && values.LightBrightness) {
+      const type = TYPES[values.LightType] ?? values.LightType, entry = lightTypes.get(type) ?? { lights: 0, maps: new Set(), classes: new Map() };
+      entry.lights++; entry.maps.add(map); entry.classes.set(className, (entry.classes.get(className) ?? 0) + 1);
+      lightTypes.set(type, entry);
+    }
     const cls = lit ? surfaceLightClass(values) : null;
     // bIsOn (AlarmLight, Lamp, ...) decides whether BeginPlay keeps the light.
     const on = values.bIsOn === undefined ? '' : ` bIsOn=${Boolean(values.bIsOn)}`;
@@ -134,6 +142,8 @@ const result = {
     addLight: surfaceLightClass(c.values), candidate: isMovingLightCandidate(c.values) })),
   writers, spawns,
   classTwoPairs: [...reach.values()].map(e => ({ pair: e.pair, sources: Object.fromEntries(e.sources) })),
+  lightTypes: Object.fromEntries([...lightTypes].map(([type, e]) => [type, { lights: e.lights, maps: [...e.maps],
+    classes: Object.fromEntries(e.classes) }])),
   mapLights,
 };
 if (argv.includes('--text')) {
@@ -144,6 +154,9 @@ if (argv.includes('--text')) {
   for (const w of writers) console.log(`  ${w.class}:${w.line} ${w.target}.${w.field} = ${w.value}`);
   console.log('\nSpawned light classes:');
   for (const s of spawns) console.log(`  ${s.by} -> ${s.spawns}`);
+  console.log('\nEvery lit map light by LightType (any class):');
+  for (const [type, e] of Object.entries(result.lightTypes))
+    console.log(`  ${type.padEnd(20)} ${String(e.lights).padStart(5)} lights in ${e.maps.length} maps: ${Object.entries(e.classes).map(([c, n]) => `${c}×${n}`).join(', ').slice(0, 300)}`);
   console.log('\nClass 2 reach (map actors) and script-lit/spawned sources:');
   for (const e of result.classTwoPairs) console.log(`  ${e.pair}: ${Object.entries(e.sources).map(([k, n]) => `${k}${n > 1 ? `×${n}` : ''}`).join(', ')}`);
 } else console.log(JSON.stringify(result, null, 1));

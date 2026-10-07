@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { POLY, toView, fromView } from '../unreal/geometry.mjs';
-import { MIRROR_RECURSION_LIMIT, mirrorsMayRender, planMirrorPasses } from './mirror-passes.mjs';
+import { MIRROR_RECURSION_LIMIT, mirrorsMayRender, planMirrorPasses, planFramePasses } from './mirror-passes.mjs';
 export { MIRROR_RECURSION_LIMIT };
 
 /** Original OccludeBsp reflects Origin and all three axes. Keep the negative
@@ -113,7 +113,13 @@ export function createMirrors(notes, displayGamma) {
     for (const group of planes.values()) follow(group);
     return mirrorsMayRender(source, [...planes.values()], undefined, requested);
   }
-  function render(renderer, scene, source, { markers, updateActors, sky, requested = null } = {}) {
+  /** `frames` (OccludeFrame's child frames, sim-session.mjs visibility;
+   * `rect` their render viewport in drawing-buffer pixels) plan the passes
+   * instead of the frustum; `framePass(frame)` selects one frame's world and
+   * sprites (null: all again) and `skyIn(skyFrame, camera)` draws the sky
+   * frame OccludeBsp made inside a mirror frame, before the mirror's view. */
+  function render(renderer, scene, source, { markers, updateActors, sky, requested = null, frames = null, rect = null,
+    framePass = null, skyIn = null } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
     if (!planes.size) return;
     for (const group of planes.values()) group.active.value = 0;
@@ -125,7 +131,8 @@ export function createMirrors(notes, displayGamma) {
     source.updateMatrixWorld();
     for (const group of planes.values()) for (const mesh of group.meshes) mesh.updateWorldMatrix(true, false);
     for (const group of planes.values()) follow(group);
-    if (!mayRender(source, requested)) return;
+    const plan = frames ? planFramePasses(source, [...planes.values()], renderer.getDrawingBufferSize(size), frames, rect) : null;
+    if (frames ? !plan.length : !mayRender(source, requested)) return;
     renderer.getDrawingBufferSize(size);
     const target = renderer.getRenderTarget(), clearColor = renderer.getClearColor(new THREE.Color());
     const clearAlpha = renderer.getClearAlpha();
@@ -153,10 +160,17 @@ export function createMirrors(notes, displayGamma) {
         updateActors?.(fromView(child.position.toArray()), child, node);
         renderer.setRenderTarget(target); renderer.setClearColor(0, 1);
         renderer.clear();
+        // The sky frame inside this mirror frame, unclipped, then depth again.
+        if (node.sky && skyIn) {
+          renderClip.normal.set(0, 0, 0); renderClip.constant = 1; renderer.clippingPlanes = clippingPlanes;
+          skyIn(node.sky, child);
+          renderer.clearDepth();
+        }
+        framePass?.(node.frame ?? null);
         // Clip geometry behind the original mirror plane, not the reflected
         // eye's side. No bias or invented distance/opacity constant.
         renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;
-        renderer.render(scene, child);
+        try { renderer.render(scene, child); } finally { framePass?.(null); }
         for (const mesh of group.meshes) mesh.visible = visibility.get(mesh);
         stats.renderedPlanes++;stats.depth=Math.max(stats.depth,depth);stats.scissorPixels+=scissor.width*scissor.height;
         result.push({ group, target });
@@ -164,10 +178,10 @@ export function createMirrors(notes, displayGamma) {
       return result;
     }
     try {
-      const rendered = draw(planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh), requested));
+      const rendered = draw(plan ?? planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh), requested));
       for (const group of planes.values()) group.active.value = 0;
       for (const { group, target } of rendered) { group.texture.value = target.texture; group.size.value.copy(size); group.active.value = 1; }
-      if (sky) notes.add('Mirror views through sky-zone openings are not yet verified.');
+      if (sky && !frames) notes.add('Mirror views through sky-zone openings are not yet verified.');
     } finally {
       for (const [mesh, value] of visibility) mesh.visible = value;
       if (markers) markers.visible = markerVisible;

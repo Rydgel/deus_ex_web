@@ -415,9 +415,13 @@ class Attach(native.NativeCollision):
         self.supply(m + 0x98, '3I', surf_data, len(surfs), len(surfs))
         # Surface actors: shipped level BSP surfaces are all Brush actors. A
         # scenario may override a surface's actor (e.g. a Mover with a Rotation).
+        # A model the moving brush tracker filtered gives each tracker surface
+        # its Mover (`mover`: that Mover's Rotation).
         brush = self.trap_alloc(0x200, 'Brush')
         self.supply(brush + 0x24, 'I', BRUSH_CLASS)
         movers = {}
+        overrides = {**{str(i): {'class': 'Mover', 'rotation': s['mover']} for i, s in enumerate(surfs) if s.get('mover')},
+                     **overrides}
         for key, spec in overrides.items():
             actor = self.trap_alloc(0x200, f'SurfActor{key}')
             self.supply(actor + 0x24, 'I', {'Mover': MOVER_CLASS, 'Brush': BRUSH_CLASS}[spec['class']])
@@ -433,8 +437,13 @@ class Attach(native.NativeCollision):
             self.supply(p + 0x24, 'I', actor)
             self.supply(p + 0x28, '6I', 0, 0, 0, 0, 0, 0)  # Decals and Nodes empty, as after load
         # FBspSurf.Nodes is not serialized; UModel::PostLoad (0x103ace90) adds
-        # every node index to its surface's list. Run it unchanged.
+        # every node index to its surface's list. Run it unchanged, at load:
+        # over the nodes before the tracker added its fragments (whose
+        # surfaces' Nodes stay empty, docs/brush-tracker.md).
+        original = model.get('originalNodes', len(nodes))
+        self.supply(m + 0x5c, 'I', original)
         self.call_native(UMODEL_POSTLOAD, m, b'', 0x037f)
+        self.supply(m + 0x5c, 'I', len(nodes))
         # The level objects AttachDecal follows.
         self.level_info = self.trap_alloc(0x400, 'LevelInfo')
         self.xlevel = self.trap_alloc(0x100, 'XLevel')

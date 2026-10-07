@@ -250,8 +250,15 @@ headless Chromium in the default worker mode with real keyboard events:
 
 The worker-side `windowProbe` (`src/viewer/window-probe.mjs`) reads the
 note, as `decalProbe` does for decals. The '€' is in the text but nothing
-is drawn for it in the screenshot. The font's coverage of 0x20ac (its
-character pages and the glyph-miss path) was not checked here.
+is drawn for it in the screenshot, which is the original's result:
+* every installed font (the 23 in DeusExUI.u, the six Tech fonts in
+  Extension.u, Engine.u's Small/Med/BigFont) has one page of 256
+  characters; Engine.u's LargeFont has four pages of 64;
+* Extension's glyph mapper (`0x10026880`/`0x10026950`, `uFontGlyph`) puts
+  0x20ac on page 0x20ac / 256 = 32, which is past the page count, and
+  returns the zero glyph record (`0x100aeba0`): no tile, no advance;
+* validate-gc-get-text-extent's mutation that forces every unit out of page
+  range fails it, so the original's miss path is the one compared.
 
 ## Unresolved
 

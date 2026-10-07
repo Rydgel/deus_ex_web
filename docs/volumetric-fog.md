@@ -218,14 +218,36 @@ generic over three register models (`Reg`):
   `ONE_MINUS_SRC_ALPHA`, Z writes and `LessEqual`. It samples the fog atlas
   at the light UVs, doubling the seven-bit channels as the light-map shader
   does.
+- **Movers** (with the [brush tracker](brush-tracker.md), 2026-10-07). A
+  mover polygon is an FBspSurf of the level model, so SetupForSurf gives
+  each of its draw items a fog map under the same gate: the item's zone is
+  bFogZone and the surface has a light map. For a dynamic surface the
+  light-map index comes from `Surf.Actor->Brush` (`0x10b06e2c..0x10b06e4a`);
+  the lattice uses the surface's own pBase and vectors, which each Update
+  rewrites in world space.
+  - On maps with a fog zone, world.mjs collects every lit mover polygon,
+    parented to its mover's group.
+  - The simulation sends each drawn polygon's draw-item zones (`moverZones`)
+    and its tracker surface's pBase, vTextureU, vTextureV and vNormal
+    (`moverFacets`, `brush-tracker.mjs surfaceFacet`).
+  - The pass builds the lattice as for level surfaces (`lightmapBasis`,
+    p00, p10 and p01) from those vectors and the Brush's light-map index,
+    then runs the same loop.
 - **Check.** `validate-volumetric-fog-play.mjs` stands in 02_NYC_Bar's
   Light90 volume, in the default mode with the simulation in the worker
   (`placeProbe` moves the player there; `--query sim=inline` runs it on the
-  page). 919 fog-zone surfaces are collected, the 7 that OccludeBsp draws
-  in that view get fog maps (8,704 texels) through the Rust loop, and the
-  frame changes with the pass (2026-10-06; before occlusion, 264 surfaces
-  in the frustum did). The haze takes the light's blue and thickens with
-  distance.
+  page).
+  - 949 surfaces are collected: 919 fog-zone level surfaces and 30 lit
+    mover polygons.
+  - The 7 that OccludeBsp draws in that view get fog maps (8,704 texels)
+    through the Rust loop, and the frame changes with the pass (2026-10-06;
+    before occlusion, 264 surfaces in the frustum did).
+  - The haze takes the light's blue and thickens with distance.
+  - **Mover phase.** The player then faces DeusExMover9, a door in the
+    bar's fog zone about 1,900 units from Light90. Its drawn polygon 4 gets
+    a 4×8 fog map. Its inputs (lattice, frame coords, light, early-out
+    flag) go through the unchanged Render.dll loop
+    (`native-volumetric-fog-oracle.py`), and the texels are equal.
 
 Unverified or host choices, noted:
 - **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
@@ -237,9 +259,15 @@ Unverified or host choices, noted:
   flag then sees a different sequence.
 - **Brightness and colour.** Volumetric lights use their steady brightness
   and colour; GlobalLighting's LightType animation is not applied to them.
-- **Not fogged.** Mover surfaces get no fog until the brush tracker; meshes
-  draw unfogged as D3D does ("Mesh fog"). Mirror child views reuse the
-  main frame's fog maps instead of their own frames'.
+- **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog"). Mirror
+  child views reuse the main frame's fog maps instead of their own
+  frames'.
+- **Mover polygons.** A mover polygon draws whole with one fog map. It is
+  fogged when any of its draw items lies in a bFogZone zone. The original
+  computes a map per draw item (fragment) and gates each by its own zone.
+  The lattice's derivation (`lightmapBasis`, in doubles rounded to floats)
+  is the one used for level surfaces, and it is not separately checked
+  against SetupForSurf's own lattice code.
 - **Gamma.** The display ramp maps the finished frame after the pass
   blends ([lighting](lighting.md), "Display ramp"), as the original's
   SetGammaRamp does. Until 2026-10-03 it applied per fragment, before
@@ -253,7 +281,6 @@ Unverified or host choices, noted:
 - **Draw order.** The early-out flag persists across surfaces in the
   original draw order. Play's surface order differs, which can change
   boundary texels.
-- **Not done yet.** Fog on movers (with the brush tracker).
 
 ## Mesh fog
 
@@ -297,8 +324,8 @@ face helper into the real D3D vtable, at the render pass's 0x007f).
 (mesh lighting, decals, the display ramp): meshes draw unfogged, which is
 what the shipped configuration shows. UseVertexFog = True (specular fog,
 and masked fogged meshes failing the alpha test at `0x78`) and the Glide
-pass are explicitly unsupported options. Mover fog arrives with the brush
-tracker ([BSP occlusion](bsp-occlusion.md)).
+pass are explicitly unsupported options. Mover surfaces are fogged by the
+fog-map pass ("Play", Movers).
 
 Precision: FLightManager::Fog runs in the render pass (24-bit). At
 `0x007f` its FPlanes differ from the `0x037f` results in 328 of 480

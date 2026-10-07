@@ -14,7 +14,19 @@
  * every surface's FDecal list (actor, Vertices bits, Nodes, MoverRotation, in
  * TArray order) must match.
  *
- *   node scripts/validate-decal-attach.mjs [--map 00_Training] [--compare]
+ * With --tracker the model is the one the moving brush tracker filtered the
+ * map's movers into (brush-tracker.mjs trackedModel; the movers at their
+ * placement, then the first two raised 96 units by an Update at 24 bits):
+ * every tracker surface's Actor is its Mover, and the scenarios add
+ * bullet holes, scorch marks and blood splats on mover fragments (the
+ * Mover branch: MoverRotation, SetBase(Owner, 1)). Two checks of Play's
+ * plumbing follow (the port against itself, not the original): each
+ * scenario's store is laid out for more surfaces after its first operation
+ * (decal-kernel.mjs setModel), and a decal model uploaded before three more
+ * Updates and synced after them (decal.rs `decal_model_sync`) must equal
+ * one uploaded after them.
+ *
+ *   node scripts/validate-decal-attach.mjs [--map 00_Training] [--compare] [--tracker]
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -27,7 +39,11 @@ import { decalModelJson } from './decal-model-export.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
-import { uploadDecalModel, createDecalStore, bitsF32, DecalKernelFault } from '../src/runtime/decal-kernel.mjs';
+import { uploadDecalModel, createDecalStore, bitsF32 } from '../src/runtime/decal-kernel.mjs';
+import { createBspOcclusion, texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
+import { collectTrackerMovers, trackedModel, trackerMoverSpec, trackerTextureFlags, TRACKER } from '../src/runtime/brush-tracker.mjs';
+import { readTexture } from '../src/unreal/textures.mjs';
+import { surfaceTextureFlags as textureFlagsOf } from './occlusion-request.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
@@ -45,11 +61,34 @@ for (const directory of ['Maps', 'System', 'Textures'])
     files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 const assets = new AssetStore(files), asset = await assets.get(mapName), map = decodeMap(asset.bytes);
 
+// --tracker: the model as the moving brush tracker filtered the movers in.
+let model = map.model, moverRotation = null, trackerNote = '', tracked = null;
+if (argv.includes('--tracker')) {
+  const occlusionKernel = (await loadScriptVmKernel()).occlusion;
+  const movers = await collectTrackerMovers(assets, asset, map);
+  await trackerTextureFlags(assets, asset, movers, object => texturePolyFlags(readTexture(object.asset, object.index).values));
+  const rotations = movers.map(m => (m.values.Rotation ?? [0, 0, 0]).map(v => v | 0));
+  const occlusion = createBspOcclusion(occlusionKernel, map.model, { surfaceTextureFlags: await textureFlagsOf(assets, asset, map.model),
+    tracker: { movers: movers.map((m, i) => trackerMoverSpec(m, i, { hidden: m.values.bHidden, location: m.values.Location ?? [0, 0, 0],
+      rotation: rotations[i], prePivot: m.values.PrePivot ?? [0, 0, 0] })) } });
+  assert.equal(occlusion.tracker.construct({ pc64: true }), 0, 'tracker construction');
+  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), bitsOf = v => (f32[0] = v, u32[0]);
+  for (const i of [0, 1].filter(i => i < movers.length)) {
+    occlusion.tracker.setMover(i, { locationBits: (movers[i].values.Location ?? [0, 0, 0]).map((v, k) => bitsOf(Math.fround(v + (k === 2 ? 96 : 0)))),
+      rotation: rotations[i] });
+    occlusion.tracker.update(i);
+  }
+  model = trackedModel(occlusion, map.model, occlusionKernel.memory);
+  moverRotation = i => rotations[i];
+  tracked = { occlusion, occlusionKernel, movers, rotations, bitsOf };
+  trackerNote = ` with ${movers.length} tracked movers (${model.nodes.length - model.originalNodes} pool nodes)`;
+}
+
 const scratch = await mkdtemp(path.join(os.tmpdir(), 'decal-attach-'));
 let cases;
 try {
   const modelPath = path.join(scratch, 'model.json');
-  await writeFile(modelPath, JSON.stringify(decalModelJson(mapName, map)));
+  await writeFile(modelPath, JSON.stringify(decalModelJson(mapName, map, { model, moverRotation })));
   const started = performance.now();
   cases = JSON.parse(execFileSync(python, ['scripts/native-decal-cases.py', root, modelPath,
     ...(argv.includes('--compare') ? ['--compare'] : [])], { encoding: 'utf8', maxBuffer: 1 << 30 }));
@@ -58,16 +97,17 @@ try {
   await rm(scratch, { recursive: true, force: true });
 }
 
-const counts = { scenarios: 0, ops: 0, attaches: 0, attached: 0, decals: 0, neighbours: 0, boundaries: 0, exits: {} };
+const counts = { scenarios: 0, ops: 0, attaches: 0, attached: 0, decals: 0, neighbours: 0, moverBranches: 0, exits: {} };
 for (const [index, scenario] of cases.request.scenarios.entries()) {
   const reference = cases.results0x037f[index];
   assert.equal(reference.name, scenario.name);
   assert.ok(!reference.error, `${scenario.name}: oracle error ${reference.error}`);
   const surfaceFlags = scenario.surfaceFlags
     ? Object.fromEntries(Object.entries(scenario.surfaceFlags).map(([k, v]) => [Number(k), v])) : null;
-  const movers = new Set(Object.entries(scenario.surfaceActors ?? {})
-    .filter(([, actor]) => /mover/i.test(actor.class)).map(([k]) => Number(k)));
-  const decalModel = uploadDecalModel(kernel, map.model, { surfaceFlags, isMover: s => movers.has(s) });
+  const movers = new Map(Object.entries(scenario.surfaceActors ?? {})
+    .filter(([, actor]) => /mover/i.test(actor.class)).map(([k, actor]) => [Number(k), actor.rotation ?? [0, 0, 0]]));
+  const decalModel = uploadDecalModel(kernel, model, { surfaceFlags,
+    isMover: s => movers.get(s) ?? (model.surfaces[s]?.dynamic ? moverRotation(model.surfaces[s].mover) : null) });
   const store = createDecalStore(kernel, decalModel, { capacity: 4 });
   const actors = new Map(), textures = new Map(), touched = new Set();
   const actorOf = name => {
@@ -88,23 +128,21 @@ for (const [index, scenario] of cases.request.scenarios.entries()) {
         const drawScale = op.drawScaleBits !== undefined ? bitsF32(op.drawScaleBits) : Math.fround(op.drawScale);
         const level = Math.min(op.multiDecalLevel | 0, 4);
         assert.equal(level, expected.multiDecalLevel, `${where}: clamped MultiDecalLevel`);
-        let out;
-        try {
-          out = store.attach({ actor: actor.id, location, rotation: op.rotation, traceDistance: Math.fround(op.args[0]),
-            decalDir: (op.args[1] ?? [0, 0, 0]).map(Math.fround), drawScale, uSize: op.texture.USize, level,
-            texture: actor.texture, surfList: actor.surfList }, {
-            rand: () => { if (!rands.length) throw new Error(`${where}: rand() beyond the recorded values`); return rands.shift(); },
-            textureOf: id => [...actors.values()].find(a => a.id === id)?.texture ?? 0,
-          });
-        } catch (error) {
-          // The Mover branch (MoverRotation, AActor::SetBase) is a labelled
-          // boundary: no shipped level surface belongs to a Mover.
-          if (error instanceof DecalKernelFault && error.fault === 6 && movers.size) {
-            assert.ok(expected.events.some(event => event.op === 'SetBase'), `${where}: the original reached SetBase`);
-            counts.boundaries++;
-            break;
-          }
-          throw error;
+        const out = store.attach({ actor: actor.id, location, rotation: op.rotation, traceDistance: Math.fround(op.args[0]),
+          decalDir: (op.args[1] ?? [0, 0, 0]).map(Math.fround), drawScale, uSize: op.texture.USize, level,
+          texture: actor.texture, surfList: actor.surfList }, {
+          rand: () => { if (!rands.length) throw new Error(`${where}: rand() beyond the recorded values`); return rands.shift(); },
+          textureOf: id => [...actors.values()].find(a => a.id === id)?.texture ?? 0,
+        });
+        // The Mover branch: the original called this->SetBase(Owner, 1),
+        // which the port leaves to its host.
+        const setBases = (expected.events ?? []).filter(event => event.op === 'SetBase');
+        assert.equal(out.setBase, setBases.length > 0, `${where}: SetBase(Owner, 1) requested`);
+        if (setBases.length) {
+          assert.equal(setBases.length, 1, `${where}: one SetBase`);
+          assert.equal(setBases[0].notify, 1, `${where}: SetBase's bNotifyActor`);
+          assert.equal(setBases[0].newBase, op.owner ?? 0, `${where}: SetBase's NewBase is the decal's Owner`);
+          counts.moverBranches++;
         }
         actor.surfList.push(...out.appended);
         for (const s of out.appended) touched.add(s);
@@ -117,6 +155,8 @@ for (const [index, scenario] of cases.request.scenarios.entries()) {
         store.detach({ actor: actor.id, surfList: actor.surfList });
         actor.surfList = [];
       }
+      // Play's store growing into the tracker's surfaces (setModel).
+      if (tracked && k === 0) store.setModel({ ...decalModel, surfaceCount: decalModel.surfaceCount + 7 });
       assert.deepEqual(actor.surfList, expected.surfList, `${where}: SurfList`);
       for (const s of Object.keys(expected.decals)) touched.add(Number(s));
       const got = {};
@@ -147,9 +187,45 @@ for (const [index, scenario] of cases.request.scenarios.entries()) {
   }
   counts.scenarios++;
 }
+// Play's decal model following the tracker: upload, three more Updates
+// (movers 0 and 1 back to their placement, mover 2 turned), sync, and
+// compare with a fresh upload.
+if (tracked) {
+  const { occlusion, occlusionKernel, movers, rotations, bitsOf } = tracked, t = occlusion.tracker;
+  const isMover = m => s => (m.surfaces[s]?.dynamic ? moverRotation(m.surfaces[s].mover) : null);
+  const pointCapacity = t.header(TRACKER.POINTS_CAP);
+  const before = uploadDecalModel(kernel, model, { pointCapacity, isMover: isMover(model) });
+  const generation = t.header(TRACKER.GENERATION);
+  for (const i of [0, 1, 2].filter(i => i < movers.length)) {
+    const location = (movers[i].values.Location ?? [0, 0, 0]).map(v => bitsOf(Math.fround(v)));
+    const rotation = i === 2 ? [rotations[i][0], (rotations[i][1] + 4096) | 0, rotations[i][2]] : rotations[i];
+    t.setMover(i, { locationBits: location, rotation });
+    t.update(i);
+  }
+  assert.ok(t.header(TRACKER.GENERATION) !== generation, 'the Updates advance the tracker generation');
+  assert.ok(before.sync(), 'decal_model_sync fits');
+  const after = trackedModel(occlusion, map.model, occlusionKernel.memory);
+  const fresh = uploadDecalModel(kernel, after, { pointCapacity, isMover: isMover(after) });
+  const regions = m => {
+    const u = new Uint32Array(kernel.memory.buffer), h = i => u[(m.base >>> 2) + i], trace = h(7) >>> 2;
+    const at = (ptr, n) => u.subarray(ptr >>> 2, (ptr >>> 2) + n);
+    const traceNodes = [];
+    for (let i = 0; i < u[trace]; i++) traceNodes.push(...u.subarray(trace + 8 + 16 * i, trace + 8 + 16 * i + 13));
+    return { counts: [h(0), h(8), h(9), h(10), h(11), h(12)], nodes: at(h(1), 4 * h(0)), verts: at(h(2), h(9)),
+      points: at(h(3), 3 * h(10)), vectors: at(h(4), 3 * h(11)), surfs: at(h(5), 9 * h(8)), lists: at(h(6), h(12)),
+      traceHeader: [u[trace], u[trace + 1], u[trace + 3]], traceNodes, hulls: at(u[trace + 2], u[trace + 3]) };
+  };
+  const a = regions(before), b = regions(fresh);
+  for (const key of Object.keys(a)) {
+    assert.equal(a[key].length, b[key].length, `synced model ${key} length`);
+    for (let i = 0; i < a[key].length; i++) if (a[key][i] !== b[key][i]) assert.fail(`synced model ${key} word ${i}: ${a[key][i]} vs ${b[key][i]}`);
+  }
+  before.dispose(); fresh.dispose();
+  trackerNote += `; store resized per scenario, synced model equal to a fresh upload after ${movers.length > 2 ? 3 : movers.length} Updates`;
+}
 const exits = Object.entries(counts.exits).map(([exit, n]) => `${exit} ${n}`).join(', ');
-console.log(`validate-decal-attach: ${mapName}: ${counts.scenarios} scenarios, ${counts.ops} operations, ` +
+console.log(`validate-decal-attach: ${mapName}${trackerNote}: ${counts.scenarios} scenarios, ${counts.ops} operations, ` +
   `${counts.attaches} AttachDecal calls (${exits}), ${counts.neighbours} neighbour FDecals, ` +
-  `${counts.boundaries} Mover boundary as designed; every FDecal list bit-equal to the original; PASS`);
+  `${counts.moverBranches} Mover branch (MoverRotation, SetBase(Owner, 1)); every FDecal list bit-equal to the original; PASS`);
 if (Object.keys(cases.controlWordComparison ?? {}).length)
   console.log(`control words: ${JSON.stringify(cases.controlWordComparison)}`);

@@ -11,8 +11,10 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * DeusExPlayer.ShowHud run). `location`/`rotation` write Location, a zero
  * Velocity and ViewRotation directly, as the console's SET does
  * (UObject::GlobalSetProperty imports the text into the field; for a
- * non-brush actor nothing else follows). Returns the player's state. */
-export function viewProbe(game, { playersOnly = false, timeDilation = null, ghost = false, location = null, rotation = null } = {}) {
+ * non-brush actor nothing else follows). `exec` runs further console
+ * commands the same way, after the same bCheatsEnabled write (main.mjs
+ * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
+export function viewProbe(game, { playersOnly = false, timeDilation = null, ghost = false, location = null, rotation = null, exec = [] } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -26,10 +28,11 @@ export function viewProbe(game, { playersOnly = false, timeDilation = null, ghos
   const read = name => runtime.readNamed(player, name);
   const commands = game.doors.scriptRuntime.windowHost?.consoleCommands;
   const output = [];
-  if (ghost) {
+  if (ghost || exec.length) {
     if (!commands) throw new Error('viewProbe: the console command chain needs the window host');
     runtime.writeNamed(player, 'bCheatsEnabled', true);
-    for (const command of ['ghost', 'ShowHud False']) output.push(commands.consoleCommand(player, command));
+    for (const command of [...(ghost ? ['ghost', 'ShowHud False'] : []), ...exec])
+      output.push(commands.consoleCommand(player, command));
   }
   if (location) {
     runtime.writeNamed(player, 'Location', location.map(Math.fround));
