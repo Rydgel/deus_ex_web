@@ -25,3 +25,4 @@ reports/
 *.dx
 *.unr
 /Reference/
+embed/out/
