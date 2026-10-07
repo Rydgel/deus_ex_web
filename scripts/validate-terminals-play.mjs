@@ -20,11 +20,13 @@
  *    e-mail screen with its list (01_EmailMenu_klloyd) and the first
  *    message's text; Escape logs out, and Escape on the login screen closes
  *    the terminal.
- *  - ComputerSecurity1 (NetworkTerminalSecurity): the login succeeds and
- *    the security screen's camera ViewportWindows are admitted
- *    (docs/script-window-viewport.md); the screen then stops at its pan
- *    slider's ScaleManagerWindow native 1667 (SetMarginSpacing), which is
- *    not translated yet (an explicit, labelled boundary).
+ *  - ComputerSecurity1 (NetworkTerminalSecurity): NSF001 logs in to the
+ *    security screen. View 1 renders from SecurityCamera5 (one 'viewport'
+ *    draw command); views 2 and 3 have no camera. Left pans and Equals zooms
+ *    the camera; the four choices turn the camera off, unlock and open
+ *    DeusExMover10 and set AutoTurretSmall0 to attack enemies; 2 selects the
+ *    second view; Escape logs out and closes. The page-side camera image is
+ *    not checked here (docs/script-window-viewport.md).
  * 01_NYC_UNATCOHQ:
  *  - ComputerPublic0 (NetworkTerminalPublic): six bulletins, the first shown,
  *    Down shows the second, Escape closes, and the computer turns off.
@@ -151,19 +153,80 @@ const checks = [];
     assert.equal(topWindow(), null, 'Escape on the login screen closes the terminal');
     checks.push(`ComputerPersonal0: KLloyd, ${rows.length} e-mail(s) ("${rows[0]}"), logout, close`);
   }
-  // The login works; the pan slider's ScaleManager native is the boundary.
+  // Login, the three camera views, pan/zoom, the camera/door/turret choices,
+  // camera selection and logout, all through the original screen scripts.
   if (only === 'ComputerSecurity1') {
     const {terminal} = open('ComputerSecurity1');
     assert.equal(cls(terminal), 'deusex.networkterminalsecurity');
     assert.equal(cls(rd(terminal, 'winComputer')), 'deusex.computerscreenlogin');
     typeText('NSF001'); key('Tab');
     for (const ch of 'smashthestate') type(`Key${ch.toUpperCase()}`, ch);
-    let boundary = null;
-    try { enter(); } catch (error) { boundary = String(error.message).split('\n')[0]; }
+    enter();
     assert.equal(rd(terminal, 'userName'), 'NSF001', 'the security login succeeds');
-    assert.match(boundary ?? '', /Unsupported original door native 1667 in menuuisliderbuttonwindow\.initwindow/,
-      'the security screen stops at the pan slider native 1667 (explicitly unsupported)');
-    checks.push('ComputerSecurity1: NSF001 logs in; the pan slider ScaleManager native 1667 is unsupported');
+    const screen = rd(terminal, 'winComputer');
+    assert.equal(cls(screen), 'deusex.computerscreensecurity');
+    const cams = rd(screen, 'winCameras'), names = o => o?.name ?? null;
+    assert.deepEqual(cams.map(c => [names(rd(c, 'camera')), names(rd(c, 'door')), names(rd(c, 'turret'))]),
+      [['SecurityCamera5', 'DeusExMover10', 'AutoTurretSmall0'], [null, null, null], [null, null, null]],
+      "InitCameras binds ComputerSecurity1's Views by tag");
+    assert.equal(rd(screen, 'selectedCamera'), cams[0], 'SelectFirstCamera presses the first camera button');
+    const camera = rd(cams[0], 'camera'), viewport = c => rd(c, 'winCamera');
+    assert.equal(W.ptr(viewport(cams[0]), 0x15c), camera, 'the first view renders from its camera');
+    assert.deepEqual(cams.map(c => W.u32(viewport(c), 0x14c) & 1), [1, 0, 0], 'views without a camera are disabled (no signal)');
+    // XViewportWindow::Draw queues one world view, from the camera, hiding it.
+    const views = () => game.hud.commands(1432, 1268, {location: game.player.eye, rotation: game.player.viewRotation, fov: 75})
+      .filter(c => c.kind === 'viewport');
+    let [view] = views();
+    assert.equal(views().length, 1, 'one viewport draw command');
+    assert.deepEqual(view.location, rd(camera, 'Location').map(Math.fround));
+    assert.deepEqual(view.rotation, rd(camera, 'Rotation'));
+    assert.deepEqual([view.fov, view.clearZ, view.hidden], [90, true, ['SecurityCamera5']]);
+    // PanCamera starts from ReplicatedRotation. This camera sees the player
+    // (bPlayerSeen), so its Tick returns before refreshing that rotation and
+    // each pan restarts from the same stale value, as the script is written.
+    const panMod = rd(screen, 'panMod'), panSize = rd(screen, 'panSize'), zoomSize = rd(screen, 'zoomSize');
+    const replicated = rd(camera, 'ReplicatedRotation');
+    key('ArrowLeft');
+    const turned = [replicated[0], replicated[1] - Math.trunc(panMod * panSize), replicated[2]];
+    assert.deepEqual(rd(camera, 'DesiredRotation'), turned, 'Left pans the camera by panMod * panSize');
+    input.tick(30);
+    assert.deepEqual(rd(camera, 'Rotation').map(v => v & 0xffff), turned.map(v => v & 0xffff), 'the camera turns to the pan');
+    assert.deepEqual(views()[0].rotation.map(v => v & 0xffff), turned.map(v => v & 0xffff), 'the view follows the camera');
+    key('Equal');
+    const fov = Math.fround(90 - panMod * zoomSize);
+    assert.equal(W.f32(viewport(cams[0]), 0x150), fov, 'Equals zooms in by panMod * zoomSize');
+    assert.equal(views()[0].fov, fov);
+    // The four choices: camera on/off, door lock, door open, turret mode.
+    const choices = rd(screen, 'choiceWindows'), door = rd(cams[0], 'door'), turret = rd(cams[0], 'turret');
+    assert.deepEqual(choices.map(cls), ['deusex.computersecuritychoice_camera', 'deusex.computersecuritychoice_dooraccess',
+      'deusex.computersecuritychoice_dooropen', 'deusex.computersecuritychoice_turret']);
+    const click = win => {
+      const x = W.f32(win, 0xd4) + W.f32(win, 0x80) * .5, y = W.f32(win, 0xd8) + W.f32(win, 0x84) * .5;
+      assert.equal(game.windowPointer({x, y, key: 1, action: 1}), true);
+      assert.equal(game.windowPointer({x, y, key: 1, action: 3}), true);
+      input.tick(2);
+    };
+    const before = {camera: rd(camera, 'bActive'), locked: rd(door, 'bLocked'), keyNum: rd(door, 'KeyNum'),
+      turret: ['bActive', 'bDisabled', 'bTrackPlayersOnly', 'bTrackPawnsOnly'].map(k => rd(turret, k))};
+    assert.deepEqual(before, {camera: true, locked: true, keyNum: 0, turret: [false, false, true, false]});
+    click(rd(choices[0], 'btnAction'));
+    assert.equal(rd(camera, 'bActive'), false, 'the camera choice turns the camera off (UnTrigger)');
+    click(rd(choices[1], 'btnAction'));
+    assert.equal(rd(door, 'bLocked'), false, 'the door access choice unlocks the door');
+    click(rd(choices[2], 'btnAction'));
+    assert.equal(rd(door, 'KeyNum'), 1, 'the door open choice triggers the door');
+    click(rd(choices[3], 'btnAction'));
+    assert.deepEqual(['bActive', 'bDisabled', 'bTrackPlayersOnly', 'bTrackPawnsOnly'].map(k => rd(turret, k)),
+      [true, false, false, true], 'the turret choice moves to "attack enemies"');
+    // Key 2 presses the second camera button (VirtualKeyPressed IK_2).
+    key('Digit2');
+    assert.equal(rd(screen, 'selectedCamera'), cams[1], '2 selects the second view');
+    key('Escape'); input.tick(2);
+    assert.equal(cls(rd(terminal, 'winComputer')), 'deusex.computerscreenlogin', 'Escape logs out');
+    key('Escape'); input.tick(5);
+    assert.equal(topWindow(), null, 'Escape on the login screen closes the terminal');
+    checks.push(`ComputerSecurity1: NSF001; SecurityCamera5 view; pan ${turned[1] - replicated[1]}, fov ${fov};` +
+      ' camera off, door unlocked and opened, turret attacks enemies; view 2; logout, close');
   }
 }
 if (only === 'ComputerPublic0') {
