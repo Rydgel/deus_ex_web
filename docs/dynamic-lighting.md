@@ -332,13 +332,17 @@ row (`NORMAL_BODY`, `SPOT_BODY`, NonIncidence, Shell) and has no float
 fallback left. Per frame it applies `lightTypeBrightness` with the frame's
 TimeSeconds, noise and the strobe state it shares with the class 1 animation,
 then ComputeFromActor's colour steps; the wavers' spatial bytes go through
-the frame's modulation table (`createLightFrame` `modulation`) from index 0.
-A contribution caches its rectangle's spatial bytes while its light's
-location and fields are unchanged, and rebuilds its addends when its colour
-or noise input changes. The light maps a changing light reaches recompose
-only when drawn (OccludeBsp's drawn surfaces, else the frustum, as the class
-1 animation does): the original rebuilds the per-frame map of drawn
-surfaces only, and a map's texels depend only on that frame's inputs.
+the merge's modulation from index 0 (each (noise entry, byte) entry computed
+when first asked in its noise input's frame, with `createLightFrame`
+`modulation`'s rounding). A contribution caches its rectangle's spatial
+bytes while its light's location and fields are unchanged; a steady
+contribution also keeps its addends, a time-varying one is added directly.
+The light maps a changing light reaches recompose only when drawn
+(OccludeBsp's drawn surfaces, listed, else the frustum test, as the class 1
+animation does): the original rebuilds the per-frame map of drawn surfaces
+only, and a map's texels depend only on that frame's inputs. A time-varying
+light does not mark its maps dirty: one pass over the drawn maps recomposes
+those whose colour or noise tokens changed since they were composed.
 `game.movingLights()` reads LightPeriod and LightPhase for the types that
 use them, a Pawn's ViewRotation for a spot, and gives each light its
 Level.Actors slot (low byte) as the Flicker key, the host's stand-in for the
@@ -374,38 +378,37 @@ worlds a light frame each frame, with probes for Strobe WateryShimmer,
 Flicker FireWaver and a turning spotlight, and still finds the incremental
 mode equal to the full one.
 
-### Handoff (2026-10-06, stopped for the usage limit)
+`validate-moving-lights-incremental` also runs a third world, incremental
+and gated as Play gates it (a seeded drawn set of level surfaces on odd
+frames, a seeded stand-in for the frustum test on even ones): every drawn
+light map equals the full mode's (25,133, 89,774 and 113,739 map-frames on
+Training, Island and the Airfield).
 
-Done and verified (commits 21ea08b, 6d04fc2): the reach census; class 2
-lights on the original bodies (LightType functions, wavers, spotlights);
-the noise from the shared appFrand stream in the simulation; the
-`movingFrames` oracle; validate-moving-light-effects and its worker-mode
-Play check; validate-moving-lights-incremental, -auglight, -light-spatial
-(-play), -light-animation, -normal-moving-lighting, -island-player-start,
--particles-play, -lasers-play and the unit tests pass.
+### Cost
 
-Next:
-- **Cost.** Headless, incremental mode: Island 1.2 ms/frame; 10_Paris_
-  Catacombs_Tunnels (76 BarrelFires) 30 ms with every reached map
-  recomposed, 4.2 ms with frustum gating (97 maps a frame). The profile
-  puts it in moving-lights.mjs bookkeeping (per-light JSON signatures,
-  marking every reached map dirty each frame, the visibility test), not the
-  arithmetic. Restructure that (per-record entry lists, a drawn-surface
-  lookup instead of sphere tests), then measure in the browser and move the
-  per-frame composition to light.rs if a measurement still names it. The
-  interleaved A/B against the previous tree (`git archive` of 46d8573 into
-  scratch, `TREE=` for the bench) is not taken yet.
-- **06_HongKong_Helibase (coordinator's case).** TriggerLight4 (Searchlight,
-  hue 0, sat 0, radius 64) is `bNoDelete`: AddLight's class 1, not class 2,
-  so its light maps are the static path's (spatial.rs Searchlight). The
-  helicopter's red in the original must come from SetupForActor choosing it
-  (FLightManager::Light never calls the spatial function). Check whether
-  Play's mesh-lighting selection (mesh-lighting.mjs setupForActor: leaf
-  permeating lights, model.lights) reaches it for BlackHelicopter0, with a
-  mesh-light oracle run on the helicopter's live inputs at the held
-  TimeSeconds; then recapture with scripts/visual-acceptance.mjs.
-- Roadmap Stage 4 entry; mesh lighting's Flicker/Pulse/SubtlePulse
-  (LIGHT_TYPE_UNSUPPORTED) could use the simulation's noise now.
+Browser, default worker mode, Linux host (Ryzen 9 8945HS), 1920×1080,
+Player start, 240 frames, 3 interleaved pairs against master `d4cb676`
+(each tree served from a snapshot; medians of the per-run medians; the
+moving-light sync now counts in the `lightAnimation` phase, before in
+`tick`):
+
+| Map | Page total | lightAnimation + lightUpload | Worker |
+| --- | --- | --- | --- |
+| 01_NYC_UNATCOIsland (3 BarrelFires) | 3.03 → 3.55 ms | 0.06 → 0.58 ms | 16.05 → 16.08 ms |
+| 10_Paris_Catacombs_Tunnels (76 BarrelFires) | 2.78 → 3.96 ms | 0.03 → 1.16 ms | 15.89 → 15.88 ms |
+
+The difference is the fires' per-frame flicker, which the old path did not
+draw (their light maps stayed static after the first frame). The
+bookkeeping changes took the headless frustum-gated Catacombs update from
+4.4 to 3.5 ms (dc8a8b9), and the browser light phase from 1.06 ms (436f49c)
+to 0.99 ms (88aca28, the modulated bytes on demand).
+In the browser profile of Catacombs Tunnels the per-texel composition
+(`addDirect`) is 0.18 ms a frame; the rest is per-light and per-map host
+bookkeeping (the light loop, colours, inputs, recomposition restores) and
+the light atlas's tile updates. The measurement does not name the
+per-texel lighting work, so the composition stays in JavaScript; moving it
+to the Rust core would mean keeping the light maps' samples in the core's
+memory.
 
 ## Not reproduced / open
 
