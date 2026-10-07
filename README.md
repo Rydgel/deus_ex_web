@@ -157,9 +157,8 @@ keeps the dated record.
 **Still open in Stage 4:** fog and decals on movers (the moving brush
 tracker itself now runs: closed doors occlude), the occlusion's child frames
 and mirror/sky combinations, time-varying moving lights and spotlights,
-UnrealScript inside the render events at the pass's 24-bit precision, the
-remaining native UI presentation (the ListWindow family behind the
-Conversations, Images and Logs screens), and the darkest-pixel rounding and
+UnrealScript inside the render events at the pass's 24-bit precision, two
+per-actor mesh-lighting differences, the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 
