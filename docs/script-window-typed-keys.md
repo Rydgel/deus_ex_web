@@ -249,9 +249,9 @@ headless Chromium in the default worker mode with real keyboard events:
 * Backspace gives "Hi é", and Tab saves it.
 
 The worker-side `windowProbe` (`src/viewer/window-probe.mjs`) reads the
-note, as `decalProbe` does for decals. The '€' is in the text but draws
-nothing: the DXFonts pages end at 0xff, and the translated glyph-miss path
-applies.
+note, as `decalProbe` does for decals. The '€' is in the text but nothing
+is drawn for it in the screenshot. The font's coverage of 0x20ac (its
+character pages and the glyph-miss path) was not checked here.
 
 ## Unresolved
 
