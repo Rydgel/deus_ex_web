@@ -68,11 +68,22 @@ for (const { map: mapName, actor: actorName } of CASES) {
     rotation: a.rotation, prePivotBits: a.prePivotBits, mainScale: a.mainScale, postScale: a.postScale,
     specialLit: a.specialLit, polys: a.brush.polys.map(p => ({ ...p, textureKey: p.texture === null ? 0 : p.texture + 1 })) }));
   const occlusion = createBspOcclusion(kernel, model, { surfaceTextureFlags: [], tracker: { movers } });
-  let play;
+  let play, regions = 0;
   try {
     assert.equal(occlusion.tracker.construct({ pc64: true }), 0, 'tracker construction');
+    const tracked = occlusion.lineModel();
     play = checks.map(c => ({ static: traceRayFast(model, c.start, c.end) === null ? 1 : 0,
-      tracked: traceRayFast(occlusion.lineModel(), c.start, c.end) === null ? 1 : 0 }));
+      tracked: traceRayFast(tracked, c.start, c.end) === null ? 1 : 0 }));
+    // UModel::PointRegion over the tracked model gives the static model's
+    // region: AddNode (0x1037bb00) gives a fragment both sides' iZone and
+    // iLeaf from its parent's side, and coplanar fragments hang off iPlane,
+    // which PointRegion does not follow. Points around every mover.
+    for (const c of checks) for (let k = 0; k <= 4; k++) {
+      const point = c.start.map((v, i) => f(v + (c.end[i] - v) * k / 4));
+      const a = pointRegion(model, point, {}, []), b = pointRegion(tracked, point, {}, []);
+      assert.deepEqual([b.leaf, b.zoneNumber], [a.leaf, a.zoneNumber], `${mapName} ${c.label}: PointRegion at step ${k}`);
+      regions++;
+    }
   } finally { occlusion.dispose(); }
   const request = { gameRoot: root, model: built.model, actors: built.actors, fillers: [], rootOutside: model.rootOutside ? 1 : 0,
     checks: checks.map(c => ({ start: c.start.map(bits), end: c.end.map(bits) })) };
@@ -85,7 +96,7 @@ for (const { map: mapName, actor: actorName } of CASES) {
     if (play[i].static !== play[i].tracked) differ++;
   });
   const lightRows = lights.map((light, i) => `${light.name}:${play[i].static}${play[i].tracked}`);
-  report.push({ map: mapName, actor: actorName, checks: checks.length, trackerChanged: differ, lights: lightRows });
+  report.push({ map: mapName, actor: actorName, checks: checks.length, trackerChanged: differ, regions, lights: lightRows });
 }
 console.log(JSON.stringify(report));
 assert.ok(report.every(r => r.trackerChanged > 0), 'the tracker\'s fragments change some line checks on each map');

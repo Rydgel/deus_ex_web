@@ -63,7 +63,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     notes.push(`${actorSim.summary.npcs} NPC and ${actorSim.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
     for (const error of actorSim.summary.errors) notes.push(`${error.actor}: ${error.message}`);
   } catch (error) { notes.push(`Actor meshes unavailable: ${error.message}`); }
-  const session = createSimSession(game, { assets, events });
+  const session = createSimSession(game, { assets, events, exportName });
   session.setScene(stampScene, actorSim);
   if (meshLighting) session.setMeshLighting(meshLighting);
   const hudTextures = game.hud ? session.hudTextures() : null;

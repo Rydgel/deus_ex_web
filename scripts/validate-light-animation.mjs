@@ -121,7 +121,30 @@ for (let k = 0; k < 32; k++) {
     }
   }
 }
+// Galaxy's Update calls the same GlobalLighting before PreRender, on the
+// game thread (its 64-bit word, the assumption): the type functions with
+// `precision: 'pc64'` against the original at 0x037f, on the same cases
+// with an input brightness (Galaxy passes its volume).
+report.gameThreadFrames = 0; report.gameThreadMismatch = 0;
+if (!controlWord) {
+  const gameThreadCases = typeCases.map(c => ({ ...c, frames: c.frames.map(frame => ({ ...frame, brightness: u32(f((random() % 1000) / 999)) })) }));
+  const gameThread = JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, '0x037f'],
+    { input: JSON.stringify({ sines: [...rotationSineTable()].map(u32), lightTypes: gameThreadCases }), encoding: 'utf8', maxBuffer: 1 << 28 }));
+  gameThreadCases.forEach((c, i) => {
+    const strobe = { time: 0, flag: 0 }, key = gameThread.lightTypes[i].flickerKey;
+    const values = { LightType: c.light.type, LightBrightness: c.light.brightness, LightPeriod: c.light.period, LightPhase: c.light.phase };
+    c.frames.forEach((frame, k) => {
+      const A = Float32Array.from(frame.A, bits => { view.setUint32(0, bits, true); return view.getFloat32(0, true); });
+      view.setUint32(0, frame.brightness, true);
+      const brightness = lightTypeBrightness(values, { timeSeconds: frame.time, noise: { A }, strobe, flickerKey: key,
+        animate: Boolean(c.animate), brightness: view.getFloat32(0, true), precision: 'pc64' });
+      report.gameThreadFrames++;
+      if (u32(brightness) !== gameThread.lightTypes[i].frames[k].brightness) report.gameThreadMismatch++;
+    });
+  });
+}
 console.log(JSON.stringify(report));
+assert.equal(report.gameThreadMismatch, 0, 'the game thread\'s LightType brightness matches at 0x037f');
 assert.equal(report.factorMismatch, 0, 'the 24-bit merge factors give the x87 modulation bytes');
 assert.equal(report.noiseMismatch, 0, 'light noise tables match');
 assert.equal(report.typeMismatch, 0, 'LightType brightness matches');

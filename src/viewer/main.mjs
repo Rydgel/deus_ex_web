@@ -10,7 +10,7 @@ import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
-import { decalProbe, placeProbe, laserProbe } from './decal-probe.mjs';
+import { decalProbe, placeProbe, laserProbe, meshLightProbe } from './decal-probe.mjs';
 import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
@@ -1135,6 +1135,12 @@ async moverProbe(args) {
 async moverDecalProbe(args) {
   if (simClient) return simClient.call('moverDecalProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverDecalProbe(game, sim, args) : null;
+},
+/** Validation only: decal-probe.mjs meshLightProbe (one actor's mesh light
+ * setups) on the simulation side. */
+meshLightProbe(args) {
+  if (simClient) return simClient.call('meshLightProbe', args);
+  return game ? meshLightProbe(meshLighting, game, args) : null;
 },
 /** Validation only: decal-probe.mjs placeProbe (player location and view
  * rotation) on the simulation side. */
