@@ -1,15 +1,15 @@
-/** Serves embed/out/ locally: node embed/serve.mjs [port] (default 5180). */
+/** Serves a built embed locally: node embed/serve.mjs [port] [dir] (default 5180, embed/out). */
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
+const here = path.dirname(fileURLToPath(import.meta.url));
 const types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.png': 'image/png'};
 
 /** Resolves with the listening server; port 0 picks a free one. */
-export function serve(port) {
+export function serve(port, root = path.join(here, 'out')) {
   const server = createServer(async (request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
     const file = path.join(root, pathname.endsWith('/') ? `${pathname}index.html` : pathname);
@@ -26,6 +26,7 @@ export function serve(port) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const server = await serve(Number(process.argv[2] ?? 5180));
+  const root = process.argv[3] ? path.resolve(process.argv[3]) : undefined;
+  const server = await serve(Number(process.argv[2] ?? 5180), root);
   console.log(`http://127.0.0.1:${server.address().port}/`);
 }

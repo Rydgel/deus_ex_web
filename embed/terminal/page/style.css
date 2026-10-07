@@ -1,0 +1,51 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+
+body {
+  display: grid;
+  place-items: center;
+}
+
+/* Drawn at the original's pixel size, then scaled (main.js sets --scale). */
+#stage {
+  position: relative;
+  transform: scale(var(--scale, 1));
+  image-rendering: pixelated;
+}
+
+#stage.smooth {
+  image-rendering: auto;
+}
+
+#screen {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: inherit;
+  touch-action: manipulation;
+}
+
+/* Real inputs over the drawn edit boxes: they take the keys and summon phone
+   keyboards, the canvas draws their text in the original font. 16px avoids
+   iOS zooming on focus. */
+#stage input {
+  position: absolute;
+  height: 19px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+}
+
+#stage input::selection {
+  background: transparent;
+}

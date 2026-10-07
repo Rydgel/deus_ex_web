@@ -11,12 +11,10 @@
  *           Implies --poster.
  * --poster  render out/card.png (the card's still image) with Playwright.
  */
-import {cp, mkdir, readdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import zlib from 'node:zlib';
-import {gameDirectory} from '../scripts/game-directory.mjs';
-import {AssetStore} from '../src/unreal/assets.mjs';
+import {baseUrlOption, gameAssets, png, repositoryRoot as root} from './shared.mjs';
 import {ClassDefaults} from '../src/unreal/classes.mjs';
 import {nameAt, objectAt, readObject} from '../src/unreal/objects.mjs';
 import {TextureStore} from '../src/unreal/textures.mjs';
@@ -26,22 +24,12 @@ import {decodeLodMeshPayload, meshPayloadView, readLodMeshFrame} from '../src/ru
 import {meshVertexNormalsInto} from '../src/runtime/mesh-environment.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
 const out = path.join(here, 'out');
 const args = process.argv.slice(2);
-const option = name => { const i = args.indexOf(name); return i < 0 ? null : args[i + 1] ?? ''; };
-const baseUrl = option('--url')?.replace(/\/?$/, '/') ?? null;
-if (baseUrl !== null && !/^https:\/\/[^/]+\//.test(baseUrl)) throw new Error('--url must be an absolute https:// URL');
+const baseUrl = baseUrlOption(args);
 
-process.chdir(root);
-const game = gameDirectory();
-const files = [];
-for (const dir of ['System', 'Textures', 'Maps']) {
-  for (const name of await readdir(path.join(game, dir))) {
-    if (/\.(u|utx|dx)$/i.test(name)) files.push({path: `${dir}/${name}`, read: () => readFile(path.join(game, dir, name))});
-  }
-}
-const assets = new AssetStore(files), textures = new TextureStore(assets), classes = new ClassDefaults(assets);
+const {game, assets} = await gameAssets();
+const textures = new TextureStore(assets), classes = new ClassDefaults(assets);
 
 /** Classic UMesh (the logo meshes are MLOD=0 imports): the shared native
  * serializer with the same detached services decodeLodMeshPayload uses. */
@@ -105,22 +93,6 @@ function exportMesh(mesh) {
     normals: indices.flatMap(i => [...normals.subarray(i * 3, i * 3 + 3)].map(v => round(v * sign))),
     uvs: uvs.map(round),
   };
-}
-
-function png(width, height, rgba) {
-  const table = Array.from({length: 256}, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-  const crc = bytes => { let c = 0xffffffff; for (const b of bytes) c = table[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-  const chunk = (type, data) => {
-    const body = Buffer.concat([Buffer.from(type), data]), head = Buffer.alloc(4), tail = Buffer.alloc(4);
-    head.writeUInt32BE(data.length); tail.writeUInt32BE(crc(body));
-    return Buffer.concat([head, body, tail]);
-  };
-  const rows = Buffer.alloc((width * 4 + 1) * height);
-  for (let y = 0; y < height; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(rows, y * (width * 4 + 1) + 1);
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header),
-    chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
 }
 
 async function writeTexture(asset, ref, file) {
