@@ -140,6 +140,10 @@ export function createScriptVmKernel(instance, memory) {
     multiplyVectorVector: (a, b) => (x.op_multiply_vector_vector(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
     multiplyEqualVectorVector: (a, b) => (x.op_multiply_equal_vector_vector(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
     mirrorVectorByNormal: (a, b) => (x.op_mirror_vector_by_normal(bits(a[0]), bits(a[1]), bits(a[2]), bits(b[0]), bits(b[1]), bits(b[2])), vector()),
+    /** Validation only: the last vector operator's three result words, which
+     * vector() hands out as numbers in an Array (where V8 may store a NaN
+     * canonically; see script-vm.mjs x87OperatorWords). */
+    resultWords: () => { const w = words(); return [w[resultAt], w[resultAt + 1], w[resultAt + 2]]; },
     // Pawn physics' x87 tails (docs/rust-core.md R3-b): script-pawn-physics.mjs
     // AvgPhysicsTime and falling.mjs refundTime.
     avgPhysicsTime: (avg, dt) => num(x.phys_avg_time(bits(avg), bits(dt))),
