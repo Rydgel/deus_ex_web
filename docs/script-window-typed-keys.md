@@ -11,8 +11,11 @@ Translation: [`src/runtime/script-window-typed-keys.mjs`](../src/runtime/script-
 [`script-console-command.mjs`](../src/runtime/script-console-command.mjs),
 and the browser adapter
 [`src/viewer/typed-characters.mjs`](../src/viewer/typed-characters.mjs).
-Checks: `scripts/validate-window-typed-key-diff.mjs` (needs
-`NATIVE_PROBE_PYTHON`) and `scripts/validate-window-typed-key-play.mjs`.
+Checks:
+* `scripts/validate-window-typed-key-diff.mjs` (needs `NATIVE_PROBE_PYTHON`);
+* `scripts/validate-window-typed-key-play.mjs` (headless Play);
+* `scripts/validate-window-typed-key-browser.mjs` (Chromium, worker mode);
+* `test/typed-characters.test.mjs`.
 
 ## Authority
 
