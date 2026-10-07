@@ -269,26 +269,29 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   }
   // A frame's drawn nodes (Uint32Array) and the tracked movers' polygon
   // ordinals its draw lists hold, by mover name (null without the tracker),
-  // with each draw item's iZone alongside (`moverZones`: SetupForSurf's
-  // fog-zone test reads the item's zone) and each drawn polygon's surface
-  // pBase and vectors as the tracker holds them (`moverFacets`, by ordinal:
-  // SetupForSurf's light-map lattice of a dynamic surface).
+  // and its mover draw items (`moverItems`, in draw-list order): each one's
+  // mover, polygon, iZone (SetupForSurf's fog-zone test reads the item's
+  // zone), its surface's pBase and vectors as the tracker holds them (the
+  // light-map lattice of a dynamic surface) and its fragments' points
+  // (the polygons the item draws, world floats).
   function drawnOf(draw) {
     const nodes = [];
     for (const list of draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
-    let movers = null, moverZones = null, moverFacets = null;
+    let movers = null, moverItems = null;
     if (trackerMovers && occlusion.tracker?.live()) {
-      movers = {}; moverZones = {}; moverFacets = {};
+      movers = {}; moverItems = [];
+      const facets = new Map();
       for (const list of draw) for (const entry of list) {
         const owner = occlusion.tracker.surfOwner(entry.iSurf);
         if (!owner) continue;
         const name = trackerMovers.names[owner.tag - 0x40000000];
         (movers[name] ??= []).push(owner.ordinal);
-        (moverZones[name] ??= []).push(entry.iZone);
-        (moverFacets[name] ??= {})[owner.ordinal] ??= occlusion.tracker.surfaceFacet(entry.iSurf);
+        if (!facets.has(entry.iSurf)) facets.set(entry.iSurf, occlusion.tracker.surfaceFacet(entry.iSurf));
+        moverItems.push({ mover: name, polygon: owner.ordinal, zone: entry.iZone, facet: facets.get(entry.iSurf),
+          fragments: entry.polys.map(poly => occlusion.nodePolygon(poly.iNode)) });
       }
     }
-    return { nodes: Uint32Array.from(nodes), movers, moverZones, moverFacets };
+    return { nodes: Uint32Array.from(nodes), movers, moverItems };
   }
   // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null.
   function spanBounds(span) {
@@ -316,7 +319,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0 } : null });
-    const { nodes, movers, moverZones, moverFacets } = drawnOf(result.draw);
+    const { nodes, movers, moverItems } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
     const mirrors = [];
@@ -337,7 +340,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
-        moverZones: drawnHere.moverZones, moverFacets: drawnHere.moverFacets,
+        moverItems: drawnHere.moverItems,
         // The frame's Coords (origin, X, Y, Z), as its fog maps read them.
         coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
         sprites: frame.sprites.map(sprite => sprite.key) };
@@ -347,7 +350,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const frameFloats = new Float32Array(words.buffer, words.byteOffset, 19);
     const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod,
-      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverZones, moverFacets,
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.

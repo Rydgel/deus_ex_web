@@ -381,6 +381,17 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
     /** Node `i`'s iSurf (a child request names its node, not its surface). */
     nodeSurf: i => words()[(nodes >>> 2) + 16 * i + 7] | 0,
+    /** Node `i`'s polygon as the model holds it now (a tracker fragment where
+     * the last Update left it): its points, flat [x, y, z, ...] floats. */
+    nodePolygon(i) {
+      const u = words(), f = new Float32Array(u.buffer), count = bytes()[nodes + 64 * i + 54];
+      const pool = u[(nodes >>> 2) + 16 * i + 6] | 0, out = new Array(3 * count);
+      for (let k = 0; k < count; k++) {
+        const at = (points >>> 2) + 3 * u[(verts >>> 2) + 2 * (pool + k)];
+        out[3 * k] = f[at]; out[3 * k + 1] = f[at + 1]; out[3 * k + 2] = f[at + 2];
+      }
+      return out;
+    },
     /** The moving brush tracker (brush-tracker.mjs) over this model, or
      * null without movers; `blocks` are the model's own. */
     tracker: trackerHost,

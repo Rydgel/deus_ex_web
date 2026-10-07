@@ -1435,14 +1435,13 @@ function drawFrame(snap, time) {
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation
   // (docs/volumetric-fog.md), and each child frame's from its own Coords.
-  if (world.fog?.stats.surfaces && !runtimeError) {
+  if ((world.fog?.stats.surfaces || world.fog?.stats.moverPolygons) && !runtimeError) {
     const toUnits = radians => Math.round(radians * 32768 / Math.PI);
     const fogView = playerView ?? snap?.inspect?.view ?? { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] };
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
-        drawnSurfaces, { movers: visible?.movers ?? null, moverZones: visible?.moverZones ?? null,
-          moverFacets: visible?.moverFacets ?? null, fogZone: world.fogZone, frames: childFog ? frames : null,
+        drawnSurfaces, { moverItems: visible?.moverItems ?? null, fogZone: world.fogZone, frames: childFog ? frames : null,
           nodeSurface: world.nodeSurface });
     } catch (error) { pauseForRuntimeError(error); }
   }

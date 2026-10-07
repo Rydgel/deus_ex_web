@@ -407,7 +407,7 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: per-fragment fog maps on movers, time-varying moving lights and spotlights, UnrealScript inside
+Open: time-varying moving lights and spotlights, UnrealScript inside
 the render events at 24 bits (the script VM computes at 64), the darkest-pixel
 rounding visual acceptance found, and acceptance of live (unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
@@ -636,12 +636,11 @@ movers' polygons are level surfaces whose Actor is the Mover.
 - **Decals in Play.** The decal model follows the tracker. A BulletHole
   spawned on a Training door stays on the door's plane when the door is
   raised and turned.
-- **Fog.** Drawn mover polygons in a fog zone get fog maps over their
-  tracker surface's lattice. On 02_NYC_Bar, a door's fog map equals
+- **Fog.** Each mover draw item in a fog zone gets its own fog map over
+  its tracker surface's lattice, drawn over that item's fragments. On 02_NYC_Bar, a door's fog map equals
   Render.dll's loop.
 
-Open: a mover polygon draws one fog map, where the original draws one per
-fragment. Script traces in Play still use the static model (Stage 5).
+Open: script traces in Play still use the static model (Stage 5).
 ([decals](decals.md#movers), [volumetric fog](volumetric-fog.md#play)).
 
 **Occlusion child frames (2026-10-07).** OccludeBsp's mirror and sky
