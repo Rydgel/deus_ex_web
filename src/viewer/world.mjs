@@ -345,8 +345,13 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
   const sky = skyActor?.values.Location ?? null, skyRotation = skyActor?.values.Rotation ?? [0, 0, 0];
   // The appFrand draws of the light noise come from a host stream: the
   // original's position in the process-wide CRT stream is not reproduced.
+  // Play hands each frame the simulation's noise (beginLightFrame); a world
+  // without a simulation (headless checks) advances its own from this stream.
   const lightFrame = createLightFrame(createNativeRng(0x11647).frand), lightAnimation = { changed: 0 };
-  if (lighting.animatedRecords().length) notes.add(`${lighting.animatedRecords().length} light maps carry animated lights (pulse, flicker, strobe, torch/fire/watery waver, the time-varying spatial effects), merged each frame; their noise draws come from a host stream.`);
+  // `simFed`: the simulation supplies every frame's inputs (a display frame
+  // without a new simulation frame keeps the last one).
+  let lightFrameBegun = false, simFed = false;
+  if (lighting.animatedRecords().length) notes.add(`${lighting.animatedRecords().length} light maps carry animated lights (pulse, flicker, strobe, torch/fire/watery waver, the time-varying spatial effects), merged each frame; in Play their noise comes from the simulation's shared appFrand stream (a world without one draws from a host stream).`);
   function updateLighting(changes) {
     const update = lighting.invalidate(changes);
     for (const lightmap of update.lightmaps) lightAtlas.update(lightmap, { partial: true });
@@ -400,11 +405,31 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
           nodes: group.moving ? null : [...new Set(group.meshes.flatMap(mesh => mesh.userData.actor ? [] : [...(mesh.userData.nodes ?? [])]))] })),
       };
     },
+    /** The frame's light animation inputs from the simulation
+     * (sim-session.mjs `frame.light`: Level.TimeSeconds and the noise
+     * URender::PreRender advanced from the shared stream), before the frame's
+     * moving lights and texture animation use them. */
+    beginLightFrame({ timeSeconds, noise }) {
+      lightFrame.advance(timeSeconds, noise);
+      lightFrameBegun = simFed = true;
+      return lightFrame;
+    },
     /** Play's per-frame moving lights (game.movingLights()) over the current
-     * mover offsets; changed tiles upload on the next flushLighting. */
-    syncMovingLights(lights, movers = []) {
+     * mover offsets, with this frame's light animation inputs when
+     * beginLightFrame supplied them; with `drawn` (the level surfaces
+     * OccludeBsp's frame draws) or a `frustum`, the light maps not drawn
+     * wait. Changed tiles upload on the next flushLighting. */
+    syncMovingLights(lights, movers = [], { frustum = null, drawn = null } = {}) {
       const offsets = new Map(movers.map(mover => [mover.name, mover.offset]));
-      const changed = movingLights.update(lights, offsets);
+      // The drawn light maps, as for the light animation below.
+      const visible = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
+        : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
+          new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : null;
+      // With OccludeBsp's drawn surfaces the drawn light maps are listed
+      // (brush light maps are always drawn).
+      const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
+      if (drawn) for (const surfaceIndex of drawn) for (const record of lighting.recordsFor(map.model, surfaceIndex)) drawnRecords.push(record);
+      const changed = movingLights.update(lights, offsets, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
       for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
       return { lightmaps: changed.length, surfaces: movingLights.surfaces };
@@ -429,7 +454,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
             new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : () => true;
         let merged = 0;
         const visible = record => inView(record) && ++merged > 0;
-        const start = performance.now(), changed = lighting.animate(lightFrame.advance(timeSeconds), visible);
+        const start = performance.now();
+        const changed = lighting.animate(lightFrameBegun || simFed ? lightFrame : lightFrame.advance(timeSeconds), visible);
         lightAnimation.mergeMs = performance.now() - start;
         // A light map composed with moving lights changes as a whole (no
         // region): its whole tile is resent, not the whole atlas. Otherwise
@@ -441,6 +467,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         lightAnimation.merged = merged;
         lightAnimation.changedSpatial = changed.filter(({ lightmap }) => lightmap.animated.some(light => light.spatialDynamic)).length;
       }
+      lightFrameBegun = false;
       phase?.('lightAnimation');
       // Fire textures, BSP and mesh skins alike, once per frame.
       sharedProceduralTextures().update(time);
@@ -483,6 +510,10 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     }),
     flushLighting(renderer) { lightAtlas.flush(renderer); },
     movingLightRecords: () => movingLights.records(),
+    /** Validation: the current light frame's inputs, and whether the
+     * simulation supplied them. */
+    lightFrameInputs: () => ({ simFed, frameIndex: lightFrame.frameIndex, timeSeconds: lightFrame.timeSeconds,
+      A: Array.from(lightFrame.noise.A), W: Array.from(lightFrame.noise.W), strobe: { ...lightFrame.strobe } }),
     /** The light atlas pages' bytes (validators compare them). */
     lightAtlasPages: () => lightAtlas.pages.map(page => page.pixels),
     lightAnimation: () => ({ records: lighting.animatedRecords().length, changed: lightAnimation.changed,

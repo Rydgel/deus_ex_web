@@ -16,8 +16,15 @@
  *   Play reads them, plus seeded perturbations (lights leaving and returning
  *   as an ElectricityEmitter's LightType flicker does, changed brightness and
  *   locations, swapped and repeated entries, mover offsets, and probe lights
- *   beside movers for the brush light maps). The perturbations are synthetic
- *   inputs for the bookkeeping, not game states.
+ *   beside movers for the brush light maps: Strobe WateryShimmer, steady
+ *   NonIncidence, Flicker FireWaver and a turning spotlight). The
+ *   perturbations are synthetic inputs for the bookkeeping, not game states.
+ * Both worlds take the same light animation frame (Level.TimeSeconds and a
+ * noise advanced from one seeded stream, as sim-session.mjs hands it), so
+ * the time-varying lights recompose every frame. A third world, incremental
+ * and gated as Play gates it (a seeded "drawn" set of level surfaces each
+ * frame, brush light maps always drawn), must hold the full mode's texels in
+ * every drawn light map.
  * Each map runs in its own process to bound memory. Requires the local install.
  *
  *   node scripts/validate-moving-lights-incremental.mjs [--map NAME] [--frames N] [--seed N] [--shell 1]
@@ -51,6 +58,8 @@ const { createWorld } = await import('../src/viewer/world.mjs');
 const { createGame } = await import('../src/viewer/game.mjs');
 const { gameDirectory } = await import('./game-directory.mjs');
 const { createPlayerInputFixture } = await import('./player-input-fixture.mjs');
+const { createLightNoise, lightNoiseSnapshot } = await import('../src/runtime/static-lighting.mjs');
+const { createNativeRng } = await import('../src/runtime/rng.mjs');
 
 const mapName = flag('map'), frames = Number(flag('frames', 300));
 const root = gameDirectory(), files = [];
@@ -60,8 +69,9 @@ for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
 const assets = new AssetStore(files), asset = await assets.get(mapName), map = decodeMap(asset.bytes);
 const full = await createWorld(map, asset, assets, undefined, { movingLightsMode: 'full' });
 const incremental = await createWorld(map, asset, assets, undefined, { movingLightsMode: 'incremental' });
+const gated = await createWorld(map, asset, assets, undefined, { movingLightsMode: 'incremental' });
 const game = await createGame(map, asset, assets, { randomSeed: 1,
-  onLightingChanged: changes => { full.updateLighting(changes); incremental.updateLighting(changes); } });
+  onLightingChanged: changes => { full.updateLighting(changes); incremental.updateLighting(changes); gated.updateLighting(changes); } });
 const input = createPlayerInputFixture(game, { tickSeconds: 1 / 60 });
 const runtime = game.doors.scriptRuntime.runtime;
 
@@ -76,10 +86,14 @@ const rand = () => {
 const pick = list => list[Math.floor(rand() * list.length)];
 const perturbed = mapName !== '00_Training';
 const changes = new Map(), moverDeltas = new Map(), flicker = new Set();
-// Probe lights beside movers: the normal, NonIncidence and float paths.
+// Probe lights beside movers: the normal (Strobe, WateryShimmer),
+// NonIncidence, normal (Flicker, FireWaver) and spot (or Shell) bodies.
 const probes = game.collision.movers.slice(0, 4).map((mover, i) => ({ name: `ProbeLight${i}`, mover,
-  values: { LightType: 1, bStatic: false, bNoDelete: false, bDynamicLight: false, LightBrightness: 180 + i * 20,
-    LightRadius: 12 + i * 4, LightEffect: [0, 13, 1, flag('shell') ? 14 : 0][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false } }));
+  values: { LightType: [5, 1, 4, 1][i], bStatic: false, bNoDelete: false, bDynamicLight: false, LightBrightness: 180 + i * 20,
+    LightRadius: 12 + i * 4, LightEffect: [3, 13, 2, flag('shell') ? 14 : 12][i], LightHue: 40 * i, LightSaturation: 128, bSpecialLit: false,
+    ...(i === 3 ? { LightCone: 40, Rotation: [0, 0, 0] } : {}) } }));
+// The light animation frame both worlds take (sim-session.mjs frame.light).
+const lightNoise = createLightNoise(createNativeRng(0x1badf00d).frand);
 function lightsFor(frame) {
   let lights = game.movingLights();
   if (!perturbed) return lights;
@@ -98,7 +112,8 @@ function lightsFor(frame) {
   }
   for (const probe of probes) if (frame % 90 < 60 + 7 * probe.name.length % 30)
     lights.push({ name: probe.name, location: probe.mover.position.map((v, i) => v + [24, -16, 32][i]),
-      values: { ...probe.values }, levelBrightness: lights[0]?.levelBrightness ?? 1 });
+      values: { ...probe.values, ...(probe.values.Rotation ? { Rotation: [-4096, (frame * 700) & 0xffff, 0] } : {}) },
+      flickerKey: probe.name.length, levelBrightness: lights[0]?.levelBrightness ?? 1 });
   lights = lights.filter(light => !(flicker.has(light.name) && rand() < 0.4));
   if (rand() < 0.03 && lights.length > 1) {
     const i = Math.floor(rand() * lights.length), j = Math.floor(rand() * lights.length);
@@ -121,16 +136,37 @@ const keyOf = record => `${record.owner ?? ''}|${record.surfaceIndex}|${record.z
 const seen = [new Map(), new Map()];
 const bytes = array => Buffer.from(array.buffer, array.byteOffset, array.byteLength);
 const regionKey = region => region ? `${region.minU},${region.maxU},${region.minV},${region.maxV}` : '-';
-const totals = { frames: 0, full: 0, incremental: 0, compared: 0, maxLights: 0 };
+const totals = { frames: 0, full: 0, incremental: 0, compared: 0, gated: 0, maxLights: 0 };
+const seenGated = new Map();
 function frame(index) {
   const lights = lightsFor(index), movers = moversFor();
   totals.maxLights = Math.max(totals.maxLights, lights.length);
   const timeSeconds = runtime.readNamed(runtime.levelFor(game.player.collisionActor).actors[0], 'TimeSeconds');
+  lightNoise.update(Math.fround(timeSeconds));
+  const light = { timeSeconds: Math.fround(timeSeconds), noise: lightNoiseSnapshot(lightNoise) };
   const results = [full, incremental].map(world => {
+    world.beginLightFrame(light);
     const result = world.syncMovingLights(lights, movers);
     world.updateTextureAnimation(index / 60, { timeSeconds });
     return result;
   });
+  // The gated world: a seeded drawn set, as main.mjs passes OccludeBsp's,
+  // on odd frames; on even ones a seeded stand-in for the frustum test
+  // (a light map's view sphere centre hashed), the predicate path.
+  const drawn = new Set();
+  for (let surface = 0; surface < map.model.surfaces.length; surface++) if (((surface * 2654435761 + index * 40503) >>> 7) % 3 === 0) drawn.add(surface);
+  const hashed = sphere => ((Math.floor(sphere.center.x) * 73856093 ^ Math.floor(sphere.center.y) * 19349663 ^ index * 83492791) >>> 5) % 3 === 0;
+  const frustum = index % 2 ? null : { intersectsSphere: hashed };
+  gated.beginLightFrame(light);
+  gated.syncMovingLights(lights, movers, frustum ? { frustum } : { drawn });
+  gated.updateTextureAnimation(index / 60, { timeSeconds, ...(frustum ? { frustum } : { drawn }) });
+  for (const record of gated.movingLightRecords()) seenGated.set(keyOf(record), record);
+  for (const [key, a] of seen[0]) {
+    const b = seenGated.get(key);
+    if (!b || !(b.owner || (frustum ? b.viewSphere && hashed(b.viewSphere) : drawn.has(b.surfaceIndex)))) continue;
+    assert.ok(bytes(a.pixels).equals(bytes(b.pixels)), `${mapName} frame ${index} light map ${key}: gated texels`);
+    totals.gated++;
+  }
   totals.frames++; totals.full += results[0].lightmaps; totals.incremental += results[1].lightmaps;
   const active = [full, incremental].map((world, i) => {
     const keys = new Set();

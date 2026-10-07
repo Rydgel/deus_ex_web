@@ -684,6 +684,33 @@ x87 hardware.
   1.9 million texels, and the init-time tables' precision is unmeasured.
   See [static lighting](static-lighting.md#spatially-dynamic-effects).
 
+**Time-varying moving lights (2026-10-07).** Moving (AddLight class 2)
+lights now take the original per-frame path: GlobalLighting's LightType
+function, the effect row's spatial body (normal, spot, NonIncidence,
+Shell) with the unshadowed illumination, and the merge's waver modulation
+from index 0. The float reconstruction is gone.
+- *Reach.* `scripts/census-moving-lights.mjs` over the class defaults, the
+  83 maps and the packages' scripts: BarrelFire and burning Fire
+  (FireWaver), BarrelAmbrosia, BarrelVirus and the Dragon's Tooth
+  (WateryShimmer), lit Flares (TorchWaver), AlarmLights (Spotlight, Strobe
+  in Endgame 4) and one Flicker LaserTrigger. The other types and effects
+  are not reached by class 2 and are documented as such.
+- *Random stream.* PreRender's light noise now draws from the game's
+  shared appFrand stream in the simulation, at its place in the frame; the
+  page's light frame (class 1 animation too) takes its tables.
+- *Evidence.* A `movingFrames` oracle runs the class 2 chain at 0x007f:
+  2,448 contributions and 1,592 composed light maps over 8 frames match
+  (validate-moving-light-effects), and in worker-mode Play the BarrelFire
+  light maps around Island's BarrelFire3 match each frame's own inputs.
+- *Cost.* Island 3.03 → 3.55 ms of page time per frame, Catacombs Tunnels
+  (76 fires) 2.78 → 3.96 ms; the per-texel part is 0.18 ms of it, so it stays
+  in JavaScript ([moving lights](dynamic-lighting.md#time-varying-moving-lights-2026-10-06)).
+- *Mesh lighting.* SetupForActor's LineCheck now sees the movers the brush
+  tracker put into the BSP, as Engine's UModel::LineCheck does (366 checks
+  against the original under Unicorn). Helibase's helicopter is lit red by
+  TriggerLight4 alone, and the 747's RepairBot loses Light10, as in the
+  original's frames ([mesh lighting](mesh-lighting.md)).
+
 **Sound effects and zone reverb through Galaxy's mixer (2026-10-06).**
 Ambient sounds and script PlaySound now play through Galaxy's own voices
 and mixer, in the music worklet, instead of the Web Audio mapping

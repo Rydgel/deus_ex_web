@@ -14,6 +14,7 @@ import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
+import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
 import { TRACKED_MOVER_MIRRORS } from './mirror-passes.mjs';
 
@@ -71,6 +72,12 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
   const live = { lights: null, meshItems: [], sprites: [], iterators: null };
+  // URender::PreRender's light noise (0x10b13080, called at 0x10b146ae on
+  // every drawn frame with Level.TimeSeconds, docs/dynamic-lighting.md
+  // "Time-varying moving lights"): its appFrand draws come from the game's
+  // shared stream, after PlayerCalcView and before the PreRender event and
+  // DrawWorld's draws. The page's light frame takes its tables.
+  const lightNoise = createLightNoise(() => runtime.rng.frand());
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
   // actor hashes its owned objects by its measured GObjObjects index
@@ -122,7 +129,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     position: [...mover.position], rotation: mover.rotation ? [...mover.rotation] : null, offset: [...mover.collider.offset] }));
   const plainView = view => ({ location: [...view.location], rotation: [...view.rotation], fov: view.fov });
   const plainLight = light => ({ handle: handleOf(light.actor), name: light.name, location: light.location,
-    values: light.values, levelBrightness: light.levelBrightness });
+    values: light.values, levelBrightness: light.levelBrightness, flickerKey: light.flickerKey });
   // Render.dll's sky frame (0x10b18410): only when LevelInfo.SkyZone (+0x384)
   // is set; the frame zone's ZoneInfo (LevelInfo when the zone has none)
   // supplies its SkyZone, whose Location is the sky frame's origin and whose
@@ -625,9 +632,17 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (run && !stopped()) {
         try { game.tick(dt); lipSync?.update(dt); } catch (error) { fail(error); }
       }
-      const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, sky: null, target: null, pan: null, visibility: null };
+      const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, light: null, sky: null, target: null, pan: null,
+        visibility: null };
       live.lights = null;
       try { frame.view = plainView(game.view()); lastViewLocation = frame.view.location; } catch (error) { fail(error); }
+      if (!stopped()) {
+        try {
+          const timeSeconds = Math.fround(game.surfacePan().timeSeconds);
+          lightNoise.update(timeSeconds);
+          frame.light = { timeSeconds, noise: lightNoiseSnapshot(lightNoise) };
+        } catch (error) { fail(error); }
+      }
       if (frame.view && !stopped()) {
         try { frame.renderRect = { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
       }

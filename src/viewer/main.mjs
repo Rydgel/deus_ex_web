@@ -1291,9 +1291,7 @@ function drawFrame(snap, time) {
     const viewSize = renderRect?.render && renderRect.width > 0 && renderRect.height > 0
       ? [renderRect.width, renderRect.height] : [renderer.domElement.width, renderer.domElement.height];
     setPixelCentre(camera, ...viewSize);
-    if (frame.lights) {
-      try { world.syncMovingLights(frame.lights, frame.movers); } catch (error) { pauseForRuntimeError(error); }
-    }
+    if (frame.light) world.beginLightFrame(frame.light);
     if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
     const target = frame.target;
     $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
@@ -1337,11 +1335,18 @@ function drawFrame(snap, time) {
   // The surfaces OccludeBsp's main frame draws (with no mirror or sky child
   // frame, whose surfaces it does not list).
   const drawnSurfaces = visible ? new Set(Array.from(visible.nodes, node => world.nodeSurface[node])) : null;
+  const drawnLightMaps = viewFrustum && visible && !visible.sky ? drawnSurfaces : null;
+  // The frame's moving lights (docs/dynamic-lighting.md), on the drawn light
+  // maps, before the texture animation that shares their light frame.
+  if (playing && frame?.lights) {
+    try { world.syncMovingLights(frame.lights, frame.movers, { frustum: viewFrustum, drawn: drawnLightMaps }); }
+    catch (error) { pauseForRuntimeError(error); }
+  }
   // The worker's snapshot animates textures at its frame's post time;
   // on the page the frame is now.
   world.updateTextureAnimation(simClient ? snap?.now : undefined,
     { ...panInputs, viewpoint: fromView(camera.position.toArray()), frustum: viewFrustum,
-      drawn: viewFrustum && visible && !visible.sky ? drawnSurfaces : null, phase });
+      drawn: drawnLightMaps, phase });
   world.flushLighting(renderer);
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation

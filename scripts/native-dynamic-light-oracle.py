@@ -483,6 +483,115 @@ class Oracle:
             merged.extend(row[x] if rect[0] <= x < rect[1] and rect[2] <= y < rect[3] else case['static'][y * width + x] for x in range(width))
         return {'merged': merged}
 
+    # Class 2 lights over successive frames as SetupForSurf sets them up
+    # each frame (0x10b0850f-0x10b088f9). Per frame: Level.TimeSeconds and
+    # the noise tables A (0x10b4fa44) and W (0x10b4fe44). Per light:
+    # ComputeFromActor's brightness (0x10b060b1), GlobalLighting (0x10b05e90:
+    # the LightType function, Flicker's table A at the actor's low address
+    # byte, the shared strobe state at 0x10b49ea4) and the colour and colour
+    # table (0x10b06122, 0x10b064ff). Per reached surface: the radius
+    # constants (0x10b05fc3), incidence (0x10b06325), the rectangle
+    # (0x10b0660e), the unshadowed illumination (0x7f, as 0x10b02650 with no
+    # shadow bits), the effect row's spatial function (table 0x10b2a0f0) and
+    # the merge 0x10b03040 from index 0 onto a zero map: the texels' colour
+    # entries. The case's `flickerKey` places the actor at that low byte.
+    def moving_frames(self, case):
+        if not getattr(self, 'moving_ready', False):
+            self.sqrt_table()
+            self.normal_table()
+            self.rsqrt_tables()
+            self.moving_ready = True
+        if case.get('sines'):
+            self.gmath(case['sines'])
+        level = self.alloc(0x600)
+        self.write(level + 0x500, 'I', case['levelBrightness'])
+        self.write(0x10b49ea4, 'II', *case.get('strobe', (0, 0)))
+        frames = []
+        for frame in case['frames']:
+            mark = self.alloc_top
+            self.write(level + 0x478, 'I', frame['time'])
+            self.write(0x10b4fa44, '256I', *frame['A'])
+            self.write(0x10b4fe44, '256I', *frame['W'])
+            lights = []
+            for light in frame['lights']:
+                # An actor whose address has the light's flicker key as its low byte.
+                base = self.alloc(0x900, align=0x100)
+                actor = base + (light.get('flickerKey', 0) & 0xff)
+                vtable = self.alloc(0x100)
+                self.cpu.mem_write(actor, bytes(0x800))
+                self.write(vtable + 0x60, 'I', self.world_light_radius)
+                self.write(actor, 'I', vtable)
+                self.write(actor + 0xa8, 'I', level)
+                self.write(actor + 0x114, 'III', *light['location'])
+                self.write(actor + 0x120, 'iii', *light.get('rotation', (0, 0, 0)))
+                self.write(actor + 0x1e0, 'BBBBBB', light['type'], light['effect'], light['brightness'],
+                           light.get('hue', 0), light.get('saturation', 0), light['radius'])
+                self.write(actor + 0x1e6, 'BBB', light.get('period', 0), light.get('phase', 0), light.get('cone', 0))
+                info, cache = self.alloc(0x100), self.alloc(0x440)
+                self.write(info, 'I', actor)
+                self.frame()
+                self.cpu.reg_write(UC_X86_REG_EAX, actor)
+                self.cpu.reg_write(UC_X86_REG_EDI, info + 0x20)
+                self.run(0x10b060b1, 0x10b060d0)
+                self.call(0x10b05e90, [1, actor, info + 0x20, info + 0x6c])
+                self.frame()
+                self.cpu.reg_write(UC_X86_REG_EBX, info)
+                self.cpu.reg_write(UC_X86_REG_ESI, info + 0x6c)
+                self.cpu.reg_write(UC_X86_REG_EDI, info + 0x20)
+                self.run(0x10b06122, 0x10b0614b)
+                self.cpu.reg_write(UC_X86_REG_ESI, cache)
+                self.run(0x10b064ff, 0x10b065e2)
+                table = cache + 0xc
+                row = self.read(0x10b2a0f0 + 12 * (light['effect'] if light['effect'] < 20 else 0), 'III')
+                contributions = []
+                for item in light['contributions']:
+                    facet, grid = item['facet'], item['grid']
+                    width, height = facet['clamp']
+                    ebp = self.frame()
+                    self.write(ebp + 0xc, 'I', self.alloc(0x100))
+                    self.cpu.reg_write(UC_X86_REG_EBX, info)
+                    self.run(0x10b05fc3, 0x10b0602c)
+                    coords = self.alloc(0x40)
+                    self.write(coords, '12I', *facet['origin'], *facet['axisU'], *facet['axisV'], *facet['normal'])
+                    self.write(FACET, 'I', coords)
+                    self.frame()
+                    self.cpu.reg_write(UC_X86_REG_EBX, info)
+                    self.run(0x10b06325, 0x10b0639e)
+                    self.lightmap_globals(facet)
+                    ebp = self.frame()
+                    self.write(ebp - 0x2c, 'I', info)
+                    self.cpu.reg_write(UC_X86_REG_EBX, info)
+                    self.cpu.reg_write(UC_X86_REG_ECX, coords)
+                    self.cpu.reg_write(UC_X86_REG_EAX, 0)
+                    self.run(0x10b0660e, 0x10b06868)
+                    rect = list(self.read(info + 0x34, 'iiii'))
+                    out = {'rect': rect, 'constants': list(self.read(info + 0x14, 'III')), 'incidence': self.read(info + 0x24, 'I')[0]}
+                    if rect[0] < rect[1] and rect[2] < rect[3]:
+                        stride = ((width + 7) >> 3) * 8
+                        illum, spatial = self.alloc(stride * height + 16), self.alloc(width * height + 16)
+                        self.cpu.mem_write(illum, bytes([0x7f]) * (stride * height))
+                        self.write(START, 'III', *grid['start'])
+                        self.write(STEP_U, 'III', *grid['stepU'])
+                        self.write(STEP_V, 'III', *grid['stepV'])
+                        self.write(0x10b34a5c, 'B', 1)  # the normal body's local static guard
+                        self.call(row[0], [LIGHTMAP, info, illum, spatial])
+                        size_u = 1 << (width - 1).bit_length()
+                        target = self.alloc(size_u * height * 4 + 16)
+                        self.write(info + 0x8c, 'I', table)
+                        self.write(info + 0x28, 'I', spatial)
+                        self.call(0x10b03040, [LIGHTMAP, light['effect'], 0, info, target, target])
+                        rw = rect[1] - rect[0]
+                        out['spatial'] = b''.join(bytes(self.read(spatial + v * width + rect[0], f'{rw}B'))
+                                                  for v in range(rect[2], rect[3])).hex()
+                        out['merged'] = [word for v in range(rect[2], rect[3])
+                                         for word in self.read(target + (v * size_u + rect[0]) * 4, f'{rw}I')]
+                    contributions.append(out)
+                lights.append({'brightness': self.read(info + 0x20, 'I')[0], 'color': list(self.read(info + 0x6c, 'III')),
+                               'table': list(self.read(table, '256I')), 'contributions': contributions})
+            frames.append({'lights': lights, 'strobe': list(self.read(0x10b49ea4, 'II'))})
+            self.alloc_top = mark
+        return {'frames': frames}
+
     def incidence(self, light, facet, reciprocal):
         info, coords = self.alloc(0x100), self.alloc(0x40)
         actor = self.actor(light)
@@ -707,6 +816,7 @@ def main():
     out['noise'] = [oracle.noise(case) for case in cases.get('noise', [])]
     out['lightTypes'] = [oracle.light_type(case) for case in cases.get('lightTypes', [])]
     out['mergeMods'] = [oracle.merge_mod(case) for case in cases.get('mergeMods', [])]
+    out['movingFrames'] = [oracle.moving_frames(case) for case in cases.get('movingFrames', [])]
     if cases.get('spatialDynamic'):
         oracle.fpatan = {key: bytes.fromhex(value)[::-1] for key, value in cases.get('fpatan', {}).items()}
         oracle.set_tables(cases['tables'])

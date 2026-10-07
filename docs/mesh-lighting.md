@@ -177,7 +177,7 @@ for L in sorted:
     elif !newCache and ((L.Index ^ Viewport.FrameCount) & 15) != 0:
       visible = L.fade & 1
     else:
-      visible = Model.LineCheck(End=Actor.Location, Start=L.Location, Extent=0) clear
+      visible = Model.LineCheck(End=L.Location, Start=Actor.Location, Extent=0) clear
       if visible and newCache: L.fade = 255
     if visible:
       count++; if L.bStatic: staticCount++
@@ -355,6 +355,48 @@ These are isolated setup costs, not whole-frame FPS results. Native
 validation still passes 52 setup cases and the 24 live Training passes
 above, with zero diffuse-byte differences. Local captures are under
 `.cache/perf/mesh-light-setup-memo*` and remain outside Git.
+
+## LineCheck and the brush tracker (2026-10-07)
+
+The visibility test is the level model's virtual `LineCheck` (vtable slot
+22, `call [esi+0x58]` at `0x10b0961f`) with Owner None, End the light's
+Location (`0x10b09604`–`0x10b09615`), Start the lit actor's
+(`0x10b095e3`–`0x10b09601`), a zero Extent and no extra node flags
+(`0x10b0958c`). The model is Level->Model, which the moving brush tracker
+fills with the movers' polygons where they were last rendered
+([brush tracker](brush-tracker.md)): once NF_IsNew clears they are ordinary
+solid nodes, and LineCheck's node mask (`NF_NotCsg | NF_IsNew`) does not
+exclude them. A mover therefore blocks a static light's line check.
+
+Play's view (`mesh-lighting-view.mjs`) takes that model from the BSP
+occlusion's memory (`bsp-occlusion.mjs` `lineModel`, the Rust tracker's
+nodes as the tracker last left them) and runs ray.mjs `traceRayFast`, the
+translated zero-extent LineCheck, over it; without the tracker
+(`?moverTracker=off`) it keeps the static model.
+
+`scripts/validate-tracked-linecheck.mjs` runs Engine's unchanged
+UModel::LineCheck under Unicorn
+(`native-tracked-linecheck-oracle.py`, on the tracker oracle's level model
+after GNewBrushTracker) beside Play's: the line checks of Helibase's
+BlackHelicopter0 and the 747's RepairBot0 to every light of their leaves'
+permeating lists, and six segments through every mover of the two maps
+(277 and 89 checks). All agree, on the static model and on the tracked one,
+and the tracked model blocks 54 and 4 of them that the static model lets
+through. In particular:
+- **Helibase.** The hangar's roof doors (ElevatorMover0 and 1, `hangar_door_01`,
+  at Z 736) block BlackHelicopter0's checks to Light55, Light167, Light58 and
+  Light50 above them. SetupForActor then keeps TriggerLight4 alone (key
+  158,224; Searchlight, hue 0, saturation 0: red; a movable light is never
+  traced), and the helicopter is lit red, as in the original's frame; Play
+  had added the three gold lights.
+- **747.** The force field `field001` (DeusExMover13–16) around Light10
+  blocks RepairBot0's check to it; Play had added Light10, the brightest of
+  its candidates.
+
+Still open: the other level traces (collision, AI sight, decals) use the
+static model ([brush tracker](brush-tracker.md) "Collision"), and an actor
+whose region is set after GNewBrushTracker (one that moves) takes its leaf
+from the tracked BSP in the original.
 
 ## Not reproduced / open
 
