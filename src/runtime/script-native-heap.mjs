@@ -341,6 +341,10 @@ export function createNativeHeap({capacity = 16 * 1024 * 1024, external = null, 
       return record.address;
     },
     sizeOf: object => objects.get(object)?.size ?? 0,
+    /** Byte length of the live allocRaw/realloc block at `address`, or undefined. */
+    blockSize: address => blocks.get(address >>> 0),
+    /** Every live block as [address, length] (validators hand them to oracles). */
+    blockEntries: () => [...blocks],
     get used() { return next; },
     /** The arena offset of HEAP_BASE, or 0 without an arena. */
     region, capacity, base: HEAP_BASE,

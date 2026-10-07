@@ -114,3 +114,9 @@ route's next boundary has moved from preferred size to ConfigurationChanged.
 Follow-up: [child configuration](script-window-scroll-configuration.md) now
 completes the reached placement/count/range/sensitivity chain. MedicalBot's next
 boundary is Actor.PlaySound in SetMedicalBot; draw/input/cleanup remain guarded.
+
+Follow-up (2026-10-06): XScaleWindow::Draw (0x1003fb10, with DrawScaleTexture
+0x1003f250 and TickToPixel at render-pass precision 24) is translated in
+`src/runtime/script-window-scale-draw.mjs` and compared with the original body
+by `scripts/validate-window-list-family.mjs`; the persona lists reach it when
+they overflow their scroll area. See [the ListWindow family](script-window-list-family.md).

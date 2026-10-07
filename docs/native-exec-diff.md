@@ -108,3 +108,11 @@ Sixteen Scale execs add 224 full receiver/result/event comparisons; the total is
 styles/colors, margins, tick-count/position reads, thumb step and sounds. Stateful
 range/geometry and child wiring use the bounded original-body runner described
 in [scroll child families](script-window-scroll-children.md).
+
+### ClipWindow.ForceChildSize (2026-10-06)
+
+Native 1689 (exec 0x1000cb70, both optional booleans default TRUE, body
+0x1000b9f0) is dispatched for MenuScreenSaveGame's edit control: 10 cases,
+745 identical across 53 natives. The ListWindow natives 1720–1812 use the
+structured family harness in [the ListWindow family](script-window-list-family.md),
+which runs the same exec bodies over a full heap image.
