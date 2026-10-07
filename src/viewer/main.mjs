@@ -1096,6 +1096,12 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** Validation only: window-probe.mjs (the root window, focus text,
+ * Console line and notes) on the simulation side. */
+async windowProbe() {
+  if (simClient) return simClient.call('windowProbe');
+  return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;
+},
 /** Validation only: mover-probe.mjs (the moving brush tracker's movers) on
  * the simulation side. */
 async moverProbe(args) {

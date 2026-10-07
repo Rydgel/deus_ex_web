@@ -237,6 +237,19 @@ their own diffs:
 * `validate-window-list-family` 283/283, 19/19 mutations (0xe9, 0x20ac,
   0x08).
 
+In the browser, `validate-window-typed-key-browser.mjs` drives Play in
+headless Chromium in the default worker mode with real keyboard events:
+* F2 opens the Goals screen;
+* Alt+N adds a note;
+* Shift+H, i, `\`, Space, then a French-layout `é` (Digit2) and AltGr `€`
+  (Ctrl+Alt+E) give "Hi é€";
+* Backspace gives "Hi é", and Tab saves it.
+
+The worker-side `windowProbe` (`src/viewer/window-probe.mjs`) reads the
+note, as `decalProbe` does for decals. The '€' is in the text but draws
+nothing: the DXFonts pages end at 0xff, and the translated glyph-miss path
+applies.
+
 ## Unresolved
 
 * `XComputerWindow::VirtualKeyPressed` (`0x1000f530`) is still a boundary.
