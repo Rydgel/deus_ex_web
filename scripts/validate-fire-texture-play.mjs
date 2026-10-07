@@ -20,7 +20,8 @@ let server = null, url = option('url', null);
 if (!url) {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const {default: base} = await import('../vite.config.mjs');
-  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/')));
+  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/'))
+    && !(pattern.includes('.claude/worktrees') && root.includes('/.claude/worktrees/')));
   server = await createServer({...base, configFile: false, root, logLevel: 'error',
     server: {...base.server, port: 0, strictPort: false, fs: {...base.server.fs, deny}, watch: null}});
   await server.listen();

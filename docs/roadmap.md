@@ -401,14 +401,13 @@ maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
 frame, dynamics, the moving brush tracker and child frames in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
-on BSP surfaces, ambient sound, script sounds, sound effects and zone reverb
-through Galaxy's mixer, Galaxy music, decals, and the third-person
+on BSP and mover surfaces, ambient sound, script sounds, sound effects and zone reverb
+through Galaxy's mixer, Galaxy music, decals (movers included), and the third-person
 conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Fourteen maps match the original's own frames at matched cameras
 ([visual acceptance](visual-acceptance.md)).
-Open: fog and decals on movers (ClipDecal's mover rotation is done), child
-frames' own fog maps, time-varying moving lights and spotlights, UnrealScript inside
+Open: child frames' own fog maps, per-fragment fog maps on movers, time-varying moving lights and spotlights, UnrealScript inside
 the render events at 24 bits (the script VM computes at 64), the darkest-pixel
 rounding visual acceptance found, and acceptance of live (unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
@@ -626,6 +625,25 @@ instead of frustum culling (the Paris club tunnel went from 15 to 59 fps).
 Each actor's Setup rectangle, child frames and the moving brush tracker
 remain ([BSP occlusion](bsp-occlusion.md#what-is-left)).
 
+**Decals and fog on movers (2026-10-07).** With the brush tracker,
+movers' polygons are level surfaces whose Actor is the Mover.
+- **Decals.** AttachDecal's trace and FindSurface run over the tracked
+  model, so a bullet hole can land on a door. Its Mover branch copies
+  MoverRotation and bases the decal on its Owner (SetBase(Owner, 1)). This
+  is bit-equal to Engine.dll over 65 scenarios with 11 mover attaches.
+  ClipDecal turns the decal by Rotation − MoverRotation, bit-equal over 107
+  Render.dll cases.
+- **Decals in Play.** The decal model follows the tracker. A BulletHole
+  spawned on a Training door stays on the door's plane when the door is
+  raised and turned.
+- **Fog.** Drawn mover polygons in a fog zone get fog maps over their
+  tracker surface's lattice. On 02_NYC_Bar, a door's fog map equals
+  Render.dll's loop.
+
+Open: a mover polygon draws one fog map, where the original draws one per
+fragment. Script traces in Play still use the static model (Stage 5).
+([decals](decals.md#movers), [volumetric fog](volumetric-fog.md#play)).
+
 **Occlusion child frames (2026-10-07).** OccludeBsp's mirror and sky
 requests make child frames, through Render.dll's CreateChildFrame (merging,
 24-bit ComputeRenderSize, mirror and sky coordinates). OccludeFrame then
@@ -647,8 +665,9 @@ frame's OccludeBsp and drawn from the draw lists, so closed doors occlude
 what lies behind them (Island's UNATCO HQ doors: 24 nodes drawn instead of
 149). The pixels are unchanged, and mover mirrors are requested through
 their polygons. Tracked movers are not stamped, as in the original, where
-only DrawActorSprite stamps. Fog and decals on movers, collision (Stage 5)
-and SaveGame (Stage 6) remain ([brush tracker](brush-tracker.md)).
+only DrawActorSprite stamps. Collision (Stage 5) and SaveGame (Stage 6)
+remain; fog and decals on movers followed on 2026-10-07 (above)
+([brush tracker](brush-tracker.md)).
 
 **Galaxy music (2026-10-06).** Each map plays its song. Galaxy.dll's IT
 loader, sequencer (238 cases, 1.83 million ticks), SSE mixer and

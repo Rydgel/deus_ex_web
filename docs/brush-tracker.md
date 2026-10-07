@@ -256,6 +256,13 @@ names its node. With the tracker the requests also carry
 moving mirror group its child frame only when OccludeBsp asked for it, as
 it already did for static groups.
 
+**Decals and fog (2026-10-07).** AttachDecal traces the level model as the
+tracker holds it, so decals attach to movers through the Mover branch. Each
+Update bumps a generation word (header 51), and the decal model then
+follows the tracker's arrays ([decals](decals.md), "Movers"). Drawn mover
+polygons in a bFogZone zone get fog maps over their tracker surface's
+lattice (`surfaceFacet`; [volumetric fog](volumetric-fog.md), "Play").
+
 **Switch.** `?moverTracker=off` (Node: `MOVER_TRACKER=off`) keeps the
 earlier behaviour: movers stay out of the BSP, draw whole and are stamped
 from the frustum set.
@@ -369,8 +376,6 @@ lists is not drawn.
   mover's SavedPos to (−1, −1, −1) and builds a new tracker. Play has no
   SaveGame yet; `buildOcclusion` in `sim-host.mjs` is the rebuild to call.
   Travel uses the same rebuild once maps travel (Stage 6).
-- **Fog on movers.** Mover surfaces get no fog map. SetupForSurf on drawn
-  tracker surfaces is the next step.
 - **Child frames.** Mirror and sky passes draw movers whole until child
   frames have their own occlusion.
 - **Whole polygons.** A polygon split into fragments draws whole, and the
