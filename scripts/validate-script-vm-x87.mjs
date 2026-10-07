@@ -9,9 +9,16 @@
  * signalling NaNs of both signs and several payloads, int32 extremes, the
  * SafeNormal 1e-08 threshold) and on seeded random operands: raw bit patterns
  * and log-uniform finite magnitudes.
+ *
+ * The words are compared before they become numbers in an Array: V8 may store
+ * a NaN number into an Array canonically, depending on the literal's feedback
+ * state rather than on the operands, so the BigInt result literal once held
+ * 0x7fc00000 where its body (and Core.dll) stored 0xffc00000. The number
+ * forms both sides hand to the VM are then checked against the words with
+ * any NaN matching any NaN.
  */
 import assert from 'node:assert/strict';
-import {x87Operators} from '../src/runtime/script-vm.mjs';
+import {x87Operators, x87OperatorWords} from '../src/runtime/script-vm.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 
 const kernel = await loadScriptVmKernel();
@@ -42,12 +49,19 @@ const float = () => num(randomFloatBits());
 const vector = () => [float(), float(), float()];
 const rotator = () => [randomInt(), randomInt(), randomInt()];
 
-const same = (a, b) => {
-  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
-  return typeof a === 'number' && typeof b === 'number' && (Number.isInteger(a) && Number.isInteger(b) && !Object.is(a, -0) && !Object.is(b, -0)
-    ? a === b : bits(a) === bits(b));
-};
 const show = v => Array.isArray(v) ? `[${v.map(show).join(',')}]` : `0x${bits(v).toString(16)}(${v})`;
+const showWords = v => Array.isArray(v) ? `[${v.map(showWords).join(',')}]` : `0x${(v >>> 0).toString(16)}`;
+// Operators whose results are int32s; the others store float32 words.
+const INTEGER = new Set(['divideEqualIntFloat', 'multiplyRotatorFloat']);
+const sameWords = (a, b) => Array.isArray(a)
+  ? Array.isArray(b) && a.length === b.length && a.every((v, i) => sameWords(v, b[i]))
+  : Number.isInteger(a) && Number.isInteger(b) && a >>> 0 === b >>> 0;
+const nanWord = w => (w & 0x7fffffff) >>> 0 > 0x7f800000;
+// A number form against the reference words: bit-equal, a NaN word matching
+// any NaN.
+const numberMatches = (value, word) => Array.isArray(word)
+  ? Array.isArray(value) && value.length === word.length && value.every((v, i) => numberMatches(v, word[i]))
+  : typeof value === 'number' && (nanWord(word) ? value !== value : bits(value) === word >>> 0);
 
 const OPERATORS = {
   divideEqualIntFloat: () => [randomInt(), float()],
@@ -73,13 +87,23 @@ for (const [name, operands] of Object.entries(OPERATORS)) {
   for (let i = 0; i < CASES; i++) {
     const args = operands();
     let expected;
-    try { expected = x87Operators[name](...args); }
+    try { expected = x87OperatorWords[name](...args); }
     catch (error) {
       // The reference refuses nothing here; an error is a harness fault.
       throw new Error(`${name}(${args.map(show).join(', ')}) reference threw: ${error.message}`);
     }
     const actual = kernel[name](...args);
-    assert.ok(same(actual, expected), `${name}(${args.map(show).join(', ')}): kernel ${show(actual)}, BigInt ${show(expected)}`);
+    // A scalar float result is returned, not stored in an Array, so its
+    // number keeps the kernel's word; a vector's words are read from the
+    // kernel's result slot.
+    const words = INTEGER.has(name) ? actual : Array.isArray(expected) ? kernel.resultWords() : bits(actual);
+    assert.ok(sameWords(words, expected),
+      `${name}(${args.map(show).join(', ')}): kernel ${showWords(words)}, BigInt ${showWords(expected)}`);
+    if (!INTEGER.has(name)) {
+      assert.ok(numberMatches(actual, expected), `${name}(${args.map(show).join(', ')}): kernel number form ${show(actual)}`);
+      const numbers = x87Operators[name](...args);
+      assert.ok(numberMatches(numbers, expected), `${name}(${args.map(show).join(', ')}): BigInt number form ${show(numbers)}`);
+    } else assert.ok(sameWords(x87Operators[name](...args), expected), `${name}: BigInt int form`);
     total++;
   }
 }
