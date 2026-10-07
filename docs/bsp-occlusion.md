@@ -588,6 +588,67 @@ These run-to-run differences are not resolved. validate-gpu-mesh,
 validate-mirrors-play (also with `?simVerify=1`), validate-lasers-play and
 validate-particles-play pass.
 
+## Child frames: cost
+
+Child frames against `?childFrames=off` (the frustum passes). The A/B runs
+`profile-play-browser.mjs --no-profile --angle gl` in worker mode at
+1920×1080 for 600 frames, with 3 interleaved rounds and the mode order
+alternating by round. Values are medians, on the Linux host, measured on
+2026-10-07. Other agents were running throughout, with a load average of
+3 to 16.
+
+**Views.**
+- **Island:** the start, where the sky child frame is drawn.
+- **Club spawn:** 10_Paris_Club's start turned to yaw 32768 (rotation
+  only). No child frame is requested at any spawn yaw, checked every 4,096.
+- **Club mirrors:** the bar's two mirrors (surfaces 231 and 232) from
+  `[-122,-1008,60]`, yaw 0.
+- **Smug:** facing DeusExMover7's mirror.
+- **Training:** facing the entrance floor mirror.
+
+Draw calls are per drawn frame.
+
+| View | Worker frame | Page total | Page mirror passes | Mirror draw calls | Sky draw calls |
+| --- | --- | --- | --- | --- | --- |
+| Club mirrors | 9.9 against 16.8 ms | 6.2 against 18.6 ms | 2.1 against 12.0 ms | 29 against 605 | — |
+| Smug | 8.8 against 14.0 ms | 3.0 against 5.6 ms | 1.1 against 3.2 ms | 29 against 191 | — |
+| Training | 8.7 against 13.4 ms | 3.5 against 10.8 ms | 1.3 against 4.4 ms | 17 against 268 | — |
+| Island | 19.5 against 20.0 ms | 3.5 against 3.1 ms | — | — | 5 against 8 |
+| Club spawn | 8.3 against 8.6 ms | 3.2 against 3.0 ms | — | — | — |
+
+- **Mirror views.** A mirror pass draws only its frame's visible polygons,
+  mover fragments and Frame->Sprite, which cuts its draw calls by 7 to 21
+  times.
+- **Worker.** Only the original's Frame->Sprite actors are stamped now,
+  instead of everything in the mirror frustums, so fewer actors count as
+  rendered. The actor and tick phases shrink with them. That the cause is
+  work gated by LastRenderTime is inferred; the work was not traced.
+  - Club mirrors (medians): actors 2.1 against 4.0 ms, tick 5.2 against 8.6 ms, the
+    mirror planning 0.15 against 0.96 ms.
+  - Training (medians): actors 2.2 against 3.8 ms, tick 3.9 against 6.2 ms.
+
+  That is the original's behaviour (only DrawActorSprite stamps), not a
+  host saving.
+- **Island.** The earlier 18.1 against 14.5 ms (two partial rounds, with
+  child frames always run first) was host load.
+  - In those runs every worker phase scaled by the same 1.3 to 1.7 times,
+    including tick, HUD and audio, which child frames do not touch. The
+    third run of the same mode measured 13.9 ms.
+  - With the mode order alternating, the medians are 19.5 against 20.0
+    ms, and the phase ratios match, for example actors to tick at 0.49 to 0.52
+    in both modes.
+  - The worker's own `visibility()` timing (`moverProbe`, 120 samples per
+    load, 3 interleaved loads per mode) puts OccludeBsp with its decode
+    and the sky child frame at 2.1, 2.1 and 2.8 ms, against 2.2, 2.3 and
+    2.3 ms without the child. The worker clock has a 0.1 ms step, so the
+    sky child frame's OccludeBsp, SetupDynamics and decode cost less than
+    that resolution.
+  - The mirror planning phase reads 0.20 to 0.24 against 0.14 to 0.19 ms:
+    the frame passes plan the sky pass from its frame, about 0.04 ms of
+    host work.
+- **Club spawn.** No child frame is in view, so the modes match within
+  noise.
+
 ## What is left
 
 In recommended order. Each step keeps the rule above: recover from the
