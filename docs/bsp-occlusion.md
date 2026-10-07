@@ -657,10 +657,11 @@ then wire into Play.
 
 ### 1. Child frames (done)
 
-Ported and in Play on 2026-10-07 ("Child frames" above). What remains:
-each child frame's own fog maps, actor meshes in a sky frame inside a mirror
-frame, each frame's own iterator items, and a measured FPTAN for the
-24-bit argument.
+Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
+own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
+"Play"). What remains: actor meshes in a sky frame inside a mirror frame,
+each frame's own iterator items, and a measured FPTAN for the 24-bit
+argument.
 
 ### 2. The moving brush tracker (done)
 

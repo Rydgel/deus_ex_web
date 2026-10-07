@@ -81,6 +81,9 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
+// ?childFog=off: the child frames' passes reuse the root frame's fog maps
+// (as before each frame had its own, fog-pass.mjs framePass).
+const childFog = new URLSearchParams(location.search).get('childFog') !== 'off';
 // The original's display gamma ramp maps the finished 8-bit framebuffer, HUD
 // included (D3DDrv SetGammaRamp, display-ramp.mjs): shaders draw raw colours
 // and one pass ramps the frame. ?gamma=material keeps the earlier ramp in
@@ -1417,7 +1420,7 @@ function drawFrame(snap, time) {
   world.flushLighting(renderer);
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation
-  // (docs/volumetric-fog.md). Mirror views reuse the main frame's maps.
+  // (docs/volumetric-fog.md), and each child frame's from its own Coords.
   if (world.fog?.stats.surfaces && !runtimeError) {
     const toUnits = radians => Math.round(radians * 32768 / Math.PI);
     const fogView = playerView ?? snap?.inspect?.view ?? { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] };
@@ -1425,7 +1428,8 @@ function drawFrame(snap, time) {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
         drawnSurfaces, { movers: visible?.movers ?? null, moverZones: visible?.moverZones ?? null,
-          moverFacets: visible?.moverFacets ?? null, fogZone: world.fogZone });
+          moverFacets: visible?.moverFacets ?? null, fogZone: world.fogZone, frames: childFog ? frames : null,
+          nodeSurface: world.nodeSurface });
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');
@@ -1446,6 +1450,7 @@ function drawFrame(snap, time) {
   // One child frame's world (its visible nodes and mover polygons) and
   // sprite records; null: all again.
   const framePass = frames ? record => {
+    world.fog?.framePass(record, renderer);
     if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
     world.visibility.select(record.nodes, record.movers ?? null);
     spriteScene?.framePass(record.index);
