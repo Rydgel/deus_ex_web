@@ -425,7 +425,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const visible = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
         : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
           new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : null;
-      const changed = movingLights.update(lights, offsets, lightFrameBegun ? lightFrame : null, visible);
+      // With OccludeBsp's drawn surfaces the drawn light maps are listed
+      // (brush light maps are always drawn).
+      const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
+      if (drawn) for (const surfaceIndex of drawn) for (const record of lighting.recordsFor(map.model, surfaceIndex)) drawnRecords.push(record);
+      const changed = movingLights.update(lights, offsets, lightFrameBegun ? lightFrame : null, visible, drawnRecords);
       for (const { lightmap, region } of changed) lightAtlas.update(lightmap, { partial: true, region });
       for (const note of movingLights.notes) if (!notes.has(note)) { notes.add(note); world.notes.push(note); }
       return { lightmaps: changed.length, surfaces: movingLights.surfaces };

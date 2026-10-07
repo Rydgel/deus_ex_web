@@ -14,6 +14,9 @@ const NORMAL_BODY = new Set([0, 1, 2, 3, 11, 19]), SPOT_BODY = new Set([8, 12]);
 // The merge-dynamic rows (TorchWaver, FireWaver, WateryShimmer): the merge
 // 0x10b03040 modulates their spatial bytes with the light noise.
 const MODULATED = new Set([1, 2, 3]);
+// LightTypes GlobalLighting leaves at the brightness: Steady (0x10b05a00 is
+// `ret`), BackdropLight, and the untranslated texture-palette types.
+const STEADY_TYPES = new Set([1, 6, 8, 9]);
 const add = (a, b) => a.map((v, i) => v + b[i]);
 const union = rects => rects.length ? {
   minU: Math.min(...rects.map(r => r.minU)), maxU: Math.max(...rects.map(r => r.maxU)),
@@ -33,7 +36,7 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
  * the effect row's spatial body, and the merge 0x10b03040 from index 0,
  * which modulates the wavers' bytes with the frame's light noise.
  *
- * `update(lights, moverOffsets, frame, visible)` takes the frame's light
+ * `update(lights, moverOffsets, frame, visible, drawnRecords)` takes the frame's light
  * animation inputs (static-lighting.mjs createLightFrame: Level.TimeSeconds,
  * the noise tables, the shared strobe state and the modulation tables);
  * without one every light is taken steady and unmodulated, with a note.
@@ -41,7 +44,9 @@ const movingLightsMode = () => (typeof process !== 'undefined' && process.env?.M
  * original rebuilds the per-frame map only for a drawn surface, so the
  * incremental mode leaves the others stale and recomposes them, from that
  * frame's inputs, when they are drawn again (their texels depend on the
- * frame's inputs only). The full mode, the reference, recomposes all.
+ * frame's inputs only). `drawnRecords`, when given with `visible`, lists
+ * the drawn light maps, so only those are looked at. The full mode, the
+ * reference, recomposes all.
  *
  * Host work only, identical texels in both modes: a light map's moving
  * texels depend only on its static copy and its contributions, applied in
@@ -98,33 +103,65 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     return entry.spatial = bytes;
   }
 
+  /** A colour's per-byte amounts: `colorTableEntry(step, byte) / 255` per
+   * channel (the colour table at 0x10b064ff, as the page adds it). */
+  const amountsOf = colour => colour.amounts ??= colour.steps.map(step =>
+    Float64Array.from({ length: 256 }, (_, byte) => colorTableEntry(step, byte) / 255));
+
   /** The merge's per-texel addends of one contribution for its light's
    * current colour (`item.colour`): the sample offsets and the three
    * channel values. The modulation index counts every rectangle texel from
    * 0 (the merge's start index at 0x10b088de is 0). */
   function addends(record, entry) {
-    const { item, rect } = entry, { steps: [red, green, blue], modulate } = item.colour;
-    const bytes = spatialBytes(entry), { width } = record, at = [], amounts = [];
-    let index = 0, k = 0;
+    const { item, rect } = entry, { modulate } = item.colour, [red, green, blue] = amountsOf(item.colour);
+    const bytes = spatialBytes(entry), { width } = record;
+    const at = new Int32Array(bytes.length), amounts = new Float64Array(bytes.length * 3);
+    let index = 0, k = 0, n = 0;
     for (let v = rect.minV; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, index++, k++) {
       let byte = bytes[k];
       if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
       if (!byte) continue;
-      at.push((v * width + u) * 3);
-      amounts.push(colorTableEntry(red, byte) / 255, colorTableEntry(green, byte) / 255, colorTableEntry(blue, byte) / 255);
+      at[n] = (v * width + u) * 3;
+      amounts[n * 3] = red[byte]; amounts[n * 3 + 1] = green[byte]; amounts[n * 3 + 2] = blue[byte];
+      n++;
     }
-    return { at: Int32Array.from(at), amounts: Float64Array.from(amounts), token: item.colour.token };
+    return { at: at.subarray(0, n), amounts: amounts.subarray(0, n * 3), token: item.colour.token };
+  }
+
+  /** One contribution added straight onto the texels, in addends' order
+   * (the same additions; nothing kept). Returns the texels written. */
+  function addDirect(record, entry) {
+    const { item, rect } = entry, { modulate } = item.colour, [red, green, blue] = amountsOf(item.colour);
+    const bytes = spatialBytes(entry), { width, pixels } = record;
+    let index = 0, k = 0, written = 0;
+    for (let v = rect.minV; v < rect.maxV; v++) {
+      let i = (v * width + rect.minU) * 3;
+      for (let u = rect.minU; u < rect.maxU; u++, index++, k++, i += 3) {
+        let byte = bytes[k];
+        if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
+        if (!byte) continue;
+        pixels[i] = Math.min(MAX, pixels[i] + red[byte]);
+        pixels[i + 1] = Math.min(MAX, pixels[i + 1] + green[byte]);
+        pixels[i + 2] = Math.min(MAX, pixels[i + 2] + blue[byte]);
+        written++;
+      }
+    }
+    return written;
   }
 
   /** lighting.mjs applier: adds each contribution onto the static copy, the
-   * saturating merge at 127 per channel. */
+   * saturating merge at 127 per channel. A steady contribution keeps its
+   * addends between recompositions; a time-varying one (its colour or
+   * modulation changes from frame to frame) is added directly. */
   function apply(record, contributions) {
     const { pixels } = record;
     let written = 0;
     for (const contribution of contributions) {
+      const colour = contribution.item.colour;
+      contribution.composed = colour.token;
+      if (!incremental || contribution.item.timeVarying) { written += addDirect(record, contribution); continue; }
       const cached = contribution.addends;
-      const { at, amounts } = incremental && cached?.token === contribution.item.colour.token ? cached
-        : contribution.addends = addends(record, contribution);
+      const { at, amounts } = cached?.token === colour.token ? cached : contribution.addends = addends(record, contribution);
       for (let k = 0, j = 0; k < at.length; k++, j += 3) {
         const i = at[k];
         pixels[i] = Math.min(MAX, pixels[i] + amounts[j]);
@@ -146,11 +183,17 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     const type = values.LightType & 255;
     if (!frame && type !== 1) notes.add(`Moving light type ${type} is taken steady: no light animation frame was supplied.`);
     if (type === 8 || type === 9) notes.add(`Light type ${type} (texture palette) is not translated and stays steady.`);
-    const brightness = frame ? lightTypeBrightness(values, { timeSeconds: frame.timeSeconds, noise: frame.noise,
-      strobe: frame.strobe, flickerKey: item.flickerKey }) : null;
-    const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
-    if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
-    const { steps } = movingLightConstants(values, levelBrightness, hsv.get(key), brightness);
+    // Steady and BackdropLight leave the brightness as it is (and the
+    // texture-palette types are not translated): no type function to run.
+    const brightness = frame && !STEADY_TYPES.has(type) ? lightTypeBrightness(values, { timeSeconds: frame.timeSeconds,
+      noise: frame.noise, strobe: frame.strobe, flickerKey: item.flickerKey }) : item.baseBrightness;
+    let base = item.colourBase;
+    if (!base || base.brightness !== brightness) {
+      const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
+      if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
+      const { steps } = movingLightConstants(values, levelBrightness, hsv.get(key), brightness);
+      base = item.colourBase = { brightness, steps, key: steps.join(','), amounts: null };
+    }
     let modulate = null, noise = '';
     if (MODULATED.has(effect)) {
       if (frame) {
@@ -158,7 +201,10 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
         noise = effect === 3 ? `W${frame.noise.version}` : `A${frame.frameIndex}`;
       } else notes.add('Moving torch, fire and watery lights are unmodulated: no light animation frame was supplied.');
     }
-    return { steps, modulate, token: `${steps.join(',')}${noise}` };
+    // The colour tables' amounts belong to the steps; the modulation table
+    // to the frame.
+    return { steps: base.steps, get amounts() { return base.amounts; }, set amounts(value) { base.amounts = value; },
+      modulate, token: noise ? `${base.key}${noise}` : base.key };
   }
 
   function contribution(light) {
@@ -176,7 +222,11 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     const key = (values.LightHue & 255) * 256 + (values.LightSaturation & 255);
     if (!hsv.has(key)) hsv.set(key, fgetHsv(values.LightHue, values.LightSaturation, 255));
     const item = { name: light.name, effect, kind, values, location: light.location.map(Math.fround), levelBrightness: light.levelBrightness,
-      flickerKey: light.flickerKey ?? 0, constants: movingLightConstants(values, light.levelBrightness, hsv.get(key)) };
+      flickerKey: light.flickerKey ?? 0, constants: movingLightConstants(values, light.levelBrightness, hsv.get(key)),
+      // ComputeFromActor's brightness before GlobalLighting (0x10b060b3).
+      baseBrightness: Math.fround((values.LightBrightness & 255) * Math.fround(1 / 255)),
+      // Its colour or modulation may change from frame to frame.
+      timeVarying: MODULATED.has(effect) || !STEADY_TYPES.has(values.LightType & 255) };
     // The spot body's axis: the X axis of GMath.UnitCoords / Rotation, the
     // ViewRotation of a Pawn (0x10b04f89-0x10b04fda; game.mjs movingLights
     // reads the one the body reads).
@@ -274,13 +324,32 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       return count ? `${name}\u0000${count}` : name;
     });
   };
-  const lightSignature = light => JSON.stringify([light.location, light.values, light.levelBrightness, light.flickerKey ?? 0]);
+  // A light's inputs, kept to tell whether its contribution is unchanged.
+  const inputsOf = light => ({ location: [light.location[0], light.location[1], light.location[2]],
+    values: { ...light.values, ...(light.values.Rotation ? { Rotation: [...light.values.Rotation] } : {}) },
+    levelBrightness: light.levelBrightness, flickerKey: light.flickerKey ?? 0 });
+  function sameInputs(inputs, light) {
+    if (!inputs || inputs.levelBrightness !== light.levelBrightness || inputs.flickerKey !== (light.flickerKey ?? 0)) return false;
+    const a = inputs.location, b = light.location;
+    if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) return false;
+    const x = inputs.values, y = light.values;
+    let count = 0;
+    for (const key in y) {
+      count++;
+      const p = x[key], q = y[key];
+      if (Array.isArray(q)) { if (!Array.isArray(p) || p.length !== q.length || p.some((v, i) => v !== q[i])) return false; }
+      else if (!Object.is(p, q)) return false;
+    }
+    return count === Object.keys(x).length;
+  }
+  let updates = 0;
   const sameOffset = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
-  // Light maps whose recomposition waits until they are drawn.
-  const stale = new Set();
-  function updateIncremental(lights, moverOffsets = new Map(), frame = null, visible = null) {
+  // Light maps whose recomposition from the lights waits until they are drawn.
+  const pending = new Set();
+  function updateIncremental(lights, moverOffsets = new Map(), frame = null, visible = null, drawnRecords = null) {
     frameIndex = frame?.frameIndex ?? -1;
+    const stamp = ++updates;
     const keys = lightKeys(lights), present = new Set(keys);
     // Movers whose offset changed (a vanished entry counts as changed).
     const moved = new Set();
@@ -306,12 +375,13 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       if (!moved.size) parked.set(key, state);
     }
     for (let i = 0; i < lights.length; i++) {
-      const light = lights[i], key = keys[i], sig = lightSignature(light);
+      const light = lights[i], key = keys[i];
       let state = lightStates.get(key);
-      if (!state && parked.get(key)?.sig === sig) {
+      const same = state && sameInputs(state.inputs, light);
+      if (!state && sameInputs(parked.get(key)?.inputs, light)) {
         state = parked.get(key); parked.delete(key); lightStates.set(key, state);
         for (const record of state.reach.keys()) dirty.add(record);
-      } else if (!state || state.sig !== sig) {
+      } else if (!same) {
         if (state) for (const record of state.reach.keys()) dirty.add(record);
         parked.delete(key);
         const item = contribution(light), reach = new Map();
@@ -319,7 +389,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
           item.colour = colourOf(item, frame);
           reachLight(item, moverOffsets, (record, entry) => { reach.set(record, entry); dirty.add(record); });
         }
-        lightStates.set(key, state = { sig, item, reach });
+        lightStates.set(key, state = { inputs: inputsOf(light), item, reach });
         continue;
       } else if (moved.size && state.item) {
         for (const record of state.reach.keys()) if (record.owner && moved.has(record.owner)) {
@@ -332,25 +402,57 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
         }
       }
       // The frame's colour: a LightType function or a new noise frame
-      // changes the addends, not the spatial bytes.
+      // changes the addends, not the spatial bytes. A steady light's change
+      // dirties its maps; a time-varying light's maps are checked below.
       if (state.item) {
         const colour = colourOf(state.item, frame);
-        if (colour.token !== state.item.colour.token) {
-          state.item.colour = colour;
+        if (colour.token !== state.item.colour.token && !state.item.timeVarying)
           for (const record of state.reach.keys()) dirty.add(record);
-        } else state.item.colour = colour;
+        state.item.colour = colour;
       }
     }
     order = keys;
     const changed = [], states = keys.map(key => lightStates.get(key));
-    for (const record of stale) dirty.add(record);
-    for (const record of dirty) {
-      if (visible && !visible(record)) { stale.add(record); continue; }
-      stale.delete(record);
+    const contributionsOf = record => {
       const contributions = [];
       for (const state of states) { const entry = state.reach.get(record); if (entry) contributions.push(entry); }
+      return contributions;
+    };
+    const compose = (record, contributions) => {
       recompose(record, contributions.length ? contributions : null, moverOffsets, changed);
       if (contributions.length) active.add(record); else active.delete(record);
+      record.movingTimeVarying = contributions.some(entry => entry.item.timeVarying);
+    };
+    // A map whose time-varying lights' colour or modulation changed since it
+    // was composed (its contributions are current: any other change made
+    // it pending).
+    const outdated = record => record.movingTimeVarying && record.moving.some(entry => entry.composed !== entry.item.colour.token);
+    for (const record of dirty) pending.add(record);
+    if (!visible) {
+      for (const record of pending) compose(record, contributionsOf(record));
+      pending.clear();
+      for (const state of states) if (state.item?.timeVarying)
+        for (const record of state.reach.keys()) if (outdated(record)) compose(record, record.moving);
+    } else if (drawnRecords) {
+      // The drawn maps, enumerated: nothing else is looked at.
+      for (const record of drawnRecords) {
+        if (pending.delete(record)) compose(record, contributionsOf(record));
+        else if (outdated(record)) compose(record, record.moving);
+      }
+    } else {
+      // The pending maps and the time-varying lights' maps, each tested once.
+      for (const record of pending) {
+        record.movingStamp = stamp;
+        if (visible(record)) { pending.delete(record); compose(record, contributionsOf(record)); }
+      }
+      for (const state of states) {
+        if (!state.item?.timeVarying) continue;
+        for (const record of state.reach.keys()) {
+          if (record.movingStamp === stamp) continue;
+          record.movingStamp = stamp;
+          if (visible(record) && outdated(record)) compose(record, record.moving);
+        }
+      }
     }
     return changed;
   }
