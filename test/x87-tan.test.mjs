@@ -25,3 +25,21 @@ test('a non-measured FOV builds a frame', () => {
   const frame = buildWindowSceneFrame({location: [0, 0, 0], rotation: [0, 0, 0], width: 1440, height: 960, fov: 74.99874114990234});
   assert.ok(frame.projectionZ > 0);
 });
+
+// DrawLodMesh's FOV factor (docs/script-lodmesh-lod.md): the precision-
+// control-24 argument and the float FSTP m32 stores, measured on real x87
+// (AMD Ryzen 9 8945HS under Wine, control word 0x007f) by
+// scripts/validate-x87-tan-hardware.mjs's "lod" mode: FOV bits -> [argument
+// qword, tangent float bits].
+const LOD_MEASURED = {'42700000': ['3fe0c15240000000', '3f13cd3a'], '42960000': ['3fe4f1a6c0000000', '3f446f8a'],
+  '42b40000': ['3fe921fb60000000', '3f800000'], '42f00000': ['3ff0c15240000000', '3fddb3d8'],
+  '4295ffd6': ['3fe4f1a0e0000000', '3f446f40']};
+
+test('the LOD tangent model gives the measured precision-control-24 floats', async () => {
+  const {lodMeshTanArgument, lodMeshTanFactor, floatBits, bitsFloat} = await import('../src/runtime/lodmesh-lod.mjs');
+  for (const [fov, [argument, tangent]] of Object.entries(LOD_MEASURED)) {
+    const value = bitsFloat(parseInt(fov, 16));
+    assert.equal(hex(lodMeshTanArgument(value)), argument, `FOV ${value}: argument`);
+    assert.equal(floatBits(lodMeshTanFactor(value)).toString(16).padStart(8, '0'), tangent, `FOV ${value}: tangent float`);
+  }
+});

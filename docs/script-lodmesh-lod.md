@@ -1,76 +1,169 @@
 # Original character mesh LOD selection and morphing
 
-## Contract recovered before implementation
+Authority: hash-pinned Render.dll `607f1077…d75d1`, Engine.dll `0c3a8b18…c20b4`
+and Core.dll `8bf3039e…7e4` (see [surface/skin selection](script-lodmesh-materials.md)).
+This is the distance LOD of `URender::DrawLodMesh` (`0x10b0ea80`, reached only
+through `URender::DrawMesh` `0x10b0d1a0`). Re-derived from the disassembly on
+2026-10-07; the earlier draft of this page assumed 64-bit precision and
+mis-stated the morph gate and appTan's store.
 
-Authority: hash-pinned Render.dll, Engine.dll and Core.dll recorded in
-[surface/skin selection](script-lodmesh-materials.md). This translates the
-LOD portions of DrawLodMesh, not its complete lighting/culling/draw pipeline.
+## Precision
 
-Selection is `10b0eb52..10b0ed53`. Mesh +180 is the ordinary vertex count N;
-+184 special vertices are separate. Initialize requested count=N and float
-detail=N. Nonzero raw +18c bits and a nonempty +12c point-collapse array enable
-LOD. Morphing additionally requires renderer +48 bit 1 and mesh +194 >0.
-Original URender.Init (`10b134de..10b134f2`) sets +40=.25, +44=1, +48=1,
-+4c=1; these are explicit renderer settings, not arbitrary browser defaults.
+DrawLodMesh runs inside the render pass, at x87 precision control 24
+(control word `0x007f`, [render-pass precision](render-pass-precision.md)):
+every FADD, FSUB, FMUL, FDIV and FIMUL rounds to a 24-bit significand with the
+x87's wide exponent; loads, FILD, FST/FSTP to a float, FISTP and FPTAN are not
+affected. Below, "rounded" means that 24-bit rounding, "stored" a float store.
+For operations on floats and small integers this is one binary32 operation;
+the two operations with a double constant (the FOV argument and the screen
+factor) round the exact product or sum once. Comparisons see the unstored
+value.
 
-Compute f32(appTan(double(f32(viewportActor.FOVAngle +410) *
-double .008726646259971648))). Core's actual appTan body `10123260` executes
-FPTAN; modes >=3 replace its stored result with 1. The argument's qword store
-and the result's f32 store are part of the contract. Hardware measurements must
-check these double-input calls because Unicorn's transcendental emulator is
-not the hardware authority. Admit finite ordinary FOVs (0<angle<180); extreme
-transcendental/invalid allocation domains remain unsupported.
+The precision is not cosmetic: the same 228 reference cases run with the
+oracle at `0x037f` differ from the translation in the appTan argument of every
+gated case (216), the stored detail of 104, the morphed buffer of 141 and the
+transformed Location of 6 (`ORACLE_CW=0x037f node scripts/validate-lodmesh-lod.mjs
+--js-only`).
 
-Let complexity=f32(N*f32(.003)+.25), screen=f32(frameWidth*double
-.0010937499999999999+double .3). FSceneNode +b8 is the float conversion of
-its integer +a8 dimension, as shown by Engine.ComputeRenderSize
-`103729a3..103729b8`. Transform Actor.Location (+114) by the caller's FCoords,
-with extended origin subtraction and dot intermediates, then store the vector
-f32. Depth is its Z minus mesh +198, retained extended, clamped to at least 1.
-The retained ratio is:
+## Renderer settings
 
-    mesh[188] * Actor.DrawScale * Actor.LODBias * screen * 430
-    / (renderer[44] * renderer[40] * mesh[18c] * depth * complexity * tanFactor)
+`URender::Init` (`0x10b134d7..0x10b134ef`) sets `+3c` = 3.0 (texture LOD,
+console `TLOD`), `+40` = 0.25 (shape LOD distance, `MLOD`), `+44` = 1.0, `+48`
+= 1 (shape LOD mode, `MLMODE`) and `+4c` = 1.0 (fixed scale, `MLFIX`).
+`URender::Exec` (`0x10b147b0`) changes `+40` only to a positive value, `+48`
+and `+4c` only to a non-negative one. `+44` has no writer besides the copy
+constructor and assignment. `URender::StaticConstructor` (`0x10b13450`) is a
+bare `ret`, so no config property loads them; the INI files have no
+`[Render.Render]` section. The shipped game therefore always runs with
+0.25 / 1.0 / 1 / 1.0 unless a player types those console commands.
+`RENDER_LOD_SETTINGS` in `src/runtime/lodmesh-lod.mjs` holds them.
 
-All factors are float32 fields except named embedded doubles; multiplication
-order is exactly the order shown. Actor.LODBias is +64. Mode 0 replaces this
-ratio with renderer +4c when nonzero, otherwise 1. Multiply by N, clamp below
-to integer mesh +190 (comparison before store), and store f32 detail. Requested
-count is min(N, round-nearest-even(detail)); the native FISTP does not truncate.
+## Selection `0x10b0eb52..0x10b0ed53`
 
-GetFrame runs next and can reduce the returned count because of its pose cache.
-The post-frame LOD range `10b0ee34..10b0ef6e` must use that returned count C.
-For candidate morphing, start=round-nearest-even(f32((1-mesh[194])*detail)).
-If start>=C, disable morphing. Otherwise hold inverse=1/(detail*mesh[194])
-extended and iterate ordinary vertices i=C-1 down to start+1. Alpha is
-min((i-start)*inverse,1), retained extended. Read the unsigned word collapse
-target from +12c; target zero leaves the position unchanged and stores alpha=0.
-Positive targets morph toward the target's **current** position. X retains
-delta/product extended; Y/Z store delta and product f32 before the final add.
-Write alpha f32 at transformed-vertex +50. Other bytes, special vertices and
-positions outside that interval are untouched. If morphing is disabled and
-C>=N, disable reduced topology too; otherwise preserve the original LOD flag.
+Mesh fields (SDK layouts, confirmed by the reads): ModelVerts `+180` (N),
+SpecialVerts `+184`, MeshScaleMax `+188`, LODStrength `+18c`, LODMinVerts
+`+190`, LODMorph `+194`, LODZDisplace `+198`, CollapsePointThus `+12c`,
+FaceLevel `+138`, Faces `+144`, CollapseWedgeThus `+150`, Wedges `+15c`,
+Materials `+168`. Actor: Location `+114`, DrawScale `+17c`, LODBias `+64`.
+The viewport actor's FovAngle `+410`; the frame's float width FX `+b8`.
 
-Reduced surface selection is `10b0fc6f..10b0fe60`, skipping to `10b10117`
-when face-level word (+138) >C. A face's three wedge words index +15c, as in
-the full-resolution path. A zero-initialized u32 scratch table memoizes results
-by **original** wedge index. On a cache miss, follow unsigned +150 collapse
-links until the wedge's vertex word <C. If morphing is active, vertex>start,
-the stored alpha bits are nonzero, and the next wedge differs, interpolate its
-U/V bytes toward that next wedge. Skip if both UV bytes already match. Each
-interpolation retains arithmetic extended, stores f32, rounds nearest-even to
-int, then retains the low byte. Vertex identity stays at the selected wedge's
-vertex. Cache the complete packed vertex/U/V dword. Add SpecialVerts only when
-addressing the complete GetFrame output. Faces retain original order/materials.
+1. Requested count = N, detail = float(N). The LOD flag (`[ebp-28]`) and the
+   morph flag (`[ebp-b4]`) start clear.
+2. The LOD runs only when LODStrength's **raw bits** are nonzero (-0.0
+   counts) and CollapsePointThus.Num is nonzero. Then the LOD flag is set,
+   and the morph flag when byte `+48` has bit 0 set and LODMorph > 0
+   (ordered).
+3. appTan: FLD FovAngle, FMUL m64 PI/360 (`0x10b2ac48`), rounded, FSTP m64.
+   Core's appTan (`0x10123260`) is `FLD m64; FPTAN; FSTP st(0); RET`: the
+   extended tangent stays in ST0, and DrawLodMesh stores it as a double
+   (dead) and as the float it uses (`0x10b0ebe2`), one rounding from the
+   extended value. Mode `+48` >= 3 (signed) replaces the float with 1.
+4. complexity = stored((N·0.003f) + 0.25f); screen = stored((FX·0.0010937499999999999)
+   + 0.3), both double constants exact then rounded once.
+5. Location by the caller's FCoords (Frame->Coords, `Frame+34`, from
+   DrawActorSprite): `d = L − Origin`, each axis `(d.x·A.x + d.y·A.y) + d.z·A.z`,
+   all three stored. depth = Z − LODZDisplace, replaced by 1 unless
+   `1 < depth` or it is NaN.
+6. ratio = (((MeshScaleMax·DrawScale)·LODBias)·screen)·430 /
+   (((((+44·+40)·LODStrength)·depth)·complexity)·tan), each rounded.
+   Mode 0 replaces it with `+4c`, or 1 when `+4c` is ±0 or NaN.
+7. ratio·N (FIMUL), rounded and not stored, against the exact LODMinVerts:
+   detail = stored(ratio·N) when LODMinVerts is below it (or it is NaN), else
+   float(LODMinVerts). Requested count = min(N, FISTP(detail)) (nearest-even,
+   signed compare).
 
-## Reference plan and remaining work
+Before GetFrame, a viewport actor whose RendMap (`+600`) is 1 or 13..15
+(wire and orthographic views) makes GetFrame use GMath.UnitCoords instead of
+the caller's coords (`0x10b0ed53..0x10b0edf3`).
 
-Capture the unchanged selection and post-frame ranges, then the face admission/
-wedge-collapse range over verified real mesh arrays. Compare exact float bits,
-counts/flags, every output-buffer byte, scratch wedge dwords and selected faces.
-Include renderer modes, near/far distances, FOV/width, forced detail, disabled
-tables/strength, morph limits and a returned-count reduction. Establish native
-references before translating, and retain captures outside Git.
+## GetFrame and the post-frame morph `0x10b0ee34..0x10b0ef6e`
 
-Normal accumulation, backface/clip admission, lighting, texture animation and
-locking, draw submission, full NPC startup and world enrollment remain open.
+GetFrame ([GetFrame](script-lodmesh-frame.md)) receives the requested count
+and can return fewer (its tween clamp to the cache's valid count); the rest of
+DrawLodMesh uses the returned count C. Its output buffer is fresh GMem, 88
+bytes per vertex (FTransTexture: Point `+0`, outcode `+c`, Normal `+20`,
+Light `+30`, U `+50`, V `+54`).
+
+1. Morph flag set: start = FISTP(stored((1 − LODMorph)·detail)). start >= C
+   clears the morph flag.
+2. Otherwise inverse = 1/(detail·LODMorph), rounded, kept on the stack. For
+   ordinary vertex i from C−1 down to start+1: alpha = (i − start)·inverse,
+   rounded, replaced by 1 unless `1 > alpha`. The CollapsePointThus word t of
+   i (ordinary indices; every shipped target is below its vertex or zero):
+   t = 0 stores alpha 0 at `+50` and leaves the position; otherwise each axis
+   moves toward t's position (not yet morphed, the loop runs downward): X
+   keeps its difference and product on the stack, Y and Z store both, then
+   each sum is stored; alpha is stored at `+50`. Nothing else is written.
+3. With the morph flag clear and C >= N, the LOD flag is cleared.
+
+The morph happens before the outcodes (`0x10b0ef6e..`), normals and lighting,
+so they all see morphed positions.
+
+## Faces `0x10b0fc6f..0x10b0fe60` (LOD flag) or `0x10b10123..0x10b101e8`
+
+A zero-filled dword per wedge (an FArray, `[ebp-34]`) memoizes the packed
+corner by **original** wedge index. With the LOD flag:
+
+* a face with FaceLevel > C is skipped (`0x10b10117`);
+* each corner's wedge follows CollapseWedgeThus while its vertex word is at or
+  above C;
+* while morphing, a selected vertex above start whose stored alpha bits are
+  nonzero, and whose next wedge differs from it, moves U and V toward the next
+  wedge's bytes when either differs: `stored((next − cur)·alpha + cur)`, FISTP,
+  low byte. The vertex stays the selected wedge's;
+* the packed dword (vertex word, U, V) is cached and the corner addresses the
+  ordinary vertex.
+
+Without the LOD flag every face's three wedges are copied unchanged. Faces keep
+their order and materials (`[ebp-58]`/`[ebp-54]` update on admitted faces).
+
+What follows runs over that face list exactly as at full resolution (the
+reduced copy `0x10b0fe60..0x10b0ffcf` and the full one `0x10b101d3..0x10b10351`
+are the same 95 x87 operations on other registers and temporaries; only the
+back-face dot adds its first two products in the other order, which one
+rounded addition does not distinguish): the
+face normal is accumulated into its three (collapsed) vertices for every
+admitted face, before the outcode and back-face tests; a drawn face marks its
+vertices (`+30` = −1); the lighting loop (`0x10b10834`) lights the marked
+ordinary vertices below C; the draw loop (`0x10b10ae9`) takes each corner's
+vertex and U/V bytes from the cached dwords (overwriting `+50`/`+54`).
+
+Not ported here: the particle branch (Actor `+194` bit 2, `0x10b0f7ad..`),
+which uses the same count; the wire/orthographic branch (`0x10b0f45c..`),
+which collapses wedges below the count without testing the LOD flag.
+
+## Translation and reference cases
+
+* `src/runtime/lodmesh-lod.mjs` (the reference): `selectLodMesh`,
+  `morphLodMesh`, `lodMeshCorners`, `lodMeshTopology`, `lodMeshTanArgument`,
+  `lodMeshTanFactor`, `RENDER_LOD_SETTINGS`.
+* `native/lodmesh-kernel/src/lod.rs` (the port): `lod_select`, `lod_morph`,
+  `lod_corners`, `upload_lod_mesh`; `kernel.lod` in `src/runtime/lodmesh-wasm.mjs`.
+* The tangent: `x87TanFloatCandidates` in `src/runtime/x87-tan.mjs` computes
+  tan(x) to 256 bits and rounds it to a float; when the true value lies within
+  8 extended units of a float rounding midpoint it returns both neighbours and
+  `lodMeshTanFactor` refuses the FOV. Unicorn computes FPTAN in double
+  precision, so the oracle replaces its float at `0x10b0ebe5` by the model's
+  for the argument it recorded (and keeps Unicorn's for comparison).
+
+`scripts/native-lodmesh-lod-oracle.py` executes the three original ranges at
+`0x007f` over real mesh arrays and an original GetFrame buffer;
+`scripts/lodmesh-lod-cases.mjs` generates the cases;
+`scripts/validate-lodmesh-lod.mjs` compares the JS reference and the kernel.
+
+| Check | Result |
+| --- | --- |
+| `node scripts/validate-lodmesh-lod.mjs` (GM_Trench, GFM_Trench, GM_Jumpsuit, Chair1, Barrel1, SoyFood; 228 cases) | detail bits, requested count, both flags, transformed Location, morph start, all 88-byte buffer bytes (positions, alphas, untouched pattern), each face's admission, material, flags and vertices, every scratch dword: equal for JS and the kernel |
+| coverage of those cases | 183 with reduced topology, 152 morphing (4,174 morphed vertices), 162 below ModelVerts; 48,578 of 77,140 faces admitted; 4,531 wedges with interpolated UVs; distances from full detail to the LODMinVerts floor and behind the camera; FOV 60/75/90/120/74.99874; FX 640–1920; LODBias, DrawScale, LODZDisplace; no collapse table, LODStrength 0 and −0, LODMorph 0, LODMinVerts above N; modes 0 (fixed 0.37 and 0), 2, 3, MLOD 0.5; rotated coords; GetFrame returning 7 fewer and fewer than the morph start |
+| `node scripts/validate-x87-tan-hardware.mjs` (AMD Ryzen 9 8945HS, Wine, `0x007f`) | 208,181 FOVs: every argument equals `lodMeshTanArgument`, every stored float equals the single candidate (no ambiguous pair); `Math.fround(Math.tan(x))` happened to agree in all of them too |
+| `ORACLE_CW=0x037f` audit | 665 of 226,265 checks differ (above): the precision matters |
+
+The captured oracle output (`--reference-only`, `.cache/research/`) stays
+outside Git; `--captured` reuses it when its inputs match.
+
+Not covered: Intel x87 (a disagreement would be a finding), FOVs outside
+(0°, 180°), a NaN detail (FISTP's integer indefinite makes the count
+negative; the translation throws), a count the wedge collapse never reaches
+(the original loops forever; the translation throws), subnormal or
+overflowing intermediates (the translation keeps the x87's wide exponent in
+doubles, untested).

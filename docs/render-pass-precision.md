@@ -147,7 +147,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | D3D diffuse `0x10005942–0x100059ac` | pass | mesh-light oracle | validate-mesh-lighting | `d3dDiffuse`; kernel `diffuse_channel`; GLSL `CORNER_FRAGMENT` | exact | 0 |
 | Environment mapping `0x10b101d3–0x10b10314`, `0x10b0bae9–0x10b0bbbc` | pass | mesh-environment oracle (tables at init, slices ORACLE_CW) | validate-mesh-environment (tolerance 0.00005 texel) | `mesh-environment.mjs`; GLSL `ENVIRONMENT_UV` | f64, not bit-exact | within tolerance |
 | GetRenderBoundingBox `0x103a6850`, BoundVisible `0x10b162e0`, FDynamicSprite::Setup `0x10b23910` | pass | render-visibility oracle (0x037f, BoundsOracle rejects other words) | validate-render-mesh-bounds, validate-render-visibility | JS reference (not in Play); Rust occlude.rs and the Setup branch in binary32 | x87 model (JS) | superseded by the binary32 Rust ports (other worktree); JS references not re-measured |
-| DrawLodMesh LOD selection/morph | pass | lodmesh-lod oracle (0x037f) | none | not translated | — | — |
+| DrawLodMesh LOD selection `0x10b0eb52–0x10b0ed53`, morph `0x10b0ee34–0x10b0ef6e`, reduced corners `0x10b0fc6f–0x10b0fe60` ([LOD](script-lodmesh-lod.md)) | pass | lodmesh-lod oracle, **0x007f** (appTan's float from the real-x87 model) | validate-lodmesh-lod, validate-x87-tan-hardware ("lod" mode) | `lodmesh-lod.mjs`; lodmesh-kernel `lod.rs` | **PC 24** (written at 24 bits from the start) | 0 of 228 cases; at 0x037f the oracle differs in 665 of 226,265 checks |
 
 ### Other render-pass routines
 
