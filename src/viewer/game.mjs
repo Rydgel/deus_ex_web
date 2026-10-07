@@ -344,6 +344,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       if (key < 0) return {handled: false};
       return inputEvent(key, pressed ? 1 : 3);
     },
+    // A WM_CHAR/WM_SYSCHAR character unit (the browser's TranslateMessage
+    // stand-in, src/viewer/typed-characters.mjs) after its key's press.
+    inputChar(char) {
+      return doors.scriptRuntime.liveConPlay.withLifecycle(() => inputHost.typedKey(char));
+    },
     inputAxis(name, delta) { return namedInput(name, 4, delta); },
     mouseMotion(dx, dy) { return inputHost.mouseMotion(dx, dy); },
     inputButton(name, pressed) { return namedInput(name, pressed ? 1 : 3); },

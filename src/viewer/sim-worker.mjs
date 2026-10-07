@@ -65,6 +65,7 @@ function command(game, entry, errors) {
   try {
     switch (entry.op) {
       case 'key': keyAnswers[entry.code] = game.inputKey(entry.code, entry.pressed) ?? { handled: false }; break;
+      case 'char': game.inputChar(entry.char); break;
       case 'button': game.inputButton(entry.name, entry.pressed); break;
       case 'motion': game.mouseMotion(entry.dx, entry.dy); break;
       case 'pointer': pointerGrab = game.windowPointer(entry.sample); break;
@@ -82,6 +83,10 @@ function command(game, entry, errors) {
   } catch (error) {
     // A console-command keyword claim throws before its handler does any
     // work, so Play continues (main.mjs inputKey).
+    if (entry.op === 'char' && error?.name === 'UnsupportedConsoleCommandError' && !error.partial) {
+      toasts.push(`Typed 0x${entry.char.toString(16)}: ${error.message}`);
+      return;
+    }
     if (entry.op === 'key' && error?.name === 'UnsupportedConsoleCommandError' && !error.partial) {
       keyAnswers[entry.code] = { handled: true };
       if (entry.pressed) toasts.push(`${entry.code}: ${error.message}`);

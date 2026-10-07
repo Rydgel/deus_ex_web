@@ -19,6 +19,7 @@
  * a keyword claims, other than the handled KEYNAME, KEYBINDING and FLUSH,
  * throws UnsupportedConsoleCommandError before any of that handler's work.
  */
+import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {readToken} from './config-text.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
 import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
@@ -539,6 +540,30 @@ export function createConsoleCommands({runtime, input, services}) {
     return process(key, action, delta, ar);
   }
 
+  /** XGameEngineExt::Key 0x10026650 for one WM_CHAR/WM_SYSCHAR unit
+   * (script-window-typed-keys.mjs gameEngineKey, docs/script-window-typed-keys.md).
+   * The viewport's Input is the UInput this module models: DeusEx.ini's
+   * Input=Extension.InputExt, so it IsA XInputExt and its viewport is the
+   * local one. Console.KeyType runs through ProcessEvent (state version
+   * first) with the key as a BYTE. */
+  function key(char) {
+    const viewport = services.viewport();
+    let console = false;
+    const handled = gameEngineKey(viewport, char, {
+      console: v => read(v, 'Console'),
+      keyType(object, byte) {
+        const result = {reference: {}, value: false, get() { return this.value; }, set(value) { this.value = value; }};
+        runtime.processEvent(object, 'KeyType', [byte], result);
+        return (console = Boolean(result.value));
+      },
+      input: () => input, isInputExt: () => true, actor: () => read(viewport, 'Actor'),
+      isPlayerPawnExt: actor => services.isPlayerPawnExt(actor),
+      rootWindow: actor => read(actor, 'rootWindow'),
+      rootKey: (root, unit) => services.rootKey(root, unit),
+    });
+    return {handled: Boolean(handled), console};
+  }
+
   // UEngine::InputEvent hands Process the Console's FOutputDevice (+0x28).
   function consoleOutput() {
     return {log(text) { throw new UnsupportedConsoleCommandError(`Console output device is not linked: ${text}`); }};
@@ -612,7 +637,7 @@ export function createConsoleCommands({runtime, input, services}) {
     services.updateInput(viewport, 1);
   }
 
-  return {state, aliases: input.aliases, inputEvent, process, readInput, viewportReadInput, execInputCommands, viewportExec, inputExec, consoleCommand,
+  return {state, aliases: input.aliases, inputEvent, key, process, readInput, viewportReadInput, execInputCommands, viewportExec, inputExec, consoleCommand,
     flush, resetInput};
 }
 

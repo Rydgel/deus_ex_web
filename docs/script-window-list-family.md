@@ -255,9 +255,10 @@ Complete for the persona list screens; open items below.
   (`--screens MenuScreenLoadGame,MenuScreenSaveGame`); both stop at native
   3013 `DeusExPlayer.CreateGameDirectoryObject` (GameDirectory, the save-game
   directory) — Stage 6.
-* KeyPressed (hot keys) is translated and compared, but the root's
-  typed-character route to a window's KeyPressed is not recovered (as for
-  EditWindow), so hot keys are not reachable in Play yet.
+* KeyPressed (hot keys) is reachable in Play since the typed-character
+  route landed ([typed characters](script-window-typed-keys.md)); the Logs
+  list's hot keys are checked by `validate-window-typed-key-play.mjs`. Its
+  compared keys now include 0xe9, 0x20ac and 0x08 (283/283).
 * The conversation history list with rows (ListSelectionChanged →
   DisplayHistory) is not exercised in Play: a fresh game has no ConHistory.
 * Serialize `0x1002ec70` (UObject::Serialize only) is not wired; saving is

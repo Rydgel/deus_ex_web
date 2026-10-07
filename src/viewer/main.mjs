@@ -23,6 +23,7 @@ import { WEAPON_GPU_MESH_CAPACITIES } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
 import { packViews } from './mesh-frame-pack.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
+import { typedCharacters } from './typed-characters.mjs';
 import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp } from './display-ramp.mjs';
@@ -920,6 +921,8 @@ const simInput = {
     simClient.queue({ op: 'key', code, pressed });
     return simAnswers.keys[code] ?? { handled: true };
   },
+  // One WM_CHAR unit; nothing on the page waits for its answer.
+  char(char) { if (simClient) simClient.queue({ op: 'char', char }); else game.inputChar(char); },
   button(name, pressed) { if (simClient) simClient.queue({ op: 'button', name, pressed }); else game.inputButton(name, pressed); },
   motion(dx, dy) { if (simClient) simClient.queue({ op: 'motion', dx, dy }); else game.mouseMotion(dx, dy); },
   pointer(sample) {
@@ -1001,8 +1004,22 @@ function inputKey(event, pressed) {
     return {handled: true, consumed: true};
   }
 }
+// TranslateMessage posts a key's WM_CHAR/WM_SYSCHAR units after its
+// WM_KEYDOWN; WinDrv hands them to Client->Engine->Key
+// (docs/script-window-typed-keys.md).
+function typeCharacters(event) {
+  for (const char of typedCharacters(event)) {
+    try { simInput.char(char); }
+    catch (error) {
+      if (error?.name === 'UnsupportedConsoleCommandError' && !error.partial) { toast(`${event.key}: ${error.message}`); continue; }
+      pauseForRuntimeError(error);
+      return;
+    }
+  }
+}
 document.addEventListener('keydown', event => {
   const input = inputKey(event, true);
+  if (input && !runtimeError) typeCharacters(event);
   if (input) {
     if (input.consumed) { keys.clear(); event.preventDefault(); return; }
     if (input.handled) {

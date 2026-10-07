@@ -364,7 +364,7 @@ add('edit draw selection', 'edit', {text: EDIT_TEXT + '\nthird row here', prelay
 add('edit draw selection one row', 'edit', {text: EDIT_TEXT, prelayout: true, insertPos: 14, select: [3, 14], precaret: true}, 'edit.draw', [], {isFocus: 1});
 add('edit draw caret hidden', 'edit', {text: EDIT_TEXT, prelayout: true, precaret: true, cursorFlags: 0}, 'edit.draw', [], {isFocus: 1});
 add('edit draw centered', 'edit', {text: EDIT_TEXT, prelayout: true, precaret: true, hAlign: 1, vAlign: 1, insertPos: 3}, 'edit.draw', [], {isFocus: 1});
-for (const key of [0x41, 0x60, 0x1f, 0x7e, 0x20])
+for (const key of [0x41, 0x60, 0x1f, 0x7e, 0x20, 0xe9, 0x20ac, 0x08, 0])
   add(`edit key 0x${key.toString(16)}`, 'edit', {text: EDIT_TEXT, prelayout: true, precaret: true, insertPos: 4}, 'edit.keyPressed', [key]);
 add('edit key not editing', 'edit', {text: EDIT_TEXT, editFlags: 0}, 'edit.keyPressed', [0x41], {scriptResult: 1});
 add('edit vkey enter single', 'edit', {text: 'one line', editFlags: 3, parent: true, prelayout: true, precaret: true}, 'edit.virtualKeyPressed', [0x0d, 0], {editActivatedResult: 0});

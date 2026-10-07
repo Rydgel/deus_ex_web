@@ -88,9 +88,11 @@ both Init bodies and CleanUp, which the Goals probe runs in Play.
 
 ## Remaining boundaries
 
-* Typed characters: `V.keyPressed` runs XEditWindow::KeyPressed, but the root's
-  typed-character route to it (the KeyType path) is not recovered, so a note
-  cannot be typed into yet. Arrow keys, Backspace, Delete and Enter arrive as
-  virtual keys through the recovered HandleVirtualKeyboard route.
+* Typed characters reach XEditWindow::KeyPressed through the recovered
+  route ([typed characters](script-window-typed-keys.md)); Goals notes, the
+  New Game name and computer logins take text in Play. Arrow keys,
+  Backspace, Delete and Enter arrive as virtual keys through
+  HandleVirtualKeyboard. The compared KeyPressed keys now include 0xe9,
+  0x20ac, 0x08 and 0 (151/151).
 * An omitted colour argument to 1905/1907/1908/1909 keeps the exec's stale
   stack alpha and stays a boundary, as for the button colour natives.

@@ -194,6 +194,8 @@ steps exactly. They cover:
     skipped, and returns 1.
 * `XRootWindow::Key` (`0x1003b520`, a character) returns 0 without a keyboard
   grab. Otherwise it calls `HandleKeyboard` (vtable `+0x128`) and returns 1.
+  The whole typed-character route, from WinDrv's `WM_CHAR` to each family's
+  `KeyPressed`, is in [typed characters](script-window-typed-keys.md).
 * `HandleVirtualKeyboard` (`0x1003b820`) selects its target in order: the focus
   window (`+0x5c8`); else the topmost visible child (`GetTopChild(1)`, walking
   down with `GetLowerSibling(1)`) whose type byte (`+0x28`) is ≥ 2; else the root.
@@ -456,5 +458,5 @@ GRANTED, closed keypad, restored HUD, open doorway, no browser errors.
 * Browser auto-repeat keydowns are delivered as further presses. The root then
   marks them as repeats, as for a key already down. That WinDrv delivers
   auto-repeat the same way has not been measured.
-* `XRootWindow::Key`/`HandleKeyboard` (character input) are not wired. The
-  keypad does not need them.
+* Character input (`XRootWindow::Key`/`HandleKeyboard`) is recovered and
+  wired: [typed characters](script-window-typed-keys.md).
