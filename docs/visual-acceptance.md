@@ -146,12 +146,12 @@ strong gradients (—: none); over those 36 views the median is (0, 0).
 | 01_NYC_UNATCOIsland | 1.29–1.33 | 1.43–3.27 | 0.94 | 0.95 | 0 | (0, 0) |
 | 02_NYC_BatteryPark | 1.13–1.35 | 0.35–3.80 | 0.96 | 0.96 | 0 | (0, 0) |
 | 02_NYC_Smug | 1.30–1.37 | 0.81–1.31 | 0.97 | 0.58 | 0 | — |
-| 03_NYC_747 | 1.34–1.45 | 1.89–2.84 | 0.93 | 0.89 | 11 | (0, 0), (0, 0.25) |
+| 03_NYC_747 | 1.33–1.35 | 1.59–2.59 | 0.95 | 0.94 | 0 | (0, 0), (0, 0.125) |
 | 03_NYC_AirfieldHeliBase | 1.34–1.38 | 2.22–3.66 | 0.92 | 0.66 | 0 | — |
 | 03_NYC_BrooklynBridgeStation | 1.28–1.40 | 0.80–2.25 | 0.96 | 0.67 | 0 | — |
 | 04_NYC_Street | 1.36–1.39 | 1.47–2.27 | 0.91 | 0.93 | 7 | — |
 | 05_NYC_UNATCOMJ12lab | 1.33–1.41 | 1.46–4.12 | 0.94 | 0.74 | 0 | — |
-| 06_HongKong_Helibase | 1.21–1.35 | 2.90–5.87 | 0.96 | 0.93 | 25 | (0, 0) |
+| 06_HongKong_Helibase | 1.21–1.33 | 2.90–5.87 | 0.95 | 0.94 | 14 | (0, 0) |
 | 06_HongKong_VersaLife | 1.24–1.34 | 3.31–5.52 | 0.96 | 0.97 | 0 | (0, -0.25) |
 | 06_HongKong_WanChai_Market | 1.27–1.35 | 1.35–2.30 | 0.94 | 0.97 | 0 | (0, -0.375), (0, 0), (0.125, 0) |
 | 08_NYC_Bar | 1.34–1.40 | 1.64–3.18 | 0.92 | 0.96 | 0 | (0, 0) |
@@ -172,7 +172,7 @@ Every view was also inspected side by side.
 
 **Matching.** Geometry, BSP lighting (pulsing lights included, now that
 time is held), coronas, mirrors, fog, the skies and decorations line up in
-122 of 130 views. Play's raw frame is uniformly 1.13–1.45× brighter; see
+122 of 130 views before the line-check fix below, and in 124 after it. Play's raw frame is uniformly 1.13–1.45× brighter; see
 Open. Before time was held, Helibase y1 and Dockyard y1/y2 differed through
 LT_Pulse phase alone.
 
@@ -193,14 +193,19 @@ LT_Pulse phase alone.
 
 **Differences.**
 
-0. *Mesh lighting of single actors (open, with the lighting work).* With
-   time held, Helibase's BlackHelicopter0 is deep red in the original (lit
-   by TriggerLight4, a static Searchlight, hue 0, saturation 0, brightness
-   200, 370 units away) and gold in Play. 747 y2's yellow robotic arm is 2–3×
-   brighter in Play than the frame's ratio. The BSP around both matches, so
-   the suspects are the inputs of the per-actor light gather
-   ([mesh lighting](mesh-lighting.md) "Candidates"): the leaf's permeating
-   list, the line checks, the fade schedule, or a light's initial state.
+0. *Mesh lighting of single actors (fixed).* With time held, Helibase's
+   BlackHelicopter0 was deep red in the original and gold in Play, and 747
+   y2's yellow robotic arm was 2–3× too bright. Both came from the light line
+   check:
+   - The original's `UModel::LineCheck` traces the level BSP that the moving
+     brush tracker has filled with mover polygons. Closed hangar doors hide
+     three gold ceiling lights from the helicopter, leaving the red
+     TriggerLight4 (a static Searchlight). A force field hides the arm's
+     brightest light.
+   - Play's mesh lighting now traces the tracker's model
+     (`validate-tracked-linecheck`, 366 checks against Engine's line check
+     under Unicorn). Both views match: 747 y2 has no outlier block left, and
+     Helibase's are around the rotor (animation phase).
 
 1. *Pixel centres (fixed).* In the 19 views with at least 1,500
    strong-gradient pixels, the original's image sat a median (−0.5, −0.5)
